@@ -99,6 +99,12 @@ external engine (e.g. Mem0) can plug in without owning the canonical data.
 
 Goal: detect an injected bug, restore service, generate and validate a fix automatically.
 
+Delivered (ADR-0024): stdlib-only Recovery Supervisor with versioned release
+pointers and auto-rollback; fingerprinted incident ingest; deterministic
+self-healing pipeline (reproduce → regression test → patch → review gate →
+staging/canary → promote/reject) behind a CodingBackend seam whose real
+Claude Agent SDK backend plugs in without pipeline changes.
+
 ## M7 — Self-Extension/Evolution
 
 Goal: add a genuinely missing capability and resume the original task automatically.
