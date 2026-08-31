@@ -121,6 +121,13 @@ strict token validation on everything reaching generated source.
 
 Goal: owner-authorized asset scope and autonomous defensive testing/remediation workflow.
 
+Delivered (ADR-0026): the Authorized Asset Registry as the single scope
+authority with fail-safe, spoofing-resistant target matching and append-only
+authorization events; scope-based (not per-command) approval for in-scope
+defensive assessments; constraint-gated remediation; findings published as
+ordinary artifacts with redacted evidence; and the registry-backed
+AuthorizationProvider that closes the M7 evolution permission-verification gap.
+
 ## M9 — Native Mobile
 
 Goal: stronger always-available mobile voice experience beyond PWA limitations.
