@@ -111,10 +111,9 @@ def test_resolve_runs_the_pipeline_and_registers(client: TestClient) -> None:
     assert response.status_code == 200
     result = response.json()
     assert result["status"] == "registered"
-    assert [stage["name"] for stage in result["stages"]][-2:] == [
-        "register_capability",
-        "resume_task",
-    ]
+    names = [stage["name"] for stage in result["stages"]]
+    assert names[-2:] == ["register_capability", "resume_task"]
+    assert names.index("shadow") < names.index("canary") < names.index("register_capability")
 
     capability = client.get("/v1/evolution/capabilities/text.slugify").json()
     assert capability["status"] == "production"
@@ -168,3 +167,47 @@ def test_health_reports_the_evolution_subsystem(client: TestClient) -> None:
     body = client.get("/v1/system/health").json()
     assert "evolution" in body["checks"]
     assert body["checks"]["evolution"]["skill_generator"] == "deterministic"
+
+
+def test_audit_endpoint_answers_all_nine_questions(client: TestClient) -> None:
+    gap = client.post("/v1/evolution/gaps", json=GAP_BODY).json()
+    assert client.post(f"/v1/evolution/gaps/{gap['id']}/resolve").json()["status"] == (
+        "registered"
+    )
+
+    response = client.get(f"/v1/evolution/gaps/{gap['id']}/audit")
+    assert response.status_code == 200
+    audit = response.json()
+    assert audit["questions"] == [
+        "why_needed",
+        "what_triggered",
+        "what_changed",
+        "code_and_dependencies",
+        "permissions_granted",
+        "tests_that_ran",
+        "who_reviewed",
+        "why_promoted",
+        "rollback_target",
+    ]
+    for question in audit["questions"]:
+        assert audit["answers"][question], question
+    assert audit["answers"]["who_reviewed"]["reviewer"] == "independent-skill-reviewer"
+    assert audit["answers"]["permissions_granted"]["deny_by_default"] is True
+
+
+def test_audit_of_an_unknown_gap_is_404(client: TestClient) -> None:
+    assert client.get(f"/v1/evolution/gaps/{uuid.uuid4()}/audit").status_code == 404
+
+
+def test_an_over_deep_request_is_refused_with_409(client: TestClient) -> None:
+    response = client.post("/v1/evolution/gaps", json={**GAP_BODY, "depth": 5})
+    assert response.status_code == 409
+    assert response.json()["detail"]["error_class"] == "recursion_limit_exceeded"
+
+
+def test_health_reports_the_component_catalog_and_budget(client: TestClient) -> None:
+    check = client.get("/v1/system/health").json()["checks"]["evolution"]
+    assert check["component_catalog"] >= 1
+    assert check["resource_budget"]["timeout_s"] > 0
+    assert check["resource_budget"]["max_depth"] >= 0
+    assert check["sandbox_isolated_from_core"] is True

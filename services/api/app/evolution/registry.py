@@ -16,9 +16,14 @@ enforced in code, never by convention:
    reviewer verdict alone is never sufficient and neither is a green test run
    alone — §9 forbids promotion on "the reviewer liked it".
 
-Manifest validation covers the §2 fields: id, version, status, inputs, outputs,
-permissions, dependencies, owner_scope, health_metrics. Every value that can
-later reach generated source goes through app.evolution.tokens.
+3. ``register(...)`` additionally requires the LIFECYCLE promotion evidence
+   (candidate -> sandbox -> validated -> shadow -> canary) and, for a generated
+   manifest carrying any permission grant, an explicit reviewer approval of that
+   exact grant set — generated skills are deny-by-default (SECURITY_MODEL M7).
+
+Manifest validation is delegated to ``app.evolution.manifest``, the single
+schema authority for the full owner-required field set. Every value that can
+later reach generated source goes through ``app.evolution.tokens``.
 """
 
 from __future__ import annotations
@@ -32,146 +37,39 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.evolution import lifecycle as lifecycle_module
 from app.evolution.errors import EvolutionError, EvolutionErrorClass
+from app.evolution.manifest import (
+    OPTIONAL_FIELDS,
+    REQUIRED_FIELDS,
+    SUPPORTED_ENTRYPOINT,
+    require_permission_approval,
+    validate_manifest,
+)
 from app.evolution.models import (
     CAPABILITY_STATUSES,
     SKILL_VERSION_STATUSES,
     Capability,
     SkillVersion,
 )
-from app.evolution.tokens import (
-    require_capability_id,
-    require_identifier,
-    require_owner_scope,
-    require_slug_list,
-    require_summary,
-    require_version,
-)
+from app.evolution.tokens import require_capability_id, require_version
 from app.logging import get_logger
 
 logger = get_logger("app.evolution.registry")
 
 SessionFactory = Callable[[], AbstractContextManager[Session]]
 
-# EVOLUTION_ENGINE_SPEC §2 example manifest keys.
-REQUIRED_MANIFEST_KEYS = (
-    "id",
-    "version",
-    "status",
-    "inputs",
-    "outputs",
-    "permissions",
-    "dependencies",
-    "owner_scope",
-    "health_metrics",
-)
-# Keys the engine adds on top of §2 so a registered capability is executable and
-# auditable. Optional on input; filled in by the pipeline.
-#   configurable_for / extension_points make steps 3 and 4 of the gap-detection
-#   decision tree (configure / safely extend an existing skill) real, machine
-#   checkable questions instead of prose.
-OPTIONAL_MANIFEST_KEYS = (
-    "summary",
-    "skill",
-    "entrypoint",
-    "source_ref",
-    "generated_by",
-    "configurable_for",
-    "extension_points",
-)
+# The manifest schema authority lives in app.evolution.manifest (M7 delta: the
+# full owner-required field set). Re-exported here so callers keep one import.
+REQUIRED_MANIFEST_KEYS = REQUIRED_FIELDS
+OPTIONAL_MANIFEST_KEYS = OPTIONAL_FIELDS
 
 # A skill version must be here before it can be registered.
 REGISTRABLE_FROM_STATUS = "evaluated"
 
-# The single dispatchable entrypoint name a generated skill may declare.
-SUPPORTED_ENTRYPOINT = "run"
-
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
-
-
-def validate_manifest(manifest: Any) -> dict[str, Any]:
-    """Validate a §2 capability manifest and return a normalized copy.
-
-    This is a CHOKE POINT: the returned manifest's scalar values are all strict
-    tokens, so the pipeline may safely write them into a generated manifest.yaml
-    and README without further escaping (they are re-validated at the splice
-    points in skills.py regardless).
-    """
-    if not isinstance(manifest, dict):
-        raise EvolutionError(
-            EvolutionErrorClass.VALIDATION_ERROR, "capability manifest must be an object"
-        )
-    missing = [key for key in REQUIRED_MANIFEST_KEYS if key not in manifest]
-    if missing:
-        raise EvolutionError(
-            EvolutionErrorClass.VALIDATION_ERROR,
-            f"capability manifest is missing required keys: {missing}",
-            details={"missing": missing, "required": list(REQUIRED_MANIFEST_KEYS)},
-        )
-    unknown = [
-        key
-        for key in manifest
-        if key not in REQUIRED_MANIFEST_KEYS and key not in OPTIONAL_MANIFEST_KEYS
-    ]
-    if unknown:
-        raise EvolutionError(
-            EvolutionErrorClass.VALIDATION_ERROR,
-            f"capability manifest carries unknown keys: {sorted(unknown)}",
-            details={"unknown": sorted(unknown)},
-        )
-    status = manifest["status"]
-    if status not in CAPABILITY_STATUSES:
-        raise EvolutionError(
-            EvolutionErrorClass.VALIDATION_ERROR,
-            f"invalid capability status: {status!r}",
-            details={"allowed": list(CAPABILITY_STATUSES)},
-        )
-    normalized: dict[str, Any] = {
-        "id": require_capability_id(manifest["id"], field="manifest.id"),
-        "version": require_version(manifest["version"], field="manifest.version"),
-        "status": status,
-        "inputs": require_slug_list(manifest["inputs"], field="manifest.inputs"),
-        "outputs": require_slug_list(manifest["outputs"], field="manifest.outputs"),
-        "permissions": require_slug_list(manifest["permissions"], field="manifest.permissions"),
-        "dependencies": require_slug_list(
-            manifest["dependencies"], field="manifest.dependencies"
-        ),
-        "owner_scope": require_owner_scope(manifest["owner_scope"]),
-        "health_metrics": require_slug_list(
-            manifest["health_metrics"], field="manifest.health_metrics"
-        ),
-    }
-    if "summary" in manifest:
-        normalized["summary"] = require_summary(manifest["summary"])
-    if "skill" in manifest:
-        normalized["skill"] = require_identifier(manifest["skill"], field="manifest.skill")
-    if "entrypoint" in manifest:
-        # The runtime contract is a single fixed entrypoint name; an arbitrary
-        # identifier here would mean the manifest could point dispatch at any
-        # function in the generated module.
-        if manifest["entrypoint"] != SUPPORTED_ENTRYPOINT:
-            raise EvolutionError(
-                EvolutionErrorClass.VALIDATION_ERROR,
-                f"manifest.entrypoint must be {SUPPORTED_ENTRYPOINT!r}",
-            )
-        normalized["entrypoint"] = SUPPORTED_ENTRYPOINT
-    for list_key in ("configurable_for", "extension_points"):
-        if list_key in manifest:
-            normalized[list_key] = require_slug_list(
-                manifest[list_key], field=f"manifest.{list_key}"
-            )
-    for passthrough in ("source_ref", "generated_by"):
-        if passthrough in manifest:
-            value = manifest[passthrough]
-            if not isinstance(value, str) or len(value) > 512:
-                raise EvolutionError(
-                    EvolutionErrorClass.VALIDATION_ERROR,
-                    f"manifest.{passthrough} must be a string of at most 512 chars",
-                )
-            normalized[passthrough] = value
-    return normalized
 
 
 def gates_passed(evaluation: Any, review: Any) -> tuple[bool, list[str]]:
@@ -403,6 +301,76 @@ class CapabilityRegistry:
             session.commit()
             return _skill_version_dict(row)
 
+    def advance_lifecycle(
+        self,
+        skill_version_id: uuid.UUID,
+        stage: str,
+        evidence: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Move the version along the lifecycle state machine.
+
+        The stage lives in ``evaluation_json["lifecycle"]`` (the frozen
+        migration's status CHECK cannot express shadow/canary); the DB status is
+        kept in sync through ``lifecycle.STAGE_TO_DB_STATUS`` so both readings
+        stay true. Illegal transitions and missing evidence raise
+        ``lifecycle_violation``.
+        """
+        with self._session_factory() as session:
+            row = self._require_version(session, skill_version_id)
+            updated = lifecycle_module.advance(row.evaluation_json, stage, evidence)
+            row.evaluation_json = updated
+            db_status = lifecycle_module.db_status_for(stage)
+            # `registered` and `superseded` are owned by register()/rollback_to();
+            # never let a lifecycle hop grant dispatchability by itself.
+            if db_status not in ("registered", "superseded"):
+                row.status = db_status
+            session.commit()
+            logger.info(
+                "skill_version_lifecycle_advanced",
+                skill_version_id=str(skill_version_id),
+                stage=stage,
+                db_status=row.status,
+            )
+            return _skill_version_dict(row)
+
+    def record_telemetry(
+        self, skill_version_id: uuid.UUID, sample: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Append one dispatch outcome to the version's telemetry.
+
+        Telemetry is what makes the improvement path evidence-driven rather than
+        a hunch (ACCEPTANCE_TESTS M7 "Improvement of an existing skill"). It is
+        stored in ``evaluation_json["telemetry"]`` — no migration, and it travels
+        with the version it describes.
+        """
+        with self._session_factory() as session:
+            row = self._require_version(session, skill_version_id)
+            base = dict(row.evaluation_json or {})
+            telemetry = dict(base.get("telemetry") or {})
+            samples = list(telemetry.get("samples") or [])
+            samples.append(sample)
+            samples = samples[-200:]
+            failures = sum(1 for entry in samples if not entry.get("ok"))
+            latencies = sorted(float(entry.get("latency_ms") or 0.0) for entry in samples)
+            p95 = (
+                latencies[min(len(latencies) - 1, int(len(latencies) * 0.95))]
+                if latencies
+                else 0.0
+            )
+            telemetry.update(
+                {
+                    "invocations": len(samples),
+                    "failures": failures,
+                    "failure_rate": (failures / len(samples)) if samples else 0.0,
+                    "p95_latency_ms": p95,
+                    "samples": samples,
+                }
+            )
+            base["telemetry"] = telemetry
+            row.evaluation_json = base
+            session.commit()
+            return _skill_version_dict(row)
+
     def record_evaluation(
         self, skill_version_id: uuid.UUID, evaluation: dict[str, Any]
     ) -> dict[str, Any]:
@@ -410,11 +378,17 @@ class CapabilityRegistry:
 
         The version reaches ``evaluated`` only when the evaluation itself
         reports ``passed``; a failing evaluation leaves it at ``tested`` so
-        register() can never find it in a registrable state.
+        register() can never find it in a registrable state. Any lifecycle
+        already recorded on the row is preserved.
         """
         with self._session_factory() as session:
             row = self._require_version(session, skill_version_id)
-            row.evaluation_json = evaluation
+            merged = dict(evaluation)
+            previous = row.evaluation_json or {}
+            for carried in ("lifecycle", "telemetry"):
+                if carried in previous and carried not in merged:
+                    merged[carried] = previous[carried]
+            row.evaluation_json = merged
             row.status = "evaluated" if evaluation.get("passed") is True else "tested"
             session.commit()
             logger.info(
@@ -499,6 +473,12 @@ class CapabilityRegistry:
                     "skill version has not passed the release gates",
                     details={"reasons": reasons},
                 )
+            # Lifecycle: `active` is unreachable on the generator's say-so —
+            # sandbox/validated/shadow/canary evidence must all be on the row.
+            lifecycle_module.require_promotion_evidence(version.evaluation_json)
+            # Deny-by-default: a generated manifest may only carry permission
+            # grants the INDEPENDENT reviewer approved, exactly as requested.
+            require_permission_approval(normalized, version.review_json)
             if normalized["version"] != version.version:
                 raise EvolutionError(
                     EvolutionErrorClass.VALIDATION_ERROR,
@@ -529,10 +509,20 @@ class CapabilityRegistry:
                 row.updated_at = now
             version.status = "registered"
             version.registered_at = now
+            version.evaluation_json = lifecycle_module.advance(
+                version.evaluation_json,
+                lifecycle_module.STAGE_ACTIVE,
+                {"registered_by": "capability-registry", "at": now.isoformat()},
+            )
             if previous_version_id is not None and previous_version_id != version.id:
                 previous = session.get(SkillVersion, previous_version_id)
                 if previous is not None and previous.status == "registered":
                     previous.status = "superseded"
+                    previous.evaluation_json = lifecycle_module.advance(
+                        previous.evaluation_json,
+                        lifecycle_module.STAGE_DEPRECATED,
+                        {"superseded_by": version.version},
+                    )
             session.commit()
             logger.info(
                 "capability_registered",
@@ -542,6 +532,76 @@ class CapabilityRegistry:
             )
             resolved = _capability_dict(row)
             resolved["skill_version"] = _skill_version_dict(version)
+            return resolved
+
+    def rollback_to(self, capability_id: str, target_version: str) -> dict[str, Any]:
+        """Demote the current version and restore a previously registered one.
+
+        This is the "old version remains rollback-capable" guarantee: the target
+        must be a version that was registered before (DB status ``superseded``,
+        lifecycle ``deprecated``/``rolled_back``), and after the call
+        ``resolve()`` serves it again. Nothing is deleted; the demoted version
+        keeps its full history.
+        """
+        capability_id = require_capability_id(capability_id)
+        target_version = require_version(target_version)
+        with self._session_factory() as session:
+            capability = self._require_row(session, capability_id)
+            target = session.execute(
+                select(SkillVersion).where(
+                    SkillVersion.capability_id == capability_id,
+                    SkillVersion.version == target_version,
+                )
+            ).scalar_one_or_none()
+            if target is None:
+                raise EvolutionError(
+                    EvolutionErrorClass.NOT_FOUND,
+                    f"rollback target {capability_id}/{target_version} does not exist",
+                )
+            if target.registered_at is None:
+                raise EvolutionError(
+                    EvolutionErrorClass.VALIDATION_ERROR,
+                    "rollback target was never registered; it is not a known-good version",
+                )
+            current_id = capability.current_skill_version_id
+            if current_id == target.id:
+                return _capability_dict(capability)
+            now = _utcnow()
+            if current_id is not None:
+                current = session.get(SkillVersion, current_id)
+                if current is not None:
+                    current.status = "superseded"
+                    current.evaluation_json = lifecycle_module.advance(
+                        current.evaluation_json,
+                        lifecycle_module.STAGE_ROLLED_BACK,
+                        {"rolled_back_to": target_version, "at": now.isoformat()},
+                    )
+            target.status = "registered"
+            target.evaluation_json = lifecycle_module.advance(
+                target.evaluation_json,
+                lifecycle_module.STAGE_ACTIVE,
+                {"registered_by": "rollback", "at": now.isoformat()},
+            )
+            capability.current_skill_version_id = target.id
+            capability.version = target.version
+            capability.status = "production"
+            restored = {
+                **(capability.manifest_json or {}),
+                "version": target.version,
+                "rollback_version": None,
+            }
+            if target.source_ref:
+                restored["source_ref"] = target.source_ref
+            capability.manifest_json = restored
+            capability.updated_at = now
+            session.commit()
+            logger.info(
+                "capability_rolled_back",
+                capability_id=capability_id,
+                to_version=target_version,
+            )
+            resolved = _capability_dict(capability)
+            resolved["skill_version"] = _skill_version_dict(target)
             return resolved
 
     # ------------------------------------------------------------------ utils

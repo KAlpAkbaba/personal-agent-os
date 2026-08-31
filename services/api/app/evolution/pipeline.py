@@ -26,6 +26,7 @@ Hard invariants, each enforced by code rather than convention:
 
 from __future__ import annotations
 
+import hashlib
 import shutil
 import tempfile
 import uuid
@@ -34,22 +35,28 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from app.evolution import lifecycle as lifecycle_module
 from app.evolution.errors import EvolutionError, EvolutionErrorClass
 from app.evolution.evaluation import EvaluationResult, SkillEvaluator
 from app.evolution.gaps import (
+    STEP_COMPONENT,
     GapService,
     request_from_trail,
     require_composition_attempted,
 )
 from app.evolution.registry import CapabilityRegistry
+from app.evolution.resources import ResourceBudget, require_within_depth
 from app.evolution.review import IndependentSkillReviewer
+from app.evolution.rollout import CanaryRunner, ShadowRunner
 from app.evolution.sandbox import SandboxPolicy
 from app.evolution.skills import (
     DeterministicSkillGenerator,
     SkillGenerator,
     SkillLayout,
     SkillSpec,
+    read_manifest,
 )
+from app.evolution.supply_chain import scan_dependencies
 from app.evolution.task_resumption import TaskResumer
 from app.logging import get_logger
 from app.selfhealing.service import compute_manifest_digest
@@ -105,11 +112,17 @@ class EvolutionPipeline:
         sandbox: SandboxPolicy,
         skills_root: Path,
         resumer: TaskResumer | None = None,
+        budget: ResourceBudget | None = None,
+        shadow: ShadowRunner | None = None,
+        canary: CanaryRunner | None = None,
     ) -> None:
         self.registry = registry
         self.gaps = gaps
+        self.budget = budget or ResourceBudget()
         self.generator = generator or DeterministicSkillGenerator()
-        self.evaluator = evaluator or SkillEvaluator()
+        self.evaluator = evaluator or SkillEvaluator(budget=self.budget)
+        self.shadow = shadow or ShadowRunner()
+        self.canary = canary or CanaryRunner()
         # Builder/reviewer separation (§6): the reviewer is a DIFFERENT object
         # with its OWN evaluator; it never receives the generator.
         self.reviewer = reviewer or IndependentSkillReviewer(sandbox=sandbox)
@@ -185,12 +198,34 @@ class EvolutionPipeline:
                     },
                 )
             )
+            # 2b. Self-extension recursion limit (structural loop stop).
+            require_within_depth(request.depth, self.budget)
             self.gaps.set_status(gap_id, "resolving")
 
             # 3. Requirement work order (choke-point validation of the spec).
-            spec = self._build_spec(request.requested_capability, request.spec)
+            # If resolution step 4 matched a vetted component, the work order is
+            # an ADAPTER around that pinned component, not code from scratch.
+            component = self._matched_component(trail)
+            spec = self._build_spec(request.requested_capability, request.spec, component)
             spec.version = self._next_version(spec.capability_id, spec.version)
-            manifest = spec.capability_manifest()
+            previous = self.registry.resolve(spec.capability_id)
+            manifest = spec.capability_manifest(
+                creation_reason={
+                    "gap_id": str(gap_id),
+                    "task_id": gap["task_id"],
+                    "trigger": "capability_gap",
+                    "request_digest": hashlib.sha256(
+                        request.request_text.encode("utf-8")
+                    ).hexdigest(),
+                    "depth": request.depth,
+                    "authorized_asset": request.authorized_asset,
+                    "resolution_path": (
+                        "component_adaptation" if component else "generation_from_scratch"
+                    ),
+                },
+                rollback_version=previous["version"] if previous else None,
+                resource_budget=self.budget.to_dict(),
+            )
             self.gaps.append_step(
                 gap_id,
                 {
@@ -198,7 +233,12 @@ class EvolutionPipeline:
                     "step": "work_order",
                     "question": "what exactly will be built?",
                     "outcome": "recorded",
-                    "evidence": {"manifest": manifest, "generator": self.generator.name},
+                    "evidence": {
+                        "manifest": manifest,
+                        "generator": self.generator.name,
+                        "component": component,
+                        "resource_budget": self.budget.to_dict(),
+                    },
                     "at": datetime.now(UTC).isoformat(),
                 },
             )
@@ -206,7 +246,12 @@ class EvolutionPipeline:
                 PipelineStage(
                     "work_order",
                     "ok",
-                    {"capability_id": spec.capability_id, "version": spec.version},
+                    {
+                        "capability_id": spec.capability_id,
+                        "version": spec.version,
+                        "resolution_path": manifest["creation_reason"]["resolution_path"],
+                        "rollback_version": manifest["rollback_version"],
+                    },
                 )
             )
 
@@ -233,10 +278,15 @@ class EvolutionPipeline:
             result.skill_version_id = version_row["id"]
             result.capability_id = spec.capability_id
             result.version = spec.version
+            workspace_digest = compute_manifest_digest(layout.root)
             self.registry.record_build(
+                skill_version_id, source_ref=str(layout.root), manifest_digest=workspace_digest
+            )
+            # lifecycle: candidate -> sandbox
+            self.registry.advance_lifecycle(
                 skill_version_id,
-                source_ref=str(layout.root),
-                manifest_digest=compute_manifest_digest(layout.root),
+                lifecycle_module.STAGE_SANDBOX,
+                {"workspace": work_dir.name, "manifest_digest": workspace_digest},
             )
             stages.append(
                 PipelineStage(
@@ -245,16 +295,41 @@ class EvolutionPipeline:
                     {
                         "generator": self.generator.name,
                         "files": sorted(p.name for p in layout.required_paths()),
+                        "lifecycle_stage": lifecycle_module.STAGE_SANDBOX,
                     },
                 )
             )
 
-            # 6. RUN the generated tests + eval set and score them (§9).
-            evaluation: EvaluationResult = self.evaluator.evaluate(layout)
+            # 5b. Supply chain: pinned name+version+source+digest, no install
+            # scripts, and every component must exist in the local catalog.
+            # Scanned from the manifest the GENERATOR actually emitted, not the
+            # work-order draft — a generator cannot smuggle a dependency past
+            # the gate by adding it after the work order was recorded.
+            emitted_manifest = read_manifest(layout)
+            supply = scan_dependencies(
+                list(emitted_manifest.get("dependencies") or [])
+                + list(emitted_manifest.get("components") or [])
+            )
+            if not supply.ok:
+                stages.append(PipelineStage("supply_chain", "failed", supply.to_dict()))
+                return self._reject(
+                    result,
+                    gap_id,
+                    skill_version_id,
+                    "supply chain rejected: "
+                    + ", ".join(sorted({f.rule for f in supply.findings})),
+                )
+            stages.append(PipelineStage("supply_chain", "ok", supply.to_dict()))
+
+            # 6. RUN the generated tests + eval set and score them (§9), with the
+            # configured retry limit for transient timeouts.
+            evaluation, attempts = self._evaluate_with_retries(layout)
             self.registry.record_evaluation(skill_version_id, evaluation.to_dict())
             if not evaluation.passed:
                 stages.append(
-                    PipelineStage("evaluate", "failed", evaluation.to_dict())
+                    PipelineStage(
+                        "evaluate", "failed", evaluation.to_dict() | {"attempts": attempts}
+                    )
                 )
                 return self._reject(
                     result,
@@ -262,17 +337,74 @@ class EvolutionPipeline:
                     skill_version_id,
                     "release gates failed: " + ", ".join(evaluation.failed_gates),
                 )
-            stages.append(PipelineStage("evaluate", "ok", evaluation.to_dict()))
+            stages.append(
+                PipelineStage("evaluate", "ok", evaluation.to_dict() | {"attempts": attempts})
+            )
 
-            # 7. INDEPENDENT review (re-runs everything itself).
-            review = self.reviewer.review(layout)
-            self.registry.record_review(skill_version_id, review.to_dict())
+            # 7. INDEPENDENT review (re-runs everything itself) + the
+            # deny-by-default decision on any requested permission grants.
+            review, review_payload = self.reviewer.review_record(layout)
+            self.registry.record_review(skill_version_id, review_payload)
             if not review.approved:
-                stages.append(PipelineStage("independent_review", "failed", review.to_dict()))
+                stages.append(PipelineStage("independent_review", "failed", review_payload))
                 return self._reject(
                     result, gap_id, skill_version_id, f"independent review: {review.summary}"
                 )
-            stages.append(PipelineStage("independent_review", "ok", review.to_dict()))
+            stages.append(PipelineStage("independent_review", "ok", review_payload))
+            # lifecycle: sandbox -> validated (independent evidence at the edge)
+            self.registry.advance_lifecycle(
+                skill_version_id,
+                lifecycle_module.STAGE_VALIDATED,
+                {
+                    "evaluation_passed": True,
+                    "review_approved": True,
+                    "supply_chain_ok": True,
+                    "reviewer": self.reviewer.name,
+                },
+            )
+
+            # 7b. SHADOW: mirror the case set; nothing is served.
+            incumbent_layout = self._incumbent_layout(spec.capability_id)
+            shadow_report = self.shadow.run(layout, incumbent_layout)
+            if shadow_report.mismatches:
+                stages.append(PipelineStage("shadow", "failed", shadow_report.to_dict()))
+                return self._reject(
+                    result,
+                    gap_id,
+                    skill_version_id,
+                    f"shadow recorded {shadow_report.mismatches} mismatches",
+                )
+            self.registry.advance_lifecycle(
+                skill_version_id,
+                lifecycle_module.STAGE_SHADOW,
+                {
+                    "samples": shadow_report.candidate.samples,
+                    "mismatches": shadow_report.mismatches,
+                    "report": shadow_report.to_dict(),
+                },
+            )
+            stages.append(PipelineStage("shadow", "ok", shadow_report.to_dict()))
+
+            # 7c. CANARY: bounded sample, compared against the incumbent.
+            canary_report = self.canary.run(layout, incumbent_layout)
+            if not canary_report.not_worse_than_incumbent:
+                stages.append(PipelineStage("canary", "failed", canary_report.to_dict()))
+                return self._reject(
+                    result,
+                    gap_id,
+                    skill_version_id,
+                    "canary performed worse than the incumbent",
+                )
+            self.registry.advance_lifecycle(
+                skill_version_id,
+                lifecycle_module.STAGE_CANARY,
+                {
+                    "samples": canary_report.candidate.samples,
+                    "not_worse_than_incumbent": True,
+                    "report": canary_report.to_dict(),
+                },
+            )
+            stages.append(PipelineStage("canary", "ok", canary_report.to_dict()))
 
             # 8. Publish the approved candidate into the skills root.
             published = self._publish(layout)
@@ -289,9 +421,19 @@ class EvolutionPipeline:
                 )
             )
 
-            # 9. Registration — the gate. Refuses anything not evaluated+approved.
+            # 9. Registration — the gate. Refuses anything not evaluated+approved,
+            # lacking lifecycle promotion evidence, or carrying unapproved grants.
             manifest["source_ref"] = str(published)
-            manifest["generated_by"] = self.generator.name
+            manifest["provenance"] = {
+                "generator": self.generator.name,
+                "workspace_digest": workspace_digest,
+                "published_digest": digest,
+                "published_at": datetime.now(UTC).isoformat(),
+                "gap_id": str(gap_id),
+            }
+            manifest["evaluation_metrics"] = evaluation.score.to_dict()
+            manifest["dependencies"] = list(emitted_manifest.get("dependencies") or [])
+            manifest["components"] = list(emitted_manifest.get("components") or [])
             registered = self.registry.register(spec.capability_id, skill_version_id, manifest)
             stages.append(
                 PipelineStage(
@@ -333,6 +475,8 @@ class EvolutionPipeline:
                     EvolutionErrorClass.PRODUCT_CHANGE_REQUIRED,
                     EvolutionErrorClass.GENERATION_REFUSED,
                     EvolutionErrorClass.SANDBOX_VIOLATION,
+                    EvolutionErrorClass.RECURSION_LIMIT_EXCEEDED,
+                    EvolutionErrorClass.PERMISSION_DENIED,
                 )
                 else "failed"
             )
@@ -380,7 +524,23 @@ class EvolutionPipeline:
         )
         return result
 
-    def _build_spec(self, requested_capability: str, raw_spec: dict[str, Any] | None) -> SkillSpec:
+    def _matched_component(self, trail: list[dict[str, Any]]) -> dict[str, Any] | None:
+        """The vetted component resolution step 4 chose, if any."""
+        for entry in trail or []:
+            if (
+                isinstance(entry, dict)
+                and entry.get("step") == STEP_COMPONENT
+                and entry.get("outcome") == "satisfied"
+            ):
+                return (entry.get("evidence") or {}).get("component")
+        return None
+
+    def _build_spec(
+        self,
+        requested_capability: str,
+        raw_spec: dict[str, Any] | None,
+        component: dict[str, Any] | None = None,
+    ) -> SkillSpec:
         spec_dict = dict(raw_spec or {})
         spec_dict.setdefault("capability_id", requested_capability)
         if spec_dict["capability_id"] != requested_capability:
@@ -388,7 +548,55 @@ class EvolutionPipeline:
                 EvolutionErrorClass.VALIDATION_ERROR,
                 "skill spec capability_id does not match the requested capability",
             )
+        if component:
+            # Adapting a vetted component: the component decides the operation
+            # and is recorded as a PINNED dependency of the resulting skill.
+            spec_dict["operation"] = component["operation"]
+            spec_dict["components"] = [
+                {
+                    "name": component["name"],
+                    "version": component["version"],
+                    "source": component["source"],
+                    "digest": component["digest"],
+                }
+            ]
+            spec_dict.setdefault("builder_name", "component_adapter")
         return SkillSpec.parse(spec_dict)
+
+    def _evaluate_with_retries(self, layout: SkillLayout) -> tuple[EvaluationResult, int]:
+        """Evaluate, retrying ONLY transient timeouts up to the retry limit."""
+        attempts = 0
+        evaluation: EvaluationResult | None = None
+        for attempts in range(1, self.budget.retry_limit + 2):  # noqa: B007
+            evaluation = self.evaluator.evaluate(layout)
+            transient = {"generated_tests_timed_out"} & set(evaluation.failed_gates)
+            if evaluation.passed or not transient:
+                break
+            logger.info(
+                "evaluation_retry",
+                capability_id=layout.capability_id,
+                attempt=attempts,
+                gates=evaluation.failed_gates,
+            )
+        assert evaluation is not None
+        return evaluation, attempts
+
+    def _incumbent_layout(self, capability_id: str) -> SkillLayout | None:
+        """The currently registered version's skill directory, for comparison."""
+        resolved = self.registry.resolve(capability_id)
+        if resolved is None:
+            return None
+        source_ref = (resolved.get("skill_version") or {}).get("source_ref")
+        manifest = resolved.get("manifest") or {}
+        skill_name = manifest.get("skill")
+        if not source_ref or not skill_name or not Path(source_ref).is_dir():
+            return None
+        return SkillLayout(
+            root=Path(source_ref),
+            skill_name=skill_name,
+            capability_id=capability_id,
+            version=resolved["version"],
+        )
 
     def _next_version(self, capability_id: str, requested: str) -> str:
         parts = [int(p) for p in requested.split(".")]

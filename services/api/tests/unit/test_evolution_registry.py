@@ -14,7 +14,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.evolution import lifecycle as lifecycle_module
 from app.evolution.errors import EvolutionError, EvolutionErrorClass
+from app.evolution.manifest import default_manifest
 from app.evolution.models import Capability, CapabilityGap, SkillVersion
 from app.evolution.registry import (
     REQUIRED_MANIFEST_KEYS,
@@ -64,19 +66,42 @@ def manifest_for(
     outputs: list[str] | None = None,
     **extra,
 ) -> dict:
-    body = {
-        "id": capability_id,
-        "version": version,
-        "status": "experimental",
-        "inputs": inputs if inputs is not None else ["text"],
-        "outputs": outputs if outputs is not None else ["slug"],
-        "permissions": [],
-        "dependencies": [],
-        "owner_scope": "normal",
-        "health_metrics": ["success_rate"],
-    }
-    body.update(extra)
-    return body
+    """A complete, deny-by-default M7 manifest for tests."""
+    extra.setdefault("purpose", f"test capability {capability_id}")
+    purpose = extra.pop("purpose")
+    return default_manifest(
+        capability_id,
+        version,
+        purpose=purpose,
+        inputs=inputs if inputs is not None else ["text"],
+        outputs=outputs if outputs is not None else ["slug"],
+        health_metrics=["success_rate"],
+        **extra,
+    )
+
+
+def promote_lifecycle(registry: CapabilityRegistry, skill_version_id: uuid.UUID) -> None:
+    """Walk the lifecycle to `canary` with the evidence each edge requires."""
+    registry.advance_lifecycle(
+        skill_version_id,
+        lifecycle_module.STAGE_SANDBOX,
+        {"workspace": "test-ws", "manifest_digest": "ab" * 32},
+    )
+    registry.record_evaluation(skill_version_id, PASSING_EVALUATION)
+    registry.record_review(skill_version_id, APPROVING_REVIEW)
+    registry.advance_lifecycle(
+        skill_version_id,
+        lifecycle_module.STAGE_VALIDATED,
+        {"evaluation_passed": True, "review_approved": True, "supply_chain_ok": True},
+    )
+    registry.advance_lifecycle(
+        skill_version_id, lifecycle_module.STAGE_SHADOW, {"samples": 5, "mismatches": 0}
+    )
+    registry.advance_lifecycle(
+        skill_version_id,
+        lifecycle_module.STAGE_CANARY,
+        {"samples": 5, "not_worse_than_incumbent": True},
+    )
 
 
 def register_fully(
@@ -87,8 +112,7 @@ def register_fully(
 ) -> tuple[dict, uuid.UUID]:
     created = registry.create_skill_version(capability_id, version)
     skill_version_id = uuid.UUID(created["id"])
-    registry.record_evaluation(skill_version_id, PASSING_EVALUATION)
-    registry.record_review(skill_version_id, APPROVING_REVIEW)
+    promote_lifecycle(registry, skill_version_id)
     capability = registry.register(
         capability_id, skill_version_id, manifest_for(capability_id, version, **manifest_extra)
     )
@@ -110,22 +134,22 @@ def test_manifest_requires_every_section2_key() -> None:
 
 def test_manifest_rejects_unknown_keys_and_bad_tokens() -> None:
     with pytest.raises(EvolutionError):
-        validate_manifest(manifest_for("text.slugify", surprise="x"))
+        validate_manifest({**manifest_for("text.slugify"), "surprise": "x"})
     with pytest.raises(EvolutionError):
-        validate_manifest(manifest_for("Text.Slugify"))
+        validate_manifest({**manifest_for("text.slugify"), "id": "Text.Slugify"})
     with pytest.raises(EvolutionError):
-        validate_manifest(manifest_for("text.slugify", version="1.0"))
+        validate_manifest({**manifest_for("text.slugify"), "version": "1.0"})
     with pytest.raises(EvolutionError):
-        validate_manifest(manifest_for("text.slugify", owner_scope="root"))
+        validate_manifest({**manifest_for("text.slugify"), "owner_scope": "root"})
     with pytest.raises(EvolutionError):
-        validate_manifest(manifest_for("text.slugify", entrypoint="__import__"))
+        validate_manifest({**manifest_for("text.slugify"), "entrypoint": "__import__"})
 
 
 def test_manifest_normalizes_and_keeps_engine_keys() -> None:
     normalized = validate_manifest(
         manifest_for(
             "text.slugify",
-            summary="turn a title into a slug",
+            purpose="turn a title into a slug",
             skill="text_slugify",
             entrypoint="run",
             configurable_for=["text.slugify_tr"],
@@ -190,8 +214,7 @@ def test_register_refuses_a_version_of_another_capability(
 ) -> None:
     created = registry.create_skill_version("text.reverse", "0.1.0")
     skill_version_id = uuid.UUID(created["id"])
-    registry.record_evaluation(skill_version_id, PASSING_EVALUATION)
-    registry.record_review(skill_version_id, APPROVING_REVIEW)
+    promote_lifecycle(registry, skill_version_id)
     with pytest.raises(EvolutionError) as excinfo:
         registry.register("text.slugify", skill_version_id, manifest_for("text.slugify"))
     assert excinfo.value.error_class == EvolutionErrorClass.REGISTRATION_REFUSED

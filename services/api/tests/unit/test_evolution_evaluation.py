@@ -8,6 +8,7 @@ Also covers the INDEPENDENT reviewer (§6): it re-runs everything itself and
 proves the generated tests are not vacuous via a mutation probe.
 """
 
+import json
 import sys
 
 import pytest
@@ -109,10 +110,10 @@ def test_evaluation_requires_a_complete_layout(tmp_path) -> None:
 
 def test_evaluation_flags_declared_metrics_the_eval_set_never_emits(tmp_path) -> None:
     layout = build(tmp_path)
-    manifest = layout.manifest_path.read_text(encoding="utf-8")
+    manifest = json.loads(layout.manifest_path.read_text(encoding="utf-8"))
+    manifest["health_metrics"] = [*manifest["health_metrics"], "owner_correction_rate"]
     layout.manifest_path.write_text(
-        manifest.replace("  - case_count", "  - case_count\n  - owner_correction_rate"),
-        encoding="utf-8",
+        json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
     )
     result = SkillEvaluator().evaluate(layout)
     assert result.passed is False

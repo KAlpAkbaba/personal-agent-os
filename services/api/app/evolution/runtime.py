@@ -36,8 +36,11 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import Settings
 from app.db import build_engine, build_session_factory
+from app.evolution.components import ComponentCatalog
 from app.evolution.gaps import CapabilityComposer, GapDetector, GapService
+from app.evolution.improvement import ImprovementDetector, SkillImprover
 from app.evolution.registry import CapabilityRegistry
+from app.evolution.resources import ResourceBudget
 from app.evolution.sandbox import SandboxPolicy
 from app.evolution.skills import (
     ClaudeSkillGenerator,
@@ -72,6 +75,17 @@ class EvolutionRuntime:
         ).resolve()
         self._generator_name = os.environ.get("PAGENTOS_EVOLUTION_GENERATOR", "deterministic")
         self._claude_cli = os.environ.get("PAGENTOS_EVOLUTION_CLAUDE_CLI", "")
+        # Resource controls (§ Isolation, supply chain, resources). Every value
+        # is configurable; the defaults are the safe ones.
+        self.budget = ResourceBudget(
+            timeout_s=float(os.environ.get("PAGENTOS_EVOLUTION_TIMEOUT_S", "60")),
+            cpu_seconds=int(os.environ.get("PAGENTOS_EVOLUTION_CPU_SECONDS", "30")),
+            memory_mb=int(os.environ.get("PAGENTOS_EVOLUTION_MEMORY_MB", "512")),
+            disk_mb=int(os.environ.get("PAGENTOS_EVOLUTION_DISK_MB", "8")),
+            retry_limit=int(os.environ.get("PAGENTOS_EVOLUTION_RETRY_LIMIT", "1")),
+            max_depth=int(os.environ.get("PAGENTOS_EVOLUTION_MAX_DEPTH", "1")),
+        )
+        self.catalog = ComponentCatalog.load()
         # Constructed eagerly so a protected-tree misconfiguration fails at
         # startup rather than at the first generation request.
         self.sandbox = SandboxPolicy(self.work_root)
@@ -108,7 +122,26 @@ class EvolutionRuntime:
 
     @property
     def detector(self) -> GapDetector:
-        return GapDetector(self.registry, CapabilityComposer(self.registry))
+        return GapDetector(
+            self.registry,
+            CapabilityComposer(self.registry),
+            catalog=self.catalog,
+            budget=self.budget,
+        )
+
+    @property
+    def improvement_detector(self) -> ImprovementDetector:
+        return ImprovementDetector(self.registry)
+
+    @property
+    def improver(self) -> SkillImprover:
+        return SkillImprover(
+            self.registry,
+            sandbox=self.sandbox,
+            skills_root=self.skills_root,
+            generator=self.generator,
+            budget=self.budget,
+        )
 
     @property
     def generator(self) -> SkillGenerator:
@@ -139,6 +172,8 @@ class EvolutionRuntime:
             "skills_root_present": self.skills_root.is_dir(),
             "sandbox_root": str(self.sandbox.root),
             "sandbox_isolated_from_core": True,
+            "component_catalog": len(self.catalog.components),
+            "resource_budget": self.budget.to_dict(),
         }
 
 

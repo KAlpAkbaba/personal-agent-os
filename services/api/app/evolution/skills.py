@@ -32,7 +32,6 @@ bounded scalars and emitted only through ``repr()``.
 from __future__ import annotations
 
 import json
-import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -132,61 +131,35 @@ class SkillLayout:
         return [p.name for p in self.required_paths() if not p.is_file()]
 
 
-# ------------------------------------------------------- minimal YAML subset
-# Deliberately NOT PyYAML: the API declares no YAML dependency (it is only
-# present transitively via uvicorn[standard]) and the manifest content here is
-# a closed set of strict tokens and flat string lists, so a ~40-line
-# deterministic emitter/parser is both sufficient and auditable. See the M7
-# deviations note in the delivery report.
-
-_YAML_KEY_RE = re.compile(r"^([a-z_][a-z0-9_]{0,63}):(?:[ ]+(.*))?$")
-_YAML_ITEM_RE = re.compile(r"^[ ]{2}-[ ]+(.+)$")
+# ---------------------------------------------------------- manifest.yaml I/O
+# Deliberately NOT PyYAML: the API declares no YAML dependency (PyYAML is only
+# present transitively via uvicorn[standard]). JSON is a strict subset of YAML
+# 1.2, so the §10 `manifest.yaml` is emitted as canonical JSON — valid YAML for
+# any reader, deterministic byte-for-byte, and able to carry the nested
+# permission/provenance/dependency records the M7 manifest schema requires,
+# with zero new dependencies. Documented as an M7 deviation.
 
 
 def dump_manifest_yaml(manifest: dict[str, Any]) -> str:
-    lines: list[str] = []
-    for key in sorted(manifest):
-        value = manifest[key]
-        if isinstance(value, list):
-            if not value:
-                lines.append(f"{key}: []")
-                continue
-            lines.append(f"{key}:")
-            lines.extend(f"  - {item}" for item in value)
-        else:
-            lines.append(f"{key}: {value}")
-    return "\n".join(lines) + "\n"
+    return (
+        json.dumps(manifest, indent=2, sort_keys=True, ensure_ascii=False, allow_nan=False)
+        + "\n"
+    )
 
 
 def load_manifest_yaml(text: str) -> dict[str, Any]:
-    manifest: dict[str, Any] = {}
-    current_key: str | None = None
-    for raw in text.splitlines():
-        if not raw.strip() or raw.lstrip().startswith("#"):
-            continue
-        item = _YAML_ITEM_RE.match(raw)
-        if item is not None:
-            if current_key is None or not isinstance(manifest.get(current_key), list):
-                raise EvolutionError(
-                    EvolutionErrorClass.VALIDATION_ERROR,
-                    "manifest.yaml list item without a preceding list key",
-                )
-            manifest[current_key].append(item.group(1).strip())
-            continue
-        entry = _YAML_KEY_RE.match(raw)
-        if entry is None:
-            raise EvolutionError(
-                EvolutionErrorClass.VALIDATION_ERROR, "manifest.yaml line is not key: value"
-            )
-        key, value = entry.group(1), entry.group(2)
-        current_key = key
-        if value is None:
-            manifest[key] = []
-        elif value.strip() == "[]":
-            manifest[key] = []
-        else:
-            manifest[key] = value.strip()
-    return manifest
+    try:
+        loaded = json.loads(text)
+    except ValueError as exc:
+        raise EvolutionError(
+            EvolutionErrorClass.VALIDATION_ERROR,
+            "manifest.yaml is not parseable (expected JSON-in-YAML canonical form)",
+        ) from exc
+    if not isinstance(loaded, dict):
+        raise EvolutionError(
+            EvolutionErrorClass.VALIDATION_ERROR, "manifest.yaml must hold a mapping"
+        )
+    return loaded
 
 
 def read_manifest(layout_or_path: SkillLayout | Path) -> dict[str, Any]:
@@ -217,6 +190,7 @@ class Operation:
     body: str
     reference: Callable[[Any], Any]
     sample_inputs: tuple[Any, ...]
+    output_type: str = "string"
 
 
 def _ref_slugify(value: Any) -> str:
@@ -230,6 +204,21 @@ def _ref_slugify(value: Any) -> str:
             out.append("-")
             prev_dash = True
     return "".join(out).strip("-")
+
+
+# tr-TR transliteration table (constitution: Turkish is first-class). Used by
+# the improved `slugify_tr` operation, which is measurably better than plain
+# `slugify` on Turkish input — that measurable difference is what the
+# improvement benchmark in app.evolution.improvement promotes on.
+_TR_MAP = {
+    "ı": "i", "İ": "i", "ş": "s", "Ş": "s", "ğ": "g", "Ğ": "g",
+    "ü": "u", "Ü": "u", "ö": "o", "Ö": "o", "ç": "c", "Ç": "c",
+}
+
+
+def _ref_slugify_tr(value: Any) -> str:
+    text = "".join(_TR_MAP.get(ch, ch) for ch in str(value))
+    return _ref_slugify(text)
 
 
 def _ref_word_count(value: Any) -> int:
@@ -273,8 +262,40 @@ OPERATIONS: dict[str, Operation] = {
             "2026 Roadmap: M7 Evolution",
         ),
     ),
+    "slugify_tr": Operation(
+        name="slugify_tr",
+        input_name="text",
+        output_name="slug",
+        body=(
+            "    table = {\n"
+            '        "\\u0131": "i", "\\u0130": "i", "\\u015f": "s", "\\u015e": "s",\n'
+            '        "\\u011f": "g", "\\u011e": "g", "\\u00fc": "u", "\\u00dc": "u",\n'
+            '        "\\u00f6": "o", "\\u00d6": "o", "\\u00e7": "c", "\\u00c7": "c",\n'
+            "    }\n"
+            '    text = "".join(table.get(ch, ch) for ch in str(value))\n'
+            "    out = []\n"
+            "    prev_dash = False\n"
+            "    for ch in text.strip().lower():\n"
+            "        if ch.isalnum():\n"
+            "            out.append(ch)\n"
+            "            prev_dash = False\n"
+            "        elif out and not prev_dash:\n"
+            '            out.append("-")\n'
+            "            prev_dash = True\n"
+            '    return "".join(out).strip("-")\n'
+        ),
+        reference=_ref_slugify_tr,
+        sample_inputs=(
+            "Türkçe Başlık",
+            "Personal Agent OS",
+            "IŞIK ve GÖLGE",
+            "  Çoğunlukla  ",
+            "2026 Yol Haritası",
+        ),
+    ),
     "word_count": Operation(
         name="word_count",
+        output_type="integer",
         input_name="text",
         output_name="count",
         body="    return len([w for w in str(value).split() if w])\n",
@@ -291,6 +312,7 @@ OPERATIONS: dict[str, Operation] = {
     ),
     "char_checksum": Operation(
         name="char_checksum",
+        output_type="integer",
         input_name="text",
         output_name="checksum",
         body=(
@@ -328,10 +350,21 @@ class SkillSpec:
     operation: str
     summary: str
     owner_scope: str = "normal"
-    permissions: list[str] = field(default_factory=list)
-    dependencies: list[str] = field(default_factory=list)
     function_name: str = ""
     cases: list[SkillCase] = field(default_factory=list)
+    # Permission grants — DENY-BY-DEFAULT (SECURITY_MODEL M7). Empty unless the
+    # requester declares them AND the independent reviewer approves them.
+    network_permissions: list[str] = field(default_factory=list)
+    filesystem_permissions: list[dict[str, str]] = field(default_factory=list)
+    device_permissions: list[str] = field(default_factory=list)
+    secret_requirements: list[str] = field(default_factory=list)
+    external_services: list[str] = field(default_factory=list)
+    # Pinned reusable components this skill adapts (resolution step 4).
+    components: list[dict[str, str]] = field(default_factory=list)
+    # Owner-policy grant reference; presence marks an OPERATIONAL capability
+    # rather than a self-modification (see gaps.implies_product_change).
+    authorized_asset: str | None = None
+    builder_name: str = "deterministic"
 
     @property
     def op(self) -> Operation:
@@ -345,21 +378,48 @@ class SkillSpec:
     def outputs(self) -> list[str]:
         return [self.op.output_name]
 
-    def capability_manifest(self, *, status: str = "experimental") -> dict[str, Any]:
-        return {
-            "id": self.capability_id,
-            "version": self.version,
-            "status": status,
-            "inputs": list(self.inputs),
-            "outputs": list(self.outputs),
-            "permissions": list(self.permissions),
-            "dependencies": list(self.dependencies),
-            "owner_scope": self.owner_scope,
-            "health_metrics": list(GENERATED_HEALTH_METRICS),
-            "summary": self.summary,
-            "skill": self.skill_name,
-            "entrypoint": "run",
-        }
+    def capability_manifest(
+        self, *, status: str = "experimental", **extra: Any
+    ) -> dict[str, Any]:
+        """The FULL M7 capability manifest for this spec (deny-by-default)."""
+        from app.evolution.manifest import default_manifest
+
+        # The owner-policy authorization travels WITH the skill, so the
+        # independent reviewer sees it in the emitted manifest.yaml — not only
+        # in the registration payload the pipeline assembles later.
+        creation_reason = dict(extra.pop("creation_reason", {}) or {})
+        if self.authorized_asset and "authorized_asset" not in creation_reason:
+            creation_reason["authorized_asset"] = self.authorized_asset
+        extra["creation_reason"] = creation_reason
+        return default_manifest(
+            self.capability_id,
+            self.version,
+            purpose=self.summary,
+            inputs=self.inputs,
+            outputs=self.outputs,
+            status=status,
+            builder_kind="generated",
+            builder_name=self.builder_name,
+            health_metrics=list(GENERATED_HEALTH_METRICS),
+            input_types={self.op.input_name: "string"},
+            output_types={self.op.output_name: self.op.output_type},
+            owner_scope=self.owner_scope,
+            skill=self.skill_name,
+            entrypoint="run",
+            network_permissions=list(self.network_permissions),
+            filesystem_permissions=[dict(entry) for entry in self.filesystem_permissions],
+            device_permissions=list(self.device_permissions),
+            secret_requirements=list(self.secret_requirements),
+            external_services=list(self.external_services),
+            components=[dict(record) for record in self.components],
+            dependencies=[dict(record) for record in self.components],
+            tests={
+                "unit": f"{TESTS_DIRNAME}/test_{self.skill_name}.py",
+                "evals": f"{EVALS_DIRNAME}/eval_{self.skill_name}.py",
+                "case_count": len(self.cases),
+            },
+            **extra,
+        )
 
     @classmethod
     def parse(cls, raw: Any) -> SkillSpec:
@@ -374,10 +434,16 @@ class SkillSpec:
             "operation",
             "summary",
             "owner_scope",
-            "permissions",
-            "dependencies",
             "function_name",
             "cases",
+            "network_permissions",
+            "filesystem_permissions",
+            "device_permissions",
+            "secret_requirements",
+            "external_services",
+            "components",
+            "authorized_asset",
+            "builder_name",
         }
         if unknown:
             raise EvolutionError(
@@ -403,6 +469,22 @@ class SkillSpec:
         function_name = require_identifier(
             raw.get("function_name") or op.name, field="function_name"
         )
+        # Permission grants and pinned components are validated by the manifest
+        # schema authority (choke point), so there is exactly one set of rules.
+        from app.evolution.manifest import validate_dependencies, validate_permissions
+
+        grants = validate_permissions(
+            {
+                "network_permissions": raw.get("network_permissions") or [],
+                "filesystem_permissions": raw.get("filesystem_permissions") or [],
+                "device_permissions": raw.get("device_permissions") or [],
+                "secret_requirements": raw.get("secret_requirements") or [],
+            }
+        )
+        components = validate_dependencies(raw.get("components") or [])
+        authorized_asset = raw.get("authorized_asset")
+        if authorized_asset is not None:
+            authorized_asset = require_slug(authorized_asset, field="authorized_asset")
         spec = cls(
             capability_id=capability_id,
             skill_name=skill_name,
@@ -410,10 +492,20 @@ class SkillSpec:
             operation=op.name,
             summary=require_summary(raw.get("summary") or f"generated {op.name} capability"),
             owner_scope=require_owner_scope(raw.get("owner_scope", "normal")),
-            permissions=require_slug_list(raw.get("permissions") or [], field="permissions"),
-            dependencies=require_slug_list(raw.get("dependencies") or [], field="dependencies"),
             function_name=function_name,
             cases=_parse_cases(raw.get("cases"), op),
+            network_permissions=grants["network_permissions"],
+            filesystem_permissions=grants["filesystem_permissions"],
+            device_permissions=grants["device_permissions"],
+            secret_requirements=grants["secret_requirements"],
+            external_services=require_slug_list(
+                raw.get("external_services") or [], field="external_services"
+            ),
+            components=components,
+            authorized_asset=authorized_asset,
+            builder_name=require_slug(
+                raw.get("builder_name") or "deterministic", field="builder_name"
+            ),
         )
         return spec
 

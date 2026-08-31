@@ -20,15 +20,19 @@ one shape.
 from __future__ import annotations
 
 import ast
+import json
 import shutil
 import tempfile
 from pathlib import Path
+from typing import Any
 
 from app.evolution.errors import EvolutionError
 from app.evolution.evaluation import SkillEvaluator, static_findings
-from app.evolution.registry import validate_manifest
+from app.evolution.manifest import granted_permissions, validate_manifest
+from app.evolution.resources import permission_findings
 from app.evolution.sandbox import SandboxPolicy
 from app.evolution.skills import SkillLayout, read_manifest
+from app.evolution.supply_chain import scan_dependencies
 from app.logging import get_logger
 from app.selfhealing.backends import ReviewCheck, ReviewResult
 
@@ -57,6 +61,45 @@ class IndependentSkillReviewer:
         # instead of consuming the builder-side evaluation report.
         self.evaluator = evaluator or SkillEvaluator()
         self.sandbox = sandbox
+
+    def review_record(self, layout: SkillLayout) -> tuple[ReviewResult, dict[str, Any]]:
+        """The reviewer's verdict PLUS the JSON payload the registry gates on.
+
+        ``permissions_approved``/``approved_permissions`` are the deny-by-default
+        decision: ``registry.register`` refuses a generated manifest whose grants
+        are not exactly what this payload approved.
+        """
+        result = self.review(layout)
+        try:
+            manifest = read_manifest(layout)
+        except EvolutionError:
+            manifest = {}
+        grants = granted_permissions(manifest)
+        approved = self._approve_permissions(grants, manifest)
+        payload = result.to_dict()
+        payload["reviewer"] = self.name
+        payload["permissions_approved"] = approved
+        payload["approved_permissions"] = grants if approved else {}
+        payload["deny_by_default"] = True
+        return result, payload
+
+    @staticmethod
+    def _approve_permissions(
+        grants: dict[str, list[Any]], manifest: dict[str, Any]
+    ) -> bool:
+        """DENY-BY-DEFAULT.
+
+        A generated skill gets a permission grant approved ONLY when the manifest
+        records an owner-policy authorization for the asset it acts on
+        (``creation_reason.authorized_asset``). That is the seam the owner policy
+        subsystem drives: it can hand a powerful tool to an explicitly authorized
+        device/asset without Evolution touching the security root
+        (ACCEPTANCE_TESTS M7 Boundaries, SECURITY_MODEL M7).
+        """
+        if not grants:
+            return True
+        authorized_asset = (manifest.get("creation_reason") or {}).get("authorized_asset")
+        return bool(authorized_asset)
 
     def review(self, layout: SkillLayout) -> ReviewResult:
         checks: list[ReviewCheck] = []
@@ -114,6 +157,7 @@ class IndependentSkillReviewer:
         )
 
         # Manifest must satisfy the §2 registry contract.
+        manifest: dict[str, Any] = {}
         try:
             manifest = read_manifest(layout)
             validate_manifest(manifest)
@@ -125,11 +169,12 @@ class IndependentSkillReviewer:
         )
 
         # Static security scan (independent of the evaluator's run).
-        findings = (
-            static_findings(layout.module_path.read_text(encoding="utf-8"))
+        source = (
+            layout.module_path.read_text(encoding="utf-8")
             if layout.module_path.is_file()
-            else ["missing_source"]
+            else ""
         )
+        findings = static_findings(source) if source else ["missing_source"]
         checks.append(
             ReviewCheck(
                 name="no_forbidden_constructs",
@@ -137,6 +182,51 @@ class IndependentSkillReviewer:
                 detail=", ".join(findings),
             )
         )
+
+        # Capability-scoped access, deny-by-default — re-derived by the reviewer
+        # from the source and the manifest, never taken from the evaluator.
+        loaded_manifest = manifest if manifest_ok else {}
+        scope_findings = permission_findings(source, loaded_manifest) if source else []
+        checks.append(
+            ReviewCheck(
+                name="permissions_scoped",
+                passed=not scope_findings,
+                detail="; ".join(
+                    f"{f['construct']} needs {f['permission']}" for f in scope_findings
+                ),
+            )
+        )
+
+        # Supply chain re-scanned independently (pinning, source, digest,
+        # install scripts, local availability).
+        supply = scan_dependencies(
+            list((loaded_manifest or {}).get("dependencies") or [])
+            + list((loaded_manifest or {}).get("components") or [])
+        )
+        checks.append(
+            ReviewCheck(
+                name="supply_chain_clean",
+                passed=supply.ok,
+                detail=", ".join(sorted({f.rule for f in supply.findings})),
+            )
+        )
+
+        # Deny-by-default decision on the requested grants. The reviewer records
+        # the exact approved set; registration compares it to the manifest.
+        grants = granted_permissions(loaded_manifest or {})
+        permissions_approved = self._approve_permissions(grants, loaded_manifest or {})
+        if grants:
+            checks.append(
+                ReviewCheck(
+                    name="permission_grants_reviewed",
+                    passed=permissions_approved,
+                    detail=(
+                        "approved: " + json.dumps(grants, sort_keys=True)
+                        if permissions_approved
+                        else "grants are not owner-authorized; deny-by-default stands"
+                    ),
+                )
+            )
 
         # Re-run the generated tests and evals ourselves.
         if not missing:

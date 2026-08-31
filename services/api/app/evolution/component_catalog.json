@@ -1,0 +1,36 @@
+{
+  "schema": "pagentos.evolution.component_catalog.v1",
+  "note": "Curated, vetted, PINNED reusable components. Offline only: there is no network install path. Each digest is recomputed at load and a mismatch refuses the entry.",
+  "components": [
+    {
+      "name": "text_metrics_kit",
+      "version": "2.1.0",
+      "operation": "word_count",
+      "requires_inputs": [
+        "text"
+      ],
+      "provides_outputs": [
+        "count"
+      ],
+      "purpose": "Vetted text metrics helper (word counting).",
+      "license": "MIT",
+      "source": "local-component-catalog",
+      "digest": "sha256:f21a0736d9eabf680b904b40ee3c89e923efc2b7824316f5340d681c442a9e58"
+    },
+    {
+      "name": "text_checksum_kit",
+      "version": "1.0.0",
+      "operation": "char_checksum",
+      "requires_inputs": [
+        "text"
+      ],
+      "provides_outputs": [
+        "checksum"
+      ],
+      "purpose": "Vetted rolling character checksum helper.",
+      "license": "MIT",
+      "source": "local-component-catalog",
+      "digest": "sha256:b08254d61b5f63a96aee98e9468a0bf96f06cfdb88e1db44fee7be703c5ee3c1"
+    }
+  ]
+}

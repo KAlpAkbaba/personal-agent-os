@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import ast
 import json
-import os
 import re
 import subprocess
 import sys
@@ -35,7 +34,16 @@ from pathlib import Path
 from typing import Any
 
 from app.evolution.errors import EvolutionError, EvolutionErrorClass
+from app.evolution.resources import (
+    ResourceBudget,
+    assert_no_secrets,
+    build_isolated_env,
+    enforce_disk_budget,
+    enforce_output_budget,
+    permission_findings,
+)
 from app.evolution.skills import SKILL_DIR_ENV, SkillLayout, read_manifest
+from app.evolution.supply_chain import scan_dependencies
 from app.logging import get_logger
 
 logger = get_logger("app.evolution.evaluation")
@@ -139,16 +147,22 @@ def run_skill_script(
     skill_dir: Path,
     *,
     python: str = sys.executable,
-    timeout_s: float = DEFAULT_TIMEOUT_S,
+    timeout_s: float | None = None,
+    budget: ResourceBudget | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> ProcessRun:
     """Execute one generated script in an ISOLATED subprocess.
 
-    The environment is rebuilt from scratch (only what the interpreter needs on
-    Windows plus the skill locator), the working directory is the skill
-    directory, and ``-I -S`` isolates the interpreter from ``PYTHON*`` inherited
-    state, the user site directory AND every site-packages entry — so generated
-    code cannot import the ``app`` package, its settings or its credentials, and
-    sees only the standard library it is contractually limited to.
+    The environment is built from an ALLOWLIST (``app.evolution.resources``),
+    never by filtering the parent environment, and is then asserted against the
+    secret deny-list; the working directory is the skill directory; and
+    ``-I -S`` isolates the interpreter from ``PYTHON*`` inherited state, the user
+    site directory AND every site-packages entry — so generated code cannot
+    import the ``app`` package, its settings or its credentials, and sees only
+    the standard library it is contractually limited to.
+
+    The resource budget supplies the hard wall-clock timeout (every platform)
+    and POSIX CPU/address-space rlimits; output size is capped afterwards.
     """
     script = Path(script)
     skill_dir = Path(skill_dir)
@@ -156,15 +170,20 @@ def run_skill_script(
         raise EvolutionError(
             EvolutionErrorClass.NOT_FOUND, f"generated script not found: {script.name}"
         )
-    env: dict[str, str] = {SKILL_DIR_ENV: str(skill_dir), "PYTHONUTF8": "1"}
-    for passthrough in ("SYSTEMROOT", "PATH", "TEMP", "TMP", "COMSPEC"):
-        value = os.environ.get(passthrough)
-        if value:
-            env[passthrough] = value
+    budget = budget or ResourceBudget()
+    timeout_s = budget.timeout_s if timeout_s is None else timeout_s
+    env = build_isolated_env(skill_dir, skill_dir_var=SKILL_DIR_ENV)
+    if extra_env:
+        env.update(extra_env)
+        assert_no_secrets(env, skill_dir_var=SKILL_DIR_ENV)
     started = time.perf_counter()
+    kwargs: dict[str, Any] = {}
+    preexec = budget.rlimit_preexec()
+    if preexec is not None:  # pragma: no cover - POSIX only
+        kwargs["preexec_fn"] = preexec
     try:
         proc = subprocess.run(  # noqa: S603 - our own generated script, isolated env
-            [python, "-I", "-S", str(script)],
+            [python, "-I", "-S", "-X", "utf8", str(script)],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -172,6 +191,7 @@ def run_skill_script(
             env=env,
             cwd=str(skill_dir),
             timeout=timeout_s,
+            **kwargs,
         )
     except subprocess.TimeoutExpired:
         return ProcessRun(
@@ -181,10 +201,12 @@ def run_skill_script(
             duration_ms=(time.perf_counter() - started) * 1000.0,
             timed_out=True,
         )
+    stdout = enforce_output_budget(proc.stdout or "", budget)
+    stderr = enforce_output_budget(proc.stderr or "", budget)
     return ProcessRun(
         exit_code=proc.returncode,
-        stdout=proc.stdout or "",
-        stderr=proc.stderr or "",
+        stdout=stdout,
+        stderr=stderr,
         duration_ms=(time.perf_counter() - started) * 1000.0,
     )
 
@@ -257,24 +279,34 @@ class SkillEvaluator:
         self,
         *,
         python: str = sys.executable,
-        timeout_s: float = DEFAULT_TIMEOUT_S,
+        timeout_s: float | None = None,
         success_threshold: float = DEFAULT_SUCCESS_THRESHOLD,
         max_p95_latency_ms: float = DEFAULT_MAX_P95_LATENCY_MS,
+        budget: ResourceBudget | None = None,
     ) -> None:
+        self.budget = budget or ResourceBudget()
         self.python = python
-        self.timeout_s = timeout_s
+        self.timeout_s = self.budget.timeout_s if timeout_s is None else timeout_s
         self.success_threshold = success_threshold
         self.max_p95_latency_ms = max_p95_latency_ms
 
     def run_tests(self, layout: SkillLayout) -> tuple[ProcessRun, dict[str, Any]]:
         run = run_skill_script(
-            layout.test_path, layout.root, python=self.python, timeout_s=self.timeout_s
+            layout.test_path,
+            layout.root,
+            python=self.python,
+            timeout_s=self.timeout_s,
+            budget=self.budget,
         )
         return run, parse_test_output(run.stdout)
 
     def run_evals(self, layout: SkillLayout) -> tuple[ProcessRun, dict[str, Any]]:
         run = run_skill_script(
-            layout.eval_path, layout.root, python=self.python, timeout_s=self.timeout_s
+            layout.eval_path,
+            layout.root,
+            python=self.python,
+            timeout_s=self.timeout_s,
+            budget=self.budget,
         )
         if run.timed_out:
             return run, {}
@@ -327,9 +359,36 @@ class SkillEvaluator:
             failed_gates.append("declared_health_metrics_missing")
 
         # 4. Static security scan of the generated source.
-        findings = static_findings(layout.module_path.read_text(encoding="utf-8"))
+        source = layout.module_path.read_text(encoding="utf-8")
+        findings = static_findings(source)
         if findings:
             failed_gates.append("security_findings")
+
+        # 4b. Capability-scoped access, DENY-BY-DEFAULT: any construct needing a
+        # permission the manifest does not grant is a gate failure.
+        scope_findings = permission_findings(source, manifest)
+        if scope_findings:
+            failed_gates.append("permission_scope_violation")
+
+        # 4c. Supply chain: pinned name+version+source+digest, no install
+        # scripts, and the component must actually exist locally.
+        supply = scan_dependencies(
+            list(manifest.get("dependencies") or []) + list(manifest.get("components") or [])
+        )
+        if not supply.ok:
+            failed_gates.append(
+                "dependency_unavailable"
+                if any(f.rule == "dependency_unavailable" for f in supply.findings)
+                else "supply_chain_rejected"
+            )
+
+        # 4d. Disk budget for the generated artifact.
+        try:
+            artifact_bytes = enforce_disk_budget(layout.root, self.budget)
+            disk_detail: dict[str, Any] = {"bytes": artifact_bytes, "ok": True}
+        except EvolutionError as exc:
+            disk_detail = {"ok": False, "error": exc.to_dict()}
+            failed_gates.append("disk_budget_exceeded")
 
         functional_success_rate = (eval_passed / eval_total) if eval_total else 0.0
         test_pass_rate = ((test_total - test_failed) / test_total) if test_total else 0.0
@@ -347,7 +406,7 @@ class SkillEvaluator:
             regression_count=test_failed,
             p95_latency_ms=p95,
             test_pass_rate=test_pass_rate,
-            security_findings=len(findings),
+            security_findings=len(findings) + len(scope_findings) + len(supply.findings),
             eval_cases=eval_total,
             test_checks=test_total,
             metrics=metrics,
@@ -372,6 +431,20 @@ class SkillEvaluator:
                 "findings": findings,
                 "declared_health_metrics": list(declared),
                 "missing_health_metrics": missing_metrics,
+                "permission_scope_findings": scope_findings,
+                "granted_permissions": {
+                    key: list(manifest.get(key) or [])
+                    for key in (
+                        "network_permissions",
+                        "filesystem_permissions",
+                        "device_permissions",
+                        "secret_requirements",
+                    )
+                    if manifest.get(key)
+                },
+                "supply_chain": supply.to_dict(),
+                "disk": disk_detail,
+                "resource_budget": self.budget.to_dict(),
             },
             evaluator=self.name,
         )

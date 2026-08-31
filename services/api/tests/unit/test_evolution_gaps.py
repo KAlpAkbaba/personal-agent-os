@@ -13,6 +13,7 @@ import pytest
 
 from app.evolution.errors import EvolutionError, EvolutionErrorClass
 from app.evolution.gaps import (
+    STEP_COMPONENT,
     STEP_COMPOSITION,
     STEP_EXISTING,
     STEP_NEW_SKILL,
@@ -27,7 +28,11 @@ from app.evolution.gaps import (
     require_composition_attempted,
 )
 from app.evolution.registry import CapabilityRegistry
-from tests.unit.test_evolution_registry import make_session_factory, register_fully
+from tests.unit.test_evolution_registry import (
+    make_session_factory,
+    manifest_for,
+    register_fully,
+)
 
 
 @pytest.fixture()
@@ -63,7 +68,11 @@ def test_gap_detector_identifies_missing_capability(stack) -> None:
     assert steps[STEP_EXISTING]["outcome"] == "insufficient"
     assert steps[STEP_NEW_SKILL]["outcome"] == "satisfied"
     assert steps[STEP_PRODUCT_CHANGE]["outcome"] == "not_applicable"
-    assert [entry["index"] for entry in decision.trail] == [0, 1, 2, 3, 4, 5, 6]
+    assert [entry["index"] for entry in decision.trail] == [0, 1, 2, 3, 4, 5, 6, 7]
+    assert steps[STEP_COMPONENT]["outcome"] == "insufficient"
+    # the component question is asked BEFORE the generate decision
+    assert steps[STEP_COMPONENT]["index"] < steps[STEP_NEW_SKILL]["index"]
+    assert decision.resolution_path == "generation_from_scratch"
 
 
 def test_existing_capability_short_circuits_the_tree(stack) -> None:
@@ -124,17 +133,7 @@ def test_composer_only_uses_dispatchable_capabilities(stack) -> None:
     registry, _, _ = stack
     registry.upsert_capability(
         "text.tokenize",
-        {
-            "id": "text.tokenize",
-            "version": "0.1.0",
-            "status": "experimental",
-            "inputs": ["text"],
-            "outputs": ["tokens"],
-            "permissions": [],
-            "dependencies": [],
-            "owner_scope": "normal",
-            "health_metrics": [],
-        },
+        manifest_for("text.tokenize", inputs=["text"], outputs=["tokens"]),
     )
     attempt = CapabilityComposer(registry).attempt(
         make_request(required_inputs=["text"], required_outputs=["tokens"])
@@ -325,3 +324,72 @@ def test_gap_service_rejects_invalid_states(stack) -> None:
     with pytest.raises(EvolutionError) as excinfo:
         gaps.get(uuid.uuid4())
     assert excinfo.value.error_class == EvolutionErrorClass.NOT_FOUND
+
+
+# ------------------------------- 4. install/adapt a reusable component
+
+
+def test_component_adaptation_is_considered_before_generation(stack) -> None:
+    """A request the vetted catalog covers resolves through step 4, and the
+    trail proves the question was asked BEFORE the generate decision."""
+    _, _, detector = stack
+    decision = detector.detect(
+        make_request(
+            requested_capability="text.word_count",
+            required_inputs=["text"],
+            required_outputs=["count"],
+        )
+    )
+    assert decision.resolution == "generation"  # frozen CHECK has no `component`
+    assert decision.resolution_path == "component_adaptation"
+    assert decision.component["name"] == "text_metrics_kit"
+    assert decision.component["digest"].startswith("sha256:")
+
+    steps = steps_by_name(decision.trail)
+    component = steps[STEP_COMPONENT]
+    assert component["outcome"] == "satisfied"
+    assert component["index"] == 5
+    assert component["index"] < steps[STEP_NEW_SKILL]["index"]
+    assert component["evidence"]["install"] == "offline-local-catalog"
+    assert steps[STEP_NEW_SKILL]["evidence"]["resolution_path"] == "component_adaptation"
+
+
+def test_composition_still_wins_over_component_adaptation(stack) -> None:
+    """The order is enforced: if registered capabilities can be chained, the
+    catalog is never even consulted."""
+    registry, _, detector = stack
+    register_fully(registry, "text.tokenize", inputs=["text"], outputs=["count"])
+    decision = detector.detect(
+        make_request(
+            requested_capability="text.word_count",
+            required_inputs=["text"],
+            required_outputs=["count"],
+        )
+    )
+    assert decision.resolution == "composition"
+    assert STEP_COMPONENT not in steps_by_name(decision.trail)
+
+
+def test_the_catalog_survey_is_recorded_even_when_nothing_matches(stack) -> None:
+    _, _, detector = stack
+    decision = detector.detect(make_request())  # wants `slug`; catalog has none
+    component = steps_by_name(decision.trail)[STEP_COMPONENT]
+    assert component["outcome"] == "insufficient"
+    assert component["evidence"]["catalog"], "the survey is the audit evidence"
+    assert "no vetted component" in component["evidence"]["reason"]
+
+
+def test_the_full_resolution_order_is_the_owner_order(stack) -> None:
+    """owner step 3 == trail steps 3+4; owner step 4 == trail step 5."""
+    _, _, detector = stack
+    trail = detector.detect(make_request()).trail
+    assert [entry["step"] for entry in trail] == [
+        "request_received",
+        "existing_capability",
+        "composition",
+        "configuration",
+        "extension",
+        "component_adaptation",
+        "new_skill",
+        "product_core_change",
+    ]

@@ -56,7 +56,7 @@ class Stack:
     sandbox: SandboxPolicy
     skills_root: Path
 
-    def pipeline(self, generator=None) -> EvolutionPipeline:
+    def pipeline(self, generator=None, **overrides) -> EvolutionPipeline:
         return EvolutionPipeline(
             self.registry,
             self.gaps,
@@ -64,6 +64,7 @@ class Stack:
             sandbox=self.sandbox,
             skills_root=self.skills_root,
             resumer=self.resumer,
+            **overrides,
         )
 
     def open_gap(self, **overrides) -> uuid.UUID:
@@ -81,8 +82,12 @@ class Stack:
         return uuid.UUID(gap["id"])
 
 
-@pytest.fixture()
-def stack(tmp_path) -> Stack:
+def make_stack(tmp_path) -> Stack:
+    """Build a fully wired, offline evolution stack on SQLite + temp roots.
+
+    Exposed as a plain function so sibling test modules can build their own
+    ``stack`` fixture without importing (and shadowing) this one's.
+    """
     engine = create_engine(
         "sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False}
     )
@@ -112,6 +117,28 @@ def stack(tmp_path) -> Stack:
     )
 
 
+@pytest.fixture()
+def stack(tmp_path) -> Stack:
+    return make_stack(tmp_path)
+
+
+EXPECTED_STAGES = [
+    "load_gap",
+    "verify_composition_attempted",
+    "work_order",
+    "isolated_workspace",
+    "generate",
+    "supply_chain",
+    "evaluate",
+    "independent_review",
+    "shadow",
+    "canary",
+    "publish",
+    "register_capability",
+    "resume_task",
+]
+
+
 def stage_names(result) -> list[str]:
     return [stage.name for stage in result.stages]
 
@@ -124,22 +151,34 @@ def test_pipeline_generates_evaluates_reviews_and_registers(stack: Stack) -> Non
     result = stack.pipeline().run(gap_id)
 
     assert result.status == "registered", result.summary
-    assert stage_names(result) == [
-        "load_gap",
-        "verify_composition_attempted",
-        "work_order",
-        "isolated_workspace",
-        "generate",
-        "evaluate",
-        "independent_review",
-        "publish",
-        "register_capability",
-        "resume_task",
-    ]
+    assert stage_names(result) == EXPECTED_STAGES
     resolved = stack.registry.resolve("text.slugify")
     assert resolved is not None
     assert resolved["skill_version"]["status"] == "registered"
-    assert resolved["manifest"]["generated_by"] == "deterministic"
+    manifest = resolved["manifest"]
+    assert manifest["provenance"]["generator"] == "deterministic"
+    assert manifest["builder_identity"] == {"kind": "generated", "name": "deterministic"}
+    assert manifest["creation_reason"]["gap_id"] == str(gap_id)
+    assert manifest["creation_reason"]["trigger"] == "capability_gap"
+    assert manifest["rollback_version"] is None  # first version of this capability
+    # Deny-by-default: nothing was granted and the risk class reflects that.
+    assert manifest["network_permissions"] == []
+    assert manifest["filesystem_permissions"] == []
+    assert manifest["device_permissions"] == []
+    assert manifest["secret_requirements"] == []
+    assert manifest["risk_class"] == "low"
+    assert manifest["side_effects"] == ["pure"]
+    assert manifest["evaluation_metrics"]["functional_success_rate"] == 1.0
+    # Lifecycle reached `active` with the evidence of every promotion edge.
+    lifecycle = resolved["skill_version"]["evaluation"]["lifecycle"]
+    assert lifecycle["stage"] == "active"
+    assert [entry["stage"] for entry in lifecycle["history"]] == [
+        "sandbox",
+        "validated",
+        "shadow",
+        "canary",
+        "active",
+    ]
 
     published = Path(resolved["skill_version"]["source_ref"])
     assert published.is_relative_to(stack.skills_root)

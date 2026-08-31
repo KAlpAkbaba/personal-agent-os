@@ -5,6 +5,7 @@
 - POST /gaps                    run gap detection for a request and record it
 - GET  /gaps                    list recorded gaps with their decision trails
 - POST /gaps/{id}/resolve       run the self-extension pipeline for one gap
+- GET  /gaps/{id}/audit         the nine auditability answers for one evolution
 - GET  /skill-versions          candidate/registered/rejected skill versions
 
 Auth posture: the SAME as the rest of the API — no per-route authentication
@@ -26,6 +27,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.evolution.audit import build_audit
 from app.evolution.errors import EvolutionError, EvolutionErrorClass
 from app.evolution.gaps import CapabilityRequest
 from app.evolution.pipeline import EvolutionPipeline
@@ -49,6 +51,13 @@ _HTTP_STATUS = {
     EvolutionErrorClass.REVIEW_REJECTED: 409,
     EvolutionErrorClass.REGISTRATION_REFUSED: 409,
     EvolutionErrorClass.DISPATCH_FAILED: 500,
+    EvolutionErrorClass.SUPPLY_CHAIN_REJECTED: 409,
+    EvolutionErrorClass.DEPENDENCY_UNAVAILABLE: 424,
+    EvolutionErrorClass.RESOURCE_BUDGET_EXCEEDED: 409,
+    EvolutionErrorClass.RECURSION_LIMIT_EXCEEDED: 409,
+    EvolutionErrorClass.PERMISSION_DENIED: 403,
+    EvolutionErrorClass.LIFECYCLE_VIOLATION: 409,
+    EvolutionErrorClass.NOT_SUPERIOR: 409,
     EvolutionErrorClass.INTERNAL_BUG: 500,
 }
 
@@ -121,6 +130,13 @@ class GapDetectBody(BaseModel):
     task_id: uuid.UUID | None = None
     target_component: str | None = Field(default=None, max_length=128)
     change_kind: str | None = Field(default=None, max_length=32)
+    # Boundary: an operational capability request may carry the owner policy
+    # subsystem's authorization for an asset; self_modification is the only
+    # intent the recovery/security-root rule constrains.
+    intent: str | None = Field(default=None, max_length=32)
+    authorized_asset: str | None = Field(default=None, max_length=64)
+    depth: int = Field(default=0, ge=0, le=8)
+    origin_gap_id: str | None = Field(default=None, max_length=64)
     # The structured skill spec; every field is re-validated at the choke point
     # in SkillSpec.parse before a single character reaches generated source.
     spec: dict[str, Any] | None = None
@@ -183,6 +199,13 @@ async def resolve_gap(request: Request, gap_id: uuid.UUID) -> dict[str, Any]:
     runtime = _runtime(request)
     logger.info("gap_resolve_requested", gap_id=str(gap_id))
     return await _call(_resolve, runtime, gap_id)
+
+
+@router.get("/gaps/{gap_id}/audit")
+async def gap_audit(request: Request, gap_id: uuid.UUID) -> dict[str, Any]:
+    """The nine auditability answers for one evolution (M7 Auditability)."""
+    runtime = _runtime(request)
+    return await _call(build_audit, gap_id, runtime.gaps, runtime.registry)
 
 
 # ----------------------------------------------------------- skill versions

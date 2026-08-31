@@ -142,7 +142,7 @@ class CapabilityDispatcher:
         started = _utcnow()
         try:
             proc = subprocess.run(  # noqa: S603 - registered, reviewed skill; isolated env
-                [self.python, "-I", "-S", str(module_path)],
+                [self.python, "-I", "-S", "-X", "utf8", str(module_path)],
                 input=body,
                 capture_output=True,
                 text=True,

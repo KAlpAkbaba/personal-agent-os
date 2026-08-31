@@ -3,13 +3,19 @@
 For every unmet request the engine walks a fixed, ordered tree and records ONE
 trail entry per question, in order, into ``capability_gaps.decision_trail_json``:
 
-    0. request_received     the normalized request (spec + resume payload)
-    1. existing_capability   can an already-registered capability solve it?
-    2. composition           can registered capabilities be CHAINED to solve it?
-    3. configuration         can an existing skill be configured to solve it?
-    4. extension             can an existing skill be safely extended?
-    5. new_skill             is a new skill/module required?
-    6. product_core_change   does the requirement imply a product/core change?
+    0. request_received      the normalized request (spec + resume payload)
+    1. existing_capability    can an already-registered capability solve it?
+    2. composition            can registered capabilities be CHAINED to solve it?
+    3. configuration          can an existing skill be configured to solve it?
+    4. extension              can an existing skill be safely extended?
+    5. component_adaptation   can a vetted, pinned reusable component be adapted?
+    6. new_skill              is a new skill/module required?
+    7. product_core_change    does the requirement imply a product/core change?
+
+The owner's resolution order lists "configure/extend an existing skill" as one
+step; the tree keeps configure and extend as SEPARATE questions (a strict
+refinement of the same order), so owner step 3 == trail steps 3+4, owner step 4
+== trail step 5, owner step 5 == trail step 6, owner step 6 == trail step 7.
 
 "Composition was attempted first" is therefore *evidence*, not a claim: the
 composer really runs a forward-chaining search over the registered capabilities'
@@ -37,11 +43,13 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.evolution.components import ComponentCatalog
 from app.evolution.errors import EvolutionError, EvolutionErrorClass
 from app.evolution.models import GAP_RESOLUTIONS, GAP_STATUSES, CapabilityGap
 from app.evolution.registry import CapabilityRegistry
+from app.evolution.resources import ResourceBudget, require_within_depth
 from app.evolution.skills import SkillSpec
-from app.evolution.tokens import require_capability_id, require_slug_list
+from app.evolution.tokens import require_capability_id, require_slug, require_slug_list
 from app.logging import get_logger
 
 logger = get_logger("app.evolution.gaps")
@@ -53,6 +61,7 @@ STEP_EXISTING = "existing_capability"
 STEP_COMPOSITION = "composition"
 STEP_CONFIGURATION = "configuration"
 STEP_EXTENSION = "extension"
+STEP_COMPONENT = "component_adaptation"
 STEP_NEW_SKILL = "new_skill"
 STEP_PRODUCT_CHANGE = "product_core_change"
 
@@ -61,6 +70,7 @@ DECISION_STEPS = (
     STEP_COMPOSITION,
     STEP_CONFIGURATION,
     STEP_EXTENSION,
+    STEP_COMPONENT,
     STEP_NEW_SKILL,
     STEP_PRODUCT_CHANGE,
 )
@@ -95,6 +105,11 @@ PRODUCT_CHANGE_KINDS = frozenset({"schema", "api", "ui", "core", "recovery", "mi
 MAX_REQUEST_TEXT = 4000
 MAX_IO_NAMES = 16
 
+# A request either asks Evolution to build/extend an OPERATIONAL capability
+# (the normal case) or to modify the product's own foundations. Only the second
+# kind is constrained by the recovery/security-root rule.
+REQUEST_INTENTS = ("operational_capability", "self_modification")
+
 
 # ------------------------------------------------------------------- request
 
@@ -113,6 +128,15 @@ class CapabilityRequest:
     change_kind: str | None = None
     spec: dict[str, Any] | None = None
     resume_payload: dict[str, Any] | None = None
+    # BOUNDARY (ACCEPTANCE_TESTS M7 Boundaries): the recovery/security-root
+    # restriction binds SELF-MODIFICATION authority only. `intent` says which
+    # kind of request this is, and `authorized_asset` carries the owner policy
+    # subsystem's grant reference for an operational capability.
+    intent: str = "operational_capability"
+    authorized_asset: str | None = None
+    # Self-extension recursion depth (0 = owner/task triggered).
+    depth: int = 0
+    origin_gap_id: str | None = None
 
     @classmethod
     def parse(cls, raw: Any) -> CapabilityRequest:
@@ -172,6 +196,27 @@ class CapabilityRequest:
             raise EvolutionError(
                 EvolutionErrorClass.VALIDATION_ERROR, "resume_payload must be an object"
             )
+        intent = raw.get("intent") or "operational_capability"
+        if intent not in REQUEST_INTENTS:
+            raise EvolutionError(
+                EvolutionErrorClass.VALIDATION_ERROR,
+                f"intent must be one of {REQUEST_INTENTS}",
+            )
+        authorized_asset = raw.get("authorized_asset")
+        if authorized_asset is not None:
+            authorized_asset = require_slug(authorized_asset, field="authorized_asset")
+        depth = raw.get("depth", 0)
+        if isinstance(depth, bool) or not isinstance(depth, int) or depth < 0:
+            raise EvolutionError(
+                EvolutionErrorClass.VALIDATION_ERROR, "depth must be a non-negative integer"
+            )
+        origin_gap_id = raw.get("origin_gap_id")
+        if origin_gap_id is not None and (
+            not isinstance(origin_gap_id, str) or len(origin_gap_id) > 64
+        ):
+            raise EvolutionError(
+                EvolutionErrorClass.VALIDATION_ERROR, "origin_gap_id must be a short string"
+            )
         return cls(
             requested_capability=require_capability_id(
                 raw.get("requested_capability"), field="requested_capability"
@@ -190,6 +235,10 @@ class CapabilityRequest:
             change_kind=change_kind,
             spec=spec,
             resume_payload=resume_payload,
+            intent=intent,
+            authorized_asset=authorized_asset,
+            depth=depth,
+            origin_gap_id=origin_gap_id,
         )
 
     def to_evidence(self) -> dict[str, Any]:
@@ -203,6 +252,10 @@ class CapabilityRequest:
             "change_kind": self.change_kind,
             "spec": self.spec,
             "resume_payload": self.resume_payload,
+            "intent": self.intent,
+            "authorized_asset": self.authorized_asset,
+            "depth": self.depth,
+            "origin_gap_id": self.origin_gap_id,
         }
 
 
@@ -332,6 +385,13 @@ class GapDecision:
     trail: list[dict[str, Any]] = field(default_factory=list)
     plan: list[str] = field(default_factory=list)
     refusal_reason: str | None = None
+    # Set when resolution step 4 matched a vetted reusable component. The frozen
+    # `capability_gaps.resolution` CHECK has no `component` value, so the DB
+    # resolution stays `generation` (an adapter skill IS generated and passes
+    # every gate) and the component-vs-scratch distinction is carried here and
+    # in the decision trail. Documented M7 mapping.
+    component: dict[str, Any] | None = None
+    resolution_path: str = "generation_from_scratch"
 
     @property
     def generation_required(self) -> bool:
@@ -344,6 +404,8 @@ class GapDecision:
             "trail": list(self.trail),
             "plan": list(self.plan),
             "refusal_reason": self.refusal_reason,
+            "component": self.component,
+            "resolution_path": self.resolution_path,
         }
 
 
@@ -361,13 +423,25 @@ def _step(
 
 
 def implies_product_change(request: CapabilityRequest) -> tuple[bool, dict[str, Any]]:
-    """Fail-SAFE core/recovery detector.
+    """Fail-SAFE detector for requests that would MODIFY the product's own
+    foundations (core, recovery root, schema, API, UI).
 
-    Every signal here can only push the answer towards *refuse*, so a hostile or
-    confused request can never talk the engine into generating code — at worst
-    it talks it into refusing. Explicit structured signals
-    (``target_component``/``change_kind``) come first; the request text is
-    scanned last and only for protected-component markers.
+    BOUNDARY (ACCEPTANCE_TESTS M7 Boundaries, SECURITY_MODEL M7): this rule
+    constrains **self-modification authority only**. It must never block the
+    owner policy subsystem from granting powerful tools to explicitly authorized
+    devices/assets, so:
+
+    - declaring device/network/filesystem permissions NEVER contributes here —
+      permissions are an operational concern, gated separately (deny-by-default
+      + reviewer approval), not a self-modification signal;
+    - an ``operational_capability`` request that carries an owner-policy
+      ``authorized_asset`` is not second-guessed by the request-TEXT scan (the
+      owner already authorized the asset); its structured signals still count,
+      so it cannot name ``recovery-supervisor`` as its target and slip through.
+
+    Every remaining signal can only push the answer towards *refuse*, so a
+    hostile or confused request can never talk the engine into generating code —
+    at worst it talks it into refusing.
     """
     reasons: list[str] = []
     if request.target_component and request.target_component.lower() in PROTECTED_COMPONENTS:
@@ -377,23 +451,48 @@ def implies_product_change(request: CapabilityRequest) -> tuple[bool, dict[str, 
     for prefix in PROTECTED_CAPABILITY_PREFIXES:
         if request.requested_capability.startswith(prefix):
             reasons.append(f"capability_prefix={prefix}")
-    lowered = request.request_text.lower()
-    for marker in PROTECTED_COMPONENTS:
-        if marker in lowered:
-            reasons.append(f"request_text_mentions={marker}")
-    return (bool(reasons), {"reasons": sorted(set(reasons))})
+    if request.intent == "self_modification":
+        reasons.append("intent=self_modification")
+    owner_authorized_operational = (
+        request.intent == "operational_capability" and bool(request.authorized_asset)
+    )
+    if not owner_authorized_operational:
+        lowered = request.request_text.lower()
+        for marker in PROTECTED_COMPONENTS:
+            if marker in lowered:
+                reasons.append(f"request_text_mentions={marker}")
+    return (
+        bool(reasons),
+        {
+            "reasons": sorted(set(reasons)),
+            "intent": request.intent,
+            "authorized_asset": request.authorized_asset,
+            "owner_authorized_operational": owner_authorized_operational,
+        },
+    )
 
 
 class GapDetector:
     """Walks §3 in order and produces an auditable decision trail."""
 
     def __init__(
-        self, registry: CapabilityRegistry, composer: CapabilityComposer | None = None
+        self,
+        registry: CapabilityRegistry,
+        composer: CapabilityComposer | None = None,
+        *,
+        catalog: ComponentCatalog | None = None,
+        budget: ResourceBudget | None = None,
     ) -> None:
         self.registry = registry
         self.composer = composer or CapabilityComposer(registry)
+        self.catalog = catalog if catalog is not None else ComponentCatalog.load()
+        self.budget = budget or ResourceBudget()
 
     def detect(self, request: CapabilityRequest) -> GapDecision:
+        # Structural stop for agent -> agent -> agent capability creation: a gap
+        # spawned by an evolution carries depth+1 and is refused past the limit
+        # BEFORE any registry work happens.
+        require_within_depth(request.depth, self.budget)
         trail: list[dict[str, Any]] = [
             _step(0, STEP_REQUEST, "what was requested?", "recorded", request.to_evidence())
         ]
@@ -488,12 +587,37 @@ class GapDetector:
                 plan=[extendable["capability_id"]],
             )
 
-        # 5/6. New skill, unless the requirement implies a product/core change.
+        # 5. Install/adapt a compatible vetted, pinned reusable component.
+        match = self.catalog.find(
+            available_inputs=request.required_inputs,
+            required_outputs=request.required_outputs,
+        )
+        trail.append(
+            _step(
+                5,
+                STEP_COMPONENT,
+                "can a compatible reusable component be installed/adapted?",
+                "satisfied" if match else "insufficient",
+                (
+                    match.to_dict()
+                    | {"catalog": self.catalog.survey(), "install": "offline-local-catalog"}
+                    if match
+                    else {
+                        "reason": "no vetted component in the local catalog covers the "
+                        "required outputs",
+                        "catalog": self.catalog.survey(),
+                    }
+                ),
+            )
+        )
+
+        # 6/7. New skill (or an adapter around the matched component), unless the
+        # requirement implies a product/core change.
         product_change, evidence = implies_product_change(request)
         if product_change:
             trail.append(
                 _step(
-                    5,
+                    6,
                     STEP_NEW_SKILL,
                     "is a new skill/module required?",
                     "not_applicable",
@@ -502,15 +626,16 @@ class GapDetector:
             )
             trail.append(
                 _step(
-                    6,
+                    7,
                     STEP_PRODUCT_CHANGE,
                     "does the requirement imply a product/core change?",
                     "refused",
                     evidence
                     | {
                         "policy": (
-                            "core/recovery changes are never auto-generated "
-                            "(constitution section 6, EVOLUTION_ENGINE_SPEC section 12)"
+                            "core/recovery SELF-MODIFICATION is never auto-generated "
+                            "(constitution section 6, EVOLUTION_ENGINE_SPEC section 12); "
+                            "owner-authorized operational capability is unaffected"
                         )
                     },
                 )
@@ -526,20 +651,29 @@ class GapDetector:
             )
         trail.append(
             _step(
-                5,
+                6,
                 STEP_NEW_SKILL,
                 "is a new skill/module required?",
                 "satisfied",
                 {
-                    "reason": "composition, configuration and extension were all insufficient",
+                    "reason": (
+                        "adapting the matched reusable component"
+                        if match
+                        else "composition, configuration, extension and component adaptation "
+                        "were all insufficient"
+                    ),
                     "composition_attempted_at_index": 2,
                     "composition_missing_outputs": list(attempt.missing_outputs),
+                    "component_considered_at_index": 5,
+                    "resolution_path": (
+                        "component_adaptation" if match else "generation_from_scratch"
+                    ),
                 },
             )
         )
         trail.append(
             _step(
-                6,
+                7,
                 STEP_PRODUCT_CHANGE,
                 "does the requirement imply a product/core change?",
                 "not_applicable",
@@ -550,6 +684,8 @@ class GapDetector:
             requested_capability=request.requested_capability,
             resolution="generation",
             trail=trail,
+            component=match.component.to_dict() if match else None,
+            resolution_path=("component_adaptation" if match else "generation_from_scratch"),
         )
 
     def _find_declaring(

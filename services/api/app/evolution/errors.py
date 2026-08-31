@@ -26,6 +26,20 @@ class EvolutionErrorClass(StrEnum):
     GENERATION_FAILED = "generation_failed"
     # Generated tests/evals did not meet the release-score gates (§9).
     EVALUATION_FAILED = "evaluation_failed"
+    # A dependency scan rule fired (unpinned/unknown source/install script...).
+    SUPPLY_CHAIN_REJECTED = "supply_chain_rejected"
+    # A pinned dependency/component is not actually available locally.
+    DEPENDENCY_UNAVAILABLE = "dependency_unavailable"
+    # A configured resource budget was exceeded (timeout/disk/output/cpu/memory).
+    RESOURCE_BUDGET_EXCEEDED = "resource_budget_exceeded"
+    # The self-extension recursion depth limit was reached.
+    RECURSION_LIMIT_EXCEEDED = "recursion_limit_exceeded"
+    # A candidate asked for a permission the manifest does not grant.
+    PERMISSION_DENIED = "permission_denied"
+    # An illegal lifecycle transition (e.g. active without canary evidence).
+    LIFECYCLE_VIOLATION = "lifecycle_violation"
+    # A candidate performed worse than the incumbent in shadow/canary/benchmark.
+    NOT_SUPERIOR = "not_superior"
     # The INDEPENDENT reviewer refused the candidate (§6).
     REVIEW_REJECTED = "review_rejected"
     # Registration attempted without a passing, evaluated skill version (§2).
