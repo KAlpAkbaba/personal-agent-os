@@ -416,9 +416,12 @@ def normalize(
         return ""
     ctx = _Ctx(mode, pronunciation or {})
     out = text
-    for _name, pattern, fn in _PIPELINE:
-        out = pattern.sub(lambda m, fn=fn: fn(m, ctx), out)  # type: ignore[operator]
 
+    # The owner dictionary runs BEFORE the substitution pipeline: an explicit
+    # owner spoken form always wins (VOICE_SPEC §5, owner-authority precedence).
+    # Running it afterwards silently loses every token containing digits or
+    # punctuation ("CUDA12", "SQL2019", "1.250.000 TL" as an owner phrase),
+    # because a numeric/date rule would already have rewritten it.
     pron = pronunciation or {}
     if pron:
         keys = sorted((re.escape(k) for k in pron), key=len, reverse=True)
@@ -429,6 +432,10 @@ def normalize(
             return pron.get(tok) or pron.get(tok.upper()) or tok
 
         out = token_re.sub(repl, out)
+
+    for _name, pattern, fn in _PIPELINE:
+        out = pattern.sub(lambda m, fn=fn: fn(m, ctx), out)  # type: ignore[operator]
+
     if spell_acronyms:
         out = _acronym_fallback(out)
 

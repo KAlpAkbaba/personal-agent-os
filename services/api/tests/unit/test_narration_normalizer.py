@@ -131,3 +131,29 @@ def test_technical_mode_keeps_dotted_octets_not_magnitude() -> None:
     # collapsed magnitude.
     out = normalize("192.168.100.200", mode="technical")
     assert "nokta" in out and "milyon" not in out
+
+
+def test_owner_pronunciation_wins_over_number_pipeline() -> None:
+    """Owner authority: an explicit spoken form must survive even when the
+    token contains digits or punctuation the numeric pipeline would rewrite.
+
+    Regression: the dictionary used to be applied AFTER the pipeline, so any
+    owner token with digits was mangled before it could ever match.
+    """
+    pron = {
+        "CUDA12": "kuda on iki",
+        "SQL2019": "es kü el iki bin on dokuz",
+        "192.168.1.1": "yerel ağ geçidi",
+    }
+    assert "kuda on iki" in normalize("CUDA12 sürümünü doğrula.", pronunciation=pron)
+    assert "es kü el iki bin on dokuz" in normalize("SQL2019 kuruldu.", pronunciation=pron)
+    assert "yerel ağ geçidi" in normalize(
+        "Sunucu 192.168.1.1 adresinde.", pronunciation=pron, mode="technical"
+    )
+
+
+def test_pronunciation_does_not_break_untouched_numerics() -> None:
+    """The reordering must not regress ordinary numeric normalization."""
+    out = normalize("Toplam 1.250.000 lira ve %17,2 artış.", pronunciation={"API": "ey pi ay"})
+    assert "bir milyon iki yüz elli bin" in out
+    assert "yüzde on yedi virgül iki" in out
