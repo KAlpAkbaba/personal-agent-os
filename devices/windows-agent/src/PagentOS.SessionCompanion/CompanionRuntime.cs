@@ -1,5 +1,6 @@
 using System.IO.Pipes;
 using System.Text;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging;
 using PagentOS.Agent.Core.Commands;
 using PagentOS.Agent.Core.Connection;
@@ -16,6 +17,7 @@ namespace PagentOS.SessionCompanion;
 public sealed class CompanionRuntime(
     string pipeName,
     AppLauncher launcher,
+    ArtifactOpener artifactOpener,
     ILogger logger,
     BackoffPolicy? backoff = null)
 {
@@ -110,19 +112,33 @@ public sealed class CompanionRuntime(
     {
         try
         {
-            if (request.Capability != AgentCapabilities.DesktopOpenApplication)
+            JsonObject result;
+            switch (request.Capability)
             {
-                throw new CapabilityException(
-                    ErrorClasses.CapabilityMissing,
-                    $"capability '{request.Capability}' is not supported by the session companion",
-                    retryable: false);
+                case AgentCapabilities.DesktopOpenApplication:
+                    result = launcher.Launch(request.Payload);
+                    logger.LogInformation(
+                        "executed {Capability}: pid={Pid}",
+                        request.Capability,
+                        result["pid"]?.GetValue<int>());
+                    break;
+
+                case AgentCapabilities.DesktopOpenArtifact:
+                    result = artifactOpener.Open(request.Payload);
+                    logger.LogInformation(
+                        "executed {Capability}: opened={Opened} path={Path}",
+                        request.Capability,
+                        result["opened"]?.GetValue<bool>(),
+                        result["path"]?.GetValue<string>());
+                    break;
+
+                default:
+                    throw new CapabilityException(
+                        ErrorClasses.CapabilityMissing,
+                        $"capability '{request.Capability}' is not supported by the session companion",
+                        retryable: false);
             }
 
-            var result = launcher.Launch(request.Payload);
-            logger.LogInformation(
-                "executed {Capability}: pid={Pid}",
-                request.Capability,
-                result["pid"]?.GetValue<int>());
             return new ExecResponse { RequestId = request.RequestId, Ok = true, Result = result };
         }
         catch (CapabilityException ex)

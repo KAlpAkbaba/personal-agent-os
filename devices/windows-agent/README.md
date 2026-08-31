@@ -11,7 +11,7 @@ discriminator).
 | --- | --- |
 | `src/PagentOS.Agent.Core` | Protocol models + System.Text.Json serialization, message validation, ECDSA P-256 device identity, enrollment REST client, WebSocket connection loop (handshake, heartbeat, reconnect with 1 s → 60 s full-jitter backoff), command dispatcher (expiry, cancellation), persistent LRU idempotency store, JSONL audit log, structured file logging with `trace_id`. |
 | `src/PagentOS.DeviceService` | Background worker (Windows Service-capable via `AddWindowsService`, runs as console in dev). Owns keys/config/state and the named-pipe **server** for the companion. CLI verbs: `enroll`, `run`. |
-| `src/PagentOS.SessionCompanion` | Console app for the interactive owner session. Connects to the service pipe, executes `desktop.open_application` against a configurable allowlist (default: `notepad`, `calc`), reconnects with backoff. |
+| `src/PagentOS.SessionCompanion` | Console app for the interactive owner session. Connects to the service pipe, executes `desktop.open_application` against a configurable allowlist (default: `notepad`, `calc`) and `desktop.open_artifact` against an artifact-root + extension allowlist, reconnects with backoff. |
 | `tests/PagentOS.Agent.Tests` | xUnit suite: schema fixtures, signature verification, idempotency/LRU, backoff bounds, allowlist, real named-pipe round trips, and a Kestrel fake broker covering handshake, duplicate delivery, cancel, malformed frames and broker-restart reconnection. |
 
 ## Two-process model
@@ -94,6 +94,36 @@ audit log all live in the data dir at runtime — nothing secret is committed.
 
 In this repo the same flow is exercised end-to-end by `tests/PagentOS.Agent.Tests`
 (`ConnectionTests` against an in-test Kestrel broker, `PipeTests` over real named pipes).
+
+## Capability: `desktop.open_artifact` (M3)
+
+Opens a downloaded artifact with its OS-associated application via ShellExecute
+(`Process.Start(UseShellExecute = true)`), executed in the interactive owner session by the
+companion. Payload `{"path":"<absolute local path>","artifact_id":"<uuid>"?}` →
+`{"opened":true,"path":"<resolved path>","handler":"shell-associated"}`.
+
+The actual shell open is behind `IFileOpener` (production `ShellFileOpener`; tests inject a
+recording fake), so the suite is headless and never pops up a handler. Every attempt writes a
+companion-side JSONL audit entry (`event":"artifact_open"`, capability, status, `path`,
+`artifact_id`) under `<data-dir>\audit\companion-audit.jsonl`, in addition to the service-side
+per-command audit.
+
+Allowlist (mirrors `desktop.open_application` rigor), checked in this order — each rejection is a
+typed error from the protocol taxonomy:
+
+| Gate | Rule | Rejection class | retryable |
+| --- | --- | --- | --- |
+| shape | `path` present, non-blank, **absolute/fully-qualified**, **not UNC** (`\\`/`//`) | `validation_error` | false |
+| executable denylist | extension ∉ {`.exe .bat .cmd .com .ps1 .psm1 .js .vbs .msi .scr .hta .jar .reg .lnk .dll …`} — hard-denied even inside a root | `security_scope_error` | false |
+| extension allowlist | extension ∈ default {`.pdf .docx .html .htm .txt .md`} (override via `PAGENTOS_AGENT_ArtifactExtensions`) | `capability_missing` | false |
+| containment | canonical full path (after collapsing `..`) is under a configured root; catches traversal and plainly-outside paths | `security_scope_error` | false |
+| existence | file exists | `dependency_unavailable` | false |
+| link escape | a symlink/junction whose real target leaves every root | `security_scope_error` | false |
+
+Roots default to `%LOCALAPPDATA%\PagentOS\agent\artifacts` plus any semicolon-separated
+`PAGENTOS_AGENT_ArtifactRoots`. Both `desktop.open_application` and `desktop.open_artifact` are
+advertised in the enrollment capability manifest (`AgentCapabilities.All`) and forwarded over the
+same service→companion named pipe.
 
 ## Windows Service installation (owner action, deferred)
 

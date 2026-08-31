@@ -16,6 +16,7 @@ public sealed class InteractiveCapabilityExecutor(CompanionPipeServer pipeServer
     private static readonly HashSet<string> InteractiveCapabilities = new(StringComparer.Ordinal)
     {
         AgentCapabilities.DesktopOpenApplication,
+        AgentCapabilities.DesktopOpenArtifact,
     };
 
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;

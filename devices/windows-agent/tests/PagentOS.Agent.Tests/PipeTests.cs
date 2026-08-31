@@ -17,10 +17,11 @@ public class PipeTests
 
     private static string NewPipeName() => $"pagentos-test-{Guid.NewGuid():N}";
 
-    private static CompanionRuntime NewCompanion(string pipeName)
+    private static CompanionRuntime NewCompanion(string pipeName, ArtifactOpener? artifactOpener = null)
         => new(
             pipeName,
             new AppLauncher(new Dictionary<string, string> { ["cmdtest"] = CmdPath }),
+            artifactOpener ?? new ArtifactOpener(new[] { Path.GetTempPath() }, new RecordingFileOpener()),
             NullLogger.Instance,
             new BackoffPolicy(baseSeconds: 0.05, maxSeconds: 0.2));
 
@@ -102,6 +103,69 @@ public class PipeTests
             }
 
             await server.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task Open_artifact_round_trips_over_real_named_pipe_using_fake_opener()
+    {
+        var pipeName = NewPipeName();
+        var root = Path.Combine(Path.GetTempPath(), "pagentos-artifact-pipe", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var artifact = Path.Combine(root, "report.pdf");
+        File.WriteAllText(artifact, "%PDF-1.7 fake");
+        var opener = new RecordingFileOpener();
+
+        var server = new CompanionPipeServer(pipeName, NullLogger<CompanionPipeServer>.Instance);
+        await server.StartAsync(CancellationToken.None);
+        using var companionCts = new CancellationTokenSource();
+        var companionTask = Task.Run(() =>
+            NewCompanion(pipeName, new ArtifactOpener(new[] { root }, opener)).RunAsync(companionCts.Token));
+        try
+        {
+            await WaitForCompanionAsync(server);
+
+            var result = await server.ExecuteCapabilityAsync(
+                AgentCapabilities.DesktopOpenArtifact,
+                new JsonObject { ["path"] = artifact, ["artifact_id"] = Guid.NewGuid().ToString() },
+                TimeSpan.FromSeconds(15),
+                CancellationToken.None);
+
+            Assert.NotNull(result);
+            Assert.True(result!["opened"]!.GetValue<bool>());
+            Assert.Equal("shell-associated", result["handler"]!.GetValue<string>());
+            Assert.Equal(Path.GetFullPath(artifact), result["path"]!.GetValue<string>());
+            Assert.Equal(new[] { Path.GetFullPath(artifact) }, opener.Opened);
+
+            // An out-of-root path: the companion's security rejection travels back typed.
+            var ex = await Assert.ThrowsAsync<CapabilityException>(() => server.ExecuteCapabilityAsync(
+                AgentCapabilities.DesktopOpenArtifact,
+                new JsonObject { ["path"] = Path.Combine(Path.GetTempPath(), "outside.pdf") },
+                TimeSpan.FromSeconds(15),
+                CancellationToken.None));
+            Assert.Equal(ErrorClasses.SecurityScopeError, ex.ErrorClass);
+        }
+        finally
+        {
+            companionCts.Cancel();
+            try
+            {
+                await companionTask.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            catch (Exception)
+            {
+                // Teardown only.
+            }
+
+            await server.StopAsync(CancellationToken.None);
+            try
+            {
+                Directory.Delete(root, recursive: true);
+            }
+            catch (Exception)
+            {
+                // Best-effort cleanup.
+            }
         }
     }
 

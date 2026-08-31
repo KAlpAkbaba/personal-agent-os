@@ -71,6 +71,12 @@ Rules:
 
 Payload: `{"application":"<name>","args":[…]?}`. The agent maintains a local **allowlist** (M1 default: `notepad`, `calc`); anything else fails with `capability_missing`. The application must start in the **interactive owner session** (executed by the session companion, not the background service). Result: `{"pid":<int>,"executable":"<path>"}`.
 
+## 6a. Capability: `desktop.open_artifact` (M3)
+
+Payload: `{"path":"<absolute local file path>","artifact_id":"<uuid>"?}`. The session companion opens the file with its OS-associated application (ShellExecute, never launching a program directly) and returns `{"opened":true,"path":"<canonical path>","handler":"shell-associated"}`. Interactive-session capability, executed by the companion.
+
+Allowlist (checked in order): reject non-absolute/blank/UNC paths (`validation_error`); hard-deny executable extensions even inside a root (`security_scope_error`); require a document extension in the configurable allowlist, default `.pdf .docx .html .htm .txt .md` (`capability_missing`); require the canonical resolved path (symlinks/`..` collapsed) to lie under a configured artifact root, default `%LOCALAPPDATA%\PagentOS\agent\artifacts` plus configured extra roots (`security_scope_error`); require the file to exist (`dependency_unavailable`). Every attempt is written to the companion's local JSONL audit with path, artifact_id and result.
+
 ## 7. Audit
 
 Broker persists an `audit_events` row for: enrollment, session start/end, command created, delivered, each ack transition, cancel, expiry. Events carry `trace_id`, `device_id`, `command_id`, never secrets or payload bodies larger than 4 KB.

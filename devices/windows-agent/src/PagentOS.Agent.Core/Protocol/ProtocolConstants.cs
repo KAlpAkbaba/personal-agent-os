@@ -30,8 +30,9 @@ public static class AckStatus
 public static class AgentCapabilities
 {
     public const string DesktopOpenApplication = "desktop.open_application";
+    public const string DesktopOpenArtifact = "desktop.open_artifact";
 
-    public static readonly IReadOnlyList<string> All = [DesktopOpenApplication];
+    public static readonly IReadOnlyList<string> All = [DesktopOpenApplication, DesktopOpenArtifact];
 }
 
 public static class ErrorClasses

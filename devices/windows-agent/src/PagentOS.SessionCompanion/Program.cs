@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using PagentOS.Agent.Core.Audit;
 using PagentOS.Agent.Core.Ipc;
 
 namespace PagentOS.SessionCompanion;
@@ -40,6 +41,35 @@ public static class Program
             allowlist = AppLauncher.DefaultAllowlist();
         }
 
+        // Artifact roots: <data-dir>\artifacts plus any semicolon-separated PAGENTOS_AGENT_ArtifactRoots.
+        var dataDir = configuration["DataDir"];
+        if (string.IsNullOrWhiteSpace(dataDir))
+        {
+            dataDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PagentOS", "agent");
+        }
+
+        var artifactRoots = new List<string> { Path.Combine(dataDir, "artifacts") };
+        var extraRoots = configuration["ArtifactRoots"];
+        if (!string.IsNullOrWhiteSpace(extraRoots))
+        {
+            artifactRoots.AddRange(extraRoots.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        }
+
+        IReadOnlySet<string>? allowedExtensions = null;
+        var extensionOverride = configuration["ArtifactExtensions"];
+        if (!string.IsNullOrWhiteSpace(extensionOverride))
+        {
+            allowedExtensions = extensionOverride
+                .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(e => e.StartsWith('.') ? e : "." + e)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        }
+
+        Directory.CreateDirectory(artifactRoots[0]);
+        var audit = new AuditLog(Path.Combine(dataDir, "audit", "companion-audit.jsonl"));
+        var artifactOpener = new ArtifactOpener(artifactRoots, new ShellFileOpener(), allowedExtensions, audit);
+
         using var loggerFactory = LoggerFactory.Create(logging => logging.AddSimpleConsole(console =>
         {
             console.SingleLine = true;
@@ -55,11 +85,12 @@ public static class Program
         };
 
         logger.LogInformation(
-            "session companion starting; pipe={Pipe} allowlist=[{Allowlist}]",
+            "session companion starting; pipe={Pipe} allowlist=[{Allowlist}] artifact_roots=[{Roots}]",
             pipeName,
-            string.Join(", ", allowlist.Keys));
+            string.Join(", ", allowlist.Keys),
+            string.Join(", ", artifactOpener.Roots));
 
-        var runtime = new CompanionRuntime(pipeName, new AppLauncher(allowlist), logger);
+        var runtime = new CompanionRuntime(pipeName, new AppLauncher(allowlist), artifactOpener, logger);
         await runtime.RunAsync(cts.Token).ConfigureAwait(false);
         return 0;
     }
