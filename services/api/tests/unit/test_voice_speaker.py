@@ -72,6 +72,49 @@ def test_threshold_boundaries() -> None:
     assert just_reject.decision in (SpeakerDecision.NOT_OWNER, SpeakerDecision.UNCERTAIN)
 
 
+def _axis_profile():
+    # Mean of three identical unit vectors along axis 0 -> normalized to exactly
+    # [1,0,0,0], so a probe [s, sqrt(1-s^2), 0, 0] has cosine similarity exactly s.
+    return enroll_owner([[1.0, 0.0, 0.0, 0.0]] * 3, model_id="axis")
+
+
+def _probe_with_cosine(s: float):
+    return [s, (1.0 - s * s) ** 0.5, 0.0, 0.0]
+
+
+def test_threshold_boundaries_are_exact_and_inclusive() -> None:
+    # M4 verification #2: pin the exact inclusive/exclusive edges so a future
+    # regression at the boundary is caught.
+    prof = _axis_profile()
+    th = SpeakerThresholds(owner_accept=0.75, not_owner_max=0.45)
+
+    # score == not_owner_max -> NOT_OWNER (inclusive lower edge)
+    assert (
+        verify_speaker(_probe_with_cosine(0.45), prof, device_trusted=True, thresholds=th).decision
+        == SpeakerDecision.NOT_OWNER
+    )
+    # just above reject -> UNCERTAIN
+    assert (
+        verify_speaker(_probe_with_cosine(0.46), prof, device_trusted=True, thresholds=th).decision
+        == SpeakerDecision.UNCERTAIN
+    )
+    # just below accept -> UNCERTAIN
+    assert (
+        verify_speaker(_probe_with_cosine(0.74), prof, device_trusted=True, thresholds=th).decision
+        == SpeakerDecision.UNCERTAIN
+    )
+    # score == owner_accept on a trusted device -> OWNER (inclusive upper edge)
+    assert (
+        verify_speaker(_probe_with_cosine(0.75), prof, device_trusted=True, thresholds=th).decision
+        == SpeakerDecision.OWNER
+    )
+    # perfect match but untrusted device -> capped at UNCERTAIN
+    assert (
+        verify_speaker(_probe_with_cosine(1.0), prof, device_trusted=False, thresholds=th).decision
+        == SpeakerDecision.UNCERTAIN
+    )
+
+
 def test_invalid_thresholds_rejected() -> None:
     with pytest.raises(VoiceError):
         SpeakerThresholds(owner_accept=0.3, not_owner_max=0.5)

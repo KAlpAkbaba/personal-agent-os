@@ -23,13 +23,13 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.artifacts import service as artifact_service
 from app.logging import get_logger
 from app.narration import commands, service
 from app.narration.engine import Cursor, build_plan
-from app.narration.models import NarrationSession, PronunciationEntry
+from app.narration.models import NARRATION_STATES, NarrationSession, PronunciationEntry
 from app.narration.normalizer import normalize
 from app.narration.runtime import NarrationRuntime
 
@@ -197,6 +197,15 @@ class UpdateCursorRequest(BaseModel):
     speed: float | None = Field(default=None, ge=0.5, le=3.0)
     device_id: uuid.UUID | None = None
 
+    @field_validator("state")
+    @classmethod
+    def _valid_state(cls, value: str | None) -> str | None:
+        # Reject unknown states here (422) instead of letting a bad value land
+        # in the DB and later 500 the /command endpoint (M4 review #3).
+        if value is not None and value not in NARRATION_STATES:
+            raise ValueError(f"invalid narration state: {value!r}")
+        return value
+
 
 @router.patch("/sessions/{session_id}/cursor")
 async def patch_cursor(
@@ -235,8 +244,8 @@ async def patch_cursor(
 class CommandRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    utterance: str | None = None
-    command: str | None = None
+    utterance: str | None = Field(default=None, max_length=2000)
+    command: str | None = Field(default=None, max_length=64)
     target_index: int | None = None
     speed: float | None = None
     device_id: uuid.UUID | None = None

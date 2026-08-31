@@ -23,14 +23,6 @@ down_revision: str | None = "0003_research_artifact"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
-_SPEAKER_DECISIONS = ("OWNER", "NOT_OWNER", "UNCERTAIN")
-
-
-def _in_list(column: str, values: Sequence[str]) -> str:
-    joined = ", ".join(f"'{v}'" for v in values)
-    return f"{column} IN ({joined})"
-
-
 def upgrade() -> None:
     # Owner voice/narration preferences (VOICE_SPEC §12). Single-owner system, so
     # rows are few; a nullable label distinguishes named profiles if ever needed.

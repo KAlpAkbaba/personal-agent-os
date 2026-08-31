@@ -20,14 +20,13 @@ import asyncio
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.logging import get_logger
 from app.voice import registry, service
 from app.voice.benchmark import run_stt_benchmark, run_tts_benchmark
 from app.voice.errors import VoiceError, VoiceErrorClass
 from app.voice.runtime import VoiceRuntime
-from app.voice.speaker import SpeakerThresholds
 
 logger = get_logger("app.voice.routes")
 
@@ -110,22 +109,40 @@ async def patch_preferences(request: Request, body: PreferencesUpdate) -> dict[s
 # ------------------------------------------------------------------ speaker
 
 
+# Embedding-shape bounds: keep requests small and DoS-resistant. A speaker
+# embedding is a few hundred dims; a handful of samples enrolls an owner.
+_MAX_EMBED_DIMS = 4096
+_MAX_ENROLL_SAMPLES = 64
+
+
 class EnrollRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # Fixture embedding vectors (tests) or a real extractor's output (owner path).
     # Raw audio is NEVER accepted here.
-    sample_embeddings: list[list[float]] = Field(min_length=1)
+    sample_embeddings: list[list[float]] = Field(min_length=1, max_length=_MAX_ENROLL_SAMPLES)
     model_id: str = Field(default="fixture-embed-v1", max_length=128)
+
+    @field_validator("sample_embeddings")
+    @classmethod
+    def _bound_dims(cls, value: list[list[float]]) -> list[list[float]]:
+        for vec in value:
+            if not 1 <= len(vec) <= _MAX_EMBED_DIMS:
+                raise ValueError(f"embedding dim out of range: {len(vec)}")
+        return value
 
 
 class VerifyRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    probe_embedding: list[float] = Field(min_length=1)
+    probe_embedding: list[float] = Field(min_length=1, max_length=_MAX_EMBED_DIMS)
+    # SECURITY (M4 review #1): this is an UNTRUSTED, client-asserted hint today.
+    # Speaker verification MUST NOT gate any privileged action until device
+    # trust is derived server-side from an authenticated enrolled-device/broker
+    # session (tracked owner-action gate). The pure classifier already caps an
+    # untrusted device at UNCERTAIN; per-call threshold overrides were removed
+    # so the accept/reject band cannot be widened by the caller.
     device_trusted: bool = False
-    owner_accept: float | None = Field(default=None, ge=0.0, le=1.0)
-    not_owner_max: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 @router.post("/speaker/enroll", status_code=201)
@@ -159,21 +176,13 @@ async def enroll_speaker(request: Request, body: EnrollRequest) -> dict[str, Any
 @router.post("/speaker/verify")
 async def verify_speaker_route(request: Request, body: VerifyRequest) -> dict[str, Any]:
     runtime = _runtime(request)
-    thresholds = None
-    if body.owner_accept is not None or body.not_owner_max is not None:
-        base = SpeakerThresholds()
-        thresholds = SpeakerThresholds(
-            owner_accept=body.owner_accept if body.owner_accept is not None else base.owner_accept,
-            not_owner_max=body.not_owner_max if body.not_owner_max is not None
-            else base.not_owner_max,
-        )
 
     def do() -> dict[str, Any] | None:
         with runtime.session() as session:
             verdict = service.verify_owner(
                 session, runtime.store, runtime.cipher,
                 probe_embedding=body.probe_embedding, device_trusted=body.device_trusted,
-                thresholds=thresholds,
+                thresholds=None,  # server-configured band only; not caller-overridable
             )
             return verdict.to_dict() if verdict else None
 
