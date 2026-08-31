@@ -88,13 +88,22 @@ services:
       TEMPORAL_CLI_ADDRESS: temporal:7233
     ports:
       - "127.0.0.1:17233:7233"
+    healthcheck:
+      # Deterministic readiness for CI's `up --wait`: auto-setup finishes its
+      # schema migration well before the frontend answers cluster health.
+      test: ["CMD-SHELL", "tctl --address temporal:7233 cluster health"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 10s
     restart: unless-stopped
 
   temporal-ui:
     image: temporalio/ui:2.34.0
     container_name: pagentos-temporal-ui
     depends_on:
-      - temporal
+      temporal:
+        condition: service_healthy
     environment:
       TEMPORAL_ADDRESS: temporal:7233
       TEMPORAL_CORS_ORIGINS: http://localhost:18233

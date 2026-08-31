@@ -1,19 +1,19 @@
 {
   "schema_version": 1,
   "project": "personal-agent-os",
-  "current_milestone": "M0",
-  "status": "IN_PROGRESS",
-  "last_completed_milestone": "M-1",
+  "current_milestone": "M1",
+  "status": "NOT_STARTED",
+  "last_completed_milestone": "M0",
   "last_updated": "2026-08-31T00:00:00+03:00",
   "owner_actions_pending": [
-    "Before first GitHub push (end of M0): run 'gh auth login' once (browser OAuth).",
+    "Before first GitHub push: run 'gh auth login' once (browser OAuth), then a private repo can be created and CI activated.",
     "At M1: approve Tailscale install (UAC) and sign in; approve Hetzner account/billing/API key creation.",
     "Recommended, non-blocking: move Docker Desktop disk image location from C: to E: (C: has ~24 GB free)."
   ],
   "quality_gate": {
     "status": "PASS",
     "last_run": "2026-08-31",
-    "scope": "M-1 bootstrap gate: required files present, no tracked secrets, docker hello-world passed, preflight report generated"
+    "scope": "M0 full gate: required files, secret hygiene (filename + content scan), ruff lint, 26 unit tests, compose stack up, alembic upgrade, 7 integration tests (migration round-trip, redis, minio, temporal incl. worker-restart durability), web shell build. Exit 0."
   },
-  "notes": "M-1 complete: git initialized, environment report written (docs/LOCAL_ENV_REPORT.md), toolchain gaps closed user-scope (uv, pnpm, gh). M0 foundation implementation starting."
+  "notes": "M0 complete. All 10 M0 acceptance criteria independently verified PASS by test-engineer agent (live HTTP health incl. degraded path, web shell HTTP 200, migration round-trip, worker-restart durability, trace_id/task_id in logs, CI commands reproduced locally). Security review: no high/critical; findings 1+4 fixed, 2/3/5 tracked in docs/reviews/M0_SECURITY_REVIEW.md. Next: M1 cloud/device link (needs owner actions above for cloud provisioning; local device-broker + Windows agent work can start without them)."
 }
