@@ -1,0 +1,33 @@
+owner:
+  singleton: true
+  locale: tr-TR
+  executive_summary_first: true
+
+device_execution:
+  enrolled_owner_devices: autonomous
+  unknown_devices: deny
+
+artifact_behavior:
+  on_ready:
+    notify: true
+    auto_open: false
+    auto_read: false
+  mobile_default_format: pdf
+  desktop_default_format: docx
+
+voice:
+  owner_speaker_required_for_voice_commands: true
+  trusted_device_can_raise_identity_confidence: true
+  narration_default: executive_summary
+  barge_in: true
+
+self_development:
+  bugfix: autonomous_pipeline
+  new_skills: autonomous_pipeline
+  product_features: autonomous_pipeline
+  direct_in_place_production_patch: false
+  rollback_required: true
+
+security_testing:
+  authorized_assets: autonomous_within_recorded_scope
+  unknown_targets: require_one_time_enrollment

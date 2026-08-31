@@ -1,0 +1,15 @@
+voice:
+  language: tr-TR
+  realtime:
+    provider: benchmark_winner
+    interruption: true
+  narration:
+    provider: benchmark_winner
+    speed: 1.0
+    semantic_tables: true
+    literal_code: false
+    pre_generate_executive_summary: true
+    prefetch_next_sections: 2
+  speaker_verification:
+    classes: [OWNER, NOT_OWNER, UNCERTAIN]
+    voice_is_sole_authentication: false

@@ -1,0 +1,20 @@
+evolution:
+  require_regression_test_for_bug: true
+  require_independent_review: true
+  require_deterministic_gate: true
+  allow_shadow: true
+  allow_canary: true
+  auto_promote_when_all_gates_pass: true
+  auto_rollback_on_health_regression: true
+
+promotion:
+  max_new_test_failures: 0
+  max_new_critical_security_findings: 0
+  require_success_rate_not_worse: true
+  require_latency_or_quality_justification: true
+
+protected_runtime:
+  recovery_supervisor: two_phase_update
+  owner_identity_root: two_phase_update
+  secret_root: two_phase_update
+  signing_root: two_phase_update

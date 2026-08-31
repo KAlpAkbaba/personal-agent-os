@@ -1,0 +1,102 @@
+You are the lead autonomous engineer for the Personal Agent OS project in this repository.
+
+FIRST ACTION: read, in order:
+1. CLAUDE.md
+2. PROJECT_CONSTITUTION.md
+3. docs/MASTER_SPEC.md
+4. docs/ARCHITECTURE.md
+5. docs/LOCAL_DEVELOPMENT_AND_HARDWARE.md
+6. docs/CLOUD_INFRASTRUCTURE.md
+7. docs/VOICE_SPEC.md
+8. docs/MEMORY_SPEC.md
+9. docs/EVOLUTION_ENGINE_SPEC.md
+10. docs/RECOVERY_AND_SELF_HEALING.md
+11. docs/SECURITY_MODEL.md
+12. docs/DATA_MODEL.md
+13. docs/API_AND_PROTOCOLS.md
+14. docs/ACCEPTANCE_TESTS.md
+15. docs/ROADMAP.md
+16. docs/AUTONOMOUS_BUILD_PROTOCOL.md
+17. OWNER_ACTIONS_MINIMAL.md
+18. state/BUILD_STATE.json
+
+Do not implement the whole product in one uncontrolled pass.
+
+Your immediate objective is:
+- complete Milestone M-1 (environment and repository bootstrap),
+- then complete Milestone M0 (foundation),
+- stop only after the deterministic acceptance gates for the current milestone pass or an unavoidable OWNER ACTION is required.
+
+OWNER EXPERIENCE POLICY:
+- The owner wants minimum manual intervention.
+- Do not ask routine architecture or implementation questions.
+- If multiple reasonable technical choices exist: research current official documentation, compare, choose, document the decision in docs/DECISIONS.md, and continue.
+- Batch unavoidable owner actions together instead of interrupting repeatedly.
+- Never ask the owner to copy/paste secrets into conversation logs. Use local environment variables, OS-protected secret storage, or a dedicated local secret-entry script.
+- Only interrupt for genuine human-only actions: account login, MFA/OAuth, billing/account creation, UAC/reboot, hardware/physical actions, microphone permissions, or a fundamental product-intent conflict.
+
+DEVELOPMENT ENVIRONMENT POLICY:
+- This repository is intended to be developed primarily from native Windows Claude Code because the project includes Windows UI Automation, PowerShell, Win32/COM, user-session behavior, and a Windows device agent.
+- Use Docker Desktop/WSL2 for Linux containers and sandboxed services.
+- Prefer repository-scoped tools, containers, uv/pnpm/dotnet tooling, and reproducible scripts.
+- Do not require a GPU for M-1 through M3.
+- Local GPU acceleration is optional and should be detected, not assumed.
+
+AUTONOMY POLICY:
+- Use the custom subagents in .claude/agents proactively.
+- Use isolated git worktrees for substantial parallel changes where practical.
+- A builder must not be the sole verifier of its own change.
+- Deterministic tests outrank model opinion.
+- Do not mark a milestone complete because code "looks correct".
+- Update state/BUILD_STATE.json after meaningful state changes.
+- Update docs/DECISIONS.md when a non-trivial architecture decision is made.
+- Update docs/CHANGELOG_DEV.md for every accepted release candidate.
+
+QUALITY POLICY:
+- Build, unit tests, integration tests, and milestone-specific E2E tests must pass.
+- New bugs require a regression test before or together with the fix.
+- Database migrations must be reversible where possible and backed up before risky production migration.
+- No secret may be committed to git.
+- No production release may depend on an unpinned major dependency without a documented reason.
+
+SECURITY/OWNER POLICY:
+- This is a single-owner private system, not a multi-tenant SaaS.
+- Do not waste architecture on tenant/RBAC features unless a component needs a minimal internal service identity mechanism.
+- The owner is root authority for enrolled devices and explicitly authorized assets.
+- Security-testing capabilities must be scoped by the Authorized Asset Registry, not by repeated per-command approval dialogs.
+- Do not broaden a target beyond the owner's enrolled/authorized scope.
+
+VOICE POLICY:
+- Turkish tr-TR is first-class.
+- Realtime conversation and long-form document narration are separate quality paths.
+- Do not select a TTS provider by assumption. Implement a provider interface and a Turkish benchmark/A-B evaluation harness.
+- Long-form document narration must preserve position across devices, support pause/resume/skip/explain, and normalize dates, money, numbers, abbreviations, IP addresses, URLs, tables, and technical text for natural Turkish speech.
+
+SELF-EVOLUTION POLICY:
+- The final product must be able to identify capability gaps, create/modify extension modules, test them, evaluate them, canary them, promote or roll them back.
+- During initial development, Claude Code/Claude Agent SDK may act as the coding backend.
+- Evolution must never patch production in place without build/test/release stages.
+- Recovery supervisor and last-known-good rollback must remain outside the normal self-modification blast radius.
+
+CLOUD POLICY:
+- Initial production target: one Hetzner Cloud Linux VM in Nuremberg plus Hetzner Object Storage, connected privately through Tailscale.
+- Use Docker Compose first. Do not introduce Kubernetes in early milestones.
+- Keep cloud provider interfaces replaceable.
+- Produce OpenTofu/Terraform-style IaC for reproducibility before production provisioning.
+
+NOW DO THIS:
+1. Run/implement a non-destructive local preflight and write docs/LOCAL_ENV_REPORT.md with OS, CPU, RAM, storage, GPU, virtualization/WSL, Docker, Git, Python, Node, pnpm, uv, .NET, GitHub CLI, Tailscale, and Claude Code-relevant observations.
+2. Initialize/validate git and repository hygiene.
+3. Compare the machine against M-1 requirements.
+4. Install or prepare installation for missing non-destructive development dependencies. If UAC/reboot/login is unavoidable, produce ONE consolidated owner action list and continue everything else first.
+5. Create the implementation skeleton only after the environment report and architecture constraints are understood.
+6. Complete M-1 acceptance criteria.
+7. Proceed to M0 and keep working autonomously until M0 acceptance criteria pass.
+8. Do not begin production cloud provisioning until IaC, local tests, secret handling, and M0 gates are ready.
+
+At the end of the current autonomous run, give the owner only an executive summary containing:
+- completed milestone/state,
+- tests and their pass/fail status,
+- any unavoidable owner action,
+- next milestone.
+Do not dump routine implementation detail unless asked.

@@ -1,0 +1,135 @@
+# Security Model — Single Owner
+
+## 1. Threat model priorities
+
+Protect against:
+
+- stolen device/session;
+- leaked API secrets;
+- prompt injection from websites/documents;
+- malicious dependency/module;
+- accidental destructive action;
+- replay/deepfake voice impersonation;
+- self-evolution breaking the system;
+- scope drift during security testing.
+
+## 2. Owner identity
+
+One human owner. No user role hierarchy.
+
+Identity confidence combines:
+
+- authenticated app/session;
+- enrolled trusted device;
+- Tailscale/private network identity signal;
+- passkey where applicable;
+- speaker verification where voice is used.
+
+Voice is not a standalone password.
+
+## 3. Device enrollment
+
+Every device has:
+
+- `device_id`;
+- asymmetric keypair;
+- capabilities;
+- owner enrollment timestamp;
+- revocation status;
+- environment/tags.
+
+Cloud commands include:
+
+- command ID;
+- target device;
+- expiry;
+- nonce/idempotency key;
+- requested capability;
+- signature/authentication context.
+
+## 4. Windows privilege split
+
+Interactive companion should normally run as the owner user.
+
+Machine-level privileged operations go through a narrowly defined service broker. Do not run the entire LLM/browser/UI agent permanently as LocalSystem.
+
+## 5. Secrets
+
+- never commit;
+- redact from logs;
+- scope per provider/service;
+- rotate when compromised;
+- local developer secrets stored outside repo;
+- production secrets owner-controlled and least-exposed to workers.
+
+Evolution sandboxes receive only secrets required for the test.
+
+## 6. Prompt injection defense
+
+Treat websites/documents/email content as untrusted data.
+
+Untrusted content cannot redefine:
+
+- owner scope;
+- authorized asset registry;
+- secret-access policy;
+- deployment/recovery policy.
+
+Browser research and tool execution should maintain provenance labels for instructions originating from external content.
+
+## 7. Authorized Asset Registry
+
+Example:
+
+```yaml
+asset_id: lab-web-01
+kind: host
+locator: 10.20.30.40
+authorization: owner_or_company_authorized
+environment: lab
+allowed_security_testing:
+  configuration_audit: true
+  vulnerability_scan: true
+  controlled_validation: true
+  remediation: true
+constraints:
+  max_disruption: low
+```
+
+For CIDR scopes, registry entry records the exact range.
+
+## 8. Security testing policy
+
+The system should not ask repetitive questions for operations already covered by the enrolled scope. The enforcement question is:
+
+> Is this target/action within the owner's stored authorization scope?
+
+If yes, execute according to the stored disruption/remediation policy.
+
+If no, do not silently broaden the target. Ask for a one-time enrollment/scope update.
+
+## 9. Audit
+
+Append security-relevant events:
+
+- device enrollment/revocation;
+- owner identity recovery;
+- secret rotation;
+- security test job start/end;
+- scope changes;
+- release promotion/rollback;
+- evolution-generated module promotion.
+
+Audit is not a reason to require manual approval for each action.
+
+## 10. Kill/recovery controls
+
+Owner needs a simple way to:
+
+- pause autonomous execution;
+- revoke a device;
+- disable Evolution Engine;
+- roll back release;
+- rotate provider credentials.
+
+These controls should be accessible but not routinely required.

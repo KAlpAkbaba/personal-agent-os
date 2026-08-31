@@ -1,0 +1,45 @@
+# Secrets
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.pfx
+secrets/local/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+.next/
+dist/
+coverage/
+
+# .NET
+bin/
+obj/
+.vs/
+
+# IDE/OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*.local.json
+
+# Claude local settings/transcripts
+.claude/settings.local.json
+
+# Runtime
+artifacts/local/
+data/local/
+logs/
+*.log
+
+# Generated environment report may contain machine details
+# Keep it local unless owner explicitly wants it committed.
+docs/LOCAL_ENV_REPORT.generated.json

@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "project": "personal-agent-os",
+  "current_milestone": "M-1",
+  "status": "NOT_STARTED",
+  "last_completed_milestone": null,
+  "last_updated": "2026-08-31T00:00:00+03:00",
+  "owner_actions_pending": [],
+  "quality_gate": {
+    "status": "NOT_RUN"
+  },
+  "notes": "Specification package imported. Claude should begin with environment preflight."
+}
