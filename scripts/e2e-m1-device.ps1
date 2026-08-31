@@ -9,7 +9,9 @@
 # enrolled agent state.
 
 param(
-  [int]$ApiPort = 8001,
+  # 0 = allocate a free ephemeral port, keeping the E2E fully isolated from
+  # the dev server, integration-test uvicorns and anything else on 8001.
+  [int]$ApiPort = 0,
   [switch]$SkipBuild
 )
 
@@ -21,7 +23,32 @@ $ErrorActionPreference = "Continue"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $apiRoot = Join-Path $repoRoot "services\api"
 $agentRoot = Join-Path $repoRoot "devices\windows-agent"
+
+if ($ApiPort -eq 0) {
+  $listener = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
+  $listener.Start()
+  $ApiPort = ([System.Net.IPEndPoint]$listener.LocalEndpoint).Port
+  $listener.Stop()
+}
 $baseUrl = "http://127.0.0.1:$ApiPort"
+Write-Host "E2E broker port: $ApiPort"
+
+function Wait-PortFree {
+  param([int]$Port, [int]$TimeoutSec = 20)
+  $deadline = (Get-Date).AddSeconds($TimeoutSec)
+  while ((Get-Date) -lt $deadline) {
+    $busy = $false
+    try {
+      $probe = New-Object System.Net.Sockets.TcpClient
+      $async = $probe.BeginConnect("127.0.0.1", $Port, $null, $null)
+      if ($async.AsyncWaitHandle.WaitOne(300) -and $probe.Connected) { $busy = $true }
+      $probe.Close()
+    } catch { $busy = $false }
+    if (-not $busy) { return }
+    Start-Sleep -Milliseconds 400
+  }
+  throw "port $Port still in use after ${TimeoutSec}s"
+}
 
 function Resolve-Tool {
   param([string]$Name, [string[]]$Fallbacks)
@@ -255,7 +282,7 @@ Invoke-Step "Audit trail (broker DB + agent JSONL)" {
 
 Invoke-Step "Recovery: broker restart" {
   & C:\Windows\System32\taskkill.exe /PID $procs["broker"].Id /T /F 2>$null | Out-Null
-  Start-Sleep -Seconds 2
+  Wait-PortFree -Port $ApiPort
   Start-Broker
   Wait-Health
   Wait-DeviceOnline -TimeoutSec 60   # agent must reconnect on its own

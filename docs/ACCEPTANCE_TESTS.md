@@ -39,12 +39,27 @@
 
 ## M2 Browser
 
-- dedicated test browser navigation passes;
-- DOM/accessibility interaction passes;
-- download test passes;
-- existing-session integration path is documented/tested where environment permits;
-- browser state-change failure is typed and retryable;
-- raw coordinate fallback is not primary path.
+Architecture gates:
+
+- a common backend adapter interface exists; higher-level browser commands are transport-agnostic (managed Playwright, existing-session connection, future visual fallback all implement the same interface);
+- the deterministic/test path uses a Playwright-managed dedicated profile with no dependency on the owner's real browser state;
+- the owner-existing-browser path is modeled as explicit **browser enrollment** (authorization record + granted capabilities), never as unrestricted debug-port exposure; no remote debugging port is ever exposed non-loopback;
+- every backend declares capabilities: `authenticated_session`, `downloads`, `uploads`, `extensions`, `existing_tabs`, `multiple_windows`, `visual_fallback`; the orchestrator can query them;
+- coordinate-based clicking is prohibited in the deterministic semantic layer (visual/coordinate automation arrives later as an explicit separate fallback adapter).
+
+Deterministic scenario matrix (all must pass against the fixture site / throwaway browsers):
+
+- navigate; back/forward; new tab/close tab; select existing tab;
+- text input; click by semantic locator; select/dropdown; checkbox/radio; form submission;
+- SPA navigation; iframe interaction; popup/new-window; download; upload using a fixture file;
+- browser-side error typed; timeout typed; stale/detached element recovery (retryable + recovery verified);
+- ambiguous locator handling; page/browser crash typed; reconnect after crash/disconnect;
+- cancellation of an in-flight command; duplicate command/idempotency at the browser-command layer.
+
+Plus:
+
+- existing-session attach path tested against a throwaway browser (transport behind the adapter seam), owner real-browser attach documented as enrollment;
+- full M0 + M1 regression gate passes before M2 closes.
 
 ## M3 Research + Artifact
 
