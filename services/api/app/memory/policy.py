@@ -160,9 +160,13 @@ def decide(observation: Observation) -> WriteDecision:
     """Apply the decision table to one observation. Pure and deterministic."""
     text = observation.text
 
+    # Scan every caller-supplied surface — text, value AND source/provenance —
+    # so a secret cannot be smuggled in through nested payloads (M5 review #3).
     secret = find_secret(text)
     if secret is None and observation.value:
         secret = find_secret(repr(observation.value))
+    if secret is None and observation.source:
+        secret = find_secret(repr(observation.source))
     if secret is not None:
         return WriteDecision(
             action=ACTION_REFUSE,
@@ -170,7 +174,14 @@ def decide(observation: Observation) -> WriteDecision:
             secret_pattern=secret,
         )
 
-    if observation.explicit or is_explicit_instruction(text):
+    # OWNER authority requires the caller-asserted `explicit` flag, set only by
+    # trusted owner-facing surfaces (/remember, an owner UI). A trigger phrase
+    # inside arbitrary text is NEVER sufficient by itself: once ingestion
+    # pipelines (browser/research/document, M6+) feed text into /observe, a
+    # webpage saying "always use ..." must not mint an explicit owner memory
+    # (SECURITY_MODEL §6; M5 review #4). Phrase-matched text without the flag
+    # is treated as a strong candidate signal, capped like any inference.
+    if observation.explicit:
         return WriteDecision(
             action=WriteStage.DURABLE,
             explicit=True,
@@ -190,13 +201,28 @@ def decide(observation: Observation) -> WriteDecision:
     )
     confidence = max(0.0, confidence)
 
-    if observation.key is not None or _matches_any(text, STRONG_SIGNAL_PATTERNS):
+    if (
+        observation.key is not None
+        or is_explicit_instruction(text)
+        or _matches_any(text, STRONG_SIGNAL_PATTERNS)
+    ):
+        # Inferred episodic events decay naturally: they get SHORT retention
+        # so the sweeper can expire them, unlike keyed preferences/facts.
+        retention = (
+            RetentionClass.SHORT
+            if observation.memory_class == MemoryClass.EPISODIC
+            else RetentionClass.STANDARD
+        )
         return WriteDecision(
             action=WriteStage.CANDIDATE,
             confidence=confidence,
             actor=Actor.POLICY,
-            retention_class=RetentionClass.STANDARD,
-            reason="inferred observation with stable key or strong signal",
+            retention_class=retention,
+            reason=(
+                "explicit-style phrase without owner assertion; candidate only"
+                if is_explicit_instruction(text) and observation.key is None
+                else "inferred observation with stable key or strong signal"
+            ),
         )
 
     return WriteDecision(

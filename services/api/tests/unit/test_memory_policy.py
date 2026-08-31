@@ -37,8 +37,30 @@ from app.memory.types import (
         "Bunu aklında tut: fatura günü ayın beşi.",
     ],
 )
-def test_explicit_owner_phrases_go_durable(text: str) -> None:
+def test_explicit_phrases_without_owner_flag_stay_candidate(text: str) -> None:
+    # M5 security review #4: a trigger phrase inside arbitrary text must NEVER
+    # mint OWNER authority by itself — once ingestion pipelines feed web/doc
+    # text into /observe, "always use ..." on a webpage must not become an
+    # explicit owner memory. Phrase-matched text is a strong candidate signal
+    # only; OWNER/durable requires the caller-asserted explicit flag.
     decision = decide(Observation(text=text, memory_class=MemoryClass.PREFERENCE))
+    assert decision.action == WriteStage.CANDIDATE
+    assert decision.explicit is False
+    assert decision.actor == Actor.POLICY
+    assert decision.confidence <= 0.4
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Remember this: I want summaries in Turkish.",
+        "Bundan sonra raporlari kisa tut.",
+    ],
+)
+def test_explicit_phrases_with_owner_flag_go_durable(text: str) -> None:
+    decision = decide(
+        Observation(text=text, memory_class=MemoryClass.PREFERENCE, explicit=True)
+    )
     assert decision.action == WriteStage.DURABLE
     assert decision.explicit is True
     assert decision.actor == Actor.OWNER

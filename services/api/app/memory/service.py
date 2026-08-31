@@ -39,7 +39,13 @@ from app.memory.models import (
     MemoryEvidence,
     MemoryVersion,
 )
-from app.memory.policy import ACTION_IGNORE, ACTION_REFUSE, Observation, WriteDecision
+from app.memory.policy import (
+    ACTION_IGNORE,
+    ACTION_REFUSE,
+    Observation,
+    WriteDecision,
+    find_secret,
+)
 from app.memory.types import (
     ENTITY_KINDS,
     SINGLE_OBSERVATION_MAX_CONFIDENCE,
@@ -174,6 +180,11 @@ def _corroborate(
     *,
     actor: Actor,
 ) -> bool:
+    # Explicit owner memories are only mutated by the owner — that includes
+    # bookkeeping (evidence_count/confidence/last_confirmed). A POLICY-actor
+    # match on an explicit row is a no-op on the row (M5 review #6).
+    if memory.explicit and actor != Actor.OWNER:
+        return False
     lifecycle.add_evidence(
         session,
         memory,
@@ -478,11 +489,46 @@ def get_memory(session: Session, memory_id: uuid.UUID) -> Memory:
 
 
 def _require_owner_for_explicit(memory: Memory, actor: Actor) -> None:
-    if memory.explicit and actor != Actor.OWNER:
+    # Pinned memories get the same protection: pinning is the owner's "never
+    # auto-rewrite/expire this" mark, so no non-owner actor may touch it.
+    if (memory.explicit or memory.pinned) and actor != Actor.OWNER:
         raise MemorySubsystemError(
             MemoryErrorClass.EXPLICIT_PROTECTED,
-            "explicit owner memories may only be changed by the owner",
+            "explicit/pinned owner memories may only be changed by the owner",
             details={"memory_id": str(memory.id)},
+        )
+
+
+def _reject_if_secret(
+    session: Session,
+    *,
+    text: str | None,
+    value: dict[str, Any] | None,
+    actor: Actor,
+    memory: Memory | None = None,
+) -> None:
+    """Secrets guard for edit/supersede paths, which bypass policy.decide()
+    (M5 review #2). Audits the refusal with the pattern name only."""
+    secret = None
+    if text:
+        secret = find_secret(text)
+    if secret is None and value:
+        secret = find_secret(repr(value))
+    if secret is not None:
+        record_audit(
+            session,
+            action="refused_secret",
+            memory_id=memory.id if memory else None,
+            memory_class=memory.memory_class if memory else None,
+            key=memory.key if memory else None,
+            actor=actor,
+            detail={"pattern": secret},
+        )
+        session.commit()
+        raise MemorySubsystemError(
+            MemoryErrorClass.SECRET_REJECTED,
+            "content matches a credential/secret pattern",
+            details={"pattern": secret},
         )
 
 
@@ -504,6 +550,7 @@ def edit_memory(
         raise MemorySubsystemError(
             MemoryErrorClass.VALIDATION_ERROR, "edit requires text and/or value"
         )
+    _reject_if_secret(session, text=text, value=value, actor=actor, memory=memory)
     text_changed = text is not None and text != memory.text
     if text is not None:
         memory.text = text
@@ -544,6 +591,7 @@ def supersede_memory(
     with status=superseded + superseded_by. Commits."""
     old = get_memory(session, memory_id)
     _require_owner_for_explicit(old, actor)
+    _reject_if_secret(session, text=text, value=value, actor=actor, memory=old)
     if old.status != MemoryStatus.ACTIVE.value:
         raise MemorySubsystemError(
             MemoryErrorClass.VALIDATION_ERROR,
@@ -581,6 +629,7 @@ def supersede_memory(
 
 def pin_memory(session: Session, memory_id: uuid.UUID, *, actor: Actor) -> Memory:
     memory = get_memory(session, memory_id)
+    _require_owner_for_explicit(memory, actor)
     memory.pinned = True
     memory.retention_class = RetentionClass.PINNED.value
     memory.updated_at = utcnow()
@@ -600,8 +649,13 @@ def pin_memory(session: Session, memory_id: uuid.UUID, *, actor: Actor) -> Memor
 def forget_memory(
     session: Session, memory_id: uuid.UUID, *, actor: Actor, reason: str = "owner_request"
 ) -> dict[str, int]:
-    """HARD delete + audit WITHOUT content. Commits."""
+    """HARD delete + audit WITHOUT content. Commits.
+
+    Owner-gated for explicit/pinned rows (M5 review #1): forgetting is the one
+    irreversible operation, so the Evolution Engine or any POLICY/SYSTEM actor
+    must never be able to erase an explicit owner memory."""
     memory = get_memory(session, memory_id)
+    _require_owner_for_explicit(memory, actor)
     counts = lifecycle.hard_delete_memory(session, memory, actor=actor, reason=reason)
     session.commit()
     return counts

@@ -60,7 +60,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(settings.web_origins),
-        allow_methods=["GET", "POST"],
+        # PATCH/PUT/DELETE: the owner web UI must be able to correct/forget
+        # memory and edit narration/pronunciation (constitution §9).
+        allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE"],
         allow_headers=["Content-Type", "X-Trace-Id"],
         max_age=600,
     )

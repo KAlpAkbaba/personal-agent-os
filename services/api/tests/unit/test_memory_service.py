@@ -12,7 +12,7 @@ import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.memory import lifecycle, service
+from app.memory import lifecycle, policy, service
 from app.memory.embedding import DeterministicEmbedder
 from app.memory.errors import MemoryErrorClass, MemorySubsystemError
 from app.memory.models import (
@@ -624,3 +624,115 @@ def test_audit_trail_records_all_mutations(db: Session) -> None:
     assert actions == ["created", "edited", "pinned", "forgotten"]
     events = service.list_audit_events(db, limit=10)
     assert events[0]["action"] == "forgotten"  # newest first
+
+
+# --------------------------------------------------- M5 security review fixes
+
+
+def test_forget_is_owner_gated_for_explicit_and_pinned(db: Session) -> None:
+    """M5 review #1: no POLICY/SYSTEM actor may hard-delete an explicit or
+    pinned memory - forgetting is the one irreversible operation."""
+    explicit = service.remember_explicit(
+        db, EMBEDDER, text="I prefer green tea in the afternoon.",
+        memory_class=MemoryClass.PREFERENCE,
+    )
+    for actor in (Actor.POLICY, Actor.SYSTEM):
+        with pytest.raises(MemorySubsystemError) as exc:
+            service.forget_memory(db, explicit.memory_id, actor=actor)
+        assert exc.value.error_class == MemoryErrorClass.EXPLICIT_PROTECTED
+    assert db.get(Memory, explicit.memory_id) is not None
+    # owner can still forget
+    service.forget_memory(db, explicit.memory_id, actor=Actor.OWNER)
+    assert db.get(Memory, explicit.memory_id) is None
+
+
+def test_edit_and_supersede_reject_secret_content(db: Session) -> None:
+    """M5 review #2: the secrets guard also covers edit/supersede, which do
+    not pass through policy.decide()."""
+    result = service.remember_explicit(
+        db, EMBEDDER, text="Deploy notes live in the wiki.",
+        memory_class=MemoryClass.SEMANTIC,
+    )
+    token = "ghp_" + "a" * 30  # built by concatenation; never a literal
+    with pytest.raises(MemorySubsystemError) as exc:
+        service.edit_memory(
+            db, EMBEDDER, result.memory_id, actor=Actor.OWNER,
+            text=f"Deploy with {token}",
+        )
+    assert exc.value.error_class == MemoryErrorClass.SECRET_REJECTED
+    with pytest.raises(MemorySubsystemError):
+        service.supersede_memory(
+            db, EMBEDDER, result.memory_id, actor=Actor.OWNER,
+            text=f"New deploy token is {token}",
+        )
+    # memory unchanged and refusals audited without content
+    assert db.get(Memory, result.memory_id).text == "Deploy notes live in the wiki."
+    refusals = db.execute(
+        select(MemoryAuditEvent).where(MemoryAuditEvent.action == "refused_secret")
+    ).scalars().all()
+    assert len(refusals) == 2
+    assert all(token not in str(e.detail_json) for e in refusals)
+
+
+def test_observation_source_field_is_scanned_for_secrets(db: Session) -> None:
+    """M5 review #3: a secret smuggled through the source/provenance payload is
+    refused like one in text/value."""
+    token = "AKIA" + "B" * 16
+    with pytest.raises(MemorySubsystemError) as exc:
+        service.record_observation(
+            db, EMBEDDER,
+            policy.Observation(
+                text="Owner mentioned the deploy pipeline.",
+                memory_class=MemoryClass.SEMANTIC,
+                source={"raw": token},
+            ),
+        )
+    assert exc.value.error_class == MemoryErrorClass.SECRET_REJECTED
+
+
+def test_policy_corroboration_never_touches_explicit_rows(db: Session) -> None:
+    """M5 review #6: POLICY-actor corroboration on an explicit memory is a
+    no-op on the row (evidence/confidence/last_confirmed unchanged)."""
+    taught = service.remember_explicit(
+        db, EMBEDDER, key="editor.theme", text="I prefer dark mode.",
+        memory_class=MemoryClass.PREFERENCE, value={"value": "dark"},
+    )
+    before = db.get(Memory, taught.memory_id)
+    evidence_before = before.evidence_count
+    confidence_before = before.confidence
+    service.record_observation(
+        db, EMBEDDER,
+        policy.Observation(
+            text="Owner switched to dark mode again.",
+            memory_class=MemoryClass.PREFERENCE,
+            key="editor.theme",
+            value={"value": "dark"},
+        ),
+    )
+    after = db.get(Memory, taught.memory_id)
+    assert after.evidence_count == evidence_before
+    assert after.confidence == confidence_before
+
+
+def test_short_retention_assigned_to_inferred_episodic_and_swept(db: Session) -> None:
+    """M5 verification gap #2: inferred episodic candidates get SHORT retention
+    and the sweeper's short rung actually expires them."""
+    episodic = service.record_observation(
+        db, EMBEDDER,
+        policy.Observation(
+            text="Owner always reviews the dashboard after standup.",
+            memory_class=MemoryClass.EPISODIC,
+        ),
+    )
+    row = db.get(Memory, episodic.memory_id)
+    assert row.retention_class == RetentionClass.SHORT
+    durable = service.remember_explicit(
+        db, EMBEDDER, text="I prefer coffee before standup.",
+        memory_class=MemoryClass.PREFERENCE,
+    )
+    swept = lifecycle.sweep_expired(
+        db, now=datetime.now(UTC) + lifecycle.SHORT_TTL + timedelta(minutes=1)
+    )
+    assert swept >= 1
+    assert db.get(Memory, episodic.memory_id) is None
+    assert db.get(Memory, durable.memory_id) is not None
