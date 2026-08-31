@@ -13,7 +13,8 @@ from app.config import Settings
 from app.main import create_app
 
 DEPENDENCY_CHECKS = {"db", "redis", "object_store", "temporal"}
-ALL_CHECKS = DEPENDENCY_CHECKS | {"broker"}
+# M3 adds an "artifacts" check (object store reachable) alongside "broker".
+ALL_CHECKS = DEPENDENCY_CHECKS | {"broker", "artifacts"}
 
 
 def make_client(monkeypatch, checks: dict[str, dict]) -> TestClient:
@@ -22,6 +23,11 @@ def make_client(monkeypatch, checks: dict[str, dict]) -> TestClient:
 
     # create_app resolves run_health_checks via app.main's import; patch there.
     monkeypatch.setattr("app.main.run_health_checks", fake_run_health_checks)
+    # The artifacts check hits the object store; keep this a true unit test.
+    monkeypatch.setattr(
+        "app.artifacts.runtime.ArtifactRuntime.health_check",
+        lambda self: {"status": "ok", "latency_ms": 0.0},
+    )
     return TestClient(create_app(Settings(_env_file=None)))
 
 

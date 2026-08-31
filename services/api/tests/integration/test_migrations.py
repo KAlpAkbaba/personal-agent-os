@@ -48,6 +48,15 @@ BROKER_TABLES = {
     "audit_events",
 }
 
+ARTIFACT_TABLES = {
+    "tasks",
+    "task_runs",
+    "artifacts",
+    "artifact_versions",
+    "artifact_renders",
+    "research_sources",
+}
+
 
 def test_migration_round_trip(settings: Settings) -> None:
     cfg = alembic_config()
@@ -55,17 +64,33 @@ def test_migration_round_trip(settings: Settings) -> None:
     command.upgrade(cfg, "head")
     assert "owner" in table_names(settings)
     assert BROKER_TABLES <= table_names(settings)
+    assert ARTIFACT_TABLES <= table_names(settings)
     assert vector_extension_installed(settings) is True
 
     command.downgrade(cfg, "base")
     assert "owner" not in table_names(settings)
     assert BROKER_TABLES.isdisjoint(table_names(settings))
+    assert ARTIFACT_TABLES.isdisjoint(table_names(settings))
     assert vector_extension_installed(settings) is False
 
     command.upgrade(cfg, "head")
     assert "owner" in table_names(settings)
     assert BROKER_TABLES <= table_names(settings)
+    assert ARTIFACT_TABLES <= table_names(settings)
     assert vector_extension_installed(settings) is True
+
+
+def test_downgrade_one_revision_drops_only_m3(settings: Settings) -> None:
+    """0003 -> 0002 must remove M3 tables and keep the M0/M1 schema intact."""
+    cfg = alembic_config()
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "0002_device_broker")
+    names = table_names(settings)
+    assert ARTIFACT_TABLES.isdisjoint(names)
+    assert BROKER_TABLES <= names
+    assert "owner" in names
+    command.upgrade(cfg, "head")
+    assert ARTIFACT_TABLES <= table_names(settings)
 
 
 def test_owner_defaults_after_upgrade(settings: Settings) -> None:

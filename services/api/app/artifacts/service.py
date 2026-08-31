@@ -1,0 +1,355 @@
+"""Artifact + task persistence (synchronous, one transaction per call).
+
+Same discipline as app/broker/service.py: every function takes an open Session
+and commits before returning, so async callers run them via
+`asyncio.to_thread`. All mutating operations are written to be idempotent so the
+durable research workflow can retry any activity (worker restart / replay)
+without creating duplicate artifacts, versions, renders or sources.
+"""
+
+import uuid
+from datetime import UTC, datetime
+from typing import Any
+
+from sqlalchemy import delete, select
+from sqlalchemy.orm import Session
+
+from app.artifacts.models import (
+    ARTIFACT_KIND_RESEARCH_REPORT,
+    CANONICAL_FORMAT_MARKDOWN,
+    TASK_STATUS_COMPLETED,
+    TASK_STATUS_CREATED,
+    TASK_STATUS_READY,
+    Artifact,
+    ArtifactRender,
+    ArtifactVersion,
+    ResearchSource,
+    Task,
+    TaskRun,
+)
+from app.artifacts.state import assert_artifact_transition, assert_task_transition
+from app.research.compose import ScoredSource
+
+
+def utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
+# --------------------------------------------------------------------- tasks
+
+
+def create_task(
+    session: Session,
+    *,
+    intent: str,
+    conversation_id: uuid.UUID | None = None,
+    created_from_device_id: uuid.UUID | None = None,
+    priority: int = 0,
+    trace_id: str | None = None,
+) -> Task:
+    task = Task(
+        intent=intent,
+        conversation_id=conversation_id,
+        created_from_device_id=created_from_device_id,
+        priority=priority,
+        status=TASK_STATUS_CREATED,
+        trace_id=trace_id,
+    )
+    session.add(task)
+    session.commit()
+    return task
+
+
+def get_task(session: Session, task_id: uuid.UUID) -> Task | None:
+    return session.get(Task, task_id)
+
+
+def list_tasks(session: Session, *, limit: int = 100) -> list[Task]:
+    return list(
+        session.execute(select(Task).order_by(Task.created_at.desc()).limit(limit)).scalars()
+    )
+
+
+def set_task_workflow_id(session: Session, task_id: uuid.UUID, workflow_id: str) -> None:
+    task = session.get(Task, task_id)
+    if task is not None:
+        task.workflow_id = workflow_id
+        session.commit()
+
+
+def transition_task(
+    session: Session,
+    task_id: uuid.UUID,
+    new_status: str,
+    *,
+    error_class: str | None = None,
+    error_message: str | None = None,
+) -> Task | None:
+    task = session.get(Task, task_id)
+    if task is None:
+        return None
+    assert_task_transition(task.status, new_status)
+    task.status = new_status
+    if error_class is not None:
+        task.error_class = error_class
+        task.error_message = error_message
+    now = utcnow()
+    if new_status == TASK_STATUS_READY and task.ready_at is None:
+        task.ready_at = now
+    if new_status == TASK_STATUS_COMPLETED and task.completed_at is None:
+        task.completed_at = now
+    session.commit()
+    return task
+
+
+def start_task_run(
+    session: Session, *, task_id: uuid.UUID, attempt: int, status: str, plan: dict[str, Any] | None
+) -> TaskRun:
+    """Idempotent per (task_id, attempt)."""
+    existing = session.execute(
+        select(TaskRun).where(TaskRun.task_id == task_id, TaskRun.attempt == attempt)
+    ).scalar_one_or_none()
+    if existing is not None:
+        existing.status = status
+        if plan is not None:
+            existing.plan_json = plan
+        session.commit()
+        return existing
+    run = TaskRun(task_id=task_id, attempt=attempt, status=status, plan_json=plan)
+    session.add(run)
+    session.commit()
+    return run
+
+
+def finish_task_run(
+    session: Session,
+    *,
+    task_id: uuid.UUID,
+    attempt: int,
+    status: str,
+    telemetry: dict[str, Any] | None = None,
+    error_class: str | None = None,
+) -> None:
+    run = session.execute(
+        select(TaskRun).where(TaskRun.task_id == task_id, TaskRun.attempt == attempt)
+    ).scalar_one_or_none()
+    if run is None:
+        return
+    run.status = status
+    run.telemetry_json = telemetry
+    run.error_class = error_class
+    run.ended_at = utcnow()
+    session.commit()
+
+
+# ----------------------------------------------------------- research sources
+
+
+def replace_research_sources(
+    session: Session, *, task_id: uuid.UUID, sources: list[ScoredSource]
+) -> list[ResearchSource]:
+    """Persist sources for a task, idempotently (delete-then-insert)."""
+    session.execute(delete(ResearchSource).where(ResearchSource.task_id == task_id))
+    rows = [
+        ResearchSource(
+            task_id=task_id,
+            url=s.url,
+            title=s.title,
+            snippet=s.snippet,
+            score=s.score,
+            rank=s.rank,
+            provider=s.provider,
+        )
+        for s in sources
+    ]
+    session.add_all(rows)
+    session.commit()
+    return rows
+
+
+def list_research_sources(session: Session, task_id: uuid.UUID) -> list[ResearchSource]:
+    return list(
+        session.execute(
+            select(ResearchSource)
+            .where(ResearchSource.task_id == task_id)
+            .order_by(ResearchSource.rank)
+        ).scalars()
+    )
+
+
+# ------------------------------------------------------------------ artifacts
+
+
+def get_artifact(session: Session, artifact_id: uuid.UUID) -> Artifact | None:
+    return session.get(Artifact, artifact_id)
+
+
+def list_artifacts(session: Session, *, limit: int = 100) -> list[Artifact]:
+    return list(
+        session.execute(
+            select(Artifact).order_by(Artifact.created_at.desc()).limit(limit)
+        ).scalars()
+    )
+
+
+def get_artifact_for_task(session: Session, task_id: uuid.UUID) -> Artifact | None:
+    return session.execute(
+        select(Artifact).where(Artifact.task_id == task_id).order_by(Artifact.created_at)
+    ).scalars().first()
+
+
+def get_or_create_artifact_for_task(
+    session: Session,
+    *,
+    task_id: uuid.UUID | None,
+    title: str,
+    kind: str = ARTIFACT_KIND_RESEARCH_REPORT,
+    conversation_id: uuid.UUID | None = None,
+) -> Artifact:
+    if task_id is not None:
+        existing = get_artifact_for_task(session, task_id)
+        if existing is not None:
+            return existing
+    artifact = Artifact(
+        task_id=task_id,
+        conversation_id=conversation_id,
+        title=title,
+        kind=kind,
+        canonical_format=CANONICAL_FORMAT_MARKDOWN,
+    )
+    session.add(artifact)
+    session.commit()
+    return artifact
+
+
+def set_artifact_state(session: Session, artifact_id: uuid.UUID, new_state: str) -> Artifact | None:
+    artifact = session.get(Artifact, artifact_id)
+    if artifact is None:
+        return None
+    assert_artifact_transition(artifact.state, new_state)
+    artifact.state = new_state
+    artifact.updated_at = utcnow()
+    session.commit()
+    return artifact
+
+
+def set_executive_summary(
+    session: Session, artifact_id: uuid.UUID, executive_summary: str
+) -> Artifact | None:
+    artifact = session.get(Artifact, artifact_id)
+    if artifact is None:
+        return None
+    artifact.executive_summary = executive_summary
+    artifact.updated_at = utcnow()
+    session.commit()
+    return artifact
+
+
+def add_artifact_version(
+    session: Session,
+    *,
+    artifact_id: uuid.UUID,
+    canonical_body: str,
+    content_hash: str,
+    source_manifest: dict[str, Any] | None = None,
+) -> ArtifactVersion:
+    """Create the next version, or return the current one if its content_hash is
+    unchanged (idempotent re-compose)."""
+    artifact = session.get(Artifact, artifact_id)
+    if artifact is None:
+        raise ValueError(f"unknown artifact: {artifact_id}")
+    current = get_current_version(session, artifact_id)
+    if current is not None and current.content_hash == content_hash:
+        return current
+    next_version = artifact.current_version + 1
+    version = ArtifactVersion(
+        artifact_id=artifact_id,
+        version=next_version,
+        canonical_body=canonical_body,
+        content_hash=content_hash,
+        source_manifest_json=source_manifest,
+    )
+    session.add(version)
+    artifact.current_version = next_version
+    artifact.updated_at = utcnow()
+    session.commit()
+    return version
+
+
+def get_current_version(session: Session, artifact_id: uuid.UUID) -> ArtifactVersion | None:
+    artifact = session.get(Artifact, artifact_id)
+    if artifact is None or artifact.current_version == 0:
+        return None
+    return get_version(session, artifact_id, artifact.current_version)
+
+
+def get_version(
+    session: Session, artifact_id: uuid.UUID, version: int
+) -> ArtifactVersion | None:
+    return session.execute(
+        select(ArtifactVersion).where(
+            ArtifactVersion.artifact_id == artifact_id,
+            ArtifactVersion.version == version,
+        )
+    ).scalar_one_or_none()
+
+
+# -------------------------------------------------------------------- renders
+
+
+def record_render(
+    session: Session,
+    *,
+    artifact_version_id: uuid.UUID,
+    fmt: str,
+    object_key: str,
+    mime_type: str,
+    content_hash: str,
+    size_bytes: int,
+) -> ArtifactRender:
+    """Upsert a render row keyed on (artifact_version_id, format)."""
+    existing = session.execute(
+        select(ArtifactRender).where(
+            ArtifactRender.artifact_version_id == artifact_version_id,
+            ArtifactRender.format == fmt,
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        existing.object_key = object_key
+        existing.mime_type = mime_type
+        existing.content_hash = content_hash
+        existing.size_bytes = size_bytes
+        session.commit()
+        return existing
+    render = ArtifactRender(
+        artifact_version_id=artifact_version_id,
+        format=fmt,
+        object_key=object_key,
+        mime_type=mime_type,
+        content_hash=content_hash,
+        size_bytes=size_bytes,
+    )
+    session.add(render)
+    session.commit()
+    return render
+
+
+def get_render(
+    session: Session, artifact_version_id: uuid.UUID, fmt: str
+) -> ArtifactRender | None:
+    return session.execute(
+        select(ArtifactRender).where(
+            ArtifactRender.artifact_version_id == artifact_version_id,
+            ArtifactRender.format == fmt,
+        )
+    ).scalar_one_or_none()
+
+
+def list_renders(session: Session, artifact_version_id: uuid.UUID) -> list[ArtifactRender]:
+    return list(
+        session.execute(
+            select(ArtifactRender)
+            .where(ArtifactRender.artifact_version_id == artifact_version_id)
+            .order_by(ArtifactRender.format)
+        ).scalars()
+    )
