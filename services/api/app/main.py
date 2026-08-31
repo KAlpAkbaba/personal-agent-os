@@ -27,6 +27,8 @@ from app.memory.routes import router as memory_router
 from app.memory.runtime import MemoryRuntime
 from app.middleware import TraceIdMiddleware
 from app.narration.routes import router as narration_router
+from app.security.routes import router as security_router
+from app.security.runtime import SecurityRuntime
 from app.selfhealing.routes import router as selfhealing_router
 from app.selfhealing.runtime import SelfHealingRuntime
 from app.voice.routes import router as voice_router
@@ -44,6 +46,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     memory = MemoryRuntime(settings)
     selfhealing = SelfHealingRuntime(settings)
     evolution = EvolutionRuntime(settings)
+    security = SecurityRuntime(settings)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -63,6 +66,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.memory = memory
     app.state.selfhealing = selfhealing
     app.state.evolution = evolution
+    app.state.security = security
     # Scoped CORS: the web shell is a separate origin from the API. Allow only
     # the configured loopback/private web origins (never "*"); M0 review #3.
     app.add_middleware(
@@ -83,6 +87,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(memory_router)
     app.include_router(selfhealing_router)
     app.include_router(evolution_router)
+    app.include_router(security_router)
 
     @app.get("/v1/system/health")
     async def system_health() -> dict[str, Any]:
@@ -98,6 +103,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         checks["selfhealing"] = await asyncio.to_thread(selfhealing.health_check)
         # M7: skill-generator identity + evolution sandbox posture.
         checks["evolution"] = await asyncio.to_thread(evolution.health_check)
+        # M8: authorized-asset scope authority + defensive-collector posture.
+        checks["security"] = await asyncio.to_thread(security.health_check)
         degraded = any(check["status"] != "ok" for check in checks.values())
         status = "degraded" if degraded else "ok"
         logger.info("health_checked", status=status, checks=checks)

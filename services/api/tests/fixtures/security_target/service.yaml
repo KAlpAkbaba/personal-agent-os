@@ -1,0 +1,12 @@
+# Synthetic service configuration for the M8 configuration-audit fixture.
+service_name: lab-web-01
+listen_port: 8080
+
+use_tls: false
+
+cors:
+  allow_origins: "*"
+
+auth:
+  min_password_length: 8
+  lockout_threshold: 10

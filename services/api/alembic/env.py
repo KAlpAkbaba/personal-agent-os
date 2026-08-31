@@ -14,6 +14,7 @@ import app.broker.models  # noqa: F401 - register broker tables on Base.metadata
 import app.evolution.models  # noqa: F401 - register evolution tables on Base.metadata
 import app.memory.models  # noqa: F401 - register memory tables on Base.metadata
 import app.narration.models  # noqa: F401 - register narration tables on Base.metadata
+import app.security.models  # noqa: F401 - register security tables on Base.metadata
 import app.selfhealing.models  # noqa: F401 - register self-healing tables on Base.metadata
 import app.voice.models  # noqa: F401 - register voice tables on Base.metadata
 from app.config import get_settings

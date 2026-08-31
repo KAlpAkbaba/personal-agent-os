@@ -1,0 +1,10 @@
+# Synthetic sshd configuration for the M8 configuration-audit fixture.
+Port 22
+Protocol 2
+
+PermitRootLogin yes
+PasswordAuthentication yes
+PubkeyAuthentication yes
+
+X11Forwarding no
+MaxAuthTries 6
