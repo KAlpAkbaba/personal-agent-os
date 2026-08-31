@@ -1,0 +1,48 @@
+"""Application settings.
+
+All values have dev-only defaults matching infra/docker/docker-compose.dev.yml
+(loopback-bound local containers). Real deployments override via environment
+variables or a .env file. No secrets live in this file.
+"""
+
+from functools import lru_cache
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_prefix="PAGENTOS_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    app_name: str = "pagentos-api"
+    environment: str = "dev"
+
+    # PostgreSQL (compose service "postgres", host port 15432)
+    database_url: str = "postgresql+psycopg://pagentos:pagentos-dev@127.0.0.1:15432/pagentos"
+
+    # Redis (compose service "redis", host port 16379)
+    redis_url: str = "redis://127.0.0.1:16379/0"
+
+    # MinIO / S3 (compose service "minio", host port 19000)
+    s3_endpoint_url: str = "http://127.0.0.1:19000"
+    s3_access_key: str = "minioadmin"  # dev-only default for local MinIO
+    s3_secret_key: str = "minioadmin"  # dev-only default for local MinIO
+    s3_bucket: str = "pagentos-artifacts"
+    s3_region: str = "us-east-1"
+
+    # Temporal (compose service "temporal", host port 17233)
+    temporal_address: str = "127.0.0.1:17233"
+    temporal_namespace: str = "default"
+    temporal_task_queue: str = "pagentos-core"
+
+    # Health check budget per dependency, seconds.
+    health_check_timeout_s: float = 2.0
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
