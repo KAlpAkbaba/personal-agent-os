@@ -81,6 +81,8 @@ Substages:
 - M4D Turkish narration engine;
 - M4E cross-device narration cursor.
 
+Delivered local-first (ADR-0022): the deterministic core — tr-TR normalizer, narration engine + cursor + command state machine, provider-neutral STT/TTS/realtime interfaces with fakes and HTTP-mocked real adapters, benchmark harness (≥2 providers), OWNER/NOT_OWNER/UNCERTAIN classifier — is built and gated with no owner action. The real-audio quality A/B, real speaker enrollment, and low-latency realtime audio require owner-provisioned provider keys and owner speech samples, which slot into the same interfaces.
+
 ## M5 — Memory
 
 Goal: durable owner/project/procedural memory.

@@ -52,6 +52,22 @@ class Settings(BaseSettings):
         "http://localhost:3100",
     )
 
+    # Voice providers (M4). Keys are an OWNER ACTION: empty by default so the
+    # real adapters stay inert (PROVIDER_AUTH_MISSING) and never call out in
+    # tests. Set e.g. PAGENTOS_VOICE_ELEVENLABS_API_KEY in the environment to
+    # activate a real provider. NEVER commit real keys.
+    voice_elevenlabs_api_key: str = ""
+    voice_azure_speech_key: str = ""
+    voice_azure_speech_region: str = "westeurope"
+    voice_openai_api_key: str = ""
+    # Secret used to derive the Fernet key that encrypts stored speaker profiles
+    # (derived embeddings, never raw audio). Dev-only default; production sets
+    # PAGENTOS_VOICE_PROFILE_SECRET to a real secret. Matches the minio dev-default
+    # convention (loopback-only, not a production credential).
+    voice_profile_secret: str = "pagentos-dev-voice-profile-secret"
+    voice_speaker_object_prefix: str = "voice/speaker"
+    voice_benchmark_object_prefix: str = "voice/benchmark"
+
     # Device broker (M1). Heartbeat interval is sent to agents in the welcome
     # frame; liveness timeout is heartbeat_interval * liveness_factor.
     broker_heartbeat_interval_s: float = 10.0

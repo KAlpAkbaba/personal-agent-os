@@ -1,0 +1,72 @@
+{"id": "date-001", "category": "date", "mode": "narration", "input": "31.08.2026", "expected": "otuz bir Ağustos iki bin yirmi altı"}
+{"id": "date-002", "category": "date", "mode": "narration", "input": "01.09.2026", "expected": "bir Eylül iki bin yirmi altı"}
+{"id": "date-003", "category": "date", "mode": "narration", "input": "15.07.1999", "expected": "on beş Temmuz bin dokuz yüz doksan dokuz"}
+{"id": "date-004", "category": "date", "mode": "narration", "input": "2026-08-31", "expected": "otuz bir Ağustos iki bin yirmi altı"}
+{"id": "date-005", "category": "date", "mode": "narration", "input": "2000-01-01", "expected": "bir Ocak iki bin"}
+{"id": "date-006", "category": "date", "mode": "narration", "input": "2026-08-31 14:42:18", "expected": "otuz bir Ağustos iki bin yirmi altı saat on dört kırk iki on sekiz"}
+{"id": "date-007", "category": "date", "mode": "narration", "input": "24.12.2025", "expected": "yirmi dört Aralık iki bin yirmi beş"}
+{"id": "clock-001", "category": "clock", "mode": "narration", "input": "saat 15.30", "expected": "saat on beş otuz"}
+{"id": "clock-002", "category": "clock", "mode": "narration", "input": "saat 08.05", "expected": "saat sekiz sıfır beş"}
+{"id": "clock-003", "category": "clock", "mode": "narration", "input": "09:00", "expected": "dokuz sıfır sıfır"}
+{"id": "clock-004", "category": "clock", "mode": "narration", "input": "23:59", "expected": "yirmi üç elli dokuz"}
+{"id": "clock-005", "category": "clock", "mode": "narration", "input": "14:42:18", "expected": "on dört kırk iki on sekiz"}
+{"id": "decimal-001", "category": "decimal", "mode": "narration", "input": "17,2", "expected": "on yedi virgül iki"}
+{"id": "decimal-002", "category": "decimal", "mode": "narration", "input": "3,42", "expected": "üç virgül kırk iki"}
+{"id": "decimal-003", "category": "decimal", "mode": "narration", "input": "0,5", "expected": "sıfır virgül beş"}
+{"id": "decimal-004", "category": "decimal", "mode": "narration", "input": "49,95", "expected": "kırk dokuz virgül doksan beş"}
+{"id": "decimal-005", "category": "decimal", "mode": "narration", "input": "1,8", "expected": "bir virgül sekiz"}
+{"id": "decimal-006", "category": "decimal", "mode": "narration", "input": "3,05", "expected": "üç virgül sıfır beş"}
+{"id": "percent-001", "category": "percentage", "mode": "narration", "input": "%17,2", "expected": "yüzde on yedi virgül iki"}
+{"id": "percent-002", "category": "percentage", "mode": "narration", "input": "%3,42", "expected": "yüzde üç virgül kırk iki"}
+{"id": "percent-003", "category": "percentage", "mode": "narration", "input": "%100", "expected": "yüzde yüz"}
+{"id": "percent-004", "category": "percentage", "mode": "narration", "input": "%50", "expected": "yüzde elli"}
+{"id": "percent-005", "category": "percentage", "mode": "narration", "input": "%0,5", "expected": "yüzde sıfır virgül beş"}
+{"id": "money-001", "category": "lira", "mode": "narration", "input": "₺1.250.000", "expected": "bir milyon iki yüz elli bin Türk lirası"}
+{"id": "money-002", "category": "lira", "mode": "narration", "input": "₺49,95", "expected": "kırk dokuz virgül doksan beş Türk lirası"}
+{"id": "money-003", "category": "lira", "mode": "narration", "input": "1.500 TL", "expected": "bin beş yüz Türk lirası"}
+{"id": "money-004", "category": "lira", "mode": "narration", "input": "250 TL", "expected": "iki yüz elli Türk lirası"}
+{"id": "money-005", "category": "currency", "mode": "narration", "input": "€79,90", "expected": "yetmiş dokuz virgül doksan avro"}
+{"id": "money-006", "category": "currency", "mode": "narration", "input": "$1.200", "expected": "bin iki yüz dolar"}
+{"id": "thousands-001", "category": "thousands", "mode": "narration", "input": "1.250.000", "expected": "bir milyon iki yüz elli bin"}
+{"id": "thousands-002", "category": "thousands", "mode": "narration", "input": "12.345", "expected": "on iki bin üç yüz kırk beş"}
+{"id": "thousands-003", "category": "thousands", "mode": "narration", "input": "1.000", "expected": "bin"}
+{"id": "thousands-004", "category": "thousands", "mode": "narration", "input": "100.000", "expected": "yüz bin"}
+{"id": "ordinal-001", "category": "ordinal", "mode": "narration", "input": "2'nci", "expected": "ikinci"}
+{"id": "ordinal-002", "category": "ordinal", "mode": "narration", "input": "1'inci", "expected": "birinci"}
+{"id": "ordinal-003", "category": "ordinal", "mode": "narration", "input": "10'uncu", "expected": "onuncu"}
+{"id": "ordinal-004", "category": "ordinal", "mode": "narration", "input": "3. madde", "expected": "üçüncü madde"}
+{"id": "ordinal-005", "category": "ordinal", "mode": "narration", "input": "21. sıra", "expected": "yirmi birinci sıra"}
+{"id": "phone-001", "category": "phone", "mode": "narration", "input": "0212 555 44 33", "expected": "sıfır iki bir iki beş beş beş dört dört üç üç"}
+{"id": "phone-002", "category": "phone", "mode": "narration", "input": "+90 555 123 45 67", "expected": "artı dokuz sıfır beş beş beş bir iki üç dört beş altı yedi"}
+{"id": "ip-001", "category": "ip", "mode": "technical", "input": "192.168.1.20", "expected": "yüz doksan iki nokta yüz altmış sekiz nokta bir nokta yirmi"}
+{"id": "ip-002", "category": "ip", "mode": "technical", "input": "10.0.0.1", "expected": "on nokta sıfır nokta sıfır nokta bir"}
+{"id": "ip-003", "category": "ip", "mode": "technical", "input": "192.168.10.25", "expected": "yüz doksan iki nokta yüz altmış sekiz nokta on nokta yirmi beş"}
+{"id": "cidr-001", "category": "cidr", "mode": "technical", "input": "10.20.0.0/16", "expected": "on nokta yirmi nokta sıfır nokta sıfır bölü on altı"}
+{"id": "cidr-002", "category": "cidr", "mode": "technical", "input": "192.168.1.0/24", "expected": "yüz doksan iki nokta yüz altmış sekiz nokta bir nokta sıfır bölü yirmi dört"}
+{"id": "version-001", "category": "version", "mode": "narration", "input": "TLS 1.3", "expected": "TLS bir nokta üç"}
+{"id": "version-002", "category": "version", "mode": "narration", "input": "2.5.1", "expected": "iki nokta beş nokta bir"}
+{"id": "version-003", "category": "version", "mode": "narration", "input": "12.0", "expected": "on iki nokta sıfır"}
+{"id": "version-004", "category": "version", "mode": "narration", "input": "v1.2", "expected": "sürüm bir nokta iki"}
+{"id": "email-001", "category": "email", "mode": "narration", "input": "ali@example.com", "expected": "ali et example nokta com"}
+{"id": "email-002", "category": "email", "mode": "narration", "input": "info@site.org", "expected": "info et site nokta org"}
+{"id": "url-001", "category": "url", "mode": "narration", "input": "https://github.com/foo", "expected": "github nokta com bölü foo"}
+{"id": "url-002", "category": "url", "mode": "narration", "input": "http://example.com", "expected": "example nokta com"}
+{"id": "path-001", "category": "path", "mode": "narration", "input": "C:\\AI\\report.pdf", "expected": "C ters bölü AI ters bölü report nokta pdf"}
+{"id": "path-002", "category": "path", "mode": "narration", "input": "D:\\data\\file.txt", "expected": "D ters bölü data ters bölü file nokta txt"}
+{"id": "abbr-001", "category": "abbreviation", "mode": "narration", "input": "API kullan", "pronunciation": {"API": "ey pi ay"}, "expected": "ey pi ay kullan"}
+{"id": "abbr-002", "category": "abbreviation", "mode": "narration", "input": "SQL sorgusu", "pronunciation": {"SQL": "es kü el"}, "expected": "es kü el sorgusu"}
+{"id": "abbr-003", "category": "abbreviation", "mode": "narration", "input": "PostgreSQL 17 bağlantısı", "pronunciation": {"PostgreSQL": "postgre es kü el", "SQL": "es kü el"}, "expected": "postgre es kü el on yedi bağlantısı"}
+{"id": "abbr-004", "category": "abbreviation", "mode": "narration", "input": "GPU ve CPU", "pronunciation": {"GPU": "ci pi yu", "CPU": "si pi yu"}, "expected": "ci pi yu ve si pi yu"}
+{"id": "mixed-001", "category": "mixed_tr_en", "mode": "narration", "input": "Device Broker outbound WebSocket bağlantısını yeniden kurdu.", "expected": "Device Broker outbound WebSocket bağlantısını yeniden kurdu."}
+{"id": "mixed-002", "category": "mixed_tr_en", "mode": "technical", "input": "Sunucunun IP adresi 192.168.10.25 ve ağ maskesi /24.", "expected": "Sunucunun IP adresi yüz doksan iki nokta yüz altmış sekiz nokta on nokta yirmi beş ve ağ maskesi bölü yirmi dört."}
+{"id": "mixed-003", "category": "mixed_tr_en", "mode": "narration", "input": "Redis 6379 portunda dinliyor.", "expected": "Redis altı bin üç yüz yetmiş dokuz portunda dinliyor."}
+{"id": "mixed-004", "category": "mixed_tr_en", "mode": "narration", "input": "TLS 1.3 bağlantısında sertifikayı kontrol et.", "expected": "TLS bir nokta üç bağlantısında sertifikayı kontrol et."}
+{"id": "number-001", "category": "number_edge", "mode": "narration", "input": "0", "expected": "sıfır"}
+{"id": "number-002", "category": "number_edge", "mode": "narration", "input": "7", "expected": "yedi"}
+{"id": "number-003", "category": "number_edge", "mode": "narration", "input": "11", "expected": "on bir"}
+{"id": "number-004", "category": "number_edge", "mode": "narration", "input": "99", "expected": "doksan dokuz"}
+{"id": "number-005", "category": "number_edge", "mode": "narration", "input": "1000000", "expected": "bir milyon"}
+{"id": "number-006", "category": "number_edge", "mode": "narration", "input": "2026", "expected": "iki bin yirmi altı"}
+{"id": "table-001", "category": "table", "mode": "narration", "input": "| Bileşen | Durum | Gecikme |\n|---|---|---:|\n| API | Sağlıklı | 82 ms |\n| Voice | Sağlıklı | 240 ms |\n| Browser Agent | Uyarı | 1,8 sn |", "expected_contains": ["Browser Agent", "uyarı durumunda", "bir virgül sekiz", "sağlıklı"], "expected_absent": ["seksen iki ms"]}
+{"id": "table-002", "category": "table", "mode": "narration", "input": "| Servis | Durum |\n|---|---|\n| Ödeme | Hata |\n| Kimlik | Sağlıklı |", "expected_contains": ["Ödeme", "hata durumunda", "Kimlik"], "expected_absent": []}
+{"id": "table-003", "category": "table", "mode": "narration", "input": "| Servis | Durum |\n|---|---|\n| API | Sağlıklı |\n| Voice | Sağlıklı |", "expected_contains": ["Tüm bileşenler sağlıklı"], "expected_absent": ["hata", "uyarı"]}
