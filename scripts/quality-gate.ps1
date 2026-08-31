@@ -7,9 +7,15 @@
 # Windows PowerShell 5.1 compatible. Never relies on PATH for external tools.
 # Exit code is nonzero if any step fails.
 
-param([switch]$Fast)
+# -E2E additionally runs the M1 device end-to-end test (opens/closes Notepad
+# in the interactive session; not suitable for headless CI).
+param([switch]$Fast, [switch]$E2E)
 
-$ErrorActionPreference = "Stop"
+# "Continue", not "Stop": docker compose, alembic and next write progress to
+# stderr; under output redirection PS 5.1 would turn those lines into
+# terminating NativeCommandError failures. Steps fail via Assert-ExitCode and
+# explicit throws instead.
+$ErrorActionPreference = "Continue"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $apiRoot = Join-Path $repoRoot "services\api"
 
@@ -149,6 +155,32 @@ if (-not $Fast) {
       & $uv run pytest tests/integration -q -m integration
       Assert-ExitCode "pytest (integration)"
     } finally { Pop-Location }
+  }
+
+  Invoke-Step "Windows agent build + tests" {
+    $dotnet = $null
+    foreach ($cand in @("$env:LOCALAPPDATA\Microsoft\dotnet\dotnet.exe", "C:\Program Files\dotnet\dotnet.exe")) {
+      if (Test-Path $cand) {
+        $sdks = & $cand --list-sdks 2>$null
+        if ($LASTEXITCODE -eq 0 -and $sdks) { $dotnet = $cand; break }
+      }
+    }
+    if (-not $dotnet) { throw "dotnet SDK not found" }
+    $env:DOTNET_ROOT = Split-Path -Parent $dotnet
+    Push-Location (Join-Path $repoRoot "devices\windows-agent")
+    try {
+      & $dotnet build PagentOS.WindowsAgent.sln --nologo -v q
+      Assert-ExitCode "dotnet build"
+      & $dotnet test PagentOS.WindowsAgent.sln --nologo --no-build -v q
+      Assert-ExitCode "dotnet test"
+    } finally { Pop-Location }
+  }
+
+  if ($E2E) {
+    Invoke-Step "M1 device E2E (Notepad)" {
+      & $powershell5 -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot "scripts\e2e-m1-device.ps1") -SkipBuild
+      Assert-ExitCode "e2e-m1-device.ps1"
+    }
   }
 
   Invoke-Step "Web shell build" {

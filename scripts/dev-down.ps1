@@ -6,7 +6,8 @@ param(
   [switch]$Purge
 )
 
-$ErrorActionPreference = "Stop"
+# "Continue": docker compose reports progress on stderr (see dev-up.ps1).
+$ErrorActionPreference = "Continue"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $composeFile = Join-Path $repoRoot "infra\docker\docker-compose.dev.yml"
 

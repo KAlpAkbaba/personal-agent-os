@@ -6,7 +6,10 @@ param(
   [int]$TimeoutSec = 180
 )
 
-$ErrorActionPreference = "Stop"
+# "Continue": docker compose reports progress on stderr; with "Stop" and
+# redirected output PS 5.1 turns those lines into terminating errors.
+# Failures are handled via explicit exit-code checks.
+$ErrorActionPreference = "Continue"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $composeFile = Join-Path $repoRoot "infra\docker\docker-compose.dev.yml"
 
