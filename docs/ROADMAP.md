@@ -109,6 +109,14 @@ Claude Agent SDK backend plugs in without pipeline changes.
 
 Goal: add a genuinely missing capability and resume the original task automatically.
 
+Delivered (ADR-0025): capability registry with code-enforced registration
+gates, auditable gap-decision trail (composition attempted before any code
+generation), generated skills in the standard layout behind a SkillGenerator
+seam, evaluation that actually runs generated tests/evals, independent review
+(no self-approval), and original-task resumption — with guard-tested
+boundaries: no owner-explicit-memory mutation, no core/recovery targets, and
+strict token validation on everything reaching generated source.
+
 ## M8 — Authorized Security Agent
 
 Goal: owner-authorized asset scope and autonomous defensive testing/remediation workflow.
