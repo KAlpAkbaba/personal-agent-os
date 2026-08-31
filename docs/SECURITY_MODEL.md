@@ -72,6 +72,25 @@ Evolution Engine may read memory but must never silently alter explicit owner
 preferences (explicit rows are only mutable by owner-actor operations) or the
 recovery/security roots.
 
+M7 evolution rules (ADR-0025 + delta):
+
+- Generated skills are **deny-by-default** for network, filesystem, device and
+  secret access; every grant is declared in the versioned capability manifest
+  and recorded in the audit trail.
+- Generated code never receives production secrets by default and builds/runs
+  only inside an isolated workspace with capability-scoped access and enforced
+  timeout/CPU/memory/disk/network budgets, retry limits and a recursion depth
+  limit (no infinite agent→agent capability creation).
+- Supply chain: no blind package installation; dependency name, version and
+  source are recorded and pinned, scanned, and install scripts may not silently
+  expand privileges.
+- The self-modification restriction on recovery/security roots constrains the
+  **Evolution Engine's authority over its own foundations**. It does not
+  restrict owner-authorized operational capability: the owner policy subsystem
+  may grant powerful tools to explicitly authorized devices/assets, and
+  Evolution must never need to weaken or rewrite the security root to enable
+  that.
+
 ## 6. Prompt injection defense
 
 Treat websites/documents/email content as untrusted data.

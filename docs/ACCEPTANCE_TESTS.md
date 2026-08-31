@@ -142,6 +142,47 @@ Ask for a capability intentionally absent from registry:
 - original user task resumes and completes;
 - rejected candidate does not affect production.
 
+### Resolution order (must be enforced and auditable, in this order)
+
+1. use an existing capability; 2. compose existing capabilities; 3. configure/extend an existing skill; 4. install/adapt a compatible reusable component when appropriate; 5. generate a new skill; 6. classify as product/core change only when none of the above can solve it.
+
+Code generation must not happen when composition is sufficient (asserted: no skill_version row created for a composable request).
+
+### Capability manifest (versioned, required fields)
+
+capability ID; human-readable purpose; version; input/output schema; dependencies; network permissions; filesystem permissions; device permissions; secret requirements; external services/providers; expected side effects; risk classification; tests; evaluation metrics; provenance; builder identity; creation reason/task; rollback version. **Permissions are deny-by-default for generated skills.**
+
+### Generated-skill lifecycle
+
+`candidate -> sandbox -> validated -> shadow -> canary -> active -> deprecated/rolled_back`. A generated skill may never reach `active` because the agent that generated it claims success — promotion requires independent validation evidence.
+
+### Isolation, supply chain, resources
+
+- generated code builds/executes in an isolated workspace/worktree/container; no production secrets by default; network/filesystem/device access is capability-scoped;
+- no blind package installation: dependency name, version and source recorded and pinned; dependency/security scanning; install scripts cannot silently expand privileges;
+- configurable execution timeout, CPU/memory/disk/network budgets, retry limit, and a recursion/self-extension limit that prevents infinite agent→agent capability-creation loops.
+
+### Failure matrix (each case: production stays on last-known-good and the system stays usable)
+
+generated code does not compile; generated tests fail; security reviewer rejects; candidate crashes; canary performs worse; dependency unavailable; generated capability times out.
+
+### Improvement of an existing skill
+
+Telemetry indicating recurring weakness -> candidate improved version -> benchmark old vs new -> promotion only when objectively superior; the old version remains rollback-capable.
+
+### Boundaries (guard-tested, not conventional)
+
+- evolution may read memories as context; it may not mutate explicit-owner memory through any evolution code path; weak inferred preferences never become product requirements automatically;
+- the recovery/security root restriction applies to **self-modification authority**, not to owner-authorized operational capabilities: the owner policy subsystem must remain able to grant powerful tools to explicitly authorized devices/assets without Evolution weakening or rewriting the security root.
+
+### Auditability
+
+Every evolution answers: why the capability was needed; what request/incident triggered it; what changed; what code/dependencies were introduced; what permissions were granted; what tests ran; who/what reviewed it; why it was promoted; what the rollback target is.
+
+### Mandatory end-to-end demonstration
+
+With a deterministic fixture capability absent beforehand, asking the running system to perform a task requiring it must automatically produce: `CAPABILITY_MISSING` -> composition check -> skill design -> implementation -> tests -> independent security/reviewer gate -> canary -> promotion -> registry update -> original task resumes -> task succeeds. The same scenario repeated with a deliberately defective implementation must be rejected or rolled back with no owner intervention.
+
 ## M8 Authorized Security
 
 - authorized test asset enrolls;
