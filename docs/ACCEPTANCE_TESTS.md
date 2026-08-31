@@ -26,12 +26,16 @@
 ## M1 Cloud + Device
 
 - Windows agent enrolls with cloud/staging broker;
-- outbound connection reconnects automatically;
+- outbound connection reconnects automatically (verified against both broker restart and agent restart, no owner intervention);
 - device online/offline state reflects reality;
-- command idempotency test passes;
-- from owner UI: `open_notepad` opens Notepad on enrolled Windows session;
+- command idempotency test passes (duplicate creation and duplicate delivery both execute exactly once);
+- expired command is never executed and terminates as `command_expired`;
+- malformed protocol frame yields a `validation_error` frame and does not kill the connection;
+- command to an unavailable/offline agent stays pending and is delivered on reconnect (or expires);
+- broker-unavailable behavior: agent retries with backoff, no crash, no duplicate execution after recovery;
+- from owner UI/API: `desktop.open_application` opens Notepad in the enrolled Windows interactive session, acknowledgement returns, and the execution appears in the broker audit log and the agent's local audit log;
 - wrong/revoked device key is rejected;
-- no inbound public Windows port required.
+- no inbound public Windows port required (agent connects outbound only).
 
 ## M2 Browser
 

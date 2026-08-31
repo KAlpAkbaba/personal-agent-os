@@ -76,7 +76,7 @@ Windows PC
 
 Preferred implementation split:
 
-- .NET current LTS for service/companion/native integration
+- .NET current LTS for service/companion/native integration (M1: .NET 10 LTS, ADR-0015; solution at `devices/windows-agent`)
 - Windows Service for machine/background responsibilities
 - user-session companion for interactive UI/audio
 - named pipes or local authenticated IPC
@@ -133,6 +133,8 @@ Executes durable workflows and activities with idempotency.
 ### `device-broker`
 
 Tracks enrolled devices, outbound sessions, capabilities and command acknowledgements.
+
+M1 implementation note (ADR-0014): realized as the `app/broker/` module inside the `api` service (shared process, DB and health surface) rather than a separate deployment; the logical boundary is preserved so it can be split out later without protocol changes.
 
 ### `memory`
 

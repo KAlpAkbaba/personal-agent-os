@@ -10,6 +10,10 @@ The engineering agent should complete everything else autonomously before asking
 4. Allow microphone and notification permissions in Windows/browser/mobile.
 5. If local NVIDIA acceleration is enabled later, install/approve the required GPU driver if not already present.
 
+## One-time Windows agent actions (deferred, not blocking local development)
+
+1. Installing `PagentOS.DeviceService` as a real Windows Service (Session 0) requires one UAC approval when that step arrives; in development it runs as a console process without elevation.
+
 ## One-time cloud actions that may be unavoidable
 
 1. Create or sign into a Hetzner account.

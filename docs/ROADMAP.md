@@ -42,6 +42,8 @@ Deliverables:
 - reconnect/idempotency;
 - Notepad E2E.
 
+M1 is delivered local-first: broker and agent run and are acceptance-tested entirely on the development machine (loopback transport). Tailscale/Hetzner provisioning is a deployment step that reuses the same protocol and is unblocked separately by the owner actions list.
+
 ## M2 — Browser Agent
 
 Goal: reliable semantic browser automation.

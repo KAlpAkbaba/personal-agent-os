@@ -61,6 +61,8 @@ Handshake carries:
 - nonce challenge signature;
 - session metadata.
 
+Implemented in M1 as protocol v1 — the normative contract is `packages/protocol/DEVICE_PROTOCOL.md` with message schemas in `packages/schemas/device-protocol.schema.json` (hello → challenge → auth → welcome, ECDSA P-256 over `nonce||device_id`, heartbeat presence, at-least-once delivery with agent-side idempotency, redelivery on reconnect). Broker REST surface: `/v1/devices`, `/v1/devices/enroll`, `/v1/devices/enrollment-tokens`, `/v1/devices/{id}/commands[...]`, `/v1/devices/{id}/revoke`; WS endpoint `/v1/devices/connect`.
+
 ## 5. Device command envelope
 
 ```json
@@ -120,6 +122,8 @@ At minimum:
 - ui_target_not_found
 - ui_state_changed
 - timeout
+- command_expired
+- cancelled
 - retry_exhausted
 - artifact_render_error
 - voice_provider_error
