@@ -1,0 +1,10 @@
+{
+  "type": "command_ack",
+  "command_id": "3d2f1a9c-5b6e-47a1-9c3d-2e8f7a6b5c4d",
+  "status": "failed",
+  "error": {
+    "class": "cancelled",
+    "message": "command cancelled by broker",
+    "retryable": false
+  }
+}

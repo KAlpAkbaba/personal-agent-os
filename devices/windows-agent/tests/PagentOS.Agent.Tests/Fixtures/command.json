@@ -1,0 +1,11 @@
+{
+  "type": "command",
+  "command": {
+    "command_id": "3d2f1a9c-5b6e-47a1-9c3d-2e8f7a6b5c4d",
+    "idempotency_key": "b1946ac9-2a49-4b53-9f1e-6d2c3b4a5e6f",
+    "capability": "desktop.open_application",
+    "payload": { "application": "notepad" },
+    "expires_at": "2026-08-31T12:00:00+00:00",
+    "trace_id": "trace-abc-123"
+  }
+}

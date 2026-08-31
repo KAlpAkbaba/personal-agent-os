@@ -1,0 +1,7 @@
+{
+  "type": "hello",
+  "protocol_version": 1,
+  "device_id": "6f9619ff-8b86-4011-b42d-00cf4fc964ff",
+  "software_version": "0.1.0",
+  "capabilities": ["desktop.open_application"]
+}

@@ -1,0 +1,6 @@
+{
+  "type": "command_ack",
+  "command_id": "3d2f1a9c-5b6e-47a1-9c3d-2e8f7a6b5c4d",
+  "status": "succeeded",
+  "result": { "pid": 1234, "executable": "C:\\Windows\\System32\\notepad.exe" }
+}

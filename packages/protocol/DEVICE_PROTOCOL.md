@@ -62,7 +62,8 @@ Agent → broker acknowledgements (`command_ack`), monotonic per command:
 Rules:
 - **Expiry:** agent rejects a command whose `expires_at` has passed with `command_expired` (never executes). Broker also expires undelivered commands server-side.
 - **Idempotency:** agent keeps a persistent map `idempotency_key → terminal ack` (bounded LRU, survives restarts). A duplicate delivery re-sends the recorded terminal ack and never re-executes. Broker dedups REST creation on `idempotency_key` as well. Delivery is therefore at-least-once, execution effectively-once.
-- **Cancellation:** broker sends `{"type":"cancel","command_id":"…"}`. If not yet terminal, agent aborts and acks `failed` with `error.class="cancelled"`; if already terminal, it re-sends the terminal ack.
+- **Cancellation:** broker sends `{"type":"cancel","command_id":"…"}`. If not yet terminal, agent aborts and acks `failed` with `error.class="cancelled"`; if already terminal, it re-sends the terminal ack. A cancel for a command the agent has never seen is acked `failed`/`cancelled` so the broker can settle it (the agent records nothing, having no idempotency key for it).
+- **In-flight duplicate delivery:** a duplicate of a command that is still executing is answered with a `running` re-ack and never re-executed (monotonicity preserved).
 - **Malformed frames:** receiver answers `{"type":"error","error":{"class":"validation_error",…}}` referencing `command_id` when parseable; the connection stays open.
 - **Redelivery:** on (re)connect the broker re-delivers all non-terminal, non-expired commands for that device.
 

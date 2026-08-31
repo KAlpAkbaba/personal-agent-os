@@ -1,0 +1,14 @@
+# Build outputs
+bin/
+obj/
+TestResults/
+*.user
+.vs/
+
+# Runtime state (keys, device identity, idempotency store, logs, audit) must never be committed
+state/
+data/
+*.key
+*.pem
+audit*.jsonl
+idempotency*.json
