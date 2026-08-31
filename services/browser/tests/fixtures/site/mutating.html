@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Mutating Page</title>
+  <style>
+    #overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(200, 200, 200, 0.5);
+      z-index: 10;
+    }
+  </style>
+</head>
+<body>
+  <h1>Mutating Page</h1>
+
+  <!-- Removed from the DOM 300ms after load: deterministic ui_target_not_found
+       for any resolve attempted after the removal. -->
+  <button id="vanish" type="button">Vanishing Button</button>
+
+  <!-- Covered by a pointer-intercepting overlay for the first 1200ms after
+       load: a click during that window resolves (element is attached) but the
+       action is intercepted -> deterministic ui_state_changed. After the
+       overlay timer fires, the same semantic target stabilizes and the click
+       succeeds -> with_retry recovery scenario. -->
+  <button id="blocked" type="button">Blocked Button</button>
+  <div id="blocked-result" data-testid="blocked-result"></div>
+
+  <div id="overlay"></div>
+
+  <script>
+    setTimeout(() => {
+      const el = document.getElementById("vanish");
+      if (el) el.remove();
+    }, 300);
+
+    setTimeout(() => {
+      const overlay = document.getElementById("overlay");
+      if (overlay) overlay.remove();
+    }, 1200);
+
+    document.getElementById("blocked").addEventListener("click", () => {
+      document.getElementById("blocked-result").textContent = "clicked";
+    });
+  </script>
+</body>
+</html>

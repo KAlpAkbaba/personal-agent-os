@@ -157,6 +157,22 @@ if (-not $Fast) {
     } finally { Pop-Location }
   }
 
+  Invoke-Step "Browser agent lint + tests" {
+    if (-not $uv) { throw "uv not found" }
+    Push-Location (Join-Path $repoRoot "services\browser")
+    try {
+      & $uv run ruff check .
+      Assert-ExitCode "ruff (browser)"
+      & $uv run pytest -q
+      Assert-ExitCode "pytest (browser unit)"
+      # Chromium is a one-time user-scope install; make the gate self-healing.
+      & $uv run playwright install chromium
+      Assert-ExitCode "playwright install chromium"
+      & $uv run pytest -q -m browser
+      Assert-ExitCode "pytest (browser e2e)"
+    } finally { Pop-Location }
+  }
+
   Invoke-Step "Windows agent build + tests" {
     $dotnet = $null
     foreach ($cand in @("$env:LOCALAPPDATA\Microsoft\dotnet\dotnet.exe", "C:\Program Files\dotnet\dotnet.exe")) {

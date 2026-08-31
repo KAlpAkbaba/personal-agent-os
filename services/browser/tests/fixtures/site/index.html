@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Personal Agent OS Fixture</title>
+</head>
+<body>
+  <h1>Personal Agent OS Fixture</h1>
+
+  <nav>
+    <a href="second.html">Second page</a>
+    <a href="mutating.html">Mutating page</a>
+  </nav>
+
+  <section aria-label="greeting">
+    <button id="greet" type="button">Greet</button>
+    <output id="greeting" data-testid="greeting"></output>
+  </section>
+
+  <form>
+    <label for="name">Your name</label>
+    <input id="name" name="name" type="text">
+    <span id="name-echo" data-testid="name-echo"></span>
+
+    <input id="query" name="query" type="text" placeholder="Search query">
+    <span id="query-echo" data-testid="query-echo"></span>
+  </form>
+
+  <div data-testid="status-box">All systems nominal</div>
+
+  <a href="files/sample.txt" download="sample.txt">Download sample</a>
+
+  <div id="click-echo" data-testid="click-echo"></div>
+
+  <script>
+    document.getElementById("greet").addEventListener("click", () => {
+      document.getElementById("greeting").textContent = "Hello, Agent!";
+    });
+    document.getElementById("name").addEventListener("input", (e) => {
+      document.getElementById("name-echo").textContent = e.target.value;
+    });
+    document.getElementById("query").addEventListener("input", (e) => {
+      document.getElementById("query-echo").textContent = e.target.value;
+    });
+    document.addEventListener("click", () => {
+      document.getElementById("click-echo").textContent = "clicked-somewhere";
+    });
+  </script>
+</body>
+</html>
