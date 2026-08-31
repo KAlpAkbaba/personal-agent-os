@@ -1,20 +1,21 @@
 {
   "schema_version": 1,
   "project": "personal-agent-os",
-  "current_milestone": "M2",
-  "status": "IN_PROGRESS",
-  "last_completed_milestone": "M1",
+  "current_milestone": "M3",
+  "status": "NOT_STARTED",
+  "last_completed_milestone": "M2",
   "last_updated": "2026-08-31T00:00:00+03:00",
   "owner_actions_pending": [
     "Before first GitHub push: run 'gh auth login' once (browser OAuth), then a private repo can be created and CI activated.",
-    "Cloud deployment of M1 (any time): approve Tailscale install (UAC) + sign in; approve Hetzner account/billing/API key. Local M1 is complete without these.",
+    "Cloud deployment (any time): approve Tailscale install (UAC) + sign in; approve Hetzner account/billing/API key. Local milestones are complete without these.",
     "Windows Service installation (any time, one UAC): install PagentOS.DeviceService as a real service - BLOCKED on resolving M1 security finding #1 (pipe identity model for Session 0) first.",
+    "Owner-browser enrollment (M2 production path): before the extension-bridge/real-browser attach ships, harden the enrollment registry file ACL (M2 finding #6) and complete the owner approval flow.",
     "Recommended, non-blocking: move Docker Desktop disk image location from C: to E: (C: has ~24 GB free)."
   ],
   "quality_gate": {
     "status": "PASS",
     "last_run": "2026-08-31",
-    "scope": "Full gate + -E2E: secret hygiene (content scan), ruff, 85 unit + 21 integration Python tests, 65 agent xUnit tests, alembic, M1 device E2E (Notepad + broker/agent restart recovery), web build. Exit 0."
+    "scope": "Full gate + -E2E 11/11: secret hygiene (content scan), ruff, API 85 unit + 21 integration, browser 75 unit + 39 e2e, Windows agent 65 xUnit, alembic, M1 Notepad E2E with restart recovery, web build. Exit 0."
   },
-  "notes": "M1 complete local-first: device protocol v1, broker module, .NET 10 Windows agent (service+companion), deterministic Notepad E2E with automatic reconnect/recovery, audit trail. Independently verified; security review clean (1 forward-looking finding gates Windows-Service install). M2 Browser Agent starting."
+  "notes": "M2 complete: semantic browser agent with backend-adapter seam (managed + existing-session enrollment), capability declaration, typed taxonomy, idempotent/cancellable browser commands, full scenario matrix. Independently verified (zero defects); security review clean after same-day fixes. M3 Research & Artifact starting: durable research workflow (Temporal), source/evidence model, artifact service with PDF/DOCX render, Artifact Inbox UI, Windows open-artifact command; task ends READY without auto-reading."
 }

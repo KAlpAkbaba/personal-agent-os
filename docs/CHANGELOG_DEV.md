@@ -2,6 +2,15 @@
 
 Autonomous engineering agents append concise accepted-change records here.
 
+## 2026-08-31 — M2 browser agent complete
+
+- services/browser: semantic-only browser automation (Playwright 1.62.0) with a BrowserBackend adapter seam — ManagedBackend (isolated + persistent dedicated profile, real-profile guard) and ExistingSessionBackend (enrollment-only, loopback-only CDP, reconnect); visual/coordinate automation reserved as a future separate adapter.
+- Owner-browser attach modeled as explicit BrowserEnrollment (authorization record + capability grants), never raw debug-port exposure; extension_bridge transport reserved. Per-backend BrowserCapabilities (authenticated_session/downloads/uploads/extensions/existing_tabs/multiple_windows/visual_fallback) queryable by the orchestrator.
+- Typed BrowserError taxonomy; retryable-only with_retry; BrowserCommandExecutor with cancellation and idempotency (op-fingerprint bound) mirroring the device protocol.
+- Full deterministic scenario matrix tested: navigate, back/forward, tabs, text/click/select/checkbox/radio, form submit, SPA, iframe, popup, download+upload (hash-verified), typed browser error/timeout, stale-element recovery, ambiguous locator, browser crash + reconnect (managed relaunch and CDP reattach), cancellation, idempotency. 75 unit + 39 browser tests.
+- Independent verification: all M2 acceptance criteria (architecture gates + scenario matrix) reproduced PASS, zero defects. Security review: 1 high + 1 med-high + 3 low findings all fixed same-day (loopback IP-literal gate, URL scheme allowlist, URL redaction, file_io_root confinement, op-fingerprint idempotency), 1 low tracked (docs/reviews/M2_SECURITY_REVIEW.md).
+- Full M0+M1+M2 regression gate 11/11 PASS. ADR-0018/0019. CI browser-agent job added.
+
 ## 2026-08-31 — M1 cloud/device link complete (local-first)
 
 - Device protocol v1 (packages/protocol + JSON schema): outbound-only WS, ECDSA P-256 challenge handshake, heartbeat presence, at-least-once delivery + agent idempotency, expiry/cancel semantics, audit requirements.
