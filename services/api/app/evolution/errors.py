@@ -1,0 +1,59 @@
+"""Typed evolution error taxonomy (mirrors app.selfhealing.errors conventions)."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from enum import StrEnum
+from typing import Any
+
+
+class EvolutionErrorClass(StrEnum):
+    # Caller-supplied arguments/manifest/spec are invalid.
+    VALIDATION_ERROR = "validation_error"
+    # The referenced capability/gap/skill version does not exist.
+    NOT_FOUND = "not_found"
+    # Dispatch asked for a capability that is not registered/production.
+    CAPABILITY_MISSING = "capability_missing"
+    # Code generation was requested before composition was genuinely attempted.
+    GENERATION_REFUSED = "generation_refused"
+    # The requirement implies a product/core/recovery change — never auto-generated.
+    PRODUCT_CHANGE_REQUIRED = "product_change_required"
+    # A path escaped the configured evolution sandbox root (§13).
+    SANDBOX_VIOLATION = "sandbox_violation"
+    # A generator seam exists but is not configured (Claude Agent SDK).
+    GENERATOR_NOT_CONFIGURED = "generator_not_configured"
+    # The generator refused a hostile/unsupported skill spec.
+    GENERATION_FAILED = "generation_failed"
+    # Generated tests/evals did not meet the release-score gates (§9).
+    EVALUATION_FAILED = "evaluation_failed"
+    # The INDEPENDENT reviewer refused the candidate (§6).
+    REVIEW_REJECTED = "review_rejected"
+    # Registration attempted without a passing, evaluated skill version (§2).
+    REGISTRATION_REFUSED = "registration_refused"
+    # Executing a registered capability failed at runtime.
+    DISPATCH_FAILED = "dispatch_failed"
+    # Anything unexpected.
+    INTERNAL_BUG = "internal_bug"
+
+
+@dataclass(slots=True)
+class EvolutionError(Exception):
+    """An evolution-engine failure with a stable, typed classification."""
+
+    error_class: EvolutionErrorClass
+    message: str
+    details: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        # Zero-arg super() is unsafe under @dataclass(slots=True).
+        Exception.__init__(self, self.message)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "error_class": str(self.error_class),
+            "message": self.message,
+            "details": self.details,
+        }
+
+
+__all__ = ["EvolutionError", "EvolutionErrorClass"]

@@ -45,3 +45,9 @@ logs/
 # Generated environment report may contain machine details
 # Keep it local unless owner explicitly wants it committed.
 docs/LOCAL_ENV_REPORT.generated.json
+
+# Evolution Engine (M7): generated-skill runtime output. Published skill
+# versions and disposable candidate workspaces are machine-produced artifacts
+# tracked in the skill_versions table (with manifest digests), not source.
+skills/generated/*
+!skills/generated/README.md

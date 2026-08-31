@@ -17,7 +17,15 @@ DEPENDENCY_CHECKS = {"db", "redis", "object_store", "temporal"}
 # M4 adds a "voice" check (real-provider activation status; always ok/offline).
 # M5 adds a "memory" check (backend + embedder identity; no I/O, always ok).
 # M6 adds a "selfhealing" check (coding backend + supervisor script presence).
-ALL_CHECKS = DEPENDENCY_CHECKS | {"broker", "artifacts", "voice", "memory", "selfhealing"}
+# M7 adds an "evolution" check (skill generator identity + sandbox posture).
+ALL_CHECKS = DEPENDENCY_CHECKS | {
+    "broker",
+    "artifacts",
+    "voice",
+    "memory",
+    "selfhealing",
+    "evolution",
+}
 
 
 def make_client(monkeypatch, checks: dict[str, dict]) -> TestClient:
