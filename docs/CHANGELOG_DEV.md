@@ -2,6 +2,15 @@
 
 Autonomous engineering agents append concise accepted-change records here.
 
+## 2026-09-01 — M6 self-healing engineering complete
+
+- Recovery Supervisor (services/recovery-supervisor): stdlib-only, dependency-free, model-reasoning-free standalone process — versioned release workspace with current/last_known_good pointer files, stage-preserve-activate, transient-tolerant health policy (a single blip can never roll back), automatic rollback with tested recovery-before-reporting ordering, incident outbox as source of truth; 25 tests.
+- staging/target-service: supervised browser-agent-shaped demo with a known-good release and a controlled INJECTED-FAULT release; selftest expectations live in the monitor so a broken release cannot redefine success.
+- app/selfhealing: fingerprinted incident ingest with dedup/occurrence counting, release records with manifest digests, CodingBackend seam (deterministic gate backend; Claude Agent SDK backend inert without configuration), independent reviewer gate (a backend can never self-approve), full pipeline: reproduce → regression fails-before/passes-after → patch → review → candidate → staging canary → promote/reject; memory-boundary guard test (ADR-0023).
+- M6 acceptance E2E (12.4s, real processes/ports/DB): inject → detect → fingerprint → auto-rollback to last-known-good → reproduce → fix → canary → promote → incident fixed; bad candidate auto-rolls staging back and is rejected with production untouched.
+- Quality gate gained a recovery-supervisor step; full M0-M6 gate 12/12 PASS. 475 unit + 48 integration API tests, 25 supervisor tests.
+- Independent verification PASS on every acceptance bullet (incl. hand-driven supervisor CLI and live ingest/dedup). Security review: one **Critical** (unescaped incident evidence spliced into generated code — a network-to-promoted-code path) fixed same-day with token validation at the choke point and splice point plus hostile-payload regression tests; evidence-in-repair now immutable; report size bounded. docs/reviews/M6_SECURITY_REVIEW.md. ADR-0024 + addenda.
+
 ## 2026-08-31 — M5 memory subsystem complete (first-class)
 
 - Six memory classes (preference/episodic/project/semantic/procedural/voice_preference) on a lead-frozen canonical schema (alembic 0005): confidence+evidence, provenance, temporal validity, version history, supersede, retention classes, entity/project graph, append-only audit (content-free after forget).

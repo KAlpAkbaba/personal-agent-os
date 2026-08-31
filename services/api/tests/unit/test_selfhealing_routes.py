@@ -146,3 +146,18 @@ def test_pipeline_run_rejects_workspace_outside_root(client: TestClient, tmp_pat
     )
     assert response.status_code == 422
     assert response.json()["detail"]["error_class"] == "validation_error"
+
+
+def test_oversized_incident_report_is_refused() -> None:
+    """M6 review: an incident report is a small structured envelope; oversized
+    payloads must not bloat the incidents table."""
+    from pydantic import ValidationError
+
+    from app.selfhealing.routes import MAX_INCIDENT_REPORT_BYTES, IngestBody
+
+    with pytest.raises(ValidationError, match="too large"):
+        IngestBody(
+            schema="pagentos.incident.v1",
+            fingerprint_material={"component": "c", "error_class": "e", "failing_check": "s"},
+            filler="x" * (MAX_INCIDENT_REPORT_BYTES + 1),
+        )

@@ -159,7 +159,14 @@ class SelfHealingService:
             else:
                 row.occurrence_count += 1
                 row.last_seen_at = now
-                row.evidence_json = evidence
+                # Do NOT overwrite the evidence of an incident that is already
+                # being (or has been) repaired: the pipeline derives code from
+                # this evidence, so a later duplicate report must not be able
+                # to swap the counterexample under a running repair
+                # (M6 security review). Fresh evidence is only accepted while
+                # the incident is still open/recovered.
+                if row.status in ("open", "recovered"):
+                    row.evidence_json = evidence
                 if introduced_id is not None and row.introduced_release_id is None:
                     row.introduced_release_id = introduced_id
                 created = False

@@ -138,6 +138,27 @@ _MAPPING_ENTRY_RE = re.compile(
     r"(?P<q2>['\"])(?P<klass>[^'\"]+)(?P=q2)\s*\)"
 )
 
+# Error-class identifiers are a fixed lexical shape. Anything the incident
+# evidence supplies as expected/actual that will be emitted into generated
+# code (backends.py builds a candidate handler.py) MUST match this — a hard
+# gate against injecting arbitrary text into generated source from the
+# unauthenticated incident-ingest surface (M6 security review, Critical).
+_ERROR_CLASS_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+
+
+def _require_error_class_token(value: str, *, field: str) -> str:
+    if not _ERROR_CLASS_RE.match(value):
+        raise SelfHealingError(
+            SelfHealingErrorClass.PATCH_DERIVATION_FAILED,
+            f"{field} is not a valid error-class token; refusing to derive code",
+            details={"field": field},
+        )
+    return value
+
+# Error-class identifiers (expected/actual) are taxonomy tokens. Because the
+# evidence arrives over the UNAUTHENTICATED ingest surface and `expected` is
+# spliced into generated Python source, it MUST be shape-validated at the
+
 
 class DeterministicCodingBackend:
     """Derives the fix for the controlled ``wrong_error_mapping`` fault class
@@ -168,6 +189,11 @@ class DeterministicCodingBackend:
                 SelfHealingErrorClass.PATCH_DERIVATION_FAILED,
                 "evidence lacks the input/expected/actual counterexample",
             )
+        # expected/actual are emitted into generated code — validate their
+        # lexical shape at this single choke point (input_value only ever
+        # reaches generated code via repr(), never raw). Security review Crit.
+        _require_error_class_token(expected, field="expected")
+        _require_error_class_token(actual, field="actual")
         return IssueAnalysis(
             component=incident.get("component", "unknown"),
             fault_kind=fault_kind,
@@ -243,7 +269,14 @@ class DeterministicCodingBackend:
             ):
                 replacements += 1
                 q1, q2 = match.group("q1"), match.group("q2")
-                return f"({q1}{marker}{q1}, {q2}{analysis.expected}{q2})"
+                # `expected` is re-validated here (not just at analyze time)
+                # against the error-class token shape, so nothing that could
+                # terminate the string literal or inject code can ever be
+                # spliced into generated source — the value is [a-z0-9_]+ by
+                # construction (M6 security review, Critical; defense in depth
+                # at the exact splice point).
+                expected = _require_error_class_token(analysis.expected or "", field="expected")
+                return f"({q1}{marker}{q1}, {q2}{expected}{q2})"
             return match.group(0)
 
         patched = _MAPPING_ENTRY_RE.sub(_substitute, source)

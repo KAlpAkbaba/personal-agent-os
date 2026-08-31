@@ -16,12 +16,13 @@ modules.
 """
 
 import asyncio
+import json
 import uuid
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.logging import get_logger, trace_id_var
 from app.selfhealing.errors import SelfHealingError, SelfHealingErrorClass
@@ -63,6 +64,11 @@ async def _call(fn, *args, **kwargs):
         raise _http_error(exc) from exc
 
 
+# An incident report is a small structured envelope; anything larger is
+# either a bug or an attempt to bloat the incidents table (M6 review).
+MAX_INCIDENT_REPORT_BYTES = 64 * 1024
+
+
 class IngestBody(BaseModel):
     # The supervisor report is a versioned envelope validated in
     # monitoring.draft_from_supervisor_report; unknown extra keys are refused
@@ -71,6 +77,17 @@ class IngestBody(BaseModel):
 
     schema_: str = Field(alias="schema", max_length=128)
     fingerprint_material: dict[str, Any]
+
+    @model_validator(mode="after")
+    def _bounded_report(self) -> "IngestBody":
+        size = len(
+            json.dumps(self.model_dump(by_alias=True), separators=(",", ":"), default=str).encode()
+        )
+        if size > MAX_INCIDENT_REPORT_BYTES:
+            raise ValueError(
+                f"incident report too large: {size} bytes (max {MAX_INCIDENT_REPORT_BYTES})"
+            )
+        return self
 
 
 @router.post("/incidents/ingest")

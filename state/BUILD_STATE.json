@@ -1,23 +1,23 @@
 {
   "schema_version": 1,
   "project": "personal-agent-os",
-  "current_milestone": "M6",
+  "current_milestone": "M7",
   "status": "NOT_STARTED",
-  "last_completed_milestone": "M5",
-  "last_updated": "2026-08-31T00:00:00+03:00",
+  "last_completed_milestone": "M6",
+  "last_updated": "2026-09-01T00:00:00+03:00",
   "owner_actions_pending": [
     "Before first GitHub push: run 'gh auth login' once (browser OAuth), then a private repo can be created and CI activated.",
     "Cloud deployment (any time): approve Tailscale install (UAC) + sign in; approve Hetzner account/billing/API key. Local milestones are complete without these.",
     "M4 Voice real-audio layer: provision voice-provider API keys (PAGENTOS_VOICE_*) and record owner speech samples for real speaker enrollment + blind A/B benchmark; plugs into the built interfaces without code changes.",
     "Windows Service install (one UAC): BLOCKED on M1 security finding #1 (Session-0 pipe identity) first.",
     "Owner-browser enrollment (M2 production path): harden enrollment registry file ACL (M2 finding #6) + owner approval flow before real-browser attach.",
-    "HARD GATE - API authentication/identity layer (standing M0 deferral). Until it exists: (a) speaker verification must not gate any privileged action (M4 #1: device-trust must become server-derived); (b) the memory REST surface's owner-authority mutations - especially DELETE/forget - and the 'trusted owner surface' behind the memory explicit flag rest on the same missing layer (M5 #4/#5). Do not wire content-ingestion pipelines into /v1/memory/observe or speaker verification into authorization before this lands.",
+    "HARD GATE - API authentication/identity layer (standing M0 deferral). Until it exists: (a) speaker verification must not gate any privileged action (M4 #1); (b) memory REST owner-authority mutations and the 'trusted owner surface' behind the memory explicit flag rest on this layer (M5 #4/#5) - do not wire content-ingestion pipelines into /v1/memory/observe; (c) the self-healing incident-ingest and pipeline/run endpoints must be owner-authenticated before running outside a trusted loopback/private network AND before enabling any non-deterministic coding backend (M6 #4).",
     "Recommended, non-blocking: move Docker Desktop disk image location from C: to E: (C: has ~24 GB free)."
   ],
   "quality_gate": {
     "status": "PASS",
-    "last_run": "2026-08-31",
-    "scope": "Full gate + -E2E 11/11: secret hygiene (content scan), ruff, API 422 unit + 47 integration, browser 75 unit + 39 e2e, Windows agent 91 xUnit, alembic 0005, M1 Notepad E2E with restart recovery (retryable semantics), web build. Exit 0."
+    "last_run": "2026-09-01",
+    "scope": "Full gate + -E2E 12/12: secret hygiene, ruff, API 475 unit + 48 integration, recovery-supervisor 25 tests + ruff, browser 75 unit + 39 e2e, Windows agent 91 xUnit, alembic 0006, M1 Notepad E2E with restart recovery, web build. Exit 0."
   },
-  "notes": "M5 complete: first-class memory subsystem - six classes, write policy with explicit-flag OWNER authority, provenance/confidence/evidence, version history, owner-gated hard forget cascading to vector rows, hybrid pgvector+structured retrieval with strict project isolation, MemoryBackend abstraction (Mem0 seam), deterministic seeded eval (precision 1.0, contamination 0.0). Independently verified (adversarial, direct-SQL); security review clean after same-day fixes. M6 Self-Healing next: injected-bug detection -> incident fingerprint -> reproduce -> regression test -> candidate fix -> staging/canary -> promote-or-rollback, with last-known-good recovery outside the blast radius; per ADR-0023 the engineering loop may read memory but can never alter explicit owner memory or recovery roots."
+  "notes": "M6 complete: Recovery Supervisor (stdlib-only, outside the blast radius) with versioned releases + auto-rollback; fingerprinted incidents; deterministic self-healing pipeline with an independent reviewer gate and a pluggable CodingBackend (Claude backend inert). Full injected-bug story E2E-proven incl. bad-candidate rejection. Independently verified; security review found and closed a Critical code-injection path from unauthenticated incident evidence into generated code. M7 Evolution next: capability registry, gap detection (compose-before-code), self-extension with generated skills, evaluation/canary/promotion, original-task resumption - reusing M6's pipeline/reviewer/release machinery. Per ADR-0023/0024 the evolution loop may read memory but can never alter explicit owner memory or recovery/security roots."
 }

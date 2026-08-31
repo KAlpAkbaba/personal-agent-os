@@ -207,3 +207,53 @@ def test_claude_backend_command_construction_is_pure() -> None:
     assert command[0] == "C:/tools/claude.exe"
     assert "--output-format" in command and "json" in command
     assert "--model" in command and "claude-x" in command
+
+
+# ------------------------------------------- M6 security review (Critical)
+
+
+@pytest.mark.parametrize(
+    "hostile",
+    [
+        'dependency_unavailable"), __import__("os").system("calc"), ("x',
+        "dependency_unavailable') or exec('x=1') or ('",
+        'has space',
+        "UPPER_CASE",
+        "with-dash",
+        "with\nnewline",
+        "backslash\\x41",
+        "",
+    ],
+)
+def test_hostile_expected_value_is_refused_before_code_generation(hostile: str) -> None:
+    """A crafted incident must never get arbitrary text spliced into generated
+    source. analyze_issue refuses anything that is not an error-class token."""
+    incident = make_incident()
+    incident["evidence"]["selftest"]["expected"] = hostile
+    backend = DeterministicCodingBackend()
+    with pytest.raises(SelfHealingError) as exc:
+        backend.analyze_issue(incident)
+    assert exc.value.error_class == SelfHealingErrorClass.PATCH_DERIVATION_FAILED
+
+
+def test_hostile_actual_value_is_refused_before_code_generation() -> None:
+    incident = make_incident()
+    incident["evidence"]["selftest"]["actual"] = 'internal_bug"), ("evil'
+    with pytest.raises(SelfHealingError):
+        DeterministicCodingBackend().analyze_issue(incident)
+
+
+def test_generated_candidate_always_compiles_and_has_no_injection(
+    broken_dir: Path, tmp_path: Path
+) -> None:
+    """Belt-and-suspenders: the emitted candidate is valid Python and contains
+    no statement smuggled through the evidence."""
+    import ast
+
+    backend = DeterministicCodingBackend()
+    analysis = backend.analyze_issue(make_incident())
+    patch = backend.implement_change(analysis, broken_dir, tmp_path / "out")
+    source = (patch.candidate_dir / "handler.py").read_text(encoding="utf-8")
+    ast.parse(source)  # raises SyntaxError if a literal was broken out of
+    assert "__import__" not in source
+    assert "system(" not in source
