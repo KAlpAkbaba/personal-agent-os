@@ -54,7 +54,12 @@ export default function Home() {
   return (
     <main>
       <h1>Personal Agent OS</h1>
-      <p className="subtitle">Web shell — M0 foundation</p>
+      <p className="subtitle">
+        Web shell —{" "}
+        <a href="/artifacts" style={{ color: "var(--accent)" }}>
+          Araştırma Gelen Kutusu →
+        </a>
+      </p>
 
       <div className="panel">
         <div className="status-row">
