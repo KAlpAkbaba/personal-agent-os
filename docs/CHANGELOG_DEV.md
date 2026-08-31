@@ -2,6 +2,16 @@
 
 Autonomous engineering agents append concise accepted-change records here.
 
+## 2026-08-31 — M5 memory subsystem complete (first-class)
+
+- Six memory classes (preference/episodic/project/semantic/procedural/voice_preference) on a lead-frozen canonical schema (alembic 0005): confidence+evidence, provenance, temporal validity, version history, supersede, retention classes, entity/project graph, append-only audit (content-free after forget).
+- Memory Write Policy: ignore -> session -> candidate -> durable; OWNER authority requires the caller-asserted explicit flag (phrase-matching alone can never mint explicit memory — prompt-injection defense); single observation capped at 0.4 confidence; promotion at evidence>=3 AND confidence>=0.7; secrets guard on text/value/source and on edit/supersede paths.
+- Forget = hard delete cascading to versions/evidence/pgvector rows — verified to the SQL level by the independent verifier; owner-gated for explicit/pinned rows (Evolution Engine can never erase explicit owner memory).
+- Hybrid retrieval: pgvector hnsw cosine + structured + deterministic weighted rerank, temporal windows, strict project isolation; MemoryBackend abstraction (Mem0 seam) with PostgreSQL canonical; reindex(new_embedder) re-embedding support.
+- Deterministic seeded eval: 44-memory corpus, 18 queries — precision@k 1.0, hit-rate 1.0, cross-project contamination 0.0 (floors asserted in CI).
+- Full behavioral matrix as named tests; 422 unit + 47 integration green; full M0-M5 gate 11/11 PASS (M1 E2E now honors retryable dependency_unavailable semantics after agent restart).
+- Independent verification PASS incl. adversarial direct-SQL forget checks and a confidence-hint bypass attempt. Security review: 3 live High + 1 forward-looking High + 4 lower — all fixed same-day (forget/pin owner-gating, edit/supersede+source secrets guard, explicit-flag authority, corroboration no-op, CORS methods, SHORT retention wiring); docs/reviews/M5_SECURITY_REVIEW.md. ADR-0023 + addenda.
+
 ## 2026-08-31 — M4 voice core & narration complete (local-first)
 
 - Deterministic tr-TR narration normalizer + Turkish number engine (date/clock/decimal/percentage/lira/currency/thousands/ordinal/phone/IP+CIDR/version/email/URL/path/abbreviation/mixed-TR-EN), 72-case machine-readable eval dataset (evals/voice); semantic table/code narration.

@@ -1,23 +1,23 @@
 {
   "schema_version": 1,
   "project": "personal-agent-os",
-  "current_milestone": "M5",
+  "current_milestone": "M6",
   "status": "NOT_STARTED",
-  "last_completed_milestone": "M4",
+  "last_completed_milestone": "M5",
   "last_updated": "2026-08-31T00:00:00+03:00",
   "owner_actions_pending": [
     "Before first GitHub push: run 'gh auth login' once (browser OAuth), then a private repo can be created and CI activated.",
     "Cloud deployment (any time): approve Tailscale install (UAC) + sign in; approve Hetzner account/billing/API key. Local milestones are complete without these.",
-    "M4 Voice real-audio layer: provision voice-provider API keys (ElevenLabs / Azure Speech / OpenAI Realtime) via PAGENTOS_VOICE_* env, and record several owner speech samples in quiet/office/noisy conditions for real speaker enrollment + the blind A/B quality benchmark. The interfaces, benchmark harness and classifier are built and tested with fakes/fixtures; these plug in without code changes.",
+    "M4 Voice real-audio layer: provision voice-provider API keys (PAGENTOS_VOICE_*) and record owner speech samples for real speaker enrollment + blind A/B benchmark; plugs into the built interfaces without code changes.",
     "Windows Service install (one UAC): BLOCKED on M1 security finding #1 (Session-0 pipe identity) first.",
     "Owner-browser enrollment (M2 production path): harden enrollment registry file ACL (M2 finding #6) + owner approval flow before real-browser attach.",
-    "HARD GATE before speaker verification gates any privileged action (M4 finding #1): derive device-trust server-side from an authenticated enrolled-device/broker session and protect owner re-enrollment - needs the API authentication/identity layer (also the standing 'no per-request auth yet' deferral from M0). Do not wire speaker verification to authorization until then.",
+    "HARD GATE - API authentication/identity layer (standing M0 deferral). Until it exists: (a) speaker verification must not gate any privileged action (M4 #1: device-trust must become server-derived); (b) the memory REST surface's owner-authority mutations - especially DELETE/forget - and the 'trusted owner surface' behind the memory explicit flag rest on the same missing layer (M5 #4/#5). Do not wire content-ingestion pipelines into /v1/memory/observe or speaker verification into authorization before this lands.",
     "Recommended, non-blocking: move Docker Desktop disk image location from C: to E: (C: has ~24 GB free)."
   ],
   "quality_gate": {
     "status": "PASS",
     "last_run": "2026-08-31",
-    "scope": "Full gate + -E2E 11/11: secret hygiene, ruff, API 340 unit + 40 integration, browser 75 unit + 39 e2e, Windows agent 91 xUnit, alembic 0004, M1 Notepad E2E with restart recovery, web build. Exit 0."
+    "scope": "Full gate + -E2E 11/11: secret hygiene (content scan), ruff, API 422 unit + 47 integration, browser 75 unit + 39 e2e, Windows agent 91 xUnit, alembic 0005, M1 Notepad E2E with restart recovery (retryable semantics), web build. Exit 0."
   },
-  "notes": "M4 complete local-first: tr-TR normalizer + narration engine + cursor + command state machine, provider-neutral voice interfaces + benchmark + fallback, OWNER/NOT_OWNER/UNCERTAIN speaker classifier, voice preferences, barge-in FSM. Independently verified (9/9 criteria); security review clean after same-day fixes (1 high tracked as a hard-gate for the future API auth layer). Real audio/keys are batched owner actions. M5 Memory next: owner/project/procedural memory, pgvector retrieval, correction/deletion semantics - buildable locally."
+  "notes": "M5 complete: first-class memory subsystem - six classes, write policy with explicit-flag OWNER authority, provenance/confidence/evidence, version history, owner-gated hard forget cascading to vector rows, hybrid pgvector+structured retrieval with strict project isolation, MemoryBackend abstraction (Mem0 seam), deterministic seeded eval (precision 1.0, contamination 0.0). Independently verified (adversarial, direct-SQL); security review clean after same-day fixes. M6 Self-Healing next: injected-bug detection -> incident fingerprint -> reproduce -> regression test -> candidate fix -> staging/canary -> promote-or-rollback, with last-known-good recovery outside the blast radius; per ADR-0023 the engineering loop may read memory but can never alter explicit owner memory or recovery roots."
 }
