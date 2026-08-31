@@ -2,6 +2,16 @@
 
 Autonomous engineering agents append concise accepted-change records here.
 
+## 2026-08-31 — M4 voice core & narration complete (local-first)
+
+- Deterministic tr-TR narration normalizer + Turkish number engine (date/clock/decimal/percentage/lira/currency/thousands/ordinal/phone/IP+CIDR/version/email/URL/path/abbreviation/mixed-TR-EN), 72-case machine-readable eval dataset (evals/voice); semantic table/code narration.
+- Narration engine: stable section/paragraph/sentence cursor IDs, chunk planning + cancellation, TTS Synthesizer seam; oku/dur/devam/tekrar/jump/explain command state machine ("dur" top priority, explain returns to exact cursor); cross-device cursor persistence (narration_sessions); pronunciation dictionary CRUD.
+- Provider-neutral TTSProvider/STTProvider/RealtimeProvider interfaces with deterministic fakes + HTTP-mocked real adapter skeletons (ElevenLabs/Azure/OpenAI, Faster-Whisper fallback), inert without keys; benchmark harness comparing >=2 providers (STT WER/CER + TTS) with reports to object store; capability-aware provider fallback router.
+- OWNER/NOT_OWNER/UNCERTAIN speaker classifier (cosine sim + threshold band + required device-trust second factor; encrypted derived embeddings, never raw audio); voice preferences (explicit overrides inferred); barge-in realtime state machine.
+- alembic 0004 (reversible). 340 unit + 40 integration API tests; full M0-M4 regression gate 11/11 PASS.
+- Independent verification: all 9 M4 acceptance criteria PASS. Security review: no critical; 1 high (speaker-verification device-trust must be server-derived before it gates a privileged action — tracked hard-gate with the API auth layer) + 3 low all fixed same-day. docs/reviews/M4_SECURITY_REVIEW.md. ADR-0022.
+- Owner actions batched: real voice-provider API keys and owner speech samples for the real-audio A/B quality benchmark and real speaker enrollment (plug into the same interfaces).
+
 ## 2026-08-31 — M3 research & artifact complete
 
 - Durable Temporal ResearchWorkflow (provider-neutral ResearchProvider; offline DeterministicResearchProvider wired, WebResearchProvider seam) producing a Turkish-first canonical Markdown artifact with executive summary + detailed body + scored/deduped sources.
