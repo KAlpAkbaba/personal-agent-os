@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
 from app.artifacts.routes import router as artifacts_router
@@ -45,6 +46,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title=settings.app_name, version=__version__, lifespan=lifespan)
     app.state.broker = broker
     app.state.artifacts = artifacts
+    # Scoped CORS: the web shell is a separate origin from the API. Allow only
+    # the configured loopback/private web origins (never "*"); M0 review #3.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=list(settings.web_origins),
+        allow_methods=["GET", "POST"],
+        allow_headers=["Content-Type", "X-Trace-Id"],
+        max_age=600,
+    )
     app.add_middleware(TraceIdMiddleware)
     app.include_router(broker_router)
     app.include_router(broker_ws_router)

@@ -42,6 +42,16 @@ class Settings(BaseSettings):
     # Health check budget per dependency, seconds.
     health_check_timeout_s: float = 2.0
 
+    # CORS: explicit allowlist of web origins permitted to call the API from a
+    # browser. Loopback dev origins only by default; NEVER "*". Production sets
+    # PAGENTOS_WEB_ORIGINS to the real (Tailscale/private) web origin.
+    web_origins: tuple[str, ...] = (
+        "http://127.0.0.1:3000",
+        "http://localhost:3000",
+        "http://127.0.0.1:3100",
+        "http://localhost:3100",
+    )
+
     # Device broker (M1). Heartbeat interval is sent to agents in the welcome
     # frame; liveness timeout is heartbeat_interval * liveness_factor.
     broker_heartbeat_interval_s: float = 10.0
