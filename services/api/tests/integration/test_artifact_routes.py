@@ -124,6 +124,34 @@ def test_task_and_artifact_http_flow(settings: Settings, default_queue_worker) -
         assert all("canonical_body" not in a for a in listing["artifacts"])
 
 
+def test_task_ends_ready_without_auto_reading_body(
+    settings: Settings, default_queue_worker
+) -> None:
+    """Acceptance (M3): a completed research task ends READY and can be seen
+    without the report body ever being pushed at the owner. Dedicated 1:1 test
+    for the "notify briefly and wait" guarantee."""
+    with TestClient(create_app(settings)) as client:
+        task_id = client.post("/v1/tasks", json={"input": TOPIC}).json()["task_id"]
+        ready = _poll_ready(client, task_id)
+
+        # The task status payload carries readiness + artifact id, never the body.
+        assert ready["status"] == "READY"
+        assert ready["artifact_id"]
+        assert "canonical_body" not in ready
+        assert "executive_summary" not in ready
+
+        # The default artifact view is the executive summary, not the full report.
+        meta = client.get(f"/v1/artifacts/{ready['artifact_id']}").json()
+        assert meta["executive_summary"]
+        assert "canonical_body" not in meta
+
+        # The body exists but only when explicitly asked for.
+        with_body = client.get(
+            f"/v1/artifacts/{ready['artifact_id']}", params={"include": "body"}
+        ).json()
+        assert with_body["canonical_body"]
+
+
 def test_unknown_task_and_artifact_404(settings: Settings) -> None:
     with TestClient(create_app(settings)) as client:
         missing = uuid.uuid4()

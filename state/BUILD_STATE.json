@@ -1,21 +1,22 @@
 {
   "schema_version": 1,
   "project": "personal-agent-os",
-  "current_milestone": "M3",
+  "current_milestone": "M4",
   "status": "NOT_STARTED",
-  "last_completed_milestone": "M2",
+  "last_completed_milestone": "M3",
   "last_updated": "2026-08-31T00:00:00+03:00",
   "owner_actions_pending": [
     "Before first GitHub push: run 'gh auth login' once (browser OAuth), then a private repo can be created and CI activated.",
     "Cloud deployment (any time): approve Tailscale install (UAC) + sign in; approve Hetzner account/billing/API key. Local milestones are complete without these.",
     "Windows Service installation (any time, one UAC): install PagentOS.DeviceService as a real service - BLOCKED on resolving M1 security finding #1 (pipe identity model for Session 0) first.",
     "Owner-browser enrollment (M2 production path): before the extension-bridge/real-browser attach ships, harden the enrollment registry file ACL (M2 finding #6) and complete the owner approval flow.",
+    "M4 Voice (upcoming): create voice-provider accounts/API keys (e.g. ElevenLabs / Azure Speech / OpenAI Realtime) for the Turkish TTS/STT benchmark; record several owner speech samples for speaker enrollment. Local benchmark harness and provider interfaces can be built first with fixtures; real provider keys and owner audio are owner actions.",
     "Recommended, non-blocking: move Docker Desktop disk image location from C: to E: (C: has ~24 GB free)."
   ],
   "quality_gate": {
     "status": "PASS",
     "last_run": "2026-08-31",
-    "scope": "Full gate + -E2E 11/11: secret hygiene (content scan), ruff, API 85 unit + 21 integration, browser 75 unit + 39 e2e, Windows agent 65 xUnit, alembic, M1 Notepad E2E with restart recovery, web build. Exit 0."
+    "scope": "Full gate + -E2E 11/11: secret hygiene (content scan), ruff, API 132 unit + 28 integration, browser 75 unit + 39 e2e, Windows agent 91 xUnit, alembic, M1 Notepad E2E with restart recovery, web build. Exit 0."
   },
-  "notes": "M2 complete: semantic browser agent with backend-adapter seam (managed + existing-session enrollment), capability declaration, typed taxonomy, idempotent/cancellable browser commands, full scenario matrix. Independently verified (zero defects); security review clean after same-day fixes. M3 Research & Artifact starting: durable research workflow (Temporal), source/evidence model, artifact service with PDF/DOCX render, Artifact Inbox UI, Windows open-artifact command; task ends READY without auto-reading."
+  "notes": "M3 complete: durable research workflow, Task->Artifact->Presentation with deterministic renders (Turkish-correct PDF), executive-summary READY-without-auto-read, Windows open_artifact, web Artifact Inbox, scoped CORS. Verified live end-to-end in a browser; independently verified; security review clean after same-day fixes. M4 Voice next: STT/TTS provider interfaces + Turkish benchmark harness + normalizer can be built locally with fixtures; owner actions (provider keys, owner speech samples) batched for when benchmark needs real audio."
 }

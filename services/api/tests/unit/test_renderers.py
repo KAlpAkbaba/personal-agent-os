@@ -96,3 +96,23 @@ def test_pdf_render_is_deterministic_with_turkish() -> None:
     a = R.render("pdf", title="Başlık", canonical_markdown=md)
     b = R.render("pdf", title="Başlık", canonical_markdown=md)
     assert a.content_hash == b.content_hash
+
+
+def test_html_render_neutralizes_injected_markup() -> None:
+    # M3 security review #1: raw HTML in the (future untrusted) body must not
+    # survive into the HTML render as live markup.
+    md = "# Baslik\n\n<script>alert('xss')</script>\n\n- <img src=x onerror=alert(1)>\n"
+    result = R.render("html", title="<script>t</script>", canonical_markdown=md)
+    text = result.data.decode("utf-8")
+    assert "<script>" not in text
+    assert "onerror=" not in text or "&lt;img" in text
+    # the escaped form is present instead
+    assert "&lt;script&gt;" in text
+
+
+def test_html_render_preserves_turkish_and_ampersand() -> None:
+    md = "# Yapay Zeka & Ajanlar\n\n## Yonetici Ozeti\n\nseffaflik ve guven.\n"
+    result = R.render("html", title="AI & ML", canonical_markdown=md)
+    text = result.data.decode("utf-8")
+    assert "Yapay Zeka &amp; Ajanlar" in text
+    assert "Yonetici Ozeti" in text

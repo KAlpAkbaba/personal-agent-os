@@ -213,8 +213,10 @@ public sealed class ArtifactOpener
                 retryable: false);
         }
 
-        // Defense against a symlink/junction inside a root that points outside it: re-check the
-        // fully-resolved real target.
+        // Defense against a symlink/junction that points outside a root. We must check not only the
+        // leaf file but every ancestor directory segment between the matched root and the file: a
+        // directory junction planted mid-path is resolved transparently by Windows at open time, so a
+        // leaf-only check would let a physically-outside file pass the textual containment test.
         var realPath = ResolveFinalTarget(canonical);
         if (!string.Equals(realPath, canonical, StringComparison.OrdinalIgnoreCase) && !IsUnderAnyRoot(realPath))
         {
@@ -224,7 +226,69 @@ public sealed class ArtifactOpener
                 retryable: false);
         }
 
+        var matchedRoot = MatchedRoot(canonical);
+        if (matchedRoot is not null && AncestorEscapesRoot(canonical, matchedRoot))
+        {
+            throw new CapabilityException(
+                ErrorClasses.SecurityScopeError,
+                "an ancestor directory is a reparse point leaving the artifact root(s)",
+                retryable: false);
+        }
+
         return canonical;
+    }
+
+    private string? MatchedRoot(string canonicalPath)
+    {
+        foreach (var root in _roots)
+        {
+            if (canonicalPath.Equals(root, StringComparison.OrdinalIgnoreCase)
+                || canonicalPath.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            {
+                return root;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool AncestorEscapesRoot(string canonicalPath, string root)
+    {
+        // Walk each directory segment strictly below the root up to (and including) the file's
+        // parent. If any segment is a reparse point whose resolved final target leaves the root,
+        // reject — the transparent junction would otherwise smuggle the open outside the root.
+        var current = Path.GetDirectoryName(canonicalPath);
+        while (current is not null
+               && current.Length > root.Length
+               && current.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                var info = new DirectoryInfo(current);
+                if ((info.Attributes & FileAttributes.ReparsePoint) != 0)
+                {
+                    var target = info.ResolveLinkTarget(returnFinalTarget: true);
+                    if (target is not null)
+                    {
+                        var resolved = Path.GetFullPath(target.FullName);
+                        if (!resolved.Equals(root, StringComparison.OrdinalIgnoreCase)
+                            && !resolved.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                        {
+                            return true;
+                        }
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                // If we cannot inspect a segment, fail closed: treat it as an escape.
+                return true;
+            }
+
+            current = Path.GetDirectoryName(current);
+        }
+
+        return false;
     }
 
     private bool IsUnderAnyRoot(string canonicalPath)

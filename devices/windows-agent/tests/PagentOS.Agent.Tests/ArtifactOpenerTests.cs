@@ -137,6 +137,47 @@ public sealed class ArtifactOpenerTests : IDisposable
     }
 
     [Fact]
+    public void Ancestor_directory_junction_leaving_root_fails_with_security_scope_error()
+    {
+        // M3 security review #2: a directory junction planted INSIDE the root but
+        // pointing OUTSIDE must not smuggle an outside file through the textual
+        // containment check. Junctions (mklink /J) need no elevation.
+        var outside = Path.Combine(Path.GetTempPath(), $"pagentos-outside-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(outside);
+        File.WriteAllText(Path.Combine(outside, "secret.pdf"), "data");
+        var junction = Path.Combine(_root, "linked");
+
+        var mklink = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "cmd.exe",
+            Arguments = $"/c mklink /J \"{junction}\" \"{outside}\"",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        });
+        mklink!.WaitForExit();
+        try
+        {
+            // If the environment cannot create a junction, don't produce a flaky failure.
+            if (mklink.ExitCode != 0 || !Directory.Exists(junction))
+            {
+                return;
+            }
+
+            var smuggled = Path.Combine(junction, "secret.pdf");
+            var ex = Assert.Throws<CapabilityException>(() => NewOpener().Open(Payload(smuggled)));
+            Assert.Equal(ErrorClasses.SecurityScopeError, ex.ErrorClass);
+            Assert.Empty(_opener.Opened);
+        }
+        finally
+        {
+            try { Directory.Delete(junction); } catch (Exception) { /* best effort */ }
+            try { Directory.Delete(outside, recursive: true); } catch (Exception) { /* best effort */ }
+        }
+    }
+
+    [Fact]
     public void Prefix_sibling_of_root_is_not_treated_as_inside()
     {
         // "<root>-evil" shares the root's string prefix but is a different directory.

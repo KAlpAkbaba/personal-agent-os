@@ -140,8 +140,19 @@ class HtmlRenderer:
     mime_type = MIME_TYPES[FORMAT_HTML]
 
     def render(self, *, title: str, canonical_markdown: str) -> bytes:
+        # Neutralize any raw HTML in the (possibly untrusted, once a web research
+        # provider is wired) body BEFORE Markdown conversion. python-markdown has
+        # no safe mode and passes raw HTML/<script> through. Our own canonical
+        # Markdown structure uses only #, -, ** — never <, >, & — so escaping
+        # those three characters across the whole body is lossless for our
+        # markup and removes every HTML-injection vector. (M3 security review #1.)
+        safe_markdown = (
+            canonical_markdown.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+        )
         body = markdown_lib.markdown(
-            canonical_markdown, extensions=["extra", "sane_lists"]
+            safe_markdown, extensions=["extra", "sane_lists"]
         )
         escaped_title = (
             title.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")

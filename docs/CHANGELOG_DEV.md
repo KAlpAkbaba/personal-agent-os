@@ -2,6 +2,15 @@
 
 Autonomous engineering agents append concise accepted-change records here.
 
+## 2026-08-31 — M3 research & artifact complete
+
+- Durable Temporal ResearchWorkflow (provider-neutral ResearchProvider; offline DeterministicResearchProvider wired, WebResearchProvider seam) producing a Turkish-first canonical Markdown artifact with executive summary + detailed body + scored/deduped sources.
+- Artifact service (Task->Artifact->Presentation): content-hash versioning, deterministic PDF/DOCX/HTML/TXT renderers stored in MinIO; PDF embeds bundled DejaVu Unicode font for full Turkish (no ASCII fold). REST for tasks/artifacts/canonical/renders; executive_summary column enforces READY-without-auto-read (body only via ?include=body or /canonical). alembic 0003.
+- Windows desktop.open_artifact capability with defense-in-depth allowlist (path containment incl. ancestor-junction walk, executable denylist, extension allowlist); 91 xUnit tests.
+- Web Artifact Inbox (apps/web /artifacts): topic input, readiness-only polling ("Rapor hazir"), executive-summary list, per-format download links; scoped CORS added (resolves deferred M0 finding #3).
+- Verified live end-to-end in a real browser (topic -> READY -> exec summary -> PDF/DOCX). 132 unit + 28 integration Python tests; full M0-M3 regression gate 11/11 PASS.
+- Independent verification PASS (all criteria). Security review: no high/critical; 2 medium findings fixed same-day (HTML injection neutralization, open_artifact ancestor-junction), docs/reviews/M3_SECURITY_REVIEW.md. ADR-0020/0021.
+
 ## 2026-08-31 — M2 browser agent complete
 
 - services/browser: semantic-only browser automation (Playwright 1.62.0) with a BrowserBackend adapter seam — ManagedBackend (isolated + persistent dedicated profile, real-profile guard) and ExistingSessionBackend (enrollment-only, loopback-only CDP, reconnect); visual/coordinate automation reserved as a future separate adapter.
