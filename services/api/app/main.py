@@ -21,6 +21,8 @@ from app.broker.ws import router as broker_ws_router
 from app.config import Settings, get_settings
 from app.health import run_health_checks
 from app.logging import configure_logging, get_logger
+from app.memory.routes import router as memory_router
+from app.memory.runtime import MemoryRuntime
 from app.middleware import TraceIdMiddleware
 from app.narration.routes import router as narration_router
 from app.voice.routes import router as voice_router
@@ -35,6 +37,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     broker = BrokerRuntime(settings)
     artifacts = ArtifactRuntime(settings)
     voice = VoiceRuntime(settings)
+    memory = MemoryRuntime(settings)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -51,6 +54,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.broker = broker
     app.state.artifacts = artifacts
     app.state.voice = voice
+    app.state.memory = memory
     # Scoped CORS: the web shell is a separate origin from the API. Allow only
     # the configured loopback/private web origins (never "*"); M0 review #3.
     app.add_middleware(
@@ -66,6 +70,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(artifacts_router)
     app.include_router(voice_router)
     app.include_router(narration_router)
+    app.include_router(memory_router)
 
     @app.get("/v1/system/health")
     async def system_health() -> dict[str, Any]:
@@ -75,6 +80,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         checks["artifacts"] = await asyncio.to_thread(artifacts.health_check)
         # M4: voice-provider activation status (offline fakes vs key-gated reals).
         checks["voice"] = await asyncio.to_thread(voice.health_check)
+        # M5: memory backend + embedder identity (native, deterministic by default).
+        checks["memory"] = await asyncio.to_thread(memory.health_check)
         degraded = any(check["status"] != "ok" for check in checks.values())
         status = "degraded" if degraded else "ok"
         logger.info("health_checked", status=status, checks=checks)

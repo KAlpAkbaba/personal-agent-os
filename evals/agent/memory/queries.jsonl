@@ -1,0 +1,18 @@
+{"query_id": "q01", "q": "executive summary first preference", "filters": {"memory_class": "preference"}, "k": 5, "expected": ["pref-response-style"]}
+{"query_id": "q02", "q": "dark theme code editor", "filters": {"memory_class": "preference"}, "k": 5, "expected": ["pref-editor-theme"]}
+{"query_id": "q03", "q": "Turkish primary language preference", "filters": {"memory_class": "preference"}, "k": 5, "expected": ["pref-language"]}
+{"query_id": "q04", "q": "narration speed for long documents", "filters": {"memory_class": "voice_preference"}, "k": 5, "expected": ["voice-speed"]}
+{"query_id": "q05", "q": "read URLs aloud", "filters": {"memory_class": "voice_preference"}, "k": 5, "expected": ["voice-skip-urls"]}
+{"query_id": "q06", "q": "deployment to staging failed", "filters": {"memory_class": "episodic", "project": "atlas"}, "k": 5, "expected": ["epi-atlas-deploy-fail", "epi-atlas-deploy-fix"]}
+{"query_id": "q07", "q": "invoice duplicate fatura rows", "filters": {"memory_class": "episodic", "project": "borealis"}, "k": 5, "expected": ["epi-borealis-invoice-bug", "epi-borealis-invoice-fix"]}
+{"query_id": "q08", "q": "pgvector semantic retrieval hnsw index", "filters": {"memory_class": "semantic"}, "k": 5, "expected": ["sem-pgvector"]}
+{"query_id": "q09", "q": "Temporal durable workflows long-running", "filters": {"memory_class": "semantic"}, "k": 5, "expected": ["sem-temporal"]}
+{"query_id": "q10", "q": "Tailscale private network cloud VM", "filters": {"memory_class": "semantic"}, "k": 5, "expected": ["sem-tailscale"]}
+{"query_id": "q11", "q": "authenticated local IPC decision", "filters": {"memory_class": "project", "project": "atlas"}, "k": 5, "expected": ["proj-atlas-decision-ipc"]}
+{"query_id": "q12", "q": "canonical invoice data PostgreSQL decision", "filters": {"memory_class": "project", "project": "borealis"}, "k": 5, "expected": ["proj-borealis-decision-store"]}
+{"query_id": "q13", "q": "release procedure quality gates staging promote", "filters": {"memory_class": "procedural"}, "k": 5, "expected": ["proc-release"]}
+{"query_id": "q14", "q": "backup procedure restore verification", "filters": {"memory_class": "procedural"}, "k": 5, "expected": ["proc-backup"]}
+{"query_id": "q15", "q": null, "filters": {"memory_class": "episodic", "project": "borealis", "occurred_from": "2026-05-01T00:00:00+00:00", "occurred_to": "2026-05-31T23:59:59+00:00"}, "k": 5, "expected": ["epi-borealis-kickoff", "epi-borealis-invoice-bug", "epi-borealis-invoice-fix"]}
+{"query_id": "q16", "q": "morning brief Turkish summary", "filters": {"memory_class": "procedural"}, "k": 5, "expected": ["proc-morning-brief"]}
+{"query_id": "q17", "q": "voice control demo latency", "filters": {"memory_class": "episodic", "project": "atlas"}, "k": 5, "expected": ["epi-atlas-demo"]}
+{"query_id": "q18", "q": "Hetzner production virtual machine", "filters": {"memory_class": "semantic"}, "k": 5, "expected": ["sem-hetzner"]}

@@ -15,7 +15,8 @@ from app.main import create_app
 DEPENDENCY_CHECKS = {"db", "redis", "object_store", "temporal"}
 # M3 adds an "artifacts" check (object store reachable) alongside "broker".
 # M4 adds a "voice" check (real-provider activation status; always ok/offline).
-ALL_CHECKS = DEPENDENCY_CHECKS | {"broker", "artifacts", "voice"}
+# M5 adds a "memory" check (backend + embedder identity; no I/O, always ok).
+ALL_CHECKS = DEPENDENCY_CHECKS | {"broker", "artifacts", "voice", "memory"}
 
 
 def make_client(monkeypatch, checks: dict[str, dict]) -> TestClient:
