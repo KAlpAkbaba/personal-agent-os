@@ -77,21 +77,34 @@ def collect_files(root: Path) -> list[CollectedFile]:
     """Read every eligible text file under `root`, deterministically ordered.
 
     The caller is responsible for having proven `root` is authorized; this
-    function additionally refuses to leave it via symlinks.
+    function additionally refuses to leave it via any reparse point.
+
+    Containment is decided by RESOLVING each candidate and checking it is still
+    under the resolved root — not by testing ``is_symlink()``. A Windows NTFS
+    junction (or a directory symlink anywhere in the path) does not set that
+    flag on the leaf entry, so a leaf-only check reads straight through it and
+    the collector would leave the authorized root (M8 security review; the same
+    bug class the M3 review found in the Windows agent's ArtifactOpener).
     """
     files: list[CollectedFile] = []
     root = root.resolve()
     for path in sorted(root.rglob("*"), key=lambda p: p.as_posix()):
         if len(files) >= MAX_FILES:
             break
-        if path.is_symlink() or not path.is_file():
+        try:
+            real = path.resolve()
+        except OSError:
             continue
-        if path.suffix.lower() not in TEXT_SUFFIXES:
+        if not real.is_relative_to(root):
+            continue  # escapes the authorized root via a link/junction
+        if not real.is_file():
+            continue
+        if real.suffix.lower() not in TEXT_SUFFIXES:
             continue
         try:
-            if path.stat().st_size > MAX_FILE_BYTES:
+            if real.stat().st_size > MAX_FILE_BYTES:
                 continue
-            raw = path.read_bytes()
+            raw = real.read_bytes()
         except OSError:
             continue
         if b"\x00" in raw[:1024]:

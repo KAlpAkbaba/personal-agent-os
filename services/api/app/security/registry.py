@@ -112,6 +112,33 @@ def _invalid(message: str, **details: Any) -> SecurityError:
 
 # ------------------------------------------------------------- normalization
 
+# Breadth guard for network locators (M8 security review). A single-owner
+# system may legitimately authorize a wide range, but enrolling `0.0.0.0/0`
+# SILENTLY would defeat the point of having a scope registry at all: the whole
+# internet would become "in scope" from one typo. Ranges broader than these
+# prefixes must be enrolled as several explicit narrower entries, which keeps
+# owner authority intact while making breadth a deliberate, auditable act.
+MIN_IPV4_PREFIX = 16
+MIN_IPV6_PREFIX = 48
+
+
+def _reject_absurd_network(network: ipaddress.IPv4Network | ipaddress.IPv6Network) -> None:
+    if network.is_multicast or network.is_reserved or network.is_unspecified:
+        raise _invalid(
+            "network locator must be a routable/private range, not a "
+            "multicast/reserved/unspecified block",
+            locator=str(network),
+        )
+    minimum = MIN_IPV4_PREFIX if network.version == 4 else MIN_IPV6_PREFIX
+    if network.prefixlen < minimum:
+        raise _invalid(
+            "network locator is too broad to enroll as one asset "
+            f"(/{network.prefixlen} exceeds the /{minimum} limit); enroll the "
+            "specific ranges you authorize",
+            locator=str(network),
+            min_prefix=minimum,
+        )
+
 
 def normalize_locator(kind: str, locator: str) -> str:
     """Canonical stored form of a locator, validated for its kind.
@@ -133,6 +160,7 @@ def normalize_locator(kind: str, locator: str) -> str:
             network = ipaddress.ip_network(raw, strict=False)
         except ValueError as exc:
             raise _invalid(f"network locator is not a valid CIDR: {exc}") from exc
+        _reject_absurd_network(network)
         return str(network)
 
     if kind == "host":

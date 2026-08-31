@@ -161,23 +161,28 @@ class EvolutionRuntime:
     def authorization(self) -> AuthorizationProvider:
         """Verified source of owner authorization for permission grants.
 
-        Deny-by-default: without a configured source nothing is verifiable, so
-        every grant is refused and generated skills reach production with empty
-        grants. `PAGENTOS_EVOLUTION_AUTHORIZATIONS` accepts a JSON object
-        `{asset_ref: {permission_class: [values]}}` for local/dev use; M8's
-        Authorized Asset Registry replaces it by implementing the same
-        interface (M7 security review #1).
+        The M8 Authorized Asset Registry is the real source (ADR-0026): an
+        evolution grant is approved because an enrolled, active, in-window
+        asset records that permission — never because a requester asserted an
+        asset name (M7 security review #1). `PAGENTOS_EVOLUTION_AUTHORIZATIONS`
+        remains a local/dev override for environments with no registry; with
+        neither, nothing is verifiable and every grant is refused
+        (deny-by-default still holds).
         """
         raw = os.environ.get("PAGENTOS_EVOLUTION_AUTHORIZATIONS", "").strip()
-        if not raw:
+        if raw:
+            try:
+                parsed = json.loads(raw)
+            except ValueError:
+                return NullAuthorizationProvider()
+            if isinstance(parsed, dict):
+                return StaticAuthorizationProvider(parsed)
             return NullAuthorizationProvider()
-        try:
-            parsed = json.loads(raw)
-        except ValueError:
-            return NullAuthorizationProvider()
-        if not isinstance(parsed, dict):
-            return NullAuthorizationProvider()
-        return StaticAuthorizationProvider(parsed)
+        # Registry-backed by default. Imported lazily so the evolution package
+        # keeps no import-time dependency on the security package.
+        from app.security.provider import RegistryAuthorizationProvider
+
+        return RegistryAuthorizationProvider(self.session)
 
     @property
     def reviewer(self) -> IndependentSkillReviewer:

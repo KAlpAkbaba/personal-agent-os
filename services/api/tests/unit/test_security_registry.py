@@ -264,3 +264,32 @@ def test_get_unknown_asset_is_typed_not_found(stack) -> None:
     with pytest.raises(SecurityError) as excinfo:
         stack.registry.get("never-enrolled")
     assert excinfo.value.error_class is SecurityErrorClass.NOT_FOUND
+
+
+# ------------------------------------------- M8 security review: breadth guard
+
+
+@pytest.mark.parametrize(
+    "locator",
+    ["0.0.0.0/0", "10.0.0.0/8", "0.0.0.0/1", "::/0", "2001:db8::/32"],
+)
+def test_absurdly_broad_network_locators_are_refused(locator: str) -> None:
+    """A scope registry that silently accepts 0.0.0.0/0 is not a scope
+    registry. Broad ranges must be enrolled as explicit narrower entries."""
+    with pytest.raises(SecurityError) as exc:
+        normalize_locator("network", locator)
+    assert exc.value.error_class == SecurityErrorClass.VALIDATION_ERROR
+
+
+@pytest.mark.parametrize(
+    "locator",
+    ["10.20.30.0/24", "192.168.1.0/24", "172.16.0.0/16", "2001:db8:abcd::/48"],
+)
+def test_reasonable_network_locators_still_enroll(locator: str) -> None:
+    assert normalize_locator("network", locator)
+
+
+@pytest.mark.parametrize("locator", ["224.0.0.0/24", "240.0.0.0/24"])
+def test_multicast_and_reserved_ranges_are_refused(locator: str) -> None:
+    with pytest.raises(SecurityError):
+        normalize_locator("network", locator)

@@ -188,3 +188,36 @@ def test_provider_never_creates_or_widens_a_registry_row(provider_stack) -> None
 
     assert stack.registry.list() == before_assets
     assert stack.registry.list_events(limit=500) == before_events
+
+
+# ---------------------------------- M8 review: the wiring must actually exist
+
+
+def test_evolution_runtime_uses_the_registry_provider_by_default(monkeypatch) -> None:
+    """The M7 High finding is only closed if the running system WIRES this
+    provider. Building it and leaving EvolutionRuntime on the deny-everything
+    default would look fixed while changing nothing (M8 security review #1)."""
+    from app.config import Settings
+    from app.evolution.runtime import EvolutionRuntime
+    from app.security.provider import RegistryAuthorizationProvider
+
+    monkeypatch.delenv("PAGENTOS_EVOLUTION_AUTHORIZATIONS", raising=False)
+    runtime = EvolutionRuntime(Settings(_env_file=None))
+    provider = runtime.authorization
+    assert isinstance(provider, RegistryAuthorizationProvider)
+    assert provider.name == "registry"
+    # ...and the reviewer the pipeline uses carries it.
+    assert runtime.reviewer.authorization is not None
+    assert runtime.reviewer.authorization.name == "registry"
+
+
+def test_explicit_static_override_still_wins_for_local_dev(monkeypatch) -> None:
+    from app.config import Settings
+    from app.evolution.runtime import EvolutionRuntime
+
+    monkeypatch.setenv(
+        "PAGENTOS_EVOLUTION_AUTHORIZATIONS",
+        '{"asset": {"device_permissions": ["serial_port"]}}',
+    )
+    runtime = EvolutionRuntime(Settings(_env_file=None))
+    assert runtime.authorization.name == "static"

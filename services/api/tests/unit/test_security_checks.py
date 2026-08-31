@@ -185,3 +185,43 @@ def test_no_finding_carries_a_secret(findings) -> None:
     assert contains_secret([f.evidence for f in findings]) is None
     assert contains_secret([f.remediation for f in findings]) is None
     assert contains_secret([f.title for f in findings]) is None
+
+
+# ------------------------------------------- M8 security review: containment
+
+
+def test_collector_refuses_to_read_through_a_directory_junction(tmp_path) -> None:
+    """A junction/directory symlink planted inside an authorized root must not
+    let the collector read outside it.
+
+    Regression: containment was decided by is_symlink() on the leaf entry,
+    which a Windows NTFS junction does not set - the same bug class the M3
+    review found in the Windows agent's ArtifactOpener. Containment is now
+    decided by resolving the path and checking it is still under the root.
+    """
+    import subprocess
+
+    root = tmp_path / "authorized"
+    root.mkdir()
+    (root / "inside.conf").write_text("debug=true\n", encoding="utf-8")
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.conf").write_text("APP_PASSWORD=leaked-through-junction\n", encoding="utf-8")
+
+    link = root / "linked"
+    made = subprocess.run(
+        ["cmd.exe", "/c", "mklink", "/J", str(link), str(outside)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if made.returncode != 0 or not link.exists():
+        pytest.skip("this environment cannot create a directory junction")
+
+    collected = collect_files(root)
+    names = {f.relative_path for f in collected}
+    assert "inside.conf" in names
+    assert not any("secret.conf" in n for n in names)
+    blob = "\n".join(line for f in collected for line in f.lines)
+    assert "leaked-through-junction" not in blob
