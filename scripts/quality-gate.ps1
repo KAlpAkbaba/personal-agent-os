@@ -157,6 +157,17 @@ if (-not $Fast) {
     } finally { Pop-Location }
   }
 
+  Invoke-Step "Recovery supervisor tests" {
+    if (-not $uv) { throw "uv not found" }
+    Push-Location (Join-Path $repoRoot "services\recovery-supervisor")
+    try {
+      & $uv run ruff check .
+      Assert-ExitCode "ruff (supervisor)"
+      & $uv run pytest -q
+      Assert-ExitCode "pytest (supervisor)"
+    } finally { Pop-Location }
+  }
+
   Invoke-Step "Browser agent lint + tests" {
     if (-not $uv) { throw "uv not found" }
     Push-Location (Join-Path $repoRoot "services\browser")

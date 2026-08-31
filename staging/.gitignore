@@ -1,0 +1,10 @@
+# Runtime state produced by the recovery supervisor / M6 E2E is never tracked:
+# only source templates (target-service/service.py, releases-src/) belong in git.
+workspaces/
+incidents-outbox/
+releases/
+current.txt
+last_known_good.txt
+history.jsonl
+*.log
+__pycache__/

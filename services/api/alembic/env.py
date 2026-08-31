@@ -6,6 +6,7 @@ from sqlalchemy import engine_from_config, pool
 import app.artifacts.models  # noqa: F401 - register artifact/task tables on Base.metadata
 import app.broker.models  # noqa: F401 - register broker tables on Base.metadata
 import app.memory.models  # noqa: F401 - register memory tables on Base.metadata
+import app.selfhealing.models  # noqa: F401 - register self-healing tables on Base.metadata
 from app.config import get_settings
 from app.models import Base
 
