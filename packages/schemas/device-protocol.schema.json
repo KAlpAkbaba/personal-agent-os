@@ -1,0 +1,165 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pagentos.local/schemas/device-protocol.schema.json",
+  "title": "Personal Agent OS device protocol v1",
+  "oneOf": [
+    { "$ref": "#/$defs/hello" },
+    { "$ref": "#/$defs/challenge" },
+    { "$ref": "#/$defs/auth" },
+    { "$ref": "#/$defs/welcome" },
+    { "$ref": "#/$defs/heartbeat" },
+    { "$ref": "#/$defs/heartbeat_ack" },
+    { "$ref": "#/$defs/command" },
+    { "$ref": "#/$defs/command_ack" },
+    { "$ref": "#/$defs/cancel" },
+    { "$ref": "#/$defs/error" }
+  ],
+  "$defs": {
+    "errorObject": {
+      "type": "object",
+      "required": ["class", "message"],
+      "properties": {
+        "class": {
+          "enum": [
+            "validation_error",
+            "auth_error",
+            "device_offline",
+            "capability_missing",
+            "dependency_unavailable",
+            "provider_rate_limited",
+            "provider_error",
+            "ui_target_not_found",
+            "ui_state_changed",
+            "timeout",
+            "command_expired",
+            "cancelled",
+            "retry_exhausted",
+            "artifact_render_error",
+            "voice_provider_error",
+            "security_scope_error",
+            "internal_bug"
+          ]
+        },
+        "message": { "type": "string", "maxLength": 2000 },
+        "retryable": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "hello": {
+      "type": "object",
+      "required": ["type", "protocol_version", "device_id", "software_version", "capabilities"],
+      "properties": {
+        "type": { "const": "hello" },
+        "protocol_version": { "type": "integer", "minimum": 1 },
+        "device_id": { "type": "string", "format": "uuid" },
+        "software_version": { "type": "string", "maxLength": 64 },
+        "capabilities": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9_.]{1,63}$" },
+          "maxItems": 128
+        }
+      },
+      "additionalProperties": false
+    },
+    "challenge": {
+      "type": "object",
+      "required": ["type", "nonce"],
+      "properties": {
+        "type": { "const": "challenge" },
+        "nonce": { "type": "string", "contentEncoding": "base64", "minLength": 16, "maxLength": 128 }
+      },
+      "additionalProperties": false
+    },
+    "auth": {
+      "type": "object",
+      "required": ["type", "signature"],
+      "properties": {
+        "type": { "const": "auth" },
+        "signature": { "type": "string", "contentEncoding": "base64", "maxLength": 512 }
+      },
+      "additionalProperties": false
+    },
+    "welcome": {
+      "type": "object",
+      "required": ["type", "session_id", "heartbeat_interval_s"],
+      "properties": {
+        "type": { "const": "welcome" },
+        "session_id": { "type": "string", "format": "uuid" },
+        "heartbeat_interval_s": { "type": "number", "exclusiveMinimum": 0, "maximum": 300 }
+      },
+      "additionalProperties": false
+    },
+    "heartbeat": {
+      "type": "object",
+      "required": ["type", "seq"],
+      "properties": {
+        "type": { "const": "heartbeat" },
+        "seq": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "heartbeat_ack": {
+      "type": "object",
+      "required": ["type", "seq"],
+      "properties": {
+        "type": { "const": "heartbeat_ack" },
+        "seq": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "command": {
+      "type": "object",
+      "required": ["type", "command"],
+      "properties": {
+        "type": { "const": "command" },
+        "command": {
+          "type": "object",
+          "required": ["command_id", "idempotency_key", "capability", "payload", "expires_at", "trace_id"],
+          "properties": {
+            "command_id": { "type": "string", "format": "uuid" },
+            "idempotency_key": { "type": "string", "minLength": 8, "maxLength": 128 },
+            "capability": { "type": "string", "pattern": "^[a-z][a-z0-9_.]{1,63}$" },
+            "payload": { "type": "object" },
+            "expires_at": { "type": "string", "format": "date-time" },
+            "trace_id": { "type": "string", "minLength": 1, "maxLength": 128 }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "command_ack": {
+      "type": "object",
+      "required": ["type", "command_id", "status"],
+      "properties": {
+        "type": { "const": "command_ack" },
+        "command_id": { "type": "string", "format": "uuid" },
+        "status": { "enum": ["accepted", "running", "succeeded", "failed"] },
+        "result": { "type": ["object", "null"] },
+        "error": {
+          "anyOf": [{ "$ref": "#/$defs/errorObject" }, { "type": "null" }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "cancel": {
+      "type": "object",
+      "required": ["type", "command_id"],
+      "properties": {
+        "type": { "const": "cancel" },
+        "command_id": { "type": "string", "format": "uuid" }
+      },
+      "additionalProperties": false
+    },
+    "error": {
+      "type": "object",
+      "required": ["type", "error"],
+      "properties": {
+        "type": { "const": "error" },
+        "command_id": { "type": "string", "format": "uuid" },
+        "error": { "$ref": "#/$defs/errorObject" }
+      },
+      "additionalProperties": false
+    }
+  }
+}
