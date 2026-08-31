@@ -27,6 +27,7 @@ the product's own code.
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 from collections.abc import Iterator
 from pathlib import Path
@@ -36,11 +37,17 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import Settings
 from app.db import build_engine, build_session_factory
+from app.evolution.authorization import (
+    AuthorizationProvider,
+    NullAuthorizationProvider,
+    StaticAuthorizationProvider,
+)
 from app.evolution.components import ComponentCatalog
 from app.evolution.gaps import CapabilityComposer, GapDetector, GapService
 from app.evolution.improvement import ImprovementDetector, SkillImprover
 from app.evolution.registry import CapabilityRegistry
 from app.evolution.resources import ResourceBudget
+from app.evolution.review import IndependentSkillReviewer
 from app.evolution.sandbox import SandboxPolicy
 from app.evolution.skills import (
     ClaudeSkillGenerator,
@@ -149,6 +156,34 @@ class EvolutionRuntime:
             # Inert without PAGENTOS_EVOLUTION_CLAUDE_CLI (typed error on use).
             return ClaudeSkillGenerator(cli_path=self._claude_cli)
         return DeterministicSkillGenerator()
+
+    @property
+    def authorization(self) -> AuthorizationProvider:
+        """Verified source of owner authorization for permission grants.
+
+        Deny-by-default: without a configured source nothing is verifiable, so
+        every grant is refused and generated skills reach production with empty
+        grants. `PAGENTOS_EVOLUTION_AUTHORIZATIONS` accepts a JSON object
+        `{asset_ref: {permission_class: [values]}}` for local/dev use; M8's
+        Authorized Asset Registry replaces it by implementing the same
+        interface (M7 security review #1).
+        """
+        raw = os.environ.get("PAGENTOS_EVOLUTION_AUTHORIZATIONS", "").strip()
+        if not raw:
+            return NullAuthorizationProvider()
+        try:
+            parsed = json.loads(raw)
+        except ValueError:
+            return NullAuthorizationProvider()
+        if not isinstance(parsed, dict):
+            return NullAuthorizationProvider()
+        return StaticAuthorizationProvider(parsed)
+
+    @property
+    def reviewer(self) -> IndependentSkillReviewer:
+        return IndependentSkillReviewer(
+            sandbox=self.sandbox, authorization=self.authorization
+        )
 
     @property
     def dispatcher(self) -> CapabilityDispatcher:

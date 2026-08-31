@@ -22,7 +22,6 @@ change to the task state machine, no ownership of app/artifacts code.
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import sys
 import uuid
@@ -45,8 +44,9 @@ from app.artifacts.models import (
 )
 from app.evolution.errors import EvolutionError, EvolutionErrorClass
 from app.evolution.registry import CapabilityRegistry
+from app.evolution.resources import build_isolated_env
 from app.evolution.sandbox import SandboxPolicy
-from app.evolution.skills import SRC_DIRNAME, read_manifest
+from app.evolution.skills import SKILL_DIR_ENV, SRC_DIRNAME, read_manifest
 from app.logging import get_logger
 
 logger = get_logger("app.evolution.task_resumption")
@@ -134,11 +134,10 @@ class CapabilityDispatcher:
                 EvolutionErrorClass.VALIDATION_ERROR,
                 f"dispatch payload too large (max {MAX_PAYLOAD_BYTES} bytes)",
             )
-        env: dict[str, str] = {"PYTHONUTF8": "1"}
-        for passthrough in ("SYSTEMROOT", "PATH", "TEMP", "TMP", "COMSPEC"):
-            value = os.environ.get(passthrough)
-            if value:
-                env[passthrough] = value
+        # Reuse the single allowlist + secret deny-list assertion instead of
+        # hand-rolling a second copy here: a later widening of one list must not
+        # silently skip the secret check (M7 security review #3).
+        env = build_isolated_env(skill_root, skill_dir_var=SKILL_DIR_ENV)
         started = _utcnow()
         try:
             proc = subprocess.run(  # noqa: S603 - registered, reviewed skill; isolated env

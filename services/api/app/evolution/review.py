@@ -26,6 +26,10 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from app.evolution.authorization import (
+    AuthorizationProvider,
+    NullAuthorizationProvider,
+)
 from app.evolution.errors import EvolutionError
 from app.evolution.evaluation import SkillEvaluator, static_findings
 from app.evolution.manifest import granted_permissions, validate_manifest
@@ -56,11 +60,15 @@ class IndependentSkillReviewer:
         *,
         evaluator: SkillEvaluator | None = None,
         sandbox: SandboxPolicy | None = None,
+        authorization: AuthorizationProvider | None = None,
     ) -> None:
         # A *fresh* evaluator by default: the reviewer re-runs everything itself
         # instead of consuming the builder-side evaluation report.
         self.evaluator = evaluator or SkillEvaluator()
         self.sandbox = sandbox
+        # Deny-by-default: with no verifiable authorization source (the M8
+        # Authorized Asset Registry), every permission grant is refused.
+        self.authorization = authorization or NullAuthorizationProvider()
 
     def review_record(self, layout: SkillLayout) -> tuple[ReviewResult, dict[str, Any]]:
         """The reviewer's verdict PLUS the JSON payload the registry gates on.
@@ -75,31 +83,65 @@ class IndependentSkillReviewer:
         except EvolutionError:
             manifest = {}
         grants = granted_permissions(manifest)
-        approved = self._approve_permissions(grants, manifest)
+        approved, reason, unauthorized = self._approve_permissions(grants, manifest)
         payload = result.to_dict()
         payload["reviewer"] = self.name
         payload["permissions_approved"] = approved
         payload["approved_permissions"] = grants if approved else {}
         payload["deny_by_default"] = True
+        payload["authorization_provider"] = self.authorization.name
+        payload["permission_decision_reason"] = reason
+        if unauthorized:
+            payload["unauthorized_grants"] = unauthorized
         return result, payload
 
-    @staticmethod
     def _approve_permissions(
-        grants: dict[str, list[Any]], manifest: dict[str, Any]
-    ) -> bool:
-        """DENY-BY-DEFAULT.
+        self, grants: dict[str, list[Any]], manifest: dict[str, Any]
+    ) -> tuple[bool, str, list[str]]:
+        """DENY-BY-DEFAULT, against a VERIFIED authorization.
 
-        A generated skill gets a permission grant approved ONLY when the manifest
-        records an owner-policy authorization for the asset it acts on
-        (``creation_reason.authorized_asset``). That is the seam the owner policy
-        subsystem drives: it can hand a powerful tool to an explicitly authorized
-        device/asset without Evolution touching the security root
-        (ACCEPTANCE_TESTS M7 Boundaries, SECURITY_MODEL M7).
+        A grant is approved only when an ``AuthorizationProvider`` verifies the
+        asset the skill acts on AND the requested grants fall inside what the
+        owner recorded for that asset. A caller-asserted
+        ``creation_reason.authorized_asset`` string is evidence of nothing: with
+        the default provider (no Authorized Asset Registry until M8) every grant
+        request is refused, and the skill can still reach production with empty
+        grants. This is the seam the owner policy subsystem drives — M8's
+        registry implements the provider, so powerful tools can be handed to an
+        explicitly authorized device/asset without Evolution touching the
+        security root (ACCEPTANCE_TESTS M7 Boundaries, SECURITY_MODEL M7).
         """
         if not grants:
-            return True
-        authorized_asset = (manifest.get("creation_reason") or {}).get("authorized_asset")
-        return bool(authorized_asset)
+            return True, "no permissions requested (deny-by-default satisfied)", []
+        asset_ref = (manifest.get("creation_reason") or {}).get("authorized_asset")
+        authorization = self.authorization.verify(asset_ref)
+        if authorization is None:
+            return (
+                False,
+                (
+                    "permission grants refused: no verifiable owner authorization "
+                    f"for asset {asset_ref!r} (provider {self.authorization.name!r}; "
+                    "the Authorized Asset Registry is an M8 deliverable)"
+                ),
+                sorted(f"{k}:{v}" for k, values in grants.items() for v in values),
+            )
+        covered, unauthorized = authorization.covers(
+            {k: [str(v) for v in values] for k, values in grants.items()}
+        )
+        if not covered:
+            return (
+                False,
+                (
+                    f"permission grants exceed what asset {asset_ref!r} is "
+                    f"authorized for (source {authorization.source!r})"
+                ),
+                unauthorized,
+            )
+        return (
+            True,
+            f"grants verified against asset {asset_ref!r} (source {authorization.source!r})",
+            [],
+        )
 
     def review(self, layout: SkillLayout) -> ReviewResult:
         checks: list[ReviewCheck] = []
@@ -214,7 +256,9 @@ class IndependentSkillReviewer:
         # Deny-by-default decision on the requested grants. The reviewer records
         # the exact approved set; registration compares it to the manifest.
         grants = granted_permissions(loaded_manifest or {})
-        permissions_approved = self._approve_permissions(grants, loaded_manifest or {})
+        permissions_approved, permission_reason, _unauthorized = self._approve_permissions(
+            grants, loaded_manifest or {}
+        )
         if grants:
             checks.append(
                 ReviewCheck(
@@ -223,7 +267,7 @@ class IndependentSkillReviewer:
                     detail=(
                         "approved: " + json.dumps(grants, sort_keys=True)
                         if permissions_approved
-                        else "grants are not owner-authorized; deny-by-default stands"
+                        else permission_reason
                     ),
                 )
             )

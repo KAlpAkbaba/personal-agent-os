@@ -2,6 +2,17 @@
 
 Autonomous engineering agents append concise accepted-change records here.
 
+## 2026-09-01 — M7 self-extension / evolution complete
+
+- Capability registry where `register()` is the only path to production and requires evaluated status, passing evaluation AND independent review, per-edge lifecycle evidence and verified permission approval; six-step resolution order (existing → compose → configure/extend → adapt a catalog component → generate → product/core change) with a persisted decision trail.
+- Generated skills in the standard layout behind a SkillGenerator seam (deterministic gate generator; Claude generator inert), with token validation at the request choke point and every splice point; generated tests and evals actually run in isolated subprocesses that cannot import the app or see secrets; an independent reviewer re-runs everything and proves the generated tests catch a sabotaged entrypoint.
+- Delta controls: full versioned manifest (19 required fields, deny-by-default permissions, risk class consistent with grants), candidate→sandbox→validated→shadow→canary→active lifecycle with per-edge evidence, offline pinned component catalog with digest verification and install-script refusal, resource budgets + retry + recursion-depth limit, seven-case failure matrix, telemetry-driven improvement with old-vs-new benchmark and rollback, and a nine-question audit endpoint.
+- Boundaries: recovery/security-root self-modification refused fail-safe, while owner-authorized operational grants pass through the normal gates; memory boundary guard-tested (no owner-actor mutation path).
+- Mandatory E2E: capability missing → composition → component check → design → implement → tests → independent review → shadow → canary → promote → registry → original task resumes and succeeds; defective implementation rejected with production unaffected, no owner intervention.
+- Independent verification PASS on every bullet and delta subsection. Both gates found the same defect class — trusting requester-supplied evidence — and both are fixed: permission approval now requires a verified AuthorizationProvider (deny-by-default until M8's asset registry), and the composition gate re-derives its claim instead of shape-checking the trail. docs/reviews/M7_SECURITY_REVIEW.md; ADR-0025 + delta + security addendum.
+- Totals: 804 unit + 55 integration API tests, 25 supervisor tests; full M0-M7 gate 12/12 PASS.
+- Also fixed en route: the narration normalizer applied the owner pronunciation dictionary AFTER the number pipeline, silently mangling any owner token containing digits (owner-authority violation, VOICE_SPEC §5); and alembic/env.py did not register the voice/narration models, so autogenerate would have proposed dropping their tables.
+
 ## 2026-09-01 — M6 self-healing engineering complete
 
 - Recovery Supervisor (services/recovery-supervisor): stdlib-only, dependency-free, model-reasoning-free standalone process — versioned release workspace with current/last_known_good pointer files, stage-preserve-activate, transient-tolerant health policy (a single blip can never roll back), automatic rollback with tested recovery-before-reporting ordering, incident outbox as source of truth; 25 tests.

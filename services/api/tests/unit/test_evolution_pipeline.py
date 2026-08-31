@@ -472,3 +472,54 @@ def test_pipeline_refuses_an_unknown_gap(stack: Stack) -> None:
     result = stack.pipeline().run(uuid.uuid4())
     assert result.status == "failed"
     assert result.stages[-1].detail["error_class"] == "not_found"
+
+
+# ------------------- M7 verification finding (a): re-derived composition
+
+
+def test_a_wellformed_but_fabricated_composition_trail_is_re_derived(
+    stack: Stack, monkeypatch
+) -> None:
+    """The composition gate must not trust the trail's SHAPE.
+
+    The independent verifier fabricated a well-formed composition entry that
+    the composer never produced and drove a full registration. The gate now
+    re-runs the composer against live registry state, so a fabricated claim is
+    only accepted when the composer independently agrees.
+    """
+    from app.evolution import gaps as gaps_module
+
+    gap_id = stack.open_gap()
+
+    # A composer that reports the request IS satisfiable — i.e. the fabricated
+    # "insufficient" claim is false. Generation must be refused.
+    class SatisfiedComposer:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def attempt(self, request):
+            return gaps_module.CompositionAttempt(
+                attempted=True,
+                satisfied=True,
+                plan=["text.normalize", "text.slug"],
+                considered=["text.normalize", "text.slug"],
+                produced=list(request.required_outputs),
+                missing_outputs=[],
+                reason="composable",
+            )
+
+    monkeypatch.setattr("app.evolution.pipeline.CapabilityComposer", SatisfiedComposer)
+    result = stack.pipeline().run(gap_id)
+    assert result.status in ("refused", "failed")
+    assert "composition satisfies the request" in result.summary.lower()
+    # Nothing was generated or registered.
+    assert stack.registry.resolve("text.slugify") is None
+
+
+def test_re_derivation_records_evidence_on_the_happy_path(stack: Stack) -> None:
+    """When the composer independently agrees composition is insufficient, the
+    gate passes and records that it re-verified."""
+    result = stack.pipeline().run(stack.open_gap())
+    assert result.status == "registered", result.summary
+    stage = next(s for s in result.stages if s.name == "verify_composition_attempted")
+    assert stage.status == "ok"

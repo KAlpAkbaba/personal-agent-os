@@ -190,6 +190,7 @@ def _resolve(runtime: EvolutionRuntime, gap_id: uuid.UUID) -> dict[str, Any]:
         sandbox=runtime.sandbox,
         skills_root=runtime.skills_root,
         resumer=runtime.resumer,
+        reviewer=runtime.reviewer,
     )
     return pipeline.run(gap_id).to_dict()
 

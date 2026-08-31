@@ -715,13 +715,27 @@ def composition_step(trail: list[dict[str, Any]]) -> dict[str, Any] | None:
     return None
 
 
-def require_composition_attempted(trail: list[dict[str, Any]]) -> dict[str, Any]:
+def require_composition_attempted(
+    trail: list[dict[str, Any]],
+    *,
+    composer: CapabilityComposer | None = None,
+) -> dict[str, Any]:
     """Hard precondition of code generation.
 
     The trail must contain a composition step, it must record a genuine attempt
     (``evidence.attempted is True``), it must have reported the composition
     INSUFFICIENT, and it must appear BEFORE the new_skill decision. Anything
     else raises ``generation_refused`` — the generator is never constructed.
+
+    When a ``composer`` is supplied the claim is not merely shape-checked, it is
+    RE-DERIVED: the composer is re-run against live registry state and must
+    independently agree that composition cannot satisfy the request. A trail
+    entry is self-reported data, so trusting its shape alone would let anything
+    able to write a gap row fabricate "composition was attempted" and unlock
+    code generation (M7 independent verification finding (a)). Re-derivation
+    also closes the real race where a capability registered after the trail was
+    written now makes composition sufficient — in which case generating code
+    would violate the resolution order.
     """
     entry = composition_step(trail)
     if entry is None:
@@ -754,6 +768,28 @@ def require_composition_attempted(trail: list[dict[str, Any]]) -> dict[str, Any]
             EvolutionErrorClass.GENERATION_REFUSED,
             "composition was not attempted before the new_skill decision",
         )
+
+    if composer is not None:
+        # Re-derive the claim instead of trusting it. The request is read from
+        # the trail's own request step, so a forged composition entry is checked
+        # against what the composer actually reports for that request now.
+        request = request_from_trail(trail)
+        recomputed = composer.attempt(request)
+        if recomputed.satisfied:
+            raise EvolutionError(
+                EvolutionErrorClass.GENERATION_REFUSED,
+                "composition satisfies the request against current registry state; "
+                "generating code is not permitted",
+                details={"plan": list(recomputed.plan)},
+            )
+        entry = {
+            **entry,
+            "evidence": {
+                **(entry.get("evidence") or {}),
+                "reverified": True,
+                "reverified_missing_outputs": sorted(recomputed.missing_outputs),
+            },
+        }
     return entry
 
 

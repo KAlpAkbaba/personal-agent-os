@@ -40,6 +40,7 @@ from app.evolution.errors import EvolutionError, EvolutionErrorClass
 from app.evolution.evaluation import EvaluationResult, SkillEvaluator
 from app.evolution.gaps import (
     STEP_COMPONENT,
+    CapabilityComposer,
     GapService,
     request_from_trail,
     require_composition_attempted,
@@ -183,8 +184,12 @@ class EvolutionPipeline:
                 )
             )
 
-            # 2. Composition-first gate. Runs BEFORE any generator work.
-            composition = require_composition_attempted(trail)
+            # 2. Composition-first gate. Runs BEFORE any generator work, and
+            # RE-DERIVES the claim against live registry state instead of
+            # trusting the recorded trail (M7 verification finding (a)).
+            composition = require_composition_attempted(
+                trail, composer=CapabilityComposer(self.registry)
+            )
             stages.append(
                 PipelineStage(
                     "verify_composition_attempted",

@@ -25,6 +25,7 @@ Everything is offline and deterministic: no model calls, no network, stdlib-only
 generated code, bounded subprocesses. Budget well under ~150s.
 """
 
+import json
 import uuid
 from pathlib import Path
 
@@ -401,10 +402,7 @@ def test_improvement_and_rollback_end_to_end(client: TestClient) -> None:
     )
 
 
-def test_owner_authorized_operational_grant_is_not_blocked(client: TestClient) -> None:
-    """The boundary: the recovery/security-root rule constrains self-modification
-    only — an owner-authorized operational capability with device/network grants
-    reaches production, while self-modification of the recovery root does not."""
+def _operational_grant_body() -> dict:
     body = gap_body(DEVICE_CAPABILITY, "slugify", ["slug"])
     body["intent"] = "operational_capability"
     body["authorized_asset"] = AUTHORIZED_ASSET
@@ -415,7 +413,40 @@ def test_owner_authorized_operational_grant_is_not_blocked(client: TestClient) -
             "authorized_asset": AUTHORIZED_ASSET,
         }
     )
-    gap = detect(client, body)
+    return body
+
+
+def test_an_unverified_asset_reference_cannot_award_itself_permissions(
+    client: TestClient,
+) -> None:
+    """Deny-by-default over HTTP (M7 security review #1): with no configured
+    authorization source, asserting an asset reference grants nothing."""
+    gap = detect(client, _operational_grant_body())
+    assert gap["resolution"] == "generation"
+    result = resolve(client, gap["id"])
+    assert result["status"] == "rejected", result["summary"]
+    assert client.get(f"/v1/evolution/capabilities/{DEVICE_CAPABILITY}").status_code == 404
+
+
+def test_owner_authorized_operational_grant_is_not_blocked(
+    client: TestClient, monkeypatch
+) -> None:
+    """The boundary: the recovery/security-root rule constrains self-modification
+    only — an owner-authorized operational capability with device/network grants
+    reaches production (once a VERIFIED authorization source exists), while
+    self-modification of the recovery root does not."""
+    monkeypatch.setenv(
+        "PAGENTOS_EVOLUTION_AUTHORIZATIONS",
+        json.dumps(
+            {
+                AUTHORIZED_ASSET: {
+                    "device_permissions": ["serial_port"],
+                    "network_permissions": ["device.local"],
+                }
+            }
+        ),
+    )
+    gap = detect(client, _operational_grant_body())
     assert gap["resolution"] == "generation"
     result = resolve(client, gap["id"])
     assert result["status"] == "registered", result["summary"]

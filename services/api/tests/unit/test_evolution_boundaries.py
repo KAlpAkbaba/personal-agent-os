@@ -21,6 +21,7 @@ import uuid
 
 import pytest
 
+from app.evolution.authorization import StaticAuthorizationProvider
 from app.evolution.errors import EvolutionError, EvolutionErrorClass
 from app.evolution.gaps import (
     PROTECTED_COMPONENTS,
@@ -30,6 +31,7 @@ from app.evolution.gaps import (
 )
 from app.evolution.manifest import granted_permissions
 from app.evolution.resources import ResourceBudget
+from app.evolution.review import IndependentSkillReviewer
 from app.evolution.sandbox import REPO_ROOT, SandboxPolicy
 from tests.unit.test_evolution_pipeline import Stack, make_stack
 
@@ -135,10 +137,30 @@ def test_an_unauthorized_request_is_still_text_scanned() -> None:
     assert any("request_text_mentions" in reason for reason in evidence["reasons"])
 
 
+def _authorized_reviewer() -> IndependentSkillReviewer:
+    """A reviewer wired to a VERIFIED authorization source.
+
+    This is the seam M8's Authorized Asset Registry implements. The asset's
+    recorded scope is the authority — never a string the requester asserted.
+    """
+    return IndependentSkillReviewer(
+        authorization=StaticAuthorizationProvider(
+            {
+                AUTHORIZED_ASSET: {
+                    "device_permissions": ["serial_port"],
+                    "network_permissions": ["device.local"],
+                }
+            }
+        )
+    )
+
+
 def test_owner_authorized_grants_reach_production_through_the_normal_gates(
     stack: Stack,
 ) -> None:
-    result = stack.pipeline().run(stack.open_gap(**OPERATIONAL_GAP))
+    result = stack.pipeline(reviewer=_authorized_reviewer()).run(
+        stack.open_gap(**OPERATIONAL_GAP)
+    )
     assert result.status == "registered", result.summary
 
     resolved = stack.registry.resolve("device.slug_label")
@@ -155,11 +177,39 @@ def test_owner_authorized_grants_reach_production_through_the_normal_gates(
     assert review["approved_permissions"] == granted_permissions(manifest)
 
 
+def test_an_asserted_asset_reference_alone_never_approves_a_grant(stack: Stack) -> None:
+    """Security review M7 #1: a caller-asserted ``authorized_asset`` string is
+    evidence of NOTHING. With the default provider (no Authorized Asset Registry
+    until M8) the identical request that succeeds above is refused, so a false
+    'owner-authorized, independently reviewed' record can never be written."""
+    result = stack.pipeline().run(stack.open_gap(**OPERATIONAL_GAP))
+    assert result.status == "rejected"
+    assert stack.registry.resolve("device.slug_label") is None
+    review = stack.registry.get_skill_version(uuid.UUID(result.skill_version_id))["review"]
+    assert review["permissions_approved"] is False
+    assert review["approved_permissions"] == {}
+    assert "no verifiable owner authorization" in review["permission_decision_reason"]
+
+
+def test_a_grant_beyond_the_assets_recorded_scope_is_denied(stack: Stack) -> None:
+    """Even a verified asset only authorizes what the owner recorded for it."""
+    reviewer = IndependentSkillReviewer(
+        authorization=StaticAuthorizationProvider(
+            {AUTHORIZED_ASSET: {"device_permissions": ["serial_port"]}}  # no network
+        )
+    )
+    result = stack.pipeline(reviewer=reviewer).run(stack.open_gap(**OPERATIONAL_GAP))
+    assert result.status == "rejected"
+    review = stack.registry.get_skill_version(uuid.UUID(result.skill_version_id))["review"]
+    assert review["permissions_approved"] is False
+    assert "network_permissions:device.local" in review["unauthorized_grants"]
+
+
 def test_a_grant_without_owner_authorization_is_denied(stack: Stack) -> None:
     """Deny-by-default: the same capability WITHOUT the owner policy reference
     cannot award itself device access."""
     spec = {k: v for k, v in OPERATIONAL_GAP["spec"].items() if k != "authorized_asset"}
-    result = stack.pipeline().run(
+    result = stack.pipeline(reviewer=_authorized_reviewer()).run(
         stack.open_gap(
             **{
                 **OPERATIONAL_GAP,
