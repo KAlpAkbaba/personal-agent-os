@@ -186,18 +186,44 @@ function Send-OpenNotepad {
   return $resp.command_id
 }
 
-function Wait-CommandSucceeded {
+function Wait-CommandTerminal {
   param([string]$CommandId, [int]$TimeoutSec = 30)
   $deadline = (Get-Date).AddSeconds($TimeoutSec)
   while ((Get-Date) -lt $deadline) {
     $cmd = Invoke-RestMethod -Uri "$baseUrl/v1/devices/$($script:deviceId)/commands/$CommandId" -TimeoutSec 5 -ErrorAction Stop
-    if ($cmd.status -eq "succeeded") { return $cmd }
-    if ($cmd.status -in @("failed", "expired", "cancelled")) {
-      throw "command terminal but not succeeded: $($cmd.status) $($cmd.error.class) $($cmd.error.message)"
-    }
+    if ($cmd.status -in @("succeeded", "failed", "expired", "cancelled")) { return $cmd }
     Start-Sleep -Milliseconds 400
   }
-  throw "command $CommandId not succeeded within ${TimeoutSec}s"
+  throw "command $CommandId not terminal within ${TimeoutSec}s"
+}
+
+function Wait-CommandSucceeded {
+  param([string]$CommandId, [int]$TimeoutSec = 30)
+  $cmd = Wait-CommandTerminal -CommandId $CommandId -TimeoutSec $TimeoutSec
+  if ($cmd.status -ne "succeeded") {
+    throw "command terminal but not succeeded: $($cmd.status) $($cmd.error.class) $($cmd.error.message)"
+  }
+  return $cmd
+}
+
+function Invoke-OpenNotepadWithRetry {
+  # The protocol marks a companion-not-yet-connected failure as
+  # dependency_unavailable / retryable=true (DEVICE_PROTOCOL.md §9): right
+  # after an agent restart the service's WS reconnects before the companion
+  # re-attaches to the local pipe. Honor the retryable semantics the way a
+  # real orchestrator would: re-send on retryable terminal failures.
+  param([string]$TraceId, [int]$Attempts = 4)
+  for ($i = 1; $i -le $Attempts; $i++) {
+    $cid = Send-OpenNotepad -TraceId "$TraceId-a$i"
+    $cmd = Wait-CommandTerminal -CommandId $cid
+    if ($cmd.status -eq "succeeded") { return $cmd }
+    $retryable = ($cmd.error -and $cmd.error.class -eq "dependency_unavailable")
+    if (-not $retryable -or $i -eq $Attempts) {
+      throw "command not succeeded after $i attempt(s): $($cmd.status) $($cmd.error.class) $($cmd.error.message)"
+    }
+    Write-Host "  attempt ${i}: retryable $($cmd.error.class); retrying..."
+    Start-Sleep -Seconds 2
+  }
 }
 
 function Assert-NotepadRunning {
@@ -286,8 +312,7 @@ Invoke-Step "Recovery: broker restart" {
   Start-Broker
   Wait-Health
   Wait-DeviceOnline -TimeoutSec 60   # agent must reconnect on its own
-  $cid = Send-OpenNotepad -TraceId ("e2e-m1-recovery1-" + [guid]::NewGuid().ToString("N"))
-  $cmd = Wait-CommandSucceeded -CommandId $cid
+  $cmd = Invoke-OpenNotepadWithRetry -TraceId ("e2e-m1-recovery1-" + [guid]::NewGuid().ToString("N"))
   Assert-NotepadRunning $cmd
 }
 
@@ -296,8 +321,7 @@ Invoke-Step "Recovery: agent restart" {
   Start-Sleep -Seconds 2
   Start-AgentService
   Wait-DeviceOnline -TimeoutSec 60
-  $cid = Send-OpenNotepad -TraceId ("e2e-m1-recovery2-" + [guid]::NewGuid().ToString("N"))
-  $cmd = Wait-CommandSucceeded -CommandId $cid
+  $cmd = Invoke-OpenNotepadWithRetry -TraceId ("e2e-m1-recovery2-" + [guid]::NewGuid().ToString("N"))
   Assert-NotepadRunning $cmd
 }
 
