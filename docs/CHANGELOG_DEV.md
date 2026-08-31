@@ -2,6 +2,16 @@
 
 Autonomous engineering agents append concise accepted-change records here.
 
+## 2026-08-31 — M1 cloud/device link complete (local-first)
+
+- Device protocol v1 (packages/protocol + JSON schema): outbound-only WS, ECDSA P-256 challenge handshake, heartbeat presence, at-least-once delivery + agent idempotency, expiry/cancel semantics, audit requirements.
+- Device broker as app/broker module in services/api: enrollment (single-use hashed tokens), WS handshake with indistinguishable rejection, presence, durable dispatch + redelivery, monotonic ack machine, server-side expiry sweeper, audit trail, stats; alembic 0002.
+- Windows Device Agent (.NET 10 LTS, devices/windows-agent): Agent.Core + DeviceService (Windows-Service-capable, named-pipe server) + SessionCompanion (interactive execution, notepad/calc allowlist); persistent idempotency store; JSONL audit; full-jitter reconnect.
+- Deterministic E2E (scripts/e2e-m1-device.ps1): command -> broker -> agent -> Notepad in interactive session -> ack chain -> broker+agent audit; automatic recovery verified after broker restart and agent restart. Wired into quality gate via -E2E.
+- Tests: 103 -> 174 total green (85 unit + 21 integration Python, 65 xUnit agent, 3 new security-fix tests); full gate 10/10 PASS incl. M0 regression.
+- Independent verification: all extended M1 acceptance criteria reproduced PASS. Security review: no high/critical; 3 low findings fixed same-day, 1 forward-looking medium gated on Windows-Service install (docs/reviews/M1_SECURITY_REVIEW.md).
+- ADR-0014..0017. PS 5.1 stderr-tolerance hardening in all ops scripts.
+
 ## 2026-08-31 — M0 foundation complete
 
 - FastAPI cloud-core (services/api): /v1/system/health with degraded semantics, structlog JSON logging with trace_id/task_id, reversible Alembic initial migration (owner + pgvector), ObjectStore provider interface with key validation, Temporal workflow + worker.

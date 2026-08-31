@@ -5,6 +5,7 @@ loopback peer. Production adds owner authentication in a later milestone.
 """
 
 import asyncio
+import json
 import re
 import uuid
 from datetime import UTC, datetime
@@ -12,7 +13,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.broker import frames, service
 from app.broker.frames import CAPABILITY_PATTERN
@@ -168,6 +169,9 @@ async def revoke_device(request: Request, device_id: uuid.UUID) -> dict[str, Any
 # -------------------------------------------------------------------- commands
 
 
+MAX_COMMAND_PAYLOAD_BYTES = 64 * 1024
+
+
 class CreateCommandRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -175,6 +179,16 @@ class CreateCommandRequest(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
     idempotency_key: str | None = Field(default=None, min_length=8, max_length=128)
     timeout_s: float | None = Field(default=None, gt=0, le=86400)
+
+    @field_validator("payload")
+    @classmethod
+    def _payload_size_bounded(cls, value: dict[str, Any]) -> dict[str, Any]:
+        size = len(json.dumps(value, separators=(",", ":"), default=str).encode())
+        if size > MAX_COMMAND_PAYLOAD_BYTES:
+            raise ValueError(
+                f"payload too large: {size} bytes (max {MAX_COMMAND_PAYLOAD_BYTES})"
+            )
+        return value
 
 
 def _command_payload(command: DeviceCommand) -> dict[str, Any]:

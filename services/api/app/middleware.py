@@ -1,5 +1,6 @@
 """FastAPI/Starlette middleware assigning and propagating trace IDs."""
 
+import re
 import time
 import uuid
 
@@ -10,8 +11,20 @@ from starlette.responses import Response
 from app.logging import get_logger, trace_id_var
 
 TRACE_HEADER = "X-Trace-Id"
+# trace_id lands in String(128) DB columns and log pipelines: constrain the
+# client-supplied value instead of surfacing a DB error on abuse.
+_TRACE_ID_MAX_LEN = 128
+_TRACE_ID_SANITIZE = re.compile(r"[^A-Za-z0-9._-]")
 
 logger = get_logger("app.request")
+
+
+def sanitize_trace_id(value: str | None) -> str | None:
+    """Return a DB/log-safe trace id, or None if nothing usable remains."""
+    if not value:
+        return None
+    cleaned = _TRACE_ID_SANITIZE.sub("", value)[:_TRACE_ID_MAX_LEN]
+    return cleaned or None
 
 
 class TraceIdMiddleware(BaseHTTPMiddleware):
@@ -20,7 +33,7 @@ class TraceIdMiddleware(BaseHTTPMiddleware):
     and echoes it back in the response headers."""
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-        incoming = request.headers.get(TRACE_HEADER)
+        incoming = sanitize_trace_id(request.headers.get(TRACE_HEADER))
         trace_id = incoming if incoming else uuid.uuid4().hex
         token = trace_id_var.set(trace_id)
         started = time.perf_counter()

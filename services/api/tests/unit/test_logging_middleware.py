@@ -12,7 +12,7 @@ from app.logging import (
     task_id_var,
     trace_id_var,
 )
-from app.middleware import TRACE_HEADER, TraceIdMiddleware
+from app.middleware import TRACE_HEADER, TraceIdMiddleware, sanitize_trace_id
 
 
 def build_test_app() -> FastAPI:
@@ -40,6 +40,22 @@ def test_trace_id_is_generated_when_absent() -> None:
     generated = response.headers[TRACE_HEADER]
     assert len(generated) == 32  # uuid4().hex
     assert response.json()["trace_id_in_context"] == generated
+
+
+def test_oversized_trace_id_is_truncated_to_column_limit() -> None:
+    client = TestClient(build_test_app())
+    response = client.get("/echo-trace", headers={TRACE_HEADER: "x" * 500})
+    assert response.headers[TRACE_HEADER] == "x" * 128
+
+
+def test_hostile_trace_id_characters_are_stripped() -> None:
+    assert sanitize_trace_id("abc<script>'; DROP--") == "abcscriptDROP--"
+    assert sanitize_trace_id("   ") is None
+    assert sanitize_trace_id(None) is None
+    client = TestClient(build_test_app())
+    response = client.get("/echo-trace", headers={TRACE_HEADER: "!!!@@@###"})
+    # nothing usable remains -> a fresh uuid is generated instead
+    assert len(response.headers[TRACE_HEADER]) == 32
 
 
 def test_two_requests_get_distinct_trace_ids() -> None:

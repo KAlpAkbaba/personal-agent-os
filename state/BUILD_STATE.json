@@ -1,19 +1,20 @@
 {
   "schema_version": 1,
   "project": "personal-agent-os",
-  "current_milestone": "M1",
-  "status": "NOT_STARTED",
-  "last_completed_milestone": "M0",
+  "current_milestone": "M2",
+  "status": "IN_PROGRESS",
+  "last_completed_milestone": "M1",
   "last_updated": "2026-08-31T00:00:00+03:00",
   "owner_actions_pending": [
     "Before first GitHub push: run 'gh auth login' once (browser OAuth), then a private repo can be created and CI activated.",
-    "At M1: approve Tailscale install (UAC) and sign in; approve Hetzner account/billing/API key creation.",
+    "Cloud deployment of M1 (any time): approve Tailscale install (UAC) + sign in; approve Hetzner account/billing/API key. Local M1 is complete without these.",
+    "Windows Service installation (any time, one UAC): install PagentOS.DeviceService as a real service - BLOCKED on resolving M1 security finding #1 (pipe identity model for Session 0) first.",
     "Recommended, non-blocking: move Docker Desktop disk image location from C: to E: (C: has ~24 GB free)."
   ],
   "quality_gate": {
     "status": "PASS",
     "last_run": "2026-08-31",
-    "scope": "M0 full gate: required files, secret hygiene (filename + content scan), ruff lint, 26 unit tests, compose stack up, alembic upgrade, 7 integration tests (migration round-trip, redis, minio, temporal incl. worker-restart durability), web shell build. Exit 0."
+    "scope": "Full gate + -E2E: secret hygiene (content scan), ruff, 85 unit + 21 integration Python tests, 65 agent xUnit tests, alembic, M1 device E2E (Notepad + broker/agent restart recovery), web build. Exit 0."
   },
-  "notes": "M0 complete. All 10 M0 acceptance criteria independently verified PASS by test-engineer agent (live HTTP health incl. degraded path, web shell HTTP 200, migration round-trip, worker-restart durability, trace_id/task_id in logs, CI commands reproduced locally). Security review: no high/critical; findings 1+4 fixed, 2/3/5 tracked in docs/reviews/M0_SECURITY_REVIEW.md. Next: M1 cloud/device link (needs owner actions above for cloud provisioning; local device-broker + Windows agent work can start without them)."
+  "notes": "M1 complete local-first: device protocol v1, broker module, .NET 10 Windows agent (service+companion), deterministic Notepad E2E with automatic reconnect/recovery, audit trail. Independently verified; security review clean (1 forward-looking finding gates Windows-Service install). M2 Browser Agent starting."
 }

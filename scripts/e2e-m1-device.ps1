@@ -81,7 +81,9 @@ function Invoke-Step {
 function Start-Broker {
   $psi = New-Object System.Diagnostics.ProcessStartInfo
   $psi.FileName = $uv
-  $psi.Arguments = "run uvicorn app.main:app --host 127.0.0.1 --port $ApiPort"
+  # --ws-max-size: cap WS frames well above any legal protocol frame
+  # (defense in depth; uvicorn default is 16 MiB).
+  $psi.Arguments = "run uvicorn app.main:app --host 127.0.0.1 --port $ApiPort --ws-max-size 65536"
   $psi.WorkingDirectory = $apiRoot
   $psi.UseShellExecute = $false
   $psi.CreateNoWindow = $true

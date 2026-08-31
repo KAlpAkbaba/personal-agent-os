@@ -159,3 +159,19 @@ def test_outbound_frame_builders_match_schema_shapes() -> None:
     assert command["type"] == "command"
     assert command["command"]["expires_at"] == "2026-08-31T12:00:00Z"
     assert command["command"]["payload"] == {"application": "notepad"}
+
+
+def test_create_command_request_rejects_oversized_payload():
+    import pytest as _pytest
+    from pydantic import ValidationError
+
+    from app.broker.routes import MAX_COMMAND_PAYLOAD_BYTES, CreateCommandRequest
+
+    ok = CreateCommandRequest(capability="desktop.open_application", payload={"a": "x" * 1000})
+    assert ok.payload["a"]
+
+    with _pytest.raises(ValidationError, match="payload too large"):
+        CreateCommandRequest(
+            capability="desktop.open_application",
+            payload={"blob": "x" * (MAX_COMMAND_PAYLOAD_BYTES + 1)},
+        )
