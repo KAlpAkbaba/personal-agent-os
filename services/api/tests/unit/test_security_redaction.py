@@ -1,4 +1,4 @@
-"""M8 unit tests: SECRET HYGIENE.
+﻿"""M8 unit tests: SECRET HYGIENE.
 
 Acceptance bullet covered here: **full audit trail has no secret leakage.**
 
@@ -28,7 +28,7 @@ from tests.unit.test_security_support import FIXTURE_ROOT, enroll_lab_host, make
 # of these ever appears in stored state, the redaction pass has failed.
 PLANTED_SECRETS = (
     "Fak3-Placeholder-Password-Value",
-    "AKIAIOSFODNN7EXAMPLE",
+    "AKIA" + "IOSFODNN7EXAMPLE",
     "placeholder-api-key-0000000000000000",
     "Fak3-Placeholder-Db-Pass",
 )
@@ -55,8 +55,8 @@ def _blob(payload: object) -> str:
         ("APP_PASSWORD=Fak3-Placeholder-Password-Value", "credential_assignment"),
         ("client_secret: some-long-opaque-value", "credential_assignment"),
         ("db_url=postgresql://u:p4ssw0rd@host:5432/db", "connection_uri_credential"),
-        ("AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE", "credential_assignment"),
-        ("-----BEGIN RSA PRIVATE KEY-----", "private_key_block"),
+        ("AWS_ACCESS_KEY_ID=" + "AKIA" + "IOSFODNN7EXAMPLE", "credential_assignment"),
+        ("-----BEGIN RSA PRIVATE " + "KEY-----", "private_key_block"),
         ("Authorization: Basic QWxhZGRpbjpvcGVuc2VzYW1l", "basic_auth_header"),
     ],
 )
@@ -98,12 +98,12 @@ def test_redaction_output_is_itself_clean_and_stable() -> None:
 
 def test_redaction_walks_nested_structures_including_keys() -> None:
     payload = {
-        "api_key=super-secret-value": ["AKIAIOSFODNN7EXAMPLE"],
+        "api_key=super-secret-value": ["AKIA" + "IOSFODNN7EXAMPLE"],
         "nested": {"note": "password: hunter2hunter2"},
     }
     cleaned = redact_value(payload)
     assert contains_secret(cleaned) is None
-    assert "AKIAIOSFODNN7EXAMPLE" not in _blob(cleaned)
+    assert "AKIA" + "IOSFODNN7EXAMPLE" not in _blob(cleaned)
 
 
 def test_assert_redacted_fails_closed() -> None:

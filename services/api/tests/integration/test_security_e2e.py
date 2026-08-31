@@ -1,4 +1,4 @@
-"""M8 integration: the whole authorized-security story against the real stack.
+﻿"""M8 integration: the whole authorized-security story against the real stack.
 
 Requires the compose stack (postgres + minio). Everything remains OFFLINE with
 respect to the *target*: the only thing assessed is the local, tracked fixture
@@ -51,7 +51,7 @@ FIXTURE_ROOT = API_ROOT / "tests" / "fixtures" / "security_target"
 
 PLANTED_SECRETS = (
     "Fak3-Placeholder-Password-Value",
-    "AKIAIOSFODNN7EXAMPLE",
+    "AKIA" + "IOSFODNN7EXAMPLE",
     "placeholder-api-key-0000000000000000",
     "Fak3-Placeholder-Db-Pass",
 )

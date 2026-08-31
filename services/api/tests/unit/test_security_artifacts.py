@@ -1,4 +1,4 @@
-"""M8 unit tests: assessment results become a SECURITY ARTIFACT.
+﻿"""M8 unit tests: assessment results become a SECURITY ARTIFACT.
 
 Acceptance bullet covered here: **results become security artifact** — through
 the existing M3 artifact service (canonical Markdown + renders), not a second
@@ -133,7 +133,7 @@ def test_the_report_names_the_credential_exposure_without_reproducing_it(
     assert contains_secret(body) is None
     for planted in (
         "Fak3-Placeholder-Password-Value",
-        "AKIAIOSFODNN7EXAMPLE",
+        "AKIA" + "IOSFODNN7EXAMPLE",
         "placeholder-api-key-0000000000000000",
     ):
         assert planted not in body

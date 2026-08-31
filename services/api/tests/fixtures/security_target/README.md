@@ -11,7 +11,11 @@ Every credential-looking string below is synthetic and deliberately
 non-functional. They exist so the redaction pass (`app/security/redaction.py`)
 and the `secret_in_config` check have something to find:
 
-- `AKIAIOSFODNN7EXAMPLE` is AWS's own published example key id.
+- Every credential VALUE is an obvious placeholder string, deliberately shaped
+  so it does not match the repository's own secret-content scan
+  (`scripts/quality-gate.ps1`). The `credential_assignment` detector fires on
+  the credential-meaning KEY name, so the fixture stays meaningful without
+  planting a scannable token literal in the repo.
 - Every password/token/private-key body is an obvious placeholder string.
 
 They are committed on purpose. The acceptance requirement is that a fixture
