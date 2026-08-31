@@ -89,12 +89,32 @@ Given a fixed test topic:
 
 ## M5 Memory
 
-- explicit preference is remembered across sessions;
-- inferred preference stores evidence/confidence;
-- project memory retrieval works;
-- false/obsolete memory can be corrected;
-- deletion removes retrieval/index result;
-- procedural memory prototype detects repeated test workflow;
+Architecture gates:
+
+- six first-class memory classes exist (preference, episodic, project, semantic, procedural, voice_preference) — not a bare vector-store wrapper;
+- a Memory Write Policy decides `ignore -> session -> candidate -> durable`; explicit owner instructions outrank inference and enter durable directly;
+- inferred memories carry confidence + evidence; a single observation never becomes a high-confidence permanent preference (promotion needs both an evidence-count and a confidence threshold);
+- provenance, version history, retention classification and an append-only memory audit trail exist; audit never stores content after a forget;
+- the memory API sits behind an abstraction layer (`MemoryBackend`) so Mem0 or another framework can be added/replaced without changing the core data model; PostgreSQL stays canonical;
+- embedding rows carry model_id/model_version/dim and a reindex operation supports re-embedding migrations;
+- secrets/credentials/tokens are refused as memory content;
+- retrieval combines pgvector semantic, structured relational, and hybrid reranking with temporal filtering; superseded/deleted rows are always excluded.
+
+Behavioral matrix (each a named deterministic test):
+
+- owner explicitly teaches a preference; it survives a new conversation/session;
+- weak inferred preference stays low-confidence; repeated evidence increases confidence and promotes at thresholds;
+- contradictory inferred evidence does not overwrite an explicit owner preference (conflict recorded, surfaced on inspection);
+- an old preference can be superseded (history kept, retrieval returns only the active one);
+- owner can inspect why a memory exists (provenance + evidence + versions + audit);
+- owner can correct a memory (new version) and forget a memory;
+- a deleted memory is absent from BOTH semantic (vector) and structured retrieval — the vector/index rows are actually gone;
+- project A memories do not contaminate project B retrieval (contamination metric = 0 on the seeded eval);
+- relevant memories cross device/session boundaries;
+- task -> artifact -> conversation -> project relationships are retrievable (entity graph);
+- episodic time-window search works;
+- procedural patterns are identified from repeated workflows as candidate proposals only — never by modifying application code;
+- deterministic retrieval evaluation on a seeded corpus reports precision/relevance above a stated floor and zero cross-project contamination.
 
 ## M6 Self-Healing
 

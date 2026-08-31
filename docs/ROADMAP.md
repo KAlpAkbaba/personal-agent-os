@@ -87,6 +87,14 @@ Delivered local-first (ADR-0022): the deterministic core — tr-TR normalizer, n
 
 Goal: durable owner/project/procedural memory.
 
+Delivered as a first-class subsystem (ADR-0023): six memory classes, write
+policy (ignore/session/candidate/durable with explicit-owner authority),
+provenance + confidence + evidence, version history, supersede/edit/forget
+(hard delete incl. vector rows), pgvector + structured + hybrid retrieval,
+entity/project graph, deterministic seeded retrieval evaluation with a
+zero-cross-project-contamination gate, and a MemoryBackend abstraction so an
+external engine (e.g. Mem0) can plug in without owning the canonical data.
+
 ## M6 — Self-Healing Engineering
 
 Goal: detect an injected bug, restore service, generate and validate a fix automatically.

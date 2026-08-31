@@ -12,7 +12,7 @@ Core resources:
 - `/v1/devices`
 - `/v1/voice/sessions`
 - `/v1/narration/sessions`
-- `/v1/memory`
+- `/v1/memory` — M5: `POST /observe` (write policy: may decide "ignored"), `POST /remember` (explicit owner teach → durable), `GET /search` (hybrid semantic+structured retrieval with class/project/temporal filters), `GET /{id}` (inspection incl. why-it-exists: provenance/evidence/versions/audit), `PATCH /{id}` (owner correction), `POST /{id}/pin`, `POST /{id}/supersede`, `DELETE /{id}` (forget — hard removal incl. vector rows), `GET /audit`, plus minimal `/entities` graph CRUD
 - `/v1/capabilities`
 - `/v1/authorized-assets`
 - `/v1/system/health`

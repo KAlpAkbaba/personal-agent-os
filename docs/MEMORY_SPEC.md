@@ -1,5 +1,18 @@
 # Memory Specification
 
+> M5 implementation (ADR-0023): realized in `services/api/app/memory/` with a
+> lead-frozen core data model (migration `0005_memory`): `memories` (six
+> classes; stage ladder session/candidate/durable; explicit/pinned; confidence
+> + evidence_count; provenance; temporal validity; version + superseded_by;
+> retention class), `memory_versions`, `memory_evidence`, `memory_embeddings`
+> (pgvector hnsw, with model_id/model_version/dim for re-embedding
+> migrations), `memory_audit_events` (append-only, never content after a
+> forget), and an `entities`/`entity_edges` project graph. Forgetting is a
+> hard delete cascading to versions/evidence/embeddings. The behavior layer
+> (write policy, lifecycle, hybrid retrieval, deterministic evaluation) sits
+> behind a `MemoryBackend` abstraction so Mem0 or another engine can be added
+> without changing the canonical schema.
+
 ## 1. Memory is not chat history
 
 Store structured, evidence-linked memory rather than endlessly inserting raw transcripts into prompts.

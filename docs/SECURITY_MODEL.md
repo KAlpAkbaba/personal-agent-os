@@ -64,6 +64,14 @@ Machine-level privileged operations go through a narrowly defined service broker
 
 Evolution sandboxes receive only secrets required for the test.
 
+M5 memory rule: the Memory Write Policy refuses to store secrets, credentials,
+API keys or tokens as learned memory content (pattern guard + audit). Memory
+audit events never contain memory content after a forget, and forgetting
+hard-deletes the row plus all version/evidence/vector representations. The
+Evolution Engine may read memory but must never silently alter explicit owner
+preferences (explicit rows are only mutable by owner-actor operations) or the
+recovery/security roots.
+
 ## 6. Prompt injection defense
 
 Treat websites/documents/email content as untrusted data.

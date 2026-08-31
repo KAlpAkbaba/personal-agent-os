@@ -135,30 +135,53 @@ Exactly one active row.
 
 ## Memory
 
+Realized in migration `0005_memory` (M5, ADR-0023) as a superset of this
+sketch:
+
 ### memories
 
 - id
-- type
-- key
+- memory_class (preference | episodic | project | semantic | procedural | voice_preference)
+- key nullable
+- text (canonical statement; what gets embedded)
 - value_json
-- confidence
-- explicit
-- source_ref_json
-- project_id nullable
-- created_at
-- updated_at
-- deleted_at nullable
+- stage (session | candidate | durable)
+- status (active | superseded) — forgetting is a hard delete, not a status
+- explicit, pinned
+- confidence, evidence_count
+- retention_class (session | short | standard | pinned)
+- project_id -> entities.id nullable; conversation_id/task_id/artifact_id/device_id nullable
+- provenance_json
+- occurred_at / valid_from / valid_until
+- version, superseded_by -> memories.id
+- created_at, updated_at, last_confirmed_at
+
+### memory_versions
+
+Immutable per-version snapshots (memory_id, version, text, value_json, stage,
+explicit, confidence, edited_by, change_reason, created_at).
+
+### memory_evidence
+
+Individual observations backing inferred memories (memory_id, kind,
+source_ref_json, weight, observed_at). Cascade-deleted on forget.
 
 ### memory_embeddings
 
-- memory_id
-- embedding
-- model_id
+- memory_id (cascade on delete — forget removes the vector row)
+- model_id, model_version, dim (re-embedding migration metadata)
+- embedding vector(256), hnsw cosine index
 - created_at
+
+### memory_audit_events
+
+Append-only (action, memory_id, memory_class, key, actor, detail_json,
+trace_id, created_at). Never stores memory content after a forget.
 
 ### entities / entity_edges
 
-Project/document/person/device/decision/task relationships.
+Project/document/person/device/decision/system/task/capability nodes with
+unique (kind, name); edges unique (src, dst, relation).
 
 ## Voice
 
