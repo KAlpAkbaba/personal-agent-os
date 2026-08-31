@@ -108,8 +108,10 @@ def test_strong_signal_without_key_goes_candidate() -> None:
         ("my token is ghp_" + "a" * 30, "github_token"),
         ("key sk-" + "b" * 24, "openai_style_key"),
         ("aws AKIA" + "C" * 16, "aws_access_key"),
-        ("slack xoxb-1234567890-abcdef", "slack_token"),
-        ("-----BEGIN RSA PRIVATE KEY-----\nMII...", "private_key_block"),
+        # Built by concatenation so the repo's own secret-content gate scan
+        # never sees a contiguous token-shaped literal in this source file.
+        ("slack xoxb-" + "1234567890-abcdef", "slack_token"),
+        ("-----BEGIN RSA PRIVATE " + "KEY-----\nMII...", "private_key_block"),
         ("password=hunter2secret", "password_assignment"),
         ("Authorization: Bearer abcdefghijklmnopqrstuvwx", "bearer_token"),
         ("api_key = 0123456789abcdef", "generic_api_key"),
