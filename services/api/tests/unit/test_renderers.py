@@ -78,8 +78,21 @@ def test_unsupported_format_raises() -> None:
         R.render("rtf", title="t", canonical_markdown="# x")
 
 
-def test_pdf_folds_turkish_glyphs_without_crashing() -> None:
-    # ş/ğ/ı/İ are outside latin-1; the PDF layer must fold, not raise.
-    md = "# Işık ğ ş İ\n\n- ığdır şehri\n"
+def test_pdf_preserves_turkish_glyphs_with_embedded_font() -> None:
+    # Turkish is first-class: the bundled Unicode font must render ş/ğ/ı/İ,
+    # not fold them. The glyphs are embedded as a subset, so we assert the
+    # PDF is well-formed, non-trivial, and declares the embedded font.
+    md = "# Işık ğ ş İ çöğüş\n\n- Iğdır şehri\n"
     result = R.render("pdf", title="Işık", canonical_markdown=md)
     assert result.data[:4] == b"%PDF"
+    # An embedded TrueType subset (/FontFile2) of DejaVu proves the glyphs are
+    # really in the file — a folded latin-1 core-font PDF would have neither.
+    assert b"/FontFile2" in result.data
+    assert b"DejaVu" in result.data
+
+
+def test_pdf_render_is_deterministic_with_turkish() -> None:
+    md = _canonical()
+    a = R.render("pdf", title="Başlık", canonical_markdown=md)
+    b = R.render("pdf", title="Başlık", canonical_markdown=md)
+    assert a.content_hash == b.content_hash

@@ -6,11 +6,12 @@ Design (task deliverable 3):
   (title, canonical_markdown) -> bytes with NO clock/network/randomness, so the
   same input yields byte-identical output and a stable content_hash.
 - Determinism specifics:
-  - PDF (fpdf2): creation/modification date pinned; core Helvetica font (no
-    embedded font file). Core fonts are latin-1 only, so Turkish glyphs outside
-    latin-1 (ş/ğ/ı/İ) are ASCII-folded FOR THE PDF LAYER ONLY. The canonical
-    body and the DOCX/HTML/TXT renders keep full Turkish. A Unicode-font PDF
-    profile (bundling e.g. DejaVu/Noto) is a documented follow-up.
+  - PDF (fpdf2): creation/modification date pinned; a bundled Unicode font
+    (DejaVu Sans, regular + bold, under services/api/app/artifacts/fonts) is
+    embedded so full Turkish orthography (ş/ğ/ı/İ/ç/ö/ü) and typographic
+    punctuation render identically on every host — Turkish is first-class, so
+    the PDF (the default mobile presentation format) must not fold glyphs.
+    fpdf2 subsets and embeds the font deterministically.
   - DOCX (python-docx): core properties pinned to a fixed timestamp, then the
     package zip is re-emitted with fixed member dates/order so bytes are stable.
   - HTML/TXT: naturally deterministic.
@@ -22,12 +23,18 @@ import re
 import zipfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 import markdown as markdown_lib
 from docx import Document
 from fpdf import FPDF
 from fpdf.enums import XPos, YPos
+
+_FONT_DIR = Path(__file__).parent / "fonts"
+_FONT_FAMILY = "DejaVu"
+_FONT_REGULAR = _FONT_DIR / "DejaVuSans.ttf"
+_FONT_BOLD = _FONT_DIR / "DejaVuSans-Bold.ttf"
 
 # Fixed epoch used for every timestamp a renderer would otherwise pull from the
 # clock. Any constant works; it just must never be "now".
@@ -154,33 +161,6 @@ class HtmlRenderer:
 # ----------------------------------------------------------------------- PDF
 
 
-# Turkish-specific glyphs missing from latin-1, folded to ASCII for the PDF
-# core-font layer only.
-_TR_FOLD = str.maketrans(
-    {
-        "ş": "s",
-        "Ş": "S",
-        "ğ": "g",
-        "Ğ": "G",
-        "ı": "i",
-        "İ": "I",
-        "—": "-",
-        "–": "-",
-        "’": "'",
-        "‘": "'",
-        "“": '"',
-        "”": '"',
-        "…": "...",
-    }
-)
-
-
-def _pdf_safe(text: str) -> str:
-    folded = text.translate(_TR_FOLD)
-    # Anything still outside latin-1 (should be rare) is replaced deterministically.
-    return folded.encode("latin-1", errors="replace").decode("latin-1")
-
-
 class PdfRenderer:
     format = FORMAT_PDF
     mime_type = MIME_TYPES[FORMAT_PDF]
@@ -189,9 +169,12 @@ class PdfRenderer:
         pdf = FPDF(format="A4", unit="mm")
         # Pin every clock-derived field so output bytes are stable.
         pdf.set_creation_date(_FIXED_DT)
-        pdf.set_title(_pdf_safe(title))
+        pdf.set_title(title)
         pdf.set_author("Personal Agent OS")
         pdf.set_producer("pagentos-artifacts")
+        # Embed a bundled Unicode font so full Turkish renders on any host.
+        pdf.add_font(_FONT_FAMILY, "", str(_FONT_REGULAR))
+        pdf.add_font(_FONT_FAMILY, "B", str(_FONT_BOLD))
         pdf.set_auto_page_break(auto=True, margin=15)
         pdf.add_page()
 
@@ -201,23 +184,23 @@ class PdfRenderer:
             pdf.multi_cell(pdf.epw, h, s, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
         for block in _parse_blocks(canonical_markdown):
-            text = _pdf_safe(_strip_inline(block.text))
+            text = _strip_inline(block.text)
             if block.kind == "blank":
                 pdf.ln(3)
             elif block.kind == "h1":
-                pdf.set_font("Helvetica", "B", 18)
+                pdf.set_font(_FONT_FAMILY, "B", 18)
                 line(9, text)
             elif block.kind == "h2":
-                pdf.set_font("Helvetica", "B", 14)
+                pdf.set_font(_FONT_FAMILY, "B", 14)
                 line(8, text)
             elif block.kind == "h3":
-                pdf.set_font("Helvetica", "B", 12)
+                pdf.set_font(_FONT_FAMILY, "B", 12)
                 line(7, text)
             elif block.kind == "li":
-                pdf.set_font("Helvetica", "", 11)
+                pdf.set_font(_FONT_FAMILY, "", 11)
                 line(6, f"  - {text}")
             else:
-                pdf.set_font("Helvetica", "", 11)
+                pdf.set_font(_FONT_FAMILY, "", 11)
                 line(6, text)
 
         out = pdf.output()
