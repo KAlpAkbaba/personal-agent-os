@@ -41,3 +41,35 @@ Decision: Kubernetes is not an early milestone dependency.
 Status: Accepted
 
 Decision: Use pgvector and optional Mem0 integration; preserve project-owned schemas and exportability.
+
+## ADR-0007 — Deterministic line endings via .gitattributes (2026-08-31)
+
+Status: Accepted
+
+Decision: `* text=auto eol=lf` with CRLF overrides for PowerShell/batch scripts; common media/office formats marked binary.
+
+Reason: The repo is edited on Windows but ships Linux containers and CI; LF-normalized sources keep Docker builds, hashes and diffs reproducible. PowerShell files stay CRLF because Windows PowerShell 5.1 handles CRLF most predictably.
+
+## ADR-0008 — Preflight script hardened against hangs and PATH drift (2026-08-31)
+
+Status: Accepted
+
+Decision: `scripts/preflight.ps1` rewritten to run every external probe through `System.Diagnostics.Process` with a hard timeout, resolve tools via absolute fallback paths, and emit both JSON and a console summary.
+
+Reason: The original version hung indefinitely on this machine (blocked child process, no timeout) and depended on a session PATH that was observed to be incomplete (`System32` missing in spawned shells). A preflight that can hang violates the deterministic-gate principle. Also fixed a latent bug: the old script used `$args` as a function parameter name, which collides with PowerShell's automatic variable.
+
+## ADR-0009 — User-scope toolchain installs, no UAC (2026-08-31)
+
+Status: Accepted
+
+Decision: Missing dev tools are installed user-scope without elevation: `uv` 0.12.7 (winget `--scope user`), `pnpm` 11.24.0 (`npm install -g`, lands in `%APPDATA%\npm`), GitHub CLI 2.98.0 (winget `--scope user`). Deferred: PowerShell 7 (optional; scripts stay 5.1-compatible), .NET SDK (installed user-scope via official `dotnet-install.ps1` when M1 Windows-agent work starts), Tailscale (machine service + login → owner action at M1).
+
+Reason: Keeps M-1 free of UAC interruptions per the owner-experience policy while still making all M0-required tools available. Owner actions are batched in `docs/LOCAL_ENV_REPORT.md`.
+
+## ADR-0010 — M0 language/runtime pinning strategy (2026-08-31)
+
+Status: Accepted
+
+Decision: Python services use `uv` with a project-pinned interpreter (uv-managed CPython, `pyproject.toml` + `uv.lock`), independent of the machine's mixed system Pythons (3.8/3.12/3.14). Node/web workspace uses pnpm with `packageManager` pinning and lockfile. All service dependencies pinned via lockfiles from the first commit.
+
+Reason: The machine has multiple global Pythons; reproducibility must not depend on machine state.

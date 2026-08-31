@@ -1,13 +1,19 @@
 {
   "schema_version": 1,
   "project": "personal-agent-os",
-  "current_milestone": "M-1",
-  "status": "NOT_STARTED",
-  "last_completed_milestone": null,
+  "current_milestone": "M0",
+  "status": "IN_PROGRESS",
+  "last_completed_milestone": "M-1",
   "last_updated": "2026-08-31T00:00:00+03:00",
-  "owner_actions_pending": [],
+  "owner_actions_pending": [
+    "Before first GitHub push (end of M0): run 'gh auth login' once (browser OAuth).",
+    "At M1: approve Tailscale install (UAC) and sign in; approve Hetzner account/billing/API key creation.",
+    "Recommended, non-blocking: move Docker Desktop disk image location from C: to E: (C: has ~24 GB free)."
+  ],
   "quality_gate": {
-    "status": "NOT_RUN"
+    "status": "PASS",
+    "last_run": "2026-08-31",
+    "scope": "M-1 bootstrap gate: required files present, no tracked secrets, docker hello-world passed, preflight report generated"
   },
-  "notes": "Specification package imported. Claude should begin with environment preflight."
+  "notes": "M-1 complete: git initialized, environment report written (docs/LOCAL_ENV_REPORT.md), toolchain gaps closed user-scope (uv, pnpm, gh). M0 foundation implementation starting."
 }
