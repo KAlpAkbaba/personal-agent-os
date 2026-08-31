@@ -2,7 +2,7 @@
 
 import pytest
 
-from app.object_store import InMemoryObjectStore, ObjectStore
+from app.object_store import InMemoryObjectStore, ObjectStore, validate_object_key
 
 
 def exercise_object_store_contract(store: ObjectStore) -> None:
@@ -34,3 +34,41 @@ def test_in_memory_store_satisfies_contract() -> None:
 
 def test_in_memory_store_is_objectstore_protocol() -> None:
     assert isinstance(InMemoryObjectStore(), ObjectStore)
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "artifacts/2026/report.pdf",
+        "a",
+        "task-1_v2.json",
+    ],
+)
+def test_valid_object_keys_accepted(key: str) -> None:
+    assert validate_object_key(key) == key
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "",
+        "/leading-slash",
+        "../escape",
+        "a/../b",
+        "a//b",
+        "back\\slash",
+        "spaces not allowed",
+        ".hidden-leading-dot",
+        "x" * 513,
+    ],
+)
+def test_invalid_object_keys_rejected(key: str) -> None:
+    store = InMemoryObjectStore()
+    with pytest.raises(ValueError):
+        store.put(key, b"data")
+    with pytest.raises(ValueError):
+        store.get(key)
+    with pytest.raises(ValueError):
+        store.delete(key)
+    with pytest.raises(ValueError):
+        store.exists(key)

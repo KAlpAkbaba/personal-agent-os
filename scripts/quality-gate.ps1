@@ -93,10 +93,19 @@ Invoke-Step "Secret hygiene" {
     if ($envTracked) { throw ".env-style file is tracked: $($envTracked -join ', ')" }
     $keyFiles = $tracked | Where-Object { $_ -match "\.(pem|pfx|p12|key)$" }
     if ($keyFiles) { throw "Key material is tracked: $($keyFiles -join ', ')" }
+
+    # Content scan: real token/key patterns pasted into tracked files
+    # (security review M0, finding #1). git grep exits 1 when nothing matches.
+    $secretPattern = "AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|sk-[A-Za-z0-9]{24,}|xox[baprs]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----"
+    $hits = & $git grep -nE $secretPattern -- ":!*.example" ":!*.lock"
+    if ($LASTEXITCODE -eq 0 -and $hits) {
+      throw "Potential secret content in tracked files:`n$($hits -join "`n")"
+    }
+    if ($LASTEXITCODE -gt 1) { throw "git grep secret scan failed with code $LASTEXITCODE" }
   } finally {
     Pop-Location
   }
-  Write-Host "No tracked .env or key material."
+  Write-Host "No tracked .env/key files and no secret-pattern content."
 }
 
 Invoke-Step "API lint (ruff)" {

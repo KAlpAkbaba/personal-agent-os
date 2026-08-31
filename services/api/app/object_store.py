@@ -6,6 +6,7 @@ S3-compatible store in production) and `InMemoryObjectStore` (tests) implement
 it.
 """
 
+import re
 from typing import Protocol, runtime_checkable
 
 import boto3
@@ -13,6 +14,24 @@ from botocore.client import Config as BotoConfig
 from botocore.exceptions import ClientError
 
 from app.config import Settings
+
+_KEY_MAX_LENGTH = 512
+_KEY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
+
+
+def validate_object_key(key: str) -> str:
+    """Reject keys that could traverse paths or break provider semantics.
+
+    Baked into every implementation (security review M0, finding #4) so that
+    future callers deriving keys from owner input inherit the check for free.
+    """
+    if not key or len(key) > _KEY_MAX_LENGTH:
+        raise ValueError(f"invalid object key length: {len(key)}")
+    if not _KEY_PATTERN.match(key):
+        raise ValueError(f"invalid object key: {key!r}")
+    if ".." in key.split("/") or "//" in key:
+        raise ValueError(f"invalid object key (path traversal): {key!r}")
+    return key
 
 
 @runtime_checkable
@@ -43,19 +62,20 @@ class InMemoryObjectStore:
         self._objects: dict[str, bytes] = {}
 
     def put(self, key: str, data: bytes, content_type: str = "application/octet-stream") -> None:
-        self._objects[key] = bytes(data)
+        self._objects[validate_object_key(key)] = bytes(data)
 
     def get(self, key: str) -> bytes:
+        validate_object_key(key)
         try:
             return self._objects[key]
         except KeyError:
             raise KeyError(f"object not found: {key}") from None
 
     def delete(self, key: str) -> None:
-        self._objects.pop(key, None)
+        self._objects.pop(validate_object_key(key), None)
 
     def exists(self, key: str) -> bool:
-        return key in self._objects
+        return validate_object_key(key) in self._objects
 
 
 class S3ObjectStore:
@@ -105,10 +125,14 @@ class S3ObjectStore:
 
     def put(self, key: str, data: bytes, content_type: str = "application/octet-stream") -> None:
         self._client.put_object(
-            Bucket=self._bucket, Key=key, Body=data, ContentType=content_type
+            Bucket=self._bucket,
+            Key=validate_object_key(key),
+            Body=data,
+            ContentType=content_type,
         )
 
     def get(self, key: str) -> bytes:
+        validate_object_key(key)
         try:
             response = self._client.get_object(Bucket=self._bucket, Key=key)
         except ClientError as exc:
@@ -119,9 +143,10 @@ class S3ObjectStore:
         return response["Body"].read()
 
     def delete(self, key: str) -> None:
-        self._client.delete_object(Bucket=self._bucket, Key=key)
+        self._client.delete_object(Bucket=self._bucket, Key=validate_object_key(key))
 
     def exists(self, key: str) -> bool:
+        validate_object_key(key)
         try:
             self._client.head_object(Bucket=self._bucket, Key=key)
         except ClientError as exc:
