@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Frame Child</title>
+</head>
+<body>
+  <h2>Frame Child</h2>
+  <button id="fg" type="button">Frame Greet</button>
+  <output id="frame-greeting" data-testid="frame-greeting"></output>
+  <script>
+    document.getElementById("fg").addEventListener("click", () => {
+      document.getElementById("frame-greeting").textContent = "Hello from frame";
+    });
+  </script>
+</body>
+</html>

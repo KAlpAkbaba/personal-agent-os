@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING
 from .errors import BrowserError, ErrorClass
 
 if TYPE_CHECKING:
-    from playwright.async_api import Locator, Page
+    from playwright.async_api import FrameLocator, Locator, Page
 
 _PRIMARY_FIELDS = ("role", "text", "label", "placeholder", "test_id")
 
@@ -83,8 +83,12 @@ class TargetSpec:
         """Compact dict (non-None fields only) for logs/evidence."""
         return {k: v for k, v in asdict(self).items() if v is not None and v is not False}
 
-    def to_locator(self, page: Page) -> Locator:
-        """Build the Playwright locator for this (validated) spec."""
+    def to_locator(self, page: Page | FrameLocator) -> Locator:
+        """Build the Playwright locator for this (validated) spec.
+
+        ``page`` may be a Page or a FrameLocator root (iframe interaction);
+        both expose the same semantic ``get_by_*`` surface.
+        """
         self.validate()
         if self.role is not None:
             if self.name is not None:

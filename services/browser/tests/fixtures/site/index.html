@@ -32,6 +32,21 @@
 
   <div id="click-echo" data-testid="click-echo"></div>
 
+  <section aria-label="duplicates">
+    <!-- Two buttons with the same accessible name: deterministic ambiguous
+         locator scenario (match_count 2, .first wins). -->
+    <button class="dup" type="button">Duplicate</button>
+    <button class="dup" type="button">Duplicate</button>
+    <span id="dup-echo" data-testid="dup-echo"></span>
+  </section>
+
+  <section aria-label="counter">
+    <!-- Side-effect counter for command idempotency tests: exactly-once
+         execution is observable as exactly one increment. -->
+    <button id="count" type="button">Increment</button>
+    <output id="count-echo" data-testid="count-echo">0</output>
+  </section>
+
   <script>
     document.getElementById("greet").addEventListener("click", () => {
       document.getElementById("greeting").textContent = "Hello, Agent!";
@@ -44,6 +59,17 @@
     });
     document.addEventListener("click", () => {
       document.getElementById("click-echo").textContent = "clicked-somewhere";
+    });
+    const dups = document.querySelectorAll(".dup");
+    dups[0].addEventListener("click", () => {
+      document.getElementById("dup-echo").textContent = "first-clicked";
+    });
+    dups[1].addEventListener("click", () => {
+      document.getElementById("dup-echo").textContent = "second-clicked";
+    });
+    document.getElementById("count").addEventListener("click", () => {
+      const echo = document.getElementById("count-echo");
+      echo.textContent = String(Number(echo.textContent) + 1);
     });
   </script>
 </body>

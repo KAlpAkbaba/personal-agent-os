@@ -60,6 +60,8 @@ class ErrorClass(StrEnum):
     TIMEOUT = "timeout"
     VALIDATION_ERROR = "validation_error"
     DEPENDENCY_UNAVAILABLE = "dependency_unavailable"
+    CAPABILITY_MISSING = "capability_missing"
+    CANCELLED = "cancelled"
     INTERNAL_BUG = "internal_bug"
 
 

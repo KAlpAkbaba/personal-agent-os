@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Form Fixture</title>
+</head>
+<body>
+  <h1>Form Fixture</h1>
+
+  <form action="result.html" method="get">
+    <label for="fname">Full name</label>
+    <input id="fname" name="fname" type="text">
+
+    <label for="color">Favorite color</label>
+    <select id="color" name="color">
+      <option value="">-- pick --</option>
+      <option value="red">Red</option>
+      <option value="green">Green</option>
+      <option value="blue">Blue</option>
+    </select>
+    <span id="color-echo" data-testid="color-echo"></span>
+
+    <label>
+      <input type="checkbox" id="subscribe" name="subscribe" value="yes">
+      Subscribe to updates
+    </label>
+    <span id="subscribe-echo" data-testid="subscribe-echo">off</span>
+
+    <fieldset>
+      <legend>Plan</legend>
+      <label><input type="radio" name="plan" value="basic"> Basic plan</label>
+      <label><input type="radio" name="plan" value="pro"> Pro plan</label>
+      <span id="plan-echo" data-testid="plan-echo">none</span>
+    </fieldset>
+
+    <button type="submit">Submit form</button>
+  </form>
+
+  <script>
+    document.getElementById("color").addEventListener("change", (e) => {
+      document.getElementById("color-echo").textContent = e.target.value;
+    });
+    document.getElementById("subscribe").addEventListener("change", (e) => {
+      document.getElementById("subscribe-echo").textContent = e.target.checked ? "on" : "off";
+    });
+    for (const radio of document.querySelectorAll('input[name="plan"]')) {
+      radio.addEventListener("change", (e) => {
+        document.getElementById("plan-echo").textContent = e.target.value;
+      });
+    }
+  </script>
+</body>
+</html>

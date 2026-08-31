@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Popup Window</title>
+</head>
+<body>
+  <h1>Popup Window</h1>
+  <button id="pg" type="button">Popup Greet</button>
+  <output id="popup-greeting" data-testid="popup-greeting"></output>
+  <script>
+    document.getElementById("pg").addEventListener("click", () => {
+      document.getElementById("popup-greeting").textContent = "Hello from popup";
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Form Result</title>
+</head>
+<body>
+  <h1>Form Result</h1>
+  <dl>
+    <dt>Full name</dt><dd data-testid="echo-fname" id="echo-fname"></dd>
+    <dt>Color</dt><dd data-testid="echo-color" id="echo-color"></dd>
+    <dt>Subscribe</dt><dd data-testid="echo-subscribe" id="echo-subscribe"></dd>
+    <dt>Plan</dt><dd data-testid="echo-plan" id="echo-plan"></dd>
+  </dl>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const put = (id, key) => {
+      document.getElementById(id).textContent = params.get(key) ?? "absent";
+    };
+    put("echo-fname", "fname");
+    put("echo-color", "color");
+    put("echo-subscribe", "subscribe");
+    put("echo-plan", "plan");
+  </script>
+</body>
+</html>

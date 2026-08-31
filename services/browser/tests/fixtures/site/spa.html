@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SPA Fixture</title>
+</head>
+<body>
+  <h1>SPA Fixture</h1>
+  <!-- A fresh token per full page load: if SPA navigation triggered a real
+       load, the token would change. Tests assert it stays constant. -->
+  <span id="load-token" data-testid="load-token"></span>
+  <nav>
+    <button id="to-a" type="button">Show section A</button>
+    <button id="to-b" type="button">Show section B</button>
+  </nav>
+  <main id="view" data-testid="spa-view">home</main>
+  <span id="spa-route" data-testid="spa-route"></span>
+  <script>
+    document.getElementById("load-token").textContent =
+      String(Date.now()) + "-" + Math.random().toString(36).slice(2);
+
+    const CONTENT = {
+      "": "home",
+      "#/a": "Section A content",
+      "#/b": "Section B content",
+    };
+    function render() {
+      const route = location.hash in CONTENT ? location.hash : "";
+      document.getElementById("view").textContent = CONTENT[route];
+      document.getElementById("spa-route").textContent = route || "(root)";
+    }
+    document.getElementById("to-a").addEventListener("click", () => {
+      history.pushState({}, "", "#/a");
+      render();
+    });
+    document.getElementById("to-b").addEventListener("click", () => {
+      history.pushState({}, "", "#/b");
+      render();
+    });
+    window.addEventListener("popstate", render);
+    render();
+  </script>
+</body>
+</html>

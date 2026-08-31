@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Storage Fixture</title>
+</head>
+<body>
+  <h1>Storage Fixture</h1>
+  <!-- Persistent-profile scenario: "Save value" writes localStorage; on load
+       the stored value (or "empty") is rendered. A persistent dedicated
+       profile keeps it across browser restarts; an isolated context does not. -->
+  <button id="save" type="button">Save value</button>
+  <output id="stored" data-testid="stored-value"></output>
+  <script>
+    const el = document.getElementById("stored");
+    el.textContent = localStorage.getItem("pagentos-persist") || "empty";
+    document.getElementById("save").addEventListener("click", () => {
+      localStorage.setItem("pagentos-persist", "persisted-42");
+      el.textContent = "persisted-42";
+    });
+  </script>
+</body>
+</html>

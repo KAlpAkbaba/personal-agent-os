@@ -92,6 +92,8 @@ Python/UFO components may run as a separately sandboxed integration where they a
 - extension/CDP bridge for current user session
 - accessibility/DOM snapshot preferred over pixels
 
+M2 realization (ADR-0018/0019, `services/browser`): a `BrowserBackend` adapter seam separates transport from semantics. `ManagedBackend` (isolated or persistent dedicated profile) serves CI/deterministic E2E with zero dependency on owner browser state; `ExistingSessionBackend` attaches to an already-running owner browser only through an explicit `BrowserEnrollment` authorization record over loopback (raw `--remote-debugging-port` on the owner's default profile is not a production dependency; an extension-bridge transport slot is reserved); a visual/coordinate fallback will be a separate future adapter, never mixed into the semantic engine. Every backend declares queryable capabilities (`authenticated_session`, `downloads`, `uploads`, `extensions`, `existing_tabs`, `multiple_windows`, `visual_fallback`). A browser-command layer provides cancellation and idempotency mirroring the device protocol.
+
 ### Durable workflows
 
 Temporal is used for:
