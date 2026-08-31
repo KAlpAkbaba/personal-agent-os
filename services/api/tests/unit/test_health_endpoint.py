@@ -1,4 +1,9 @@
-"""Health endpoint shape tests with mocked dependency checks."""
+"""Health endpoint shape tests with mocked dependency checks.
+
+M1: the endpoint adds a "broker" check (sweeper alive + active sessions) on
+top of the M0 dependency checks. Clients are used as context managers so the
+app lifespan runs and the broker sweeper is alive.
+"""
 
 from fastapi.testclient import TestClient
 
@@ -7,10 +12,13 @@ from app import __version__
 from app.config import Settings
 from app.main import create_app
 
+DEPENDENCY_CHECKS = {"db", "redis", "object_store", "temporal"}
+ALL_CHECKS = DEPENDENCY_CHECKS | {"broker"}
+
 
 def make_client(monkeypatch, checks: dict[str, dict]) -> TestClient:
     async def fake_run_health_checks(settings: Settings) -> dict[str, dict]:
-        return checks
+        return dict(checks)
 
     # create_app resolves run_health_checks via app.main's import; patch there.
     monkeypatch.setattr("app.main.run_health_checks", fake_run_health_checks)
@@ -26,23 +34,42 @@ ALL_OK = {
 
 
 def test_health_ok_shape(monkeypatch) -> None:
-    client = make_client(monkeypatch, ALL_OK)
-    response = client.get("/v1/system/health")
+    with make_client(monkeypatch, ALL_OK) as client:
+        response = client.get("/v1/system/health")
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "ok"
     assert body["version"] == __version__
-    assert set(body["checks"].keys()) == {"db", "redis", "object_store", "temporal"}
+    assert set(body["checks"].keys()) == ALL_CHECKS
     for check in body["checks"].values():
         assert check["status"] == "ok"
         assert isinstance(check["latency_ms"], int | float)
 
 
+def test_health_broker_check_shape(monkeypatch) -> None:
+    with make_client(monkeypatch, ALL_OK) as client:
+        response = client.get("/v1/system/health")
+    broker = response.json()["checks"]["broker"]
+    assert broker["status"] == "ok"
+    assert broker["sweeper_alive"] is True
+    assert broker["active_sessions"] == 0
+
+
+def test_health_broker_fails_without_lifespan(monkeypatch) -> None:
+    """Without the lifespan (sweeper not started) the broker check reports fail."""
+    client = make_client(monkeypatch, ALL_OK)
+    response = client.get("/v1/system/health")
+    body = response.json()
+    assert body["status"] == "degraded"
+    assert body["checks"]["broker"]["status"] == "fail"
+    assert body["checks"]["broker"]["sweeper_alive"] is False
+
+
 def test_health_degraded_still_200(monkeypatch) -> None:
     checks = dict(ALL_OK)
     checks["redis"] = {"status": "fail", "latency_ms": 2000.0, "error": "TimeoutError: timeout"}
-    client = make_client(monkeypatch, checks)
-    response = client.get("/v1/system/health")
+    with make_client(monkeypatch, checks) as client:
+        response = client.get("/v1/system/health")
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "degraded"
@@ -55,8 +82,8 @@ def test_health_never_crashes_when_all_down(monkeypatch) -> None:
         name: {"status": "fail", "latency_ms": 1.0, "error": "ConnectionError: down"}
         for name in ALL_OK
     }
-    client = make_client(monkeypatch, checks)
-    response = client.get("/v1/system/health")
+    with make_client(monkeypatch, checks) as client:
+        response = client.get("/v1/system/health")
     assert response.status_code == 200
     assert response.json()["status"] == "degraded"
 
@@ -75,7 +102,7 @@ def test_real_check_runner_reports_fail_not_raise(monkeypatch) -> None:
     import asyncio
 
     results = asyncio.run(health_module.run_health_checks(Settings(_env_file=None)))
-    assert set(results) == {"db", "redis", "object_store", "temporal"}
+    assert set(results) == DEPENDENCY_CHECKS
     for result in results.values():
         assert result["status"] == "fail"
         assert "ConnectionError" in result["error"]

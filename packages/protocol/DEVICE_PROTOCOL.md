@@ -16,7 +16,8 @@ Contract between the cloud Device Broker and device agents (first: Windows Devic
   1. Owner/operator obtains a one-time enrollment token: `POST /v1/devices/enrollment-tokens` → `{token, expires_at}` (dev: loopback-only, unauthenticated; production: owner-authenticated).
   2. Agent calls `POST /v1/devices/enroll` with `{token, name, platform, public_key_spki_b64, capabilities}` → `{device_id}`.
   - Tokens are single-use, short-lived (default 15 min), stored hashed.
-- Re-enrollment with a new token rotates the key. Revocation: broker marks device revoked; all sessions close; handshake is rejected thereafter.
+- In protocol v1, every enrollment creates a **new device identity** (the enroll request carries no device_id, so the broker cannot safely bind it to an existing row). Key rotation for an existing device is deferred to a dedicated authenticated rotate endpoint in a later protocol revision. Revocation: broker marks device revoked; all sessions close; handshake is rejected thereafter.
+- Signature encoding: the broker accepts both DER and raw IEEE P1363 `r||s` (64-byte) ECDSA signatures.
 
 ## 3. Handshake (over WS)
 

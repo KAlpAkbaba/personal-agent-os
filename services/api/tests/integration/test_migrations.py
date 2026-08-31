@@ -40,19 +40,31 @@ def vector_extension_installed(settings: Settings) -> bool:
         engine.dispose()
 
 
+BROKER_TABLES = {
+    "devices",
+    "device_sessions",
+    "device_commands",
+    "enrollment_tokens",
+    "audit_events",
+}
+
+
 def test_migration_round_trip(settings: Settings) -> None:
     cfg = alembic_config()
 
     command.upgrade(cfg, "head")
     assert "owner" in table_names(settings)
+    assert BROKER_TABLES <= table_names(settings)
     assert vector_extension_installed(settings) is True
 
     command.downgrade(cfg, "base")
     assert "owner" not in table_names(settings)
+    assert BROKER_TABLES.isdisjoint(table_names(settings))
     assert vector_extension_installed(settings) is False
 
     command.upgrade(cfg, "head")
     assert "owner" in table_names(settings)
+    assert BROKER_TABLES <= table_names(settings)
     assert vector_extension_installed(settings) is True
 
 

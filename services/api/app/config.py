@@ -42,6 +42,15 @@ class Settings(BaseSettings):
     # Health check budget per dependency, seconds.
     health_check_timeout_s: float = 2.0
 
+    # Device broker (M1). Heartbeat interval is sent to agents in the welcome
+    # frame; liveness timeout is heartbeat_interval * liveness_factor.
+    broker_heartbeat_interval_s: float = 10.0
+    broker_liveness_factor: float = 2.5
+    broker_enrollment_token_ttl_s: int = 900
+    broker_sweep_interval_s: float = 5.0
+    broker_default_command_timeout_s: float = 300.0
+    broker_handshake_timeout_s: float = 10.0
+
 
 @lru_cache
 def get_settings() -> Settings:

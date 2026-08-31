@@ -4,11 +4,16 @@ Run locally:
     uv run uvicorn app.main:app --host 127.0.0.1 --port 8001
 """
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI
 
 from app import __version__
+from app.broker.routes import router as broker_router
+from app.broker.runtime import BrokerRuntime
+from app.broker.ws import router as broker_ws_router
 from app.config import Settings, get_settings
 from app.health import run_health_checks
 from app.logging import configure_logging, get_logger
@@ -20,12 +25,28 @@ logger = get_logger("app.main")
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
-    app = FastAPI(title=settings.app_name, version=__version__)
+    broker = BrokerRuntime(settings)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        await broker.start()
+        logger.info("broker_started")
+        try:
+            yield
+        finally:
+            await broker.stop()
+            logger.info("broker_stopped")
+
+    app = FastAPI(title=settings.app_name, version=__version__, lifespan=lifespan)
+    app.state.broker = broker
     app.add_middleware(TraceIdMiddleware)
+    app.include_router(broker_router)
+    app.include_router(broker_ws_router)
 
     @app.get("/v1/system/health")
     async def system_health() -> dict[str, Any]:
         checks = await run_health_checks(settings)
+        checks["broker"] = broker.health_check()
         degraded = any(check["status"] != "ok" for check in checks.values())
         status = "degraded" if degraded else "ok"
         logger.info("health_checked", status=status, checks=checks)
