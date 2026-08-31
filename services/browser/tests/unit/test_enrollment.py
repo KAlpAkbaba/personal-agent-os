@@ -13,6 +13,7 @@ from browser_agent import (
     ManagedBackend,
     Transport,
 )
+from browser_agent.enrollment import is_loopback_endpoint
 
 
 def test_cdp_loopback_convenience_constructor() -> None:
@@ -130,3 +131,17 @@ def test_managed_backend_rejects_real_browser_profile_dirs() -> None:
 
 def test_managed_backend_accepts_dedicated_profile_dir(tmp_path: Path) -> None:
     ManagedBackend(profile_dir=tmp_path / "pagentos-profile")  # no raise
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "http://127.evil.example:9222",
+        "http://127.0.0.1.evil.example:9222",
+        "ws://localhost.evil.example:9222",
+    ],
+)
+def test_loopback_lookalike_hostnames_are_rejected(endpoint: str) -> None:
+    # Regression for M2 security finding #1: a DNS name that merely *starts
+    # with* "127." is routable, not loopback, and must never pass.
+    assert is_loopback_endpoint(endpoint) is False

@@ -270,3 +270,26 @@ async def test_slow_navigation_is_typed_timeout_retryable(
     assert err.error_class is ErrorClass.TIMEOUT
     assert err.retryable is True
     assert err.evidence["phase"] == "navigate"
+
+
+async def test_upload_outside_file_io_root_is_rejected(
+    session: BrowserSession, site_url: str, tmp_path
+) -> None:
+    # Regression for M2 security finding #4: upload sources must live under
+    # the session's configured file_io_root.
+    outside = tmp_path / "outside.txt"
+    outside.write_text("nope")
+    await session.navigate(f"{site_url}/upload.html")
+    with pytest.raises(BrowserError) as exc_info:
+        await session.upload(TargetSpec(label="Choose file"), outside)
+    assert str(exc_info.value.error_class) == "validation_error"
+
+
+async def test_file_and_javascript_urls_are_rejected(session: BrowserSession) -> None:
+    # Regression for M2 security finding #2.
+    for bad in ("file:///C:/Windows/win.ini", "javascript:alert(1)"):
+        with pytest.raises(BrowserError) as exc_info:
+            await session.navigate(bad)
+        assert str(exc_info.value.error_class) == "validation_error"
+        with pytest.raises(BrowserError):
+            await session.new_tab(bad)

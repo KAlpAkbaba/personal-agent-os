@@ -58,6 +58,7 @@ class _Terminal:
     command_id: str
     value: Any = None
     error: BrowserError | None = None
+    op_fingerprint: str | None = None
 
 
 class BrowserCommandExecutor:
@@ -75,6 +76,7 @@ class BrowserCommandExecutor:
         self._max_records = max_records
         self._records: OrderedDict[str, _Terminal] = OrderedDict()
         self._inflight: dict[str, asyncio.Future[_Terminal]] = {}
+        self._inflight_fingerprints: dict[str, str | None] = {}
 
     async def execute(
         self,
@@ -82,6 +84,8 @@ class BrowserCommandExecutor:
         idempotency_key: str,
         op: Callable[[], Awaitable[Any]],
         cancel_token: CancelToken | None = None,
+        *,
+        op_fingerprint: str | None = None,
     ) -> Any:
         """Run ``op`` (or replay/join its outcome) under ``idempotency_key``.
 
@@ -89,12 +93,18 @@ class BrowserCommandExecutor:
         ``BrowserError`` otherwise. A duplicate call's own ``cancel_token`` is
         ignored once it joins an in-flight or recorded execution (the original
         submission owns the execution).
+
+        ``op_fingerprint`` (e.g. a hash of capability+args) binds the recorded
+        terminal to the command's identity: a replay under the same key with a
+        DIFFERENT fingerprint fails loudly (``validation_error``) instead of
+        returning another command's result (M2 security review finding #5).
         """
         _require_nonempty("command_id", command_id)
         _require_nonempty("idempotency_key", idempotency_key)
 
         recorded = self._records.get(idempotency_key)
         if recorded is not None:
+            self._check_fingerprint(recorded, idempotency_key, op_fingerprint)
             self._records.move_to_end(idempotency_key)
             logger.info(
                 "browser.command_duplicate_replayed",
@@ -106,6 +116,12 @@ class BrowserCommandExecutor:
 
         inflight = self._inflight.get(idempotency_key)
         if inflight is not None:
+            self._check_fingerprint(
+                self._inflight_fingerprints.get(idempotency_key),
+                idempotency_key,
+                op_fingerprint,
+                raw=True,
+            )
             logger.info(
                 "browser.command_duplicate_joined_inflight",
                 command_id=command_id,
@@ -116,19 +132,41 @@ class BrowserCommandExecutor:
 
         future: asyncio.Future[_Terminal] = asyncio.get_running_loop().create_future()
         self._inflight[idempotency_key] = future
+        self._inflight_fingerprints[idempotency_key] = op_fingerprint
         try:
             terminal = await self._run(command_id, op, cancel_token)
         except asyncio.CancelledError:
             # The *executor caller's* task was cancelled (not a CancelToken).
             # Don't record a terminal; release any joined duplicates.
             self._inflight.pop(idempotency_key, None)
+            self._inflight_fingerprints.pop(idempotency_key, None)
             if not future.done():
                 future.cancel()
             raise
+        terminal.op_fingerprint = op_fingerprint
         self._record(idempotency_key, terminal)
         self._inflight.pop(idempotency_key, None)
+        self._inflight_fingerprints.pop(idempotency_key, None)
         future.set_result(terminal)
         return _deliver(terminal)
+
+    def _check_fingerprint(
+        self,
+        recorded: _Terminal | str | None,
+        idempotency_key: str,
+        op_fingerprint: str | None,
+        *,
+        raw: bool = False,
+    ) -> None:
+        stored = recorded if raw else (recorded.op_fingerprint if recorded else None)
+        if stored is not None and op_fingerprint is not None and stored != op_fingerprint:
+            raise BrowserError(
+                ErrorClass.VALIDATION_ERROR,
+                "idempotency key collision: duplicate carries a different "
+                "op fingerprint than the recorded command",
+                retryable=False,
+                evidence={"idempotency_key": idempotency_key},
+            )
 
     # ------------------------------------------------------------------ #
     # internals

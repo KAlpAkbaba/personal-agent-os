@@ -115,3 +115,34 @@ def test_browser_error_is_an_exception_with_message() -> None:
     with pytest.raises(BrowserError):
         raise err
     assert "slow" in str(err)
+
+
+def test_navigable_url_scheme_allowlist():
+    import pytest as _pytest
+
+    from browser_agent.errors import BrowserError, require_navigable_url
+
+    require_navigable_url("http://127.0.0.1:8080/x", op="navigate")
+    require_navigable_url("https://example.test/", op="navigate")
+    require_navigable_url("about:blank", op="navigate")
+    bad_urls = (
+        "file:///C:/Windows/win.ini",
+        "javascript:alert(1)",
+        "data:text/html,x",
+        "ftp://host/x",
+        "no-scheme",
+    )
+    for bad in bad_urls:
+        with _pytest.raises(BrowserError) as exc_info:
+            require_navigable_url(bad, op="navigate")
+        assert str(exc_info.value.error_class) == "validation_error"
+
+
+def test_redact_url_strips_query_and_fragment():
+    from browser_agent.errors import redact_url
+
+    assert (
+        redact_url("https://h.example/cb?code=SECRET&state=x#frag")
+        == "https://h.example/cb"
+    )
+    assert redact_url("http://127.0.0.1:8080/path") == "http://127.0.0.1:8080/path"

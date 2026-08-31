@@ -28,6 +28,7 @@ mechanical.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import uuid
@@ -50,11 +51,13 @@ class Transport(StrEnum):
     EXTENSION_BRIDGE = "extension_bridge"  # reserved; not implemented in M2
 
 
-_LOOPBACK_HOSTS = {"localhost", "::1"}
-
-
 def is_loopback_endpoint(endpoint: str) -> bool:
-    """True iff the endpoint URL's host is a loopback address."""
+    """True iff the endpoint URL's host is a loopback address.
+
+    The host must be the literal ``localhost`` or parse as an IP literal whose
+    ``is_loopback`` is true. DNS names are never trusted (``127.evil.example``
+    is a routable hostname, not loopback) and are rejected without resolution.
+    """
     try:
         parsed = urlparse(endpoint)
     except ValueError:
@@ -64,7 +67,12 @@ def is_loopback_endpoint(endpoint: str) -> bool:
     host = parsed.hostname
     if host is None:
         return False
-    return host in _LOOPBACK_HOSTS or host.startswith("127.")
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 @dataclass(frozen=True, slots=True)

@@ -47,6 +47,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
@@ -101,6 +102,44 @@ class BrowserError(Exception):
 # Marker strings emitted by Playwright's actionability engine when a resolved
 # element stops being actionable (detached, covered, hidden, moving). These are
 # stable, documented behaviors of Playwright's auto-waiting subsystem.
+# URL schemes the agent may navigate to. file:// (local file read) and
+# javascript: (script execution in the current origin — a session-hijack
+# primitive on an attached authenticated browser) are deliberately excluded
+# (M2 security review finding #2).
+ALLOWED_NAV_SCHEMES = frozenset({"http", "https"})
+
+
+def redact_url(url: str) -> str:
+    """URL stripped of query string and fragment — safe for logs/evidence.
+
+    Query strings routinely carry tokens (OAuth callbacks, magic links);
+    telemetry must never persist them (M2 security review finding #3).
+    """
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return "<unparseable-url>"
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+
+
+def require_navigable_url(url: str, *, op: str) -> None:
+    """Raise ``validation_error`` unless ``url`` uses an allowed scheme."""
+    if url == "about:blank":
+        return
+    try:
+        scheme = urlsplit(url).scheme.lower()
+    except ValueError:
+        scheme = ""
+    if scheme not in ALLOWED_NAV_SCHEMES:
+        raise BrowserError(
+            ErrorClass.VALIDATION_ERROR,
+            f"{op}: URL scheme {scheme or '<none>'!r} is not allowed "
+            "(http/https only)",
+            retryable=False,
+            evidence={"url": redact_url(url)},
+        )
+
+
 _ACTIONABILITY_MARKERS = (
     "intercepts pointer events",
     "element is not attached",

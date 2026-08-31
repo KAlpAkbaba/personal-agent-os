@@ -117,7 +117,9 @@ def site_url() -> Iterator[str]:
 @pytest.fixture()
 async def session() -> AsyncIterator[BrowserSession]:
     """Dedicated isolated headless Chromium session (browser-marked tests only)."""
-    browser_session = await BrowserSession.launch_dedicated(headless=True)
+    browser_session = await BrowserSession.launch_dedicated(
+        headless=True, file_io_root=FIXTURE_SITE
+    )
     try:
         yield browser_session
     finally:

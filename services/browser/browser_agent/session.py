@@ -52,7 +52,14 @@ from .backends import (
 )
 from .capabilities import require_capability
 from .enrollment import BrowserEnrollment
-from .errors import BrowserError, ErrorClass, Phase, map_playwright_error
+from .errors import (
+    BrowserError,
+    ErrorClass,
+    Phase,
+    map_playwright_error,
+    redact_url,
+    require_navigable_url,
+)
 from .obs_logging import get_logger
 from .targets import TargetSpec, coerce_target
 
@@ -82,9 +89,28 @@ class DownloadResult:
 class BrowserSession:
     """One semantic browser automation session over a backend. Not thread-safe."""
 
-    def __init__(self, backend: BrowserBackend) -> None:
+    def __init__(
+        self, backend: BrowserBackend, *, file_io_root: Path | str | None = None
+    ) -> None:
+        """``file_io_root``: the only directory tree this session may read
+        upload sources from or write screenshot files to (defense in depth
+        against page-content-influenced path arguments; M2 security review
+        finding #4). When unset, ``upload`` and ``screenshot(path=...)`` are
+        refused; downloads still land in a fresh temp dir by default."""
         self._backend = backend
+        self._file_io_root = Path(file_io_root).resolve() if file_io_root else None
         self._closed = False
+
+    def _require_within_file_io_root(self, path: Path, *, op: str) -> Path:
+        resolved = path.resolve()
+        if self._file_io_root is None or not resolved.is_relative_to(self._file_io_root):
+            raise BrowserError(
+                ErrorClass.VALIDATION_ERROR,
+                f"{op}: path is outside the session's configured file_io_root",
+                retryable=False,
+                evidence={"op": op, "file_io_root": str(self._file_io_root)},
+            )
+        return resolved
 
     # ------------------------------------------------------------------ #
     # constructors (v1-compatible convenience routes)
@@ -97,6 +123,7 @@ class BrowserSession:
         headless: bool = True,
         browser_args: list[str] | None = None,
         profile_dir: Path | str | None = None,
+        file_io_root: Path | str | None = None,
     ) -> BrowserSession:
         """Launch a dedicated Playwright-managed Chromium session.
 
@@ -113,7 +140,7 @@ class BrowserSession:
             persistent=backend.persistent,
             headless=headless,
         )
-        return cls(backend)
+        return cls(backend, file_io_root=file_io_root)
 
     @classmethod
     async def connect_existing_cdp(
@@ -121,6 +148,7 @@ class BrowserSession:
         endpoint_url: str,
         *,
         timeout_ms: float = 10_000,
+        file_io_root: Path | str | None = None,
     ) -> BrowserSession:
         """Attach to an already-running Chromium via a loopback CDP endpoint.
 
@@ -135,7 +163,7 @@ class BrowserSession:
         backend = ExistingSessionBackend(enrollment, connect_timeout_ms=timeout_ms)
         await backend.connect()
         logger.info("browser.session_started", mode="cdp", endpoint_url=endpoint_url)
-        return cls(backend)
+        return cls(backend, file_io_root=file_io_root)
 
     # ------------------------------------------------------------------ #
     # backend surface
@@ -166,15 +194,19 @@ class BrowserSession:
     async def navigate(
         self, url: str, *, timeout_ms: float = DEFAULT_NAV_TIMEOUT_MS
     ) -> None:
-        """Navigate the page and wait for the load event."""
-        async with self._oplog("navigate", url=url):
+        """Navigate the page and wait for the load event (http/https only)."""
+        require_navigable_url(url, op="navigate")
+        async with self._oplog("navigate", url=redact_url(url)):
             try:
                 await self._page.goto(url, timeout=timeout_ms, wait_until="load")
             except BrowserError:
                 raise
             except Exception as exc:
                 raise map_playwright_error(
-                    exc, phase=Phase.NAVIGATE, op="navigate", evidence={"url": url}
+                    exc,
+                    phase=Phase.NAVIGATE,
+                    op="navigate",
+                    evidence={"url": redact_url(url)},
                 ) from exc
 
     async def back(self, *, timeout_ms: float = DEFAULT_NAV_TIMEOUT_MS) -> str:
@@ -212,7 +244,9 @@ class BrowserSession:
 
     async def new_tab(self, url: str | None = None) -> int:
         """Open (and select) a new tab; optionally navigate it. Returns index."""
-        async with self._oplog("new_tab", url=url):
+        if url is not None:
+            require_navigable_url(url, op="new_tab")
+        async with self._oplog("new_tab", url=redact_url(url) if url else None):
             return await self._backend.new_tab(url)
 
     async def select_tab(self, index: int) -> None:
@@ -367,9 +401,11 @@ class BrowserSession:
         timeout_ms: float = DEFAULT_TIMEOUT_MS,
         frame: str | None = None,
     ) -> None:
-        """Populate a file input from a local file (capability: uploads)."""
+        """Populate a file input from a local file (capability: uploads).
+
+        The file must live under the session's ``file_io_root``."""
         require_capability(self._backend, "uploads")
-        path = Path(file_path)
+        path = self._require_within_file_io_root(Path(file_path), op="upload")
         if not path.is_file():
             raise BrowserError(
                 ErrorClass.VALIDATION_ERROR,
@@ -403,7 +439,7 @@ class BrowserSession:
                     exc,
                     phase=Phase.ACT,
                     op="accessibility_snapshot",
-                    evidence={"url": self._page.url},
+                    evidence={"url": redact_url(self._page.url)},
                 ) from exc
 
     async def download(
@@ -433,7 +469,11 @@ class BrowserSession:
             return DownloadResult(path=path, sha256=digest, suggested_filename=filename)
 
     async def screenshot(self, *, path: Path | str | None = None) -> bytes:
-        """Diagnostic-only full-page screenshot (never used for control)."""
+        """Diagnostic-only full-page screenshot (never used for control).
+
+        A file ``path`` must live under the session's ``file_io_root``."""
+        if path is not None:
+            path = self._require_within_file_io_root(Path(path), op="screenshot")
         async with self._oplog("screenshot"):
             try:
                 return await self._page.screenshot(
@@ -459,7 +499,7 @@ class BrowserSession:
                 op="escape_hatch_click_xy",
                 x=x,
                 y=y,
-                url=self._page.url,
+                url=redact_url(self._page.url),
             )
             try:
                 await self._page.mouse.click(x, y)
@@ -517,7 +557,10 @@ class BrowserSession:
         try:
             await locator.wait_for(state="attached", timeout=timeout_ms)
         except Exception as exc:
-            evidence: dict[str, Any] = {"target": spec.as_dict(), "url": self._page.url}
+            evidence: dict[str, Any] = {
+                "target": spec.as_dict(),
+                "url": redact_url(self._page.url),
+            }
             if frame is not None:
                 evidence["frame"] = frame
             raise map_playwright_error(
@@ -532,7 +575,7 @@ class BrowserSession:
             exc,
             phase=Phase.ACT,
             op=op,
-            evidence={"target": spec.as_dict(), "url": self._page.url},
+            evidence={"target": spec.as_dict(), "url": redact_url(self._page.url)},
         )
 
     @asynccontextmanager

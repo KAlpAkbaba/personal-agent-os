@@ -149,3 +149,25 @@ async def test_empty_idempotency_key_is_validation_error() -> None:
     with pytest.raises(BrowserError) as excinfo:
         await executor.execute("cmd-1", "  ", _CountingOp())
     assert excinfo.value.error_class is ErrorClass.VALIDATION_ERROR
+
+
+async def test_duplicate_with_different_op_fingerprint_fails_loudly():
+    from browser_agent.commands import BrowserCommandExecutor
+    from browser_agent.errors import BrowserError
+
+    executor = BrowserCommandExecutor()
+
+    async def op():
+        return "v1"
+
+    assert (
+        await executor.execute("c1", "key-fp", op, op_fingerprint="fp-aaa") == "v1"
+    )
+    # same key + same fingerprint replays fine
+    assert (
+        await executor.execute("c2", "key-fp", op, op_fingerprint="fp-aaa") == "v1"
+    )
+    # same key + DIFFERENT fingerprint must not replay another command's result
+    with pytest.raises(BrowserError) as exc_info:
+        await executor.execute("c3", "key-fp", op, op_fingerprint="fp-bbb")
+    assert str(exc_info.value.error_class) == "validation_error"

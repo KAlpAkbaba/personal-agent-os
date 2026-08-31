@@ -44,7 +44,14 @@ from playwright.async_api import (
 
 from .capabilities import BrowserCapabilities
 from .enrollment import BrowserEnrollment, Transport, is_loopback_endpoint
-from .errors import BrowserError, ErrorClass, Phase, map_playwright_error
+from .errors import (
+    BrowserError,
+    ErrorClass,
+    Phase,
+    map_playwright_error,
+    redact_url,
+    require_navigable_url,
+)
 from .obs_logging import get_logger
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -194,6 +201,8 @@ class _PlaywrightBackendBase(BrowserBackend):
         return tabs
 
     async def new_tab(self, url: str | None = None) -> int:
+        if url is not None:
+            require_navigable_url(url, op="new_tab")
         context = self._require_connected()
         try:
             page = await context.new_page()
@@ -205,7 +214,10 @@ class _PlaywrightBackendBase(BrowserBackend):
                 await page.goto(url, timeout=DEFAULT_TAB_NAV_TIMEOUT_MS, wait_until="load")
             except Exception as exc:
                 raise map_playwright_error(
-                    exc, phase=Phase.NAVIGATE, op="new_tab", evidence={"url": url}
+                    exc,
+                    phase=Phase.NAVIGATE,
+                    op="new_tab",
+                    evidence={"url": redact_url(url)},
                 ) from exc
         return self._open_pages().index(page)
 
