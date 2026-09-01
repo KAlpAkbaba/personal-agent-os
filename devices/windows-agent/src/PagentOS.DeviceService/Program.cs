@@ -125,6 +125,19 @@ public static class Program
                 "A Windows Service install must set PAGENTOS_AGENT_CompanionSid to the owner's SID.");
         }
 
+        if (string.IsNullOrWhiteSpace(options.CompanionImagePath))
+        {
+            // The same loud treatment as a missing CompanionSid, for the same reason: this
+            // is the check that separates "the companion" from "anything the owner runs".
+            // An install that sets the SID but forgets the binary admits any process in the
+            // owner's session, and would look correct in the log without this line.
+            Console.Error.WriteLine(
+                "warning: CompanionImagePath is not configured; ANY process running as the " +
+                "authorized SID in an interactive session will be admitted as the companion. " +
+                "A Windows Service install must set PAGENTOS_AGENT_CompanionImagePath to the " +
+                "installed companion executable.");
+        }
+
         return new CompanionAdmissionPolicy(sid, options.CompanionImagePath, options.CompanionSessionId);
     }
 

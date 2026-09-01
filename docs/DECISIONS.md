@@ -407,3 +407,51 @@ session are proven against an injected kernel answer at the one seam where that 
 enters the system, and are recorded as `PROVEN_PROXY` in `docs/QUALIFICATION.md` until
 the service actually runs under LocalSystem. Pipe squatting, impostor-pipe refusal, replay
 and stale-connection refusal are proven for real today.
+
+### ADR-0028 security addendum (2026-09-01) - the check that shipped turned off
+
+The independent review of this ADR found a **Critical** in the fix itself, and it is the
+same defect class this project has now hit three times: the component was written, the
+component was tested, and the binary that ships never used it.
+
+`SessionCompanion/Program.cs` constructed `CompanionRuntime` with four positional
+arguments and no `ServiceAdmissionPolicy`. The constructor default was
+`DeveloperMode(currentUserSid)`, which trusts a pipe owned by the owner's own account in
+addition to SYSTEM. UAC splits integrity level, not identity, so on an installed agent every
+ordinary process in the owner's session shares that SID: any of them could have squatted the
+pipe name during a service restart and driven `desktop.open_application` on the owner's
+desktop. `ServiceMode()` was constructed nowhere outside the test suite - the tests passed
+a policy the real program never passed, so a green suite said nothing about the shipped
+posture.
+
+Fixed, and the fix is about defaults rather than about remembering:
+
+- `CompanionRuntime`'s own default is now `ServiceMode()`. Whatever a caller forgets, the
+  safe posture is what it gets.
+- `SessionCompanion.Program.BuildServicePolicy(mode, ownerSid)` is public and directly
+  tested. It returns service mode for null, for an unrecognized value, **and** for
+  `developer` without an owner SID - asking to widen trust without saying whose pipes to
+  trust is not a request that can be honoured safely.
+- The active posture is logged at startup every time, at warning level for developer mode.
+  ADR-0028 claimed "developer mode is labelled, not hidden"; it was hidden, and now it is not.
+- Developer runs opt in out loud: `--dev-trust` or `PAGENTOS_AGENT_ServiceTrustMode`.
+  `scripts/e2e-m1-device.ps1` and the round-trip tests do exactly that, because in both the
+  "service" is a process the owner started.
+
+Two Mediums from the same review, also fixed. A missing `CompanionImagePath` now produces
+the same loud startup warning as a missing `CompanionSid` - without the binary pin, any
+process running as the owner in an interactive session is admitted, which is precisely the
+gap the pin exists to close. And the pipe name is now derived from the OWNER
+(`PipeNaming.ForOwnerSid`, with the service defaulting from `CompanionSid`) rather than
+from the calling process: a Session-0 service naming its pipe after "the current user" would
+listen on `pagentos-companion-S-1-5-18` while the companion waited on
+`pagentos-companion-{ownerSid}` - two healthy-looking halves that never meet.
+
+`docs/QUALIFICATION.md` 1.3 was corrected: its evidence line described the production
+policy while the shipped binary ran developer trust. New criteria 1.12 and 1.13 track the
+wiring and the pipe-name agreement, because the thing that went unnoticed was not covered by
+any numbered criterion - which is how it went unnoticed.
+
+Standing lesson, restated because restating it has not yet been enough: **a regression test
+for an integration point must assert the wiring, not the class.** Seen in M8 (authorization
+provider), M9 (`require_scope`), and now here.

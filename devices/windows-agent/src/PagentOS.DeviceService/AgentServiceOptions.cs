@@ -66,10 +66,17 @@ public sealed record AgentServiceOptions
             dataDir = DefaultDataDir();
         }
 
+        var companionSid = configuration["CompanionSid"];
         var pipeName = configuration["PipeName"];
         if (string.IsNullOrWhiteSpace(pipeName))
         {
-            pipeName = PipeNaming.DefaultPipeName();
+            // Named after the OWNER, not after this process. Under a Session-0 service those
+            // are different accounts, and defaulting to "the current user" would put the
+            // service on pagentos-companion-S-1-5-18 while the companion waited on
+            // pagentos-companion-{ownerSid} — two healthy-looking halves that never meet.
+            pipeName = string.IsNullOrWhiteSpace(companionSid)
+                ? PipeNaming.DefaultPipeName()
+                : PipeNaming.ForOwnerSid(companionSid);
         }
 
         double? heartbeatOverride = null;
@@ -93,7 +100,7 @@ public sealed record AgentServiceOptions
             BrokerWsUrl = configuration["BrokerWsUrl"] ?? "ws://127.0.0.1:8001/v1/devices/connect",
             DataDir = dataDir,
             PipeName = pipeName,
-            CompanionSid = configuration["CompanionSid"],
+            CompanionSid = companionSid,
             CompanionImagePath = configuration["CompanionImagePath"],
             CompanionSessionId = companionSessionId,
             HeartbeatIntervalOverrideS = heartbeatOverride,

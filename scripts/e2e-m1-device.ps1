@@ -175,6 +175,11 @@ function Start-Companion {
   $psi.UseShellExecute = $false
   $psi.CreateNoWindow = $true
   $psi.EnvironmentVariables["PAGENTOS_AGENT_PipeName"] = "pagentos-e2e-" + (Split-Path $dataDir -Leaf)
+  # In this test the "service" is an ordinary process this script started, so the pipe is
+  # owned by the current user rather than by SYSTEM. The companion now refuses that by
+  # default (ADR-0028 security review: shipping developer trust silently was a Critical),
+  # so the developer posture is requested here, out loud, where it is visible.
+  $psi.EnvironmentVariables["PAGENTOS_AGENT_ServiceTrustMode"] = "developer"
   $psi.EnvironmentVariables["DOTNET_ROOT"] = $env:DOTNET_ROOT
   $script:procs["companion"] = [System.Diagnostics.Process]::Start($psi)
 }

@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging.Abstractions;
 using PagentOS.Agent.Core.Commands;
 using PagentOS.Agent.Core.Connection;
+using PagentOS.Agent.Core.Ipc;
 using PagentOS.Agent.Core.Protocol;
 using PagentOS.Agent.Tests.Support;
 using PagentOS.DeviceService;
@@ -18,13 +19,21 @@ public class PipeTests
 
     private static string NewPipeName() => $"pagentos-test-{Guid.NewGuid():N}";
 
+    /// <summary>
+    /// These round-trip tests run both halves inside one test process, so the "service" pipe
+    /// is owned by the test user rather than by SYSTEM. The companion refuses that in its
+    /// production posture — correctly — so these tests ask for the developer posture out
+    /// loud, the same way `scripts/e2e-m1-device.ps1` does. Never a default, always a
+    /// request: that is what the ADR-0028 review's Critical was about.
+    /// </summary>
     private static CompanionRuntime NewCompanion(string pipeName, ArtifactOpener? artifactOpener = null)
         => new(
             pipeName,
             new AppLauncher(new Dictionary<string, string> { ["cmdtest"] = CmdPath }),
             artifactOpener ?? new ArtifactOpener(new[] { Path.GetTempPath() }, new RecordingFileOpener()),
             NullLogger.Instance,
-            new BackoffPolicy(baseSeconds: 0.05, maxSeconds: 0.2));
+            new BackoffPolicy(baseSeconds: 0.05, maxSeconds: 0.2),
+            ServiceAdmissionPolicy.DeveloperMode(IpcTestSupport.CurrentSid()));
 
     private static async Task WaitForCompanionAsync(CompanionPipeServer server)
     {

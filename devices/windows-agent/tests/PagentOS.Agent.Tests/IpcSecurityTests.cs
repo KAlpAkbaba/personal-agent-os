@@ -205,6 +205,61 @@ public class IpcSecurityTests
         }
     }
 
+    // ------------------------------------ the posture the SHIPPED binary actually runs at
+
+    [Fact]
+    public void The_shipped_companion_defaults_to_service_trust_not_developer_trust()
+    {
+        // Regression for the ADR-0028 review's Critical: the real entry point constructed
+        // CompanionRuntime without a policy, and the constructor default was developer mode.
+        // Since UAC splits integrity level rather than identity, that meant any process
+        // running as the owner could drive the companion on an installed agent. The default
+        // must be the production posture, and asking for developer mode must be explicit.
+        var owner = IpcTestSupport.CurrentSid();
+
+        var byDefault = SessionCompanion.Program.BuildServicePolicy(null, owner);
+        Assert.True(byDefault.RequiresElevatedOwner);
+        Assert.Equal(IpcRefusal.UntrustedPipeOwner, byDefault.Evaluate(owner));
+
+        var unknownMode = SessionCompanion.Program.BuildServicePolicy("something-else", owner);
+        Assert.True(unknownMode.RequiresElevatedOwner);
+
+        // Asking for developer mode without saying whose pipes to trust stays production
+        // rather than widening the trust set to something unnamed.
+        var unnamed = SessionCompanion.Program.BuildServicePolicy("developer", null);
+        Assert.True(unnamed.RequiresElevatedOwner);
+
+        var explicitlyDeveloper = SessionCompanion.Program.BuildServicePolicy("developer", owner);
+        Assert.False(explicitlyDeveloper.RequiresElevatedOwner);
+        Assert.Equal(IpcRefusal.None, explicitlyDeveloper.Evaluate(owner));
+    }
+
+    [Fact]
+    public void A_runtime_built_without_a_policy_refuses_an_owner_owned_pipe()
+    {
+        // The same defect one layer down: whatever the caller forgets, the runtime's own
+        // default must be the safe one.
+        var companion = new CompanionRuntime(
+            IpcTestSupport.NewPipeName(),
+            new AppLauncher(new Dictionary<string, string> { ["cmdtest"] = CmdPath }),
+            new ArtifactOpener(new[] { Path.GetTempPath() }, new RecordingFileOpener()),
+            NullLogger.Instance);
+
+        Assert.True(companion.ServicePolicy.RequiresElevatedOwner);
+        Assert.Equal(IpcRefusal.UntrustedPipeOwner, companion.ServicePolicy.Evaluate(IpcTestSupport.CurrentSid()));
+    }
+
+    [Fact]
+    public void The_service_and_the_companion_derive_the_same_pipe_name_from_the_owner()
+    {
+        // Under a Session-0 service the two halves are different accounts. A pipe name
+        // derived from "the current user" would put them on different names — two healthy
+        // processes that never meet, with nothing in either log saying why.
+        var owner = IpcTestSupport.CurrentSid();
+        Assert.Equal(PipeNaming.ForOwnerSid(owner), PipeNaming.DefaultPipeName());
+        Assert.NotEqual(PipeNaming.ForOwnerSid(ServiceAdmissionPolicy.LocalSystemSid), PipeNaming.ForOwnerSid(owner));
+    }
+
     [Fact]
     public void A_developer_run_trusts_the_owner_but_says_so()
     {

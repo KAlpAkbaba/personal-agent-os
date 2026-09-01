@@ -50,27 +50,24 @@ public sealed class CompanionRuntime(
     /// <summary>Refusals since start, by reason — asserted by tests, surfaced in logs.</summary>
     public IReadOnlyDictionary<IpcRefusal, int> Refusals => _refusals;
 
+    /// <summary>The trust posture actually in force. Logged at startup; never inferred by a reader.</summary>
+    public ServiceAdmissionPolicy ServicePolicy => _servicePolicy;
+
     private readonly Dictionary<IpcRefusal, int> _refusals = new();
 
     /// <summary>
-    /// Developer default: also trust a pipe owned by the current user, because in a dev run
-    /// the "service" is a process the owner started. Production wiring passes
-    /// <see cref="ServiceAdmissionPolicy.ServiceMode"/> explicitly, and the difference is
-    /// recorded in the qualification matrix rather than hidden in a default.
+    /// The default is the PRODUCTION posture: only a pipe owned by an account that can host
+    /// a Windows Service is trusted.
+    ///
+    /// This default used to be developer mode, which also trusts a pipe owned by the current
+    /// user — and since UAC splits integrity level rather than identity, any ordinary process
+    /// running as the owner shares that SID. A companion defaulting to developer mode would
+    /// therefore accept exec requests from any process in the owner's own session, which is
+    /// exactly the attack this check exists to stop. Developer mode is now something a
+    /// developer run asks for out loud (<c>--dev-trust</c>), never something production
+    /// inherits by forgetting to pass an argument.
     /// </summary>
-    private static ServiceAdmissionPolicy DefaultServicePolicy()
-    {
-        if (OperatingSystem.IsWindows())
-        {
-            var sid = WindowsIdentity.GetCurrent().User?.Value;
-            if (!string.IsNullOrEmpty(sid))
-            {
-                return ServiceAdmissionPolicy.DeveloperMode(sid);
-            }
-        }
-
-        return ServiceAdmissionPolicy.ServiceMode();
-    }
+    private static ServiceAdmissionPolicy DefaultServicePolicy() => ServiceAdmissionPolicy.ServiceMode();
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
