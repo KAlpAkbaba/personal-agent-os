@@ -62,6 +62,11 @@ skills/generated/*
 *.tfstate
 *.tfstate.*
 .terraform/
-.terraform.lock.hcl
 *.tfvars
 !*.tfvars.example
+
+# .terraform.lock.hcl is deliberately NOT ignored. It holds no secret — it pins the
+# provider VERSION and its cryptographic hashes, which is the same supply-chain control
+# M7 applies to generated skills (pinned dependencies with digests). Ignoring it would
+# let a later `tofu init` satisfy `~> 1.51` with a different provider build than the one
+# reviewed here, on the machine that provisions real infrastructure.

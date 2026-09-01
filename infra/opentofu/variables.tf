@@ -40,13 +40,22 @@ variable "location" {
 
 variable "server_type" {
   description = <<-EOT
-    Hetzner server type. The plan targets ~8 vCPU / 16 GB (CPX42 class): PostgreSQL,
-    Temporal, the application containers and observability are cramped below 16 GB.
-    Verify current availability and price in the Hetzner console before applying, and
-    record the chosen SKU in docs/DECISIONS.md.
+    Hetzner server type. CPX32 (4 vCPU / 8 GB / 160 GB NVMe, NBG1) — chosen by the owner
+    on 2026-09-01 and recorded in docs/DECISIONS.md.
+
+    CLOUD_INFRASTRUCTURE.md §1 targets a CPX42 (8 vCPU / 16 GB), and that was the right
+    call at the price it was written for. Hetzner's 15 June 2026 adjustment took CPX42
+    from €25.49 to €69.49/month and CPX32 from €13.99 to €35.49, which changes the
+    trade-off rather than the requirement: the five containers actually deployed
+    (PostgreSQL, Redis, MinIO, Temporal, the API) sit around 2–3 GB in practice, so 8 GB
+    leaves real headroom, and Hetzner supports rescaling CPU/RAM upward in place — so
+    this is a reversible decision to be revisited from MEASURED need, per the
+    constitution's "scale from measured need, not speculation".
+
+    Verify the current price in the console before applying; it has moved once already.
   EOT
   type        = string
-  default     = "cpx42"
+  default     = "cpx32"
 }
 
 variable "image" {

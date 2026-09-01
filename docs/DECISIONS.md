@@ -729,3 +729,33 @@ Docker Desktop stopped on Windows, loopback connections to the compose ports are
 ~2 s each rather than instantly, which makes the dependency-probing unit tests look hung.
 On a Linux runner with nothing listening the same connections are refused in ~0 ms. The
 symptom looked like a product hang and was a stopped container engine.
+
+## ADR-0033 — Hetzner SKU: CPX32, not CPX42 (2026-09-01)
+
+Status: Accepted (owner decision)
+
+`CLOUD_INFRASTRUCTURE.md` §1 targets a CPX42-class host (8 vCPU / 16 GB) and requires the
+current price to be verified before provisioning. Verified: CPX42 exists in NBG1 with 8
+vCPU / 16 GB / 320 GB NVMe / 20 TB traffic — but Hetzner's price adjustment of 15 June
+2026 moved it from €25.49 to **€69.49/month**, with CPX32 (4 vCPU / 8 GB / 160 GB) going
+from €13.99 to €35.49.
+
+Decision: provision **CPX32**, and keep the separate 100 GB data volume.
+
+Reason: the original recommendation was made against a price that no longer exists, and the
+requirement behind it was headroom, not a SKU. The stack actually deployed is five
+containers — PostgreSQL, Redis, MinIO, Temporal, the API — which sit around 2–3 GB in
+practice, so 8 GB leaves genuine margin. Hetzner supports rescaling CPU/RAM upward in
+place, so this is reversible from measured need rather than guessed at up front, which is
+what the constitution asks for ("scale from measured need, not speculation"; "do not
+pre-emptively create cluster complexity"). Revisit if real telemetry shows memory pressure
+— that is an M10 input, and M10 is gated on RQ-2 completing.
+
+The data volume is kept despite the extra ~€4–5/month because it is what makes the host
+disposable: PostgreSQL, the artifact store and the owner-identity root live on it, so the
+server can be rebuilt, resized or replaced without taking them along.
+`scripts/cloud/deploy-cloud-core.sh` refuses to start if that data would land on the boot
+disk instead, so the property is enforced rather than assumed.
+
+Prices move: this one changed once already between the plan being written and the machine
+being ordered. Verify in the console at provisioning time rather than trusting this ADR.
