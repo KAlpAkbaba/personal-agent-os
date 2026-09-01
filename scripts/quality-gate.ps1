@@ -165,6 +165,15 @@ if (-not $Fast) {
     Assert-ExitCode "script syntax tests"
   }
 
+  Invoke-Step "Machine-readable child protocol" {
+    # A rotation committed and lost its replacement credential because the child mixed a log
+    # line into machine-readable stdout and the wrapper parsed leniently. These drive a real
+    # child through every contamination shape and assert no error path quotes the secret.
+    $script = Join-Path $repoRoot "scripts\tests\machine-readable.tests.ps1"
+    & (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -NoProfile -File $script
+    Assert-ExitCode "machine-readable protocol tests"
+  }
+
   Invoke-Step "Installer invocation tests" {
     # The installer's native-tool invocation is a deterministic, offline check, and it earns
     # its place in the gate: a real install on the owner's machine failed at `sc create` with

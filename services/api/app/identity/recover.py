@@ -15,15 +15,34 @@ stays independently usable when the application is broken).
 `--rotate` mints a new owner credential, prints it once, and revokes every
 existing session by default, on the assumption that a credential you had to
 recover may have leaked. `--keep-sessions` opts out.
+
+Machine-readable contract (`--json`, or its alias `--machine-readable`):
+
+    stdout is EXACTLY ONE JSON document and nothing else.
+    Every log line, warning and diagnostic goes to stderr.
+    The exit code is authoritative: parse output only after checking it.
+
+That contract is not decoration. A wrapper once rotated the owner credential
+successfully and then failed to parse the result, because `bootstrap()` emits a
+structured log line and this application logs to *stdout* — so stdout carried
+two JSON documents, `ConvertFrom-Json` refused them, and the replacement
+credential was lost with the child process. The rotation had already committed.
+A credential that exists but was never shown to the owner is worse than no
+rotation at all, so in machine-readable mode logging is redirected to stderr
+before anything can write to stdout.
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
+import logging
 import sys
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from typing import Any
+
+import structlog
 
 from app.config import Settings, get_settings
 from app.identity.runtime import IdentityRuntime
@@ -36,6 +55,42 @@ _BANNER = (
 
 def _build_runtime(settings: Settings) -> IdentityRuntime:
     return IdentityRuntime(settings)
+
+
+@contextlib.contextmanager
+def logs_on_stderr() -> Iterator[None]:
+    """Keep stdout clean for the single JSON document, then put logging back.
+
+    Both logging paths this application configures write to stdout: structlog through a
+    PrintLoggerFactory, and the standard library through basicConfig. Either one emitting a
+    line during a rotation corrupts the machine-readable output — and
+    `identity_owner_credential_minted` is emitted by exactly the call that mints the
+    credential, so the corruption was guaranteed rather than occasional.
+
+    Restoring matters even though a CLI is about to exit: `main()` is called directly by the
+    test suite, and an earlier version left structlog pointed at stderr for the rest of the
+    process. Sixty-seven unrelated tests failed because one recovery test had run first.
+    """
+    saved_structlog = structlog.get_config()
+    root = logging.getLogger()
+    saved_handlers = list(root.handlers)
+    saved_level = root.level
+
+    structlog.configure(logger_factory=structlog.PrintLoggerFactory(sys.stderr))
+    for handler in saved_handlers:
+        root.removeHandler(handler)
+    stderr_handler = logging.StreamHandler(sys.stderr)
+    stderr_handler.setFormatter(logging.Formatter("%(message)s"))
+    root.addHandler(stderr_handler)
+
+    try:
+        yield
+    finally:
+        root.removeHandler(stderr_handler)
+        for handler in saved_handlers:
+            root.addHandler(handler)
+        root.setLevel(saved_level)
+        structlog.configure(**saved_structlog)
 
 
 def _status(runtime: IdentityRuntime) -> dict[str, Any]:
@@ -100,7 +155,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="with --rotate: leave existing sessions active",
     )
-    parser.add_argument("--json", action="store_true", help="machine-readable output")
+    parser.add_argument(
+        "--json",
+        "--machine-readable",
+        dest="json",
+        action="store_true",
+        help="stdout is exactly one JSON document; all logging goes to stderr",
+    )
     return parser
 
 
@@ -120,16 +181,22 @@ def _render(payload: dict[str, Any], *, as_json: bool) -> str:
 
 def main(argv: Sequence[str] | None = None, *, runtime: IdentityRuntime | None = None) -> int:
     args = build_parser().parse_args(argv)
-    active = runtime or _build_runtime(get_settings())
 
-    if args.rotate:
-        payload = _rotate(active, keep_sessions=args.keep_sessions)
-    elif args.revoke_all:
-        payload = _revoke_all(active)
-    else:
-        payload = _status(active)
+    # The redirect wraps everything that could log, and is undone afterwards. In
+    # machine-readable mode nothing but the payload may reach stdout.
+    with logs_on_stderr() if args.json else contextlib.nullcontext():
+        active = runtime or _build_runtime(get_settings())
 
-    print(_render(payload, as_json=args.json))
+        if args.rotate:
+            payload = _rotate(active, keep_sessions=args.keep_sessions)
+        elif args.revoke_all:
+            payload = _revoke_all(active)
+        else:
+            payload = _status(active)
+
+    rendered = _render(payload, as_json=args.json)
+    sys.stdout.write(rendered + "\n")
+    sys.stdout.flush()
     return 0
 
 

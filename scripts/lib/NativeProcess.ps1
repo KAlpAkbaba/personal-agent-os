@@ -210,6 +210,99 @@ function Assert-NativeSuccess {
     throw ($detail -join [Environment]::NewLine)
 }
 
+function ConvertFrom-SingleJsonDocument {
+    <#
+    .SYNOPSIS
+        Parse text that must be exactly one JSON document, or fail closed.
+
+    .DESCRIPTION
+        Written for output that may contain a secret. Two rules follow from that, and both
+        were learned the hard way:
+
+          * on failure the raw text is NEVER included in the error, echoed, or logged. A
+            wrapper that dumps stdout to diagnose a parse failure would print the very
+            credential it was trying to protect;
+          * no salvage. There is no regex that "finds the JSON part" of contaminated output —
+            attempting one is how a tool ends up extracting a credential from arbitrary text
+            it does not understand. Malformed means refused.
+
+        The failure this exists for: `--rotate` had already committed when the wrapper found
+        two JSON documents on stdout (an `identity_owner_credential_minted` log line, then the
+        payload) and threw. The replacement credential was lost with the child process.
+    #>
+    [CmdletBinding()]
+    param(
+        [AllowNull()][AllowEmptyString()][string]$Text,
+        [string]$Activity = "the child process"
+    )
+
+    if ($null -eq $Text -or $Text.Trim().Length -eq 0) {
+        throw "$Activity produced no output on stdout; expected exactly one JSON document"
+    }
+
+    $trimmed = $Text.Trim()
+    if (-not ($trimmed.StartsWith("{") -or $trimmed.StartsWith("["))) {
+        throw "$Activity wrote something other than JSON to stdout (output withheld: it may contain a secret)"
+    }
+
+    try {
+        $parsed = $trimmed | ConvertFrom-Json -ErrorAction Stop
+    }
+    catch {
+        # Deliberately does not include $_.Exception.Message either: PowerShell's JSON errors
+        # can quote the offending text.
+        throw "$Activity did not write a single valid JSON document to stdout (output withheld: it may contain a secret). Logging must go to stderr."
+    }
+
+    if ($parsed -is [System.Array]) {
+        throw "$Activity wrote $(@($parsed).Count) JSON values to stdout; exactly one document is required"
+    }
+
+    return $parsed
+}
+
+function Invoke-MachineReadableProcess {
+    <#
+    .SYNOPSIS
+        Run a tool whose stdout is a single JSON document, checking the exit code first.
+
+    .DESCRIPTION
+        Order matters: a non-zero exit code is authoritative and is reported without touching
+        stdout at all. Only a successful run has its output parsed, and only strictly.
+
+        `SensitiveOutput` (default true here) means no failure path may quote stdout or
+        stderr — for the credential-rotation call, the output IS the secret.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Arguments,
+        [string]$WorkingDirectory,
+        [int]$TimeoutSeconds = 180,
+        [string]$Activity = "the child process",
+        [bool]$SensitiveOutput = $true
+    )
+
+    $invokeArgs = @{
+        FilePath       = $FilePath
+        Arguments      = $Arguments
+        TimeoutSeconds = $TimeoutSeconds
+    }
+    if ($WorkingDirectory) { $invokeArgs["WorkingDirectory"] = $WorkingDirectory }
+
+    $result = Invoke-NativeProcess @invokeArgs
+
+    if ($result.ExitCode -ne 0) {
+        $detail = "$Activity failed with exit code $($result.ExitCode)$(Get-NativeExitCodeHint -ExitCode $result.ExitCode)"
+        if (-not $SensitiveOutput -and $result.StdErr -and $result.StdErr.Trim()) {
+            $detail += [Environment]::NewLine + "  stderr: " + $result.StdErr.Trim()
+        }
+        throw $detail
+    }
+
+    return ConvertFrom-SingleJsonDocument -Text $result.StdOut -Activity $Activity
+}
+
 function Get-NativeExitCodeHint {
     <#
     .SYNOPSIS

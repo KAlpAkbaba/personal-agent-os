@@ -96,11 +96,11 @@ function ConvertFrom-SecureStringPlain {
 
 function Get-IdentityStatus {
     param([string]$Uv)
-    $result = Invoke-NativeProcess -FilePath $Uv `
+    # Status carries no secret, so its stderr may be quoted on failure.
+    return Invoke-MachineReadableProcess -FilePath $Uv `
         -Arguments @("run", "python", "-m", "app.identity.recover", "--status", "--json") `
-        -WorkingDirectory $apiRoot -TimeoutSeconds 120
-    Assert-NativeSuccess -Result $result -Activity "identity root status"
-    return ($result.StdOut | ConvertFrom-Json)
+        -WorkingDirectory $apiRoot -TimeoutSeconds 120 `
+        -Activity "identity root status" -SensitiveOutput $false
 }
 
 Assert-Elevated
@@ -151,15 +151,19 @@ $newCredential = $null
 try {
     Write-Host ""
     Write-Host "rotating the owner credential (host-side; not an API operation)..."
-    $rotate = Invoke-NativeProcess -FilePath $uv `
-        -Arguments @("run", "python", "-m", "app.identity.recover", "--rotate", "--json") `
-        -WorkingDirectory $apiRoot -TimeoutSeconds 180
-    Assert-NativeSuccess -Result $rotate -Activity "owner credential rotation"
 
-    $payload = $rotate.StdOut | ConvertFrom-Json
+    # Exit code first, then a strict single-document parse, and no failure path that quotes
+    # stdout — stdout IS the credential here. An earlier version used the general-purpose
+    # helper, whose error message includes stdout, and parsed leniently; the rotation
+    # committed and the replacement was lost when the parse failed.
+    $payload = Invoke-MachineReadableProcess -FilePath $uv `
+        -Arguments @("run", "python", "-m", "app.identity.recover", "--rotate", "--json") `
+        -WorkingDirectory $apiRoot -TimeoutSeconds 180 `
+        -Activity "owner credential rotation" -SensitiveOutput $true
+
     $newCredential = $payload.owner_credential
     if (-not $newCredential) {
-        throw "rotation reported success but returned no credential"
+        throw "rotation returned a JSON document with no owner_credential field"
     }
 
     Write-Host "sessions revoked by the rotation: $($payload.sessions_revoked)"
