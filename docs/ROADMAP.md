@@ -152,9 +152,40 @@ client against the real API, which proves the server contract but not the
 platform behaviour. Both are batched as owner actions requiring a physical
 device.
 
+## RQ-1 — Real-environment qualification: local Windows (CLOSED 2026-09-01)
+
+The turn from fixtures to the owner's machine. Everything M-1…M9 proved against fakes was
+re-earned against the real OS: the Windows Service installed and Running as LocalSystem in
+Session 0, the companion in the owner's Session 1, the live pipe's DACL read from the
+actual runtime handle, kernel-sourced companion admission, hardened install tree, zero
+inbound listeners, device enrollment against a dedicated production database, and the full
+command path — broker → Session-0 service → companion → real Notepad → ACK — surviving both
+a DeviceService restart and a Cloud Core restart unattended. The final owner credential was
+rotated host-side and shown exactly once. Nine real-machine defects were found (all in code
+paths tests did not execute) and each is logged in `docs/QUALIFICATION.md` with the
+regression that now covers it. Evidence rules and remaining deliberately-open items live in
+that document; the qualified runtime is frozen.
+
+## RQ-2 — Real-environment qualification: cloud bring-up (CURRENT)
+
+Goal: the same proof with the Cloud Core on real infrastructure. Hetzner NBG1 host
+provisioned from `infra/opentofu` with **no public application port**; Tailscale connecting
+the Windows device and the cloud host; Cloud Core deployed on the production database
+model; the Windows agent switched from loopback to the tailnet endpoint **without
+reinstalling or re-enrolling**; then
+
+`Hetzner Cloud Core -> Tailscale -> Windows DeviceService -> Session Companion -> real Notepad -> ACK`
+
+followed by the resilience matrix: cloud process restart, VPS reboot, Tailscale reconnect,
+temporary network loss, Windows service restart — all recovering without owner
+intervention, with Windows inbound public ports staying closed. Cloud criteria are marked
+`PROVEN_REAL` only from the actual Hetzner/Tailscale environment. Owner dependencies
+(batched, one at a time): `gh auth login`, Tailscale sign-in/auth key, Hetzner API token.
+
 ## M10 — Optimization
 
-Only after real use:
+Gated on RQ-2: no speculative optimization or new feature development until real cloud
+qualification completes. Only after real use:
 
 - local voice fallback;
 - local models;

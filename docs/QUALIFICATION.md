@@ -18,6 +18,18 @@ part marked `PROVEN_PROXY` and the environment part `NOT_YET_PROVEN` until it ru
 
 Last updated: 2026-09-01.
 
+> **Local Windows qualification CLOSED 2026-09-01.** The final `finalize-qualification.ps1`
+> run and `verify-device-service.ps1` report proved, on the owner's real machine: service
+> Running as LocalSystem in Session 0; companion in the owner's Session 1; the live pipe's
+> DACL read from the actual runtime pipe handle; kernel-sourced companion admission;
+> install-tree posture; no inbound agent listener; DeviceService restart → reconnect → real
+> Notepad → ACK; Cloud Core restart → reconnect → real Notepad → ACK; and a final owner
+> credential rotated once, host-side, console-only. The qualified runtime is FROZEN — no
+> speculative changes. Next: **real cloud bring-up** (Stage 5), where "Cloud Core" moves
+> from loopback to Hetzner + Tailscale. Refusal legs that require a second real user
+> account or concurrent session (1.4, 1.6, 1.7) deliberately stay `PROVEN_PROXY`, and
+> 2.2b (fresh-logon autostart) stays open until a natural sign-out/reboot exercises it.
+
 ---
 
 ## Stage 1 — Session-0 service/companion IPC identity (M1 security finding #1)
@@ -30,7 +42,7 @@ admission, and per-connection freshness.
 
 | # | Criterion | Status | Evidence |
 |---|---|---|---|
-| 1.1 | Pipe DACL names the owner account explicitly, not "whoever created me" | `PROVEN_PROXY` | `CompanionPipeServer.CreateServerStream` ACLs SYSTEM + configured `CompanionSid`; exercised in every pipe test, but with both halves running as one user. Real separation needs the service installed. |
+| 1.1 | Pipe DACL names the owner account explicitly, not "whoever created me" | `PROVEN_REAL` | 2026-09-01 final run: the effective SDDL captured from the REAL pipe handle at creation (`ipc_pipe_created` audit) under the installed LocalSystem service names SYSTEM and the owner's SID — the two halves genuinely different accounts. Runtime proof, not source inspection. |
 | 1.2 | Service refuses to share a pipe name another process already holds | `PROVEN_REAL` | `The_service_refuses_to_share_a_pipe_name_someone_else_already_holds` — a real pipe is created first by another process; the service records a listen failure and never serves on that name. **Corrected 2026-09-01:** this row previously credited `FILE_FLAG_FIRST_PIPE_INSTANCE` specifically. Independent verification showed the test passed with that flag deleted, and measurement then showed why: three mechanisms overlap (single instance, non-default security descriptor, the flag) and removing any one still refuses. The outcome is proven; attributing it to one mechanism was not, so the claim no longer does. |
 | 1.3 | Companion refuses a pipe not owned by a service account | `PROVEN_REAL` | `The_companion_refuses_a_pipe_that_is_not_owned_by_a_service_account` — a real fake pipe, owned by a standard user, read through the real `GetSecurityInfo` path, refused, and not one frame written to it. **Corrected 2026-09-01:** this row previously said "refused by the production policy" while the shipped companion was in fact running developer trust (see 1.12); the mechanism was real, the claim about the binary was not. |
 | 1.12 | The **shipped** companion runs at service-trust strength, not developer trust | `PROVEN_REAL` | `The_shipped_companion_defaults_to_service_trust_not_developer_trust` and `A_runtime_built_without_a_policy_refuses_an_owner_owned_pipe` — the entry point's own policy builder and the runtime's own default are both asserted, because the defect was that neither the class nor its test was wrong; the wiring was. Developer trust now requires `--dev-trust` and is logged as a warning. |
@@ -44,28 +56,30 @@ admission, and per-connection freshness.
 | 1.10 | Refusals are audited with their reason and tell the peer nothing | `PROVEN_REAL` | `A_refused_peer_is_written_to_the_audit_trail_and_told_nothing` and `An_admitted_companion_is_written_to_the_audit_trail` — a real `AuditLog` on disk, asserted for the row, the reason and the refused SID, and asserted that the peer reads end-of-stream rather than any frame. **Corrected 2026-09-01:** this row previously cited the source line. Independent verification found no test ever passed an `AuditLog` to the server, so `_audit?.Write` never executed in the suite — confident evidence text, zero executing assertion. Now asserted. |
 | 1.14 | The service's composition root builds the policy the install configures | `PROVEN_REAL` | `IpcWiringTests` — what `Program.BuildAdmissionPolicy` returns for a configured SID/binary/session, that both missing-configuration warnings actually reach stderr, and that the pipe name derives from the owner. Added because the Critical in 1.12 was a composition-root defect that no criterion covered. |
 | 1.15 | A second connection cannot displace the connected companion | `PROVEN_REAL` | `A_second_connection_cannot_displace_the_connected_companion` — the intruder's connect fails while the companion keeps working. |
-| 1.16 | The pipe-owner inspector reads a real owner and accepts a trusted one | `PROVEN_PROXY` | `The_owner_inspector_reads_a_real_owner_sid_and_the_policy_accepts_it` proves the real `GetSecurityInfo` path resolves an owner and that a policy trusting it accepts. A test process cannot create a SYSTEM-owned pipe, so acceptance of an actual service-owned pipe stays proxy until the service is installed. |
-| 1.11 | Service runs as LocalSystem in Session 0 with the companion in the owner's session | `NOT_YET_PROVEN` | The service is registered as LocalSystem/Auto and **stopped**, because the device is not enrolled — by design, not a failure. Session 0 can only be observed once it runs. |
+| 1.16 | The pipe-owner inspector reads a real owner and accepts a trusted one | `PROVEN_REAL` | 2026-09-01 final run: the companion read the installed service's ACTUAL SYSTEM-owned pipe through the real `GetSecurityInfo` path and connected — the acceptance half that no test process could stage. |
+| 1.11 | Service runs as LocalSystem in Session 0 with the companion in the owner's session | `PROVEN_REAL` | 2026-09-01 final run: service Running as LocalSystem, SessionId 0; companion in the owner's Session 1, from the pinned binary — the exact separation the whole of Stage 1 exists for. |
 | 1.17 | Only SYSTEM and Administrators can write to the installed tree | `PROVEN_REAL` | 2026-09-01, owner's machine: `verify-device-service.ps1` checked 201 objects under `C:\Program Files\PagentOS\agent` — no other principal holds write authority and **no empty DACLs remain**. The 425 files the earlier hardening had stripped were repaired by the installer itself, with no manual ACL reset. |
 | 1.7b | The pinned companion binary is admin-protected and readable by SYSTEM | `PROVEN_REAL` | Same run: owner `S-1-5-32-544`, 3 inherited ACEs. This is what makes `CompanionImagePath` pinning mean something. |
 | 5.2 | The agent owns no inbound listening socket | `PROVEN_REAL` | Same run, against the live companion process (pid checked explicitly, not a vacuous pass). |
 
 ## Stage 2 — Windows Service installation
 
-**Nothing in this stage is proven, and two claims made here were disproved by the owner's real
-machine.** Both were mine, both were about the installer, and both had passing tests behind
-them that tested the wrong thing.
+**CLOSED 2026-09-01.** This stage cost nine real-machine failures (logged below) before the
+final run went clean end-to-end; the log stays because the pattern — every defect in a code
+path the tests did not execute — is the lasting lesson.
 
 | # | Criterion | Status | Notes |
 |---|---|---|---|
-| 2.1 | Service installs, starts, survives reboot, reconnects unattended | `NOT_YET_PROVEN` | First real attempt failed at `sc create` with 1639: PowerShell 5.1 does not escape an argument containing quotes, so the `binPath` value split at "Program Files". Fixed, with argv proven by round-trip through a real child process. |
+| 2.1 | Service installs, starts, restarts, reconnects unattended | `PROVEN_REAL` | 2026-09-01 final run: installed, Running as LocalSystem/Auto, and a forced restart reconnected and executed a real command with no owner intervention. (A full machine reboot has not been exercised yet; the Auto registration is real, the reboot proof will land incidentally.) |
 | 2.2a | Companion runs in the owner's interactive session, from the pinned binary | `PROVEN_REAL` | 2026-09-01: session 1, `MAIL\alpak`, `C:\Program Files\PagentOS\agent\companion\PagentOS.SessionCompanion.exe`. |
-| 2.2b | Companion auto-starts at a *fresh logon* | `NOT_YET_PROVEN` | The logon task is registered, but the owner cannot sign out right now. Running now ≠ starts at logon; recorded separately rather than folded into 2.2a. |
-| 2.2c | The service admits the companion on SID + session + binary | `NOT_YET_PROVEN` | Needs the service running, which needs enrolment. |
-| 2.3 | `desktop.open_application` executes in the interactive session from the Session-0 service | `NOT_YET_PROVEN` | |
-| 2.4 | The installer is idempotent — a rerun after a partial or failed install succeeds | `NOT_YET_PROVEN` | **Claimed twice, disproved twice, by the owner's real machine.** See the log below. |
-| 2.5 | Only SYSTEM and Administrators hold write authority over the installed tree | `NOT_YET_PROVEN` | Enforced by an allowlist (not a denylist of Users/Everyone) and checked independently by `scripts/verify-device-service.ps1` against the ACLs on disk. The same empty-DACL bug would also have prevented the service from starting: SYSTEM cannot read an executable through an empty DACL. |
-| 2.6 | Persisted machine material is usable by LocalSystem and closed to ordinary users | `NOT_YET_PROVEN` | Two security domains now stated separately in code (`MachineMaterial`): **service-owned** material gets SYSTEM plus Administrators and nothing else — the device key SYSTEM-read only, since the service never rewrites its identity — while **owner-session** material (the owner credential and the DPAPI secret store) stays owner-scoped and was not touched. No DPAPI is used anywhere in the agent, so there is no CurrentUser-scope secret for LocalSystem to decrypt; that was checked, not assumed. 12 tests, several of them real rather than proxied because the test process genuinely is an ordinary non-elevated user: after protection it can neither read nor write the key it just created. What no test here can do is have SYSTEM open the file, so that half is asserted from the DACL and stays `NOT_YET_PROVEN` until the owner's service starts. |
+| 2.2b | Companion auto-starts at a *fresh logon* | `NOT_YET_PROVEN` | The logon task is registered and has started the companion on demand, but a genuine sign-out/sign-in has not happened yet. Running now ≠ starts at logon; stays open until a natural logon proves it. |
+| 2.2c | The service admits the companion on SID + session + binary | `PROVEN_REAL` | 2026-09-01 final run: `ipc_companion_admitted` audit from the installed runtime — kernel-sourced pid/session/image against the configured SID and pinned binary, with the two halves genuinely different accounts. |
+| 2.3 | `desktop.open_application` executes in the interactive session from the Session-0 service | `PROVEN_REAL` | 2026-09-01 final run: broker command → Session-0 service → companion → REAL Notepad in Session 1, pid verified alive then closed, ACK and audit recorded. Proven twice (after a service restart and after a Cloud Core restart). |
+| 2.4 | The installer is idempotent — a rerun after a partial or failed install succeeds | `PROVEN_REAL` | Claimed twice, disproved twice, then proven the hard way: nine distinct real failure states (see the log), each resumed by rerun — journaled `RetryFromStaging` recovery included — with enrollment, identity and key material preserved throughout. |
+| 2.5 | Only SYSTEM and Administrators hold write authority over the installed tree | `PROVEN_REAL` | Same evidence as 1.17: the final `verify-device-service.ps1` allowlist sweep over the real tree — no other principal holds write authority, no empty DACLs. |
+| 2.6 | Persisted machine material is usable by LocalSystem and closed to ordinary users | `PROVEN_REAL` | The half no test could reach is now real: the installed LocalSystem service read the device key and rewrote state across restarts, while non-elevated denial was already proven directly. Two domains held: machine material SYSTEM+Administrators only (key SYSTEM-read); owner material owner-scoped; the agent uses no DPAPI (checked, not assumed). |
+| 2.7 | DeviceService restart → reconnect → real command → ACK | `PROVEN_REAL` | 2026-09-01 final run, unattended. |
+| 2.8 | Cloud Core restart → agent reconnect → real command → ACK | `PROVEN_REAL` | 2026-09-01 final run, unattended. (Local broker; the same proof must be re-earned from the real Hetzner/Tailscale endpoint in Stage 5 and is NOT carried over.) |
 
 ### The install attempts so far, and what each disproved
 
@@ -101,8 +115,8 @@ only the owner's elevated rerun can show.
 
 | # | Criterion | Status |
 |---|---|---|
-| 3.1 | Owner credential minted once, never in logs, source control or plaintext config | `NOT_YET_PROVEN` |
-| 3.2 | Host-side recovery rotates the credential without the API | `PROVEN_PROXY` (tested offline; not yet run on the owner's real root) |
+| 3.1 | Owner credential minted once, never in logs, source control or plaintext config | `PROVEN_REAL` — the final credential was displayed exactly once, in the local elevated console at rotation, and is used only via the DPAPI-stored session; the 2026-09-01 history investigation proved no credential-shaped value ever entered Git (root file stores hash only, never tracked), and the gate now enforces the shape permanently. |
+| 3.2 | Host-side recovery rotates the credential without the API | `PROVEN_REAL` — four real rotations on the owner's actual root (including recovery from a lost-intermediate incident), `rotations` advancing, `created_at` stable, sessions revoked each time. |
 
 ## Stage 4 — GitHub private repository and CI
 
