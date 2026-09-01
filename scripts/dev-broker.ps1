@@ -1,0 +1,181 @@
+<#
+.SYNOPSIS
+    Start the local Cloud Core (API + device broker) — the canonical way to run it.
+
+.DESCRIPTION
+    `dev-up.ps1` starts the infrastructure containers; `e2e-m1-device.ps1` starts a throwaway
+    API on an ephemeral port against a temporary identity root. Neither runs the thing a
+    real, installed Windows agent connects to, and until now nothing did — which is why a
+    correctly installed Device Service found no listener on 127.0.0.1:8001.
+
+    This script is that missing piece:
+
+      * infrastructure first (compose stack), then migrations, then the API;
+      * the port is not assumed. It defaults to whatever the INSTALLED agent is configured
+        to dial, read from its own appsettings.json, so the broker and the agent cannot
+        disagree about where they meet;
+      * the identity root is the persistent one, not a temp directory, so an owner
+        credential bootstrapped once survives restarts of this process;
+      * it waits for /v1/system/health and reports the socket it is actually listening on
+        rather than the one it was asked for.
+
+    Run it from an ordinary (non-elevated) shell: the API needs no privileges, and giving it
+    any would be a mistake.
+
+.PARAMETER Port
+    Overrides the port. By default it is taken from the installed agent's configuration, and
+    falls back to 8001 when no agent is installed.
+
+.EXAMPLE
+    .\scripts\dev-broker.ps1
+    .\scripts\dev-broker.ps1 -Stop
+#>
+[CmdletBinding()]
+param(
+    [int]$Port = 0,
+    [string]$AgentConfig = (Join-Path $env:ProgramFiles "PagentOS\agent\service\appsettings.json"),
+    [switch]$SkipInfra,
+    [switch]$Stop,
+    [int]$TimeoutSeconds = 90
+)
+
+$ErrorActionPreference = "Continue"
+$repoRoot = Split-Path -Parent $PSScriptRoot
+$apiRoot = Join-Path $repoRoot "services\api"
+
+. (Join-Path $PSScriptRoot "lib\NativeProcess.ps1")
+
+function Get-Uv {
+    $candidates = @(
+        (Join-Path $env:LOCALAPPDATA "Microsoft\WinGet\Packages\astral-sh.uv_Microsoft.Winget.Source_8wekyb3d8bbwe\uv.exe"),
+        "uv"
+    )
+    foreach ($candidate in $candidates) {
+        if ($candidate -eq "uv") {
+            $found = Get-Command uv -ErrorAction SilentlyContinue
+            if ($found) { return $found.Source }
+        }
+        elseif (Test-Path -LiteralPath $candidate) { return $candidate }
+    }
+    throw "uv not found; install it or add it to PATH"
+}
+
+function Get-ConfiguredPort {
+    <#
+    .SYNOPSIS
+        The port the installed agent actually dials — read, not assumed.
+    #>
+    param([string]$ConfigPath, [int]$Explicit)
+
+    if ($Explicit -gt 0) {
+        Write-Host "port $Explicit (from -Port)"
+        return $Explicit
+    }
+
+    if (Test-Path -LiteralPath $ConfigPath) {
+        try {
+            $config = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
+            if ($config.BrokerRestUrl) {
+                $uri = [Uri]$config.BrokerRestUrl
+                Write-Host "port $($uri.Port) (from the installed agent's BrokerRestUrl: $($config.BrokerRestUrl))"
+                return $uri.Port
+            }
+        }
+        catch {
+            Write-Warning "could not read $ConfigPath ($($_.Exception.Message)); falling back to 8001"
+        }
+    }
+
+    Write-Host "port 8001 (default; no installed agent configuration found at $ConfigPath)"
+    return 8001
+}
+
+function Get-BrokerProcesses {
+    <#  uvicorn started through `uv run` is a child; match on the command line.  #>
+    return @(Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='uv.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -and $_.CommandLine -match "uvicorn" -and $_.CommandLine -match "app\.main:app" })
+}
+
+if ($Stop) {
+    $running = @(Get-BrokerProcesses)
+    if (@($running).Count -eq 0) {
+        Write-Host "no local broker is running"
+        exit 0
+    }
+    $taskkill = Get-SystemTool -Name "taskkill.exe"
+    foreach ($process in $running) {
+        # /T: `uv run` spawns python children that would otherwise keep the port open.
+        [void](Invoke-NativeProcess -FilePath $taskkill -Arguments @("/PID", "$($process.ProcessId)", "/T", "/F") -SuccessExitCodes @(0, 128))
+    }
+    Write-Host "stopped $(@($running).Count) broker process(es)"
+    exit 0
+}
+
+$Port = Get-ConfiguredPort -ConfigPath $AgentConfig -Explicit $Port
+$baseUrl = "http://127.0.0.1:$Port"
+
+$existing = @(Get-BrokerProcesses)
+if (@($existing).Count -gt 0) {
+    Write-Host "a local broker is already running (pid $($existing[0].ProcessId)); checking its health"
+}
+else {
+    if (-not $SkipInfra) {
+        Write-Host "starting the infrastructure stack..."
+        & (Join-Path $PSScriptRoot "dev-up.ps1")
+        if ($LASTEXITCODE -ne 0) { throw "dev-up.ps1 failed; the API cannot run without PostgreSQL" }
+    }
+
+    $uv = Get-Uv
+
+    Write-Host "applying migrations..."
+    $migrate = Invoke-NativeProcess -FilePath $uv -Arguments @("run", "alembic", "upgrade", "head") `
+        -WorkingDirectory $apiRoot -TimeoutSeconds 300
+    Assert-NativeSuccess -Result $migrate -Activity "alembic upgrade head"
+
+    Write-Host "starting the Cloud Core on $baseUrl ..."
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $uv
+    # --ws-max-size caps device WebSocket frames well above any legal protocol frame
+    # (M1 security review #2; uvicorn's default of 16 MiB applies pre-auth).
+    $psi.Arguments = "run uvicorn app.main:app --host 127.0.0.1 --port $Port --ws-max-size 65536"
+    $psi.WorkingDirectory = $apiRoot
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    [void][System.Diagnostics.Process]::Start($psi)
+}
+
+Write-Host "waiting for health..."
+$deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+$health = $null
+while ((Get-Date) -lt $deadline) {
+    try {
+        $health = Invoke-RestMethod -Uri "$baseUrl/v1/system/health" -TimeoutSec 3 -ErrorAction Stop
+        break
+    }
+    catch {
+        Start-Sleep -Milliseconds 500
+    }
+}
+
+if (-not $health) {
+    throw "the Cloud Core did not answer $baseUrl/v1/system/health within ${TimeoutSeconds}s"
+}
+
+# Report the socket it is REALLY listening on, not the one we asked for.
+$listeners = @(Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue)
+Write-Host ""
+Write-Host "Cloud Core is up:" -ForegroundColor Green
+Write-Host "  health   : $baseUrl/v1/system/health -> $($health.status)"
+foreach ($listener in $listeners) {
+    Write-Host "  listening: $($listener.LocalAddress):$($listener.LocalPort) (pid $($listener.OwningProcess))"
+}
+if (@($listeners).Count -eq 0) {
+    Write-Warning "health answered but no listening socket was found on port $Port - check for a proxy"
+}
+
+foreach ($dependency in $health.dependencies) {
+    Write-Host "  dep      : $($dependency.name) = $($dependency.status)"
+}
+
+Write-Host ""
+Write-Host "stop it with: .\scripts\dev-broker.ps1 -Stop"

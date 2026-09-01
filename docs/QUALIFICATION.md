@@ -45,7 +45,10 @@ admission, and per-connection freshness.
 | 1.14 | The service's composition root builds the policy the install configures | `PROVEN_REAL` | `IpcWiringTests` — what `Program.BuildAdmissionPolicy` returns for a configured SID/binary/session, that both missing-configuration warnings actually reach stderr, and that the pipe name derives from the owner. Added because the Critical in 1.12 was a composition-root defect that no criterion covered. |
 | 1.15 | A second connection cannot displace the connected companion | `PROVEN_REAL` | `A_second_connection_cannot_displace_the_connected_companion` — the intruder's connect fails while the companion keeps working. |
 | 1.16 | The pipe-owner inspector reads a real owner and accepts a trusted one | `PROVEN_PROXY` | `The_owner_inspector_reads_a_real_owner_sid_and_the_policy_accepts_it` proves the real `GetSecurityInfo` path resolves an owner and that a policy trusting it accepts. A test process cannot create a SYSTEM-owned pipe, so acceptance of an actual service-owned pipe stays proxy until the service is installed. |
-| 1.11 | Service runs as LocalSystem in Session 0 with the companion in the owner's session | `NOT_YET_PROVEN` | Requires the Windows Service install (one UAC prompt). This is what converts 1.1, 1.4–1.7 from proxy to real. `scripts/verify-device-service.ps1` reports these against the real install. |
+| 1.11 | Service runs as LocalSystem in Session 0 with the companion in the owner's session | `NOT_YET_PROVEN` | The service is registered as LocalSystem/Auto and **stopped**, because the device is not enrolled — by design, not a failure. Session 0 can only be observed once it runs. |
+| 1.17 | Only SYSTEM and Administrators can write to the installed tree | `PROVEN_REAL` | 2026-09-01, owner's machine: `verify-device-service.ps1` checked 201 objects under `C:\Program Files\PagentOS\agent` — no other principal holds write authority and **no empty DACLs remain**. The 425 files the earlier hardening had stripped were repaired by the installer itself, with no manual ACL reset. |
+| 1.7b | The pinned companion binary is admin-protected and readable by SYSTEM | `PROVEN_REAL` | Same run: owner `S-1-5-32-544`, 3 inherited ACEs. This is what makes `CompanionImagePath` pinning mean something. |
+| 5.2 | The agent owns no inbound listening socket | `PROVEN_REAL` | Same run, against the live companion process (pid checked explicitly, not a vacuous pass). |
 
 ## Stage 2 — Windows Service installation
 
@@ -56,7 +59,9 @@ them that tested the wrong thing.
 | # | Criterion | Status | Notes |
 |---|---|---|---|
 | 2.1 | Service installs, starts, survives reboot, reconnects unattended | `NOT_YET_PROVEN` | First real attempt failed at `sc create` with 1639: PowerShell 5.1 does not escape an argument containing quotes, so the `binPath` value split at "Program Files". Fixed, with argv proven by round-trip through a real child process. |
-| 2.2 | Companion auto-starts in the owner's session and is admitted by SID + session + binary | `NOT_YET_PROVEN` | |
+| 2.2a | Companion runs in the owner's interactive session, from the pinned binary | `PROVEN_REAL` | 2026-09-01: session 1, `MAIL\alpak`, `C:\Program Files\PagentOS\agent\companion\PagentOS.SessionCompanion.exe`. |
+| 2.2b | Companion auto-starts at a *fresh logon* | `NOT_YET_PROVEN` | The logon task is registered, but the owner cannot sign out right now. Running now ≠ starts at logon; recorded separately rather than folded into 2.2a. |
+| 2.2c | The service admits the companion on SID + session + binary | `NOT_YET_PROVEN` | Needs the service running, which needs enrolment. |
 | 2.3 | `desktop.open_application` executes in the interactive session from the Session-0 service | `NOT_YET_PROVEN` | |
 | 2.4 | The installer is idempotent — a rerun after a partial or failed install succeeds | `NOT_YET_PROVEN` | **Claimed twice, disproved twice, by the owner's real machine.** See the log below. |
 | 2.5 | Only SYSTEM and Administrators hold write authority over the installed tree | `NOT_YET_PROVEN` | Enforced by an allowlist (not a denylist of Users/Everyone) and checked independently by `scripts/verify-device-service.ps1` against the ACLs on disk. The same empty-DACL bug would also have prevented the service from starting: SYSTEM cannot read an executable through an empty DACL. |

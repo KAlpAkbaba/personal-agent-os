@@ -198,6 +198,46 @@ Test-Case "exit code, stdout and stderr are all captured" {
     Assert-True -Condition ($result.StdErr -match "err") -Because "stderr must be captured"
 }
 
+Test-Case "the child runs in the requested working directory, not the shell's" {
+    # Push-Location changes PowerShell's location, NOT a .NET process's working directory.
+    # Without an explicit WorkingDirectory the child inherited wherever this shell started,
+    # which is how `uv run alembic` came back "program not found" from a script that had
+    # Push-Location'd into services\api first.
+    $cmd = Join-Path $env:SystemRoot "System32\cmd.exe"
+    $target = Join-Path $env:TEMP "pagentos-cwd-$([guid]::NewGuid().ToString('N'))"
+    New-Item -ItemType Directory -Force -Path $target | Out-Null
+    try {
+        $explicit = Invoke-NativeProcess -FilePath $cmd -Arguments @("/c", "cd") -WorkingDirectory $target
+        Assert-True -Condition ($explicit.StdOut.Trim() -ieq $target) `
+            -Because "the child should have run in $target but reported <$($explicit.StdOut.Trim())>"
+
+        # And with no parameter it follows PowerShell's own location, so Push-Location reads
+        # the way it looks.
+        Push-Location $target
+        try {
+            $implicit = Invoke-NativeProcess -FilePath $cmd -Arguments @("/c", "cd")
+            Assert-True -Condition ($implicit.StdOut.Trim() -ieq $target) `
+                -Because "with no -WorkingDirectory the child should follow Push-Location, got <$($implicit.StdOut.Trim())>"
+        }
+        finally { Pop-Location }
+    }
+    finally {
+        Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-Case "a missing working directory is refused before the process starts" {
+    $cmd = Join-Path $env:SystemRoot "System32\cmd.exe"
+    try {
+        Invoke-NativeProcess -FilePath $cmd -Arguments @("/c", "cd") -WorkingDirectory (Join-Path $env:TEMP "no-such-dir-$([guid]::NewGuid())") | Out-Null
+        throw "should have refused"
+    }
+    catch {
+        Assert-True -Condition ($_.Exception.Message -match "working directory does not exist") `
+            -Because "the error should name the problem, not surface as a launch failure"
+    }
+}
+
 Test-Case "a failure message names the tool, the exit code and its meaning" {
     $cmd = Join-Path $env:SystemRoot "System32\cmd.exe"
     $result = Invoke-NativeProcess -FilePath $cmd -Arguments @("/c", "exit /b 1639")

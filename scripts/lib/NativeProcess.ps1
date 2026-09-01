@@ -126,7 +126,8 @@ function Invoke-NativeProcess {
         [Parameter(Mandatory = $true)][string]$FilePath,
         [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Arguments,
         [int[]]$SuccessExitCodes = @(0),
-        [int]$TimeoutSeconds = 120
+        [int]$TimeoutSeconds = 120,
+        [string]$WorkingDirectory
     )
 
     $commandLine = ConvertTo-NativeArgumentLine -Arguments $Arguments
@@ -138,6 +139,23 @@ function Invoke-NativeProcess {
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
     $psi.CreateNoWindow = $true
+
+    # Push-Location changes PowerShell's location, NOT the process's working directory, so a
+    # child launched here inherits wherever the shell was started — which is how
+    # `uv run alembic` came back "program not found" while the same command worked in the
+    # gate. Tools that resolve their environment from the current directory must be told
+    # explicitly.
+    if ($WorkingDirectory) {
+        if (-not (Test-Path -LiteralPath $WorkingDirectory)) {
+            throw "working directory does not exist: $WorkingDirectory"
+        }
+        $psi.WorkingDirectory = (Resolve-Path -LiteralPath $WorkingDirectory).Path
+    }
+    else {
+        # Default to PowerShell's own location rather than the process's inherited one, so
+        # `Push-Location X; Invoke-NativeProcess ...` behaves the way it reads.
+        $psi.WorkingDirectory = (Get-Location -PSProvider FileSystem).ProviderPath
+    }
 
     $process = [System.Diagnostics.Process]::Start($psi)
     $stdoutTask = $process.StandardOutput.ReadToEndAsync()
