@@ -684,3 +684,48 @@ imitates a production credential is indistinguishable from a leak. The scanner (
 pre-existing generic one, fixed here) reports file:line only; a scanner that echoes what
 it matched would be the leak it exists to prevent. Verified both ways: the current tree
 passes; a 43-char probe is caught.
+
+## First real CI run — four defects the local gate could not see (2026-09-01)
+
+The private GitHub repository was created and `main` pushed; the first CI run failed three
+jobs. Every failure was an assumption about the *environment* that the local gate satisfies
+by accident, which is the same shape as every real-machine defect in RQ-1 — only this time
+the "real machine" is a Linux runner and an elevated Windows runner.
+
+1. **CI was testing nothing at all.** `tests/integration/conftest.py` implemented
+   `pytest_collection_modifyitems` as an unscoped loop. Pytest hands a subdirectory
+   conftest's hook the WHOLE session's collected items, not just the ones beneath it, so
+   every unit test was marked `integration` too: `pytest -m "not integration"` deselected
+   all 1418 and exited 5 having asserted nothing. The local gate never saw it because it
+   scopes by path (`pytest tests/unit`). The hook now marks only items under its own
+   directory — 1324 selected / 94 deselected, and the inverse for `-m integration`. This is
+   the worst class of defect in the project's history: a gate that looks green and asserts
+   nothing.
+
+2. **The real-browser-profile guard was a no-op on Linux** — the platform the browser agent
+   actually runs on in production. `_reject_real_profile_dir` scanned `Path(...).parts`, and
+   a Windows-shaped string is a SINGLE segment on POSIX because a backslash is not a
+   separator there, so the marker scan matched nothing. The markers themselves were also
+   Windows-only, while a real Chrome profile in the container lives at
+   `~/.config/google-chrome`. Fixed on both axes: Linux and macOS markers added, and every
+   path is now read natively AND as a `PureWindowsPath`, so the guard answers the same way
+   whichever OS is asked. The test carries all nine shapes.
+
+3. **Two Windows agent tests asserted the host's elevation, not the policy.** The owner of a
+   new kernel object comes from the creating token's default owner, and for a member of
+   Administrators running elevated that is `BUILTIN\Administrators` — an account
+   `ServiceAdmissionPolicy.ServiceMode` deliberately trusts. So on every GitHub runner (and
+   in the owner's own elevated console) the "standard user" pipe those tests build was
+   really owned by Administrators, the policy correctly accepted it, and the refusal under
+   test never happened. The product was right; the tests were wrong. They now STATE the
+   pipe's owner as the account's user SID via `NewPipeOwnedByCurrentUser`, so the adversarial
+   condition is staged identically on every host instead of being skipped or assumed.
+
+4. **Every CI job is now bounded** (`timeout-minutes`). A job that hangs otherwise burns
+   hours of runner time and hides the real signal.
+
+Also recorded, because it cost time and is worth recognising instantly next time: with
+Docker Desktop stopped on Windows, loopback connections to the compose ports are refused in
+~2 s each rather than instantly, which makes the dependency-probing unit tests look hung.
+On a Linux runner with nothing listening the same connections are refused in ~0 ms. The
+symptom looked like a product hang and was a stopped container engine.

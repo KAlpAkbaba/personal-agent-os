@@ -19,6 +19,7 @@ jobs:
   secret-hygiene:
     name: Secret hygiene
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
@@ -54,6 +55,7 @@ jobs:
   api-lint-unit:
     name: API lint + unit tests
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     defaults:
       run:
         working-directory: services/api
@@ -73,6 +75,7 @@ jobs:
   api-integration:
     name: API integration tests
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     needs: api-lint-unit
     defaults:
       run:
@@ -98,6 +101,7 @@ jobs:
   recovery-supervisor:
     name: Recovery supervisor
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     defaults:
       run:
         working-directory: services/recovery-supervisor
@@ -117,6 +121,7 @@ jobs:
   browser-agent:
     name: Browser agent tests
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     defaults:
       run:
         working-directory: services/browser
@@ -142,6 +147,7 @@ jobs:
   windows-agent:
     name: Windows agent build + tests
     runs-on: windows-latest
+    timeout-minutes: 40
     defaults:
       run:
         working-directory: devices/windows-agent
@@ -174,6 +180,7 @@ jobs:
   web-build:
     name: Web shell build
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4

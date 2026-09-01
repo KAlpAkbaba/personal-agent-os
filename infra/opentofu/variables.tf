@@ -7,9 +7,20 @@ variable "hcloud_token" {
 variable "tailscale_auth_key" {
   description = <<-EOT
     Tailscale auth key used once, at first boot, to join the tailnet. Supply via
-    TF_VAR_tailscale_auth_key. Prefer an ephemeral, pre-authorized, tagged key
-    (tag:agent-os-cloud) so it cannot be reused to enrol an attacker's machine, and so the
-    node disappears from the tailnet if it is destroyed.
+    TF_VAR_tailscale_auth_key.
+
+    Use a key that is pre-authorized, tagged (tag:agent-os-cloud), single-use — and
+    NOT ephemeral.
+
+    Single-use is safe because cloud-init spends it exactly once; afterwards the node
+    holds its own node key. "Not ephemeral" is the part that matters and is easy to get
+    wrong: Tailscale REMOVES an ephemeral node from the tailnet shortly after it goes
+    offline. A VPS reboot is one of the resilience criteria this milestone has to pass,
+    and an ephemeral node would be deleted while it reboots and come back — if at all —
+    as a different node with a different tailnet address. The Windows agent dials a
+    pinned broker endpoint, so that is precisely the failure it cannot recover from
+    without owner intervention. A persistent, tagged node keeps its address across
+    reboots and network loss, which is what "recovery without owner intervention" needs.
   EOT
   type        = string
   sensitive   = true

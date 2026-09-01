@@ -76,8 +76,22 @@ def owner_client(settings: Settings) -> TestClient:
 
 
 def pytest_collection_modifyitems(items) -> None:
+    """Mark the tests in THIS directory as integration tests.
+
+    Scoped to this conftest's own directory on purpose. Pytest hands a
+    subdirectory conftest's hook the WHOLE session's collected items, not just
+    the ones beneath it, so an unscoped loop marks every unit test as
+    ``integration`` too. A repo-root ``pytest -m "not integration"`` then
+    deselects all 1418 tests and exits 5 having asserted nothing at all -- a
+    green-looking run that tests nothing, which is worse than a red one. The
+    local gate never saw it because it scopes by path (``pytest tests/unit``);
+    the first real CI run did.
+    """
+    here = Path(__file__).parent.resolve()
     for item in items:
-        item.add_marker(pytest.mark.integration)
+        item_path = Path(str(getattr(item, "fspath", ""))).resolve()
+        if here == item_path or here in item_path.parents:
+            item.add_marker(pytest.mark.integration)
 
 
 #: Arbitrary fixed key; any value works as long as every runner uses the same one.

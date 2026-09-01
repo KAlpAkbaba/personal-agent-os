@@ -35,12 +35,51 @@ fi
 echo "tailnet address: $TAILNET_IP"
 
 # ------------------------------------------------------------------ persistent data
+#
+# The Hetzner volume is attached with automount, and Hetzner mounts it where IT chooses:
+# /mnt/HC_Volume_<id>. Nothing mounts /mnt/pagentos-data. Creating that directory blindly
+# would put PostgreSQL, the artifact store and the identity root on the BOOT DISK while
+# every comment in the stack claims they are on the durable volume — and the volume's
+# prevent_destroy in OpenTofu would then be guarding an empty disk. Silent, and only
+# discovered when a server rebuild loses the database.
+#
+# So: find the real volume, point /mnt/pagentos-data at it, and refuse if there is none.
+DATA_ROOT="/mnt/pagentos-data"
+if [[ ! -e "$DATA_ROOT" ]]; then
+    volume_mount="$(findmnt -rno TARGET --source /dev/disk/by-id/scsi-0HC_Volume_* 2>/dev/null | head -n1 || true)"
+    if [[ -z "$volume_mount" ]]; then
+        volume_mount="$(ls -d /mnt/HC_Volume_* 2>/dev/null | head -n1 || true)"
+    fi
+    if [[ -n "$volume_mount" ]]; then
+        echo "data volume: $volume_mount -> $DATA_ROOT"
+        ln -sfn "$volume_mount" "$DATA_ROOT"
+    fi
+fi
+
+# Fail closed: whatever $DATA_ROOT resolves to must NOT be the root filesystem's device.
+if [[ -e "$DATA_ROOT" ]]; then
+    data_dev="$(findmnt -no SOURCE --target "$(readlink -f "$DATA_ROOT")" 2>/dev/null || true)"
+else
+    data_dev=""
+fi
+root_dev="$(findmnt -no SOURCE --target / 2>/dev/null || true)"
+if [[ -z "$data_dev" || "$data_dev" == "$root_dev" ]]; then
+    if [[ "${PAGENTOS_ALLOW_BOOT_DISK:-0}" != "1" ]]; then
+        echo "REFUSING: $DATA_ROOT is on the boot disk (${data_dev:-nothing mounted}), not the Hetzner data volume." >&2
+        echo "  The database and identity root must live on the durable volume, or a server rebuild loses them." >&2
+        echo "  Check the volume is attached and mounted:  lsblk; findmnt /mnt/HC_Volume_*" >&2
+        echo "  For a throwaway host WITHOUT a volume, and only then: PAGENTOS_ALLOW_BOOT_DISK=1 $0" >&2
+        exit 1
+    fi
+    echo "WARNING: proceeding with data on the boot disk because PAGENTOS_ALLOW_BOOT_DISK=1. Not for production."
+fi
+
 for dir in postgres minio identity; do
-    mkdir -p "/mnt/pagentos-data/$dir"
+    mkdir -p "$DATA_ROOT/$dir"
 done
 # The identity dir is mounted into the container where uid 10001 runs the app.
-chown 10001:10001 /mnt/pagentos-data/identity
-chmod 700 /mnt/pagentos-data/identity
+chown 10001:10001 "$DATA_ROOT/identity"
+chmod 700 "$DATA_ROOT/identity"
 
 # ------------------------------------------------------------------ secrets (once)
 if [[ ! -f "$ENV_FILE" ]]; then

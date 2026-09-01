@@ -312,8 +312,10 @@ public class IpcWiringTests
         // pipe, so the SYSTEM case stays PROVEN_PROXY until the service is installed â€” but
         // "the inspector can read an owner at all" is no longer assumed.
         var pipeName = IpcTestSupport.NewPipeName();
-        using var server = new NamedPipeServerStream(
-            pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+        // Owner stated, not inherited from the token: elevated hosts default new objects to
+        // BUILTIN\Administrators, which ServiceMode trusts, and the last assertion below
+        // would then be asserting the host's elevation rather than the policy.
+        using var server = IpcTestSupport.NewPipeOwnedByCurrentUser(pipeName);
         var accepting = server.WaitForConnectionAsync();
 
         await using var client = new NamedPipeClientStream(

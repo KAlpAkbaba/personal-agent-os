@@ -1,4 +1,5 @@
 using System.IO.Pipes;
+using System.Security.AccessControl;
 using System.Security.Principal;
 using Microsoft.Extensions.Logging.Abstractions;
 using PagentOS.Agent.Core.Ipc;
@@ -30,6 +31,40 @@ public static class IpcTestSupport
            ?? throw new InvalidOperationException("no SID for the current test process");
 
     public static string NewPipeName() => $"pagentos-test-{Guid.NewGuid():N}";
+
+    /// <summary>
+    /// A real pipe whose OWNER is explicitly this account's user SID — never a service
+    /// account — so "an untrusted process is squatting the pipe name" is staged the same
+    /// way on every host.
+    ///
+    /// Letting Windows pick the owner does not do that. The owner of a new object comes
+    /// from the creating token's default owner, and for a member of Administrators running
+    /// ELEVATED that default is BUILTIN\Administrators (S-1-5-32-544) — an account
+    /// <see cref="ServiceAdmissionPolicy.ServiceMode"/> deliberately trusts. So on an
+    /// elevated host (every GitHub Actions runner, and the owner's own elevated console)
+    /// the "standard user" pipe these tests build was silently owned by Administrators,
+    /// the policy correctly accepted it, and the refusal under test never happened. The
+    /// product was right and the test was asserting the environment. Stating the owner
+    /// removes the assumption instead of skipping the test.
+    /// </summary>
+    public static NamedPipeServerStream NewPipeOwnedByCurrentUser(string pipeName)
+    {
+        var user = new SecurityIdentifier(CurrentSid());
+        var security = new PipeSecurity();
+        security.SetOwner(user);
+        // An empty DACL would deny everyone, including the client half of the test.
+        security.AddAccessRule(new PipeAccessRule(user, PipeAccessRights.FullControl, AccessControlType.Allow));
+
+        return NamedPipeServerStreamAcl.Create(
+            pipeName,
+            PipeDirection.InOut,
+            maxNumberOfServerInstances: 1,
+            PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous,
+            inBufferSize: 0,
+            outBufferSize: 0,
+            security);
+    }
 
     /// <summary>Admission policy that accepts this test process — the honest path.</summary>
     public static CompanionAdmissionPolicy SelfPolicy(string? imagePath = null, int? sessionId = null)

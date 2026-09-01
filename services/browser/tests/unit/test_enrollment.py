@@ -119,9 +119,24 @@ def test_extension_bridge_transport_is_reserved_not_implemented() -> None:
 
 
 def test_managed_backend_rejects_real_browser_profile_dirs() -> None:
+    # Every shape, on every host OS. The Windows-shaped strings used to pass on Linux
+    # because a backslash is not a separator there: the whole path collapsed into ONE
+    # segment and the marker scan matched nothing. The guard was therefore a no-op on
+    # exactly the platform the browser agent runs on in production, and this test could
+    # only ever have caught it by running there — which it now does, in CI.
     real_profiles = [
+        # Windows
         r"C:\Users\alpak\AppData\Local\Google\Chrome\User Data",
         r"C:\Users\alpak\AppData\Local\Microsoft\Edge\User Data\Default",
+        r"C:\Users\alpak\AppData\Local\BraveSoftware\Brave-Browser\User Data",
+        # Linux — the container the browser agent actually runs in
+        "/home/owner/.config/google-chrome",
+        "/home/owner/.config/google-chrome/Default",
+        "/home/owner/.config/chromium",
+        "/home/owner/.config/microsoft-edge",
+        # macOS
+        "/Users/owner/Library/Application Support/Google/Chrome",
+        "/Users/owner/Library/Application Support/Microsoft Edge/Default",
     ]
     for profile in real_profiles:
         with pytest.raises(BrowserError) as excinfo:

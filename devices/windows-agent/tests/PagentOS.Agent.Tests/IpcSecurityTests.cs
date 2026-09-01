@@ -235,13 +235,20 @@ public class IpcSecurityTests
     public async Task The_companion_refuses_a_pipe_that_is_not_owned_by_a_service_account()
     {
         // The other half of the same attack: the squatter is already there and the companion
-        // connects to it. This one IS proven for real — the fake pipe below is created by
-        // this test process, so its owner really is a standard user, and the production
-        // policy (SYSTEM/Administrators only) really does reject it via the real
-        // WindowsPipeOwnerInspector reading the kernel's security descriptor.
+        // connects to it. This one IS proven for real — the fake pipe below is a real pipe
+        // owned by a real non-service account, and the production policy (SYSTEM and
+        // Administrators only) really does reject it via the real WindowsPipeOwnerInspector
+        // reading the kernel's security descriptor.
+        //
+        // It used to say "created by this test process, so its owner really is a standard
+        // user". That was the assumption, not the fact: on an elevated host the creating
+        // token hands ownership to BUILTIN\Administrators, which the policy trusts, so the
+        // impostor was never an impostor and the refusal never fired. Stated explicitly now.
         var pipeName = IpcTestSupport.NewPipeName();
-        using var fakeService = new NamedPipeServerStream(
-            pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+        // The owner is STATED as this account's user SID rather than left to the token's
+        // default: elevated hosts hand new objects to BUILTIN\Administrators, which the
+        // production policy trusts on purpose, so the impostor would not have been one.
+        using var fakeService = IpcTestSupport.NewPipeOwnedByCurrentUser(pipeName);
         var accepted = fakeService.WaitForConnectionAsync();
 
         var companion = NewCompanion(pipeName, ServiceAdmissionPolicy.ServiceMode(), new WindowsPipeOwnerInspector());

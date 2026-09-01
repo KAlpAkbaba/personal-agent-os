@@ -38,10 +38,10 @@ resource "hcloud_firewall" "agent_os" {
   // Tailscale's direct-connection port. Without it, peers still connect via DERP relays —
   // it works, but every packet takes a detour. This is the one inbound port that exists.
   rule {
-    direction  = "in"
-    protocol   = "udp"
-    port       = "41641"
-    source_ips = ["0.0.0.0/0", "::/0"]
+    direction   = "in"
+    protocol    = "udp"
+    port        = "41641"
+    source_ips  = ["0.0.0.0/0", "::/0"]
     description = "Tailscale direct connection (WireGuard)"
   }
 

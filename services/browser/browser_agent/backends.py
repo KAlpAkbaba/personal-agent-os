@@ -31,7 +31,7 @@ from __future__ import annotations
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import TYPE_CHECKING
 
 from playwright.async_api import (
@@ -264,19 +264,52 @@ class _PlaywrightBackendBase(BrowserBackend):
 # persistent mode must only ever use a dedicated agent profile (ADR-0019 /
 # task rule: never touch the owner's real Chrome/Edge state).
 _REAL_PROFILE_MARKERS = (
+    # Windows
     ("google", "chrome", "user data"),
     ("microsoft", "edge", "user data"),
     ("chromium", "user data"),
     ("bravesoftware", "brave-browser", "user data"),
+    # macOS
+    ("application support", "google", "chrome"),
+    ("application support", "chromium"),
+    ("application support", "microsoft edge"),
+    ("application support", "bravesoftware", "brave-browser"),
+    # Linux -- the browser agent runs in a Linux container in the cloud, where the
+    # owner's real profiles live under ~/.config. Covering only the Windows shapes
+    # made the guard a no-op on exactly the host it runs on in production.
+    (".config", "google-chrome"),
+    (".config", "chromium"),
+    (".config", "microsoft-edge"),
+    (".config", "bravesoftware", "brave-browser"),
 )
 
 
+def _candidate_part_tuples(profile_dir: Path) -> tuple[tuple[str, ...], ...]:
+    """The path's segments, read both natively and as a Windows path.
+
+    A Windows-shaped string is a SINGLE segment on POSIX -- ``Path`` does not treat
+    a backslash as a separator there -- so scanning only ``Path.parts`` lets
+    a real Windows-shaped Chrome profile path straight through
+    unrejected on Linux. Reading it a second time as a ``PureWindowsPath`` makes the
+    guard answer the same way regardless of which OS is asked.
+    """
+    candidates: list[tuple[str, ...]] = []
+    try:
+        candidates.append(tuple(part.lower() for part in profile_dir.resolve().parts))
+    except OSError:  # unresolvable path: judge what we were given
+        candidates.append(tuple(part.lower() for part in profile_dir.parts))
+    candidates.append(
+        tuple(part.lower().rstrip("\\") for part in PureWindowsPath(str(profile_dir)).parts)
+    )
+    return tuple(candidates)
+
+
 def _reject_real_profile_dir(profile_dir: Path) -> None:
-    parts = tuple(part.lower() for part in profile_dir.resolve().parts)
-    joined = tuple(parts)
-    for marker in _REAL_PROFILE_MARKERS:
-        for start in range(len(joined) - len(marker) + 1):
-            if joined[start : start + len(marker)] == marker:
+    for joined in _candidate_part_tuples(profile_dir):
+        for marker in _REAL_PROFILE_MARKERS:
+            for start in range(len(joined) - len(marker) + 1):
+                if joined[start : start + len(marker)] != marker:
+                    continue
                 raise BrowserError(
                     ErrorClass.VALIDATION_ERROR,
                     "profile_dir points into a real browser profile tree "
