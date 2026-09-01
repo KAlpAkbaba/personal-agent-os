@@ -132,6 +132,26 @@ AuthorizationProvider that closes the M7 evolution permission-verification gap.
 
 Goal: stronger always-available mobile voice experience beyond PWA limitations.
 
+Delivered (ADR-0027): the owner identity layer this milestone needed and every
+earlier one deferred — an opaque bearer session minted from a file-backed owner
+credential root that lives outside the database (so a restored database neither
+resurrects nor destroys the owner's ability to authenticate), with host-side
+recovery, TTL and idle timeout, refresh rotation, a panic control that revokes
+everything, and a token-free append-only audit. Every M4–M8 endpoint is now
+authenticated, which closes the standing hard gate that had been carried since
+M0. On top of it: device-bound sessions that die with the device, push
+registration and an artifact-ready announcer that delivers before it records
+delivery, narration cursor resume, file share/export, the web shell's owner
+sign-in, and a headless reference client that exercises the whole mobile
+contract in CI.
+
+Not delivered locally, and deliberately: a real mobile application. The device
+half of "microphone/realtime voice under normal mobile lifecycle" and
+"push notification arrives on the phone" is verified through the reference
+client against the real API, which proves the server contract but not the
+platform behaviour. Both are batched as owner actions requiring a physical
+device.
+
 ## M10 — Optimization
 
 Only after real use:

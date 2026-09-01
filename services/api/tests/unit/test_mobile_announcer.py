@@ -183,6 +183,35 @@ def test_a_failed_delivery_leaves_the_task_for_the_next_sweep(session_factory) -
         assert session.get(Task, task_id).announced_at is not None
 
 
+def test_a_crash_mid_sweep_stamps_nothing_at_all(session_factory) -> None:
+    """The pass is one transaction, so a crash rolls the whole sweep back.
+
+    The task that was already delivered is retried on the next pass (a repeat
+    push, which the collapse key makes harmless) rather than being stamped by a
+    transaction that never finished.
+    """
+    ids = {
+        _seed(session_factory, status=TASK_STATUS_READY, title="First"),
+        _seed(session_factory, status=TASK_STATUS_READY, title="Second"),
+    }
+
+    delivered: list[uuid.UUID] = []
+
+    def crash(artifact_id, title, task_id):
+        if delivered:
+            raise KeyboardInterrupt("process killed mid-sweep")
+        delivered.append(task_id)
+
+    announcer = ArtifactReadyAnnouncer(session_factory, crash)
+    with pytest.raises(KeyboardInterrupt):
+        announcer.sweep_once()
+
+    assert len(delivered) == 1 and delivered[0] in ids
+    with session_factory() as session:
+        assert session.get(Task, delivered[0]).announced_at is None
+        assert set(pending_task_ids(session)) == ids
+
+
 def test_a_partial_batch_failure_only_settles_the_delivered_tasks(session_factory) -> None:
     good = _seed(session_factory, status=TASK_STATUS_READY, title="Good")
     bad = _seed(session_factory, status=TASK_STATUS_READY, title="Bad")

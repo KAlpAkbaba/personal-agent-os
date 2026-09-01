@@ -15,11 +15,13 @@ recovery supervisor already does: through a durable record they both see.
 
 The worker only transitions the task to READY (it already does). The API drains
 tasks that are READY with `announced_at IS NULL`, **delivers, and only then**
-stamps the column. That ordering is the durability guarantee: a crash between
-delivery and stamping costs at most a duplicate notice (the provider's collapse
-key makes artifact-ready idempotent for the owner), whereas stamping first would
-silently drop the notification forever. At-least-once, not exactly-once — the
-honest description of what this design provides — and free of any long-lived
+stamps the column, with one transaction around the whole pass (the rows are
+selected `FOR UPDATE SKIP LOCKED`, so a second API process skips them rather
+than announcing them again). That ordering is the durability guarantee: a crash
+before the commit costs at most a duplicate notice — the provider's collapse key
+makes artifact-ready idempotent for the owner — whereas stamping first would
+silently drop the notification forever. At-least-once, not exactly-once: the
+honest description of what this design provides, and free of any long-lived
 service credential.
 """
 

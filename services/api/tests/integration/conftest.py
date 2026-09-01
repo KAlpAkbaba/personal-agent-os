@@ -5,14 +5,18 @@
 Every test in this package is marked `integration`.
 """
 
+import time
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 from alembic import command
 from alembic.config import Config as AlembicConfig
 from fastapi.testclient import TestClient
+from sqlalchemy import text
 
 from app.config import Settings
+from app.db import build_engine
 from app.identity.root import InMemoryCredentialRoot
 from app.identity.runtime import IdentityRuntime
 from app.main import create_app
@@ -74,8 +78,59 @@ def pytest_collection_modifyitems(items) -> None:
         item.add_marker(pytest.mark.integration)
 
 
+#: Arbitrary fixed key; any value works as long as every runner uses the same one.
+_SUITE_LOCK_KEY = 0x5041_474E  # "PAGN"
+_SUITE_LOCK_TIMEOUT_S = 900.0
+
+
 @pytest.fixture(scope="session", autouse=True)
-def migrated_database() -> None:
+def exclusive_database() -> Iterator[None]:
+    """Serialize concurrent runs of this suite against the one dev database.
+
+    These tests share a database *and* a schema — there is one `tasks` table and
+    one artifact-ready announcer sweeping it. Two pytest processes running at
+    once (two agents, or a gate running beside a verification run) therefore
+    interleave: one process's announcer drains the other's READY task, and the
+    victim sees a sweep that returns 0 or an inbox missing its own notification.
+    Every such failure observed in this project has been that, not a defect in
+    the code under test — but it looks exactly like one, which is worse than a
+    slow suite.
+
+    A PostgreSQL session-level advisory lock makes the second runner wait rather
+    than corrupt the first one's assumptions. It is polled rather than blocking
+    so a stuck runner produces a clear message instead of a hang.
+    """
+    engine = build_engine(Settings().database_url)
+    connection = engine.connect()
+    deadline = time.monotonic() + _SUITE_LOCK_TIMEOUT_S
+    while True:
+        acquired = connection.execute(
+            text("SELECT pg_try_advisory_lock(:key)"), {"key": _SUITE_LOCK_KEY}
+        ).scalar()
+        connection.commit()
+        if acquired:
+            break
+        if time.monotonic() > deadline:
+            connection.close()
+            engine.dispose()
+            pytest.fail(
+                "another integration run has held the suite lock for "
+                f"{_SUITE_LOCK_TIMEOUT_S:.0f}s; stop it before running this one"
+            )
+        time.sleep(1.0)
+    try:
+        yield
+    finally:
+        connection.execute(
+            text("SELECT pg_advisory_unlock(:key)"), {"key": _SUITE_LOCK_KEY}
+        )
+        connection.commit()
+        connection.close()
+        engine.dispose()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def migrated_database(exclusive_database: None) -> None:
     """Ensure the schema is at head before any integration test runs."""
     cfg = AlembicConfig(str(API_ROOT / "alembic.ini"))
     cfg.set_main_option("script_location", str(API_ROOT / "alembic"))

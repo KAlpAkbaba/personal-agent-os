@@ -200,3 +200,37 @@ With a deterministic fixture capability absent beforehand, asking the running sy
 - microphone/realtime voice works under normal mobile lifecycle;
 - file share/export works;
 - device revocation invalidates session.
+
+Identity gates (ADR-0027 — this is also the milestone that closes the standing
+API-authentication hard gate carried since M0):
+
+- every endpoint outside the documented unauthenticated surface refuses without
+  a valid owner session, proven by a test that walks the **live FastAPI route
+  table and dependency graph** rather than a hand-maintained list, so a new
+  unprotected route fails the suite instead of shipping quietly;
+- the unauthenticated surface is exactly: health, `POST /v1/identity/bootstrap`
+  (loopback-only, one-time), `POST /v1/identity/sessions` (the credential *is*
+  the authentication), `POST /v1/devices/enroll` (single-use owner-minted
+  enrollment token) and the device WebSocket handshake (device key);
+- the test suite contains **no authentication bypass** — no dependency
+  override, no "auth off in tests" setting; every test holds a real token from
+  the real service, which is what makes the suite evidence of protection;
+- sessions and their audit survive an application restart (real PostgreSQL),
+  and a revocation cannot be forgotten;
+- a scoped session is *narrower* than an unscoped one at every route, including
+  routes that forgot to declare a scope (structural, see M9 review #2);
+- a corrupt identity root refuses cleanly and is never overwritten by
+  bootstrap;
+- device revocation kills every session bound to that device across the whole
+  REST API, not just its WebSocket, and survives a crash between its two
+  transactions in the safe direction.
+
+Proof status, stated rather than blurred: "authenticated native client
+connects", "push notification for artifact ready", "narration resumes from the
+cloud cursor", "file share/export" and "device revocation invalidates session"
+are proven against the real API by an in-repo headless reference client
+(`clients/reference`) plus integration tests. That proves the **server
+contract** the mobile app depends on. It does not prove **platform behaviour**:
+a real push arriving on a locked phone, and microphone/realtime capture under
+iOS/Android backgrounding and interruption, require a physical device and are
+batched as owner actions.
