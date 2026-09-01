@@ -1,25 +1,26 @@
 {
   "schema_version": 1,
   "project": "personal-agent-os",
-  "current_milestone": "M8",
+  "current_milestone": "M9",
   "status": "NOT_STARTED",
-  "last_completed_milestone": "M7",
+  "last_completed_milestone": "M8",
   "last_updated": "2026-09-01T00:00:00+03:00",
   "owner_actions_pending": [
     "Before first GitHub push: run 'gh auth login' once (browser OAuth), then a private repo can be created and CI activated.",
     "Cloud deployment (any time): approve Tailscale install (UAC) + sign in; approve Hetzner account/billing/API key. Local milestones are complete without these.",
     "M4 Voice real-audio layer: provision voice-provider API keys (PAGENTOS_VOICE_*) and record owner speech samples for real speaker enrollment + blind A/B benchmark; plugs into the built interfaces without code changes.",
-    "M8 will need owner-authorized asset enrollment evidence (which hosts/networks/devices are authorized, with scope) - that is the milestone's own first deliverable, not a blocker to starting it.",
+    "M8 asset enrollment: enroll the real hosts/networks/devices you authorize, with evidence and scope (the registry and its API are built and tested; only the owner's real authorization records are missing).",
+    "M9 will need a real mobile device for on-device verification (push delivery, mic/lifecycle, background audio) and, for distribution beyond a local build, developer-account/store actions.",
     "Windows Service install (one UAC): BLOCKED on M1 security finding #1 (Session-0 pipe identity) first.",
     "Owner-browser enrollment (M2 production path): harden enrollment registry file ACL (M2 finding #6) + owner approval flow before real-browser attach.",
-    "HARD GATE - API authentication/identity layer (standing M0 deferral). Until it exists: (a) speaker verification must not gate any privileged action (M4 #1); (b) memory REST owner-authority mutations and the memory explicit flag rest on this layer (M5 #4/#5) - no content-ingestion pipelines into /v1/memory/observe; (c) self-healing incident-ingest and pipeline/run must be owner-authenticated before leaving a trusted loopback/private network AND before enabling a non-deterministic coding backend (M6 #4); (d) the evolution endpoints CREATE AND PROMOTE CODE and have no rate limit - same requirement (M7 #4).",
-    "HARD GATE - runtime confinement before enabling any I/O-capable generated operation or a non-deterministic skill generator (M7 review verdict (d)): today's permission model is enforcing at generation/evaluation/review time but advisory at dispatch (no OS-level network/filesystem/device jail).",
+    "HARD GATE - API authentication/identity layer (standing M0 deferral). Until it exists: (a) speaker verification must not gate any privileged action (M4 #1); (b) memory REST owner-authority mutations and the memory explicit flag rest on this layer (M5 #4/#5); (c) self-healing incident-ingest and pipeline/run must be owner-authenticated before leaving a trusted loopback/private network and before enabling a non-deterministic coding backend (M6 #4); (d) the evolution endpoints create and promote code and have no rate limit (M7 #4); (e) the security endpoints ENROLL ASSETS - i.e. define what the agent may touch - and must not be reachable unauthenticated outside loopback (M8 #4).",
+    "HARD GATE - runtime confinement before enabling any I/O-capable generated operation or a non-deterministic skill generator (M7 review verdict (d)): the permission model is enforcing at generation/evaluation/review time but advisory at dispatch.",
     "Recommended, non-blocking: move Docker Desktop disk image location from C: to E: (C: has ~24 GB free)."
   ],
   "quality_gate": {
     "status": "PASS",
     "last_run": "2026-09-01",
-    "scope": "Full gate + -E2E 12/12: secret hygiene, ruff, API 804 unit + 55 integration, recovery-supervisor 25 tests + ruff, browser 75 unit + 39 e2e, Windows agent 91 xUnit, alembic 0007, M1 Notepad E2E with restart recovery, web build. Exit 0."
+    "scope": "Full gate + -E2E 12/12: secret hygiene, ruff, API 1024 unit + 57 integration, recovery-supervisor 25 tests + ruff, browser 75 unit + 39 e2e, Windows agent 91 xUnit, alembic 0008, M1 Notepad E2E with restart recovery, web build. Exit 0."
   },
-  "notes": "M7 complete: Evolution Engine with code-enforced registration gates, six-step resolution order with re-derived composition proof, deny-by-default versioned manifests verified against an AuthorizationProvider (Null by default until M8's asset registry), full generated-skill lifecycle with shadow/canary evidence, offline pinned component catalog, resource + recursion limits, seven-case failure matrix, telemetry-driven improvement with benchmark and rollback, nine-question audit, and the mandatory end-to-end demonstration plus its defective-implementation counterpart. Independently verified; both gates found and closed the same defect class (trusting requester-supplied evidence). M8 Authorized Security next: the Authorized Asset Registry is now doubly motivated - it is M8's own deliverable AND the verification source the evolution permission model already depends on."
+  "notes": "M8 complete: Authorized Asset Registry as the single scope authority (fail-safe, spoofing-resistant, no DNS, ambiguity refuses, append-only authorization events, breadth-bounded enrollment); scope-based approval for in-scope defensive assessments; constraint-gated reversible remediation; findings as redacted artifacts; and the registry-backed AuthorizationProvider now actually WIRED into evolution, which is what closes M7's High finding. Independently verified with adversarial fixtures; security review's High (unwired provider) and Medium (junction containment - third occurrence of that bug class) fixed and committed. M9 Native Mobile next: authenticated native client, push on artifact-ready, narration resume from the cloud cursor, mobile mic/realtime lifecycle, file share/export, device revocation invalidating the session - buildable locally against the existing API, with on-device verification and any distribution steps batched as owner actions."
 }

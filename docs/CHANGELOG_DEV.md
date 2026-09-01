@@ -2,6 +2,15 @@
 
 Autonomous engineering agents append concise accepted-change records here.
 
+## 2026-09-01 — M8 authorized security agent complete
+
+- Authorized Asset Registry as the single scope authority: enrollment requires authorization evidence, kind/locator are immutable (re-pointing needs revoke + re-enroll), evidence and constraints are redacted before storage, and every mutation and every attempt is appended to an authorization-event log.
+- Scope enforcement is one ordered, total, fail-safe decision point: real `ipaddress` membership (never string prefixing), no DNS resolution anywhere (resolving would hand scope authority to whoever controls DNS), label-wise domain containment, ambiguity refuses rather than picking, expiry re-derived on every decision. Independently driven with hex/decimal/octal IP encodings, IPv4-mapped IPv6, zone ids, embedded-IP hostnames and domain lookalikes — all refused.
+- Scope-based (not per-command) approval for in-scope defensive assessments: 10 deterministic offline configuration-audit checks with path-stable fingerprints, collector roots taken from the asset's own constraints. Constraint-gated remediation that re-enters the scope guard with the fix's own disruption, backs up before applying and reports already-resolved rather than clobbering.
+- Findings published as ordinary artifacts through the M3 service, with a secret-free precondition; redaction verified across findings, result payloads, canonical body, both renders and the audit trail.
+- Independent verification PASS on every acceptance bullet with its own adversarial fixtures. Security review: one High — the registry-backed AuthorizationProvider was built and tested but **not wired**, so M7's finding was not actually closed in the running system (fixed, with a test that asserts the wiring); one Medium — the collector's `is_symlink()` containment check missed Windows junctions, the third occurrence of that bug class (fixed by resolve-then-contain, now a standing rule); plus a breadth guard refusing absurdly broad network locators. docs/reviews/M8_SECURITY_REVIEW.md; ADR-0026 + security addendum.
+- Totals: 1024 unit + 57 integration API tests; full M0-M8 gate 12/12 PASS.
+
 ## 2026-09-01 — M7 self-extension / evolution complete
 
 - Capability registry where `register()` is the only path to production and requires evaluated status, passing evaluation AND independent review, per-edge lifecycle evidence and verified permission approval; six-step resolution order (existing → compose → configure/extend → adapt a catalog component → generate → product/core change) with a persisted decision trail.
