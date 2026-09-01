@@ -56,3 +56,12 @@ docs/LOCAL_ENV_REPORT.generated.json
 # tracked in the skill_versions table (with manifest digests), not source.
 skills/generated/*
 !skills/generated/README.md
+
+# OpenTofu/Terraform: state can contain sensitive attribute values, and .tfvars holds
+# the tokens themselves. Neither belongs in git.
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+*.tfvars
+!*.tfvars.example

@@ -1,0 +1,84 @@
+#cloud-config
+# First boot of the Personal Agent OS cloud host.
+#
+# Three jobs, in this order: make the machine administrable only by the owner, put it on the
+# tailnet, and install a container runtime. It deliberately does NOT deploy the application —
+# that is a release action with its own gates (build, health check, last-known-good pointer),
+# not something a machine should do to itself while booting for the first time.
+
+users:
+  - name: ${admin_user}
+    groups: [sudo, docker]
+    shell: /bin/bash
+    sudo: ["ALL=(ALL) NOPASSWD:ALL"]
+    ssh_authorized_keys:
+      - ${ssh_public_key}
+
+# Root SSH and password authentication are off before the machine is ever reachable, not
+# after someone notices.
+ssh_pwauth: false
+disable_root: true
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - ca-certificates
+  - curl
+  - gnupg
+  - ufw
+  - fail2ban
+  - unattended-upgrades
+
+write_files:
+  - path: /etc/ssh/sshd_config.d/10-pagentos.conf
+    permissions: "0644"
+    content: |
+      PermitRootLogin no
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      X11Forwarding no
+      AllowTcpForwarding no
+
+  - path: /etc/apt/apt.conf.d/20auto-upgrades
+    permissions: "0644"
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+
+  - path: /etc/pagentos/README
+    permissions: "0644"
+    content: |
+      Application deployment is a release action, not a boot action. This host is
+      provisioned empty on purpose: images are pulled and started by the release
+      process, which health-checks them and only then advances the last-known-good
+      pointer. See docs/OPERATIONS.md.
+
+runcmd:
+  # Host firewall in addition to the Hetzner cloud firewall. Two layers because they fail
+  # differently: a cloud firewall rule can be edited in a console by accident, and a host
+  # rule cannot be edited by anyone who has not already got in.
+  - ufw default deny incoming
+  - ufw default allow outgoing
+  - ufw allow 41641/udp comment 'tailscale'
+  - ufw --force enable
+
+  # Tailscale. --ssh enables Tailscale SSH so administration needs no public port at all.
+  - curl -fsSL https://tailscale.com/install.sh | sh
+  - tailscale up --authkey='${tailscale_auth_key}' --hostname='${tailscale_hostname}' --ssh --accept-dns=true
+
+  # Docker from the official repository, pinned to the distribution's stable channel.
+  - install -m 0755 -d /etc/apt/keyrings
+  - curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+  - chmod a+r /etc/apt/keyrings/docker.asc
+  - echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" > /etc/apt/sources.list.d/docker.list
+  - apt-get update
+  - apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  - systemctl enable --now docker
+
+  # The data volume is mounted by cloud-init (automount); make the application directory
+  # live on it rather than on the boot disk.
+  - mkdir -p /mnt/pagentos-data /opt/pagentos
+  - systemctl restart ssh
+
+final_message: "Personal Agent OS host ready on the tailnet after $UPTIME seconds. No public application port is open."
