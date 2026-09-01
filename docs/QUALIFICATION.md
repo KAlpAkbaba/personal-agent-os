@@ -69,9 +69,9 @@ them that tested the wrong thing.
 
 ### The install attempts so far, and what each disproved
 
-Recorded in full because the pattern matters more than any single bug: three real-machine
-runs, three defects, and **every one of them was in a code path my tests did not execute**.
-None of the three was found by the gate; all three were found by the owner running the thing.
+Recorded in full because the pattern matters more than any single bug: seven real-machine
+runs, seven defects, and **every one of them was in a code path my tests did not execute**.
+None was found by the gate; all were found by the owner running the thing.
 
 | Attempt | Failure | Cause | What it disproved |
 |---|---|---|---|
@@ -80,6 +80,8 @@ None of the three was found by the gate; all three were found by the owner runni
 | 5 | Credential rotation committed, replacement lost | The wrapper ran `--rotate --json`, the child exited 0, and stdout carried **two** JSON documents: this application logs to stdout, and `bootstrap()` emits `identity_owner_credential_minted` — so the mint itself guaranteed the contamination. `ConvertFrom-Json` refused it and the wrapper threw *after* the rotation had committed. The replacement died with the child process. | That a wrapper checking the exit code is enough. The exit code was 0 and the operation had succeeded; the loss was entirely in the protocol between the two processes. |
 | 2 | Access denied rewriting `appsettings.json` | Hardening with `/T` and `(OI)(CI)` grants left every pre-existing file with a protected empty DACL — 425 objects on the owner's machine — denying everyone including SYSTEM. | The idempotency claim. The tests behind it covered the create/reconfigure *decision* and never touched a hardened tree. |
 | 3 | `Property 'Count' cannot be found` (`PropertyNotFoundStrict`) | A function returning an empty collection unrolls to `$null`; `.Count` on it throws under StrictMode, which the libraries set and dot-sourcing propagates. Reproduced: 0 → `$null`, 1 → `String`, 2+ → array. | The claim that the partial install was *fully recoverable*. It was not: recovery aborted before it began, and a rerun with exactly one component to restore would have failed too. |
+| 6 | `Move-Item` access denied on the live service tree; companion left down; pipe server later found dead inside a "Running" service | NTFS refuses to rename a directory holding a running process's mapped images — the deploy never stopped the runtime first. Separately, the pre-fix `/T` icacls (reintroduced for ProgramData) emptied the log file's DACL and one failed log write from a `finally` killed the pipe server's `ExecuteAsync` while the host stayed Running. | That copy-over-live deployment was a deployment at all, and that service `Running` means health. Replaced by the journaled transactional engine (`Deployment.ps1`): verified stop before any move, same-volume renames, symmetric restart of both halves in `finally`, health = service AND companion AND pipe. Loggers may never throw. |
+| 7 | Finalize denied reading `state.json` — elevated administrator, access denied | `state.json` was rewritten at enrollment by the old binary's atomic tmp→move, so the fresh file carried only INHERITED ACEs; the earlier pre-fix `/T` run stripped inherited ACEs tree-wide, leaving a protected **empty** DACL. `device.key` survived because its ACEs were explicit — the exact signature of the bug class, timeline-proven from the owner's read-only inspection. | That ACL correctness can live in an installer repair instead of the **write primitive**. Now: every `AgentState.Save`/`IdempotencyStore` write re-applies explicit SYSTEM+Administrators protection after the move (asserted across replace), and `Restore-MachineStateAcl` repairs exactly the named state files — no recursion, no takeown, no new principals (ADR-0029). |
 
 The corrective work is not only the three fixes. It is that the installer's top-level flow now
 lives in tested functions (`Invoke-InstallRecovery`), that the cardinality pattern is linted

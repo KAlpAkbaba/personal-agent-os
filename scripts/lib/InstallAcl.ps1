@@ -516,6 +516,113 @@ function Set-MachineDataAcl {
     }
 }
 
+function Restore-MachineStateAcl {
+    <#
+    .SYNOPSIS
+        Repair exactly the named machine-state files whose DACLs are empty or unreadable —
+        no recursion, no takeown, no principal beyond SYSTEM and Administrators.
+
+    .DESCRIPTION
+        Built for a precisely diagnosed state: `state.json` was rewritten by the old agent
+        binary (inherited ACEs only) and the pre-fix `/T` icacls then stripped inherited
+        ACEs tree-wide, leaving the file with a protected EMPTY DACL that denied even an
+        elevated administrator. `device.key` survived because its ACEs were explicit.
+
+        The elevated caller can rewrite these descriptors because Administrators own the
+        files (WRITE_DAC through ownership) — the same recovery lever the whole model
+        already depends on. Files that are readable and non-empty are left alone, so the
+        function is idempotent and safe to run unconditionally as a pre-read guard.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$DataDir)
+
+    $repaired = @()
+    foreach ($entry in @(
+        @{ Name = "state.json";        SystemRights = [System.Security.AccessControl.FileSystemRights]::FullControl },
+        @{ Name = "idempotency.json";  SystemRights = [System.Security.AccessControl.FileSystemRights]::FullControl },
+        @{ Name = "device.key";        SystemRights = [System.Security.AccessControl.FileSystemRights]::Read }
+    )) {
+        $path = Join-Path $DataDir $entry.Name
+        if (-not (Test-Path -LiteralPath $path)) { continue }
+
+        $damaged = $false
+        try {
+            $acl = Get-SecurityDescriptor -Path $path
+            if (@($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])).Count -eq 0) {
+                $damaged = $true
+            }
+        }
+        catch {
+            $damaged = $true
+        }
+        if (-not $damaged) { continue }
+
+        $security = New-Object System.Security.AccessControl.FileSecurity
+        $security.SetAccessRuleProtection($true, $false)
+        $security.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+            (New-Object System.Security.Principal.SecurityIdentifier($script:SidSystem)),
+            $entry.SystemRights, [System.Security.AccessControl.AccessControlType]::Allow)))
+        $security.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+            (New-Object System.Security.Principal.SecurityIdentifier($script:SidAdministrators)),
+            [System.Security.AccessControl.FileSystemRights]::FullControl,
+            [System.Security.AccessControl.AccessControlType]::Allow)))
+        Set-SecurityDescriptor -Path $path -Security $security
+        $repaired += $entry.Name
+    }
+
+    return @($repaired)
+}
+
+function Get-MachineStateDocument {
+    <#
+    .SYNOPSIS
+        Read a non-secret machine-state file (default state.json) the way an elevated
+        updater is allowed to: existence decided by directory listing, DACL guarded,
+        denial loud. Returns the raw text, or $null when the file genuinely does not exist.
+
+    .DESCRIPTION
+        Two real hazards this closes, both from the state.json empty-DACL incident:
+
+        - `Test-Path`/`File.Exists` return FALSE for an access-DENIED file. A script asking
+          "is the device enrolled?" through Test-Path would read damage as absence and
+          proceed to re-enroll — the one outcome the recovery rules forbid. Existence is
+          therefore decided by listing the parent directory, which an elevated
+          administrator can always do on the machine-data tree.
+        - a damaged DACL made the read fail cryptically deep in a flow. The targeted
+          repair guard runs first, and a read that still fails throws a diagnosis instead
+          of an access-denied one-liner.
+
+        Only for the non-secret state documents (ADR-0029). Never used for device.key.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$DataDir,
+        [string]$Name = "state.json"
+    )
+
+    if ($Name -eq "device.key") {
+        throw "Get-MachineStateDocument reads non-secret state documents only, never key material"
+    }
+
+    if (-not (Test-Path -LiteralPath $DataDir)) { return $null }
+    if (@([System.IO.Directory]::GetFiles($DataDir, $Name)).Count -eq 0) {
+        return $null   # genuinely absent — not denied, because the listing itself succeeded
+    }
+
+    [void](Restore-MachineStateAcl -DataDir $DataDir)
+
+    $path = Join-Path $DataDir $Name
+    try {
+        return [System.IO.File]::ReadAllText($path)
+    }
+    catch [System.UnauthorizedAccessException] {
+        $why = "$Name exists but this process cannot read it even after the targeted ACL guard. " +
+               "It is service-owned machine material: run from an ELEVATED console so the Administrators " +
+               "ACE is effective. Do not delete or re-create the file - it may hold the device enrollment."
+        throw $why
+    }
+}
+
 function Protect-DeviceKeyAcl {
     <#
     .SYNOPSIS

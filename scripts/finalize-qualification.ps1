@@ -150,7 +150,17 @@ else {
 }
 
 # Configs travel with the candidate so promotion is complete in one rename.
-$state = Get-Content -LiteralPath (Join-Path $DataDir "state.json") -Raw | ConvertFrom-Json
+#
+# Reading state.json here is a decided design, not convenience: AgentState is documented and
+# enforced secret-free (the key lives elsewhere, SYSTEM-read-only), and Administrators'
+# recovery read is carried by the BA ACE in the intended machine-state DACL. A real run was
+# denied here because the pre-fix /T icacls had emptied the file's DACL — so the read is
+# guarded by a targeted, non-recursive repair of exactly the known state files.
+$stateRaw = Get-MachineStateDocument -DataDir $DataDir
+if ($null -eq $stateRaw) {
+    throw "no state.json under $DataDir - the device is not enrolled, and finalize must not enroll it"
+}
+$state = $stateRaw | ConvertFrom-Json
 $existingServiceConfig = Get-Content -LiteralPath (Join-Path $InstallRoot "service\appsettings.json") -Raw
 [System.IO.File]::WriteAllText((Join-Path $InstallRoot ".staging\service\appsettings.json"), $existingServiceConfig, (New-Object System.Text.UTF8Encoding($false)))
 $existingCompanionConfig = Get-Content -LiteralPath (Join-Path $InstallRoot "companion\appsettings.json") -Raw -ErrorAction SilentlyContinue
@@ -223,7 +233,7 @@ Write-Host "deployment committed; service and companion are both up with a live 
 Write-Host ""
 Write-Host "=== step 2: restore the device's broker registration (NOT re-enrollment) ===" -ForegroundColor Cyan
 
-$state = Get-Content -LiteralPath (Join-Path $DataDir "state.json") -Raw | ConvertFrom-Json
+$state = (Get-MachineStateDocument -DataDir $DataDir) | ConvertFrom-Json
 Write-Host "device on this machine: device_id=$($state.device_id) name=$($state.name)"
 
 # Derive the PUBLIC key from the device's own private key. Elevated read; the key never

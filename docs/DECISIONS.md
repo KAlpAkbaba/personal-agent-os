@@ -455,3 +455,62 @@ any numbered criterion - which is how it went unnoticed.
 Standing lesson, restated because restating it has not yet been enough: **a regression test
 for an integration point must assert the wiring, not the class.** Seen in M8 (authorization
 provider), M9 (`require_scope`), and now here.
+
+## ADR-0029 — An elevated updater may read service-owned device state directly (2026-09-01)
+
+Status: Accepted
+
+Context: the real finalize run failed at `Get-Content state.json` — access denied even to an
+elevated administrator. The owner's read-only inspection showed `state.json` with a
+protected, EMPTY DACL (`D:PAI`, no ACEs) while `device.key` (explicit SYSTEM-read +
+Administrators-full ACEs) and the `agent` directory (SYSTEM + Administrators) were intact.
+Root cause, closed by timeline: `state.json` was rewritten by the *old installed binary's*
+`AgentState.Save` at enrollment — atomic tmp→move, so the fresh file held only INHERITED
+ACEs — and the later install run still carrying the pre-fix `/inheritance:r ... /T` icacls
+stripped inherited ACEs tree-wide, its `(OI)(CI)`-flagged grants applying nothing to files.
+Explicit ACEs survived, inherited ones died: the exact signature of the twice-seen
+empty-DACL bug class, inflicted by a run that predated its fix. Not a new bug; one damaged
+file plus an unanswered design question.
+
+Decision — the question the incident forces: should an elevated owner/update process ever
+read service-owned device state directly? **Yes, for `state.json` specifically**, because:
+
+- `AgentState` is documented and enforced secret-free (device id, name, broker URL,
+  enrolled-at). The device private key lives in a different file under a strictly narrower
+  DACL (SYSTEM read-only), and no deployment flow reads it.
+- Administrators-as-recovery-authority is already the model: the intended machine-state DACL
+  is explicit `SYSTEM FullControl + Administrators FullControl`, so the elevated read needs
+  no new grant. The minimum right the updater uses is Read; it arrives via the existing
+  Administrators ACE. A separate metadata-broker service would add a privileged interface
+  without removing any authority Administrators already hold on this machine.
+
+Consequences, all implemented:
+
+1. **ACL correctness is part of the write primitive.** `AgentState.Save` and
+   `IdempotencyStore` apply `MachineMaterial.Protect(State)` explicitly after every atomic
+   replace — audited as the only writers of these files; no script writes them. A new agent
+   test replaces the state file twice and asserts explicit (never inherited) SYSTEM +
+   Administrators ACEs survive the replace. The old binary — the one writer without this
+   property — is exactly what the pending deployment replaces.
+2. **Targeted repair, never a sweep**: `Restore-MachineStateAcl` repairs exactly the named
+   state files (`state.json`, `idempotency.json`, `device.key`) and only when their DACL is
+   empty or unreadable — no recursion, no takeown, no `/reset /T`, no principal beyond
+   SYSTEM and Administrators, `device.key` keeping SYSTEM read-only. Healthy files are
+   untouched (asserted by SDDL equality). `finalize-qualification.ps1` runs it as a guard
+   before its state read.
+3. **The posture is not widened**: a non-elevated caller is still denied after repair — a
+   test asserts the denial. Users/Authenticated Users/Everyone appear nowhere.
+4. **One strict read primitive, everywhere**: `Get-MachineStateDocument` decides existence
+   by *directory listing* — because `Test-Path`/`File.Exists` answer FALSE for an
+   access-denied file, and "not enrolled" is the answer that leads a bring-up script to
+   RE-ENROLL a machine that already has a device identity. It guards with the targeted
+   repair, throws a self-explaining error on denial, and refuses `device.key` by name. All
+   four elevated readers (`finalize-qualification`, `qualify-device`,
+   `rotate-owner-credential`, `complete-device-enrollment` — including its
+   enrolled-already probe and its post-enroll verification) now go through it; no script
+   reads `state.json` raw any more.
+
+Tests: 7 new PS5.1 cases in `installer-acl.tests.ps1` (26/26) reproducing the empty-DACL
+denial on a state file, repairing it, proving no-op on healthy files, idempotence, and the
+reader's absent/denied/key-refusal semantics; 1 new agent test (`134/134`) proving
+protection survives `Save`-over-`Save` atomic replacement.

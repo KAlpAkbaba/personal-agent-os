@@ -56,6 +56,7 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 . (Join-Path $PSScriptRoot "lib\NativeProcess.ps1")
+. (Join-Path $PSScriptRoot "lib\InstallAcl.ps1")
 
 function Assert-Elevated {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -100,10 +101,14 @@ Write-Host "cloud core health: $($health.status)"
 
 # --- 2. owner credential ---------------------------------------------------------------------
 
-$statePath = Join-Path $dataDir "state.json"
-$alreadyEnrolled = Test-Path -LiteralPath $statePath
+# "Is the device enrolled?" must NEVER be answered by Test-Path: an access-denied state
+# file reads as absent, and the answer "not enrolled" here leads straight to re-enrollment —
+# a second device identity for a machine that already has one. Get-MachineStateDocument
+# decides existence by directory listing and throws loudly on a denied read (ADR-0029).
+$stateRaw = Get-MachineStateDocument -DataDir $dataDir
+$alreadyEnrolled = ($null -ne $stateRaw)
 if ($alreadyEnrolled) {
-    $existing = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+    $existing = $stateRaw | ConvertFrom-Json
     Write-Host "device is already enrolled: device_id=$($existing.device_id) (it will not be enrolled again)"
 }
 
@@ -161,7 +166,7 @@ try {
         # Deliberately not re-enrolling. A second enrolment would mint a second device
         # identity for a machine that already has one, orphaning the first in the broker and
         # discarding a key the service is already configured to use.
-        $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+        $state = $stateRaw | ConvertFrom-Json
         Write-Host "skipping enrolment: device_id=$($state.device_id) enrolled $($state.enrolled_at)"
     }
     else {
@@ -189,10 +194,11 @@ try {
         }
         Write-Host ($safeOut.Trim())
 
-        if (-not (Test-Path -LiteralPath $statePath)) {
-            throw "enrolment reported success but $statePath does not exist"
+        $freshRaw = Get-MachineStateDocument -DataDir $dataDir
+        if ($null -eq $freshRaw) {
+            throw "enrolment reported success but state.json does not exist under $dataDir"
         }
-        $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+        $state = $freshRaw | ConvertFrom-Json
         Write-Host "enrolled: device_id=$($state.device_id) name=$($state.name)"
     }
 

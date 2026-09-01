@@ -325,6 +325,36 @@ public class MachineMaterialTests : IDisposable
     }
 
     [Fact]
+    public void Replacing_the_state_file_reapplies_its_protection()
+    {
+        // ACL correctness is part of the WRITE PRIMITIVE, not a one-time installer repair:
+        // a real state.json was rewritten by Save (tmp -> atomic move, inherited ACEs only)
+        // and a later tree-wide ACL pass emptied its DACL, locking out even an elevated
+        // administrator. Every Save must leave the file explicitly protected.
+        var statePath = Path.Combine(_root, "state.json");
+        var state = new AgentState
+        {
+            DeviceId = Guid.NewGuid().ToString(),
+            Name = "first",
+            BrokerRestUrl = "http://127.0.0.1:8001",
+            EnrolledAt = DateTimeOffset.UtcNow,
+        };
+        state.Save(statePath);
+        (state with { Name = "replaced" }).Save(statePath);   // the atomic replace path
+
+        var rules = RulesOf(statePath);
+        Assert.NotEmpty(rules);
+        Assert.Contains(rules, rule =>
+            ((SecurityIdentifier)rule.IdentityReference).Equals(SystemSid)
+            && rule.FileSystemRights.HasFlag(FileSystemRights.FullControl));
+        // The elevated-recovery read the deployment flow depends on:
+        Assert.Contains(rules, rule =>
+            ((SecurityIdentifier)rule.IdentityReference).Equals(AdministratorsSid)
+            && rule.FileSystemRights.HasFlag(FileSystemRights.FullControl));
+        Assert.All(rules, rule => Assert.False(rule.IsInherited, "protection must be explicit, not borrowed from the directory"));
+    }
+
+    [Fact]
     public void A_machine_directory_grants_only_SYSTEM_and_administrators_and_inherits_down()
     {
         var directory = Path.Combine(_root, "machine-dir");

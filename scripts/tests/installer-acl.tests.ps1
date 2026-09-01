@@ -394,6 +394,137 @@ try {
         Assert-Equal -Expected '{"DataDir":"original"}' -Actual ([System.IO.File]::ReadAllText($marker)) `
             -Because "the live install must be exactly as it was"
     }
+
+    Write-Host ""
+    Write-Host "machine-state file recovery (the real state.json empty-DACL incident)"
+
+    function New-MachineDataFixture {
+        <#  A data dir shaped like C:\ProgramData\PagentOS\agent after the incident.  #>
+        param([string]$Name)
+        $dataDir = Join-Path $script:Sandbox $Name
+        New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
+        Set-Content -LiteralPath (Join-Path $dataDir "state.json") -Value '{"device_id":"real"}' -Encoding ASCII
+        Set-Content -LiteralPath (Join-Path $dataDir "device.key") -Value "keymaterial" -Encoding ASCII
+        return $dataDir
+    }
+
+    Test-Case "a state file with an empty protected DACL is repaired and readable again" {
+        # The real failure: state.json rewritten by the service (inherited ACEs only), then
+        # the pre-fix /T icacls stripped inheritance tree-wide -> protected EMPTY DACL that
+        # denied even the elevated administrator running finalize-qualification.
+        $dataDir = New-MachineDataFixture -Name "state-incident"
+        $statePath = Join-Path $dataDir "state.json"
+        Set-EmptyProtectedDacl -Path $statePath
+        try { [void][System.IO.File]::ReadAllText($statePath); throw "damage was not reproduced" }
+        catch [System.UnauthorizedAccessException] { }
+
+        $repaired = @(Restore-MachineStateAcl -DataDir $dataDir)
+        Assert-True -Condition ($repaired -contains "state.json") -Because "the damaged file must be reported as repaired"
+
+        # Readability is a property of the caller's TOKEN: the finalize updater runs with an
+        # elevated Administrators SID, this test may not. Assert the outcome each token earns.
+        $tokenIsAdmin = ([System.Security.Principal.WindowsPrincipal]::new(
+            [System.Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole(
+            [System.Security.Principal.WindowsBuiltInRole]::Administrator)
+        if ($tokenIsAdmin) {
+            Assert-Equal -Expected '{"device_id":"real"}' -Actual ([System.IO.File]::ReadAllText($statePath).Trim()) `
+                -Because "after repair the elevated updater's read (the finalize line that failed) must succeed"
+        }
+        else {
+            $denied = $false
+            try { [void][System.IO.File]::ReadAllText($statePath) } catch [System.UnauthorizedAccessException] { $denied = $true }
+            Assert-True -Condition $denied -Because "a non-elevated caller must STILL be denied - repair is recovery, not a widening"
+        }
+
+        $acl = Get-SecurityDescriptor -Path $statePath
+        $sids = @($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]) | ForEach-Object { $_.IdentityReference.Value })
+        Assert-True -Condition ($sids -contains "S-1-5-18") -Because "SYSTEM must be able to replace its own state"
+        Assert-True -Condition ($sids -contains "S-1-5-32-544") -Because "Administrators carry the recovery read"
+        foreach ($sid in $sids) {
+            Assert-True -Condition ($sid -in @("S-1-5-18", "S-1-5-32-544")) -Because "repair must not widen access beyond SYSTEM+Administrators (got $sid)"
+        }
+    }
+
+    Test-Case "device.key repair grants SYSTEM read-only, not full control" {
+        $dataDir = New-MachineDataFixture -Name "key-incident"
+        $keyPath = Join-Path $dataDir "device.key"
+        Set-EmptyProtectedDacl -Path $keyPath
+        [void](Restore-MachineStateAcl -DataDir $dataDir)
+        $acl = Get-SecurityDescriptor -Path $keyPath
+        $systemRules = @($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]) |
+            Where-Object { $_.IdentityReference.Value -eq "S-1-5-18" })
+        Assert-Equal -Expected 1 -Actual @($systemRules).Count -Because "exactly one SYSTEM ACE"
+        Assert-True -Condition (-not ($systemRules[0].FileSystemRights.HasFlag([System.Security.AccessControl.FileSystemRights]::WriteData))) `
+            -Because "the key stays read-only for SYSTEM - the narrower secret posture must not be flattened by repair"
+    }
+
+    Test-Case "healthy machine-state files are left untouched by the repair guard" {
+        $dataDir = New-MachineDataFixture -Name "state-healthy"
+        $statePath = Join-Path $dataDir "state.json"
+        $before = (Get-SecurityDescriptor -Path $statePath).GetSecurityDescriptorSddlForm(
+            [System.Security.AccessControl.AccessControlSections]::Access)
+        $repaired = @(Restore-MachineStateAcl -DataDir $dataDir)
+        Assert-Equal -Expected 0 -Actual @($repaired).Count -Because "nothing was damaged, nothing may be rewritten"
+        $after = (Get-SecurityDescriptor -Path $statePath).GetSecurityDescriptorSddlForm(
+            [System.Security.AccessControl.AccessControlSections]::Access)
+        Assert-Equal -Expected $before -Actual $after -Because "the guard must be a no-op on healthy files"
+    }
+
+    Test-Case "the strict state reader returns content for a healthy file and null for a missing one" {
+        $dataDir = New-MachineDataFixture -Name "reader-healthy"
+        Assert-Equal -Expected '{"device_id":"real"}' -Actual ((Get-MachineStateDocument -DataDir $dataDir).Trim()) `
+            -Because "a readable state document is returned as-is"
+        Assert-True -Condition ($null -eq (Get-MachineStateDocument -DataDir $dataDir -Name "idempotency.json")) `
+            -Because "genuinely absent means null, decided by directory listing, not an exception"
+        Assert-True -Condition ($null -eq (Get-MachineStateDocument -DataDir (Join-Path $dataDir "no-such-dir"))) `
+            -Because "a missing data dir is also 'not enrolled', not a crash"
+    }
+
+    Test-Case "the strict state reader never treats an access-denied file as absent" {
+        # The hazard: Test-Path answers FALSE for a denied file, and 'not enrolled' leads to
+        # re-enrollment. The reader must either repair-and-read or throw - never return null.
+        $dataDir = New-MachineDataFixture -Name "reader-denied"
+        Set-EmptyProtectedDacl -Path (Join-Path $dataDir "state.json")
+
+        $tokenIsAdmin = ([System.Security.Principal.WindowsPrincipal]::new(
+            [System.Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole(
+            [System.Security.Principal.WindowsBuiltInRole]::Administrator)
+        if ($tokenIsAdmin) {
+            Assert-Equal -Expected '{"device_id":"real"}' -Actual ((Get-MachineStateDocument -DataDir $dataDir).Trim()) `
+                -Because "elevated: the guard repairs and the read succeeds"
+        }
+        else {
+            try {
+                $result = Get-MachineStateDocument -DataDir $dataDir
+                throw "returned <$result> instead of throwing - a denied file must never read as absent"
+            }
+            catch {
+                Assert-True -Condition ($_.Exception.Message -match "ELEVATED") `
+                    -Because "the refusal must say what to do, not just 'access denied' (got: $($_.Exception.Message))"
+            }
+        }
+    }
+
+    Test-Case "the strict state reader refuses to read key material" {
+        $dataDir = New-MachineDataFixture -Name "reader-key"
+        try {
+            [void](Get-MachineStateDocument -DataDir $dataDir -Name "device.key")
+            throw "device.key must never be readable through the state-document path"
+        }
+        catch {
+            Assert-True -Condition ($_.Exception.Message -match "key material") -Because "the refusal names the boundary"
+        }
+    }
+
+    Test-Case "repair is idempotent and survives a missing optional file" {
+        # idempotency.json does not exist in this fixture; state.json is damaged twice.
+        $dataDir = New-MachineDataFixture -Name "state-idempotent"
+        Set-EmptyProtectedDacl -Path (Join-Path $dataDir "state.json")
+        $first = @(Restore-MachineStateAcl -DataDir $dataDir)
+        $second = @(Restore-MachineStateAcl -DataDir $dataDir)
+        Assert-Equal -Expected 1 -Actual @($first).Count -Because "first pass repairs the one damaged file"
+        Assert-Equal -Expected 0 -Actual @($second).Count -Because "second pass finds nothing to do"
+    }
 }
 finally {
     # Test trees are hardened against the test account, so ownership is what makes cleanup

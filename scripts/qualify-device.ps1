@@ -41,6 +41,9 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
+. (Join-Path $PSScriptRoot "lib\NativeProcess.ps1")
+. (Join-Path $PSScriptRoot "lib\InstallAcl.ps1")
+
 function Assert-Elevated {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     if (-not (New-Object Security.Principal.WindowsPrincipal($identity)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -97,7 +100,11 @@ else {
 $tokenFile = Join-Path $env:LOCALAPPDATA "PagentOS\secrets\PAGENTOS_OWNER_SESSION_TOKEN.dpapi"
 $agentConfig = Get-Content -LiteralPath "C:\Program Files\PagentOS\agent\service\appsettings.json" -Raw | ConvertFrom-Json
 $baseUrl = $agentConfig.BrokerRestUrl.TrimEnd('/')
-$state = Get-Content -LiteralPath (Join-Path $agentConfig.DataDir "state.json") -Raw | ConvertFrom-Json
+# Strict read: existence by directory listing (Test-Path reads DENIED as absent), DACL
+# guarded, loud on denial. The state.json empty-DACL incident is why (ADR-0029).
+$stateRaw = Get-MachineStateDocument -DataDir $agentConfig.DataDir
+if ($null -eq $stateRaw) { throw "no state.json under $($agentConfig.DataDir): the device is not enrolled" }
+$state = $stateRaw | ConvertFrom-Json
 
 $commandOk = $false
 if (Test-Path -LiteralPath $tokenFile) {

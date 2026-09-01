@@ -47,6 +47,7 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 . (Join-Path $PSScriptRoot "lib\NativeProcess.ps1")
+. (Join-Path $PSScriptRoot "lib\InstallAcl.ps1")
 . (Join-Path $PSScriptRoot "lib\IdentityStatus.ps1")
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -230,10 +231,11 @@ try {
     }
     Write-Host "  same owner identity preserved      : rotations $rotationsBefore -> $rotationsAfter, created_at unchanged, root unchanged"
 
-    # 4. the enrolled device is untouched
-    $statePath = Join-Path $agent.DataDir "state.json"
-    if (Test-Path -LiteralPath $statePath) {
-        $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+    # 4. the enrolled device is untouched. Strict read (ADR-0029): Test-Path would report
+    # an access-DENIED state file as "none on this machine yet", which is exactly wrong.
+    $stateRaw = Get-MachineStateDocument -DataDir $agent.DataDir
+    if ($null -ne $stateRaw) {
+        $state = $stateRaw | ConvertFrom-Json
         Write-Host "  device enrollment preserved        : device_id=$($state.device_id)"
     }
     else {
