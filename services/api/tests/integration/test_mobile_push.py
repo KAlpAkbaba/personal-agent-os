@@ -374,3 +374,33 @@ def test_share_refuses_a_render_over_the_bound(
 def test_share_404s_for_an_unknown_artifact(client: TestClient) -> None:
     assert client.get(f"/v1/mobile/share/{uuid.uuid4()}").status_code == 404
     assert client.get(f"/v1/mobile/share/{uuid.uuid4()}/pdf").status_code == 404
+
+
+# ------------------------------------------- automatic announcement (no wire)
+
+
+def test_the_announcer_fires_for_a_ready_task_with_no_one_calling_the_endpoint(
+    client: TestClient, ready_task: tuple[uuid.UUID, uuid.UUID, str]
+) -> None:
+    """The worker only makes a task READY; the API delivers.
+
+    Nothing here calls /notifications/artifact-ready - the announcer drains
+    READY-but-unannounced tasks by itself, which is what makes the push
+    trigger real in production rather than test-only.
+    """
+    task_id, artifact_id, title = ready_task
+    register(client, token="announcer-driven-token")
+
+    announcer = client.app.state.mobile.announcer
+    assert announcer.sweep_once() >= 1
+
+    inbox = client.get("/v1/mobile/notifications").json()["notifications"]
+    mine = [n for n in inbox if n["data"].get("artifact_id") == str(artifact_id)]
+    assert mine, "the ready task was not announced by the sweeper"
+    assert title in mine[0]["body"]
+
+    # Exactly once: a second sweep must not re-announce the same task.
+    before = len(client.get("/v1/mobile/notifications").json()["notifications"])
+    assert announcer.sweep_once() == 0
+    after = len(client.get("/v1/mobile/notifications").json()["notifications"])
+    assert after == before

@@ -14,6 +14,7 @@ registration's delivery target.
 from __future__ import annotations
 
 import contextlib
+import os
 from collections.abc import Iterator
 
 from sqlalchemy.engine import Engine
@@ -22,6 +23,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.config import Settings
 from app.db import build_engine, build_session_factory
 from app.logging import get_logger
+from app.mobile.announcer import DEFAULT_INTERVAL_S, ArtifactReadyAnnouncer
 from app.mobile.config import share_max_bytes
 from app.mobile.providers import FakePushProvider, PushProvider, build_registry
 from app.mobile.service import MobileService
@@ -44,6 +46,7 @@ class MobileRuntime:
         )
         self._providers: dict[str, PushProvider] = providers or build_registry()
         self._service: MobileService | None = None
+        self._announcer: ArtifactReadyAnnouncer | None = None
 
     @property
     def engine(self) -> Engine:
@@ -78,6 +81,25 @@ class MobileRuntime:
         if self._service is None:
             self._service = MobileService(self.session, self._providers)
         return self._service
+
+    @property
+    def announcer(self) -> ArtifactReadyAnnouncer:
+        """Drains READY-but-unannounced tasks into artifact-ready pushes.
+
+        The Temporal worker only makes a task READY; delivery happens here,
+        where the registrations and provider state live (app/mobile/announcer.py).
+        """
+        if self._announcer is None:
+            self._announcer = ArtifactReadyAnnouncer(
+                self.session,
+                lambda artifact_id, title, task_id: self.service.notify_artifact_ready(
+                    artifact_id=artifact_id, title=title, task_id=task_id
+                ),
+                interval_s=float(
+                    os.environ.get("PAGENTOS_MOBILE_ANNOUNCE_INTERVAL_S", DEFAULT_INTERVAL_S)
+                ),
+            )
+        return self._announcer
 
     def health_check(self) -> dict[str, object]:
         """Push posture for /v1/system/health ('mobile'). No I/O, no secrets.

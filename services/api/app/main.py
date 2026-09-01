@@ -58,10 +58,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await broker.start()
         await artifacts.start()
+        # M9: the artifact-ready announcer runs HERE, in the process that holds
+        # the push registrations. The Temporal worker only makes a task READY;
+        # this drains READY-but-unannounced tasks (app/mobile/announcer.py).
+        await mobile.announcer.start()
         logger.info("broker_started")
         try:
             yield
         finally:
+            await mobile.announcer.stop()
             await broker.stop()
             logger.info("broker_stopped")
 

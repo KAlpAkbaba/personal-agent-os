@@ -102,6 +102,13 @@ class Task(Base):
     )
     ready_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # M9: stamped by the API's artifact-ready announcer once the readiness push
+    # has been delivered. The Temporal worker never touches it — it only makes
+    # the task READY; see app/mobile/announcer.py for why the two processes
+    # communicate through this column instead of a worker-held credential.
+    announced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class TaskRun(Base):
