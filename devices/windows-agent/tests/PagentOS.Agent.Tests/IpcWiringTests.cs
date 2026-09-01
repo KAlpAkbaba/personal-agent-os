@@ -247,6 +247,60 @@ public class IpcWiringTests
         }
     }
 
+    // ----------------------------------------- the pipe DACL, proven from the REAL handle
+
+    [Fact]
+    public async Task The_created_pipes_effective_dacl_names_exactly_the_intended_principals()
+    {
+        // Runtime proof, not configuration inspection: the SDDL is read back from the real
+        // pipe handle after creation and must name the authorized owner SID explicitly, plus
+        // the creating (service) account — and nobody else. Measured on this machine: the
+        // DACL cannot be read externally at ANY later point without either failing (busy) or
+        // consuming the listening instance, so creation time is the only honest observation
+        // point and the audit row is how a verifier sees it.
+        var ownerSid = IpcTestSupport.CurrentSid();
+        var dir = Path.Combine(Path.GetTempPath(), "pagentos-pipe-sddl", Guid.NewGuid().ToString("N"));
+        var auditPath = Path.Combine(dir, "agent-audit.jsonl");
+        var server = new CompanionPipeServer(
+            IpcTestSupport.NewPipeName(),
+            IpcTestSupport.SelfPolicy(),
+            new WindowsPipePeerInspector(),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<CompanionPipeServer>.Instance,
+            new AuditLog(auditPath));
+        await server.StartAsync(CancellationToken.None);
+        try
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(15);
+            while (server.LastPipeSddl is null)
+            {
+                Assert.True(DateTime.UtcNow < deadline, "the pipe never reported its effective SDDL");
+                await Task.Delay(20);
+            }
+
+            var sddl = server.LastPipeSddl!;
+            var descriptor = new System.Security.AccessControl.RawSecurityDescriptor(sddl);
+            var aces = descriptor.DiscretionaryAcl!.Cast<System.Security.AccessControl.CommonAce>().ToList();
+
+            Assert.NotEmpty(aces);
+            // In this test the creating account IS the owner, so exactly one principal is
+            // legitimate; anything else at all is a finding.
+            Assert.All(aces, ace => Assert.Equal(ownerSid, ace.SecurityIdentifier.Value));
+            Assert.DoesNotContain("S-1-5-32-545", sddl); // Users
+            Assert.DoesNotContain("S-1-1-0", sddl);      // Everyone
+            Assert.DoesNotContain("S-1-5-11", sddl);     // Authenticated Users
+
+            // And the audit row a verifier reads must carry the same SDDL.
+            var audit = File.ReadAllText(auditPath);
+            Assert.Contains("ipc_pipe_created", audit, StringComparison.Ordinal);
+            Assert.Contains(sddl, audit, StringComparison.Ordinal);
+        }
+        finally
+        {
+            await server.StopAsync(CancellationToken.None);
+            try { Directory.Delete(dir, recursive: true); } catch (Exception) { }
+        }
+    }
+
     // ---------------------------------------------- the pipe-owner inspector, positively
 
     [Fact]

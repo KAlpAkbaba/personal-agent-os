@@ -34,6 +34,13 @@
 param(
     [int]$Port = 0,
     [string]$AgentConfig = (Join-Path $env:ProgramFiles "PagentOS\agent\service\appsettings.json"),
+
+    # The database this Cloud Core uses. Defaults to a DEDICATED database, not the test one:
+    # the real machine's enrollment row was destroyed because the "production" broker shared
+    # `pagentos` with the integration suite, whose migration test round-trips the schema
+    # (drop + recreate). Real state and test state never share a database again.
+    [string]$DatabaseName = "pagentos_prod",
+
     [switch]$SkipInfra,
     [switch]$Stop,
     [int]$TimeoutSeconds = 90
@@ -127,10 +134,35 @@ else {
 
     $uv = Get-Uv
 
-    Write-Host "applying migrations..."
-    $migrate = Invoke-NativeProcess -FilePath $uv -Arguments @("run", "alembic", "upgrade", "head") `
-        -WorkingDirectory $apiRoot -TimeoutSeconds 300
-    Assert-NativeSuccess -Result $migrate -Activity "alembic upgrade head"
+    $databaseUrl = "postgresql+psycopg://pagentos:pagentos-dev@127.0.0.1:15432/$DatabaseName"
+    Write-Host "database: $DatabaseName (isolated from the integration suite's 'pagentos')"
+
+    # Create the database if it does not exist yet. CREATE DATABASE cannot run inside a
+    # transaction, and psql inside the container is the simplest reliable path.
+    $docker = "C:\Program Files\Docker\Docker\resources\bin\docker.exe"
+    $exists = Invoke-NativeProcess -FilePath $docker -Arguments @(
+        "exec", "pagentos-postgres", "psql", "-U", "pagentos", "-d", "postgres", "-tAc",
+        "SELECT 1 FROM pg_database WHERE datname='$DatabaseName'"
+    ) -TimeoutSeconds 60
+    if ($exists.StdOut.Trim() -ne "1") {
+        Write-Host "creating database $DatabaseName ..."
+        $create = Invoke-NativeProcess -FilePath $docker -Arguments @(
+            "exec", "pagentos-postgres", "psql", "-U", "pagentos", "-d", "postgres", "-c",
+            "CREATE DATABASE $DatabaseName OWNER pagentos"
+        ) -TimeoutSeconds 60
+        Assert-NativeSuccess -Result $create -Activity "create database $DatabaseName"
+    }
+
+    Write-Host "applying migrations to $DatabaseName ..."
+    $env:PAGENTOS_DATABASE_URL = $databaseUrl
+    try {
+        $migrate = Invoke-NativeProcess -FilePath $uv -Arguments @("run", "alembic", "upgrade", "head") `
+            -WorkingDirectory $apiRoot -TimeoutSeconds 300
+        Assert-NativeSuccess -Result $migrate -Activity "alembic upgrade head ($DatabaseName)"
+    }
+    finally {
+        Remove-Item Env:\PAGENTOS_DATABASE_URL -ErrorAction SilentlyContinue
+    }
 
     Write-Host "starting the Cloud Core on $baseUrl ..."
     $psi = New-Object System.Diagnostics.ProcessStartInfo
@@ -141,6 +173,7 @@ else {
     $psi.WorkingDirectory = $apiRoot
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
+    $psi.EnvironmentVariables["PAGENTOS_DATABASE_URL"] = $databaseUrl
     [void][System.Diagnostics.Process]::Start($psi)
 }
 

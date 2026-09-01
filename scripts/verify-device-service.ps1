@@ -76,38 +76,104 @@ else {
     Add-Result "2.2" "Companion runs in the owner's interactive session" $status "session=$companionSession user=$($owner.Domain)\$($owner.User) path=$($companion.ExecutablePath)"
 }
 
-# --- 1.1 pipe DACL and 1.3 pipe ownership --------------------------------------
-# The pipe object itself is the artifact to inspect: who owns it (must be a service
-# account, which is what the companion checks) and who may open it.
+# --- 1.1 pipe DACL --------------------------------------------------------------
+# Lifecycle facts, measured on this machine rather than assumed (scratch-pipe probes):
+#   - while the companion is CONNECTED (the normal steady state), EVERY external open of a
+#     single-instance pipe fails ERROR_PIPE_BUSY - including READ_CONTROL-only, including
+#     the CreateFile inside Test-Path. The old probe read that 231 as "does not exist";
+#   - against a LISTENING instance the same open CONNECTS, consuming the instance and
+#     disrupting admission. So a runtime probe is either blind or invasive;
+#   - namespace enumeration ([IO.Directory]::GetFiles("\\.\pipe\")) sees the pipe in both
+#     states and never touches the channel.
+# Therefore: presence via enumeration; the DACL from the `ipc_pipe_created` audit row, which
+# the service writes from the REAL handle at creation - the one non-invasive observation
+# point the pipe's life has. The name comes from the service's own configuration, never
+# reconstructed.
 
-$sid = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
-$pipePath = "\\.\pipe\pagentos-companion-$sid"
-if (Test-Path $pipePath) {
+$agentSettingsPath = Join-Path $InstallRoot "service\appsettings.json"
+$expectedPipe = $null
+$expectedOwnerSid = $null
+if (Test-Path -LiteralPath $agentSettingsPath) {
     try {
-        $acl = Get-Acl -Path $pipePath -ErrorAction Stop
-        $ownerSid = (New-Object Security.Principal.NTAccount($acl.Owner)).Translate([Security.Principal.SecurityIdentifier]).Value
-        $ownedByService = $ownerSid -in @("S-1-5-18", "S-1-5-32-544")
-        Add-Result "1.3" "Pipe is owned by a service account" ($(if ($ownedByService) { "PROVEN_REAL" } else { "NOT_YET_PROVEN" })) "owner=$($acl.Owner) ($ownerSid)"
+        $agentSettings = Get-Content -LiteralPath $agentSettingsPath -Raw | ConvertFrom-Json
+        $expectedPipe = $agentSettings.PipeName
+        $expectedOwnerSid = $agentSettings.CompanionSid
+    } catch { }
+}
+if (-not $expectedPipe) {
+    $expectedPipe = "pagentos-companion-$(([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value)"
+}
+if (-not $expectedOwnerSid) {
+    $expectedOwnerSid = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
+}
 
-        $rules = $acl.Access | ForEach-Object { "$($_.IdentityReference)=$($_.FileSystemRights)" }
-        $ownerNamed = $acl.Access | Where-Object { $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -eq $sid }
-        Add-Result "1.1" "Pipe DACL names the owner account explicitly" ($(if ($ownerNamed) { "PROVEN_REAL" } else { "NOT_YET_PROVEN" })) ($rules -join "; ")
+$pipeListed = @([System.IO.Directory]::GetFiles("\\.\pipe\") | Where-Object { $_ -match [regex]::Escape($expectedPipe) })
+$pipeExists = (@($pipeListed).Count -ge 1)
+
+# The audit lives in the machine-protected data directory: readable elevated, access-denied
+# otherwise. Those are different findings and must not be reported identically.
+$sddlRow = $null
+$auditReadable = $false
+$agentAudit = Join-Path $DataDir "audit\agent-audit.jsonl"
+try {
+    $auditLines = Get-Content -LiteralPath $agentAudit -Tail 500 -ErrorAction Stop
+    $auditReadable = $true
+    $sddlRow = $auditLines |
+        ForEach-Object { try { $_ | ConvertFrom-Json } catch { $null } } |
+        Where-Object { $_ -and $_.event -eq "ipc_pipe_created" -and $_.detail -match [regex]::Escape($expectedPipe) } |
+        Select-Object -Last 1
+}
+catch [System.UnauthorizedAccessException] {
+    # Correctly protected against this account; run elevated to read it.
+}
+catch {
+    # Absent (or another read failure): $auditReadable stays false.
+}
+
+if (-not $pipeExists) {
+    Add-Result "1.1" "Pipe DACL names the owner account explicitly" "NOT_YET_PROVEN" `
+        "pipe '$expectedPipe' is not in the pipe namespace (service not running, or listening on another name)"
+}
+elseif ($sddlRow) {
+    $sddl = ($sddlRow.detail -replace '^.*sddl=', '')
+    $ownerNamed = ($sddl -match [regex]::Escape("(A;;") -and $sddl -match [regex]::Escape($expectedOwnerSid))
+    $noBroadGrants = -not ($sddl -match "S-1-5-32-545|S-1-1-0|S-1-5-11")
+    if ($ownerNamed -and $noBroadGrants) {
+        Add-Result "1.1" "Pipe DACL names the owner account explicitly" "PROVEN_REAL" `
+            "effective SDDL read from the live pipe HANDLE at creation and audited at $($sddlRow.ts): $sddl"
     }
-    catch {
-        Add-Result "1.1" "Pipe DACL names the owner account explicitly" "NOT_YET_PROVEN" "could not read the pipe ACL: $($_.Exception.Message)"
+    else {
+        Add-Result "1.1" "Pipe DACL names the owner account explicitly" "NOT_YET_PROVEN" `
+            "runtime SDDL does not match ADR-0028 (ownerNamed=$ownerNamed, broadGrants=$(-not $noBroadGrants)): $sddl"
     }
 }
+elseif (-not $auditReadable) {
+    Add-Result "1.1" "Pipe DACL names the owner account explicitly" "NOT_YET_PROVEN" `
+        "pipe '$expectedPipe' is live, but the agent audit at $agentAudit is not readable from this account (which is the intended protection). Run this verifier elevated."
+}
 else {
-    Add-Result "1.1" "Pipe DACL names the owner account explicitly" "NOT_YET_PROVEN" "pipe $pipePath does not exist (service not running?)"
+    Add-Result "1.1" "Pipe DACL names the owner account explicitly" "NOT_YET_PROVEN" `
+        "pipe '$expectedPipe' is live, but no ipc_pipe_created audit row exists - the installed service binary predates the SDDL capture. The DACL cannot be read externally without disturbing the pipe (measured: busy=231 when connected, instance-consuming when listening), so this converts when the service binary is updated."
 }
 
 # --- 1.4-1.7 admission actually happened, per the service's own audit ------------
 
 $auditPath = Join-Path $DataDir "audit\agent-audit.jsonl"
-if (Test-Path $auditPath) {
-    $recent = Get-Content $auditPath -Tail 400 | ForEach-Object {
+$auditAccessDenied = $false
+$recent = @()
+try {
+    $recent = Get-Content $auditPath -Tail 400 -ErrorAction Stop | ForEach-Object {
         try { $_ | ConvertFrom-Json } catch { $null }
     } | Where-Object { $_ }
+}
+catch [System.UnauthorizedAccessException] { $auditAccessDenied = $true }
+catch { }
+
+if ($auditAccessDenied) {
+    Add-Result "1.4-1.7" "Companion admitted on kernel-sourced identity" "NOT_YET_PROVEN" `
+        "the agent audit is protected against this account (as intended); run this verifier elevated to read it"
+}
+elseif (@($recent).Count -gt 0) {
 
     $admitted = $recent | Where-Object { $_.event -eq "ipc_companion_admitted" } | Select-Object -Last 1
     if ($admitted) {

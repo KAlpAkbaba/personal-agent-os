@@ -83,6 +83,22 @@ public sealed class CompanionPipeServer : BackgroundService
     /// <summary>Identity of the currently admitted companion, or null when none is connected.</summary>
     public PipePeer? ConnectedPeer => _connection?.Peer;
 
+    /// <summary>
+    /// The effective security descriptor of the most recently created pipe instance, as
+    /// SDDL, read back from the REAL handle — not from the PipeSecurity object we asked for.
+    ///
+    /// This exists because the pipe's DACL turned out to be unverifiable from outside at
+    /// runtime, measured rather than assumed: while the companion is connected (the normal
+    /// steady state), every external CreateFile — even a READ_CONTROL-only open, even the
+    /// one hiding inside PowerShell's Test-Path — fails with ERROR_PIPE_BUSY on a
+    /// single-instance pipe; and against a LISTENING instance the same open *connects*,
+    /// consuming the instance and disrupting admission. The only non-invasive place the
+    /// effective DACL can be observed is here, on the handle, at creation. It is audited
+    /// (`ipc_pipe_created`) so an external verifier can check the runtime descriptor without
+    /// touching the pipe. SDDL contains SIDs and rights — no secrets.
+    /// </summary>
+    public string? LastPipeSddl { get; private set; }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation(
@@ -424,7 +440,7 @@ public sealed class CompanionPipeServer : BackgroundService
                 AccessControlType.Allow));
         }
 
-        return NamedPipeServerStreamAcl.Create(
+        var stream = NamedPipeServerStreamAcl.Create(
             _pipeName,
             PipeDirection.InOut,
             // One instance, one owner of the name.
@@ -445,6 +461,31 @@ public sealed class CompanionPipeServer : BackgroundService
             inBufferSize: 0,
             outBufferSize: 0,
             security);
+
+        // Read the EFFECTIVE descriptor back off the real handle and audit it once per
+        // change. Asking the object we just configured would prove what we requested; the
+        // handle proves what the kernel actually applied — and no external observer can read
+        // it non-invasively at any later point in the pipe's life (see LastPipeSddl).
+        try
+        {
+            var effective = stream.GetAccessControl();
+            var sddl = effective.GetSecurityDescriptorSddlForm(
+                AccessControlSections.Access | AccessControlSections.Owner);
+            if (!string.Equals(sddl, LastPipeSddl, StringComparison.Ordinal))
+            {
+                LastPipeSddl = sddl;
+                _logger.LogInformation("companion pipe created; effective sddl={Sddl}", sddl);
+                _audit?.Write("ipc_pipe_created", status: "ok", detail: $"pipe={_pipeName} sddl={sddl}");
+            }
+        }
+        catch (Exception ex)
+        {
+            // The pipe still works without the audit row; the verifier will say NOT proven
+            // rather than guessing, which is the correct failure direction.
+            _logger.LogWarning("could not read the pipe's effective security descriptor: {Reason}", ex.Message);
+        }
+
+        return stream;
     }
 
     private sealed class CompanionConnection : IAsyncDisposable
