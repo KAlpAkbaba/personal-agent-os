@@ -28,6 +28,7 @@ Set-StrictMode -Version Latest
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 . (Join-Path $repoRoot "scripts\lib\NativeProcess.ps1")
+. (Join-Path $repoRoot "scripts\lib\IdentityStatus.ps1")
 
 $script:Failures = 0
 $script:Passes = 0
@@ -241,6 +242,58 @@ exit 2
             Assert-True -Condition ($_.Exception.Message -match "database unreachable") `
                 -Because "a non-sensitive tool should surface its stderr: $($_.Exception.Message)"
         }
+    }
+
+    Write-Host ""
+    Write-Host "identity status field extraction (the rotations 0 -> 0 bug)"
+
+    # The REAL shape the recovery tool emits, captured from the owner's machine. `rotations`
+    # is top-level; `root` is a storage descriptor with no counter in it. The wrapper read
+    # `root.rotations`, and a defensive existence check turned that into a silent zero.
+    $realShape = @'
+{
+  "action": "status",
+  "active_sessions": 0,
+  "bootstrapped": true,
+  "created_at": "2026-09-01T11:44:57.479379+00:00",
+  "root": { "bootstrapped": true, "kind": "file", "path": "E:\\api\\var\\identity\\owner_credential.json" },
+  "rotated_at": "2026-09-01T13:34:28.637831+00:00",
+  "rotations": 2,
+  "session_idle_timeout_s": 604800,
+  "session_ttl_s": 2592000
+}
+'@ | ConvertFrom-Json
+
+    Test-Case "rotations is read from the top level of the real payload shape" {
+        Assert-Equal -Expected 2 -Actual (Get-IdentityRotationCount -Status $realShape) `
+            -Because "this exact payload was read as 0 by the old root.rotations path"
+    }
+
+    Test-Case "root path and created_at come from where they actually live" {
+        Assert-True -Condition ((Get-IdentityRootPath -Status $realShape) -match "owner_credential\.json") `
+            -Because "root.path is the canonical root file"
+        Assert-True -Condition ((Get-IdentityCreatedAt -Status $realShape) -match "^2026-09-01T11:44:57") `
+            -Because "created_at identifies the owner identity across rotations"
+    }
+
+    Test-Case "a payload missing the counter throws instead of defaulting to zero" {
+        # The defensive default is the bug: a missing field must be a loud protocol error,
+        # never a quiet 0 that produces '0 -> 0' while the real counter advances.
+        $withoutCounter = '{"action":"status","root":{"kind":"file","path":"x"}}' | ConvertFrom-Json
+        try {
+            Get-IdentityRotationCount -Status $withoutCounter | Out-Null
+            throw "a missing rotations field must not be read as zero"
+        }
+        catch {
+            Assert-True -Condition ($_.Exception.Message -match "no top-level 'rotations'") `
+                -Because "the error should name the protocol problem: $($_.Exception.Message)"
+        }
+    }
+
+    Test-Case "the old wrong path (root.rotations) is genuinely absent from the real shape" {
+        # Documents WHY the bug produced zero: the property never existed.
+        Assert-True -Condition ($realShape.root.PSObject.Properties.Name -notcontains "rotations") `
+            -Because "if root ever grows a rotations field this test forces a decision about which is canonical"
     }
 
     Write-Host ""

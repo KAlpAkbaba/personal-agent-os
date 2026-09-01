@@ -47,6 +47,7 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 . (Join-Path $PSScriptRoot "lib\NativeProcess.ps1")
+. (Join-Path $PSScriptRoot "lib\IdentityStatus.ps1")
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $apiRoot = Join-Path $repoRoot "services\api"
@@ -128,11 +129,14 @@ $before = Get-IdentityStatus -Uv $uv
 if (-not $before.bootstrapped) {
     throw "there is no owner credential to rotate. Use .\scripts\complete-device-enrollment.ps1 to bootstrap one instead."
 }
-$rotationsBefore = 0
-if ($before.root.PSObject.Properties.Name -contains "rotations") {
-    $rotationsBefore = [int]$before.root.rotations
-}
-Write-Host "identity root: bootstrapped, rotations=$rotationsBefore"
+# Top-level `rotations`, through the tested accessor. The first version read
+# `root.rotations` — a field that has never existed — and a defensive existence check turned
+# the mistake into a silent zero plus a spurious warning while the real counter advanced.
+$rotationsBefore = Get-IdentityRotationCount -Status $before
+$rootPathBefore = Get-IdentityRootPath -Status $before
+$createdAtBefore = Get-IdentityCreatedAt -Status $before
+Write-Host "identity root: $rootPathBefore"
+Write-Host "  bootstrapped, rotations=$rotationsBefore, created_at=$createdAtBefore"
 
 $oldCredential = $null
 if ($VerifyOldCredential) {
@@ -209,14 +213,22 @@ try {
 
     # 3. one owner identity, not two
     $after = Get-IdentityStatus -Uv $uv
-    $rotationsAfter = 0
-    if ($after.root.PSObject.Properties.Name -contains "rotations") {
-        $rotationsAfter = [int]$after.root.rotations
+    $rotationsAfter = Get-IdentityRotationCount -Status $after
+    $rootPathAfter = Get-IdentityRootPath -Status $after
+    $createdAtAfter = Get-IdentityCreatedAt -Status $after
+
+    # Hard failures, not warnings: each of these is a claim this script makes to the owner,
+    # and a claim that cannot be verified is a stop, not a footnote.
+    if ($rotationsAfter -ne ($rotationsBefore + 1)) {
+        throw "the rotation counter went $rotationsBefore -> $rotationsAfter (expected $($rotationsBefore + 1)). The credential state is ambiguous; do not proceed."
     }
-    Write-Host "  same owner identity preserved      : rotations $rotationsBefore -> $rotationsAfter, root $($after.root.path)"
-    if ($rotationsAfter -le $rotationsBefore) {
-        Write-Warning "the rotation counter did not advance; check the identity root"
+    if ($rootPathAfter -ne $rootPathBefore) {
+        throw "the identity root path changed during rotation ($rootPathBefore -> $rootPathAfter). Two roots would mean two owners; stop."
     }
+    if ($createdAtAfter -ne $createdAtBefore) {
+        throw "created_at changed during rotation ($createdAtBefore -> $createdAtAfter): that is a NEW owner identity, not a rotation. Stop."
+    }
+    Write-Host "  same owner identity preserved      : rotations $rotationsBefore -> $rotationsAfter, created_at unchanged, root unchanged"
 
     # 4. the enrolled device is untouched
     $statePath = Join-Path $agent.DataDir "state.json"
