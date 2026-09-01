@@ -10,7 +10,37 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
+  # The gate that costs nothing and catches the worst mistake: a secret in the tree.
+  # Mirrors the "Secret hygiene" step in scripts/quality-gate.ps1 so local and CI agree.
+  secret-hygiene:
+    name: Secret hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: No tracked .env or key material
+        run: |
+          set -euo pipefail
+          if git ls-files | grep -E '(^|/)\.env$|(^|/)\.env\.(?!example)' ; then
+            echo "::error::an .env-style file is tracked"; exit 1
+          fi
+          if git ls-files | grep -E '\.(pem|pfx|p12|key)$' ; then
+            echo "::error::key material is tracked"; exit 1
+          fi
+      - name: No secret-shaped content in tracked files
+        run: |
+          set -euo pipefail
+          pattern='AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|sk-[A-Za-z0-9]{24,}|xox[baprs]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----'
+          # git grep exits 1 when nothing matches, which is the success case here.
+          if git grep -nE "$pattern" -- ':!*.example' ':!*.lock' ; then
+            echo "::error::potential secret content in tracked files"; exit 1
+          fi
+
   api-lint-unit:
     name: API lint + unit tests
     runs-on: ubuntu-latest
@@ -55,6 +85,25 @@ jobs:
         working-directory: infra/docker
         run: docker compose -f docker-compose.dev.yml down -v
 
+  recovery-supervisor:
+    name: Recovery supervisor
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/recovery-supervisor
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Sync dependencies
+        run: uv sync --frozen
+      - name: Lint (ruff)
+        run: uv run ruff check .
+      - name: Tests
+        run: uv run pytest -q
+
   browser-agent:
     name: Browser agent tests
     runs-on: ubuntu-latest
@@ -77,6 +126,24 @@ jobs:
         run: uv run playwright install --with-deps chromium
       - name: Browser E2E tests
         run: uv run pytest -q -m browser
+
+  # The Windows agent has to build and test on Windows: its identity model is Windows
+  # kernel behaviour (pipe ACLs, client impersonation, session ids), not portable code.
+  windows-agent:
+    name: Windows agent build + tests
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: devices/windows-agent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: devices/windows-agent/global.json
+      - name: Build
+        run: dotnet build -c Release --nologo
+      - name: Tests
+        run: dotnet test -c Release --nologo --no-build
 
   web-build:
     name: Web shell build

@@ -1,0 +1,164 @@
+<#
+.SYNOPSIS
+    Qualifies an installed Device Service against the criteria in docs/QUALIFICATION.md
+    Stage 1 and 2 that can only be proven once the service really runs as LocalSystem.
+
+.DESCRIPTION
+    The adversarial unit tests prove the identity *logic*. They cannot prove the topology:
+    that the service is in Session 0 as LocalSystem, that the companion is in the owner's
+    interactive session, and that the service admits it on the strength of the kernel's
+    answer rather than because both halves happen to be the same user. That is what this
+    script checks, on the owner's real machine, and it prints a verdict per criterion using
+    the same PROVEN_REAL / NOT_YET_PROVEN vocabulary as the qualification matrix.
+
+    Read-only: it starts nothing, installs nothing and changes no configuration.
+
+.EXAMPLE
+    .\scripts\verify-device-service.ps1
+#>
+[CmdletBinding()]
+param(
+    [string]$ServiceName = "PagentOSDeviceAgent",
+    [string]$DataDir = (Join-Path $env:ProgramData "PagentOS\agent")
+)
+
+$ErrorActionPreference = "Continue"
+$results = New-Object System.Collections.ArrayList
+
+function Add-Result {
+    param([string]$Id, [string]$Criterion, [string]$Status, [string]$Evidence)
+    [void]$results.Add([pscustomobject]@{
+        Id        = $Id
+        Criterion = $Criterion
+        Status    = $Status
+        Evidence  = $Evidence
+    })
+}
+
+# --- 2.1 service exists, runs as LocalSystem, starts automatically ---------------
+
+$service = Get-CimInstance -ClassName Win32_Service -Filter "Name='$ServiceName'" -ErrorAction SilentlyContinue
+if (-not $service) {
+    Add-Result "2.1" "Service installed and running as LocalSystem" "NOT_YET_PROVEN" "no service named $ServiceName"
+}
+else {
+    $account = $service.StartName
+    $status = if ($service.State -eq "Running" -and $account -eq "LocalSystem" -and $service.StartMode -eq "Auto") { "PROVEN_REAL" } else { "NOT_YET_PROVEN" }
+    Add-Result "2.1" "Service installed and running as LocalSystem" $status "state=$($service.State) account=$account start=$($service.StartMode) pid=$($service.ProcessId)"
+}
+
+# --- 1.11 service process really is in Session 0 --------------------------------
+
+if ($service -and $service.ProcessId -gt 0) {
+    $proc = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId=$($service.ProcessId)" -ErrorAction SilentlyContinue
+    $sessionId = $proc.SessionId
+    $status = if ($sessionId -eq 0) { "PROVEN_REAL" } else { "NOT_YET_PROVEN" }
+    Add-Result "1.11" "Service process is in Session 0" $status "session=$sessionId"
+}
+else {
+    Add-Result "1.11" "Service process is in Session 0" "NOT_YET_PROVEN" "service is not running"
+}
+
+# --- 2.2 companion is in the owner's interactive session ------------------------
+
+$companion = Get-CimInstance -ClassName Win32_Process -Filter "Name='PagentOS.SessionCompanion.exe'" -ErrorAction SilentlyContinue
+if (-not $companion) {
+    Add-Result "2.2" "Companion runs in the owner's interactive session" "NOT_YET_PROVEN" "no companion process; sign out and back in, or start it once by hand"
+}
+else {
+    $owner = Invoke-CimMethod -InputObject $companion -MethodName GetOwner -ErrorAction SilentlyContinue
+    $companionSession = $companion.SessionId
+    $status = if ($companionSession -ne 0) { "PROVEN_REAL" } else { "NOT_YET_PROVEN" }
+    Add-Result "2.2" "Companion runs in the owner's interactive session" $status "session=$companionSession user=$($owner.Domain)\$($owner.User) path=$($companion.ExecutablePath)"
+}
+
+# --- 1.1 pipe DACL and 1.3 pipe ownership --------------------------------------
+# The pipe object itself is the artifact to inspect: who owns it (must be a service
+# account, which is what the companion checks) and who may open it.
+
+$sid = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
+$pipePath = "\\.\pipe\pagentos-companion-$sid"
+if (Test-Path $pipePath) {
+    try {
+        $acl = Get-Acl -Path $pipePath -ErrorAction Stop
+        $ownerSid = (New-Object Security.Principal.NTAccount($acl.Owner)).Translate([Security.Principal.SecurityIdentifier]).Value
+        $ownedByService = $ownerSid -in @("S-1-5-18", "S-1-5-32-544")
+        Add-Result "1.3" "Pipe is owned by a service account" ($(if ($ownedByService) { "PROVEN_REAL" } else { "NOT_YET_PROVEN" })) "owner=$($acl.Owner) ($ownerSid)"
+
+        $rules = $acl.Access | ForEach-Object { "$($_.IdentityReference)=$($_.FileSystemRights)" }
+        $ownerNamed = $acl.Access | Where-Object { $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -eq $sid }
+        Add-Result "1.1" "Pipe DACL names the owner account explicitly" ($(if ($ownerNamed) { "PROVEN_REAL" } else { "NOT_YET_PROVEN" })) ($rules -join "; ")
+    }
+    catch {
+        Add-Result "1.1" "Pipe DACL names the owner account explicitly" "NOT_YET_PROVEN" "could not read the pipe ACL: $($_.Exception.Message)"
+    }
+}
+else {
+    Add-Result "1.1" "Pipe DACL names the owner account explicitly" "NOT_YET_PROVEN" "pipe $pipePath does not exist (service not running?)"
+}
+
+# --- 1.4-1.7 admission actually happened, per the service's own audit ------------
+
+$auditPath = Join-Path $DataDir "audit\agent-audit.jsonl"
+if (Test-Path $auditPath) {
+    $recent = Get-Content $auditPath -Tail 400 | ForEach-Object {
+        try { $_ | ConvertFrom-Json } catch { $null }
+    } | Where-Object { $_ }
+
+    $admitted = $recent | Where-Object { $_.event -eq "ipc_companion_admitted" } | Select-Object -Last 1
+    if ($admitted) {
+        Add-Result "1.4-1.7" "Companion admitted on kernel-sourced identity" "PROVEN_REAL" $admitted.detail
+    }
+    else {
+        Add-Result "1.4-1.7" "Companion admitted on kernel-sourced identity" "NOT_YET_PROVEN" "no ipc_companion_admitted row in the last 400 audit entries"
+    }
+
+    $refused = $recent | Where-Object { $_.event -eq "ipc_peer_refused" }
+    if ($refused) {
+        Write-Host ""
+        Write-Host "peers refused since this log was rotated (this is the interesting part):" -ForegroundColor Yellow
+        $refused | Select-Object -Last 10 | ForEach-Object { Write-Host "  $($_.ts) $($_.status): $($_.detail)" }
+    }
+}
+else {
+    Add-Result "1.4-1.7" "Companion admitted on kernel-sourced identity" "NOT_YET_PROVEN" "no audit log at $auditPath"
+}
+
+# --- no inbound listener on the Windows machine ---------------------------------
+# The device link is outbound-only by design; an inbound listener owned by the agent
+# would be a silent architectural regression, so check rather than assume.
+
+$agentPids = @()
+if ($service -and $service.ProcessId) { $agentPids += $service.ProcessId }
+if ($companion) { $agentPids += $companion.ProcessId }
+if ($agentPids.Count -eq 0) {
+    # Nothing running means nothing was checked. "No listener found" would be true and
+    # worthless here, and writing it up as PROVEN_REAL is exactly the kind of vacuous pass
+    # this file exists to avoid.
+    Add-Result "5.2" "No inbound listener owned by the agent" "NOT_YET_PROVEN" "no agent process was running, so nothing was checked"
+}
+else {
+    $listeners = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
+        Where-Object { $agentPids -contains $_.OwningProcess }
+    if ($listeners) {
+        Add-Result "5.2" "No inbound listener owned by the agent" "NOT_YET_PROVEN" (($listeners | ForEach-Object { "$($_.LocalAddress):$($_.LocalPort)" }) -join ", ")
+    }
+    else {
+        Add-Result "5.2" "No inbound listener owned by the agent" "PROVEN_REAL" "checked pids $($agentPids -join ', '): no listening TCP socket"
+    }
+}
+
+# ------------------------------------------------------------------------ report
+
+Write-Host ""
+Write-Host "=== Device service qualification ===" -ForegroundColor Cyan
+$results | Format-Table -AutoSize -Wrap
+
+$blocked = $results | Where-Object { $_.Status -ne "PROVEN_REAL" }
+if ($blocked) {
+    Write-Host "$($blocked.Count) criteria not yet proven." -ForegroundColor Yellow
+    exit 1
+}
+
+Write-Host "All checked criteria PROVEN_REAL." -ForegroundColor Green
+exit 0
