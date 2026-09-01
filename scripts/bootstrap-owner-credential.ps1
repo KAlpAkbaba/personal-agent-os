@@ -117,14 +117,20 @@ try {
     $response = Invoke-RestMethod -Uri "$ApiBase/v1/identity/bootstrap" -Method Post -TimeoutSec 30
 }
 catch {
-    $status = $_.Exception.Response.StatusCode.value__
-    if ($status -eq 409) {
+    # $statusCode, NOT $status: this script declares [switch]$Status, and PowerShell
+    # variable names are case-insensitive, so `$status = 409` was an assignment to that
+    # PARAMETER. An int coerces to a SwitchParameter rather than throwing, so nothing
+    # looked wrong — but `$status -eq 409` then compared switch-to-switch and was true for
+    # ANY non-zero HTTP status, making both branches below fire on every error alike. Found
+    # by the parameter-collision lint after the same class cost a real provisioning run.
+    $statusCode = $_.Exception.Response.StatusCode.value__
+    if ($statusCode -eq 409) {
         Write-Host ""
         Write-Host "An owner credential already exists. Bootstrap is one-time by design." -ForegroundColor Yellow
         Write-Host "If you have lost it, rotate on the host:  .\scripts\bootstrap-owner-credential.ps1 -Rotate"
         exit 3
     }
-    if ($status -eq 403) {
+    if ($statusCode -eq 403) {
         throw "the API refused this peer as non-loopback. Run this on the machine hosting the API."
     }
     throw

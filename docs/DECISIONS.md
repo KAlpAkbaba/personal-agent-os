@@ -759,3 +759,53 @@ disk instead, so the property is enforced rather than assumed.
 
 Prices move: this one changed once already between the plan being written and the machine
 being ordered. Verify in the console at provisioning time rather than trusting this ADR.
+
+## Incident — the provisioning run that said it stopped, and had not (2026-09-01)
+
+`scripts/cloud/provision.ps1 -Apply` ended with:
+
+    Cannot convert value "System.Management.Automation.PSCustomObject"
+    to type "System.Management.Automation.SwitchParameter"
+
+and the natural reading — that it failed on the way into the apply phase — was wrong.
+
+The script declared `[switch]$Apply` and later wrote `$apply = Invoke-NativeProcess ...`.
+PowerShell variable names are case-INSENSITIVE, so that is not a new variable: it is an
+assignment to the parameter, and the result object cannot become a `SwitchParameter`. The
+assignment is evaluated **after** the child process returns, so `tofu apply` had already
+run to completion. Four billable resources existed — server `164238173` (`pagentos-core`,
+cpx32, nbg1, running), a 100 GB volume, a firewall and an SSH key — while the operator
+believed nothing had been created. Verified from local state before saying so, exactly as
+the owner required: `tofu state list` plus the declared outputs, never `tofu show` of the
+whole state, because the server's `user_data` carries the Tailscale auth key.
+
+Fixes:
+
+- intent is captured once as `$shouldApply = [bool]$Apply` and every result object has a
+  name no parameter wants (`$planResult`, `$applyResult`, `$initResult`, `$outputResult`,
+  `$tofuVersionResult`);
+- a **parser lint over every script** for the whole class: an assignment to a `[switch]`
+  parameter, or to any parameter under different casing. It immediately found a second,
+  live instance — `bootstrap-owner-credential.ps1` declared `[switch]$Status` and then did
+  `$status = $_.Exception.Response.StatusCode.value__`. An int coerces to a
+  `SwitchParameter` instead of throwing, so nothing looked wrong, but `$status -eq 409`
+  then compared switch-to-switch and was true for **any** non-zero HTTP status: the
+  "credential already exists" and "non-loopback refused" branches both fired on every
+  error alike, in the owner-credential bootstrap. Renamed to `$statusCode`;
+- `provision.ps1` is now driven end-to-end in tests by a fake `tofu`, so the apply path is
+  exercised without paid infrastructure. 12 tests: plan-only never applies, `-Apply`
+  applies exactly the plan it just saved and showed, the saved plan is deleted afterwards,
+  `-ExpectAdd/-ExpectChange/-ExpectDestroy` refuse a plan that is not the reviewed one, a
+  plan containing any delete refuses without `-AllowDestroy`, a no-op plan does not churn,
+  and no credential value is ever echoed;
+- the saved plan moved out of the repository into a temp file deleted in a `finally`, and
+  `tfplan.binary` is gitignored. A saved plan embeds the variable values it was planned
+  with — including the Tailscale auth key — so it is secret-bearing at rest exactly like
+  state, and it was sitting untracked-but-not-ignored, one `git add -A` from being
+  committed.
+
+Two lessons worth keeping. A crash after a side effect is not evidence the side effect did
+not happen — check the world, not the traceback. And an assertion anchored on an error
+*message* is anchored on the host's display language: the first version of the collision
+test matched "SwitchParameter" and failed on this Turkish-language machine, so it now
+matches the exception type instead.

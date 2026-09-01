@@ -65,6 +65,12 @@ skills/generated/*
 *.tfvars
 !*.tfvars.example
 
+# A SAVED PLAN embeds the variable values it was planned with - including the Tailscale
+# auth key - so tfplan.binary is secret-bearing at rest exactly like state is. It was one
+# `git add -A` away from being committed.
+tfplan.binary
+*.tfplan
+
 # .terraform.lock.hcl is deliberately NOT ignored. It holds no secret — it pins the
 # provider VERSION and its cryptographic hashes, which is the same supply-chain control
 # M7 applies to generated skills (pinned dependencies with digests). Ignoring it would

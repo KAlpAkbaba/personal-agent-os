@@ -276,6 +276,16 @@ if (-not $Fast) {
     } finally { Pop-Location }
   }
 
+  Invoke-Step "Provisioning + parameter collisions (PS5.1)" {
+    # A real provisioning run applied four billable resources and then died assigning the
+    # result over its own [switch]$Apply parameter - PowerShell variable names are
+    # case-insensitive - so it looked like it had stopped before applying. These drive
+    # provision.ps1 end to end through a fake tofu and lint every script for the class.
+    $script = Join-Path $repoRoot "scripts\tests\provision.tests.ps1"
+    & (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -NoProfile -File $script
+    Assert-ExitCode "provisioning tests"
+  }
+
   Invoke-Step "Identity restoration (PS5.1 + real key)" {
     # A real finalize run died calling ECDsa.ImportFromPem from Windows PowerShell 5.1,
     # whose .NET Framework does not have it. These run AFTER the agent build: the real
