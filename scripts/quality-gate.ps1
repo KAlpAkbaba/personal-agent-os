@@ -102,12 +102,31 @@ Invoke-Step "Secret hygiene" {
 
     # Content scan: real token/key patterns pasted into tracked files
     # (security review M0, finding #1). git grep exits 1 when nothing matches.
+    # Failures report file:line ONLY - a scanner that echoes what it matched would be the
+    # leak it exists to prevent.
     $secretPattern = "AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|sk-[A-Za-z0-9]{24,}|xox[baprs]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----"
     $hits = & $git grep -nE $secretPattern -- ":!*.example" ":!*.lock"
     if ($LASTEXITCODE -eq 0 -and $hits) {
-      throw "Potential secret content in tracked files:`n$($hits -join "`n")"
+      $locations = @($hits | ForEach-Object { (($_ -split ":", 3)[0..1]) -join ":" })
+      throw "Potential secret content in tracked files (values not shown): $($locations -join ', ')"
     }
     if ($LASTEXITCODE -gt 1) { throw "git grep secret scan failed with code $LASTEXITCODE" }
+
+    # PagentOS-minted credentials and session tokens: a REAL mint is pagentos_ok_ or
+    # pagentos_st_ followed by 43 urlsafe-base64 characters (token_urlsafe(32)); the 40+
+    # threshold catches it with margin. The rule is SHAPE-based with no allowlist and no
+    # exclusions: synthetic fixtures are legitimate only while off-shape (short, or built
+    # from words - the 33-char marker in machine-readable.tests.ps1 is the pattern to
+    # follow), because a fixture that perfectly imitates a production credential is
+    # indistinguishable from a leak, which makes it one. History classification 2026-09-01:
+    # only prefixes and off-shape fixtures have ever been committed.
+    $pagentosPattern = "pagentos_(ok|st)_[A-Za-z0-9_-]{40,}"
+    $hits = & $git grep -nE $pagentosPattern
+    if ($LASTEXITCODE -eq 0 -and $hits) {
+      $locations = @($hits | ForEach-Object { (($_ -split ":", 3)[0..1]) -join ":" })
+      throw "Production-shaped PagentOS credential in tracked files (values not shown): $($locations -join ', '). If this is a fixture, make it off-shape; the rule has no allowlist."
+    }
+    if ($LASTEXITCODE -gt 1) { throw "git grep pagentos credential scan failed with code $LASTEXITCODE" }
   } finally {
     Pop-Location
   }

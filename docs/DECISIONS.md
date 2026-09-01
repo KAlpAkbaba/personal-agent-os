@@ -603,3 +603,48 @@ Verified on the real machine: the fixed dev-broker detects the owner's elevated 
 (pid 46856) via its listener, spawns nothing, warns that its database cannot be proven
 (it predates markers — the honest answer), and renders all 13 real subsystem checks from
 the exact line that crashed.
+
+## Security investigation — `pagentos_ok_` in Git history (2026-09-01)
+
+Status: Closed — no real credential ever entered Git; no history rewrite performed.
+
+Question: `git log --all -S"pagentos_ok_"` names four commits (`bacda78`, `23df90b`,
+`75d8fad`, `b2d2c29`). Did actual owner-credential material ever enter the repository?
+
+Method: every occurrence in each of the four commits, in HEAD, and in the repository's one
+unreachable commit (`5191d84`, no occurrences) was classified STRUCTURALLY — file, line,
+and shape only; no matched value was ever printed. Shapes: bare prefix; short suffix
+(<30 chars); token-shaped (≥30 urlsafe chars, identified by SHA-256 fingerprint only).
+
+Findings:
+
+1. **Every occurrence is prefix, placeholder, format-check, or off-shape fixture.** The
+   `PREFIX` constant in `app/identity/tokens.py`; ADR-0027 prose; the web `OwnerGate`
+   input placeholder; the reference client's format check; `startswith`-style assertions
+   and bare-prefix fixtures across the identity unit tests; one 6-char-suffix fixture
+   (`test_identity_root.py`); and one 33-char-suffix marker in
+   `machine-readable.tests.ps1` whose declared purpose is asserting that error paths never
+   quote a secret.
+2. **Nothing could ever have authenticated.** A real mint is `token_urlsafe(32)` — a
+   43-char suffix; nothing 40+ shaped ever appears in history. The single ≥30 candidate is
+   33 chars, contains dictionary words ("test", "secret", "not" — hand-authored, not
+   CSPRNG), and its SHA-256 does not match the real root's `credential_hash`.
+3. **Fixtures are environmentally isolated**: identity unit tests run against temp roots
+   and the test database; the machine-readable suite drives fake child processes in temp
+   dirs. None touches the real root or `pagentos_prod`.
+4. **No plaintext credential ever entered Git by any path**: the real root
+   (`services/api/var/identity/owner_credential.json`) stores only a SHA-256, is
+   gitignored (`services/api/var/`), and `git log --all` over that path is empty — never
+   tracked, not even once.
+5. **Never pushed anywhere**: the repository has NO remote configured (GitHub setup is
+   still pending), one branch, no tags, no stashes.
+
+Consequences: per the investigation's own rule, prefixes and off-shape fixtures do not
+warrant a history rewrite — none was performed. Permanent enforcement added to the gate's
+Secret hygiene step: a SHAPE-based scan fails on `pagentos_(ok|st)_` + 40 or more urlsafe
+chars anywhere in tracked files, with **no allowlist** — synthetic fixtures stay
+legitimate exactly as long as they stay off-shape, because a fixture that perfectly
+imitates a production credential is indistinguishable from a leak. The scanner (and the
+pre-existing generic one, fixed here) reports file:line only; a scanner that echoes what
+it matched would be the leak it exists to prevent. Verified both ways: the current tree
+passes; a 43-char probe is caught.

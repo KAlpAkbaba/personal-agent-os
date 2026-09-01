@@ -356,23 +356,48 @@ else {
 # ----------------------------------------------------- step 3: session for the E2E commands
 
 Write-Host ""
-Write-Host "=== step 3: owner session for the E2E (new database has no sessions) ===" -ForegroundColor Cyan
-Write-Host "The dedicated database starts with no sessions, so one sign-in is needed."
-$secure = Read-Host -Prompt "Owner credential (input hidden; used in memory only)" -AsSecureString
-$bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
-try { $credential = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
-finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+Write-Host "=== step 3: owner session for the E2E ===" -ForegroundColor Cyan
 
-try {
-    $session = Invoke-RestMethod -Uri "$baseUrl/v1/identity/sessions" -Method Post -TimeoutSec 30 `
-        -ContentType "application/json" `
-        -Body (@{ owner_credential = $credential; client_kind = "cli"; label = "final-qualification" } | ConvertTo-Json)
+# Prefer the DPAPI-stored automation session (rotate-owner-credential.ps1 re-mints it with
+# the final credential): the credential then never has to be typed during qualification —
+# it is displayed exactly once, at rotation, and used nowhere else. The prompt below is
+# the fallback for a missing or expired stored session.
+$headers = $null
+$tokenFile = Join-Path $env:LOCALAPPDATA "PagentOS\secrets\PAGENTOS_OWNER_SESSION_TOKEN.dpapi"
+if (Test-Path -LiteralPath $tokenFile) {
+    try {
+        $secureToken = Get-Content -LiteralPath $tokenFile | ConvertTo-SecureString
+        $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureToken)
+        try { $storedToken = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
+        finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+        $candidate = @{ Authorization = "Bearer $storedToken" }
+        $storedToken = $null
+        $null = Invoke-RestMethod -Uri "$baseUrl/v1/devices" -Headers $candidate -TimeoutSec 10
+        $headers = $candidate
+        Write-Host "using the stored automation session (no credential entry needed)"
+    }
+    catch {
+        Write-Host "stored automation session not usable ($($_.Exception.Message)); falling back to sign-in"
+    }
 }
-finally {
-    $credential = $null
+
+if ($null -eq $headers) {
+    $secure = Read-Host -Prompt "Owner credential (input hidden; used in memory only)" -AsSecureString
+    $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+    try { $credential = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
+    finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+
+    try {
+        $session = Invoke-RestMethod -Uri "$baseUrl/v1/identity/sessions" -Method Post -TimeoutSec 30 `
+            -ContentType "application/json" `
+            -Body (@{ owner_credential = $credential; client_kind = "cli"; label = "final-qualification" } | ConvertTo-Json)
+    }
+    finally {
+        $credential = $null
+    }
+    $headers = @{ Authorization = "Bearer $($session.token)" }
+    Write-Host "session established"
 }
-$headers = @{ Authorization = "Bearer $($session.token)" }
-Write-Host "session established"
 
 # ------------------------------------- step 4: E2E #1 (doubles as service-restart -> command)
 
