@@ -15,6 +15,17 @@ Protect against:
 
 ## 2. Owner identity
 
+> Implemented in M9 (ADR-0027): a one-time bootstrap mints the owner
+> credential; it is exchanged for opaque bearer sessions stored only as SHA-256
+> hashes, scoped by client kind, optionally bound to an enrolled device, with an
+> absolute TTL and idle timeout, and an append-only `session_events` audit.
+> `require_owner_session` protects every mutating/sensitive endpoint; only
+> `GET /v1/system/health` and the ECDSA-authenticated device WebSocket handshake
+> are open. No owner credential bootstrapped means everything protected is
+> refused — fail closed, no default credential. Revoking a device revokes its
+> sessions; a panic control revokes all sessions; credential recovery runs on
+> the host, not through the API.
+
 One human owner. No user role hierarchy.
 
 Identity confidence combines:
