@@ -564,3 +564,42 @@ Enforcement, both directions:
   Refusal legs prove exit 3 creates nothing and exit 4 never re-mints a key whose loss is
   a recovery situation. First test asserts the host really lacks `ImportFromPem`, so the
   premise is re-examined if the platform ever changes.
+
+## ADR-0031 — Optional-property accessors, and broker reuse only on proof (2026-09-01)
+
+Status: Accepted
+
+Context: the next real finalize run got past deployment and Cloud Core startup, then died
+in `dev-broker.ps1` on `$health.dependencies` — `PropertyNotFoundStrict`. The real health
+schema is `{status, version, checks}` where `checks` maps subsystem→check; a top-level
+`dependencies` array never existed. The script had also never declared StrictMode — it
+inherited it from dot-sourced libraries, which is how an imagined property parsed fine and
+died at the read, on the owner's machine, after the broker was already healthy.
+
+Decisions:
+
+1. **Optional JSON properties go through explicit accessors** — `Test-ObjectProperty`
+   (presence; distinguishes absent from present-but-null, takes no default so the caller
+   owns what absence means) and `Get-OptionalProperty` (value-or-null, display reads only).
+   Properties the schema REQUIRES stay direct accesses on purpose: their absence should be
+   loud. StrictMode is declared per script, never merely inherited. Covered by 5 new
+   StrictMode cases (absent/null/scalar/empty/one/many, plus the real health shape and the
+   checks-less document) in `installer-strictmode.tests.ps1` (21/21).
+2. **A running Cloud Core is reused only when its DATABASE is proven.** dev-broker records
+   `{pid, port, database, started_at}` in a marker when it starts an instance (removed on
+   -Stop); `Get-DevBrokerDatabase` vouches for a database only when the marker matches a
+   live broker process — dead pid, recycled pid, missing/unreadable marker, wrong image
+   name all mean *unknown*, and unknown is not suitable. finalize reuses on
+   `pagentos_prod` proof and restarts otherwise. Health alone never qualifies: the
+   enrollment row was once destroyed by a healthy-looking broker on the wrong database.
+3. Proving the fix against the real machine surfaced a third defect, fixed in the same
+   change: an **elevated**-started broker hides its command line from a non-elevated
+   querier, so process-match detection missed the live instance and a duplicate uvicorn
+   was spawned (it died on the bound port while riding the existing instance's health).
+   "Already running" is now process match OR a live listener on the port, and the marker
+   liveness check falls back to pid+image-name for exactly this asymmetry.
+
+Verified on the real machine: the fixed dev-broker detects the owner's elevated broker
+(pid 46856) via its listener, spawns nothing, warns that its database cannot be proven
+(it predates markers — the honest answer), and renders all 13 real subsystem checks from
+the exact line that crashed.

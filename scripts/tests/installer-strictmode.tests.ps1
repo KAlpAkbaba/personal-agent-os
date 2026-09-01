@@ -43,6 +43,7 @@ $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 . (Join-Path $repoRoot "scripts\lib\NativeProcess.ps1")
 . (Join-Path $repoRoot "scripts\lib\InstallAcl.ps1")
 . (Join-Path $repoRoot "scripts\lib\ServiceInstall.ps1")
+. (Join-Path $repoRoot "scripts\lib\DevBroker.ps1")
 
 $script:Failures = 0
 $script:Passes = 0
@@ -340,6 +341,87 @@ try {
             $null = $check.Value.Count   # the read that failed on the owner's machine
             Assert-True -Condition (@($check.Value | Where-Object { $_ -is [array] }).Count -eq 0) `
                 -Because "$($check.Name) contains a nested array, so its count is wrong"
+        }
+    }
+
+    Write-Host ""
+    Write-Host "optional JSON properties (the .dependencies incident)"
+
+    Test-Case "a direct read of an absent property really throws here - the incident reproduced" {
+        $parsed = '{"status":"ok"}' | ConvertFrom-Json
+        $threw = $false
+        try { $null = $parsed.dependencies } catch { $threw = ($_.FullyQualifiedErrorId -match "PropertyNotFoundStrict") }
+        Assert-True -Condition $threw -Because "the engine no longer throws on absent properties; every assertion below would be vacuous"
+    }
+
+    Test-Case "Test-ObjectProperty answers absent/null/scalar/array correctly" {
+        $parsed = '{"present_null":null,"scalar":"x","empty_array":[],"one":[1],"many":[1,2]}' | ConvertFrom-Json
+        Assert-Equal -Expected $false -Actual (Test-ObjectProperty -InputObject $parsed -Name "absent") -Because "absent is absent"
+        Assert-Equal -Expected $true  -Actual (Test-ObjectProperty -InputObject $parsed -Name "present_null") -Because "present-but-null is PRESENT - absent and null are different answers"
+        Assert-Equal -Expected $true  -Actual (Test-ObjectProperty -InputObject $parsed -Name "scalar") -Because "scalar present"
+        Assert-Equal -Expected $true  -Actual (Test-ObjectProperty -InputObject $parsed -Name "empty_array") -Because "empty array present"
+        Assert-Equal -Expected $false -Actual (Test-ObjectProperty -InputObject $null -Name "anything") -Because "a null object holds no properties, and asking must not throw"
+    }
+
+    Test-Case "Get-OptionalProperty returns values without throwing, across every shape" {
+        $parsed = '{"present_null":null,"scalar":"x","empty_array":[],"one":[1],"many":[1,2]}' | ConvertFrom-Json
+        Assert-True -Condition ($null -eq (Get-OptionalProperty -InputObject $parsed -Name "absent")) -Because "absent collapses to null for display reads"
+        Assert-True -Condition ($null -eq (Get-OptionalProperty -InputObject $parsed -Name "present_null")) -Because "null stays null"
+        Assert-Equal -Expected "x" -Actual (Get-OptionalProperty -InputObject $parsed -Name "scalar") -Because "scalar comes back as-is"
+        Assert-Equal -Expected 0 -Actual (@(Get-OptionalProperty -InputObject $parsed -Name "empty_array")).Count -Because "empty array enumerates to nothing"
+        Assert-Equal -Expected 1 -Actual (@(Get-OptionalProperty -InputObject $parsed -Name "one")).Count -Because "one element"
+        Assert-Equal -Expected 2 -Actual (@(Get-OptionalProperty -InputObject $parsed -Name "many")).Count -Because "many elements"
+    }
+
+    Test-Case "the real health schema enumerates the way dev-broker now reads it" {
+        # {status, version, checks} - checks is a MAP, and a checks-less document must fall
+        # to the warned branch, never to PropertyNotFoundStrict.
+        $healthy = '{"status":"ok","version":"1.0.0","checks":{"db":{"status":"ok"},"broker":{"status":"ok"},"odd":{}}}' | ConvertFrom-Json
+        $checks = Get-OptionalProperty -InputObject $healthy -Name "checks"
+        Assert-True -Condition ($null -ne $checks) -Because "checks is present in the real schema"
+        $names = @($checks.PSObject.Properties | ForEach-Object { $_.Name })
+        Assert-Equal -Expected 3 -Actual (@($names).Count) -Because "every subsystem enumerates"
+        $oddStatus = Get-OptionalProperty -InputObject $checks.odd -Name "status"
+        Assert-True -Condition ($null -eq $oddStatus) -Because "a check without a status reads as null, not a throw"
+
+        $bare = '{"status":"ok","version":"1.0.0"}' | ConvertFrom-Json
+        Assert-True -Condition ($null -eq (Get-OptionalProperty -InputObject $bare -Name "checks")) `
+            -Because "a checks-less document is the warned case, not an exception"
+    }
+
+    Write-Host ""
+    Write-Host "dev-broker database marker"
+
+    Test-Case "an absent, stale or broken marker all mean 'database unknown', never a throw" {
+        # Redirect the marker into the sandbox so the real one (if any) is untouched.
+        $realLocalAppData = $env:LOCALAPPDATA
+        $env:LOCALAPPDATA = Join-Path $script:Sandbox "marker-home"
+        try {
+            New-Item -ItemType Directory -Force -Path $env:LOCALAPPDATA | Out-Null
+            Assert-True -Condition ($null -eq (Get-DevBrokerDatabase)) -Because "no marker file -> unknown"
+
+            $markerDir = Join-Path $env:LOCALAPPDATA "PagentOS"
+            New-Item -ItemType Directory -Force -Path $markerDir | Out-Null
+            $markerPath = Join-Path $markerDir "dev-broker.json"
+
+            [System.IO.File]::WriteAllText($markerPath, "{ not json")
+            Assert-True -Condition ($null -eq (Get-DevBrokerDatabase 3>$null)) -Because "unreadable marker -> unknown (warned, not thrown)"
+
+            [System.IO.File]::WriteAllText($markerPath, '{"port":8001}')
+            Assert-True -Condition ($null -eq (Get-DevBrokerDatabase)) -Because "marker missing pid/database -> unknown, without PropertyNotFoundStrict"
+
+            # pid 4 is the System process: alive, but never a broker - a stale marker whose
+            # pid was recycled must not vouch for a database.
+            [System.IO.File]::WriteAllText($markerPath, '{"pid":4,"port":8001,"database":"pagentos_prod"}')
+            Assert-True -Condition ($null -eq (Get-DevBrokerDatabase)) -Because "marker pid that is not a live broker process -> unknown"
+
+            # This test's own pid: alive, but powershell, not python/uv - the image-name
+            # fallback (for elevated brokers whose command line is hidden) must still refuse.
+            [System.IO.File]::WriteAllText($markerPath, ('{{"pid":{0},"port":8001,"database":"pagentos_prod"}}' -f $PID))
+            Assert-True -Condition ($null -eq (Get-DevBrokerDatabase)) -Because "a live pid with the wrong image name -> unknown"
+        }
+        finally {
+            $env:LOCALAPPDATA = $realLocalAppData
         }
     }
 }

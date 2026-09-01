@@ -50,6 +50,7 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 . (Join-Path $PSScriptRoot "lib\NativeProcess.ps1")
+. (Join-Path $PSScriptRoot "lib\DevBroker.ps1")
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $apiRoot = Join-Path $repoRoot "services\api"
@@ -337,9 +338,20 @@ finally {
 }
 
 # The Cloud Core must actually be serving the prod database for the agent to be known.
-Write-Host "restarting the Cloud Core on the dedicated database..."
-& (Join-Path $PSScriptRoot "dev-broker.ps1") -Stop
-& (Join-Path $PSScriptRoot "dev-broker.ps1") -SkipInfra
+# Reuse over restart, but only on PROOF: dev-broker records which database each instance
+# it starts serves, and Get-DevBrokerDatabase returns it only when the marker matches a
+# live broker process. Unknown is not suitable — the enrollment row was once destroyed by
+# a healthy-looking broker on the wrong database.
+$servingDb = Get-DevBrokerDatabase
+if ($servingDb -eq "pagentos_prod") {
+    Write-Host "reusing the running Cloud Core: proven to serve pagentos_prod (no restart)"
+}
+else {
+    $reason = if ($servingDb) { "it serves '$servingDb'" } else { "its database cannot be proven" }
+    Write-Host "restarting the Cloud Core on the dedicated database ($reason)..."
+    & (Join-Path $PSScriptRoot "dev-broker.ps1") -Stop
+    & (Join-Path $PSScriptRoot "dev-broker.ps1") -SkipInfra
+}
 
 # ----------------------------------------------------- step 3: session for the E2E commands
 

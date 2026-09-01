@@ -47,10 +47,15 @@ param(
 )
 
 $ErrorActionPreference = "Continue"
+# Stated here, not inherited: the dot-sourced libraries set StrictMode and it propagates,
+# so this script has ALWAYS run strict — a `.dependencies` access against a property the
+# health schema never had died here in a real run. Declaring it makes that contract visible.
+Set-StrictMode -Version Latest
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $apiRoot = Join-Path $repoRoot "services\api"
 
 . (Join-Path $PSScriptRoot "lib\NativeProcess.ps1")
+. (Join-Path $PSScriptRoot "lib\DevBroker.ps1")
 
 function Get-Uv {
     $candidates = @(
@@ -97,12 +102,6 @@ function Get-ConfiguredPort {
     return 8001
 }
 
-function Get-BrokerProcesses {
-    <#  uvicorn started through `uv run` is a child; match on the command line.  #>
-    return @(Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='uv.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -and $_.CommandLine -match "uvicorn" -and $_.CommandLine -match "app\.main:app" })
-}
-
 if ($Stop) {
     $running = @(Get-BrokerProcesses)
     if (@($running).Count -eq 0) {
@@ -115,15 +114,28 @@ if ($Stop) {
         [void](Invoke-NativeProcess -FilePath $taskkill -Arguments @("/PID", "$($process.ProcessId)", "/T", "/F") -SuccessExitCodes @(0, 128))
     }
     Write-Host "stopped $(@($running).Count) broker process(es)"
+    Remove-DevBrokerMarker
     exit 0
 }
 
 $Port = Get-ConfiguredPort -ConfigPath $AgentConfig -Explicit $Port
 $baseUrl = "http://127.0.0.1:$Port"
 
+# "Already running" is decided by process match OR a live listener on the port: an
+# elevated-started broker hides its command line from a non-elevated query, and starting a
+# duplicate against a bound port just dies while riding the existing instance's health —
+# which is exactly the confusing outcome this branch exists to prevent.
 $existing = @(Get-BrokerProcesses)
-if (@($existing).Count -gt 0) {
-    Write-Host "a local broker is already running (pid $($existing[0].ProcessId)); checking its health"
+$portListeners = @(Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue)
+if (@($existing).Count -gt 0 -or @($portListeners).Count -gt 0) {
+    $existingPid = if (@($existing).Count -gt 0) { $existing[0].ProcessId } else { $portListeners[0].OwningProcess }
+    $servingDb = Get-DevBrokerDatabase
+    if ($servingDb) {
+        Write-Host "a local broker is already running (pid $existingPid, database $servingDb); checking its health"
+    }
+    else {
+        Write-Warning "a local broker is already running (pid $existingPid) but its DATABASE cannot be proven (no matching marker). Health alone does not make it suitable; stop it with -Stop and rerun to get a provable instance."
+    }
 }
 else {
     if (-not $SkipInfra) {
@@ -174,7 +186,11 @@ else {
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
     $psi.EnvironmentVariables["PAGENTOS_DATABASE_URL"] = $databaseUrl
-    [void][System.Diagnostics.Process]::Start($psi)
+    $broker = [System.Diagnostics.Process]::Start($psi)
+    # Record WHICH database this instance serves — a later orchestrator may only reuse a
+    # running broker whose database it can prove (the enrollment row was once destroyed by
+    # a broker silently sharing the test database).
+    Write-DevBrokerMarker -BrokerPid $broker.Id -Port $Port -DatabaseName $DatabaseName
 }
 
 Write-Host "waiting for health..."
@@ -206,8 +222,25 @@ if (@($listeners).Count -eq 0) {
     Write-Warning "health answered but no listening socket was found on port $Port - check for a proxy"
 }
 
-foreach ($dependency in $health.dependencies) {
-    Write-Host "  dep      : $($dependency.name) = $($dependency.status)"
+# Real health schema ({status, version, checks}): `checks` is a MAP of subsystem name ->
+# check object. There is no `dependencies` array and never was — a run died here on exactly
+# that imagined property under StrictMode. `status` above is required (direct access, loud
+# if it ever vanishes); `checks` is read through the explicit optional accessor, and an
+# absent or empty map on a healthy answer is REPORTED, not defaulted away.
+$checks = Get-OptionalProperty -InputObject $health -Name "checks"
+if ($null -eq $checks) {
+    Write-Warning "the health document carried no 'checks' object - the Cloud Core answered, but subsystem states are unknown"
+}
+else {
+    $checkProperties = @($checks.PSObject.Properties)
+    if (@($checkProperties).Count -eq 0) {
+        Write-Warning "the health document's 'checks' object is empty - no subsystem reported"
+    }
+    foreach ($check in $checkProperties) {
+        $checkStatus = Get-OptionalProperty -InputObject $check.Value -Name "status"
+        if ($null -eq $checkStatus) { $checkStatus = "(no status reported)" }
+        Write-Host "  check    : $($check.Name) = $checkStatus"
+    }
 }
 
 Write-Host ""

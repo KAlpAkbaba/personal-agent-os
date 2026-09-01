@@ -219,6 +219,54 @@ function Assert-NativeSuccess {
     throw ($detail -join [Environment]::NewLine)
 }
 
+function Test-ObjectProperty {
+    <#
+    .SYNOPSIS
+        Does this object carry a property with this name? StrictMode-safe presence check
+        for parsed JSON (PSCustomObject) and anything else with a PSObject view.
+
+    .DESCRIPTION
+        Under StrictMode, `$parsed.optional` on an absent property is PropertyNotFoundStrict
+        — a real qualification run died on `.dependencies` against a health document whose
+        real schema never had it. This is the explicit accessor for the OPTIONAL case;
+        properties the schema requires should stay as direct accesses, precisely so their
+        absence fails loudly.
+
+        Presence and null are different answers: a property present with value $null
+        returns $true here. Callers that must distinguish "absent" from "present but null"
+        can, and callers must decide for themselves what absence means — this function
+        deliberately has no default-value parameter to hide that decision in.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][AllowNull()]$InputObject,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+
+    if ($null -eq $InputObject) { return $false }
+    return [bool]($InputObject.PSObject.Properties[$Name])
+}
+
+function Get-OptionalProperty {
+    <#
+    .SYNOPSIS
+        The value of an optional property, or $null when the property is absent.
+
+    .DESCRIPTION
+        Convenience over Test-ObjectProperty for display/informational reads where absent
+        and null legitimately collapse. Never use it for a value the schema requires —
+        a required property should be a direct access that fails loudly when missing.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][AllowNull()]$InputObject,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+
+    if (-not (Test-ObjectProperty -InputObject $InputObject -Name $Name)) { return $null }
+    return $InputObject.$Name
+}
+
 function ConvertFrom-SingleJsonDocument {
     <#
     .SYNOPSIS
