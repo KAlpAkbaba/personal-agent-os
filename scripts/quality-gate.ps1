@@ -167,6 +167,15 @@ if (-not $Fast) {
     Assert-ExitCode "installer invocation tests"
   }
 
+  Invoke-Step "Installer ACL + recovery tests" {
+    # Also deterministic and offline: builds real hardened trees in %TEMP%, reproduces the
+    # empty-DACL state a previous install left on the owner's machine, and proves the
+    # installer recovers from it without weakening anything.
+    $script = Join-Path $repoRoot "scripts\tests\installer-acl.tests.ps1"
+    & (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -NoProfile -File $script
+    Assert-ExitCode "installer ACL tests"
+  }
+
   Invoke-Step "Recovery supervisor tests" {
     if (-not $uv) { throw "uv not found" }
     Push-Location (Join-Path $repoRoot "services\recovery-supervisor")

@@ -19,10 +19,14 @@
 [CmdletBinding()]
 param(
     [string]$ServiceName = "PagentOSDeviceAgent",
-    [string]$DataDir = (Join-Path $env:ProgramData "PagentOS\agent")
+    [string]$DataDir = (Join-Path $env:ProgramData "PagentOS\agent"),
+    [string]$InstallRoot = (Join-Path $env:ProgramFiles "PagentOS\agent")
 )
 
 $ErrorActionPreference = "Continue"
+. (Join-Path $PSScriptRoot "lib\NativeProcess.ps1")
+. (Join-Path $PSScriptRoot "lib\InstallAcl.ps1")
+
 $results = New-Object System.Collections.ArrayList
 
 function Add-Result {
@@ -122,6 +126,34 @@ if (Test-Path $auditPath) {
 }
 else {
     Add-Result "1.4-1.7" "Companion admitted on kernel-sourced identity" "NOT_YET_PROVEN" "no audit log at $auditPath"
+}
+
+# --- installed-tree security posture --------------------------------------------
+# Re-derived from the ACLs on disk, independently of whatever the installer believes it
+# applied. A previous installer version left 219 files with an empty DACL that denied even
+# SYSTEM, and nothing checked — so this is the check that would have caught it.
+
+$posture = Test-InstallAclPosture -Root $InstallRoot -SampleSize 200
+if (-not $posture.Ok) {
+    $summary = ($posture.Violations | Select-Object -First 3) -join " | "
+    if ($posture.Violations.Count -gt 3) { $summary += " (+$($posture.Violations.Count - 3) more)" }
+    Add-Result "1.17" "Only SYSTEM and Administrators can write to the install tree" "NOT_YET_PROVEN" $summary
+}
+else {
+    Add-Result "1.17" "Only SYSTEM and Administrators can write to the install tree" "PROVEN_REAL" `
+        "$($posture.Checked) objects checked under $InstallRoot; no other principal holds write, and no empty DACLs"
+}
+
+$companionPin = Join-Path $InstallRoot "companion\PagentOS.SessionCompanion.exe"
+if (Test-Path -LiteralPath $companionPin) {
+    $pinReport = Get-AclReport -Path $companionPin
+    $pinOk = $pinReport.Readable -and $pinReport.AceCount -gt 0
+    Add-Result "1.7b" "The pinned companion binary is admin-protected and readable by SYSTEM" `
+        ($(if ($pinOk) { "PROVEN_REAL" } else { "NOT_YET_PROVEN" })) `
+        $(if ($pinOk) { "owner=$($pinReport.Owner) aces=$($pinReport.AceCount)" } else { "DACL unreadable or empty: pinning proves nothing if the file cannot be read" })
+}
+else {
+    Add-Result "1.7b" "The pinned companion binary is admin-protected and readable by SYSTEM" "NOT_YET_PROVEN" "not installed at $companionPin"
 }
 
 # --- no inbound listener on the Windows machine ---------------------------------

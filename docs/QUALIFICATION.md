@@ -49,11 +49,17 @@ admission, and per-connection freshness.
 
 ## Stage 2 — Windows Service installation
 
-| # | Criterion | Status |
-|---|---|---|
-| 2.1 | Service installs, starts, survives reboot, reconnects unattended | `NOT_YET_PROVEN` |
-| 2.2 | Companion auto-starts in the owner's session and is admitted by SID + session + binary | `NOT_YET_PROVEN` |
-| 2.3 | `desktop.open_application` executes in the interactive session from the Session-0 service | `NOT_YET_PROVEN` |
+**Nothing in this stage is proven, and two claims made here were disproved by the owner's real
+machine.** Both were mine, both were about the installer, and both had passing tests behind
+them that tested the wrong thing.
+
+| # | Criterion | Status | Notes |
+|---|---|---|---|
+| 2.1 | Service installs, starts, survives reboot, reconnects unattended | `NOT_YET_PROVEN` | First real attempt failed at `sc create` with 1639: PowerShell 5.1 does not escape an argument containing quotes, so the `binPath` value split at "Program Files". Fixed, with argv proven by round-trip through a real child process. |
+| 2.2 | Companion auto-starts in the owner's session and is admitted by SID + session + binary | `NOT_YET_PROVEN` | |
+| 2.3 | `desktop.open_application` executes in the interactive session from the Session-0 service | `NOT_YET_PROVEN` | |
+| 2.4 | The installer is idempotent — a rerun after a partial or failed install succeeds | `NOT_YET_PROVEN` | **Claimed on 2026-09-01 and disproved the same day by the real machine.** The second run failed with access denied rewriting `appsettings.json`. Cause: hardening with `/T` and `(OI)(CI)` grants stripped every pre-existing *file* to a protected empty DACL — 219 of them under `service\` — which denies everyone including SYSTEM and Administrators. The tests behind the earlier claim covered the *decision* logic (create vs reconfigure vs no-op) and never exercised an actually hardened tree, so they passed while the property was false. Now: staging plus atomic swap, repair-before-write, and 19 tests that build real hardened trees and reproduce the empty-DACL state. Still `NOT_YET_PROVEN` until the owner reruns. |
+| 2.5 | Only SYSTEM and Administrators hold write authority over the installed tree | `NOT_YET_PROVEN` | Enforced by an allowlist (not a denylist of Users/Everyone) and checked independently by `scripts/verify-device-service.ps1` against the ACLs on disk. The same empty-DACL bug would also have prevented the service from starting: SYSTEM cannot read an executable through an empty DACL. |
 
 ## Stage 3 — Owner identity bootstrap and recovery
 

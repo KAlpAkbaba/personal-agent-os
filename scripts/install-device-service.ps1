@@ -65,6 +65,7 @@ $agentRoot = Join-Path $repoRoot "devices\windows-agent"
 # and ACL hardening had already succeeded. See scripts/lib/NativeProcess.ps1.
 . (Join-Path $PSScriptRoot "lib\NativeProcess.ps1")
 . (Join-Path $PSScriptRoot "lib\ServiceInstall.ps1")
+. (Join-Path $PSScriptRoot "lib\InstallAcl.ps1")
 
 function Assert-Elevated {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -126,19 +127,28 @@ function Set-InstallAcl {
     # write. This is precisely what makes CompanionImagePath pinning worth checking: if the
     # owner could overwrite the companion binary, "the peer is the installed companion"
     # would prove nothing about what that binary contains.
-    Write-Host "restricting write access on $Path to administrators"
-    $icacls = Get-SystemTool -Name "icacls.exe"
-    $result = Invoke-NativeProcess -FilePath $icacls -Arguments @(
-        $Path,
-        "/inheritance:r",
-        "/grant:r",
-        "*S-1-5-32-544:(OI)(CI)F",
-        "*S-1-5-18:(OI)(CI)F",
-        "*S-1-5-32-545:(OI)(CI)RX",
-        "/T",
-        "/Q"
-    ) -TimeoutSeconds 300
-    Assert-NativeSuccess -Result $result -Activity "icacls $Path"
+    #
+    # Explicit ACEs on the root only; children inherit. The earlier version pushed (OI)(CI)
+    # grants to every child with /T, and those flags do not apply to a leaf, so 219 files
+    # were left with a protected empty DACL that denied even SYSTEM.
+    Write-Host "restricting write access on $Path to SYSTEM and Administrators"
+    Set-HardenedAcl -Root $Path
+}
+
+function Assert-InstallPosture {
+    param([string]$Path)
+    # Re-derived from disk, not from what was just applied. This is the check that would have
+    # caught the empty-DACL breakage at install time instead of at the next run.
+    $posture = Test-InstallAclPosture -Root $Path
+    if (-not $posture.Ok) {
+        $lines = @("the installed tree does not have the intended security posture:")
+        $lines += ($posture.Violations | Select-Object -First 12 | ForEach-Object { "  - $_" })
+        if ($posture.Violations.Count -gt 12) {
+            $lines += "  ... and $($posture.Violations.Count - 12) more"
+        }
+        throw ($lines -join [Environment]::NewLine)
+    }
+    Write-Host "verified posture on $($posture.Checked) objects: only SYSTEM and Administrators can write"
 }
 
 function Write-ServiceConfig {
@@ -163,12 +173,7 @@ function Write-ServiceConfig {
         CompanionImagePath = $CompanionExe
     }
     $path = Join-Path $ServiceDir "appsettings.json"
-    # Written through .NET so the file is UTF-8 without a BOM: PowerShell 5.1's Set-Content
-    # adds one and re-encodes non-ASCII, which has already corrupted files in this repo once.
-    [System.IO.File]::WriteAllText(
-        $path,
-        ($config | ConvertTo-Json -Depth 4),
-        (New-Object System.Text.UTF8Encoding($false)))
+    Write-JsonFile -Path $path -Content ($config | ConvertTo-Json -Depth 4)
     Write-Host "wrote $path (no secrets: URLs, paths and the owner SID only)"
 }
 
@@ -214,14 +219,50 @@ $companionDir = Join-Path $InstallRoot "companion"
 $companionExe = Join-Path $companionDir "PagentOS.SessionCompanion.exe"
 $serviceExe = Join-Path $serviceDir "PagentOS.DeviceService.exe"
 
-if (-not $SkipBuild) {
-    $dotnet = Get-DotnetPath
-    Publish-Agent -Dotnet $dotnet -Project (Join-Path $agentRoot "src\PagentOS.DeviceService\PagentOS.DeviceService.csproj") -Output $serviceDir
-    Publish-Agent -Dotnet $dotnet -Project (Join-Path $agentRoot "src\PagentOS.SessionCompanion\PagentOS.SessionCompanion.csproj") -Output $companionDir
+# --- recover from whatever a previous run left behind -------------------------------------
+#
+# This installer's own earlier version could leave a tree it could not then update: hardening
+# with /T stripped every existing file to an empty DACL. Recovering from that is the
+# installer's job, not the owner's, so it happens first and unconditionally.
+
+New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
+
+$restored = Resume-InterruptedDeployment -Root $InstallRoot -Components @("service", "companion")
+if ($restored.Count -gt 0) {
+    Write-Host "restored $($restored -join ', ') from an interrupted previous run"
 }
 
-foreach ($required in @($serviceExe, $companionExe)) {
-    if (-not (Test-Path $required)) { throw "expected $required after publish; nothing to install" }
+$repair = Repair-InstallTreeAcl -Root $InstallRoot
+if ($repair.Repaired) {
+    Write-Host "recovered the existing install: $($repair.Actions -join '; ')"
+}
+
+# --- stage everything before touching the live tree ---------------------------------------
+#
+# Publishing and configuration both write into staging. Nothing is written into the live,
+# hardened directories at all — which is what makes a rerun safe regardless of the ACLs the
+# last run left, and what makes an interrupted run cost nothing.
+
+if ($SkipBuild) {
+    foreach ($required in @($serviceExe, $companionExe)) {
+        if (-not (Test-Path $required)) { throw "-SkipBuild was passed but $required does not exist" }
+    }
+    $stagedServiceDir = $serviceDir
+    $stagedCompanionDir = $companionDir
+}
+else {
+    $dotnet = Get-DotnetPath
+    $stagedServiceDir = New-StagingDirectory -Root $InstallRoot -Name "service"
+    $stagedCompanionDir = New-StagingDirectory -Root $InstallRoot -Name "companion"
+
+    Publish-Agent -Dotnet $dotnet -Project (Join-Path $agentRoot "src\PagentOS.DeviceService\PagentOS.DeviceService.csproj") -Output $stagedServiceDir
+    Publish-Agent -Dotnet $dotnet -Project (Join-Path $agentRoot "src\PagentOS.SessionCompanion\PagentOS.SessionCompanion.csproj") -Output $stagedCompanionDir
+
+    foreach ($required in @(
+        (Join-Path $stagedServiceDir "PagentOS.DeviceService.exe"),
+        (Join-Path $stagedCompanionDir "PagentOS.SessionCompanion.exe"))) {
+        if (-not (Test-Path $required)) { throw "expected $required after publish; nothing to install" }
+    }
 }
 
 # Service state lives under ProgramData, not the owner's profile: a Session-0 service
@@ -232,20 +273,29 @@ Assert-NativeSuccess -Activity "icacls $DataDir" -Result (Invoke-NativeProcess `
     -Arguments @($DataDir, "/inheritance:r", "/grant:r", "*S-1-5-32-544:(OI)(CI)F", "*S-1-5-18:(OI)(CI)F", "/T", "/Q") `
     -TimeoutSeconds 300)
 
-Write-ServiceConfig -ServiceDir $serviceDir -CompanionExe $companionExe -OwnerSid $OwnerSid `
+# Configuration is written into STAGING, against the final paths the service will use. This
+# is the ordering fix: the previous version wrote config into the live tree after it had
+# been hardened, and an existing appsettings.json could not be replaced.
+Write-ServiceConfig -ServiceDir $stagedServiceDir -CompanionExe $companionExe -OwnerSid $OwnerSid `
     -DataDir $DataDir -BrokerRestUrl $BrokerRestUrl -BrokerWsUrl $BrokerWsUrl
 
 # The companion reads its own settings from its own directory.
-$companionConfig = [ordered]@{
+Write-JsonFile -Path (Join-Path $stagedCompanionDir "appsettings.json") -Content ([ordered]@{
     PipeName = "pagentos-companion-$OwnerSid"
     DataDir  = (Join-Path $env:ProgramData "PagentOS\companion")
-} | ConvertTo-Json -Depth 4
-[System.IO.File]::WriteAllText(
-    (Join-Path $companionDir "appsettings.json"),
-    $companionConfig,
-    (New-Object System.Text.UTF8Encoding($false)))
+} | ConvertTo-Json -Depth 4)
 
+# --- swap staging into place, atomically ---------------------------------------------------
+if (-not $SkipBuild) {
+    Publish-StagedDirectory -Root $InstallRoot -Component "service" -StagedPath $stagedServiceDir | Out-Null
+    Publish-StagedDirectory -Root $InstallRoot -Component "companion" -StagedPath $stagedCompanionDir | Out-Null
+    Remove-Item -LiteralPath (Join-Path $InstallRoot ".staging") -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Host "deployed service and companion"
+}
+
+# --- harden last, then prove it ------------------------------------------------------------
 Set-InstallAcl -Path $InstallRoot
+Assert-InstallPosture -Path $InstallRoot
 
 $enrolled = Test-Path (Join-Path $DataDir "state.json")
 if ($EnrollmentToken) {
