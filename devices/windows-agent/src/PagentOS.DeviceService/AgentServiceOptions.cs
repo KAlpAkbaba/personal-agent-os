@@ -17,6 +17,28 @@ public sealed record AgentServiceOptions
 
     public required string PipeName { get; init; }
 
+    /// <summary>
+    /// SID of the account whose Session Companion may connect. Under a Session-0 service
+    /// this is NOT the service's own account, which is precisely why it must be configured
+    /// rather than inferred from the running process (M1 security finding #1). When absent,
+    /// the service falls back to its own SID — correct only for a developer run where both
+    /// halves are the same user, and reported as such at startup.
+    /// </summary>
+    public string? CompanionSid { get; init; }
+
+    /// <summary>
+    /// Full path of the installed companion executable. When set, a peer that is the right
+    /// user in the right session but is not this binary is refused. Left unset in developer
+    /// runs, where the companion is launched from a build output that moves around.
+    /// </summary>
+    public string? CompanionImagePath { get; init; }
+
+    /// <summary>
+    /// Windows session the companion must be in. Normally left unset (any interactive
+    /// session, never Session 0); pinned when the owner wants one specific console session.
+    /// </summary>
+    public int? CompanionSessionId { get; init; }
+
     public double? HeartbeatIntervalOverrideS { get; init; }
 
     public double BackoffBaseSeconds { get; init; } = 1.0;
@@ -58,12 +80,22 @@ public sealed record AgentServiceOptions
             heartbeatOverride = parsed;
         }
 
+        int? companionSessionId = null;
+        var sessionRaw = configuration["CompanionSessionId"];
+        if (!string.IsNullOrWhiteSpace(sessionRaw) && int.TryParse(sessionRaw, out var parsedSession))
+        {
+            companionSessionId = parsedSession;
+        }
+
         return new AgentServiceOptions
         {
             BrokerRestUrl = configuration["BrokerRestUrl"] ?? "http://127.0.0.1:8001",
             BrokerWsUrl = configuration["BrokerWsUrl"] ?? "ws://127.0.0.1:8001/v1/devices/connect",
             DataDir = dataDir,
             PipeName = pipeName,
+            CompanionSid = configuration["CompanionSid"],
+            CompanionImagePath = configuration["CompanionImagePath"],
+            CompanionSessionId = companionSessionId,
             HeartbeatIntervalOverrideS = heartbeatOverride,
             BackoffBaseSeconds = configuration.GetValue("BackoffBaseSeconds", 1.0),
             BackoffMaxSeconds = configuration.GetValue("BackoffMaxSeconds", 60.0),

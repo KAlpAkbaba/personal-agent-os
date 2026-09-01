@@ -1,9 +1,10 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging.Abstractions;
 using PagentOS.Agent.Core.Commands;
 using PagentOS.Agent.Core.Connection;
 using PagentOS.Agent.Core.Protocol;
+using PagentOS.Agent.Tests.Support;
 using PagentOS.DeviceService;
 using PagentOS.SessionCompanion;
 using Xunit;
@@ -38,7 +39,7 @@ public class PipeTests
     [Fact]
     public async Task Interactive_command_without_companion_fails_fast_with_dependency_unavailable()
     {
-        var server = new CompanionPipeServer(NewPipeName(), NullLogger<CompanionPipeServer>.Instance);
+        var server = IpcTestSupport.NewServer(NewPipeName());
         await server.StartAsync(CancellationToken.None);
         try
         {
@@ -64,7 +65,7 @@ public class PipeTests
     public async Task Service_and_companion_round_trip_over_real_named_pipe()
     {
         var pipeName = NewPipeName();
-        var server = new CompanionPipeServer(pipeName, NullLogger<CompanionPipeServer>.Instance);
+        var server = IpcTestSupport.NewServer(pipeName);
         await server.StartAsync(CancellationToken.None);
         using var companionCts = new CancellationTokenSource();
         var companionTask = Task.Run(() => NewCompanion(pipeName).RunAsync(companionCts.Token));
@@ -116,7 +117,7 @@ public class PipeTests
         File.WriteAllText(artifact, "%PDF-1.7 fake");
         var opener = new RecordingFileOpener();
 
-        var server = new CompanionPipeServer(pipeName, NullLogger<CompanionPipeServer>.Instance);
+        var server = IpcTestSupport.NewServer(pipeName);
         await server.StartAsync(CancellationToken.None);
         using var companionCts = new CancellationTokenSource();
         var companionTask = Task.Run(() =>
@@ -173,7 +174,7 @@ public class PipeTests
     public async Task Companion_reconnects_with_backoff_after_service_restart()
     {
         var pipeName = NewPipeName();
-        var firstServer = new CompanionPipeServer(pipeName, NullLogger<CompanionPipeServer>.Instance);
+        var firstServer = IpcTestSupport.NewServer(pipeName);
         await firstServer.StartAsync(CancellationToken.None);
         using var companionCts = new CancellationTokenSource();
         var companionTask = Task.Run(() => NewCompanion(pipeName).RunAsync(companionCts.Token));
@@ -183,7 +184,7 @@ public class PipeTests
             await firstServer.StopAsync(CancellationToken.None);
 
             // Simulated service restart with the same pipe name.
-            var secondServer = new CompanionPipeServer(pipeName, NullLogger<CompanionPipeServer>.Instance);
+            var secondServer = IpcTestSupport.NewServer(pipeName);
             await secondServer.StartAsync(CancellationToken.None);
             try
             {

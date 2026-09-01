@@ -8,6 +8,7 @@ using PagentOS.Agent.Core.Connection;
 using PagentOS.Agent.Core.Enrollment;
 using PagentOS.Agent.Core.Identity;
 using PagentOS.Agent.Core.Idempotency;
+using PagentOS.Agent.Core.Ipc;
 using PagentOS.Agent.Core.Logging;
 using PagentOS.Agent.Core.Protocol;
 
@@ -104,6 +105,29 @@ public static class Program
         return 0;
     }
 
+    /// <summary>
+    /// Who is allowed to be the companion. Configured explicitly in a service install, where
+    /// the service account and the owner account differ; falls back to this process's own SID
+    /// for a developer run, which is the same trust as before and no looser. The fallback is
+    /// logged at startup so a service install that forgot to set CompanionSid is visible
+    /// rather than silently self-authorizing.
+    /// </summary>
+    private static CompanionAdmissionPolicy BuildAdmissionPolicy(AgentServiceOptions options)
+    {
+        var sid = options.CompanionSid;
+        if (string.IsNullOrWhiteSpace(sid))
+        {
+            sid = System.Security.Principal.WindowsIdentity.GetCurrent().User?.Value
+                  ?? throw new InvalidOperationException(
+                      "CompanionSid is not configured and this process's own SID could not be resolved");
+            Console.Error.WriteLine(
+                "warning: CompanionSid is not configured; falling back to this process's SID. " +
+                "A Windows Service install must set PAGENTOS_AGENT_CompanionSid to the owner's SID.");
+        }
+
+        return new CompanionAdmissionPolicy(sid, options.CompanionImagePath, options.CompanionSessionId);
+    }
+
     private static async Task<int> RunAsync(string[] args)
     {
         var settings = new HostApplicationBuilderSettings
@@ -131,9 +155,14 @@ public static class Program
         builder.Services.AddSingleton(_ => DeviceIdentity.LoadOrCreate(options.KeyFilePath));
         builder.Services.AddSingleton(new AuditLog(options.AuditLogPath));
         builder.Services.AddSingleton(new IdempotencyStore(options.IdempotencyStorePath));
+        var admission = BuildAdmissionPolicy(options);
+        builder.Services.AddSingleton(admission);
         builder.Services.AddSingleton(provider => new CompanionPipeServer(
             options.PipeName,
-            provider.GetRequiredService<ILogger<CompanionPipeServer>>()));
+            admission,
+            new WindowsPipePeerInspector(),
+            provider.GetRequiredService<ILogger<CompanionPipeServer>>(),
+            provider.GetRequiredService<AuditLog>()));
         builder.Services.AddSingleton<ICapabilityExecutor>(provider =>
             new InteractiveCapabilityExecutor(provider.GetRequiredService<CompanionPipeServer>()));
         builder.Services.AddSingleton(provider => new CommandDispatcher(
@@ -168,6 +197,11 @@ public static class Program
             options.BrokerWsUrl,
             options.DataDir,
             options.PipeName);
+        logger.LogInformation(
+            "companion admission: sid={Sid} session={Session} binary={Binary}",
+            admission.AuthorizedSid,
+            admission.ExpectedSessionId?.ToString() ?? "any interactive",
+            admission.ExpectedImagePath ?? "not pinned");
         await host.RunAsync().ConfigureAwait(false);
         return 0;
     }

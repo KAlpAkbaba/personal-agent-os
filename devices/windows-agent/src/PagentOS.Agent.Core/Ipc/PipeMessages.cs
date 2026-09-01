@@ -8,17 +8,61 @@ namespace PagentOS.Agent.Core.Ipc;
 /// <summary>
 /// Internal service ↔ companion IPC frames (newline-delimited JSON over the local named pipe).
 /// This is not part of the device protocol; it never leaves the machine.
+///
+/// Frames carry <c>conn_id</c> and <c>seq</c> from protocol version 2 onward. They are not
+/// authentication — the peer's identity comes from the kernel, never from a frame — they are
+/// freshness: they bind a frame to the connection it was written on and to a position in
+/// that connection, so a frame from a retired connection or a frame seen twice is refused
+/// (<see cref="IpcChannelGuard"/>).
 /// </summary>
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "type", UnknownDerivedTypeHandling = JsonUnknownDerivedTypeHandling.FailSerialization)]
+[JsonDerivedType(typeof(ServiceChallenge), "service_challenge")]
 [JsonDerivedType(typeof(CompanionHello), "companion_hello")]
 [JsonDerivedType(typeof(ExecRequest), "exec_request")]
 [JsonDerivedType(typeof(ExecResponse), "exec_response")]
 public abstract record PipeMessage;
 
+public static class IpcProtocol
+{
+    /// <summary>v1: unauthenticated hello. v2: challenge + connection binding + sequencing.</summary>
+    public const int Version = 2;
+}
+
+/// <summary>
+/// First frame on every accepted connection, written by the service once the peer has
+/// passed the OS-level identity checks. Announces the connection id the companion must
+/// echo and use on every later frame.
+/// </summary>
+public sealed record ServiceChallenge : PipeMessage
+{
+    [JsonPropertyName("conn_id")]
+    public required string ConnectionId { get; init; }
+
+    [JsonPropertyName("nonce")]
+    public required string Nonce { get; init; }
+
+    [JsonPropertyName("protocol_version")]
+    public int ProtocolVersion { get; init; } = IpcProtocol.Version;
+}
+
 public sealed record CompanionHello : PipeMessage
 {
     [JsonPropertyName("capabilities")]
     public required IReadOnlyList<string> Capabilities { get; init; }
+
+    /// <summary>Echo of the challenge's connection id.</summary>
+    [JsonPropertyName("conn_id")]
+    public string? ConnectionId { get; init; }
+
+    /// <summary>Echo of the challenge nonce, proving this hello answers *this* challenge.</summary>
+    [JsonPropertyName("nonce")]
+    public string? Nonce { get; init; }
+
+    [JsonPropertyName("seq")]
+    public long Seq { get; init; }
+
+    [JsonPropertyName("protocol_version")]
+    public int ProtocolVersion { get; init; } = IpcProtocol.Version;
 }
 
 public sealed record ExecRequest : PipeMessage
@@ -34,12 +78,24 @@ public sealed record ExecRequest : PipeMessage
 
     [JsonPropertyName("timeout_ms")]
     public required int TimeoutMs { get; init; }
+
+    [JsonPropertyName("conn_id")]
+    public string? ConnectionId { get; init; }
+
+    [JsonPropertyName("seq")]
+    public long Seq { get; init; }
 }
 
 public sealed record ExecResponse : PipeMessage
 {
     [JsonPropertyName("request_id")]
     public required string RequestId { get; init; }
+
+    [JsonPropertyName("conn_id")]
+    public string? ConnectionId { get; init; }
+
+    [JsonPropertyName("seq")]
+    public long Seq { get; init; }
 
     [JsonPropertyName("ok")]
     public required bool Ok { get; init; }
