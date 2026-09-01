@@ -155,9 +155,23 @@ class CreateSessionRequest(BaseModel):
 
 @router.post("/sessions", status_code=201)
 async def create_session(request: Request, body: CreateSessionRequest) -> dict[str, Any]:
-    """Exchange the owner credential for an opaque bearer session."""
+    """Exchange the owner credential for an opaque bearer session.
+
+    A session requested WITH scopes is narrowed, and narrowing is real: it can
+    only reach routes that declare a scope, and today no route does. Asking for
+    scopes therefore currently produces a session that can reach nothing. That
+    is the intended safe direction (M9 security review #2) — but it is a
+    surprising one, so it is logged rather than left to be discovered.
+    """
     runtime = _runtime(request)
     trace_id = trace_id_var.get()
+    if body.scopes:
+        logger.warning(
+            "identity_scoped_session_requested",
+            client_kind=body.client_kind,
+            scopes=list(body.scopes),
+            note="scoped sessions reach only scope-declaring routes; none exist yet",
+        )
 
     def exchange() -> IssuedSession:
         return runtime.service.exchange_credential(
