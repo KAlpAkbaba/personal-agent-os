@@ -142,12 +142,18 @@ class EvolutionRuntime:
 
     @property
     def improver(self) -> SkillImprover:
+        # Pass the registry-backed reviewer explicitly. Omitting it would let
+        # this path fall back to a reviewer with no authorization source the
+        # day self-improvement is wired to a route — the same "built but not
+        # wired" failure the M8 review caught in EvolutionRuntime.authorization
+        # (ADR-0026 security addendum). It fails safe, but silently.
         return SkillImprover(
             self.registry,
             sandbox=self.sandbox,
             skills_root=self.skills_root,
             generator=self.generator,
             budget=self.budget,
+            reviewer=self.reviewer,
         )
 
     @property

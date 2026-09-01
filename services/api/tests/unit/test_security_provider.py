@@ -221,3 +221,16 @@ def test_explicit_static_override_still_wins_for_local_dev(monkeypatch) -> None:
     )
     runtime = EvolutionRuntime(Settings(_env_file=None))
     assert runtime.authorization.name == "static"
+
+
+def test_every_runtime_path_that_reviews_carries_the_registry_provider(monkeypatch) -> None:
+    """Same lesson as the M8 High finding: a reviewer built without an
+    authorization source fails safe but silently. Every runtime path that
+    constructs a reviewer must carry the registry-backed one."""
+    from app.config import Settings
+    from app.evolution.runtime import EvolutionRuntime
+
+    monkeypatch.delenv("PAGENTOS_EVOLUTION_AUTHORIZATIONS", raising=False)
+    runtime = EvolutionRuntime(Settings(_env_file=None))
+    assert runtime.reviewer.authorization.name == "registry"
+    assert runtime.improver.reviewer.authorization.name == "registry"
