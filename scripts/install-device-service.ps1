@@ -260,11 +260,17 @@ else {
 
 # Service state lives under ProgramData, not the owner's profile: a Session-0 service
 # writing into a user profile resolves to the system profile and is a topology bug.
+# Root-only ACEs with inheritance — the old raw icacls /T call here reintroduced the
+# empty-DACL bug on the service's own log file and killed its pipe server mid-run.
 New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
-Assert-NativeSuccess -Activity "icacls $DataDir" -Result (Invoke-NativeProcess `
-    -FilePath (Get-SystemTool -Name "icacls.exe") `
-    -Arguments @($DataDir, "/inheritance:r", "/grant:r", "*S-1-5-32-544:(OI)(CI)F", "*S-1-5-18:(OI)(CI)F", "/T", "/Q") `
-    -TimeoutSeconds 300)
+Set-MachineDataAcl -Root $DataDir
+# device.key deliberately carries explicit ACEs (SYSTEM read-only); the /reset above made it
+# inherit full control, so re-apply the narrower explicit protection.
+$keyPath = Join-Path $DataDir "device.key"
+if (Test-Path -LiteralPath $keyPath) {
+    [void](Repair-InstallTreeAcl -Root $DataDir -Quiet)
+    Protect-DeviceKeyAcl -KeyPath $keyPath
+}
 
 # Configuration is written into STAGING, against the final paths the service will use. This
 # is the ordering fix: the previous version wrote config into the live tree after it had

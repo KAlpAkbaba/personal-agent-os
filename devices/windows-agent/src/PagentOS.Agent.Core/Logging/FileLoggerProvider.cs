@@ -36,9 +36,22 @@ public sealed class FileLoggerProvider : ILoggerProvider, ISupportExternalScope
 
     private void WriteLine(string line)
     {
-        lock (_sync)
+        // A logger must never take the service down. This is not defensive decoration: a
+        // real deployment left the log FILE with an empty DACL, the write threw
+        // UnauthorizedAccessException from inside the pipe server's `finally` block, and
+        // that single failed log line killed the BackgroundService — the host stayed
+        // "Running" while the pipe accept loop was dead and the companion retried forever.
+        // Losing a log line is the strictly smaller failure.
+        try
         {
-            File.AppendAllText(_path, line + Environment.NewLine);
+            lock (_sync)
+            {
+                File.AppendAllText(_path, line + Environment.NewLine);
+            }
+        }
+        catch (Exception)
+        {
+            // Swallowed by design; the console logger still carries the line.
         }
     }
 

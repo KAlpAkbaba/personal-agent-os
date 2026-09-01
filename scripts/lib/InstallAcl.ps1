@@ -463,6 +463,81 @@ function Set-HardenedAcl {
 
 # ------------------------------------------------------------------- staging and deployment
 
+function Set-MachineDataAcl {
+    <#
+    .SYNOPSIS
+        Protect the agent's DATA directory: SYSTEM and Administrators, nobody else — not
+        even read, because this tree holds the device private key.
+
+    .DESCRIPTION
+        Same shape as Set-HardenedAcl (explicit ACEs on the root only, children inherit),
+        different principal set: no Users read here.
+
+        This function replaced a raw `icacls /inheritance:r /grant:r "*SID:(OI)(CI)F" /T`
+        call — the exact empty-DACL bug already fixed once for Program Files, reintroduced
+        for ProgramData, and found the hard way a second time: the /T pass stripped the
+        service's own LOG FILE to an empty DACL, SYSTEM's next log write threw, and that one
+        exception killed the pipe server while the service stayed "Running". Files that only
+        inherited (logs, audit) broke; files with explicit ACEs survived — which is exactly
+        the signature of the bug class.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    if (-not (Test-Path -LiteralPath $Root)) {
+        throw "cannot protect a path that does not exist: $Root"
+    }
+
+    $acl = Get-SecurityDescriptor -Path $Root
+    $acl.SetAccessRuleProtection($true, $false)
+    foreach ($existing in @($acl.GetAccessRules($true, $false, [System.Security.Principal.SecurityIdentifier]))) {
+        [void]$acl.RemoveAccessRuleSpecific($existing)
+    }
+
+    $inherit = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
+               [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+    foreach ($sid in @($script:SidSystem, $script:SidAdministrators)) {
+        $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+            (New-Object System.Security.Principal.SecurityIdentifier($sid)),
+            [System.Security.AccessControl.FileSystemRights]::FullControl,
+            $inherit,
+            [System.Security.AccessControl.PropagationFlags]::None,
+            [System.Security.AccessControl.AccessControlType]::Allow)))
+    }
+    Set-SecurityDescriptor -Path $Root -Security $acl
+
+    # Children inherit; /reset clears any explicit or stripped state left by earlier bugs.
+    # Explicit ACEs a repair applied on purpose (device.key SYSTEM-read) are re-applied by
+    # the repair path, which runs after this in every flow that uses both.
+    $icacls = Get-SystemTool -Name "icacls.exe"
+    if (@(Get-ChildItem -LiteralPath $Root -Force -ErrorAction SilentlyContinue).Count -gt 0) {
+        [void](Invoke-NativeProcess -FilePath $icacls `
+            -Arguments @((Join-Path $Root "*"), "/reset", "/T", "/C", "/Q") -TimeoutSeconds 600)
+    }
+}
+
+function Protect-DeviceKeyAcl {
+    <#
+    .SYNOPSIS
+        The device key's explicit protection: SYSTEM read-only, Administrators full, nothing
+        else. Mirrors MachineMaterial.Protect(Secret) in the agent, for the scripts' side.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$KeyPath)
+
+    $security = New-Object System.Security.AccessControl.FileSecurity
+    $security.SetAccessRuleProtection($true, $false)
+    $security.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+        (New-Object System.Security.Principal.SecurityIdentifier($script:SidSystem)),
+        [System.Security.AccessControl.FileSystemRights]::Read,
+        [System.Security.AccessControl.AccessControlType]::Allow)))
+    $security.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+        (New-Object System.Security.Principal.SecurityIdentifier($script:SidAdministrators)),
+        [System.Security.AccessControl.FileSystemRights]::FullControl,
+        [System.Security.AccessControl.AccessControlType]::Allow)))
+    Set-SecurityDescriptor -Path $KeyPath -Security $security
+}
+
 function New-StagingDirectory {
     <#
     .SYNOPSIS

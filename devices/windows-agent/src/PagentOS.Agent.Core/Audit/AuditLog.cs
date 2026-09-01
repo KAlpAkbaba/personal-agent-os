@@ -56,9 +56,17 @@ public sealed class AuditLog
         }
 
         var line = record.ToJsonString();
-        lock (_sync)
+        try
         {
-            File.AppendAllText(_path, line + Environment.NewLine);
+            lock (_sync)
+            {
+                File.AppendAllText(_path, line + Environment.NewLine);
+            }
+        }
+        catch (Exception)
+        {
+            // Same rule as the file logger, learned from the same incident: a failed audit
+            // write must degrade the record, never kill the code path being audited.
         }
     }
 

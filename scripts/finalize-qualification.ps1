@@ -110,17 +110,113 @@ $uv = Get-Uv
 
 # ---------------------------------------------------------------- step 1: update the agent
 
-Write-Host "=== step 1: update the agent binaries in place (enrollment preserved) ===" -ForegroundColor Cyan
+Write-Host "=== step 1: transactional binary update (journaled; enrollment preserved) ===" -ForegroundColor Cyan
 
-# Stop the companion so the swap is clean; the logon task and this script both restart it.
-Get-Process -Name "PagentOS.SessionCompanion" -ErrorAction SilentlyContinue | Stop-Process -Force
-& (Join-Path $PSScriptRoot "install-device-service.ps1")
+. (Join-Path $PSScriptRoot "lib\Deployment.ps1")
+. (Join-Path $PSScriptRoot "lib\ServiceInstall.ps1")
 
+$repoAgentRoot = Join-Path $repoRoot "devices\windows-agent"
 $companionExe = Join-Path $InstallRoot "companion\PagentOS.SessionCompanion.exe"
-if (-not (Get-Process -Name "PagentOS.SessionCompanion" -ErrorAction SilentlyContinue)) {
-    Write-Host "starting the companion from the pinned path"
-    Start-Process -FilePath $companionExe -WindowStyle Hidden
+$components = @("service", "companion")
+
+# What state did the last attempt leave? Decided from the journal (or, for the pre-journal
+# failure, from deterministic evidence), never guessed from directory names alone.
+$resolution = Resolve-InterruptedDeployment -Root $InstallRoot -Components $components
+Write-Host "deployment state: $($resolution.Action) - $($resolution.Reason)"
+if ($resolution.Action -eq "Blocked") {
+    throw "the install tree is in a state the engine refuses to guess about: $($resolution.Reason)"
 }
+
+if ($resolution.Action -ne "RetryFromStaging") {
+    # No usable candidate staged: publish a fresh one into .staging.
+    $dotnet = Join-Path $env:LOCALAPPDATA "Microsoft\dotnet\dotnet.exe"
+    if (-not (Test-Path $dotnet)) { $dotnet = (Get-Command dotnet -ErrorAction Stop).Source }
+    foreach ($pair in @(
+        @{ Project = "src\PagentOS.DeviceService\PagentOS.DeviceService.csproj"; Out = "service" },
+        @{ Project = "src\PagentOS.SessionCompanion\PagentOS.SessionCompanion.csproj"; Out = "companion" })) {
+        $target = Join-Path $InstallRoot ".staging\$($pair.Out)"
+        if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Recurse -Force }
+        Write-Host "publishing $($pair.Out) candidate..."
+        $publish = Invoke-NativeProcess -FilePath $dotnet -Arguments @(
+            "publish", (Join-Path $repoAgentRoot $pair.Project),
+            "-c", "Release", "-r", "win-x64", "--self-contained", "true",
+            "-p:PublishSingleFile=false", "-o", $target, "--nologo"
+        ) -TimeoutSeconds 900
+        Assert-NativeSuccess -Result $publish -Activity "publish $($pair.Out)"
+    }
+}
+else {
+    Write-Host "reusing the staged candidate from the interrupted attempt"
+}
+
+# Configs travel with the candidate so promotion is complete in one rename.
+$state = Get-Content -LiteralPath (Join-Path $DataDir "state.json") -Raw | ConvertFrom-Json
+$existingServiceConfig = Get-Content -LiteralPath (Join-Path $InstallRoot "service\appsettings.json") -Raw
+[System.IO.File]::WriteAllText((Join-Path $InstallRoot ".staging\service\appsettings.json"), $existingServiceConfig, (New-Object System.Text.UTF8Encoding($false)))
+$existingCompanionConfig = Get-Content -LiteralPath (Join-Path $InstallRoot "companion\appsettings.json") -Raw -ErrorAction SilentlyContinue
+if ($existingCompanionConfig) {
+    [System.IO.File]::WriteAllText((Join-Path $InstallRoot ".staging\companion\appsettings.json"), $existingCompanionConfig, (New-Object System.Text.UTF8Encoding($false)))
+}
+
+# Symmetric runtime handlers: stop companion THEN service, wait for PID exit; start service
+# THEN companion; health = both halves plus the pipe actually existing.
+$stopRuntime = {
+    $companion = Get-Process -Name "PagentOS.SessionCompanion" -ErrorAction SilentlyContinue
+    if ($companion) {
+        $companion | Stop-Process -Force
+        foreach ($proc in @($companion)) { try { [void]$proc.WaitForExit(15000) } catch { } }
+    }
+    $service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+    if ($service -and $service.Status -ne "Stopped") {
+        $servicePid = (Get-CimInstance Win32_Service -Filter "Name='$ServiceName'").ProcessId
+        Stop-Service -Name $ServiceName -Force
+        (Get-Service -Name $ServiceName).WaitForStatus("Stopped", (New-TimeSpan -Seconds 45))
+        if ($servicePid -gt 0) {
+            # SCM "Stopped" precedes process exit; wait for the PID itself.
+            $deadline = (Get-Date).AddSeconds(30)
+            while ((Get-Date) -lt $deadline -and (Get-Process -Id $servicePid -ErrorAction SilentlyContinue)) {
+                Start-Sleep -Milliseconds 250
+            }
+        }
+    }
+}
+
+$startRuntime = {
+    Start-Service -Name $ServiceName
+    (Get-Service -Name $ServiceName).WaitForStatus("Running", (New-TimeSpan -Seconds 45))
+    & (Join-Path $env:SystemRoot "System32\schtasks.exe") /Run /TN "PagentOS Session Companion" | Out-Null
+    Start-Sleep -Seconds 3
+    if (-not (Get-Process -Name "PagentOS.SessionCompanion" -ErrorAction SilentlyContinue)) {
+        Start-Process -FilePath $companionExe -WindowStyle Hidden
+    }
+}
+
+$testHealth = {
+    $service = Get-CimInstance Win32_Service -Filter "Name='$ServiceName'"
+    if ($service.State -ne "Running") { return $false }
+    $companionUp = [bool](Get-Process -Name "PagentOS.SessionCompanion" -ErrorAction SilentlyContinue)
+    if (-not $companionUp) { return $false }
+    # Running is not health: the pipe must exist. Non-invasive namespace enumeration; the
+    # pipe is listed both listening and connected.
+    $config = Get-Content -LiteralPath (Join-Path $InstallRoot "service\appsettings.json") -Raw | ConvertFrom-Json
+    $deadline = (Get-Date).AddSeconds(30)
+    while ((Get-Date) -lt $deadline) {
+        $listed = @([System.IO.Directory]::GetFiles("\\.\pipe\") | Where-Object { $_ -match [regex]::Escape($config.PipeName) })
+        if (@($listed).Count -ge 1) { return $true }
+        Start-Sleep -Seconds 2
+    }
+    return $false
+}
+
+$applyAcl = {
+    Set-HardenedAcl -Root $InstallRoot
+    Set-MachineDataAcl -Root $DataDir
+    Protect-DeviceKeyAcl -KeyPath (Join-Path $DataDir "device.key")
+}
+
+[void](Invoke-AgentDeployment -Root $InstallRoot -Components $components `
+    -StopRuntime $stopRuntime -StartRuntime $startRuntime -TestHealth $testHealth -ApplyAcl $applyAcl)
+Write-Host "deployment committed; service and companion are both up with a live pipe"
 
 # ------------------------------------------------- step 2: restore the broker registration
 

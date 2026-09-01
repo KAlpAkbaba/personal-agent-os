@@ -193,6 +193,15 @@ if (-not $Fast) {
     Assert-ExitCode "installer strictmode tests"
   }
 
+  Invoke-Step "Deployment transaction tests" {
+    # A real deployment renamed the live service directory while the service ran from it and
+    # left an asymmetric half-state. These drive the journaled engine through the incident
+    # shape, every failure leg, and recovery from the exact partial state it left.
+    $script = Join-Path $repoRoot "scripts\tests\installer-deploy.tests.ps1"
+    & (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -NoProfile -File $script
+    Assert-ExitCode "deployment transaction tests"
+  }
+
   Invoke-Step "Installer ACL + recovery tests" {
     # Also deterministic and offline: builds real hardened trees in %TEMP%, reproduces the
     # empty-DACL state a previous install left on the owner's machine, and proves the
