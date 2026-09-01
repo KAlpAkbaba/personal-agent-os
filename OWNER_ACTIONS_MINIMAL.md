@@ -2,6 +2,10 @@
 
 The engineering agent should complete everything else autonomously before asking for these.
 
+> **Doing one now? See [`docs/OWNER_ACTIONS.md`](docs/OWNER_ACTIONS.md).** This file lists
+> what is unavoidable in principle; that one is the live queue — which single action to take
+> next, the exact command, what it unblocks, and what the agent does automatically after it.
+
 ## One-time local actions that may be unavoidable
 
 1. Approve Windows UAC for Docker/WSL/runtime installation if requested.
