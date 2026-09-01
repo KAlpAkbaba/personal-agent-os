@@ -514,3 +514,53 @@ Tests: 7 new PS5.1 cases in `installer-acl.tests.ps1` (26/26) reproducing the em
 denial on a state file, repairing it, proving no-op on healthy files, idempotence, and the
 reader's absent/denied/key-refusal semantics; 1 new agent test (`134/134`) proving
 protection survives `Save`-over-`Save` atomic replacement.
+
+## ADR-0030 — Scripts never touch cryptographic key APIs; the `identity` verb (2026-09-01)
+
+Status: Accepted
+
+Context: the finalize run got through the transactional deployment (journal committed,
+service + companion + pipe healthy) and died in broker-registration restore on
+`ECDsa.ImportFromPem` — a .NET Core 3+ API that Windows PowerShell 5.1's .NET Framework
+does not have. The script was deriving the public SPKI from the device key to rebuild the
+broker row. Fourth member of the same defect family (native quoting, StrictMode
+cardinality, `??`): code that parses fine on 5.1 and fails only at the call, only on the
+owner's machine.
+
+Decision: **Windows PowerShell scripts never touch cryptographic key material or key APIs
+— all key handling goes through the agent's own .NET implementation.** Concretely, a new
+load-only verb: `PagentOS.DeviceService identity` prints exactly one JSON document
+(device_id, name, broker URL, enrolled_at, `public_key_spki_b64`) on stdout, diagnostics
+on stderr, per the machine-readable child protocol. The private key never crosses stdout;
+the SPKI comes from the same `DeviceIdentity` the agent signs with, so enrolled key and
+restored row cannot drift. Distinct exit codes: 3 = not enrolled, 4 = state exists but the
+key is missing — opposite recovery situations a caller must not conflate. The verb never
+creates anything: an identity question must not mint an identity.
+
+Judgement calls:
+
+- The helper is the **repo build run as a tool** against the installed data dir
+  (`PAGENTOS_AGENT_DataDir` override), not the installed service exe — the committed
+  runtime may predate the verb, and reading state never justifies touching it.
+- No PS5.1-native fallback: producing SPKI from a PKCS#8 PEM on the Framework host means
+  hand-parsing DER in script, which is crypto reimplementation and forbidden outright.
+- PowerShell 7 was not made a requirement; the installed product's script surface stays
+  Windows PowerShell 5.1.
+- `finalize-qualification.ps1` gained phase resumability (`-StartPhase
+  Auto|Deploy|RestoreBrokerRegistration`): Auto skips deployment when the journal says
+  committed and nothing is staged, but only over a runtime re-verified healthy
+  (service AND companion AND pipe — Running alone is not health).
+
+Enforcement, both directions:
+
+- `script-syntax.tests.ps1` now scans every script for .NET-Core-only crypto calls
+  (`ImportFromPem`, `ImportPkcs8PrivateKey`, `ExportSubjectPublicKeyInfo`, …) and fails
+  the gate on any hit — the class is detected before a real run, not during one.
+- `identity-restore.tests.ps1` (new gate step, after the agent build): under actual
+  Windows PowerShell 5.1, the REAL service exe performs a REAL enrollment against a raw
+  loopback TCP listener the test operates (no HttpListener URL ACLs, no elevation, chunked
+  encoding handled), capturing the registered public key; then the `identity` verb must
+  return that key **byte-for-byte** — the exact property broker restoration depends on.
+  Refusal legs prove exit 3 creates nothing and exit 4 never re-mints a key whose loss is
+  a recovery situation. First test asserts the host really lacks `ImportFromPem`, so the
+  premise is re-examined if the platform ever changes.

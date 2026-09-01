@@ -257,6 +257,17 @@ if (-not $Fast) {
     } finally { Pop-Location }
   }
 
+  Invoke-Step "Identity restoration (PS5.1 + real key)" {
+    # A real finalize run died calling ECDsa.ImportFromPem from Windows PowerShell 5.1,
+    # whose .NET Framework does not have it. These run AFTER the agent build: the real
+    # service exe performs a real loopback enrollment, and the `identity` verb must return
+    # the enrolled public key byte-for-byte - the property broker-registration restore
+    # depends on. Also proves the verb is load-only: asking never mints a key.
+    $script = Join-Path $repoRoot "scripts\tests\identity-restore.tests.ps1"
+    & (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -NoProfile -File $script
+    Assert-ExitCode "identity restoration tests"
+  }
+
   if ($E2E) {
     Invoke-Step "M1 device E2E (Notepad)" {
       & $powershell5 -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot "scripts\e2e-m1-device.ps1") -SkipBuild

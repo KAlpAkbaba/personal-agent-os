@@ -36,6 +36,18 @@ if ($PSVersionTable.PSVersion.Major -ne 5) {
 Write-Host ""
 Write-Host "Windows PowerShell 5.1 syntax ($($PSVersionTable.PSVersion))"
 
+# .NET APIs that read as perfectly normal but DO NOT EXIST on Windows PowerShell 5.1's
+# .NET Framework. A real qualification run died on ECDsa.ImportFromPem mid-flow — parseable,
+# discoverable only at the call. Key handling belongs in the .NET 10 identity helper
+# (`PagentOS.DeviceService identity`), never in script. Detected here so the gate finds the
+# next one before the owner's machine does.
+$frameworkMissingApis = @(
+    "ImportFromPem", "ImportPkcs8PrivateKey", "ExportPkcs8PrivateKey",
+    "ImportECPrivateKey", "ExportECPrivateKey", "ImportSubjectPublicKeyInfo",
+    "ExportSubjectPublicKeyInfo", "CreateFromPem", "ImportRSAPrivateKey"
+)
+$forbiddenPattern = "\.(" + ($frameworkMissingApis -join "|") + ")\("
+
 foreach ($file in @(Get-ChildItem -Path (Join-Path $repoRoot "scripts") -Filter "*.ps1" -Recurse -File)) {
     $relative = $file.FullName.Substring($repoRoot.Length + 1)
     $errors = $null
@@ -48,10 +60,23 @@ foreach ($file in @(Get-ChildItem -Path (Join-Path $repoRoot "scripts") -Filter 
         foreach ($parseError in @($errors | Select-Object -First 3)) {
             Write-Host ("        line {0}: {1}" -f $parseError.Extent.StartLineNumber, $parseError.Message) -ForegroundColor Red
         }
+        continue
     }
-    else {
-        Write-Host "  PASS  $relative"
+
+    # This test file names the forbidden APIs on purpose; every other script is checked.
+    if ($file.FullName -ne $PSCommandPath) {
+        $apiHits = @(Select-String -LiteralPath $file.FullName -Pattern $forbiddenPattern)
+        if (@($apiHits).Count -gt 0) {
+            $failures++
+            Write-Host "  FAIL  $relative" -ForegroundColor Red
+            foreach ($hit in @($apiHits | Select-Object -First 3)) {
+                Write-Host ("        line {0}: .NET-Core-only crypto API not available on the 5.1 Framework host - use the identity helper: {1}" -f $hit.LineNumber, $hit.Line.Trim()) -ForegroundColor Red
+            }
+            continue
+        }
     }
+
+    Write-Host "  PASS  $relative"
 }
 
 Write-Host ""

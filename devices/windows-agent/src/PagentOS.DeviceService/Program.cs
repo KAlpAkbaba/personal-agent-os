@@ -26,6 +26,7 @@ public static class Program
             {
                 "enroll" => await EnrollAsync(args.Skip(1).ToArray()).ConfigureAwait(false),
                 "run" => await RunAsync(args.Skip(1).ToArray()).ConfigureAwait(false),
+                "identity" => Identity(),
                 _ => PrintUsage(),
             };
         }
@@ -41,7 +42,54 @@ public static class Program
         Console.Error.WriteLine("usage:");
         Console.Error.WriteLine("  PagentOS.DeviceService enroll --broker-url <http-base> --token <one-time-token> --name <device-name>");
         Console.Error.WriteLine("  PagentOS.DeviceService run");
+        Console.Error.WriteLine("  PagentOS.DeviceService identity");
         return 2;
+    }
+
+    /// <summary>
+    /// Print the device's NON-SECRET identity metadata as exactly one JSON document on
+    /// stdout: device_id, name, broker URL, enrolled_at, and the PUBLIC (SPKI) half of the
+    /// key. Diagnostics go to stderr, per the machine-readable child protocol.
+    ///
+    /// Load-only, and loudly so: an elevated recovery flow asking "what is this device's
+    /// identity" must never cause a key or state file to be minted — a missing file here is
+    /// a recovery question, not a first run. Distinct exit codes let the caller tell "not
+    /// enrolled" from "enrolled but the key is gone", which need opposite responses.
+    ///
+    /// Exists because Windows PowerShell 5.1 (.NET Framework) has no ImportFromPem, and the
+    /// alternative — reimplementing ECDSA PEM parsing in a script — is exactly the kind of
+    /// crypto duplication ADR-0029 forbids. Key handling stays in this process, on the same
+    /// implementation the agent itself signs with; the private key never crosses stdout.
+    /// </summary>
+    private static int Identity()
+    {
+        var options = AgentServiceOptions.FromConfiguration(BuildConfiguration());
+        var state = AgentState.Load(options.StateFilePath);
+        if (state is null)
+        {
+            Console.Error.WriteLine($"not enrolled: no state at {options.StateFilePath}. This verb never enrolls; nothing was created.");
+            return 3;
+        }
+
+        if (!File.Exists(options.KeyFilePath))
+        {
+            Console.Error.WriteLine(
+                $"enrolled state exists but the device key is missing at {options.KeyFilePath}. " +
+                "This is a recovery situation, not a first run; no key was created.");
+            return 4;
+        }
+
+        using var identity = DeviceIdentity.LoadOrCreate(options.KeyFilePath);
+        var document = new System.Text.Json.Nodes.JsonObject
+        {
+            ["device_id"] = state.DeviceId,
+            ["name"] = state.Name,
+            ["broker_rest_url"] = state.BrokerRestUrl,
+            ["enrolled_at"] = state.EnrolledAt.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+            ["public_key_spki_b64"] = identity.PublicKeySpkiBase64,
+        };
+        Console.WriteLine(document.ToJsonString());
+        return 0;
     }
 
     private static IConfigurationRoot BuildConfiguration()

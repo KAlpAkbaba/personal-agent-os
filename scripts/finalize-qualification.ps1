@@ -34,7 +34,16 @@ param(
     [string]$ServiceName = "PagentOSDeviceAgent",
     [string]$InstallRoot = (Join-Path $env:ProgramFiles "PagentOS\agent"),
     [string]$DataDir = (Join-Path $env:ProgramData "PagentOS\agent"),
-    [switch]$SkipRotation
+    [switch]$SkipRotation,
+
+    # Phase resumability. "Auto" skips the transactional deployment when the journal says the
+    # last one COMMITTED and nothing is staged — a real run failed AFTER commit (in broker
+    # restore), and rerunning step 1 would have redeployed identical binaries and restarted a
+    # healthy runtime for nothing. "Deploy" forces a fresh candidate; "RestoreBrokerRegistration"
+    # skips deployment unconditionally (it still refuses if the runtime is not healthy, because
+    # everything after step 1 depends on it).
+    [ValidateSet("Auto", "Deploy", "RestoreBrokerRegistration")]
+    [string]$StartPhase = "Auto"
 )
 
 $ErrorActionPreference = "Stop"
@@ -105,15 +114,65 @@ function Invoke-BrokerCommandE2E {
     return $true
 }
 
+function Test-InstalledRuntimeHealth {
+    <#
+    .SYNOPSIS
+        Running is not health: service Running AND companion process AND the pipe actually
+        listed in the namespace. Same definition the deployment engine verifies against.
+    #>
+    param([int]$TimeoutSeconds = 0)
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    do {
+        $healthy = $false
+        $service = Get-CimInstance Win32_Service -Filter "Name='$ServiceName'" -ErrorAction SilentlyContinue
+        if ($service -and $service.State -eq "Running" -and
+            (Get-Process -Name "PagentOS.SessionCompanion" -ErrorAction SilentlyContinue)) {
+            $config = Get-Content -LiteralPath (Join-Path $InstallRoot "service\appsettings.json") -Raw | ConvertFrom-Json
+            $listed = @([System.IO.Directory]::GetFiles("\\.\pipe\") | Where-Object { $_ -match [regex]::Escape($config.PipeName) })
+            if (@($listed).Count -ge 1) { $healthy = $true }
+        }
+        if ($healthy) { return $true }
+        if ($TimeoutSeconds -gt 0) { Start-Sleep -Seconds 2 }
+    } while ((Get-Date) -lt $deadline)
+    return $false
+}
+
 Assert-Elevated
 $uv = Get-Uv
+
+. (Join-Path $PSScriptRoot "lib\Deployment.ps1")
+. (Join-Path $PSScriptRoot "lib\ServiceInstall.ps1")
+
+# ------------------------------------------------------------------------ phase selection
+
+$journalCommitted = $false
+$journalPath = Join-Path $InstallRoot ".deploy-journal.json"
+if (Test-Path -LiteralPath $journalPath) {
+    try { $journalCommitted = ((Get-Content -LiteralPath $journalPath -Raw | ConvertFrom-Json).phase -eq "committed") } catch { }
+}
+$stagingPresent = Test-Path -LiteralPath (Join-Path $InstallRoot ".staging")
+
+$deployNeeded = $true
+switch ($StartPhase) {
+    "Deploy" { $deployNeeded = $true }
+    "RestoreBrokerRegistration" { $deployNeeded = $false }
+    default { $deployNeeded = -not ($journalCommitted -and -not $stagingPresent) }
+}
+
+if (-not $deployNeeded) {
+    # Skipping deployment is only legitimate over a runtime that is actually alive — every
+    # later step depends on it, and "the journal says committed" says nothing about now.
+    Write-Host "=== step 1: skipped - deployment journal is committed, nothing staged ===" -ForegroundColor Cyan
+    if (-not (Test-InstalledRuntimeHealth -TimeoutSeconds 15)) {
+        throw "deployment was skipped (StartPhase=$StartPhase, journal committed=$journalCommitted) but the installed runtime is NOT healthy (service+companion+pipe). Diagnose it, or rerun with -StartPhase Deploy."
+    }
+    Write-Host "installed runtime verified healthy: service Running, companion up, pipe live"
+}
+else {
 
 # ---------------------------------------------------------------- step 1: update the agent
 
 Write-Host "=== step 1: transactional binary update (journaled; enrollment preserved) ===" -ForegroundColor Cyan
-
-. (Join-Path $PSScriptRoot "lib\Deployment.ps1")
-. (Join-Path $PSScriptRoot "lib\ServiceInstall.ps1")
 
 $repoAgentRoot = Join-Path $repoRoot "devices\windows-agent"
 $companionExe = Join-Path $InstallRoot "companion\PagentOS.SessionCompanion.exe"
@@ -201,22 +260,7 @@ $startRuntime = {
     }
 }
 
-$testHealth = {
-    $service = Get-CimInstance Win32_Service -Filter "Name='$ServiceName'"
-    if ($service.State -ne "Running") { return $false }
-    $companionUp = [bool](Get-Process -Name "PagentOS.SessionCompanion" -ErrorAction SilentlyContinue)
-    if (-not $companionUp) { return $false }
-    # Running is not health: the pipe must exist. Non-invasive namespace enumeration; the
-    # pipe is listed both listening and connected.
-    $config = Get-Content -LiteralPath (Join-Path $InstallRoot "service\appsettings.json") -Raw | ConvertFrom-Json
-    $deadline = (Get-Date).AddSeconds(30)
-    while ((Get-Date) -lt $deadline) {
-        $listed = @([System.IO.Directory]::GetFiles("\\.\pipe\") | Where-Object { $_ -match [regex]::Escape($config.PipeName) })
-        if (@($listed).Count -ge 1) { return $true }
-        Start-Sleep -Seconds 2
-    }
-    return $false
-}
+$testHealth = { Test-InstalledRuntimeHealth -TimeoutSeconds 30 }
 
 $applyAcl = {
     Set-HardenedAcl -Root $InstallRoot
@@ -228,22 +272,43 @@ $applyAcl = {
     -StopRuntime $stopRuntime -StartRuntime $startRuntime -TestHealth $testHealth -ApplyAcl $applyAcl)
 Write-Host "deployment committed; service and companion are both up with a live pipe"
 
+}   # end of the deployment phase
+
 # ------------------------------------------------- step 2: restore the broker registration
 
 Write-Host ""
 Write-Host "=== step 2: restore the device's broker registration (NOT re-enrollment) ===" -ForegroundColor Cyan
 
-$state = (Get-MachineStateDocument -DataDir $DataDir) | ConvertFrom-Json
-Write-Host "device on this machine: device_id=$($state.device_id) name=$($state.name)"
+# Identity metadata (device_id, name, PUBLIC SPKI key) comes from the agent's own .NET
+# identity implementation via the `identity` verb — never from parsing the key in
+# PowerShell: Windows PowerShell 5.1 runs on .NET Framework, which has no ImportFromPem
+# (a real qualification run failed exactly there), and reimplementing ECDSA PEM parsing in
+# script is forbidden. The verb is load-only (it refuses to mint anything), prints one
+# non-secret JSON document, and the private key never leaves the helper process.
+#
+# The helper is the REPO build run as a tool against the installed data dir — deliberately
+# not the installed service exe, which may predate the verb; reading state never justifies
+# touching the committed runtime.
+$dotnet = Join-Path $env:LOCALAPPDATA "Microsoft\dotnet\dotnet.exe"
+if (-not (Test-Path $dotnet)) { $dotnet = (Get-Command dotnet -ErrorAction Stop).Source }
+$helperProject = Join-Path $repoRoot "devices\windows-agent\src\PagentOS.DeviceService\PagentOS.DeviceService.csproj"
+$helperExe = Join-Path $repoRoot "devices\windows-agent\src\PagentOS.DeviceService\bin\Release\net10.0-windows\PagentOS.DeviceService.exe"
+Write-Host "building the identity helper (repo build; incremental)..."
+$helperBuild = Invoke-NativeProcess -FilePath $dotnet -Arguments @("build", $helperProject, "-c", "Release", "--nologo", "-v", "q") -TimeoutSeconds 600
+Assert-NativeSuccess -Result $helperBuild -Activity "build identity helper"
+if (-not (Test-Path -LiteralPath $helperExe)) { throw "identity helper built but not found at $helperExe" }
 
-# Derive the PUBLIC key from the device's own private key. Elevated read; the key never
-# leaves this process and only the SPKI (public) half is passed on.
-$pem = Get-Content -LiteralPath (Join-Path $DataDir "device.key") -Raw
-$ecdsa = [System.Security.Cryptography.ECDsa]::Create()
-$ecdsa.ImportFromPem($pem)
-$pem = $null
-$spki = [Convert]::ToBase64String($ecdsa.ExportSubjectPublicKeyInfo())
-$ecdsa.Dispose()
+$env:PAGENTOS_AGENT_DataDir = $DataDir
+try {
+    $state = Invoke-MachineReadableProcess -FilePath $helperExe -Arguments @("identity") `
+        -TimeoutSeconds 60 -Activity "device identity (non-secret metadata)" -SensitiveOutput $false
+}
+finally {
+    Remove-Item Env:\PAGENTOS_AGENT_DataDir -ErrorAction SilentlyContinue
+}
+Write-Host "device on this machine: device_id=$($state.device_id) name=$($state.name)"
+$spki = $state.public_key_spki_b64
+if ([string]::IsNullOrWhiteSpace($spki)) { throw "the identity helper returned no public key" }
 
 # Make sure the Cloud Core is up on its dedicated database, then restore the row there.
 $agentConfig = Get-Content -LiteralPath (Join-Path $InstallRoot "service\appsettings.json") -Raw | ConvertFrom-Json
