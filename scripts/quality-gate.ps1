@@ -157,6 +157,14 @@ if (-not $Fast) {
     } finally { Pop-Location }
   }
 
+  Invoke-Step "Script syntax (PowerShell 5.1)" {
+    # A PowerShell 7-only construct is a parse error on the owner's 5.1 machine, so the script
+    # dies on its first line. One such slip reached a credential-rotation script.
+    $script = Join-Path $repoRoot "scripts\tests\script-syntax.tests.ps1"
+    & (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -NoProfile -File $script
+    Assert-ExitCode "script syntax tests"
+  }
+
   Invoke-Step "Installer invocation tests" {
     # The installer's native-tool invocation is a deterministic, offline check, and it earns
     # its place in the gate: a real install on the owner's machine failed at `sc create` with

@@ -5,7 +5,9 @@
 Every test in this package is marked `integration`.
 """
 
+import socket
 import time
+import warnings
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -130,7 +132,39 @@ def exclusive_database() -> Iterator[None]:
 
 
 @pytest.fixture(scope="session", autouse=True)
-def migrated_database(exclusive_database: None) -> None:
+def no_live_api(exclusive_database: None) -> None:
+    """Refuse to run beside a live API process on this database.
+
+    The advisory lock above serialises pytest runs against each other. It cannot stop a
+    developer API server: `scripts/dev-broker.ps1` runs the artifact-ready announcer, which
+    sweeps `tasks` every five seconds and stamps rows these tests are about to assert on.
+    That produced failures that looked exactly like product defects and cost real time to
+    diagnose twice, so it is now detected rather than rediscovered.
+
+    A warning, not an error: a developer may knowingly want both, and the failure is loud
+    enough to recognise once it is named.
+    """
+    settings = Settings()
+    port = 8001
+    try:
+        port = int(str(settings.api_port))  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.settimeout(0.25)
+        if probe.connect_ex(("127.0.0.1", port)) == 0:
+            warnings.warn(
+                f"an API is listening on 127.0.0.1:{port}. Its artifact-ready announcer sweeps "
+                "the same `tasks` table these tests use, and can consume rows a test is waiting "
+                "for. Stop it with `scripts\\dev-broker.ps1 -Stop` if integration tests fail in "
+                "ways that make no sense.",
+                stacklevel=1,
+            )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def migrated_database(exclusive_database: None, no_live_api: None) -> None:
     """Ensure the schema is at head before any integration test runs."""
     cfg = AlembicConfig(str(API_ROOT / "alembic.ini"))
     cfg.set_main_option("script_location", str(API_ROOT / "alembic"))

@@ -40,7 +40,16 @@ param(
     [string]$AgentConfig = (Join-Path $env:ProgramFiles "PagentOS\agent\service\appsettings.json"),
     [bool]$StoreAutomationSession = $true,
     [int]$AutomationSessionTtlSeconds = 86400,
-    [switch]$SkipStart
+    [switch]$SkipStart,
+
+    # Supplied by scripts/rotate-owner-credential.ps1 so a rotation flows straight into the
+    # remaining steps without prompting again for something it already holds in memory.
+    [System.Security.SecureString]$OwnerCredential,
+
+    # Resume an interrupted bring-up: never bootstrap, never re-enrol, and skip the automation
+    # session if one is already stored. What is already done stays done — re-enrolling would
+    # issue a second device identity for a machine that already has one.
+    [switch]$Resume
 )
 
 $ErrorActionPreference = "Stop"
@@ -91,18 +100,35 @@ Write-Host "cloud core health: $($health.status)"
 
 # --- 2. owner credential ---------------------------------------------------------------------
 
+$statePath = Join-Path $dataDir "state.json"
+$alreadyEnrolled = Test-Path -LiteralPath $statePath
+if ($alreadyEnrolled) {
+    $existing = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+    Write-Host "device is already enrolled: device_id=$($existing.device_id) (it will not be enrolled again)"
+}
+
 $credential = $null
 try {
     $bootstrap = $null
-    try {
-        $bootstrap = Invoke-RestMethod -Uri "$baseUrl/v1/identity/bootstrap" -Method Post -TimeoutSec 30 -ErrorAction Stop
+    if ($OwnerCredential) {
+        # Handed over in memory by the rotation script; no prompt, no second bootstrap.
+        $credential = ConvertFrom-SecureStringPlain -Secure $OwnerCredential
+        Write-Host "using the owner credential supplied by the caller"
     }
-    catch {
-        $status = $null
-        if ($_.Exception.PSObject.Properties.Name -contains "Response" -and $_.Exception.Response) {
-            $status = $_.Exception.Response.StatusCode.value__
+    elseif ($Resume) {
+        Write-Host "resume: not bootstrapping; the owner credential is needed to mint any new session"
+    }
+    else {
+        try {
+            $bootstrap = Invoke-RestMethod -Uri "$baseUrl/v1/identity/bootstrap" -Method Post -TimeoutSec 30 -ErrorAction Stop
         }
-        if ($status -ne 409) { throw }
+        catch {
+            $status = $null
+            if ($_.Exception.PSObject.Properties.Name -contains "Response" -and $_.Exception.Response) {
+                $status = $_.Exception.Response.StatusCode.value__
+            }
+            if ($status -ne 409) { throw }
+        }
     }
 
     if ($bootstrap) {
@@ -119,7 +145,7 @@ try {
         Write-Host "safe to share." -ForegroundColor Yellow
         Write-Host ""
     }
-    else {
+    elseif (-not $credential) {
         Write-Host "an owner credential already exists; it is needed to mint an enrolment token"
         $secure = Read-Host -Prompt "Owner credential (input hidden)" -AsSecureString
         $credential = ConvertFrom-SecureStringPlain -Secure $secure
@@ -131,40 +157,52 @@ try {
 
     # --- 3. session -> enrolment token -> enrol, entirely in memory -------------------------
 
-    $session = Invoke-RestMethod -Uri "$baseUrl/v1/identity/sessions" -Method Post -TimeoutSec 30 `
-        -ContentType "application/json" `
-        -Body (@{ owner_credential = $credential; client_kind = "cli"; label = "device-enrolment" } | ConvertTo-Json)
-    $headers = @{ Authorization = "Bearer $($session.token)" }
-    Write-Host "owner session established (session_id=$($session.session_id))"
-
-    $tokenResponse = Invoke-RestMethod -Uri "$baseUrl/v1/devices/enrollment-tokens" -Method Post `
-        -Headers $headers -TimeoutSec 30
-    Write-Host "minted a single-use enrolment token (expires $($tokenResponse.expires_at)); it is not printed"
-
-    $enroll = Invoke-NativeProcess -FilePath $serviceExe -Arguments @(
-        "enroll",
-        "--broker-url", $baseUrl,
-        "--token", $tokenResponse.token,
-        "--name", $env:COMPUTERNAME
-    ) -TimeoutSeconds 120
-
-    # Redact before anything is shown: the command line contains the token.
-    $safeOut = ($enroll.StdOut + $enroll.StdErr) -replace [regex]::Escape($tokenResponse.token), "<token redacted>"
-    if (-not $enroll.Success) {
-        throw "enrolment failed with exit code $($enroll.ExitCode):`n$safeOut"
+    if ($alreadyEnrolled) {
+        # Deliberately not re-enrolling. A second enrolment would mint a second device
+        # identity for a machine that already has one, orphaning the first in the broker and
+        # discarding a key the service is already configured to use.
+        $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+        Write-Host "skipping enrolment: device_id=$($state.device_id) enrolled $($state.enrolled_at)"
     }
-    Write-Host ($safeOut.Trim())
+    else {
+        $session = Invoke-RestMethod -Uri "$baseUrl/v1/identity/sessions" -Method Post -TimeoutSec 30 `
+            -ContentType "application/json" `
+            -Body (@{ owner_credential = $credential; client_kind = "cli"; label = "device-enrolment" } | ConvertTo-Json)
+        $headers = @{ Authorization = "Bearer $($session.token)" }
+        Write-Host "owner session established (session_id=$($session.session_id))"
 
-    $statePath = Join-Path $dataDir "state.json"
-    if (-not (Test-Path -LiteralPath $statePath)) {
-        throw "enrolment reported success but $statePath does not exist"
+        $tokenResponse = Invoke-RestMethod -Uri "$baseUrl/v1/devices/enrollment-tokens" -Method Post `
+            -Headers $headers -TimeoutSec 30
+        Write-Host "minted a single-use enrolment token (expires $($tokenResponse.expires_at)); it is not printed"
+
+        $enroll = Invoke-NativeProcess -FilePath $serviceExe -Arguments @(
+            "enroll",
+            "--broker-url", $baseUrl,
+            "--token", $tokenResponse.token,
+            "--name", $env:COMPUTERNAME
+        ) -TimeoutSeconds 120
+
+        # Redact before anything is shown: the command line contains the token.
+        $safeOut = ($enroll.StdOut + $enroll.StdErr) -replace [regex]::Escape($tokenResponse.token), "<token redacted>"
+        if (-not $enroll.Success) {
+            throw "enrolment failed with exit code $($enroll.ExitCode):`n$safeOut"
+        }
+        Write-Host ($safeOut.Trim())
+
+        if (-not (Test-Path -LiteralPath $statePath)) {
+            throw "enrolment reported success but $statePath does not exist"
+        }
+        $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+        Write-Host "enrolled: device_id=$($state.device_id) name=$($state.name)"
     }
-    $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
-    Write-Host "enrolled: device_id=$($state.device_id) name=$($state.name)"
 
     # --- 4. optional automation session ------------------------------------------------------
 
-    if ($StoreAutomationSession) {
+    $storedSession = Join-Path $env:LOCALAPPDATA "PagentOS\secrets\PAGENTOS_OWNER_SESSION_TOKEN.dpapi"
+    if ($Resume -and (Test-Path -LiteralPath $storedSession)) {
+        Write-Host "resume: a local-automation session is already stored; leaving it alone"
+    }
+    elseif ($StoreAutomationSession -and $credential) {
         $automation = Invoke-RestMethod -Uri "$baseUrl/v1/identity/sessions" -Method Post -TimeoutSec 30 `
             -ContentType "application/json" `
             -Body (@{
