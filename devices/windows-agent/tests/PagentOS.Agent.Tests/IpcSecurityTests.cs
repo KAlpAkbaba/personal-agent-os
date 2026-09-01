@@ -140,18 +140,35 @@ public class IpcSecurityTests
     [Fact]
     public async Task The_service_refuses_to_share_a_pipe_name_someone_else_already_holds()
     {
-        // Real squatting: a process creates the service's pipe name first. With
-        // FILE_FLAG_FIRST_PIPE_INSTANCE the service cannot silently become a second
-        // instance behind the squatter — creation fails, so it never serves on that name.
+        // Real squatting: a process creates the service's pipe name first, and it does so
+        // with room for MORE instances — which is the point. An earlier version of this test
+        // used maxNumberOfServerInstances: 1, and Windows blocks a second instance in that
+        // case regardless of FILE_FLAG_FIRST_PIPE_INSTANCE, so the test passed even with the
+        // flag deleted from production code. It proved a true thing while being cited as
+        // evidence for a defense it never exercised (caught by the independent verification
+        // of ADR-0028). With a multi-instance squatter, only the flag stops the service from
+        // quietly becoming instance #2 behind it.
         var pipeName = IpcTestSupport.NewPipeName();
         using var squatter = new NamedPipeServerStream(
-            pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+            pipeName, PipeDirection.InOut, 4, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
 
         var server = IpcTestSupport.NewServer(pipeName);
         await server.StartAsync(CancellationToken.None);
         try
         {
-            // The squatter still owns the name: nothing the service did took it over.
+            // The service must have FAILED to listen. Asserting the failure directly, rather
+            // than inferring it from "nobody connected", is what makes the flag load-bearing
+            // for this test.
+            var deadline = DateTime.UtcNow.AddSeconds(15);
+            while (server.ListenFailures == 0)
+            {
+                Assert.True(
+                    DateTime.UtcNow < deadline,
+                    "the service created a pipe on a name another process already held");
+                await Task.Delay(20);
+            }
+
+            // And the squatter still owns the name: a client reaches it, not the service.
             await using var client = new NamedPipeClientStream(
                 ".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous, TokenImpersonationLevel.Identification);
             await client.ConnectAsync(5000);
@@ -162,6 +179,54 @@ public class IpcSecurityTests
         }
         finally
         {
+            await server.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task A_second_connection_cannot_displace_the_connected_companion()
+    {
+        // The pipe is single-instance, so a second process cannot get its own channel while
+        // the companion holds one. Worth asserting rather than assuming: "the attacker just
+        // connects too" is the obvious next move once every other door is shut, and the
+        // consequence would be a hijacked exec channel rather than a merely failed connect.
+        var pipeName = IpcTestSupport.NewPipeName();
+        var server = IpcTestSupport.NewServer(pipeName);
+        await server.StartAsync(CancellationToken.None);
+        using var companionCts = new CancellationTokenSource();
+        var companionTask = Task.Run(() => NewCompanion(
+            pipeName,
+            ServiceAdmissionPolicy.DeveloperMode(IpcTestSupport.CurrentSid()),
+            new WindowsPipeOwnerInspector()).RunAsync(companionCts.Token));
+        try
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(15);
+            while (!server.CompanionConnected)
+            {
+                Assert.True(DateTime.UtcNow < deadline, "the companion never connected");
+                await Task.Delay(20);
+            }
+
+            var intruder = new NamedPipeClientStream(
+                ".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous, TokenImpersonationLevel.Identification);
+            await using (intruder)
+            {
+                await Assert.ThrowsAnyAsync<Exception>(() => intruder.ConnectAsync(1500));
+            }
+
+            // The legitimate companion is untouched and still serving.
+            Assert.True(server.CompanionConnected);
+            var result = await server.ExecuteCapabilityAsync(
+                AgentCapabilities.DesktopOpenApplication,
+                new JsonObject { ["application"] = "cmdtest", ["args"] = new JsonArray("/c", "exit") },
+                TimeSpan.FromSeconds(15),
+                CancellationToken.None);
+            Assert.True(result!["pid"]!.GetValue<int>() > 0);
+        }
+        finally
+        {
+            companionCts.Cancel();
+            await SwallowAsync(companionTask);
             await server.StopAsync(CancellationToken.None);
         }
     }

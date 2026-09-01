@@ -112,7 +112,7 @@ public static class Program
     /// logged at startup so a service install that forgot to set CompanionSid is visible
     /// rather than silently self-authorizing.
     /// </summary>
-    private static CompanionAdmissionPolicy BuildAdmissionPolicy(AgentServiceOptions options)
+    public static CompanionAdmissionPolicy BuildAdmissionPolicy(AgentServiceOptions options)
     {
         var sid = options.CompanionSid;
         if (string.IsNullOrWhiteSpace(sid))

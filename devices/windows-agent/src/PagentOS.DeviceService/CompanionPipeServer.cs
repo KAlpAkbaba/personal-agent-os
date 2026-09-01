@@ -25,9 +25,10 @@ namespace PagentOS.DeviceService;
 /// 1. <b>DACL</b> — who may open the pipe: SYSTEM and the authorized owner SID, nobody else.
 ///    Under a Session-0 service the owner is a *different* account than the creator, which is
 ///    exactly why "ACL it to the current user" stopped being right.
-/// 2. <b>First instance</b> — the pipe is created with FILE_FLAG_FIRST_PIPE_INSTANCE, so if
-///    anything already holds that name, creation fails loudly instead of the service quietly
-///    becoming the second instance behind a squatter.
+/// 2. <b>Sole ownership of the name</b> — if anything already holds the pipe name, creation
+///    fails loudly and is recorded, instead of the service quietly becoming a second
+///    instance behind a squatter. Three mechanisms overlap here (single instance, a
+///    non-default security descriptor, FirstPipeInstance); see `CreateServerStream`.
 /// 3. <b>Peer admission</b> — the connected process's account, Windows session and image path
 ///    are read from the kernel and judged by <see cref="CompanionAdmissionPolicy"/>. An ACL
 ///    says who may knock; this says who did.
@@ -70,6 +71,15 @@ public sealed class CompanionPipeServer : BackgroundService
     /// <summary>Refusals since start, by reason. Surfaced in telemetry; also what the tests assert.</summary>
     public ConcurrentDictionary<IpcRefusal, int> Refusals { get; } = new();
 
+    /// <summary>
+    /// How many times creating the pipe failed. Non-zero means something else already holds
+    /// the name — the observable signature of squatting. Exposed so a test can assert the
+    /// refusal happened, rather than infer it from the absence of a connection.
+    /// </summary>
+    public int ListenFailures => _listenFailures;
+
+    private int _listenFailures;
+
     /// <summary>Identity of the currently admitted companion, or null when none is connected.</summary>
     public PipePeer? ConnectedPeer => _connection?.Peer;
 
@@ -90,9 +100,11 @@ public sealed class CompanionPipeServer : BackgroundService
             }
             catch (Exception ex)
             {
-                // Includes "the name is already taken" — which, with FirstPipeInstance, is
-                // how a squatted pipe name shows up. Never fall back to a shared instance.
+                // Includes "the name is already taken", which is how a squatted pipe name
+                // shows up. Never fall back to sharing the name with whoever got there first.
+                Interlocked.Increment(ref _listenFailures);
                 _logger.LogError(ex, "failed to create companion pipe; retrying in 5 s");
+                _audit?.Write("ipc_listen_failed", status: "refused", detail: $"pipe={_pipeName}: {ex.Message}");
                 try
                 {
                     await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken).ConfigureAwait(false);
@@ -415,10 +427,20 @@ public sealed class CompanionPipeServer : BackgroundService
         return NamedPipeServerStreamAcl.Create(
             _pipeName,
             PipeDirection.InOut,
+            // One instance, one owner of the name.
+            //
+            // Three things independently prevent this service from ending up sharing a name
+            // that a squatter already holds: this instance limit, the requirement that a
+            // second instance match the first's security descriptor (ours is not the
+            // default), and FirstPipeInstance below. Measured, after the independent
+            // verification of ADR-0028 pointed out that the original comment credited the
+            // flag alone: removing any single one of the three still refuses, so no test can
+            // attribute the guarantee to one mechanism and this comment does not pretend
+            // otherwise. What is asserted — by
+            // `The_service_refuses_to_share_a_pipe_name_someone_else_already_holds` — is the
+            // outcome: a listen failure is recorded and the service never serves on that name.
             maxNumberOfServerInstances: 1,
             PipeTransmissionMode.Byte,
-            // FirstPipeInstance: if this name is already taken, fail — never share the name
-            // with whatever got there first.
             PipeOptions.Asynchronous | PipeOptions.FirstPipeInstance,
             inBufferSize: 0,
             outBufferSize: 0,
@@ -468,3 +490,4 @@ public sealed class CompanionPipeServer : BackgroundService
         }
     }
 }
+
