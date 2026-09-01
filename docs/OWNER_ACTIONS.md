@@ -21,19 +21,25 @@ Status vocabulary matches `docs/QUALIFICATION.md`: `PROVEN_REAL`, `PROVEN_PROXY`
 
 ## Now
 
-**`gh auth login`** — one browser OAuth, in an ordinary (non-elevated) console:
+**Install Tailscale on this PC and sign in.** One UAC prompt, then one login:
 
-```bash
-gh auth login
+```powershell
+winget install --id Tailscale.Tailscale
 ```
 
-Everything in front of it is finished: local Windows qualification is CLOSED (2026-09-01,
-all runtime criteria `PROVEN_REAL` on your machine), the history investigation confirmed
-no credential ever entered Git, CI is written (including the Windows PowerShell 5.1
-suites and the credential-shape scanner), and the production deployment artifacts for the
-cloud milestone are committed. After this one sign-in the agent creates the private
-repository, pushes, and confirms the first CI run — nothing else needed from you for
-GitHub.
+Then launch Tailscale and sign in (create the account if you do not have one). That is the
+whole action — I verify it immediately and read-only with `scripts/verify-tailnet.ps1`, and
+I do not need the account password or any key for this step.
+
+Why this one now: it is the Windows half of the private network, it needs UAC and a human
+login (so it cannot be automated), and it is on the critical path to the milestone's
+headline proof — Hetzner Cloud Core → Tailscale → DeviceService → Companion → real Notepad
+→ ACK. Your Windows machine keeps **zero** inbound public ports throughout; the verifier
+checks that rather than assuming it, and it already passes today.
+
+`gh auth login` turned out **not** to be required — you were already authenticated
+(`KAlpAkbaba`, `repo` + `workflow` scopes), so the private repository is created, `main` is
+pushed, and CI is running.
 
 ---
 
@@ -45,15 +51,20 @@ Completed and qualified: service LocalSystem/Session 0, companion Session 1, pip
 from the real handle, both restart proofs, final credential rotation. The runtime is
 frozen; `docs/QUALIFICATION.md` holds the evidence.
 
-### 2. `gh auth login` (browser OAuth, one time) — **this is the current action**
+### 2. `gh auth login` — **NOT NEEDED (2026-09-01)**
 
-Unblocks: the private GitHub repository and CI. Everything else about CI is already written.
+You were already authenticated, so no action was required. Private repository
+`KAlpAkbaba/personal-agent-os` created (visibility confirmed `PRIVATE` before any code left
+the machine), `main` pushed, CI running.
 
-```bash
-gh auth login
-```
+The first real CI run immediately earned its keep: it found four environment assumptions the
+local gate satisfies by accident — including that `pytest -m "not integration"` was
+deselecting **all 1418 tests** and asserting nothing. All four are fixed; see the CI section
+in `docs/DECISIONS.md`.
 
-The agent then creates the private repository, pushes, and confirms the first CI run.
+### 2b. Install Tailscale on this PC (one UAC prompt + one login) — **this is the current action**
+
+Unblocks: criteria 5.2, 5.4 and the whole remote command path. See **Now** above.
 
 ### 3. Hetzner account + API token, Tailscale account + auth key
 

@@ -210,12 +210,20 @@ def test_collector_refuses_to_read_through_a_directory_junction(tmp_path) -> Non
     (outside / "secret.conf").write_text("APP_PASSWORD=leaked-through-junction\n", encoding="utf-8")
 
     link = root / "linked"
-    made = subprocess.run(
-        ["cmd.exe", "/c", "mklink", "/J", str(link), str(outside)],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        made = subprocess.run(
+            ["cmd.exe", "/c", "mklink", "/J", str(link), str(outside)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except (FileNotFoundError, OSError):
+        # No cmd.exe at all: a junction is an NTFS feature and this is not Windows.
+        # The equivalent escape on this platform is a directory SYMLINK, which
+        # test_collector_refuses_to_read_through_a_directory_symlink covers — and
+        # that is the case that matters here, since the collector runs in a Linux
+        # container in production.
+        pytest.skip("directory junctions are a Windows/NTFS feature; see the symlink test")
     if made.returncode != 0 or not link.exists():
         pytest.skip("this environment cannot create a directory junction")
 
@@ -225,3 +233,35 @@ def test_collector_refuses_to_read_through_a_directory_junction(tmp_path) -> Non
     assert not any("secret.conf" in n for n in names)
     blob = "\n".join(line for f in collected for line in f.lines)
     assert "leaked-through-junction" not in blob
+
+
+def test_collector_refuses_to_read_through_a_directory_symlink(tmp_path) -> None:
+    """The same escape, in the form the production host actually offers.
+
+    The junction test above only ever runs on Windows, and the collector runs in a
+    Linux container in the cloud — so until now the containment guard was covered
+    exclusively on the platform it does not run on. A directory symlink is the POSIX
+    way to point out of an authorized root, and it must be refused the same way:
+    containment decided by resolving the path, not by inspecting the leaf entry.
+    """
+    root = tmp_path / "authorized"
+    root.mkdir()
+    (root / "inside.conf").write_text("debug=true\n", encoding="utf-8")
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.conf").write_text("APP_PASSWORD=leaked-through-symlink\n", encoding="utf-8")
+
+    try:
+        (root / "linked").symlink_to(outside, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        # Windows needs Developer Mode or elevation to create symlinks; the junction
+        # test covers that platform.
+        pytest.skip("this environment cannot create a directory symlink")
+
+    collected = collect_files(root)
+    names = {f.relative_path for f in collected}
+    assert "inside.conf" in names
+    assert not any("secret.conf" in n for n in names)
+    blob = "\n".join(line for f in collected for line in f.lines)
+    assert "leaked-through-symlink" not in blob

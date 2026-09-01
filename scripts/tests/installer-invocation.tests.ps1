@@ -267,17 +267,25 @@ Test-Case "the child runs in the requested working directory, not the shell's" {
     $target = Join-Path $env:TEMP "pagentos-cwd-$([guid]::NewGuid().ToString('N'))"
     New-Item -ItemType Directory -Force -Path $target | Out-Null
     try {
-        $explicit = Invoke-NativeProcess -FilePath $cmd -Arguments @("/c", "cd") -WorkingDirectory $target
-        Assert-True -Condition ($explicit.StdOut.Trim() -ieq $target) `
-            -Because "the child should have run in $target but reported <$($explicit.StdOut.Trim())>"
+        # Identity, not spelling. Comparing `cd` output to $target as a STRING failed on a
+        # CI runner whose TEMP is an 8.3 short path (C:\Users\RUNNER~1\...) while cmd
+        # reports the long form - two spellings of one directory, and the test called it a
+        # bug. A sentinel the child can only see from inside $target asks the question the
+        # test actually means: did the child run THERE.
+        $sentinel = "sentinel-$([guid]::NewGuid().ToString('N')).txt"
+        Set-Content -LiteralPath (Join-Path $target $sentinel) -Value "here" -Encoding ASCII
+
+        $explicit = Invoke-NativeProcess -FilePath $cmd -Arguments @("/c", "dir", "/b", $sentinel) -WorkingDirectory $target
+        Assert-True -Condition ($explicit.ExitCode -eq 0 -and $explicit.StdOut.Trim() -ieq $sentinel) `
+            -Because "the child should have run in $target and seen $sentinel; exit=$($explicit.ExitCode) out=<$($explicit.StdOut.Trim())>"
 
         # And with no parameter it follows PowerShell's own location, so Push-Location reads
         # the way it looks.
         Push-Location $target
         try {
-            $implicit = Invoke-NativeProcess -FilePath $cmd -Arguments @("/c", "cd")
-            Assert-True -Condition ($implicit.StdOut.Trim() -ieq $target) `
-                -Because "with no -WorkingDirectory the child should follow Push-Location, got <$($implicit.StdOut.Trim())>"
+            $implicit = Invoke-NativeProcess -FilePath $cmd -Arguments @("/c", "dir", "/b", $sentinel)
+            Assert-True -Condition ($implicit.ExitCode -eq 0 -and $implicit.StdOut.Trim() -ieq $sentinel) `
+                -Because "with no -WorkingDirectory the child should follow Push-Location; exit=$($implicit.ExitCode) out=<$($implicit.StdOut.Trim())>"
         }
         finally { Pop-Location }
     }
