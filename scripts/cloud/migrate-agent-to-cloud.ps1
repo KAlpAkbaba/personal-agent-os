@@ -133,3 +133,65 @@ Write-Host "=== 4. switching the installed agent to the tailnet endpoint ===" -F
 Write-Host ""
 Write-Host "The agent now dials the Cloud Core over the tailnet, with the same device identity." -ForegroundColor Green
 Write-Host "Rollback, if ever needed:  .\scripts\switch-agent-broker.ps1 -Rollback"
+
+# ------------------------------------------------- 5. owner identity on the cloud deployment
+# This deployment has its own identity root (ADR-0032 §4): two instances, two roots, neither
+# able to impersonate the other. Bootstrap is one-time and loopback-only, so it runs ON the
+# host — through Tailscale SSH, from YOUR console, so the credential is displayed to you and
+# to nobody else. It is never returned to this script's caller, written to a file, or logged.
+Write-Host ""
+Write-Host "=== 5. owner credential for the cloud deployment ===" -ForegroundColor Cyan
+
+$identityCheck = Invoke-NativeProcess -FilePath $ssh -Arguments @(
+    "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=20", "${CloudUser}@${BrokerHost}",
+    "test -s /mnt/pagentos-data/identity/owner_credential.json && echo EXISTS || echo ABSENT"
+) -TimeoutSeconds 120
+$alreadyBootstrapped = ($identityCheck.StdOut -match "EXISTS")
+
+if ($alreadyBootstrapped) {
+    Write-Host "  an owner credential already exists on the host; bootstrap is one-time and is being left alone."
+    Write-Host "  If you do not have it, rotate on the HOST (never through the API):"
+    Write-Host "    ssh $CloudUser@$BrokerHost `"docker exec pagentos-prod-api uv run python -m app.identity.recover --rotate`""
+}
+else {
+    Write-Host "  no owner credential on this deployment yet. Minting it now, ONCE, in THIS console." -ForegroundColor Yellow
+    Write-Host "  Copy it into your password manager before continuing - it is not stored anywhere else." -ForegroundColor Yellow
+    Write-Host ""
+    # Deliberately NOT captured: the output goes straight to the console so the value never
+    # enters a variable, a transcript, or this script's output stream.
+    & $ssh -o StrictHostKeyChecking=accept-new "${CloudUser}@${BrokerHost}" `
+        "curl -fsS -X POST http://127.0.0.1:8001/v1/identity/bootstrap"
+    Write-Host ""
+    Write-Host ""
+    Write-Host "  ^ that credential is shown exactly once." -ForegroundColor Yellow
+}
+
+# The E2E and the resilience runs need a session, not the credential. Minting one here and
+# storing it DPAPI-encrypted to this Windows account means the credential itself is typed
+# once, by you, and never again.
+Write-Host ""
+$storeRoot = Join-Path $env:LOCALAPPDATA "PagentOS\secrets"
+$storedSession = Join-Path $storeRoot "PAGENTOS_CLOUD_SESSION_TOKEN.dpapi"
+$secureCredential = Read-Host -Prompt "Paste the owner credential once to mint an automation session (input hidden)" -AsSecureString
+$bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureCredential)
+try { $plainCredential = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
+finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+
+try {
+    $session = Invoke-RestMethod -Uri "$baseUrl/v1/identity/sessions" -Method Post -TimeoutSec 30 `
+        -ContentType "application/json" `
+        -Body (@{ owner_credential = $plainCredential; client_kind = "cli"; label = "cloud-automation" } | ConvertTo-Json)
+}
+finally {
+    $plainCredential = $null
+}
+
+New-Item -ItemType Directory -Force -Path $storeRoot | Out-Null
+(ConvertTo-SecureString -String $session.token -AsPlainText -Force) | ConvertFrom-SecureString |
+    Set-Content -Path $storedSession -Encoding ASCII
+$session = $null
+
+Write-Host ""
+Write-Host "Automation session stored, encrypted to this Windows account:" -ForegroundColor Green
+Write-Host "  $storedSession"
+Write-Host "Nothing else needs the credential; put it in your password manager and close this window."
