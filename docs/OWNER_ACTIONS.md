@@ -21,25 +21,29 @@ Status vocabulary matches `docs/QUALIFICATION.md`: `PROVEN_REAL`, `PROVEN_PROXY`
 
 ## Now
 
-**Install Tailscale on this PC and sign in.** One UAC prompt, then one login:
+**Run the break-glass session.** The Hetzner host exists and is healthy, but it never
+joined the tailnet: `pagentos-core` is absent from the Tailscale machine list entirely, so
+the auth key baked in at first boot was never accepted (expired, already spent, or not
+pre-authorized). The host has no public SSH by design, so the fix has to come through a
+temporary window.
+
+In a normal (non-elevated) PowerShell, with the Hetzner token set in that shell:
 
 ```powershell
-winget install --id Tailscale.Tailscale
+$env:TF_VAR_hcloud_token = '...'
+.\scripts\cloud\breakglass-ssh.ps1
 ```
 
-Then launch Tailscale and sign in (create the account if you do not have one). That is the
-whole action — I verify it immediately and read-only with `scripts/verify-tailnet.ps1`, and
-I do not need the account password or any key for this step.
+What it does, in order: opens TCP/22 to **your public IP only** (firewall resource alone -
+the running server is never in the plan), waits for the port, collects cloud-init and
+tailscaled diagnostics, then runs `tailscale up` **without any auth key**. That prints a
+one-time login URL which it shows you; open it, approve the machine, and it joins your
+existing tailnet as an ordinary non-ephemeral node. The script then verifies the node from
+this PC and **closes the SSH rule in a `finally`**, on success or failure alike.
 
-Why this one now: it is the Windows half of the private network, it needs UAC and a human
-login (so it cannot be automated), and it is on the critical path to the milestone's
-headline proof — Hetzner Cloud Core → Tailscale → DeviceService → Companion → real Notepad
-→ ACK. Your Windows machine keeps **zero** inbound public ports throughout; the verifier
-checks that rather than assuming it, and it already passes today.
-
-`gh auth login` turned out **not** to be required — you were already authenticated
-(`KAlpAkbaba`, `repo` + `workflow` scopes), so the private repository is created, `main` is
-pushed, and CI is running.
+No key or token is ever typed into chat, written to disk, or printed. If anything goes
+wrong mid-session, `.\scripts\cloud\breakglass-ssh.ps1 -CloseOnly` shuts the window on
+its own.
 
 ---
 
@@ -62,29 +66,21 @@ local gate satisfies by accident — including that `pytest -m "not integration"
 deselecting **all 1418 tests** and asserting nothing. All four are fixed; see the CI section
 in `docs/DECISIONS.md`.
 
-### 2b. Install Tailscale on this PC (one UAC prompt + one login) — **this is the current action**
+### 2b. Install Tailscale on this PC — **DONE (2026-09-01)**
 
-Unblocks: criteria 5.2, 5.4 and the whole remote command path. See **Now** above.
+Running, 100.92.148.30 / mail.tail0e6789.ts.net. Criterion 5.2a is PROVEN_REAL: the same
+check confirmed the agent still owns no inbound listening socket and no firewall rule
+names it.
 
-### 3. Hetzner account + API token, Tailscale account + auth key
+### 3. Hetzner account + API token — **DONE (2026-09-01)**
 
-Unblocks: the real cloud deployment and the PC ↔ cloud private-network proof.
+Provisioned: server 164238173 (pagentos-core, cpx32, nbg1, running), 100 GB volume,
+firewall, SSH key. SKU chosen by the owner after the 15 June 2026 price rise — see
+ADR-0033.
 
-Create the accounts and the token/key in each provider's own console — creating an account
-and entering billing details is legally your act, not the agent's. Then, in the shell you
-will run OpenTofu from:
+### 3b. Break-glass session to finish the tailnet join — **this is the current action**
 
-```bash
-export TF_VAR_hcloud_token='...'
-export TF_VAR_tailscale_auth_key='...'
-export TF_VAR_owner_ssh_public_key="$(cat ~/.ssh/id_ed25519.pub)"
-```
-
-Prefer an ephemeral, pre-authorized, tagged Tailscale key (`tag:agent-os-cloud`). Details and
-the verification commands are in `infra/opentofu/README.md`.
-
-Also approve the Tailscale install on this Windows PC (one UAC prompt) so the PC and the
-cloud host share a tailnet.
+Unblocks: 5.2b, 5.3, 5.4 and every criterion after them. See **Now** above.
 
 ### 4. Bootstrap the owner credential on the real deployment
 
