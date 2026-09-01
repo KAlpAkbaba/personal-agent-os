@@ -21,16 +21,30 @@ Status vocabulary matches `docs/QUALIFICATION.md`: `PROVEN_REAL`, `PROVEN_PROXY`
 
 ## Now
 
-**Nothing yet — the agent is still working.** The next action will be the Windows Service
-install, and it appears here once the Session-0 IPC identity fix has passed independent
-security review and independent verification. Installing before then would install the wrong
-trust model.
+**Install the Windows Service.** One UAC prompt, then one sign-out. Everything in front of
+it is finished: the Session-0 identity model is implemented, independently security-reviewed
+(one Critical found in the fix itself and corrected), independently verified with every check
+mutation-tested, and the full gate passes 12/12 including the real Notepad end-to-end.
+
+```powershell
+# In an ELEVATED PowerShell, at the repository root:
+.\scripts\install-device-service.ps1
+```
+
+Sign out and back in so the companion starts in your session, then:
+
+```powershell
+.\scripts\verify-device-service.ps1
+```
+
+Send me what that prints. It is what converts four Stage-1 criteria from `PROVEN_PROXY` to
+`PROVEN_REAL`, and it unblocks everything after it. Details below.
 
 ---
 
 ## Queue
 
-### 1. Install the Windows Service (one UAC prompt)
+### 1. Install the Windows Service (one UAC prompt) — **this is the current action**
 
 Unblocks: Stage 1 criteria 1.1 and 1.4–1.7 moving from `PROVEN_PROXY` to `PROVEN_REAL`, all
 of Stage 2, and every later stage that needs the agent running unattended.

@@ -1,10 +1,18 @@
 {
   "schema_version": 1,
   "project": "personal-agent-os",
-  "current_milestone": "M10",
-  "status": "NOT_STARTED",
+  "current_milestone": "REAL_ENVIRONMENT_QUALIFICATION",
+  "status": "IN_PROGRESS",
   "last_completed_milestone": "M9",
-  "last_updated": "2026-09-01T06:20:00+03:00",
+  "last_updated": "2026-09-01T08:10:00+03:00",
+  "qualification": {
+    "matrix": "docs/QUALIFICATION.md",
+    "owner_queue": "docs/OWNER_ACTIONS.md",
+    "rule": "PROVEN_REAL requires the real OS mechanism, host, hardware or network. A proxy result is never written up as a production acceptance; where only part of a criterion can be proven here, the rest stays NOT_YET_PROVEN until it runs for real.",
+    "stage_1_session0_ipc_identity": "COMPLETE for everything provable without the install: implemented (ADR-0028), independently security-reviewed (one Critical in the fix - the shipped companion silently ran developer trust - fixed), independently verified with every check mutation-tested, two of my own over-claims corrected in place. 120 agent tests.",
+    "stage_2_service_install": "READY - waiting on the owner's single UAC action; scripts/install-device-service.ps1 then scripts/verify-device-service.ps1.",
+    "stages_3_to_11": "PREPARED where possible: owner-credential bootstrap, local DPAPI secret entry, CI (Windows agent + recovery supervisor + secret hygiene), OpenTofu for a Hetzner host with no public application port. Real browser, real voice and real mobile qualification follow their owner actions."
+  },
   "owner_actions_pending": [
     "Before first GitHub push: run 'gh auth login' once (browser OAuth), then a private repo can be created and CI activated.",
     "Cloud deployment (any time): approve Tailscale install (UAC) + sign in; approve Hetzner account/billing/API key. Local milestones are complete without these.",
@@ -12,7 +20,7 @@
     "M8 asset enrollment: enroll the real hosts/networks/devices you authorize, with evidence and scope (the registry and its API are built and tested; only the owner's real authorization records are missing).",
     "M9 on-device verification (OPEN): the server contract is proven, but real push delivery to a locked phone and microphone/realtime capture under iOS/Android backgrounding need a physical device; distribution beyond a local build additionally needs developer-account/store actions.",
     "OWNER CREDENTIAL (M9): the first real deployment must run POST /v1/identity/bootstrap once from the machine itself and store the returned credential in a password manager. It is shown exactly once; recovery is 'python -m app.identity.recover' on the host, never through the API.",
-    "Windows Service install (one UAC): BLOCKED on M1 security finding #1 (Session-0 pipe identity) first.",
+    "CURRENT ACTION - Windows Service install (one UAC): UNBLOCKED. M1 security finding #1 (Session-0 pipe identity) is closed by ADR-0028, security-reviewed and independently verified. Run scripts/install-device-service.ps1 elevated, sign out and in, then scripts/verify-device-service.ps1 and send the output.",
     "Owner-browser enrollment (M2 production path): harden enrollment registry file ACL (M2 finding #6) + owner approval flow before real-browser attach.",
     "CLOSED by M9 (ADR-0027) - the API authentication/identity layer standing since M0. Every endpoint outside the five documented unauthenticated ones now requires an owner session, enforced by a route-table sweep over the live dependency graph, so (a) speaker verification, (b) memory owner-authority mutations, (c) self-healing ingest/pipeline, (d) the evolution endpoints and (e) the security asset-enrollment endpoints are all authenticated. Remaining within this area, and smaller than the original gate: no per-route rate limiting beyond credential-exchange throttling, and scope narrowing is enforced but not yet used by any route.",
     "HARD GATE - runtime confinement before enabling any I/O-capable generated operation or a non-deterministic skill generator (M7 review verdict (d)): the permission model is enforcing at generation/evaluation/review time but advisory at dispatch.",
