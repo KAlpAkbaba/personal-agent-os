@@ -1,0 +1,128 @@
+# Personal Agent OS — production Cloud Core on the Hetzner host (RQ-2, ADR-0032).
+#
+# Network posture, matching infra/opentofu and the constitution: NO public application
+# port. The only service published on a host interface at all is the API, and it binds
+# ${PAGENTOS_BIND_IP} — the host's TAILSCALE address, never 0.0.0.0. Everything else
+# (postgres, redis, minio, temporal) stays on the compose-internal network; not even
+# loopback publishing, because nothing on the host needs them except the API container.
+#
+# Secrets: this file contains none. /opt/pagentos/.env (root-owned, 0600, written once by
+# scripts/cloud/deploy-cloud-core.sh with generated values) supplies them via compose
+# interpolation. Every secret variable uses the :? form so a missing value refuses to
+# start instead of starting open.
+#
+# Data: everything persistent lives under /mnt/pagentos-data — the dedicated Hetzner
+# volume — so the server itself stays rebuildable (infra/opentofu keeps the volume with
+# prevent_destroy).
+
+name: pagentos-prod
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: pagentos-prod-postgres
+    environment:
+      POSTGRES_USER: pagentos
+      POSTGRES_PASSWORD: ${PAGENTOS_DB_PASSWORD:?set in /opt/pagentos/.env}
+      POSTGRES_DB: pagentos
+    volumes:
+      - /mnt/pagentos-data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pagentos -d pagentos"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: pagentos-prod-redis
+    # Ephemeral/cache only (constitution): no persistence, nothing to lose.
+    command: ["redis-server", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  minio:
+    # Initial artifact store on the VPS (ADR-0032): same S3 interface the app already
+    # speaks; migrating the bucket to Hetzner Object Storage later is a config change
+    # (PAGENTOS_S3_*), not a code change.
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    container_name: pagentos-prod-minio
+    command: ["server", "/data"]
+    environment:
+      MINIO_ROOT_USER: pagentos-artifacts
+      MINIO_ROOT_PASSWORD: ${PAGENTOS_S3_SECRET:?set in /opt/pagentos/.env}
+    volumes:
+      - /mnt/pagentos-data/minio:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  temporal:
+    image: temporalio/auto-setup:1.27.2
+    container_name: pagentos-prod-temporal
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB: postgres12
+      DB_PORT: "5432"
+      POSTGRES_USER: pagentos
+      POSTGRES_PWD: ${PAGENTOS_DB_PASSWORD:?set in /opt/pagentos/.env}
+      POSTGRES_SEEDS: postgres
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_CLI_ADDRESS: temporal:7233
+    healthcheck:
+      test: ["CMD-SHELL", "tctl --address temporal:7233 cluster health"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 10s
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ../../services/api
+    image: pagentos/cloud-core:local
+    container_name: pagentos-prod-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      temporal:
+        condition: service_healthy
+    environment:
+      PAGENTOS_DATABASE_URL: postgresql+psycopg://pagentos:${PAGENTOS_DB_PASSWORD:?}@postgres:5432/pagentos
+      PAGENTOS_REDIS_URL: redis://redis:6379/0
+      PAGENTOS_S3_ENDPOINT_URL: http://minio:9000
+      PAGENTOS_S3_ACCESS_KEY: pagentos-artifacts
+      PAGENTOS_S3_SECRET_KEY: ${PAGENTOS_S3_SECRET:?}
+      PAGENTOS_S3_BUCKET: pagentos-artifacts
+      PAGENTOS_TEMPORAL_ADDRESS: temporal:7233
+      PAGENTOS_VOICE_PROFILE_SECRET: ${PAGENTOS_VOICE_PROFILE_SECRET:?set in /opt/pagentos/.env}
+      # The web shell is reached over the tailnet; set to the real private origin(s).
+      PAGENTOS_WEB_ORIGINS: ${PAGENTOS_WEB_ORIGINS:-}
+      # Bootstrap runs ONCE, from the host itself, through this loopback-only guard.
+      PAGENTOS_IDENTITY_BOOTSTRAP_LOOPBACK_ONLY: "true"
+    volumes:
+      # ADR-0027: the owner-credential hash lives OUTSIDE the database and OUTSIDE the
+      # image, on the persistent volume, so neither a DB restore nor an image rebuild
+      # can mint or destroy owner identity.
+      - /mnt/pagentos-data/identity:/srv/pagentos/var/identity
+    ports:
+      # The ONE published socket, and only on the tailnet address. If PAGENTOS_BIND_IP
+      # is unset the stack refuses to start rather than defaulting to 0.0.0.0.
+      - "${PAGENTOS_BIND_IP:?the host's Tailscale IP; set in /opt/pagentos/.env}:8001:8001"
+      # Loopback too, for the one-time identity bootstrap and host-side recovery/health.
+      - "127.0.0.1:8001:8001"
+    restart: unless-stopped

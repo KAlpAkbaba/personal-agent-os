@@ -604,6 +604,42 @@ Verified on the real machine: the fixed dev-broker detects the owner's elevated 
 (it predates markers — the honest answer), and renders all 13 real subsystem checks from
 the exact line that crashed.
 
+## ADR-0032 — RQ-2 cloud bring-up shape (2026-09-01)
+
+Status: Accepted
+
+Context: local Windows qualification closed; the next milestone moves the Cloud Core to
+the real Hetzner + Tailscale environment. These are the initial-bring-up decisions, each
+reversible by configuration and each biased toward "prove the path first, optimize never
+until RQ-2 closes":
+
+1. **Artifact store: MinIO on the VPS first.** `CLOUD_INFRASTRUCTURE.md` targets Hetzner
+   Object Storage; the app speaks S3 either way, so the migration is a `PAGENTOS_S3_*`
+   config change later. Bringing up qualification must not wait on a second provider
+   surface, and MinIO stays compose-internal (no published port).
+2. **Image built on the host first, GHCR later.** The release model (CI → GHCR → pull) is
+   the destination, but it needs the private repo + CI to exist. `deploy-cloud-core.sh`
+   builds from the checked-out source; swapping `build:` for a GHCR `image:` later
+   changes nothing else.
+3. **The API binds the tailnet IP + loopback, nothing else.** Compose refuses to start
+   with `PAGENTOS_BIND_IP` unset (`:?`), so forgetting the variable cannot fall open to
+   0.0.0.0. Loopback exists for the one-time identity bootstrap (loopback-only guard
+   stays on) and host-side recovery. Infra services publish no host port at all.
+4. **The cloud identity root is a NEW bootstrap on the VPS**, on the persistent volume
+   (`/mnt/pagentos-data/identity`), minted once by the owner through the loopback guard.
+   The local root keeps serving the local dev broker; two instances, two roots, neither
+   able to impersonate the other. Secrets in `/opt/pagentos/.env` are GENERATED on first
+   deploy (root-owned 0600, never printed, never in git).
+5. **The Windows device is NOT re-enrolled.** Its identity (id + P-256 key) is
+   cryptographically valid for any broker; the cloud database gets the existing
+   registration via `restore-device-row.sh` from the identity helper's non-secret
+   document, and `switch-agent-broker.ps1` changes only the broker URL — atomically
+   (`File.Replace`; a 3-arg `File.Move` is .NET-Core-only, the ImportFromPem class),
+   with health-probe-before-switch, symmetric restart, and one-command rollback.
+6. **Hetzner SKU is decided at provisioning**, not now: verify current NBG1 availability
+   against the CPX42-class target in `CLOUD_INFRASTRUCTURE.md` §1 and record the choice
+   here when the API token exists.
+
 ## Security investigation — `pagentos_ok_` in Git history (2026-09-01)
 
 Status: Closed — no real credential ever entered Git; no history rewrite performed.

@@ -37,8 +37,18 @@ jobs:
           set -euo pipefail
           pattern='AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|sk-[A-Za-z0-9]{24,}|xox[baprs]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----'
           # git grep exits 1 when nothing matches, which is the success case here.
-          if git grep -nE "$pattern" -- ':!*.example' ':!*.lock' ; then
-            echo "::error::potential secret content in tracked files"; exit 1
+          # Locations only on failure — a scanner that echoes what it matched IS the leak.
+          if hits=$(git grep -nE "$pattern" -- ':!*.example' ':!*.lock' | cut -d: -f1,2) ; then
+            echo "::error::potential secret content in tracked files: $hits"; exit 1
+          fi
+      - name: No production-shaped PagentOS credentials
+        run: |
+          set -euo pipefail
+          # Mirrors the gate (2026-09-01 history investigation): a real mint is
+          # pagentos_ok_/pagentos_st_ + 43 urlsafe chars; 40+ catches it with margin.
+          # SHAPE-based, no allowlist — fixtures are legitimate only while off-shape.
+          if hits=$(git grep -nE 'pagentos_(ok|st)_[A-Za-z0-9_-]{40,}' | cut -d: -f1,2) ; then
+            echo "::error::production-shaped PagentOS credential in tracked files (values not shown): $hits"; exit 1
           fi
 
   api-lint-unit:
@@ -144,6 +154,22 @@ jobs:
         run: dotnet build -c Release --nologo
       - name: Tests
         run: dotnet test -c Release --nologo --no-build
+      # The installer/deployment/identity scripts run on the owner's machine under
+      # WINDOWS POWERSHELL 5.1, and four real qualification failures were 5.1-only
+      # (native quoting, StrictMode unrolling, ??, ImportFromPem). windows-latest still
+      # ships 5.1 as powershell.exe; these suites assert the engine themselves and would
+      # fail rather than pass vacuously on pwsh.
+      - name: PowerShell 5.1 script suites
+        shell: cmd
+        working-directory: ${{ github.workspace }}
+        run: |
+          powershell -NoProfile -File scripts\tests\script-syntax.tests.ps1 && ^
+          powershell -NoProfile -File scripts\tests\installer-strictmode.tests.ps1 && ^
+          powershell -NoProfile -File scripts\tests\installer-invocation.tests.ps1 && ^
+          powershell -NoProfile -File scripts\tests\installer-deploy.tests.ps1 && ^
+          powershell -NoProfile -File scripts\tests\installer-acl.tests.ps1 && ^
+          powershell -NoProfile -File scripts\tests\machine-readable.tests.ps1 && ^
+          powershell -NoProfile -File scripts\tests\identity-restore.tests.ps1
 
   web-build:
     name: Web shell build

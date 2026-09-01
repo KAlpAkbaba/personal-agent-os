@@ -21,49 +21,31 @@ Status vocabulary matches `docs/QUALIFICATION.md`: `PROVEN_REAL`, `PROVEN_PROXY`
 
 ## Now
 
-**Install the Windows Service.** One UAC prompt, then one sign-out. Everything in front of
-it is finished: the Session-0 identity model is implemented, independently security-reviewed
-(one Critical found in the fix itself and corrected), independently verified with every check
-mutation-tested, and the full gate passes 12/12 including the real Notepad end-to-end.
+**`gh auth login`** — one browser OAuth, in an ordinary (non-elevated) console:
 
-```powershell
-# In an ELEVATED PowerShell, at the repository root:
-.\scripts\install-device-service.ps1
+```bash
+gh auth login
 ```
 
-Sign out and back in so the companion starts in your session, then:
-
-```powershell
-.\scripts\verify-device-service.ps1
-```
-
-Send me what that prints. It is what converts four Stage-1 criteria from `PROVEN_PROXY` to
-`PROVEN_REAL`, and it unblocks everything after it. Details below.
+Everything in front of it is finished: local Windows qualification is CLOSED (2026-09-01,
+all runtime criteria `PROVEN_REAL` on your machine), the history investigation confirmed
+no credential ever entered Git, CI is written (including the Windows PowerShell 5.1
+suites and the credential-shape scanner), and the production deployment artifacts for the
+cloud milestone are committed. After this one sign-in the agent creates the private
+repository, pushes, and confirms the first CI run — nothing else needed from you for
+GitHub.
 
 ---
 
 ## Queue
 
-### 1. Install the Windows Service (one UAC prompt) — **this is the current action**
+### 1. Windows Service install — **DONE (2026-09-01)**
 
-Unblocks: Stage 1 criteria 1.1 and 1.4–1.7 moving from `PROVEN_PROXY` to `PROVEN_REAL`, all
-of Stage 2, and every later stage that needs the agent running unattended.
+Completed and qualified: service LocalSystem/Session 0, companion Session 1, pipe DACL
+from the real handle, both restart proofs, final credential rotation. The runtime is
+frozen; `docs/QUALIFICATION.md` holds the evidence.
 
-```powershell
-# From an ELEVATED PowerShell, at the repository root:
-.\scripts\install-device-service.ps1
-```
-
-Then sign out and back in (the companion starts as a logon task), and:
-
-```powershell
-.\scripts\verify-device-service.ps1
-```
-
-Afterwards the agent takes over: it reads the verification output, updates the qualification
-matrix with what is now proven for real, and continues.
-
-### 2. `gh auth login` (browser OAuth, one time)
+### 2. `gh auth login` (browser OAuth, one time) — **this is the current action**
 
 Unblocks: the private GitHub repository and CI. Everything else about CI is already written.
 
