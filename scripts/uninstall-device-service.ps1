@@ -23,6 +23,8 @@ param(
 $ErrorActionPreference = "Stop"
 $PSNativeCommandUseErrorActionPreference = $false
 
+. (Join-Path $PSScriptRoot "lib\NativeProcess.ps1")
+
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 if (-not (New-Object Security.Principal.WindowsPrincipal($identity)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw "Removing a Windows Service requires elevation. Run this from an administrator PowerShell."
@@ -35,7 +37,11 @@ if ($service) {
         Stop-Service -Name $ServiceName -Force
         $service.WaitForStatus("Stopped", (New-TimeSpan -Seconds 30))
     }
-    & sc.exe delete $ServiceName | Out-Null
+    # 1072 is "already marked for delete": the service is on its way out, which is the
+    # outcome asked for, so it is not a failure.
+    $deleted = Invoke-NativeProcess -FilePath (Get-SystemTool -Name "sc.exe") `
+        -Arguments @("delete", $ServiceName) -SuccessExitCodes @(0, 1072)
+    Assert-NativeSuccess -Result $deleted -Activity "sc delete $ServiceName"
     Write-Host "deleted service $ServiceName"
 }
 else {

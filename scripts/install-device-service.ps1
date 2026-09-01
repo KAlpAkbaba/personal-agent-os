@@ -59,6 +59,13 @@ $PSNativeCommandUseErrorActionPreference = $false
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $agentRoot = Join-Path $repoRoot "devices\windows-agent"
 
+# Native tools are invoked through these rather than by string concatenation. Windows
+# PowerShell 5.1 does not escape an argument that itself contains quotes, which is what sent
+# sc.exe a malformed binPath and produced ERROR_INVALID_COMMAND_LINE (1639) after publishing
+# and ACL hardening had already succeeded. See scripts/lib/NativeProcess.ps1.
+. (Join-Path $PSScriptRoot "lib\NativeProcess.ps1")
+. (Join-Path $PSScriptRoot "lib\ServiceInstall.ps1")
+
 function Assert-Elevated {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal($identity)
@@ -101,9 +108,16 @@ function Publish-Agent {
     # Self-contained: the service must not depend on a machine-wide .NET runtime that a
     # later update could remove out from under it. The owner's desktop agent going away
     # because an unrelated runtime was uninstalled is not an acceptable failure mode.
-    & $Dotnet publish $Project -c Release -r win-x64 --self-contained true `
-        -p:PublishSingleFile=false -o $Output --nologo | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "publish failed for $Project (exit $LASTEXITCODE)" }
+    $result = Invoke-NativeProcess -FilePath $Dotnet -Arguments @(
+        "publish", $Project,
+        "-c", "Release",
+        "-r", "win-x64",
+        "--self-contained", "true",
+        "-p:PublishSingleFile=false",
+        "-o", $Output,
+        "--nologo"
+    ) -TimeoutSeconds 900
+    Assert-NativeSuccess -Result $result -Activity "dotnet publish $(Split-Path -Leaf $Project)"
 }
 
 function Set-InstallAcl {
@@ -113,11 +127,18 @@ function Set-InstallAcl {
     # owner could overwrite the companion binary, "the peer is the installed companion"
     # would prove nothing about what that binary contains.
     Write-Host "restricting write access on $Path to administrators"
-    & icacls $Path /inheritance:r /grant:r `
-        "*S-1-5-32-544:(OI)(CI)F" `
-        "*S-1-5-18:(OI)(CI)F" `
-        "*S-1-5-32-545:(OI)(CI)RX" /T /Q | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "icacls failed on $Path (exit $LASTEXITCODE)" }
+    $icacls = Get-SystemTool -Name "icacls.exe"
+    $result = Invoke-NativeProcess -FilePath $icacls -Arguments @(
+        $Path,
+        "/inheritance:r",
+        "/grant:r",
+        "*S-1-5-32-544:(OI)(CI)F",
+        "*S-1-5-18:(OI)(CI)F",
+        "*S-1-5-32-545:(OI)(CI)RX",
+        "/T",
+        "/Q"
+    ) -TimeoutSeconds 300
+    Assert-NativeSuccess -Result $result -Activity "icacls $Path"
 }
 
 function Write-ServiceConfig {
@@ -142,31 +163,22 @@ function Write-ServiceConfig {
         CompanionImagePath = $CompanionExe
     }
     $path = Join-Path $ServiceDir "appsettings.json"
-    $config | ConvertTo-Json -Depth 4 | Set-Content -Path $path -Encoding UTF8
+    # Written through .NET so the file is UTF-8 without a BOM: PowerShell 5.1's Set-Content
+    # adds one and re-encodes non-ASCII, which has already corrupted files in this repo once.
+    [System.IO.File]::WriteAllText(
+        $path,
+        ($config | ConvertTo-Json -Depth 4),
+        (New-Object System.Text.UTF8Encoding($false)))
     Write-Host "wrote $path (no secrets: URLs, paths and the owner SID only)"
 }
 
 function Install-Service {
-    param([string]$Name, [string]$Exe, [string]$DataDir)
+    param([string]$Name, [string]$Exe)
 
-    $existing = Get-Service -Name $Name -ErrorAction SilentlyContinue
-    if ($existing) {
-        Write-Host "service $Name already exists; stopping and reconfiguring"
-        if ($existing.Status -ne "Stopped") {
-            Stop-Service -Name $Name -Force
-            $existing.WaitForStatus("Stopped", (New-TimeSpan -Seconds 30))
-        }
-        & sc.exe config $Name binPath= "`"$Exe`" run" obj= LocalSystem start= auto | Out-Null
-    }
-    else {
-        & sc.exe create $Name binPath= "`"$Exe`" run" obj= LocalSystem start= auto DisplayName= "Personal Agent OS Device Agent" | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw "sc create failed (exit $LASTEXITCODE)" }
-    }
-
-    & sc.exe description $Name "Personal Agent OS device agent: outbound-only link to the owner's cloud core; executes desktop actions through the owner-session companion." | Out-Null
-    # Restart on failure rather than leaving the owner's desktop unreachable: 5 s, 15 s, then
-    # every minute, with the counter resetting after a day of health.
-    & sc.exe failure $Name reset= 86400 actions= restart/5000/restart/15000/restart/60000 | Out-Null
+    # All of the registration logic — including deciding whether this is a first install, a
+    # repoint, or a rerun that should change nothing — lives in scripts/lib/ServiceInstall.ps1
+    # so it can be tested without elevation and without touching the real SCM.
+    return Install-DeviceServiceRegistration -ServiceName $Name -ExecutablePath $Exe -ServiceArguments @("run")
 }
 
 function Register-CompanionAutostart {
@@ -215,32 +227,57 @@ foreach ($required in @($serviceExe, $companionExe)) {
 # Service state lives under ProgramData, not the owner's profile: a Session-0 service
 # writing into a user profile resolves to the system profile and is a topology bug.
 New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
-& icacls $DataDir /inheritance:r /grant:r "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" /T /Q | Out-Null
+Assert-NativeSuccess -Activity "icacls $DataDir" -Result (Invoke-NativeProcess `
+    -FilePath (Get-SystemTool -Name "icacls.exe") `
+    -Arguments @($DataDir, "/inheritance:r", "/grant:r", "*S-1-5-32-544:(OI)(CI)F", "*S-1-5-18:(OI)(CI)F", "/T", "/Q") `
+    -TimeoutSeconds 300)
 
 Write-ServiceConfig -ServiceDir $serviceDir -CompanionExe $companionExe -OwnerSid $OwnerSid `
     -DataDir $DataDir -BrokerRestUrl $BrokerRestUrl -BrokerWsUrl $BrokerWsUrl
 
 # The companion reads its own settings from its own directory.
-@{ PipeName = "pagentos-companion-$OwnerSid"; DataDir = (Join-Path $env:ProgramData "PagentOS\companion") } |
-    ConvertTo-Json | Set-Content -Path (Join-Path $companionDir "appsettings.json") -Encoding UTF8
+$companionConfig = [ordered]@{
+    PipeName = "pagentos-companion-$OwnerSid"
+    DataDir  = (Join-Path $env:ProgramData "PagentOS\companion")
+} | ConvertTo-Json -Depth 4
+[System.IO.File]::WriteAllText(
+    (Join-Path $companionDir "appsettings.json"),
+    $companionConfig,
+    (New-Object System.Text.UTF8Encoding($false)))
 
 Set-InstallAcl -Path $InstallRoot
 
+$enrolled = Test-Path (Join-Path $DataDir "state.json")
 if ($EnrollmentToken) {
     Write-Host "enrolling the device with the broker at $BrokerRestUrl"
-    & $serviceExe enroll --broker-url $BrokerRestUrl --token $EnrollmentToken --name $env:COMPUTERNAME
-    if ($LASTEXITCODE -ne 0) { throw "enrollment failed (exit $LASTEXITCODE); the service will not start until the device is enrolled" }
-}
-elseif (-not (Test-Path (Join-Path $DataDir "state.json"))) {
-    Write-Warning "the device is not enrolled yet: the service will exit until you run"
-    Write-Warning "  `"$serviceExe`" enroll --broker-url <url> --token <one-time-token> --name $env:COMPUTERNAME"
+    $enrollResult = Invoke-NativeProcess -FilePath $serviceExe -Arguments @(
+        "enroll", "--broker-url", $BrokerRestUrl, "--token", $EnrollmentToken, "--name", $env:COMPUTERNAME
+    ) -TimeoutSeconds 120
+    Assert-NativeSuccess -Result $enrollResult -Activity "device enrollment"
+    if ($enrollResult.StdOut) { Write-Host $enrollResult.StdOut.Trim() }
+    $enrolled = $true
 }
 
-Install-Service -Name $ServiceName -Exe $serviceExe -DataDir $DataDir
+Install-Service -Name $ServiceName -Exe $serviceExe | Out-Null
 Register-CompanionAutostart -CompanionExe $companionExe -OwnerSid $OwnerSid
 
-Start-Service -Name $ServiceName
-(Get-Service -Name $ServiceName).WaitForStatus("Running", (New-TimeSpan -Seconds 30))
+# Starting is conditional on enrollment, and that is not a caveat — an unenrolled agent
+# exits immediately by design, so starting it here would turn "the install worked" into a
+# service-start failure and hide the fact that registration succeeded.
+if ($enrolled) {
+    Start-Service -Name $ServiceName
+    (Get-Service -Name $ServiceName).WaitForStatus("Running", (New-TimeSpan -Seconds 30))
+    Write-Host "service started"
+}
+else {
+    Write-Host ""
+    Write-Warning "The service is REGISTERED but not started, because this device is not enrolled yet."
+    Write-Warning "This is expected on a first install and is not a registration failure."
+    Write-Warning "Mint a token from an authenticated owner session (POST /v1/devices/enrollment-tokens), then:"
+    Write-Warning "  & '$serviceExe' enroll --broker-url $BrokerRestUrl --token <one-time-token> --name $env:COMPUTERNAME"
+    Write-Warning "  Start-Service -Name $ServiceName"
+    Write-Warning "Or rerun this installer with -EnrollmentToken <token>; rerunning is safe."
+}
 
 Write-Host ""
 Write-Host "installed:"

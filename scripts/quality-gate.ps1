@@ -157,6 +157,16 @@ if (-not $Fast) {
     } finally { Pop-Location }
   }
 
+  Invoke-Step "Installer invocation tests" {
+    # The installer's native-tool invocation is a deterministic, offline check, and it earns
+    # its place in the gate: a real install on the owner's machine failed at `sc create` with
+    # ERROR_INVALID_COMMAND_LINE because PowerShell mangled an argument containing quotes.
+    # These tests assert the exact argument shape and round-trip argv through a real child.
+    $script = Join-Path $repoRoot "scripts\tests\installer-invocation.tests.ps1"
+    & (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -NoProfile -File $script
+    Assert-ExitCode "installer invocation tests"
+  }
+
   Invoke-Step "Recovery supervisor tests" {
     if (-not $uv) { throw "uv not found" }
     Push-Location (Join-Path $repoRoot "services\recovery-supervisor")
