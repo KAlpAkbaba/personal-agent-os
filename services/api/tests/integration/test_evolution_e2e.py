@@ -38,6 +38,7 @@ from app.config import Settings
 from app.evolution.models import Capability, CapabilityGap, SkillVersion
 from app.evolution.skills import SkillLayout
 from app.main import create_app
+from tests.integration.conftest import attach_owner
 
 pytestmark = pytest.mark.integration
 
@@ -80,8 +81,11 @@ def client(tmp_path, monkeypatch) -> TestClient:
     monkeypatch.setenv("PAGENTOS_EVOLUTION_SKILLS_ROOT", str(tmp_path / "skills"))
     monkeypatch.setenv("PAGENTOS_EVOLUTION_WORK_ROOT", str(tmp_path / "work"))
     monkeypatch.setenv("PAGENTOS_EVOLUTION_GENERATOR", "deterministic")
-    app = create_app(Settings())
+    settings = Settings()
+    app = create_app(settings)
     test_client = TestClient(app)
+    # M9: /v1/evolution creates and promotes code - owner session required.
+    attach_owner(app, test_client, settings)
     yield test_client
     runtime = app.state.evolution
     with runtime.session() as session:

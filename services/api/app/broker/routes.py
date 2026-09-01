@@ -1,7 +1,12 @@
 """Broker REST surface (DEVICE_PROTOCOL.md §8).
 
-Dev posture: unauthenticated; enrollment-token minting additionally requires a
-loopback peer. Production adds owner authentication in a later milestone.
+M9/ADR-0027 posture: every endpoint here requires an owner bearer session, with
+ONE deliberate exception — `POST /enroll`. That endpoint is authenticated by the
+single-use, short-TTL enrollment token that an authenticated owner minted at
+`POST /enrollment-tokens`; the enrolling agent has that token and, by
+construction, no owner session yet. It is the same shape as the WS handshake
+exception: a surface with its own credential, rooted in an owner action, rather
+than an open one. Minting still additionally requires a loopback peer.
 """
 
 import asyncio
@@ -11,7 +16,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -20,6 +25,7 @@ from app.broker.frames import CAPABILITY_PATTERN
 from app.broker.models import DEVICE_STATUS_REVOKED, Device, DeviceCommand
 from app.broker.runtime import BrokerRuntime
 from app.broker.ws import deliver_command
+from app.identity.dependencies import require_owner_session
 from app.logging import get_logger, trace_id_var
 
 logger = get_logger("app.broker.routes")
@@ -61,7 +67,11 @@ class EnrollRequest(BaseModel):
     capabilities: list[str] = Field(default_factory=list, max_length=128)
 
 
-@router.post("/enrollment-tokens", status_code=201)
+@router.post(
+    "/enrollment-tokens",
+    status_code=201,
+    dependencies=[Depends(require_owner_session)],
+)
 async def create_enrollment_token(request: Request) -> dict[str, Any]:
     _require_loopback(request)
     runtime = _runtime(request)
@@ -80,6 +90,8 @@ async def create_enrollment_token(request: Request) -> dict[str, Any]:
     return {"token": token, "expires_at": _iso(expires_at)}
 
 
+# Intentionally NOT owner-session protected: see the module docstring. The
+# enrollment token is the credential here, and it was minted by the owner.
 @router.post("/enroll", status_code=201)
 async def enroll(request: Request, body: EnrollRequest) -> dict[str, Any]:
     runtime = _runtime(request)
@@ -135,7 +147,7 @@ def _device_payload(runtime: BrokerRuntime, device: Device) -> dict[str, Any]:
     }
 
 
-@router.get("")
+@router.get("", dependencies=[Depends(require_owner_session)])
 async def get_devices(request: Request) -> dict[str, Any]:
     runtime = _runtime(request)
 
@@ -148,7 +160,7 @@ async def get_devices(request: Request) -> dict[str, Any]:
     return {"devices": [_device_payload(runtime, d) for d in devices]}
 
 
-@router.post("/{device_id}/revoke")
+@router.post("/{device_id}/revoke", dependencies=[Depends(require_owner_session)])
 async def revoke_device(request: Request, device_id: uuid.UUID) -> dict[str, Any]:
     runtime = _runtime(request)
 
@@ -161,9 +173,30 @@ async def revoke_device(request: Request, device_id: uuid.UUID) -> dict[str, Any
     if device is None:
         raise HTTPException(status_code=404, detail="unknown device")
     await runtime.close_device_connection(device_id, code=1008)
+
+    # M9 acceptance: "device revocation invalidates session". Killing the WS is
+    # not enough — a revoked phone still holding a bearer token could keep
+    # driving the REST API. Every session bound to this device dies with it.
+    identity = getattr(request.app.state, "identity", None)
+    sessions_revoked = 0
+    if identity is not None:
+        sessions_revoked = await asyncio.to_thread(
+            lambda: identity.service.revoke_sessions_for_device(
+                device_id, reason="device_revoked", trace_id=trace_id_var.get()
+            )
+        )
+
     runtime.counters["devices_revoked"] += 1
-    logger.info("broker_device_revoked", device_id=str(device_id))
-    return {"device_id": str(device_id), "status": "revoked"}
+    logger.info(
+        "broker_device_revoked",
+        device_id=str(device_id),
+        sessions_revoked=sessions_revoked,
+    )
+    return {
+        "device_id": str(device_id),
+        "status": "revoked",
+        "sessions_revoked": sessions_revoked,
+    }
 
 
 # -------------------------------------------------------------------- commands
@@ -212,7 +245,11 @@ def _command_payload(command: DeviceCommand) -> dict[str, Any]:
     }
 
 
-@router.post("/{device_id}/commands", status_code=202)
+@router.post(
+    "/{device_id}/commands",
+    status_code=202,
+    dependencies=[Depends(require_owner_session)],
+)
 async def create_command(
     request: Request, device_id: uuid.UUID, body: CreateCommandRequest
 ) -> JSONResponse:
@@ -268,7 +305,10 @@ async def create_command(
     )
 
 
-@router.get("/{device_id}/commands/{command_id}")
+@router.get(
+    "/{device_id}/commands/{command_id}",
+    dependencies=[Depends(require_owner_session)],
+)
 async def get_command(
     request: Request, device_id: uuid.UUID, command_id: uuid.UUID
 ) -> dict[str, Any]:
@@ -285,7 +325,10 @@ async def get_command(
     return _command_payload(command)
 
 
-@router.post("/{device_id}/commands/{command_id}/cancel")
+@router.post(
+    "/{device_id}/commands/{command_id}/cancel",
+    dependencies=[Depends(require_owner_session)],
+)
 async def cancel_command(
     request: Request, device_id: uuid.UUID, command_id: uuid.UUID
 ) -> dict[str, Any]:
@@ -326,6 +369,6 @@ async def cancel_command(
 # ----------------------------------------------------------------------- stats
 
 
-@router.get("/stats")
+@router.get("/stats", dependencies=[Depends(require_owner_session)])
 async def get_stats(request: Request) -> dict[str, Any]:
     return _runtime(request).stats()

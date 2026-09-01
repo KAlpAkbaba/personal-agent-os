@@ -13,6 +13,7 @@ from app.config import Settings
 from app.evolution.models import Capability, CapabilityGap, SkillVersion
 from app.evolution.runtime import EvolutionRuntime
 from app.main import create_app
+from tests.identity_support import authenticate
 
 TABLES = [
     Capability.__table__,
@@ -50,6 +51,8 @@ def client(tmp_path, monkeypatch) -> TestClient:
     app = create_app(settings)
     app.state.evolution = EvolutionRuntime(settings, engine=engine)
     test_client = TestClient(app)
+    # M9: every /v1/evolution endpoint requires an owner session.
+    authenticate(app, test_client, settings=settings)
     yield test_client
     test_client.close()
 

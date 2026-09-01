@@ -35,9 +35,10 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.identity.dependencies import require_owner_session
 from app.logging import get_logger, trace_id_var
 from app.security.artifacts import publish_assessment_artifact
 from app.security.errors import SecurityError, SecurityErrorClass
@@ -51,7 +52,14 @@ from app.security.runtime import SecurityRuntime
 
 logger = get_logger("app.security.routes")
 
-router = APIRouter(prefix="/v1/security")
+# M9/ADR-0027: owner authentication is applied at the router, so a new
+# endpoint in this module is protected by default rather than by memory.
+# asset enrollment defines what the agent may touch,
+# and this module has no surface that must stay reachable unauthenticated.
+router = APIRouter(
+    prefix="/v1/security",
+    dependencies=[Depends(require_owner_session)],
+)
 
 _HTTP_STATUS = {
     SecurityErrorClass.VALIDATION_ERROR: 422,

@@ -13,10 +13,10 @@ Contract between the cloud Device Broker and device agents (first: Windows Devic
 
 - Each device generates an **ECDSA P-256 keypair** at first run; the private key never leaves the device (stored under the device account with OS file ACLs; DPAPI hardening is a later milestone).
 - Enrollment (REST, one-time):
-  1. Owner/operator obtains a one-time enrollment token: `POST /v1/devices/enrollment-tokens` → `{token, expires_at}` (dev: loopback-only, unauthenticated; production: owner-authenticated).
-  2. Agent calls `POST /v1/devices/enroll` with `{token, name, platform, public_key_spki_b64, capabilities}` → `{device_id}`.
+  1. Owner/operator obtains a one-time enrollment token: `POST /v1/devices/enrollment-tokens` → `{token, expires_at}`. Since M9 this requires an owner bearer session (`Authorization: Bearer <token>`, ADR-0027) **and** a loopback peer.
+  2. Agent calls `POST /v1/devices/enroll` with `{token, name, platform, public_key_spki_b64, capabilities}` → `{device_id}`. This is the one broker REST endpoint that does NOT require an owner session: the enrollment token *is* its credential, and the enrolling agent has no owner session by construction. The trust chain still roots in the owner, because only an authenticated owner can mint that token.
   - Tokens are single-use, short-lived (default 15 min), stored hashed.
-- In protocol v1, every enrollment creates a **new device identity** (the enroll request carries no device_id, so the broker cannot safely bind it to an existing row). Key rotation for an existing device is deferred to a dedicated authenticated rotate endpoint in a later protocol revision. Revocation: broker marks device revoked; all sessions close; handshake is rejected thereafter.
+- In protocol v1, every enrollment creates a **new device identity** (the enroll request carries no device_id, so the broker cannot safely bind it to an existing row). Key rotation for an existing device is deferred to a dedicated authenticated rotate endpoint in a later protocol revision. Revocation: broker marks device revoked; all WS sessions close; the handshake is rejected thereafter; and since M9 every owner session bound to that `device_id` is revoked too, so the device's bearer token stops working on the REST API as well (M9 acceptance: *device revocation invalidates session*).
 - Signature encoding: the broker accepts both DER and raw IEEE P1363 `r||s` (64-byte) ECDSA signatures.
 
 ## 3. Handshake (over WS)
@@ -84,8 +84,10 @@ The agent writes a local append-only JSONL audit log (`%ProgramData%`/configurab
 
 ## 8. Broker REST surface (owner API)
 
-- `POST /v1/devices/enrollment-tokens` → one-time token (dev: open on loopback; prod: owner auth)
-- `POST /v1/devices/enroll`
+Since M9 every endpoint below requires `Authorization: Bearer <owner-session-token>` (ADR-0027) except `POST /enroll`, which is authenticated by the owner-minted enrollment token.
+
+- `POST /v1/devices/enrollment-tokens` → one-time token (owner session + loopback peer)
+- `POST /v1/devices/enroll` (enrollment token only — see §2)
 - `GET /v1/devices` — includes `status: online|offline|revoked`, `last_seen_at`
 - `POST /v1/devices/{device_id}/commands` `{capability, payload, idempotency_key?, timeout_s?}` → `202 {command_id,status}` (immediately durable; never long-polls execution)
 - `GET /v1/devices/{device_id}/commands/{command_id}` → full status/result/error

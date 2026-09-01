@@ -13,12 +13,11 @@ import hashlib
 import uuid
 
 import pytest
-from fastapi.testclient import TestClient
 
 from app.artifacts import service as artifact_service
 from app.config import Settings
 from app.db import build_engine, build_session_factory
-from app.main import create_app
+from tests.integration.conftest import owner_client
 
 pytestmark = pytest.mark.integration
 
@@ -62,7 +61,7 @@ def artifact_id(settings: Settings) -> uuid.UUID:
 
 def test_cross_device_cursor_persists(settings: Settings, artifact_id: uuid.UUID) -> None:
     device_a = uuid.uuid4()
-    with TestClient(create_app(settings)) as client:
+    with owner_client(settings) as client:
         # Start a narration session (device A).
         created = client.post(
             "/v1/narration/sessions",
@@ -86,7 +85,7 @@ def test_cross_device_cursor_persists(settings: Settings, artifact_id: uuid.UUID
 
         # Device B (a *different* client instance / device) resumes: it reads the
         # exact same semantic cursor back from the cloud.
-        with TestClient(create_app(settings)) as client_b:
+        with owner_client(settings) as client_b:
             got = client_b.get(f"/v1/narration/sessions/{session_id}/cursor")
             assert got.status_code == 200
             payload = got.json()
@@ -95,7 +94,7 @@ def test_cross_device_cursor_persists(settings: Settings, artifact_id: uuid.UUID
 
 
 def test_oku_dur_devam_lifecycle(settings: Settings, artifact_id: uuid.UUID) -> None:
-    with TestClient(create_app(settings)) as client:
+    with owner_client(settings) as client:
         session_id = client.post(
             "/v1/narration/sessions", json={"artifact_id": str(artifact_id)}
         ).json()["session_id"]
@@ -130,7 +129,7 @@ def test_oku_dur_devam_lifecycle(settings: Settings, artifact_id: uuid.UUID) -> 
 def test_explain_then_return_persists_exact_cursor(
     settings: Settings, artifact_id: uuid.UUID
 ) -> None:
-    with TestClient(create_app(settings)) as client:
+    with owner_client(settings) as client:
         session_id = client.post(
             "/v1/narration/sessions", json={"artifact_id": str(artifact_id)}
         ).json()["session_id"]
@@ -157,7 +156,7 @@ def test_explain_then_return_persists_exact_cursor(
 
 
 def test_unknown_session_and_bad_command(settings: Settings, artifact_id: uuid.UUID) -> None:
-    with TestClient(create_app(settings)) as client:
+    with owner_client(settings) as client:
         missing = uuid.uuid4()
         assert client.get(f"/v1/narration/sessions/{missing}").status_code == 404
         # unknown artifact on create -> 404

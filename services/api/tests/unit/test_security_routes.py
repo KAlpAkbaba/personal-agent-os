@@ -12,6 +12,7 @@ from app.config import Settings
 from app.main import create_app
 from app.object_store import InMemoryObjectStore
 from app.security.runtime import SecurityRuntime
+from tests.identity_support import authenticate
 from tests.unit.test_security_support import (
     ARTIFACT_TABLES,
     FIXTURE_ROOT,
@@ -51,6 +52,8 @@ def client(tmp_path) -> TestClient:
         settings, engine=engine, store=InMemoryObjectStore()
     )
     test_client = TestClient(app)
+    # M9: every /v1/security endpoint requires an owner session.
+    authenticate(app, test_client, settings=settings)
     yield test_client
     test_client.close()
 

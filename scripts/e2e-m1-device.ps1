@@ -82,6 +82,11 @@ $results = New-Object System.Collections.ArrayList
 $failed = $false
 $procs = @{}   # name -> Process
 $dataDir = Join-Path $env:TEMP ("pagentos-e2e-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+# M9: the broker REST surface now requires an owner session. The E2E runs the
+# real thing - a throwaway identity root, one-time bootstrap on loopback, then
+# a bearer session - rather than weakening the API for the test.
+$identityDir = Join-Path $env:TEMP ("pagentos-e2e-identity-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+$script:ownerHeaders = @{}
 $notepadPids = New-Object System.Collections.ArrayList
 
 function Invoke-Step {
@@ -114,6 +119,7 @@ function Start-Broker {
   $psi.WorkingDirectory = $apiRoot
   $psi.UseShellExecute = $false
   $psi.CreateNoWindow = $true
+  $psi.EnvironmentVariables["PAGENTOS_IDENTITY_ROOT_DIR"] = $identityDir
   $script:procs["broker"] = [System.Diagnostics.Process]::Start($psi)
 }
 
@@ -127,6 +133,20 @@ function Wait-Health {
     } catch { Start-Sleep -Milliseconds 500 }
   }
   throw "API health did not answer within ${TimeoutSec}s"
+}
+
+function Initialize-OwnerSession {
+  # One-time bootstrap (loopback-only) the first time the broker starts; the
+  # session lives in PostgreSQL, so it survives the broker-restart step below.
+  if ($script:ownerHeaders.Count -gt 0) { return }
+  $boot = Invoke-RestMethod -Method Post -Uri "$baseUrl/v1/identity/bootstrap" -TimeoutSec 10 -ErrorAction Stop
+  $body = @{
+    owner_credential = $boot.owner_credential
+    client_kind = "cli"
+    label = "e2e-m1-device"
+  } | ConvertTo-Json
+  $sess = Invoke-RestMethod -Method Post -Uri "$baseUrl/v1/identity/sessions" -Body $body -ContentType "application/json" -TimeoutSec 10 -ErrorAction Stop
+  $script:ownerHeaders = @{ Authorization = "Bearer $($sess.token)" }
 }
 
 function Start-AgentService {
@@ -164,7 +184,7 @@ function Wait-DeviceOnline {
   $deadline = (Get-Date).AddSeconds($TimeoutSec)
   while ((Get-Date) -lt $deadline) {
     try {
-      $resp = Invoke-RestMethod -Uri "$baseUrl/v1/devices" -TimeoutSec 3 -ErrorAction Stop
+      $resp = Invoke-RestMethod -Uri "$baseUrl/v1/devices" -Headers $script:ownerHeaders -TimeoutSec 3 -ErrorAction Stop
       $dev = $resp.devices | Where-Object { $_.device_id -eq $script:deviceId }
       if ($dev -and $dev.status -eq "online") { return }
     } catch {}
@@ -182,6 +202,7 @@ function Send-OpenNotepad {
     timeout_s = 30
   } | ConvertTo-Json
   $headers = @{ "X-Trace-Id" = $TraceId }
+  foreach ($k in $script:ownerHeaders.Keys) { $headers[$k] = $script:ownerHeaders[$k] }
   $resp = Invoke-RestMethod -Method Post -Uri "$baseUrl/v1/devices/$($script:deviceId)/commands" -Body $body -ContentType "application/json" -Headers $headers -TimeoutSec 10 -ErrorAction Stop
   return $resp.command_id
 }
@@ -190,7 +211,7 @@ function Wait-CommandTerminal {
   param([string]$CommandId, [int]$TimeoutSec = 30)
   $deadline = (Get-Date).AddSeconds($TimeoutSec)
   while ((Get-Date) -lt $deadline) {
-    $cmd = Invoke-RestMethod -Uri "$baseUrl/v1/devices/$($script:deviceId)/commands/$CommandId" -TimeoutSec 5 -ErrorAction Stop
+    $cmd = Invoke-RestMethod -Uri "$baseUrl/v1/devices/$($script:deviceId)/commands/$CommandId" -Headers $script:ownerHeaders -TimeoutSec 5 -ErrorAction Stop
     if ($cmd.status -in @("succeeded", "failed", "expired", "cancelled")) { return $cmd }
     Start-Sleep -Milliseconds 400
   }
@@ -257,11 +278,12 @@ Invoke-Step "Build Windows agent" {
 Invoke-Step "Start broker (uvicorn)" {
   Start-Broker
   Wait-Health
+  Initialize-OwnerSession
 }
 
 Invoke-Step "Enroll fresh device" {
   New-Item -ItemType Directory -Force $dataDir | Out-Null
-  $tok = Invoke-RestMethod -Method Post -Uri "$baseUrl/v1/devices/enrollment-tokens" -TimeoutSec 10 -ErrorAction Stop
+  $tok = Invoke-RestMethod -Method Post -Uri "$baseUrl/v1/devices/enrollment-tokens" -Headers $script:ownerHeaders -TimeoutSec 10 -ErrorAction Stop
   $exe = Join-Path $agentRoot "src\PagentOS.DeviceService\bin\Debug\net10.0-windows\PagentOS.DeviceService.exe"
   $env:PAGENTOS_AGENT_DataDir = $dataDir
   $env:PAGENTOS_AGENT_BrokerRestUrl = $baseUrl
@@ -341,6 +363,7 @@ foreach ($name in @("companion", "service", "broker")) {
   }
 }
 Remove-Item -Recurse -Force $dataDir -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force $identityDir -ErrorAction SilentlyContinue
 
 # ---------------------------------------------------------------- summary
 

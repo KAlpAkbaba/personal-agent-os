@@ -24,7 +24,7 @@ import asyncio
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.evolution.audit import build_audit
@@ -32,11 +32,19 @@ from app.evolution.errors import EvolutionError, EvolutionErrorClass
 from app.evolution.gaps import CapabilityRequest
 from app.evolution.pipeline import EvolutionPipeline
 from app.evolution.runtime import EvolutionRuntime
+from app.identity.dependencies import require_owner_session
 from app.logging import get_logger, trace_id_var
 
 logger = get_logger("app.evolution.routes")
 
-router = APIRouter(prefix="/v1/evolution")
+# M9/ADR-0027: owner authentication is applied at the router, so a new
+# endpoint in this module is protected by default rather than by memory.
+# these endpoints create and promote code,
+# and this module has no surface that must stay reachable unauthenticated.
+router = APIRouter(
+    prefix="/v1/evolution",
+    dependencies=[Depends(require_owner_session)],
+)
 
 _HTTP_STATUS = {
     EvolutionErrorClass.VALIDATION_ERROR: 422,

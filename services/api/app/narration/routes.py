@@ -22,10 +22,11 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.artifacts import service as artifact_service
+from app.identity.dependencies import require_owner_session
 from app.logging import get_logger
 from app.narration import commands, service
 from app.narration.engine import Cursor, build_plan
@@ -35,7 +36,14 @@ from app.narration.runtime import NarrationRuntime
 
 logger = get_logger("app.narration.routes")
 
-router = APIRouter(prefix="/v1/narration")
+# M9/ADR-0027: owner authentication is applied at the router, so a new
+# endpoint in this module is protected by default rather than by memory.
+# narration sessions carry the owner's reading position and pronunciation,
+# and this module has no surface that must stay reachable unauthenticated.
+router = APIRouter(
+    prefix="/v1/narration",
+    dependencies=[Depends(require_owner_session)],
+)
 
 _STATE_KEY = "_state"  # reserved key inside semantic_cursor_json for machine state
 

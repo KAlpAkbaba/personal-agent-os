@@ -19,6 +19,8 @@ DEPENDENCY_CHECKS = {"db", "redis", "object_store", "temporal"}
 # M6 adds a "selfhealing" check (coding backend + supervisor script presence).
 # M7 adds an "evolution" check (skill generator identity + sandbox posture).
 # M8 adds a "security" check (scope authority + collector posture; no I/O).
+# M9 adds an "identity" check (auth posture only - deliberately does NOT say
+# whether an owner credential is bootstrapped; health is the one open endpoint).
 ALL_CHECKS = DEPENDENCY_CHECKS | {
     "broker",
     "artifacts",
@@ -27,6 +29,7 @@ ALL_CHECKS = DEPENDENCY_CHECKS | {
     "selfhealing",
     "evolution",
     "security",
+    "identity",
 }
 
 

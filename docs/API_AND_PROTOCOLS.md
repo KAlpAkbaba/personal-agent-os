@@ -6,6 +6,7 @@ Suggested versioned prefix: `/v1`.
 
 Core resources:
 
+- `/v1/identity` — M9: owner authentication (bootstrap, sessions, refresh, revoke, panic, audit). Every other resource below requires `Authorization: Bearer <owner-session-token>`; see §4a.
 - `/v1/conversations`
 - `/v1/tasks`
 - `/v1/artifacts`
@@ -61,7 +62,43 @@ Handshake carries:
 - nonce challenge signature;
 - session metadata.
 
-Implemented in M1 as protocol v1 — the normative contract is `packages/protocol/DEVICE_PROTOCOL.md` with message schemas in `packages/schemas/device-protocol.schema.json` (hello → challenge → auth → welcome, ECDSA P-256 over `nonce||device_id`, heartbeat presence, at-least-once delivery with agent-side idempotency, redelivery on reconnect). Broker REST surface: `/v1/devices`, `/v1/devices/enroll`, `/v1/devices/enrollment-tokens`, `/v1/devices/{id}/commands[...]`, `/v1/devices/{id}/revoke`; WS endpoint `/v1/devices/connect`.
+Implemented in M1 as protocol v1 — the normative contract is `packages/protocol/DEVICE_PROTOCOL.md` with message schemas in `packages/schemas/device-protocol.schema.json` (hello → challenge → auth → welcome, ECDSA P-256 over `nonce||device_id`, heartbeat presence, at-least-once delivery with agent-side idempotency, redelivery on reconnect). Broker REST surface: `/v1/devices`, `/v1/devices/enroll`, `/v1/devices/enrollment-tokens`, `/v1/devices/{id}/commands[...]`, `/v1/devices/{id}/revoke`; WS endpoint `/v1/devices/connect`. Since M9 the whole broker REST surface requires an owner session (§4a); `/v1/devices/enroll` and the WS handshake carry their own credentials instead.
+
+## 4a. Owner identity and API authentication (M9, ADR-0027)
+
+One owner, no accounts, no roles. `POST /v1/identity/bootstrap` is a one-time,
+loopback-only owner action that mints the single owner credential (returned
+once, stored only as a SHA-256 hash in the identity root **file**, not the
+database). That credential is exchanged at `POST /v1/identity/sessions` for an
+opaque bearer session token (`secrets.token_urlsafe(32)`, stored only hashed,
+compared in constant time), which every other endpoint requires as
+`Authorization: Bearer <token>`.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /v1/identity/bootstrap` | one-time owner credential mint (loopback) |
+| `POST /v1/identity/sessions` | credential → session token |
+| `POST /v1/identity/sessions/refresh` | rotate the token, extend the window |
+| `GET /v1/identity/sessions/current` | who am I (native-client connect check) |
+| `GET /v1/identity/sessions` | list active sessions |
+| `DELETE /v1/identity/sessions/current` | sign this client out |
+| `POST /v1/identity/sessions/{id}/revoke` | revoke another client's session |
+| `POST /v1/identity/panic` | kill control: revoke ALL sessions |
+| `GET /v1/identity/events` | append-only authentication audit |
+
+Sessions have an absolute TTL (`PAGENTOS_SESSION_TTL_S`, default 30 days) and
+an idle timeout (`PAGENTOS_SESSION_IDLE_TIMEOUT_S`, default 7 days); refresh
+rotates the token so a leaked one dies at the next refresh. Refusals are coarse
+to the caller (401 `unauthorized` / 403 `forbidden` / 429), precise in the
+audit. **Fail closed**: with no owner credential bootstrapped, everything
+refuses — there is no default credential.
+
+The only unauthenticated surfaces are `GET /v1/system/health`,
+`POST /v1/identity/bootstrap`, `POST /v1/identity/sessions` (the credential
+exchange itself), `POST /v1/devices/enroll` (owner-minted enrollment token) and
+the `/v1/devices/connect` WebSocket (ECDSA device authentication). A lost
+credential is recovered on the host with `python -m app.identity.recover
+--rotate`, never through this API.
 
 ## 5. Device command envelope
 

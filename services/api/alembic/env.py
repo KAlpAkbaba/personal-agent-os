@@ -12,6 +12,7 @@ from sqlalchemy import engine_from_config, pool
 import app.artifacts.models  # noqa: F401 - register artifact/task tables on Base.metadata
 import app.broker.models  # noqa: F401 - register broker tables on Base.metadata
 import app.evolution.models  # noqa: F401 - register evolution tables on Base.metadata
+import app.identity.models  # noqa: F401 - register identity tables on Base.metadata
 import app.memory.models  # noqa: F401 - register memory tables on Base.metadata
 import app.narration.models  # noqa: F401 - register narration tables on Base.metadata
 import app.security.models  # noqa: F401 - register security tables on Base.metadata

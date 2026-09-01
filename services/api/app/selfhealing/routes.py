@@ -21,9 +21,10 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.identity.dependencies import require_owner_session
 from app.logging import get_logger, trace_id_var
 from app.selfhealing.errors import SelfHealingError, SelfHealingErrorClass
 from app.selfhealing.monitoring import draft_from_supervisor_report
@@ -32,7 +33,14 @@ from app.selfhealing.runtime import SelfHealingRuntime
 
 logger = get_logger("app.selfhealing.routes")
 
-router = APIRouter(prefix="/v1/selfhealing")
+# M9/ADR-0027: owner authentication is applied at the router, so a new
+# endpoint in this module is protected by default rather than by memory.
+# incident ingest feeds the autonomous fix pipeline and pipeline/run executes it,
+# and this module has no surface that must stay reachable unauthenticated.
+router = APIRouter(
+    prefix="/v1/selfhealing",
+    dependencies=[Depends(require_owner_session)],
+)
 
 _HTTP_STATUS = {
     SelfHealingErrorClass.VALIDATION_ERROR: 422,

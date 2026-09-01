@@ -13,7 +13,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from temporalio.client import Client
@@ -23,13 +23,21 @@ from app.artifacts import render_store, service
 from app.artifacts.models import Artifact, ArtifactVersion, Task
 from app.artifacts.renderers import DEFAULT_RENDER_FORMATS, EXTENSIONS, SUPPORTED_FORMATS
 from app.artifacts.runtime import ArtifactRuntime
+from app.identity.dependencies import require_owner_session
 from app.logging import get_logger, trace_id_var
 from app.research.provider import DeterministicResearchProvider
 from app.research.workflow import ResearchRequest, ResearchWorkflow
 
 logger = get_logger("app.artifacts.routes")
 
-router = APIRouter(prefix="/v1")
+# M9/ADR-0027: owner authentication is applied at the router, so a new
+# endpoint in this module is protected by default rather than by memory.
+# tasks and artifacts are the owner's work product,
+# and this module has no surface that must stay reachable unauthenticated.
+router = APIRouter(
+    prefix="/v1",
+    dependencies=[Depends(require_owner_session)],
+)
 
 WIRED_PROVIDERS = {DeterministicResearchProvider.name}
 

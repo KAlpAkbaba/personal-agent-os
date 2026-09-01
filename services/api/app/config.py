@@ -6,8 +6,18 @@ variables or a .env file. No secrets live in this file.
 """
 
 from functools import lru_cache
+from pathlib import Path
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+#: services/api — the identity root lives beside the service, outside the repo's
+#: tracked tree (see .gitignore), never inside a database.
+_API_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _default_identity_root_dir() -> str:
+    return str(_API_ROOT / "var" / "identity")
 
 
 class Settings(BaseSettings):
@@ -76,6 +86,26 @@ class Settings(BaseSettings):
     broker_sweep_interval_s: float = 5.0
     broker_default_command_timeout_s: float = 300.0
     broker_handshake_timeout_s: float = 10.0
+
+    # Owner identity / API authentication (M9, ADR-0027).
+    #
+    # There is NO default credential. `identity_root_dir` holds the SHA-256 hash
+    # of the one owner credential, minted by POST /v1/identity/bootstrap (a
+    # one-time owner action) or by `python -m app.identity.recover --rotate`.
+    # Until that file exists every protected endpoint refuses: fail closed.
+    identity_root_dir: str = Field(default_factory=_default_identity_root_dir)
+    # Bootstrap creates authority from nothing, so it additionally requires a
+    # loopback peer: the owner is on the machine. Disable only for a deployment
+    # whose network path is already owner-only (e.g. behind Tailscale).
+    identity_bootstrap_loopback_only: bool = True
+    # Absolute session lifetime and inactivity window, seconds. A session dies
+    # at whichever comes first; refresh rotates the token and restarts both.
+    session_ttl_s: int = 30 * 24 * 3600  # 30 days
+    session_idle_timeout_s: int = 7 * 24 * 3600  # 7 days
+    # Failed-attempt budget per window: throttles credential exchange (429) and
+    # bounds how much a scanner can append to session_events.
+    identity_auth_max_failures: int = 10
+    identity_auth_failure_window_s: float = 60.0
 
 
 @lru_cache

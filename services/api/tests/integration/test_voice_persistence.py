@@ -12,11 +12,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import Settings
-from app.main import create_app
 from app.object_store import S3ObjectStore
 from app.voice import service
 from app.voice.crypto import ProfileCipher
 from app.voice.runtime import VoiceRuntime
+from tests.integration.conftest import owner_client
 
 pytestmark = pytest.mark.integration
 
@@ -33,7 +33,8 @@ def _ensure_bucket(settings: Settings) -> None:
 
 @pytest.fixture()
 def client(settings: Settings) -> TestClient:
-    return TestClient(create_app(settings))
+    # M9: /v1/voice requires an owner session.
+    return owner_client(settings)
 
 
 OWNER_SAMPLES = [

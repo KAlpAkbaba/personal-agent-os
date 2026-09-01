@@ -12,6 +12,7 @@ from app.config import Settings
 from app.main import create_app
 from app.selfhealing.models import Incident, Release
 from app.selfhealing.runtime import SelfHealingRuntime
+from tests.identity_support import authenticate
 
 
 @pytest.fixture()
@@ -26,6 +27,8 @@ def client(tmp_path, monkeypatch) -> TestClient:
     app = create_app(settings)
     app.state.selfhealing = SelfHealingRuntime(settings, engine=engine)
     test_client = TestClient(app)
+    # M9: every /v1/selfhealing endpoint requires an owner session.
+    authenticate(app, test_client, settings=settings)
     yield test_client
     test_client.close()
 

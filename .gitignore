@@ -36,6 +36,11 @@ Thumbs.db
 # Claude local settings/transcripts
 .claude/settings.local.json
 
+# Owner identity root (M9): holds the SHA-256 hash of the single owner
+# credential. Machine-local by design (constitution §6 identity root) and never
+# tracked — see services/api/app/identity/root.py.
+services/api/var/
+
 # Runtime
 artifacts/local/
 data/local/

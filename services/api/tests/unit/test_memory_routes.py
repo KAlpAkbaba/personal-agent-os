@@ -24,6 +24,7 @@ from app.memory.models import (
     MemoryVersion,
 )
 from app.memory.runtime import MemoryRuntime
+from tests.identity_support import authenticate
 
 MEMORY_TABLES = [
     Entity.__table__,
@@ -47,6 +48,8 @@ def client() -> TestClient:
     app = create_app(settings)
     app.state.memory = MemoryRuntime(settings, engine=engine)
     test_client = TestClient(app)
+    # M9: every /v1/memory endpoint requires an owner session.
+    authenticate(app, test_client, settings=settings)
     yield test_client
     engine.dispose()
 

@@ -38,6 +38,27 @@ Identity confidence combines:
 
 Voice is not a standalone password.
 
+M9 implementation (ADR-0027). The *authenticated app/session* leg of that
+combination now exists and is enforced:
+
+- exactly one owner credential, minted once by a loopback-only bootstrap owner
+  action, persisted only as a SHA-256 hash in an identity-root **file** (not a
+  database row), so it survives a database restore and can be recovered on the
+  host without the API it protects (constitution §6);
+- opaque bearer sessions (`secrets.token_urlsafe(32)`) exchanged for that
+  credential, stored only hashed, compared in constant time, never logged;
+- each session records its client kind and, where applicable, the **enrolled
+  device** it belongs to — the second leg of the combination — with an absolute
+  TTL and an idle timeout, and refresh rotates the token;
+- every issuance, refresh, revocation, expiry and rejection is an append-only
+  `session_events` row carrying a reason and never a token;
+- refusals are coarse to the caller (401/403/429) and precise in the audit;
+- **fail closed**: with no owner credential bootstrapped, every protected
+  endpoint refuses. There is no default credential.
+
+Speaker verification remains an *additional* signal on top of an authenticated
+session; it still gates nothing on its own (M4 finding #1).
+
 ## 3. Device enrollment
 
 Every device has:
@@ -171,3 +192,20 @@ Owner needs a simple way to:
 - rotate provider credentials.
 
 These controls should be accessible but not routinely required.
+
+M9 implementation:
+
+- **pause/kill sessions**: `POST /v1/identity/panic` revokes every session,
+  including the caller's. The owner credential survives, so the owner signs
+  back in on a device they still hold.
+- **revoke a device**: `POST /v1/devices/{id}/revoke` closes the WebSocket
+  *and* revokes every owner session bound to that device, so a lost phone
+  loses the REST API too, not just its socket.
+- **rotate the owner credential**: `python -m app.identity.recover --rotate`
+  on the host mints a new credential and (by default) revokes every session
+  minted under the old one. It runs from the filesystem, deliberately not
+  through the API — a "forgot my credential" endpoint would be an
+  unauthenticated way to mint owner authority.
+- `python -m app.identity.recover --status` reports whether the system is
+  bootstrapped and how many sessions are live; the unauthenticated health
+  endpoint deliberately does not.

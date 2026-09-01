@@ -19,9 +19,10 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.identity.dependencies import require_owner_session
 from app.logging import get_logger
 from app.voice import registry, service
 from app.voice.benchmark import run_stt_benchmark, run_tts_benchmark
@@ -30,7 +31,14 @@ from app.voice.runtime import VoiceRuntime
 
 logger = get_logger("app.voice.routes")
 
-router = APIRouter(prefix="/v1/voice")
+# M9/ADR-0027: owner authentication is applied at the router, so a new
+# endpoint in this module is protected by default rather than by memory.
+# speaker enrollment/verification and voice preferences are owner identity,
+# and this module has no surface that must stay reachable unauthenticated.
+router = APIRouter(
+    prefix="/v1/voice",
+    dependencies=[Depends(require_owner_session)],
+)
 
 _STATUS_BY_CLASS = {
     VoiceErrorClass.VALIDATION_ERROR: 422,

@@ -33,13 +33,12 @@ import uuid
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
 
 from app.config import Settings
-from app.main import create_app
 from app.selfhealing.backends import DeterministicCodingBackend
 from app.selfhealing.pipeline import SelfHealingPipeline, SupervisorDeployer
 from app.selfhealing.service import compute_manifest_digest
+from tests.integration.conftest import owner_client
 
 pytestmark = pytest.mark.integration
 
@@ -156,7 +155,7 @@ def test_m6_selfhealing_full_story(tmp_path: Path, monkeypatch) -> None:
     # The API runtime reads the workspace root at construction time.
     monkeypatch.setenv("PAGENTOS_SELFHEALING_WORKSPACE_ROOT", str(root))
     settings = Settings()
-    with TestClient(create_app(settings)) as client:
+    with owner_client(settings) as client:
         # ---- 1. Good release 1.0.0: activate, health green, promote. --------
         activated = run_supervisor(
             prod_ws,

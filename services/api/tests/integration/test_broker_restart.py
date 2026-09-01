@@ -9,6 +9,7 @@ import asyncio
 import os
 import subprocess
 import sys
+import tempfile
 import uuid
 from pathlib import Path
 
@@ -29,6 +30,36 @@ PORT = 8013
 BASE_URL = f"http://127.0.0.1:{PORT}"
 WS_URL = f"ws://127.0.0.1:{PORT}/v1/devices/connect"
 
+# M9: the broker REST surface requires an owner session. This test drives a real
+# uvicorn subprocess, so it exercises the production credential root as well:
+# the server writes/reads a real identity-root FILE in a throwaway directory,
+# the owner credential is minted once through POST /v1/identity/bootstrap
+# (loopback-only, one-time), and the resulting session lives in PostgreSQL —
+# which is why the same bearer token still works after the broker is killed.
+IDENTITY_ROOT_DIR = tempfile.mkdtemp(prefix="pagentos-itest-identity-")
+_owner_headers: dict[str, str] = {}
+
+
+def owner_headers() -> dict[str, str]:
+    """Bootstrap (once) and exchange the owner credential for a session."""
+    if _owner_headers:
+        return _owner_headers
+    with httpx.Client(base_url=BASE_URL, timeout=10) as http:
+        bootstrap = http.post("/v1/identity/bootstrap")
+        assert bootstrap.status_code == 201, bootstrap.text
+        credential = bootstrap.json()["owner_credential"]
+        session = http.post(
+            "/v1/identity/sessions",
+            json={
+                "owner_credential": credential,
+                "client_kind": "cli",
+                "label": "itest-broker-restart",
+            },
+        )
+        assert session.status_code == 201, session.text
+        _owner_headers["Authorization"] = f"Bearer {session.json()['token']}"
+    return _owner_headers
+
 
 def start_broker_process() -> subprocess.Popen:
     env = os.environ.copy()
@@ -36,6 +67,7 @@ def start_broker_process() -> subprocess.Popen:
         {
             "PAGENTOS_BROKER_HEARTBEAT_INTERVAL_S": "1.0",
             "PAGENTOS_BROKER_SWEEP_INTERVAL_S": "0.5",
+            "PAGENTOS_IDENTITY_ROOT_DIR": IDENTITY_ROOT_DIR,
         }
     )
     proc = subprocess.Popen(
@@ -75,7 +107,8 @@ async def test_broker_restart_pending_command_survives_and_agent_reconnects() ->
     proc2: subprocess.Popen | None = None
     key = AgentKey()
     try:
-        with httpx.Client(base_url=BASE_URL, timeout=10) as http:
+        headers = await asyncio.to_thread(owner_headers)
+        with httpx.Client(base_url=BASE_URL, timeout=10, headers=headers) as http:
             device_id = rest_enroll(http, key, name="itest-restart")
 
         agent = AsyncAgent(WS_URL, device_id, key)
@@ -86,7 +119,7 @@ async def test_broker_restart_pending_command_survives_and_agent_reconnects() ->
 
         # 2. Create a command while the device is offline -> stays pending.
         idempotency_key = f"itest-restart-{uuid.uuid4().hex}"
-        with httpx.Client(base_url=BASE_URL, timeout=10) as http:
+        with httpx.Client(base_url=BASE_URL, timeout=10, headers=headers) as http:
             response = http.post(
                 f"/v1/devices/{device_id}/commands",
                 json={
@@ -136,7 +169,9 @@ async def test_broker_restart_pending_command_survives_and_agent_reconnects() ->
             )
 
             async def final_status() -> str:
-                async with httpx.AsyncClient(base_url=BASE_URL, timeout=10) as http:
+                async with httpx.AsyncClient(
+                    base_url=BASE_URL, timeout=10, headers=headers
+                ) as http:
                     body = (
                         await http.get(f"/v1/devices/{device_id}/commands/{command_id}")
                     ).json()

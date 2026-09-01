@@ -22,6 +22,8 @@ from app.config import Settings, get_settings
 from app.evolution.routes import router as evolution_router
 from app.evolution.runtime import EvolutionRuntime
 from app.health import run_health_checks
+from app.identity.routes import router as identity_router
+from app.identity.runtime import IdentityRuntime
 from app.logging import configure_logging, get_logger
 from app.memory.routes import router as memory_router
 from app.memory.runtime import MemoryRuntime
@@ -47,6 +49,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     selfhealing = SelfHealingRuntime(settings)
     evolution = EvolutionRuntime(settings)
     security = SecurityRuntime(settings)
+    identity = IdentityRuntime(settings)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -59,7 +62,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await broker.stop()
             logger.info("broker_stopped")
 
-    app = FastAPI(title=settings.app_name, version=__version__, lifespan=lifespan)
+    # M9: the interactive docs and the OpenAPI schema enumerate every endpoint
+    # and request shape to an unauthenticated caller. Useful locally, gratuitous
+    # once this is reachable over a network, so they follow the environment.
+    docs_enabled = settings.environment == "dev"
+    app = FastAPI(
+        title=settings.app_name,
+        version=__version__,
+        lifespan=lifespan,
+        docs_url="/docs" if docs_enabled else None,
+        redoc_url="/redoc" if docs_enabled else None,
+        openapi_url="/openapi.json" if docs_enabled else None,
+    )
     app.state.broker = broker
     app.state.artifacts = artifacts
     app.state.voice = voice
@@ -67,6 +81,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.selfhealing = selfhealing
     app.state.evolution = evolution
     app.state.security = security
+    app.state.identity = identity
     # Scoped CORS: the web shell is a separate origin from the API. Allow only
     # the configured loopback/private web origins (never "*"); M0 review #3.
     app.add_middleware(
@@ -75,10 +90,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # PATCH/PUT/DELETE: the owner web UI must be able to correct/forget
         # memory and edit narration/pronunciation (constitution §9).
         allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE"],
-        allow_headers=["Content-Type", "X-Trace-Id"],
+        # M9: every non-health endpoint now requires an owner bearer session,
+        # so the browser must be allowed to send Authorization.
+        allow_headers=["Authorization", "Content-Type", "X-Trace-Id"],
         max_age=600,
     )
     app.add_middleware(TraceIdMiddleware)
+    # M9/ADR-0027: the identity router is included first so the authentication
+    # surface is registered before everything it protects.
+    app.include_router(identity_router)
     app.include_router(broker_router)
     app.include_router(broker_ws_router)
     app.include_router(artifacts_router)
@@ -105,6 +125,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         checks["evolution"] = await asyncio.to_thread(evolution.health_check)
         # M8: authorized-asset scope authority + defensive-collector posture.
         checks["security"] = await asyncio.to_thread(security.health_check)
+        # M9: authentication posture (scheme, credential-root kind, windows).
+        # Deliberately does not say whether an owner credential exists — this
+        # is the one unauthenticated endpoint.
+        checks["identity"] = await asyncio.to_thread(identity.health_check)
         degraded = any(check["status"] != "ok" for check in checks.values())
         status = "degraded" if degraded else "ok"
         logger.info("health_checked", status=status, checks=checks)

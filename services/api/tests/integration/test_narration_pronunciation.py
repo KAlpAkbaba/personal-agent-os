@@ -5,10 +5,9 @@ inferred entries. Requires the compose stack + schema at head.
 """
 
 import pytest
-from fastapi.testclient import TestClient
 
 from app.config import Settings
-from app.main import create_app
+from tests.integration.conftest import owner_client
 
 pytestmark = pytest.mark.integration
 
@@ -20,7 +19,7 @@ def settings() -> Settings:
 
 def test_pronunciation_crud_roundtrip(settings: Settings) -> None:
     token = f"TESTTOKEN{id(object())}"
-    with TestClient(create_app(settings)) as client:
+    with owner_client(settings) as client:
         # PUT (create) an explicit owner entry.
         created = client.put(
             "/v1/narration/pronunciation",
@@ -57,7 +56,7 @@ def test_pronunciation_crud_roundtrip(settings: Settings) -> None:
 
 def test_pronunciation_applied_in_preview(settings: Settings) -> None:
     token = f"XYZZY{id(object())}"
-    with TestClient(create_app(settings)) as client:
+    with owner_client(settings) as client:
         client.put(
             "/v1/narration/pronunciation",
             json={"token": token, "spoken_form": "iks ye zet", "explicit": True},

@@ -11,7 +11,6 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 
 from app.config import Settings
-from app.main import create_app
 from tests.integration.broker_agent import (
     AgentKey,
     hello_frame,
@@ -19,6 +18,7 @@ from tests.integration.broker_agent import (
     rest_enroll,
     ws_handshake,
 )
+from tests.integration.conftest import owner_client
 
 pytestmark = pytest.mark.integration
 
@@ -35,8 +35,9 @@ def settings() -> Settings:
 
 @pytest.fixture(scope="module")
 def client(settings: Settings):
-    app = create_app(settings)
-    with TestClient(app) as test_client:
+    # M9: the broker REST surface now requires an owner session (POST /enroll is
+    # the one exception - it carries the owner-minted enrollment token instead).
+    with owner_client(settings) as test_client:
         yield test_client
 
 

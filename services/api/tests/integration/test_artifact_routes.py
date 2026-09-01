@@ -16,8 +16,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import Settings
-from app.main import create_app
 from app.object_store import S3ObjectStore
+from tests.integration.conftest import owner_client
 
 pytestmark = pytest.mark.integration
 
@@ -69,7 +69,7 @@ def _poll_ready(client: TestClient, task_id: str, timeout_s: float = 45.0) -> di
 
 
 def test_task_and_artifact_http_flow(settings: Settings, default_queue_worker) -> None:
-    with TestClient(create_app(settings)) as client:
+    with owner_client(settings) as client:
         # POST returns a durable task id immediately (202), does not block.
         resp = client.post("/v1/tasks", json={"input": TOPIC})
         assert resp.status_code == 202
@@ -130,7 +130,7 @@ def test_task_ends_ready_without_auto_reading_body(
     """Acceptance (M3): a completed research task ends READY and can be seen
     without the report body ever being pushed at the owner. Dedicated 1:1 test
     for the "notify briefly and wait" guarantee."""
-    with TestClient(create_app(settings)) as client:
+    with owner_client(settings) as client:
         task_id = client.post("/v1/tasks", json={"input": TOPIC}).json()["task_id"]
         ready = _poll_ready(client, task_id)
 
@@ -153,7 +153,7 @@ def test_task_ends_ready_without_auto_reading_body(
 
 
 def test_unknown_task_and_artifact_404(settings: Settings) -> None:
-    with TestClient(create_app(settings)) as client:
+    with owner_client(settings) as client:
         missing = uuid.uuid4()
         assert client.get(f"/v1/tasks/{missing}").status_code == 404
         assert client.get(f"/v1/artifacts/{missing}").status_code == 404
@@ -161,6 +161,6 @@ def test_unknown_task_and_artifact_404(settings: Settings) -> None:
 
 
 def test_create_task_rejects_unwired_provider(settings: Settings) -> None:
-    with TestClient(create_app(settings)) as client:
+    with owner_client(settings) as client:
         resp = client.post("/v1/tasks", json={"input": TOPIC, "provider": "web"})
         assert resp.status_code == 422

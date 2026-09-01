@@ -15,9 +15,10 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.identity.dependencies import require_owner_session
 from app.logging import get_logger
 from app.memory import retrieval
 from app.memory.errors import MemoryErrorClass, MemorySubsystemError
@@ -29,7 +30,14 @@ from app.memory.types import Actor, MemoryClass, WriteStage
 
 logger = get_logger("app.memory.routes")
 
-router = APIRouter(prefix="/v1/memory")
+# M9/ADR-0027: owner authentication is applied at the router, so a new
+# endpoint in this module is protected by default rather than by memory.
+# memory is owner-authority state: every read and mutation is the owner's,
+# and this module has no surface that must stay reachable unauthenticated.
+router = APIRouter(
+    prefix="/v1/memory",
+    dependencies=[Depends(require_owner_session)],
+)
 
 _HTTP_STATUS = {
     MemoryErrorClass.SECRET_REJECTED: 422,

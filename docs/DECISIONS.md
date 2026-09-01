@@ -268,4 +268,64 @@ Revoking an enrolled device revokes every session bound to it (M9 acceptance). K
 
 Reason: Every deferral of this layer was justified only by "nothing calls it yet". M9 finally does, and shipping a mobile client against unauthenticated endpoints that can promote code, enroll assets and mutate owner memory would be the single largest security regression available to this project.
 
+### ADR-0027 implementation notes (M9, 2026-09-01) — what was built, and the three judgement calls
+
+Built: `app/identity/` (models matching frozen migration `0009_identity_mobile`;
+`tokens.py`; a file-backed `root.py`; `service.py`; `dependencies.py`;
+`routes.py`; `recover.py`), `require_owner_session` applied across the API, and
+device revocation wired into session revocation.
+
+Token/session semantics: `secrets.token_urlsafe(32)` (256 bits, OS CSPRNG),
+prefixed `pagentos_st_` / `pagentos_ok_` so a leak is identifiable by a scanner;
+persisted only as SHA-256 (plain SHA-256, not a password KDF — key stretching
+protects low-entropy human secrets and buys nothing against a full-entropy
+random preimage, while costing a hash on every request); compared with
+`hmac.compare_digest`; absolute TTL 30 days and idle timeout 7 days by default;
+**refresh rotates the token on the same session row**, so a token that leaked
+into a log or a backup dies at the next refresh while the session's identity,
+device binding and audit history stay stable.
+
+Three judgement calls worth recording:
+
+1. **The identity root is a file, not a table.** Constitution §6 names "owner
+   identity root" as part of the minimal recovery root that must remain usable
+   when the application is broken. A credential hash that lives only in
+   PostgreSQL makes owner recovery depend on the database *and* on the API the
+   credential protects. The file (0o600 plus an inheritance-stripped Windows
+   ACL, outside the tracked tree) is what makes `python -m app.identity.recover`
+   possible at all — and the recovery path being host-side, not an endpoint, is
+   the point: a "forgot my credential" endpoint is by construction an
+   unauthenticated way to mint owner authority.
+
+2. **`POST /v1/devices/enroll` stays owner-session-free** — a third deliberate
+   exception alongside health and the WS handshake, not an oversight. The
+   enrolling agent has an owner-minted, single-use, 15-minute enrollment token
+   and, by construction, no owner session; requiring one would make enrollment
+   impossible. It is the same shape as the WS handshake exception: a surface
+   with its own credential whose trust chain roots in an owner action, since
+   minting that token now requires an owner session *and* a loopback peer. A
+   route-table sweep test asserts the complete open set, so a future endpoint
+   added without the dependency fails the suite instead of shipping open.
+
+3. **Scopes narrow, they never elevate.** A session with no scopes has full
+   owner authority; a non-empty scope list restricts that client. This keeps
+   the single-owner model intact (no roles, no RBAC, nothing to escalate to)
+   while letting a constrained client — a phone, a device-bound session — be
+   issued with less than everything. `require_scope` refuses with 403, a
+   different coarse class from 401 because it is not fixable by
+   re-authenticating.
+
+Also decided: `/docs`, `/redoc` and `/openapi.json` are served only when
+`PAGENTOS_ENVIRONMENT=dev`; enumerating every endpoint and request shape to an
+unauthenticated caller is a gratuitous leak once the API is reachable over a
+network. Rejection auditing is bounded by an in-process sliding-window limiter
+so a scanner cannot flood `session_events`, and credential exchange is
+throttled to 429 after 10 failures in 60 s.
+
+Known follow-up, not in this change: `apps/web` fetches `/v1/artifacts` and
+`/v1/tasks` with no Authorization header and will now receive 401. The web
+shell needs an owner sign-in that stores a session token and sends it; that is
+UI work outside this layer's ownership and is recorded as the immediate next
+M9 task rather than silently patched here.
+
 ## ADR-0019 addendum / M2 (2026-08-31): dead-endpoint navigation types as `dependency_unavailable` (retryable, `net::ERR_*` marker rule); cancellation is a recorded terminal state — duplicates of a cancelled command replay `cancelled` without re-execution (mirrors ADR-0017 idempotency semantics); iframe addressing is semantic-only (`frame="<name>"`, injection-rejecting); `ManagedBackend` rejects profile paths inside real Chrome/Edge/Chromium/Brave `User Data` trees as defense-in-depth; `EnrollmentRegistry` is in-process/file-backed in M2 with broker/DB persistence and the owner approval flow explicitly deferred; closing the last tab is refused (`validation_error`) in favor of closing the session.

@@ -13,11 +13,9 @@ Rows are namespaced with per-run unique tokens/keys so reruns never collide.
 import uuid
 
 import pytest
-from fastapi.testclient import TestClient
 from sqlalchemy import text as sql_text
 
 from app.config import Settings
-from app.main import create_app
 from app.memory import service
 from app.memory.embedding import DeterministicEmbedder
 from app.memory.policy import Observation
@@ -25,6 +23,7 @@ from app.memory.retrieval import RetrievalFilters, hybrid_search, semantic_candi
 from app.memory.runtime import MemoryRuntime
 from app.memory.service import MemoryLinks
 from app.memory.types import Actor, MemoryClass
+from tests.integration.conftest import owner_client
 
 pytestmark = pytest.mark.integration
 
@@ -44,7 +43,7 @@ def test_preference_survives_new_conversation_and_client(settings: Settings) -> 
     """Owner teaches a preference through one client; a completely fresh
     client/runtime (new conversation) retrieves it."""
     token = _token()
-    with TestClient(create_app(settings)) as first_client:
+    with owner_client(settings) as first_client:
         created = first_client.post(
             "/v1/memory/remember",
             json={
@@ -58,7 +57,7 @@ def test_preference_survives_new_conversation_and_client(settings: Settings) -> 
         memory_id = created.json()["memory_id"]
 
     # Fresh app = fresh engine/session/state: nothing carried over in memory.
-    with TestClient(create_app(settings)) as second_client:
+    with owner_client(settings) as second_client:
         found = second_client.get(
             "/v1/memory/search",
             params={"q": f"{token} koyu tema", "memory_class": "preference"},
@@ -185,7 +184,7 @@ def test_memory_crosses_device_and_session_boundaries(settings: Settings) -> Non
 
 
 def test_audit_trail_persisted_with_trace_ids(settings: Settings) -> None:
-    with TestClient(create_app(settings)) as client:
+    with owner_client(settings) as client:
         created = client.post(
             "/v1/memory/remember",
             json={"text": f"Remember the {_token()} maintenance window on Sundays."},
