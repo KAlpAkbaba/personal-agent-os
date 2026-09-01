@@ -21,6 +21,29 @@ services:
   postgres:
     image: pgvector/pgvector:pg16
     container_name: pagentos-postgres
+    # Two settings the integration suite depends on, both dev-only:
+    #
+    # max_connections — several E2E tests spawn real worker/pipeline
+    # subprocesses and some of them KILL the worker on purpose, because
+    # surviving a hard kill is the property under test. Postgres 16's default
+    # of 100 leaves too little headroom for that, and the suite then fails with
+    # "too many clients already" in whichever test happens to ask for a
+    # connection next — a failure that looks like a product defect and is not.
+    #
+    # tcp_keepalives_* — a killed client's socket is held open by Docker
+    # Desktop's port forwarder, so the backend does not see the peer disappear
+    # and lingers as `idle`. Server-side keepalives reap those in ~a minute
+    # instead of at the OS default (hours).
+    command:
+      - postgres
+      - "-c"
+      - "max_connections=300"
+      - "-c"
+      - "tcp_keepalives_idle=30"
+      - "-c"
+      - "tcp_keepalives_interval=10"
+      - "-c"
+      - "tcp_keepalives_count=3"
     environment:
       POSTGRES_USER: pagentos
       POSTGRES_PASSWORD: pagentos-dev # dev-only

@@ -25,6 +25,7 @@ from app.config import Settings
 from app.object_store import S3ObjectStore
 from app.research.workflow import ResearchRequest, ResearchWorkflow
 from app.worker import build_worker
+from tests.integration import procs
 
 pytestmark = pytest.mark.integration
 
@@ -153,7 +154,7 @@ async def test_artifact_persists_after_service_restart(settings: Settings) -> No
 def _spawn_worker(task_queue: str) -> subprocess.Popen:
     env = dict(os.environ)
     env["PAGENTOS_TEMPORAL_TASK_QUEUE"] = task_queue
-    return subprocess.Popen(
+    return procs.spawn(
         [sys.executable, "-m", "app.worker"],
         cwd=str(API_ROOT),
         env=env,
@@ -179,6 +180,7 @@ async def test_research_workflow_survives_worker_restart(settings: Settings) -> 
             task_queue=task_queue,
         )
         # Let worker1 run plan + start the durable timer, then die mid-pause.
+        # A hard kill on purpose: surviving one is the property under test.
         await asyncio.sleep(3.0)
         worker1.kill()
         worker1.wait(timeout=15)
@@ -187,12 +189,10 @@ async def test_research_workflow_survives_worker_restart(settings: Settings) -> 
         try:
             result = await asyncio.wait_for(handle.result(), timeout=90)
         finally:
-            worker2.kill()
-            worker2.wait(timeout=15)
+            # Cleanup, not the test: let it close its database connections.
+            procs.stop(worker2)
     finally:
-        if worker1.poll() is None:
-            worker1.kill()
-            worker1.wait(timeout=15)
+        procs.stop(worker1)
 
     assert result["state"] == "READY"
 

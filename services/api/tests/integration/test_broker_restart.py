@@ -16,6 +16,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from tests.integration import procs
 from tests.integration.broker_agent import (
     AgentKey,
     AsyncAgent,
@@ -70,7 +71,7 @@ def start_broker_process() -> subprocess.Popen:
             "PAGENTOS_IDENTITY_ROOT_DIR": IDENTITY_ROOT_DIR,
         }
     )
-    proc = subprocess.Popen(
+    proc = procs.spawn(
         [
             sys.executable,
             "-m",
@@ -186,5 +187,7 @@ async def test_broker_restart_pending_command_survives_and_agent_reconnects() ->
         finally:
             await conn.close()
     finally:
-        await asyncio.to_thread(kill, proc)
-        await asyncio.to_thread(kill, proc2)
+        # Cleanup, not the test: a graceful stop lets each broker process close
+        # its PostgreSQL connections instead of leaving idle backends behind.
+        await asyncio.to_thread(procs.stop, proc)
+        await asyncio.to_thread(procs.stop, proc2)

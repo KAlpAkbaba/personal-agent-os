@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.object_store import S3ObjectStore
+from tests.integration import procs
 from tests.integration.conftest import owner_client
 
 pytestmark = pytest.mark.integration
@@ -40,7 +41,7 @@ def default_queue_worker(settings: Settings):
     """A worker on the default task queue so POST /v1/tasks workflows complete."""
     env = dict(os.environ)
     env["PAGENTOS_TEMPORAL_TASK_QUEUE"] = settings.temporal_task_queue
-    proc = subprocess.Popen(
+    proc = procs.spawn(
         [sys.executable, "-m", "app.worker"],
         cwd=str(API_ROOT),
         env=env,
@@ -50,9 +51,7 @@ def default_queue_worker(settings: Settings):
     try:
         yield proc
     finally:
-        if proc.poll() is None:
-            proc.kill()
-            proc.wait(timeout=15)
+        procs.stop(proc)
 
 
 def _poll_ready(client: TestClient, task_id: str, timeout_s: float = 45.0) -> dict:

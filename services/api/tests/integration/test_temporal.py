@@ -18,6 +18,7 @@ from temporalio.worker import Worker
 
 from app.config import Settings
 from app.workflows import HealthPingWorkflow, ping_activity
+from tests.integration import procs
 
 pytestmark = pytest.mark.integration
 
@@ -49,7 +50,7 @@ async def test_health_ping_workflow_executes(settings: Settings) -> None:
 def spawn_worker(task_queue: str) -> subprocess.Popen:
     env = dict(os.environ)
     env["PAGENTOS_TEMPORAL_TASK_QUEUE"] = task_queue
-    return subprocess.Popen(
+    return procs.spawn(
         [sys.executable, "-m", "app.worker"],
         cwd=str(API_ROOT),
         env=env,
@@ -75,6 +76,7 @@ async def test_workflow_survives_worker_restart(settings: Settings) -> None:
         # Give worker1 time to pick up the first workflow task and start the timer.
         await asyncio.sleep(3.0)
 
+        # A hard kill on purpose: resuming after one is the property under test.
         worker1.kill()
         worker1.wait(timeout=15)
 
@@ -82,11 +84,9 @@ async def test_workflow_survives_worker_restart(settings: Settings) -> None:
         try:
             result = await asyncio.wait_for(handle.result(), timeout=60)
         finally:
-            worker2.kill()
-            worker2.wait(timeout=15)
+            # Cleanup, not the test: let it close its database connections.
+            procs.stop(worker2)
     finally:
-        if worker1.poll() is None:
-            worker1.kill()
-            worker1.wait(timeout=15)
+        procs.stop(worker1)
 
     assert result == "pong:restart"
