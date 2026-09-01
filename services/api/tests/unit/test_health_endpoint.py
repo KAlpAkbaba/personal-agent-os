@@ -20,7 +20,9 @@ DEPENDENCY_CHECKS = {"db", "redis", "object_store", "temporal"}
 # M7 adds an "evolution" check (skill generator identity + sandbox posture).
 # M8 adds a "security" check (scope authority + collector posture; no I/O).
 # M9 adds an "identity" check (auth posture only - deliberately does NOT say
-# whether an owner credential is bootstrapped; health is the one open endpoint).
+# whether an owner credential is bootstrapped; health is the one open endpoint)
+# and a "mobile" check (which real push transport a credential would activate,
+# plus the share/export bound; no I/O, no secrets).
 ALL_CHECKS = DEPENDENCY_CHECKS | {
     "broker",
     "artifacts",
@@ -30,6 +32,7 @@ ALL_CHECKS = DEPENDENCY_CHECKS | {
     "evolution",
     "security",
     "identity",
+    "mobile",
 }
 
 

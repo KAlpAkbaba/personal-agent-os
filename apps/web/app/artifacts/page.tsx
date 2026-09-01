@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-const API_BASE =
-  process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8001";
+import OwnerGate, { SignOutButton } from "../components/OwnerGate";
+import { UnauthorizedError, apiFetch } from "../lib/session";
 
 type RenderInfo = {
   format: string;
@@ -30,23 +30,34 @@ type TaskStatus = {
 // The inbox deliberately mirrors the product's "notify briefly and wait"
 // rule: it lists artifacts with their executive summary only. The full
 // report body is never auto-loaded — the owner opens a render on demand.
-export default function ArtifactInbox() {
+//
+// M9: every call goes through `apiFetch`, which attaches the owner session and
+// clears it on a 401. A cleared session re-renders `OwnerGate` into the
+// sign-in panel, so an expired or revoked session asks the owner to
+// authenticate instead of showing an empty inbox and a network error.
+function ArtifactInbox() {
   const [artifacts, setArtifacts] = useState<ArtifactSummary[]>([]);
   const [topic, setTopic] = useState("");
   const [pendingTask, setPendingTask] = useState<TaskStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
+  const report = useCallback((err: unknown) => {
+    // A 401 is not an error to show: OwnerGate has already taken over.
+    if (err instanceof UnauthorizedError) return;
+    setError(err instanceof Error ? err.message : String(err));
+  }, []);
+
   const refresh = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/v1/artifacts`, { cache: "no-store" });
+      const res = await apiFetch("/v1/artifacts");
       const data = await res.json();
       setArtifacts(data.artifacts ?? []);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      report(err);
     }
-  }, []);
+  }, [report]);
 
   useEffect(() => {
     refresh();
@@ -60,14 +71,13 @@ export default function ArtifactInbox() {
     }
     const timer = setTimeout(async () => {
       try {
-        const res = await fetch(`${API_BASE}/v1/tasks/${pendingTask.task_id}`, {
-          cache: "no-store",
-        });
+        const res = await apiFetch(`/v1/tasks/${pendingTask.task_id}`);
         const data = (await res.json()) as TaskStatus;
         setPendingTask(data);
         if (data.status === "READY") refresh();
-      } catch {
-        /* keep polling */
+      } catch (err) {
+        if (err instanceof UnauthorizedError) return; // stop polling; sign in
+        /* otherwise keep polling */
       }
     }, 1500);
     return () => clearTimeout(timer);
@@ -77,7 +87,7 @@ export default function ArtifactInbox() {
     if (!topic.trim()) return;
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/v1/tasks`, {
+      const res = await apiFetch("/v1/tasks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ input: topic.trim() }),
@@ -86,13 +96,34 @@ export default function ArtifactInbox() {
       setPendingTask(data);
       setTopic("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      report(err);
     }
-  }, [topic]);
+  }, [topic, report]);
+
+  // Renders are behind the owner session too, so a plain <a href> now 401s.
+  // Fetch the bytes with the token and hand the browser a blob URL instead.
+  const openRender = useCallback(
+    async (artifactId: string, format: string) => {
+      try {
+        const res = await apiFetch(`/v1/artifacts/${artifactId}/renders/${format}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        window.open(url, "_blank", "noreferrer");
+        setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      } catch (err) {
+        report(err);
+      }
+    },
+    [report],
+  );
 
   return (
     <main>
-      <h1>Araştırma Gelen Kutusu</h1>
+      <div className="status-row" style={{ borderBottom: "none", paddingBottom: 0 }}>
+        <h1 style={{ margin: 0 }}>Araştırma Gelen Kutusu</h1>
+        <SignOutButton />
+      </div>
       <p className="subtitle">
         Bir konu ver, hazır olduğunda burada yönetici özetiyle görünür.
       </p>
@@ -141,14 +172,12 @@ export default function ArtifactInbox() {
         )}
         {error && (
           <p className="muted" style={{ marginTop: "0.75rem" }}>
-            API erişilemez ({API_BASE}): {error}
+            API hatası: {error}
           </p>
         )}
       </div>
 
-      {artifacts.length === 0 && (
-        <p className="muted">Henüz artifact yok.</p>
-      )}
+      {artifacts.length === 0 && <p className="muted">Henüz artifact yok.</p>}
 
       {artifacts.map((a) => (
         <div className="panel" key={a.artifact_id}>
@@ -181,22 +210,36 @@ export default function ArtifactInbox() {
               {expanded[a.artifact_id] ? "Daha az" : "Özetin tamamı"}
             </button>
           )}
-          <div style={{ marginTop: "0.75rem", display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+          <div
+            style={{
+              marginTop: "0.75rem",
+              display: "flex",
+              gap: "0.5rem",
+              flexWrap: "wrap",
+            }}
+          >
             {a.available_renders.map((r) => (
-              <a
+              <button
                 key={r.format}
-                href={`${API_BASE}/v1/artifacts/${a.artifact_id}/renders/${r.format}`}
-                target="_blank"
-                rel="noreferrer"
+                onClick={() => openRender(a.artifact_id, r.format)}
                 className="badge ok"
-                style={{ textDecoration: "none" }}
+                style={{ border: "none", cursor: "pointer", font: "inherit" }}
               >
-                {r.format.toUpperCase()} · {Math.max(1, Math.round(r.size_bytes / 1024))} KB
-              </a>
+                {r.format.toUpperCase()} ·{" "}
+                {Math.max(1, Math.round(r.size_bytes / 1024))} KB
+              </button>
             ))}
           </div>
         </div>
       ))}
     </main>
+  );
+}
+
+export default function ArtifactsPage() {
+  return (
+    <OwnerGate>
+      <ArtifactInbox />
+    </OwnerGate>
   );
 }

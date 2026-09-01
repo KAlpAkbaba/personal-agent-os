@@ -2,8 +2,11 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-const API_BASE =
-  process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8001";
+import { API_BASE } from "./lib/session";
+
+// NB: /v1/system/health is the one endpoint that is deliberately reachable
+// without an owner session (ADR-0027), so this page needs no sign-in. Every
+// other surface goes through `apiFetch` behind `OwnerGate`.
 
 type CheckResult = {
   status: "ok" | "fail";

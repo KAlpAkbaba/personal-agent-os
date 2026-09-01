@@ -28,6 +28,8 @@ from app.logging import configure_logging, get_logger
 from app.memory.routes import router as memory_router
 from app.memory.runtime import MemoryRuntime
 from app.middleware import TraceIdMiddleware
+from app.mobile.routes import router as mobile_router
+from app.mobile.runtime import MobileRuntime
 from app.narration.routes import router as narration_router
 from app.security.routes import router as security_router
 from app.security.runtime import SecurityRuntime
@@ -50,6 +52,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     evolution = EvolutionRuntime(settings)
     security = SecurityRuntime(settings)
     identity = IdentityRuntime(settings)
+    mobile = MobileRuntime(settings)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -82,6 +85,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.evolution = evolution
     app.state.security = security
     app.state.identity = identity
+    app.state.mobile = mobile
     # Scoped CORS: the web shell is a separate origin from the API. Allow only
     # the configured loopback/private web origins (never "*"); M0 review #3.
     app.add_middleware(
@@ -108,6 +112,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(selfhealing_router)
     app.include_router(evolution_router)
     app.include_router(security_router)
+    app.include_router(mobile_router)
 
     @app.get("/v1/system/health")
     async def system_health() -> dict[str, Any]:
@@ -129,6 +134,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Deliberately does not say whether an owner credential exists — this
         # is the one unauthenticated endpoint.
         checks["identity"] = await asyncio.to_thread(identity.health_check)
+        # M9: push-transport posture (which real provider a credential would
+        # activate) + the share/export bound. No I/O, no secrets.
+        checks["mobile"] = await asyncio.to_thread(mobile.health_check)
         degraded = any(check["status"] != "ok" for check in checks.values())
         status = "degraded" if degraded else "ok"
         logger.info("health_checked", status=status, checks=checks)
