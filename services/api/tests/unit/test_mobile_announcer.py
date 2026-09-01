@@ -155,3 +155,49 @@ async def test_start_and_stop_are_idempotent(session_factory) -> None:
     await announcer.stop()
     await announcer.stop()
     assert not announcer.running
+
+
+# ------------------------------------- M9 security review #1: deliver, then stamp
+
+
+def test_a_failed_delivery_leaves_the_task_for_the_next_sweep(session_factory) -> None:
+    """Stamping before delivering would silently drop the notification forever.
+
+    Regression for the ordering the migration promises: a task whose delivery
+    raised must remain unannounced so a later sweep retries it.
+    """
+    task_id = _seed(session_factory, status=TASK_STATUS_READY, title="Retry Me")
+    failing = _Recorder(fail=True)
+    announcer = ArtifactReadyAnnouncer(session_factory, failing)
+
+    assert announcer.sweep_once() == 0
+    with session_factory() as session:
+        assert session.get(Task, task_id).announced_at is None, "task was consumed by a failure"
+        assert list(pending_task_ids(session)) == [task_id]
+
+    # Provider recovers -> the next sweep delivers it.
+    working = _Recorder()
+    assert ArtifactReadyAnnouncer(session_factory, working).sweep_once() == 1
+    assert working.calls[0][2] == task_id
+    with session_factory() as session:
+        assert session.get(Task, task_id).announced_at is not None
+
+
+def test_a_partial_batch_failure_only_settles_the_delivered_tasks(session_factory) -> None:
+    good = _seed(session_factory, status=TASK_STATUS_READY, title="Good")
+    bad = _seed(session_factory, status=TASK_STATUS_READY, title="Bad")
+
+    class Selective:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def __call__(self, artifact_id, title, task_id):
+            self.calls.append(task_id)
+            if task_id == bad:
+                raise RuntimeError("provider down for this one")
+
+    announcer = ArtifactReadyAnnouncer(session_factory, Selective())
+    assert announcer.sweep_once() == 1
+    with session_factory() as session:
+        assert session.get(Task, good).announced_at is not None
+        assert session.get(Task, bad).announced_at is None

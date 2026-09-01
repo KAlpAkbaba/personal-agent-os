@@ -12,6 +12,16 @@ Contract:
   *narrow* a client, they never elevate one). A scope failure is 403
   `{"detail": "forbidden"}`, which is a different coarse class because it is
   not fixable by re-authenticating.
+
+"Scopes narrow, never elevate" is enforced STRUCTURALLY, not by remembering to
+use the right dependency: a **scoped** session is refused by bare
+`require_owner_session`, so it can only ever reach a route that explicitly
+declares a scope. Today no route declares one, so a scoped session can reach
+nothing — which is the safe direction. Without this rule, issuing a scoped
+session would silently grant full owner authority everywhere, because a route
+that forgot `require_scope` would happily accept it (M9 security review #2, the
+same "built but not wired" class as M8's authorization provider).
+
 - `optional_owner_session` — returns the context or None and never raises. For
   surfaces that must stay reachable unauthenticated (health).
 
@@ -63,7 +73,35 @@ async def _authenticate(request: Request) -> Verdict:
 
 
 async def require_owner_session(request: Request) -> SessionContext:
-    """Authenticate the owner, or refuse with a coarse 401."""
+    """Authenticate a FULL-AUTHORITY owner session, or refuse.
+
+    A session carrying scopes is deliberately refused here: it is a narrowed
+    credential, and this dependency guards routes that ask for unrestricted
+    owner authority. Letting it through would turn every route that forgot
+    `require_scope` into a silent full-authority grant.
+    """
+    verdict = await _authenticate(request)
+    if verdict.session is None:
+        raise _unauthorized()
+    if verdict.session.scopes:
+        runtime = _runtime(request)
+        if runtime is not None:
+            await asyncio.to_thread(
+                lambda: runtime.service.record_scope_refusal(
+                    session_id=verdict.session.session_id,
+                    client_kind=verdict.session.client_kind,
+                    scope="<unrestricted>",
+                    trace_id=trace_id_var.get(),
+                )
+            )
+        raise _forbidden()
+    request.state.owner_session = verdict.session
+    return verdict.session
+
+
+async def _authenticated_session(request: Request) -> SessionContext:
+    """Authentication only — used by `require_scope`, which does its own
+    narrowing check and must therefore accept a scoped session."""
     verdict = await _authenticate(request)
     if verdict.session is None:
         raise _unauthorized()
@@ -84,9 +122,11 @@ def require_scope(scope: str) -> Callable[..., Awaitable[SessionContext]]:
 
     async def dependency(
         request: Request,
-        session: Annotated[SessionContext, Depends(require_owner_session)],
+        session: Annotated[SessionContext, Depends(_authenticated_session)],
     ) -> SessionContext:
-        if session.has_scope(scope):
+        # An unscoped session is full owner authority and passes any scope
+        # check; a scoped one must carry exactly this scope.
+        if not session.scopes or session.has_scope(scope):
             return session
         runtime = _runtime(request)
         if runtime is not None:

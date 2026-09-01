@@ -61,6 +61,18 @@ class NotBootstrapped(IdentityError):
     """No owner credential exists yet."""
 
 
+class CorruptIdentityRoot(IdentityError):
+    """The identity root file exists but cannot be read or parsed.
+
+    Distinct from `NotBootstrapped`: a root that is present-but-unreadable must
+    never be treated as absent, because "absent" is the one state in which
+    `POST /bootstrap` will mint fresh owner authority. Anyone able to corrupt
+    the file would otherwise be able to take ownership of the system by
+    damaging it (M9 security review #5). The owner repairs it on the host with
+    `python -m app.identity.recover`.
+    """
+
+
 class InvalidOwnerCredential(IdentityError):
     """The presented owner credential did not match the stored hash."""
 
@@ -76,6 +88,7 @@ class Throttled(IdentityError):
 __all__ = [
     "AUTHENTICATION_REFUSALS",
     "AlreadyBootstrapped",
+    "CorruptIdentityRoot",
     "IdentityError",
     "InvalidOwnerCredential",
     "NotBootstrapped",

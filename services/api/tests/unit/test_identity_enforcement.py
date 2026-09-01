@@ -282,3 +282,71 @@ def test_optional_session_never_raises(client) -> None:
         assert scoped.get("/optional", headers=bearer(issued.token)).json() == {
             "authenticated": True
         }
+
+
+# ------------------------- M9 security review #2: scopes narrow, structurally
+
+
+OWNER_SESSION = Depends(require_owner_session)
+
+
+def _mixed_app(runtime: IdentityRuntime) -> FastAPI:
+    """One route asking for unrestricted owner authority, one declaring a scope."""
+    app = FastAPI()
+    app.state.identity = runtime
+
+    @app.get("/full-authority")
+    async def full_authority(_=OWNER_SESSION) -> dict[str, bool]:
+        return {"ok": True}
+
+    @app.get("/needs-scope")
+    async def needs_scope(_=NARRATION_READ) -> dict[str, bool]:
+        return {"ok": True}
+
+    return app
+
+
+def test_a_scoped_session_cannot_reach_a_full_authority_route(client) -> None:
+    """"Scopes narrow, never elevate" must hold by construction.
+
+    Before this rule, a scoped session sailed through every route that gated on
+    bare require_owner_session - i.e. issuing a narrowed credential silently
+    granted full owner authority everywhere, because forgetting `require_scope`
+    on one route was enough. A scoped session must reach ONLY routes that
+    explicitly declare a scope.
+    """
+    _, runtime, _ = client
+    service = runtime.service
+    full = service.issue_session(client_kind="mobile", label="full")
+    narrow = service.issue_session(
+        client_kind="mobile", label="narrow", scopes=["narration.read"]
+    )
+
+    with TestClient(_mixed_app(runtime)) as mixed:
+        assert mixed.get("/full-authority", headers=bearer(full.token)).status_code == 200
+        # Refused with 403, not 401: re-authenticating would not help, the
+        # credential is deliberately narrower than this route demands.
+        refused = mixed.get("/full-authority", headers=bearer(narrow.token))
+        assert refused.status_code == 403
+        assert refused.json() == {"detail": "forbidden"}
+
+    reasons = [e["reason"] for e in service.list_events(action="rejected")]
+    assert "scope_missing:<unrestricted>" in reasons
+
+
+def test_require_scope_still_accepts_the_scoped_session_it_gates(client) -> None:
+    """The narrowing rule must not lock a scoped session out of its own scope.
+
+    `require_owner_session` refusing scoped sessions is only safe if the scoped
+    route keeps working - otherwise scopes would be unusable rather than narrow.
+    """
+    _, runtime, _ = client
+    service = runtime.service
+    full = service.issue_session(client_kind="cli", label="full")
+    narrow = service.issue_session(
+        client_kind="mobile", label="narrow", scopes=["narration.read"]
+    )
+
+    with TestClient(_mixed_app(runtime)) as mixed:
+        assert mixed.get("/needs-scope", headers=bearer(narrow.token)).status_code == 200
+        assert mixed.get("/needs-scope", headers=bearer(full.token)).status_code == 200

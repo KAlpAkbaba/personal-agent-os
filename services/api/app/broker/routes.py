@@ -40,9 +40,12 @@ def _runtime(request: Request) -> BrokerRuntime:
 
 
 def _require_loopback(request: Request) -> None:
+    # An unknown peer is refused, not waved through: `request.client is None`
+    # means the transport could not tell us who is calling, which is not
+    # evidence of loopback (M9 security review #3 — the guard used to fail open).
     client = request.client
     host = client.host if client else None
-    if host is not None and host not in _LOOPBACK_HOSTS:
+    if host not in _LOOPBACK_HOSTS:
         raise HTTPException(status_code=403, detail="loopback only in dev")
 
 
@@ -164,19 +167,25 @@ async def get_devices(request: Request) -> dict[str, Any]:
 async def revoke_device(request: Request, device_id: uuid.UUID) -> dict[str, Any]:
     runtime = _runtime(request)
 
-
-    def revoke() -> Device | None:
+    def load() -> Device | None:
         with runtime.session() as db:
-            return service.revoke_device(db, device_id, trace_id=trace_id_var.get())
+            return service.get_device(db, device_id)
 
-    device = await asyncio.to_thread(revoke)
-    if device is None:
+    if await asyncio.to_thread(load) is None:
         raise HTTPException(status_code=404, detail="unknown device")
-    await runtime.close_device_connection(device_id, code=1008)
 
     # M9 acceptance: "device revocation invalidates session". Killing the WS is
     # not enough — a revoked phone still holding a bearer token could keep
     # driving the REST API. Every session bound to this device dies with it.
+    #
+    # Sessions die FIRST, and the device row second. These are two transactions
+    # (two runtimes, two session factories), so one of them can be the last
+    # thing that happens before a crash; this order picks which. Sessions-first
+    # fails towards "the revoke did not take effect, retry it" — the device
+    # stays enrolled and visible, and revoke is idempotent. Device-first would
+    # fail towards a revoked device whose bearer sessions are still live, i.e.
+    # authority outliving the revocation it was supposed to end
+    # (M9 security review #4).
     identity = getattr(request.app.state, "identity", None)
     sessions_revoked = 0
     if identity is not None:
@@ -185,6 +194,15 @@ async def revoke_device(request: Request, device_id: uuid.UUID) -> dict[str, Any
                 device_id, reason="device_revoked", trace_id=trace_id_var.get()
             )
         )
+
+    def revoke() -> Device | None:
+        with runtime.session() as db:
+            return service.revoke_device(db, device_id, trace_id=trace_id_var.get())
+
+    device = await asyncio.to_thread(revoke)
+    if device is None:  # raced with another revoke; the sessions are gone either way
+        raise HTTPException(status_code=404, detail="unknown device")
+    await runtime.close_device_connection(device_id, code=1008)
 
     runtime.counters["devices_revoked"] += 1
     logger.info(

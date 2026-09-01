@@ -217,6 +217,51 @@ def test_device_revocation_invalidates_the_session_end_to_end(
     assert [e.reason for e in events] == ["device_revoked"]
 
 
+def test_a_crash_mid_revocation_never_leaves_live_sessions_behind(
+    client: TestClient, identity: IdentityRuntime, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """M9 security review #4: the two transactions are ordered, not atomic.
+
+    Device revocation and session revocation cannot share a transaction (two
+    runtimes, two engines), so the ordering decides which half survives a crash
+    between them. Sessions must go first: the recoverable failure is "the
+    revoke did not take, retry it", never "the device is revoked but its token
+    still works".
+    """
+    key = AgentKey()
+    device_id = rest_enroll(client, key, name="itest-identity-crash-order")
+    phone = identity.service.issue_session(
+        client_kind="mobile", label="crash-phone", device_id=uuid.UUID(device_id)
+    )
+    def phone_status() -> int:
+        return client.get(
+            "/v1/identity/sessions/current", headers=bearer(phone.token)
+        ).status_code
+
+    assert phone_status() == 200
+
+    from app.broker import service as broker_service
+
+    def explode(*_args, **_kwargs):
+        raise RuntimeError("simulated crash while writing the device row")
+
+    monkeypatch.setattr(broker_service, "revoke_device", explode)
+    with pytest.raises(RuntimeError):
+        client.post(f"/v1/devices/{device_id}/revoke")
+
+    # The device row is untouched (the owner can and should retry), but the
+    # authority it carried is already gone.
+    assert phone_status() == 401
+    listed = {d["device_id"]: d for d in client.get("/v1/devices").json()["devices"]}
+    assert listed[device_id]["status"] != "revoked"
+
+    # Retrying completes it, and revocation stays idempotent.
+    monkeypatch.undo()
+    retry = client.post(f"/v1/devices/{device_id}/revoke")
+    assert retry.status_code == 200
+    assert retry.json()["status"] == "revoked"
+
+
 def test_revoking_a_device_with_no_sessions_is_a_no_op(client: TestClient) -> None:
     key = AgentKey()
     device_id = rest_enroll(client, key, name="itest-identity-sessionless")

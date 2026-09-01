@@ -68,8 +68,13 @@ class ArtifactReadyAnnouncer:
 
     # ------------------------------------------------------------------ sweep
 
-    def _claim(self, session: Session) -> list[tuple[uuid.UUID, uuid.UUID, str]]:
-        """Claim a batch of announceable tasks. Returns (task_id, artifact_id, title)."""
+    def _select_batch(self, session: Session) -> list[tuple[uuid.UUID, uuid.UUID | None, str]]:
+        """Read a batch of announceable tasks WITHOUT stamping them.
+
+        Stamping happens only after a delivery attempt (see `sweep_once`), so a
+        crash between selection and delivery leaves the row unstamped for the
+        next pass — which is what migration 0010 promises.
+        """
         stmt = (
             select(Task)
             .where(Task.status == TASK_STATUS_READY, Task.announced_at.is_(None))
@@ -77,37 +82,60 @@ class ArtifactReadyAnnouncer:
             .limit(self._batch)
         )
         if session.bind is not None and session.bind.dialect.name == "postgresql":
-            # Two API processes must not announce the same task.
+            # Two API processes must not pick up the same task in one pass.
             stmt = stmt.with_for_update(skip_locked=True)
-        claimed: list[tuple[uuid.UUID, uuid.UUID, str]] = []
-        now = _utcnow()
+        batch: list[tuple[uuid.UUID, uuid.UUID | None, str]] = []
         for task in session.execute(stmt).scalars().all():
             artifact = session.execute(
                 select(Artifact).where(Artifact.task_id == task.id)
             ).scalars().first()
-            # Stamp regardless: a READY task with no artifact has nothing to
-            # announce and must not be re-examined on every sweep.
-            task.announced_at = now
-            if artifact is not None:
-                claimed.append((task.id, artifact.id, artifact.title))
-        session.commit()
-        return claimed
+            if artifact is None:
+                batch.append((task.id, None, ""))
+            else:
+                batch.append((task.id, artifact.id, artifact.title))
+        return batch
+
+    def _stamp(self, task_ids: list[uuid.UUID]) -> None:
+        if not task_ids:
+            return
+        now = _utcnow()
+        with self._session_factory() as session:
+            for task_id in task_ids:
+                task = session.get(Task, task_id)
+                if task is not None and task.announced_at is None:
+                    task.announced_at = now
+            session.commit()
 
     def sweep_once(self) -> int:
-        """One pass. Returns how many tasks were announced. Safe to call directly."""
+        """One pass. Returns how many tasks were announced. Safe to call directly.
+
+        Ordering matters: deliver first, stamp second. Stamping first would make
+        a crash between the two silently drop that task's notification forever,
+        which is exactly what the durability claim rules out. The cost of this
+        order is an at-least-once push if the process dies after delivering but
+        before stamping — the provider's collapse key already makes a duplicate
+        artifact-ready notice idempotent for the owner, so a rare duplicate is
+        strictly better than a silent loss.
+        """
         with self._session_factory() as session:
-            claimed = self._claim(session)
+            batch = self._select_batch(session)
         announced = 0
-        for task_id, artifact_id, title in claimed:
+        settled: list[uuid.UUID] = []
+        for task_id, artifact_id, title in batch:
+            if artifact_id is None:
+                # Nothing to announce; stamp so it is not re-examined forever.
+                settled.append(task_id)
+                continue
             try:
                 self._notifier(artifact_id, title, task_id)
                 announced += 1
+                settled.append(task_id)
             except Exception:
-                # Delivery is best-effort per task: one dead provider must not
-                # stall the rest of the batch. The task stays stamped — the
-                # owner still sees the artifact in the inbox; only the push
-                # for it was lost, which is what a push is allowed to be.
+                # One dead provider must not stall the batch — and must not
+                # consume the task either: leaving it unstamped means the next
+                # sweep retries it once the provider recovers.
                 logger.exception("artifact_ready_announce_failed", task_id=str(task_id))
+        self._stamp(settled)
         if announced:
             logger.info("artifact_ready_announced", count=announced)
         return announced

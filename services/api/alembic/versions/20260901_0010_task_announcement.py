@@ -14,9 +14,12 @@ credential so it can call the API, the two processes communicate the way the M6
 recovery supervisor already does: through a durable record they both see.
 
 The worker only transitions the task to READY (it already does). The API drains
-tasks that are READY with `announced_at IS NULL`, delivers, and stamps the
-column. That makes the announcement durable (an API restart mid-delivery
-retries rather than loses it), exactly-once per task, and free of any long-lived
+tasks that are READY with `announced_at IS NULL`, **delivers, and only then**
+stamps the column. That ordering is the durability guarantee: a crash between
+delivery and stamping costs at most a duplicate notice (the provider's collapse
+key makes artifact-ready idempotent for the owner), whereas stamping first would
+silently drop the notification forever. At-least-once, not exactly-once — the
+honest description of what this design provides — and free of any long-lived
 service credential.
 """
 

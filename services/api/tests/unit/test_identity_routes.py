@@ -280,3 +280,47 @@ def test_identity_management_endpoints_require_a_session(virgin, method, path) -
     assert response.status_code == 401
     assert response.json() == {"detail": "unauthorized"}
     assert response.headers["www-authenticate"] == "Bearer"
+
+
+# --------------------------------- M9 security review #5: a damaged root file
+
+
+class _CorruptRoot(InMemoryCredentialRoot):
+    """A root file that is present but unreadable — the state a truncated or
+    hand-edited `owner_credential.json` leaves behind."""
+
+    def exists(self) -> bool:
+        return True
+
+    def load(self):
+        raise ValueError("unsupported identity root version: None")
+
+
+def test_a_corrupt_root_refuses_cleanly_instead_of_crashing(virgin) -> None:
+    client, runtime = virgin
+    runtime.use_root(_CorruptRoot())
+
+    # Session exchange: the same coarse 401 as any other refusal, not a 500.
+    exchange = client.post(
+        "/v1/identity/sessions",
+        json={"owner_credential": "pagentos_ok_" + "a" * 43, "client_kind": "cli"},
+    )
+    assert exchange.status_code == 401
+    assert exchange.json() == {"detail": "unauthorized"}
+
+    reasons = [e["reason"] for e in runtime.service.list_events(action="rejected")]
+    assert "identity_root_unreadable" in reasons
+
+
+def test_a_corrupt_root_is_never_overwritten_by_bootstrap(virgin) -> None:
+    """The security half of the same finding: "unreadable" must not read as
+    "absent", or damaging the file would be a way to seize ownership."""
+    client, runtime = virgin
+    root = _CorruptRoot()
+    runtime.use_root(root)
+
+    response = client.post("/v1/identity/bootstrap")
+    assert response.status_code == 409
+    assert "recovery" in response.json()["detail"]
+    # Nothing was minted over the damaged root.
+    assert root._record is None

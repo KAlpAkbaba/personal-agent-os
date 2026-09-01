@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.identity.dependencies import require_owner_session
 from app.identity.errors import (
     AlreadyBootstrapped,
+    CorruptIdentityRoot,
     InvalidOwnerCredential,
     NotBootstrapped,
     Throttled,
@@ -56,11 +57,24 @@ def _service(request: Request) -> IdentityService:
 def _require_loopback(request: Request, settings_enabled: bool) -> None:
     if not settings_enabled:
         return
+    # Fail closed on an unknown peer: `request.client is None` tells us the
+    # transport could not identify the caller, which is not proof of loopback
+    # (M9 security review #3). Bootstrap mints owner authority — the one place
+    # that must never be permissive about who is asking.
     client = request.client
     host = client.host if client else None
-    if host is not None and host not in _LOOPBACK_HOSTS:
+    if host not in _LOOPBACK_HOSTS:
         # Same coarse refusal as everything else: no "you are not on loopback".
         raise HTTPException(status_code=403, detail="forbidden")
+
+
+def _load_root_or_none(runtime: IdentityRuntime):
+    """Read-back after a successful mint; never turn a read error into a 500."""
+    try:
+        return runtime.root.load()
+    except (OSError, ValueError):  # pragma: no cover - we just wrote this file
+        logger.error("identity_root_unreadable_after_mint")
+        return None
 
 
 def _session_payload(context: SessionContext) -> dict[str, Any]:
@@ -109,7 +123,15 @@ async def bootstrap(request: Request) -> dict[str, Any]:
             status_code=409,
             detail="owner credential already exists; use the host recovery path",
         ) from exc
-    record = runtime.root.load()
+    except CorruptIdentityRoot as exc:
+        # Same 409 class as "already exists" on purpose: a root that is present
+        # but damaged is NOT an invitation to mint new owner authority here.
+        logger.error("identity_root_unreadable_on_bootstrap")
+        raise HTTPException(
+            status_code=409,
+            detail="owner credential root is unreadable; use the host recovery path",
+        ) from exc
+    record = _load_root_or_none(runtime)
     return {
         "owner_credential": credential,
         "created_at": record.created_at.isoformat() if record else "",
@@ -156,9 +178,11 @@ async def create_session(request: Request, body: CreateSessionRequest) -> dict[s
             detail="too many attempts",
             headers={"Retry-After": str(exc.retry_after_s)},
         ) from exc
-    except (InvalidOwnerCredential, NotBootstrapped) as exc:
-        # One coarse class: "no credential exists yet" and "wrong credential"
-        # are indistinguishable to the caller by design.
+    except (InvalidOwnerCredential, NotBootstrapped, CorruptIdentityRoot) as exc:
+        # One coarse class: "no credential exists yet", "wrong credential" and
+        # "the root is damaged" are indistinguishable to the caller by design.
+        # The precise reason is in `session_events`; a 500 here would both leak
+        # the difference and read as a bug rather than a refusal.
         raise HTTPException(
             status_code=401, detail="unauthorized", headers={"WWW-Authenticate": "Bearer"}
         ) from exc

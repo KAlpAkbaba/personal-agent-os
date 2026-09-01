@@ -8,3 +8,4 @@
 - [M6 self-healing security review](m6-selfhealing-security-review.md) — pointer to M6 findings (2026-09-01); Critical: unescaped string-literal injection in patch generator -> RCE + malicious active-release promotion via unauthenticated ingest+pipeline/run
 - [M8 security agent review](m8-security-agent-review.md) — pointer to M8 findings (2026-09-01); High: RegistryAuthorizationProvider never wired into EvolutionRuntime (M7 gap not actually closed); Medium: junction escape in checks.py collector
 - [Junction escape recurring pattern](junction-escape-recurring-pattern.md) — feedback: leaf-only is_symlink() checks miss Windows junctions on ancestor dirs; verify with a real junction, not reasoning. Seen in M3 and M8.
+- [M9 identity/API auth security review](m9-identity-security-review.md) — pointer to M9 findings (2026-09-01); Medium: announcer stamps announced_at before delivery (can lose a push on crash); Medium: require_scope never wired into any route

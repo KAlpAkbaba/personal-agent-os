@@ -29,6 +29,7 @@ from sqlalchemy.orm import Session
 from app.identity import tokens
 from app.identity.errors import (
     AlreadyBootstrapped,
+    CorruptIdentityRoot,
     InvalidOwnerCredential,
     NotBootstrapped,
     Refusal,
@@ -243,6 +244,22 @@ class IdentityService:
     def is_bootstrapped(self) -> bool:
         return self.root.exists()
 
+    def _load_root(self) -> RootRecord | None:
+        """Read the identity root, turning an unreadable one into a typed error.
+
+        `FileCredentialRoot.load()` deliberately re-raises on a corrupt file
+        rather than returning None. Callers need that distinction typed, not as
+        an OSError/ValueError escaping to the framework as a 500 (M9 security
+        review #5).
+        """
+        try:
+            return self.root.load()
+        except (OSError, ValueError) as exc:
+            raise CorruptIdentityRoot(
+                "the owner identity root exists but cannot be read; "
+                "repair it on the host with `python -m app.identity.recover`"
+            ) from exc
+
     def bootstrap(self, *, trace_id: str | None = None, force: bool = False) -> str:
         """Mint the FIRST owner credential. One-time owner action.
 
@@ -250,7 +267,10 @@ class IdentityService:
         persisted. Refuses when a credential already exists — re-minting is the
         recovery path (`app.identity.recover`), which runs on the host.
         """
-        existing = self.root.load()
+        # A corrupt root raises here, and that is the point: bootstrap is the
+        # one path that mints authority from nothing, so it must never mistake
+        # "unreadable" for "absent" and overwrite a real owner credential.
+        existing = self._load_root()
         if existing is not None and not force:
             raise AlreadyBootstrapped("an owner credential already exists")
         credential = tokens.new_owner_credential()
@@ -280,7 +300,7 @@ class IdentityService:
         return credential
 
     def verify_owner_credential(self, credential: str) -> bool:
-        record = self.root.load()
+        record = self._load_root()
         if record is None:
             raise NotBootstrapped("no owner credential has been bootstrapped")
         if not tokens.looks_like_owner_credential(credential):
@@ -382,6 +402,16 @@ class IdentityService:
             self._reject(
                 Refusal.NOT_BOOTSTRAPPED,
                 reason="credential_exchange_before_bootstrap",
+                trace_id=trace_id,
+                audit_key=_CREDENTIAL_KEY,
+            )
+            raise
+        except CorruptIdentityRoot:
+            # Fails closed like any other refusal, and is audited under its own
+            # reason so the owner can tell "damaged root" from "wrong credential".
+            self._reject(
+                Refusal.UNAVAILABLE,
+                reason="identity_root_unreadable",
                 trace_id=trace_id,
                 audit_key=_CREDENTIAL_KEY,
             )

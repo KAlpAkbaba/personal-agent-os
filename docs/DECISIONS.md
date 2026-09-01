@@ -328,4 +328,25 @@ shell needs an owner sign-in that stores a session token and sends it; that is
 UI work outside this layer's ownership and is recorded as the immediate next
 M9 task rather than silently patched here.
 
+Security addendum (2026-09-01, M9 review — full record in
+`docs/reviews/M9_SECURITY_REVIEW.md`): **"scopes narrow, never elevate" is now
+enforced structurally rather than by convention.** As first written,
+`require_scope` existed and was unit-tested but no shipped route used it, so a
+scoped session had full owner authority everywhere — the M8 lesson repeating
+itself one milestone later. Bare `require_owner_session` therefore now *refuses*
+any session carrying scopes (403, audited as `scope_missing:<unrestricted>`);
+a narrowed credential can only ever reach a route that explicitly declares a
+scope, and forgetting `require_scope` on a route now fails closed instead of
+open. Also decided in the same pass: **a corrupt identity root is not an absent
+one** — `CorruptIdentityRoot` refuses credential exchange with the standard
+coarse 401 and makes `POST /bootstrap` return 409 pointing at host recovery,
+because treating an unreadable root as "not bootstrapped" would make damaging
+the file a way to seize ownership. **Device revocation revokes sessions first
+and the device row second**: the two writes cannot share a transaction, so the
+ordering is chosen to fail towards "the revoke did not take, retry it" rather
+than towards a revoked device whose bearer token still works. And the
+artifact-ready announcer **delivers before it stamps** `announced_at`; the
+guarantee is at-least-once with collapse-key idempotency, which is what
+migration 0010 now says instead of the exactly-once it previously claimed.
+
 ## ADR-0019 addendum / M2 (2026-08-31): dead-endpoint navigation types as `dependency_unavailable` (retryable, `net::ERR_*` marker rule); cancellation is a recorded terminal state — duplicates of a cancelled command replay `cancelled` without re-execution (mirrors ADR-0017 idempotency semantics); iframe addressing is semantic-only (`frame="<name>"`, injection-rejecting); `ManagedBackend` rejects profile paths inside real Chrome/Edge/Chromium/Brave `User Data` trees as defense-in-depth; `EnrollmentRegistry` is in-process/file-backed in M2 with broker/DB persistence and the owner approval flow explicitly deferred; closing the last tab is refused (`validation_error`) in favor of closing the session.
