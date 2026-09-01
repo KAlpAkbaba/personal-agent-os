@@ -19,7 +19,15 @@ public sealed class AuditLog
         var directory = Path.GetDirectoryName(Path.GetFullPath(path));
         if (!string.IsNullOrEmpty(directory))
         {
+            var created = !Directory.Exists(directory);
             Directory.CreateDirectory(directory);
+            if (created)
+            {
+                // The audit directory is service-owned machine material: the service writes
+                // it as SYSTEM, and nobody unprivileged should be able to edit the record of
+                // what the agent did.
+                Security.MachineMaterial.Protect(directory, Security.MachineMaterialKind.Directory);
+            }
         }
     }
 

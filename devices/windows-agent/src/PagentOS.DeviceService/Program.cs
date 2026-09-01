@@ -11,6 +11,7 @@ using PagentOS.Agent.Core.Idempotency;
 using PagentOS.Agent.Core.Ipc;
 using PagentOS.Agent.Core.Logging;
 using PagentOS.Agent.Core.Protocol;
+using PagentOS.Agent.Core.Security;
 
 namespace PagentOS.DeviceService;
 
@@ -80,8 +81,17 @@ public static class Program
             return PrintUsage();
         }
 
+        // Enrollment normally runs elevated as the OWNER and creates material the SERVICE
+        // must later read. Declaring the posture here is what makes that handover correct.
+        MachineMaterial.UseDeveloperPosture(options.DeveloperMaterialPosture);
+        var dataDirExisted = Directory.Exists(options.DataDir);
         Directory.CreateDirectory(options.DataDir);
-        using var identity = DeviceIdentity.LoadOrCreate(options.KeyFilePath);
+        if (!dataDirExisted)
+        {
+            MachineMaterial.Protect(options.DataDir, MachineMaterialKind.Directory);
+        }
+
+        using var identity = DeviceIdentity.LoadOrCreate(options.KeyFilePath, options.DeveloperMaterialPosture);
         using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
         var client = new EnrollmentClient(httpClient);
         var deviceId = await client.EnrollAsync(
@@ -141,6 +151,102 @@ public static class Program
         return new CompanionAdmissionPolicy(sid, options.CompanionImagePath, options.CompanionSessionId);
     }
 
+    /// <summary>
+    /// Check the machine material this process must read BEFORE anything opens it, and say
+    /// precisely what is wrong if it cannot.
+    ///
+    /// The service previously died in <c>DeviceIdentity.LoadOrCreate</c> with a bare
+    /// UnauthorizedAccessException on device.key, which the SCM reported as 1067 â€” a crash
+    /// code that says nothing about ACLs. The key had been created by an owner-context
+    /// enrollment run and protected to that user alone, so LocalSystem could not read it.
+    /// Writing the diagnosis to the agent's own log (which SYSTEM can write, since it lives
+    /// in the machine data directory) turns a silent restart loop into one readable line.
+    ///
+    /// Never logs key material: the report contains principals, rights and paths only.
+    /// </summary>
+    private static bool VerifyMachineMaterial(AgentServiceOptions options, ILogger logger)
+    {
+        var checks = new (string Path, MachineMaterialKind Kind)[]
+        {
+            (options.DataDir, MachineMaterialKind.Directory),
+            (options.KeyFilePath, MachineMaterialKind.Secret),
+            (options.StateFilePath, MachineMaterialKind.State),
+        };
+
+        var usable = true;
+        foreach (var (path, kind) in checks)
+        {
+            var report = MachineMaterial.Inspect(path, kind);
+            if (!report.Exists)
+            {
+                // Absent is not necessarily wrong here: an unenrolled agent has no state yet.
+                continue;
+            }
+
+            // Two different questions, and conflating them was a mistake worth not repeating:
+            // "can this account USE the material" decides whether to start, and "is the
+            // descriptor exactly as intended" is a hardening report. A directory that still
+            // inherits its ACL is worth saying out loud; it is not a reason to refuse to run.
+            var accessError = TryAccess(path, kind);
+            if (accessError is not null)
+            {
+                usable = false;
+                logger.LogError(
+                    "cannot use machine material at {Path}: {Error}. {Report}. " +
+                    "Repair it with scripts\\repair-device-material.ps1 (elevated). " +
+                    "Enrollment state and the device key are preserved by that repair.",
+                    path, accessError, report.Describe());
+                continue;
+            }
+
+            if (!report.Correct)
+            {
+                logger.LogWarning("machine material is usable but not fully hardened: {Report}", report.Describe());
+                continue;
+            }
+
+            logger.LogDebug("machine material ok: {Path}", path);
+        }
+
+        return usable;
+    }
+
+    /// <summary>
+    /// Can this account actually use the material? Returns null when yes, or a short reason.
+    /// Opens nothing it does not need and never reads content — the key is opened for read
+    /// and closed immediately, which is precisely what failed under LocalSystem.
+    /// </summary>
+    private static string? TryAccess(string path, MachineMaterialKind kind)
+    {
+        try
+        {
+            switch (kind)
+            {
+                case MachineMaterialKind.Directory:
+                    var probe = Path.Combine(path, $".access-probe-{Guid.NewGuid():N}");
+                    File.WriteAllText(probe, string.Empty);
+                    File.Delete(probe);
+                    return null;
+
+                case MachineMaterialKind.Secret:
+                case MachineMaterialKind.State:
+                default:
+                    using (File.Open(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                    {
+                        return null;
+                    }
+            }
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return ex.Message;
+        }
+        catch (IOException ex)
+        {
+            return ex.Message;
+        }
+    }
+
     private static async Task<int> RunAsync(string[] args)
     {
         var settings = new HostApplicationBuilderSettings
@@ -160,12 +266,19 @@ public static class Program
             return 2;
         }
 
+        MachineMaterial.UseDeveloperPosture(options.DeveloperMaterialPosture);
+        var runDataDirExisted = Directory.Exists(options.DataDir);
         Directory.CreateDirectory(options.DataDir);
+        if (!runDataDirExisted)
+        {
+            MachineMaterial.Protect(options.DataDir, MachineMaterialKind.Directory);
+        }
+
         builder.Logging.AddProvider(new FileLoggerProvider(options.LogFilePath));
         builder.Services.AddWindowsService(windowsOptions => windowsOptions.ServiceName = "PagentOSDeviceAgent");
 
         builder.Services.AddSingleton(options);
-        builder.Services.AddSingleton(_ => DeviceIdentity.LoadOrCreate(options.KeyFilePath));
+        builder.Services.AddSingleton(_ => DeviceIdentity.LoadOrCreate(options.KeyFilePath, options.DeveloperMaterialPosture));
         builder.Services.AddSingleton(new AuditLog(options.AuditLogPath));
         builder.Services.AddSingleton(new IdempotencyStore(options.IdempotencyStorePath));
         var admission = BuildAdmissionPolicy(options);
@@ -204,6 +317,16 @@ public static class Program
 
         using var host = builder.Build();
         var logger = host.Services.GetRequiredService<ILogger<AgentWorker>>();
+
+        // Preflight before anything opens the key. A misprotected file is diagnosed here, in
+        // the log, instead of surfacing as an access-denied crash and an SCM 1067.
+        if (!VerifyMachineMaterial(options, logger))
+        {
+            logger.LogCritical(
+                "refusing to start: the service account cannot use its own machine material. " +
+                "Nothing was modified; the device identity and enrollment state are intact.");
+            return 3;
+        }
         logger.LogInformation(
             "starting device service: device_id={DeviceId} broker={Broker} data_dir={DataDir} pipe={Pipe}",
             state.DeviceId,

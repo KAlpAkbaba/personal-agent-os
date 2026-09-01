@@ -75,7 +75,7 @@ public sealed class AgentHarness : IAsyncDisposable
         double? heartbeatOverrideS = null)
     {
         DataDir = dataDir ?? TestPaths.NewTempDir();
-        Identity = DeviceIdentity.LoadOrCreate(Path.Combine(DataDir, "device.key"));
+        Identity = DeviceIdentity.LoadOrCreate(Path.Combine(DataDir, "device.key"), developerRun: true);
         DeviceId = Guid.NewGuid().ToString();
         Audit = new AuditLog(Path.Combine(DataDir, "audit.jsonl"));
         Store = new IdempotencyStore(Path.Combine(DataDir, "idempotency.json"));

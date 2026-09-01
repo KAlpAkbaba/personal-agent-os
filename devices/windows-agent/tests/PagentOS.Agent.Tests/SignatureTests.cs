@@ -13,7 +13,7 @@ public class SignatureTests
     public void Signature_verifies_with_independent_p1363_verifier()
     {
         var dir = TestPaths.NewTempDir();
-        using var identity = DeviceIdentity.LoadOrCreate(Path.Combine(dir, "device.key"));
+        using var identity = DeviceIdentity.LoadOrCreate(Path.Combine(dir, "device.key"), developerRun: true);
 
         var nonce = RandomNumberGenerator.GetBytes(32);
         var deviceId = Guid.NewGuid().ToString();
@@ -41,7 +41,7 @@ public class SignatureTests
     public void Signature_binds_device_id()
     {
         var dir = TestPaths.NewTempDir();
-        using var identity = DeviceIdentity.LoadOrCreate(Path.Combine(dir, "device.key"));
+        using var identity = DeviceIdentity.LoadOrCreate(Path.Combine(dir, "device.key"), developerRun: true);
         var nonce = RandomNumberGenerator.GetBytes(32);
         var signature = identity.Sign(nonce, "device-a");
 
@@ -57,20 +57,20 @@ public class SignatureTests
         var dir = TestPaths.NewTempDir();
         var keyPath = Path.Combine(dir, "device.key");
         string firstSpki;
-        using (var first = DeviceIdentity.LoadOrCreate(keyPath))
+        using (var first = DeviceIdentity.LoadOrCreate(keyPath, developerRun: true))
         {
             firstSpki = first.PublicKeySpkiBase64;
         }
 
-        using var second = DeviceIdentity.LoadOrCreate(keyPath);
+        using var second = DeviceIdentity.LoadOrCreate(keyPath, developerRun: true);
         Assert.Equal(firstSpki, second.PublicKeySpkiBase64);
     }
 
     [Fact]
     public void Fresh_keys_differ_per_device()
     {
-        using var a = DeviceIdentity.LoadOrCreate(Path.Combine(TestPaths.NewTempDir(), "device.key"));
-        using var b = DeviceIdentity.LoadOrCreate(Path.Combine(TestPaths.NewTempDir(), "device.key"));
+        using var a = DeviceIdentity.LoadOrCreate(Path.Combine(TestPaths.NewTempDir(), "device.key"), developerRun: true);
+        using var b = DeviceIdentity.LoadOrCreate(Path.Combine(TestPaths.NewTempDir(), "device.key"), developerRun: true);
         Assert.NotEqual(a.PublicKeySpkiBase64, b.PublicKeySpkiBase64);
     }
 

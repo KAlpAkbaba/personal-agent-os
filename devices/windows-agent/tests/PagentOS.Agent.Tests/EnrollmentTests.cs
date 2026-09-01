@@ -12,7 +12,7 @@ public class EnrollmentTests
     public async Task Enroll_posts_contract_fields_and_returns_device_id()
     {
         await using var broker = await FakeBroker.StartAsync();
-        using var identity = DeviceIdentity.LoadOrCreate(Path.Combine(TestPaths.NewTempDir(), "device.key"));
+        using var identity = DeviceIdentity.LoadOrCreate(Path.Combine(TestPaths.NewTempDir(), "device.key"), developerRun: true);
         using var httpClient = new HttpClient();
         var client = new EnrollmentClient(httpClient);
 

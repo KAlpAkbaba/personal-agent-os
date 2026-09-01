@@ -15,7 +15,7 @@ public class ConnectionTests
 
         // Pre-create the identity so the broker can enforce signature verification.
         var dataDir = TestPaths.NewTempDir();
-        using (var preCreated = DeviceIdentity.LoadOrCreate(Path.Combine(dataDir, "device.key")))
+        using (var preCreated = DeviceIdentity.LoadOrCreate(Path.Combine(dataDir, "device.key"), developerRun: true))
         {
             broker.ExpectedPublicKeySpkiB64 = preCreated.PublicKeySpkiBase64;
         }

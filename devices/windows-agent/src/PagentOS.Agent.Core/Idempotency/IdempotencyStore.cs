@@ -191,5 +191,8 @@ public sealed class IdempotencyStore
         var tempPath = _path + ".tmp";
         File.WriteAllText(tempPath, root.ToJsonString(new JsonSerializerOptions { WriteIndented = false }));
         File.Move(tempPath, _path, overwrite: true);
+        // Machine state, protected after the move for the same reason as the key and the
+        // enrollment state: the final DACL excludes the writing account.
+        Security.MachineMaterial.Protect(_path, Security.MachineMaterialKind.State);
     }
 }

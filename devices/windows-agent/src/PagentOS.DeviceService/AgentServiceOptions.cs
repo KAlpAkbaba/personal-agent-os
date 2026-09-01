@@ -24,6 +24,18 @@ public sealed record AgentServiceOptions
     /// the service falls back to its own SID — correct only for a developer run where both
     /// halves are the same user, and reported as such at startup.
     /// </summary>
+    /// <summary>
+    /// "developer" keeps the running account's access to persisted machine material (device
+    /// key, enrollment state), because in a developer run the owner IS the service account.
+    /// Anything else, including absent, means the installed-service posture: SYSTEM and
+    /// Administrators only. Set PAGENTOS_AGENT_MachineMaterialMode=developer for a console
+    /// run; an installed service must never set it.
+    /// </summary>
+    public string? MachineMaterialMode { get; init; }
+
+    public bool DeveloperMaterialPosture
+        => string.Equals(MachineMaterialMode?.Trim(), "developer", StringComparison.OrdinalIgnoreCase);
+
     public string? CompanionSid { get; init; }
 
     /// <summary>
@@ -100,6 +112,7 @@ public sealed record AgentServiceOptions
             BrokerWsUrl = configuration["BrokerWsUrl"] ?? "ws://127.0.0.1:8001/v1/devices/connect",
             DataDir = dataDir,
             PipeName = pipeName,
+            MachineMaterialMode = configuration["MachineMaterialMode"],
             CompanionSid = companionSid,
             CompanionImagePath = configuration["CompanionImagePath"],
             CompanionSessionId = companionSessionId,

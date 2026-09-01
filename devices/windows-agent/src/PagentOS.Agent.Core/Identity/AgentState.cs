@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using PagentOS.Agent.Core.Security;
 
 namespace PagentOS.Agent.Core.Identity;
 
@@ -41,5 +42,11 @@ public sealed record AgentState
         var tempPath = path + ".tmp";
         File.WriteAllText(tempPath, JsonSerializer.Serialize(this, Options));
         File.Move(tempPath, path, overwrite: true);
+        // Enrollment state is service-owned machine material: written by an owner-context
+        // enrollment run, read and rewritten by LocalSystem. Stated on the file rather than
+        // inherited, so a later change to the directory's ACL cannot silently widen it — and
+        // applied after the move, because the final DACL excludes the writing account and
+        // File.Move needs DELETE on the source.
+        MachineMaterial.Protect(path, MachineMaterialKind.State);
     }
 }

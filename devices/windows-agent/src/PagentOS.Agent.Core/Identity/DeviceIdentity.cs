@@ -1,7 +1,6 @@
-using System.Security.AccessControl;
 using System.Security.Cryptography;
-using System.Security.Principal;
 using System.Text;
+using PagentOS.Agent.Core.Security;
 
 namespace PagentOS.Agent.Core.Identity;
 
@@ -22,7 +21,17 @@ public sealed class DeviceIdentity : IDisposable
     /// <summary>Base64 of the SubjectPublicKeyInfo (SPKI) DER encoding of the public key.</summary>
     public string PublicKeySpkiBase64 => Convert.ToBase64String(_key.ExportSubjectPublicKeyInfo());
 
-    public static DeviceIdentity LoadOrCreate(string keyFilePath)
+    /// <summary>
+    /// Load the device key, or create one.
+    ///
+    /// <paramref name="developerRun"/> selects the posture for a NEW key: the installed
+    /// service protects it as machine material (SYSTEM read, Administrators full, nobody
+    /// else), while a developer console run also keeps access for the account that started
+    /// it — because there, the owner IS the service account. Named explicitly rather than
+    /// inferred, and false by default, so production cannot inherit the weaker posture by
+    /// forgetting an argument.
+    /// </summary>
+    public static DeviceIdentity LoadOrCreate(string keyFilePath, bool developerRun = false)
     {
         if (File.Exists(keyFilePath))
         {
@@ -31,6 +40,18 @@ public sealed class DeviceIdentity : IDisposable
             {
                 key.ImportFromPem(File.ReadAllText(keyFilePath));
                 return new DeviceIdentity(key);
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                key.Dispose();
+                // The exact failure that killed the service under LocalSystem, turned from a
+                // bare access-denied into something an operator can act on. The report names
+                // principals and rights only — never a byte of the key.
+                var report = MachineMaterial.Inspect(keyFilePath, MachineMaterialKind.Secret);
+                throw new DeviceIdentityAccessException(
+                    $"the device private key exists but this account cannot read it. {report.Describe()}. " +
+                    "Repair it with scripts\\repair-device-material.ps1 (elevated); the key itself is preserved.",
+                    ex);
             }
             catch
             {
@@ -50,8 +71,16 @@ public sealed class DeviceIdentity : IDisposable
 
             var tempPath = keyFilePath + ".tmp";
             File.WriteAllText(tempPath, created.ExportPkcs8PrivateKeyPem());
-            RestrictToCurrentUser(tempPath);
             File.Move(tempPath, keyFilePath, overwrite: true);
+            // Protected after the move, not before: the final DACL deliberately excludes the
+            // creating account, and File.Move needs DELETE on the source, so protecting first
+            // makes the move fail for any non-administrator. The temp file lives in the data
+            // directory, which is itself machine-protected, so it inherits the same
+            // restriction in the meantime.
+            // Explicit, never the process-wide posture: the key is the one file where an
+            // accidental fallback would be worst, so the caller always says which it means.
+            MachineMaterial.Protect(keyFilePath, MachineMaterialKind.Secret, includeCurrentUser: developerRun);
+
             return new DeviceIdentity(created);
         }
         catch
@@ -77,30 +106,29 @@ public sealed class DeviceIdentity : IDisposable
 
     public void Dispose() => _key.Dispose();
 
-    private static void RestrictToCurrentUser(string path)
+    /// <summary>
+    /// Is the key present and protected as service-owned machine material? Used by the
+    /// service's startup preflight so a misprotected key is diagnosed rather than thrown.
+    /// </summary>
+    public static MachineMaterialReport InspectKey(string keyFilePath, bool? developerRun = null)
+        => MachineMaterial.Inspect(keyFilePath, MachineMaterialKind.Secret, developerRun);
+
+    /// <summary>
+    /// Repair the key's protection in place, preserving the key itself. Returns true when
+    /// something was changed. Requires an account that can rewrite the descriptor —
+    /// Administrators, or the file's owner.
+    /// </summary>
+    public static bool RepairKeyProtection(string keyFilePath, bool? developerRun = null)
+        => MachineMaterial.Repair(keyFilePath, MachineMaterialKind.Secret, developerRun);
+}
+
+/// <summary>
+/// The device key exists but the current account cannot read it. Distinct from a corrupt key:
+/// this one is repaired by fixing an ACL, never by issuing a new identity.
+/// </summary>
+public sealed class DeviceIdentityAccessException : Exception
+{
+    public DeviceIdentityAccessException(string message, Exception inner) : base(message, inner)
     {
-        if (!OperatingSystem.IsWindows())
-        {
-            return;
-        }
-
-        try
-        {
-            var user = WindowsIdentity.GetCurrent().User;
-            if (user is null)
-            {
-                return;
-            }
-
-            var info = new FileInfo(path);
-            var security = new FileSecurity();
-            security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
-            security.AddAccessRule(new FileSystemAccessRule(user, FileSystemRights.FullControl, AccessControlType.Allow));
-            info.SetAccessControl(security);
-        }
-        catch (Exception)
-        {
-            // Best-effort in dev; the key file still lives under the user profile.
-        }
     }
 }

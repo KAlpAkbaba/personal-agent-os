@@ -12,7 +12,11 @@ param(
   # 0 = allocate a free ephemeral port, keeping the E2E fully isolated from
   # the dev server, integration-test uvicorns and anything else on 8001.
   [int]$ApiPort = 0,
-  [switch]$SkipBuild
+  [switch]$SkipBuild,
+  # Keep the temporary agent data directory (key, state, audit, logs) after the run. Off by
+  # default so a normal run leaves nothing behind; invaluable when a step fails, because the
+  # agent's own log is the only place that says why it exited.
+  [switch]$KeepData
 )
 
 # "Continue", not "Stop": docker/compose/dotnet write progress to stderr and
@@ -110,6 +114,42 @@ function Invoke-Step {
   if (-not $ok) { $script:failed = $true }
 }
 
+function Remove-ProtectedTree {
+  <#
+    Delete a tree that may contain machine-protected directories.
+
+    The agent protects its data directory for SYSTEM and Administrators; even in the
+    developer posture, a directory left behind by a run that used the production posture
+    denies this account enumeration, so a plain Remove-Item fails silently and the NEXT run
+    inherits the poisoned directory — which is exactly how one failed E2E turned into a
+    second. Resetting inheritance on the way down works because this account created the
+    tree, and an owner always keeps WRITE_DAC.
+  #>
+  param([string]$Path)
+
+  if (-not (Test-Path -LiteralPath $Path)) { return }
+
+  try {
+    $security = New-Object System.Security.AccessControl.DirectorySecurity
+    $security.SetAccessRuleProtection($false, $false)
+    ([System.IO.DirectoryInfo]$Path).SetAccessControl($security)
+  } catch { }
+
+  foreach ($child in @(Get-ChildItem -LiteralPath $Path -Force -ErrorAction SilentlyContinue)) {
+    if ($child.PSIsContainer) {
+      Remove-ProtectedTree -Path $child.FullName
+    } else {
+      try {
+        $fileSecurity = New-Object System.Security.AccessControl.FileSecurity
+        $fileSecurity.SetAccessRuleProtection($false, $false)
+        ([System.IO.FileInfo]$child.FullName).SetAccessControl($fileSecurity)
+      } catch { }
+    }
+  }
+
+  Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 function Start-Broker {
   $psi = New-Object System.Diagnostics.ProcessStartInfo
   $psi.FileName = $uv
@@ -161,6 +201,8 @@ function Start-AgentService {
   $psi.EnvironmentVariables["PAGENTOS_AGENT_BrokerRestUrl"] = $baseUrl
   $psi.EnvironmentVariables["PAGENTOS_AGENT_BrokerWsUrl"] = "ws://127.0.0.1:$ApiPort/v1/devices/connect"
   $psi.EnvironmentVariables["PAGENTOS_AGENT_PipeName"] = "pagentos-e2e-" + (Split-Path $dataDir -Leaf)
+  # Same reason as the enrol step: a console agent run is a developer run.
+  $psi.EnvironmentVariables["PAGENTOS_AGENT_MachineMaterialMode"] = "developer"
   $psi.EnvironmentVariables["PAGENTOS_AGENT_BackoffBaseSeconds"] = "1"
   $psi.EnvironmentVariables["PAGENTOS_AGENT_BackoffMaxSeconds"] = "3"
   $psi.EnvironmentVariables["DOTNET_ROOT"] = $env:DOTNET_ROOT
@@ -292,9 +334,14 @@ Invoke-Step "Enroll fresh device" {
   $exe = Join-Path $agentRoot "src\PagentOS.DeviceService\bin\Debug\net10.0-windows\PagentOS.DeviceService.exe"
   $env:PAGENTOS_AGENT_DataDir = $dataDir
   $env:PAGENTOS_AGENT_BrokerRestUrl = $baseUrl
+  # This E2E runs the agent as an ordinary console process, so it IS the service account.
+  # Persisted machine material is otherwise protected for SYSTEM and Administrators only —
+  # correct for an installed service, and it would lock this run out of its own audit log and
+  # device key. Requested out loud, the same way the companion's dev trust is.
+  $env:PAGENTOS_AGENT_MachineMaterialMode = "developer"
   & $exe enroll --broker-url $baseUrl --token $tok.token --name "e2e-test-pc"
   if ($LASTEXITCODE -ne 0) { throw "enroll exited $LASTEXITCODE" }
-  Remove-Item Env:\PAGENTOS_AGENT_DataDir, Env:\PAGENTOS_AGENT_BrokerRestUrl -ErrorAction SilentlyContinue
+  Remove-Item Env:\PAGENTOS_AGENT_DataDir, Env:\PAGENTOS_AGENT_BrokerRestUrl, Env:\PAGENTOS_AGENT_MachineMaterialMode -ErrorAction SilentlyContinue
   $state = Get-Content (Join-Path $dataDir "state.json") -Raw | ConvertFrom-Json
   $script:deviceId = $state.device_id
   if (-not $script:deviceId) { throw "device_id not found in agent state" }
@@ -367,8 +414,12 @@ foreach ($name in @("companion", "service", "broker")) {
     & C:\Windows\System32\taskkill.exe /PID $p.Id /T /F 2>$null | Out-Null
   }
 }
-Remove-Item -Recurse -Force $dataDir -ErrorAction SilentlyContinue
-Remove-Item -Recurse -Force $identityDir -ErrorAction SilentlyContinue
+if ($KeepData) {
+  Write-Host "keeping agent data for inspection: $dataDir"
+} else {
+  Remove-ProtectedTree -Path $dataDir
+  Remove-ProtectedTree -Path $identityDir
+}
 
 # ---------------------------------------------------------------- summary
 
