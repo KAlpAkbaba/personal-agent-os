@@ -58,8 +58,32 @@ them that tested the wrong thing.
 | 2.1 | Service installs, starts, survives reboot, reconnects unattended | `NOT_YET_PROVEN` | First real attempt failed at `sc create` with 1639: PowerShell 5.1 does not escape an argument containing quotes, so the `binPath` value split at "Program Files". Fixed, with argv proven by round-trip through a real child process. |
 | 2.2 | Companion auto-starts in the owner's session and is admitted by SID + session + binary | `NOT_YET_PROVEN` | |
 | 2.3 | `desktop.open_application` executes in the interactive session from the Session-0 service | `NOT_YET_PROVEN` | |
-| 2.4 | The installer is idempotent — a rerun after a partial or failed install succeeds | `NOT_YET_PROVEN` | **Claimed on 2026-09-01 and disproved the same day by the real machine.** The second run failed with access denied rewriting `appsettings.json`. Cause: hardening with `/T` and `(OI)(CI)` grants stripped every pre-existing *file* to a protected empty DACL — 219 of them under `service\` — which denies everyone including SYSTEM and Administrators. The tests behind the earlier claim covered the *decision* logic (create vs reconfigure vs no-op) and never exercised an actually hardened tree, so they passed while the property was false. Now: staging plus atomic swap, repair-before-write, and 19 tests that build real hardened trees and reproduce the empty-DACL state. Still `NOT_YET_PROVEN` until the owner reruns. |
+| 2.4 | The installer is idempotent — a rerun after a partial or failed install succeeds | `NOT_YET_PROVEN` | **Claimed twice, disproved twice, by the owner's real machine.** See the log below. |
 | 2.5 | Only SYSTEM and Administrators hold write authority over the installed tree | `NOT_YET_PROVEN` | Enforced by an allowlist (not a denylist of Users/Everyone) and checked independently by `scripts/verify-device-service.ps1` against the ACLs on disk. The same empty-DACL bug would also have prevented the service from starting: SYSTEM cannot read an executable through an empty DACL. |
+
+### The install attempts so far, and what each disproved
+
+Recorded in full because the pattern matters more than any single bug: three real-machine
+runs, three defects, and **every one of them was in a code path my tests did not execute**.
+None of the three was found by the gate; all three were found by the owner running the thing.
+
+| Attempt | Failure | Cause | What it disproved |
+|---|---|---|---|
+| 1 | `sc create` exit 1639 | PowerShell 5.1 does not escape a native argument containing quotes, so `binPath` split at "Program Files". Only visible elevated — a non-elevated `sc.exe` fails at `OpenSCManager` first. | That the installer worked at all. |
+| 2 | Access denied rewriting `appsettings.json` | Hardening with `/T` and `(OI)(CI)` grants left every pre-existing file with a protected empty DACL — 425 objects on the owner's machine — denying everyone including SYSTEM. | The idempotency claim. The tests behind it covered the create/reconfigure *decision* and never touched a hardened tree. |
+| 3 | `Property 'Count' cannot be found` (`PropertyNotFoundStrict`) | A function returning an empty collection unrolls to `$null`; `.Count` on it throws under StrictMode, which the libraries set and dot-sourcing propagates. Reproduced: 0 → `$null`, 1 → `String`, 2+ → array. | The claim that the partial install was *fully recoverable*. It was not: recovery aborted before it began, and a rerun with exactly one component to restore would have failed too. |
+
+The corrective work is not only the three fixes. It is that the installer's top-level flow now
+lives in tested functions (`Invoke-InstallRecovery`), that the cardinality pattern is linted
+out of every installer script by the PowerShell parser, and that the tests assert which engine
+they ran on — `installer-strictmode.tests.ps1` fails if it is not Windows PowerShell 5.1 with
+StrictMode in force, so it cannot pass vacuously on a more forgiving host.
+
+Read-only inspection of the owner's real tree with the fixed code (2026-09-01): the call that
+threw now returns an empty array, the posture check reports 51 violations in a 61-object
+sample, and 425 children are queued for the inheritance reset an elevated rerun performs.
+That is evidence the code recognises the state — **not** evidence the repair succeeds, which
+only the owner's elevated rerun can show.
 
 ## Stage 3 — Owner identity bootstrap and recovery
 

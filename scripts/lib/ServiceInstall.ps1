@@ -116,7 +116,7 @@ function Get-ServiceInstallPlan {
         $differences += "start mode ($($Current.StartMode))"
     }
 
-    if ($differences.Count -eq 0) {
+    if (@($differences).Count -eq 0) {
         return [pscustomobject]@{
             Action    = "AlreadyCorrect"
             StopFirst = $false

@@ -136,7 +136,7 @@ else {
 $posture = Test-InstallAclPosture -Root $InstallRoot -SampleSize 200
 if (-not $posture.Ok) {
     $summary = ($posture.Violations | Select-Object -First 3) -join " | "
-    if ($posture.Violations.Count -gt 3) { $summary += " (+$($posture.Violations.Count - 3) more)" }
+    if (@($posture.Violations).Count -gt 3) { $summary += " (+$(@($posture.Violations).Count - 3) more)" }
     Add-Result "1.17" "Only SYSTEM and Administrators can write to the install tree" "NOT_YET_PROVEN" $summary
 }
 else {
@@ -163,7 +163,7 @@ else {
 $agentPids = @()
 if ($service -and $service.ProcessId) { $agentPids += $service.ProcessId }
 if ($companion) { $agentPids += $companion.ProcessId }
-if ($agentPids.Count -eq 0) {
+if (@($agentPids).Count -eq 0) {
     # Nothing running means nothing was checked. "No listener found" would be true and
     # worthless here, and writing it up as PROVEN_REAL is exactly the kind of vacuous pass
     # this file exists to avoid.
@@ -188,7 +188,7 @@ $results | Format-Table -AutoSize -Wrap
 
 $blocked = $results | Where-Object { $_.Status -ne "PROVEN_REAL" }
 if ($blocked) {
-    Write-Host "$($blocked.Count) criteria not yet proven." -ForegroundColor Yellow
+    Write-Host "$(@($blocked).Count) criteria not yet proven." -ForegroundColor Yellow
     exit 1
 }
 

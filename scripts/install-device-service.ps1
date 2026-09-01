@@ -143,8 +143,8 @@ function Assert-InstallPosture {
     if (-not $posture.Ok) {
         $lines = @("the installed tree does not have the intended security posture:")
         $lines += ($posture.Violations | Select-Object -First 12 | ForEach-Object { "  - $_" })
-        if ($posture.Violations.Count -gt 12) {
-            $lines += "  ... and $($posture.Violations.Count - 12) more"
+        if (@($posture.Violations).Count -gt 12) {
+            $lines += "  ... and $(@($posture.Violations).Count - 12) more"
         }
         throw ($lines -join [Environment]::NewLine)
     }
@@ -225,16 +225,9 @@ $serviceExe = Join-Path $serviceDir "PagentOS.DeviceService.exe"
 # with /T stripped every existing file to an empty DACL. Recovering from that is the
 # installer's job, not the owner's, so it happens first and unconditionally.
 
-New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
-
-$restored = Resume-InterruptedDeployment -Root $InstallRoot -Components @("service", "companion")
-if ($restored.Count -gt 0) {
-    Write-Host "restored $($restored -join ', ') from an interrupted previous run"
-}
-
-$repair = Repair-InstallTreeAcl -Root $InstallRoot
-if ($repair.Repaired) {
-    Write-Host "recovered the existing install: $($repair.Actions -join '; ')"
+$recovery = Invoke-InstallRecovery -Root $InstallRoot -Components @("service", "companion")
+foreach ($line in @($recovery.Messages)) {
+    Write-Host $line
 }
 
 # --- stage everything before touching the live tree ---------------------------------------

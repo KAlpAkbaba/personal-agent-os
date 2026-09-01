@@ -231,7 +231,7 @@ function New-ScBinaryPathValue {
         [string[]]$ServiceArguments = @()
     )
 
-    if (-not $ServiceArguments -or $ServiceArguments.Count -eq 0) {
+    if (-not $ServiceArguments -or @($ServiceArguments).Count -eq 0) {
         return $ExecutablePath
     }
 

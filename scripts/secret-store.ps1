@@ -142,7 +142,7 @@ switch ($PSCmdlet.ParameterSetName) {
                 }
             }
 
-            Write-Host "running with $($loaded.Count) secret(s) in the process environment: $($loaded -join ', ')"
+            Write-Host "running with $(@($loaded).Count) secret(s) in the process environment: $($loaded -join ', ')"
             Push-Location $WorkingDirectory
             try {
                 Invoke-Expression $Run

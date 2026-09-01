@@ -167,6 +167,15 @@ if (-not $Fast) {
     Assert-ExitCode "installer invocation tests"
   }
 
+  Invoke-Step "Installer PS5.1 StrictMode tests" {
+    # Windows PowerShell 5.1 cardinality: an elevated rerun died on `.Count` over a returned
+    # empty collection, which unrolls to $null. These cover 0/1/many for every
+    # collection-returning function and lint the pattern out of the installer scripts.
+    $script = Join-Path $repoRoot "scripts\tests\installer-strictmode.tests.ps1"
+    & (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -NoProfile -File $script
+    Assert-ExitCode "installer strictmode tests"
+  }
+
   Invoke-Step "Installer ACL + recovery tests" {
     # Also deterministic and offline: builds real hardened trees in %TEMP%, reproduces the
     # empty-DACL state a previous install left on the owner's machine, and proves the

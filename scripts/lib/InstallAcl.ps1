@@ -40,6 +40,44 @@ Set-StrictMode -Version Latest
 
 . (Join-Path $PSScriptRoot "NativeProcess.ps1")
 
+<#
+    A note on cardinality, because it cost a real install.
+
+    Windows PowerShell unrolls a returned collection: a function returning an empty array
+    yields $null, and one returning a single item yields that item. Under
+    `Set-StrictMode -Version Latest` — which these libraries set, and which dot-sourcing
+    propagates into the installer's scope — reading `.Count` on either throws
+    PropertyNotFoundStrict. Measured on the owner's machine and reproduced here:
+
+        0 restored -> $null           -> @($restored).Count  throws
+        1 restored -> System.String   -> @($restored).Count  throws
+        2 restored -> Object[]        -> works
+
+    So a rerun with nothing to restore failed, and a rerun with exactly one thing to restore
+    would have failed too. Only the case my tests happened to exercise worked.
+
+    Three rules follow, applied throughout these scripts:
+
+      1. every `.Count` is written as `@(...).Count`, which is correct for $null, for a
+         scalar and for an array alike;
+      2. a caller collecting a function's collection output writes `@(Call)`;
+      3. a function returning a collection returns plain `@(...)` — NOT `,@(...)`.
+
+    Rules 2 and 3 go together, and the pairing is deliberate. `,@(...)` also survives a bare
+    assignment, but combined with `@(Call)` at the call site it wraps the array in another
+    array: counts silently read 1, and a message interpolates as "System.Object[]". That
+    happened here while fixing this very bug. Plain `@(...)` plus `@(Call)` is correct; and
+    when a caller forgets the wrapper, the result is $null and StrictMode throws loudly at
+    the next `.Count` — a failure that announces itself rather than quietly miscounting.
+
+    Where a function has more than one thing to say, it returns an object with named array
+    properties instead (see `Invoke-InstallRecovery`). Property access never unrolls, so that
+    shape is safe under either calling style and needs no convention at all.
+
+    `scripts/tests/installer-strictmode.tests.ps1` enforces rule 1 mechanically with the
+    PowerShell parser and covers the 0/1/many cases for every function here.
+#>
+
 # Well-known SIDs. Written as SIDs, not names, because names are localized — this machine
 # reports "BUILTIN\Users" in English but its errors in Turkish, and a name comparison would
 # quietly stop matching on a differently-localized Windows.
@@ -170,7 +208,7 @@ function Get-AclReport {
                           [System.Security.AccessControl.AccessControlSections]::Access -bor
                           [System.Security.AccessControl.AccessControlSections]::Owner)
         IsProtected = $acl.AreAccessRulesProtected
-        AceCount    = $rules.Count
+        AceCount    = @($rules).Count
         Aces        = $rules
         IsReadOnly  = $isReadOnly
         Error       = $null
@@ -279,7 +317,7 @@ function Test-InstallAclPosture {
         Root       = $Root
         Checked    = $checked
         Violations = @($violations)
-        Ok         = ($violations.Count -eq 0)
+        Ok         = (@($violations).Count -eq 0)
     }
 }
 
@@ -331,19 +369,27 @@ function Repair-InstallTreeAcl {
     foreach ($file in $readOnly) {
         $file.Attributes = $file.Attributes -band (-bnot [System.IO.FileAttributes]::ReadOnly)
     }
-    if ($readOnly.Count -gt 0) {
-        [void]$actions.Add("cleared the read-only attribute on $($readOnly.Count) file(s)")
+    if (@($readOnly).Count -gt 0) {
+        [void]$actions.Add("cleared the read-only attribute on $(@($readOnly).Count) file(s)")
     }
 
-    # 3. Restore inheritance on every child. This is what undoes the empty-DACL damage: a
-    #    child with no ACEs gets the root's inherited ACEs back, and nothing else changes.
-    #    /C continues past individual failures so one stubborn file cannot abort the repair;
-    #    the posture check afterwards is what decides whether the repair actually worked.
-    $children = @(Get-ChildItem -LiteralPath $Root -Force -ErrorAction SilentlyContinue)
-    if ($children.Count -gt 0) {
+    # 3. Restore inheritance, but only where something is actually wrong. Resetting
+    #    unconditionally would work, and would also make `Repaired` meaningless — every run
+    #    would claim to have repaired something. A child needs the reset when its DACL is
+    #    empty or unreadable: those are exactly the states the old hardening produced.
+    $damaged = @(Get-ChildItem -LiteralPath $Root -Recurse -Force -ErrorAction SilentlyContinue |
+        Where-Object {
+            $report = Get-AclReport -Path $_.FullName
+            (-not $report.Readable) -or ($report.AceCount -eq 0)
+        } | Select-Object -First 1)
+
+    if (@($damaged).Count -gt 0) {
+        # One tree-wide reset rather than per-file: cheaper, and the damage is never isolated
+        # in practice — the old hardening hit every file that existed at the time.
+        # /C continues past individual failures so one stubborn file cannot abort the repair;
+        # the posture check afterwards is what decides whether the repair actually worked.
         $reset = Invoke-NativeProcess -FilePath $icacls `
             -Arguments @((Join-Path $Root "*"), "/reset", "/T", "/C", "/Q") -TimeoutSeconds 600
-        # icacls returns non-zero when it skipped any file; the posture check is the judge.
         if (-not $Quiet) {
             Write-Host "restored inheritance on the existing install tree (icacls exit $($reset.ExitCode))"
         }
@@ -351,9 +397,9 @@ function Repair-InstallTreeAcl {
     }
 
     return [pscustomobject]@{
-        Repaired = ($actions.Count -gt 0)
+        Repaired = (@($actions).Count -gt 0)
         Actions  = @($actions)
-        Reason   = if ($actions.Count -gt 0) { "recovered a previously hardened or partial install" } else { "tree was already administrable" }
+        Reason   = if (@($actions).Count -gt 0) { "recovered a previously hardened or partial install" } else { "tree was already administrable" }
     }
 }
 
@@ -471,7 +517,61 @@ function Resume-InterruptedDeployment {
         Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
     }
 
+    # Plain @( ), paired with @(Call) at every call site. See the cardinality note at the top
+    # of this file: this return unrolls, so a caller that forgets the wrapper gets $null and
+    # StrictMode throws at its next `.Count` — which is how the owner's rerun failed, and is
+    # the failure mode worth having, because it is loud.
     return @($restored)
+}
+
+function Invoke-InstallRecovery {
+    <#
+    .SYNOPSIS
+        Everything the installer does before it stages anything: ensure the root exists, undo
+        an interrupted swap, and make a previously hardened tree administrable again.
+
+    .DESCRIPTION
+        This is a function rather than a block inside the installer script for one reason:
+        the installer's top-level flow had no tests, and that is where the real machine kept
+        failing. The whole sequence is now callable, and `installer-strictmode.tests.ps1`
+        drives it with nothing to restore, with one component to restore and with two —
+        the cardinalities that broke it.
+
+        Returns an object whose Messages, Restored and Actions are always arrays, so a caller
+        can count, join or iterate them without knowing how many there were.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string[]]$Components,
+        [switch]$Quiet
+    )
+
+    $messages = New-Object System.Collections.ArrayList
+
+    New-Item -ItemType Directory -Force -Path $Root | Out-Null
+
+    $restored = @(Resume-InterruptedDeployment -Root $Root -Components $Components)
+    if (@($restored).Count -gt 0) {
+        [void]$messages.Add("restored $($restored -join ', ') from an interrupted previous run")
+    }
+
+    $repair = Repair-InstallTreeAcl -Root $Root -Quiet:$Quiet
+    $actions = @($repair.Actions)
+    if ($repair.Repaired) {
+        [void]$messages.Add("recovered the existing install: $($actions -join '; ')")
+    }
+
+    # Plain @( ) here, not ,@( ): a property assignment does not unroll, so the unary comma
+    # would wrap the array in another array and every count would read 1. The comma belongs
+    # on `return` statements, which do unroll — and nowhere else.
+    return [pscustomobject]@{
+        Root     = $Root
+        Restored = @($restored)
+        Actions  = @($actions)
+        Repaired = [bool]$repair.Repaired
+        Messages = @($messages)
+    }
 }
 
 function Publish-StagedDirectory {
