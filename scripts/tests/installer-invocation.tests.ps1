@@ -198,6 +198,66 @@ Test-Case "exit code, stdout and stderr are all captured" {
     Assert-True -Condition ($result.StdErr -match "err") -Because "stderr must be captured"
 }
 
+Write-Host ""
+Write-Host "argument-list cardinality (zero / one / empty-element / null are NOT equivalent)"
+
+Test-Case "zero arguments is a legitimate invocation" {
+    # A real repair crashed here-adjacent: the model must represent an argument-less tool.
+    $whoami = Join-Path $env:SystemRoot "System32\whoami.exe"
+    $result = Invoke-NativeProcess -FilePath $whoami -Arguments @()
+    Assert-True -Condition $result.Success -Because "whoami with no arguments should succeed"
+    Assert-Equal -Expected "" -Actual $result.CommandLine -Because "zero arguments is an empty command line"
+    Assert-True -Condition ($result.StdOut.Trim().Length -gt 0) -Because "and it should still produce output"
+}
+
+Test-Case "one intentionally EMPTY argument reaches the child as one empty argv slot" {
+    # The exact shape that crashed the ACL repair: sc.exe failure X reset= 0 actions= ""
+    # clears the action list with an empty-string ARGUMENT. Binding used to reject the
+    # element with 'empty string', so sc.exe never ran - after the script had already
+    # announced the suspension.
+    $echoScript = Join-Path $env:TEMP "pagentos-empty-arg-$([guid]::NewGuid().ToString('N')).ps1"
+    Set-Content -LiteralPath $echoScript -Value 'Write-Output ("COUNT=" + $args.Count); for ($i = 0; $i -lt $args.Count; $i++) { Write-Output ("ARG[$i]=<" + $args[$i] + ">") }' -Encoding ASCII
+    try {
+        $result = Invoke-NativeProcess `
+            -FilePath (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") `
+            -Arguments @("-NoProfile", "-File", $echoScript, "actions=", "")
+        Assert-True -Condition $result.Success -Because "the invocation must be representable at all: $($result.StdErr)"
+        Assert-True -Condition ($result.StdOut -match "COUNT=2") -Because "two arguments were sent: $($result.StdOut)"
+        Assert-True -Condition ($result.StdOut -match "ARG\[1\]=<>") -Because "the empty argument must arrive as an empty slot, not vanish: $($result.StdOut)"
+    }
+    finally {
+        Remove-Item -LiteralPath $echoScript -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Test-Case "one normal argument and multiple arguments round-trip" {
+    $cmd = Join-Path $env:SystemRoot "System32\cmd.exe"
+    $one = Invoke-NativeProcess -FilePath $cmd -Arguments @("/c", "echo single")
+    Assert-True -Condition ($one.StdOut -match "single") -Because "one argument"
+    $many = Invoke-NativeProcess -FilePath $cmd -Arguments @("/c", "echo", "a", "b", "c")
+    Assert-True -Condition $many.Success -Because "multiple arguments"
+}
+
+Test-Case "the exact sc.exe suspend-recovery argument list serializes correctly" {
+    # Pin the argv the repair script sends, including the trailing empty value.
+    $line = ConvertTo-NativeArgumentLine -Arguments @("failure", "PagentOSDeviceAgent", "reset=", "0", "actions=", "")
+    Assert-Equal -Expected 'failure PagentOSDeviceAgent reset= 0 actions= ""' -Actual $line `
+        -Because "sc.exe clears the action list with an explicit empty argument"
+}
+
+Test-Case "a NULL argument list is refused loudly, not treated as zero arguments" {
+    # Null means the caller lost track of its arguments; guessing 'no arguments' could run a
+    # destructive tool with defaults nobody chose.
+    try {
+        Invoke-NativeProcess -FilePath (Join-Path $env:SystemRoot "System32\whoami.exe") -Arguments $null | Out-Null
+        throw "null must not be accepted"
+    }
+    catch {
+        Assert-True -Condition ($_.Exception.Message -match "null|Arguments") `
+            -Because "the refusal should name the parameter: $($_.Exception.Message)"
+    }
+}
+
 Test-Case "the child runs in the requested working directory, not the shell's" {
     # Push-Location changes PowerShell's location, NOT a .NET process's working directory.
     # Without an explicit WorkingDirectory the child inherited wherever this shell started,

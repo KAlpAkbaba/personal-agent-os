@@ -176,6 +176,49 @@ function Test-Repaired {
     return $null
 }
 
+function Get-FailureActionsSnapshot {
+    <#
+    .SYNOPSIS
+        The service's recovery policy as the exact registry bytes, or $null when unset.
+
+    .DESCRIPTION
+        The SCM stores the policy in the FailureActions REG_BINARY value. Capturing bytes
+        rather than parsing `sc qfailure` matters twice over: the parse would be of localized
+        text (this machine reports in Turkish), and "restore the original" must mean the
+        original — byte-for-byte — not this script's opinion of what the policy should be.
+    #>
+    param([string]$Name)
+    $key = "HKLM:\SYSTEM\CurrentControlSet\Services\$Name"
+    $item = Get-ItemProperty -Path $key -ErrorAction SilentlyContinue
+    $snapshot = @{ Actions = $null; NonCrash = $null }
+    if ($item) {
+        if ($item.PSObject.Properties.Name -contains "FailureActions") {
+            $snapshot.Actions = [byte[]]$item.FailureActions
+        }
+        # A sibling value, verified present on the real machine as FALSE. `sc failure` does
+        # not touch it, but "restore the exact original" should not depend on that staying
+        # true of future Windows versions.
+        if ($item.PSObject.Properties.Name -contains "FailureActionsOnNonCrashFailures") {
+            $snapshot.NonCrash = [int]$item.FailureActionsOnNonCrashFailures
+        }
+    }
+    return $snapshot
+}
+
+function Restore-FailureActionsSnapshot {
+    param([string]$Name, [hashtable]$Snapshot)
+    $key = "HKLM:\SYSTEM\CurrentControlSet\Services\$Name"
+    if ($null -ne $Snapshot.Actions) {
+        Set-ItemProperty -Path $key -Name "FailureActions" -Value $Snapshot.Actions -Type Binary
+    }
+    else {
+        Remove-ItemProperty -Path $key -Name "FailureActions" -ErrorAction SilentlyContinue
+    }
+    if ($null -ne $Snapshot.NonCrash) {
+        Set-ItemProperty -Path $key -Name "FailureActionsOnNonCrashFailures" -Value $Snapshot.NonCrash -Type DWord
+    }
+}
+
 Assert-Elevated
 $sc = Get-SystemTool -Name "sc.exe"
 
@@ -193,12 +236,24 @@ Show-Descriptor -Label "state.json" -Path (Join-Path $DataDir "state.json")
 # and restored below whatever happens.
 
 $service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+$policySnapshot = $null
 $recoverySuspended = $false
 try {
     if ($service) {
         Write-Host ""
+        # SNAPSHOT FIRST, announce second, act third. An earlier version announced the
+        # suspension and then crashed inside the sc invocation — the policy was untouched,
+        # but the transcript claimed otherwise and the real state had to be inspected by hand
+        # to know. The snapshot is the exact registry bytes, restored verbatim in `finally`
+        # whatever happens below, including a crash between here and there.
+        $policySnapshot = Get-FailureActionsSnapshot -Name $ServiceName
+        $actionBytes = if ($null -ne $policySnapshot.Actions) { "$(@($policySnapshot.Actions).Count) bytes" } else { "not set" }
+        Write-Host "captured the recovery policy (FailureActions: $actionBytes; NonCrashFlag: $(if ($null -ne $policySnapshot.NonCrash) { $policySnapshot.NonCrash } else { 'not set' }))"
+
         Write-Host "suspending the service recovery policy and stopping $ServiceName"
-        [void](Invoke-NativeProcess -FilePath $sc -Arguments @("failure", $ServiceName, "reset=", "0", "actions=", ""))
+        $suspend = Invoke-NativeProcess -FilePath $sc `
+            -Arguments @("failure", $ServiceName, "reset=", "0", "actions=", "")
+        Assert-NativeSuccess -Result $suspend -Activity "sc failure (suspend recovery)"
         $recoverySuspended = $true
 
         if ($service.Status -ne "Stopped") {
@@ -274,9 +329,15 @@ try {
 finally {
     if ($recoverySuspended) {
         Write-Host ""
-        Write-Host "restoring the service recovery policy"
-        [void](Invoke-NativeProcess -FilePath $sc -Arguments @(
-            "failure", $ServiceName, "reset=", "86400", "actions=", "restart/5000/restart/15000/restart/60000"))
+        Write-Host "restoring the ORIGINAL recovery policy (exact bytes, not a rewrite)"
+        try {
+            Restore-FailureActionsSnapshot -Name $ServiceName -Snapshot $policySnapshot
+        }
+        catch {
+            # The one state worse than a suspended policy is a silently suspended one.
+            Write-Warning "FAILED to restore the recovery policy: $($_.Exception.Message)"
+            Write-Warning "Restore it manually: sc.exe failure $ServiceName reset= 86400 actions= restart/5000/restart/15000/restart/60000"
+        }
     }
 }
 

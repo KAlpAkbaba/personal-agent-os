@@ -101,7 +101,7 @@ function ConvertTo-NativeArgumentLine {
         Join arguments into the exact command line a native tool will parse back.
     #>
     [CmdletBinding()]
-    param([Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Arguments)
+    param([Parameter(Mandatory = $true)][AllowEmptyCollection()][AllowEmptyString()][string[]]$Arguments)
 
     return (($Arguments | ForEach-Object { ConvertTo-NativeArgument -Argument $_ }) -join ' ')
 }
@@ -124,7 +124,16 @@ function Invoke-NativeProcess {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$FilePath,
-        [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Arguments,
+        # The argument model, stated because a real repair crashed on it:
+        #   @()            zero arguments - a legitimate invocation (`whoami`);
+        #   @("")          ONE argument that is the empty string - also legitimate, and how
+        #                  `sc.exe failure X actions= ""` clears the action list;
+        #   $null          an error. A caller passing null has lost track of its arguments,
+        #                  and Mandatory refuses it loudly rather than guessing.
+        # AllowEmptyString is what separates the second case from the third: without it,
+        # Mandatory binding rejected the "" ELEMENT with "empty string" - the same message a
+        # null would get - and the repair script died before sc.exe ever ran.
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][AllowEmptyString()][string[]]$Arguments,
         [int[]]$SuccessExitCodes = @(0),
         [int]$TimeoutSeconds = 120,
         [string]$WorkingDirectory
@@ -276,7 +285,7 @@ function Invoke-MachineReadableProcess {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$FilePath,
-        [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Arguments,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][AllowEmptyString()][string[]]$Arguments,
         [string]$WorkingDirectory,
         [int]$TimeoutSeconds = 180,
         [string]$Activity = "the child process",
