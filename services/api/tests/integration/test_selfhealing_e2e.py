@@ -23,6 +23,7 @@ controlled fault. Budget well under ~120s.
 """
 
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -127,12 +128,24 @@ class ServiceProcess:
         raise RuntimeError("target service did not come up")
 
     def kill(self) -> None:
-        subprocess.run(
-            ["taskkill", "/PID", str(self.proc.pid), "/T", "/F"],
-            capture_output=True,
-            check=False,
-        )
-        self.proc.wait(timeout=10)
+        # Mirrors ManagedProcess.stop() in the supervisor itself: taskkill /T on Windows
+        # to take the whole tree, signals elsewhere. Hardcoding taskkill made this test
+        # unrunnable on Linux — which is where the recovery supervisor actually runs in
+        # production, so the one platform whose behaviour matters most was the one never
+        # exercised.
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/PID", str(self.proc.pid), "/T", "/F"],
+                capture_output=True,
+                check=False,
+            )
+        else:
+            self.proc.terminate()
+        try:
+            self.proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+            self.proc.wait(timeout=10)
 
 
 def workspace_status(workspace: Path) -> dict:
