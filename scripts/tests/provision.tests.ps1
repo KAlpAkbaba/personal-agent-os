@@ -102,7 +102,16 @@ switch ($args[0]) {
     }
     "show"    { Get-Content -LiteralPath (Join-Path $PSScriptRoot "plan.json") -Raw; exit 0 }
     "apply"   { Write-Output "Apply complete! Resources: 4 added, 0 changed, 0 destroyed."; exit 0 }
-    "output"  { Write-Output '{"server_id":{"value":"164238173","sensitive":false,"type":"string"}}'; exit 0 }
+    "output"  {
+        # The real output set, so the post-apply tailnet confirmation is exercised rather
+        # than skipped. TAILNET_HOSTNAME lets a test choose a name this machine will never
+        # see on its tailnet, which is how the "never joined" failure is provable offline.
+        $hostname = if ($env:FAKE_TOFU_TAILNET_HOSTNAME) { $env:FAKE_TOFU_TAILNET_HOSTNAME } else { "pagentos-core" }
+        Write-Output ('{"server_id":{"value":"164238173","sensitive":false,"type":"string"},' +
+            '"public_ipv4":{"value":"203.0.113.10","sensitive":false,"type":"string"},' +
+            '"tailscale_hostname":{"value":"' + $hostname + '","sensitive":false,"type":"string"}}')
+        exit 0
+    }
     default   { Write-Error "fake tofu: unexpected verb $($args[0])"; exit 9 }
 }
 '@
@@ -116,8 +125,18 @@ switch ($args[0]) {
 }
 
 function Invoke-Provision {
-    <#  Run the real provision.ps1 in a child 5.1 process against a fake tofu.  #>
-    param([object]$Fake, [string[]]$ExtraArguments = @())
+    <#
+    .SYNOPSIS
+        Run the real provision.ps1 in a child 5.1 process against a fake tofu.
+
+    .DESCRIPTION
+        The fake reports a tailnet hostname that this machine will never see, and the join
+        timeout is a few seconds, so the post-apply confirmation resolves the same way on
+        every host: not joined. That keeps these tests offline and deterministic — pointing
+        them at the REAL `pagentos-core` would make them pass or fail according to whether
+        a Hetzner host happens to be up.
+    #>
+    param([object]$Fake, [string[]]$ExtraArguments = @(), [string]$TailnetHostname = "pagentos-core-absent-by-design")
 
     $sshKey = Join-Path $Fake.Directory "id_test.pub"
     if (-not (Test-Path -LiteralPath $sshKey)) {
@@ -125,7 +144,8 @@ function Invoke-Provision {
     }
 
     $arguments = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $provisionScript,
-        "-TofuPath", $Fake.Shim, "-SshPublicKeyPath", $sshKey) + $ExtraArguments
+        "-TofuPath", $Fake.Shim, "-SshPublicKeyPath", $sshKey,
+        "-TailnetJoinTimeoutSeconds", "5") + $ExtraArguments
 
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $powershell
@@ -137,6 +157,7 @@ function Invoke-Provision {
     # Credentials the preflight demands. Deliberately obvious non-secrets.
     $psi.EnvironmentVariables["TF_VAR_hcloud_token"] = "fake-token-for-tests-only"
     $psi.EnvironmentVariables["TF_VAR_tailscale_auth_key"] = "fake-authkey-for-tests-only"
+    $psi.EnvironmentVariables["FAKE_TOFU_TAILNET_HOSTNAME"] = $TailnetHostname
 
     $process = [System.Diagnostics.Process]::Start($psi)
     $stdOut = $process.StandardOutput.ReadToEndAsync()
@@ -259,9 +280,11 @@ Write-Output "shouldApply=$shouldApply exit=$($applyResult.ExitCode) reached-the
     }
 
     Test-Case "-Apply saves a plan, shows it, and applies THAT plan" {
+        # Asserts the tofu invocation SEQUENCE. The run's exit code belongs to the tailnet
+        # confirmation, which has its own test below; conflating them would make this test
+        # fail for a reason that has nothing to do with the apply mechanics.
         $fake = New-FakeTofu -Directory (Join-Path $script:Sandbox "apply")
         $result = Invoke-Provision -Fake $fake -ExtraArguments @("-Apply")
-        Assert-Equal -Expected 0 -Actual $result.ExitCode -Because "the apply path must succeed (stderr: $($result.StdErr))"
 
         $planLine = @($result.Log | Where-Object { $_ -like "plan *" })[0]
         $showLine = @($result.Log | Where-Object { $_ -like "show *" })[0]
@@ -297,8 +320,34 @@ Write-Output "shouldApply=$shouldApply exit=$($applyResult.ExitCode) reached-the
     Test-Case "a matching expectation proceeds" {
         $fake = New-FakeTofu -Directory (Join-Path $script:Sandbox "expect-ok") -Create 4
         $result = Invoke-Provision -Fake $fake -ExtraArguments @("-Apply", "-ExpectAdd", "4", "-ExpectChange", "0", "-ExpectDestroy", "0")
-        Assert-Equal -Expected 0 -Actual $result.ExitCode -Because "4/0/0 was expected and is what the plan does (stderr: $($result.StdErr))"
-        Assert-True -Condition (@($result.Log | Where-Object { $_ -like "apply*" }).Count -eq 1) -Because "and it applies exactly once"
+        Assert-True -Condition (@($result.Log | Where-Object { $_ -like "apply*" }).Count -eq 1) `
+            -Because "4/0/0 was expected and is what the plan does, so it applies exactly once (log: $($result.Log -join ' | '))"
+    }
+
+    Test-Case "provisioning FAILS when the host never joins the tailnet" {
+        # The defect this exists for: the first real run created four billable resources,
+        # reported success, and left a host with no tailnet and - by design - no public
+        # SSH. `tofu apply` succeeding is not the same as the host being reachable, and the
+        # command must not claim otherwise.
+        $fake = New-FakeTofu -Directory (Join-Path $script:Sandbox "no-tailnet")
+        $result = Invoke-Provision -Fake $fake -ExtraArguments @("-Apply")
+        $combined = $result.StdOut + $result.StdErr
+
+        $tailscaleInstalled = Test-Path -LiteralPath (Join-Path $env:ProgramFiles "Tailscale\tailscale.exe")
+        if ($tailscaleInstalled) {
+            Assert-True -Condition ($result.ExitCode -ne 0) -Because "a host that never joined the tailnet is a failed provision"
+            Assert-True -Condition ($combined -match "never joined the tailnet") -Because "and it must say so plainly"
+            Assert-True -Condition ($combined -match "breakglass-ssh") -Because "and point at the recovery path that does not need public SSH"
+            Assert-True -Condition ($combined -match "do NOT destroy") -Because "and say the infrastructure is intact, so nobody re-creates a working host"
+        }
+        else {
+            # No Tailscale here (a CI runner): it cannot confirm, and says so rather than
+            # inventing a verdict in either direction.
+            Assert-True -Condition ($combined -match "cannot be confirmed from here") `
+                -Because "without Tailscale the run must report that it cannot confirm (out: $combined)"
+        }
+        Assert-True -Condition (@($result.Log | Where-Object { $_ -like "apply*" }).Count -eq 1) `
+            -Because "the apply itself did happen - that is exactly why silence would be dangerous"
     }
 
     Test-Case "a plan that would DESTROY refuses unless explicitly allowed" {

@@ -24,11 +24,11 @@ services:
     environment:
       POSTGRES_USER: pagentos
       POSTGRES_PASSWORD: ${PAGENTOS_DB_PASSWORD:?set in /opt/pagentos/.env}
-      POSTGRES_DB: pagentos
+      POSTGRES_DB: pagentos_prod
     volumes:
       - /mnt/pagentos-data/postgres:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U pagentos -d pagentos"]
+      test: ["CMD-SHELL", "pg_isready -U pagentos -d pagentos_prod"]
       interval: 5s
       timeout: 5s
       retries: 12
@@ -102,7 +102,7 @@ services:
       temporal:
         condition: service_healthy
     environment:
-      PAGENTOS_DATABASE_URL: postgresql+psycopg://pagentos:${PAGENTOS_DB_PASSWORD:?}@postgres:5432/pagentos
+      PAGENTOS_DATABASE_URL: postgresql+psycopg://pagentos:${PAGENTOS_DB_PASSWORD:?}@postgres:5432/pagentos_prod
       PAGENTOS_REDIS_URL: redis://redis:6379/0
       PAGENTOS_S3_ENDPOINT_URL: http://minio:9000
       PAGENTOS_S3_ACCESS_KEY: pagentos-artifacts
@@ -111,7 +111,11 @@ services:
       PAGENTOS_TEMPORAL_ADDRESS: temporal:7233
       PAGENTOS_VOICE_PROFILE_SECRET: ${PAGENTOS_VOICE_PROFILE_SECRET:?set in /opt/pagentos/.env}
       # The web shell is reached over the tailnet; set to the real private origin(s).
-      PAGENTOS_WEB_ORIGINS: ${PAGENTOS_WEB_ORIGINS:-}
+      # A JSON list, and `[]` rather than empty: pydantic-settings parses complex fields as
+      # JSON, so an empty string is a parse error ("error parsing value for field
+      # web_origins"), not an empty list. Defaulting to no origins is also the right
+      # production posture — CORS is an allowlist, and nothing browser-based is served yet.
+      PAGENTOS_WEB_ORIGINS: ${PAGENTOS_WEB_ORIGINS:-[]}
       # Bootstrap runs ONCE, from the host itself, through this loopback-only guard.
       PAGENTOS_IDENTITY_BOOTSTRAP_LOOPBACK_ONLY: "true"
     volumes:

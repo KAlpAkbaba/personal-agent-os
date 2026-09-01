@@ -91,7 +91,7 @@ PAGENTOS_BIND_IP=$TAILNET_IP
 PAGENTOS_DB_PASSWORD=$(openssl rand -base64 32 | tr -d '=+/' | cut -c1-40)
 PAGENTOS_S3_SECRET=$(openssl rand -base64 32 | tr -d '=+/' | cut -c1-40)
 PAGENTOS_VOICE_PROFILE_SECRET=$(openssl rand -base64 32 | tr -d '=+/' | cut -c1-40)
-PAGENTOS_WEB_ORIGINS=
+PAGENTOS_WEB_ORIGINS=[]
 EOF
     chmod 600 "$ENV_FILE"
 else

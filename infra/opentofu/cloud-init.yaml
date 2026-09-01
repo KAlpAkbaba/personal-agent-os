@@ -64,8 +64,58 @@ runcmd:
   - ufw --force enable
 
   # Tailscale. --ssh enables Tailscale SSH so administration needs no public port at all.
-  - curl -fsSL https://tailscale.com/install.sh | sh
-  - tailscale up --authkey='${tailscale_auth_key}' --hostname='${tailscale_hostname}' --ssh --accept-dns=true
+  #
+  # VERIFIED, not fire-and-forget. The first real provisioning run finished with
+  # `cloud-init status` reporting "done" and "errors: []" while the auth key had in fact
+  # been rejected: the host came up with no tailnet, no public SSH by design, and therefore
+  # no way in at all. A provisioning step whose failure is invisible is worse than one that
+  # fails loudly, so this block ends in a state check and a non-zero exit, which cloud-init
+  # records as a module error and `cloud-init status --long` then reports.
+  - |
+    set -o pipefail
+    curl -fsSL https://tailscale.com/install.sh | sh
+    tailscale up --authkey='${tailscale_auth_key}' --hostname='${tailscale_hostname}' --ssh --accept-dns=true || true
+    tailnet_ip=""
+    for _ in $(seq 1 30); do
+      tailnet_ip="$(tailscale ip -4 2>/dev/null | head -n1 || true)"
+      [ -n "$tailnet_ip" ] && break
+      sleep 2
+    done
+    mkdir -p /etc/pagentos
+    if [ -z "$tailnet_ip" ]; then
+      {
+        echo "TAILSCALE ENROLMENT FAILED at first boot."
+        echo "The auth key was not accepted (expired, already spent, or not pre-authorised)."
+        echo "This host has no public SSH by design, so recover with the break-glass path:"
+        echo "  scripts/cloud/breakglass-ssh.ps1"
+      } > /etc/pagentos/PROVISIONING_FAILED
+      echo "FATAL: tailscale enrolment failed; wrote /etc/pagentos/PROVISIONING_FAILED" >&2
+      exit 1
+    fi
+    echo "tailscale up: $tailnet_ip"
+
+  # The data volume is attached AFTER the server is created, so it may not exist yet at
+  # first boot. Wait for it, then mount it at the path the deployment expects and persist
+  # that in fstab with nofail — a boot that hangs on a missing volume would be worse than
+  # a boot without one, and scripts/cloud/deploy-cloud-core.sh refuses to put data on the
+  # boot disk anyway. Hetzner's own automount lands on /mnt/HC_Volume_<id>, which is not a
+  # name anything else can predict; this makes the location deterministic.
+  - |
+    volume_device=""
+    for _ in $(seq 1 60); do
+      volume_device="$(ls /dev/disk/by-id/scsi-0HC_Volume_* 2>/dev/null | head -n1 || true)"
+      [ -n "$volume_device" ] && break
+      sleep 2
+    done
+    if [ -n "$volume_device" ]; then
+      mkdir -p /mnt/pagentos-data
+      grep -q ' /mnt/pagentos-data ' /etc/fstab || \
+        echo "$volume_device /mnt/pagentos-data ext4 defaults,nofail,discard 0 0" >> /etc/fstab
+      mountpoint -q /mnt/pagentos-data || mount /mnt/pagentos-data || true
+      echo "data volume: $(findmnt -no SOURCE,TARGET /mnt/pagentos-data 2>/dev/null || echo 'NOT MOUNTED')"
+    else
+      echo "WARNING: no Hetzner data volume appeared; deployment will refuse to use the boot disk" >&2
+    fi
 
   # Docker from the official repository, pinned to the distribution's stable channel.
   - install -m 0755 -d /etc/apt/keyrings

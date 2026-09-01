@@ -16,7 +16,7 @@ A proxy result is never written up as real. Where a criterion is split — logic
 here, environment provable only on the owner's machine — it appears twice, with the proxy
 part marked `PROVEN_PROXY` and the environment part `NOT_YET_PROVEN` until it runs.
 
-Last updated: 2026-09-01.
+Last updated: 2026-09-02.
 
 > **Local Windows qualification CLOSED 2026-09-01.** The final `finalize-qualification.ps1`
 > run and `verify-device-service.ps1` report proved, on the owner's real machine: service
@@ -133,18 +133,18 @@ was loopback, and the thing under test here is the network.
 
 | # | Criterion | Status | Notes |
 |---|---|---|---|
-| 5.1 | Cloud Core runs on the real VPS | `NOT_YET_PROVEN` | `infra/opentofu` validated against the real hcloud provider schema (2026-09-01) and `infra/docker/docker-compose.prod.yml` renders; neither has met Hetzner yet. |
+| 5.1 | Cloud Core runs on the real VPS | `PROVEN_REAL` | 2026-09-02: deployed to `pagentos-core` (Hetzner cpx32, nbg1). All 13 subsystem checks `ok` — db, redis, object_store, temporal, broker, artifacts, voice, memory, selfhealing, evolution, security, identity, mobile. Image built on the host from the checked-out source per ADR-0032. |
 | 5.2a | This PC is on the tailnet, and still opens no inbound public port | `PROVEN_REAL` | 2026-09-01, owner's machine: Tailscale `Running`, `100.92.148.30` / `mail.tail0e6789.ts.net`. Same `verify-tailnet.ps1` run re-checked the posture rather than assuming it — the agent's own pids own **zero** listening sockets, and no enabled inbound firewall rule names PagentOS. |
-| 5.2b | Windows PC ↔ Cloud over the private network | `NOT_YET_PROVEN` | Needs the cloud host on the same tailnet. |
-| 5.3 | No public application port on the VPS | `NOT_YET_PROVEN` | Enforced three ways by construction: the Hetzner firewall opens only UDP/41641 + ICMP, ufw denies inbound, and compose binds the API to `${PAGENTOS_BIND_IP:?}` (the tailnet address) so a missing value refuses to start rather than falling open to 0.0.0.0. To be verified from OUTSIDE the tailnet. |
-| 5.4 | The agent moves to the cloud endpoint without reinstall or re-enrollment | `NOT_YET_PROVEN` | `switch-agent-broker.ps1` changes only the broker URL (health-probed first, atomic replace, rollback). The device keeps its id and P-256 key; the cloud DB row is rebuilt from the public half by `restore-device-row.sh`. |
+| 5.2b | Windows PC ↔ Cloud over the private network | `PROVEN_REAL` | 2026-09-02: `http://100.90.158.26:8001/v1/system/health` answered from the Windows machine over the tailnet; `tailscale ping` reports a DIRECT connection via `2.28.67.130:41641`, ~47 ms, not a DERP relay. |
+| 5.3 | No public application port on the VPS | `PROVEN_REAL` | 2026-09-02, probed from the Windows machine against the PUBLIC IP: 8001, 22, 5432, 6379, 9000 and 7233 all refused/filtered. On the tailnet address only 8001 answers — PostgreSQL, Redis, MinIO and Temporal are closed there too, because they publish no host port at all (`ss -tlnp` shows the API bound to 127.0.0.1 and 100.90.158.26 only, never 0.0.0.0). Public SSH stays closed; administration is Tailscale SSH. |
+| 5.4 | The agent moves to the cloud endpoint without reinstall or re-enrollment | `NOT_YET_PROVEN` (one elevated command away) | `switch-agent-broker.ps1` changes only the broker URL (health-probed first, atomic replace, rollback). The device keeps its id and P-256 key; the cloud DB row is rebuilt from the public half by `restore-device-row.sh`. |
 | 5.5 | **Hetzner Cloud Core → Tailscale → DeviceService → Companion → real Notepad → ACK** | `NOT_YET_PROVEN` | The milestone's headline proof. |
 | 5.6 | Cloud Core process restart → agent reconnects → command succeeds | `NOT_YET_PROVEN` | |
 | 5.7 | VPS reboot → agent reconnects → command succeeds | `NOT_YET_PROVEN` | Requires a NON-ephemeral tailnet node, or the host is removed while it reboots and returns at a different address; `infra/opentofu/variables.tf` says so and why. |
 | 5.8 | Tailscale reconnect (link down/up) → command succeeds | `NOT_YET_PROVEN` | |
 | 5.9 | Temporary network loss → recovery with no owner intervention | `NOT_YET_PROVEN` | |
 | 5.10 | Windows Service restart against the cloud broker → command succeeds | `NOT_YET_PROVEN` | Proven locally (2.7); must be re-earned across the real network. |
-| 5.11 | Persistent state really lives on the Hetzner volume, not the boot disk | `NOT_YET_PROVEN` | `deploy-cloud-core.sh` resolves the volume and REFUSES if `/mnt/pagentos-data` is on the root device — Hetzner automounts at `/mnt/HC_Volume_<id>`, so assuming the path would have silently put PostgreSQL and the identity root on a disk that a server rebuild discards. |
+| 5.11 | Persistent state really lives on the Hetzner volume, not the boot disk | `PROVEN_REAL` | 2026-09-02: the guard EARNED ITS KEEP — the 100 GB volume was attached and formatted but **not mounted**, and `/mnt/pagentos-data` existed as an empty directory on the boot disk, so the deploy would have put PostgreSQL and the identity root on a disk a rebuild discards. Now mounted from `/dev/disk/by-id/scsi-0HC_Volume_106767183` with an fstab entry (`nofail`, so a missing volume can never hang boot); `findmnt` confirms data on `/dev/sdb` while root is `/dev/sda1`. |
 
 ## Stage 6 — Real browser qualification
 

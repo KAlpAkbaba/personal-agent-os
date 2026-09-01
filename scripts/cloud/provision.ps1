@@ -34,6 +34,7 @@ param(
     [int]$ExpectAdd,
     [int]$ExpectChange,
     [int]$ExpectDestroy,
+    [int]$TailnetJoinTimeoutSeconds = 900,
     [string]$TofuVersion = "1.10.6",
     [string]$SshPublicKeyPath = (Join-Path $env:USERPROFILE ".ssh\id_kurek.pub"),
 
@@ -243,10 +244,56 @@ foreach ($outputName in @($parsedOutputs.PSObject.Properties.Name)) {
     Write-Host "  $outputName = $($parsedOutputs.$outputName.value)"
 }
 
+# --------------------------------------------------- provisioning is not done until it is
+# `tofu apply` succeeding only means Hetzner created the resources. The first real run
+# ended exactly here, reporting success, while the host had silently failed to join the
+# tailnet — leaving a machine with no tailnet and, by design, no public SSH. Since the
+# tailnet IS the management path, a host that is not on it is a failed provision, and this
+# says so rather than leaving it to be discovered later.
+# Schema-safe (ADR-0031): outputs are a document from another tool, so an absent key is a
+# possibility to handle, not a crash to suffer. Caught by the provisioning tests, whose
+# fake tofu returned a narrower output set than the real one.
+$hostnameOutput = Get-OptionalProperty -InputObject $parsedOutputs -Name "tailscale_hostname"
+$expectedHostname = if ($null -ne $hostnameOutput) { Get-OptionalProperty -InputObject $hostnameOutput -Name "value" } else { $null }
+if ([string]::IsNullOrWhiteSpace($expectedHostname)) {
+    Write-Warning "the configuration declares no 'tailscale_hostname' output, so this run cannot confirm the host joined the tailnet."
+    Write-Warning "Confirm it yourself before relying on the host: it must appear in 'tailscale status'."
+    return
+}
+
+$tailscaleExe = Join-Path $env:ProgramFiles "Tailscale\tailscale.exe"
+if (-not (Test-Path -LiteralPath $tailscaleExe)) {
+    Write-Warning "Tailscale is not installed on THIS machine, so the host's enrolment cannot be confirmed from here."
+    Write-Warning "Check it yourself before relying on the host: it must appear as '$expectedHostname' on the tailnet."
+    return
+}
+
 Write-Host ""
-Write-Host "Host created. Next, in order:" -ForegroundColor Green
-Write-Host "  1. wait for cloud-init to finish, then confirm it joined the tailnet:  tailscale status"
-Write-Host "  2. copy this repository to the host and run (over Tailscale SSH):"
-Write-Host "       sudo ./scripts/cloud/deploy-cloud-core.sh"
-Write-Host "  3. bootstrap the owner credential ONCE on the host (loopback guard; shown once)"
-Write-Host "  4. restore the device row, then switch the agent:  .\scripts\switch-agent-broker.ps1 -BrokerHost <tailnet-ip>"
+Write-Host "=== confirming the host joined the tailnet ===" -ForegroundColor Cyan
+Write-Host "  waiting for '$expectedHostname' (cloud-init installs and enrols it; this takes a few minutes)"
+$joined = $false
+$joinDeadline = (Get-Date).AddSeconds($TailnetJoinTimeoutSeconds)
+while ((Get-Date) -lt $joinDeadline) {
+    $peerResult = Invoke-NativeProcess -FilePath $tailscaleExe -Arguments @("status") -TimeoutSeconds 60 -SuccessExitCodes @(0, 1)
+    $peerLine = @($peerResult.StdOut -split "`n" | Where-Object { $_ -match [regex]::Escape($expectedHostname) })
+    if (@($peerLine).Count -gt 0) {
+        Write-Host "  joined: $($peerLine[0].Trim())" -ForegroundColor Green
+        $joined = $true
+        break
+    }
+    Start-Sleep -Seconds 15
+}
+
+if (-not $joined) {
+    throw ("the host was created but never joined the tailnet within $TailnetJoinTimeoutSeconds seconds. " +
+        "It has no public SSH by design, so recover with:  .\scripts\cloud\breakglass-ssh.ps1  " +
+        "(it opens SSH to your IP only, reads /etc/pagentos/PROVISIONING_FAILED and the cloud-init log, " +
+        "joins the node interactively without an auth key, and closes the rule again). " +
+        "The infrastructure itself is intact - do NOT destroy or re-create it.")
+}
+
+Write-Host ""
+Write-Host "Provisioned and reachable over the tailnet." -ForegroundColor Green
+Write-Host "Next: copy this repository to the host and run  sudo ./scripts/cloud/deploy-cloud-core.sh"
+
+Write-Host ""
