@@ -77,6 +77,13 @@ public static class DpapiSecretStore
     public static string DecodeSecureString(string hex)
     {
         var blob = Convert.FromHexString(hex.Trim());
+        if (blob.Length == 0)
+        {
+            // CryptUnprotectData reports an empty blob as Win32 error 87 (invalid
+            // parameter), which reads like a crypto failure; say what it really is.
+            throw new ArgumentException("empty DPAPI blob: nothing to decode", nameof(hex));
+        }
+
         var plain = Unprotect(blob);
         try
         {
