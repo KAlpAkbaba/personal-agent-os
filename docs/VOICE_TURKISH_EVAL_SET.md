@@ -67,3 +67,63 @@ Input table:
 | Browser Agent | Uyarı | 1,8 sn |
 
 Expected style: explain the important finding in natural Turkish, not literal cell-by-cell dumping unless requested.
+
+## M12 realtime additions (2026-09-02)
+
+Machine-readable form: `services/api/app/voice/datasets.py` (`M12_TERMINOLOGY`,
+`M12_TERMINOLOGY_CASES`, `TURKISH_PHONETICS_CASES`, `HESITATION_CASES`,
+`M12_INTENT_UTTERANCES`). Acceptance for these is real-only (ACCEPTANCE_TESTS §M12):
+the owner listens on the owner's machine; the deterministic gate only proves the sets
+exist, cover the list and agree with the normaliser and the intent resolver.
+
+### Mixed Turkish-English terminology (must be benchmarked on at least these)
+
+PagentOS, Tailscale, Hetzner, PostgreSQL, PowerShell, FortiGate, OpenAI, Claude,
+Windows, Kubernetes, Redis, Temporal.
+
+33. PagentOS, Tailscale üzerinden Hetzner'daki PostgreSQL veritabanına bağlanıyor.
+34. PowerShell betiği FortiGate yapılandırmasını Windows makinesinden okudu.
+35. OpenAI ve Claude modellerini aynı görevde karşılaştırdım.
+36. Kubernetes kümesinde Redis önbellek, Temporal ise iş akışlarını yönetiyor.
+
+Expected style: each term pronounced as a Turkish speaker naturally says the product
+name (no letter-by-letter spelling, no anglicised vowel reduction of the Turkish words
+around it); the Turkish suffix attaches with the correct vowel harmony
+("Hetzner'daki", "PostgreSQL'e").
+
+### Turkish characters and phonetics: ı İ ğ ş ç ö ü
+
+37. Işık ılık, İstanbul'da ıslık çaldı.  (ı vs i; İ capital dotted)
+38. Ağaç yağmurda eğildi, dağ sisle örtüldü.  (ğ lengthening, never a hard g)
+39. Şişli'de şaşırtıcı bir çarşı gördüm.  (ş)
+40. Çocuklar çiçekli bahçede koşuyor.  (ç)
+41. Öğle vakti gölde ördekler yüzüyordu.  (ö, ğ)
+42. Üzüm, üç gün üst üste güneş gördü.  (ü)
+
+### Hesitation set (semantic end-of-turn; false-barge rate is measured on this)
+
+The assistant must NOT take the turn at the "…" — the owner is still speaking.
+
+43. şey… raporun ikinci bölümünü bir daha oku
+44. yani… aslında sadece OpenAI kısmına bak
+45. hani şu… Tailscale ayarını değiştirdiğimiz gün
+46. ııı… toplantıyı yarına al
+47. bir de… eee… özet geç ama maliyet kısmını atla
+48. PostgreSQL'e… yani veritabanına bakar mısın
+
+### Realtime control intents (resolved in Cloud Core, not by keyword alone)
+
+dur (top priority, any state) · devam · tekrar oku · ikinci maddeyi tekrar oku ·
+biraz daha yavaş · biraz daha hızlı · özet geç · detaya gir · burayı atla.
+
+Negatives that must not stop: "Durum raporunu oku", "yeterli değil", "kesin bilgi ver",
+"susuz kaldım" — matching is on tokens and meaning, never substrings.
+
+### Benchmark targets recorded for the realtime harness (targets, never claims)
+
+barge-in → playback stopped < ~150 ms; end-of-turn → first audible response
+~500–700 ms on short turns; tool preamble and tool-done → resumed speech bounded;
+no audible gap > ~300 ms inside a response; no silence > ~3 s during a tool without a
+preamble. Simulator numbers are gate evidence (`tests/unit/test_realtime_bench.py`);
+the owner's machine produces the acceptance numbers via
+`GET /v1/voice/realtime/sessions/{id}/benchmark`.

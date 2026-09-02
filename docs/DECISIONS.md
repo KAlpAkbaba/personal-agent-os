@@ -1008,3 +1008,59 @@ Decisions:
 7. Provider credentials are owner-provisioned and stored in the existing secret store,
    never in the repository; the credential ask is deferred until the real-provider adapter
    exists behind the abstraction and a fake-provider run already passes.
+
+## ADR-0035 — M12 tracks A+E: session service, simulator and harness decisions (2026-09-02)
+
+Status: Accepted (reversible implementation decisions under ADR-0034)
+
+Context: M12 tracks A (server core) and E (intent resolver, narration bridge,
+benchmark harness) were built offline against a deterministic full-duplex simulator
+before any real speech-to-speech adapter exists. Several choices were not fixed by
+the spec; they are recorded here so tracks B/C/D and the owner can revisit them.
+
+Decisions:
+
+1. **Capability defaults are "not offered".** The M12 fields on
+   `ProviderCapabilities` default to false/empty/`silence`/`n/a`, so every M4
+   TTS/STT adapter keeps working unchanged and can never be selected for
+   `ConversationRealtime` by accident. Selection (`app/voice/selection.py`) is a
+   pure function: hard requirement first, then semantic end-of-turn, then WebRTC,
+   then the configured `voice_realtime_provider_preference`, then the name.
+2. **The simulator is a real provider, not a mock.** `app/voice/simulator.py`
+   implements the full `RealtimeProvider`/`RealtimeSessionHandle` contract on a
+   virtual clock and embeds the M4 control FSM, so its ordering semantics and
+   `STOP_WORDS` are reused rather than re-implemented. It declares transport
+   `simulated` only, so a WebRTC-capable real adapter outranks it automatically.
+3. **Audit goes to the shared `audit_events` table** (category `voice_realtime`,
+   actions `voice_*`), not a new table: one place to query, the existing 4 KB bound,
+   plus a scrubber that refuses audio/credential/transcript-shaped keys. Transcript
+   text is never audited — only the resolved intent and character count.
+4. **`call_id` is unique per session**, not globally: provider call ids are
+   provider-scoped, and a global constraint would let one session's id collide with
+   another's. The API is idempotent on `(session_id, call_id)`; PostgreSQL enforces it.
+5. **The media leg is owned by one owner API session at a time.** Tool calls and
+   events are accepted only from the owner session holding the current leg; `attach`
+   moves the leg, mints a fresh credential, tells the previous client (`leg_closed`,
+   best effort) and replays queued sideband messages. A web client with no device
+   socket receives sideband messages in its next `/events` response or on `attach`
+   (queued on the session record, bounded at 50).
+6. **One `context_json` column** carries the open plan, the pending sideband queue,
+   last intent, presentation level and counters, rather than a column per concern;
+   `plan_id` and `narration_session_id` stay as first-class columns for queries.
+7. **Provisional targets for the metrics the spec leaves open**: mic→uplink
+   ≤ 120 ms, tool preamble ≤ 1000 ms, tool-done→speech ≤ 1000 ms, audible gap
+   ≤ 300 ms, tool silence ≤ 3000 ms. They are recorded in every report with their
+   basis and are PersonalAgentOS targets, never claims; the two spec targets (150 ms
+   barge-in, 500–700 ms first audio) are labelled as ADR-0034.
+8. **"ikinci madde" counts content items, not blocks.** Headings are navigation
+   structure; the intent bridge maps the n-th item to the n-th non-heading paragraph.
+   The M4 `MADDEYE_GEC` command (which counts blocks) is unchanged for its callers.
+9. **Hesitation guard is provider-side in the simulator and client-side for real
+   providers** (spec §5); the harness measures the false-barge rate on the
+   hesitation set in both cases.
+
+Consequences: track B registers its adapter in `RealtimeVoiceRuntime.providers`
+and is selected only if its declared capabilities beat the simulator; tracks C/D
+implement the create → media → tool relay → events → attach contract in
+`app/voice/realtime_sessions/routes.py`; the owner's acceptance numbers come from
+`GET /v1/voice/realtime/sessions/{id}/benchmark`, never from the simulator.

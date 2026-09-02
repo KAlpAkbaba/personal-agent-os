@@ -1,0 +1,758 @@
+"""Realtime session transactions (M12 spec §4, §6, §7, §9).
+
+Every function takes the SQLAlchemy ``Session`` first and owns its commit, like
+the other service modules. Every step writes a ``voice_*`` audit row into the
+shared ``audit_events`` table (category ``voice_realtime``) with ids and
+timings only: the metadata scrubber refuses any key that smells like audio or
+a credential, and no function here ever receives the provider secret after it
+has been handed to the client once.
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from app.broker.audit import record_audit_event
+from app.identity.service import SessionContext
+from app.logging import get_logger
+from app.narration import service as narration_service
+from app.narration.commands import NarrationState, State
+from app.voice import service as voice_service
+from app.voice.errors import VoiceError, VoiceErrorClass
+from app.voice.intents import ResolvedIntent, resolve_intent
+from app.voice.providers import EphemeralCredential, RealtimeProvider
+from app.voice.realtime import RealtimeState
+from app.voice.realtime_bench import (
+    SOURCE_CLIENT,
+    TIMING_EVENT_KINDS,
+    RealtimeBenchReport,
+    build_report,
+    events_from_client_reports,
+)
+from app.voice.realtime_sessions.models import (
+    REALTIME_STATE_ACTIVE,
+    REALTIME_STATE_CLOSED,
+    REALTIME_STATE_CREATED,
+    REALTIME_STATE_EXPIRED,
+    TOOL_STATUS_FAILED,
+    TOOL_STATUS_RUNNING,
+    TOOL_STATUS_SUCCEEDED,
+    RealtimeSessionRow,
+    RealtimeToolCall,
+)
+from app.voice.realtime_sessions.persona import build_instructions
+from app.voice.realtime_sessions.sideband import (
+    SB_LEG_CLOSED,
+    SB_TOOL_COMPLETED,
+    SidebandPusher,
+    sideband_frame,
+)
+from app.voice.realtime_sessions.tools import ToolContext, ToolRegistry
+
+logger = get_logger("app.voice.realtime_sessions.service")
+
+AUDIT_CATEGORY = "voice_realtime"
+ACTION_SESSION_CREATED = "voice_session_created"
+ACTION_SESSION_ATTACHED = "voice_session_attached"
+ACTION_LEG_CLOSED = "voice_leg_closed"
+ACTION_SESSION_CLOSED = "voice_session_closed"
+ACTION_SESSION_EXPIRED = "voice_session_expired"
+ACTION_CREDENTIAL_MINTED = "voice_credential_minted"
+ACTION_TOOL_CALL = "voice_tool_call"
+ACTION_TOOL_CALL_REPLAYED = "voice_tool_call_replayed"
+ACTION_TOOL_COMPLETED = "voice_tool_completed"
+ACTION_CLIENT_EVENT = "voice_client_event"
+ACTION_INTENT_RESOLVED = "voice_intent_resolved"
+ACTION_SIDEBAND_QUEUED = "voice_sideband_queued"
+ACTION_SIDEBAND_PUSHED = "voice_sideband_pushed"
+
+#: client-reported event kinds accepted by POST .../events
+STATE_EVENT_KINDS = ("utterance", "summary", "intent", "state", "error")
+CLIENT_EVENT_KINDS = TIMING_EVENT_KINDS + STATE_EVENT_KINDS
+
+MAX_PENDING_SIDEBAND = 50
+MAX_SUMMARY_CHARS = 2000
+
+#: Any metadata key containing one of these never reaches an audit row.
+_FORBIDDEN_KEY_PARTS = ("audio", "pcm", "wave", "secret", "credential", "token", "api_key",
+                        "password", "text", "transcript")
+
+
+def utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
+def _aware(dt: datetime | None, fallback: datetime) -> datetime:
+    """SQLite hands naive datetimes back; treat them as UTC."""
+    if dt is None:
+        return fallback
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+
+
+def _iso(dt: datetime | None) -> str | None:
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+def scrub_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
+    """Ids and timings only: drop forbidden keys, bytes, and long strings."""
+    out: dict[str, Any] = {}
+    for key, value in (metadata or {}).items():
+        lowered = str(key).lower()
+        if any(part in lowered for part in _FORBIDDEN_KEY_PARTS):
+            continue
+        if isinstance(value, bytes | bytearray):
+            continue
+        if isinstance(value, str):
+            out[key] = value[:256]
+        elif isinstance(value, dict):
+            out[key] = scrub_metadata(value)
+        elif isinstance(value, list | tuple):
+            out[key] = [v for v in value if not isinstance(v, bytes | bytearray)][:50]
+        else:
+            out[key] = value
+    return out
+
+
+def _audit(
+    db: Session, action: str, row: RealtimeSessionRow | None, *,
+    trace_id: str | None = None, metadata: dict[str, Any] | None = None,
+) -> None:
+    record_audit_event(
+        db,
+        category=AUDIT_CATEGORY,
+        action=action,
+        subject_ref=str(row.id) if row is not None else None,
+        device_id=row.device_id if row is not None else None,
+        trace_id=trace_id,
+        metadata=scrub_metadata(metadata),
+    )
+
+
+# ---------------------------------------------------------------- sessions
+
+
+def get_session(db: Session, session_id: uuid.UUID) -> RealtimeSessionRow | None:
+    return db.get(RealtimeSessionRow, session_id)
+
+
+def require_live(db: Session, row: RealtimeSessionRow, *, now: datetime | None = None,
+                 trace_id: str | None = None) -> RealtimeSessionRow:
+    """Refuse a closed/expired session; lazily mark expiry."""
+    now = now or utcnow()
+    if row.state in (REALTIME_STATE_CLOSED, REALTIME_STATE_EXPIRED):
+        raise VoiceError(VoiceErrorClass.VALIDATION_ERROR, f"session is {row.state}",
+                         details={"state": row.state})
+    expires = row.expires_at if row.expires_at.tzinfo else row.expires_at.replace(tzinfo=UTC)
+    if expires <= now:
+        row.state = REALTIME_STATE_EXPIRED
+        row.closed_at = now
+        row.updated_at = now
+        _audit(db, ACTION_SESSION_EXPIRED, row, trace_id=trace_id,
+               metadata={"expires_at": _iso(row.expires_at)})
+        db.commit()
+        raise VoiceError(VoiceErrorClass.VALIDATION_ERROR, "session has expired",
+                         details={"state": REALTIME_STATE_EXPIRED})
+    return row
+
+
+def require_leg(row: RealtimeSessionRow, owner: SessionContext) -> None:
+    """Tool execution and events are accepted only from the owner API session
+    that holds the CURRENT media leg (spec §9; attach moves the leg)."""
+    if row.owner_session_id != owner.session_id:
+        raise VoiceError(
+            VoiceErrorClass.VALIDATION_ERROR,
+            "this owner session does not hold the session's current media leg; attach first",
+            details={"leg": "mismatch"},
+        )
+
+
+def mint_credential(
+    provider: RealtimeProvider, *, session_id: uuid.UUID, ttl_s: int, transport: str,
+) -> EphemeralCredential:
+    """Through the adapter interface only: the runtime never reads a vendor key here."""
+    return provider.mint_credential(session_id=str(session_id), ttl_s=ttl_s, transport=transport)
+
+
+def create_session(
+    db: Session,
+    *,
+    owner: SessionContext,
+    provider: RealtimeProvider,
+    transport: str,
+    client_kind: str | None = None,
+    device_id: uuid.UUID | None = None,
+    language: str = "tr-TR",
+    session_ttl_s: int = 3600,
+    credential_ttl_s: int = 600,
+    narration_session_id: uuid.UUID | None = None,
+    registry: ToolRegistry,
+    selection: dict[str, Any] | None = None,
+    trace_id: str | None = None,
+) -> tuple[RealtimeSessionRow, EphemeralCredential, dict[str, Any]]:
+    """Spec §4 step 1. Returns the row, the one-time credential and the
+    client payload (session id, provider, transport, tools, instructions)."""
+    now = utcnow()
+    if narration_session_id is not None:
+        if narration_service.get_session(db, narration_session_id) is None:
+            raise VoiceError(VoiceErrorClass.VALIDATION_ERROR,
+                             "narration_session_id does not exist")
+    row = RealtimeSessionRow(
+        provider=provider.name,
+        transport=transport,
+        client_kind=(client_kind or owner.client_kind)[:16],
+        device_id=device_id if device_id is not None else owner.device_id,
+        owner_session_id=owner.session_id,
+        language=language,
+        state=REALTIME_STATE_CREATED,
+        narration_session_id=narration_session_id,
+        context_json={
+            "narration_session_id": str(narration_session_id) if narration_session_id else None,
+            "pending_sideband": [],
+            "fsm_state": RealtimeState.IDLE.value,
+            "barge_in_count": 0,
+            "legs": 1,
+            "selection": selection or {},
+        },
+        transcript_summary="",
+        expires_at=now + timedelta(seconds=session_ttl_s),
+        updated_at=now,
+    )
+    db.add(row)
+    db.flush()
+    credential = mint_credential(provider, session_id=row.id, ttl_s=credential_ttl_s,
+                                 transport=transport)
+    _audit(db, ACTION_SESSION_CREATED, row, trace_id=trace_id, metadata={
+        "provider": row.provider, "transport": row.transport, "client_kind": row.client_kind,
+        "owner_session_id": str(owner.session_id), "expires_at": _iso(row.expires_at),
+        "narration_session_id": row.context_json.get("narration_session_id"),
+        "selection": selection or {},
+    })
+    _audit(db, ACTION_CREDENTIAL_MINTED, row, trace_id=trace_id, metadata={
+        "provider": credential.provider, "session_ref": credential.session_ref,
+        "expires_at": _iso(credential.expires_at), "ttl_s": credential_ttl_s,
+    })
+    db.commit()
+    prefs = voice_service.load_preferences(db)
+    payload = _leg_payload(row, credential, registry=registry, prefs_summary_first=prefs)
+    return row, credential, payload
+
+
+def _leg_payload(
+    row: RealtimeSessionRow, credential: EphemeralCredential, *, registry: ToolRegistry,
+    prefs_summary_first: Any,
+) -> dict[str, Any]:
+    ctx = row.context_json or {}
+    return {
+        "session_id": str(row.id),
+        "provider": row.provider,
+        "transport": row.transport,
+        "credential": credential.to_client_dict(),
+        "tools": registry.manifest(),
+        "instructions": build_instructions(
+            prefs_summary_first, narration_attached=bool(ctx.get("narration_session_id")),
+            plan=ctx.get("plan"), transcript_summary=row.transcript_summary,
+        ),
+        "language": row.language,
+        "expires_at": _iso(row.expires_at),
+        "state": row.state,
+    }
+
+
+def session_state(db: Session, row: RealtimeSessionRow) -> dict[str, Any]:
+    """The continuity state (spec §7). Never includes a credential."""
+    ctx = row.context_json or {}
+    narration: dict[str, Any] | None = None
+    if row.narration_session_id is not None:
+        nrow = narration_service.get_session(db, row.narration_session_id)
+        if nrow is not None:
+            cursor = {k: v for k, v in (nrow.semantic_cursor_json or {}).items()
+                      if k != "_state"}
+            narration = {"narration_session_id": str(nrow.id), "state": nrow.state,
+                         "speed": nrow.speed, "cursor": cursor,
+                         "artifact_id": str(nrow.artifact_id)}
+    return {
+        "session_id": str(row.id),
+        "provider": row.provider,
+        "transport": row.transport,
+        "client_kind": row.client_kind,
+        "device_id": str(row.device_id) if row.device_id else None,
+        "state": row.state,
+        "language": row.language,
+        "plan": ctx.get("plan"),
+        "plan_id": str(row.plan_id) if row.plan_id else None,
+        "narration": narration,
+        "presentation": ctx.get("presentation"),
+        "last_intent": ctx.get("last_intent"),
+        "fsm_state": ctx.get("fsm_state"),
+        "barge_in_count": int(ctx.get("barge_in_count", 0)),
+        "network": ctx.get("network"),
+        "legs": int(ctx.get("legs", 1)),
+        "pending_sideband_count": len(ctx.get("pending_sideband") or []),
+        "transcript_summary": row.transcript_summary,
+        "created_at": _iso(row.created_at),
+        "expires_at": _iso(row.expires_at),
+        "closed_at": _iso(row.closed_at),
+    }
+
+
+def _touch(row: RealtimeSessionRow, now: datetime) -> None:
+    if row.state == REALTIME_STATE_CREATED:
+        row.state = REALTIME_STATE_ACTIVE
+    row.updated_at = now
+
+
+def _set_context(row: RealtimeSessionRow, ctx: dict[str, Any]) -> None:
+    # Reassign so SQLAlchemy sees a changed JSON value (no MutableDict here).
+    row.context_json = dict(ctx)
+
+
+# ---------------------------------------------------------------- sideband
+
+
+def _deliver(
+    db: Session, row: RealtimeSessionRow, ctx: dict[str, Any], sideband: SidebandPusher,
+    event: str, payload: dict[str, Any], *, trace_id: str | None,
+) -> bool:
+    frame = sideband_frame(row.id, event, payload)
+    delivered = sideband.push(device_id=row.device_id, frame=frame)
+    if delivered:
+        _audit(db, ACTION_SIDEBAND_PUSHED, row, trace_id=trace_id,
+               metadata={"event": event, "device_id": str(row.device_id)})
+        return True
+    pending = list(ctx.get("pending_sideband") or [])
+    pending.append(frame)
+    ctx["pending_sideband"] = pending[-MAX_PENDING_SIDEBAND:]
+    _audit(db, ACTION_SIDEBAND_QUEUED, row, trace_id=trace_id,
+           metadata={"event": event, "queued": len(ctx["pending_sideband"])})
+    return False
+
+
+def drain_pending_sideband(row: RealtimeSessionRow) -> list[dict[str, Any]]:
+    ctx = dict(row.context_json or {})
+    pending = list(ctx.get("pending_sideband") or [])
+    ctx["pending_sideband"] = []
+    _set_context(row, ctx)
+    return pending
+
+
+# -------------------------------------------------------------- tool calls
+
+
+def _tool_row_payload(call: RealtimeToolCall, *, preamble: str | None = None,
+                      replayed: bool = False) -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "call_id": call.call_id, "name": call.name, "status": call.status,
+        "long_running": call.long_running, "replayed": replayed,
+    }
+    if call.status == TOOL_STATUS_SUCCEEDED:
+        out["result"] = call.result_json
+    elif call.status == TOOL_STATUS_FAILED:
+        out["error"] = {"error_class": call.error_class, **(call.result_json or {})}
+    elif call.status == TOOL_STATUS_RUNNING:
+        out["result"] = call.result_json
+        if preamble:
+            out["preamble"] = preamble
+    return out
+
+
+def get_tool_call(db: Session, session_id: uuid.UUID, call_id: str) -> RealtimeToolCall | None:
+    return db.execute(
+        select(RealtimeToolCall).where(
+            RealtimeToolCall.session_id == session_id, RealtimeToolCall.call_id == call_id
+        )
+    ).scalar_one_or_none()
+
+
+def handle_tool_call(
+    db: Session,
+    row: RealtimeSessionRow,
+    *,
+    owner: SessionContext,
+    call_id: str,
+    name: str,
+    arguments: dict[str, Any],
+    registry: ToolRegistry,
+    sideband: SidebandPusher,
+    trace_id: str | None = None,
+) -> dict[str, Any]:
+    """Spec §4 step 3. Idempotent on ``call_id`` per session: a replay returns
+    the recorded outcome and executes nothing."""
+    now = utcnow()
+    require_live(db, row, now=now, trace_id=trace_id)
+    require_leg(row, owner)
+    existing = get_tool_call(db, row.id, call_id)
+    if existing is not None:
+        spec = registry.get(existing.name)
+        _audit(db, ACTION_TOOL_CALL_REPLAYED, row, trace_id=trace_id,
+               metadata={"call_id": call_id, "name": existing.name, "status": existing.status})
+        db.commit()
+        return _tool_row_payload(existing, preamble=spec.preamble if spec else None,
+                                 replayed=True)
+
+    spec = registry.get(name)
+    call = RealtimeToolCall(
+        session_id=row.id, call_id=call_id, name=name, arguments_json=dict(arguments),
+        status=TOOL_STATUS_RUNNING, long_running=bool(spec and spec.long_running),
+    )
+    db.add(call)
+    try:
+        db.flush()
+    except IntegrityError:
+        # Lost a race with the same call_id: replay the winner's outcome.
+        db.rollback()
+        winner = get_tool_call(db, row.id, call_id)
+        if winner is None:  # pragma: no cover - only on a genuine DB fault
+            raise
+        return _tool_row_payload(winner, replayed=True)
+
+    ctx = dict(row.context_json or {})
+    tool_ctx = ToolContext(
+        session_id=row.id, owner_session_id=owner.session_id, device_id=row.device_id,
+        client_kind=row.client_kind, context=ctx, db=db, now=now,
+    )
+    started = utcnow()
+    preamble: str | None = None
+    if spec is None:
+        call.status = TOOL_STATUS_FAILED
+        call.error_class = VoiceErrorClass.CAPABILITY_MISSING.value
+        call.result_json = {"message": f"unknown tool {name!r}",
+                            "available": registry.names()}
+        call.completed_at = utcnow()
+    else:
+        try:
+            result = spec.handler(tool_ctx, dict(arguments))
+        except VoiceError as exc:
+            call.status = TOOL_STATUS_FAILED
+            call.error_class = exc.error_class.value
+            call.result_json = {"message": exc.message, "details": exc.details}
+            call.completed_at = utcnow()
+        except Exception as exc:  # noqa: BLE001 - a tool bug must not kill the session
+            logger.exception("voice_tool_handler_crashed", tool=name, call_id=call_id)
+            call.status = TOOL_STATUS_FAILED
+            call.error_class = VoiceErrorClass.INTERNAL_BUG.value
+            call.result_json = {"message": f"{type(exc).__name__}"}
+            call.completed_at = utcnow()
+        else:
+            if spec.long_running:
+                call.status = TOOL_STATUS_RUNNING
+                call.result_json = result
+                preamble = spec.preamble
+                plan = ctx.get("plan") or {}
+                if plan.get("plan_id"):
+                    row.plan_id = uuid.UUID(str(plan["plan_id"]))
+            else:
+                call.status = TOOL_STATUS_SUCCEEDED
+                call.result_json = result
+                call.completed_at = utcnow()
+    duration_ms = int((utcnow() - started).total_seconds() * 1000)
+    for event, payload in tool_ctx.pushes:
+        _deliver(db, row, ctx, sideband, event, payload, trace_id=trace_id)
+    _set_context(row, ctx)
+    _touch(row, now)
+    _audit(db, ACTION_TOOL_CALL, row, trace_id=trace_id, metadata={
+        "call_id": call_id, "name": name, "status": call.status,
+        "long_running": call.long_running, "duration_ms": duration_ms,
+        "error_class": call.error_class, "plan_id": str(row.plan_id) if row.plan_id else None,
+        "preamble_chars": len(preamble or ""),
+    })
+    db.commit()
+    return _tool_row_payload(call, preamble=preamble)
+
+
+def complete_tool_call(
+    db: Session,
+    row: RealtimeSessionRow,
+    *,
+    call_id: str,
+    result: dict[str, Any] | None,
+    error: dict[str, Any] | None,
+    sideband: SidebandPusher,
+    trace_id: str | None = None,
+) -> dict[str, Any]:
+    """A long-running tool finished (worker/pipeline side). Records the outcome
+    and pushes ``tool_completed`` over the sideband so the client can submit
+    the final output to the provider (spec §4 step 3-4)."""
+    now = utcnow()
+    call = get_tool_call(db, row.id, call_id)
+    if call is None:
+        raise VoiceError(VoiceErrorClass.VALIDATION_ERROR, f"unknown tool call {call_id!r}")
+    if call.status != TOOL_STATUS_RUNNING:
+        raise VoiceError(VoiceErrorClass.VALIDATION_ERROR,
+                         f"tool call {call_id!r} is already {call.status}",
+                         details={"status": call.status})
+    if error:
+        call.status = TOOL_STATUS_FAILED
+        call.error_class = str(error.get("error_class") or VoiceErrorClass.DEPENDENCY_UNAVAILABLE)
+        call.result_json = {"message": str(error.get("message") or "")[:2000]}
+    else:
+        call.status = TOOL_STATUS_SUCCEEDED
+        call.result_json = dict(result or {})
+    call.completed_at = now
+    ctx = dict(row.context_json or {})
+    plan = ctx.get("plan")
+    if plan and str(plan.get("plan_id")) == (str(row.plan_id) if row.plan_id else None):
+        plan = dict(plan)
+        plan["status"] = "completed" if call.status == TOOL_STATUS_SUCCEEDED else "failed"
+        ctx["plan"] = plan
+    payload = {"call_id": call.call_id, "name": call.name, "status": call.status,
+               "result": call.result_json if call.status == TOOL_STATUS_SUCCEEDED else None,
+               "error": ({"error_class": call.error_class, **(call.result_json or {})}
+                         if call.status == TOOL_STATUS_FAILED else None)}
+    delivered = _deliver(db, row, ctx, sideband, SB_TOOL_COMPLETED, payload, trace_id=trace_id)
+    _set_context(row, ctx)
+    row.updated_at = now
+    _audit(db, ACTION_TOOL_COMPLETED, row, trace_id=trace_id, metadata={
+        "call_id": call_id, "name": call.name, "status": call.status,
+        "delivered": delivered, "error_class": call.error_class,
+        "running_ms": int((now - _aware(call.created_at, now)).total_seconds() * 1000),
+    })
+    db.commit()
+    return {**payload, "delivered": delivered}
+
+
+# ------------------------------------------------------------ client events
+
+
+def _narration_state_for(db: Session, row: RealtimeSessionRow) -> NarrationState | None:
+    if row.narration_session_id is None:
+        return None
+    nrow = narration_service.get_session(db, row.narration_session_id)
+    if nrow is None:
+        return None
+    try:
+        return NarrationState(state=State(nrow.state), speed=nrow.speed)
+    except ValueError:
+        return None
+
+
+def record_client_events(
+    db: Session,
+    row: RealtimeSessionRow,
+    *,
+    owner: SessionContext,
+    events: list[dict[str, Any]],
+    trace_id: str | None = None,
+) -> dict[str, Any]:
+    """Spec §4 step 5: timing events (benchmark) and state transitions (audit).
+
+    Timing events are stored as audit rows and later assembled into a report;
+    ``utterance`` events are resolved into intents HERE (Cloud Core resolves,
+    the client only transcribes) and the intent — not the text — is audited.
+    """
+    now = utcnow()
+    require_live(db, row, now=now, trace_id=trace_id)
+    require_leg(row, owner)
+    ctx = dict(row.context_json or {})
+    resolved: list[dict[str, Any]] = []
+    narration_state = None
+    accepted = 0
+    for ev in events:
+        kind = str(ev.get("kind"))
+        if kind not in CLIENT_EVENT_KINDS:
+            continue
+        payload = dict(ev.get("payload") or {})
+        t_ms = int(ev.get("t_ms", 0))
+        turn = int(ev.get("turn") or 0)
+        meta: dict[str, Any] = {"kind": kind, "t_ms": t_ms, "turn": turn}
+        if kind == "utterance":
+            if narration_state is None:
+                narration_state = _narration_state_for(db, row)
+            text = str(ev.get("text") or payload.get("utterance") or "")
+            fsm = ctx.get("fsm_state")
+            intent: ResolvedIntent = resolve_intent(
+                text, session_state=RealtimeState(fsm) if fsm else None,
+                narration=narration_state,
+            )
+            ctx["last_intent"] = intent.intent.value
+            resolved.append({"t_ms": t_ms, "turn": turn, **intent.to_dict(),
+                             "normalized_text": None})
+            meta.update({"intent": intent.intent.value, "scope": intent.scope,
+                         "target_index": intent.target_index, "chars": len(text),
+                         "fillers_removed": intent.fillers_removed})
+            _audit(db, ACTION_INTENT_RESOLVED, row, trace_id=trace_id, metadata=meta)
+            accepted += 1
+            continue
+        if kind == "summary":
+            row.transcript_summary = str(ev.get("text") or "")[:MAX_SUMMARY_CHARS]
+            meta["chars"] = len(row.transcript_summary)
+        elif kind == "state":
+            state = str(payload.get("state") or "")
+            if state in RealtimeState.__members__:
+                ctx["fsm_state"] = state
+                meta["state"] = state
+        elif kind == "barge_in_start":
+            ctx["barge_in_count"] = int(ctx.get("barge_in_count", 0)) + 1
+        elif kind == "network_lost":
+            ctx["network"] = "lost"
+        elif kind == "network_restored":
+            ctx["network"] = "restored"
+        elif kind == "error":
+            meta["error_class"] = str(payload.get("error_class") or "")[:64]
+        meta["payload"] = payload
+        _audit(db, ACTION_CLIENT_EVENT, row, trace_id=trace_id, metadata=meta)
+        accepted += 1
+    pending = list(ctx.get("pending_sideband") or [])
+    ctx["pending_sideband"] = []
+    _set_context(row, ctx)
+    _touch(row, now)
+    db.commit()
+    return {"accepted": accepted, "resolved_intents": resolved, "pending_sideband": pending,
+            "state": session_state(db, row)}
+
+
+# ---------------------------------------------------------------- continuity
+
+
+def attach(
+    db: Session,
+    row: RealtimeSessionRow,
+    *,
+    owner: SessionContext,
+    provider: RealtimeProvider,
+    registry: ToolRegistry,
+    sideband: SidebandPusher,
+    client_kind: str | None = None,
+    device_id: uuid.UUID | None = None,
+    transport: str | None = None,
+    credential_ttl_s: int = 600,
+    trace_id: str | None = None,
+) -> dict[str, Any]:
+    """Spec §7: a new client takes over the session. The previous media leg is
+    told it is closed (sideband, best effort), the leg moves to the caller's
+    owner session, a fresh credential is minted, and the continuity state +
+    queued sideband messages are returned."""
+    now = utcnow()
+    require_live(db, row, now=now, trace_id=trace_id)
+    if provider.name != row.provider:
+        raise VoiceError(VoiceErrorClass.CAPABILITY_MISSING,
+                         f"session was opened on provider {row.provider!r}, "
+                         f"which is no longer selectable", provider=provider.name)
+    ctx = dict(row.context_json or {})
+    previous = {"owner_session_id": str(row.owner_session_id),
+                "device_id": str(row.device_id) if row.device_id else None,
+                "client_kind": row.client_kind}
+    same_leg = row.owner_session_id == owner.session_id
+    if not same_leg:
+        frame = sideband_frame(row.id, SB_LEG_CLOSED, {"reason": "attached_elsewhere",
+                                                       "new_client_kind": client_kind
+                                                       or owner.client_kind})
+        sideband.push(device_id=row.device_id, frame=frame)
+        _audit(db, ACTION_LEG_CLOSED, row, trace_id=trace_id, metadata=previous)
+    row.owner_session_id = owner.session_id
+    row.client_kind = (client_kind or owner.client_kind)[:16]
+    row.device_id = device_id if device_id is not None else owner.device_id
+    if transport:
+        row.transport = transport
+    ctx["legs"] = int(ctx.get("legs", 1)) + (0 if same_leg else 1)
+    ctx["network"] = "restored" if ctx.get("network") == "lost" else ctx.get("network")
+    pending = list(ctx.get("pending_sideband") or [])
+    ctx["pending_sideband"] = []
+    _set_context(row, ctx)
+    _touch(row, now)
+    credential = mint_credential(provider, session_id=row.id, ttl_s=credential_ttl_s,
+                                 transport=row.transport)
+    _audit(db, ACTION_CREDENTIAL_MINTED, row, trace_id=trace_id, metadata={
+        "provider": credential.provider, "session_ref": credential.session_ref,
+        "expires_at": _iso(credential.expires_at), "ttl_s": credential_ttl_s, "leg": ctx["legs"],
+    })
+    _audit(db, ACTION_SESSION_ATTACHED, row, trace_id=trace_id, metadata={
+        "owner_session_id": str(owner.session_id), "client_kind": row.client_kind,
+        "device_id": str(row.device_id) if row.device_id else None,
+        "same_leg": same_leg, "legs": ctx["legs"], "pending_sideband": len(pending),
+    })
+    db.commit()
+    prefs = voice_service.load_preferences(db)
+    payload = _leg_payload(row, credential, registry=registry, prefs_summary_first=prefs)
+    payload["state"] = session_state(db, row)
+    payload["pending_sideband"] = pending
+    payload["previous_leg"] = previous if not same_leg else None
+    return payload
+
+
+def close_session(
+    db: Session, row: RealtimeSessionRow, *, reason: str = "client_closed",
+    trace_id: str | None = None,
+) -> dict[str, Any]:
+    now = utcnow()
+    if row.state not in (REALTIME_STATE_CLOSED, REALTIME_STATE_EXPIRED):
+        row.state = REALTIME_STATE_CLOSED
+        row.closed_at = now
+        row.updated_at = now
+        created = _aware(row.created_at, now)
+        _audit(db, ACTION_SESSION_CLOSED, row, trace_id=trace_id, metadata={
+            "reason": reason[:64], "lifetime_ms": int((now - created).total_seconds() * 1000),
+            "barge_in_count": int((row.context_json or {}).get("barge_in_count", 0)),
+        })
+        db.commit()
+    return {"session_id": str(row.id), "state": row.state, "closed_at": _iso(row.closed_at)}
+
+
+# ---------------------------------------------------------------- benchmark
+
+
+def client_timing_rows(db: Session, session_id: uuid.UUID) -> list[dict[str, Any]]:
+    from app.broker.models import AuditEvent
+
+    rows = db.execute(
+        select(AuditEvent).where(
+            AuditEvent.category == AUDIT_CATEGORY,
+            AuditEvent.action == ACTION_CLIENT_EVENT,
+            AuditEvent.subject_ref == str(session_id),
+        ).order_by(AuditEvent.id)
+    ).scalars()
+    return [dict(r.metadata_json or {}) for r in rows]
+
+
+def benchmark_report(db: Session, row: RealtimeSessionRow) -> RealtimeBenchReport:
+    """The five metrics from the CLIENT's reported timestamps (spec §8):
+    acceptance evidence when the client is the owner's real machine."""
+    events = events_from_client_reports(client_timing_rows(db, row.id))
+    return build_report(
+        events, source=SOURCE_CLIENT,
+        context={"session_id": str(row.id), "provider": row.provider,
+                 "transport": row.transport, "client_kind": row.client_kind},
+    )
+
+
+__all__ = [
+    "ACTION_CLIENT_EVENT",
+    "ACTION_CREDENTIAL_MINTED",
+    "ACTION_INTENT_RESOLVED",
+    "ACTION_LEG_CLOSED",
+    "ACTION_SESSION_ATTACHED",
+    "ACTION_SESSION_CLOSED",
+    "ACTION_SESSION_CREATED",
+    "ACTION_SESSION_EXPIRED",
+    "ACTION_SIDEBAND_PUSHED",
+    "ACTION_SIDEBAND_QUEUED",
+    "ACTION_TOOL_CALL",
+    "ACTION_TOOL_CALL_REPLAYED",
+    "ACTION_TOOL_COMPLETED",
+    "AUDIT_CATEGORY",
+    "CLIENT_EVENT_KINDS",
+    "attach",
+    "benchmark_report",
+    "client_timing_rows",
+    "close_session",
+    "complete_tool_call",
+    "create_session",
+    "drain_pending_sideband",
+    "get_session",
+    "get_tool_call",
+    "handle_tool_call",
+    "record_client_events",
+    "require_leg",
+    "require_live",
+    "scrub_metadata",
+    "session_state",
+]

@@ -48,6 +48,15 @@ PROTECTED_ENDPOINTS = [
     ("memory-forget", "delete", f"/v1/memory/{MEMORY_ID}"),
     ("voice", "post", "/v1/voice/speaker/enroll"),
     ("voice-preferences", "patch", "/v1/voice/preferences"),
+    # M12: the realtime session surface mints provider credentials and relays
+    # tool calls under the owner session; every verb must be protected.
+    ("voice-realtime-create", "post", "/v1/voice/realtime/sessions"),
+    ("voice-realtime-tool-call", "post", f"/v1/voice/realtime/sessions/{uuid.uuid4()}/tool-calls"),
+    ("voice-realtime-events", "post", f"/v1/voice/realtime/sessions/{uuid.uuid4()}/events"),
+    ("voice-realtime-attach", "post", f"/v1/voice/realtime/sessions/{uuid.uuid4()}/attach"),
+    ("voice-realtime-close", "post", f"/v1/voice/realtime/sessions/{uuid.uuid4()}/close"),
+    ("voice-realtime-state", "get", f"/v1/voice/realtime/sessions/{uuid.uuid4()}"),
+    ("voice-realtime-providers", "get", "/v1/voice/realtime/providers"),
     ("narration", "post", "/v1/narration/sessions"),
     ("narration-pronunciation", "put", "/v1/narration/pronunciation"),
     ("tasks", "post", "/v1/tasks"),
