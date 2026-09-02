@@ -30,6 +30,7 @@ from app.voice.providers_openai_realtime import (
     OPENAI_REALTIME_PROVIDER_NAME,
     OpenAIRealtimeProvider,
 )
+from app.voice.realtime_sessions.contract_version import CONTRACT_VERSION
 from app.voice.realtime_sessions.sideband import BrokerSideband, RecordingSideband, SidebandPusher
 from app.voice.realtime_sessions.tools import ToolRegistry, default_registry
 from app.voice.selection import SelectionResult, select_conversation_provider
@@ -197,6 +198,9 @@ class RealtimeVoiceRuntime:
             "status": status,
             "latency_ms": 0.0,
             "environment": self.settings.environment,
+            # The served wire-contract version: the release qualification refuses an
+            # unexpectedly old one (ADR-0045), and a client can tell v1 from v2 here.
+            "contract_version": CONTRACT_VERSION,
             "providers": sorted(self._providers),
             "inactive": dict(self._inactive),
             "selection": selection,

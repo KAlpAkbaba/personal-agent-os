@@ -24,6 +24,10 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from app.voice.realtime_sessions.contract_version import (  # noqa: E402
+    CONTRACT_VERSION,
+    LEGACY_V1_CREATE_FIELDS,
+)
 from app.voice.realtime_sessions.routes import (
     AttachRequest,
     CreateSessionRequest,
@@ -31,12 +35,6 @@ from app.voice.realtime_sessions.routes import (
     ToolCallRequest,
     ToolCompleteRequest,
 )
-
-CONTRACT_VERSION = 2
-#: Fields a version-1 server (the first shipped contract) accepts on create; a
-#: client that gets 404 from the contract endpoint is talking to v1.
-LEGACY_V1_CREATE_FIELDS = ("client_kind", "transport", "language", "narration_session_id",
-                           "session_ttl_s")
 
 _MODELS: dict[str, type[BaseModel]] = {
     "create_session": CreateSessionRequest,

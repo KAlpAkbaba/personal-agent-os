@@ -69,6 +69,9 @@ function New-FakeDockerAndCurl {
         '      *"echo PRESENT"*) if [ -f "$FAKE_STATE/recreated" ]; then echo PRESENT; else echo MISSING; fi;;',
         '      *"wc -c"*) echo 40;;',
         '      *"sha256sum"*) echo abcdef012345;;',
+        '      *"--voice "*)',
+        '        all="$*"; v="${all##*--voice }"; v="${v%% *}"',
+        '        if [ "${FAKE_VOICE_ECHO_WRONG:-0}" = "1" ]; then echo "{\"voice\": \"other\"}"; else echo "{\"voice\": \"$v\"}"; fi;;',
         '      *) if [ -n "${FAKE_SMOKE_EXIT:-}" ]; then echo "vendor refused (Authorization: Bearer nope)" >&2; exit "$FAKE_SMOKE_EXIT"; fi; echo ok;;',
         '    esac; exit 0;;',
         '  compose*" config -q") exit "${FAKE_CONFIG_EXIT:-0}";;',
@@ -88,9 +91,9 @@ function New-FakeDockerAndCurl {
     $curl = @(
         '#!/usr/bin/env bash',
         'if [ -f "$FAKE_STATE/recreated" ] && [ "${FAKE_PROVIDER_LISTED:-1}" = "1" ]; then',
-        '  printf "{\"status\":\"ok\",\"checks\":{\"voice_realtime\":{\"providers\":[\"openai-realtime\",\"simulated\"]}}}"',
+        '  printf "{\"status\":\"ok\",\"checks\":{\"voice_realtime\":{\"contract_version\":%s,\"providers\":[\"openai-realtime\",\"simulated\"]}}}" "${FAKE_CONTRACT_VERSION:-2}"',
         'else',
-        '  printf "{\"status\":\"ok\",\"checks\":{\"voice_realtime\":{\"providers\":[]}}}"',
+        '  printf "{\"status\":\"ok\",\"checks\":{\"voice_realtime\":{\"contract_version\":%s,\"providers\":[]}}}" "${FAKE_CONTRACT_VERSION:-2}"',
         'fi'
     )
     [IO.File]::WriteAllText((Join-Path $Directory "docker"), (($docker -join "`n") + "`n"))

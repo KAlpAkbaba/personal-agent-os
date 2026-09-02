@@ -86,6 +86,8 @@ function Reset-Host {
     New-Item -ItemType Directory -Force -Path (Join-Path $hostBase "app.next\infra\docker"), (Join-Path $hostBase "app.next\scripts\cloud"), (Join-Path $hostBase "state") | Out-Null
     [IO.File]::WriteAllText((Join-Path $hostBase "app.next\infra\docker\docker-compose.prod.yml"), "services: {}`n")
     [IO.File]::WriteAllText((Join-Path $hostBase "app.next\NEW_TREE"), "new`n")
+    New-Item -ItemType Directory -Force -Path (Join-Path $hostBase "app.next\services\api\app\voice\realtime_sessions") | Out-Null
+    [IO.File]::WriteAllText((Join-Path $hostBase "app.next\services\api\app\voice\realtime_sessions\contract_version.py"), "CONTRACT_VERSION = 2`n")
     if ($WithCurrent) {
         New-Item -ItemType Directory -Force -Path (Join-Path $hostBase "app\infra\docker") | Out-Null
         [IO.File]::WriteAllText((Join-Path $hostBase "app\infra\docker\docker-compose.prod.yml"), "services: {}`n")
@@ -193,6 +195,16 @@ try {
         Reset-Host
         $r71 = Invoke-HostRelease -Env @{ FAKE_CONFIG_EXIT = "1" }
         Assert-True ($r71.Exit -eq 71 -and (Test-Path (Join-Path $hostBase "app\OLD_TREE")) -and -not (Test-Path (Join-Path $hostBase "app.next")) -and -not ($r71.Calls -match " up |build")) "invalid compose in the new tree -> exit 71 before anything changes"
+
+        Reset-Host
+        $r73 = Invoke-HostRelease -Env @{ FAKE_CONTRACT_VERSION = "1" }
+        Assert-True ($r73.Exit -eq 73 -and $r73.Output -match "served realtime contract_version is '1', the tree expects '2'" -and (Test-Path (Join-Path $hostBase "app\OLD_TREE"))) "an api serving an OLDER contract than the tree declares -> exit 73 and rollback (the owner's 422)"
+        Reset-Host
+        $r74 = Invoke-HostRelease -Env @{ FAKE_VOICE_ECHO_WRONG = "1" }
+        Assert-True ($r74.Exit -eq 74 -and $r74.Output -match "voice marin: not echoed unchanged" -and (Test-Path (Join-Path $hostBase "app\OLD_TREE"))) "a candidate voice not echoed unchanged by the provider -> exit 74 and rollback"
+        Reset-Host
+        $rv = Invoke-HostRelease
+        Assert-True ($rv.Exit -eq 0 -and $rv.Output -match "contract_version 2 served" -and $rv.Output -match "voice marin: minted and echoed" -and $rv.Output -match "voice cedar: minted and echoed") "a good release proves the contract version and both candidate voices"
 
         Reset-Host -WithKey $false
         $rk = Invoke-HostRelease

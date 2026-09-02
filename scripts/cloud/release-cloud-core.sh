@@ -14,7 +14,9 @@
 #   alembic upgrade head (additive migrations; never downgraded on rollback)
 #   recreate ONLY the api workload (--no-deps --force-recreate --wait)
 #   health on loopback
+#   served realtime contract_version == the tree's CONTRACT_VERSION           73
 #   PAGENTOS_VOICE_OPENAI_API_KEY PRESENT inside the container when the env file has it  68
+#   with the key: marin and cedar each minted and echoed unchanged by the vendor  74
 #   health lists openai-realtime when the key is present                  69
 #   one real provider call from THIS host (realtime_smoke --mode minimal)  70
 # Any failure after the swap rolls back: previous tree and image restored, api recreated.
@@ -105,6 +107,19 @@ case "$health" in
     *) echo "health FAILED on $health_url" >&2; exit 1;;
 esac
 
+# The tree says which wire contract it serves; the running api must say the same. A
+# release that leaves an older contract in production is refused and rolled back.
+version_file="$cur/services/api/app/voice/realtime_sessions/contract_version.py"
+if [ -f "$version_file" ]; then
+    expected_contract="$(grep -oE '^CONTRACT_VERSION[[:space:]]*=[[:space:]]*[0-9]+' "$version_file" | grep -oE '[0-9]+$' || true)"
+    served_contract="$(printf '%s' "$health" | grep -oE '"contract_version":[[:space:]]*[0-9]+' | head -1 | grep -oE '[0-9]+$' || true)"
+    if [ -z "$expected_contract" ] || [ "$served_contract" != "$expected_contract" ]; then
+        echo "served realtime contract_version is '${served_contract:-absent}', the tree expects '${expected_contract:-?}'" >&2
+        exit 73
+    fi
+    echo "realtime contract_version $served_contract served (matches the tree)"
+fi
+
 if [ "$key_on_host" -gt 0 ]; then
     present="$(docker exec "$container" sh -c "printenv $key_name >/dev/null 2>&1 && echo PRESENT || echo MISSING")"
     if [ "$present" != "PRESENT" ]; then
@@ -128,6 +143,20 @@ if [ "$key_on_host" -gt 0 ]; then
         rm -f "$err"
         exit 70
     fi
+    # The owner's A/B candidates must reach the vendor unchanged (ADR-0043): one real
+    # minimal mint per voice; the vendor echoes the session's audio.output.voice.
+    for candidate in marin cedar; do
+        out="$(mktemp)"
+        if docker exec "$container" sh -c "uv run python scripts/realtime_smoke.py --mode minimal --voice $candidate" >"$out" 2>/dev/null \
+           && grep -Eq "\"voice\":[[:space:]]*\"$candidate\"" "$out"; then
+            echo "voice $candidate: minted and echoed unchanged by the provider"
+            rm -f "$out"
+        else
+            echo "voice $candidate: not echoed unchanged by the provider" >&2
+            rm -f "$out"
+            exit 74
+        fi
+    done
 else
     echo "note: $key_name is not on the host; realtime provider verification skipped"
 fi

@@ -134,3 +134,17 @@ def test_real_check_runner_reports_fail_not_raise(monkeypatch) -> None:
     for result in results.values():
         assert result["status"] == "fail"
         assert "ConnectionError" in result["error"]
+
+
+def test_health_serves_the_realtime_contract_version() -> None:
+    # ADR-0045: the release qualification reads this without auth and refuses an old one.
+    from fastapi.testclient import TestClient
+
+    from app.config import Settings
+    from app.main import create_app
+    from app.voice.realtime_sessions.contract_version import CONTRACT_VERSION
+
+    app = create_app(Settings(_env_file=None))
+    with TestClient(app) as client:
+        doc = client.get("/v1/system/health").json()
+    assert doc["checks"]["voice_realtime"]["contract_version"] == CONTRACT_VERSION == 2

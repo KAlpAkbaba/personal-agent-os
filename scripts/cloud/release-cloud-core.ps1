@@ -62,6 +62,8 @@ $exitMeanings = @{
     70  = "the real provider self-test from the host FAILED (see the message above; no secret is shown)"
     71  = "docker compose config is INVALID for this tree; nothing was changed"
     72  = "the host env file is not 600 root:root"
+    73  = "the api came up serving an OLDER realtime contract than the tree declares; rolled back"
+    74  = "a candidate voice (marin/cedar) was not echoed unchanged by the provider; rolled back"
     127 = "the host tree has no scripts/cloud/release-cloud-core.sh (the archive did not extract)"
     255 = "ssh could not reach ${CloudUser}@${BrokerHost} (Tailscale up? key-based auth in BatchMode?)"
 }
@@ -186,7 +188,8 @@ try {
         $checks = Get-OptionalProperty -InputObject $doc -Name "checks"
         $rt = if ($null -ne $checks) { Get-OptionalProperty -InputObject $checks -Name "voice_realtime" } else { $null }
         $providers = if ($null -ne $rt) { @(Get-OptionalProperty -InputObject $rt -Name "providers") } else { @() }
-        Write-Host "verified from this machine over the tailnet: $HealthUrl status=$status realtime providers=[$($providers -join ', ')]"
+        $contract = if ($null -ne $rt) { Get-OptionalProperty -InputObject $rt -Name "contract_version" } else { $null }
+        Write-Host "verified from this machine over the tailnet: $HealthUrl status=$status realtime providers=[$($providers -join ', ')] contract_version=$(if ($null -eq $contract) { 'absent' } else { $contract })"
     }
     Write-Host "RELEASE OK: $short is running on $BrokerHost"
     exit 0

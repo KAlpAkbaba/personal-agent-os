@@ -6,6 +6,12 @@
       "runtimeExecutable": "C:/Users/alpak/AppData/Roaming/npm/pnpm.cmd",
       "runtimeArgs": ["--dir", "apps/web", "dev", "--port", "3000"],
       "port": 3000
+    },
+    {
+      "name": "web-cloud",
+      "runtimeExecutable": "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
+      "runtimeArgs": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/voice/start-web-voice.ps1", "-PnpmPath", "C:/Users/alpak/AppData/Roaming/npm/pnpm.cmd"],
+      "port": 3000
     }
   ]
 }
