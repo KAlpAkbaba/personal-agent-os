@@ -98,7 +98,7 @@ class Settings(BaseSettings):
     # docs (docs/research/realtime-providers-2026-09.md §1.5) and is measured on
     # the owner's machine, never assumed.
     voice_realtime_openai_base_url: str = "https://api.openai.com/v1"
-    voice_realtime_openai_model: str = "gpt-realtime"
+    voice_realtime_openai_model: str = "gpt-realtime-2.1"
     voice_realtime_openai_voice: str = "marin"
     voice_realtime_openai_eagerness: str = "low"  # low | medium | high | auto
     voice_realtime_openai_transcription_model: str = "gpt-4o-transcribe"

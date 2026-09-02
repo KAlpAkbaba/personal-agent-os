@@ -428,6 +428,8 @@ def handle_tool_call(
                                  replayed=True)
 
     spec = registry.get(name)
+    if spec is not None:
+        name = spec.name  # the vendor spelling (research__start) is recorded canonically
     call = RealtimeToolCall(
         session_id=row.id, call_id=call_id, name=name, arguments_json=dict(arguments),
         status=TOOL_STATUS_RUNNING, long_running=bool(spec and spec.long_running),

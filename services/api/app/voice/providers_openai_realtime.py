@@ -37,7 +37,7 @@ import base64
 import binascii
 import json
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -62,6 +62,8 @@ from app.voice.providers import (
     RealtimeSessionEvent,
     _require_key,
     _send,
+    cloud_tool_name,
+    vendor_tool_name,
 )
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -71,6 +73,24 @@ logger = get_logger("app.voice.providers_openai_realtime")
 
 OPENAI_REALTIME_PROVIDER_NAME = "openai-realtime"
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
+#: The qualified Realtime model (owner decision 2026-09-02); overridable via
+#: PAGENTOS_VOICE_REALTIME_OPENAI_MODEL when live model discovery proves a newer one.
+DEFAULT_MODEL = "gpt-realtime-2.1"
+#: The minimal client_secrets contract is exactly
+#:   {"session": {"type": "realtime", "model": ..., "audio": {"output": {"voice": ...}}}}
+#: Everything else is a LAYER, added one at a time so a live smoke can say which
+#: option the vendor refuses. Order = the order the probe adds them.
+SESSION_LAYERS = (
+    "expires_after",       # request-level: expires_after.anchor/seconds
+    "output_modalities",   # session.output_modalities = ["audio"]
+    "audio_formats",       # session.audio.input.format / session.audio.output.format
+    "transcription",       # session.audio.input.transcription
+    "turn_detection",      # session.audio.input.turn_detection = semantic_vad + interrupt
+    "instructions",        # session.instructions (Cloud Core persona)
+    "tools",               # session.tools + tool_choice
+)
+MINIMAL_LAYERS: tuple[str, ...] = ()
+FULL_LAYERS: tuple[str, ...] = SESSION_LAYERS
 
 #: WebRTC events data channel — the vendor requires exactly this name.
 DATA_CHANNEL_NAME = "oai-events"
@@ -154,7 +174,7 @@ def map_tools(manifest: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
         params = entry.get("parameters") or {"type": "object", "properties": {}}
         out.append({
             "type": "function",
-            "name": name,
+            "name": vendor_tool_name(name),
             "description": str(entry.get("description") or ""),
             "parameters": params,
         })
@@ -175,6 +195,14 @@ def _clamp_ttl(ttl_s: int) -> int:
     return max(CREDENTIAL_TTL_MIN_S, min(CREDENTIAL_TTL_MAX_S, int(ttl_s)))
 
 
+def _validate_layers(layers: tuple[str, ...]) -> None:
+    unknown = [layer for layer in layers if layer not in SESSION_LAYERS]
+    if unknown:
+        raise VoiceError(VoiceErrorClass.VALIDATION_ERROR,
+                         f"unknown session layer(s) {unknown}; known: {list(SESSION_LAYERS)}",
+                         provider=OPENAI_REALTIME_PROVIDER_NAME)
+
+
 @dataclass(frozen=True, slots=True)
 class MintResult:
     """``mint()`` output: the client credential plus the vendor's scrubbed
@@ -182,6 +210,8 @@ class MintResult:
 
     credential: EphemeralCredential
     session_echo: dict[str, Any]
+    #: The request body as sent (no headers, so no key); what the smoke prints.
+    request_body: dict[str, Any] = field(default_factory=dict)
 
 
 # ----------------------------------------------------------------- adapter
@@ -196,7 +226,7 @@ class OpenAIRealtimeProvider:
         self,
         api_key: str | None = None,
         *,
-        model: str = "gpt-realtime",
+        model: str = DEFAULT_MODEL,
         voice: str = "marin",
         eagerness: str = "low",
         transcription_model: str = "gpt-4o-transcribe",
@@ -344,8 +374,15 @@ class OpenAIRealtimeProvider:
 
     def build_session_config(
         self, session_config: RealtimeSessionConfig | None = None,
+        *, layers: tuple[str, ...] = FULL_LAYERS,
     ) -> dict[str, Any]:
-        """The ``session`` object of the client_secrets request (GA schema).
+        """The ``session`` object of the client_secrets request (current GA schema).
+
+        With ``layers=MINIMAL_LAYERS`` this is exactly the minimal contract:
+        ``{"type": "realtime", "model": ..., "audio": {"output": {"voice": ...}}}``.
+        Each layer adds one option on top (see ``SESSION_LAYERS``); the live
+        smoke adds them one at a time so an incompatible option is named, not
+        guessed. Full M12 configuration:
 
         - ``turn_detection`` is ``semantic_vad`` (the reason this adapter declares
           ``end_of_turn=semantic``) with the configured eagerness; ``low`` by
@@ -356,48 +393,54 @@ class OpenAIRealtimeProvider:
         - Cloud Core's persona ``instructions`` and tool manifest are baked in
           here, server-side, so a client cannot substitute its own.
         """
+        _validate_layers(layers)
         cfg = session_config or RealtimeSessionConfig()
         language_hint = cfg.language.split("-")[0].lower() if cfg.language else "tr"
-        fmt = _audio_format_object(self._audio_format)
         session: dict[str, Any] = {
             "type": "realtime",
             "model": self._model,
-            "output_modalities": ["audio"],
-            "audio": {
-                "input": {
-                    "format": dict(fmt),
-                    "transcription": {
-                        "model": self._transcription_model,
-                        "language": language_hint,
-                    },
-                    "turn_detection": {
-                        "type": "semantic_vad",
-                        "eagerness": self._eagerness,
-                        "create_response": True,
-                        "interrupt_response": True,
-                    },
-                },
-                "output": {
-                    "format": dict(fmt),
-                    "voice": cfg.voice or self._voice,
-                },
-            },
+            "audio": {"output": {"voice": cfg.voice or self._voice}},
         }
-        if cfg.instructions:
+        if "output_modalities" in layers:
+            session["output_modalities"] = ["audio"]
+        if "audio_formats" in layers:
+            fmt = _audio_format_object(self._audio_format)
+            session["audio"].setdefault("input", {})["format"] = dict(fmt)
+            session["audio"]["output"]["format"] = dict(fmt)
+        if "transcription" in layers:
+            session["audio"].setdefault("input", {})["transcription"] = {
+                "model": self._transcription_model,
+                "language": language_hint,
+            }
+        if "turn_detection" in layers:
+            session["audio"].setdefault("input", {})["turn_detection"] = {
+                "type": "semantic_vad",
+                "eagerness": self._eagerness,
+                "create_response": True,
+                "interrupt_response": True,
+            }
+        if "instructions" in layers and cfg.instructions:
             session["instructions"] = cfg.instructions
-        tools = map_tools(cfg.tools)
-        if tools:
-            session["tools"] = tools
-            session["tool_choice"] = "auto"
+        if "tools" in layers:
+            tools = map_tools(cfg.tools)
+            if tools:
+                session["tools"] = tools
+                session["tool_choice"] = "auto"
         return session
 
     def build_credential_request(
         self, *, session_id: str, ttl_s: int, transport: str,
         session_config: RealtimeSessionConfig | None = None,
+        layers: tuple[str, ...] = FULL_LAYERS,
     ) -> ProviderRequest:
         """Pure request construction (no I/O) — asserted exactly by unit tests."""
         if transport not in SUPPORTED_TRANSPORTS:
             self.transport_descriptor(transport)  # raises the typed error
+        _validate_layers(layers)
+        body: dict[str, Any] = {}
+        if "expires_after" in layers:
+            body["expires_after"] = {"anchor": "created_at", "seconds": _clamp_ttl(ttl_s)}
+        body["session"] = self.build_session_config(session_config, layers=layers)
         return ProviderRequest(
             method="POST",
             url=f"{self._base_url}/realtime/client_secrets",
@@ -407,11 +450,31 @@ class OpenAIRealtimeProvider:
                 # Owner-side correlation only; opaque to the vendor, non-secret.
                 "X-PagentOS-Session": session_id,
             },
-            json_body={
-                "expires_after": {"anchor": "created_at", "seconds": _clamp_ttl(ttl_s)},
-                "session": self.build_session_config(session_config),
-            },
+            json_body=body,
         )
+
+    def build_models_request(self) -> ProviderRequest:
+        """``GET /models`` - live model discovery for the smoke (ids only)."""
+        return ProviderRequest(
+            method="GET",
+            url=f"{self._base_url}/models",
+            headers={"Authorization": f"Bearer {self._api_key or ''}"},
+        )
+
+    def list_realtime_models(self) -> list[str]:
+        """Ids of the account's models whose id mentions ``realtime``, sorted.
+        One real call; nothing but ids is returned or logged."""
+        _require_key(self._api_key, self.name)
+        try:
+            payload = _send(self.build_models_request(), timeout_s=self._timeout_s,
+                            provider=self.name).json()
+        except VoiceError as exc:
+            raise self._scrubbed(exc) from None
+        except ValueError:
+            return []
+        data = payload.get("data") if isinstance(payload, dict) else None
+        ids = [str(m.get("id")) for m in (data or []) if isinstance(m, dict) and m.get("id")]
+        return sorted(i for i in ids if "realtime" in i.lower())
 
     # ---------------------------------------------------------------- mint
 
@@ -430,6 +493,7 @@ class OpenAIRealtimeProvider:
     def mint(
         self, *, session_id: str, ttl_s: int, transport: str,
         session_config: RealtimeSessionConfig | None = None,
+        layers: tuple[str, ...] = FULL_LAYERS,
     ) -> MintResult:
         """Mint one single-session ephemeral credential through the vendor.
 
@@ -438,7 +502,7 @@ class OpenAIRealtimeProvider:
         _require_key(self._api_key, self.name)
         req = self.build_credential_request(
             session_id=session_id, ttl_s=ttl_s, transport=transport,
-            session_config=session_config,
+            session_config=session_config, layers=layers,
         )
         try:
             resp = _send(req, timeout_s=self._timeout_s, provider=self.name)
@@ -480,7 +544,8 @@ class OpenAIRealtimeProvider:
             session_id=session_id, session_ref=session_ref, transport=transport,
             expires_at=expires_at.isoformat(), ttl_requested_s=_clamp_ttl(ttl_s),
         )
-        return MintResult(credential=credential, session_echo=scrub_secrets(session_obj))
+        return MintResult(credential=credential, session_echo=scrub_secrets(session_obj),
+                          request_body=req.json_body or {})
 
     def mint_credential(
         self, *, session_id: str, ttl_s: int, transport: str = TRANSPORT_WEBRTC,
@@ -558,8 +623,10 @@ def map_server_event(event: dict[str, Any], *, at_ms: int) -> tuple[RealtimeSess
             "cancelled": True, "status": "cancelled", "tool_call_ids": [],
         }),)
     if kind == EV_FUNCTION_CALL_ARGS_DONE:
+        raw_name = event.get("name")
         return (RealtimeSessionEvent(RT_TOOL_CALL, at_ms, {
-            "call_id": event.get("call_id"), "name": event.get("name"),
+            "call_id": event.get("call_id"),
+            "name": cloud_tool_name(raw_name) if isinstance(raw_name, str) else raw_name,
             "arguments": _parse_arguments(event.get("arguments")),
             "response_id": event.get("response_id"), "item_id": event.get("item_id"),
         }),)

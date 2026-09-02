@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 
 from app.voice.errors import VoiceError, VoiceErrorClass
 from app.voice.intents import apply_to_narration, resolve_intent
+from app.voice.providers import cloud_tool_name
 from app.voice.realtime import RealtimeState
 from app.voice.realtime_sessions.sideband import SB_NARRATION_CURSOR, SB_PLAN_CHANGED
 
@@ -95,7 +96,12 @@ class ToolRegistry:
         self._tools[spec.name] = spec
 
     def get(self, name: str) -> ToolSpec | None:
-        return self._tools.get(name)
+        """By Cloud Core name, or by the vendor spelling a client relays verbatim
+        (``research__start`` -> ``research.start``; see ``vendor_tool_name``)."""
+        spec = self._tools.get(name)
+        if spec is None:
+            spec = self._tools.get(cloud_tool_name(name))
+        return spec
 
     def names(self) -> list[str]:
         return sorted(self._tools)

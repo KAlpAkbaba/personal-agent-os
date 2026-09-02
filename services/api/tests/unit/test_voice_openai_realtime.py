@@ -30,9 +30,11 @@ from app.voice.providers import (
     TRANSPORT_SIMULATED,
     TRANSPORT_WEBRTC,
     TRANSPORT_WEBSOCKET,
+    VENDOR_TOOL_NAME_PATTERN,
     EphemeralCredential,
     RealtimeProvider,
     RealtimeSessionConfig,
+    vendor_tool_name,
 )
 from app.voice.providers_openai_realtime import (
     CMD_ITEM_CREATE,
@@ -216,7 +218,7 @@ def test_credential_request_shape_exact_endpoint_headers_and_body() -> None:
     assert body["expires_after"] == {"anchor": "created_at", "seconds": 600}
     session = body["session"]
     assert session["type"] == "realtime"
-    assert session["model"] == "gpt-realtime"
+    assert session["model"] == "gpt-realtime-2.1"
     assert session["instructions"] == CONFIG.instructions
     assert session["output_modalities"] == ["audio"]
     assert session["tool_choice"] == "auto"
@@ -256,7 +258,8 @@ def test_tools_manifest_maps_to_realtime_function_schema() -> None:
     assert len(tools) == len(TOOLS) > 0
     by_name = {t["name"]: t for t in tools}
     for entry in TOOLS:
-        mapped = by_name[entry["name"]]
+        mapped = by_name[vendor_tool_name(entry["name"])]
+        assert VENDOR_TOOL_NAME_PATTERN.match(mapped["name"]), mapped["name"]
         assert mapped["type"] == "function"
         assert mapped["description"] == entry["description"]
         assert mapped["parameters"] == entry["parameters"]
@@ -303,7 +306,7 @@ def test_websocket_transport_descriptor() -> None:
     d = provider(base_url="https://api.openai.com/v1/").transport_descriptor(TRANSPORT_WEBSOCKET)
     assert d["transport"] == TRANSPORT_WEBSOCKET
     assert d["websocket_url"] == "wss://api.openai.com/v1/realtime"
-    assert d["query"] == {"model": "gpt-realtime"}
+    assert d["query"] == {"model": "gpt-realtime-2.1"}
     assert d["audio"]["sample_rate_hz"] == 24000
     _assert_no_key(d)
 
@@ -711,3 +714,187 @@ def test_descriptors_carry_the_keys_the_web_client_requires() -> None:
     assert webrtc["data_channel"] and webrtc["dialect"] == WEB_CLIENT_DIALECT == "openai-realtime"
     assert "sdp_endpoint" not in webrtc
     assert provider.transport_descriptor("websocket")["dialect"] == WEB_CLIENT_DIALECT
+
+
+# ----------------------------------------------- contract regression (owner smoke 2026-09-02)
+# A REAL owner smoke returned 400 after the key was fixed, with the body discarded by the
+# HTTP helper. These pin (a) the minimal current client_secrets contract byte for byte,
+# (b) that no beta-era key can silently return, (c) that each M12 option is a separate,
+# cumulative layer the smoke can add one at a time, and (d) that a non-2xx carries the
+# vendor's error object so the next 400 names its field.
+
+BETA_ERA_SESSION_KEYS = {
+    "modalities", "voice", "input_audio_format", "output_audio_format",
+    "input_audio_transcription", "turn_detection", "temperature", "max_response_output_tokens",
+}
+
+
+def test_minimal_request_is_exactly_the_current_client_secrets_contract() -> None:
+    from app.voice.providers_openai_realtime import MINIMAL_LAYERS
+
+    req = provider().build_credential_request(
+        session_id="s", ttl_s=60, transport=TRANSPORT_WEBRTC, session_config=CONFIG,
+        layers=MINIMAL_LAYERS,
+    )
+    assert req.json_body == {
+        "session": {
+            "type": "realtime",
+            "model": "gpt-realtime-2.1",
+            "audio": {"output": {"voice": "marin"}},
+        }
+    }
+
+
+def test_full_session_uses_only_the_ga_schema_no_beta_era_keys() -> None:
+    session = provider().build_session_config(CONFIG)
+    assert not (set(session) & BETA_ERA_SESSION_KEYS)
+    assert set(session) == {
+        "type", "model", "audio", "output_modalities", "instructions", "tools", "tool_choice",
+    }
+    assert set(session["audio"]) == {"input", "output"}
+    assert set(session["audio"]["input"]) == {"format", "transcription", "turn_detection"}
+    assert set(session["audio"]["output"]) == {"voice", "format"}
+
+
+def _path_present(body: dict, path: tuple[str, ...]) -> bool:
+    node: object = body
+    for key in path:
+        if not isinstance(node, dict) or key not in node:
+            return False
+        node = node[key]
+    return True
+
+
+def test_layers_are_cumulative_each_adding_exactly_its_option() -> None:
+    from app.voice.providers_openai_realtime import SESSION_LAYERS
+
+    expected_path = {
+        "expires_after": ("expires_after",),
+        "output_modalities": ("session", "output_modalities"),
+        "audio_formats": ("session", "audio", "input", "format"),
+        "transcription": ("session", "audio", "input", "transcription"),
+        "turn_detection": ("session", "audio", "input", "turn_detection"),
+        "instructions": ("session", "instructions"),
+        "tools": ("session", "tools"),
+    }
+    assert set(expected_path) == set(SESSION_LAYERS)
+    p = provider()
+    for idx, layer in enumerate(SESSION_LAYERS):
+        before = p.build_credential_request(
+            session_id="s", ttl_s=60, transport=TRANSPORT_WEBRTC, session_config=CONFIG,
+            layers=SESSION_LAYERS[:idx]).json_body
+        after = p.build_credential_request(
+            session_id="s", ttl_s=60, transport=TRANSPORT_WEBRTC, session_config=CONFIG,
+            layers=SESSION_LAYERS[:idx + 1]).json_body
+        assert not _path_present(before, expected_path[layer]), layer
+        assert _path_present(after, expected_path[layer]), layer
+    full = p.build_credential_request(
+        session_id="s", ttl_s=60, transport=TRANSPORT_WEBRTC, session_config=CONFIG).json_body
+    assert full == p.build_credential_request(
+        session_id="s", ttl_s=60, transport=TRANSPORT_WEBRTC, session_config=CONFIG,
+        layers=SESSION_LAYERS).json_body
+    turn = full["session"]["audio"]["input"]["turn_detection"]
+    assert turn["type"] == "semantic_vad" and turn["interrupt_response"] is True
+
+
+def test_unknown_layer_is_refused_before_any_io() -> None:
+    with pytest.raises(VoiceError):
+        provider().build_session_config(CONFIG, layers=("vad",))
+
+
+def test_http_400_carries_the_vendor_error_body_and_is_not_retryable(mock_http) -> None:
+    vendor = {
+        "type": "invalid_request_error",
+        "code": "unknown_parameter",
+        "param": "session.audio.input.turn_detection",
+        "message": "Unknown parameter: 'session.audio.input.turn_detection'.",
+    }
+    mock_http.handler = lambda request: httpx.Response(400, json={"error": vendor})
+    with pytest.raises(VoiceError) as exc:
+        provider().mint_credential(session_id="s", ttl_s=60, transport=TRANSPORT_WEBRTC)
+    err = exc.value
+    assert err.error_class is VoiceErrorClass.DEPENDENCY_UNAVAILABLE
+    assert err.retryable is False
+    assert err.details["http_status"] == 400
+    assert err.details["vendor_error"] == vendor
+    assert "Unknown parameter" in err.message
+    _assert_no_key(err, err.to_dict(), err.message, err.details)
+
+
+@pytest.mark.parametrize("status,retryable", [(400, False), (404, False), (429, True), (503, True)])
+def test_http_status_decides_retryability(mock_http, status: int, retryable: bool) -> None:
+    mock_http.handler = lambda request: httpx.Response(status, text="nope")
+    with pytest.raises(VoiceError) as exc:
+        provider().mint_credential(session_id="s", ttl_s=60, transport=TRANSPORT_WEBRTC)
+    assert exc.value.retryable is retryable
+    assert exc.value.details["http_status"] == status
+    assert exc.value.details["vendor_error"]["message"] == "nope"
+
+
+def test_list_realtime_models_returns_ids_only(mock_http) -> None:
+    mock_http.handler = lambda request: httpx.Response(200, json={"data": [
+        {"id": "gpt-realtime-2.1", "object": "model"},
+        {"id": "gpt-4o", "object": "model"},
+        {"id": "gpt-realtime-mini", "object": "model"},
+    ]})
+    assert provider().list_realtime_models() == ["gpt-realtime-2.1", "gpt-realtime-mini"]
+    sent = mock_http.requests[-1]
+    assert sent.method == "GET" and str(sent.url) == "https://api.openai.com/v1/models"
+    assert sent.headers["Authorization"] == f"Bearer {KEY}"
+
+
+def test_mint_result_carries_the_request_body_without_headers(mock_http) -> None:
+    result = provider().mint(session_id="s", ttl_s=60, transport=TRANSPORT_WEBRTC,
+                             session_config=CONFIG)
+    assert result.request_body["session"]["model"] == "gpt-realtime-2.1"
+    assert "Authorization" not in json.dumps(result.request_body)
+    _assert_no_key(result.request_body)
+
+
+# ------------------------------------------------ tool names at the vendor boundary (real 400)
+# The REAL probe on 2026-09-02 accepted every M12 layer except tools: OpenAI refuses
+# function names outside ^[a-zA-Z0-9_-]+$ and Cloud Core's tools are dotted. The mapping
+# is reversible ('.' <-> '__'), applied outbound in map_tools and inbound on the
+# function-call event, and the registry accepts the vendor spelling a client relays.
+
+
+def test_every_registry_tool_name_maps_to_the_vendor_pattern_and_back() -> None:
+    from app.voice.providers import cloud_tool_name
+
+    for entry in TOOLS:
+        mapped = vendor_tool_name(entry["name"])
+        assert VENDOR_TOOL_NAME_PATTERN.match(mapped), mapped
+        assert "." not in mapped
+        assert cloud_tool_name(mapped) == entry["name"]
+    assert vendor_tool_name("research.start") == "research__start"
+    assert cloud_tool_name("clock__now") == "clock.now"
+    assert cloud_tool_name("clock.now") == "clock.now"
+
+
+@pytest.mark.parametrize("bad", ["a__b", "bad name", "tür.şey", ""])
+def test_unmappable_tool_names_are_refused_before_the_vendor_sees_them(bad: str) -> None:
+    with pytest.raises(VoiceError):
+        vendor_tool_name(bad)
+
+
+def test_full_session_tools_carry_vendor_names_only() -> None:
+    session = provider().build_session_config(CONFIG)
+    names = [t["name"] for t in session["tools"]]
+    assert names and all(VENDOR_TOOL_NAME_PATTERN.match(n) for n in names)
+    assert "research__start" in names and "research.start" not in names
+
+
+def test_function_call_event_maps_the_vendor_name_back_to_cloud_core() -> None:
+    ev = _one({"type": EV_FUNCTION_CALL_ARGS_DONE, "call_id": "c1", "name": "research__start",
+               "arguments": '{"topic": "x"}', "response_id": "r", "item_id": "i"})
+    assert ev.payload["name"] == "research.start"
+    assert ev.payload["arguments"] == {"topic": "x"}
+
+
+def test_registry_resolves_the_vendor_spelling() -> None:
+    from app.voice.realtime_sessions.tools import default_registry
+
+    registry = default_registry()
+    assert registry.get("research__start") is registry.get("research.start")
+    assert registry.get("clock__now").name == "clock.now"
+    assert registry.get("nope__tool") is None

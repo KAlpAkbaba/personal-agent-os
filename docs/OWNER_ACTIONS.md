@@ -104,12 +104,14 @@ Three commands from the repository root, in an ordinary (non-elevated) PowerShel
    .\scripts\secret-store.ps1 -Set PAGENTOS_VOICE_OPENAI_API_KEY
    ```
 
-2. Prove it works, with exactly one real call (mints one 60-second ephemeral credential,
-   prints the vendor's session shape with every secret scrubbed; exit 0 = good, 1 = the
-   vendor refused, 3 = key not found):
+2. Prove it works — **DONE (2026-09-02)**. The probe minted the minimal contract and
+   then every M12 layer one at a time with `gpt-realtime-2.1`; the only refusal (dotted
+   tool names) was fixed the same day. Re-run any time; exit 0 = every layer accepted,
+   1 = the minimal contract refused (vendor error printed), 4 = a layer refused (named),
+   3 = key not found:
 
    ```powershell
-   .\scripts\secret-store.ps1 -Run "uv run python scripts/realtime_smoke.py" -WorkingDirectory services\api
+   .\scripts\secret-store.ps1 -Run "uv run python scripts/realtime_smoke.py --mode probe" -WorkingDirectory services\api
    ```
 
 3. Ship it to the cloud host over Tailscale SSH. The value travels on stdin only, lands in

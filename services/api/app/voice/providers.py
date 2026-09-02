@@ -22,6 +22,7 @@ Testing discipline (deterministic + offline):
 from __future__ import annotations
 
 import math
+import re
 import struct
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -613,6 +614,33 @@ class FakeRealtimeProvider:
 # only reached once an owner has provisioned a key.
 
 
+#: Function-tool names a realtime vendor accepts (OpenAI enforces exactly this; a
+#: REAL owner smoke on 2026-09-02 got a 400 on ``session.tools[0].name`` because Cloud
+#: Core's tool names are dotted).
+VENDOR_TOOL_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
+_VENDOR_DOT = "__"
+
+
+def vendor_tool_name(name: str) -> str:
+    """Cloud Core tool name (``research.start``) -> the name the vendor sees
+    (``research__start``). Reversible: a Cloud Core name may not contain ``__``."""
+    if _VENDOR_DOT in name:
+        raise VoiceError(VoiceErrorClass.VALIDATION_ERROR,
+                         f"tool name {name!r} contains '__', which is reserved for the vendor "
+                         "spelling of '.'")
+    mapped = name.replace(".", _VENDOR_DOT)
+    if not VENDOR_TOOL_NAME_PATTERN.match(mapped):
+        raise VoiceError(VoiceErrorClass.VALIDATION_ERROR,
+                         f"tool name {name!r} cannot be expressed to the vendor "
+                         f"(pattern {VENDOR_TOOL_NAME_PATTERN.pattern})")
+    return mapped
+
+
+def cloud_tool_name(name: str) -> str:
+    """The inverse of :func:`vendor_tool_name`; a plain Cloud Core name passes through."""
+    return name.replace(_VENDOR_DOT, ".")
+
+
 def _require_key(key: str | None, provider: str) -> str:
     if not key:
         raise VoiceError(
@@ -643,10 +671,58 @@ def _send(req: ProviderRequest, *, timeout_s: float, provider: str) -> Any:
     except httpx.TimeoutException as exc:
         raise VoiceError(VoiceErrorClass.TIMEOUT, f"{provider}: request timed out",
                          provider=provider, retryable=True) from exc
+    except httpx.HTTPStatusError as exc:
+        # The body is the diagnosis. A bare "400 Bad Request" sent a real owner
+        # smoke run in circles; the vendor's error object (type/code/param/message)
+        # says which field it refused. Kept in details, never the request headers.
+        status = exc.response.status_code
+        details = vendor_error_details(exc.response)
+        vendor_message = details["vendor_error"].get("message") or exc.response.reason_phrase
+        raise VoiceError(
+            VoiceErrorClass.DEPENDENCY_UNAVAILABLE,
+            f"{provider}: HTTP {status} from {_url_path(req.url)}: {vendor_message}",
+            provider=provider,
+            retryable=status == 429 or status >= 500,
+            details=details,
+        ) from exc
     except httpx.HTTPError as exc:
         raise VoiceError(VoiceErrorClass.DEPENDENCY_UNAVAILABLE,
                          f"{provider}: {type(exc).__name__}: {exc}",
                          provider=provider, retryable=True) from exc
+
+
+VENDOR_ERROR_FIELDS = ("type", "code", "param", "message")
+_VENDOR_MESSAGE_MAX = 600
+
+
+def _url_path(url: str) -> str:
+    return url.split("://", 1)[-1].split("/", 1)[-1] if "://" in url else url
+
+
+def vendor_error_details(response: Any) -> dict[str, Any]:
+    """``{"http_status": n, "vendor_error": {type, code, param, message}}`` from a
+    non-2xx response. OpenAI-shaped bodies (``{"error": {...}}``) are read
+    field by field; anything else is kept as a bounded ``message``. Values are
+    strings or None, bounded, never the request."""
+    status = int(getattr(response, "status_code", 0) or 0)
+    error: dict[str, Any] = {name: None for name in VENDOR_ERROR_FIELDS}
+    body: Any = None
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+    if isinstance(body, dict) and isinstance(body.get("error"), dict):
+        for name in VENDOR_ERROR_FIELDS:
+            value = body["error"].get(name)
+            if value is not None:
+                error[name] = str(value)[:_VENDOR_MESSAGE_MAX]
+    elif isinstance(body, dict) and isinstance(body.get("error"), str):
+        error["message"] = body["error"][:_VENDOR_MESSAGE_MAX]
+    else:
+        text = getattr(response, "text", "") or ""
+        if text.strip():
+            error["message"] = text.strip()[:_VENDOR_MESSAGE_MAX]
+    return {"http_status": status, "vendor_error": error}
 
 
 class ElevenLabsTTSProvider:

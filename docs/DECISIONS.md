@@ -1643,3 +1643,47 @@ Decisions:
 Consequences: the owner action is two local commands and never shows a value
 (`docs/OWNER_ACTIONS.md`); the gate and CI run the new suite; a future secret for any
 provider goes through the same two commands.
+
+### ADR-0038 addendum — the REAL client_secrets contract, proven live (2026-09-02)
+
+The owner's first real smoke returned `401`, then, with a valid key, `400 Bad Request`
+with the body discarded by the shared HTTP helper. Diagnosed and closed on the live API,
+not from documentation:
+
+1. **Non-2xx responses now carry the vendor's error object.** `_send` keeps
+   `{"http_status", "vendor_error": {type, code, param, message}}` in the typed error's
+   details (bounded, scrubbed of the key; 4xx other than 429 are not retryable). The next
+   400 names its field instead of being a blind status code.
+2. **The session is built in layers.** `MINIMAL_LAYERS` yields exactly the current
+   contract, `{"session": {"type": "realtime", "model": ..., "audio": {"output":
+   {"voice": ...}}}}`; each M12 option (`expires_after`, `output_modalities`,
+   `audio_formats`, `transcription`, `turn_detection`, `instructions`, `tools`) is one
+   layer. `scripts/realtime_smoke.py --mode probe` mints the minimal contract first and
+   then adds one layer at a time, naming any the vendor refuses. Contract tests pin the
+   minimal body byte for byte and refuse every beta-era top-level key (`modalities`,
+   `voice`, `input_audio_format`, `turn_detection` at the top level, ...).
+3. **What the live probe proved with `gpt-realtime-2.1`:** minimal OK; every layer OK;
+   the vendor echo confirms the GA nesting exactly as sent - `audio.input.format
+   {type: audio/pcm, rate: 24000}`, `audio.input.transcription {gpt-4o-transcribe,
+   language: tr}`, `audio.input.turn_detection {semantic_vad, eagerness: low,
+   create_response, interrupt_response: true}`, `audio.output {voice, format, speed:
+   1.0}`; `expires_after` is honoured (observed TTL 59 s for 60 requested; 600 s
+   without it); `cedar` is accepted as the comparison voice. The "GA audio-format
+   nesting assumed" caveat of this ADR is closed.
+4. **The one incompatibility was tool names.** OpenAI enforces
+   `^[a-zA-Z0-9_-]+$` on `session.tools[].name`; Cloud Core's tools are dotted
+   (`research.start`). `vendor_tool_name`/`cloud_tool_name` (`app/voice/providers.py`)
+   map `.` <-> `__` reversibly (a Cloud Core name may not contain `__`, enforced),
+   applied outbound in `map_tools` and inbound on `response.function_call_arguments.done`;
+   `ToolRegistry.get` also resolves the vendor spelling because the desktop and web
+   clients relay the provider's name verbatim, and the service records the canonical
+   name. Nothing in the registry, intents or spec renamed.
+5. **Model choice.** Live discovery on the account lists `gpt-realtime`, `-1.5`, `-2`,
+   `-2.1`, `-2.1-mini`, dated `-2025-08-28`, `-mini`, `-translate`, `-whisper`; nothing
+   newer than 2.1, so `gpt-realtime-2.1` is the default
+   (`PAGENTOS_VOICE_REALTIME_OPENAI_MODEL` overrides). Voice `marin` default, `cedar`
+   retained as the immediate comparison candidate for the real-microphone session.
+
+Still open, honestly: the companion's `session.update` codec still uses beta-era field
+names for mid-session updates (credential-time configuration is what the probe proved);
+it is exercised only by the real-microphone session, which is the next owner step.

@@ -590,3 +590,18 @@ def test_forbidden_keys_are_caught_under_any_spelling_at_the_route_and_in_the_sc
     assert client.post(f"/v1/voice/realtime/sessions/{sid}/tool-calls", json={
         "call_id": "c", "name": "clock.now", "arguments": {"nested": {spelling: "v"}},
     }).status_code == 422
+
+
+def test_tool_call_relayed_under_the_vendor_spelling_runs_the_cloud_core_tool(wired) -> None:
+    # A real provider only ever sees research__start (OpenAI refuses dots in function
+    # names); the client relays that spelling verbatim. The registry resolves it and the
+    # record keeps the canonical name, so audit/idempotency never see two names.
+    client, *_ = wired
+    sid = _create(client)["session_id"]
+    r = client.post(f"/v1/voice/realtime/sessions/{sid}/tool-calls",
+                    json={"call_id": "v1", "name": "clock__now", "arguments": {}})
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "succeeded" and r.json()["name"] == "clock.now"
+    replay = client.post(f"/v1/voice/realtime/sessions/{sid}/tool-calls",
+                         json={"call_id": "v1", "name": "clock.now", "arguments": {}}).json()
+    assert replay["replayed"] is True and replay["name"] == "clock.now"
