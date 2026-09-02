@@ -20,7 +20,11 @@ from datetime import UTC, datetime
 
 from app.research.browser_gateway import BrowserGateway, FetchQuery, UnwiredBrowserGateway
 from app.research.evidence import EvidenceRecord, dedup_and_rank
-from app.research.executive import ExecutiveReport, render_executive_markdown
+from app.research.executive import (
+    ExecutiveReport,
+    render_executive_markdown,
+    require_source_fact_provenance,
+)
 from app.research.plan import ResearchPlan, build_plan
 from app.research.synthesis import DeterministicSynthesisProvider, SynthesisProvider
 
@@ -90,6 +94,9 @@ class BrowserResearchProvider:
         report = self._synthesis.synthesize(
             plan.topic, ranked, recency_label=plan.recency.label
         )
+        # Pipeline-owned, provider-independent: no synthesis backend gets to
+        # decide for itself whether its "facts" are cited (ProvenanceError).
+        require_source_fact_provenance(report, {e.url for e in ranked})
         return BrowserResearchResult(plan=plan, evidence=tuple(ranked), report=report)
 
 

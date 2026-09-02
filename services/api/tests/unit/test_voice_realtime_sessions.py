@@ -531,3 +531,62 @@ def test_scrubber_drops_audio_and_credential_shaped_keys() -> None:
     })
     assert scrubbed == {"call_id": "c", "duration_ms": 12, "nested": {"turn": 1},
                         "frames": [1], "long": "y" * 256}
+
+
+def test_complete_is_refused_from_a_superseded_leg_and_from_a_dead_session(wired) -> None:
+    # Security review finding (M12 A+E): /complete skipped require_leg/require_live while
+    # its siblings enforced them, so a desktop whose leg the phone had taken over (its
+    # owner bearer still valid) could inject a tool result into the live conversation,
+    # and a closed session could still be written to. Gated like /tool-calls and /events.
+    client, identity, runtime, sideband, _, _ = wired
+    sid = _create(client)["session_id"]
+    client.post(f"/v1/voice/realtime/sessions/{sid}/tool-calls", json={
+        "call_id": "r", "name": "research.start", "arguments": {"topic": "x"}})
+    phone = identity.service.issue_session(client_kind="mobile", label="phone")
+    assert client.post(f"/v1/voice/realtime/sessions/{sid}/attach", json={"client_kind": "mobile"},
+                       headers=bearer(phone.token)).status_code == 200
+
+    injected = client.post(f"/v1/voice/realtime/sessions/{sid}/tool-calls/r/complete",
+                           json={"result": {"summary": "sahte sonuç"}})
+    assert injected.status_code == 409, injected.text
+    assert "tool_completed" not in sideband.events()
+    with runtime.session() as db:
+        call = service.get_tool_call(db, uuid.UUID(sid), "r")
+        # still running, and the injected payload never reached the record
+        assert call.status == service.TOOL_STATUS_RUNNING
+        assert "summary" not in (call.result_json or {})
+    # ...while the leg holder completes it normally
+    ok = client.post(f"/v1/voice/realtime/sessions/{sid}/tool-calls/r/complete",
+                     json={"result": {"summary": "3 kaynak"}}, headers=bearer(phone.token))
+    assert ok.status_code == 200, ok.text
+    assert sideband.events()[-1] == "tool_completed"
+
+    dead = _create(client)["session_id"]
+    client.post(f"/v1/voice/realtime/sessions/{dead}/tool-calls", json={
+        "call_id": "r", "name": "research.start", "arguments": {"topic": "x"}})
+    assert client.post(f"/v1/voice/realtime/sessions/{dead}/close").status_code == 200
+    assert client.post(f"/v1/voice/realtime/sessions/{dead}/tool-calls/r/complete",
+                       json={"result": {}}).status_code == 410
+
+
+@pytest.mark.parametrize(
+    "spelling", ["apiKey", "api-key", "API_KEY", "Api Key", "x-api-key", "accessToken", "audioPcm"]
+)
+def test_forbidden_keys_are_caught_under_any_spelling_at_the_route_and_in_the_scrubber(
+    wired, spelling: str
+) -> None:
+    # Verification finding: both layers matched the literal substring "api_key", so the
+    # camelCase and hyphenated spellings a JS client naturally uses landed verbatim in an
+    # audit row. One normalized blocklist now serves the validator and the scrubber.
+    assert service.is_forbidden_key(spelling)
+    for benign in ("call_id", "duration_ms", "turn", "t_ms", "error_class"):
+        assert not service.is_forbidden_key(benign)
+    assert service.scrub_metadata({spelling: "v", "turn": 1, "nested": {spelling: "v"}}) == {
+        "turn": 1, "nested": {}}
+    client, *_ = wired
+    sid = _create(client)["session_id"]
+    assert client.post(f"/v1/voice/realtime/sessions/{sid}/events", json={"events": [
+        {"kind": "error", "t_ms": 1, "payload": {spelling: "v"}}]}).status_code == 422
+    assert client.post(f"/v1/voice/realtime/sessions/{sid}/tool-calls", json={
+        "call_id": "c", "name": "clock.now", "arguments": {"nested": {spelling: "v"}},
+    }).status_code == 422

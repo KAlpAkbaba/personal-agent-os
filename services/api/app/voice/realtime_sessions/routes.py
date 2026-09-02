@@ -56,7 +56,6 @@ _STATUS_BY_CLASS = {
 MAX_ARGUMENTS_BYTES = 16 * 1024
 MAX_EVENT_PAYLOAD_BYTES = 4 * 1024
 MAX_EVENTS_PER_REQUEST = 200
-_FORBIDDEN_PAYLOAD_KEY_PARTS = ("audio", "pcm", "wave", "secret", "credential", "api_key")
 
 
 def _runtime(request: Request) -> RealtimeVoiceRuntime:
@@ -86,8 +85,9 @@ def _raise_http(exc: VoiceError) -> None:
 def _no_forbidden_keys(value: Any, *, where: str) -> None:
     if isinstance(value, dict):
         for key, inner in value.items():
-            lowered = str(key).lower()
-            if any(part in lowered for part in _FORBIDDEN_PAYLOAD_KEY_PARTS):
+            # one blocklist for the validator and the audit scrubber (normalized
+            # matching lives in service.is_forbidden_key); they used to diverge
+            if service.is_forbidden_key(key):
                 raise ValueError(f"{where} must not carry audio or credentials ({key!r})")
             _no_forbidden_keys(inner, where=where)
     elif isinstance(value, list):
@@ -299,6 +299,7 @@ async def complete_tool_call(
     request: Request, session_id: uuid.UUID, call_id: str, body: ToolCompleteRequest
 ) -> dict[str, Any]:
     runtime = _runtime(request)
+    owner = _owner(request)
     trace_id = trace_id_var.get()
     _bind_loop(runtime)
     if body.result is None and body.error is None:
@@ -307,7 +308,7 @@ async def complete_tool_call(
     def work() -> dict[str, Any]:
         with runtime.session() as db:
             return service.complete_tool_call(
-                db, _load(db, session_id), call_id=call_id, result=body.result,
+                db, _load(db, session_id), owner=owner, call_id=call_id, result=body.result,
                 error=body.error, sideband=runtime.sideband, trace_id=trace_id,
             )
 

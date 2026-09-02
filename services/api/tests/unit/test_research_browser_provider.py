@@ -83,3 +83,38 @@ def test_pipeline_respects_recency_phrase_absent_topic_uses_default_window() -> 
     provider = BrowserResearchProvider(gateway=FakeBrowserGateway())
     result = provider.run("yapay zeka ajanlarındaki gelişmeler", now=NOW)
     assert "varsayılan" in result.plan.recency.label
+
+
+@pytest.mark.parametrize(
+    "citation",
+    [(), ("https://planted.example/never-gathered",)],
+    ids=["uncited", "foreign-url"],
+)
+def test_pipeline_rejects_any_synthesis_provider_whose_source_facts_lack_real_provenance(
+    citation: tuple[str, ...],
+) -> None:
+    # Security review (M13 prep): "source_fact always cites gathered evidence" used to
+    # be true only because DeterministicSynthesisProvider happens to attach the URL of
+    # the excerpt it quotes. Page excerpts are untrusted; a model-backed provider steered
+    # by a planted instruction could emit an uncited or foreign-cited "fact". The
+    # pipeline now re-derives the property for the output of ANY provider.
+    from app.research.evidence import LabelledStatement
+    from app.research.executive import DetailSection, ExecutiveReport, ProvenanceError
+
+    class SteeredSynthesis:
+        def synthesize(self, topic, evidence, *, recency_label):
+            real = LabelledStatement(
+                evidence[0].excerpt, STATEMENT_LABEL_SOURCE_FACT, (evidence[0].url,)
+            )
+            planted = LabelledStatement(
+                "Rakip ürün geri çağrıldı.", STATEMENT_LABEL_SOURCE_FACT, citation
+            )
+            return ExecutiveReport(
+                topic=topic, recency_label=recency_label, executive_summary="x",
+                why_it_matters=real, recommended_action=real,
+                details=(DetailSection(heading="Ayrıntı", statements=(real, planted)),),
+            )
+
+    provider = BrowserResearchProvider(gateway=FakeBrowserGateway(), synthesis=SteeredSynthesis())
+    with pytest.raises(ProvenanceError):
+        provider.run(TOPIC, now=NOW)

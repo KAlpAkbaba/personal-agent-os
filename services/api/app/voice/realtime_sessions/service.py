@@ -10,6 +10,7 @@ has been handed to the client once.
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -79,9 +80,20 @@ CLIENT_EVENT_KINDS = TIMING_EVENT_KINDS + STATE_EVENT_KINDS
 MAX_PENDING_SIDEBAND = 50
 MAX_SUMMARY_CHARS = 2000
 
-#: Any metadata key containing one of these never reaches an audit row.
-_FORBIDDEN_KEY_PARTS = ("audio", "pcm", "wave", "secret", "credential", "token", "api_key",
-                        "password", "text", "transcript")
+#: Any metadata/payload key containing one of these never reaches an audit row
+#: (and is refused at the route). Keys are NORMALIZED before matching - case and
+#: separators dropped - so ``apiKey``, ``api-key`` and ``API_KEY`` are all the
+#: same key as ``api_key``; the literal-substring check this replaced let the
+#: camelCase and hyphenated spellings through both the validator and the scrubber.
+FORBIDDEN_KEY_PARTS = ("audio", "pcm", "wave", "secret", "credential", "token", "apikey",
+                       "password", "text", "transcript")
+_KEY_NORMALIZER = re.compile(r"[^a-z0-9]+")
+
+
+def is_forbidden_key(key: Any) -> bool:
+    """True when ``key`` is audio/credential/transcript-shaped under any spelling."""
+    normalized = _KEY_NORMALIZER.sub("", str(key).lower())
+    return any(part in normalized for part in FORBIDDEN_KEY_PARTS)
 
 
 def utcnow() -> datetime:
@@ -107,8 +119,7 @@ def scrub_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
     """Ids and timings only: drop forbidden keys, bytes, and long strings."""
     out: dict[str, Any] = {}
     for key, value in (metadata or {}).items():
-        lowered = str(key).lower()
-        if any(part in lowered for part in _FORBIDDEN_KEY_PARTS):
+        if is_forbidden_key(key):
             continue
         if isinstance(value, bytes | bytearray):
             continue
@@ -473,16 +484,27 @@ def complete_tool_call(
     db: Session,
     row: RealtimeSessionRow,
     *,
+    owner: SessionContext,
     call_id: str,
     result: dict[str, Any] | None,
     error: dict[str, Any] | None,
     sideband: SidebandPusher,
     trace_id: str | None = None,
 ) -> dict[str, Any]:
-    """A long-running tool finished (worker/pipeline side). Records the outcome
-    and pushes ``tool_completed`` over the sideband so the client can submit
-    the final output to the provider (spec §4 step 3-4)."""
+    """A long-running tool finished. Records the outcome and pushes
+    ``tool_completed`` over the sideband so the client can submit the final
+    output to the provider (spec §4 step 3-4).
+
+    Reachable only through the owner router, so it is gated exactly like its
+    siblings: the session must be live and the caller must hold the CURRENT
+    media leg. Without that, a leg superseded by ``attach`` (whose owner bearer
+    is still valid) could inject a tool result into the live conversation, and
+    a closed session could still be written to. A worker/pipeline that
+    completes tool calls without a media leg must arrive through its own,
+    non-owner credential - never through this path."""
     now = utcnow()
+    require_live(db, row, now=now, trace_id=trace_id)
+    require_leg(row, owner)
     call = get_tool_call(db, row.id, call_id)
     if call is None:
         raise VoiceError(VoiceErrorClass.VALIDATION_ERROR, f"unknown tool call {call_id!r}")

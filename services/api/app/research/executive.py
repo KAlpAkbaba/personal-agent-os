@@ -11,10 +11,11 @@ mirroring ``app.research.compose.compose_canonical_markdown``'s role for M3.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.research.evidence import LabelledStatement
+from app.research.evidence import STATEMENT_LABEL_SOURCE_FACT, LabelledStatement
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +52,39 @@ class ExecutiveReport:
             "recommended_action": self.recommended_action.as_dict(),
             "details": [d.as_dict() for d in self.details],
         }
+
+
+class ProvenanceError(ValueError):
+    """A ``source_fact`` in a synthesized report does not cite gathered evidence."""
+
+
+def iter_statements(report: ExecutiveReport) -> Iterator[LabelledStatement]:
+    yield report.why_it_matters
+    yield report.recommended_action
+    for section in report.details:
+        yield from section.statements
+
+
+def require_source_fact_provenance(report: ExecutiveReport, evidence_urls: set[str]) -> None:
+    """Every ``source_fact`` must cite only evidence the pipeline actually gathered.
+
+    This is the pipeline's guarantee, re-derived here for the output of ANY
+    :class:`SynthesisProvider` - it must not depend on one provider happening
+    to attach the URL of the excerpt it quotes. Page excerpts are untrusted
+    text; once a model-backed provider reads them, a planted instruction could
+    steer it into an uncited or foreign-cited "fact", and this is the gate
+    that keeps such a statement from reaching the owner labelled as one.
+    """
+    for statement in iter_statements(report):
+        if statement.label != STATEMENT_LABEL_SOURCE_FACT:
+            continue
+        if not statement.evidence_urls:
+            raise ProvenanceError(f"source_fact without any citation: {statement.text[:80]!r}")
+        foreign = set(statement.evidence_urls) - evidence_urls
+        if foreign:
+            raise ProvenanceError(
+                f"source_fact cites URLs that were never gathered: {sorted(foreign)}"
+            )
 
 
 def render_executive_markdown(report: ExecutiveReport) -> str:

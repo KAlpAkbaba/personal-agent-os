@@ -1180,3 +1180,41 @@ and is selected only if its declared capabilities beat the simulator; tracks C/D
 implement the create → media → tool relay → events → attach contract in
 `app/voice/realtime_sessions/routes.py`; the owner's acceptance numbers come from
 `GET /v1/voice/realtime/sessions/{id}/benchmark`, never from the simulator.
+
+### ADR-0036 addendum — independent review of A+E and M13 prep (2026-09-02)
+
+Fixed on `main` before tracks B/C/D merged:
+
+1. **`POST …/tool-calls/{call_id}/complete` skipped `require_leg` and `require_live`**
+   while its two siblings enforced them. A media leg superseded by `attach` still
+   holds a valid owner bearer, so it could have injected a tool result into the live
+   conversation, and a closed session could still be written to. Now gated exactly
+   like `/tool-calls` and `/events` (409 stale leg, 410 dead session), with a
+   regression test that completes from the pre-attach leg. A future worker/pipeline
+   that completes tool calls without a media leg gets its own non-owner credential;
+   it never comes through the owner router.
+2. **Forbidden-key matching was a literal substring (`api_key`)** in both the route
+   validator and the audit scrubber, and the two lists had diverged; `apiKey` and
+   `api-key` passed both and would have landed verbatim in an audit row. One
+   normalized blocklist (`service.FORBIDDEN_KEY_PARTS`, case and separators dropped)
+   now serves both layers.
+3. **`source_fact` provenance was a property of one synthesis provider, not of the
+   pipeline.** `BrowserResearchProvider.run()` now re-derives it for the output of
+   ANY `SynthesisProvider` (`require_source_fact_provenance`, `ProvenanceError`):
+   every `source_fact` must cite a non-empty subset of the evidence actually
+   gathered. Page excerpts are untrusted text; this is the gate that keeps a
+   planted instruction from reaching the owner as a labelled "fact" once a
+   model-backed provider is wired.
+
+Carried forward, recorded here so they are not lost (both inert today - the
+gateway is `UnwiredBrowserGateway` and query→URL discovery is unimplemented):
+
+- Autonomous research navigation of the owner's REAL authenticated browser needs a
+  destination policy beyond the http/https scheme allowlist before
+  `browser.fetch_evidence` is wired for `ExistingSessionBackend` (a
+  search-result-driven GET rides the owner's cookies). Default: `ManagedBackend`
+  for any target not evidenced from a prior trusted step.
+- The file-backed `EnrollmentRegistry` carries `owner_authorized_for_research`
+  grants with no ACL tightening; apply the ADR-0029 discipline when the durable
+  store lands.
+
