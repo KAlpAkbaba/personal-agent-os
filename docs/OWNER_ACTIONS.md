@@ -106,6 +106,16 @@ then again with `Ses = Cedar` (three or four turns each, including one long answ
 just listen to). Verdict, in your words: which is closer to Arbor, and what is still off
 (pace, warmth, cheerfulness, "asistan" cadence, Turkish prosody).
 
+*Server version note (2026-09-03).* Your first Connect on this page failed with `HTTP 422`
+because the Cloud Core still runs the previous release (contract v1), which does not accept
+the `voice` field the page sends (ADR-0045). The page now detects the server's contract
+version, sends only what that version accepts, and shows a notice
+("Sunucu sözleşmesi v1: 'voice' alanı bu sürümde yok…"). Consequence: against the current
+cloud, Part B (noise) runs fully with the default voice `marin`, and Part A (the Marin/Cedar
+A/B) needs the newer Cloud Core, which is one command whenever you choose:
+`.\scripts\cloud\release-cloud-core.ps1` (ADR-0042; idempotent, verified, rolls back on
+failure). Until then, skip Part A.
+
 **Part B — noise matrix (10–15 minutes), with the winning voice.** Keep the session open
 in `Otomatik`; for each scenario do it for ~20 seconds and only speak when the scenario
 says so. Watch `Ses algılama`: it should say background, not owner speech, unless you talk.
