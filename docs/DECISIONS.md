@@ -935,3 +935,76 @@ Decisions:
    `command_id`/`trace_id` into the audit check and print the correlated evidence —
    service pid, companion pid, the rows' `ts` — so the matrix row is closed by a persisted
    row that matches the broker's ACK, and by nothing less.
+
+## RQ-2 closed — the cloud is a proven baseline (2026-09-02)
+
+Status: Closed on real evidence, on the owner's actual machines.
+
+`pagentos-core` (Hetzner cpx32, nbg1) runs the production Cloud Core on `pagentos_prod`,
+reachable only over the tailnet — every public port refused, proven from outside. The
+Windows agent was moved to it without reinstall or re-enrolment. The headline path —
+Hetzner Cloud Core → Tailscale → DeviceService (LocalSystem, Session 0) → Session Companion
+(Session 1) → real Notepad → ACK — is `PROVEN_REAL`, and `command_received`/`command_ack`
+are persisted in the Windows audit JSONL correlated to the real `command_id`/`trace_id`.
+Recovery is `PROVEN_REAL` without owner intervention for Cloud Core process restart, VPS
+reboot (tailnet address, `/mnt/pagentos-data` and the device row all survived), Tailscale
+disconnect/reconnect, Windows-side network loss and DeviceService restart.
+
+Decision: the cloud/device infrastructure is **frozen** as a proven baseline. No reinstall,
+re-enrolment, device or owner recreation, or broker redesign unless a real observed defect
+requires it. Security evidence of record: the pipe DACL from the live handle, kernel-sourced
+admission, SYSTEM+Administrators machine material, the shape-based credential scanner, the
+in-namespace-only owner bootstrap, no public port anywhere. Recovery evidence of record: the
+five scenarios above and the qualified deployment/rollback engines (`Deployment.ps1`,
+`ConfigSwap.ps1`, `breakglass-ssh.ps1`).
+
+## ADR-0034 — Realtime voice: native speech-to-speech behind a capability-driven abstraction (2026-09-02)
+
+Status: Accepted
+
+Context: the owner's primary interface is voice, and the standard is ChatGPT-Voice-class
+interaction — behavioural and perceptual parity as far as publicly available APIs and this
+architecture allow, never a claim of an identical backend. M4 built provider-neutral TTS,
+STT and a `RealtimeProvider` protocol with a control-only session FSM (barge-in, stop
+words, tool-call states, network loss), a Turkish normaliser, a narration engine with a
+durable cursor, and speaker classification. It did not build a native full-duplex
+speech-to-speech conversation path; its realtime is a protocol and a fake, and there is no
+audio transport or client audio code at all. A traditional STT → text LLM → TTS chain is
+explicitly NOT sufficient for the primary conversation.
+
+Decisions:
+
+1. **The primary conversation path is a native realtime speech-to-speech provider**,
+   selected by declared capabilities (speech-to-speech, full-duplex, server VAD with
+   semantic end-of-turn, barge-in, tool calling on a sideband, Turkish, streaming audio
+   in/out, supported transports), never by model name. OpenAI Realtime is the primary
+   candidate where it provides the best experience; its adapter is one implementation of
+   the `ConversationRealtime` capability.
+2. **Direct media path, sideband brain.** Microphone audio flows owner ↔ provider over a
+   realtime transport (WebRTC where available) without detouring through Hetzner when
+   that lowers latency. Hetzner remains the authoritative orchestration, tool and memory
+   brain over a sideband control channel: the client relays the provider's tool calls to
+   Cloud Core over the existing authenticated API, Cloud Core executes them against
+   Memory / Browser / Research / Windows Agent / Artifacts / Evolution and returns the
+   result for submission back to the provider. The provider never holds owner authority;
+   it holds a short-lived session credential minted by Cloud Core for one session.
+3. **Explicit modes**: `ConversationRealtime`, `Narration` (durable cursor, semantic
+   navigation, adjustable speed; never pre-synthesises a whole document),
+   `Transcription` (accurate STT for notes, meetings, videos and commands),
+   `VoiceIdentity` (speaker verification and personalisation; never a sole root of
+   authentication — it may augment device trust + owner session, per M4's standing rule).
+4. **Turkish voice control is semantic, not keyword-only**: dur / devam / tekrar oku /
+   ikinci maddeyi tekrar oku / biraz daha yavaş / hızlı / özet geç / detaya gir / burayı
+   atla are intents resolved against conversation and narration state, and normal Turkish
+   hesitation must not be cut off — end-of-turn is semantic, not silence-only.
+5. **Latency is measured, not felt.** The foundation ships a benchmark harness recording
+   mic → uplink, end-of-turn → first audible response, barge-in → playback stopped,
+   tool-call preamble, and tool completion → resumed speech, against the real environment.
+   Targets (PersonalAgentOS's own): barge-in-to-stop under ~150 ms and short-turn first
+   response under ~500–700 ms where technically achievable; no unexplained silence during
+   long tools — a short natural preamble, the session alive, the plan redirectable.
+6. **Real-only acceptance**: the owner's real Windows machine, microphone, headset,
+   Turkish speech, network and Hetzner Cloud Core. Fakes remain gates.
+7. Provider credentials are owner-provisioned and stored in the existing secret store,
+   never in the repository; the credential ask is deferred until the real-provider adapter
+   exists behind the abstraction and a fake-provider run already passes.

@@ -21,23 +21,7 @@ Status vocabulary matches `docs/QUALIFICATION.md`: `PROVEN_REAL`, `PROVEN_PROXY`
 
 ## Now
 
-**Close the last matrix row: one harmless command, correlated to its audit rows.** Every
-runtime and recovery row of the cloud qualification is `PROVEN_REAL`. The one open row -
-"agent audit trail records the command" - failed because the *verifier* read the timestamp
-from a field named `at`, which the writer has never emitted (it is `ts`); the writer was right.
-The reader now correlates by the ACK's own `command_id` + `trace_id`.
-
-Nothing is redeployed, switched, rebooted or disconnected. In an **elevated** PowerShell at
-the repository root:
-
-```powershell
-.\scripts\cloud\qualify-cloud.ps1 -BrokerHost 100.90.158.26 -Scenarios audit-only
-```
-
-It sends ONE real `desktop.open_application` from the Hetzner broker (Notepad opens and is
-closed), then prints the persisted `command_received` + `command_ack` rows carrying that exact
-`command_id`/`trace_id`, with the service and companion pids and the rows' `ts`. Send me that
-output; the row is closed by the persisted evidence and by nothing less.
+**Nothing.** The cloud milestone is closed on real evidence and the infrastructure is a frozen proven baseline. The product phase (M12 Realtime Voice Foundation, with M13 Real Browser + Research in parallel) is being built autonomously. The next owner dependency will be one of: a realtime voice provider credential once the real-provider path exists behind the abstraction; a real-microphone Turkish voice qualification session; Chrome session authorisation for research; a physical phone. You will get exactly one concrete action when one of those is genuinely due.
 
 ---
 

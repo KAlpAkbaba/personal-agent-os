@@ -234,3 +234,48 @@ contract** the mobile app depends on. It does not prove **platform behaviour**:
 a real push arriving on a locked phone, and microphone/realtime capture under
 iOS/Android backgrounding and interruption, require a physical device and are
 batched as owner actions.
+
+## RQ-2 Cloud bring-up — evidence of record (CLOSED 2026-09-02)
+
+Real, on the owner's machines, via `scripts/cloud/qualify-cloud.ps1` against `pagentos-core`:
+headline Hetzner → Tailscale → DeviceService → Companion → real Notepad → ACK; audit rows
+`command_received`/`command_ack` correlated to the real `command_id`/`trace_id`; recovery
+without owner intervention from Cloud Core process restart, VPS reboot (tailnet address,
+`/mnt/pagentos-data`, device row preserved), Tailscale reconnect, Windows network loss,
+DeviceService restart; no public port (proven from outside). See `docs/QUALIFICATION.md`
+Stage 5.
+
+## M12 Realtime Voice Foundation
+
+Real-only acceptance — the owner's real Windows machine, microphone, speakers/headset,
+Turkish speech, network and the real Hetzner Cloud Core. Fakes are gates, never acceptance.
+
+- primary conversation over a native realtime speech-to-speech provider selected by
+  capability (ADR-0034); STT → text LLM → TTS is not accepted as the primary path;
+- natural Turkish conversation; simultaneous listen/speak as far as the provider permits;
+- immediate barge-in: the owner interrupts the assistant mid-speech and playback stops
+  immediately; measured barge-in → playback-stopped latency, target under ~150 ms where
+  technically achievable;
+- "dur" stops speech immediately; "devam" resumes correctly; "tekrar oku"; "ikinci maddeyi
+  tekrar oku" navigates semantically; "biraz daha yavaş" / "biraz daha hızlı"; "özet geç";
+  "detaya gir"; "burayı atla";
+- semantic end-of-turn detection: the assistant does not cut the owner off during normal
+  Turkish hesitation (measured false-barge rate on a real hesitation set);
+- natural Turkish pronunciation, prosody, punctuation and emotional delivery; mixed
+  Turkish/English terminology benchmarked on at least: PagentOS, Tailscale, Hetzner,
+  PostgreSQL, PowerShell, FortiGate, OpenAI, Claude, Windows, Kubernetes, Redis, Temporal;
+  Turkish characters and phonetics ı, İ, ğ, ş, ç, ö, ü;
+- microphone switching; headset/laptop/phone microphones; echo cancellation; noise
+  suppression; a noisy-room run;
+- network interruption and voice-session recovery; conversation continuity across
+  desktop/web/mobile;
+- tool calls without destroying conversational flow: a long-running tool gets a short
+  natural preamble, the session stays alive, and a mid-task redirection ("Sadece OpenAI
+  kısmına bak") changes the active plan without a disconnected conversation;
+- quantitative benchmarks recorded against the real environment: mic → provider uplink,
+  end-of-turn → first audible response (target ~500–700 ms short turns where achievable),
+  barge-in → playback stopped, tool-call preamble latency, tool completion → resumed
+  speech; no perceptible unnecessary audio gaps;
+- modes are explicit capabilities: ConversationRealtime, Narration, Transcription,
+  VoiceIdentity — and VoiceIdentity is never the sole root of authentication;
+- subjective owner evaluation of voice quality is an explicit, final gate.

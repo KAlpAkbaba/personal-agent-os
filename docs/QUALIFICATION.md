@@ -16,7 +16,7 @@ A proxy result is never written up as real. Where a criterion is split — logic
 here, environment provable only on the owner's machine — it appears twice, with the proxy
 part marked `PROVEN_PROXY` and the environment part `NOT_YET_PROVEN` until it runs.
 
-Last updated: 2026-09-02.
+Last updated: 2026-09-02 (RQ-2 closed).
 
 > **Local Windows qualification CLOSED 2026-09-01.** The final `finalize-qualification.ps1`
 > run and `verify-device-service.ps1` report proved, on the owner's real machine: service
@@ -29,6 +29,9 @@ Last updated: 2026-09-02.
 > from loopback to Hetzner + Tailscale. Refusal legs that require a second real user
 > account or concurrent session (1.4, 1.6, 1.7) deliberately stay `PROVEN_PROXY`, and
 > 2.2b (fresh-logon autostart) stays open until a natural sign-out/reboot exercises it.
+
+
+> **Cloud bring-up (RQ-2) CLOSED 2026-09-02.** On the owner's actual machines: `pagentos-core` (Hetzner, cpx32, nbg1) runs the production Cloud Core on `pagentos_prod`, reachable only over the tailnet (every public port refused, proven from outside); the Windows agent was moved to it without reinstall or re-enrolment; the headline path Hetzner → Tailscale → DeviceService (LocalSystem, Session 0) → Companion (Session 1) → real Notepad → ACK is `PROVEN_REAL`, with `command_received`/`command_ack` persisted and correlated to the real `command_id`/`trace_id`; recovery is `PROVEN_REAL` for Cloud Core process restart, VPS reboot (tailnet address, `/mnt/pagentos-data` and the device row all survived), Tailscale reconnect, Windows-side network loss and DeviceService restart. The cloud/device infrastructure is a FROZEN proven baseline: no reinstall, re-enrolment, device or owner recreation, or broker redesign unless a real observed defect requires it.
 
 ---
 
@@ -125,7 +128,7 @@ only the owner's elevated rerun can show.
 | 4.1 | Private repo exists and receives the branch | `NOT_YET_PROVEN` (blocked on `gh auth login`) |
 | 4.2 | CI runs the full gate on a clean runner | `NOT_YET_PROVEN` |
 
-## Stage 5 — Tailscale + Hetzner production deployment (RQ-2, CURRENT)
+## Stage 5 — Tailscale + Hetzner production deployment (RQ-2, CLOSED 2026-09-02)
 
 Nothing here may be marked `PROVEN_REAL` from anything but the actual Hetzner host over
 the actual tailnet. The local Cloud Core restart proof (2.8) is **not** carried over: it
@@ -138,7 +141,7 @@ was loopback, and the thing under test here is the network.
 | 5.2b | Windows PC ↔ Cloud over the private network | `PROVEN_REAL` | 2026-09-02: `http://100.90.158.26:8001/v1/system/health` answered from the Windows machine over the tailnet; `tailscale ping` reports a DIRECT connection via `2.28.67.130:41641`, ~47 ms, not a DERP relay. |
 | 5.3 | No public application port on the VPS | `PROVEN_REAL` | 2026-09-02, probed from the Windows machine against the PUBLIC IP: 8001, 22, 5432, 6379, 9000 and 7233 all refused/filtered. On the tailnet address only 8001 answers — PostgreSQL, Redis, MinIO and Temporal are closed there too, because they publish no host port at all (`ss -tlnp` shows the API bound to 127.0.0.1 and 100.90.158.26 only, never 0.0.0.0). Public SSH stays closed; administration is Tailscale SSH. |
 | 5.4 | The agent moves to the cloud endpoint without reinstall or re-enrollment | `PROVEN_REAL` | 2026-09-02: existing device row restored into `pagentos_prod` from the public identity document (same device id, capabilities preserved, no private key transported); installed service repointed to `http://100.90.158.26:8001` by the transactional switch. Device shows `online` at the cloud broker. | `switch-agent-broker.ps1` changes only the broker URL (health-probed first, atomic replace, rollback). The device keeps its id and P-256 key; the cloud DB row is rebuilt from the public half by `restore-device-row.sh`. |
-| 5.5 | **Hetzner Cloud Core → Tailscale → DeviceService → Companion → real Notepad → ACK** | `PROVEN_REAL` | Owner-reported real matrix from `qualify-cloud.ps1`, 2026-09-02, on the actual Hetzner host over the tailnet: command POSTed to the Hetzner broker, executed by the LocalSystem/Session-0 service via the Session-1 companion, real Notepad pid verified alive, ACK read back from the same broker. **Sub-row still open:** the agent's own audit trail for that command — a verifier defect (read `at`; the writer emits `ts`), fixed; closed only by the persisted rows from the `audit-only` run. |
+| 5.5 | **Hetzner Cloud Core → Tailscale → DeviceService → Companion → real Notepad → ACK** | `PROVEN_REAL` | Owner-reported real matrix from `qualify-cloud.ps1`, 2026-09-02, on the actual Hetzner host over the tailnet: command POSTed to the Hetzner broker, executed by the LocalSystem/Session-0 service via the Session-1 companion, real Notepad pid verified alive, ACK read back from the same broker. **Audit sub-row closed 2026-09-02:** `command_received` and `command_ack` persisted in the Windows audit JSONL and correlated to the exact real `command_id` and `trace_id` of that ACK (the earlier failure was the verifier reading `at`; the writer emits `ts`). |
 | 5.6 | Cloud Core process restart → agent reconnects → command succeeds | `PROVEN_REAL` | Owner-reported real matrix from `qualify-cloud.ps1`, 2026-09-02, on the actual Hetzner host over the tailnet; recovered with no owner action. |
 | 5.7 | VPS reboot → agent reconnects → command succeeds | `PROVEN_REAL` | Owner-reported real matrix from `qualify-cloud.ps1`, 2026-09-02, on the actual Hetzner host over the tailnet. Additionally proven across the reboot: tailnet address unchanged (non-ephemeral node), `/mnt/pagentos-data` re-mounted from fstab, device row survived in `pagentos_prod`. |
 | 5.8 | Tailscale reconnect (link down/up) → command succeeds | `PROVEN_REAL` | Owner-reported real matrix from `qualify-cloud.ps1`, 2026-09-02, on the actual Hetzner host over the tailnet (`tailscale down` / flagless `up` on the host). |

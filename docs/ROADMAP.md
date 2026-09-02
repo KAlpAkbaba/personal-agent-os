@@ -166,7 +166,7 @@ paths tests did not execute) and each is logged in `docs/QUALIFICATION.md` with 
 regression that now covers it. Evidence rules and remaining deliberately-open items live in
 that document; the qualified runtime is frozen.
 
-## RQ-2 — Real-environment qualification: cloud bring-up (CURRENT)
+## RQ-2 — Real-environment qualification: cloud bring-up (CLOSED 2026-09-02)
 
 Goal: the same proof with the Cloud Core on real infrastructure. Hetzner NBG1 host
 provisioned from `infra/opentofu` with **no public application port**; Tailscale connecting
@@ -182,9 +182,95 @@ intervention, with Windows inbound public ports staying closed. Cloud criteria a
 `PROVEN_REAL` only from the actual Hetzner/Tailscale environment. Owner dependencies
 (batched, one at a time): `gh auth login`, Tailscale sign-in/auth key, Hetzner API token.
 
-## M10 — Optimization
+## The product phase (from 2026-09-02)
 
-Gated on RQ-2: no speculative optimization or new feature development until real cloud
+Infrastructure engineering is done and frozen as a proven baseline. What follows is the
+Personal Agent OS *experience*, whose primary interface is voice — not a dashboard.
+Acceptance for every milestone below is REAL only: the owner's real Windows machine,
+microphone, speakers/headset, Turkish speech, network and the real Hetzner Cloud Core;
+real Chrome and live Internet sources for research; a physical phone for mobile.
+Mocks and fixtures remain gates, never `PROVEN_REAL`.
+
+## M12 — Realtime Voice Foundation (CURRENT)
+
+Goal: ChatGPT-Voice-class conversational interaction, as close as publicly available APIs
+and this architecture allow — behavioural and perceptual parity, never a claim of an
+identical backend. A traditional STT → text LLM → TTS pipeline is NOT sufficient for the
+primary conversation path: it uses the best available native realtime speech-to-speech,
+full-duplex-capable provider behind a capability-driven abstraction (ADR-0034), so a
+superior model can replace it without redesigning the OS. OpenAI Realtime is the primary
+candidate where it gives the best experience; nothing is hardcoded to one model name.
+
+Shape: owner microphone ↔ realtime WebRTC/audio transport ↔ Realtime Voice Provider ↔
+sideband tool channel ↔ Hetzner Cloud Core ↔ Memory / Browser / Research / Windows Agent /
+Artifacts / Evolution. Raw audio does not detour through Hetzner when a secure direct
+media path is lower-latency; Hetzner stays the authoritative orchestration, tool and
+memory brain over the sideband channel.
+
+Explicit modes, not one pipeline: `ConversationRealtime`, `Narration`, `Transcription`,
+`VoiceIdentity` (never a sole root of authentication; augments device trust + owner
+session). Quantitative latency benchmarks: mic → uplink, end-of-turn → first audible
+response, barge-in → playback stopped, tool-call preamble, tool completion → resumed
+speech; targets under ~150 ms barge-in-to-stop and ~500–700 ms short-turn first response
+where technically achievable — PersonalAgentOS targets, not claims about anyone else.
+Long-running tools speak a short natural preamble and keep the session alive; the owner
+can redirect mid-task without a disconnected conversation. Gap analysis in
+`docs/VOICE_GAP_ANALYSIS.md`, specification in `docs/M12_REALTIME_VOICE_SPEC.md`,
+acceptance in `docs/ACCEPTANCE_TESTS.md` (M12).
+
+## M13 — Real Browser + Research
+
+The owner's actual use case, end to end and real: voice/text request → Hetzner planner →
+research plan → Tailscale → real Windows Browser Agent → real Chrome → multiple live
+sources → evidence extraction → deduplication/ranking → synthesis → executive summary →
+expandable detail → durable artifact → memory → voice presentation. Semantic
+DOM/accessibility/browser APIs first; coordinates only as a last resort; the owner's
+existing Chrome session only where explicitly authorised. Every fact keeps provenance and
+is labelled source fact / model inference / recommendation / uncertainty. Proceeds in
+parallel with M12 where foundations are independent.
+
+## M14 — Voice + Browser/Research integration
+
+"Son üç gündeki yapay zekâ ajanlarıyla ilgili önemli gelişmeleri araştır" spoken, answered
+with a natural progress preamble, researched through Cloud Core while the voice session
+stays alive, redirectable mid-flight ("Sadece OpenAI kısmına bak"), and presented in the
+executive-assistant structure.
+
+## M15 — Mobile/Web continuous session
+
+One owner session across Windows desktop, browser and phone: research asked from the
+phone, planned on Hetzner, executed by the authorised Windows Browser Agent, artifact
+generated; "Oku" from the phone narrates on the active phone session; "Gönder" returns the
+PDF/DOCX through the active client; "Aç" on the desktop opens it through the qualified
+Windows Agent.
+
+## M16 — Executive Assistant + Personal Memory
+
+Default structure: Executive Summary → Why it matters → Recommended action → Details on
+demand. Memory distinguishes owner facts, preferences, project facts, procedures, episodic
+history, temporary conversation state and inferred preferences; explicit owner memory
+outranks inference; correction, deletion, provenance and confidence are first-class;
+explicit preferences are never silently rewritten from behaviour.
+
+## M17 — Long-document narration
+
+"Oku" / "Dur" (persist the exact cursor) / "Devam" (resume from it) / "İkinci maddeyi
+tekrar oku" (semantic navigation, not audio replay); the cursor holds artifact, section,
+paragraph/chunk, position and presentation context; never pre-synthesises an 80-page
+document.
+
+## M18 — Production Self-Evolution
+
+The original goal, in production: a genuinely missing capability is detected, said
+naturally ("Bunun için araştırma yeteneğine ihtiyacım var. Modülü hazırlıyorum."), then
+gap detection → specification → isolated worktree/sandbox → tests → security review →
+independent reviewer → shadow → canary → promotion → registry → retry of the original
+request. Never a hot edit of the running core; the proven recovery/security roots stay
+protected.
+
+## M10 — Optimization (deferred behind the product phase)
+
+Gated on real use of M12+: no speculative optimization or new feature development until real cloud
 qualification completes. Only after real use:
 
 - local voice fallback;
