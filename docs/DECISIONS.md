@@ -1318,3 +1318,79 @@ Consequences: the qualified runtime is unchanged in behaviour; the companion bin
 one assembly and NAudio, which the deployment engine redeploys as any other companion
 change. Real acceptance (spec §10 order of proof) still needs the owner's microphone,
 which nothing here attempted.
+
+## ADR-0038 — M12 track B: OpenAI Realtime adapter shape and simulator eligibility (2026-09-02)
+
+Status: Accepted (reversible implementation decisions under ADR-0034/ADR-0036)
+
+Context: the first real native speech-to-speech adapter
+(`app/voice/providers_openai_realtime.py`) now sits behind the capability abstraction
+track A merged. The vendor facts it relies on are the citation-backed survey in
+`docs/research/realtime-providers-2026-09.md`; several of them are marked UNVERIFIED
+there and stay so here. No network call and no key are needed by any test.
+
+Decisions:
+
+1. **The adapter mints credentials and defines the client contract; it never holds
+   the media leg.** `mint_credential` is the M4 `ProviderRequest` pattern (pure request
+   builder, lazily-sent, inert without a key). `open_session` raises
+   `CAPABILITY_MISSING` deliberately: the media session is the client's (spec §1), and
+   a Cloud Core relay would put audio through Hetzner. The credential carries a
+   **transport descriptor** (`EphemeralCredential.transport_descriptor`: SDP endpoint,
+   `oai-events` data channel, WebSocket URL, pcm16/24 kHz/mono) so Companion and web
+   clients open the leg from data, not from vendor knowledge baked into client code.
+   `to_client_dict` includes the key only when the descriptor is non-empty, so the
+   simulator's client shape is unchanged.
+2. **Session configuration is baked in server-side at mint time.** The
+   `RealtimeProvider.mint_credential` protocol gained an optional
+   `session_config: RealtimeSessionConfig` (language, persona `instructions`, tool
+   manifest, optional voice). The session service builds it once and hands the *same*
+   object to the adapter and to the client payload, so the persona/tools a client sees
+   can never differ from what the vendor session was created with, and a client cannot
+   substitute its own. The simulator and the M4 fake accept and ignore it.
+3. **`end_of_turn = semantic` maps to `turn_detection.type = semantic_vad` with
+   `eagerness = low` by default** (setting `PAGENTOS_VOICE_REALTIME_OPENAI_EAGERNESS`),
+   per the survey's recommendation for the Turkish hesitation guard (spec §5);
+   `interrupt_response` stays on so server-side barge-in truncation is active. Input
+   transcription is enabled with the `tr` language hint so clients can report
+   utterances for Cloud Core's intent resolver.
+4. **tr-TR is declared for eligibility, not quality.** The vendor publishes no Turkish
+   statement for the conversational model (survey §1.5). The declaration carries a code
+   comment saying so; Turkish quality is measured on the owner's machine (ADR-0034 §6).
+   `interrupt_latency_class` is `medium`, not `fast`, until the harness measures it.
+5. **Tool calls are emitted once per stream**, from
+   `response.function_call_arguments.done`; `response.done` only lists the call ids it
+   closed. Cloud Core's `/tool-calls` is idempotent on `(session, call_id)` regardless.
+   Barge-in on the provider side is `response.cancel` → `output_audio_buffer.clear`
+   (WebRTC only) → `conversation.item.truncate` (when the client knows the item and how
+   much was heard); the client's local playback stop stays first (spec §5). Tool results
+   are `conversation.item.create(function_call_output)` → `response.create`; a
+   long-running tool's Turkish preamble is an explicit client-driven `response.create`
+   because the survey found no vendor "keep talking" primitive.
+6. **The simulator is a candidate only in `environment=dev`** or behind
+   `PAGENTOS_VOICE_REALTIME_SIMULATOR_ENABLED=true`. Track A flagged that the gate could
+   otherwise answer a production session when the real adapter lacks its key. Outside
+   dev the runtime neither registers a simulated-only provider nor accepts one handed to
+   it explicitly (reported as rejected with `simulated_transport_disabled_outside_dev`),
+   and the health check lists **inactive** adapters with the reason
+   (`provider_auth_missing` → the owner action). The real adapter is registered only
+   when its key is present, so selection can never pick a provider that would fail
+   every mint.
+7. **Model names live in the adapter and `Settings` only** (`gpt-realtime` default,
+   unversioned alias per the survey's advice against pinning a dated snapshot;
+   transcription model likewise a setting). The standing key is used for one header,
+   is never returned or logged, and every error from the mint path is scrubbed of it
+   (tested against a transport error that echoes the header).
+8. **The opt-in smoke (`scripts/realtime_smoke.py`) is the owner's credential step.**
+   With no key it exits 3 without attempting anything; with a key it mints one
+   credential and prints expiry, the transport descriptor and the vendor's *scrubbed*
+   session echo — never a value — so the GA `audio.input/output` field names the
+   clients will be built on are confirmed live (survey §4 item 7) before track C/D
+   code depends on them.
+
+Consequences: tracks C/D open the media leg from `credential.transport_descriptor` and
+drive the data channel with `map_server_event` / `barge_in_commands` /
+`tool_result_commands` semantics (ported, not re-invented). The owner credential ask
+(ADR-0034 §7) is now unblocked: provision `PAGENTOS_VOICE_OPENAI_API_KEY` and run the
+smoke. Azure Voice Live remains the documented second adapter candidate if measured
+Turkish quality is insufficient.

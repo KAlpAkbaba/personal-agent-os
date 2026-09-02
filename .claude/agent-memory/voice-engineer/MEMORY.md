@@ -1,3 +1,3 @@
 # Memory Index
 
-- [M12 realtime voice state](project_m12_realtime_state.md) — tracks A+E done 2026-09-02; B/C/D open; simulator = gate only, acceptance real-only
+- [M12 realtime voice state](project_m12_realtime_state.md) — A+E+B done 2026-09-02; C/D open; simulator dev-only gate; owner credential step = realtime_smoke.py
