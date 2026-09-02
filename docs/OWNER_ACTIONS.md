@@ -114,13 +114,20 @@ Three commands from the repository root, in an ordinary (non-elevated) PowerShel
    .\scripts\secret-store.ps1 -Run "uv run python scripts/realtime_smoke.py --mode probe" -WorkingDirectory services\api
    ```
 
-3. Ship it to the cloud host over Tailscale SSH. The value travels on stdin only, lands in
-   `/opt/pagentos/.env` (0600, root), the API restarts, and the script confirms from this
-   machine that the realtime surface now lists `openai-realtime`:
+3. Put it live on the Cloud Core — **this is the current action**. The key is already in
+   `/opt/pagentos/.env` on the host (shipped on 2026-09-02, stdin only). What was missing is
+   the M12 release itself: the host still ran the 1 Sep tree and image, whose compose had no
+   wiring for the variable, so a restart changed nothing (ADR-0042). One command releases
+   HEAD, recreates only the api workload, and proves the key inside the running container,
+   the provider in `/v1/system/health`, and one real client-secret mint from the host:
 
    ```powershell
-   .\scripts\cloud\set-cloud-secret.ps1 -Name PAGENTOS_VOICE_OPENAI_API_KEY
+   .\scripts\cloud\release-cloud-core.ps1
    ```
+
+   Add `-Preflight` first to validate without changing anything. For the NEXT secret (any
+   provider), the command is `.\scripts\cloud\set-cloud-secret.ps1 -Name <NAME>`, which now
+   fails unless the recreated workload actually carries the variable.
 
 Then tell the agent it is done (a word is enough). What happens next, automatically: the
 cloud health check is re-verified, and the next action prepared is the real-microphone

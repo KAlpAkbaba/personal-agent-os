@@ -295,6 +295,16 @@ if (-not $Fast) {
     Assert-ExitCode "cloud secret tests"
   }
 
+  Invoke-Step "Cloud Core release transaction (PS5.1 + Git Bash)" {
+    # ADR-0042: the host ran a copied tree from the first deployment, so a "restart" after
+    # installing a secret changed nothing. The release (git archive -> app.next -> validate
+    # -> swap -> build -> migrate -> recreate ONLY the api -> verify -> rollback on failure)
+    # is proven here with a real native fake ssh/scp and a fake docker under Git Bash.
+    $script = Join-Path $repoRoot "scripts\tests\cloud-release.tests.ps1"
+    & (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -NoProfile -File $script
+    Assert-ExitCode "cloud release tests"
+  }
+
   Invoke-Step "Config swap transaction (PS5.1)" {
     # A real broker switch died inside [IO.File]::Replace: PowerShell binds $null to a
     # [string] parameter as an EMPTY string, which .NET refuses as a path. These reproduce

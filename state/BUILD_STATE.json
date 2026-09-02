@@ -4,7 +4,7 @@
   "current_milestone": "M12_REALTIME_VOICE_FOUNDATION",
   "status": "IN_PROGRESS_AWAITING_OWNER_CREDENTIAL",
   "last_completed_milestone": "REAL_CLOUD_BRINGUP",
-  "last_updated": "2026-09-02T17:15:00+03:00",
+  "last_updated": "2026-09-02T21:30:00+03:00",
   "qualification": {
     "matrix": "docs/QUALIFICATION.md",
     "owner_queue": "docs/OWNER_ACTIONS.md",
@@ -23,7 +23,7 @@
     "last_updated": "2026-09-02"
   },
   "owner_actions_pending": [
-    "CURRENT: deploy PAGENTOS_VOICE_OPENAI_API_KEY to the cloud host - scripts/cloud/set-cloud-secret.ps1 -Name PAGENTOS_VOICE_OPENAI_API_KEY (local smoke PROVEN 2026-09-02). Then the real-microphone Turkish voice session (its own single action). Later: Chrome authorisation for M13; a phone for M15.",
+    "CURRENT: release the M12 Cloud Core and put the stored key live - .\\scripts\\cloud\release-cloud-core.ps1 (ADR-0042). Then the real-microphone Turkish voice session (its own single action). Later: Chrome authorisation for M13; a phone for M15.",
     "M8 asset enrollment: enroll the real hosts/networks/devices you authorize, with evidence and scope.",
     "HARD GATE - runtime confinement before enabling any I/O-capable generated operation or a non-deterministic skill generator (M7 review verdict (d)).",
     "Deferred: 2.2b fresh-logon companion autostart and full Windows reboot proof land incidentally at the next natural sign-out/reboot.",
@@ -50,8 +50,9 @@
     "tests": "API unit 1533 -> 1609 (+ realtime sessions/sideband/adapter/bench/intents); Agent.Tests 138 -> 145 (existing unmodified); Companion.Audio.Tests 0 -> 134; apps/web vitest 0 -> 36; PS5.1 cloud-secret suite 33 (real native fake ssh); 44 scripts syntax-linted",
     "qualification": "docs/QUALIFICATION.md Stage 6: 14 rows pre-registered, all NOT_YET_PROVEN. Simulator/fakes gate the code and prove nothing.",
     "known_unverified": "vendor Turkish quality; usable ephemeral lifetime under real media (credential-time TTL is honoured: 59 s observed for 60 s); provider speech-during-tool behaviour; all WASAPI code untested on hardware; companion session.update codec still beta-era names (credential-time config proven live)",
-    "next": "OWNER: deploy the key to the Hetzner Cloud Core (docs/OWNER_ACTIONS.md item 6 step 3, one command). THEN: real-microphone Turkish session on the owner's PC with the benchmark harness -> Stage 6 rows.",
+    "next": "OWNER: .\\scripts\\cloud\release-cloud-core.ps1 (one command; -Preflight to validate only). THEN: real-microphone Turkish session on the owner's PC -> Stage 6 rows.",
     "last_updated": "2026-09-02",
-    "live_provider_contract": "PROVEN LIVE 2026-09-02 with gpt-realtime-2.1 (ADR-0038 addendum): minimal client_secrets contract + every M12 layer (expires_after, output_modalities, audio_formats, transcription tr, semantic_vad low + interrupt_response, instructions, tools) minted; vendor echo confirms GA nesting; cedar accepted; model discovery shows nothing newer than 2.1. One incompatibility found and fixed: dotted tool names -> reversible '.'<->'__' mapping at the vendor boundary."
+    "live_provider_contract": "PROVEN LIVE 2026-09-02 with gpt-realtime-2.1 (ADR-0038 addendum): minimal client_secrets contract + every M12 layer (expires_after, output_modalities, audio_formats, transcription tr, semantic_vad low + interrupt_response, instructions, tools) minted; vendor echo confirms GA nesting; cedar accepted; model discovery shows nothing newer than 2.1. One incompatibility found and fixed: dotted tool names -> reversible '.'<->'__' mapping at the vendor boundary.",
+    "cloud_release_status": "NOT YET RELEASED to Hetzner: the host runs the 1 Sep tree/image (no M12 code, compose without the key wiring, alembic 0010); the key IS in /opt/pagentos/.env. ADR-0042: release-cloud-core.ps1 ships HEAD, recreates only the api, verifies key PRESENT in the container + provider in health + one real mint from the host; set-cloud-secret.ps1 now fails unless the workload proves the variable. Suites: cloud-secret 38, cloud-release 23 (real bash transactions under Git Bash with fake docker/curl)."
   }
 }

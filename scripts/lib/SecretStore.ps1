@@ -69,7 +69,37 @@ function Get-StoredSecretValue {
     }
 }
 
-function ConvertTo-NativeArgument {
+function New-RemoteSecretInstallCommand {
+    <#
+    .SYNOPSIS
+        The bash the Cloud Core host runs for set-cloud-secret.ps1: the shipped transaction
+        script (scripts/cloud/install-env-secret.sh) with NAME and paths as arguments - the
+        value arrives on stdin. Exit codes: 64 nothing on stdin, 65 unsafe, 66 env file
+        missing, 67 compose does not wire NAME, 68 workload lacks NAME after recreate, 69
+        provider not listed, 70 self-test failed, 71 compose invalid, 72 env posture wrong,
+        127 host tree lacks the script (release first).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][string]$EnvFile,
+        [Parameter(Mandatory = $true)][string]$RepoRoot,
+        [AllowEmptyString()][string]$ExpectProvider = "",
+        [AllowEmptyString()][string]$Verify = "",
+        [switch]$Restart
+    )
+    if (-not (Test-SecretName -Name $Name)) { throw "invalid secret name '$Name'" }
+    foreach ($p in @($EnvFile, $RepoRoot)) {
+        if ($p -cnotmatch '^/[A-Za-z0-9_./-]+$') { throw "unsafe remote path '$p'" }
+    }
+    if ($ExpectProvider -cnotmatch '^[A-Za-z0-9_.-]*$') { throw "unsafe provider name '$ExpectProvider'" }
+    if ($Verify -match "['`"`$\\]") { throw "the verify command may not contain quotes, backslashes or '$'" }
+    $recreate = if ($Restart) { "1" } else { "0" }
+    return ("bash '$RepoRoot/scripts/cloud/install-env-secret.sh' '$Name' '$EnvFile' '$RepoRoot' " +
+            "'$ExpectProvider' $recreate '$Verify'")
+}
+
+function ConvertTo-NativeCallArgument {
     <#
     .SYNOPSIS
         Escape one argument for a native .exe under Windows PowerShell 5.1.

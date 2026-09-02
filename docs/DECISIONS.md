@@ -1623,7 +1623,7 @@ Decisions:
 2. **Windows PowerShell 5.1 native-argument quoting is handled explicitly and proven.**
    5.1 does not escape embedded double quotes when it hands an argument to a native
    .exe, so a remote command containing `"$name"` would reach `ssh.exe` torn apart.
-   `ConvertTo-NativeArgument` (scripts/lib/SecretStore.ps1) applies the C-runtime rule,
+   `ConvertTo-NativeCallArgument` (scripts/lib/SecretStore.ps1) applies the C-runtime rule,
    and cloud-secret.tests.ps1 proves it byte for byte against a real native process
    compiled in the test (`Add-Type -OutputType ConsoleApplication`), including the
    CR that a Windows pipe appends to the value (stripped on the host, not trusted away).
@@ -1687,3 +1687,58 @@ not from documentation:
 Still open, honestly: the companion's `session.update` codec still uses beta-era field
 names for mid-session updates (credential-time configuration is what the probe proved);
 it is exercised only by the real-microphone session, which is the next owner step.
+
+## ADR-0042 — Cloud Core releases are a transaction; a secret is live only when the running workload proves it (2026-09-02)
+
+Context: after the owner shipped `PAGENTOS_VOICE_OPENAI_API_KEY` to the host, the file had
+it and the running `pagentos-prod-api` did not. Diagnosed read-only on the host: `/opt/
+pagentos/app` is a COPY of the tree from the first deployment (1 Sep), not a git checkout;
+its compose had no wiring for the variable; the running image was built before M12
+existed (no adapter, no realtime routes, no `voice_realtime` health check); the database
+was at migration 0010. A restart of an unchanged definition changes nothing, and the
+old `set-cloud-secret.ps1` accepted that as success. The credential, the DPAPI store and
+the transfer were never the problem.
+
+Decisions:
+
+1. **A release is `git archive HEAD` → scp → `app.next` → host transaction.** Only
+   committed content ships (no `.env`, no local files). `scripts/cloud/release-cloud-core.sh`
+   validates the NEW tree's compose against the host env file and the env posture BEFORE
+   touching anything (`--preflight` stops here and leaves nothing behind), keeps the previous
+   image as `pagentos/cloud-core:prev` and the previous tree at `app.prev`, swaps, builds
+   the api image, runs `alembic upgrade head`, recreates ONLY the api workload
+   (`--no-deps --force-recreate --wait`; PostgreSQL/Redis/MinIO/Temporal are never rebuilt or
+   recreated), checks health, and — when the provider key is on the host — proves it is
+   PRESENT inside the running container (length + 12-hex SHA-256 fingerprint only), that
+   health lists `openai-realtime`, and that one real client-secret mint from the host
+   succeeds. Any failure after the swap rolls back tree and image and recreates the api;
+   additive migrations are not downgraded. `RELEASE` in the tree records the sha and the
+   driver verifies it from Windows over the tailnet.
+2. **A secret change is the same transaction minus build/migrate, and it FAILS unless the
+   workload proves it.** `scripts/cloud/install-env-secret.sh` (value on stdin only):
+   atomic env-file update → posture 600 root → compose config validation → the compose
+   must WIRE the name (exit 67: "release first") → recreate only the api → PRESENT inside
+   the actual container or exit 68 → health lists the expected provider or exit 69 → one
+   real provider call inside the container or exit 70. `set-cloud-secret.ps1` maps each
+   code to its remedy and never shows a value; runtime verification reports
+   PRESENT/MISSING, length and fingerprint.
+3. **The host-side scripts are tested as transactions, on Windows, under Git Bash.**
+   `cloud-release.tests.ps1` and `cloud-secret.tests.ps1` run the real bash scripts with a
+   fake `docker` whose container exposes the variable only after `up --force-recreate`
+   and a fake `curl`, and drive the Windows scripts through a real native fake ssh/scp
+   (5.1 quoting, stdin-only value). Covered: the incident itself (unwired compose → 67,
+   nothing recreated), "file has it, workload never does" → 68, provider absent → 69,
+   self-test failure → 70 with the vendor line scrubbed, invalid compose → 71 before any
+   change, rollback restoring tree and image, preflight leaving nothing behind, and that
+   no `up` ever names a dependency.
+4. **Lessons that became code.** `Console.In.ReadToEnd()` in a native fake blocks forever
+   on an inherited pipe: the drivers now hand children a closed stdin (`$null |`, `ssh -n`);
+   MSYS bash wants `/c/...` inside `PATH` while accepting `C:/...` for file arguments; a
+   fake whose `" run "` pattern matched `sh -c "uv run …"` silently hid a self-test
+   failure — case order is part of a fake's contract.
+
+Consequences: the owner's command to put the existing stored key live is the release
+(`scripts/cloud/release-cloud-core.ps1`), which ships the M12 Cloud Core and verifies the
+key end to end; `set-cloud-secret.ps1` is the tool for the NEXT secret. Nothing in the
+PROVEN_REAL device/cloud baseline changed: the same host, env file, database, dependency
+containers, tailnet path and device registration; only the api tree/image moves.
