@@ -265,7 +265,11 @@ if ("vps-reboot" -in $Scenarios) {
 if ("tailscale-reconnect" -in $Scenarios) {
     Invoke-Scenario -Name "Tailscale disconnect/reconnect (host side)" -Headers $headers -DeviceId $deviceId -RecoverBudget $OnlineTimeoutSeconds -Disrupt {
         # Detached on the host: dropping the tailnet also drops THIS ssh session.
-        [void](Invoke-Remote -Command "nohup sh -c 'tailscale down; sleep 25; tailscale up --ssh --accept-dns=true' >/dev/null 2>&1 &" -TimeoutSeconds 30)
+        # `tailscale up` with NO flags: it restores the saved prefs (RunSSH, CorpDNS, the
+        # pagentos-core hostname). Passing some flags but not all is refused by Tailscale
+        # ("requires mentioning all non-default flags") - checked against the real host
+        # before this ran, where exactly that refusal appeared.
+        [void](Invoke-Remote -Command "nohup sh -c 'tailscale down; sleep 25; tailscale up' >/dev/null 2>&1 &" -TimeoutSeconds 30)
         Write-Host "  tailnet dropped on the host for ~25s"
         Start-Sleep -Seconds 30
     }
