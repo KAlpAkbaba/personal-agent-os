@@ -259,6 +259,8 @@ def create_session(
             # provider) and the owner's perceptual profile, recorded for the benchmark
             "voice": voice,
             "voice_profile": voice_profile,
+            # the provider's model id, so the evidence record names what spoke
+            "model": str(getattr(provider, "model", "") or "") or None,
         },
         transcript_summary="",
         expires_at=now + timedelta(seconds=session_ttl_s),
@@ -747,6 +749,7 @@ def close_session(
             "reason": reason[:64], "lifetime_ms": int((now - created).total_seconds() * 1000),
             "barge_in_count": int((row.context_json or {}).get("barge_in_count", 0)),
         })
+        snapshot_benchmark_at_close(db, row)
         db.commit()
     return {"session_id": str(row.id), "state": row.state, "closed_at": _iso(row.closed_at)}
 
@@ -818,11 +821,54 @@ def benchmark_report(db: Session, row: RealtimeSessionRow) -> RealtimeBenchRepor
     return build_report(
         events, source=SOURCE_CLIENT,
         context={"session_id": str(row.id), "provider": row.provider,
+                 "model": (row.context_json or {}).get("model"),
                  "transport": row.transport, "client_kind": row.client_kind,
                  "voice": (row.context_json or {}).get("voice"),
                  "voice_profile": (row.context_json or {}).get("voice_profile"),
+                 "state": row.state,
+                 "started_at": _iso(row.created_at) if getattr(row, "created_at", None) else None,
+                 "ended_at": _iso(row.closed_at) if row.closed_at else None,
+                 "benchmark_snapshot_at_close": bool(
+                     (row.context_json or {}).get(BENCHMARK_SNAPSHOT_KEY)),
                  "noise": noise_summary(rows)},
     )
+
+
+BENCHMARK_SNAPSHOT_KEY = "benchmark_at_close"
+
+
+def snapshot_benchmark_at_close(db: Session, row: RealtimeSessionRow) -> None:
+    """Persist the evidence record on the session row itself when it closes.
+
+    The report is always recomputable from the durable audit rows, but a snapshot
+    taken at close time survives later changes to the report code and makes the
+    row self-describing: ids, provider, model, voice, profile, timestamps, the
+    five latency metrics, barge-in and noise counters. Never audio, never a
+    credential; the provider's ephemeral secret is not part of any of it."""
+    report = benchmark_report(db, row).to_dict()
+    report.pop("events", None)
+    ctx = dict(row.context_json or {})
+    ctx[BENCHMARK_SNAPSHOT_KEY] = report
+    _set_context(row, ctx)
+
+
+def list_recent_sessions(db: Session, *, limit: int = 20) -> list[dict[str, Any]]:
+    """Newest first: what an owner needs to pick a session without transcribing a UUID."""
+    rows = db.execute(
+        select(RealtimeSessionRow).order_by(RealtimeSessionRow.created_at.desc()).limit(limit)
+    ).scalars()
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        ctx = row.context_json or {}
+        out.append({
+            "session_id": str(row.id), "state": row.state, "provider": row.provider,
+            "model": ctx.get("model"), "voice": ctx.get("voice"),
+            "voice_profile": ctx.get("voice_profile"), "client_kind": row.client_kind,
+            "started_at": _iso(row.created_at) if getattr(row, "created_at", None) else None,
+            "ended_at": _iso(row.closed_at) if row.closed_at else None,
+            "benchmark_snapshot_at_close": bool(ctx.get(BENCHMARK_SNAPSHOT_KEY)),
+        })
+    return out
 
 
 __all__ = [
@@ -851,7 +897,9 @@ __all__ = [
     "get_session",
     "get_tool_call",
     "handle_tool_call",
+    "list_recent_sessions",
     "noise_summary",
+    "snapshot_benchmark_at_close",
     "record_client_events",
     "require_leg",
     "require_live",

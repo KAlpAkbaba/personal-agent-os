@@ -2005,3 +2005,43 @@ sending; the log free of Authorization/bearer/ephemeral credential and bounded t
 Turkish wording). Two existing assertions moved from `requests[0]` to the POST because the
 probe now precedes the create. `pnpm --dir apps/web test`, `lint`, `build` green.
 Redeploying Cloud Core (contract v2) restores the marin/cedar choice with no client change.
+
+## ADR-0046 — The voice evidence record is durable, self-describing and never transcribed by hand (2026-09-03)
+
+Context: after a real qualification session the owner's benchmark fetch returned
+`unknown realtime session`. Traced on the real host: the row `2b3517ed-…-47898ea23334`
+exists in `pagentos_prod` (state `closed`, client events and the close audit row present;
+the api log shows 200s for its `/events` and `/close`), and the one 404 in the log is for
+`…47898e2a3334` — two hex characters transposed while the owner transcribed the id from
+browser network traffic, because the page shows only its first 8 characters. Both the
+browser (through the same-origin proxy) and the fetch script talk to the same api whose
+database is `postgres:5432/pagentos_prod`; nothing deletes session rows; a closed
+session was already fetchable. The defect was the human step the design demanded.
+
+Decisions:
+
+1. **The record is separated from the provider's ephemeral session.** The provider's
+   client secret is minted per leg, handed to the client once, never stored; its expiry
+   or revocation touches nothing on Cloud Core. The PersonalAgentOS session row plus the
+   `voice_*` audit rows are the durable evidence, and they now name what spoke: `model`
+   is recorded at create next to `voice` and `voice_profile`; the benchmark context
+   carries `session_id, provider, model, transport, client_kind, voice, voice_profile,
+   state, started_at, ended_at`, the five latency metrics, barge-in and the `noise`
+   block (false starts / barge-ins / turns, gate opens, calibrations). The report is
+   always recomputable from the audit rows and, at close, a snapshot (without the raw
+   event list) is persisted on the row (`benchmark_at_close`) so the record survives
+   later report-code changes and never depends on browser memory.
+2. **Nobody types a UUID.** `GET /v1/voice/realtime/sessions` (owner-gated) lists the
+   newest sessions with state, voice, model and timestamps; `fetch-benchmark.ps1 -Latest`
+   fetches the newest, and on a 404 the script prints the recent sessions instead of
+   leaving the owner to guess; the `/voice` page gains **Session ID kopyala** (copies the
+   canonical full UUID, still available after disconnect) and shows the full id in
+   diagnostics.
+3. **The lifecycle is a regression test**: create with a voice → WebRTC timing events +
+   mic metrics + calibration → close as a provider-secret revocation → a later fetch
+   succeeds with metrics, noise counters, timestamps and the snapshot; the row is listed
+   first; a mistyped id is a 404 and never an evidence loss.
+
+Consequences: the qualification instructions use `-Latest` or the copy button; the
+Cloud Core is released once more (api workload only) so the listing and the snapshot
+exist in production; the qualified baseline, the provider and the K66 work are untouched.

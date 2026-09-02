@@ -288,6 +288,21 @@ async def realtime_contract_document() -> dict[str, Any]:
     return realtime_contract()
 
 
+@router.get("/sessions")
+async def list_sessions(request: Request, limit: int = 20) -> dict[str, Any]:
+    """Newest sessions first (ids, state, provider, model, voice, timestamps) so the
+    owner never transcribes a UUID by hand: a wrong character was the whole
+    'unknown realtime session' incident."""
+    runtime = _runtime(request)
+    limit = max(1, min(int(limit), 100))
+
+    def work() -> dict[str, Any]:
+        with runtime.session() as db:
+            return {"sessions": service.list_recent_sessions(db, limit=limit)}
+
+    return await asyncio.to_thread(work)
+
+
 @router.get("/sessions/{session_id}")
 async def get_session_state(request: Request, session_id: uuid.UUID) -> dict[str, Any]:
     runtime = _runtime(request)

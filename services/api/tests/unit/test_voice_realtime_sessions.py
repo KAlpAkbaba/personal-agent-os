@@ -678,3 +678,57 @@ def test_benchmark_carries_the_noise_counters_and_the_calibration_in_force(wired
     empty = _create(client)["session_id"]
     empty_bench = client.get(f"/v1/voice/realtime/sessions/{empty}/benchmark").json()
     assert empty_bench["context"]["noise"]["reported"] is False
+
+
+def test_lifecycle_benchmark_fetchable_after_disconnect_and_secret_revocation(wired) -> None:
+    # The owner's qualification: create -> WebRTC events + mic metrics -> disconnect ->
+    # the provider's ephemeral secret is gone -> a later benchmark fetch must SUCCEED
+    # from the durable record, never from browser memory. (The real incident was a
+    # mistyped id; this pins that a correct id always works after close.)
+    client, _, runtime, _, _, _ = wired
+    from app.voice.providers_openai_realtime import OpenAIRealtimeProvider
+
+    sim = runtime.providers[next(iter(runtime.providers))]
+    sim.require_supported_voice = OpenAIRealtimeProvider("k").require_supported_voice  # type: ignore[attr-defined]
+    created = _create(client, voice="cedar")
+    sid = created["session_id"]
+    assert client.post(f"/v1/voice/realtime/sessions/{sid}/events", json={"events": [
+        {"kind": "mic_speech_start", "t_ms": 100, "turn": 0},
+        {"kind": "end_of_turn", "t_ms": 900, "turn": 0},
+        {"kind": "first_audio", "t_ms": 1400, "turn": 0},
+        {"kind": "barge_in_start", "t_ms": 3000, "turn": 1},
+        {"kind": "playback_stopped", "t_ms": 3090, "turn": 1},
+        {"kind": "state", "t_ms": 3100,
+         "payload": {"mic_calibration": 1, "noise_floor_db": -52.0, "env": 1}},
+        {"kind": "state", "t_ms": 5000,
+         "payload": {"mic_metrics": 1, "false_starts": 1, "false_barge_ins": 0,
+                     "false_turns": 0, "gate_opens": 4, "session_end": 1}},
+    ]}).status_code == 200
+    # disconnect: the client closes; the provider's ephemeral credential is revoked/expired
+    # on the provider side and is not part of any record here
+    closed = client.post(f"/v1/voice/realtime/sessions/{sid}/close",
+                         json={"reason": "provider_secret_revoked"}).json()
+    assert closed["state"] == "closed"
+    # "later": a fresh request, nothing cached
+    bench = client.get(f"/v1/voice/realtime/sessions/{sid}/benchmark")
+    assert bench.status_code == 200, bench.text
+    doc = bench.json()
+    ctx = doc["context"]
+    assert ctx["session_id"] == sid and ctx["state"] == "closed"
+    assert ctx["provider"] == "simulator" and ctx["voice"] == "cedar"
+    assert ctx["voice_profile"] == "arbor"
+    assert ctx["started_at"] and ctx["ended_at"] and ctx["benchmark_snapshot_at_close"] is True
+    assert ctx["noise"]["false_starts"] == 1 and ctx["noise"]["calibrations"] == 1
+    assert doc["metrics"]  # latency metrics computed from the durable client timestamps
+    with runtime.session() as db:
+        row = db.get(RealtimeSessionRow, uuid.UUID(sid))
+        snap = row.context_json["benchmark_at_close"]
+        assert snap["context"]["voice"] == "cedar" and "events" not in snap
+        assert "secret" not in repr(snap) and "credential" not in repr(snap).lower()
+    # the row is listed, newest first, with everything the owner needs to pick it
+    listing = client.get("/v1/voice/realtime/sessions?limit=5").json()["sessions"]
+    assert listing[0]["session_id"] == sid and listing[0]["state"] == "closed"
+    assert listing[0]["voice"] == "cedar" and listing[0]["benchmark_snapshot_at_close"] is True
+    # a mistyped id is a 404, not an evidence loss
+    wrong = sid[:-4] + ("0000" if not sid.endswith("0000") else "1111")
+    assert client.get(f"/v1/voice/realtime/sessions/{wrong}/benchmark").status_code == 404
