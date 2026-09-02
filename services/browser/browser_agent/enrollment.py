@@ -77,7 +77,19 @@ def is_loopback_endpoint(endpoint: str) -> bool:
 
 @dataclass(frozen=True, slots=True)
 class BrowserEnrollment:
-    """One authorized browser attachment record."""
+    """One authorized browser attachment record.
+
+    ``owner_authorized_for_research`` (M13, ADR-0035) is a separate, narrower
+    grant from merely being enrolled for attach: an enrollment lets the agent
+    *connect* to an existing browser (dev/test throwaway browsers included);
+    this flag is the owner's explicit statement that THIS enrollment's browser
+    session may additionally be driven by *autonomous* research tasks (no
+    human at the keyboard approving each page). Defaults to ``False`` so a
+    plain attach enrollment (e.g. the ephemeral dev/test one
+    ``BrowserSession.connect_existing_cdp`` creates) never silently grants
+    autonomous research use of a real profile. See
+    :func:`require_research_authorization`.
+    """
 
     id: str
     name: str
@@ -85,6 +97,7 @@ class BrowserEnrollment:
     endpoint: str
     capability_overrides: dict[str, bool] = field(default_factory=dict)
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    owner_authorized_for_research: bool = False
 
     @classmethod
     def cdp_loopback(
@@ -94,6 +107,7 @@ class BrowserEnrollment:
         name: str = "",
         enrollment_id: str | None = None,
         capability_overrides: dict[str, bool] | None = None,
+        owner_authorized_for_research: bool = False,
     ) -> BrowserEnrollment:
         """Convenience constructor for the implemented transport."""
         return cls(
@@ -102,6 +116,7 @@ class BrowserEnrollment:
             transport=Transport.CDP_LOOPBACK,
             endpoint=endpoint,
             capability_overrides=dict(capability_overrides or {}),
+            owner_authorized_for_research=owner_authorized_for_research,
         )
 
     def as_dict(self) -> dict[str, object]:
@@ -112,6 +127,7 @@ class BrowserEnrollment:
             "endpoint": self.endpoint,
             "capability_overrides": dict(self.capability_overrides),
             "created_at": self.created_at.isoformat(),
+            "owner_authorized_for_research": self.owner_authorized_for_research,
         }
 
     @classmethod
@@ -124,6 +140,11 @@ class BrowserEnrollment:
                 endpoint=str(data["endpoint"]),
                 capability_overrides=dict(data.get("capability_overrides") or {}),  # type: ignore[arg-type]
                 created_at=datetime.fromisoformat(str(data["created_at"])),
+                # Absent in records written before M13: default False, never
+                # inferred as True (a missing field must never widen scope).
+                owner_authorized_for_research=bool(
+                    data.get("owner_authorized_for_research", False)
+                ),
             )
         except (KeyError, ValueError, TypeError) as exc:
             raise BrowserError(
@@ -219,3 +240,50 @@ class EnrollmentRegistry:
         tmp = self._path.with_suffix(self._path.suffix + ".tmp")
         tmp.write_text(payload, encoding="utf-8")
         os.replace(tmp, self._path)
+
+
+# ------------------------------------------------------------------------- #
+# M13 research authorization gate
+# ------------------------------------------------------------------------- #
+
+
+def require_research_authorization(enrollment: BrowserEnrollment) -> None:
+    """Refuse unless this enrollment carries explicit research authorization.
+
+    This is the enforcement point CLAUDE.md's browser rule and the M13 spec
+    require: the owner's real (existing-session) Chrome may be driven by an
+    autonomous research task ONLY where the registry records an explicit
+    grant. Everything else — unknown enrollment, plain attach enrollment
+    without the flag, revoked/replaced record — refuses fail-safe with
+    ``security_scope_error`` (never ``capability_missing``: this is a scope
+    decision, not a missing feature, and never silently falls back by itself —
+    the caller decides whether to fall back to ``ManagedBackend``).
+    """
+    if not enrollment.owner_authorized_for_research:
+        raise BrowserError(
+            ErrorClass.SECURITY_SCOPE_ERROR,
+            f"enrollment {enrollment.id!r} ({enrollment.name!r}) is not "
+            "authorized for autonomous research use; the owner must "
+            "explicitly grant owner_authorized_for_research on this "
+            "enrollment, or the research task must use ManagedBackend with a "
+            "dedicated profile instead",
+            retryable=False,
+            evidence={"enrollment_id": enrollment.id, "enrollment_name": enrollment.name},
+        )
+
+
+def get_research_authorized_enrollment(
+    registry: EnrollmentRegistry, enrollment_id: str
+) -> BrowserEnrollment:
+    """Look up ``enrollment_id`` in ``registry`` and require research grant.
+
+    The single call a research orchestrator should make before constructing
+    an ``ExistingSessionBackend`` for an autonomous (no owner-in-the-loop)
+    task: unknown id -> ``validation_error`` (``registry.get``), known but
+    unauthorized -> ``security_scope_error``
+    (:func:`require_research_authorization`). Only a registered enrollment
+    with the explicit flag reaches the caller.
+    """
+    enrollment = registry.get(enrollment_id)
+    require_research_authorization(enrollment)
+    return enrollment

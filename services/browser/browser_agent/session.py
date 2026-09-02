@@ -425,6 +425,49 @@ class BrowserSession:
             except Exception as exc:
                 raise self._act_error(exc, "upload", spec) from exc
 
+    async def title(self) -> str:
+        """The current page's document title (DOM-level, no coordinates).
+
+        Used by M13 evidence extraction for source provenance — the highest
+        control surface available for "what is this page called" (CLAUDE.md
+        browser rule: DOM/Playwright before accessibility tree, before
+        vision/coordinates).
+        """
+        async with self._oplog("title"):
+            try:
+                return await self._page.title()
+            except BrowserError:
+                raise
+            except Exception as exc:
+                raise map_playwright_error(
+                    exc,
+                    phase=Phase.ACT,
+                    op="title",
+                    evidence={"url": redact_url(self._page.url)},
+                ) from exc
+
+    async def page_text(self, *, timeout_ms: float = DEFAULT_TIMEOUT_MS) -> str:
+        """Rendered inner text of the whole page body (DOM-level extraction).
+
+        M13 evidence extraction's primary text source: ``body.inner_text()``
+        is a DOM read, one rung above the accessibility snapshot on the
+        control-surface hierarchy and far above vision/coordinates. Callers
+        needing structural (role-labelled) text instead should use
+        :meth:`accessibility_snapshot`.
+        """
+        async with self._oplog("page_text"):
+            try:
+                return await self._page.locator("body").inner_text(timeout=timeout_ms)
+            except BrowserError:
+                raise
+            except Exception as exc:
+                raise map_playwright_error(
+                    exc,
+                    phase=Phase.ACT,
+                    op="page_text",
+                    evidence={"url": redact_url(self._page.url)},
+                ) from exc
+
     async def accessibility_snapshot(
         self, *, timeout_ms: float = DEFAULT_TIMEOUT_MS
     ) -> str:
