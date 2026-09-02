@@ -99,7 +99,9 @@ function Invoke-HostRelease {
     param([string]$Sha = "0123456789abcdef0123456789abcdef01234567", [string]$Mode = "", [hashtable]$Env = @{})
     $cmd = "PAGENTOS_ALLOW_NONROOT_ENV=1 PAGENTOS_BASE='$(& $u $hostBase)' PAGENTOS_API_CONTAINER=fake-api PAGENTOS_HEALTH_URL=http://fake/health FAKE_STATE='$(& $u (Join-Path $hostBase 'state'))' " +
            (($Env.GetEnumerator() | ForEach-Object { "$($_.Key)='$($_.Value)' " }) -join "") +
-           "PATH='$(& $posix $fakeBin):'`"`$PATH`" bash '$(& $u $hostScript)' $Sha $Mode"
+           "PATH='$(& $posix $fakeBin):'`"`$PATH`" bash '$(& $u $hostScript)' $Sha $Mode 2>&1"
+    # stderr is merged INSIDE bash: PowerShell would otherwise render it as error records
+    # wrapped at console width, splitting a message where a regex expects it whole.
     $previous = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
