@@ -78,6 +78,15 @@ class Settings(BaseSettings):
     voice_speaker_object_prefix: str = "voice/speaker"
     voice_benchmark_object_prefix: str = "voice/benchmark"
 
+    # Realtime voice (M12, ADR-0034/0035). ConversationRealtime providers are
+    # chosen by declared capability; this list only orders otherwise-equal
+    # candidates. The simulator needs no key and is always registered. The
+    # per-session provider credential is short-lived (seconds) and the session
+    # record itself expires after its TTL.
+    voice_realtime_provider_preference: tuple[str, ...] = ("openai-realtime", "simulator")
+    voice_realtime_credential_ttl_s: int = 600
+    voice_realtime_session_ttl_s: int = 3600
+
     # Device broker (M1). Heartbeat interval is sent to agents in the welcome
     # frame; liveness timeout is heartbeat_interval * liveness_factor.
     broker_heartbeat_interval_s: float = 10.0

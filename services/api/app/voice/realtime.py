@@ -25,8 +25,10 @@ bounded. It carries no audio bytes.
 from __future__ import annotations
 
 import itertools
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Any
 
 from app.voice.errors import VoiceError, VoiceErrorClass
 
@@ -158,6 +160,20 @@ class RealtimeSession:
 
     def request_barge_in(self) -> None:
         self.owner_speech_started("dur")
+
+    # M12: the extended RealtimeSessionHandle contract. The control FSM carries
+    # no audio and no provider events, so these are recorded, never acted on;
+    # the deterministic full-duplex behaviour lives in app/voice/simulator.py.
+
+    def on_audio(self, sink: Callable[[bytes], None]) -> None:
+        self._emit("audio_sink_attached")
+
+    def on_event(self, sink: Callable[[Any], None]) -> None:
+        self._emit("event_sink_attached")
+
+    def submit_tool_result(self, call_id: str, result: dict[str, Any]) -> None:
+        self._require_open()
+        self._emit("tool_result_submitted", call_id)
 
     def close(self) -> None:
         self.state = RealtimeState.CLOSED

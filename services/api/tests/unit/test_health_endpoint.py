@@ -33,6 +33,9 @@ ALL_CHECKS = DEPENDENCY_CHECKS | {
     "security",
     "identity",
     "mobile",
+    # M12 adds "voice_realtime" (capability-selected ConversationRealtime
+    # provider + tool manifest; the simulator is always selectable offline).
+    "voice_realtime",
 }
 
 

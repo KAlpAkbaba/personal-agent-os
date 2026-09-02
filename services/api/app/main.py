@@ -35,6 +35,8 @@ from app.security.routes import router as security_router
 from app.security.runtime import SecurityRuntime
 from app.selfhealing.routes import router as selfhealing_router
 from app.selfhealing.runtime import SelfHealingRuntime
+from app.voice.realtime_sessions.routes import router as voice_realtime_router
+from app.voice.realtime_sessions.runtime import RealtimeVoiceRuntime
 from app.voice.routes import router as voice_router
 from app.voice.runtime import VoiceRuntime
 
@@ -53,6 +55,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     security = SecurityRuntime(settings)
     identity = IdentityRuntime(settings)
     mobile = MobileRuntime(settings)
+    # M12: realtime voice sessions push sideband messages over the broker's
+    # device WebSocket, so the runtime is handed the broker (never a socket).
+    voice_realtime = RealtimeVoiceRuntime(settings, broker=broker)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -91,6 +96,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.security = security
     app.state.identity = identity
     app.state.mobile = mobile
+    app.state.voice_realtime = voice_realtime
     # Scoped CORS: the web shell is a separate origin from the API. Allow only
     # the configured loopback/private web origins (never "*"); M0 review #3.
     app.add_middleware(
@@ -112,6 +118,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(broker_ws_router)
     app.include_router(artifacts_router)
     app.include_router(voice_router)
+    app.include_router(voice_realtime_router)
     app.include_router(narration_router)
     app.include_router(memory_router)
     app.include_router(selfhealing_router)
@@ -142,6 +149,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # M9: push-transport posture (which real provider a credential would
         # activate) + the share/export bound. No I/O, no secrets.
         checks["mobile"] = await asyncio.to_thread(mobile.health_check)
+        # M12: which ConversationRealtime provider a session would select, by
+        # capability, and why (no I/O, no secrets).
+        checks["voice_realtime"] = await asyncio.to_thread(voice_realtime.health_check)
         degraded = any(check["status"] != "ok" for check in checks.values())
         status = "degraded" if degraded else "ok"
         logger.info("health_checked", status=status, checks=checks)

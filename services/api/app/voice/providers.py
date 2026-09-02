@@ -23,7 +23,9 @@ from __future__ import annotations
 
 import math
 import struct
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol, runtime_checkable
 
 from app.voice.errors import VoiceError, VoiceErrorClass
@@ -93,6 +95,26 @@ def is_wav(audio: bytes) -> bool:
 # ------------------------------------------------------------ capability + I/O
 
 
+# M12 realtime capability vocabulary (M12_REALTIME_VOICE_SPEC §2).
+END_OF_TURN_SILENCE = "silence"
+END_OF_TURN_SERVER_VAD = "server_vad"
+END_OF_TURN_SEMANTIC = "semantic"
+END_OF_TURN_MODES = (END_OF_TURN_SILENCE, END_OF_TURN_SERVER_VAD, END_OF_TURN_SEMANTIC)
+
+TRANSPORT_WEBRTC = "webrtc"
+TRANSPORT_WEBSOCKET = "websocket"
+TRANSPORT_SIMULATED = "simulated"  # in-process, deterministic; the simulator only
+TRANSPORTS = (TRANSPORT_WEBRTC, TRANSPORT_WEBSOCKET, TRANSPORT_SIMULATED)
+
+INTERRUPT_LATENCY_FAST = "fast"  # provider cancels an in-flight response well under 150 ms
+INTERRUPT_LATENCY_MEDIUM = "medium"
+INTERRUPT_LATENCY_SLOW = "slow"
+INTERRUPT_LATENCY_NA = "n/a"
+INTERRUPT_LATENCY_CLASSES = (
+    INTERRUPT_LATENCY_FAST, INTERRUPT_LATENCY_MEDIUM, INTERRUPT_LATENCY_SLOW, INTERRUPT_LATENCY_NA,
+)
+
+
 @dataclass(frozen=True, slots=True)
 class ProviderCapabilities:
     """VOICE_SPEC §7 capability declaration, shared by all three subsystems."""
@@ -110,9 +132,47 @@ class ProviderCapabilities:
     latency_class: str  # "realtime" | "low" | "batch"
     requires_api_key: bool
 
+    # ---- M12 realtime vocabulary (M12_REALTIME_VOICE_SPEC §2). Every field
+    # defaults to "not offered" so the M4 TTS/STT adapters and their tests are
+    # untouched; a realtime adapter declares what it actually provides and the
+    # pure selector (app/voice/selection.py) chooses by these, never by name.
+    speech_to_speech: bool = False
+    full_duplex: bool = False
+    barge_in: bool = False
+    end_of_turn: str = END_OF_TURN_SILENCE  # "silence" | "server_vad" | "semantic"
+    tool_calling: bool = False
+    transports: tuple[str, ...] = ()  # subset of TRANSPORTS
+    ephemeral_credentials: bool = False
+    input_formats: tuple[str, ...] = ()
+    interrupt_latency_class: str = INTERRUPT_LATENCY_NA  # "fast" | "medium" | "slow" | "n/a"
+
+    def __post_init__(self) -> None:
+        if self.end_of_turn not in END_OF_TURN_MODES:
+            raise ValueError(f"end_of_turn must be one of {END_OF_TURN_MODES}, "
+                             f"got {self.end_of_turn!r}")
+        if self.interrupt_latency_class not in INTERRUPT_LATENCY_CLASSES:
+            raise ValueError(f"interrupt_latency_class must be one of "
+                             f"{INTERRUPT_LATENCY_CLASSES}, got {self.interrupt_latency_class!r}")
+        unknown = [t for t in self.transports if t not in TRANSPORTS]
+        if unknown:
+            raise ValueError(f"unknown transports {unknown}; known: {TRANSPORTS}")
+
     def supports_language(self, language: str) -> bool:
         base = language.split("-")[0].lower()
         return any(lang.split("-")[0].lower() == base for lang in self.languages)
+
+    def is_conversation_capable(self, language: str = "tr-TR") -> bool:
+        """The hard requirement for ``ConversationRealtime`` (spec §2):
+        speech-to-speech AND full-duplex AND barge-in AND tool calling AND the
+        language. Preferences (semantic end-of-turn, WebRTC) rank, not gate."""
+        return (
+            self.kind == "realtime"
+            and self.speech_to_speech
+            and self.full_duplex
+            and self.barge_in
+            and self.tool_calling
+            and self.supports_language(language)
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -128,6 +188,15 @@ class ProviderCapabilities:
             "output_formats": list(self.output_formats),
             "latency_class": self.latency_class,
             "requires_api_key": self.requires_api_key,
+            "speech_to_speech": self.speech_to_speech,
+            "full_duplex": self.full_duplex,
+            "barge_in": self.barge_in,
+            "end_of_turn": self.end_of_turn,
+            "tool_calling": self.tool_calling,
+            "transports": list(self.transports),
+            "ephemeral_credentials": self.ephemeral_credentials,
+            "input_formats": list(self.input_formats),
+            "interrupt_latency_class": self.interrupt_latency_class,
         }
 
 
@@ -198,6 +267,73 @@ class STTProvider(Protocol):
     def transcribe(self, audio: bytes, *, language: str = "tr-TR") -> STTResult: ...
 
 
+# ---- M12 realtime session vocabulary (M12_REALTIME_VOICE_SPEC §1, §4).
+#
+# A realtime session handle is the client-side view of ONE provider media
+# session: audio in, audio out, structured events, barge-in, tool-result
+# submission. Cloud Core never holds the media leg in production (the direct
+# media path is client <-> provider); the handle exists so the simulator and
+# the unit tests can drive the exact same contract offline.
+
+RT_SPEECH_STARTED = "speech_started"  # owner speech detected (server VAD / semantic)
+RT_SPEECH_STOPPED = "speech_stopped"  # end of the owner's turn
+RT_RESPONSE_STARTED = "response_started"
+RT_RESPONSE_AUDIO = "response_audio"  # one audio frame; payload carries byte count only
+RT_RESPONSE_DONE = "response_done"  # payload: {"cancelled": bool}
+RT_TOOL_CALL = "tool_call"  # payload: {"call_id", "name", "arguments"}
+RT_ERROR = "error"
+RT_NETWORK_LOST = "network_lost"
+RT_NETWORK_RESTORED = "network_restored"
+REALTIME_EVENT_KINDS = (
+    RT_SPEECH_STARTED, RT_SPEECH_STOPPED, RT_RESPONSE_STARTED, RT_RESPONSE_AUDIO,
+    RT_RESPONSE_DONE, RT_TOOL_CALL, RT_ERROR, RT_NETWORK_LOST, RT_NETWORK_RESTORED,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class RealtimeSessionEvent:
+    """A structured provider event with a session-relative timestamp in ms.
+
+    ``at_ms`` is the session clock (monotonic, 0 at open) so latency can be
+    computed by subtraction; the payload never carries audio bytes (frames are
+    delivered to the audio sink, the event only records their size)."""
+
+    kind: str
+    at_ms: int
+    payload: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"kind": self.kind, "at_ms": self.at_ms, "payload": dict(self.payload)}
+
+
+@dataclass(frozen=True, slots=True)
+class EphemeralCredential:
+    """A per-session, short-lived provider credential minted THROUGH the adapter.
+
+    The owner-provisioned provider key (Settings) is never in this object; a
+    client receives only ``secret`` and it is scoped to one media session.
+    ``secret`` is never persisted and never logged/audited."""
+
+    provider: str
+    secret: str
+    expires_at: datetime
+    transport: str
+    session_ref: str  # provider-side session identifier (opaque, non-secret)
+
+    def to_client_dict(self) -> dict[str, Any]:
+        return {
+            "provider": self.provider,
+            "secret": self.secret,
+            "expires_at": self.expires_at.isoformat().replace("+00:00", "Z"),
+            "transport": self.transport,
+            "session_ref": self.session_ref,
+        }
+
+
+AudioSink = Callable[[bytes], None]
+EventSink = Callable[[RealtimeSessionEvent], None]
+
+
 @runtime_checkable
 class RealtimeProvider(Protocol):
     name: str
@@ -206,11 +342,18 @@ class RealtimeProvider(Protocol):
 
     def open_session(self, *, language: str = "tr-TR") -> RealtimeSessionHandle: ...
 
+    def mint_credential(
+        self, *, session_id: str, ttl_s: int, transport: str
+    ) -> EphemeralCredential: ...
+
 
 @runtime_checkable
 class RealtimeSessionHandle(Protocol):
     def push_audio(self, chunk: bytes) -> None: ...
+    def on_audio(self, sink: AudioSink) -> None: ...
+    def on_event(self, sink: EventSink) -> None: ...
     def request_barge_in(self) -> None: ...
+    def submit_tool_result(self, call_id: str, result: dict[str, Any]) -> None: ...
     def close(self) -> None: ...
 
 
@@ -419,6 +562,18 @@ class FakeRealtimeProvider:
         from app.voice.realtime import RealtimeSession
 
         return RealtimeSession(provider=self.name, language=language)
+
+    def mint_credential(
+        self, *, session_id: str, ttl_s: int, transport: str = TRANSPORT_SIMULATED
+    ) -> EphemeralCredential:
+        """Control-only fake: a labelled, non-secret placeholder credential."""
+        return EphemeralCredential(
+            provider=self.name,
+            secret=f"fake-realtime-credential:{session_id}",
+            expires_at=datetime.now(UTC) + timedelta(seconds=ttl_s),
+            transport=transport,
+            session_ref=f"fake:{session_id}",
+        )
 
 
 # ======================================================= real adapter skeletons
@@ -782,9 +937,26 @@ class FasterWhisperSTTProvider:
 
 __all__ = [
     "AUDIO_FORMATS",
+    "END_OF_TURN_MODES",
+    "END_OF_TURN_SEMANTIC",
+    "END_OF_TURN_SERVER_VAD",
+    "END_OF_TURN_SILENCE",
+    "INTERRUPT_LATENCY_CLASSES",
+    "INTERRUPT_LATENCY_FAST",
+    "INTERRUPT_LATENCY_MEDIUM",
+    "INTERRUPT_LATENCY_NA",
+    "INTERRUPT_LATENCY_SLOW",
+    "REALTIME_EVENT_KINDS",
+    "TRANSPORTS",
+    "TRANSPORT_SIMULATED",
+    "TRANSPORT_WEBRTC",
+    "TRANSPORT_WEBSOCKET",
+    "AudioSink",
     "AzureSTTProvider",
     "AzureTTSProvider",
     "ElevenLabsTTSProvider",
+    "EphemeralCredential",
+    "EventSink",
     "FailingTTSProvider",
     "FakeRealtimeProvider",
     "FakeSTTProvider",
@@ -795,6 +967,8 @@ __all__ = [
     "ProviderCapabilities",
     "ProviderRequest",
     "RealtimeProvider",
+    "RealtimeSessionEvent",
+    "RealtimeSessionHandle",
     "STTProvider",
     "STTResult",
     "TTSProvider",

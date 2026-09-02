@@ -19,6 +19,7 @@ import app.narration.models  # noqa: F401 - register narration tables on Base.me
 import app.security.models  # noqa: F401 - register security tables on Base.metadata
 import app.selfhealing.models  # noqa: F401 - register self-healing tables on Base.metadata
 import app.voice.models  # noqa: F401 - register voice tables on Base.metadata
+import app.voice.realtime_sessions.models  # noqa: F401 - register M12 realtime tables
 from app.config import get_settings
 from app.models import Base
 

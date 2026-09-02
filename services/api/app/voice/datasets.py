@@ -72,4 +72,73 @@ STT_CASES: tuple[STTCase, ...] = (
 )
 
 
-__all__ = ["STTCase", "STT_CASES", "TTSCase", "TTS_CASES"]
+# ------------------------------------------------------- M12 realtime eval sets
+# ACCEPTANCE_TESTS §M12: mixed Turkish/English terminology benchmarked on at
+# least this list, Turkish characters/phonetics, and a real hesitation set for
+# the false-barge rate. These are the machine-readable half of
+# docs/VOICE_TURKISH_EVAL_SET.md §M12; scoring them for real is owner-gated.
+
+M12_TERMINOLOGY: tuple[str, ...] = (
+    "PagentOS", "Tailscale", "Hetzner", "PostgreSQL", "PowerShell", "FortiGate",
+    "OpenAI", "Claude", "Windows", "Kubernetes", "Redis", "Temporal",
+)
+
+TURKISH_PHONETICS: tuple[str, ...] = ("ı", "İ", "ğ", "ş", "ç", "ö", "ü")
+
+M12_TERMINOLOGY_CASES: tuple[TTSCase, ...] = (
+    TTSCase("m12-term-1", "mixed_tr_en",
+            "PagentOS, Tailscale üzerinden Hetzner'daki PostgreSQL veritabanına bağlanıyor."),
+    TTSCase("m12-term-2", "mixed_tr_en",
+            "PowerShell betiği FortiGate yapılandırmasını Windows makinesinden okudu."),
+    TTSCase("m12-term-3", "mixed_tr_en",
+            "OpenAI ve Claude modellerini aynı görevde karşılaştırdım."),
+    TTSCase("m12-term-4", "mixed_tr_en",
+            "Kubernetes kümesinde Redis önbellek, Temporal ise iş akışlarını yönetiyor."),
+)
+
+TURKISH_PHONETICS_CASES: tuple[TTSCase, ...] = (
+    TTSCase("m12-phon-1", "phonetics", "Işık ılık, İstanbul'da ıslık çaldı."),
+    TTSCase("m12-phon-2", "phonetics", "Ağaç yağmurda eğildi, dağ sisle örtüldü."),
+    TTSCase("m12-phon-3", "phonetics", "Şişli'de şaşırtıcı bir çarşı gördüm."),
+    TTSCase("m12-phon-4", "phonetics", "Çocuklar çiçekli bahçede koşuyor."),
+    TTSCase("m12-phon-5", "phonetics", "Öğle vakti gölde ördekler yüzüyordu."),
+    TTSCase("m12-phon-6", "phonetics", "Üzüm, üç gün üst üste güneş gördü."),
+)
+
+#: Turkish hesitation set (spec §5): natural pauses/fillers that a semantic
+#: end-of-turn MUST NOT treat as the end of the owner's turn. ``cut_after``
+#: marks where a naive silence detector would cut; the utterance continues.
+HESITATION_CASES: tuple[STTCase, ...] = (
+    STTCase("m12-hes-1", "hesitation", "şey... raporun ikinci bölümünü bir daha oku"),
+    STTCase("m12-hes-2", "hesitation", "yani... aslında sadece OpenAI kısmına bak"),
+    STTCase("m12-hes-3", "hesitation", "hani şu... Tailscale ayarını değiştirdiğimiz gün"),
+    STTCase("m12-hes-4", "hesitation", "ııı... toplantıyı yarına al"),
+    STTCase("m12-hes-5", "hesitation", "bir de... eee... özet geç ama maliyet kısmını atla"),
+    STTCase("m12-hes-6", "hesitation", "PostgreSQL'e... yani veritabanına bakar mısın"),
+)
+
+M12_INTENT_UTTERANCES: tuple[STTCase, ...] = (
+    STTCase("m12-int-stop", "command", "dur"),
+    STTCase("m12-int-resume", "command", "devam"),
+    STTCase("m12-int-repeat", "command", "tekrar oku"),
+    STTCase("m12-int-item", "command", "ikinci maddeyi tekrar oku"),
+    STTCase("m12-int-slower", "command", "biraz daha yavaş"),
+    STTCase("m12-int-faster", "command", "biraz daha hızlı"),
+    STTCase("m12-int-summary", "command", "özet geç"),
+    STTCase("m12-int-detail", "command", "detaya gir"),
+    STTCase("m12-int-skip", "command", "burayı atla"),
+)
+
+
+__all__ = [
+    "HESITATION_CASES",
+    "M12_INTENT_UTTERANCES",
+    "M12_TERMINOLOGY",
+    "M12_TERMINOLOGY_CASES",
+    "STTCase",
+    "STT_CASES",
+    "TTSCase",
+    "TTS_CASES",
+    "TURKISH_PHONETICS",
+    "TURKISH_PHONETICS_CASES",
+]
