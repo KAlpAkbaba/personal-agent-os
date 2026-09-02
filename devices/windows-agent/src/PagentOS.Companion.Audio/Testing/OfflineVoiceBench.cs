@@ -129,11 +129,12 @@ public sealed class OfflineVoiceBench(BenchOptions? options = null)
         var startedBefore = o.Fsm.EventKinds().Count(k => k == "owner_speech_started");
         await FeedAsync(devices, synth, voicedMs: 400, ct).ConfigureAwait(false);
         await WaitForAsync(() => o.Fsm.EventKinds().Count(k => k == "owner_speech_started") > startedBefore, 2000, ct).ConfigureAwait(false);
+        var handledBefore = o.ProviderEventsHandled;
         provider.EmitTranscript("yarın toplantıyı şey", final: false);
-        await Task.Delay(5, ct).ConfigureAwait(false);
+        await WaitForAsync(() => o.ProviderEventsHandled > handledBefore, 2000, ct).ConfigureAwait(false);
         var endedBefore = o.Fsm.EventKinds().Count(k => k == "owner_speech_ended");
         await FeedAsync(devices, synth, 0, 700, ct).ConfigureAwait(false);
-        await Task.Delay(20, ct).ConfigureAwait(false);
+        await o.DrainAsync().ConfigureAwait(false); // every one of those silent frames has been judged
         var cutOff = o.Fsm.EventKinds().Count(k => k == "owner_speech_ended") > endedBefore;
         log.Add(cutOff ? "DEFECT: hesitation was cut off" : "ok: 700ms pause after 'şey' kept the turn open");
         provider.EmitTranscript("ertele", final: true);
@@ -151,7 +152,8 @@ public sealed class OfflineVoiceBench(BenchOptions? options = null)
         await FeedAsync(devices, synth, voicedMs: 500, ct).ConfigureAwait(false);
         await FeedSilenceUntilAsync(devices, () => o.Fsm.EventKinds().Count(k => k == "owner_speech_ended") > endedBefore, 3000, ct).ConfigureAwait(false);
         await WaitForAsync(() => o.Fsm.State == VoiceClientState.AssistantSpeaking, 5000, ct).ConfigureAwait(false);
-        await Task.Delay(_options.ProviderAudioChunkMs * 2, ct).ConfigureAwait(false);
+        var audible = devices.CurrentPlayback!.EnqueuedBytes + Format.BytesForMs(_options.ProviderAudioChunkMs);
+        await WaitForAsync(() => devices.CurrentPlayback!.EnqueuedBytes >= audible, 5000, ct).ConfigureAwait(false);
         await FeedAsync(devices, synth, voicedMs: 300, ct).ConfigureAwait(false);
         await WaitForAsync(() => o.Fsm.BargeInCount > bargeInsBefore, 3000, ct).ConfigureAwait(false);
         var endedBefore2 = o.Fsm.EventKinds().Count(k => k == "owner_speech_ended");
@@ -170,7 +172,7 @@ public sealed class OfflineVoiceBench(BenchOptions? options = null)
         await WaitForAsync(() => o.Relay!.RunningCalls.Count > 0, 5000, ct).ConfigureAwait(false);
         var callId = o.Relay!.RunningCalls.First();
         await WaitForAsync(() => o.Fsm.EventKinds().Contains("assistant_progress"), 5000, ct).ConfigureAwait(false);
-        await Task.Delay(_options.ProviderResponseMs, ct).ConfigureAwait(false);
+        await WaitForAsync(() => provider.Quiet, 10000, ct).ConfigureAwait(false);
         await DrainAsync(o, devices, provider, ct).ConfigureAwait(false);
         pushes.Push(SidebandPushKinds.ToolCompleted, new JsonObject { ["call_id"] = callId, ["result"] = new JsonObject { ["summary"] = "araştırma tamam" } });
         await WaitForAsync(() => o.Relay!.RunningCalls.Count == 0, 5000, ct).ConfigureAwait(false);
@@ -216,8 +218,9 @@ public sealed class OfflineVoiceBench(BenchOptions? options = null)
         // Let the provider finish whatever it started before the next scenario begins, so a
         // late response cannot masquerade as an extra barge-in in the numbers.
         await WaitForAsync(() => provider.Quiet, 5000, ct).ConfigureAwait(false);
+        await o.DrainAsync().ConfigureAwait(false);
         devices.CurrentPlayback!.Drain();
-        await Task.Delay(10, ct).ConfigureAwait(false);
+        await o.DrainAsync().ConfigureAwait(false);
         // Keep the uplink alive between scenario steps as a real microphone would.
         await FeedSilenceUntilAsync(devices, () => o.Fsm.State is VoiceClientState.Idle or VoiceClientState.Listening, 1000, ct).ConfigureAwait(false);
         await WaitForAsync(() => provider.Quiet, 5000, ct).ConfigureAwait(false);
