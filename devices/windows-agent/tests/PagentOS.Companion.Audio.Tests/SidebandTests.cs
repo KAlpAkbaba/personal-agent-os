@@ -14,42 +14,59 @@ public sealed class SidebandTests
 {
     private const string Token = "pagentos_sess_test_token";
 
+    private static CreateSessionRequest Create() => new("windows_desktop", "websocket");
+
     [Fact]
-    public void A_grant_is_parsed_and_its_credential_never_reaches_the_audit_shape()
+    public void A_grant_is_parsed_from_the_servers_shape_and_its_credential_never_reaches_the_audit_shape()
     {
+        // The exact body of POST /v1/voice/realtime/sessions (service._leg_payload + EphemeralCredential.to_client_dict).
         var body = JsonNode.Parse("""
-            {"session_id":"rts-1","provider":"openai-realtime","transport":"websocket",
-             "credential":{"client_secret":{"value":"ek_abc","expires_at":1}},
-             "tools":[{"name":"echo"}],"instructions":"Türkçe konuş","expires_at":"2026-09-02T12:10:00Z",
-             "provider_session_config":{"voice":"marin"}}
+            {"session_id":"7f4c2a1e-0000-4000-8000-000000000001","provider":"openai-realtime","transport":"websocket",
+             "credential":{"provider":"openai-realtime","secret":"ek_abc","expires_at":"2026-09-02T12:10:00Z",
+                           "transport":"websocket","session_ref":"sess_x",
+                           "transport_descriptor":{"transport":"websocket","websocket_url":"wss://api.openai.com/v1/realtime","query":{"model":"gpt-realtime"}}},
+             "tools":[{"name":"clock.now","description":"","parameters":{"type":"object"},"long_running":false}],
+             "instructions":"Türkçe konuş","language":"tr-TR","expires_at":"2026-09-02T13:00:00Z","state":"created"}
             """)!.AsObject();
 
         var grant = RealtimeSessionGrant.Parse(body);
 
-        Assert.Equal("rts-1", grant.SessionId);
-        Assert.Equal("ek_abc", grant.CredentialValue());
+        Assert.Equal("7f4c2a1e-0000-4000-8000-000000000001", grant.SessionId);
+        Assert.Equal("ek_abc", grant.CredentialSecret());
+        Assert.Equal("wss://api.openai.com/v1/realtime", grant.TransportDescriptor!["websocket_url"]!.GetValue<string>());
         Assert.Single(grant.Tools!);
-        Assert.Equal("marin", grant.ProviderSessionConfig!["voice"]!.GetValue<string>());
+        Assert.Equal("tr-TR", grant.Language);
+        Assert.Equal("created", grant.State);
+        Assert.Equal(new DateTimeOffset(2026, 9, 2, 12, 10, 0, TimeSpan.Zero), grant.CredentialExpiresAt);
         Assert.DoesNotContain("ek_abc", grant.ToAuditJson().ToJsonString());
     }
 
     [Fact]
-    public void A_bare_string_credential_is_accepted_and_a_missing_id_is_refused()
+    public void A_credential_that_is_not_the_documented_object_is_refused_not_guessed()
     {
-        var grant = RealtimeSessionGrant.Parse(JsonNode.Parse("""{"session_id":"s","provider":"p","transport":"websocket","credential":"ek_plain"}""")!.AsObject());
-        Assert.Equal("ek_plain", grant.CredentialValue());
-
-        Assert.Throws<FormatException>(() => RealtimeSessionGrant.Parse(JsonNode.Parse("""{"provider":"p","transport":"t","credential":"x"}""")!.AsObject()));
+        // Before ADR-0039 the client accepted value/client_secret/token/key/ephemeral_key/a bare string.
+        // The contract has exactly one key, `secret`; anything else is a server the client does not know.
+        Assert.Throws<FormatException>(() => RealtimeSessionGrant.Parse(JsonNode.Parse("""{"session_id":"s","provider":"p","transport":"websocket","credential":"ek_plain"}""")!.AsObject()));
+        Assert.Throws<FormatException>(() => RealtimeSessionGrant.Parse(JsonNode.Parse("""{"session_id":"s","provider":"p","transport":"websocket","credential":{"value":"ek"}}""")!.AsObject()));
+        Assert.Throws<FormatException>(() => RealtimeSessionGrant.Parse(JsonNode.Parse("""{"session_id":"s","provider":"p","transport":"websocket","credential":{"client_secret":{"value":"ek"}}}""")!.AsObject()));
+        Assert.Throws<FormatException>(() => RealtimeSessionGrant.Parse(JsonNode.Parse("""{"provider":"p","transport":"t","credential":{"secret":"x"}}""")!.AsObject()));
         Assert.Throws<FormatException>(() => RealtimeSessionGrant.Parse(JsonNode.Parse("""{"session_id":"s","provider":"p","transport":"t"}""")!.AsObject()));
+        // the simulator omits transport_descriptor entirely; that is a valid grant
+        var simulator = RealtimeSessionGrant.Parse(JsonNode.Parse("""{"session_id":"s","provider":"simulator","transport":"simulated","credential":{"provider":"simulator","secret":"sim","expires_at":"2026-09-02T12:10:00Z","transport":"simulated","session_ref":"r"}}""")!.AsObject());
+        Assert.Null(simulator.TransportDescriptor);
     }
 
     [Fact]
     public void Tool_results_become_the_function_output_shape_the_provider_expects()
     {
-        Assert.Equal("""{"status":"running","preamble":"Bakıyorum."}""", new ToolCallRelayResult("c", null, null, "running", "Bakıyorum.").OutputJson());
-        Assert.Equal("""{"error":{"class":"x"}}""", new ToolCallRelayResult("c", null, new JsonObject { ["class"] = "x" }, null, null).OutputJson());
-        Assert.Equal("""{"a":1}""", new ToolCallRelayResult("c", JsonNode.Parse("""{"a":1}"""), null, null, null).OutputJson());
-        Assert.Equal("""{"result":null}""", new ToolCallRelayResult("c", null, null, null, null).OutputJson());
+        Assert.Equal("""{"status":"running","preamble":"Bakıyorum."}""", new ToolCallRelayResult("c", "research.start", "running", true, false, null, null, "Bakıyorum.").OutputJson());
+        Assert.Equal("""{"error":{"error_class":"x"}}""", new ToolCallRelayResult("c", "t", "failed", false, false, null, new JsonObject { ["error_class"] = "x" }, null).OutputJson());
+        Assert.Equal("""{"a":1}""", new ToolCallRelayResult("c", "t", "succeeded", false, false, JsonNode.Parse("""{"a":1}"""), null, null).OutputJson());
+        Assert.Equal("""{"result":null}""", new ToolCallRelayResult("c", "t", "succeeded", false, false, null, null, null).OutputJson());
+        // the server's failed-tool shape parses into Error with error_class, as _tool_row_payload writes it
+        var failed = ToolCallRelayResult.Parse(JsonNode.Parse("""{"call_id":"c","name":"nope","status":"failed","long_running":false,"replayed":false,"error":{"error_class":"capability_missing","message":"unknown tool 'nope'","available":["clock.now"]}}""")!.AsObject(), "c");
+        Assert.False(failed.IsRunning);
+        Assert.Equal("capability_missing", failed.Error!["error_class"]!.GetValue<string>());
     }
 
     [Fact]
@@ -58,23 +75,30 @@ public sealed class SidebandTests
         using var cloud = new InProcessFakeCloudCore(Token);
         var client = cloud.CreateSidebandClient();
 
-        var grant = await client.CreateSessionAsync(new CreateSessionRequest("windows-companion", "dev-1", new[] { "websocket" }), CancellationToken.None);
-        Assert.StartsWith("rts-", grant.SessionId);
+        var grant = await client.CreateSessionAsync(Create(), CancellationToken.None);
+        Assert.True(Guid.TryParse(grant.SessionId, out _));
         Assert.Equal("websocket", grant.Transport);
-        Assert.NotNull(grant.CredentialValue());
+        Assert.NotEmpty(grant.CredentialSecret());
+        Assert.Equal("created", grant.State);
 
         var echoed = await client.RelayToolCallAsync(grant.SessionId, "call-1", "echo", """{"x":1}""", CancellationToken.None);
         Assert.Equal(1, echoed.Result!["x"]!.GetValue<int>());
         Assert.False(echoed.IsRunning);
+        Assert.Equal("succeeded", echoed.Status);
+        Assert.False(echoed.Replayed);
 
         var running = await client.RelayToolCallAsync(grant.SessionId, "call-2", "research", "{}", CancellationToken.None);
         Assert.True(running.IsRunning);
+        Assert.True(running.LongRunning);
         Assert.StartsWith("Bakıyorum", running.Preamble);
 
-        var reattached = await client.AttachAsync(grant.SessionId, CancellationToken.None);
-        Assert.Equal(grant.SessionId, reattached!.SessionId);
-        Assert.NotEqual(grant.CredentialValue(), reattached.CredentialValue());
-        Assert.Null(await client.AttachAsync("rts-nope", CancellationToken.None));
+        var reattached = await client.AttachAsync(grant.SessionId, "windows_desktop", null, CancellationToken.None);
+        Assert.Equal(grant.SessionId, reattached!.Grant.SessionId);
+        Assert.NotEqual(grant.CredentialSecret(), reattached.Grant.CredentialSecret());
+        Assert.Null(reattached.PreviousLeg); // same owner session: a reconnect, not a takeover
+        Assert.Equal("active", reattached.State!["state"]!.GetValue<string>());
+        Assert.Null(await client.AttachAsync(Guid.NewGuid().ToString(), "windows_desktop", null, CancellationToken.None));
+        Assert.Equal(0, cloud.Refusals);
     }
 
     [Fact]
@@ -83,41 +107,48 @@ public sealed class SidebandTests
         using var cloud = new InProcessFakeCloudCore(Token);
 
         var bad = cloud.CreateSidebandClient("wrong");
-        var ex = await Assert.ThrowsAsync<SidebandException>(() => bad.CreateSessionAsync(new CreateSessionRequest("windows-companion", null, new[] { "websocket" }), CancellationToken.None));
+        var ex = await Assert.ThrowsAsync<SidebandException>(() => bad.CreateSessionAsync(Create(), CancellationToken.None));
         Assert.Equal(401, ex.StatusCode);
         Assert.False(ex.Transient);
 
         var none = new CloudCoreSidebandClient(cloud.CreateClient(), new StaticOwnerSessionTokenSource(null));
-        await Assert.ThrowsAsync<InvalidOperationException>(() => none.CreateSessionAsync(new CreateSessionRequest("windows-companion", null, new[] { "websocket" }), CancellationToken.None));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => none.CreateSessionAsync(Create(), CancellationToken.None));
         Assert.Equal(1, cloud.Unauthorized);
     }
 
     [Fact]
-    public async Task Re_delivering_an_event_with_the_same_client_seq_is_stored_once()
+    public async Task Events_are_posted_in_the_servers_batch_shape_and_nothing_else()
     {
         using var cloud = new InProcessFakeCloudCore(Token);
         var client = cloud.CreateSidebandClient();
-        var grant = await client.CreateSessionAsync(new CreateSessionRequest("windows-companion", null, new[] { "websocket" }), CancellationToken.None);
-        var record = new VoiceClientEventRecord(7, VoiceClientEvents.SpeechStarted, 12.5, new JsonObject());
+        var grant = await client.CreateSessionAsync(Create(), CancellationToken.None);
+        var record = new VoiceClientEventRecord(7, VoiceClientEvents.MicSpeechStart, 12, 1, new JsonObject { ["reason"] = "vad_onset" });
 
-        await client.ReportEventAsync(grant.SessionId, record, CancellationToken.None);
-        await client.ReportEventAsync(grant.SessionId, record, CancellationToken.None);
+        var ack = await client.ReportEventsAsync(grant.SessionId, new[] { record }, CancellationToken.None);
 
-        Assert.Equal(2, cloud.EventRequests);
-        Assert.Single(cloud.EventsFor(grant.SessionId));
-        Assert.Equal(7, cloud.EventsFor(grant.SessionId)[0]["client_seq"]!.GetValue<long>());
+        Assert.Equal(1, ack.Accepted);
+        Assert.Equal("active", ack.State!["state"]!.GetValue<string>());
+        var stored = Assert.Single(cloud.EventsFor(grant.SessionId));
+        Assert.Equal(new[] { "kind", "t_ms", "turn", "payload" }, stored.Select(p => p.Key).ToArray());
+        Assert.Equal("mic_speech_start", stored["kind"]!.GetValue<string>());
+        Assert.Equal(12, stored["t_ms"]!.GetValue<long>());
+        Assert.Equal(1, stored["turn"]!.GetValue<int>());
+        Assert.Equal("vad_onset", stored["payload"]!["reason"]!.GetValue<string>());
+        // client_seq is bookkeeping, never a wire field (the server model forbids extras)
+        Assert.DoesNotContain("client_seq", record.ToJson().ToJsonString());
+        Assert.Equal(0, cloud.Refusals);
     }
 
     [Fact]
-    public async Task The_reporter_keeps_order_across_an_outage_and_resends_with_the_same_seq()
+    public async Task The_reporter_keeps_order_across_an_outage_and_resends_the_backlog_as_one_batch()
     {
         using var cloud = new InProcessFakeCloudCore(Token);
         var client = cloud.CreateSidebandClient();
-        var grant = await client.CreateSessionAsync(new CreateSessionRequest("windows-companion", null, new[] { "websocket" }), CancellationToken.None);
+        var grant = await client.CreateSessionAsync(Create(), CancellationToken.None);
         var time = new ManualTimeProvider();
         var reporter = new VoiceEventReporter(client, grant.SessionId, time, time.GetTimestamp());
 
-        await reporter.ReportAsync(VoiceClientEvents.SpeechStarted, null, CancellationToken.None);
+        await reporter.ReportAsync(VoiceClientEvents.MicSpeechStart, null, CancellationToken.None);
         cloud.FailNextRequests(1);
         time.AdvanceMs(10);
         await reporter.ReportAsync(VoiceClientEvents.NetworkLost, new JsonObject { ["reason"] = "ws" }, CancellationToken.None);
@@ -132,26 +163,41 @@ public sealed class SidebandTests
         await reporter.FlushAsync(CancellationToken.None);
 
         Assert.Equal(0, reporter.PendingCount);
-        Assert.Equal(new[] { "speech_started", "network_lost", "network_restored" }, cloud.EventNamesFor(grant.SessionId));
-        Assert.Equal(new long[] { 1, 2, 3 }, cloud.EventsFor(grant.SessionId).Select(e => e["client_seq"]!.GetValue<long>()));
-        Assert.Equal(10.0, cloud.EventsFor(grant.SessionId)[1]["client_ts_ms"]!.GetValue<double>(), precision: 3);
-        // Four requests for three events: the one refused with 503 came back with its original seq (2), not a new one.
-        Assert.Equal(4, cloud.EventRequests);
+        Assert.Equal(new[] { "mic_speech_start", "network_lost", "network_restored" }, cloud.EventKindsFor(grant.SessionId));
+        Assert.Equal(new long[] { 1, 2, 3 }, reporter.Delivered.Select(e => e.ClientSeq));
+        Assert.Equal(10, cloud.EventsFor(grant.SessionId)[1]["t_ms"]!.GetValue<long>());
+        // Three requests for three events: one delivered, one refused with 503, then ONE batch carrying the two held back.
+        Assert.Equal(3, cloud.EventRequests);
+        Assert.Equal(3, reporter.BatchesSent);
+        Assert.Equal(0, cloud.Refusals);
     }
 
     [Fact]
-    public async Task The_reporter_refuses_event_names_outside_the_contract()
+    public async Task The_reporter_refuses_kinds_and_payload_keys_the_server_would_refuse_before_posting_them()
     {
         using var cloud = new InProcessFakeCloudCore(Token);
-        var reporter = new VoiceEventReporter(cloud.CreateSidebandClient(), "rts-x", new ManualTimeProvider(), 0);
-        await Assert.ThrowsAsync<ArgumentException>(async () => await reporter.ReportAsync("made_up", null, CancellationToken.None));
+        var reporter = new VoiceEventReporter(cloud.CreateSidebandClient(), Guid.NewGuid().ToString(), new ManualTimeProvider(), 0);
+        // the pre-ADR-0039 vocabulary is gone: these are not kinds Cloud Core knows
+        foreach (var stale in new[] { "made_up", "speech_started", "speech_ended", "mic_uplink", "barge_in", "tool_call_relayed", "tool_result_submitted" })
+        {
+            await Assert.ThrowsAsync<ArgumentException>(async () => await reporter.ReportAsync(stale, null, CancellationToken.None));
+        }
+
+        foreach (var spelling in new[] { "apiKey", "api-key", "API_KEY", "accessToken", "audioPcm", "context", "waveform" })
+        {
+            await Assert.ThrowsAsync<ArgumentException>(async () => await reporter.ReportAsync(VoiceClientEvents.Error, new JsonObject { [spelling] = "v" }, CancellationToken.None));
+            await Assert.ThrowsAsync<ArgumentException>(async () => await reporter.ReportAsync(VoiceClientEvents.Error, new JsonObject { ["nested"] = new JsonObject { [spelling] = "v" } }, CancellationToken.None));
+        }
+
+        await Assert.ThrowsAsync<ArgumentException>(async () => await reporter.ReportAsync(VoiceClientEvents.Error, new JsonObject { ["blob"] = new string('x', 5000) }, CancellationToken.None));
+        Assert.Equal(0, cloud.EventRequests);
     }
 
     private static (ToolCallRelay Relay, FakeMediaLeg Leg, RecordingEventReporter Reporter, VoiceClientStateMachine Fsm, InProcessFakeCloudCore Cloud, string SessionId) BuildRelay(InProcessFakeCloudCore cloud, IReadOnlyList<TimeSpan>? retries = null)
     {
         var time = TimeProvider.System;
         var client = cloud.CreateSidebandClient();
-        var grant = client.CreateSessionAsync(new CreateSessionRequest("windows-companion", null, new[] { "websocket" }), CancellationToken.None).GetAwaiter().GetResult();
+        var grant = client.CreateSessionAsync(Create(), CancellationToken.None).GetAwaiter().GetResult();
         var leg = new FakeMediaLeg(time);
         leg.OpenAsync(grant, new MediaLegOptions(Support.TestSupport.Format, Turn.EndOfTurnMode.Server), CancellationToken.None).GetAwaiter().GetResult();
         var reporter = new RecordingEventReporter(time);
@@ -178,7 +224,8 @@ public sealed class SidebandTests
         Assert.True(submitted.Final);
         Assert.False(submitted.FollowUp);
         Assert.Contains("merhaba", submitted.OutputJson);
-        Assert.Equal(new[] { "tool_call_relayed", "tool_result_submitted" }, reporter.EventNames);
+        Assert.Equal(new[] { "tool_call" }, reporter.EventNames);
+        Assert.Equal("succeeded", reporter.Reports.Single().Data["status"]!.GetValue<string>());
         Assert.Equal(new[] { "tool_call_started", "tool_call_finished" }, fsm.EventKinds());
     }
 
@@ -211,7 +258,7 @@ public sealed class SidebandTests
         Assert.False(first.Final);
         Assert.Contains("Bakıyorum", first.OutputJson);
         Assert.Equal(VoiceClientState.ToolRunning, fsm.State);
-        Assert.True(reporter.Reports.Single(r => r.Event == VoiceClientEvents.ToolResultSubmitted).Data["preamble"]!.GetValue<bool>());
+        Assert.Equal("running", reporter.Reports.Single(r => r.Event == VoiceClientEvents.ToolCall).Data["status"]!.GetValue<string>());
 
         var completed = await relay.CompleteAsync("call-r", JsonNode.Parse("""{"summary":"tamam"}"""), null, CancellationToken.None);
 
@@ -235,7 +282,26 @@ public sealed class SidebandTests
         var result = await relay.HandleAsync(new ToolCallEvent(0, "call-u", "no_such_tool", "{}"), CancellationToken.None);
 
         Assert.NotNull(result.Error);
-        Assert.Equal("capability_missing", result.Error!["class"]!.GetValue<string>());
+        Assert.Equal("failed", result.Status);
+        Assert.Equal("capability_missing", result.Error!["error_class"]!.GetValue<string>());
+        Assert.Contains("\"error\"", leg.Commands.OfType<ToolResultCommand>().Single().OutputJson);
+        Assert.Equal(VoiceClientState.Idle, fsm.State);
+    }
+
+    [Fact]
+    public async Task A_tool_call_cloud_core_refuses_as_invalid_is_a_loud_client_bug_and_the_provider_still_gets_an_answer()
+    {
+        using var cloud = new InProcessFakeCloudCore(Token);
+        var (relay, leg, _, fsm, _, _) = BuildRelay(cloud);
+
+        // a forbidden key inside the model's arguments: the server says 422, the relay must not leave the provider hanging
+        var result = await relay.HandleAsync(new ToolCallEvent(0, "call-bad", "echo", """{"apiKey":"leak"}"""), CancellationToken.None);
+
+        Assert.Equal("failed", result.Status);
+        Assert.Equal("validation_error", result.Error!["error_class"]!.GetValue<string>());
+        Assert.Equal(1, relay.RefusedRelays);
+        Assert.Equal(1, cloud.Refusals);
+        Assert.Equal(1, cloud.ToolCallRequests); // never retried
         Assert.Contains("\"error\"", leg.Commands.OfType<ToolResultCommand>().Single().OutputJson);
         Assert.Equal(VoiceClientState.Idle, fsm.State);
     }

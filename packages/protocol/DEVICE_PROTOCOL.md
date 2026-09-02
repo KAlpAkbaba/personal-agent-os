@@ -67,6 +67,34 @@ Rules:
 - **Malformed frames:** receiver answers `{"type":"error","error":{"class":"validation_error",…}}` referencing `command_id` when parseable; the connection stays open.
 - **Redelivery:** on (re)connect the broker re-delivers all non-terminal, non-expired commands for that device.
 
+## 5a. Sideband push: `voice_sideband` (M12, ADR-0039)
+
+Broker → agent, additive to v1. Cloud Core's realtime-voice session service delivers
+sideband messages for the owner-session companion (`say`, `tool_progress`,
+`tool_completed`, `plan_changed`, `narration_cursor`, `leg_closed`) over the SAME
+outbound-only device connection, as their own frame type:
+
+```json
+{"type":"voice_sideband","session_id":"uuid","event":"tool_completed",
+ "payload":{"call_id":"call_1","status":"succeeded","result":{}},
+ "at":"2026-09-02T12:00:00Z"}
+```
+
+Rules:
+- **Opaque to the Device Service.** The service validates the envelope (uuid session id,
+  event name, object payload, ≤ 16 KiB serialized) and forwards the frame unchanged over
+  the authenticated local IPC (`voice_sideband` pipe frame, carrying the connection id and
+  sequence every pipe frame carries). It never interprets the payload, never acts on it,
+  and never replies to the broker for it.
+- **Nothing from the command path applies:** no `command_ack`, no idempotency key, no
+  expiry, no audit row per frame. A frame that cannot be forwarded (no companion
+  connected, oversize) is dropped by the agent; Cloud Core already queues undelivered
+  pushes on the session record and the client receives the backlog with its next
+  `POST /v1/voice/realtime/sessions/{id}/events` response or on `attach`.
+- **Older receivers:** an agent that predates this frame answers it with the standard
+  `validation_error` error frame (§5, malformed frames); the broker logs that and the
+  session continues. Newer agents with no companion connected simply drop it.
+
 ## 6. Capability: `desktop.open_application` (M1)
 
 Payload: `{"application":"<name>","args":[…]?}`. The agent maintains a local **allowlist** (M1 default: `notepad`, `calc`); anything else fails with `capability_missing`. The application must start in the **interactive owner session** (executed by the session companion, not the background service). Result: `{"pid":<int>,"executable":"<path>"}`.

@@ -155,13 +155,19 @@ public static class Program
                 ownerSid);
         }
 
+        // M12 (ADR-0039): voice_sideband frames the Device Service forwards over the pipe land
+        // here and are read by the voice client. With voice off they are counted and dropped;
+        // the pipe loop itself neither executes nor answers them.
+        var sidebandSource = new PagentOS.Companion.Audio.Sideband.PipeSidebandPushSource(loggerFactory.CreateLogger("Sideband"));
+
         var runtime = new CompanionRuntime(
             pipeName,
             new AppLauncher(allowlist),
             artifactOpener,
             logger,
             backoff: null,
-            servicePolicy: servicePolicy);
+            servicePolicy: servicePolicy,
+            sidebandSink: sidebandSource);
 
         // M12 track C: the realtime voice client is ADDITIVE and OFF by default. It runs beside
         // the qualified pipe loop, never inside it, and a voice failure can only log — the
@@ -175,7 +181,7 @@ public static class Program
             configuration["DeviceId"],
             commandLineFlag: voiceFlag);
         var voiceTask = voiceOptions.Enabled
-            ? RunVoiceAsync(voiceOptions, loggerFactory.CreateLogger("Voice"), audit, cts.Token)
+            ? RunVoiceAsync(voiceOptions, loggerFactory.CreateLogger("Voice"), audit, sidebandSource, cts.Token)
             : Task.CompletedTask;
         if (!voiceOptions.Enabled)
         {
@@ -191,13 +197,14 @@ public static class Program
         PagentOS.Companion.Audio.VoiceCompanionOptions options,
         ILogger logger,
         AuditLog audit,
+        PagentOS.Companion.Audio.Sideband.ISidebandPushSource pushes,
         CancellationToken cancellationToken)
     {
         try
         {
             if (OperatingSystem.IsWindows())
             {
-                await PagentOS.Companion.Audio.VoiceCompanionHost.RunAsync(options, logger, audit, cancellationToken).ConfigureAwait(false);
+                await PagentOS.Companion.Audio.VoiceCompanionHost.RunAsync(options, logger, audit, pushes, cancellationToken).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

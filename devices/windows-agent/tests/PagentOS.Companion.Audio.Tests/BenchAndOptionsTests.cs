@@ -25,7 +25,7 @@ public sealed class BenchAndOptionsTests
         Assert.Equal(1, report["tool_executions"]!.GetValue<int>());
         Assert.Empty(report["defects"]!.AsArray());
         Assert.Contains(report["scenario_log"]!.AsArray(), line => line!.GetValue<string>().StartsWith("ok:"));
-        Assert.Contains("barge_in", report["cloud_events"]!.AsArray().Select(e => e!.GetValue<string>()));
+        Assert.Contains("barge_in_start", report["cloud_events"]!.AsArray().Select(e => e!.GetValue<string>()));
         Assert.True(report["barge_in_to_stop_ms"]!["p95"]!.GetValue<double>() < 150, "offline barge-in stop must be far under the 150 ms target");
         Assert.Contains("offline gate", report["disclaimer"]!.GetValue<string>());
     }

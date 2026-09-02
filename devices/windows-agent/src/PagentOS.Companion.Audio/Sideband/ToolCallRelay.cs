@@ -15,6 +15,10 @@ namespace PagentOS.Companion.Audio.Sideband;
 /// provisional result (status running + Turkish preamble) is submitted at once so the
 /// provider can speak it; the final result lands through <see cref="CompleteAsync"/> from
 /// the sideband push.
+///
+/// A relay that Cloud Core refuses (422: this client's bug; 409/410: the leg or session is
+/// gone) never leaves the provider waiting: an error output is submitted, the FSM leaves
+/// ToolRunning, and the refusal is logged — loudly for the 422.
 /// </summary>
 public sealed class ToolCallRelay(
     ISidebandClient sideband,
@@ -39,6 +43,9 @@ public sealed class ToolCallRelay(
 
     public int RelayedCount => _inFlight.Count;
 
+    /// <summary>Relays Cloud Core refused as invalid (422). Any non-zero value is a client bug.</summary>
+    public int RefusedRelays { get; private set; }
+
     public Task<ToolCallRelayResult> HandleAsync(ToolCallEvent call, CancellationToken cancellationToken)
         => _inFlight.GetOrAdd(call.CallId, _ => RunAsync(call, cancellationToken));
 
@@ -51,16 +58,9 @@ public sealed class ToolCallRelay(
             return false;
         }
 
-        var final = new ToolCallRelayResult(callId, result, error, Status: "completed", Preamble: null);
-        var t0 = time.GetTimestamp();
+        var status = error is null ? ToolCallRelayResult.StatusSucceeded : ToolCallRelayResult.StatusFailed;
+        var final = new ToolCallRelayResult(callId, null, status, LongRunning: true, Replayed: false, result, error, Preamble: null);
         await leg().SubmitToolResultAsync(callId, final.OutputJson(), final: true, followUp: true, cancellationToken).ConfigureAwait(false);
-        await reporter.ReportAsync(VoiceClientEvents.ToolResultSubmitted, new JsonObject
-        {
-            ["call_id"] = callId,
-            ["final"] = true,
-            ["follow_up"] = true,
-            ["submit_ms"] = Math.Round(time.ElapsedMs(t0), 2),
-        }, cancellationToken).ConfigureAwait(false);
         fsm.FinishToolCall(callId);
         return true;
     }
@@ -72,12 +72,13 @@ public sealed class ToolCallRelay(
         var result = await RelayWithRetryAsync(call, cancellationToken).ConfigureAwait(false);
         var relayMs = time.ElapsedMs(t0);
 
-        await reporter.ReportAsync(VoiceClientEvents.ToolCallRelayed, new JsonObject
+        await reporter.ReportAsync(VoiceClientEvents.ToolCall, new JsonObject
         {
             ["call_id"] = call.CallId,
             ["name"] = call.Name,
             ["relay_ms"] = Math.Round(relayMs, 2),
-            ["status"] = result.IsRunning ? "running" : result.Error is null ? "ok" : "error",
+            ["status"] = result.Status,
+            ["replayed"] = result.Replayed,
         }, cancellationToken).ConfigureAwait(false);
 
         if (result.IsRunning)
@@ -85,16 +86,7 @@ public sealed class ToolCallRelay(
             _running[call.CallId] = 1;
         }
 
-        var t1 = time.GetTimestamp();
         await leg().SubmitToolResultAsync(call.CallId, result.OutputJson(), final: !result.IsRunning, followUp: false, cancellationToken).ConfigureAwait(false);
-        await reporter.ReportAsync(VoiceClientEvents.ToolResultSubmitted, new JsonObject
-        {
-            ["call_id"] = call.CallId,
-            ["final"] = !result.IsRunning,
-            ["follow_up"] = false,
-            ["preamble"] = result.IsRunning && !string.IsNullOrEmpty(result.Preamble),
-            ["submit_ms"] = Math.Round(time.ElapsedMs(t1), 2),
-        }, cancellationToken).ConfigureAwait(false);
 
         if (!result.IsRunning)
         {
@@ -113,11 +105,38 @@ public sealed class ToolCallRelay(
             {
                 return await sideband.RelayToolCallAsync(sessionId, call.CallId, call.Name, call.ArgumentsJson, cancellationToken).ConfigureAwait(false);
             }
-            catch (Exception ex) when (IsTransient(ex) && attempt < _retryDelays.Count && !cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex) when (IsTransient(ex) && attempt < _retryDelays.Count)
             {
                 logger?.LogWarning("tool call {CallId} relay attempt {Attempt} failed ({Reason}); retrying with the same call_id", call.CallId, attempt + 1, ex.Message);
                 await Task.Delay(_retryDelays[attempt], time, cancellationToken).ConfigureAwait(false);
                 attempt++;
+            }
+            catch (SidebandException ex) when (ex.IsPayloadRefused)
+            {
+                RefusedRelays++;
+                logger?.LogError(
+                    "CLIENT BUG: Cloud Core refused tool call {CallId} ({Name}) as invalid (422). Fix the client; the server is the contract. Detail: {Detail}",
+                    call.CallId, call.Name, ex.Body);
+                return ToolCallRelayResult.Failed(call.CallId, call.Name, "validation_error", "the client sent a tool call Cloud Core refused");
+            }
+            catch (SidebandException ex) when (ex.IsStaleLeg)
+            {
+                logger?.LogWarning("tool call {CallId} refused: another client holds the media leg (409)", call.CallId);
+                return ToolCallRelayResult.Failed(call.CallId, call.Name, "security_scope_error", "this client no longer holds the session's media leg");
+            }
+            catch (SidebandException ex) when (ex.IsSessionGone)
+            {
+                logger?.LogWarning("tool call {CallId} refused: the session is gone ({Status})", call.CallId, ex.StatusCode);
+                return ToolCallRelayResult.Failed(call.CallId, call.Name, "dependency_unavailable", "the voice session is closed or expired");
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger?.LogWarning("tool call {CallId} relay failed after {Attempts} attempts: {Reason}", call.CallId, attempt + 1, ex.Message);
+                return ToolCallRelayResult.Failed(call.CallId, call.Name, "dependency_unavailable", "Cloud Core could not be reached to run the tool");
             }
         }
     }

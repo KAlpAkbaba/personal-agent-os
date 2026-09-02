@@ -13,7 +13,8 @@ public sealed record VoiceClientOptions
     /// <summary>Server (provider VAD ends turns; default per ADR-0034) or Client (this client commits turns).</summary>
     public EndOfTurnMode EndOfTurn { get; init; } = EndOfTurnMode.Server;
 
-    public string ClientKind { get; init; } = "windows-companion";
+    /// <summary>Cloud Core's <c>client_kind</c> (pattern <c>^[a-z][a-z0-9_]{0,15}$</c>): how this leg shows up in continuity state and audit.</summary>
+    public string ClientKind { get; init; } = "windows_desktop";
 
     /// <summary>The enrolled device id, when known, so Cloud Core can device-bind the session.</summary>
     public string? DeviceId { get; init; }

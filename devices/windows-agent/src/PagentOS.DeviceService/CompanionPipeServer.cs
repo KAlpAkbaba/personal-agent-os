@@ -257,6 +257,73 @@ public sealed class CompanionPipeServer : BackgroundService
         }
     }
 
+    /// <summary>How many voice_sideband frames were written to the companion since start (telemetry; asserted by tests).</summary>
+    public int SidebandForwarded => _sidebandForwarded;
+
+    /// <summary>How many voice_sideband frames were refused before the pipe (oversize) or dropped (no companion).</summary>
+    public int SidebandDropped => _sidebandDropped;
+
+    private int _sidebandForwarded;
+    private int _sidebandDropped;
+
+    /// <summary>
+    /// Forwards a <c>voice_sideband</c> device-protocol frame to the connected companion,
+    /// opaquely (M12, ADR-0039). One-way: no response is awaited, nothing is recorded in the
+    /// pending table, and the frame is never interpreted here. It rides the same connection
+    /// id and outbound sequence as exec requests, so the companion applies the same
+    /// freshness rule to it. Returns false — never throws — when there is no companion or the
+    /// frame exceeds the bound; Cloud Core queues what was not delivered and the client
+    /// drains it over HTTP, so a drop here loses nothing.
+    /// </summary>
+    public async Task<bool> ForwardSidebandAsync(JsonObject frame, CancellationToken cancellationToken)
+    {
+        var connection = _connection;
+        if (connection is null)
+        {
+            Interlocked.Increment(ref _sidebandDropped);
+            return false;
+        }
+
+        // The bound is on the broker's frame itself, measured before a sequence number is
+        // consumed, so a refused frame leaves the connection's ordering exactly as it was.
+        var frameBytes = Encoding.UTF8.GetByteCount(frame.ToJsonString());
+        if (frameBytes > VoiceSideband.MaxFrameBytes)
+        {
+            Interlocked.Increment(ref _sidebandDropped);
+            _logger.LogWarning(
+                "voice_sideband frame refused: {Bytes} bytes exceeds the {Limit}-byte bound",
+                frameBytes,
+                VoiceSideband.MaxFrameBytes);
+            return false;
+        }
+
+        var forward = new SidebandForward
+        {
+            Frame = (JsonObject)frame.DeepClone(),
+            ConnectionId = connection.Guard.ConnectionId,
+            Seq = connection.Guard.NextOutboundSeq(),
+        };
+        var line = PipeJson.Serialize(forward);
+
+        try
+        {
+            await connection.WriteLineAsync(line, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Interlocked.Increment(ref _sidebandDropped);
+            _logger.LogWarning("voice_sideband forward failed: {Reason}", ex.Message);
+            return false;
+        }
+
+        Interlocked.Increment(ref _sidebandForwarded);
+        return true;
+    }
+
     /// <summary>
     /// Challenge, then hello. The challenge is not a secret and proves nothing about who the
     /// companion is — the kernel already answered that. It establishes the connection id and

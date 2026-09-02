@@ -12,7 +12,8 @@
     { "$ref": "#/$defs/command" },
     { "$ref": "#/$defs/command_ack" },
     { "$ref": "#/$defs/cancel" },
-    { "$ref": "#/$defs/error" }
+    { "$ref": "#/$defs/error" },
+    { "$ref": "#/$defs/voice_sideband" }
   ],
   "$defs": {
     "errorObject": {
@@ -158,6 +159,21 @@
         "type": { "const": "error" },
         "command_id": { "type": "string", "format": "uuid" },
         "error": { "$ref": "#/$defs/errorObject" }
+      },
+      "additionalProperties": false
+    },
+    "voice_sideband": {
+      "$comment": "M12 (ADR-0039): broker -> agent, additive. A realtime-voice sideband push for the owner-session companion. The Device Service forwards it opaquely over the local IPC and never acts on it; no acknowledgement, no idempotency, no audit semantics of the command path apply. Bounded to 16 KiB serialized. Receivers that predate this frame answer it with a validation_error frame, which the broker logs and ignores.",
+      "type": "object",
+      "required": ["type", "session_id", "event", "payload"],
+      "properties": {
+        "type": { "const": "voice_sideband" },
+        "session_id": { "type": "string", "format": "uuid" },
+        "event": {
+          "enum": ["plan_changed", "tool_progress", "tool_completed", "narration_cursor", "say", "leg_closed"]
+        },
+        "payload": { "type": "object" },
+        "at": { "type": "string", "format": "date-time" }
       },
       "additionalProperties": false
     }

@@ -29,7 +29,12 @@ public sealed record DeviceSwitchRecord(AudioDirection Direction, string? From, 
 /// it, and what lets the tests and the offline bench drive it deterministically with fakes.
 ///
 /// Track C scope: this is the desktop audio client of the M12 session contract. It does not
-/// resolve Turkish intents (track E, in Cloud Core) or select providers (track A).
+/// resolve Turkish intents (track E, in Cloud Core) or select providers (track A). Since
+/// ADR-0039 it speaks the server's contract exactly: batched events with the server's kinds,
+/// pushes from the device-protocol <c>voice_sideband</c> frame or the HTTP backlog, and the
+/// server's verdicts — 409 (another client holds the leg: stop, re-attach when the owner
+/// speaks to this device again), 410 (session gone: end, the host opens a new one), 422
+/// (a client bug: logged loudly, never retried).
 /// </summary>
 public sealed class VoiceSessionOrchestrator : IAsyncDisposable
 {
@@ -72,6 +77,8 @@ public sealed class VoiceSessionOrchestrator : IAsyncDisposable
     private string? _currentResponseId;
     private bool _firstAudioOfResponsePending;
     private bool _reconnecting;
+    private bool _legSuperseded;
+    private bool _sessionGone;
     private long _disconnectedAt;
     private long _toolStartedAt;
     private long _lastAssistantAudioAt;
@@ -127,6 +134,32 @@ public sealed class VoiceSessionOrchestrator : IAsyncDisposable
 
     public int ReconnectCount { get; private set; }
 
+    /// <summary>Times the media leg was closed because another client took the session over (409 or a leg_closed push).</summary>
+    public int LegSupersededCount { get; private set; }
+
+    /// <summary>Times this client re-attached after being superseded, on the owner's next speech.</summary>
+    public int ReattachCount { get; private set; }
+
+    /// <summary>True while another client holds the leg: no uplink, no playback, until the owner speaks here again.</summary>
+    public bool LegSuperseded => _legSuperseded;
+
+    /// <summary>Why the loop ended on its own (<c>session_gone</c>), or null while running / stopped by the caller.</summary>
+    public string? StopReason { get; private set; }
+
+    /// <summary>Sideband pushes handled, by kind (asserted by tests).</summary>
+    public IReadOnlyList<string> PushesHandled
+    {
+        get
+        {
+            lock (_pushesHandled)
+            {
+                return _pushesHandled.ToList();
+            }
+        }
+    }
+
+    private readonly List<string> _pushesHandled = new();
+
     public IReadOnlyList<DeviceSwitchRecord> DeviceSwitches
     {
         get
@@ -162,28 +195,16 @@ public sealed class VoiceSessionOrchestrator : IAsyncDisposable
         var ct = _runCts.Token;
         _sessionStartedAt = _time.GetTimestamp();
 
-        var request = new CreateSessionRequest(
-            _options.ClientKind,
-            _options.DeviceId,
-            _options.TransportPreference,
-            ClientCapabilities: new JsonObject
-            {
-                ["barge_in"] = true,
-                ["client_end_of_turn"] = _options.EndOfTurn == EndOfTurnMode.Client,
-                ["hesitation_guard"] = true,
-                ["audio_format"] = new JsonObject
-                {
-                    ["encoding"] = "pcm16",
-                    ["sample_rate"] = _options.Format.SampleRate,
-                    ["channels"] = _options.Format.Channels,
-                },
-            });
-        Grant = await _sideband.CreateSessionAsync(request, ct).ConfigureAwait(false);
+        Grant = await CreateSessionAsync(ct).ConfigureAwait(false);
 
         _events = _reporterOverride;
         if (_events is null)
         {
-            _reporter = new VoiceEventReporter(_sideband, Grant.SessionId, _time, _sessionStartedAt, _logger);
+            _reporter = new VoiceEventReporter(
+                _sideband, Grant.SessionId, _time, _sessionStartedAt, _logger,
+                turnProvider: () => Latency.Current?.Index ?? 0,
+                onAck: ack => EnqueuePushes(ack.PendingSideband),
+                onFault: fault => _inputs.Writer.TryWrite(new SidebandFaultInput(fault)));
             _events = _reporter;
         }
 
@@ -221,6 +242,45 @@ public sealed class VoiceSessionOrchestrator : IAsyncDisposable
         _capture?.Start();
         _playback?.Start();
         return Grant;
+    }
+
+    /// <summary>
+    /// <c>POST /sessions</c> with this client's first transport preference. The server answers
+    /// 422 naming the provider's transports when that one is not offered; the next preference
+    /// the provider offers is tried once, and a provider that offers none of ours is an error
+    /// said out loud rather than a WebRTC grant this build cannot open.
+    /// </summary>
+    private async Task<RealtimeSessionGrant> CreateSessionAsync(CancellationToken ct)
+    {
+        var preferences = _options.TransportPreference.Count == 0 ? new[] { (string?)null } : _options.TransportPreference.Cast<string?>().ToArray();
+        try
+        {
+            return await _sideband.CreateSessionAsync(new CreateSessionRequest(_options.ClientKind, preferences[0]), ct).ConfigureAwait(false);
+        }
+        catch (SidebandException ex) when (ex.IsPayloadRefused && OfferedTransports(ex.Body) is { Count: > 0 } offered)
+        {
+            var fallback = _options.TransportPreference.FirstOrDefault(offered.Contains)
+                ?? throw new NotSupportedException(
+                    $"Cloud Core's provider offers transports [{string.Join(", ", offered)}]; this client supports [{string.Join(", ", _options.TransportPreference)}]");
+            _logger?.LogInformation("transport {Requested} not offered; using {Fallback}", preferences[0], fallback);
+            return await _sideband.CreateSessionAsync(new CreateSessionRequest(_options.ClientKind, fallback), ct).ConfigureAwait(false);
+        }
+    }
+
+    private static List<string>? OfferedTransports(string body)
+    {
+        try
+        {
+            return (JsonNode.Parse(body)?["detail"]?["transports"] as JsonArray)?
+                .Select(t => t?.GetValue<string>())
+                .Where(t => t is not null)
+                .Select(t => t!)
+                .ToList();
+        }
+        catch (Exception)
+        {
+            return null;
+        }
     }
 
     public async Task RunAsync(CancellationToken cancellationToken)
@@ -274,6 +334,9 @@ public sealed class VoiceSessionOrchestrator : IAsyncDisposable
             ["session_id"] = Grant?.SessionId,
             ["barge_ins"] = Fsm.BargeInCount,
             ["reconnects"] = ReconnectCount,
+            ["leg_superseded"] = LegSupersededCount,
+            ["reattached"] = ReattachCount,
+            ["stop_reason"] = StopReason ?? "stopped",
             ["defects"] = _defects.Count,
         }.ToJsonString());
     }
@@ -445,6 +508,15 @@ public sealed class VoiceSessionOrchestrator : IAsyncDisposable
         }
     }
 
+    /// <summary>The sideband backlog Cloud Core returned over HTTP (events ack, attach): the same pushes, the other door.</summary>
+    private void EnqueuePushes(IReadOnlyList<SidebandPush> pushes)
+    {
+        foreach (var push in pushes)
+        {
+            _inputs.Writer.TryWrite(new PushInput(push));
+        }
+    }
+
     // --------------------------------------------------------------------- loop
 
     private async Task LoopAsync(CancellationToken ct)
@@ -472,6 +544,12 @@ public sealed class VoiceSessionOrchestrator : IAsyncDisposable
                         break;
                     case ReconnectedInput reconnected:
                         await HandleReconnectedAsync(reconnected, ct).ConfigureAwait(false);
+                        break;
+                    case ToolFinishedInput finished:
+                        await HandleToolFinishedAsync(finished.CallId, finished.Status, ct).ConfigureAwait(false);
+                        break;
+                    case SidebandFaultInput fault:
+                        await HandleSidebandFaultAsync(fault.Fault, ct).ConfigureAwait(false);
                         break;
                 }
             }
@@ -503,7 +581,7 @@ public sealed class VoiceSessionOrchestrator : IAsyncDisposable
         }
 
         var leg = _leg;
-        if (leg is { IsOpen: true } && (_turnOpen || _options.StreamWhileIdle))
+        if (leg is { IsOpen: true } && !_legSuperseded && (_turnOpen || _options.StreamWhileIdle))
         {
             try
             {
@@ -518,7 +596,7 @@ public sealed class VoiceSessionOrchestrator : IAsyncDisposable
                         turn.FirstUplinkAt = now;
                     }
 
-                    await _events!.ReportAsync(VoiceClientEvents.MicUplink, new JsonObject
+                    await _events!.ReportAsync(VoiceClientEvents.UplinkFirstPacket, new JsonObject
                     {
                         ["mic_to_uplink_ms"] = Math.Round(_time.ElapsedMs(frame.CapturedAt, now), 3),
                         ["frame_ms"] = frame.DurationMs,
@@ -546,6 +624,17 @@ public sealed class VoiceSessionOrchestrator : IAsyncDisposable
             return;
         }
 
+        if (_legSuperseded)
+        {
+            // The owner is talking to THIS device again: that is the moment to take the leg
+            // back (spec §7), not the moment the 409 arrived — re-attaching on the refusal
+            // itself would have two clients stealing the leg from each other forever.
+            if (!await TryReclaimLegAsync("owner_speech", ct).ConfigureAwait(false))
+            {
+                return;
+            }
+        }
+
         _turnOpen = true;
         _uplinkPending = true;
         var turn = Latency.BeginTurn(startedAt);
@@ -562,7 +651,7 @@ public sealed class VoiceSessionOrchestrator : IAsyncDisposable
             _responseDone = true;
         }
 
-        await _events!.ReportAsync(VoiceClientEvents.SpeechStarted, new JsonObject
+        await _events!.ReportAsync(VoiceClientEvents.MicSpeechStart, new JsonObject
         {
             ["reason"] = reason,
             ["barge_in"] = decision.ShouldBargeIn || playing,
@@ -586,7 +675,7 @@ public sealed class VoiceSessionOrchestrator : IAsyncDisposable
             turn.HesitationReason = ended.Reason;
         }
 
-        await _events!.ReportAsync(VoiceClientEvents.SpeechEnded, new JsonObject
+        await _events!.ReportAsync(VoiceClientEvents.EndOfTurn, new JsonObject
         {
             ["trailing_silence_ms"] = Math.Round(ended.TrailingSilenceMs, 1),
             ["required_silence_ms"] = ended.RequiredSilenceMs,
@@ -595,7 +684,7 @@ public sealed class VoiceSessionOrchestrator : IAsyncDisposable
             ["end_of_turn"] = _options.EndOfTurn.ToString().ToLowerInvariant(),
         }, ct).ConfigureAwait(false);
 
-        if (_options.EndOfTurn == EndOfTurnMode.Client && _leg is { IsOpen: true } leg)
+        if (_options.EndOfTurn == EndOfTurnMode.Client && _leg is { IsOpen: true } leg && !_legSuperseded)
         {
             await leg.CommitTurnAsync(ct).ConfigureAwait(false);
         }
@@ -620,7 +709,7 @@ public sealed class VoiceSessionOrchestrator : IAsyncDisposable
 
             case InputSpeechStoppedEvent:
                 // In Server mode the provider decides; the client's own detector still reports
-                // speech_ended with the guard's verdict when its silence clock runs out.
+                // end_of_turn with the guard's verdict when its silence clock runs out.
                 break;
 
             case ResponseStartedEvent started:
@@ -644,6 +733,11 @@ public sealed class VoiceSessionOrchestrator : IAsyncDisposable
                     }
                 }
 
+                await _events!.ReportAsync(VoiceClientEvents.ResponseDone, new JsonObject
+                {
+                    ["response_id"] = done.ResponseId,
+                    ["status"] = done.Status,
+                }, ct).ConfigureAwait(false);
                 break;
 
             case ToolCallEvent call:
@@ -658,11 +752,23 @@ public sealed class VoiceSessionOrchestrator : IAsyncDisposable
                     await StopWordBargeInAsync(transcript.Text, ct).ConfigureAwait(false);
                 }
 
+                if (transcript.Final && !string.IsNullOrWhiteSpace(transcript.Text))
+                {
+                    // Cloud Core resolves intents from the utterance (track E); the client only
+                    // transcribes. The text travels in the event's `text` field, never in payload.
+                    await _events!.ReportAsync(VoiceClientEvents.Utterance, null, transcript.Text.Trim(), ct).ConfigureAwait(false);
+                }
+
                 break;
 
             case ProviderErrorEvent error:
                 _logger?.LogWarning("provider error {Code}: {Message}", error.Code, error.Message);
                 AddDefect("provider_error:" + error.Code);
+                await _events!.ReportAsync(VoiceClientEvents.Error, new JsonObject
+                {
+                    ["error_class"] = "voice_provider_error",
+                    ["code"] = error.Code,
+                }, ct).ConfigureAwait(false);
                 break;
 
             case DisconnectedEvent disconnected when ReferenceEquals(source, _leg):
@@ -698,37 +804,55 @@ public sealed class VoiceSessionOrchestrator : IAsyncDisposable
             // arrived, and an observer that sees the state change must already see the stamp.
             if (Fsm.State == VoiceClientState.ToolRunning)
             {
-                if (turn is not null && turn.ToolPreambleAudioAt is null)
+                var firstPreamble = turn is not null && turn.ToolPreambleAudioAt is null;
+                if (firstPreamble)
                 {
-                    turn.ToolPreambleAudioAt = now;
+                    turn!.ToolPreambleAudioAt = now;
                 }
 
                 Fsm.AssistantProgress("preamble");
+                if (firstPreamble)
+                {
+                    await _events!.ReportAsync(VoiceClientEvents.PreambleAudioStart, new JsonObject
+                    {
+                        ["response_id"] = delta.ResponseId,
+                        ["tool_preamble_ms"] = Math.Round(_time.ElapsedMs(turn!.ToolCallAt ?? now, now), 3),
+                    }, ct).ConfigureAwait(false);
+                }
             }
             else
             {
-                JsonObject? firstAudio = null;
+                string? kind = null;
+                JsonObject? report = null;
                 if (turn is not null)
                 {
                     if (turn.ToolDoneAt is not null && turn.ResumedSpeechAt is null)
                     {
                         turn.ResumedSpeechAt = now;
+                        kind = VoiceClientEvents.SpeechResumed;
+                        report = new JsonObject
+                        {
+                            ["response_id"] = delta.ResponseId,
+                            ["tool_done_to_speech_ms"] = Math.Round(_time.ElapsedMs(turn.ToolDoneAt.Value, now), 3),
+                        };
                     }
                     else if (turn.FirstAudioAt is null)
                     {
                         turn.FirstAudioAt = now;
-                        firstAudio = new JsonObject { ["response_id"] = delta.ResponseId };
+                        kind = VoiceClientEvents.FirstAudio;
+                        // "eot_to_first_ms", not "..._audio_ms": the server refuses any payload key containing "audio".
+                        report = new JsonObject { ["response_id"] = delta.ResponseId };
                         if (turn.SpeechEndedAt is not null)
                         {
-                            firstAudio["eot_to_first_audio_ms"] = Math.Round(_time.ElapsedMs(turn.SpeechEndedAt.Value, now), 3);
+                            report["eot_to_first_ms"] = Math.Round(_time.ElapsedMs(turn.SpeechEndedAt.Value, now), 3);
                         }
                     }
                 }
 
                 Fsm.AssistantStartSpeaking(delta.ResponseId);
-                if (firstAudio is not null)
+                if (kind is not null)
                 {
-                    await _events!.ReportAsync(VoiceClientEvents.FirstAudio, firstAudio, ct).ConfigureAwait(false);
+                    await _events!.ReportAsync(kind, report, ct).ConfigureAwait(false);
                 }
             }
         }
@@ -751,11 +875,40 @@ public sealed class VoiceSessionOrchestrator : IAsyncDisposable
         _toolSilenceReported = false;
         var relayTask = _relay!.HandleAsync(call, ct);
         _background.Add(relayTask.ContinueWith(
-            t => _logger?.LogWarning("tool call {CallId} relay failed: {Reason}", call.CallId, t.Exception?.GetBaseException().Message),
+            t =>
+            {
+                if (t.IsCompletedSuccessfully)
+                {
+                    if (!t.Result.IsRunning)
+                    {
+                        // A synchronous tool is done the moment its result is submitted.
+                        _inputs.Writer.TryWrite(new ToolFinishedInput(call.CallId, t.Result.Status));
+                    }
+                }
+                else if (t.IsFaulted)
+                {
+                    _logger?.LogWarning("tool call {CallId} relay failed: {Reason}", call.CallId, t.Exception?.GetBaseException().Message);
+                }
+            },
             CancellationToken.None,
-            TaskContinuationOptions.OnlyOnFaulted,
+            TaskContinuationOptions.None,
             TaskScheduler.Default));
         await Task.CompletedTask.ConfigureAwait(false);
+    }
+
+    private async Task HandleToolFinishedAsync(string callId, string status, CancellationToken ct)
+    {
+        var turn = Latency.Current;
+        if (turn is not null && turn.ToolDoneAt is null)
+        {
+            turn.ToolDoneAt = _time.GetTimestamp();
+        }
+
+        await _events!.ReportAsync(VoiceClientEvents.ToolDone, new JsonObject
+        {
+            ["call_id"] = callId,
+            ["status"] = status,
+        }, ct).ConfigureAwait(false);
     }
 
     private async Task StopWordBargeInAsync(string text, CancellationToken ct)
@@ -780,10 +933,21 @@ public sealed class VoiceSessionOrchestrator : IAsyncDisposable
 
     private async Task HandlePushAsync(SidebandPush push, CancellationToken ct)
     {
+        if (push.SessionId is not null && Grant is not null && !string.Equals(push.SessionId, Grant.SessionId, StringComparison.Ordinal))
+        {
+            _logger?.LogInformation("sideband push {Kind} for another session ({SessionId}) ignored", push.Kind, push.SessionId);
+            return;
+        }
+
+        lock (_pushesHandled)
+        {
+            _pushesHandled.Add(push.Kind);
+        }
+
         switch (push.Kind)
         {
             case SidebandPushKinds.Say:
-                if (push.Payload["text"]?.GetValue<string>() is { Length: > 0 } text && _leg is { IsOpen: true } leg)
+                if (push.Payload["text"]?.GetValue<string>() is { Length: > 0 } text && _leg is { IsOpen: true } leg && !_legSuperseded)
                 {
                     await leg.SayAsync(text, ct).ConfigureAwait(false);
                 }
@@ -803,11 +967,21 @@ public sealed class VoiceSessionOrchestrator : IAsyncDisposable
                     turn.ToolDoneAt = _time.GetTimestamp();
                 }
 
-                await _relay!.CompleteAsync(
+                var error = push.Payload["error"] as JsonObject;
+                var completed = await _relay!.CompleteAsync(
                     callId,
                     push.Payload["result"] is { } result ? JsonNode.Parse(result.ToJsonString()) : null,
-                    push.Payload["error"] as JsonObject,
+                    error,
                     ct).ConfigureAwait(false);
+                if (completed)
+                {
+                    await _events!.ReportAsync(VoiceClientEvents.ToolDone, new JsonObject
+                    {
+                        ["call_id"] = callId,
+                        ["status"] = push.Payload["status"]?.GetValue<string>() ?? (error is null ? ToolCallRelayResult.StatusSucceeded : ToolCallRelayResult.StatusFailed),
+                    }, ct).ConfigureAwait(false);
+                }
+
                 break;
 
             case SidebandPushKinds.ToolProgress:
@@ -816,6 +990,10 @@ public sealed class VoiceSessionOrchestrator : IAsyncDisposable
                     Fsm.AssistantProgress(push.Payload["text"]?.GetValue<string>() ?? "progress");
                 }
 
+                break;
+
+            case SidebandPushKinds.LegClosed:
+                await HandleLegSupersededAsync("leg_closed:" + (push.Payload["reason"]?.GetValue<string>() ?? "unknown"), ct).ConfigureAwait(false);
                 break;
 
             default:
@@ -888,11 +1066,136 @@ public sealed class VoiceSessionOrchestrator : IAsyncDisposable
         }
     }
 
+    // ------------------------------------------------------- server verdicts
+
+    private async Task HandleSidebandFaultAsync(SidebandFault fault, CancellationToken ct)
+    {
+        switch (fault)
+        {
+            case SidebandFault.StaleLeg:
+                await HandleLegSupersededAsync("stale_leg_409", ct).ConfigureAwait(false);
+                break;
+            case SidebandFault.SessionGone:
+                HandleSessionGone("session_gone");
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Another client holds the media leg (409, or a leg_closed push): stop everything the
+    /// owner could hear or that could reach the provider from here, keep the session, and wait
+    /// for the owner to speak to this device again before reclaiming the leg.
+    /// </summary>
+    private async Task HandleLegSupersededAsync(string reason, CancellationToken ct)
+    {
+        if (_legSuperseded || _sessionGone)
+        {
+            return;
+        }
+
+        // An open owner turn is left to end naturally (the detector still reports end_of_turn,
+        // held by the reporter until the leg is reclaimed); only the media path is cut here.
+        _legSuperseded = true;
+        LegSupersededCount++;
+        _playback?.StopImmediately();
+        if (Fsm.State == VoiceClientState.AssistantSpeaking)
+        {
+            Fsm.AssistantStopSpeaking("leg_superseded");
+        }
+
+        _responseDone = true;
+        _reporter?.SetOnline(false);
+        var leg = _leg;
+        if (leg is not null)
+        {
+            try
+            {
+                await leg.CloseAsync(ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger?.LogWarning("closing the superseded leg failed: {Reason}", ex.Message);
+            }
+        }
+
+        _logger?.LogInformation("media leg superseded ({Reason}); this device is silent until the owner speaks to it again", reason);
+        _audit?.Write("voice_leg_superseded", status: "ok", detail: new JsonObject
+        {
+            ["session_id"] = Grant?.SessionId,
+            ["reason"] = reason,
+        }.ToJsonString());
+    }
+
+    private async Task<bool> TryReclaimLegAsync(string reason, CancellationToken ct)
+    {
+        try
+        {
+            var attached = await _sideband.AttachAsync(Grant!.SessionId, _options.ClientKind, _leg?.Transport is { } t && RealtimeContract.Transports.Contains(t) ? t : Grant.Transport, ct).ConfigureAwait(false);
+            if (attached is null)
+            {
+                HandleSessionGone("session_gone_on_reattach");
+                return false;
+            }
+
+            Grant = attached.Grant;
+            await OpenLegAsync(attached.Grant, ct).ConfigureAwait(false);
+            _legSuperseded = false;
+            ReattachCount++;
+            _responseDone = true;
+            _reporter?.SetOnline(true);
+            _audit?.Write("voice_leg_reclaimed", status: "ok", detail: new JsonObject
+            {
+                ["session_id"] = Grant.SessionId,
+                ["reason"] = reason,
+                ["previous_leg"] = attached.PreviousLeg?["client_kind"]?.GetValue<string>(),
+                ["pending_pushes"] = attached.PendingSideband.Count,
+            }.ToJsonString());
+            _logger?.LogInformation("media leg reclaimed ({Reason}); {Pending} queued pushes", reason, attached.PendingSideband.Count);
+            EnqueuePushes(attached.PendingSideband);
+            if (_reporter is not null)
+            {
+                await _reporter.FlushAsync(ct).ConfigureAwait(false);
+            }
+
+            return true;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning("reclaiming the media leg failed: {Reason}", ex.Message);
+            AddDefect("reattach_failed:" + ex.GetType().Name);
+            return false;
+        }
+    }
+
+    /// <summary>410/404: nothing more can be posted to this session. The loop ends; the host opens a new session.</summary>
+    private void HandleSessionGone(string reason)
+    {
+        if (_sessionGone)
+        {
+            return;
+        }
+
+        _sessionGone = true;
+        StopReason = "session_gone";
+        _playback?.StopImmediately();
+        _logger?.LogWarning("voice session {SessionId} is gone ({Reason}); ending this session", Grant?.SessionId, reason);
+        _audit?.Write("voice_session_gone", status: "ok", detail: new JsonObject
+        {
+            ["session_id"] = Grant?.SessionId,
+            ["reason"] = reason,
+        }.ToJsonString());
+        _inputs.Writer.TryComplete();
+    }
+
     // ------------------------------------------------------------- reconnection
 
     private async Task HandleDisconnectedAsync(DisconnectedEvent disconnected, CancellationToken ct)
     {
-        if (_reconnecting)
+        if (_reconnecting || _legSuperseded || _sessionGone)
         {
             return;
         }
@@ -914,16 +1217,18 @@ public sealed class VoiceSessionOrchestrator : IAsyncDisposable
             try
             {
                 await Task.Delay(_options.ReconnectBackoff.NextDelay(attempt), _time, ct).ConfigureAwait(false);
-                var grant = await _sideband.AttachAsync(Grant!.SessionId, ct).ConfigureAwait(false);
-                if (grant is null)
+                var attached = await _sideband.AttachAsync(Grant!.SessionId, _options.ClientKind, Grant.Transport, ct).ConfigureAwait(false);
+                if (attached is null)
                 {
                     _logger?.LogWarning("Cloud Core no longer knows session {SessionId}; giving up reconnection", Grant!.SessionId);
                     AddDefect("session_gone_on_reattach");
+                    _inputs.Writer.TryWrite(new SidebandFaultInput(SidebandFault.SessionGone));
                     return;
                 }
 
-                Grant = grant;
-                await OpenLegAsync(grant, ct).ConfigureAwait(false);
+                Grant = attached.Grant;
+                await OpenLegAsync(attached.Grant, ct).ConfigureAwait(false);
+                EnqueuePushes(attached.PendingSideband);
                 _inputs.Writer.TryWrite(new ReconnectedInput(attempt + 1));
                 return;
             }
@@ -984,4 +1289,8 @@ public sealed class VoiceSessionOrchestrator : IAsyncDisposable
     private sealed record PlaybackDrainedInput : Input;
 
     private sealed record ReconnectedInput(int Attempts) : Input;
+
+    private sealed record ToolFinishedInput(string CallId, string Status) : Input;
+
+    private sealed record SidebandFaultInput(SidebandFault Fault) : Input;
 }

@@ -356,7 +356,9 @@ public static class Program
             provider.GetRequiredService<DeviceIdentity>(),
             provider.GetRequiredService<CommandDispatcher>(),
             provider.GetRequiredService<AuditLog>(),
-            provider.GetRequiredService<ILogger<AgentConnection>>()));
+            provider.GetRequiredService<ILogger<AgentConnection>>(),
+            // M12 (ADR-0039): voice_sideband frames are forwarded to the companion, opaquely.
+            sidebandSink: new PipeSidebandForwarder(provider.GetRequiredService<CompanionPipeServer>())));
 
         builder.Services.AddHostedService(provider => provider.GetRequiredService<CompanionPipeServer>());
         builder.Services.AddHostedService(provider => new AgentWorker(
