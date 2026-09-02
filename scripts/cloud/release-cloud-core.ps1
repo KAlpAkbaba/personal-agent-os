@@ -42,6 +42,8 @@ param(
     [switch]$Preflight,
     [switch]$AllowDirty,
     [switch]$SkipVerify,
+    [switch]$VerifyOnly,
+    [switch]$Force,
     [switch]$DryRun
 )
 
@@ -102,7 +104,7 @@ try {
     $sha = ([string]$revParse[0]).Trim()
     $short = $sha.Substring(0, 7)
     $dirty = @(& $GitPath status --porcelain --untracked-files=no 2>$null)
-    if ($dirty.Count -gt 0 -and -not $AllowDirty) {
+    if ($dirty.Count -gt 0 -and -not $AllowDirty -and -not $VerifyOnly) {
         throw ("the working tree has $($dirty.Count) uncommitted change(s); a release ships HEAD only. " +
                "Commit first, or -AllowDirty to ship HEAD without them.")
     }
@@ -122,6 +124,26 @@ try {
     foreach ($tool in @($SshPath, $ScpPath)) {
         if (-not (Test-Path -LiteralPath $tool)) { throw "OpenSSH client not found at $tool" }
     }
+
+    # Idempotent: a release that already committed on the host (RELEASE marker == HEAD) is
+    # not repeated - only the local verification/report runs. -VerifyOnly forces that
+    # path; -Force repeats the release anyway.
+    $alreadyReleased = $false
+    if (-not $Preflight) {
+        $markerLines = @($null | & $SshPath -n -o StrictHostKeyChecking=accept-new -o BatchMode=yes $target "cat '$HostBase/app/RELEASE' 2>/dev/null || true")
+        $marker = if ($markerLines.Count -gt 0) { ([string]$markerLines[0]).Trim() } else { "" }
+        if ($marker -eq $sha) { $alreadyReleased = $true }
+        if ($VerifyOnly -and -not $alreadyReleased) {
+            throw "-VerifyOnly: the host runs '$(if ($marker) { $marker.Substring(0, 7) } else { 'no RELEASE marker' })', not HEAD $short; run a release first"
+        }
+    }
+    if ($alreadyReleased -and -not $Force) {
+        Write-Host "already released: the host's RELEASE marker is HEAD $short; skipping archive/upload/host transaction, verifying only"
+    }
+    elseif ($VerifyOnly) {
+        throw "-VerifyOnly requires the host to run HEAD"
+    }
+    else {
 
     & $GitPath archive --format=tar -o $localTar HEAD
     if ($LASTEXITCODE -ne 0) { throw "git archive failed" }
@@ -150,6 +172,8 @@ try {
         exit 0
     }
 
+    }  # end of the release branch
+
     if (-not $SkipVerify) {
         $releaseLines = @($null | & $SshPath -n -o BatchMode=yes $target "cat '$HostBase/app/RELEASE'")
         $releasedSha = if ($releaseLines.Count -gt 0) { ([string]$releaseLines[0]).Trim() } else { "" }
@@ -158,10 +182,10 @@ try {
         }
         if (-not $HealthUrl) { $HealthUrl = "http://${BrokerHost}:8001/v1/system/health" }
         $doc = Invoke-RestMethod -Uri $HealthUrl -TimeoutSec 20
-        $status = Get-OptionalProperty -InputObject$doc -Name "status"
-        $checks = Get-OptionalProperty -InputObject$doc -Name "checks"
-        $rt = if ($null -ne $checks) { Get-OptionalProperty -InputObject$checks -Name "voice_realtime" } else { $null }
-        $providers = if ($null -ne $rt) { @(Get-OptionalProperty -InputObject$rt -Name "providers") } else { @() }
+        $status = Get-OptionalProperty -InputObject $doc -Name "status"
+        $checks = Get-OptionalProperty -InputObject $doc -Name "checks"
+        $rt = if ($null -ne $checks) { Get-OptionalProperty -InputObject $checks -Name "voice_realtime" } else { $null }
+        $providers = if ($null -ne $rt) { @(Get-OptionalProperty -InputObject $rt -Name "providers") } else { @() }
         Write-Host "verified from this machine over the tailnet: $HealthUrl status=$status realtime providers=[$($providers -join ', ')]"
     }
     Write-Host "RELEASE OK: $short is running on $BrokerHost"

@@ -21,12 +21,11 @@ Status vocabulary matches `docs/QUALIFICATION.md`: `PROVEN_REAL`, `PROVEN_PROXY`
 
 ## Now
 
-**Item 6 below: the realtime voice provider credential.** M12's real-provider path now
-exists behind the abstraction (OpenAI Realtime adapter, ADR-0038), every fake-provider gate
-passes, and the only thing between the system and a real speech-to-speech session is a key
-that only you can create. Three local commands, none of which shows the value anywhere.
-Nothing else is waiting on you: the real-microphone Turkish voice session comes after this
-and will be its own single action.
+**Item 7 below: the real Turkish microphone / WebRTC session.** The provider is live on the
+Cloud Core (item 6, PROVEN_REAL 2026-09-02: key inside the running container, provider
+selected, a real client-secret mint from Hetzner). The only way any Stage 6 row moves is
+your voice on your microphone through the real path. One launcher, one page, a short
+Turkish script, then one command to pull the numbers.
 
 ---
 
@@ -86,7 +85,57 @@ Unblocks: real-browser qualification against sites you are already signed into.
 The agent will give you the exact enrollment step when it reaches this point; it needs the
 browser closed once, and it never asks for a password.
 
-### 6. Realtime voice provider credential (OpenAI Realtime) — **this is the current action**
+### 7. Real Turkish microphone / WebRTC session — **this is the current action**
+
+Unblocks: every `docs/QUALIFICATION.md` Stage 6 row (6.1–6.14). Nothing else can.
+
+What you need: this PC on the tailnet (as for the cloud qualification), a headset or the
+laptop microphone, the cloud Owner Credential (typed once into the page; exchanged for a
+session and dropped), and a quiet ~10 minutes.
+
+1. Start the web shell against the real Cloud Core (same-origin proxy over Tailscale; no
+   change on the host, the running api container is not touched):
+
+   ```powershell
+   .\scripts\voice\start-web-voice.ps1
+   ```
+
+2. Open http://localhost:3000/voice, sign in once, allow the microphone, press start. The
+   page shows the session id (first 8 characters), the provider (`openai-realtime`) and
+   the transport. Then, in Turkish, at your normal pace:
+
+   - a free exchange, two or three turns ("Bugün ne yapmamı önerirsin?" and follow-ups);
+   - **barge-in**: while it is speaking, cut in with "dur" — playback must stop at once;
+     then "devam";
+   - **hesitation**: "Şey... yani... hani şu, geçen hafta konuştuğumuz..." with a real
+     pause of about a second before you finish the sentence — it must NOT answer early;
+   - **mixed terms**: "OpenAI Realtime API ile WebRTC bağlantısı kuruldu mu?";
+   - **a long-running tool**: "Son üç gündeki yapay zekâ gelişmelerini araştır" — it should
+     say a short natural preamble and keep the session alive; then redirect it mid-task:
+     "Sadece OpenAI kısmına bak";
+   - **Turkish letters**: "Işık, İstanbul, ğ, ş, ç, ö, ü — bunları tekrar et".
+
+   Note anything that felt wrong (a cut-off, a late stop, a mispronunciation, an English
+   accent): that is the subjective row, and only you can fill it.
+
+3. Pull the numbers for the record (the credential is typed into a masked prompt; the
+   fetch mints one session and revokes it; the output is ids and timings only):
+
+   ```powershell
+   .\scripts\voice\fetch-benchmark.ps1 -SessionId <the full session id from the page> -OutFile voice-session-1.json
+   ```
+
+   Paste the printed JSON (or the file's content) to the agent together with your notes.
+   What happens next, automatically: the five metrics are recorded against the Stage 6
+   rows with their targets, every defect you noticed becomes a tracked fix, and the next
+   session is scheduled only when something changed.
+
+### 6. Realtime voice provider credential (OpenAI Realtime) — **DONE (2026-09-02)**
+
+Completed and PROVEN_REAL: key stored (DPAPI), local probe minted every M12 session layer
+with `gpt-realtime-2.1`, the M12 Cloud Core was released (ADR-0042) and the key is live
+inside the running api container with the provider selected and a real client-secret mint
+from Hetzner. The three commands below stay as the reference for the NEXT provider key.
 
 Unblocks: the first real speech-to-speech session (M12), and with it the real-microphone
 Turkish voice qualification. Until this key exists the realtime surface is built, gated and

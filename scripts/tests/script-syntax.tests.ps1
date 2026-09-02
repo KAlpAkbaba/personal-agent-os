@@ -48,11 +48,45 @@ $frameworkMissingApis = @(
 )
 $forbiddenPattern = "\.(" + ($frameworkMissingApis -join "|") + ")\("
 
+# A parameter token glued to its value (`-InputObject$doc`, from a search-and-replace that
+# ate the space) PARSES cleanly: 5.1 reads the whole thing as one parameter name and only
+# fails at bind time, with "A parameter cannot be found that matches parameter name
+# 'InputObject$doc'". A real release died in its final report on exactly that. Parameter
+# names can only look like identifiers, so anything else is a glued token.
+function Get-GluedParameterTokens {
+    param([Parameter(Mandatory = $true)][System.Management.Automation.Language.Ast]$Ast)
+    return @($Ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandParameterAst] }, $true) |
+        Where-Object { $_.ParameterName -cnotmatch '^[A-Za-z][A-Za-z0-9_]*$' -and $_.Extent.Text -ne '--' })
+}
+
+# the lint proves itself first: the exact defect must be caught, the correct form must not
+$gluedProbe = [System.Management.Automation.Language.Parser]::ParseInput('Get-OptionalProperty -InputObject$doc -Name "status"', [ref]$null, [ref]$null)
+$cleanProbe = [System.Management.Automation.Language.Parser]::ParseInput('Get-OptionalProperty -InputObject $doc -Name "status"', [ref]$null, [ref]$null)
+if (@(Get-GluedParameterTokens -Ast $gluedProbe).Count -eq 1 -and @(Get-GluedParameterTokens -Ast $cleanProbe).Count -eq 0) {
+    Write-Host "  PASS  glued-parameter lint catches -InputObject`$doc and accepts -InputObject `$doc"
+}
+else {
+    $failures++
+    Write-Host "  FAIL  glued-parameter lint does not distinguish -InputObject`$doc from -InputObject `$doc" -ForegroundColor Red
+}
+
 foreach ($file in @(Get-ChildItem -Path (Join-Path $repoRoot "scripts") -Filter "*.ps1" -Recurse -File)) {
     $relative = $file.FullName.Substring($repoRoot.Length + 1)
     $errors = $null
-    [void][System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$null, [ref]$errors)
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$null, [ref]$errors)
     $checked++
+
+    if (-not $errors -or @($errors).Count -eq 0) {
+        $glued = @(Get-GluedParameterTokens -Ast $ast)
+        if ($glued.Count -gt 0) {
+            $failures++
+            Write-Host "  FAIL  $relative" -ForegroundColor Red
+            foreach ($token in @($glued | Select-Object -First 3)) {
+                Write-Host ("        line {0}: parameter token glued to its value (binds as parameter name {1}): {2}" -f $token.Extent.StartLineNumber, $token.ParameterName, $token.Extent.Text) -ForegroundColor Red
+            }
+            continue
+        }
+    }
 
     if ($errors -and @($errors).Count -gt 0) {
         $failures++

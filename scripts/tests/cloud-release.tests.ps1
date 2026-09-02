@@ -119,15 +119,33 @@ try {
     $d0 = Invoke-Driver -Arguments @("-SshPath", $fakeSsh, "-ScpPath", $fakeScp, "-DryRun", "-AllowDirty")
     Assert-True ($d0.Exit -eq 0 -and $d0.Calls.Count -eq 0 -and $d0.Output -match "git archive" -and $d0.Output -match $headSha) "dry run shows the plan with HEAD's sha and opens nothing"
 
-    $env:FAKE_SSH_STDOUT = $headSha
-    try { $d1 = Invoke-Driver -Arguments @("-SshPath", $fakeSsh, "-ScpPath", $fakeScp, "-SkipVerify", "-AllowDirty") } finally { Remove-Item Env:FAKE_SSH_STDOUT -ErrorAction SilentlyContinue }
+    # the host reports no RELEASE marker (fresh host) -> a full release happens
+    $d1 = Invoke-Driver -Arguments @("-SshPath", $fakeSsh, "-ScpPath", $fakeScp, "-SkipVerify", "-AllowDirty")
     Assert-True ($d1.Exit -eq 0) "release through the fakes exits 0 (last line: $(($d1.Output.Trim() -split "`n")[-1]))"
-    Assert-True ($d1.Calls.Count -eq 2) "exactly two native calls: scp then ssh"
-    $scpArgs = ($d1.Calls[0] -split "`n"); $sshArgs = ($d1.Calls[1] -split "`n")
+    Assert-True ($d1.Calls.Count -eq 3) "exactly three native calls: ssh (RELEASE marker probe), scp, ssh (release)"
+    Assert-True (($d1.Calls[0] -split "`n")[-1] -match "^cat '/opt/pagentos/app/RELEASE'") "the first call only reads the host's RELEASE marker"
+    $scpArgs = ($d1.Calls[1] -split "`n"); $sshArgs = ($d1.Calls[2] -split "`n")
     $short = $headSha.Substring(0, 7)
     Assert-True (($scpArgs -join " ") -match "BatchMode=yes" -and $scpArgs[-1] -eq "root@pagentos-core:/tmp/pagentos-release-$short.tar" -and $scpArgs[-2] -match "pagentos-release-$short\.tar$") "scp uploads the HEAD archive to /tmp/pagentos-release-<sha>.tar in BatchMode"
     Assert-True (-not (Test-Path (Join-Path $env:TEMP "pagentos-release-$short.tar"))) "the local tarball is deleted afterwards"
     Assert-True ($sshArgs[-2] -eq "root@pagentos-core" -and $sshArgs[-1] -ceq "set -eu; rm -rf '/opt/pagentos/app.next'; mkdir -p '/opt/pagentos/app.next'; tar -xf '/tmp/pagentos-release-$short.tar' -C '/opt/pagentos/app.next'; rm -f '/tmp/pagentos-release-$short.tar'; bash '/opt/pagentos/app.next/scripts/cloud/release-cloud-core.sh' $headSha") "the remote command extracts to app.next and runs the shipped release script with the full sha (byte for byte after 5.1 quoting)"
+    # Idempotence (the REAL release had committed on the host; only the local report failed):
+    # when the host already runs HEAD the driver ships nothing and verifies only.
+    $env:FAKE_SSH_STDOUT = $headSha
+    try {
+        $d1b = Invoke-Driver -Arguments @("-SshPath", $fakeSsh, "-ScpPath", $fakeScp, "-SkipVerify", "-AllowDirty")
+        $d1c = Invoke-Driver -Arguments @("-SshPath", $fakeSsh, "-ScpPath", $fakeScp, "-SkipVerify", "-VerifyOnly")
+    }
+    finally { Remove-Item Env:FAKE_SSH_STDOUT -ErrorAction SilentlyContinue }
+    Assert-True ($d1b.Exit -eq 0 -and $d1b.Calls.Count -eq 1 -and $d1b.Output -match "already released") "a host already running HEAD is not released again (marker probe only, no scp, no host transaction)"
+    Assert-True ($d1c.Exit -eq 0 -and $d1c.Calls.Count -eq 1 -and $d1c.Output -match "already released") "-VerifyOnly on a host running HEAD ships nothing (and ignores a dirty tree: nothing ships)"
+    $env:FAKE_SSH_STDOUT = "0000000000000000000000000000000000000000"
+    try { $d1d = Invoke-Driver -Arguments @("-SshPath", $fakeSsh, "-ScpPath", $fakeScp, "-SkipVerify", "-VerifyOnly") } finally { Remove-Item Env:FAKE_SSH_STDOUT -ErrorAction SilentlyContinue }
+    Assert-True ($d1d.Exit -ne 0 -and $d1d.Calls.Count -eq 1 -and $d1d.Output -match "not HEAD") "-VerifyOnly refuses when the host runs a different commit"
+    $env:FAKE_SSH_STDOUT = $headSha
+    try { $d1e = Invoke-Driver -Arguments @("-SshPath", $fakeSsh, "-ScpPath", $fakeScp, "-SkipVerify", "-AllowDirty", "-Force") } finally { Remove-Item Env:FAKE_SSH_STDOUT -ErrorAction SilentlyContinue }
+    Assert-True ($d1e.Exit -eq 0 -and $d1e.Calls.Count -eq 3) "-Force repeats the release even when the host runs HEAD"
+
     $d2 = Invoke-Driver -Arguments @("-SshPath", $fakeSsh, "-ScpPath", $fakeScp, "-Preflight", "-AllowDirty")
     Assert-True ($d2.Exit -eq 0 -and (($d2.Calls[-1] -split "`n")[-1]) -match " --preflight$" -and $d2.Output -match "preflight OK") "-Preflight passes --preflight to the host and reports validate-only"
     foreach ($case in @(@{ Exit = "71"; Pattern = "INVALID" }, @{ Exit = "68"; Pattern = "MISSING inside" }, @{ Exit = "70"; Pattern = "self-test" })) {

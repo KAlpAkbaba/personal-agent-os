@@ -1742,3 +1742,32 @@ Consequences: the owner's command to put the existing stored key live is the rel
 key end to end; `set-cloud-secret.ps1` is the tool for the NEXT secret. Nothing in the
 PROVEN_REAL device/cloud baseline changed: the same host, env file, database, dependency
 containers, tailnet path and device registration; only the api tree/image moves.
+
+### ADR-0042 addendum — the real release succeeded; the local report did not (2026-09-02)
+
+The owner's release run committed on the host exactly as designed (env key PRESENT,
+compose wired, api recreated, migration 0011 applied, container Healthy, key PRESENT in
+the container, `openai-realtime` in health, a real client-secret mint from Hetzner). The
+only failure was in the local report: `Get-OptionalProperty -InputObject$doc` — a
+search-and-replace had eaten the space, and Windows PowerShell 5.1 reads that as one
+parameter name and fails only at bind time.
+
+1. **The exact defect is now a lint.** `script-syntax.tests.ps1` walks every script's AST
+   and fails any `CommandParameterAst` whose name is not an identifier (a parameter token
+   glued to its value); the lint proves itself on `-InputObject$doc` vs `-InputObject $doc`
+   before checking the tree. A repo-wide audit found no other instance.
+2. **Releases are idempotent.** The driver first reads the host's `RELEASE` marker; when it
+   equals HEAD the archive/upload/host transaction is skipped and only the local
+   verification runs (`-VerifyOnly` forces that path and does not need a clean tree;
+   `-Force` repeats a release). The owner's committed release was therefore verified from
+   this machine without being repeated: `RELEASE` = fb9d52e, health `ok`, providers
+   `['openai-realtime']`. QUALIFICATION row 6.0 is PROVEN_REAL on that evidence.
+3. **The microphone session does not touch the cloud baseline.** The browser would need
+   its origin in the API's CORS allowlist; instead `apps/web/next.config.ts` rewrites
+   `/api/*` server-side to `PAGENTOS_API_UPSTREAM` (the tailnet host) and the page runs with
+   `NEXT_PUBLIC_API_BASE=/api`, so every Cloud Core call is same-origin; the WebRTC leg
+   still goes straight to the provider with the ephemeral credential.
+   `scripts/voice/start-web-voice.ps1` checks the provider is listed and starts the shell;
+   `scripts/voice/fetch-benchmark.ps1` pulls the session state and the five-metric
+   benchmark afterwards (credential in a masked prompt, one session minted and revoked,
+   ids and timings only).

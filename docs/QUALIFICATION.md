@@ -159,6 +159,7 @@ real run, not impressions.
 
 | # | Criterion | Status | What will count as proof |
 |---|---|---|---|
+| 6.0 | The realtime provider is live on the real Cloud Core: key present inside the running api container, provider selected in `/v1/system/health`, one real client-secret mint from the Hetzner host | `PROVEN_REAL` (2026-09-02) | Owner's release run on pagentos-core (ADR-0042): env key PRESENT, compose wired, api recreated, migration 0011 applied, container Healthy, key PRESENT in container, health providers `['openai-realtime']`, real mint from Hetzner OK. Re-read independently the same evening: `RELEASE` = fb9d52e (HEAD), health `ok`, providers `['openai-realtime']`, simulator disabled (`environment=prod`). Model `gpt-realtime-2.1`; local probe proved every M12 session layer live (ADR-0038 addendum). Nothing about audio is claimed here. |
 | 6.1 | Primary conversation runs on a native speech-to-speech provider chosen by capability | `NOT_YET_PROVEN` | Session record shows the selected provider and its declared capabilities; no STT→LLM→TTS chain in the conversation path. |
 | 6.2 | Natural Turkish conversation, simultaneous listen/speak as far as the provider permits | `NOT_YET_PROVEN` | Owner session transcript + owner evaluation (final gate). Vendor Turkish support is UNVERIFIED in docs — measured, never assumed. |
 | 6.3 | Barge-in: owner interrupts, playback stops immediately | `NOT_YET_PROVEN` | Harness `barge_in_to_stop_ms` from the real run; target < ~150 ms where achievable; stop-first ordering in the client event log. |
