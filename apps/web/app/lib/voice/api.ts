@@ -42,6 +42,8 @@ export type CreateSessionBody = {
   language?: string;
   narration_session_id?: string;
   session_ttl_s?: number;
+  /** ADR-0043: one of the provider's supported wire voices (the page offers marin | cedar). */
+  voice?: string;
 };
 
 export type AttachBody = { client_kind?: string; transport?: string };

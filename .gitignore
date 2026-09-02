@@ -79,3 +79,6 @@ tfplan.binary
 
 # Agent worktrees are scratch checkouts of this repo; committing them would nest the repo inside itself.
 .claude/worktrees/
+
+# TypeScript incremental state (tsc --noEmit)
+*.tsbuildinfo

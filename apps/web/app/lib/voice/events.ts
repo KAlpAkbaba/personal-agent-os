@@ -15,7 +15,7 @@
 
 import {
   CLIENT_EVENT_KINDS,
-  FORBIDDEN_PAYLOAD_KEY_PARTS,
+  isForbiddenKey,
   MAX_EVENTS_PER_REQUEST,
   MAX_EVENT_PAYLOAD_BYTES,
   MAX_EVENT_TEXT_CHARS,
@@ -48,9 +48,9 @@ export const realScheduler: Scheduler = {
 
 const KNOWN_KINDS: ReadonlySet<string> = new Set(CLIENT_EVENT_KINDS);
 
+/** The server's rule (contract.ts `isForbiddenKey`), kept under its historical name. */
 export function isForbiddenPayloadKey(key: string): boolean {
-  const lowered = key.toLowerCase();
-  return FORBIDDEN_PAYLOAD_KEY_PARTS.some((part) => lowered.includes(part));
+  return isForbiddenKey(key);
 }
 
 /** Drop forbidden keys recursively; bytes-like values never make it in. */
@@ -73,6 +73,21 @@ export function scrubPayload(payload: Record<string, unknown>): Record<string, u
     } else {
       out[key] = value;
     }
+  }
+  return out;
+}
+
+/**
+ * Metric payloads (ADR-0044 §7) carry NUMBERS ONLY under names the server's
+ * rule accepts: booleans become 0/1, everything else — strings, objects,
+ * non-finite numbers, forbidden keys — is dropped before the event is built.
+ */
+export function numbersOnly(payload: Record<string, unknown>): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [key, value] of Object.entries(payload)) {
+    if (isForbiddenKey(key)) continue;
+    if (typeof value === "boolean") out[key] = value ? 1 : 0;
+    else if (typeof value === "number" && Number.isFinite(value)) out[key] = value;
   }
   return out;
 }

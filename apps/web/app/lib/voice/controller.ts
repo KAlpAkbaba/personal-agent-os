@@ -35,9 +35,15 @@ import type {
   ToolCallResponse,
 } from "./contract";
 import { MAX_SUMMARY_CHARS } from "./contract";
-import { EventReporter, type Scheduler, realScheduler } from "./events";
+import { EventReporter, numbersOnly, type Scheduler, realScheduler } from "./events";
 import { HesitationGuard, type HesitationGuardConfig } from "./hesitation";
-import type { Microphone, NetworkMonitor, Playback, SpeechDetector } from "./ports";
+import type {
+  Microphone,
+  NetworkMonitor,
+  Playback,
+  SpeechDetector,
+  SpeechDetectorCalibration,
+} from "./ports";
 import {
   type RealtimeTransport,
   type TransportDescriptor,
@@ -59,11 +65,35 @@ export type VoiceUiState =
 
 export type LatencySample = { value: number; at: number };
 
+/**
+ * Per-session microphone / noise counters for the qualification matrix
+ * (ADR-0044 §7). Numbers only; reported through `state` events.
+ */
+export type MicMetrics = {
+  /** local gate opened, the provider never heard speech for it */
+  false_starts: number;
+  /** a false start that had already stopped the assistant (barge-in on noise) */
+  false_barge_ins: number;
+  /** provider-confirmed turns that produced no transcript */
+  false_turns: number;
+  gate_opens: number;
+  gated_out: number;
+  click_rejects: number;
+  calibrations: number;
+  noise_floor_db: number | null;
+  /** 0 quiet, 1 normal, 2 noisy, 3 very noisy; null before calibration */
+  env: number | null;
+};
+
 export type ControllerSnapshot = {
   state: VoiceUiState;
   sessionId: string | null;
   provider: string | null;
   transport: string | null;
+  /** ADR-0043: wire voice and perceptual profile the server reported for this session. */
+  voice: string | null;
+  voiceProfile: string | null;
+  micMetrics: MicMetrics;
   turn: number;
   assistantText: string;
   ownerText: string;
@@ -96,6 +126,14 @@ export type ControllerDeps = {
   hesitation?: Partial<HesitationGuardConfig>;
   flushIntervalMs?: number;
   reattach?: { maxAttempts: number; baseDelayMs: number };
+  /**
+   * After the local gate closes without the provider ever confirming speech,
+   * how long to wait for a late `speech_started` before calling it a false
+   * start and releasing the turn. The provider's VAD confirms real speech well
+   * inside this; without it a noise-opened turn would stay "speaking" forever
+   * and silently disable the next barge-in.
+   */
+  localSpeechGraceMs?: number;
   /** Ordered operation log — tests pin ordering with it. */
   log?: (op: string) => void;
 };
@@ -103,6 +141,19 @@ export type ControllerDeps = {
 type LongRunning = { name: string; startedAt: number; preamble?: string };
 
 const SIDEBAND_LOG_MAX = 20;
+const DEFAULT_LOCAL_GRACE_MS = 700;
+
+const EMPTY_MIC_METRICS: MicMetrics = {
+  false_starts: 0,
+  false_barge_ins: 0,
+  false_turns: 0,
+  gate_opens: 0,
+  gated_out: 0,
+  click_rejects: 0,
+  calibrations: 0,
+  noise_floor_db: null,
+  env: null,
+};
 
 export class VoiceSessionController {
   private readonly deps: ControllerDeps;
@@ -112,6 +163,7 @@ export class VoiceSessionController {
   private transport: RealtimeTransport | null = null;
   private transportUnsubs: Array<() => void> = [];
   private portUnsubs: Array<() => void> = [];
+  private localSpeechUnsubs: Array<() => void> = [];
   private snapshot: ControllerSnapshot;
   private listeners = new Set<(snapshot: ControllerSnapshot) => void>();
 
@@ -129,6 +181,12 @@ export class VoiceSessionController {
   private eotTimer: unknown = null;
   private lastEotAt: number | null = null;
   private prematureResponse = false;
+  // noise qualification (ADR-0044 §7)
+  private localGraceTimer: unknown = null;
+  private metrics = { false_starts: 0, false_barge_ins: 0, false_turns: 0 };
+  /** the open turn awaiting its transcript verdict: judged when the next turn starts / at close */
+  private turnJudgement: { turn: number; providerConfirmed: boolean; hadTranscript: boolean } | null = null;
+  private lastCalibration: SpeechDetectorCalibration | null = null;
 
   // response tracking
   private responseActive = false;
@@ -159,6 +217,9 @@ export class VoiceSessionController {
       sessionId: null,
       provider: null,
       transport: null,
+      voice: null,
+      voiceProfile: null,
+      micMetrics: { ...EMPTY_MIC_METRICS },
       turn: 0,
       assistantText: "",
       ownerText: "",
@@ -217,16 +278,28 @@ export class VoiceSessionController {
   // ------------------------------------------------------------ lifecycle
 
   /** Create the session, open the microphone and the media leg. */
-  async connect(options: { deviceId?: string; language?: string } = {}): Promise<void> {
+  async connect(options: { deviceId?: string; language?: string; voice?: string } = {}): Promise<void> {
     if (this.snapshot.state !== "idle" && this.snapshot.state !== "closed" && this.snapshot.state !== "error") {
       return;
     }
     this.closing = false;
     this.t0 = this.deps.now();
-    this.patch({ state: "creating", lastError: null, assistantText: "", ownerText: "" });
+    this.metrics = { false_starts: 0, false_barge_ins: 0, false_turns: 0 };
+    this.turnJudgement = null;
+    this.lastCalibration = null;
+    this.patch({
+      state: "creating",
+      lastError: null,
+      assistantText: "",
+      ownerText: "",
+      micMetrics: { ...EMPTY_MIC_METRICS },
+    });
     let payload: SessionLegPayload;
     try {
-      payload = await this.deps.api.create({ language: options.language });
+      payload = await this.deps.api.create({
+        language: options.language,
+        ...(options.voice ? { voice: options.voice } : {}),
+      });
     } catch (error) {
       this.fail(`Oturum oluşturulamadı: ${describe(error)}`);
       return;
@@ -246,6 +319,8 @@ export class VoiceSessionController {
       sessionId: payload.session_id,
       provider: payload.provider,
       transport: payload.transport,
+      voice: payload.voice ?? null,
+      voiceProfile: payload.voice_profile ?? null,
       state: "connecting",
     });
     this.portUnsubs.push(
@@ -271,9 +346,7 @@ export class VoiceSessionController {
       if (this.deps.localSpeech) {
         this.deps.localSpeech.stop();
         this.deps.localSpeech.start(microphone);
-        this.portUnsubs.push(
-          this.deps.localSpeech.onSpeechStart((at) => this.onOwnerSpeechStart(at - this.t0, "local")),
-        );
+        this.wireLocalSpeech(this.deps.localSpeech);
       }
     }
     const transport = this.deps.transportFactory(this.descriptor);
@@ -288,6 +361,18 @@ export class VoiceSessionController {
       now: () => this.now(),
     });
     this.log("transport.connected");
+  }
+
+  /** Subscribe once per leg (a reattach re-wires instead of stacking sinks). */
+  private wireLocalSpeech(detector: SpeechDetector): void {
+    for (const unsub of this.localSpeechUnsubs) unsub();
+    this.localSpeechUnsubs = [
+      detector.onSpeechStart((at) => this.onOwnerSpeechStart(at - this.t0, "local")),
+      detector.onSpeechEnd((at) => this.onLocalSpeechEnd(at - this.t0)),
+    ];
+    if (detector.onCalibration) {
+      this.localSpeechUnsubs.push(detector.onCalibration((c) => this.onCalibration(c)));
+    }
   }
 
   /** Swap the microphone without dropping the session. */
@@ -307,7 +392,10 @@ export class VoiceSessionController {
     this.closing = true;
     this.clearEotTimer();
     this.clearReattachTimer();
+    this.clearLocalGraceTimer();
     if (this.reporter) {
+      this.judgeOpenTurn();
+      if (this.deps.localSpeech) this.reportMicMetrics({ session_end: 1 });
       const summary = this.recentLines.join(" | ").slice(0, MAX_SUMMARY_CHARS);
       if (summary) this.reporter.report({ kind: "summary", text: summary });
       this.reporter.report({ kind: "state", turn: this.snapshot.turn, payload: { state: "CLOSED" } });
@@ -348,6 +436,9 @@ export class VoiceSessionController {
   dispose(): void {
     for (const unsub of this.portUnsubs) unsub();
     this.portUnsubs = [];
+    for (const unsub of this.localSpeechUnsubs) unsub();
+    this.localSpeechUnsubs = [];
+    this.clearLocalGraceTimer();
     this.teardownLeg("dispose");
     this.reporter?.dispose();
     this.listeners.clear();
@@ -420,6 +511,8 @@ export class VoiceSessionController {
       // client has to "first uplink packet acknowledged".
       if (source === "provider" && !this.uplinkReported && this.ownerSpeechStartedAt !== null) {
         this.uplinkReported = true;
+        this.clearLocalGraceTimer();
+        if (this.turnJudgement) this.turnJudgement.providerConfirmed = true;
         this.reporter.report({
           kind: "uplink_first_packet",
           t_ms: at,
@@ -451,12 +544,14 @@ export class VoiceSessionController {
     if (this.responseActive || this.deps.playback.playing) {
       this.bargeIn(at, source);
     }
+    this.judgeOpenTurn();
     this.ownerSpeaking = true;
     this.ownerSpeechStartedAt = at;
     this.ownerSpeechSource = source;
     this.uplinkReported = source === "provider";
     this.ownerTranscriptTail = "";
     const turn = this.snapshot.turn + 1;
+    this.turnJudgement = { turn, providerConfirmed: source === "provider", hadTranscript: false };
     this.patch({ turn, ownerText: "" });
     this.reporter.report({ kind: "mic_speech_start", t_ms: at, turn, payload: { source } });
     if (this.snapshot.state !== "tool_running" && this.snapshot.state !== "interrupted") {
@@ -492,8 +587,114 @@ export class VoiceSessionController {
     this.setState("interrupted", "INTERRUPTED");
   }
 
+  /**
+   * The local gate closed. Real speech is ended by the provider's
+   * `speech_stopped`; this only matters when the provider never heard speech
+   * for a locally opened turn — after a short grace it was noise.
+   */
+  private onLocalSpeechEnd(at: number): void {
+    if (this.closing || !this.ownerSpeaking) return;
+    if (this.ownerSpeechSource !== "local" || this.uplinkReported) return;
+    this.clearLocalGraceTimer();
+    const grace = this.deps.localSpeechGraceMs ?? DEFAULT_LOCAL_GRACE_MS;
+    this.localGraceTimer = this.scheduler.setTimeout(() => {
+      this.localGraceTimer = null;
+      this.onLocalFalseStart(at);
+    }, grace);
+  }
+
+  private onLocalFalseStart(at: number): void {
+    if (this.closing || !this.ownerSpeaking) return;
+    if (this.ownerSpeechSource !== "local" || this.uplinkReported) return;
+    this.ownerSpeaking = false;
+    this.ownerSpeechSource = null;
+    this.ownerSpeechStartedAt = null;
+    this.turnJudgement = null; // counted as a false start, not a false turn
+    const wasBargeIn = this.snapshot.state === "interrupted";
+    this.metrics.false_starts += 1;
+    if (wasBargeIn) this.metrics.false_barge_ins += 1;
+    this.log(wasBargeIn ? "gate.false_barge_in" : "gate.false_start");
+    this.reportMicMetrics({ false_start: 1, false_barge_in: wasBargeIn ? 1 : 0 }, at);
+    if (wasBargeIn) this.setState("listening", "LISTENING");
+  }
+
+  private clearLocalGraceTimer(): void {
+    if (this.localGraceTimer !== null) {
+      this.scheduler.clearTimeout(this.localGraceTimer);
+      this.localGraceTimer = null;
+    }
+  }
+
+  /** A provider-confirmed turn that never produced a transcript was noise. */
+  private judgeOpenTurn(): void {
+    const judgement = this.turnJudgement;
+    this.turnJudgement = null;
+    if (!judgement || !judgement.providerConfirmed || judgement.hadTranscript) return;
+    this.metrics.false_turns += 1;
+    this.log(`gate.false_turn:${judgement.turn}`);
+    this.reportMicMetrics({ false_turn: 1 });
+  }
+
+  private onCalibration(calibration: SpeechDetectorCalibration): void {
+    if (this.closing || !this.reporter) return;
+    this.lastCalibration = calibration;
+    this.reporter.report({
+      kind: "state",
+      turn: this.snapshot.turn,
+      payload: numbersOnly({ mic_calibration: 1, ...calibration }),
+    });
+    this.log("report.mic_calibration");
+    this.refreshMicMetrics();
+  }
+
+  private currentMicMetrics(): MicMetrics {
+    const stats = this.deps.localSpeech?.stats?.();
+    return {
+      ...EMPTY_MIC_METRICS,
+      ...(stats
+        ? {
+            gate_opens: stats.gate_opens,
+            gated_out: stats.gated_out,
+            click_rejects: stats.click_rejects,
+            calibrations: stats.calibrations,
+          }
+        : {}),
+      false_starts: this.metrics.false_starts,
+      false_barge_ins: this.metrics.false_barge_ins,
+      false_turns: this.metrics.false_turns,
+      noise_floor_db: this.lastCalibration?.noise_floor_db ?? null,
+      env: this.lastCalibration?.env ?? null,
+    };
+  }
+
+  private refreshMicMetrics(): void {
+    this.patch({ micMetrics: this.currentMicMetrics() });
+  }
+
+  /** `state` event, numbers only (ADR-0044 §7); `extra` marks what just happened. */
+  private reportMicMetrics(extra: Record<string, number> = {}, tMs?: number): void {
+    this.refreshMicMetrics();
+    if (!this.reporter) return;
+    const stats = this.deps.localSpeech?.stats?.() ?? {};
+    this.reporter.report({
+      kind: "state",
+      t_ms: tMs,
+      turn: this.snapshot.turn,
+      payload: numbersOnly({
+        mic_metrics: 1,
+        ...stats,
+        false_starts: this.metrics.false_starts,
+        false_barge_ins: this.metrics.false_barge_ins,
+        false_turns: this.metrics.false_turns,
+        ...extra,
+      }),
+    });
+    this.log("report.mic_metrics");
+  }
+
   private onOwnerSpeechStopped(at: number): void {
     if (!this.ownerSpeaking || !this.reporter) return;
+    this.clearLocalGraceTimer();
     this.ownerSpeaking = false;
     const decision = this.guard.decide(this.ownerTranscriptTail, at);
     this.patch({ hesitation: { ...this.guard.stats(), last: decision.reason } });
@@ -527,6 +728,7 @@ export class VoiceSessionController {
   }
 
   private onOwnerTranscript(text: string, final: boolean): void {
+    if (this.turnJudgement && text.trim()) this.turnJudgement.hadTranscript = true;
     if (final) {
       this.ownerTranscriptTail = text;
       this.patch({ ownerText: text });
@@ -790,6 +992,7 @@ export class VoiceSessionController {
     this.reporter.report({ kind: "network_lost", t_ms: at, turn: this.snapshot.turn, payload: { reason } });
     this.log(`network.lost:${reason}`);
     this.clearEotTimer();
+    this.clearLocalGraceTimer();
     this.teardownLeg(reason);
     this.ownerSpeaking = false;
     this.patch({ state: "reconnecting" });
