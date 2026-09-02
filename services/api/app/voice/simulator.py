@@ -49,6 +49,7 @@ from app.voice.providers import (
     EphemeralCredential,
     EventSink,
     ProviderCapabilities,
+    RealtimeSessionConfig,
     RealtimeSessionEvent,
 )
 from app.voice.realtime import RealtimeSession, RealtimeState
@@ -493,11 +494,14 @@ class SimulatedRealtimeProvider:
                                         timings=self.timings, script=script)
 
     def mint_credential(
-        self, *, session_id: str, ttl_s: int | None = None, transport: str = TRANSPORT_SIMULATED
+        self, *, session_id: str, ttl_s: int | None = None, transport: str = TRANSPORT_SIMULATED,
+        session_config: RealtimeSessionConfig | None = None,
     ) -> EphemeralCredential:
         """A random, single-session secret. Nothing from Settings is involved —
         the simulator has no vendor key, which is exactly the property the
-        session-service tests assert (the vendor key is never a client value)."""
+        session-service tests assert (the vendor key is never a client value).
+        ``session_config`` is accepted for contract parity and ignored: the
+        simulator's dialogue is scripted, not instructed."""
         ttl = ttl_s if ttl_s is not None else self.credential_ttl_s
         ref = f"sim:{session_id}"
         self.minted.append(ref)

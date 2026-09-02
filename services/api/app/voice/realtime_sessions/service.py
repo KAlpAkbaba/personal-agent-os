@@ -26,7 +26,7 @@ from app.narration.commands import NarrationState, State
 from app.voice import service as voice_service
 from app.voice.errors import VoiceError, VoiceErrorClass
 from app.voice.intents import ResolvedIntent, resolve_intent
-from app.voice.providers import EphemeralCredential, RealtimeProvider
+from app.voice.providers import EphemeralCredential, RealtimeProvider, RealtimeSessionConfig
 from app.voice.realtime import RealtimeState
 from app.voice.realtime_bench import (
     SOURCE_CLIENT,
@@ -178,9 +178,27 @@ def require_leg(row: RealtimeSessionRow, owner: SessionContext) -> None:
 
 def mint_credential(
     provider: RealtimeProvider, *, session_id: uuid.UUID, ttl_s: int, transport: str,
+    session_config: RealtimeSessionConfig | None = None,
 ) -> EphemeralCredential:
-    """Through the adapter interface only: the runtime never reads a vendor key here."""
-    return provider.mint_credential(session_id=str(session_id), ttl_s=ttl_s, transport=transport)
+    """Through the adapter interface only: the runtime never reads a vendor key here.
+    ``session_config`` carries the persona instructions + tool manifest so a real
+    provider bakes them into the session server-side (spec §4 step 1)."""
+    return provider.mint_credential(session_id=str(session_id), ttl_s=ttl_s, transport=transport,
+                                    session_config=session_config)
+
+
+def _session_config(
+    row: RealtimeSessionRow, *, registry: ToolRegistry, prefs: Any,
+) -> RealtimeSessionConfig:
+    ctx = row.context_json or {}
+    return RealtimeSessionConfig(
+        language=row.language,
+        instructions=build_instructions(
+            prefs, narration_attached=bool(ctx.get("narration_session_id")),
+            plan=ctx.get("plan"), transcript_summary=row.transcript_summary,
+        ),
+        tools=tuple(registry.manifest()),
+    )
 
 
 def create_session(
@@ -229,8 +247,10 @@ def create_session(
     )
     db.add(row)
     db.flush()
+    prefs = voice_service.load_preferences(db)
+    config = _session_config(row, registry=registry, prefs=prefs)
     credential = mint_credential(provider, session_id=row.id, ttl_s=credential_ttl_s,
-                                 transport=transport)
+                                 transport=transport, session_config=config)
     _audit(db, ACTION_SESSION_CREATED, row, trace_id=trace_id, metadata={
         "provider": row.provider, "transport": row.transport, "client_kind": row.client_kind,
         "owner_session_id": str(owner.session_id), "expires_at": _iso(row.expires_at),
@@ -242,26 +262,23 @@ def create_session(
         "expires_at": _iso(credential.expires_at), "ttl_s": credential_ttl_s,
     })
     db.commit()
-    prefs = voice_service.load_preferences(db)
-    payload = _leg_payload(row, credential, registry=registry, prefs_summary_first=prefs)
+    payload = _leg_payload(row, credential, registry=registry, config=config)
     return row, credential, payload
 
 
 def _leg_payload(
     row: RealtimeSessionRow, credential: EphemeralCredential, *, registry: ToolRegistry,
-    prefs_summary_first: Any,
+    config: RealtimeSessionConfig,
 ) -> dict[str, Any]:
-    ctx = row.context_json or {}
+    """The client sees exactly the instructions/tools the credential was minted
+    with (same ``config`` object), so the two can never drift."""
     return {
         "session_id": str(row.id),
         "provider": row.provider,
         "transport": row.transport,
         "credential": credential.to_client_dict(),
         "tools": registry.manifest(),
-        "instructions": build_instructions(
-            prefs_summary_first, narration_attached=bool(ctx.get("narration_session_id")),
-            plan=ctx.get("plan"), transcript_summary=row.transcript_summary,
-        ),
+        "instructions": config.instructions,
         "language": row.language,
         "expires_at": _iso(row.expires_at),
         "state": row.state,
@@ -659,8 +676,10 @@ def attach(
     ctx["pending_sideband"] = []
     _set_context(row, ctx)
     _touch(row, now)
+    prefs = voice_service.load_preferences(db)
+    config = _session_config(row, registry=registry, prefs=prefs)
     credential = mint_credential(provider, session_id=row.id, ttl_s=credential_ttl_s,
-                                 transport=row.transport)
+                                 transport=row.transport, session_config=config)
     _audit(db, ACTION_CREDENTIAL_MINTED, row, trace_id=trace_id, metadata={
         "provider": credential.provider, "session_ref": credential.session_ref,
         "expires_at": _iso(credential.expires_at), "ttl_s": credential_ttl_s, "leg": ctx["legs"],
@@ -671,8 +690,7 @@ def attach(
         "same_leg": same_leg, "legs": ctx["legs"], "pending_sideband": len(pending),
     })
     db.commit()
-    prefs = voice_service.load_preferences(db)
-    payload = _leg_payload(row, credential, registry=registry, prefs_summary_first=prefs)
+    payload = _leg_payload(row, credential, registry=registry, config=config)
     payload["state"] = session_state(db, row)
     payload["pending_sideband"] = pending
     payload["previous_leg"] = previous if not same_leg else None

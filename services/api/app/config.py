@@ -86,6 +86,23 @@ class Settings(BaseSettings):
     voice_realtime_provider_preference: tuple[str, ...] = ("openai-realtime", "simulator")
     voice_realtime_credential_ttl_s: int = 600
     voice_realtime_session_ttl_s: int = 3600
+    # The deterministic simulator is a GATE, not a product path (ADR-0036 §2). It
+    # is registered as a ConversationRealtime candidate only in environment=dev,
+    # or when this flag is set explicitly, so a production session can never be
+    # answered by the simulator when the real adapter is missing its key.
+    voice_realtime_simulator_enabled: bool = False
+    # OpenAI Realtime adapter (M12 track B, ADR-0037). The ONLY place a realtime
+    # model name may appear outside the adapter module. Voice + eagerness are
+    # defaults the owner tunes after real Turkish A/B runs; nothing here is a
+    # quality claim. Turkish quality on this provider is UNVERIFIED by the vendor
+    # docs (docs/research/realtime-providers-2026-09.md §1.5) and is measured on
+    # the owner's machine, never assumed.
+    voice_realtime_openai_base_url: str = "https://api.openai.com/v1"
+    voice_realtime_openai_model: str = "gpt-realtime"
+    voice_realtime_openai_voice: str = "marin"
+    voice_realtime_openai_eagerness: str = "low"  # low | medium | high | auto
+    voice_realtime_openai_transcription_model: str = "gpt-4o-transcribe"
+    voice_realtime_openai_timeout_s: float = 15.0
 
     # Device broker (M1). Heartbeat interval is sent to agents in the welcome
     # frame; liveness timeout is heartbeat_interval * liveness_factor.

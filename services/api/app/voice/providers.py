@@ -307,27 +307,54 @@ class RealtimeSessionEvent:
 
 
 @dataclass(frozen=True, slots=True)
+class RealtimeSessionConfig:
+    """What Cloud Core wants baked into ONE provider media session at credential
+    time (spec §4 step 1): the language, the Turkish persona/executive
+    ``instructions`` and the tool manifest (``ToolRegistry.manifest()`` entries).
+
+    Provider-neutral: each adapter maps this onto its own session schema. The
+    simulator ignores it (its behaviour is scripted), which is fine — the point
+    is that a real provider receives the instructions and tools *server-side*,
+    so a client can never present a different persona or tool set than the one
+    Cloud Core minted the credential for."""
+
+    language: str = "tr-TR"
+    instructions: str = ""
+    tools: tuple[dict[str, Any], ...] = ()
+    voice: str | None = None  # None = the adapter's configured default
+
+
+@dataclass(frozen=True, slots=True)
 class EphemeralCredential:
     """A per-session, short-lived provider credential minted THROUGH the adapter.
 
     The owner-provisioned provider key (Settings) is never in this object; a
     client receives only ``secret`` and it is scoped to one media session.
-    ``secret`` is never persisted and never logged/audited."""
+    ``secret`` is never persisted and never logged/audited.
+
+    ``transport_descriptor`` is the adapter-defined, NON-secret contract a client
+    needs to open the media leg itself (SDP endpoint, data-channel name,
+    WebSocket URL, audio format). Real adapters fill it; the simulator has no
+    media leg and leaves it empty, in which case ``to_client_dict`` omits it."""
 
     provider: str
     secret: str
     expires_at: datetime
     transport: str
     session_ref: str  # provider-side session identifier (opaque, non-secret)
+    transport_descriptor: dict[str, Any] = field(default_factory=dict)
 
     def to_client_dict(self) -> dict[str, Any]:
-        return {
+        out = {
             "provider": self.provider,
             "secret": self.secret,
             "expires_at": self.expires_at.isoformat().replace("+00:00", "Z"),
             "transport": self.transport,
             "session_ref": self.session_ref,
         }
+        if self.transport_descriptor:
+            out["transport_descriptor"] = dict(self.transport_descriptor)
+        return out
 
 
 AudioSink = Callable[[bytes], None]
@@ -343,7 +370,8 @@ class RealtimeProvider(Protocol):
     def open_session(self, *, language: str = "tr-TR") -> RealtimeSessionHandle: ...
 
     def mint_credential(
-        self, *, session_id: str, ttl_s: int, transport: str
+        self, *, session_id: str, ttl_s: int, transport: str,
+        session_config: RealtimeSessionConfig | None = None,
     ) -> EphemeralCredential: ...
 
 
@@ -564,7 +592,8 @@ class FakeRealtimeProvider:
         return RealtimeSession(provider=self.name, language=language)
 
     def mint_credential(
-        self, *, session_id: str, ttl_s: int, transport: str = TRANSPORT_SIMULATED
+        self, *, session_id: str, ttl_s: int, transport: str = TRANSPORT_SIMULATED,
+        session_config: RealtimeSessionConfig | None = None,
     ) -> EphemeralCredential:
         """Control-only fake: a labelled, non-secret placeholder credential."""
         return EphemeralCredential(
@@ -967,6 +996,7 @@ __all__ = [
     "ProviderCapabilities",
     "ProviderRequest",
     "RealtimeProvider",
+    "RealtimeSessionConfig",
     "RealtimeSessionEvent",
     "RealtimeSessionHandle",
     "STTProvider",
