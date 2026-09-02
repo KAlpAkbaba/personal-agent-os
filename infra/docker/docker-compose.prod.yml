@@ -110,6 +110,13 @@ services:
       PAGENTOS_S3_BUCKET: pagentos-artifacts
       PAGENTOS_TEMPORAL_ADDRESS: temporal:7233
       PAGENTOS_VOICE_PROFILE_SECRET: ${PAGENTOS_VOICE_PROFILE_SECRET:?set in /opt/pagentos/.env}
+      # M12 (ADR-0038): the realtime voice provider key. OPTIONAL - absent means the
+      # adapter is simply not registered and the realtime surface reports it inactive;
+      # nothing else changes. Installed into /opt/pagentos/.env by
+      # scripts/cloud/set-cloud-secret.ps1 over Tailscale SSH (stdin only, never argv).
+      PAGENTOS_VOICE_OPENAI_API_KEY: ${PAGENTOS_VOICE_OPENAI_API_KEY:-}
+      # Production is never "dev": the simulated provider is barred from selection here.
+      PAGENTOS_ENVIRONMENT: ${PAGENTOS_ENVIRONMENT:-prod}
       # The web shell is reached over the tailnet; set to the real private origin(s).
       # A JSON list, and `[]` rather than empty: pydantic-settings parses complex fields as
       # JSON, so an empty string is a parse error ("error parsing value for field

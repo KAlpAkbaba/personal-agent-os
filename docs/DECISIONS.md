@@ -1487,3 +1487,45 @@ Consequences: track B returns a `transport_descriptor` with its credential;
 the owner's quality evaluation of the web leg waits on that plus the provider
 credential; the desktop client (track C) can reuse the same descriptor contract
 and event mapping.
+
+## ADR-0041 — Provider credentials reach the cloud host over Tailscale SSH stdin; secret-name checks are ordinal (2026-09-02)
+
+Context: M12 track B made the realtime adapter key-gated (ADR-0038), which makes the
+first product-phase owner action "provide `PAGENTOS_VOICE_OPENAI_API_KEY`". The
+constitution forbids pasting a secret into chat; `scripts/secret-store.ps1` already gives
+a masked, DPAPI-encrypted local entry - but the key has to run on the Hetzner host, and
+the production compose passed no such variable to the api container.
+
+Decisions:
+
+1. **`scripts/cloud/set-cloud-secret.ps1` ships one stored value to `/opt/pagentos/.env`
+   over the existing Tailscale SSH path, on STDIN only.** The ssh argv, the remote bash,
+   this script's output and every log line carry the name. On the host the value is read
+   with `read -r`, refused if it contains whitespace/quotes/`#`/`$`/backslash, written by
+   a temp-file + `mv` rewrite (0600 root, replacing an existing line), then the api is
+   restarted through the deployment's own compose invocation and the health document is
+   checked from Windows for the provider. `-DryRun` shows the plan by name; no other
+   transport (scp of a file, an argument, a here-string) is offered.
+2. **Windows PowerShell 5.1 native-argument quoting is handled explicitly and proven.**
+   5.1 does not escape embedded double quotes when it hands an argument to a native
+   .exe, so a remote command containing `"$name"` would reach `ssh.exe` torn apart.
+   `ConvertTo-NativeArgument` (scripts/lib/SecretStore.ps1) applies the C-runtime rule,
+   and cloud-secret.tests.ps1 proves it byte for byte against a real native process
+   compiled in the test (`Add-Type -OutputType ConsoleApplication`), including the
+   CR that a Windows pipe appends to the value (stripped on the host, not trusted away).
+3. **Secret-name validation is ordinal (`-cmatch`), in `secret-store.ps1` too.** On this
+   tr-TR machine a case-insensitive `-match` folds `I` through the culture into dotless
+   `ı`, which falls outside `[a-z]`, so every name containing an I - `…_API_KEY`, `…_ID` -
+   was refused by the existing store on exactly the machine that matters. The suite pins
+   the tr-TR case. Same pattern class as ADR-0025's addendum: verified only where it
+   does not run.
+4. **`docker-compose.prod.yml` passes `PAGENTOS_VOICE_OPENAI_API_KEY` (optional, empty
+   default) and `PAGENTOS_ENVIRONMENT` (default `prod`).** Absent key = adapter not
+   registered, nothing else changes; the explicit environment keeps the simulated
+   provider barred from selection in production (ADR-0038). This is the one additive
+   change to the frozen cloud baseline, made because the product cannot otherwise reach
+   its provider; the qualified paths are untouched.
+
+Consequences: the owner action is two local commands and never shows a value
+(`docs/OWNER_ACTIONS.md`); the gate and CI run the new suite; a future secret for any
+provider goes through the same two commands.

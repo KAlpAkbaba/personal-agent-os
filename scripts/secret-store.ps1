@@ -67,7 +67,7 @@ function Initialize-Store {
 
 function Get-SecretPath {
     param([string]$Name)
-    if ($Name -notmatch '^[A-Za-z_][A-Za-z0-9_]{0,127}$') {
+    if ($Name -cnotmatch '^[A-Za-z_][A-Za-z0-9_]{0,127}$') {
         throw "secret names must look like environment variables (letters, digits, underscore): '$Name'"
     }
     return Join-Path $StoreRoot "$Name.dpapi"

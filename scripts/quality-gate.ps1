@@ -285,6 +285,16 @@ if (-not $Fast) {
     Assert-ExitCode "agent audit tests"
   }
 
+  Invoke-Step "Cloud secret shipping (PS5.1)" {
+    # The owner's provider-credential path: DPAPI store -> Tailscale SSH stdin -> /opt/pagentos/.env.
+    # Proven with a real native fake ssh (5.1 native-argument quoting byte for byte, value
+    # only ever on stdin) and pinned to tr-TR for the Turkish-I case-folding bug that
+    # refused every secret name containing an I on the owner's machine.
+    $script = Join-Path $repoRoot "scripts\tests\cloud-secret.tests.ps1"
+    & (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -NoProfile -File $script
+    Assert-ExitCode "cloud secret tests"
+  }
+
   Invoke-Step "Config swap transaction (PS5.1)" {
     # A real broker switch died inside [IO.File]::Replace: PowerShell binds $null to a
     # [string] parameter as an EMPTY string, which .NET refuses as a path. These reproduce
