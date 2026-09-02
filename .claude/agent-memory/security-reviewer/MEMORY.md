@@ -9,3 +9,4 @@
 - [M8 security agent review](m8-security-agent-review.md) — pointer to M8 findings (2026-09-01); High: RegistryAuthorizationProvider never wired into EvolutionRuntime (M7 gap not actually closed); Medium: junction escape in checks.py collector
 - [Junction escape recurring pattern](junction-escape-recurring-pattern.md) — feedback: leaf-only is_symlink() checks miss Windows junctions on ancestor dirs; verify with a real junction, not reasoning. Seen in M3 and M8.
 - [M9 identity/API auth security review](m9-identity-security-review.md) — pointer to M9 findings (2026-09-01); Medium: announcer stamps announced_at before delivery (can lose a push on crash); Medium: require_scope never wired into any route
+- [M12 voice Arbor/noise security review](m12-voice-arbor-noise-security-review.md) — pointer to M12 findings (2026-09-02); no Critical/High; Low: fail-open voice validation via getattr duck-typing if a future provider lacks require_supported_voice
