@@ -278,6 +278,16 @@ async def create_session(request: Request, body: CreateSessionRequest) -> dict[s
     return payload
 
 
+@router.get("/contract")
+async def realtime_contract_document() -> dict[str, Any]:
+    """The versioned wire contract (JSON Schema per request body) so a client
+    validates what it sends against THIS server's version instead of guessing.
+    Owner-gated like the rest of the router; a 404 here means a v1 server."""
+    from app.voice.realtime_sessions.contract import realtime_contract
+
+    return realtime_contract()
+
+
 @router.get("/sessions/{session_id}")
 async def get_session_state(request: Request, session_id: uuid.UUID) -> dict[str, Any]:
     runtime = _runtime(request)

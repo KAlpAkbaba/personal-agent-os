@@ -1,0 +1,259 @@
+{
+  "contract_version": 2,
+  "kind": "pagentos.realtime_session_contract",
+  "legacy": {
+    "1": {
+      "create_session": [
+        "client_kind",
+        "transport",
+        "language",
+        "narration_session_id",
+        "session_ttl_s"
+      ]
+    }
+  },
+  "requests": {
+    "attach": {
+      "additionalProperties": false,
+      "properties": {
+        "client_kind": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z][a-z0-9_]{0,15}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Client Kind"
+        },
+        "transport": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Transport"
+        }
+      },
+      "title": "AttachRequest",
+      "type": "object"
+    },
+    "create_session": {
+      "additionalProperties": false,
+      "properties": {
+        "client_kind": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z][a-z0-9_]{0,15}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Client Kind"
+        },
+        "language": {
+          "default": "tr-TR",
+          "pattern": "^[a-z]{2}-[A-Z]{2}$",
+          "title": "Language",
+          "type": "string"
+        },
+        "narration_session_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Narration Session Id"
+        },
+        "session_ttl_s": {
+          "anyOf": [
+            {
+              "maximum": 86400,
+              "minimum": 60,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Session Ttl S"
+        },
+        "transport": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Transport"
+        },
+        "voice": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z]{2,16}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Voice"
+        }
+      },
+      "title": "CreateSessionRequest",
+      "type": "object"
+    },
+    "events": {
+      "$defs": {
+        "ClientEvent": {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Kind",
+              "type": "string"
+            },
+            "payload": {
+              "additionalProperties": true,
+              "title": "Payload",
+              "type": "object"
+            },
+            "t_ms": {
+              "maximum": 1000000000000,
+              "minimum": 0,
+              "title": "T Ms",
+              "type": "integer"
+            },
+            "text": {
+              "anyOf": [
+                {
+                  "maxLength": 4000,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Text"
+            },
+            "turn": {
+              "default": 0,
+              "maximum": 1000000,
+              "minimum": 0,
+              "title": "Turn",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "t_ms"
+          ],
+          "title": "ClientEvent",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "events": {
+          "items": {
+            "$ref": "#/$defs/ClientEvent"
+          },
+          "maxItems": 200,
+          "minItems": 1,
+          "title": "Events",
+          "type": "array"
+        }
+      },
+      "required": [
+        "events"
+      ],
+      "title": "EventsRequest",
+      "type": "object"
+    },
+    "tool_call": {
+      "additionalProperties": false,
+      "properties": {
+        "arguments": {
+          "additionalProperties": true,
+          "title": "Arguments",
+          "type": "object"
+        },
+        "call_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.:-]+$",
+          "title": "Call Id",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_.]*$",
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "call_id",
+        "name"
+      ],
+      "title": "ToolCallRequest",
+      "type": "object"
+    },
+    "tool_complete": {
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error"
+        },
+        "result": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Result"
+        }
+      },
+      "title": "ToolCompleteRequest",
+      "type": "object"
+    }
+  }
+}
