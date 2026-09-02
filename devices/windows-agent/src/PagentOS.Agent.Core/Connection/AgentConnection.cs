@@ -14,6 +14,10 @@ namespace PagentOS.Agent.Core.Connection;
 /// Outbound WebSocket client loop: hello → challenge → auth → welcome handshake, heartbeats at
 /// the welcome-provided interval, command/cancel dispatch, malformed-frame error replies, and
 /// infinite exponential-backoff reconnect (1 s → 60 s, factor 2, full jitter).
+///
+/// <paramref name="sidebandSink"/> (M12, ADR-0039) is where a <c>voice_sideband</c> frame
+/// goes; it is optional and additive — with none, the frame is logged and dropped, and no
+/// command, ack or heartbeat behaviour changes either way.
 /// </summary>
 public sealed class AgentConnection(
     AgentConnectionOptions options,
@@ -21,7 +25,8 @@ public sealed class AgentConnection(
     CommandDispatcher dispatcher,
     AuditLog audit,
     ILogger<AgentConnection> logger,
-    Random? jitterRandom = null)
+    Random? jitterRandom = null,
+    ISidebandFrameSink? sidebandSink = null)
 {
     private const int MaxFrameBytes = 1024 * 1024;
 
@@ -173,9 +178,43 @@ public sealed class AgentConnection(
             case ErrorMessage error:
                 logger.LogWarning("broker error frame: {Class} {Message}", error.Error.Class, error.Error.Message);
                 break;
+            case VoiceSidebandMessage sideband:
+                await ForwardSidebandAsync(sideband, cancellationToken).ConfigureAwait(false);
+                break;
             default:
                 logger.LogWarning("unexpected frame type {Type} ignored", message.GetType().Name);
                 break;
+        }
+    }
+
+    /// <summary>
+    /// Opaque hand-off; never a reply to the broker, never an exception into the receive
+    /// loop. A dropped frame is not lost to the product: Cloud Core queues undelivered pushes
+    /// on the session and the client drains them over HTTP (spec §4 step 4).
+    /// </summary>
+    private async Task ForwardSidebandAsync(VoiceSidebandMessage sideband, CancellationToken cancellationToken)
+    {
+        if (sidebandSink is null)
+        {
+            logger.LogDebug("voice_sideband {Event} for session {SessionId} dropped: no sideband sink", sideband.Event, sideband.SessionId);
+            return;
+        }
+
+        try
+        {
+            var forwarded = await sidebandSink.ForwardAsync(sideband, cancellationToken).ConfigureAwait(false);
+            if (!forwarded)
+            {
+                logger.LogDebug("voice_sideband {Event} for session {SessionId} not forwarded (no companion or refused)", sideband.Event, sideband.SessionId);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning("voice_sideband forward failed: {Reason}", ex.Message);
         }
     }
 

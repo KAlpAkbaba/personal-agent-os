@@ -39,7 +39,8 @@ public sealed class CompanionRuntime(
     ILogger logger,
     BackoffPolicy? backoff = null,
     ServiceAdmissionPolicy? servicePolicy = null,
-    IPipeOwnerInspector? ownerInspector = null)
+    IPipeOwnerInspector? ownerInspector = null,
+    ISidebandForwardSink? sidebandSink = null)
 {
     private const int ConnectTimeoutMs = 2000;
 
@@ -52,6 +53,11 @@ public sealed class CompanionRuntime(
 
     /// <summary>The trust posture actually in force. Logged at startup; never inferred by a reader.</summary>
     public ServiceAdmissionPolicy ServicePolicy => _servicePolicy;
+
+    /// <summary>voice_sideband forwards accepted (fresh on this connection) and handed to the sink.</summary>
+    public int SidebandAccepted => _sidebandAccepted;
+
+    private int _sidebandAccepted;
 
     private readonly Dictionary<IpcRefusal, int> _refusals = new();
 
@@ -211,6 +217,23 @@ public sealed class CompanionRuntime(
             catch (Exception ex)
             {
                 logger.LogWarning("malformed pipe frame from service: {Reason}", ex.Message);
+                continue;
+            }
+
+            if (message is SidebandForward forward)
+            {
+                // M12 (ADR-0039): one-way, opaque, and bound to this connection like every
+                // other frame. Nothing is executed and nothing is answered; a stale or
+                // replayed forward is refused exactly as a replayed exec_request would be.
+                var forwardVerdict = guard.Accept(forward.ConnectionId, forward.Seq);
+                if (forwardVerdict != IpcRefusal.None)
+                {
+                    RecordRefusal(forwardVerdict, "frame=voice_sideband");
+                    continue;
+                }
+
+                Interlocked.Increment(ref _sidebandAccepted);
+                sidebandSink?.Accept(forward.Frame);
                 continue;
             }
 

@@ -44,14 +44,14 @@ public sealed class BargeInTests
 
         var outcome = await controller.ExecuteAsync(stopWord: false, "overlap", CancellationToken.None);
 
-        Assert.Equal(new[] { "playback:stop", "leg:cancel", "report:barge_in", "report:playback_stopped" }, trace);
+        Assert.Equal(new[] { "playback:stop", "leg:cancel", "report:barge_in_start", "report:playback_stopped" }, trace);
         Assert.False(playback.IsPlaying);
         Assert.Equal(400, outcome.Stop.DiscardedMs);
         Assert.Equal(VoiceClientState.Listening, fsm.State);
         Assert.Contains("assistant_speech_cut", fsm.EventKinds());
         var kinds = fsm.EventKinds().ToList();
         Assert.True(kinds.IndexOf("assistant_speech_cut") < kinds.IndexOf("barge_in"));
-        Assert.Equal(new[] { VoiceClientEvents.BargeIn, VoiceClientEvents.PlaybackStopped }, reporter.EventNames);
+        Assert.Equal(new[] { VoiceClientEvents.BargeInStart, VoiceClientEvents.PlaybackStopped }, reporter.EventNames);
     }
 
     [Fact]
@@ -67,7 +67,7 @@ public sealed class BargeInTests
         var outcome = await controller.ExecuteAsync(stopWord: false, "overlap", CancellationToken.None);
 
         Assert.Equal(3.25, outcome.PlaybackStoppedMs, precision: 3);
-        var report = reporter.Reports.Single(r => r.Event == VoiceClientEvents.BargeIn).Data;
+        var report = reporter.Reports.Single(r => r.Event == VoiceClientEvents.BargeInStart).Data;
         Assert.Equal(3.25, report["playback_stopped_ms"]!.GetValue<double>(), precision: 3);
         Assert.Equal(100, report["discarded_ms"]!.GetValue<int>());
         Assert.Equal(playback.SimulatedResidualLatencyMs, report["residual_latency_ms"]!.GetValue<int>());
@@ -91,10 +91,10 @@ public sealed class BargeInTests
         Assert.False(playback.IsPlaying);
         Assert.True(outcome.StopWord);
         Assert.Equal(1, fsm.BargeInCount);
-        Assert.Contains(VoiceClientEvents.BargeIn, reporter.EventNames);
+        Assert.Contains(VoiceClientEvents.BargeInStart, reporter.EventNames);
         Assert.Equal("stop_word", reporter.Reports.Single(r => r.Event == VoiceClientEvents.PlaybackStopped).Data["reason"]!.GetValue<string>());
     }
 
     private static RealtimeSessionGrant Grant() => new(
-        "rts-1", "fake", "fake", new System.Text.Json.Nodes.JsonObject { ["value"] = "ek" }, null, null, null, null);
+        "rts-1", "fake", "fake", new System.Text.Json.Nodes.JsonObject { ["secret"] = "ek" }, null, null, "tr-TR", null, null);
 }

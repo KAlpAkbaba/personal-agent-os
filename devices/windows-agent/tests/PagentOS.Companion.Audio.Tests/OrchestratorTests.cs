@@ -144,12 +144,12 @@ public sealed class OrchestratorTests : IAsyncDisposable
         Playback.Drain();
         Assert.True(await TestSupport.WaitForAsync(() => o.Fsm.State == VoiceClientState.Idle));
 
-        var names = _cloud.EventNamesFor(o.Grant!.SessionId);
-        Assert.Equal(new[] { "speech_started", "mic_uplink", "speech_ended", "first_audio" }, names);
+        var names = _cloud.EventKindsFor(o.Grant!.SessionId);
+        Assert.Equal(new[] { "mic_speech_start", "uplink_first_packet", "end_of_turn", "first_audio", "response_done" }, names);
         var events = _cloud.EventsFor(o.Grant.SessionId);
-        Assert.True(events[1]["data"]!["mic_to_uplink_ms"]!.GetValue<double>() >= 0);
-        Assert.Equal("none", events[2]["data"]!["hesitation_reason"]!.GetValue<string>());
-        Assert.True(events[3]["data"]!["eot_to_first_audio_ms"]!.GetValue<double>() >= 0);
+        Assert.True(events[1]["payload"]!["mic_to_uplink_ms"]!.GetValue<double>() >= 0);
+        Assert.Equal("none", events[2]["payload"]!["hesitation_reason"]!.GetValue<string>());
+        Assert.True(events[3]["payload"]!["eot_to_first_ms"]!.GetValue<double>() >= 0);
 
         var metrics = Assert.Single(o.Latency.Metrics());
         Assert.NotNull(metrics.MicToUplinkMs);
@@ -170,15 +170,15 @@ public sealed class OrchestratorTests : IAsyncDisposable
         Speak(200);
         Assert.True(await TestSupport.WaitForAsync(() => o.Fsm.BargeInCount == 1));
 
-        Assert.Equal(new[] { "playback:stop", "leg:cancel", "report:barge_in", "report:playback_stopped", "report:speech_started" }, _trace.Take(5));
+        Assert.Equal(new[] { "playback:stop", "leg:cancel", "report:barge_in_start", "report:playback_stopped", "report:mic_speech_start" }, _trace.Take(5));
         Assert.False(Playback.IsPlaying);
         Assert.Equal(VoiceClientState.Listening, o.Fsm.State);
         var kinds = o.Fsm.EventKinds().ToList();
         Assert.True(kinds.IndexOf("assistant_speech_cut") < kinds.IndexOf("barge_in"));
-        var bargeIn = reporter.Reports.Single(r => r.Event == VoiceClientEvents.BargeIn).Data;
+        var bargeIn = reporter.Reports.Single(r => r.Event == VoiceClientEvents.BargeInStart).Data;
         Assert.True(bargeIn["playback_stopped_ms"]!.GetValue<double>() >= 0);
         Assert.True(bargeIn["discarded_ms"]!.GetValue<int>() > 0);
-        Assert.True(reporter.Reports.Single(r => r.Event == VoiceClientEvents.SpeechStarted).Data["barge_in"]!.GetValue<bool>());
+        Assert.True(reporter.Reports.Single(r => r.Event == VoiceClientEvents.MicSpeechStart).Data["barge_in"]!.GetValue<bool>());
 
         // Late audio for the cancelled response must not restart playback.
         Leg.Emit(new AudioDeltaEvent(_time.GetTimestamp(), "resp-1", _synth.Tone(40, 0).Pcm16));
@@ -201,7 +201,7 @@ public sealed class OrchestratorTests : IAsyncDisposable
         Assert.False(Playback.IsPlaying);
         Assert.Contains(Leg.Commands, c => c is CancelResponseCommand);
         Assert.Equal("dur", o.Fsm.Events.Single(e => e.Kind == "barge_in").Detail);
-        Assert.True(_cloud.EventsFor(o.Grant!.SessionId).Single(e => e["event"]!.GetValue<string>() == "barge_in")["data"]!["stop_word"]!.GetValue<bool>());
+        Assert.True(_cloud.EventsFor(o.Grant!.SessionId).Single(e => e["kind"]!.GetValue<string>() == "barge_in_start")["payload"]!["stop_word"]!.GetValue<bool>());
     }
 
     [Fact]
@@ -239,7 +239,7 @@ public sealed class OrchestratorTests : IAsyncDisposable
         var metrics = o.Latency.Metrics().Single();
         Assert.NotNull(metrics.ToolPreambleMs);
         Assert.NotNull(metrics.ToolDoneToSpeechMs);
-        Assert.Equal(new[] { "tool_call_relayed", "tool_result_submitted", "tool_result_submitted" }, _cloud.EventNamesFor(o.Grant!.SessionId));
+        Assert.Equal(new[] { "tool_call", "preamble_audio_start", "response_done", "tool_done", "speech_resumed" }, _cloud.EventKindsFor(o.Grant!.SessionId));
     }
 
     [Fact]
@@ -261,7 +261,7 @@ public sealed class OrchestratorTests : IAsyncDisposable
             ReconnectBackoff = new PagentOS.Agent.Core.Connection.BackoffPolicy(0.01, 0.05),
         });
         var firstLeg = Leg;
-        var firstCredential = o.Grant!.CredentialValue();
+        var firstCredential = o.Grant!.CredentialSecret();
 
         firstLeg.EmitDisconnect("wifi dropped");
 
@@ -270,9 +270,9 @@ public sealed class OrchestratorTests : IAsyncDisposable
         Assert.True(Leg.IsOpen);
         Assert.NotSame(firstLeg, Leg);
         Assert.Equal(1, _cloud.AttachRequests);
-        Assert.NotEqual(firstCredential, o.Grant.CredentialValue());
-        Assert.True(await TestSupport.WaitForAsync(() => _cloud.EventNamesFor(o.Grant.SessionId).Contains("network_restored")));
-        Assert.Equal(new[] { "network_lost", "network_restored" }, _cloud.EventNamesFor(o.Grant.SessionId));
+        Assert.NotEqual(firstCredential, o.Grant.CredentialSecret());
+        Assert.True(await TestSupport.WaitForAsync(() => _cloud.EventKindsFor(o.Grant.SessionId).Contains("network_restored")));
+        Assert.Equal(new[] { "network_lost", "network_restored" }, _cloud.EventKindsFor(o.Grant.SessionId));
         Assert.Contains("network_lost", o.Fsm.EventKinds());
         Assert.Contains("network_restored", o.Fsm.EventKinds());
         Assert.True(o.Reporter!.Online);
@@ -327,6 +327,135 @@ public sealed class OrchestratorTests : IAsyncDisposable
         await o.StopAsync();
         Assert.Equal(VoiceClientState.Closed, o.Fsm.State);
         Assert.False(Leg.IsOpen);
+    }
+
+    // ---------------------------------------------------- the server's verdicts (ADR-0039)
+
+    [Fact]
+    public async Task A_leg_closed_push_silences_this_device_and_the_owners_next_words_reclaim_the_leg_with_its_backlog()
+    {
+        var o = await StartAsync();
+        var sid = o.Grant!.SessionId;
+        var firstLeg = Leg;
+
+        // The phone attached (spec §7): Cloud Core pushes leg_closed to this device.
+        var legClosed = _cloud.SupersedeLeg(sid, "mobile");
+        _pushes.Push(SidebandPush.TryParseFrame(legClosed)!);
+
+        Assert.True(await TestSupport.WaitForAsync(() => o.LegSuperseded));
+        Assert.False(firstLeg.IsOpen);
+        Assert.Equal(1, o.LegSupersededCount);
+        Assert.Contains("leg_closed", o.PushesHandled);
+        // Nothing is uplinked while another client holds the leg (idle frames would normally stream).
+        var framesBefore = firstLeg.AudioFramesSent;
+        for (var i = 0; i < 10; i++)
+        {
+            Capture.Feed(TestSupport.Quiet(_time.GetTimestamp()));
+        }
+
+        await Task.Delay(30);
+        Assert.Equal(framesBefore, firstLeg.AudioFramesSent);
+        Assert.Equal(0, o.ReattachCount);
+
+        // Meanwhile Cloud Core queued a push for this session; the owner speaks to the desktop again.
+        _cloud.QueueSideband(sid, SidebandPushKinds.Say, new JsonObject { ["text"] = "Masaüstüne döndük." });
+        Speak(300);
+
+        Assert.True(await TestSupport.WaitForAsync(() => o.ReattachCount == 1, 5000));
+        Assert.False(o.LegSuperseded);
+        Assert.Equal(2, _legs.Count);
+        Assert.True(Leg.IsOpen);
+        Assert.Equal(1, _cloud.AttachRequests);
+        Assert.Equal("windows_desktop", _cloud.Sessions[sid].ClientKind);
+        // the backlog returned by attach was applied on the NEW leg, and reporting resumed
+        Assert.True(await TestSupport.WaitForAsync(() => Leg.Commands.OfType<SayCommand>().Any()));
+        Assert.Equal("Masaüstüne döndük.", Leg.Commands.OfType<SayCommand>().Single().Text);
+        Assert.True(await TestSupport.WaitForAsync(() => _cloud.EventKindsFor(sid).Contains("mic_speech_start")));
+        Assert.True(o.Reporter!.Online);
+        Assert.Equal(0, _cloud.Refusals);
+    }
+
+    [Fact]
+    public async Task A_409_from_cloud_core_is_a_superseded_leg_too_and_the_held_events_arrive_after_the_reattach()
+    {
+        var o = await StartAsync();
+        var sid = o.Grant!.SessionId;
+
+        // The leg moved but the push never reached us (offline at the time): the next post says 409.
+        _cloud.SupersedeLeg(sid, "mobile");
+        Speak(300);
+
+        Assert.True(await TestSupport.WaitForAsync(() => o.LegSuperseded, 5000));
+        Assert.Equal(1, o.Reporter!.StaleLegRefusals);
+        Assert.False(o.Reporter.Online);
+        Assert.True(o.Reporter.PendingCount >= 1); // held, not dropped
+        await SilenceUntilAsync(() => o.Fsm.EventKinds().Contains("owner_speech_ended"));
+
+        Speak(300);
+        Assert.True(await TestSupport.WaitForAsync(() => o.ReattachCount == 1, 5000));
+        Assert.True(await TestSupport.WaitForAsync(() => o.Reporter.PendingCount == 0 && o.Reporter.Online, 5000));
+        var kinds = _cloud.EventKindsFor(sid);
+        Assert.Equal("mic_speech_start", kinds[0]);
+        Assert.Contains("end_of_turn", kinds);
+        Assert.Equal(2, kinds.Count(k => k == "mic_speech_start"));
+        Assert.Equal(0, o.Reporter.RefusedBatches);
+    }
+
+    [Fact]
+    public async Task A_gone_session_ends_the_orchestrator_with_a_reason_the_host_acts_on()
+    {
+        var o = await StartAsync();
+        _cloud.CloseSession(o.Grant!.SessionId);
+
+        Speak(300);
+
+        Assert.True(await TestSupport.WaitForAsync(() => o.StopReason == "session_gone", 5000));
+        Assert.False(o.Reporter!.Online);
+        Assert.Equal(0, o.Reporter.RefusedBatches);
+        Assert.Equal(0, o.ReattachCount);
+    }
+
+    [Fact]
+    public async Task The_sideband_backlog_in_an_events_ack_is_applied_like_a_push()
+    {
+        var o = await StartAsync();
+        var sid = o.Grant!.SessionId;
+        _cloud.QueueSideband(sid, SidebandPushKinds.Say, new JsonObject { ["text"] = "Kuyruktan geldi." });
+
+        Speak(300); // the first report's ack carries the backlog
+
+        Assert.True(await TestSupport.WaitForAsync(() => Leg.Commands.OfType<SayCommand>().Any(), 5000));
+        Assert.Equal("Kuyruktan geldi.", Leg.Commands.OfType<SayCommand>().Single().Text);
+        Assert.Contains("say", o.PushesHandled);
+    }
+
+    [Fact]
+    public async Task A_push_for_another_session_is_ignored_and_a_provider_error_is_reported_as_an_error_event()
+    {
+        var o = await StartAsync();
+        _pushes.Push(SidebandPushKinds.Say, new JsonObject { ["text"] = "Yanlış oturum." }, sessionId: Guid.NewGuid().ToString());
+        Leg.Emit(new ProviderErrorEvent(_time.GetTimestamp(), "rate_limit", "slow down"));
+
+        Assert.True(await TestSupport.WaitForAsync(() => _cloud.EventKindsFor(o.Grant!.SessionId).Contains("error")));
+        await Task.Delay(30);
+        Assert.Empty(Leg.Commands.OfType<SayCommand>());
+        Assert.Empty(o.PushesHandled);
+        var error = _cloud.EventsFor(o.Grant!.SessionId).Single(e => e["kind"]!.GetValue<string>() == "error");
+        Assert.Equal("voice_provider_error", error["payload"]!["error_class"]!.GetValue<string>());
+        Assert.Contains("provider_error:rate_limit", o.Defects);
+    }
+
+    [Fact]
+    public async Task A_final_transcript_is_reported_as_an_utterance_for_cloud_core_to_resolve()
+    {
+        var o = await StartAsync();
+        Leg.Emit(new TranscriptDeltaEvent(_time.GetTimestamp(), "ikinci maddeyi tekrar oku", Final: true));
+
+        Assert.True(await TestSupport.WaitForAsync(() => _cloud.EventKindsFor(o.Grant!.SessionId).Contains("utterance")));
+        var utterance = _cloud.EventsFor(o.Grant!.SessionId).Single(e => e["kind"]!.GetValue<string>() == "utterance");
+        Assert.Equal("ikinci maddeyi tekrar oku", utterance["text"]!.GetValue<string>());
+        Assert.Empty(utterance["payload"]!.AsObject()); // the text travels in `text`, never in payload
+        Assert.Equal(0, _cloud.Refusals);
     }
 
     public async ValueTask DisposeAsync()

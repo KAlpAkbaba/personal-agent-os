@@ -10,55 +10,75 @@ namespace PagentOS.Companion.Audio.Sideband;
 /// read from the source on every request so a rotation lands without a restart, and it is
 /// attached as <c>Authorization: Bearer</c> exactly as every other owner client does. The
 /// provider credential never travels here; Cloud Core hands it out, the media leg uses it.
+///
+/// Status handling is the server's (routes.py <c>_raise_http</c>): 409 = this owner session
+/// no longer holds the media leg; 410 = closed/expired; 404 = unknown; 422 = the payload was
+/// refused (a client bug). The exceptions carry that classification; callers decide.
 /// </summary>
 public sealed class CloudCoreSidebandClient(HttpClient http, IOwnerSessionTokenSource tokens) : ISidebandClient
 {
-    private const string SessionsPath = "/v1/voice/realtime/sessions";
-
     public async Task<RealtimeSessionGrant> CreateSessionAsync(CreateSessionRequest request, CancellationToken cancellationToken)
     {
-        var body = await PostAsync(SessionsPath, request.ToJson(), cancellationToken).ConfigureAwait(false);
+        var body = await PostAsync(RealtimeContract.SessionsPath, request.ToJson(), cancellationToken).ConfigureAwait(false);
         return RealtimeSessionGrant.Parse(body);
     }
 
     public async Task<ToolCallRelayResult> RelayToolCallAsync(string sessionId, string callId, string name, string argumentsJson, CancellationToken cancellationToken)
     {
-        JsonNode? arguments;
+        // The server takes `arguments` as an object; a provider that hands us anything else
+        // is wrapped rather than refused, so the tool sees what the model actually said.
+        JsonNode? parsed = null;
         try
         {
-            arguments = JsonNode.Parse(string.IsNullOrWhiteSpace(argumentsJson) ? "{}" : argumentsJson);
+            parsed = JsonNode.Parse(string.IsNullOrWhiteSpace(argumentsJson) ? "{}" : argumentsJson);
         }
         catch (System.Text.Json.JsonException)
         {
-            arguments = argumentsJson;
+            // fall through: wrapped below
         }
 
+        var arguments = parsed as JsonObject ?? new JsonObject { ["raw_arguments"] = argumentsJson };
         var payload = new JsonObject
         {
             ["call_id"] = callId,
             ["name"] = name,
             ["arguments"] = arguments,
         };
-        var body = await PostAsync($"{SessionsPath}/{Uri.EscapeDataString(sessionId)}/tool-calls", payload, cancellationToken).ConfigureAwait(false);
+        var body = await PostAsync($"{RealtimeContract.SessionsPath}/{Uri.EscapeDataString(sessionId)}/tool-calls", payload, cancellationToken).ConfigureAwait(false);
         return ToolCallRelayResult.Parse(body, callId);
     }
 
-    public async Task ReportEventAsync(string sessionId, VoiceClientEventRecord record, CancellationToken cancellationToken)
+    public async Task<EventsAck> ReportEventsAsync(string sessionId, IReadOnlyList<VoiceClientEventRecord> events, CancellationToken cancellationToken)
     {
-        await PostAsync($"{SessionsPath}/{Uri.EscapeDataString(sessionId)}/events", record.ToJson(), cancellationToken).ConfigureAwait(false);
+        if (events.Count is 0 or > RealtimeContract.MaxEventsPerRequest)
+        {
+            throw new ArgumentException($"an events batch carries 1..{RealtimeContract.MaxEventsPerRequest} events, not {events.Count}", nameof(events));
+        }
+
+        var body = await PostAsync(
+            $"{RealtimeContract.SessionsPath}/{Uri.EscapeDataString(sessionId)}/events",
+            VoiceClientEventRecord.BatchJson(events),
+            cancellationToken).ConfigureAwait(false);
+        return EventsAck.Parse(body);
     }
 
-    public async Task<RealtimeSessionGrant?> AttachAsync(string sessionId, CancellationToken cancellationToken)
+    public async Task<AttachResult?> AttachAsync(string sessionId, string clientKind, string? transport, CancellationToken cancellationToken)
     {
+        var request = new JsonObject { ["client_kind"] = clientKind };
+        if (transport is not null)
+        {
+            request["transport"] = transport;
+        }
+
         try
         {
             var body = await PostAsync(
-                $"{SessionsPath}/{Uri.EscapeDataString(sessionId)}/attach",
-                new JsonObject { ["client_kind"] = "windows-companion" },
+                $"{RealtimeContract.SessionsPath}/{Uri.EscapeDataString(sessionId)}/attach",
+                request,
                 cancellationToken).ConfigureAwait(false);
-            return RealtimeSessionGrant.Parse(body);
+            return AttachResult.Parse(body);
         }
-        catch (SidebandException ex) when (ex.StatusCode is (int)HttpStatusCode.NotFound or (int)HttpStatusCode.Gone)
+        catch (SidebandException ex) when (ex.IsSessionGone)
         {
             return null;
         }
@@ -85,6 +105,6 @@ public sealed class CloudCoreSidebandClient(HttpClient http, IOwnerSessionTokenS
             return new JsonObject();
         }
 
-        return JsonNode.Parse(text) as JsonObject ?? throw new SidebandException((int)response.StatusCode, path, "response was not a JSON object");
+        return JsonNode.Parse(text) as JsonObject ?? throw new SidebandException((int)HttpStatusCode.OK, path, "response was not a JSON object");
     }
 }

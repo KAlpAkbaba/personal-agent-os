@@ -56,11 +56,21 @@ public sealed record VoiceCompanionOptions(
     private static string? Blank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }
 
-/// <summary>Production composition: real WASAPI devices, the OpenAI wire codec over WebSocket, HTTP sideband with the DPAPI-stored owner token.</summary>
+/// <summary>
+/// Production composition: real WASAPI devices, the OpenAI wire codec over WebSocket, HTTP
+/// sideband with the DPAPI-stored owner token, and the REAL push source — the
+/// <c>voice_sideband</c> frames the Device Service forwards over the named pipe
+/// (ADR-0039). A session that Cloud Core closes or expires (410) ends the orchestrator;
+/// the host then opens a fresh session after a backoff, so the owner never has to restart
+/// anything.
+/// </summary>
 [SupportedOSPlatform("windows")]
 public static class VoiceCompanionHost
 {
-    public static async Task RunAsync(VoiceCompanionOptions options, ILogger logger, AuditLog? audit, CancellationToken cancellationToken)
+    private static readonly TimeSpan MinRestartDelay = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan MaxRestartDelay = TimeSpan.FromSeconds(30);
+
+    public static async Task RunAsync(VoiceCompanionOptions options, ILogger logger, AuditLog? audit, ISidebandPushSource pushes, CancellationToken cancellationToken)
     {
         if (!options.Enabled || options.CloudCoreUrl is null)
         {
@@ -103,8 +113,37 @@ public static class VoiceCompanionHost
             PreferredRenderDeviceId = options.PreferredRenderDeviceId,
         };
 
-        await using var orchestrator = new VoiceSessionOrchestrator(
-            clientOptions, catalog, devices, LegFor, sideband, new NullSidebandPushSource(), TimeProvider.System, logger, audit);
-        await orchestrator.RunAsync(cancellationToken).ConfigureAwait(false);
+        var failures = 0;
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            string? stopReason;
+            try
+            {
+                await using var orchestrator = new VoiceSessionOrchestrator(
+                    clientOptions, catalog, devices, LegFor, sideband, pushes, TimeProvider.System, logger, audit);
+                await orchestrator.RunAsync(cancellationToken).ConfigureAwait(false);
+                stopReason = orchestrator.StopReason ?? "loop_ended";
+                failures = 0;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                failures++;
+                stopReason = ex.GetType().Name;
+                logger.LogError(ex, "voice session failed: {Reason}", ex.Message);
+            }
+
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+
+            var delay = TimeSpan.FromSeconds(Math.Min(MaxRestartDelay.TotalSeconds, MinRestartDelay.TotalSeconds * Math.Pow(2, Math.Min(failures, 4))));
+            logger.LogInformation("voice session ended ({Reason}); opening a new session in {Delay:F0} s", stopReason, delay.TotalSeconds);
+            await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+        }
     }
 }

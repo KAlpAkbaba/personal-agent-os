@@ -11,21 +11,45 @@ public sealed class CodecTests
 {
     private static readonly OpenAiRealtimeWireCodec Codec = new();
 
-    private static RealtimeSessionGrant Grant(string? url = null) => new(
-        "rts-1", OpenAiRealtimeWireCodec.ProviderName, "websocket",
-        url is null ? new JsonObject { ["value"] = "ek_secret" } : new JsonObject { ["value"] = "ek_secret", ["url"] = url },
-        new JsonArray(new JsonObject { ["type"] = "function", ["name"] = "echo" }),
-        "Türkçe konuş",
-        new JsonObject { ["voice"] = "marin" },
-        null);
+    /// <summary>The credential exactly as Cloud Core's OpenAI adapter mints it (ADR-0038): secret + a non-secret transport descriptor.</summary>
+    private static RealtimeSessionGrant Grant(string? url = null, JsonObject? query = null)
+    {
+        var credential = new JsonObject
+        {
+            ["provider"] = OpenAiRealtimeWireCodec.ProviderName,
+            ["secret"] = "ek_secret",
+            ["expires_at"] = "2026-09-02T12:10:00Z",
+            ["transport"] = "websocket",
+            ["session_ref"] = "sess_ref",
+        };
+        if (url is not null)
+        {
+            credential["transport_descriptor"] = new JsonObject
+            {
+                ["transport"] = "websocket",
+                ["websocket_url"] = url,
+                ["query"] = query,
+                ["auth"] = "bearer_ephemeral_secret",
+            };
+        }
+
+        return new RealtimeSessionGrant(
+            "rts-1", OpenAiRealtimeWireCodec.ProviderName, "websocket", credential,
+            new JsonArray(new JsonObject { ["type"] = "function", ["name"] = "echo" }),
+            "Türkçe konuş", "tr-TR", null, "created");
+    }
 
     [Fact]
-    public void Connection_uses_the_grants_credential_as_a_bearer_and_its_url_when_given()
+    public void Connection_uses_the_credential_secret_as_a_bearer_and_the_transport_descriptor_for_where_to_connect()
     {
         var headers = Codec.ConnectHeaders(Grant());
         Assert.Equal("Bearer ek_secret", headers["Authorization"]);
         Assert.Equal(new Uri(OpenAiRealtimeWireCodec.DefaultEndpoint), Codec.ConnectUri(Grant()));
         Assert.Equal(new Uri("wss://x.example/rt"), Codec.ConnectUri(Grant("wss://x.example/rt")));
+        // ADR-0038: the adapter's descriptor carries the model as a query, so no model name lives in this client.
+        Assert.Equal(
+            new Uri("wss://api.openai.com/v1/realtime?model=gpt-realtime"),
+            Codec.ConnectUri(Grant("wss://api.openai.com/v1/realtime", new JsonObject { ["model"] = "gpt-realtime" })));
         Assert.Throws<InvalidOperationException>(() => Codec.ConnectHeaders(Grant() with { Credential = new JsonObject() }));
     }
 
@@ -33,7 +57,7 @@ public sealed class CodecTests
     public void Session_configure_forwards_instructions_tools_and_provider_config_and_turns_server_vad_off_in_client_mode()
     {
         var grant = Grant();
-        var server = JsonNode.Parse(Codec.Encode(new SessionConfigureCommand(grant.Instructions, grant.Tools, EndOfTurnMode.Server, grant.ProviderSessionConfig)).Single())!;
+        var server = JsonNode.Parse(Codec.Encode(new SessionConfigureCommand(grant.Instructions, grant.Tools, EndOfTurnMode.Server, new JsonObject { ["voice"] = "marin" })).Single())!;
         Assert.Equal("session.update", server["type"]!.GetValue<string>());
         Assert.Equal("semantic_vad", server["session"]!["turn_detection"]!["type"]!.GetValue<string>());
         Assert.Equal("Türkçe konuş", server["session"]!["instructions"]!.GetValue<string>());

@@ -57,7 +57,7 @@ public sealed class BargeInController(
 
         // 3. Report, with the number the owner actually experienced.
         var totalMs = time.ElapsedMs(t0);
-        await reporter.ReportAsync(VoiceClientEvents.BargeIn, new JsonObject
+        await reporter.ReportAsync(VoiceClientEvents.BargeInStart, new JsonObject
         {
             ["playback_stopped_ms"] = Math.Round(playbackStoppedMs, 3),
             ["discarded_ms"] = stop.DiscardedMs,

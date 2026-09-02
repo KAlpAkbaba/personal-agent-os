@@ -98,7 +98,7 @@ public sealed class OfflineVoiceBench(BenchOptions? options = null)
             ["response_ms"] = _options.ProviderResponseMs,
         };
         report["fsm_events"] = new JsonArray(orchestrator.Fsm.EventKinds().Select(k => (JsonNode)k).ToArray());
-        report["cloud_events"] = new JsonArray(cloud.EventNamesFor(grant.SessionId).Select(k => (JsonNode)k).ToArray());
+        report["cloud_events"] = new JsonArray(cloud.EventKindsFor(grant.SessionId).Select(k => (JsonNode)k).ToArray());
         report["barge_ins"] = orchestrator.Fsm.BargeInCount;
         report["tool_call_requests"] = cloud.ToolCallRequests;
         report["tool_executions"] = cloud.ToolExecutions;

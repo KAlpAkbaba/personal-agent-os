@@ -20,6 +20,7 @@ namespace PagentOS.Agent.Core.Ipc;
 [JsonDerivedType(typeof(CompanionHello), "companion_hello")]
 [JsonDerivedType(typeof(ExecRequest), "exec_request")]
 [JsonDerivedType(typeof(ExecResponse), "exec_response")]
+[JsonDerivedType(typeof(SidebandForward), "voice_sideband")]
 public abstract record PipeMessage;
 
 public static class IpcProtocol
@@ -107,6 +108,33 @@ public sealed record ExecResponse : PipeMessage
     [JsonPropertyName("error")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ErrorObject? Error { get; init; }
+}
+
+/// <summary>
+/// Service → companion, one way, no response (M12, ADR-0039): a <c>voice_sideband</c>
+/// device-protocol frame forwarded OPAQUELY. <c>frame</c> is the broker's frame verbatim;
+/// the service has validated its envelope and its ≤ 16 KiB bound and nothing else. The
+/// same connection id and sequence every pipe frame carries apply, so a replayed or
+/// stale forward is refused by the companion exactly like a replayed exec_request.
+/// Grants the companion nothing: it can only receive this; it never answers it.
+/// </summary>
+public sealed record SidebandForward : PipeMessage
+{
+    [JsonPropertyName("conn_id")]
+    public string? ConnectionId { get; init; }
+
+    [JsonPropertyName("seq")]
+    public long Seq { get; init; }
+
+    [JsonPropertyName("frame")]
+    public required JsonObject Frame { get; init; }
+}
+
+/// <summary>Companion side: where an accepted <see cref="SidebandForward"/> frame is delivered.</summary>
+public interface ISidebandForwardSink
+{
+    /// <summary>Must not throw; a bad frame is the sink's to count and drop.</summary>
+    void Accept(JsonObject frame);
 }
 
 public static class PipeJson

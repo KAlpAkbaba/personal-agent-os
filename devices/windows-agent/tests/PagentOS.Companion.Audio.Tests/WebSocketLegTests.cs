@@ -13,8 +13,16 @@ public sealed class WebSocketLegTests
 {
     private static RealtimeSessionGrant Grant(Uri uri) => new(
         "rts-ws", OpenAiRealtimeWireCodec.ProviderName, "websocket",
-        new JsonObject { ["value"] = "ek_loopback", ["url"] = uri.ToString() },
-        null, "Türkçe konuş", null, null);
+        new JsonObject
+        {
+            ["provider"] = OpenAiRealtimeWireCodec.ProviderName,
+            ["secret"] = "ek_loopback",
+            ["expires_at"] = "2026-09-02T12:10:00Z",
+            ["transport"] = "websocket",
+            ["session_ref"] = "sess_ref",
+            ["transport_descriptor"] = new JsonObject { ["transport"] = "websocket", ["websocket_url"] = uri.ToString() },
+        },
+        null, "Türkçe konuş", "tr-TR", null, "created");
 
     private static async Task<T> NextAsync<T>(IMediaLeg leg, int timeoutMs = 5000)
         where T : ProviderEvent

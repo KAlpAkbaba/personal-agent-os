@@ -11,6 +11,9 @@ public static partial class MessageValidator
     [GeneratedRegex("^[a-z][a-z0-9_.]{1,63}$")]
     private static partial Regex CapabilityRegex();
 
+    [GeneratedRegex("^[a-z][a-z0-9_]{0,63}$")]
+    private static partial Regex SidebandEventRegex();
+
     public static void ValidateInbound(ProtocolMessage message)
     {
         switch (message)
@@ -35,6 +38,9 @@ public static partial class MessageValidator
                 break;
             case ErrorMessage error:
                 ValidateErrorObject(error.Error);
+                break;
+            case VoiceSidebandMessage sideband:
+                ValidateVoiceSideband(sideband);
                 break;
             default:
                 // hello/auth/command_ack are agent->broker; nothing extra to validate inbound.
@@ -71,6 +77,28 @@ public static partial class MessageValidator
         if (error.Message.Length > ProtocolConstants.MaxErrorMessageLength)
         {
             throw new ProtocolValidationException("error.message exceeds 2000 characters");
+        }
+    }
+
+    /// <summary>
+    /// Envelope and size only (ADR-0039). The event name is checked by shape, not against a
+    /// closed list: the vocabulary belongs to Cloud Core and the companion, and an agent that
+    /// refused an event it had not heard of would turn every additive server change into a
+    /// service redeploy. The payload is never inspected here.
+    /// </summary>
+    public static void ValidateVoiceSideband(VoiceSidebandMessage sideband)
+    {
+        RequireUuid(sideband.SessionId, "voice_sideband.session_id");
+        if (!SidebandEventRegex().IsMatch(sideband.Event))
+        {
+            throw new ProtocolValidationException("voice_sideband.event does not match required pattern");
+        }
+
+        var bytes = sideband.SerializedBytes();
+        if (bytes > VoiceSideband.MaxFrameBytes)
+        {
+            throw new ProtocolValidationException(
+                $"voice_sideband frame is {bytes} bytes; the bound is {VoiceSideband.MaxFrameBytes}");
         }
     }
 

@@ -17,11 +17,19 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any, Protocol, runtime_checkable
 
+from app.broker.frames import (
+    MAX_VOICE_SIDEBAND_FRAME_BYTES,
+    VOICE_SIDEBAND_EVENTS,
+    VOICE_SIDEBAND_FRAME_TYPE,
+    voice_sideband_frame_size,
+)
 from app.logging import get_logger
 
 logger = get_logger("app.voice.realtime_sessions.sideband")
 
-SIDEBAND_FRAME_TYPE = "voice_sideband"
+# The frame type and event vocabulary are the device protocol's (ADR-0039):
+# packages/schemas/device-protocol.schema.json $defs/voice_sideband.
+SIDEBAND_FRAME_TYPE = VOICE_SIDEBAND_FRAME_TYPE
 
 SB_PLAN_CHANGED = "plan_changed"
 SB_TOOL_PROGRESS = "tool_progress"
@@ -33,6 +41,8 @@ SIDEBAND_EVENTS = (
     SB_PLAN_CHANGED, SB_TOOL_PROGRESS, SB_TOOL_COMPLETED, SB_NARRATION_CURSOR, SB_SAY,
     SB_LEG_CLOSED,
 )
+if set(SIDEBAND_EVENTS) != set(VOICE_SIDEBAND_EVENTS):  # pragma: no cover - import-time guard
+    raise RuntimeError("sideband vocabulary drifted from the device protocol frame definition")
 
 
 def sideband_frame(session_id: uuid.UUID, event: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -82,6 +92,14 @@ class BrokerSideband:
     def push(self, *, device_id: uuid.UUID | None, frame: dict[str, Any]) -> bool:
         if device_id is None or self._loop is None or not self._broker.is_online(device_id):
             return False
+        size = voice_sideband_frame_size(frame)
+        if size > MAX_VOICE_SIDEBAND_FRAME_BYTES:
+            # The Device Service would drop it at the pipe; refusing here keeps it on the
+            # session's pending queue, where the HTTP paths (events/attach) have no such bound.
+            logger.warning("voice_sideband_frame_oversize", device_id=str(device_id),
+                           sideband_event=frame.get("event"), frame_bytes=size,
+                           limit=MAX_VOICE_SIDEBAND_FRAME_BYTES)
+            return False
         try:
             future = asyncio.run_coroutine_threadsafe(
                 self._broker.send_frame(device_id, frame), self._loop
@@ -89,7 +107,7 @@ class BrokerSideband:
             return bool(future.result(timeout=2.0))
         except Exception as exc:  # noqa: BLE001 - a dead socket must not fail the tool call
             logger.warning("voice_sideband_push_failed", device_id=str(device_id),
-                           event=frame.get("event"), error=f"{type(exc).__name__}: {exc}")
+                           sideband_event=frame.get("event"), error=f"{type(exc).__name__}: {exc}")
             return False
 
 

@@ -63,7 +63,7 @@ public sealed class WebSocketMediaLeg(
         logger?.LogInformation("media leg open: transport=websocket provider={Provider} host={Host}", codec.Provider, uri.Host);
 
         await SendCommandAsync(
-            new SessionConfigureCommand(grant.Instructions, grant.Tools, options.EndOfTurn, grant.ProviderSessionConfig),
+            new SessionConfigureCommand(grant.Instructions, grant.Tools, options.EndOfTurn, null),
             cancellationToken).ConfigureAwait(false);
     }
 

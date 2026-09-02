@@ -220,3 +220,40 @@ def command_frame(
             "trace_id": trace_id,
         },
     }
+
+
+# --------------------------------------------------- voice sideband (M12, ADR-0039)
+
+#: Broker -> agent, additive to v1: a realtime-voice sideband push for the
+#: owner-session companion. The agent forwards it opaquely over its local IPC;
+#: nothing from the command path (ack, idempotency, expiry, audit) applies.
+VOICE_SIDEBAND_FRAME_TYPE = "voice_sideband"
+VOICE_SIDEBAND_EVENTS = (
+    "plan_changed", "tool_progress", "tool_completed", "narration_cursor", "say", "leg_closed",
+)
+#: Serialized bound the Device Service enforces before forwarding over the pipe.
+MAX_VOICE_SIDEBAND_FRAME_BYTES = 16 * 1024
+
+
+class VoiceSidebandFrame(_Frame):
+    """Outbound-only; mirrors ``$defs/voice_sideband`` in the schema so tests can
+    prove what the service pushes is exactly what the schema and the Windows
+    agent accept."""
+
+    type: Literal["voice_sideband"]
+    session_id: uuid.UUID
+    event: str
+    payload: dict[str, Any]
+    at: datetime | None = None
+
+    @field_validator("event")
+    @classmethod
+    def _known_event(cls, value: str) -> str:
+        if value not in VOICE_SIDEBAND_EVENTS:
+            raise ValueError(f"unknown sideband event: {value!r}")
+        return value
+
+
+def voice_sideband_frame_size(frame: dict[str, Any]) -> int:
+    """Bytes on the wire as the broker sends them (UTF-8 JSON)."""
+    return len(json.dumps(frame, ensure_ascii=False, default=str).encode("utf-8"))

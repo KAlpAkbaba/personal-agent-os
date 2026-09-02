@@ -10,8 +10,9 @@ namespace PagentOS.Companion.Audio.Media.OpenAi;
 /// Pure request/event mapping for the OpenAI Realtime WebSocket protocol — no I/O, in the
 /// M4 <c>ProviderRequest</c> tradition, so every mapping is asserted without a network. No
 /// model name lives here: the session credential Cloud Core mints is already bound to a
-/// model, and any provider-specific session settings arrive in the grant's
-/// <c>provider_session_config</c> and are forwarded verbatim.
+/// model, and where to connect comes from the credential's <c>transport_descriptor</c>
+/// (ADR-0038: <c>websocket_url</c> + <c>query</c>), which the adapter fills from data the
+/// client never has to know.
 /// </summary>
 public sealed class OpenAiRealtimeWireCodec : IProviderWireCodec
 {
@@ -24,14 +25,33 @@ public sealed class OpenAiRealtimeWireCodec : IProviderWireCodec
 
     public Uri ConnectUri(RealtimeSessionGrant grant)
     {
-        var url = grant.Credential["url"]?.GetValue<string>();
-        return new Uri(string.IsNullOrWhiteSpace(url) ? DefaultEndpoint : url);
+        var descriptor = grant.TransportDescriptor;
+        var url = descriptor?["websocket_url"]?.GetValue<string>();
+        var builder = new UriBuilder(string.IsNullOrWhiteSpace(url) ? DefaultEndpoint : url);
+        if (descriptor?["query"] is JsonObject query && query.Count > 0)
+        {
+            var pairs = query
+                .Where(p => p.Value is JsonValue)
+                .Select(p => Uri.EscapeDataString(p.Key) + "=" + Uri.EscapeDataString(p.Value!.ToString()));
+            var extra = string.Join("&", pairs);
+            builder.Query = string.IsNullOrEmpty(builder.Query) ? extra : builder.Query.TrimStart('?') + "&" + extra;
+        }
+
+        return builder.Uri;
     }
 
     public IReadOnlyDictionary<string, string> ConnectHeaders(RealtimeSessionGrant grant)
     {
-        var secret = grant.CredentialValue()
-            ?? throw new InvalidOperationException("the session grant carries no provider credential value");
+        string secret;
+        try
+        {
+            secret = grant.CredentialSecret();
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or NullReferenceException or FormatException)
+        {
+            throw new InvalidOperationException("the session grant carries no provider credential secret", ex);
+        }
+
         return new Dictionary<string, string>
         {
             ["Authorization"] = "Bearer " + secret,

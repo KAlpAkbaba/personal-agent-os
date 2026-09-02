@@ -1394,3 +1394,117 @@ drive the data channel with `map_server_event` / `barge_in_commands` /
 (ADR-0034 §7) is now unblocked: provision `PAGENTOS_VOICE_OPENAI_API_KEY` and run the
 smoke. Azure Voice Live remains the documented second adapter candidate if measured
 Turkish quality is insufficient.
+
+## ADR-0039 — M12 integration: the companion speaks the server's contract, and the sideband push rides the device protocol (2026-09-02)
+
+Status: Accepted (integration of track C, ADR-0037, with tracks A+E, ADR-0036, and B,
+ADR-0038; reversible at the seams named)
+
+Context: the track C handoff recorded two open questions honestly and both turned out to
+be defects. (1) The companion posted one `{event, client_seq, client_ts_ms, data}` object
+per call to `POST .../events`, with its own event vocabulary, a guessed credential key
+list, a `client_kind` outside the server's pattern and a create body with three fields the
+server forbids — the server would have answered 422 to every single request, and the
+in-process fake that stood in for Cloud Core accepted all of it because it was looser than
+the server. (2) Cloud Core's sideband pushes (`say`, `tool_completed`, `plan_changed`,
+`narration_cursor`, `leg_closed`) were delivered as a `voice_sideband` frame over the
+device broker connection, but that frame existed in no protocol definition, and the
+qualified Device Service/Companion (frozen, `docs/QUALIFICATION.md`) had no path for it, so
+the companion consumed a `NullSidebandPushSource`.
+
+Decisions:
+
+1. **The server is the single source of truth and the fake is its mirror.**
+   `routes.py`/`service.py` define the contract; `RealtimeContract` in the companion
+   copies it verbatim (batch shape `{"events":[{kind,t_ms,turn,payload[,text]}]}`, 1..200
+   per request, 4 KiB payloads, 16 KiB arguments, `CLIENT_EVENT_KINDS`, the normalized
+   forbidden-key rule with `FORBIDDEN_KEY_PARTS`, the `client_kind`/`call_id`/tool-name
+   patterns, `TRANSPORTS`), and `InProcessFakeCloudCore` enforces every one of them with
+   the server's status codes (201/404/409/410/422) and pydantic-shaped 422 details. Tests
+   post RAW bodies to the fake so it is judged on its own: the old per-call object is a
+   422, `apiKey`/`api-key`/`API_KEY`/`audioPcm` in a payload are 422s, the old create
+   body is a 422. The client also checks its own payloads against the same rule before
+   posting, so a forbidden key throws at the call site in a test rather than 422ing in
+   production. That check caught this integration's own first bug: `eot_to_first_audio_ms`
+   contains `audio` and is refused by the server's rule; the client key is
+   `eot_to_first_ms`. **Consequence to keep:** any new client payload key is checked
+   against `RealtimeContract.IsForbiddenKey` — `text`, `token`, `audio`, `pcm`, `wave`
+   inside a longer word are all refused (`context`, `next_item`, `waveform`).
+2. **Event kinds are the server's benchmark/state vocabulary; `client_seq` is client-side
+   bookkeeping only.** `mic_speech_start`, `uplink_first_packet`, `end_of_turn`,
+   `first_audio`, `barge_in_start`, `playback_stopped`, `tool_call`,
+   `preamble_audio_start`, `tool_done`, `speech_resumed`, `response_done`,
+   `network_lost/restored`, plus `utterance` (final transcripts, in `text`, for track E's
+   resolver), `error` (provider errors). `t_ms` is integer client-monotonic ms since
+   session start; `turn` is the latency recorder's turn index. Not reported: `audio_frame`
+   (one HTTP event per 20 ms frame is noise; gap detection stays client-side in the
+   latency recorder). Delivery is at-least-once: the reporter batches everything pending
+   (≤ 200) into one request, keeps the head on a transient failure and re-sends it
+   unchanged; the server has no dedup, so a lost 2xx can duplicate a timing event — accepted
+   for the gate, revisit if the benchmark's percentiles ever look bimodal.
+3. **The server's verdicts are handled as verdicts, not retries.** 422 = a client bug:
+   logged at Error with the server's detail, the batch/tool call is dropped (a refused
+   head must not block every later event), counted (`RefusedBatches`, `RefusedRelays`),
+   never retried; for a tool call the provider still receives an error output so the
+   conversation does not stall. 409 = another client holds the media leg: the leg is
+   closed, playback stopped, events held, and the leg is reclaimed (`attach`) on the
+   owner's **next speech onset on this device** — not on the 409 itself, which would have
+   two clients stealing the leg from each other forever (spec §7 makes the last attach the
+   winner). A `leg_closed` push is the same signal, handled the same way. 410/404 = the
+   session is gone: the orchestrator ends with `StopReason = session_gone` and
+   `VoiceCompanionHost` opens a fresh session after a backoff, so an expired TTL never
+   needs the owner. The `pending_sideband` backlog in every `/events` ack and `attach`
+   response is applied exactly like a push.
+4. **Credential and transport come from the documented contract.** `credential.secret`
+   is the only key read (the guess list is gone; a bare-string or `value`/`client_secret`
+   credential is a `FormatException`); `credential.transport_descriptor` (ADR-0038:
+   `websocket_url` + `query`) is where the OpenAI codec connects, falling back to the
+   default endpoint when absent (the simulator). `client_kind` is `windows_desktop`
+   (pattern `^[a-z][a-z0-9_]{0,15}$`). The create request names ONE transport (the first
+   this build supports); a 422 naming the provider's transports is answered once with the
+   first preference the provider offers, and a provider offering none of ours is an error
+   said out loud rather than a WebRTC grant this build cannot open.
+5. **`voice_sideband` is an additive device-protocol frame, forwarded opaquely.** Declared
+   in `packages/schemas/device-protocol.schema.json` (`$defs/voice_sideband`, appended to
+   `oneOf`; every v1 definition untouched), `packages/protocol/DEVICE_PROTOCOL.md` §5a,
+   and `app/broker/frames.py` (`VoiceSidebandFrame`, outbound-only; a unit test pins the
+   service's `sideband_frame()` output, the schema and the model to each other).
+   `BrokerSideband.push` refuses a frame over 16 KiB so it stays on the session's HTTP
+   backlog instead of being dropped at the pipe. On the Windows side, Agent.Core gains
+   `VoiceSidebandMessage` (validated for a uuid session id, an event name by *shape*, and
+   the 16 KiB bound — the payload is never read), `AgentConnection` gains an optional
+   `ISidebandFrameSink` (with none, the frame is logged and dropped), the pipe protocol
+   gains a `voice_sideband` frame carrying the same `conn_id`/`seq` as every pipe frame,
+   `CompanionPipeServer.ForwardSidebandAsync` writes it one-way with no pending entry, no
+   response, no audit row, and `CompanionRuntime` hands an accepted (fresh, this-connection)
+   forward to an optional `ISidebandForwardSink`; a stale or replayed forward is refused by
+   the existing `IpcChannelGuard` like a replayed `exec_request`. `PipeSidebandPushSource`
+   in the companion library is the real `ISidebandPushSource` (bounded, drop-oldest, since
+   Cloud Core keeps its own backlog). Nothing on the command/ack/idempotency/audit path
+   changed, the pipe DACL and admission logic are untouched, and the companion gained no
+   authority — it can only receive this frame and never answers it. All 138 pre-existing
+   agent tests pass unmodified; 7 new ones prove the forward, the bound, the no-sink drop,
+   the malformed-frame error reply and the freshness refusal.
+6. **Older receivers.** An agent that predates the frame answers it with the standard
+   `validation_error` error frame (§5 malformed-frame rule), which the broker already logs
+   and ignores; a newer agent with no companion connected drops it and returns false to
+   the sink. Both are harmless because a push that does not arrive is re-delivered over
+   HTTP on the next `/events` ack or `attach`.
+
+Also fixed on the way: `BrokerSideband.push`'s failure warning passed `event=` to structlog,
+which reserves that name — a dead socket would have raised `TypeError` inside the handler
+and failed the tool call it was meant to protect. Both warnings now use `sideband_event`.
+
+Not done, recorded rather than implied: the OpenAI codec's `session.update` still uses the
+beta field names (`modalities`, `input_audio_format`) and the `OpenAI-Beta: realtime=v1`
+header; ADR-0038 item 8's smoke confirms the GA `audio.input/output` names before any
+client depends on them, and that is track B/C's next real step. The Session Companion's
+composition (`Program.cs`) wires the pipe source into both the pipe loop and the voice
+host, but there is no wiring test for it beyond the two halves' own tests. Real acceptance
+still needs the owner's microphone, the real provider credential and the real broker; every
+number here is offline gate evidence.
+
+Consequences: `devices/windows-agent` builds 0/0; PagentOS.Agent.Tests 138 → 145 (138
+unmodified), PagentOS.Companion.Audio.Tests 110 → 134; API unit tests +10
+(`test_voice_sideband_frame.py`), ruff clean. The companion posts to the real
+`/v1/voice/realtime/...` unchanged from what the fake accepted.
