@@ -276,6 +276,15 @@ if (-not $Fast) {
     } finally { Pop-Location }
   }
 
+  Invoke-Step "Agent audit reader (PS5.1)" {
+    # The cloud driver reported "no command row found" while real commands succeeded:
+    # its verifier read the timestamp from `at`, a field the writer never emitted (`ts`).
+    # These pin the reader to the real schema and to identity-based correlation.
+    $script = Join-Path $repoRoot "scripts\tests\agent-audit.tests.ps1"
+    & (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -NoProfile -File $script
+    Assert-ExitCode "agent audit tests"
+  }
+
   Invoke-Step "Config swap transaction (PS5.1)" {
     # A real broker switch died inside [IO.File]::Replace: PowerShell binds $null to a
     # [string] parameter as an EMPTY string, which .NET refuses as a path. These reproduce

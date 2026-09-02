@@ -63,12 +63,30 @@ public sealed class AuditLog
                 File.AppendAllText(_path, line + Environment.NewLine);
             }
         }
-        catch (Exception)
+        catch (Exception ex)
         {
             // Same rule as the file logger, learned from the same incident: a failed audit
             // write must degrade the record, never kill the code path being audited.
+            //
+            // Non-fatal is not the same as silent. A trail that stops being written while
+            // commands keep succeeding is exactly the shape of the first cloud qualification
+            // finding, so the failure is counted (observable by callers and tests) and each
+            // NEW failure message is written once to stderr, which the service host captures.
+            // De-duplicated, because a broken path would otherwise flood the log on every row.
+            Interlocked.Increment(ref _failedWrites);
+            var message = $"{ex.GetType().Name}: {ex.Message}";
+            if (!string.Equals(Interlocked.Exchange(ref _lastFailureMessage, message), message, StringComparison.Ordinal))
+            {
+                try { Console.Error.WriteLine($"audit write failed ({_path}): {message}"); } catch (Exception) { }
+            }
         }
     }
+
+    private long _failedWrites;
+    private string? _lastFailureMessage;
+
+    /// <summary>Audit rows that could not be written since this instance was created. Never resets.</summary>
+    public long FailedWrites => Interlocked.Read(ref _failedWrites);
 
     private static void AddIfPresent(JsonObject record, string name, string? value)
     {

@@ -177,7 +177,8 @@ jobs:
           powershell -NoProfile -File scripts\tests\machine-readable.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\identity-restore.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\provision.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\config-swap.tests.ps1
+          powershell -NoProfile -File scripts\tests\config-swap.tests.ps1 && ^
+          powershell -NoProfile -File scripts\tests\agent-audit.tests.ps1
 
   web-build:
     name: Web shell build

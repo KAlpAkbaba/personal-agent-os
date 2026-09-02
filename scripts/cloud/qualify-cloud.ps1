@@ -40,7 +40,10 @@ param(
     [string]$InstallRoot = (Join-Path $env:ProgramFiles "PagentOS\agent"),
     [string]$DataDir = (Join-Path $env:ProgramData "PagentOS\agent"),
     [string]$SessionTokenFile = (Join-Path $env:LOCALAPPDATA "PagentOS\secrets\PAGENTOS_CLOUD_SESSION_TOKEN.dpapi"),
-    [ValidateSet("baseline", "core-restart", "vps-reboot", "tailscale-reconnect", "windows-netloss", "service-restart")]
+    # "audit-only": ONE harmless real command, correlated end-to-end to its persisted audit
+    # rows by command_id + trace_id. No disruption of anything. This is the re-run for the
+    # single matrix row the first qualification left open.
+    [ValidateSet("baseline", "audit-only", "core-restart", "vps-reboot", "tailscale-reconnect", "windows-netloss", "service-restart")]
     [string[]]$Scenarios = @("baseline", "core-restart", "vps-reboot", "tailscale-reconnect", "windows-netloss", "service-restart"),
     [int]$OnlineTimeoutSeconds = 240,
     [int]$RebootTimeoutSeconds = 420
@@ -51,6 +54,7 @@ Set-StrictMode -Version Latest
 
 . (Join-Path $PSScriptRoot "..\lib\NativeProcess.ps1")
 . (Join-Path $PSScriptRoot "..\lib\InstallAcl.ps1")
+. (Join-Path $PSScriptRoot "..\lib\AgentAudit.ps1")
 
 $ssh = Join-Path $env:SystemRoot "System32\OpenSSH\ssh.exe"
 $tailscaleExe = Join-Path $env:ProgramFiles "Tailscale\tailscale.exe"
@@ -148,23 +152,44 @@ function Invoke-CloudNotepad {
     if (-not $resultPid) { throw "[$Label] succeeded but reported no pid - the real-process proof is missing" }
     $proc = Get-Process -Id $resultPid -ErrorAction SilentlyContinue
     if (-not $proc) { throw "[$Label] reported pid $resultPid but no such process is alive" }
-    $evidence = "cmd=$($command.command_id) -> '$($proc.ProcessName)' pid $($proc.Id) session $($proc.SessionId), ACK from $baseUrl"
+    $evidence = "cmd=$($command.command_id) trace=$($result.trace_id) -> '$($proc.ProcessName)' pid $($proc.Id) session $($proc.SessionId), ACK from $baseUrl"
     Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-    return $evidence
+    # The ACK's identity travels with the evidence so the audit trail can be correlated to
+    # THIS command, not to "some command".
+    return [pscustomobject]@{
+        Evidence  = $evidence
+        CommandId = [string]$command.command_id
+        TraceId   = [string](Get-OptionalProperty -InputObject $result -Name "trace_id")
+        Pid       = [int]$proc.Id
+    }
 }
 
-function Test-AgentAuditHasCommand {
-    <#  The agent's own audit trail, on this machine, must show it executed a command.  #>
-    param([string]$AuditPath, [datetime]$Since)
-    if (-not (Test-Path -LiteralPath $AuditPath)) { return $false }
-    $lines = @(Get-Content -LiteralPath $AuditPath -ErrorAction SilentlyContinue | Select-Object -Last 200)
-    foreach ($line in $lines) {
-        try { $row = $line | ConvertFrom-Json } catch { continue }
-        $event = Get-OptionalProperty -InputObject $row -Name "event"
-        $at = Get-OptionalProperty -InputObject $row -Name "at"
-        if ($event -match "command" -and $at -and ([datetime]$at).ToUniversalTime() -ge $Since.ToUniversalTime()) { return $true }
-    }
-    return $false
+function Test-AgentAuditForCommand {
+    <#
+    .SYNOPSIS
+        The agent's own audit trail must hold the received + ack rows for EXACTLY the command
+        the broker acknowledged. Schema-true (ts/event/command_id/trace_id) via AgentAudit.ps1.
+    #>
+    param([string]$AuditPath, [string]$CommandId, [string]$TraceId, [datetime]$Since)
+    # The dispatcher appends the ack row after replying to the broker; give the disk a moment.
+    $deadline = (Get-Date).AddSeconds(15)
+    do {
+        $report = Find-AgentAuditCommandRows -AuditPath $AuditPath -CommandId $CommandId -TraceId $TraceId -Since $Since
+        if ($report.Proven) { return $report }
+        Start-Sleep -Seconds 1
+    } while ((Get-Date) -lt $deadline)
+    return $report
+}
+
+function Format-AuditReport {
+    param($Report)
+    if (-not $Report.Exists) { return "audit file absent: $($Report.Path)" }
+    $svc = Get-CimInstance Win32_Service -Filter "Name='$ServiceName'" -ErrorAction SilentlyContinue
+    $comp = Get-Process -Name "PagentOS.SessionCompanion" -ErrorAction SilentlyContinue | Select-Object -First 1
+    $tsList = @($Report.Rows | ForEach-Object { Get-OptionalProperty -InputObject $_ -Name "ts" }) -join ", "
+    return ("command_id=$($Report.CommandId) trace_id=$($Report.TraceId) events=[$($Report.Events -join ',')] ts=[$tsList] " +
+            "service pid=$(if ($svc) { $svc.ProcessId } else { '?' }) companion pid=$(if ($comp) { $comp.Id } else { '?' }) " +
+            "file=$($Report.Path) rows=$($Report.TotalRows) unparseable=$($Report.Unparseable) stale=$($Report.StaleRows) traceMismatch=$($Report.TraceMismatch)")
 }
 
 function Invoke-Scenario {
@@ -179,8 +204,8 @@ function Invoke-Scenario {
             throw "device did not come back ONLINE at the cloud broker within ${RecoverBudget}s"
         }
         $recovered = [int]((Get-Date) - $started).TotalSeconds
-        $evidence = Invoke-CloudNotepad -Headers $Headers -DeviceId $DeviceId -Label $Name
-        Add-Result -Scenario $Name -Status "PROVEN_REAL" -Evidence "recovered in ${recovered}s, no owner action; $evidence$Extra"
+        $ack = Invoke-CloudNotepad -Headers $Headers -DeviceId $DeviceId -Label $Name
+        Add-Result -Scenario $Name -Status "PROVEN_REAL" -Evidence "recovered in ${recovered}s, no owner action; $($ack.Evidence)$Extra"
     }
     catch {
         Add-Result -Scenario $Name -Status "NOT_YET_PROVEN" -Evidence $_.Exception.Message
@@ -220,15 +245,38 @@ if ("baseline" -in $Scenarios) {
         if (-not (Wait-DeviceOnline -Headers $headers -DeviceId $deviceId -TimeoutSeconds $OnlineTimeoutSeconds)) {
             throw "device is not ONLINE at the cloud broker (waited ${OnlineTimeoutSeconds}s)"
         }
-        $evidence = Invoke-CloudNotepad -Headers $headers -DeviceId $deviceId -Label "baseline"
-        Start-Sleep -Seconds 2
-        $audited = Test-AgentAuditHasCommand -AuditPath $auditPath -Since $runStart
-        Add-Result -Scenario "baseline: cloud -> real Notepad -> ACK" -Status "PROVEN_REAL" -Evidence $evidence
-        Add-Result -Scenario "baseline: agent audit trail records the command" -Status $(if ($audited) { "PROVEN_REAL" } else { "NOT_YET_PROVEN" }) `
-            -Evidence $(if ($audited) { "row in $auditPath since $($runStart.ToString('o'))" } else { "no command row found in $auditPath since run start" })
+        $ack = Invoke-CloudNotepad -Headers $headers -DeviceId $deviceId -Label "baseline"
+        Add-Result -Scenario "baseline: cloud -> real Notepad -> ACK" -Status "PROVEN_REAL" -Evidence $ack.Evidence
+        $report = Test-AgentAuditForCommand -AuditPath $auditPath -CommandId $ack.CommandId -TraceId $ack.TraceId -Since $runStart
+        Add-Result -Scenario "baseline: agent audit trail records the command" -Status $(if ($report.Proven) { "PROVEN_REAL" } else { "NOT_YET_PROVEN" }) `
+            -Evidence (Format-AuditReport -Report $report)
     }
     catch {
         Add-Result -Scenario "baseline: cloud -> real Notepad -> ACK" -Status "NOT_YET_PROVEN" -Evidence $_.Exception.Message
+    }
+}
+
+# ---------------------------------------------------- audit-only: one command, correlated
+if ("audit-only" -in $Scenarios) {
+    Write-Host ""
+    Write-Host "=== audit-only: one harmless command, correlated to its persisted audit rows ===" -ForegroundColor Cyan
+    try {
+        if (-not (Wait-DeviceOnline -Headers $headers -DeviceId $deviceId -TimeoutSeconds $OnlineTimeoutSeconds)) {
+            throw "device is not ONLINE at the cloud broker (waited ${OnlineTimeoutSeconds}s)"
+        }
+        $ack = Invoke-CloudNotepad -Headers $headers -DeviceId $deviceId -Label "audit-only"
+        Write-Host "  ACK: $($ack.Evidence)"
+        $report = Test-AgentAuditForCommand -AuditPath $auditPath -CommandId $ack.CommandId -TraceId $ack.TraceId -Since $runStart
+        Add-Result -Scenario "baseline: agent audit trail records the command" -Status $(if ($report.Proven) { "PROVEN_REAL" } else { "NOT_YET_PROVEN" }) `
+            -Evidence (Format-AuditReport -Report $report)
+        if ($report.Proven) {
+            Write-Host ""
+            Write-Host "  persisted rows for this command:" -ForegroundColor DarkCyan
+            foreach ($row in $report.Rows) { Write-Host "    $($row | ConvertTo-Json -Compress)" }
+        }
+    }
+    catch {
+        Add-Result -Scenario "baseline: agent audit trail records the command" -Status "NOT_YET_PROVEN" -Evidence $_.Exception.Message
     }
 }
 

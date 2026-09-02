@@ -898,3 +898,40 @@ Also observed: Tailscale SSH's periodic re-authentication check for root session
 during diagnosis ("Tailscale SSH requires an additional check"). It is a browser link only
 the owner can open; it gates the agent's host access but not the owner's own run, where the
 link appears in their console.
+
+## Incident — the audit row that was there all along (2026-09-02)
+
+The cloud qualification driver closed every runtime and recovery row `PROVEN_REAL` and left
+exactly one open: "agent audit trail records the command" — *no command row found in
+agent-audit.jsonl since run start* — while, on the same screen, real commands opened Notepad
+and were ACKed from the Hetzner broker.
+
+Diagnosed from the writer, not by retrying. `AuditLog` emits `ts`, `event`, and (when
+present) `device_id`, `command_id`, `trace_id`, `capability`, `status`, `detail`; the
+dispatcher — the same one whichever broker is dialled — writes `command_received` and then
+`command_ack` for every command. The verifier read the timestamp from a field named `at`,
+which the writer has never emitted, so the time filter rejected every row that ever existed.
+It also matched rows loosely (`event -match "command"`) and read only a 200-line tail. **The
+writer was right; the verifier was wrong.** The product path was never in doubt — the
+evidence path was.
+
+Decisions:
+
+1. **Correlate by identity, not by vocabulary.** `scripts/lib/AgentAudit.ps1` reads the whole
+   file, parses `ts`, and proves a command only by rows carrying THAT `command_id` (and
+   `trace_id`) with both `command_received` and `command_ack` present. Rows older than the
+   run, a different command's rows, or a trace mismatch are reported as such — never
+   counted. Unparseable lines are counted, not hidden.
+2. **The schema is pinned where it is produced.** `AuditLogSchemaTests.cs` writes real rows
+   through the real `AuditLog` and asserts the exact key set (and that `at` is absent).
+   The PowerShell fixture is documented as the same contract; if the writer changes, the C#
+   test fails first.
+3. **Non-fatal is not silent.** The writer still never throws into the audited code path
+   (a throwing logger once killed the pipe server), but a failed audit write is now counted
+   (`FailedWrites`) and each new failure message is written once to stderr, which the
+   service host captures. A trail that has quietly stopped is the exact shape of this
+   incident, and it must be observable.
+4. The driver's baseline and a new `-Scenarios audit-only` mode carry the ACK's
+   `command_id`/`trace_id` into the audit check and print the correlated evidence —
+   service pid, companion pid, the rows' `ts` — so the matrix row is closed by a persisted
+   row that matches the broker's ACK, and by nothing less.
