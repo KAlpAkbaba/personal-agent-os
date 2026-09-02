@@ -45,6 +45,13 @@ describe("event reporting shape", () => {
     expect(isForbiddenPayloadKey("clientSecret")).toBe(true);
     expect(isForbiddenPayloadKey("api_key")).toBe(true);
     expect(isForbiddenPayloadKey("playback_stopped_ms")).toBe(false);
+    // service.py normalizes before matching: any spelling of the same key is refused.
+    for (const spelling of ["apiKey", "api-key", "API_KEY", "Api Key", "access_token", "Password2", "transcriptLen", "context"]) {
+      expect(isForbiddenPayloadKey(spelling)).toBe(true);
+    }
+    for (const safe of ["rms_db", "noise_floor_db", "speech_prob", "gate_opens", "false_starts", "hold_ms", "hesitation"]) {
+      expect(isForbiddenPayloadKey(safe)).toBe(false);
+    }
     const scrubbed = scrubPayload({
       playback_stopped_ms: 70,
       audio: new ArrayBuffer(8),

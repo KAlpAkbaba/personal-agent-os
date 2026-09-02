@@ -11,18 +11,28 @@
  */
 
 import type { Fetcher } from "./api";
-import type {
-  ClientEvent,
-  EventsResponse,
-  SessionCredential,
-  SessionLegPayload,
-  SessionState,
-  SidebandFrame,
-  ToolCallResponse,
-  ToolManifestEntry,
+import {
+  type ClientEvent,
+  type EventsResponse,
+  isForbiddenKey,
+  type SessionCredential,
+  type SessionLegPayload,
+  type SessionState,
+  type SidebandFrame,
+  type ToolCallResponse,
+  type ToolManifestEntry,
 } from "./contract";
 import type { Scheduler } from "./events";
-import type { Microphone, NetworkMonitor, Playback, SpeechDetector } from "./ports";
+import type {
+  AppliedInputSettings,
+  Microphone,
+  MicrophoneConstraints,
+  NetworkMonitor,
+  Playback,
+  SpeechDetector,
+  SpeechDetectorCalibration,
+  SpeechDetectorStats,
+} from "./ports";
 import type {
   AudioInput,
   AudioOutput,
@@ -213,24 +223,54 @@ export class FakePlayback implements Playback {
 
 export class FakeMicrophone implements Microphone {
   stream: MediaStream | null = null;
+  applied: AppliedInputSettings | null = null;
   opened: Array<string | undefined> = [];
+  constraints: Array<Partial<MicrophoneConstraints> | undefined> = [];
 
-  async open(deviceId?: string): Promise<MediaStream> {
+  async open(deviceId?: string, constraints?: Partial<MicrophoneConstraints>): Promise<MediaStream> {
     this.opened.push(deviceId);
+    this.constraints.push(constraints);
     // Node has no MediaStream; the controller only passes it through.
     this.stream = { id: `fake-mic-${this.opened.length}`, getAudioTracks: () => [] } as unknown as MediaStream;
+    const requested: MicrophoneConstraints = {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: false,
+      channelCount: 1,
+      ...constraints,
+    };
+    this.applied = {
+      label: "Fake K66",
+      deviceId: deviceId ?? "default",
+      groupId: "group-1",
+      echoCancellation: requested.echoCancellation,
+      noiseSuppression: requested.noiseSuppression,
+      autoGainControl: requested.autoGainControl,
+      voiceIsolation: null,
+      suppressLocalAudioPlayback: null,
+      channelCount: 1,
+      sampleRate: 48_000,
+      notHonoured: requested.voiceIsolation ? ["voiceIsolation"] : [],
+      requested,
+      settings: { sampleRate: 48_000, channelCount: 1 },
+      capabilities: null,
+      supportedConstraints: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    };
     return this.stream;
   }
 
   close(): void {
     this.stream = null;
+    this.applied = null;
   }
 }
 
 export class FakeSpeechDetector implements SpeechDetector {
   started = 0;
+  counters: SpeechDetectorStats = { gate_opens: 0, gated_out: 0, click_rejects: 0, speech_ms: 0, calibrations: 0 };
   private startSinks = new Set<(at: number) => void>();
   private endSinks = new Set<(at: number) => void>();
+  private calibrationSinks = new Set<(calibration: SpeechDetectorCalibration) => void>();
 
   start(): void {
     this.started += 1;
@@ -250,12 +290,45 @@ export class FakeSpeechDetector implements SpeechDetector {
     return () => this.endSinks.delete(sink);
   }
 
+  onCalibration(sink: (calibration: SpeechDetectorCalibration) => void): Unsubscribe {
+    this.calibrationSinks.add(sink);
+    return () => this.calibrationSinks.delete(sink);
+  }
+
+  stats(): SpeechDetectorStats {
+    return { ...this.counters };
+  }
+
   speechStart(at: number): void {
+    this.counters.gate_opens += 1;
     for (const sink of this.startSinks) sink(at);
   }
 
   speechEnd(at: number): void {
     for (const sink of this.endSinks) sink(at);
+  }
+
+  /** Script a completed calibration (numbers only, like the real detector). */
+  emitCalibration(partial: Partial<SpeechDetectorCalibration> = {}): void {
+    this.counters.calibrations += 1;
+    const calibration: SpeechDetectorCalibration = {
+      noise_floor_db: -52.5,
+      stationary_db: -55,
+      spread_db: 4,
+      peak_db: -30,
+      clip_risk: 0,
+      hum_ratio: 0.2,
+      contaminated: 0,
+      sensitivity: 1,
+      env: 1,
+      open_margin_db: 10,
+      min_onset_ms: 70,
+      hang_ms: 450,
+      pre_roll_ms: 120,
+      trigger: 0,
+      ...partial,
+    };
+    for (const sink of this.calibrationSinks) sink(calibration);
   }
 }
 
@@ -360,6 +433,9 @@ export class FakeCloudCore {
     };
   }
 
+  /** The wire voice the session was created with (ADR-0043); null until create. */
+  voice: string | null = null;
+
   private legPayload(): SessionLegPayload {
     return {
       session_id: this.sessionId,
@@ -371,6 +447,8 @@ export class FakeCloudCore {
       language: "tr-TR",
       expires_at: "2026-09-02T01:00:00Z",
       state: "created",
+      voice: this.voice,
+      voice_profile: "arbor",
       ...(this.options.descriptor ? { transport_descriptor: this.options.descriptor } : {}),
     };
   }
@@ -394,7 +472,15 @@ export class FakeCloudCore {
       }
     }
     const base = "/v1/voice/realtime/sessions";
-    if (path === base && method === "POST") return this.json(201, this.legPayload());
+    if (path === base && method === "POST") {
+      const wanted = (body as { voice?: unknown } | undefined)?.voice;
+      // routes.py: optional, pattern ^[a-z]{2,16}$; anything else is a 422.
+      if (wanted !== undefined && (typeof wanted !== "string" || !/^[a-z]{2,16}$/.test(wanted))) {
+        return this.json(422, { detail: "invalid voice" });
+      }
+      this.voice = typeof wanted === "string" ? wanted : null;
+      return this.json(201, this.legPayload());
+    }
     if (!path.startsWith(`${base}/`)) return this.json(404, { detail: "unknown" });
     const rest = path.slice(base.length + 1).split("/");
     if (rest[0] !== this.sessionId) return this.json(404, { detail: "unknown realtime session" });
@@ -439,9 +525,10 @@ export class FakeCloudCore {
       const batch = (body as { events: ClientEvent[] }).events;
       for (const event of batch) {
         if (event.payload) {
+          // service.py `is_forbidden_key`: normalized (lower-case, separators
+          // dropped) substring match against FORBIDDEN_KEY_PARTS.
           for (const key of Object.keys(event.payload)) {
-            const lowered = key.toLowerCase();
-            if (["audio", "pcm", "wave", "secret", "credential", "api_key"].some((p) => lowered.includes(p))) {
+            if (isForbiddenKey(key)) {
               return this.json(422, { detail: `forbidden payload key ${key}` });
             }
           }

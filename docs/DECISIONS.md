@@ -1820,3 +1820,114 @@ Consequences: server changes are small (voice request validated against the pinn
 speed, style block, the profile recorded on the session); the working realtime path is
 untouched; the owner never tunes DSP parameters - the system converges from calibration
 and the owner's verdicts.
+
+## ADR-0044 — Web microphone / noise work package: layered input pipeline, calibrated local speech gate, per-device profiles (2026-09-02)
+
+Context: the owner's first real K66 session (VOICE_OWNER_FEEDBACK.md, ADR-0043) was good
+except for one defect — the unusually sensitive microphone let fan, keyboard, clicks,
+knocks, TV, music, street, chair and room echo trigger conversational turns. The WebRTC
+architecture, provider, low-latency path, session handling, barge-in ordering and the
+sideband are kept; this ADR is surgical optimisation of the input side in `apps/web`.
+
+Decisions:
+
+1. **Layer 1 — browser processing is requested AND read back.** `BrowserMicrophone`
+   asks for `echoCancellation`, `noiseSuppression`, `channelCount: 1`, and (only when
+   `getSupportedConstraints()` lists them) `voiceIsolation` / `suppressLocalAudioPlayback`
+   as ideal constraints; after `getUserMedia` it records `track.getSettings()`,
+   `track.getCapabilities()` and the list of requested booleans that were NOT honoured
+   (`AppliedInputSettings`). `autoGainControl` is never blindly on: it is the profile's
+   `agcPreference` (default `auto` = off unless the A/B benchmark says otherwise). The
+   diagnostics view shows the read-back verbatim (bounded) with a copyable JSON, because
+   the real K66 settings can only be read in the owner's own browser.
+2. **Layer 2 — non-invasive noise-floor calibration.** `NoiseFloorCalibrator` consumes
+   1.8 s of frame features at microphone/session start (frames skipped while the assistant
+   is audible or the gate is open) and keeps numbers only: median floor (dBFS RMS), p20
+   stationary estimate, p90−p10 spread, peak, clip risk, hum ratio, speech-like ratio.
+   Class: floor < −60 quiet, < −48 normal, < −38 noisy, else very noisy; spread > 12 dB
+   bumps one class. Sensitivity: floor ≥ −40 high, ≥ −55 normal. A window contaminated
+   by speech (speech-like ratio > 0.3) is measured again (twice at most) instead of
+   trusted. Recalibration: manual ("Yeniden ölçümle") and automatic when
+   `RunningNoiseFloor` (non-speech frames only; rise τ 3 s, fall τ 0.5 s) drifts more than
+   8 dB for 5 s, with a 30 s cooldown. No raw audio is retained anywhere.
+3. **Layer 3 — local speech gate before the controller's turn logic.** Per 21 ms frame:
+   `energy = sigmoid((rms − floor − openMargin [− echoExtra while playback]) / 3 dB)`,
+   `spectral = 0.4·speechBandRatio(200–3400 Hz) + 0.4·(1 − flatness) + 0.2·zcrWindow`,
+   `prob = energy · (0.35 + 0.65 · spectral)`. Energy alone caps at 0.35, below every
+   mode's open threshold. Temporal: an onset must persist `minOnsetMs`; a burst above the
+   margin shorter than 40 ms is a click; the open gate hangs `hangMs` after the last
+   voiced frame (voiced = prob ≥ closeProb, or level above closeMargin = openMargin − 4 dB
+   with a speech-like spectrum); the reported start is backdated by `preRollMs`. The
+   documented mode table (`MODE_PRESETS`, pinned by tests):
+
+   | class / mode | openMargin dB | openProb | minOnset ms | hang ms | preRoll ms | echoExtra dB |
+   |---|---|---|---|---|---|---|
+   | quiet ("Sessiz ortam") | 8 | 0.55 | 50 | 500 | 150 | 4 |
+   | normal ("Otomatik" base) | 10 | 0.60 | 70 | 450 | 120 | 6 |
+   | noisy ("Gürültülü ortam") | 14 | 0.65 | 90 | 400 | 100 | 8 |
+   | very noisy ("Çok gürültülü ortam") | 18 | 0.70 | 110 | 350 | 100 | 10 |
+
+   "Otomatik" takes the row of the calibrated class and adds `clamp((spread − 6)·0.5, 0, 3)`
+   dB; the profile's sensitivity preference shifts ±2/+3 dB and ∓20 ms; bounds: onset
+   40–140 ms, hang ≥ 300 ms. The gate governs only what the CLIENT treats as owner-speech
+   start (barge-in / hesitation / counters); the uplink track is untouched and the
+   provider's semantic VAD and `interrupt_response` are unchanged (Layer 4, server side).
+   Speaker playback is a FEATURE (extra margin), never a mute: barge-in keeps working in
+   headset and open-speaker modes. Added local barge-in latency vs. the old RMS detector
+   (40 ms attack) is +10…+70 ms by mode, and the timestamp is backdated by the pre-roll.
+4. **Two seams, both passthrough by default.** `Denoiser` (denoiser.ts) with the
+   promotion checklist (better separation on the 14 scenarios, no unacceptable latency,
+   no metallic Turkish, no lost quiet syllables, no harm to barge-in, bypass kept) — no
+   RNNoise/APM in this task. `UplinkShaper` (uplink.ts): the gate computes a gain target
+   (< 1 only during floor-level background, never during an onset candidate, an open gate
+   or any energy rise > 3 dB above the floor; depth −9 dB, release 5 ms, attack 50 ms). The
+   Web Audio implementation exists but is opt-in per profile from diagnostics
+   (`inputGainStrategy: "gated_attenuation"`) because it re-routes the proven low-latency
+   track; the gate analyses the raw capture so it never sees its own attenuation.
+5. **MicrophoneProfile per device, not a global constant.** Keyed by
+   FNV-1a(label|groupId) so the K66 keeps its profile across deviceId rotation; fields:
+   deviceId, fingerprint, friendlyName, inputGainStrategy, agcPreference,
+   noiseSuppressionMode, measuredNoiseFloorDb, preferredVadSensitivity, lastCalibratedAt,
+   qualificationScore, environmentMode, agcBenchmark, appliedVoiceIsolation. Stored in
+   localStorage behind `MicrophoneProfileStore` (every access wrapped; a throwing storage
+   degrades to an in-memory mirror) so it can later be mirrored to Cloud Core owner
+   preferences. Switching devices calibrates the new one independently. The AGC A/B
+   benchmark (diagnostics, not live): two 2 s ambient measurements with AGC off/on on a
+   temporary capture, scored `−floor − 1.5·spread − 20·clipRisk`; AGC must win by ≥ 1
+   point to be recommended on.
+6. **The controller learns two things it was missing, nothing else.** (a) It subscribes
+   to the local gate's end: a locally opened turn the provider never confirms is released
+   after a 700 ms grace as a *false start* (a *false barge-in* when it had already stopped
+   the assistant, returning to LISTENING) — previously such a turn stayed "speaking" and
+   silently disabled the next barge-in. (b) A provider-confirmed turn with no transcript
+   is a *false turn*, judged when the next turn starts or at close (the transcript arrives
+   after `speech_stopped`, so it cannot be judged at end-of-turn). Barge-in ordering,
+   hesitation guard, tool relay, reattach and the event vocabulary are untouched.
+7. **Metrics through the existing `/events` contract, numbers only.** `state` events with
+   `mic_calibration: 1` (floor, stationary, spread, peak, clip risk, hum ratio, class,
+   sensitivity, applied margin/onset/hang/pre-roll, trigger) and `mic_metrics: 1`
+   (gate_opens, gated_out, click_rejects, speech_ms, calibrations, false_starts,
+   false_barge_ins, false_turns, plus the marker of what just happened; `session_end: 1`
+   at close). The client's forbidden-key rule now mirrors `service.py` exactly
+   (`audio pcm wave secret credential token apikey password text transcript`, normalized
+   before matching — so a key like `context` is also refused) and `numbersOnly()` drops
+   everything that is not a finite number under a safe name. The server is unchanged.
+8. **Owner-facing page.** "Mikrofon: <name>", "Ortam", "Gürültü bastırma", "Ses algılama"
+   (sahibin sesi / arka plan / sessiz), a live level meter with the floor marker, the four
+   mode buttons, "Yeniden ölçümle" and a "Tanılama" toggle; all DSP numbers live only
+   behind the toggle. The ADR-0043 A/B gets a two-candidate "Ses" selector (Marin / Cedar,
+   default Marin, persisted per owner, unknown values impossible) and the status line
+   shows `ses: <voice> · profil: arbor` from the server's create payload.
+
+What this cannot do without server changes: stop the PROVIDER's VAD from opening a turn on
+loud non-speech. The audio still flows raw to the provider (by design, for quiet syllables);
+provider-side VAD threshold / eagerness live in the session config Cloud Core sends with
+the descriptor (Layer 4). The client now measures how often that happens (`false_turns`)
+so the server-side tuning can be driven by numbers from the 14-scenario matrix.
+
+Consequences: `apps/web` tests 36 → 70 (synthetic silence, −50 dBFS hum, click bursts,
+band-limited modulated speech, −35 dBFS quiet speech; calibration, click rejection, bounded
+open time, pre-roll, hang through a 250 ms pause, no chatter, playback-as-feature, profile
+round-trips, mode table, false start / false barge-in / false turn, forbidden-key sweep);
+`RmsSpeechDetector` kept as the Layer 3 bypass. The K66 read-back, the AGC A/B and the
+14-scenario matrix are owner actions on the real device.

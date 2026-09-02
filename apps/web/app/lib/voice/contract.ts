@@ -43,6 +43,10 @@ export type SessionLegPayload = {
   language: string;
   expires_at: string;
   state: string | SessionState;
+  /** ADR-0043: the wire voice id the session was created with (owner A/B: marin | cedar). */
+  voice?: string | null;
+  /** ADR-0043: the owner's perceptual profile ("arbor"), applied server-side; never a wire voice. */
+  voice_profile?: string | null;
   /** Optional provider transport descriptor (see transport.ts). */
   transport_descriptor?: Record<string, unknown>;
   /** attach only */
@@ -69,6 +73,8 @@ export type SessionState = {
   legs: number;
   pending_sideband_count: number;
   transcript_summary: string;
+  voice?: string | null;
+  voice_profile?: string | null;
 };
 
 /** Cloud Core → client sideband message, replayed via `/events` and `attach`. */
@@ -171,9 +177,16 @@ export const MAX_EVENT_TEXT_CHARS = 4000;
 export const MAX_SUMMARY_CHARS = 2000;
 
 /**
- * Payload keys the server refuses (routes.py `_FORBIDDEN_PAYLOAD_KEY_PARTS`).
- * The client drops such keys itself so a defensive bug can never turn into a
- * rejected batch — and so audio or a credential can never be reported.
+ * Payload keys the server refuses (service.py `FORBIDDEN_KEY_PARTS`, applied
+ * by the route validator and the audit scrubber). The client drops such keys
+ * itself so a defensive bug can never turn into a rejected batch — and so
+ * audio, a credential or a transcript can never travel inside a payload.
+ *
+ * The server NORMALIZES a key before matching (lower-case, every non
+ * alphanumeric character dropped), so `apiKey`, `api-key` and `API_KEY` are the
+ * same key as `api_key`; `isForbiddenKey` applies the identical rule. Note that
+ * "text" catches innocent-looking keys such as `context` — metric payloads use
+ * names like `rms_db`, `noise_floor_db`, `speech_prob`, `gate_opens`.
  */
 export const FORBIDDEN_PAYLOAD_KEY_PARTS = [
   "audio",
@@ -181,5 +194,17 @@ export const FORBIDDEN_PAYLOAD_KEY_PARTS = [
   "wave",
   "secret",
   "credential",
-  "api_key",
+  "token",
+  "apikey",
+  "password",
+  "text",
+  "transcript",
 ] as const;
+
+/** Server-identical: true when `key` is audio/credential/transcript-shaped under any spelling. */
+export function isForbiddenKey(key: unknown): boolean {
+  const normalized = String(key)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+  return FORBIDDEN_PAYLOAD_KEY_PARTS.some((part) => normalized.includes(part));
+}
