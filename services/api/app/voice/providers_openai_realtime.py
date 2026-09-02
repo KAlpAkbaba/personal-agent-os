@@ -94,6 +94,14 @@ FULL_LAYERS: tuple[str, ...] = SESSION_LAYERS
 
 #: WebRTC events data channel — the vendor requires exactly this name.
 DATA_CHANNEL_NAME = "oai-events"
+#: The vendor's voice ids, verbatim from live discovery on 2026-09-02 (a mint with
+#: ``voice: arbor`` was refused with exactly this list). A session may request only
+#: one of these; "arbor" is the owner's perceptual profile, never a wire value.
+SUPPORTED_VOICES = ("alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse",
+                    "marin", "cedar")
+SUPPORTED_VOICES_DISCOVERED = "2026-09-02"
+OUTPUT_SPEED_MIN = 0.25
+OUTPUT_SPEED_MAX = 1.5
 #: Wire-dialect name the web client selects its event mapping by (must match
 #: apps/web/app/lib/voice/dialects/index.ts REGISTRY).
 WEB_CLIENT_DIALECT = "openai-realtime"
@@ -230,6 +238,7 @@ class OpenAIRealtimeProvider:
         voice: str = "marin",
         eagerness: str = "low",
         transcription_model: str = "gpt-4o-transcribe",
+        speed: float = 1.0,
         base_url: str = DEFAULT_BASE_URL,
         timeout_s: float = 15.0,
         audio_format: str = AUDIO_FORMAT_PCM16,
@@ -244,6 +253,12 @@ class OpenAIRealtimeProvider:
         self._voice = voice
         self._eagerness = eagerness
         self._transcription_model = transcription_model
+        if not (OUTPUT_SPEED_MIN <= float(speed) <= OUTPUT_SPEED_MAX):
+            raise VoiceError(VoiceErrorClass.VALIDATION_ERROR,
+                             f"speed must be within [{OUTPUT_SPEED_MIN}, {OUTPUT_SPEED_MAX}], "
+                             f"got {speed!r}",
+                             provider=OPENAI_REALTIME_PROVIDER_NAME)
+        self._speed = float(speed)
         self._base_url = base_url.rstrip("/")
         self._timeout_s = timeout_s
         self._audio_format = audio_format
@@ -256,6 +271,7 @@ class OpenAIRealtimeProvider:
             voice=settings.voice_realtime_openai_voice,
             eagerness=settings.voice_realtime_openai_eagerness,
             transcription_model=settings.voice_realtime_openai_transcription_model,
+            speed=settings.voice_realtime_openai_speed,
             base_url=settings.voice_realtime_openai_base_url,
             timeout_s=settings.voice_realtime_openai_timeout_s,
         )
@@ -268,6 +284,24 @@ class OpenAIRealtimeProvider:
     @property
     def model(self) -> str:
         return self._model
+
+    @property
+    def voice(self) -> str:
+        return self._voice
+
+    def supported_voices(self) -> tuple[str, ...]:
+        """The vendor's voice ids as discovered live (ADR-0043)."""
+        return SUPPORTED_VOICES
+
+    def require_supported_voice(self, voice: str) -> str:
+        if voice not in SUPPORTED_VOICES:
+            raise VoiceError(
+                VoiceErrorClass.VALIDATION_ERROR,
+                f"voice {voice!r} is not offered by {self.name} "
+                f"(discovered {SUPPORTED_VOICES_DISCOVERED}): {list(SUPPORTED_VOICES)}",
+                provider=self.name, details={"supported_voices": list(SUPPORTED_VOICES)},
+            )
+        return voice
 
     @property
     def has_key(self) -> bool:
@@ -407,6 +441,9 @@ class OpenAIRealtimeProvider:
             fmt = _audio_format_object(self._audio_format)
             session["audio"].setdefault("input", {})["format"] = dict(fmt)
             session["audio"]["output"]["format"] = dict(fmt)
+            # output pacing belongs to the voice profile (ADR-0043); the vendor echoes
+            # ``speed`` on the session object, so it rides the same layer as the formats
+            session["audio"]["output"]["speed"] = self._speed
         if "transcription" in layers:
             session["audio"].setdefault("input", {})["transcription"] = {
                 "model": self._transcription_model,

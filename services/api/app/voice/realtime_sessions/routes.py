@@ -117,6 +117,9 @@ class CreateSessionRequest(BaseModel):
     language: str = Field(default="tr-TR", pattern=r"^[a-z]{2}-[A-Z]{2}$")
     narration_session_id: uuid.UUID | None = None
     session_ttl_s: int | None = Field(default=None, ge=60, le=86_400)
+    # ADR-0043: a wire voice id from the provider's supported list (A/B in the owner
+    # qualification); absent -> the configured default. Never a profile name.
+    voice: str | None = Field(default=None, pattern=r"^[a-z]{2,16}$")
 
     @field_validator("transport")
     @classmethod
@@ -230,6 +233,16 @@ async def create_session(request: Request, body: CreateSessionRequest) -> dict[s
     except VoiceError as exc:
         _raise_http(exc)
     transport = body.transport or selection.transport
+    voice = body.voice
+    if voice is not None:
+        require = getattr(provider, "require_supported_voice", None)
+        try:
+            if require is not None:
+                require(voice)
+        except VoiceError as exc:
+            _raise_http(exc)
+    profile = (runtime.settings.voice_realtime_owner_target_voice_profile or "").strip().lower()
+    voice_profile = profile if profile and profile != "none" else None
     if transport not in provider.capabilities().transports:
         raise HTTPException(status_code=422, detail={
             "error_class": "validation_error",
@@ -241,6 +254,7 @@ async def create_session(request: Request, body: CreateSessionRequest) -> dict[s
             _, _, payload = service.create_session(
                 db, owner=owner, provider=provider, transport=transport,
                 client_kind=body.client_kind, language=body.language,
+                voice=voice, voice_profile=voice_profile,
                 session_ttl_s=body.session_ttl_s or runtime.settings.voice_realtime_session_ttl_s,
                 credential_ttl_s=runtime.settings.voice_realtime_credential_ttl_s,
                 narration_session_id=body.narration_session_id, registry=runtime.registry,

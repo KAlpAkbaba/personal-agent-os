@@ -605,3 +605,43 @@ def test_tool_call_relayed_under_the_vendor_spelling_runs_the_cloud_core_tool(wi
     replay = client.post(f"/v1/voice/realtime/sessions/{sid}/tool-calls",
                          json={"call_id": "v1", "name": "clock.now", "arguments": {}}).json()
     assert replay["replayed"] is True and replay["name"] == "clock.now"
+
+
+def test_create_accepts_a_supported_voice_records_it_and_applies_the_owner_profile(wired) -> None:
+    # ADR-0043: "arbor" is the owner's perceptual profile (not a wire voice); a session
+    # may request only a voice the provider offers; both are recorded for the benchmark.
+    client, _, runtime, _, _, _ = wired
+    from app.voice.realtime_sessions.persona import VOICE_STYLE_ARBOR_TR
+
+    created = _create(client)
+    assert created["voice"] is None
+    assert created["voice_profile"] == "arbor"
+    assert VOICE_STYLE_ARBOR_TR in created["instructions"]
+    state = client.get(f"/v1/voice/realtime/sessions/{created['session_id']}").json()
+    assert state["voice_profile"] == "arbor" and state["voice"] is None
+
+    # the simulator has no supported-voice list -> any well-formed id is recorded as is
+    chosen = _create(client, voice="cedar")
+    assert chosen["voice"] == "cedar"
+    chosen_state = client.get(f"/v1/voice/realtime/sessions/{chosen['session_id']}").json()
+    assert chosen_state["voice"] == "cedar"
+
+    # malformed ids never reach the provider
+    bad = client.post("/v1/voice/realtime/sessions", json={"voice": "Arbor!"})
+    assert bad.status_code == 422
+
+
+def test_create_refuses_a_voice_the_provider_does_not_offer(wired) -> None:
+    client, _, runtime, _, _, _ = wired
+    from app.voice.providers_openai_realtime import OpenAIRealtimeProvider
+
+    sim = runtime.providers[next(iter(runtime.providers))]
+    sim.require_supported_voice = OpenAIRealtimeProvider("k").require_supported_voice  # type: ignore[attr-defined]
+    try:
+        refused = client.post("/v1/voice/realtime/sessions", json={"voice": "arbor"})
+        assert refused.status_code == 422, refused.text
+        assert refused.json()["detail"]["details"]["supported_voices"][0] == "alloy"
+        ok = client.post("/v1/voice/realtime/sessions", json={"voice": "marin"})
+        assert ok.status_code == 201, ok.text
+    finally:
+        del sim.require_supported_voice

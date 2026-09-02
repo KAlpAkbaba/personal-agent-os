@@ -1771,3 +1771,52 @@ parameter name and fails only at bind time.
    `scripts/voice/fetch-benchmark.ps1` pulls the session state and the five-metric
    benchmark afterwards (credential in a masked prompt, one session minted and revoked,
    ids and timings only).
+
+## ADR-0043 — Voice target "Arbor" as a perceptual profile; background noise as a first-class acceptance defect (2026-09-02)
+
+Context: the first real microphone/WebRTC session (docs/VOICE_OWNER_FEEDBACK.md). The
+owner's verdict: generally good, do not redesign; preferred voice is ChatGPT's *Arbor*;
+the one major defect is that a very sensitive microphone lets ambient sound drive turns.
+
+Decisions:
+
+1. **Arbor is a profile, not a provider voice id.** Live discovery on 2026-09-02 (one
+   real client-secret mint with `voice: arbor`) was refused with the vendor's list:
+   `alloy, ash, ballad, coral, echo, sage, shimmer, verse, marin, cedar`. The system keeps
+   `owner_target_voice_profile = arbor` and never passes an unsupported id. The profile is
+   realised through what the provider does expose: the closest supported voice (candidates
+   `marin`, `cedar`; the winner is the owner's A/B verdict in the combined qualification),
+   the Arbor style block in the persona instructions (relaxed, warm, conversational, not
+   announcer-like, confident not formal, low theatricality, natural Turkish prosody,
+   moderate pace, smooth transitions, natural pauses, low fatigue, no exaggerated
+   cheerfulness, no "AI assistant" cadence) and output pacing (`audio.output.speed`).
+   `supported_voices()` on the adapter pins the vendor list with its discovery date, and a
+   session may request a voice only from it. If the provider later exposes Arbor, the
+   switch is configuration (`PAGENTOS_VOICE_REALTIME_OPENAI_VOICE=arbor`) followed by
+   qualification. No cloning or imitation of a proprietary voice.
+2. **Background noise is an acceptance defect with a layered, capability-driven fix on
+   the client** (ADR-0044 for the implementation): browser processing verified by
+   read-back, AGC benchmarked rather than assumed, non-invasive noise-floor calibration
+   with recalibration, local speech gating that combines energy, spectral cues and
+   temporal consistency but never hard-cuts quiet speech, the provider's semantic VAD left
+   in charge of end-of-turn, advanced denoising only behind a seam and measurements,
+   per-device microphone profiles, owner-facing modes with `Otomatik` default. Noise
+   reduction cleans input; local VAD decides whether speech is occurring; semantic VAD
+   decides whether the owner finished. Speech preservation outranks denoising: a
+   configuration that clips onsets, swallows Turkish consonants, pumps, chatters or adds
+   turn latency is rejected.
+3. **Echo is never solved by muting.** The assistant's own output is a feature to the
+   gate, not a reason to close the microphone; barge-in must work in headset and
+   open-speaker modes.
+4. **Voice character and noise processing are qualified together**, on the owner's
+   machine, with the 14-scenario matrix in docs/OWNER_ACTIONS.md. The revised voice target
+   is PROVEN_REAL only on the owner's confirmation of the six acceptance points in
+   VOICE_OWNER_FEEDBACK.md. Background human speech (TV, people) is tested honestly: generic
+   suppression cannot fully solve it; an owner-directed strategy (proximity/level,
+   conversational context, optional VoiceIdentity confidence that is never sole
+   authentication, trusted device/session context) is evaluated, not assumed.
+
+Consequences: server changes are small (voice request validated against the pinned list,
+speed, style block, the profile recorded on the session); the working realtime path is
+untouched; the owner never tunes DSP parameters - the system converges from calibration
+and the owner's verdicts.

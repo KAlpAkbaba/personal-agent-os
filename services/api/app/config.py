@@ -100,6 +100,13 @@ class Settings(BaseSettings):
     voice_realtime_openai_base_url: str = "https://api.openai.com/v1"
     voice_realtime_openai_model: str = "gpt-realtime-2.1"
     voice_realtime_openai_voice: str = "marin"
+    # ADR-0043: the owner's perceptual target is ChatGPT's "Arbor", which the Realtime
+    # API does not expose (live discovery 2026-09-02). The profile is realised through
+    # the closest supported voice + the style block in the persona + output pacing;
+    # "none" disables the style block. If the vendor ever exposes it, set the voice.
+    voice_realtime_owner_target_voice_profile: str = "arbor"
+    voice_realtime_voice_candidates: tuple[str, ...] = ("marin", "cedar")
+    voice_realtime_openai_speed: float = 1.0  # audio.output.speed; moderate pace = 1.0
     voice_realtime_openai_eagerness: str = "low"  # low | medium | high | auto
     voice_realtime_openai_transcription_model: str = "gpt-4o-transcribe"
     voice_realtime_openai_timeout_s: float = 15.0

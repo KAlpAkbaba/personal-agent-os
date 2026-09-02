@@ -753,7 +753,7 @@ def test_full_session_uses_only_the_ga_schema_no_beta_era_keys() -> None:
     }
     assert set(session["audio"]) == {"input", "output"}
     assert set(session["audio"]["input"]) == {"format", "transcription", "turn_detection"}
-    assert set(session["audio"]["output"]) == {"voice", "format"}
+    assert set(session["audio"]["output"]) == {"voice", "format", "speed"}
 
 
 def _path_present(body: dict, path: tuple[str, ...]) -> bool:
@@ -898,3 +898,46 @@ def test_registry_resolves_the_vendor_spelling() -> None:
     assert registry.get("research__start") is registry.get("research.start")
     assert registry.get("clock__now").name == "clock.now"
     assert registry.get("nope__tool") is None
+
+
+# ------------------------------------------ voice profile (ADR-0043, owner feedback 2026-09-02)
+
+
+def test_supported_voices_is_the_live_discovered_list_and_arbor_is_not_in_it() -> None:
+    from app.voice.providers_openai_realtime import SUPPORTED_VOICES
+
+    p = provider()
+    assert p.supported_voices() == SUPPORTED_VOICES
+    assert set(SUPPORTED_VOICES) == {"alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer",
+                                     "verse", "marin", "cedar"}
+    assert "arbor" not in SUPPORTED_VOICES
+    assert p.require_supported_voice("cedar") == "cedar"
+    with pytest.raises(VoiceError) as exc:
+        p.require_supported_voice("arbor")
+    assert exc.value.error_class is VoiceErrorClass.VALIDATION_ERROR
+    assert exc.value.details["supported_voices"] == list(SUPPORTED_VOICES)
+
+
+def test_output_speed_rides_the_audio_formats_layer_and_is_bounded() -> None:
+    from app.voice.providers_openai_realtime import MINIMAL_LAYERS
+
+    session = provider(speed=0.9).build_session_config(CONFIG)
+    assert session["audio"]["output"]["speed"] == 0.9
+    minimal = provider(speed=0.9).build_session_config(CONFIG, layers=MINIMAL_LAYERS)
+    assert "speed" not in minimal["audio"]["output"]  # the minimal contract stays exact
+    with pytest.raises(VoiceError):
+        provider(speed=3.0)
+    with pytest.raises(VoiceError):
+        provider(speed=0.1)
+
+
+def test_persona_carries_the_arbor_style_block_only_for_that_profile() -> None:
+    from app.voice.realtime_sessions.persona import VOICE_STYLE_ARBOR_TR, build_instructions
+
+    assert VOICE_STYLE_ARBOR_TR in build_instructions(voice_profile="arbor")
+    assert VOICE_STYLE_ARBOR_TR in build_instructions(voice_profile="Arbor")
+    assert VOICE_STYLE_ARBOR_TR not in build_instructions()
+    assert VOICE_STYLE_ARBOR_TR not in build_instructions(voice_profile="none")
+    # the block speaks about HOW to speak, never names a vendor voice id
+    for vendor_voice in ("marin", "cedar", "alloy"):
+        assert vendor_voice not in VOICE_STYLE_ARBOR_TR.lower()

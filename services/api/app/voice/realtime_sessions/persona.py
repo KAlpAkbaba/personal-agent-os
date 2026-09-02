@@ -34,15 +34,33 @@ EXECUTIVE_DEFAULTS_TR = (
 )
 
 
+#: ADR-0043: the owner's target voice character (ChatGPT "Arbor"), expressed as how to
+#: speak, because the provider does not expose that voice. Applied when the configured
+#: owner_target_voice_profile is "arbor"; any other value drops the block.
+VOICE_STYLE_ARBOR_TR = (
+    "Konuşma tarzın: rahat, doğal ve sıcak; sohbet eder gibi, sunucu gibi değil. "
+    "Kendinden emin ama resmi değil; abartısız, teatral olmayan bir ton. "
+    "Doğal Türkçe vurgu ve ezgiyle, orta hızda, cümleler arasında yumuşak geçişler ve "
+    "doğal duraklamalarla konuşursun. Hem kısa sohbete hem uzun dinlemeye uygun, "
+    "yormayan bir ses; aşırı neşe yok, yapay 'asistan' kadansı yok."
+)
+
+VOICE_STYLE_BLOCKS = {"arbor": VOICE_STYLE_ARBOR_TR}
+
+
 def build_instructions(
     prefs: VoicePreferences | None = None,
     *,
     narration_attached: bool = False,
     plan: dict[str, Any] | None = None,
     transcript_summary: str = "",
+    voice_profile: str | None = None,
 ) -> str:
     """Assemble the session instructions (Turkish persona + defaults + state)."""
     parts = [PERSONA_TR, EXECUTIVE_DEFAULTS_TR]
+    style = VOICE_STYLE_BLOCKS.get((voice_profile or "").lower())
+    if style:
+        parts.append(style)
     prefs = prefs or VoicePreferences()
     if not prefs.executive_summary_first:
         parts.append("Sahibi ayrıntılı anlatımı tercih ediyor; özetle başlamak zorunda değilsin.")
@@ -68,4 +86,5 @@ def build_instructions(
     return "\n".join(parts)
 
 
-__all__ = ["EXECUTIVE_DEFAULTS_TR", "PERSONA_TR", "build_instructions"]
+__all__ = ["EXECUTIVE_DEFAULTS_TR", "PERSONA_TR", "VOICE_STYLE_ARBOR_TR", "VOICE_STYLE_BLOCKS",
+           "build_instructions"]

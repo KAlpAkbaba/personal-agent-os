@@ -1,0 +1,22 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>mic caps</title>
+<pre id="out">loading</pre>
+<script>
+(async () => {
+  const out = {};
+  try { out.supportedConstraints = navigator.mediaDevices.getSupportedConstraints(); } catch (e) { out.supportedConstraintsError = String(e); }
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    out.devices = devices.map(d => ({ kind: d.kind, label: d.label, deviceId: d.deviceId.slice(0, 8), groupId: d.groupId.slice(0, 8) }));
+  } catch (e) { out.devicesError = String(e); }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: false, channelCount: 1 } });
+    const track = stream.getAudioTracks()[0];
+    out.track = { label: track.label, settings: track.getSettings(), capabilities: track.getCapabilities ? track.getCapabilities() : null };
+    track.stop();
+  } catch (e) { out.getUserMediaError = String(e); }
+  out.userAgent = navigator.userAgent;
+  document.getElementById("out").textContent = JSON.stringify(out, null, 2);
+})();
+</script>

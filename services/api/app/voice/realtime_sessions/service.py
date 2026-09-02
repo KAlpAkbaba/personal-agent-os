@@ -207,8 +207,10 @@ def _session_config(
         instructions=build_instructions(
             prefs, narration_attached=bool(ctx.get("narration_session_id")),
             plan=ctx.get("plan"), transcript_summary=row.transcript_summary,
+            voice_profile=ctx.get("voice_profile"),
         ),
         tools=tuple(registry.manifest()),
+        voice=ctx.get("voice"),
     )
 
 
@@ -224,6 +226,8 @@ def create_session(
     session_ttl_s: int = 3600,
     credential_ttl_s: int = 600,
     narration_session_id: uuid.UUID | None = None,
+    voice: str | None = None,
+    voice_profile: str | None = None,
     registry: ToolRegistry,
     selection: dict[str, Any] | None = None,
     trace_id: str | None = None,
@@ -251,6 +255,10 @@ def create_session(
             "barge_in_count": 0,
             "legs": 1,
             "selection": selection or {},
+            # ADR-0043: the requested wire voice (already validated against the
+            # provider) and the owner's perceptual profile, recorded for the benchmark
+            "voice": voice,
+            "voice_profile": voice_profile,
         },
         transcript_summary="",
         expires_at=now + timedelta(seconds=session_ttl_s),
@@ -266,7 +274,7 @@ def create_session(
         "provider": row.provider, "transport": row.transport, "client_kind": row.client_kind,
         "owner_session_id": str(owner.session_id), "expires_at": _iso(row.expires_at),
         "narration_session_id": row.context_json.get("narration_session_id"),
-        "selection": selection or {},
+        "selection": selection or {}, "voice": voice, "voice_profile": voice_profile,
     })
     _audit(db, ACTION_CREDENTIAL_MINTED, row, trace_id=trace_id, metadata={
         "provider": credential.provider, "session_ref": credential.session_ref,
@@ -293,6 +301,8 @@ def _leg_payload(
         "language": row.language,
         "expires_at": _iso(row.expires_at),
         "state": row.state,
+        "voice": (row.context_json or {}).get("voice"),
+        "voice_profile": (row.context_json or {}).get("voice_profile"),
     }
 
 
@@ -323,6 +333,8 @@ def session_state(db: Session, row: RealtimeSessionRow) -> dict[str, Any]:
         "last_intent": ctx.get("last_intent"),
         "fsm_state": ctx.get("fsm_state"),
         "barge_in_count": int(ctx.get("barge_in_count", 0)),
+        "voice": ctx.get("voice"),
+        "voice_profile": ctx.get("voice_profile"),
         "network": ctx.get("network"),
         "legs": int(ctx.get("legs", 1)),
         "pending_sideband_count": len(ctx.get("pending_sideband") or []),
