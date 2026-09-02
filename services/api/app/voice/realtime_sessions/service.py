@@ -767,14 +767,61 @@ def client_timing_rows(db: Session, session_id: uuid.UUID) -> list[dict[str, Any
     return [dict(r.metadata_json or {}) for r in rows]
 
 
+NOISE_COUNTERS = ("false_starts", "false_barge_ins", "false_turns", "gate_opens")
+
+
+def noise_summary(client_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """The microphone/noise evidence for QUALIFICATION rows 6.16-6.21 (ADR-0044).
+
+    The client reports CUMULATIVE counters in ``state`` events flagged
+    ``mic_metrics: 1`` and each calibration as ``mic_calibration: 1``; the last
+    counters row is the session total, the last calibration is the one in force.
+    Numbers only, by construction on both sides."""
+    counters: dict[str, Any] = {name: 0 for name in NOISE_COUNTERS}
+    last_metrics: dict[str, Any] | None = None
+    last_calibration: dict[str, Any] | None = None
+    calibrations = 0
+    for meta in client_rows:
+        if meta.get("kind") != "state":
+            continue
+        payload = meta.get("payload") or {}
+        if not isinstance(payload, dict):
+            continue
+        if payload.get("mic_metrics"):
+            last_metrics = payload
+        if payload.get("mic_calibration"):
+            calibrations += 1
+            last_calibration = payload
+    if last_metrics is not None:
+        for name in NOISE_COUNTERS:
+            value = last_metrics.get(name)
+            if isinstance(value, int | float):
+                counters[name] = int(value)
+    return {
+        "reported": last_metrics is not None,
+        **counters,
+        "calibrations": calibrations,
+        "calibration": {k: v for k, v in (last_calibration or {}).items()
+                        if k != "mic_calibration"},
+        "metrics": {k: v for k, v in (last_metrics or {}).items() if k != "mic_metrics"},
+    }
+
+
 def benchmark_report(db: Session, row: RealtimeSessionRow) -> RealtimeBenchReport:
     """The five metrics from the CLIENT's reported timestamps (spec §8):
-    acceptance evidence when the client is the owner's real machine."""
-    events = events_from_client_reports(client_timing_rows(db, row.id))
+    acceptance evidence when the client is the owner's real machine. The
+    ``noise`` block (ADR-0044) carries the session's false-start/turn counters
+    and the calibration in force, so the noise matrix is read from the same
+    document as the latency metrics."""
+    rows = client_timing_rows(db, row.id)
+    events = events_from_client_reports(rows)
     return build_report(
         events, source=SOURCE_CLIENT,
         context={"session_id": str(row.id), "provider": row.provider,
-                 "transport": row.transport, "client_kind": row.client_kind},
+                 "transport": row.transport, "client_kind": row.client_kind,
+                 "voice": (row.context_json or {}).get("voice"),
+                 "voice_profile": (row.context_json or {}).get("voice_profile"),
+                 "noise": noise_summary(rows)},
     )
 
 
@@ -804,6 +851,7 @@ __all__ = [
     "get_session",
     "get_tool_call",
     "handle_tool_call",
+    "noise_summary",
     "record_client_events",
     "require_leg",
     "require_live",

@@ -4,7 +4,7 @@
   "current_milestone": "M12_REALTIME_VOICE_FOUNDATION",
   "status": "IN_PROGRESS_AWAITING_OWNER_CREDENTIAL",
   "last_completed_milestone": "REAL_CLOUD_BRINGUP",
-  "last_updated": "2026-09-02T22:20:00+03:00",
+  "last_updated": "2026-09-03T00:20:00+03:00",
   "qualification": {
     "matrix": "docs/QUALIFICATION.md",
     "owner_queue": "docs/OWNER_ACTIONS.md",
@@ -23,7 +23,7 @@
     "last_updated": "2026-09-02"
   },
   "owner_actions_pending": [
-    "CURRENT: real Turkish microphone / WebRTC session (docs/OWNER_ACTIONS.md item 7): start-web-voice.ps1, sign in once, run the Turkish script, fetch-benchmark.ps1, paste the JSON + notes. Later: Chrome authorisation for M13; a phone for M15.",
+    "CURRENT: docs/OWNER_ACTIONS.md item 8 - combined Arbor-like voice A/B + 14-scenario noise qualification on the K66 (start-web-voice.ps1, /voice, fetch-benchmark.ps1). Later: Chrome authorisation for M13; a phone for M15.",
     "M8 asset enrollment: enroll the real hosts/networks/devices you authorize, with evidence and scope.",
     "HARD GATE - runtime confinement before enabling any I/O-capable generated operation or a non-deterministic skill generator (M7 review verdict (d)).",
     "Deferred: 2.2b fresh-logon companion autostart and full Windows reboot proof land incidentally at the next natural sign-out/reboot.",
@@ -50,9 +50,12 @@
     "tests": "API unit 1533 -> 1609 (+ realtime sessions/sideband/adapter/bench/intents); Agent.Tests 138 -> 145 (existing unmodified); Companion.Audio.Tests 0 -> 134; apps/web vitest 0 -> 36; PS5.1 cloud-secret suite 33 (real native fake ssh); 44 scripts syntax-linted",
     "qualification": "docs/QUALIFICATION.md Stage 6: 14 rows pre-registered, all NOT_YET_PROVEN. Simulator/fakes gate the code and prove nothing.",
     "known_unverified": "vendor Turkish quality; usable ephemeral lifetime under real media (credential-time TTL is honoured: 59 s observed for 60 s); provider speech-during-tool behaviour; all WASAPI code untested on hardware; companion session.update codec still beta-era names (credential-time config proven live)",
-    "next": "OWNER: the real Turkish microphone/WebRTC session via scripts/voice/start-web-voice.ps1 -> http://localhost:3000/voice, then scripts/voice/fetch-benchmark.ps1 (docs/OWNER_ACTIONS.md item 7). Only that can move Stage 6 rows 6.1-6.14.",
+    "next": "OWNER: combined voice-character + noise qualification session (docs/OWNER_ACTIONS.md item 8): Part A Marin/Cedar A/B, Part B the 14-scenario noise matrix in Otomatik, Part C fetch-benchmark.ps1 -> rows 6.15-6.21.",
     "last_updated": "2026-09-02",
     "live_provider_contract": "PROVEN LIVE 2026-09-02 with gpt-realtime-2.1 (ADR-0038 addendum): minimal client_secrets contract + every M12 layer (expires_after, output_modalities, audio_formats, transcription tr, semantic_vad low + interrupt_response, instructions, tools) minted; vendor echo confirms GA nesting; cedar accepted; model discovery shows nothing newer than 2.1. One incompatibility found and fixed: dotted tool names -> reversible '.'<->'__' mapping at the vendor boundary.",
-    "cloud_release_status": "RELEASED and PROVEN_REAL 2026-09-02 (QUALIFICATION 6.0): the owner's release put fb9d52e on pagentos-core - key PRESENT in the running container, migration 0011, container Healthy, health providers ['openai-realtime'], a real client-secret mint from Hetzner. Independently re-read from Windows over the tailnet (RELEASE marker = HEAD, status ok, providers ['openai-realtime'], simulator disabled in prod). The one defect was in the local report (glued parameter token) -> fixed, AST lint added, release driver idempotent."
+    "cloud_release_status": "RELEASED and PROVEN_REAL 2026-09-02 (QUALIFICATION 6.0): the owner's release put fb9d52e on pagentos-core - key PRESENT in the running container, migration 0011, container Healthy, health providers ['openai-realtime'], a real client-secret mint from Hetzner. Independently re-read from Windows over the tailnet (RELEASE marker = HEAD, status ok, providers ['openai-realtime'], simulator disabled in prod). The one defect was in the local report (glued parameter token) -> fixed, AST lint added, release driver idempotent.",
+    "owner_feedback_2026_09_02": "docs/VOICE_OWNER_FEEDBACK.md: realtime experience generally good (keep architecture); target voice ChatGPT Arbor (API refuses 'arbor'; supported list pinned as SUPPORTED_VOICES); primary defect = background noise with an unusually sensitive K66 microphone. Not milestone-complete: focused quality optimisation.",
+    "voice_target": "ADR-0043: owner_target_voice_profile=arbor as a perceptual profile (persona style block VOICE_STYLE_ARBOR_TR + audio.output.speed, proven live; candidates marin/cedar for the owner's A/B; POST /sessions accepts a voice only from the provider's list, fail-closed when a provider declares none). Winner decided by the owner in the combined qualification.",
+    "noise_pipeline": "ADR-0044 on main (f34cfd6): browser read-back incl. voiceIsolation/suppressLocalAudioPlayback, AGC A/B benchmark, 1.8 s noise-floor calibration with drift-triggered recalibration, calibrated local speech gate (energy x spectral x temporal; energy alone cannot open it; pre-roll + hang; never mutes), per-device MicrophoneProfile (localStorage, K66 gets its own), modes Otomatik/Sessiz/Gurultulu/Cok gurultulu, diagnostics with copyable MediaTrack settings, Marin/Cedar selector, false-start/false-barge-in/false-turn counters reported as numbers and aggregated into the benchmark's context.noise. Denoiser + uplink shaper left as seams behind measurements. Reviews: security (1 Low fixed fail-closed; static page removed), test-engineer in flight."
   }
 }

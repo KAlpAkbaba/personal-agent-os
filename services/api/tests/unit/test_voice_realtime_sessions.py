@@ -620,11 +620,11 @@ def test_create_accepts_a_supported_voice_records_it_and_applies_the_owner_profi
     state = client.get(f"/v1/voice/realtime/sessions/{created['session_id']}").json()
     assert state["voice_profile"] == "arbor" and state["voice"] is None
 
-    # the simulator has no supported-voice list -> any well-formed id is recorded as is
-    chosen = _create(client, voice="cedar")
-    assert chosen["voice"] == "cedar"
-    chosen_state = client.get(f"/v1/voice/realtime/sessions/{chosen['session_id']}").json()
-    assert chosen_state["voice"] == "cedar"
+    # the simulator declares no supported-voice list -> a client-chosen voice is REFUSED
+    # (fail closed; security review 2026-09-02), never forwarded by omission
+    unlisted = client.post("/v1/voice/realtime/sessions", json={"voice": "cedar"})
+    assert unlisted.status_code == 422, unlisted.text
+    assert "declares no supported voices" in unlisted.json()["detail"]["message"]
 
     # malformed ids never reach the provider
     bad = client.post("/v1/voice/realtime/sessions", json={"voice": "Arbor!"})
@@ -645,3 +645,36 @@ def test_create_refuses_a_voice_the_provider_does_not_offer(wired) -> None:
         assert ok.status_code == 201, ok.text
     finally:
         del sim.require_supported_voice
+
+
+def test_benchmark_carries_the_noise_counters_and_the_calibration_in_force(wired) -> None:
+    # ADR-0044: the client reports cumulative mic counters and calibrations as numbers in
+    # "state" events; the benchmark the owner fetches must carry them (rows 6.16-6.21).
+    client, *_ = wired
+    sid = _create(client)["session_id"]
+    r = client.post(f"/v1/voice/realtime/sessions/{sid}/events", json={"events": [
+        {"kind": "state", "t_ms": 10, "payload": {"mic_calibration": 1, "noise_floor_db": -58.5,
+                                                   "env": 1, "clip_risk": 0}},
+        {"kind": "state", "t_ms": 500, "payload": {"mic_metrics": 1, "false_starts": 1,
+                                                    "false_barge_ins": 0, "false_turns": 0,
+                                                    "gate_opens": 3}},
+        {"kind": "state", "t_ms": 900, "payload": {"mic_calibration": 1, "noise_floor_db": -49.0,
+                                                   "env": 2, "clip_risk": 0}},
+        {"kind": "state", "t_ms": 2000, "payload": {"mic_metrics": 1, "false_starts": 2,
+                                                     "false_barge_ins": 1, "false_turns": 1,
+                                                     "gate_opens": 7, "session_end": 1}},
+        {"kind": "state", "t_ms": 2001, "payload": {"state": "IDLE"}},
+    ]})
+    assert r.status_code == 200, r.text
+    bench = client.get(f"/v1/voice/realtime/sessions/{sid}/benchmark").json()
+    noise = bench["context"]["noise"]
+    assert noise["reported"] is True
+    assert (noise["false_starts"], noise["false_barge_ins"], noise["false_turns"],
+            noise["gate_opens"]) == (2, 1, 1, 7)
+    assert noise["calibrations"] == 2 and noise["calibration"]["noise_floor_db"] == -49.0
+    assert noise["metrics"]["session_end"] == 1 and "mic_metrics" not in noise["metrics"]
+    assert bench["context"]["voice_profile"] == "arbor"
+    # a session without any mic report says so instead of pretending zeros are evidence
+    empty = _create(client)["session_id"]
+    empty_bench = client.get(f"/v1/voice/realtime/sessions/{empty}/benchmark").json()
+    assert empty_bench["context"]["noise"]["reported"] is False

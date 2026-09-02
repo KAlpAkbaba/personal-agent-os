@@ -235,10 +235,17 @@ async def create_session(request: Request, body: CreateSessionRequest) -> dict[s
     transport = body.transport or selection.transport
     voice = body.voice
     if voice is not None:
+        # Fail closed (security review 2026-09-02): a provider that declares no
+        # supported-voice list gets no client-chosen voice at all, so a future adapter
+        # can never forward an unvetted string to a vendor by omission.
         require = getattr(provider, "require_supported_voice", None)
+        if require is None:
+            raise HTTPException(status_code=422, detail={
+                "error_class": "validation_error",
+                "message": f"provider {provider.name!r} declares no supported voices; "
+                           "omit 'voice' to use its default"})
         try:
-            if require is not None:
-                require(voice)
+            require(voice)
         except VoiceError as exc:
             _raise_http(exc)
     profile = (runtime.settings.voice_realtime_owner_target_voice_profile or "").strip().lower()
