@@ -4,7 +4,7 @@
   "current_milestone": "REAL_CLOUD_BRINGUP",
   "status": "IN_PROGRESS",
   "last_completed_milestone": "LOCAL_WINDOWS_QUALIFICATION",
-  "last_updated": "2026-09-02T11:40:00+03:00",
+  "last_updated": "2026-09-02T12:30:00+03:00",
   "qualification": {
     "matrix": "docs/QUALIFICATION.md",
     "owner_queue": "docs/OWNER_ACTIONS.md",
@@ -32,7 +32,7 @@
     "status": "PASS",
     "last_run": "2026-09-01",
     "scope": "Full gate: secret hygiene (incl. shape-based pagentos credential scan), ruff, API unit + integration, PS5.1 suites (syntax+API-lint 30 scripts, strictmode 21, invocation 28, deploy 11, ACL 26, machine-readable 18, identity-restore 5 with a real loopback enrollment), recovery supervisor, browser, Windows agent 134 xUnit, web build. Exit 0.",
-    "ci": "GREEN 2026-09-01: secret hygiene (incl. shape-based credential scan), API lint+unit (1324), API integration, recovery supervisor, browser unit+e2e, Windows agent 134 xUnit + 7 PS5.1 suites on the real 5.1 engine, web build. Every job bounded with timeout-minutes."
+    "ci": "GREEN 2026-09-02 on f33718e (7/7): secret hygiene incl. shape-based credential scan, API lint+unit (1324), API integration, recovery supervisor, browser unit+e2e, Windows agent 134 xUnit + NINE PS5.1 suites on the real 5.1 engine (syntax+API lint, strictmode, invocation, deploy, ACL, machine-readable, identity-restore, provisioning+collision lint, config-swap), web build. Every job bounded with timeout-minutes."
   },
   "notes": "Local Windows qualification is the first milestone proven end-to-end on real infrastructure rather than fixtures. What it added beyond M1-M9: transactional journaled deployment with verified-stop and symmetric restart; ACL correctness as part of the state write primitive (ADR-0029); the identity verb so PowerShell never touches key material (ADR-0030); schema-safe optional-property accessors and proof-based broker reuse (ADR-0031); a machine-readable child protocol that cannot lose a committed rotation; and a permanent secret-shape scanner. Next: REAL_CLOUD_BRINGUP - GitHub private repo + CI (after gh auth), Tailscale enrollment both ends, Hetzner provisioning from infra/opentofu, Cloud Core deployed on the production database model, agent switched from loopback to the tailnet endpoint WITHOUT reinstall/reenroll, then the full remote command path and resilience matrix. Optimization (M10) stays gated until real cloud qualification completes."
 }
