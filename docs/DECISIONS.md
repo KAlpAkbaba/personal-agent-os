@@ -809,3 +809,55 @@ not happen — check the world, not the traceback. And an assertion anchored on 
 *message* is anchored on the host's display language: the first version of the collision
 test matched "SwitchParameter" and failed on this Turkish-language machine, so it now
 matches the exception type instead.
+
+## Incident — `File.Replace` and the empty third argument (2026-09-02)
+
+The real agent migration got through cloud health, the identity read and the existing-device
+registration, then died switching the broker endpoint:
+
+    Exception calling "Replace" with "3" argument(s): "The path is not in a valid format."
+
+Diagnosed by probing the call before changing anything. The overload is
+`System.IO.File.Replace(String, String, String)` — there is only one with three parameters.
+The source and destination were absolute, rooted, existing, and in a directory containing a
+space; both fine. The third argument was the defect: **PowerShell binds `$null` to a
+`[string]` parameter as an empty string**, and `File.Replace` refuses `""` as a path.
+Passing `[NullString]::Value` succeeds; passing a real backup path on the same volume
+succeeds *and* produces the rollback copy inside the same atomic NTFS operation.
+
+State on the machine when it failed, established before touching anything: the live
+`appsettings.json` still pointed at `127.0.0.1`, untouched; the staging file and the
+backup copy had been written beforehand and were harmless. The failed call had no side
+effect on the live file — `File.Replace` validates its arguments first.
+
+Decisions:
+
+1. **The transactional primitive is a library, not inline code** —
+   `scripts/lib/ConfigSwap.ps1`. It never passes null or empty for the backup; every path
+   is `GetFullPath`-normalised and required to be rooted (nothing depends on the current
+   directory); staging file and backup must live in the destination's own directory, so
+   all three are on one volume and the replace is atomic rather than a copy; a stale
+   staging file from an interrupted attempt is overwritten, not trusted; an existing
+   backup is overwritten; the staged content is validated (JSON, the runtime identity
+   keys preserved, endpoints well-formed) **before** it goes live and read back
+   **after**, byte for byte; the DACL is checked afterwards rather than assumed — an
+   empty DACL on a config file has already taken this service down once; and applying
+   the same bytes twice is a no-op that reports `Replaced = $false`.
+2. **`switch-agent-broker.ps1` is a transaction with a journal**: probe the new broker →
+   read → stage → validate → stop runtime → atomic replace → verify ACL → start runtime →
+   verify (service + companion + pipe, and the cloud still answers, and the live file says
+   the new URL) → commit. Any failure after the replace restores the previous
+   configuration atomically from the backup, restarts, re-verifies, and only then throws.
+   `-Rollback` does the same on demand; the failed configuration is kept aside as
+   `appsettings.json.failed` for diagnosis.
+3. **Only the broker keys change.** `DataDir`, `PipeName`, `CompanionSid` and
+   `CompanionImagePath` are the qualified runtime's identity and are preserved verbatim;
+   a configuration missing any of them is refused as "not the installed agent's".
+4. `migrate-agent-to-cloud.ps1 -StartPhase SwitchBroker` resumes at the switch without
+   re-reading machine material or re-registering — the completed cloud steps stay done.
+
+13 tests in `config-swap.tests.ps1`, all against real files in a directory whose name
+contains a space: the incident reproduced (`$null` → `ArgumentException`, live file
+untouched), absolute-path and same-volume enforcement, the replace itself, a stale staging
+file, an existing backup, validation before going live, the caller's validator refusing a
+config that lost its identity, rollback, idempotence, and the post-replace DACL.

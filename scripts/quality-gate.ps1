@@ -276,6 +276,16 @@ if (-not $Fast) {
     } finally { Pop-Location }
   }
 
+  Invoke-Step "Config swap transaction (PS5.1)" {
+    # A real broker switch died inside [IO.File]::Replace: PowerShell binds $null to a
+    # [string] parameter as an EMPTY string, which .NET refuses as a path. These reproduce
+    # it and prove the transactional replace: same-volume staging + real backup, stale
+    # staging files, existing backups, validation before going live, rollback, idempotence.
+    $script = Join-Path $repoRoot "scripts\tests\config-swap.tests.ps1"
+    & (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -NoProfile -File $script
+    Assert-ExitCode "config swap tests"
+  }
+
   Invoke-Step "Provisioning + parameter collisions (PS5.1)" {
     # A real provisioning run applied four billable resources and then died assigning the
     # result over its own [switch]$Apply parameter - PowerShell variable names are

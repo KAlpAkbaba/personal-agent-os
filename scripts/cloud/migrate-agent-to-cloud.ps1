@@ -31,7 +31,14 @@ param(
     [string]$DataDir = (Join-Path $env:ProgramData "PagentOS\agent"),
     [string]$InstallRoot = (Join-Path $env:ProgramFiles "PagentOS\agent"),
     [string]$ServiceName = "PagentOSDeviceAgent",
-    [switch]$SkipSwitch
+    [switch]$SkipSwitch,
+
+    # Phase resumability. "SwitchBroker" skips the identity read and the cloud registration
+    # (already done on the real machine) and resumes at the broker switch; "All" runs
+    # everything. Idempotent either way: registration re-runs are harmless, but there is no
+    # reason to re-read machine material for a step that already completed.
+    [ValidateSet("All", "SwitchBroker")]
+    [string]$StartPhase = "All"
 )
 
 $ErrorActionPreference = "Stop"
@@ -40,6 +47,7 @@ Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot "..\lib\NativeProcess.ps1")
 
 $shouldSwitch = -not [bool]$SkipSwitch
+$resumeAtSwitch = ($StartPhase -eq "SwitchBroker")
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $ssh = Join-Path $env:SystemRoot "System32\OpenSSH\ssh.exe"
 $scp = Join-Path $env:SystemRoot "System32\OpenSSH\scp.exe"
@@ -60,6 +68,11 @@ $baseUrl = "http://${BrokerHost}:$Port"
 $health = Invoke-RestMethod -Uri "$baseUrl/v1/system/health" -TimeoutSec 20
 Write-Host "  $baseUrl -> status=$($health.status) version=$($health.version)"
 
+if ($resumeAtSwitch) {
+    Write-Host ""
+    Write-Host "=== 2-3. skipped (-StartPhase SwitchBroker): identity already read and device already registered in the cloud ===" -ForegroundColor Cyan
+}
+else {
 # --------------------------------------------------- 2. this device's identity, non-secret
 Write-Host ""
 Write-Host "=== 2. reading the device's own identity (public half only) ===" -ForegroundColor Cyan
@@ -117,6 +130,7 @@ try {
 finally {
     Remove-Item -LiteralPath $documentPath -Force -ErrorAction SilentlyContinue
 }
+}   # end of the identity + registration phases
 
 # ------------------------------------------------------------- 4. point the agent at it
 if (-not $shouldSwitch) {

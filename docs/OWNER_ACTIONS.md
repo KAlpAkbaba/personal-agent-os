@@ -21,29 +21,27 @@ Status vocabulary matches `docs/QUALIFICATION.md`: `PROVEN_REAL`, `PROVEN_PROXY`
 
 ## Now
 
-**Run the break-glass session.** The Hetzner host exists and is healthy, but it never
-joined the tailnet: `pagentos-core` is absent from the Tailscale machine list entirely, so
-the auth key baked in at first boot was never accepted (expired, already spent, or not
-pre-authorized). The host has no public SSH by design, so the fix has to come through a
-temporary window.
+**Resume the migration at the broker switch.** The cloud steps are done and stay done:
+Cloud Core healthy on the tailnet, the device's public identity read, the existing device
+registered in the cloud database with its id and capabilities intact, no private key
+transported. The switch itself failed inside `File.Replace` (PowerShell hands `$null` to a
+`[string]` parameter as an empty string, which .NET refuses as a path) and left the live
+configuration untouched - the agent still points at `127.0.0.1`.
 
-In a normal (non-elevated) PowerShell, with the Hetzner token set in that shell:
+In an **elevated** PowerShell at the repository root:
 
 ```powershell
-$env:TF_VAR_hcloud_token = '...'
-.\scripts\cloud\breakglass-ssh.ps1
+.\scripts\cloud\migrate-agent-to-cloud.ps1 -BrokerHost 100.90.158.26 -StartPhase SwitchBroker
 ```
 
-What it does, in order: opens TCP/22 to **your public IP only** (firewall resource alone -
-the running server is never in the plan), waits for the port, collects cloud-init and
-tailscaled diagnostics, then runs `tailscale up` **without any auth key**. That prints a
-one-time login URL which it shows you; open it, approve the machine, and it joins your
-existing tailnet as an ordinary non-ephemeral node. The script then verifies the node from
-this PC and **closes the SSH rule in a `finally`**, on success or failure alike.
+It skips the completed steps, runs the switch as a journaled transaction (stage -> validate ->
+stop -> atomic replace with a real backup -> verify ACL -> start -> verify -> commit, with
+rollback to the previous configuration on any failure), then bootstraps the cloud's own
+owner credential **in your console, once** via Tailscale SSH, and mints a DPAPI-encrypted
+automation session so the credential is typed exactly once. Put that credential in your
+password manager when it appears.
 
-No key or token is ever typed into chat, written to disk, or printed. If anything goes
-wrong mid-session, `.\scripts\cloud\breakglass-ssh.ps1 -CloseOnly` shuts the window on
-its own.
+Rollback at any time: `.\scripts\switch-agent-broker.ps1 -Rollback`.
 
 ---
 
