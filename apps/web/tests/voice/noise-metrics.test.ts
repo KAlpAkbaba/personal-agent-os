@@ -169,6 +169,25 @@ describe("noise qualification metrics (ADR-0044 §7)", () => {
     }
   });
 
+  it("a reattach re-wires the local gate instead of stacking sinks: one calibration, one speech start, reported once", async () => {
+    const t = await setup();
+    // The same path a network restore uses: the leg drops, attach opens a new one.
+    t.transport.emit({ type: "disconnected", at: 100, reason: "peer_failed" });
+    await tick(8);
+    expect(t.controller.getSnapshot().state).toBe("listening");
+    expect(t.localSpeech.started).toBe(2); // detector restarted on the new leg
+    t.log.length = 0;
+    t.localSpeech.emitCalibration({ noise_floor_db: -47 });
+    t.scheduler.advance(500);
+    t.localSpeech.speechStart(600);
+    await t.controller.flushEvents();
+    expect(t.log.filter((op) => op === "report.mic_calibration")).toHaveLength(1);
+    expect(t.core.events.filter((e) => e.kind === "state" && e.payload?.mic_calibration === 1)).toHaveLength(1);
+    expect(t.core.events.filter((e) => e.kind === "mic_speech_start")).toHaveLength(1);
+    expect(t.controller.getSnapshot().turn).toBe(1);
+    expect(t.controller.getSnapshot().micMetrics.noise_floor_db).toBe(-47);
+  });
+
   it("the metric payload builder drops anything that is not a safe number", () => {
     const built = numbersOnly({
       rms_db: -42.2,
