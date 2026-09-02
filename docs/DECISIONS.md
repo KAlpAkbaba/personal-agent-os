@@ -1008,3 +1008,103 @@ Decisions:
 7. Provider credentials are owner-provisioned and stored in the existing secret store,
    never in the repository; the credential ask is deferred until the real-provider adapter
    exists behind the abstraction and a fake-provider run already passes.
+
+## ADR-0035 — M12 track C: the desktop audio client is an additive companion library (2026-09-02)
+
+Status: Accepted (track C of ADR-0034; server tracks A/B/E are built in parallel from the
+same `docs/M12_REALTIME_VOICE_SPEC.md` contract)
+
+Context: the Session Companion is the only PagentOS process in the owner's interactive
+session, so it is the only place microphone and speaker access can live (the DeviceService
+is LocalSystem in Session 0 and must never touch audio). The companion, its named-pipe IPC,
+DACLs, admission policy and the installer are qualified and FROZEN (QUALIFICATION Stages
+1–2, 5). The audio client must therefore be additive: it may ship inside the companion
+binary through the existing deployment engine, and it may change nothing the owner
+qualified.
+
+Decisions, each reversible at the seam named:
+
+1. **A separate class library, `devices/windows-agent/src/PagentOS.Companion.Audio`,
+   referenced by `PagentOS.SessionCompanion`.** The installer publishes the companion
+   csproj, so a `ProjectReference` ships with it and `scripts/` is untouched. Alternative
+   rejected: a folder inside the companion project — it would put NAudio and the voice
+   surface into the qualified project's own compilation unit for no deployment gain.
+2. **Voice is OFF unless asked for, and cannot take the pipe loop down.** The companion's
+   `Program.cs` gains one flag-gated hook (`--voice`, or `PAGENTOS_AGENT_VoiceEnabled=true`
+   plus `PAGENTOS_AGENT_CloudCoreUrl`); the shipped `appsettings.json` says `false`, and a
+   test parses that shipped file and asserts the posture (the ADR-0028 addendum lesson:
+   the default that ships is the one that must be tested). Voice runs beside
+   `CompanionRuntime.RunAsync`, never inside it, and any failure only logs.
+3. **NAudio 2.2.1 (MIT) for WASAPI**; only the `Wasapi/` folder references it. Capture
+   is opened at the engine mix format and converted by a dependency-free
+   `PcmConverter`; playback is a `BufferedWaveProvider` under `WasapiOut` that stays
+   open between responses, and `StopImmediately` is a buffer clear so the residual audible
+   audio is exactly the device period (50 ms), which is reported rather than hidden.
+4. **Echo cancellation / noise suppression — what is real and what is deferred.** Real
+   now: (a) the capture stream is opened with `IAudioClient2::SetClientProperties`
+   category `Communications`, the one Windows 10 (19045) lever that engages a driver's own
+   voice-processing APOs (AEC/NS/AGC on most laptop microphone arrays), with a watchdog
+   fallback to a plain stream if the category path yields nothing; (b) a client-side DC
+   blocker and energy noise gate; (c) an echo-aware VAD: while the assistant is audible
+   through loudspeakers (render device not headset-like) the onset threshold rises by a
+   margin so the speakers do not barge in on themselves. Deferred, and written into the
+   session's audit row as such: software AEC/NS of WebRTC APM class (no maintained managed
+   port; native build later), Windows 11's `IAcousticEchoCancellationControl` (needs build
+   22621+), and provider-side noise reduction (Cloud Core's session config, track A/B).
+5. **WebSocket media leg first; WebRTC is a separated, explicitly deferred adapter.**
+   `IMediaLeg` is the seam; `WebSocketMediaLeg` is real (PCM16 base64 over the provider's
+   JSON events, proven against a loopback Kestrel provider); `WebRtcMediaLeg` throws
+   `NotSupportedException` and `MediaLegFactory` refuses a `webrtc` grant loudly instead of
+   downgrading, while the client asks Cloud Core for `websocket` in its transport
+   preference. SIPSorcery (BSD-3, maintained, ICE/DTLS-SRTP/data channel) was evaluated
+   as the candidate and not added: it needs an Opus codec (Concentus or a native encoder)
+   and a live provider to validate, neither of which exists offline; the WebSocket leg
+   reaches the same session contract today.
+6. **Provider wire mapping is a pure codec (`OpenAiRealtimeWireCodec`), no model names.**
+   Cloud Core's grant is already bound to a model; any provider-specific session settings
+   arrive in the grant's `provider_session_config` and are forwarded verbatim. A tool's
+   final result after a provisional "running + preamble" output is submitted as a
+   follow-up conversation item that names the `call_id`, because a function output cannot
+   be amended once sent.
+7. **Barge-in order is enforced by construction**: `BargeInController` stops playback
+   before any await, records the cut, cancels the provider, latches, then reports
+   `barge_in` with the measured `playback_stopped_ms` and `playback_stopped`; the FSM
+   refuses to latch without a recorded cut. The M4 FSM (`realtime.py`) is mirrored state
+   for state and event for event, plus timestamps.
+8. **Turkish hesitation guard is a pure function of evidence** (`HesitationGuard`):
+   fillers (şey/yani/hani/ııı/eee/hmm, elongated tokens), connectives (ve/ama/çünkü…) and
+   an acoustic prolongation heuristic (a steady final voiced run ≥ 350 ms) each extend the
+   trailing-silence requirement, additively and capped. In `Server` end-of-turn mode
+   (default, per ADR-0034 semantic VAD) it times events and reports its verdict; in
+   `Client` mode it is decisive and the client commits the turn.
+9. **The sideband reuses the owner's existing DPAPI secret store, not a new one.** The
+   companion reads `%LOCALAPPDATA%\PagentOS\secrets\PAGENTOS_OWNER_SESSION_TOKEN.dpapi`
+   (written by `complete-device-enrollment.ps1` / `rotate-owner-credential.ps1` via
+   `ConvertFrom-SecureString`) through crypt32 directly, in the owner's session — the
+   only place it decrypts. A test round-trips through the real `powershell.exe` in both
+   directions. The two-domain rule from QUALIFICATION 2.6 holds: owner material stays
+   owner-scoped, and the Session-0 service still uses no DPAPI.
+10. **Event reporting is at-least-once with a per-session `client_seq`**, one event per
+    `POST .../events`, queued while offline and re-sent unchanged (never renumbered) on
+    `network_restored`, so Cloud Core can make it exactly-once. Tool-call relay is
+    idempotent on `call_id` at both ends: a duplicate provider event joins the in-flight
+    call; a transient failure retries with the same id.
+11. **Latency is measured by the client, offline first.** `LatencyRecorder` stamps the
+    five §8 metrics from monotonic timestamps; `OfflineVoiceBench` (and the
+    `PagentOS.Companion.Audio.Bench` console) runs the real orchestrator against fake
+    devices, a scripted provider and an in-process fake Cloud Core and prints them with an
+    explicit disclaimer that they are gate numbers, not the owner's machine.
+
+Open questions for the integrator (server track A), recorded rather than guessed at
+silently: the exact body of `POST .../events` (this client sends one
+`{event, client_seq, client_ts_ms, data}` per call); the credential object's key (this
+client accepts `value`, `client_secret[.value]`, `token`, `key`, `secret`,
+`ephemeral_key`, plus an optional `url`); whether `POST .../attach` exists in the first
+server cut (this client treats 404/410 as "session gone"); and which authenticated WS
+surface carries the sideband pushes to the companion — track C defines
+`ISidebandPushSource` with a fake and leaves the real transport unwired.
+
+Consequences: the qualified runtime is unchanged in behaviour; the companion binary gains
+one assembly and NAudio, which the deployment engine redeploys as any other companion
+change. Real acceptance (spec §10 order of proof) still needs the owner's microphone,
+which nothing here attempted.

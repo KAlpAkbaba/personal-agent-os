@@ -13,6 +13,9 @@ discriminator).
 | `src/PagentOS.DeviceService` | Background worker (Windows Service-capable via `AddWindowsService`, runs as console in dev). Owns keys/config/state and the named-pipe **server** for the companion. CLI verbs: `enroll`, `run`. |
 | `src/PagentOS.SessionCompanion` | Console app for the interactive owner session. Connects to the service pipe, executes `desktop.open_application` against a configurable allowlist (default: `notepad`, `calc`) and `desktop.open_artifact` against an artifact-root + extension allowlist, reconnects with backoff. |
 | `tests/PagentOS.Agent.Tests` | xUnit suite: schema fixtures, signature verification, idempotency/LRU, backoff bounds, allowlist, real named-pipe round trips, and a Kestrel fake broker covering handshake, duplicate delivery, cancel, malformed frames and broker-restart reconnection. |
+| `src/PagentOS.Companion.Audio` | M12 track C (ADR-0035): the realtime voice client, additive to the companion. WASAPI capture/playback with device enumeration and switching (NAudio), a Communications-category capture path for driver AEC/NS with fallback, DC blocker + noise gate, echo-aware energy VAD, the Turkish hesitation guard, the M4-faithful client FSM, stop-playback-first barge-in, the WebSocket media leg with a pure OpenAI wire codec (WebRTC adapter reserved, deferred), the Cloud Core sideband (session, tool-call relay, event reporting, reattach) over the DPAPI-stored owner session token, and an in-process fake Cloud Core + deterministic fake media leg for tests and the bench. |
+| `src/PagentOS.Companion.Audio.Bench` | Offline latency harness: the real client against fake devices, a scripted provider and the fake Cloud Core; prints mic→uplink, end-of-turn→first audio, barge-in→playback stopped, tool preamble and tool-done→speech. `--list-devices` enumerates real WASAPI endpoints without opening a stream. |
+| `tests/PagentOS.Companion.Audio.Tests` | xUnit: FSM ordering, barge-in stop→cancel→report with measured latency, hesitation guard and end-of-turn detector on synthetic frames, device selection/switching, sideband idempotency (client_seq, call_id, retries), DPAPI round trip through real `powershell.exe`, wire codec mappings, the WebSocket leg against a loopback Kestrel provider, the orchestrator end-to-end on fakes, and the offline bench. |
 
 ## Two-process model
 
@@ -124,6 +127,30 @@ Roots default to `%LOCALAPPDATA%\PagentOS\agent\artifacts` plus any semicolon-se
 `PAGENTOS_AGENT_ArtifactRoots`. Both `desktop.open_application` and `desktop.open_artifact` are
 advertised in the enrollment capability manifest (`AgentCapabilities.All`) and forwarded over the
 same service→companion named pipe.
+
+## Realtime voice client (M12 track C, additive, off by default)
+
+The companion carries the desktop audio client of `docs/M12_REALTIME_VOICE_SPEC.md` but
+runs it only when asked: `PagentOS.SessionCompanion.exe --voice`, or
+`PAGENTOS_AGENT_VoiceEnabled=true` plus `PAGENTOS_AGENT_CloudCoreUrl=http://<tailnet-ip>:8001`.
+Optional: `PAGENTOS_AGENT_VoiceCaptureDevice` / `VoiceRenderDevice` (WASAPI endpoint ids from
+the bench's `--list-devices`), `PAGENTOS_AGENT_VoiceEndOfTurn=server|client`. The owner
+session token is read from the existing store
+`%LOCALAPPDATA%\PagentOS\secrets\PAGENTOS_OWNER_SESSION_TOKEN.dpapi`; without it voice stays
+off and says so. The voice loop runs beside the pipe loop; its failure only logs. Every
+session writes `voice_session_started` (ids, devices, and an honest AEC/NS statement),
+`voice_device_switched`, `voice_network_lost/restored`, `voice_tool_silence` and
+`voice_session_closed` rows to the companion audit log — never audio, never credentials.
+
+Offline numbers for the gate (no microphone, no network):
+
+```powershell
+& $dotnet run --project src\PagentOS.Companion.Audio.Bench -- --turns 4 --eot client
+& $dotnet run --project src\PagentOS.Companion.Audio.Bench -- --json
+```
+
+Real acceptance is the owner's microphone against the real provider and Cloud Core (spec
+§10); nothing in this repository attempts it.
 
 ## Windows Service installation (owner action, deferred)
 

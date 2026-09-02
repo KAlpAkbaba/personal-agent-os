@@ -17,6 +17,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\PagentOS.Agent.Core\PagentOS.Agent.Core.csproj" />
+    <ProjectReference Include="..\PagentOS.Companion.Audio\PagentOS.Companion.Audio.csproj" />
   </ItemGroup>
 
   <ItemGroup>
