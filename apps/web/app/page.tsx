@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { API_BASE } from "./lib/session";
@@ -59,9 +60,13 @@ export default function Home() {
       <h1>Personal Agent OS</h1>
       <p className="subtitle">
         Web shell —{" "}
-        <a href="/artifacts" style={{ color: "var(--accent)" }}>
+        <Link href="/artifacts" style={{ color: "var(--accent)" }}>
           Araştırma Gelen Kutusu →
-        </a>
+        </Link>
+        {" · "}
+        <Link href="/voice" style={{ color: "var(--accent)" }}>
+          Sesli Asistan →
+        </Link>
       </p>
 
       <div className="panel">

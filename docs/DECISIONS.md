@@ -1394,3 +1394,96 @@ drive the data channel with `map_server_event` / `barge_in_commands` /
 (ADR-0034 §7) is now unblocked: provision `PAGENTOS_VOICE_OPENAI_API_KEY` and run the
 smoke. Azure Voice Live remains the documented second adapter candidate if measured
 Turkish quality is insufficient.
+
+## ADR-0040 — M12 track D: browser realtime voice client decisions (2026-09-02)
+
+Status: Accepted (reversible implementation decisions under ADR-0034 / ADR-0036)
+
+Context: the web shell (`apps/web`) needed the browser leg of a
+`ConversationRealtime` session against the contract that landed with tracks A+E
+(`services/api/app/voice/realtime_sessions/routes.py`). The shell had no test
+framework, and its `next lint` script had silently stopped working when Next.js
+16 removed that command. Nothing below touches `services/`, `devices/`, `infra/`
+or `scripts/`.
+
+Decisions:
+
+1. **The browser knows a transport descriptor and a wire dialect, never a
+   vendor.** `RealtimeTransport` (`app/lib/voice/transport.ts`) is opened from a
+   `TransportDescriptor` read off the session payload (`transport_descriptor`, or
+   `credential.transport_descriptor`): `sdp_exchange_url`, `sdp_content_type`
+   (`application/sdp` default, `multipart/form-data` + `session_config` when the
+   adapter needs it), `data_channel`, `dialect`, `audio` formats, optional
+   `headers`. The WebRTC implementation refuses to connect when the endpoint, the
+   channel name or the dialect is missing rather than falling back to a built-in
+   vendor table. **Track B must return this descriptor** for its WebRTC transport;
+   until it does, the page cannot open a real media leg (the server payload today
+   carries only the `transport` string).
+2. **Provider event names live in a dialect module selected by name**
+   (`dialects/openai-realtime`), a pure mapping to normalized `TransportEvent`s.
+   Both the GA and the earlier beta event names are accepted. A dialect is a
+   protocol family, not a model: no model, voice or endpoint appears in the
+   client bundle.
+3. **Barge-in order is fixed and tested**: local playback is silenced first
+   (WebAudio gain → 0 on the audio thread, synchronous from the page's point of
+   view), then the provider cancel goes out on the data channel, then
+   `barge_in_start` (with `playback_stopped_ms`) and `playback_stopped` are
+   reported. The trigger is whichever comes first of a **local RMS speech
+   detector** on the microphone and the provider's `speech_started`; the second
+   signal for the same speech is not a second barge-in but is reported as
+   `uplink_first_packet` (payload `basis: provider_speech_started`) — the closest
+   thing a WebRTC client has to an uplink acknowledgement, labelled as such so the
+   harness never mistakes it for a wire measurement.
+4. **The client reports the server's event vocabulary verbatim**
+   (`realtime_bench.TIMING_EVENT_KINDS` + `service.STATE_EVENT_KINDS`); the
+   task's working names (`mic_uplink`, `speech_ended`, `tool_call_relayed`,
+   `tool_result_submitted`, …) map onto `mic_speech_start` / `uplink_first_packet`
+   / `end_of_turn` / `tool_call` / `tool_done` / `preamble_audio_start` /
+   `speech_resumed` / `state`. Timestamps are `performance.now()` relative to the
+   session clock, integer ms. Payloads are scrubbed of audio/credential-shaped keys
+   client-side and bounded to the server's 4 KB before they are sent.
+5. **Hesitation guard is client-side and deterministic**
+   (`app/lib/voice/hesitation.ts`, filler set mirrors `intents.FILLERS`):
+   `speech_stopped` opens a hold of `base 200 ms` (+ `700 ms` after a filler or a
+   drawn-out vowel, capped at `1500 ms`); speech inside the hold is a continuation
+   (no new turn, no `end_of_turn`), and a response the provider started during
+   the hold is cancelled through the barge-in path with `hesitation_resume: true`
+   so the harness can count false barges. The guard cannot stop the provider's
+   VAD from committing; it corrects it. Provider-side tuning (semantic VAD
+   eagerness) stays in the adapter's session config.
+6. **Long-running tools**: the `running` result (with the Turkish preamble) is
+   submitted to the provider immediately as the function output; the final
+   outcome from the replayed `tool_completed` sideband frame is injected as a
+   system message followed by a new response. Whether the provider interleaves
+   tool latency with speech on its own is unverified (research §1.4), so the
+   client never depends on it.
+7. **Web sideband is pull-only**: a web client has no device socket, so frames
+   are received on every `/events` response and on `attach` (ADR-0036 §5). The
+   reporter flushes every 250 ms while a session is open; `leg_closed` ends this
+   leg without closing the session.
+8. **Network loss**: `network_lost` is queued with its original timestamp,
+   the leg is torn down, and restore goes through `POST .../attach` (fresh
+   credential, replayed sideband, same microphone) with exponential backoff; a
+   409 on a relay or an events post is treated the same way; 410 ends the session.
+9. **Test framework: vitest** (`apps/web/vitest.config.ts`, Node environment,
+   `tests/**`), with deterministic fakes for the transport, playback, scheduler,
+   microphone, speech detector, network and an in-memory Cloud Core that mirrors
+   the route semantics (idempotent tool calls, queued sideband, attach, 409/410).
+10. **Lint: oxlint, not `eslint-config-next`.** `next lint` no longer exists in
+    Next.js 16, and `eslint-config-next@16.3.3` requires `typescript-eslint`,
+    which refuses the TypeScript 7.0 compiler the shell pins (support is tracked
+    for TS ≥ 7.1). The sanctioned alternative — aliasing `typescript` to
+    `@typescript/typescript6` — would change the compiler `next build` uses.
+    oxlint has no TypeScript-version coupling, no install scripts and ships the
+    Next/React/hooks rules; `react/react-in-jsx-scope` (automatic runtime) and
+    `react/set-state-in-effect` (false positive on the async fetch-then-set
+    pattern the pages use) are off. Revisit when typescript-eslint supports TS 7.
+11. **When Cloud Core selects a provider whose transport is `simulated`** (no
+    real adapter configured), `/voice` drives a scripted fake transport so the
+    session, events, tool relay and close paths run against the real API, and
+    says so on the page; it is not a media path.
+
+Consequences: track B returns a `transport_descriptor` with its credential;
+the owner's quality evaluation of the web leg waits on that plus the provider
+credential; the desktop client (track C) can reuse the same descriptor contract
+and event mapping.
