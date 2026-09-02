@@ -74,6 +74,9 @@ DEFAULT_BASE_URL = "https://api.openai.com/v1"
 
 #: WebRTC events data channel — the vendor requires exactly this name.
 DATA_CHANNEL_NAME = "oai-events"
+#: Wire-dialect name the web client selects its event mapping by (must match
+#: apps/web/app/lib/voice/dialects/index.ts REGISTRY).
+WEB_CLIENT_DIALECT = "openai-realtime"
 #: pcm16 is 16-bit mono little-endian at 24 kHz, the only documented rate.
 AUDIO_SAMPLE_RATE_HZ = 24000
 AUDIO_FORMAT_PCM16 = "pcm16"
@@ -306,11 +309,15 @@ class OpenAIRealtimeProvider:
             "endianness": "little",
         }
         if transport == TRANSPORT_WEBRTC:
+            # Key names are the cross-track contract the web client (track D,
+            # apps/web/app/lib/voice/transport.ts TransportDescriptor) reads:
+            # sdp_exchange_url + data_channel + dialect are REQUIRED there.
             return {
                 "transport": TRANSPORT_WEBRTC,
-                "sdp_endpoint": f"{self._base_url}/realtime/calls",
+                "sdp_exchange_url": f"{self._base_url}/realtime/calls",
                 "sdp_content_type": "application/sdp",
                 "data_channel": DATA_CHANNEL_NAME,
+                "dialect": WEB_CLIENT_DIALECT,
                 "auth": "bearer_ephemeral_secret",
                 "audio": audio,
                 "session_max_minutes": SESSION_MAX_MINUTES,
@@ -321,6 +328,7 @@ class OpenAIRealtimeProvider:
             return {
                 "transport": TRANSPORT_WEBSOCKET,
                 "websocket_url": f"{ws_base}/realtime",
+                "dialect": WEB_CLIENT_DIALECT,
                 "query": {"model": self._model},
                 "auth": "bearer_ephemeral_secret",
                 "audio": audio,

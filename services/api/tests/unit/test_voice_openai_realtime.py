@@ -291,7 +291,7 @@ def test_credential_request_rejects_unsupported_transport() -> None:
 def test_webrtc_transport_descriptor_is_the_client_contract() -> None:
     d = provider().transport_descriptor(TRANSPORT_WEBRTC)
     assert d["transport"] == TRANSPORT_WEBRTC
-    assert d["sdp_endpoint"] == "https://api.openai.com/v1/realtime/calls"
+    assert d["sdp_exchange_url"] == "https://api.openai.com/v1/realtime/calls"
     assert d["data_channel"] == DATA_CHANNEL_NAME == "oai-events"
     assert d["audio"] == {"format": "pcm16", "sample_rate_hz": 24000, "channels": 1,
                           "sample_width_bits": 16, "endianness": "little"}
@@ -342,7 +342,7 @@ def test_mint_returns_ephemeral_only_and_never_the_key(mock_http) -> None:
     assert cred.transport_descriptor["data_channel"] == "oai-events"
     client = cred.to_client_dict()
     assert client["secret"] == EPHEMERAL
-    assert client["transport_descriptor"]["sdp_endpoint"].endswith("/realtime/calls")
+    assert client["transport_descriptor"]["sdp_exchange_url"].endswith("/realtime/calls")
     assert client["expires_at"].endswith("Z")
     # the standing key: sent to the vendor exactly once, nowhere else
     assert len(mock_http.requests) == 1
@@ -696,3 +696,18 @@ def test_preference_order_never_outranks_capability() -> None:
     chosen, result = _runtime(settings).select()
     assert chosen.name == OPENAI_REALTIME_PROVIDER_NAME
     assert result.ranked[0] == OPENAI_REALTIME_PROVIDER_NAME
+
+
+def test_descriptors_carry_the_keys_the_web_client_requires() -> None:
+    # Cross-track contract (tracks B <-> D): apps/web/app/lib/voice/transport.ts
+    # refuses to open a leg without sdp_exchange_url + data_channel + dialect, and
+    # dialects/index.ts resolves the dialect by name with no default. Track B first
+    # shipped "sdp_endpoint" and no dialect at all, which the web client could not use.
+    from app.voice.providers_openai_realtime import WEB_CLIENT_DIALECT, OpenAIRealtimeProvider
+
+    provider = OpenAIRealtimeProvider(api_key="test-not-a-secret")
+    webrtc = provider.transport_descriptor("webrtc")
+    assert webrtc["sdp_exchange_url"].endswith("/realtime/calls")
+    assert webrtc["data_channel"] and webrtc["dialect"] == WEB_CLIENT_DIALECT == "openai-realtime"
+    assert "sdp_endpoint" not in webrtc
+    assert provider.transport_descriptor("websocket")["dialect"] == WEB_CLIENT_DIALECT
