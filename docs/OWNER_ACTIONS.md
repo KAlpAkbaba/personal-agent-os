@@ -21,11 +21,14 @@ Status vocabulary matches `docs/QUALIFICATION.md`: `PROVEN_REAL`, `PROVEN_PROXY`
 
 ## Now
 
-**Item 7 below: the real Turkish microphone / WebRTC session.** The provider is live on the
-Cloud Core (item 6, PROVEN_REAL 2026-09-02: key inside the running container, provider
-selected, a real client-secret mint from Hetzner). The only way any Stage 6 row moves is
-your voice on your microphone through the real path. One launcher, one page, a short
-Turkish script, then one command to pull the numbers.
+**Item 8 below: the combined voice-character + noise qualification session.** Your first
+real session (item 7) said: generally good, keep the architecture, target voice Arbor, and
+one real defect — the K66 microphone lets room noise drive turns. The response is on
+`main` (ADR-0043/0044): the Arbor profile through the closest supported voice, a layered
+microphone pipeline with calibration, a local speech gate and per-device profiles, owner
+modes with `Otomatik` default. It is qualified as one session, voice and noise together,
+because aggressive input processing can change conversational timing. No DSP tuning is
+asked of you; the system converges from its measurements plus your verdicts.
 
 ---
 
@@ -85,7 +88,57 @@ Unblocks: real-browser qualification against sites you are already signed into.
 The agent will give you the exact enrollment step when it reaches this point; it needs the
 browser closed once, and it never asks for a password.
 
-### 7. Real Turkish microphone / WebRTC session — **this is the current action**
+### 8. Combined voice-character + noise qualification — **this is the current action**
+
+Unblocks: `docs/QUALIFICATION.md` rows 6.15–6.21, and the rest of Stage 6 as a side effect.
+
+Setup, as in item 7: `.\scripts\voice\start-web-voice.ps1`, open
+http://localhost:3000/voice, sign in once. New on the page: **Ses** (Marin / Cedar — the
+two candidates for your Arbor target; the profile itself is applied on the server), the
+microphone-quality area (`Mikrofon`, `Ortam`, `Gürültü bastırma`, `Ses algılama`, a live
+meter), the modes **Otomatik / Sessiz ortam / Gürültülü ortam / Çok gürültülü ortam**
+(leave `Otomatik`), **Yeniden ölçümle** (recalibrate) and **Tanılama** (diagnostics: noise
+floor, speech probability, input level, clipping, the applied browser constraints, and a
+"copy JSON" of the K66's real MediaTrack settings/capabilities — paste that JSON once).
+
+**Part A — voice character (5 minutes).** Same short Turkish exchange with `Ses = Marin`,
+then again with `Ses = Cedar` (three or four turns each, including one long answer you
+just listen to). Verdict, in your words: which is closer to Arbor, and what is still off
+(pace, warmth, cheerfulness, "asistan" cadence, Turkish prosody).
+
+**Part B — noise matrix (10–15 minutes), with the winning voice.** Keep the session open
+in `Otomatik`; for each scenario do it for ~20 seconds and only speak when the scenario
+says so. Watch `Ses algılama`: it should say background, not owner speech, unless you talk.
+
+1. quiet room, silent; 2. computer fan only; 3. typing on your keyboard; 4. mouse clicks;
+5. a desk knock; 6. air conditioner / fan; 7. TV speech in the background; 8. another
+person speaking nearby; 9. music; 10. street / traffic sound (window open, or a
+recording); 11. the assistant speaking through the **speakers** (headset off) — interrupt
+it with "dur" while it talks; 12. you speaking quietly; 13. you speaking normally;
+14. you speaking from farther away.
+
+Then the hesitation check once more under the final configuration ("Şey... yani... hani
+şu..." with a real one-second pause), and a normal "dur" barge-in with the headset on.
+
+**Part C — the numbers.** The page counts false speech starts, false barge-ins, false
+turns and calibration results per session and reports them to the Cloud Core. Pull them:
+
+```powershell
+.\scripts\voice\fetch-benchmark.ps1 -SessionId <full session id> -OutFile voice-session-2.json
+```
+
+Paste the JSON, the diagnostics JSON, and your verdicts (Part A; for Part B which
+scenarios still triggered it, and whether your own quiet/far speech was ever cut).
+What happens next, automatically: rows 6.15–6.21 are filled from the counts and your
+words, the winning voice becomes the configured default, the K66 profile is pinned, and
+if background human speech (7–8) still commands the system the owner-directed strategy
+(ADR-0043 §4) is the next work item — with honest numbers, not a claim.
+
+### 7. Real Turkish microphone / WebRTC session — **DONE (2026-09-02)**
+
+Completed: first real session on the K66 through the real path. Owner verdict recorded in
+`docs/VOICE_OWNER_FEEDBACK.md` (generally good; Arbor target; noise defect). The
+procedure below stays as the reference for the plain conversation script.
 
 Unblocks: every `docs/QUALIFICATION.md` Stage 6 row (6.1–6.14). Nothing else can.
 

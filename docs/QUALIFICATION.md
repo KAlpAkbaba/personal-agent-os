@@ -175,6 +175,21 @@ real run, not impressions.
 | 6.13 | Provider credential never leaves Cloud Core; only the ephemeral per-session credential reaches a client | `NOT_YET_PROVEN` | Real session: client receives only the ephemeral value; audit rows carry ids/timings only. |
 | 6.14 | Subjective owner evaluation of voice quality | `NOT_YET_PROVEN` | The owner says so, after the real session. |
 
+Revised acceptance target after the first real session (owner feedback 2026-09-02,
+`VOICE_OWNER_FEEDBACK.md`, ADR-0043/0044). Voice character and noise processing are
+qualified TOGETHER in one session; a row passes only on the owner's word for the
+subjective parts and on the session's benchmark for the counted parts.
+
+| # | Criterion | Status | What will count as proof |
+|---|---|---|---|
+| 6.15 | Voice character perceptually close enough to the owner's Arbor target (closest supported voice + style profile + pacing) | `NOT_YET_PROVEN` | Owner's A/B verdict between the candidates (`marin`, `cedar`) with the Arbor profile applied; the winner recorded as the configured voice. |
+| 6.16 | Normal room noise (fan, keyboard, mouse, desk knock, air conditioner, chair, hum) no longer causes distracting activations | `NOT_YET_PROVEN` | Noise matrix scenarios 1–6, 9–10: false speech-start and false-turn counts from the session benchmark near zero; owner confirms no distracting activations. |
+| 6.17 | Background human speech (TV, another person) does not frequently command the system | `NOT_YET_PROVEN` | Scenarios 7–8 counted honestly; an owner-directed strategy evaluated, not assumed; residual rate reported, not hidden. |
+| 6.18 | Speech preservation: the owner's Turkish stays natural and complete under the final processing (no clipped onsets, no swallowed consonants, no pumping, quiet and far speech still heard) | `NOT_YET_PROVEN` | Scenarios 12–14: missed-owner-speech and interrupted-utterance counts; owner confirms naturalness. |
+| 6.19 | Echo: the assistant's own speaker output never becomes owner speech, in headset and open-speaker modes; barge-in still works while it speaks | `NOT_YET_PROVEN` | Scenario 11 in both modes: no loop, barge-in latency within target. |
+| 6.20 | Semantic end-of-turn unchanged by the noise pipeline: normal hesitation still does not cause premature responses; barge-in stays fast | `NOT_YET_PROVEN` | Hesitation set and barge-in metric re-measured under the final configuration. |
+| 6.21 | Browser processing verified by read-back on the owner's microphone; AGC chosen from measurement, not assumption | `NOT_YET_PROVEN` | Applied MediaTrackSettings/capabilities from the owner's browser recorded in the microphone profile; AGC on/off benchmark result recorded. |
+
 ## Stage 6 — Real browser qualification
 
 | # | Criterion | Status |
