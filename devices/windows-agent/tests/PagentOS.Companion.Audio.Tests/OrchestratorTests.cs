@@ -87,6 +87,18 @@ public sealed class OrchestratorTests : IAsyncDisposable
         }
 
         Assert.True(await TestSupport.WaitForAsync(condition, 1000), "condition never held");
+        await _orchestrator!.DrainAsync();
+    }
+
+    /// <summary>
+    /// Waits for an observable effect the loop produces mid-handler, then drains the loop so the
+    /// REST of that handler (reports posted, commands submitted, state recorded) has finished
+    /// too. Every assertion on "what the orchestrator did about X" follows this, never a sleep.
+    /// </summary>
+    private async Task SettleAsync(Func<bool> condition, int timeoutMs = 3000)
+    {
+        Assert.True(await TestSupport.WaitForAsync(condition, timeoutMs), "condition never held");
+        await _orchestrator!.DrainAsync();
     }
 
     private void ProviderSpeaks(string responseId, int chunks = 5)
@@ -139,10 +151,11 @@ public sealed class OrchestratorTests : IAsyncDisposable
         ProviderSpeaks("resp-1");
         Assert.True(await TestSupport.WaitForAsync(() => o.Fsm.State == VoiceClientState.AssistantSpeaking));
         Assert.True(await TestSupport.WaitForAsync(() => Playback.EnqueuedBytes > 0));
+        var handledBefore = o.ProviderEventsHandled;
         Leg.Emit(new ResponseDoneEvent(_time.GetTimestamp(), "resp-1", "completed"));
-        await Task.Delay(20);
+        await SettleAsync(() => o.ProviderEventsHandled > handledBefore);
         Playback.Drain();
-        Assert.True(await TestSupport.WaitForAsync(() => o.Fsm.State == VoiceClientState.Idle));
+        await SettleAsync(() => o.Fsm.State == VoiceClientState.Idle);
 
         var names = _cloud.EventKindsFor(o.Grant!.SessionId);
         Assert.Equal(new[] { "mic_speech_start", "uplink_first_packet", "end_of_turn", "first_audio", "response_done" }, names);
@@ -164,11 +177,12 @@ public sealed class OrchestratorTests : IAsyncDisposable
         var o = await StartAsync(reporter: reporter);
 
         ProviderSpeaks("resp-1", chunks: 20);
-        Assert.True(await TestSupport.WaitForAsync(() => o.Fsm.State == VoiceClientState.AssistantSpeaking && Playback.IsPlaying));
+        // all 21 provider events (session_ready + 20 deltas) handled, first_audio reported, before the trace is cleared
+        await SettleAsync(() => o.ProviderEventsHandled >= 21 && Playback.IsPlaying);
         _trace.Clear();
 
         Speak(200);
-        Assert.True(await TestSupport.WaitForAsync(() => o.Fsm.BargeInCount == 1));
+        await SettleAsync(() => o.Fsm.BargeInCount == 1);
 
         Assert.Equal(new[] { "playback:stop", "leg:cancel", "report:barge_in_start", "report:playback_stopped", "report:mic_speech_start" }, _trace.Take(5));
         Assert.False(Playback.IsPlaying);
@@ -181,9 +195,10 @@ public sealed class OrchestratorTests : IAsyncDisposable
         Assert.True(reporter.Reports.Single(r => r.Event == VoiceClientEvents.MicSpeechStart).Data["barge_in"]!.GetValue<bool>());
 
         // Late audio for the cancelled response must not restart playback.
+        var handled = o.ProviderEventsHandled;
         Leg.Emit(new AudioDeltaEvent(_time.GetTimestamp(), "resp-1", _synth.Tone(40, 0).Pcm16));
         Leg.Emit(new ResponseDoneEvent(_time.GetTimestamp(), "resp-1", "cancelled"));
-        await Task.Delay(30);
+        await SettleAsync(() => o.ProviderEventsHandled >= handled + 2);
         Assert.False(Playback.IsPlaying);
         Assert.NotNull(o.Latency.Metrics().Single().BargeInToStopMs);
     }
@@ -197,7 +212,7 @@ public sealed class OrchestratorTests : IAsyncDisposable
 
         Leg.Emit(new TranscriptDeltaEvent(_time.GetTimestamp(), "Dur.", Final: true));
 
-        Assert.True(await TestSupport.WaitForAsync(() => o.Fsm.BargeInCount == 1));
+        await SettleAsync(() => o.Fsm.BargeInCount == 1);
         Assert.False(Playback.IsPlaying);
         Assert.Contains(Leg.Commands, c => c is CancelResponseCommand);
         Assert.Equal("dur", o.Fsm.Events.Single(e => e.Kind == "barge_in").Detail);
@@ -210,7 +225,9 @@ public sealed class OrchestratorTests : IAsyncDisposable
         var o = await StartAsync(new VoiceClientOptions { EndOfTurn = EndOfTurnMode.Server, ToolSilenceBoundMs = 60 });
 
         Leg.Emit(new ToolCallEvent(_time.GetTimestamp(), "call-1", "research", """{"topic":"ai"}"""));
-        Assert.True(await TestSupport.WaitForAsync(() => o.Relay!.RunningCalls.Contains("call-1")));
+        // the relay runs on its own task: the provisional output on the leg is its completion signal
+        Assert.True(await TestSupport.WaitForAsync(() => Leg.Commands.OfType<ToolResultCommand>().Any()));
+        Assert.Contains("call-1", o.Relay!.RunningCalls);
         Assert.Equal(1, _cloud.ToolExecutions);
         var provisional = Leg.Commands.OfType<ToolResultCommand>().Single();
         Assert.False(provisional.Final);
@@ -218,24 +235,27 @@ public sealed class OrchestratorTests : IAsyncDisposable
         Assert.Equal(VoiceClientState.ToolRunning, o.Fsm.State);
 
         ProviderSpeaks("resp-preamble", chunks: 2);
-        Assert.True(await TestSupport.WaitForAsync(() => o.Fsm.EventKinds().Contains("assistant_progress")));
+        await SettleAsync(() => o.Fsm.EventKinds().Contains("assistant_progress"));
         Assert.Equal(VoiceClientState.ToolRunning, o.Fsm.State);
+        var handledBefore = o.ProviderEventsHandled;
         Leg.Emit(new ResponseDoneEvent(_time.GetTimestamp(), "resp-preamble", "completed"));
+        await SettleAsync(() => o.ProviderEventsHandled > handledBefore);
         Playback.Drain();
 
-        // Spec §6: silence during a tool beyond the bound is a defect the harness reports.
-        await Task.Delay(120);
-        await SilenceUntilAsync(() => o.Defects.Any(d => d.StartsWith("tool_silence_exceeded")), 500);
+        // Spec §6: silence during a tool beyond the bound (60 ms here) is a defect the harness
+        // reports. The bound is real time by definition; feeding quiet frames is what lets it
+        // elapse and be checked, and a slower machine only makes the silence longer.
+        await SilenceUntilAsync(() => o.Defects.Any(d => d.StartsWith("tool_silence_exceeded")), 2000);
 
         _pushes.Push(SidebandPushKinds.ToolCompleted, new JsonObject { ["call_id"] = "call-1", ["result"] = new JsonObject { ["summary"] = "tamam" } });
-        Assert.True(await TestSupport.WaitForAsync(() => o.Relay!.RunningCalls.Count == 0));
+        await SettleAsync(() => o.Relay!.RunningCalls.Count == 0);
         var final = Leg.Commands.OfType<ToolResultCommand>().Last();
         Assert.True(final.Final);
         Assert.True(final.FollowUp);
         Assert.Equal(VoiceClientState.Idle, o.Fsm.State);
 
         ProviderSpeaks("resp-final", chunks: 2);
-        Assert.True(await TestSupport.WaitForAsync(() => o.Fsm.State == VoiceClientState.AssistantSpeaking));
+        await SettleAsync(() => o.Fsm.State == VoiceClientState.AssistantSpeaking);
         var metrics = o.Latency.Metrics().Single();
         Assert.NotNull(metrics.ToolPreambleMs);
         Assert.NotNull(metrics.ToolDoneToSpeechMs);
@@ -265,7 +285,7 @@ public sealed class OrchestratorTests : IAsyncDisposable
 
         firstLeg.EmitDisconnect("wifi dropped");
 
-        Assert.True(await TestSupport.WaitForAsync(() => o.ReconnectCount == 1, 5000));
+        await SettleAsync(() => o.ReconnectCount == 1, 5000);
         Assert.Equal(2, _legs.Count);
         Assert.True(Leg.IsOpen);
         Assert.NotSame(firstLeg, Leg);
@@ -291,7 +311,7 @@ public sealed class OrchestratorTests : IAsyncDisposable
 
         _catalog.Set(FakeDeviceCatalog.HeadsetMic(isDefault: true, isCommunications: true), FakeDeviceCatalog.LaptopSpeakers());
 
-        Assert.True(await TestSupport.WaitForAsync(() => Capture.DeviceId == "cap-headset"));
+        await SettleAsync(() => Capture.DeviceId == "cap-headset");
         Assert.True(laptopCapture.Disposed);
         Assert.True(Capture.Started);
         var removed = Assert.Single(o.DeviceSwitches, s => s.Direction == AudioDirection.Capture && s.From is not null);
@@ -302,11 +322,11 @@ public sealed class OrchestratorTests : IAsyncDisposable
         Speak(300);
         Assert.True(await TestSupport.WaitForAsync(() => o.Fsm.State == VoiceClientState.Listening));
         _catalog.Set(FakeDeviceCatalog.HeadsetMic(), FakeDeviceCatalog.LaptopMic(isDefault: true, isCommunications: true), FakeDeviceCatalog.LaptopSpeakers());
-        await Task.Delay(30);
+        await o.DrainAsync(); // the device-change input is handled: deferred, not applied
         Assert.Equal("cap-headset", Capture.DeviceId);
 
         await SilenceUntilAsync(() => o.Fsm.EventKinds().Contains("owner_speech_ended"));
-        Assert.True(await TestSupport.WaitForAsync(() => Capture.DeviceId == "cap-laptop"));
+        await SettleAsync(() => Capture.DeviceId == "cap-laptop");
         var deferred = o.DeviceSwitches.Last();
         Assert.Equal("default_communications", deferred.Reason);
         Assert.False(deferred.Immediate);
@@ -342,7 +362,7 @@ public sealed class OrchestratorTests : IAsyncDisposable
         var legClosed = _cloud.SupersedeLeg(sid, "mobile");
         _pushes.Push(SidebandPush.TryParseFrame(legClosed)!);
 
-        Assert.True(await TestSupport.WaitForAsync(() => o.LegSuperseded));
+        await SettleAsync(() => o.LegSuperseded);
         Assert.False(firstLeg.IsOpen);
         Assert.Equal(1, o.LegSupersededCount);
         Assert.Contains("leg_closed", o.PushesHandled);
@@ -353,7 +373,7 @@ public sealed class OrchestratorTests : IAsyncDisposable
             Capture.Feed(TestSupport.Quiet(_time.GetTimestamp()));
         }
 
-        await Task.Delay(30);
+        await o.DrainAsync(); // those ten frames have been handled
         Assert.Equal(framesBefore, firstLeg.AudioFramesSent);
         Assert.Equal(0, o.ReattachCount);
 
@@ -361,7 +381,7 @@ public sealed class OrchestratorTests : IAsyncDisposable
         _cloud.QueueSideband(sid, SidebandPushKinds.Say, new JsonObject { ["text"] = "Masaüstüne döndük." });
         Speak(300);
 
-        Assert.True(await TestSupport.WaitForAsync(() => o.ReattachCount == 1, 5000));
+        await SettleAsync(() => o.ReattachCount == 1, 5000);
         Assert.False(o.LegSuperseded);
         Assert.Equal(2, _legs.Count);
         Assert.True(Leg.IsOpen);
@@ -385,15 +405,16 @@ public sealed class OrchestratorTests : IAsyncDisposable
         _cloud.SupersedeLeg(sid, "mobile");
         Speak(300);
 
-        Assert.True(await TestSupport.WaitForAsync(() => o.LegSuperseded, 5000));
+        await SettleAsync(() => o.LegSuperseded, 5000);
         Assert.Equal(1, o.Reporter!.StaleLegRefusals);
         Assert.False(o.Reporter.Online);
         Assert.True(o.Reporter.PendingCount >= 1); // held, not dropped
         await SilenceUntilAsync(() => o.Fsm.EventKinds().Contains("owner_speech_ended"));
 
         Speak(300);
-        Assert.True(await TestSupport.WaitForAsync(() => o.ReattachCount == 1, 5000));
-        Assert.True(await TestSupport.WaitForAsync(() => o.Reporter.PendingCount == 0 && o.Reporter.Online, 5000));
+        await SettleAsync(() => o.ReattachCount == 1, 5000);
+        Assert.Equal(0, o.Reporter.PendingCount);
+        Assert.True(o.Reporter.Online);
         var kinds = _cloud.EventKindsFor(sid);
         Assert.Equal("mic_speech_start", kinds[0]);
         Assert.Contains("end_of_turn", kinds);
@@ -409,7 +430,7 @@ public sealed class OrchestratorTests : IAsyncDisposable
 
         Speak(300);
 
-        Assert.True(await TestSupport.WaitForAsync(() => o.StopReason == "session_gone", 5000));
+        await SettleAsync(() => o.StopReason == "session_gone", 5000);
         Assert.False(o.Reporter!.Online);
         Assert.Equal(0, o.Reporter.RefusedBatches);
         Assert.Equal(0, o.ReattachCount);
@@ -436,8 +457,9 @@ public sealed class OrchestratorTests : IAsyncDisposable
         _pushes.Push(SidebandPushKinds.Say, new JsonObject { ["text"] = "Yanlış oturum." }, sessionId: Guid.NewGuid().ToString());
         Leg.Emit(new ProviderErrorEvent(_time.GetTimestamp(), "rate_limit", "slow down"));
 
-        Assert.True(await TestSupport.WaitForAsync(() => _cloud.EventKindsFor(o.Grant!.SessionId).Contains("error")));
-        await Task.Delay(30);
+        // both inputs arrive through background pumps: wait until the loop has SEEN each, then drain
+        await SettleAsync(() => o.PushesSeen == 1 && o.ProviderEventsHandled >= 2); // session_ready + error
+        Assert.Contains("error", _cloud.EventKindsFor(o.Grant!.SessionId));
         Assert.Empty(Leg.Commands.OfType<SayCommand>());
         Assert.Empty(o.PushesHandled);
         var error = _cloud.EventsFor(o.Grant!.SessionId).Single(e => e["kind"]!.GetValue<string>() == "error");

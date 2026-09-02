@@ -160,6 +160,41 @@ public sealed class VoiceSessionOrchestrator : IAsyncDisposable
 
     private readonly List<string> _pushesHandled = new();
 
+    /// <summary>Provider events the loop has finished handling (observable progress for tests and the bench).</summary>
+    public int ProviderEventsHandled => Volatile.Read(ref _providerEventsHandled);
+
+    /// <summary>Sideband pushes the loop has seen, including ones for other sessions it ignored.</summary>
+    public int PushesSeen => Volatile.Read(ref _pushesSeen);
+
+    private int _providerEventsHandled;
+    private int _pushesSeen;
+
+    /// <summary>
+    /// The loop's observable idle point: completes once every input enqueued BEFORE this call
+    /// (microphone frames, provider events and pushes already pumped, device changes) has been
+    /// handled to completion, including the awaits inside their handlers. This is what tests and
+    /// the bench synchronise on instead of sleeping; it never blocks the loop itself. If the loop
+    /// has ended (session gone, stopped), it returns once the loop task has.
+    /// </summary>
+    public async Task DrainAsync()
+    {
+        var loop = _loop ?? throw new InvalidOperationException("orchestrator not started");
+        var marker = new DrainInput(new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+        if (_inputs.Writer.TryWrite(marker))
+        {
+            await Task.WhenAny(marker.Completion.Task, loop).ConfigureAwait(false);
+            return;
+        }
+
+        try
+        {
+            await loop.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
     public IReadOnlyList<DeviceSwitchRecord> DeviceSwitches
     {
         get
@@ -531,7 +566,15 @@ public sealed class VoiceSessionOrchestrator : IAsyncDisposable
                         await HandleFrameAsync(frame.Frame, ct).ConfigureAwait(false);
                         break;
                     case ProviderInput provider when ReferenceEquals(provider.Leg, _leg) || provider.Event is DisconnectedEvent:
-                        await HandleProviderEventAsync(provider.Event, provider.Leg, ct).ConfigureAwait(false);
+                        try
+                        {
+                            await HandleProviderEventAsync(provider.Event, provider.Leg, ct).ConfigureAwait(false);
+                        }
+                        finally
+                        {
+                            Interlocked.Increment(ref _providerEventsHandled);
+                        }
+
                         break;
                     case PushInput push:
                         await HandlePushAsync(push.Push, ct).ConfigureAwait(false);
@@ -550,6 +593,9 @@ public sealed class VoiceSessionOrchestrator : IAsyncDisposable
                         break;
                     case SidebandFaultInput fault:
                         await HandleSidebandFaultAsync(fault.Fault, ct).ConfigureAwait(false);
+                        break;
+                    case DrainInput drain:
+                        drain.Completion.TrySetResult();
                         break;
                 }
             }
@@ -933,6 +979,7 @@ public sealed class VoiceSessionOrchestrator : IAsyncDisposable
 
     private async Task HandlePushAsync(SidebandPush push, CancellationToken ct)
     {
+        Interlocked.Increment(ref _pushesSeen);
         if (push.SessionId is not null && Grant is not null && !string.Equals(push.SessionId, Grant.SessionId, StringComparison.Ordinal))
         {
             _logger?.LogInformation("sideband push {Kind} for another session ({SessionId}) ignored", push.Kind, push.SessionId);
@@ -1293,4 +1340,6 @@ public sealed class VoiceSessionOrchestrator : IAsyncDisposable
     private sealed record ToolFinishedInput(string CallId, string Status) : Input;
 
     private sealed record SidebandFaultInput(SidebandFault Fault) : Input;
+
+    private sealed record DrainInput(TaskCompletionSource Completion) : Input;
 }
