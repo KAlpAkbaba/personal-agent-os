@@ -1931,3 +1931,77 @@ open time, pre-roll, hang through a 250 ms pause, no chatter, playback-as-featur
 round-trips, mode table, false start / false barge-in / false turn, forbidden-key sweep);
 `RmsSpeechDetector` kept as the Layer 3 bypass. The K66 read-back, the AGC A/B and the
 14-scenario matrix are owner actions on the real device.
+
+## ADR-0045 — The web voice client honours the server's realtime-session contract version; a 422 is shown field by field (2026-09-03)
+
+Status: accepted. Owners: voice-engineer, lead-architect.
+
+Context: the owner's first real qualification run against the deployed Cloud Core clicked
+Connect and saw only `Oturum oluşturulamadı: HTTP 422`. The page at HEAD (ADR-0044 §8)
+sends `voice: "marin"` when a voice is selected; the deployed API is one release older and
+its `CreateSessionRequest` is `extra="forbid"` — it answered
+`{"detail":[{"type":"extra_forbidden","loc":["body","voice"],"msg":"Extra inputs are not permitted"}]}`.
+`VoiceApiError` already carried that body as `detail`; the page rendered the status and
+nothing else. Two defects, both client-side: the client guessed the server's version, and
+it threw the server's explanation away. The server was right to refuse, and stays so.
+
+Decision:
+
+1. **One canonical, versioned contract, generated from the models that validate.**
+   `packages/protocol/realtime-session-contract.json` (JSON Schema per request body,
+   `contract_version`, and `legacy.1.create_session` — the field list a v1 server accepts)
+   is exported from the API's Pydantic request models by
+   `services/api/scripts/export_realtime_contract.py`; a unit test fails on drift. The
+   same document is served at `GET /v1/voice/realtime/contract` (owner-gated like the
+   rest of the router). Version history lives in `realtime_sessions/contract.py`
+   (1 = first shipped M12 A+E; 2 = ADR-0043 `voice` on create). Bump on every change to
+   a request model's accepted fields.
+2. **The client asks, then sends only what that version accepts.** Before creating a
+   session the web client (`app/lib/voice/session-contract.ts`, `api.ts`, `controller.ts`)
+   probes the contract endpoint through the authenticated `apiFetch` and maps the
+   outcome — proven against the real deployment:
+   `200` → the served document is the source of truth (it may be newer than the bundled
+   one); `404` → the route does not exist there: a contract v1 server;
+   `401` → not signed in — says nothing about the version, so the client does NOT enter
+   v1 mode and surfaces the sign-in state instead; network failure or an unusable body →
+   the bundled version is assumed but SHOWN as unknown and Connect is never blocked.
+   Answers 200/404 are cached for the page load; 401/unknown are asked again on the next
+   Connect. `validateCreateBody(body, version, schema)` restricts the real payload to the
+   accepted fields (returning `dropped`) and checks values against exactly the schema
+   subset this document uses — `type`, `pattern`, `anyOf` with `null`, `enum`, integer
+   bounds, `format: uuid`, string length — no general JSON-Schema library. A value that
+   breaks the honoured schema is refused before anything is sent.
+3. **Dropped fields are explained in the owner's language, not silently swallowed.**
+   Against a v1 server the page shows
+   `Sunucu sözleşmesi v1: 'voice' alanı bu sürümde yok; varsayılan ses kullanılacak
+   (marin/cedar seçimi için Cloud Core güncellenmeli)`, the status row reads
+   `Sözleşme: v1 (eski sunucu; ses seçimi yok)`, and the A/B "Ses" selector stays visible
+   but is disabled and labelled `Ses (sunucuda kullanılamaz)`. The session is created with
+   the server's default voice; nothing else in the payload changes.
+4. **A 422 is rendered structurally.** FastAPI's validation list (`loc`, `type`, `msg`)
+   becomes `alan: body.voice · neden: extra_forbidden · Extra inputs are not permitted`;
+   the API's own VoiceError shape (`error_class`, `message`, `details`) becomes
+   `neden: <class> · <message> · ayrıntı alanları: <names>`. `input`, `ctx` and `url` of a
+   validation item are never rendered, and detail VALUES are never rendered — field
+   names and reasons only. The lines appear under the error headline and in the
+   diagnostics request log.
+5. **A scrubbed structured request log in diagnostics.** The last 20 outgoing Cloud Core
+   requests (method, path, sanitized body, status, parsed detail; a network failure as
+   `status: null` + the fetcher's message). The sanitizer applies the server-identical
+   `isForbiddenKey` rule plus `authorization/credential/secret/token` under any spelling,
+   recursively; headers are never captured at all, so the bearer cannot appear. In
+   development the same object is logged once per request to the console; in production
+   nothing is logged.
+6. **Not done, on purpose.** The backend validation is not loosened (`extra="forbid"`
+   stays — it is what made the drift visible), the cloud is not redeployed for this, and
+   the client does not invent fields a served contract does not list.
+
+Consequences: `apps/web` tests 71 → 90 in 8 files (bundled document shape; the real create payload
+clean at v2 and with exactly `voice` dropped at v1; pattern / null-ability / bounds / uuid
+/ enum / required problems by field and reason; the four probe outcomes; a newer served
+property list honoured over the bundle and cached per page load; the owner's real 422
+rendered in the error area and the request log; a schema-breaking value refused before
+sending; the log free of Authorization/bearer/ephemeral credential and bounded to 20;
+Turkish wording). Two existing assertions moved from `requests[0]` to the POST because the
+probe now precedes the create. `pnpm --dir apps/web test`, `lint`, `build` green.
+Redeploying Cloud Core (contract v2) restores the marin/cedar choice with no client change.

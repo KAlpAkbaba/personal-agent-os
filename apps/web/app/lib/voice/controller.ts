@@ -25,7 +25,7 @@
  * what makes the deterministic tests possible.
  */
 
-import type { VoiceSessionApi } from "./api";
+import type { RequestLogEntry, VoiceSessionApi } from "./api";
 import { VoiceApiError } from "./api";
 import type {
   FsmState,
@@ -44,6 +44,14 @@ import type {
   SpeechDetector,
   SpeechDetectorCalibration,
 } from "./ports";
+import {
+  type ResolvedContract,
+  droppedFieldsNotice,
+  problemsNotice,
+  resolveContract,
+  unknownVersionNotice,
+  validateCreateBody,
+} from "./session-contract";
 import {
   type RealtimeTransport,
   type TransportDescriptor,
@@ -85,6 +93,20 @@ export type MicMetrics = {
   env: number | null;
 };
 
+/**
+ * ADR-0045: which realtime-session contract version the client is honouring.
+ * `source` says how it was learned: the server's own document, a 404 (a v1
+ * server), the bundled document because the server could not be asked
+ * (`known: false`), or `unauthorized` (not signed in — no version at all).
+ */
+export type ContractStatus = {
+  version: number | null;
+  source: "server" | "legacy" | "bundled" | "unauthorized";
+  known: boolean;
+  /** create_session fields the honoured version accepts */
+  createFields: string[];
+};
+
 export type ControllerSnapshot = {
   state: VoiceUiState;
   sessionId: string | null;
@@ -98,6 +120,14 @@ export type ControllerSnapshot = {
   assistantText: string;
   ownerText: string;
   lastError: string | null;
+  /** ADR-0045: the server's reasons behind `lastError`, field by field (never a request value). */
+  lastErrorLines: string[];
+  /** ADR-0045: null until the server has been asked (or could not be). */
+  contract: ContractStatus | null;
+  /** ADR-0045: Turkish notice about the last create request (fields dropped, version unknown). */
+  contractNotice: string | null;
+  /** ADR-0045: the last outgoing Cloud Core requests, scrubbed (diagnostics). */
+  requestLog: RequestLogEntry[];
   latency: {
     barge_in_to_stop_ms?: LatencySample;
     eot_to_first_audio_ms?: LatencySample;
@@ -141,6 +171,7 @@ export type ControllerDeps = {
 type LongRunning = { name: string; startedAt: number; preamble?: string };
 
 const SIDEBAND_LOG_MAX = 20;
+const REQUEST_LOG_MAX = 20;
 const DEFAULT_LOCAL_GRACE_MS = 700;
 
 const EMPTY_MIC_METRICS: MicMetrics = {
@@ -208,6 +239,10 @@ export class VoiceSessionController {
   // continuity
   private recentLines: string[] = [];
 
+  // contract (ADR-0045): resolved once per page load when the server answered
+  private contract: ResolvedContract | null = null;
+  private contractProbe: Promise<ResolvedContract | null> | null = null;
+
   constructor(deps: ControllerDeps) {
     this.deps = deps;
     this.scheduler = deps.scheduler ?? realScheduler;
@@ -224,6 +259,10 @@ export class VoiceSessionController {
       assistantText: "",
       ownerText: "",
       lastError: null,
+      lastErrorLines: [],
+      contract: null,
+      contractNotice: null,
+      requestLog: [],
       latency: {},
       toolsRunning: [],
       sidebandLog: [],
@@ -233,6 +272,41 @@ export class VoiceSessionController {
       eventsPending: 0,
       legs: 1,
     };
+    this.portUnsubs.push(
+      deps.api.onRequest((entry) => {
+        this.patch({ requestLog: [...this.snapshot.requestLog, entry].slice(-REQUEST_LOG_MAX) });
+      }),
+    );
+  }
+
+  // ------------------------------------------------------------- contract
+
+  /**
+   * Ask the server which contract version it speaks (ADR-0045). Cached for
+   * the page load once the server answered (200 or 404); a network failure
+   * or a 401 is not cached, so the next Connect asks again. Never throws.
+   */
+  probeContract(): Promise<ResolvedContract | null> {
+    if (this.contract) return Promise.resolve(this.contract);
+    if (this.contractProbe) return this.contractProbe;
+    this.contractProbe = this.deps.api
+      .contract()
+      .then((probe) => {
+        const resolved = resolveContract(probe);
+        if (resolved && resolved.known) this.contract = resolved;
+        this.patch({
+          contract: resolved
+            ? { version: resolved.version, source: resolved.source, known: resolved.known, createFields: resolved.createFields }
+            : { version: null, source: "unauthorized", known: false, createFields: [] },
+          contractNotice: probe.outcome === "unknown" ? unknownVersionNotice(probe.reason) : this.snapshot.contractNotice,
+        });
+        this.log(`contract.${probe.outcome}${resolved ? `:v${resolved.version}` : ""}`);
+        return resolved;
+      })
+      .finally(() => {
+        this.contractProbe = null;
+      });
+    return this.contractProbe;
   }
 
   // ------------------------------------------------------------ observers
@@ -290,18 +364,39 @@ export class VoiceSessionController {
     this.patch({
       state: "creating",
       lastError: null,
+      lastErrorLines: [],
+      contractNotice: null,
       assistantText: "",
       ownerText: "",
       micMetrics: { ...EMPTY_MIC_METRICS },
     });
+    // ADR-0045: honour the contract version of the server we are talking to.
+    const contract = await this.probeContract();
+    if (!contract) {
+      this.fail("Oturum açık değil: Cloud Core kimlik doğrulaması gerekiyor; yeniden giriş yapın.");
+      return;
+    }
+    const wanted: Record<string, unknown> = {
+      client_kind: "web",
+      language: options.language,
+      ...(options.voice ? { voice: options.voice } : {}),
+    };
+    const checked = validateCreateBody(wanted, contract.version, contract.createSession);
+    if (checked.problems.length > 0) {
+      // The server would answer 422; say why before sending anything.
+      this.fail(`Oturum isteği sözleşmeye (v${contract.version}) uymuyor`, [problemsNotice(checked.problems)]);
+      return;
+    }
+    const dropped = droppedFieldsNotice(contract.version, checked.dropped);
+    if (dropped) {
+      this.log(`contract.dropped:${checked.dropped.join(",")}`);
+      this.patch({ contractNotice: [this.snapshot.contractNotice, dropped].filter(Boolean).join(" ") });
+    }
     let payload: SessionLegPayload;
     try {
-      payload = await this.deps.api.create({
-        language: options.language,
-        ...(options.voice ? { voice: options.voice } : {}),
-      });
+      payload = await this.deps.api.create(checked.body);
     } catch (error) {
-      this.fail(`Oturum oluşturulamadı: ${describe(error)}`);
+      this.fail(`Oturum oluşturulamadı: ${describe(error)}`, linesOf(error));
       return;
     }
     this.sessionId = payload.session_id;
@@ -329,7 +424,7 @@ export class VoiceSessionController {
     try {
       await this.openLeg(payload, options.deviceId);
     } catch (error) {
-      this.fail(`Medya bağlantısı kurulamadı: ${describe(error)}`);
+      this.fail(`Medya bağlantısı kurulamadı: ${describe(error)}`, linesOf(error));
       await this.closeServerSession("connect_failed");
       return;
     }
@@ -428,8 +523,8 @@ export class VoiceSessionController {
     }
   }
 
-  private fail(message: string): void {
-    this.patch({ state: "error", lastError: message });
+  private fail(message: string, lines: string[] = []): void {
+    this.patch({ state: "error", lastError: message, lastErrorLines: lines });
     this.reporter?.report({ kind: "error", payload: { error_class: "client_error", message } });
   }
 
@@ -1013,7 +1108,7 @@ export class VoiceSessionController {
       }
       this.reattachAttempts += 1;
       if (this.reattachAttempts >= policy.maxAttempts) {
-        this.fail(`Yeniden bağlanılamadı: ${describe(error)}`);
+        this.fail(`Yeniden bağlanılamadı: ${describe(error)}`, linesOf(error));
         return;
       }
       const delay = policy.baseDelayMs * 2 ** (this.reattachAttempts - 1);
@@ -1077,4 +1172,9 @@ function describe(error: unknown): string {
   if (error instanceof VoiceApiError) return `HTTP ${error.status}`;
   if (error instanceof Error) return error.message;
   return String(error);
+}
+
+/** The server's field/reason lines behind an API error (ADR-0045); empty for anything else. */
+function linesOf(error: unknown): string[] {
+  return error instanceof VoiceApiError ? error.lines : [];
 }

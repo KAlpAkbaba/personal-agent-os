@@ -205,13 +205,16 @@ describe("noise qualification metrics (ADR-0044 §7)", () => {
   });
 });
 
+/** ADR-0045: the contract probe (GET) precedes the create (POST). */
+const create = (requests: { method: string; body: unknown }[]) => requests.find((r) => r.method === "POST")?.body;
+
 describe("voice selection (ADR-0043 A/B)", () => {
   it("the create body carries the selected voice and the snapshot shows voice + profile", async () => {
     const t = await setup("cedar");
-    expect(t.core.requests[0].body).toMatchObject({ client_kind: "web", voice: "cedar" });
+    expect(create(t.core.requests)).toMatchObject({ client_kind: "web", voice: "cedar" });
     expect(t.controller.getSnapshot()).toMatchObject({ voice: "cedar", voiceProfile: "arbor" });
     const plain = await setup();
-    expect((plain.core.requests[0].body as Record<string, unknown>).voice).toBeUndefined();
+    expect((create(plain.core.requests) as Record<string, unknown>).voice).toBeUndefined();
     expect(plain.controller.getSnapshot().voice).toBeNull();
   });
 });

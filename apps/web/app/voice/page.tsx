@@ -239,8 +239,9 @@ function VoiceConsole() {
     rigRef.current = { playback, microphone, detector, store };
     setVoice(loadVoiceChoice());
 
+    const api = new VoiceSessionApi(apiFetch);
     const controller = new VoiceSessionController({
-      api: new VoiceSessionApi(apiFetch),
+      api,
       transportFactory: (descriptor: TransportDescriptor): RealtimeTransport => {
         if (descriptor.kind === "webrtc") {
           setSimulated(false);
@@ -262,8 +263,21 @@ function VoiceConsole() {
     });
     controllerRef.current = controller;
     const unsubscribe = controller.subscribe(setSnapshot);
+    // ADR-0045: the same scrubbed request record the diagnostics view shows,
+    // once per request on the dev console; never a header, never a credential.
+    const unsubscribeLog =
+      process.env.NODE_ENV === "development"
+        ? api.onRequest((entry) => {
+            // oxlint-disable-next-line no-console
+            console.debug("[voice] Cloud Core", entry);
+          })
+        : () => {};
+    // Ask the server which contract it speaks before the owner clicks Connect,
+    // so the voice selector can already say when the choice will not apply.
+    void controller.probeContract();
     return () => {
       unsubscribe();
+      unsubscribeLog();
       controller.dispose();
       detector.stop();
       playback.dispose();
@@ -442,6 +456,21 @@ function VoiceConsole() {
     gate?.classification === "speech" ? "var(--accent)" : gate?.classification === "background" ? "var(--warn)" : "#3a4256";
   const micName = applied?.label || profile?.friendlyName || devices.find((d) => d.deviceId === micId)?.label || "Varsayılan";
 
+  // ADR-0045: the A/B voice selector stays visible; on a server whose contract
+  // has no `voice` field it is marked unavailable instead of silently ignored.
+  const contract = snapshot?.contract ?? null;
+  const voiceUnavailable = contract !== null && contract.version !== null && !contract.createFields.includes("voice");
+  const contractLabel =
+    contract === null
+      ? "sorgulanıyor…"
+      : contract.source === "unauthorized"
+        ? "oturum açık değil"
+        : contract.source === "legacy"
+          ? `v${contract.version} (eski sunucu; ses seçimi yok)`
+          : contract.known
+            ? `v${contract.version} (sunucu)`
+            : `v${contract.version}? (sürüm bilinmiyor; paket içi varsayıldı)`;
+
   return (
     <main>
       <div className="status-row" style={{ borderBottom: "none", paddingBottom: 0 }}>
@@ -493,9 +522,15 @@ function VoiceConsole() {
                 ))}
             </select>
           </label>
-          <label className="muted">
-            Ses{" "}
-            <select value={voice} onChange={(e) => changeVoice(e.target.value)} aria-label="Ses" disabled={live || busy}>
+          <label className="muted" title={voiceUnavailable ? `Sunucu sözleşmesi v${contract?.version}: ses seçimi bu sürümde yok` : undefined}>
+            Ses{voiceUnavailable ? " (sunucuda kullanılamaz)" : ""}{" "}
+            <select
+              value={voice}
+              onChange={(e) => changeVoice(e.target.value)}
+              aria-label="Ses"
+              aria-disabled={voiceUnavailable || undefined}
+              disabled={live || busy || voiceUnavailable}
+            >
               {VOICE_CANDIDATES.map((v) => (
                 <option key={v} value={v}>
                   {VOICE_LABEL[v]}
@@ -535,6 +570,10 @@ function VoiceConsole() {
             </span>
           </div>
           <div className="status-row">
+            <span>Sözleşme</span>
+            <span className="muted">{contractLabel}</span>
+          </div>
+          <div className="status-row">
             <span>Tur</span>
             <span className="muted">{snapshot.turn}</span>
           </div>
@@ -559,8 +598,18 @@ function VoiceConsole() {
               <span className="muted">{snapshot.toolsRunning.join(", ")}</span>
             </div>
           )}
+          {snapshot.contractNotice && (
+            <p className="muted" style={{ color: "var(--warn)" }}>{snapshot.contractNotice}</p>
+          )}
           {snapshot.lastError && (
-            <p className="muted" style={{ color: "var(--fail)" }}>{snapshot.lastError}</p>
+            <div style={{ color: "var(--fail)" }}>
+              <p className="muted" style={{ color: "inherit", margin: 0 }}>{snapshot.lastError}</p>
+              {snapshot.lastErrorLines.map((line, i) => (
+                <p className="muted" style={{ color: "inherit", margin: "0.2rem 0 0 1rem", fontSize: "0.85rem" }} key={`${i}-${line}`}>
+                  {line}
+                </p>
+              ))}
+            </div>
           )}
         </div>
       )}
@@ -746,6 +795,32 @@ function VoiceConsole() {
                     : ""}
               </span>
             </div>
+          )}
+          <div className="status-row">
+            <span>Sunucu sözleşmesi</span>
+            <span className="muted">
+              {contractLabel}
+              {contract && contract.createFields.length ? ` · oturum alanları: ${contract.createFields.join(", ")}` : ""}
+            </span>
+          </div>
+          <div className="status-row" style={{ alignItems: "flex-start" }}>
+            <span>Cloud Core istekleri</span>
+            <span className="muted" style={{ textAlign: "right", maxWidth: "75%" }}>
+              {snapshot.requestLog.length === 0 ? "—" : `son ${snapshot.requestLog.length} istek (başlıksız, kimlik bilgisi temizlenmiş)`}
+            </span>
+          </div>
+          {snapshot.requestLog.length > 0 && (
+            <pre className="muted" style={{ maxHeight: 220, overflow: "auto", fontSize: "0.75rem", margin: "0 0 0.6rem", whiteSpace: "pre-wrap" }}>
+              {snapshot.requestLog
+                .toReversed()
+                .map((entry) => {
+                  const status = entry.status === null ? `ağ hatası${entry.error ? `: ${entry.error}` : ""}` : `HTTP ${entry.status}`;
+                  const body = entry.body ? ` ${JSON.stringify(entry.body).slice(0, 300)}` : "";
+                  const detail = entry.detail.length ? `\n    ${entry.detail.join("\n    ")}` : "";
+                  return `#${entry.seq} ${entry.method} ${entry.path} → ${status}${body}${detail}`;
+                })
+                .join("\n")}
+            </pre>
           )}
           {applied && (
             <>

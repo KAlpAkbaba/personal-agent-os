@@ -65,8 +65,10 @@ describe("VoiceSessionController", () => {
   it("creates the session, opens the mic and the leg, and reports LISTENING", async () => {
     const t = await setup();
     expect(t.controller.getSnapshot().state).toBe("listening");
-    expect(t.core.requests[0]).toMatchObject({ method: "POST", path: "/v1/voice/realtime/sessions" });
-    expect((t.core.requests[0].body as { client_kind: string }).client_kind).toBe("web");
+    // ADR-0045: the contract probe goes first, then the create.
+    expect(t.core.requests[0]).toMatchObject({ method: "GET", path: "/v1/voice/realtime/contract" });
+    expect(t.core.requests[1]).toMatchObject({ method: "POST", path: "/v1/voice/realtime/sessions" });
+    expect((t.core.requests[1].body as { client_kind: string }).client_kind).toBe("web");
     expect(t.microphone.opened).toEqual([undefined]);
     expect(t.localSpeech.started).toBe(1);
     expect(t.transport.connects[0].credential.secret).toBe("ephemeral-1");

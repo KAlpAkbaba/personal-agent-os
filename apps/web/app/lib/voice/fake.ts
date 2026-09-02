@@ -33,6 +33,7 @@ import type {
   SpeechDetectorCalibration,
   SpeechDetectorStats,
 } from "./ports";
+import { BUNDLED_CONTRACT, CONTRACT_PATH, type ContractDocument, createSessionFields } from "./session-contract";
 import type {
   AudioInput,
   AudioOutput,
@@ -352,6 +353,16 @@ export class FakeNetwork implements NetworkMonitor {
 
 export type RecordedRequest = { method: string; path: string; body: unknown };
 
+/**
+ * How the fake answers `GET /v1/voice/realtime/contract` (ADR-0045):
+ * - `served` (default): 200 with the bundled document, i.e. a current server;
+ * - a document: 200 with exactly that (a newer server than the bundle);
+ * - `legacy`: 404, the route does not exist — a contract v1 server;
+ * - `unauthorized`: 401 (what the real API answers without a valid bearer);
+ * - `network`: the fetcher throws, as `fetch` does when the host is unreachable.
+ */
+export type FakeContractMode = "served" | "legacy" | "unauthorized" | "network" | ContractDocument;
+
 export type FakeCloudCoreOptions = {
   transport?: string;
   provider?: string;
@@ -359,7 +370,12 @@ export type FakeCloudCoreOptions = {
   tools?: ToolManifestEntry[];
   /** name → response for a relayed tool call */
   toolResponses?: Record<string, Partial<ToolCallResponse>>;
+  contract?: FakeContractMode;
+  /** a v1 server: `extra="forbid"` refuses `voice` exactly like the deployed release did */
+  legacyCreate?: boolean;
 };
+
+type ForcedFailure = { status: number; detail: unknown };
 
 /**
  * In-memory stand-in for `/v1/voice/realtime/sessions/*` with the behaviour
@@ -375,7 +391,7 @@ export class FakeCloudCore {
   minted = 0;
   legs = 1;
   closed: string | null = null;
-  private failures = new Map<string, number[]>();
+  private failures = new Map<string, ForcedFailure[]>();
   /** which owner leg currently holds the session; the client is leg "web-1" */
   currentLeg = "web-1";
   clientLeg = "web-1";
@@ -383,11 +399,26 @@ export class FakeCloudCore {
 
   constructor(private readonly options: FakeCloudCoreOptions = {}) {}
 
-  /** Make the next call to `pathSuffix` answer with `status` (queued FIFO). */
-  failNext(pathSuffix: string, status: number): void {
+  /** Make the next call to `pathSuffix` answer with `status` (queued FIFO), optionally with a body. */
+  failNext(pathSuffix: string, status: number, detail?: unknown): void {
     const list = this.failures.get(pathSuffix) ?? [];
-    list.push(status);
+    list.push({ status, detail: detail === undefined ? { detail: `forced ${status}` } : detail });
     this.failures.set(pathSuffix, list);
+  }
+
+  /** The deployed v1 server's answer to a body carrying `voice` (verbatim shape). */
+  static extraForbidden(field: string): unknown {
+    return {
+      detail: [
+        {
+          type: "extra_forbidden",
+          loc: ["body", field],
+          msg: "Extra inputs are not permitted",
+          input: "REDACTED-BY-TEST",
+          url: "https://errors.pydantic.dev/2.11/v/extra_forbidden",
+        },
+      ],
+    };
   }
 
   queueSideband(event: SidebandFrame["event"], payload: Record<string, unknown>): void {
@@ -467,12 +498,25 @@ export class FakeCloudCore {
     this.requests.push({ method, path, body });
     for (const [suffix, list] of this.failures) {
       if (path.endsWith(suffix) && list.length) {
-        const status = list.shift() as number;
-        return this.json(status, { detail: `forced ${status}` });
+        const forced = list.shift() as ForcedFailure;
+        return this.json(forced.status, forced.detail);
       }
+    }
+    if (path === CONTRACT_PATH && method === "GET") {
+      const mode = this.options.contract ?? "served";
+      if (mode === "network") throw new TypeError("Failed to fetch");
+      if (mode === "unauthorized") return this.json(401, { detail: "Not authenticated" });
+      if (mode === "legacy") return this.json(404, { detail: "Not Found" });
+      return this.json(200, mode === "served" ? BUNDLED_CONTRACT : mode);
     }
     const base = "/v1/voice/realtime/sessions";
     if (path === base && method === "POST") {
+      if (this.options.legacyCreate) {
+        const extra = Object.keys((body as Record<string, unknown>) ?? {}).find(
+          (key) => !createSessionFields(1).includes(key),
+        );
+        if (extra) return this.json(422, FakeCloudCore.extraForbidden(extra));
+      }
       const wanted = (body as { voice?: unknown } | undefined)?.voice;
       // routes.py: optional, pattern ^[a-z]{2,16}$; anything else is a 422.
       if (wanted !== undefined && (typeof wanted !== "string" || !/^[a-z]{2,16}$/.test(wanted))) {
