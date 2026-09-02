@@ -218,6 +218,17 @@ can redirect mid-task without a disconnected conversation. Gap analysis in
 `docs/VOICE_GAP_ANALYSIS.md`, specification in `docs/M12_REALTIME_VOICE_SPEC.md`,
 acceptance in `docs/ACCEPTANCE_TESTS.md` (M12).
 
+Status 2026-09-02 — **foundation built and gated offline; nothing PROVEN_REAL yet.** All
+five tracks are on `main` (ADR-0036 session service + simulator + benchmark harness +
+Turkish intents; ADR-0038 OpenAI Realtime adapter, key-gated, simulator barred outside
+dev; ADR-0037/0039 Windows companion audio client speaking the server contract, with the
+`voice_sideband` frame riding the device protocol additively; ADR-0040 web WebRTC client;
+ADR-0041 the owner credential path). Independent security + verification reviews closed
+(one High, one Medium and a scrubber bypass fixed with regressions). `docs/QUALIFICATION.md`
+Stage 6 pre-registers 14 criteria, all `NOT_YET_PROVEN`: the next two steps are the owner's
+provider credential (`docs/OWNER_ACTIONS.md` item 6) and then the real-microphone Turkish
+session on the owner's PC, which is the only thing that can move those rows.
+
 ## M13 — Real Browser + Research
 
 The owner's actual use case, end to end and real: voice/text request → Hetzner planner →

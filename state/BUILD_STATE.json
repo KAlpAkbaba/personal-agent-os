@@ -2,9 +2,9 @@
   "schema_version": 1,
   "project": "personal-agent-os",
   "current_milestone": "M12_REALTIME_VOICE_FOUNDATION",
-  "status": "IN_PROGRESS",
+  "status": "IN_PROGRESS_AWAITING_OWNER_CREDENTIAL",
   "last_completed_milestone": "REAL_CLOUD_BRINGUP",
-  "last_updated": "2026-09-02T16:00:00+03:00",
+  "last_updated": "2026-09-02T16:30:00+03:00",
   "qualification": {
     "matrix": "docs/QUALIFICATION.md",
     "owner_queue": "docs/OWNER_ACTIONS.md",
@@ -23,17 +23,34 @@
     "last_updated": "2026-09-02"
   },
   "owner_actions_pending": [
-    "NONE CURRENT. Next expected owner dependencies, batched: (1) a realtime voice provider credential (OpenAI Realtime is the primary candidate) once the real-provider path is built behind the abstraction and a fake-provider run passes; (2) real-microphone/headset Turkish voice qualification on the Windows machine; (3) browser login/authorisation for the owner's Chrome session in M13; (4) a physical phone in M15.",
+    "CURRENT: realtime voice provider credential (OpenAI Realtime). docs/OWNER_ACTIONS.md item 6: secret-store.ps1 -Set PAGENTOS_VOICE_OPENAI_API_KEY; secret-store.ps1 -Run realtime_smoke.py; scripts/cloud/set-cloud-secret.ps1 -Name PAGENTOS_VOICE_OPENAI_API_KEY. Then the real-microphone Turkish voice session (its own single action). Later: Chrome authorisation for M13; a phone for M15.",
     "M8 asset enrollment: enroll the real hosts/networks/devices you authorize, with evidence and scope.",
     "HARD GATE - runtime confinement before enabling any I/O-capable generated operation or a non-deterministic skill generator (M7 review verdict (d)).",
     "Deferred: 2.2b fresh-logon companion autostart and full Windows reboot proof land incidentally at the next natural sign-out/reboot.",
     "Recommended, non-blocking: move Docker Desktop disk image location from C: to E:."
   ],
   "quality_gate": {
-    "status": "PASS",
-    "last_run": "2026-09-01",
-    "scope": "Full gate: secret hygiene (incl. shape-based pagentos credential scan), ruff, API unit + integration, PS5.1 suites (syntax+API-lint 30 scripts, strictmode 21, invocation 28, deploy 11, ACL 26, machine-readable 18, identity-restore 5 with a real loopback enrollment), recovery supervisor, browser, Windows agent 134 xUnit, web build. Exit 0.",
-    "ci": "GREEN 2026-09-02 on f33718e (7/7): secret hygiene incl. shape-based credential scan, API lint+unit (1324), API integration, recovery supervisor, browser unit+e2e, Windows agent 134 xUnit + NINE PS5.1 suites on the real 5.1 engine (syntax+API lint, strictmode, invocation, deploy, ACL, machine-readable, identity-restore, provisioning+collision lint, config-swap), web build. Every job bounded with timeout-minutes."
+    "status": "PASS - full gate on f1de20e: every step PASS except the Windows agent step, which failed on a contention-only flake (2 OrchestratorTests); fixed in b4253e0 (DrainAsync) and the Windows step re-run green: solution-level 2x (145 + 135) plus 3 concurrent audio-suite runs, 0 failures. CI re-run on the pushed head is the record.",
+    "last_run": "2026-09-02",
+    "scope": "Full gate on merged main after M12 tracks A+E, B, C, C2, D and the credential path: secret hygiene (shape-based scan), ruff, API unit 1609 + integration, PS5.1 suites incl. the new cloud-secret suite (33), recovery supervisor, browser, Windows agent 145 + 134 xUnit, web build.",
+    "ci": "GREEN 2026-09-02 on 9e213ae (7/7) after every M12 merge; each track was independently verified in its worktree before merging (ruff/pytest, dotnet build+test, vitest/oxlint/next build) and re-verified on the merged tree."
   },
-  "notes": "RQ-1 and RQ-2 closed: the whole system is proven on real infrastructure end to end. The product phase begins with M12 Realtime Voice Foundation (ADR-0034: capability-driven native speech-to-speech provider abstraction, direct media path, sideband tool channel to Hetzner, explicit modes ConversationRealtime/Narration/Transcription/VoiceIdentity, quantitative latency benchmarks) with M13 Real Browser + Research prepared in parallel. Real-only acceptance for every product milestone. Gap analysis: docs/VOICE_GAP_ANALYSIS.md; spec: docs/M12_REALTIME_VOICE_SPEC.md."
+  "notes": "RQ-1 and RQ-2 closed on real infrastructure. M12 Realtime Voice Foundation: every track on main, reviews closed, offline gates green, QUALIFICATION Stage 6 pre-registered and empty. The system is now waiting on the one thing only the owner can do - the provider credential - after which the real-microphone session is the next and only path to PROVEN_REAL. M13 skeleton unchanged (ADR-0035) with the pipeline-level provenance gate added.",
+  "m12_realtime_voice": {
+    "status": "FOUNDATION_COMPLETE_OFFLINE_GATED; NOTHING PROVEN_REAL",
+    "decisions": "ADR-0034 (architecture), ADR-0036 (A+E), ADR-0037 (C), ADR-0038 (B), ADR-0039 (C2 integration), ADR-0040 (D), ADR-0041 (credential path)",
+    "spec": "docs/M12_REALTIME_VOICE_SPEC.md; gap analysis docs/VOICE_GAP_ANALYSIS.md; provider survey docs/research/realtime-providers-2026-09.md",
+    "on_main": {
+      "cloud_core": "services/api/app/voice/realtime_sessions/* (owner-gated session service: create/attach/tool relay idempotent on call_id/events/close, leg-mismatch 409 on every mutating endpoint incl. /complete, live-check 410, normalized forbidden-key scrubber, sideband push with HTTP backlog), selection.py (capability-driven), simulator.py (dev-only), realtime_bench.py (5 metrics), intents.py (Turkish), providers_openai_realtime.py (key-gated adapter; descriptor keys sdp_exchange_url/data_channel/dialect=openai-realtime; scripts/realtime_smoke.py exits 3 without key), alembic 0011",
+      "windows_companion": "devices/windows-agent/src/PagentOS.Companion.Audio (WASAPI capture/playback, AEC via Communications category, VAD + Turkish hesitation guard, barge-in, WebSocket media leg, server-contract sideband client, DPAPI token source); voice_sideband frame additive in schema + MessageValidator + AgentConnection + one-way pipe forward (16 KiB bound); companion opt-in via VoiceEnabled=false default / --voice",
+      "web": "apps/web/app/lib/voice/* + /voice page (WebRTC leg driven by the transport descriptor, dialect registry, barge-in stop-first, hesitation guard, tool relay, reattach); oxlint replaces next lint (Next 16 + TS 7.0)",
+      "owner_credential_path": "scripts/secret-store.ps1 -Set (DPAPI, masked) -> scripts/cloud/set-cloud-secret.ps1 (Tailscale SSH stdin only -> /opt/pagentos/.env -> api restart -> provider verified); compose passes PAGENTOS_VOICE_OPENAI_API_KEY optionally, PAGENTOS_ENVIRONMENT=prod"
+    },
+    "reviews": "security-reviewer + test-engineer (mutation probes) on A+E and M13 prep: High (/complete skipped leg+live gate) FIXED, Medium (provenance only in one synthesis provider) FIXED at pipeline level, scrubber bypass apiKey/api-key FIXED; two Low items carried forward in ADR-0036 addendum",
+    "tests": "API unit 1533 -> 1609 (+ realtime sessions/sideband/adapter/bench/intents); Agent.Tests 138 -> 145 (existing unmodified); Companion.Audio.Tests 0 -> 134; apps/web vitest 0 -> 36; PS5.1 cloud-secret suite 33 (real native fake ssh); 44 scripts syntax-linted",
+    "qualification": "docs/QUALIFICATION.md Stage 6: 14 rows pre-registered, all NOT_YET_PROVEN. Simulator/fakes gate the code and prove nothing.",
+    "known_unverified": "vendor Turkish quality; GA audio-format nesting (smoke echo confirms); usable ephemeral lifetime; provider speech-during-tool behaviour; all WASAPI code untested on hardware; OpenAI codec session.update still beta-era names pending the smoke",
+    "next": "OWNER: provider credential (docs/OWNER_ACTIONS.md item 6, three local commands, value never shown). THEN: real-microphone Turkish session on the owner's PC with the benchmark harness -> Stage 6 rows.",
+    "last_updated": "2026-09-02"
+  }
 }

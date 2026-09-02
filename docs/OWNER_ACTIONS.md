@@ -21,7 +21,12 @@ Status vocabulary matches `docs/QUALIFICATION.md`: `PROVEN_REAL`, `PROVEN_PROXY`
 
 ## Now
 
-**Nothing.** The cloud milestone is closed on real evidence and the infrastructure is a frozen proven baseline. The product phase (M12 Realtime Voice Foundation, with M13 Real Browser + Research in parallel) is being built autonomously. The next owner dependency will be one of: a realtime voice provider credential once the real-provider path exists behind the abstraction; a real-microphone Turkish voice qualification session; Chrome session authorisation for research; a physical phone. You will get exactly one concrete action when one of those is genuinely due.
+**Item 6 below: the realtime voice provider credential.** M12's real-provider path now
+exists behind the abstraction (OpenAI Realtime adapter, ADR-0038), every fake-provider gate
+passes, and the only thing between the system and a real speech-to-speech session is a key
+that only you can create. Three local commands, none of which shows the value anywhere.
+Nothing else is waiting on you: the real-microphone Turkish voice session comes after this
+and will be its own single action.
 
 ---
 
@@ -56,23 +61,23 @@ Provisioned: server 164238173 (pagentos-core, cpx32, nbg1, running), 100 GB volu
 firewall, SSH key. SKU chosen by the owner after the 15 June 2026 price rise — see
 ADR-0033.
 
-### 3b. Break-glass session to finish the tailnet join — **this is the current action**
+### 3b. Break-glass session to finish the tailnet join — **DONE (2026-09-02)**
+
+Completed: the host joined the tailnet as a non-ephemeral node, the temporary SSH rule was
+removed automatically, and Stage 5 closed PROVEN_REAL end to end (Hetzner → Tailscale →
+DeviceService → Companion → real Notepad → ACK, plus all five recovery scenarios).
 
 Unblocks: 5.2b, 5.3, 5.4 and every criterion after them. See **Now** above.
 
-### 4. Bootstrap the owner credential on the real deployment
+### 4. Bootstrap the owner credential on the real deployment — **DONE (2026-09-02)**
 
-Unblocks: authenticated use of the deployed system. One command, on the machine hosting the
-API, and the credential is shown exactly once:
+Completed during the cloud migration: the cloud Owner Credential was minted host-side
+through the loopback-only guard and shown exactly once in your local elevated console.
+The server keeps only its hash. If it is ever lost, rotate on the host:
 
 ```powershell
-.\scripts\bootstrap-owner-credential.ps1
+ssh root@pagentos-core "docker exec pagentos-prod-api uv run python -m app.identity.recover --rotate"
 ```
-
-Put it in your password manager immediately. The server keeps only its SHA-256 hash, the
-script writes nothing to disk, and it refuses to run under PowerShell transcription because a
-transcript would capture the credential in plaintext. If it is ever lost, rotate on the host
-with `.\scripts\bootstrap-owner-credential.ps1 -Rotate`.
 
 ### 5. Enroll the owner's browser session
 
@@ -81,20 +86,46 @@ Unblocks: real-browser qualification against sites you are already signed into.
 The agent will give you the exact enrollment step when it reaches this point; it needs the
 browser closed once, and it never asks for a password.
 
-### 6. Voice provider keys, and recording owner speech samples
+### 6. Realtime voice provider credential (OpenAI Realtime) — **this is the current action**
 
-Unblocks: real Turkish STT/TTS qualification and speaker enrollment.
+Unblocks: the first real speech-to-speech session (M12), and with it the real-microphone
+Turkish voice qualification. Until this key exists the realtime surface is built, gated and
+tested against a simulator only; nothing in `docs/QUALIFICATION.md` Stage 6 can move.
 
-Create accounts for the providers that survive the benchmark, then store each key locally —
-typed into a masked prompt, encrypted to your Windows account, never in the repository and
-never in a chat:
+What you need: an OpenAI API key with access to the Realtime API (`gpt-realtime`). Create it
+in your OpenAI account; the agent never sees it.
 
-```powershell
-.\scripts\secret-store.ps1 -Set PAGENTOS_VOICE_<PROVIDER>_API_KEY
-```
+Three commands from the repository root, in an ordinary (non-elevated) PowerShell:
 
-Then record several short samples: quiet room, normal office, mildly noisy. The agent will
-say exactly how many and how long when it reaches that step.
+1. Store it locally. The prompt is masked; the value is DPAPI-encrypted to your Windows
+   account and readable by nothing else:
+
+   ```powershell
+   .\scripts\secret-store.ps1 -Set PAGENTOS_VOICE_OPENAI_API_KEY
+   ```
+
+2. Prove it works, with exactly one real call (mints one 60-second ephemeral credential,
+   prints the vendor's session shape with every secret scrubbed; exit 0 = good, 1 = the
+   vendor refused, 3 = key not found):
+
+   ```powershell
+   .\scripts\secret-store.ps1 -Run "uv run python scripts/realtime_smoke.py" -WorkingDirectory services\api
+   ```
+
+3. Ship it to the cloud host over Tailscale SSH. The value travels on stdin only, lands in
+   `/opt/pagentos/.env` (0600, root), the API restarts, and the script confirms from this
+   machine that the realtime surface now lists `openai-realtime`:
+
+   ```powershell
+   .\scripts\cloud\set-cloud-secret.ps1 -Name PAGENTOS_VOICE_OPENAI_API_KEY
+   ```
+
+Then tell the agent it is done (a word is enough). What happens next, automatically: the
+cloud health check is re-verified, and the next action prepared is the real-microphone
+session on this PC (headset, Turkish, the M12 evaluation sets), which is the only way
+Stage 6 rows become PROVEN_REAL.
+
+Speaker-verification samples (VoiceIdentity) come later and will be their own step.
 
 ### 7. A phone
 
