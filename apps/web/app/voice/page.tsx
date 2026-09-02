@@ -41,6 +41,7 @@ import {
   type TransportDescriptor,
   TransportConfigError,
 } from "../lib/voice/transport";
+import { copySessionId, shortSessionId } from "../lib/voice/session-id";
 import type { UplinkShaper } from "../lib/voice/uplink";
 import { WebRtcTransport } from "../lib/voice/webrtc";
 
@@ -183,6 +184,9 @@ function VoiceConsole() {
   const [voice, setVoice] = useState<VoiceChoice>("marin");
   const [benchmark, setBenchmark] = useState<"idle" | "running" | "done" | "failed">("idle");
   const [copied, setCopied] = useState(false);
+  const [idCopied, setIdCopied] = useState<"idle" | "copied" | "failed">("idle");
+  /** read-only holder of the full session id: the legacy copy fallback selects it */
+  const sessionIdInputRef = useRef<HTMLInputElement | null>(null);
 
   /** Persist + publish a profile change (the ref is what the audio rig reads). */
   const commitProfile = useCallback((next: MicrophoneProfile) => {
@@ -438,6 +442,36 @@ function VoiceConsole() {
     }
   }, [applied, mic]);
 
+  /**
+   * Copy the CANONICAL full session id (the owner once re-typed it from network
+   * traffic and transposed two hex characters). Works after disconnect too: the
+   * controller keeps the last id until a new session starts.
+   */
+  const copyId = useCallback(async () => {
+    const { outcome } = await copySessionId(snapshot?.sessionId, {
+      clipboard: typeof navigator === "undefined" ? null : (navigator.clipboard ?? null),
+      fallback: (text) => {
+        const input = sessionIdInputRef.current;
+        if (!input) return false;
+        input.value = text;
+        input.focus();
+        input.select();
+        input.setSelectionRange(0, text.length);
+        // Deprecated but still the only path when the async API is refused
+        // (insecure origin, denied permission); the selection stays for Ctrl+C.
+        return typeof document.execCommand === "function" && document.execCommand("copy");
+      },
+    });
+    setIdCopied(outcome === "failed" ? "failed" : "copied");
+    setTimeout(() => setIdCopied("idle"), 1500);
+  }, [snapshot?.sessionId]);
+
+  const copyIdButton = snapshot?.sessionId ? (
+    <button onClick={copyId} style={smallButton} title={snapshot.sessionId} aria-label="Session ID kopyala">
+      {idCopied === "copied" ? "Kopyalandı" : idCopied === "failed" ? "Kopyalanamadı (seçildi)" : "Session ID kopyala"}
+    </button>
+  ) : null;
+
   const gate = mic?.gate ?? null;
   const detection =
     !mic || mic.phase === "idle"
@@ -562,11 +596,24 @@ function VoiceConsole() {
           </div>
           <div className="status-row">
             <span>Oturum</span>
-            <span className="muted">
-              {snapshot.sessionId
-                ? `${snapshot.sessionId.slice(0, 8)}… · ${snapshot.provider} · ${snapshot.transport} · bacak ${snapshot.legs}` +
-                  ` · ses: ${snapshot.voice ?? voice} · profil: ${snapshot.voiceProfile ?? "—"}`
-                : `ses: ${voice}`}
+            <span className="muted" style={{ display: "inline-flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+              <span title={snapshot.sessionId ?? undefined}>
+                {snapshot.sessionId
+                  ? `${shortSessionId(snapshot.sessionId)} · ${snapshot.provider} · ${snapshot.transport} · bacak ${snapshot.legs}` +
+                    ` · ses: ${snapshot.voice ?? voice} · profil: ${snapshot.voiceProfile ?? "—"}`
+                  : `ses: ${voice}`}
+              </span>
+              {copyIdButton}
+              {snapshot.sessionId && (
+                <input
+                  ref={sessionIdInputRef}
+                  readOnly
+                  value={snapshot.sessionId}
+                  aria-label="Oturum kimliği (tam)"
+                  tabIndex={-1}
+                  style={{ position: "absolute", left: -9999, width: 1, height: 1, opacity: 0 }}
+                />
+              )}
             </span>
           </div>
           <div className="status-row">
@@ -796,6 +843,13 @@ function VoiceConsole() {
               </span>
             </div>
           )}
+          <div className="status-row">
+            <span>Oturum kimliği (tam)</span>
+            <span className="muted" style={{ display: "inline-flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+              <code style={{ userSelect: "all" }} title={snapshot.sessionId ?? undefined}>{snapshot.sessionId ?? "—"}</code>
+              {copyIdButton}
+            </span>
+          </div>
           <div className="status-row">
             <span>Sunucu sözleşmesi</span>
             <span className="muted">
