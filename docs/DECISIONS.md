@@ -861,3 +861,40 @@ contains a space: the incident reproduced (`$null` → `ArgumentException`, live
 untouched), absolute-path and same-volume enforcement, the replace itself, a stale staging
 file, an existing backup, validation before going live, the caller's validator refusing a
 config that lost its identity, rollback, idempotence, and the post-replace DACL.
+
+## Incident — cloud owner bootstrap returned 403 (2026-09-02)
+
+The migration reached the cloud owner-credential bootstrap and the mint failed with HTTP 403
+before any credential was shown. Diagnosed from the guard, the deployment shape and the
+root's state — not by retrying:
+
+- the cloud identity root was **absent** (`/mnt/pagentos-data/identity/owner_credential.json`
+  does not exist), so this was never a "second owner" 409; no owner exists yet;
+- `_require_loopback` accepts only `request.client.host` ∈ `{127.0.0.1, ::1, localhost,
+  testclient}` and refuses with a coarse 403, fail-closed (M9 review #3);
+- the request was `curl -X POST http://127.0.0.1:8001/...` run **on the host** against the
+  **published** container port. Through Docker port publishing the API sees that request
+  arriving from the bridge gateway (`172.x`), not from 127.0.0.1. The guard cannot tell NAT
+  from a stranger and refused — which is the guard working, not failing.
+
+Decision: **the guard is not loosened.** The canonical host-side bootstrap for a containerised
+Cloud Core is made *from inside the API's own network namespace*:
+
+    docker exec pagentos-prod-api curl -fsS -X POST http://127.0.0.1:8001/v1/identity/bootstrap
+
+`docker exec` requires root on the host (Tailscale SSH), which is exactly the trust boundary
+bootstrap is defined by — "the owner is on the machine". The request is made from where the
+guard can see it is local; nothing about who may mint owner authority changed. This is the
+containerised form of ADR-0027's rule that owner recovery happens on the host, never through
+the network-facing API.
+
+A second defect in the same script, fixed alongside: a native command's non-zero exit does
+not throw in PowerShell, so the first run sailed past the 403 straight into "paste the
+credential" with nothing to paste. The mint's exit code is now checked and the script stops
+there, with the meaning of 403 vs 409 spelled out. `-StartPhase Bootstrap` resumes at this
+exact phase and verifies the completed broker switch in place instead of redoing it.
+
+Also observed: Tailscale SSH's periodic re-authentication check for root sessions surfaced
+during diagnosis ("Tailscale SSH requires an additional check"). It is a browser link only
+the owner can open; it gates the agent's host access but not the owner's own run, where the
+link appears in their console.

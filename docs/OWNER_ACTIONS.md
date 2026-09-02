@@ -21,27 +21,25 @@ Status vocabulary matches `docs/QUALIFICATION.md`: `PROVEN_REAL`, `PROVEN_PROXY`
 
 ## Now
 
-**Resume the migration at the broker switch.** The cloud steps are done and stay done:
-Cloud Core healthy on the tailnet, the device's public identity read, the existing device
-registered in the cloud database with its id and capabilities intact, no private key
-transported. The switch itself failed inside `File.Replace` (PowerShell hands `$null` to a
-`[string]` parameter as an empty string, which .NET refuses as a path) and left the live
-configuration untouched - the agent still points at `127.0.0.1`.
+**Resume at the cloud owner bootstrap.** The broker switch succeeded and is preserved (the
+agent dials `http://100.90.158.26:8001`); the device row in the cloud database is intact. The
+bootstrap returned 403 because it was called on the host against the *published* port, so
+the API saw it arriving from the Docker bridge, not from 127.0.0.1, and its loopback-only
+guard refused - correctly. No credential was minted; the cloud owner does not exist yet.
 
-In an **elevated** PowerShell at the repository root:
+The fix makes the request from inside the API's own network namespace (`docker exec`), which
+only root on the host can do - the guard is unchanged. In an **elevated** PowerShell at the
+repository root:
 
 ```powershell
-.\scripts\cloud\migrate-agent-to-cloud.ps1 -BrokerHost 100.90.158.26 -StartPhase SwitchBroker
+.\scripts\cloud\migrate-agent-to-cloud.ps1 -BrokerHost 100.90.158.26 -StartPhase Bootstrap
 ```
 
-It skips the completed steps, runs the switch as a journaled transaction (stage -> validate ->
-stop -> atomic replace with a real backup -> verify ACL -> start -> verify -> commit, with
-rollback to the previous configuration on any failure), then bootstraps the cloud's own
-owner credential **in your console, once** via Tailscale SSH, and mints a DPAPI-encrypted
-automation session so the credential is typed exactly once. Put that credential in your
-password manager when it appears.
-
-Rollback at any time: `.\scripts\switch-agent-broker.ps1 -Rollback`.
+If a line saying `Tailscale SSH requires an additional check` with a login URL appears, open
+that URL in your browser and the session continues - it is Tailscale's periodic
+re-authentication for root SSH, not an error. The credential is then shown **once, in that
+console**; put it in your password manager, paste it at the prompt, and the DPAPI automation
+session is minted. If the mint fails now, the script stops before the prompt and says why.
 
 ---
 

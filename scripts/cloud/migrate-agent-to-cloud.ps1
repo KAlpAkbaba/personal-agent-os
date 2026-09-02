@@ -37,7 +37,9 @@ param(
     # (already done on the real machine) and resumes at the broker switch; "All" runs
     # everything. Idempotent either way: registration re-runs are harmless, but there is no
     # reason to re-read machine material for a step that already completed.
-    [ValidateSet("All", "SwitchBroker")]
+    # "Bootstrap" resumes at the cloud owner-credential bootstrap: the switch to the cloud
+    # broker already succeeded and is verified in place rather than redone.
+    [ValidateSet("All", "SwitchBroker", "Bootstrap")]
     [string]$StartPhase = "All"
 )
 
@@ -48,6 +50,8 @@ Set-StrictMode -Version Latest
 
 $shouldSwitch = -not [bool]$SkipSwitch
 $resumeAtSwitch = ($StartPhase -eq "SwitchBroker")
+$resumeAtBootstrap = ($StartPhase -eq "Bootstrap")
+if ($resumeAtBootstrap) { $resumeAtSwitch = $true }   # everything before the switch is also done
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $ssh = Join-Path $env:SystemRoot "System32\OpenSSH\ssh.exe"
 $scp = Join-Path $env:SystemRoot "System32\OpenSSH\scp.exe"
@@ -139,14 +143,26 @@ if (-not $shouldSwitch) {
     return
 }
 
-Write-Host ""
-Write-Host "=== 4. switching the installed agent to the tailnet endpoint ===" -ForegroundColor Cyan
-& (Join-Path $repoRoot "scripts\switch-agent-broker.ps1") -BrokerHost $BrokerHost -Port $Port `
-    -ServiceName $ServiceName -InstallRoot $InstallRoot
+if ($resumeAtBootstrap) {
+    # The switch is done; prove it rather than assume it, then move on.
+    Write-Host ""
+    Write-Host "=== 4. skipped (-StartPhase Bootstrap): verifying the switch already in place ===" -ForegroundColor Cyan
+    $liveConfig = [System.IO.File]::ReadAllText((Join-Path $InstallRoot "service\appsettings.json")) | ConvertFrom-Json
+    if ($liveConfig.BrokerRestUrl -ne $baseUrl) {
+        throw "the installed agent dials $($liveConfig.BrokerRestUrl), not $baseUrl - the switch is NOT in place; re-run with -StartPhase SwitchBroker"
+    }
+    Write-Host "  installed agent dials $baseUrl (preserved)"
+}
+else {
+    Write-Host ""
+    Write-Host "=== 4. switching the installed agent to the tailnet endpoint ===" -ForegroundColor Cyan
+    & (Join-Path $repoRoot "scripts\switch-agent-broker.ps1") -BrokerHost $BrokerHost -Port $Port `
+        -ServiceName $ServiceName -InstallRoot $InstallRoot
 
-Write-Host ""
-Write-Host "The agent now dials the Cloud Core over the tailnet, with the same device identity." -ForegroundColor Green
-Write-Host "Rollback, if ever needed:  .\scripts\switch-agent-broker.ps1 -Rollback"
+    Write-Host ""
+    Write-Host "The agent now dials the Cloud Core over the tailnet, with the same device identity." -ForegroundColor Green
+    Write-Host "Rollback, if ever needed:  .\scripts\switch-agent-broker.ps1 -Rollback"
+}
 
 # ------------------------------------------------- 5. owner identity on the cloud deployment
 # This deployment has its own identity root (ADR-0032 §4): two instances, two roots, neither
@@ -171,12 +187,28 @@ else {
     Write-Host "  no owner credential on this deployment yet. Minting it now, ONCE, in THIS console." -ForegroundColor Yellow
     Write-Host "  Copy it into your password manager before continuing - it is not stored anywhere else." -ForegroundColor Yellow
     Write-Host ""
+    # FROM INSIDE THE API'S OWN NETWORK NAMESPACE. The first real attempt called the
+    # published port from the host and got 403: through Docker's port publishing the API
+    # sees the request arriving from the bridge gateway, not from 127.0.0.1, and the
+    # loopback-only guard correctly refuses it - it cannot tell NAT from a stranger.
+    # `docker exec` needs root on the host (Tailscale SSH), which is exactly the trust
+    # boundary bootstrap is defined by: "the owner is on the machine". The guard is not
+    # loosened; the request is made from where the guard can see it is local.
+    #
     # Deliberately NOT captured: the output goes straight to the console so the value never
     # enters a variable, a transcript, or this script's output stream.
     & $ssh -o StrictHostKeyChecking=accept-new "${CloudUser}@${BrokerHost}" `
-        "curl -fsS -X POST http://127.0.0.1:8001/v1/identity/bootstrap"
+        "docker exec pagentos-prod-api curl -fsS -X POST http://127.0.0.1:8001/v1/identity/bootstrap"
+    $mintExit = $LASTEXITCODE
     Write-Host ""
     Write-Host ""
+    if ($mintExit -ne 0) {
+        # A native command's failure does not throw in PowerShell; the first run sailed past
+        # a 403 into the paste prompt with nothing to paste. Stop HERE, with the reason.
+        throw ("the bootstrap request failed (ssh/curl exit $mintExit) and NO credential was displayed. " +
+               "Nothing was minted. Re-run with -StartPhase Bootstrap after checking the host; " +
+               "a 403 means the request did not reach the API as loopback, a 409 means an owner already exists.")
+    }
     Write-Host "  ^ that credential is shown exactly once." -ForegroundColor Yellow
 }
 
