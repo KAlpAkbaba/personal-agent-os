@@ -2006,6 +2006,28 @@ Turkish wording). Two existing assertions moved from `requests[0]` to the POST b
 probe now precedes the create. `pnpm --dir apps/web test`, `lint`, `build` green.
 Redeploying Cloud Core (contract v2) restores the marin/cedar choice with no client change.
 
+### ADR-0045 addendum — the owner copies the canonical session id; nobody transcribes a UUID (2026-09-03)
+
+Context: during the same qualification the page showed only the first 8 characters of
+the session id. The owner transcribed the full UUID from network traffic, transposed two
+hex characters, and `fetch-benchmark.ps1` answered "unknown realtime session" — the row
+existed; the id was wrong.
+
+Decision: the status line keeps the 8-character short form (`11111111…`) but carries the
+full id as its hover/title, and a **"Session ID kopyala"** button next to it copies the
+CANONICAL full UUID (lower-case, hyphenated, exactly as minted) with
+`navigator.clipboard.writeText`, falling back to selecting a read-only input plus the
+legacy copy command when the async API is missing or refused (the selection stays for
+Ctrl+C; the button then reads "Kopyalanamadı (seçildi)"). The diagnostics view shows the
+full id as selectable text with the same button. The controller keeps the last session id
+after disconnect, a failed reconnect and a failed create until a NEW session is created,
+so the copy works once the session is over — which is when the benchmark is fetched.
+`app/lib/voice/session-id.ts` holds the pure parts (`shortSessionId`, `canonicalSessionId`,
+`copyText`, `copySessionId`); `tests/voice/session-id.test.ts` pins that the id is retained
+after disconnect and through a failed create, that the copy handler receives the 36-char
+UUID and never the short form, that the fallback gets the same text when the clipboard
+API refuses, and that a non-UUID is never copied. `apps/web` tests 90 → 96.
+
 ## ADR-0046 — The voice evidence record is durable, self-describing and never transcribed by hand (2026-09-03)
 
 Context: after a real qualification session the owner's benchmark fetch returned

@@ -129,11 +129,17 @@ Then the hesitation check once more under the final configuration ("Şey... yani
 şu..." with a real one-second pause), and a normal "dur" barge-in with the headset on.
 
 **Part C — the numbers.** The page counts false speech starts, false barge-ins, false
-turns and calibration results per session and reports them to the Cloud Core. Pull them:
+turns and calibration results per session and reports them to the Cloud Core, where the
+record is durable (it survives disconnect and the provider's secret expiring). Pull the
+newest session without typing any id:
 
 ```powershell
-.\scripts\voice\fetch-benchmark.ps1 -SessionId <full session id> -OutFile voice-session-2.json
+.\scripts\voice\fetch-benchmark.ps1 -Latest -OutFile voice-session-2.json
 ```
+
+(For a specific session use the page's **Session ID kopyala** button and pass
+`-SessionId <pasted UUID>`; a wrong id lists the recent sessions instead of failing
+silently. Your 2026-09-02 session `2b3517ed-…-47898ea23334` is still there.)
 
 Paste the JSON, the diagnostics JSON, and your verdicts (Part A; for Part B which
 scenarios still triggered it, and whether your own quiet/far speech was ever cut).

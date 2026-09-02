@@ -109,6 +109,11 @@ export type ContractStatus = {
 
 export type ControllerSnapshot = {
   state: VoiceUiState;
+  /**
+   * The server's canonical session UUID. Kept after disconnect / a failed
+   * reconnect / a failed create until a NEW session is created, so the owner
+   * can still copy it for the benchmark fetch once the session is over.
+   */
   sessionId: string | null;
   provider: string | null;
   transport: string | null;
