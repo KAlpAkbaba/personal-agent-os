@@ -95,9 +95,11 @@ if (-not $RepoRoot) { $RepoRoot = Split-Path -Parent (Split-Path -Parent $PSScri
 
 Push-Location $RepoRoot
 try {
-    $sha = (& $GitPath rev-parse HEAD 2>$null | Select-Object -First 1)
-    if ($LASTEXITCODE -ne 0 -or -not $sha) { throw "git rev-parse HEAD failed in $RepoRoot" }
-    $sha = $sha.Trim()
+    # Never `| Select-Object -First 1` on a native command: ending the pipeline early can
+    # leave the tool with a non-zero exit (a race that only showed on the CI runner).
+    $revParse = @(& $GitPath rev-parse HEAD 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $revParse.Count -eq 0 -or -not $revParse[0]) { throw "git rev-parse HEAD failed in $RepoRoot" }
+    $sha = ([string]$revParse[0]).Trim()
     $short = $sha.Substring(0, 7)
     $dirty = @(& $GitPath status --porcelain --untracked-files=no 2>$null)
     if ($dirty.Count -gt 0 -and -not $AllowDirty) {
@@ -149,8 +151,9 @@ try {
     }
 
     if (-not $SkipVerify) {
-        $releasedSha = ($null | & $SshPath -n -o BatchMode=yes $target "cat '$HostBase/app/RELEASE'" | Select-Object -First 1)
-        if ($LASTEXITCODE -ne 0 -or (-not $releasedSha) -or $releasedSha.Trim() -ne $sha) {
+        $releaseLines = @($null | & $SshPath -n -o BatchMode=yes $target "cat '$HostBase/app/RELEASE'")
+        $releasedSha = if ($releaseLines.Count -gt 0) { ([string]$releaseLines[0]).Trim() } else { "" }
+        if ($LASTEXITCODE -ne 0 -or (-not $releasedSha) -or $releasedSha -ne $sha) {
             throw "post-release check: $HostBase/app/RELEASE is '$releasedSha', expected $sha"
         }
         if (-not $HealthUrl) { $HealthUrl = "http://${BrokerHost}:8001/v1/system/health" }
