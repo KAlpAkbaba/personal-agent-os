@@ -76,3 +76,6 @@ tfplan.binary
 # M7 applies to generated skills (pinned dependencies with digests). Ignoring it would
 # let a later `tofu init` satisfy `~> 1.51` with a different provider build than the one
 # reviewed here, on the machine that provisions real infrastructure.
+
+# Agent worktrees are scratch checkouts of this repo; committing them would nest the repo inside itself.
+.claude/worktrees/
