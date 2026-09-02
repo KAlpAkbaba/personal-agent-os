@@ -45,6 +45,7 @@ public static class Program
     {
         string? pipeArg = null;
         var devTrust = false;
+        var voiceFlag = false;
         for (var i = 0; i < args.Length; i++)
         {
             if (args[i] == "--pipe" && i + 1 < args.Length)
@@ -54,6 +55,10 @@ public static class Program
             else if (args[i] == "--dev-trust")
             {
                 devTrust = true;
+            }
+            else if (args[i] == "--voice")
+            {
+                voiceFlag = true;
             }
         }
 
@@ -157,7 +162,50 @@ public static class Program
             logger,
             backoff: null,
             servicePolicy: servicePolicy);
+
+        // M12 track C: the realtime voice client is ADDITIVE and OFF by default. It runs beside
+        // the qualified pipe loop, never inside it, and a voice failure can only log — the
+        // service/companion path the owner qualified does not depend on it in any way.
+        var voiceOptions = PagentOS.Companion.Audio.VoiceCompanionOptions.Parse(
+            configuration["VoiceEnabled"],
+            configuration["CloudCoreUrl"],
+            configuration["VoiceCaptureDevice"],
+            configuration["VoiceRenderDevice"],
+            configuration["VoiceEndOfTurn"],
+            configuration["DeviceId"],
+            commandLineFlag: voiceFlag);
+        var voiceTask = voiceOptions.Enabled
+            ? RunVoiceAsync(voiceOptions, loggerFactory.CreateLogger("Voice"), audit, cts.Token)
+            : Task.CompletedTask;
+        if (!voiceOptions.Enabled)
+        {
+            logger.LogInformation("voice: disabled (PAGENTOS_AGENT_VoiceEnabled=true plus PAGENTOS_AGENT_CloudCoreUrl, or --voice, enables it)");
+        }
+
         await runtime.RunAsync(cts.Token).ConfigureAwait(false);
+        await voiceTask.ConfigureAwait(false);
         return 0;
+    }
+
+    private static async Task RunVoiceAsync(
+        PagentOS.Companion.Audio.VoiceCompanionOptions options,
+        ILogger logger,
+        AuditLog audit,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                await PagentOS.Companion.Audio.VoiceCompanionHost.RunAsync(options, logger, audit, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "voice client stopped: {Reason}", ex.Message);
+        }
     }
 }

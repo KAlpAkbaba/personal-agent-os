@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RootNamespace>PagentOS.Companion.Audio</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- WASAPI capture/render and endpoint enumeration (MIT). Only the Wasapi/ folder touches it. -->
+    <PackageReference Include="NAudio" Version="2.2.1" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PagentOS.Agent.Core\PagentOS.Agent.Core.csproj" />
+  </ItemGroup>
+
+</Project>
