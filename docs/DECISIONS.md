@@ -1008,3 +1008,119 @@ Decisions:
 7. Provider credentials are owner-provisioned and stored in the existing secret store,
    never in the repository; the credential ask is deferred until the real-provider adapter
    exists behind the abstraction and a fake-provider run already passes.
+
+## ADR-0035 — M13 browser-research pipeline: shape, dispatch path, and owner-browser authorization (2026-09-02)
+
+Status: Accepted (design + offline-testable skeleton; real E2E deferred to owner qualification)
+
+Context: M13's goal is the real end-to-end chain — voice/text request → Hetzner planner →
+research plan → Tailscale → real Windows Browser Agent → real Chrome → multiple live
+sources → evidence extraction → dedup/ranking → synthesis → executive summary → expandable
+detail → durable artifact → memory → voice presentation — built now as far as it can be
+proven offline, with the genuinely owner-gated real-browser step qualified later on the
+owner's machine (mirrors ADR-0022/ADR-0034's local-first/real-audio-deferred split).
+
+**1. A separate pipeline from M3, not an extension of it.** M3's `ResearchProvider`
+contract (`gather() -> list[SourceRecord]`, composed into flat Markdown via
+`app.research.compose`) is what the M3 acceptance gate exercises and must keep passing
+unmodified — the M13 output shape (provenance-complete evidence, labelled statements,
+Executive Summary → Why it matters → Recommended action → Details on demand) is richer and
+different, so it is built as a new module set (`app.research.dates` / `plan` / `evidence` /
+`synthesis` / `executive` / `browser_gateway` / `browser_provider`) rather than overloading
+`SourceRecord`/`compose.py`. `BrowserResearchProvider.run()` composes them:
+plan (`build_plan`, which parses a Turkish relative-date phrase — "son üç gün", "son 24
+saat", "son bir hafta", "bugün", "dün" — out of the topic text itself via
+`app.research.dates.parse_recency_window`, falling back to a documented 3-day default
+rather than guessing) → gather (`BrowserGateway.fetch_evidence`, query-shaped not
+URL-shaped: discovering which URLs answer a query is the browser agent's job, not the
+API's) → dedup/rank (`app.research.evidence.dedup_and_rank` — deterministic: normalized-URL
+dedup keeping the richer excerpt, score = 0.6·source-class-weight + 0.25·keyword-overlap +
+0.15·in-recency-window-bonus, ties broken by URL) → synthesize (`SynthesisProvider` seam)
+→ `ExecutiveReport`. Every emitted claim is an `app.research.evidence.LabelledStatement`
+carrying exactly one of `source_fact | model_inference | recommendation | uncertainty`; the
+shipped `DeterministicSynthesisProvider` never emits a `source_fact` without a matching
+`evidence_urls` citation (unit-tested), and `uncertainty` is the only label allowed to carry
+no citation (an absence of sources has nothing to cite).
+
+**2. Synthesis is behind a provider seam, Claude is the default, nothing is hardcoded.**
+`SynthesisProvider` (`app.research.synthesis`) follows the same pattern as
+`CodingBackend`/M6, `SkillGenerator`/M7, `TTSProvider`/M4: `DeterministicSynthesisProvider`
+is fully offline/seeded and is what tests and the acceptance gate run;
+`ClaudeSynthesisProvider` is the real backend and is INERT — raises
+`SynthesisNotConfiguredError` before any I/O — until the owner sets
+`PAGENTOS_RESEARCH_CLAUDE_CLI`, mirroring `ClaudeCodingBackend`'s
+`backend_not_configured` discipline exactly. Claude models are this project's stated
+default choice for real backends once configured; the seam is what lets that choice change
+without touching `BrowserResearchProvider`.
+
+**3. Browser dispatch reaches the Windows Browser Agent by extending the already-proven
+device/broker command path, not by inventing a second one.** M1's `desktop.*` capability
+path (hello → challenge → auth → welcome handshake, ECDSA device auth, command
+envelope with `command_id`/`idempotency_key`/`expires_at`, Device Service in Session 0 +
+Session Companion for interactive work, `packages/protocol/DEVICE_PROTOCOL.md`) is
+PROVEN_REAL end to end (state/BUILD_STATE.json qualification log). The decision is to
+extend it with `browser.*` capabilities (e.g. `browser.fetch_evidence`) dispatched to
+`services/browser` running as a companion-adjacent process on the owner's enrolled Windows
+machine, rather than modelling the browser agent as a wholly separate device-capability
+system — one enrollment/heartbeat/idempotency/audit mechanism for both, and `browser.*`
+commands get the same at-least-once delivery, expiry and cancellation semantics
+`desktop.open_application`/`desktop.open_artifact` already have. `app.research.browser_gateway`
+is the API-side seam this decision implies: `BrowserGateway.fetch_evidence()` is what a
+`browser.fetch_evidence` command's response would satisfy; `UnwiredBrowserGateway` is the
+inert default (raises before any I/O, exactly like `WebResearchProvider`/M3), and
+`FakeBrowserGateway` is the deterministic offline stand-in tests use.
+
+**Exactly what is missing to make this real** (none of it touched in M13's scope — `devices/`,
+`infra/`, `scripts/cloud/` and the qualified Windows/cloud runtime were explicitly
+off-limits for this pass):
+
+- a `browser.fetch_evidence` (and likely `browser.close_session`) entry in the Windows
+  agent's capability manifest/allowlist (`packages/protocol/DEVICE_PROTOCOL.md` §capability
+  list, `ProtocolConstants.cs`) and a handler, analogous to `AppLauncher.cs`/
+  `ArtifactOpener.cs`, that constructs a `browser_agent.BrowserSession` (via
+  `ManagedBackend` by default) and calls `browser_agent.research.gather_evidence`;
+- the async command-dispatch plumbing on the Cloud Core side to await a
+  potentially-slow, multi-page browser result over the existing command-envelope
+  accepted/running/succeeded/failed lifecycle (today's `desktop.*` commands are all
+  fast/synchronous-feeling; a multi-source research fetch is not);
+- a chosen mechanism for query → candidate-URL discovery (which search engine or index the
+  browser agent visits and reads result links from, itself via the semantic DOM/
+  accessibility surface, never coordinates) — deliberately left unresolved in this ADR
+  because it is a product/provider choice (which search surface, ToS considerations), not
+  an architecture one;
+- wiring `BrowserResearchProvider` into a durable Temporal workflow mirroring
+  `ResearchWorkflow`'s plan/gather/compose/render activities, so a worker restart cannot
+  lose an in-flight browser research task either (M13's pipeline module is written to be
+  that workflow's activity bodies, but no workflow class exists yet);
+- the memory write (M16 depends on this pipeline's output) and voice-presentation (M14)
+  integration points are intentionally not built here.
+
+**4. The owner's real Chrome session requires an explicit, separate research grant —
+never inferred from mere enrollment.** ADR-0019's `BrowserEnrollment` authorizes *attaching*
+to an existing browser (including throwaway dev/test browsers); it says nothing about
+whether an *autonomous* task (no owner approving each page) may drive that session. M13
+adds `BrowserEnrollment.owner_authorized_for_research: bool = False` — a separate,
+narrower, explicit grant, defaulting False so a plain attach enrollment never silently
+widens into autonomous-research use, and a pre-M13 file record with the field entirely
+absent also defaults False (never inferred True from a missing key; unit-tested).
+`browser_agent.enrollment.require_research_authorization` /
+`get_research_authorized_enrollment` are the enforcement points: unknown enrollment id →
+`validation_error` (unchanged M2 behavior); known but unauthorized → the new
+`ErrorClass.SECURITY_SCOPE_ERROR` (added to the browser taxonomy — it is a scope/
+authorization refusal, not a UI or transport failure, so it does not overload
+`capability_missing`/`validation_error`). This is a narrower, ADR-0019-native gate,
+deliberately NOT layered onto ADR-0026's `AuthorizedAssetRegistry`/`ScopeGuard`: that
+registry's `asset_kinds` and `testing_classes` are frozen to migration `0008_authorized_assets`
+(security-assessment scope — configuration audits, vulnerability scans, remediation), and
+neither vocabulary is shaped for "may this task drive the owner's logged-in browser session
+autonomously" — extending it would mean widening a frozen security-scope migration for a
+concern ADR-0019 already owns. The default when no explicit grant exists remains
+`ManagedBackend` with a dedicated profile (never the owner's real profile), per M13 spec
+item 4; the refusal path is unit-tested (`services/browser/tests/unit/test_enrollment.py`).
+
+Reason: the constitution requires third-party/owner-session use to be explicit and scoped,
+not inferred, and requires deterministic gates before real-provider/real-browser work is
+qualified on the owner's machine; splitting "design + offline-testable pipeline" from "real
+browser + real search + real Temporal workflow + real owner-Chrome authorization" lets M13
+proceed in parallel with M12 without risking either milestone's acceptance gate, and leaves
+an explicit, itemized list of exactly what remains for the owner-qualified follow-up.

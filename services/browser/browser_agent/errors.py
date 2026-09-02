@@ -64,6 +64,13 @@ class ErrorClass(StrEnum):
     CAPABILITY_MISSING = "capability_missing"
     CANCELLED = "cancelled"
     INTERNAL_BUG = "internal_bug"
+    # Project-wide taxonomy (docs/API_AND_PROTOCOLS.md §8); added for M13 —
+    # the owner's real-profile browser session is used only where the
+    # EnrollmentRegistry records explicit research authorization (ADR-0019,
+    # ADR-0035). This is a scope/authorization refusal, not a UI or transport
+    # failure, so it gets its own class rather than overloading
+    # capability_missing/validation_error.
+    SECURITY_SCOPE_ERROR = "security_scope_error"
 
 
 class Phase(StrEnum):

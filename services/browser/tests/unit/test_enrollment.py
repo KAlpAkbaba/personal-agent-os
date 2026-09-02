@@ -13,7 +13,11 @@ from browser_agent import (
     ManagedBackend,
     Transport,
 )
-from browser_agent.enrollment import is_loopback_endpoint
+from browser_agent.enrollment import (
+    get_research_authorized_enrollment,
+    is_loopback_endpoint,
+    require_research_authorization,
+)
 
 
 def test_cdp_loopback_convenience_constructor() -> None:
@@ -160,3 +164,91 @@ def test_loopback_lookalike_hostnames_are_rejected(endpoint: str) -> None:
     # Regression for M2 security finding #1: a DNS name that merely *starts
     # with* "127." is routable, not loopback, and must never pass.
     assert is_loopback_endpoint(endpoint) is False
+
+
+# --------------------------------------------------------------------------- #
+# M13: research-use authorization gate (ADR-0035)
+# --------------------------------------------------------------------------- #
+
+
+def test_enrollment_defaults_to_not_research_authorized() -> None:
+    enrollment = BrowserEnrollment.cdp_loopback("http://127.0.0.1:9222", name="owner-edge")
+    assert enrollment.owner_authorized_for_research is False
+
+
+def test_require_research_authorization_refuses_unauthorized_enrollment() -> None:
+    enrollment = BrowserEnrollment.cdp_loopback("http://127.0.0.1:9222", name="owner-edge")
+    with pytest.raises(BrowserError) as excinfo:
+        require_research_authorization(enrollment)
+    assert excinfo.value.error_class is ErrorClass.SECURITY_SCOPE_ERROR
+    assert excinfo.value.retryable is False
+
+
+def test_require_research_authorization_allows_explicitly_granted_enrollment() -> None:
+    enrollment = BrowserEnrollment.cdp_loopback(
+        "http://127.0.0.1:9222", name="owner-edge", owner_authorized_for_research=True
+    )
+    require_research_authorization(enrollment)  # no raise
+
+
+def test_get_research_authorized_enrollment_refuses_unknown_id() -> None:
+    registry = EnrollmentRegistry()
+    with pytest.raises(BrowserError) as excinfo:
+        get_research_authorized_enrollment(registry, "nope")
+    assert excinfo.value.error_class is ErrorClass.VALIDATION_ERROR
+
+
+def test_get_research_authorized_enrollment_refuses_registered_but_unauthorized() -> None:
+    registry = EnrollmentRegistry()
+    enrollment = BrowserEnrollment.cdp_loopback("http://127.0.0.1:9222", name="dev-attach")
+    registry.register(enrollment)
+    with pytest.raises(BrowserError) as excinfo:
+        get_research_authorized_enrollment(registry, enrollment.id)
+    assert excinfo.value.error_class is ErrorClass.SECURITY_SCOPE_ERROR
+
+
+def test_get_research_authorized_enrollment_returns_authorized_record() -> None:
+    registry = EnrollmentRegistry()
+    enrollment = BrowserEnrollment.cdp_loopback(
+        "http://127.0.0.1:9222", name="owner-chrome", owner_authorized_for_research=True
+    )
+    registry.register(enrollment)
+    resolved = get_research_authorized_enrollment(registry, enrollment.id)
+    assert resolved.id == enrollment.id
+    assert resolved.owner_authorized_for_research is True
+
+
+def test_research_authorization_flag_round_trips_through_file_backing(tmp_path: Path) -> None:
+    path = tmp_path / "enrollments.json"
+    registry = EnrollmentRegistry(path)
+    enrollment = BrowserEnrollment.cdp_loopback(
+        "http://127.0.0.1:9222", name="owner-chrome", owner_authorized_for_research=True
+    )
+    registry.register(enrollment)
+
+    reloaded = EnrollmentRegistry(path)
+    restored = reloaded.get(enrollment.id)
+    assert restored.owner_authorized_for_research is True
+    require_research_authorization(restored)  # no raise
+
+
+def test_research_authorization_absent_field_defaults_false_never_inferred_true(
+    tmp_path: Path,
+) -> None:
+    # A record written before M13 (or hand-edited) has no such key at all;
+    # a missing field must never be treated as an implicit grant.
+    import json
+
+    path = tmp_path / "enrollments.json"
+    old_record = BrowserEnrollment.cdp_loopback(
+        "http://127.0.0.1:9222", name="pre-m13"
+    ).as_dict()
+    del old_record["owner_authorized_for_research"]
+    path.write_text(json.dumps({"enrollments": [old_record]}), encoding="utf-8")
+
+    registry = EnrollmentRegistry(path)
+    restored = registry.list()[0]
+    assert restored.owner_authorized_for_research is False
+    with pytest.raises(BrowserError) as excinfo:
+        require_research_authorization(restored)
+    assert excinfo.value.error_class is ErrorClass.SECURITY_SCOPE_ERROR
