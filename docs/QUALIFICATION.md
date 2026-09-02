@@ -149,6 +149,31 @@ was loopback, and the thing under test here is the network.
 | 5.10 | Windows Service restart against the cloud broker → command succeeds | `PROVEN_REAL` | Owner-reported real matrix from `qualify-cloud.ps1`, 2026-09-02, on the actual Hetzner host over the tailnet; re-earned across the real network, not carried over from 2.7. |
 | 5.11 | Persistent state really lives on the Hetzner volume, not the boot disk | `PROVEN_REAL` | 2026-09-02: the guard EARNED ITS KEEP — the 100 GB volume was attached and formatted but **not mounted**, and `/mnt/pagentos-data` existed as an empty directory on the boot disk, so the deploy would have put PostgreSQL and the identity root on a disk a rebuild discards. Now mounted from `/dev/disk/by-id/scsi-0HC_Volume_106767183` with an fstab entry (`nofail`, so a missing volume can never hang boot); `findmnt` confirms data on `/dev/sdb` while root is `/dev/sda1`. |
 
+## Stage 6 — M12 Realtime Voice Foundation (CURRENT; pre-registered, nothing proven yet)
+
+Rules as everywhere in this file: `PROVEN_REAL` only on the owner's real Windows machine
+with a real microphone/headset, real Turkish speech, the real network and the real Hetzner
+Cloud Core (ADR-0034, `ACCEPTANCE_TESTS.md` §M12). The simulator and fakes gate the code;
+they prove nothing here. Latency rows require the benchmark harness's numbers from the
+real run, not impressions.
+
+| # | Criterion | Status | What will count as proof |
+|---|---|---|---|
+| 6.1 | Primary conversation runs on a native speech-to-speech provider chosen by capability | `NOT_YET_PROVEN` | Session record shows the selected provider and its declared capabilities; no STT→LLM→TTS chain in the conversation path. |
+| 6.2 | Natural Turkish conversation, simultaneous listen/speak as far as the provider permits | `NOT_YET_PROVEN` | Owner session transcript + owner evaluation (final gate). Vendor Turkish support is UNVERIFIED in docs — measured, never assumed. |
+| 6.3 | Barge-in: owner interrupts, playback stops immediately | `NOT_YET_PROVEN` | Harness `barge_in_to_stop_ms` from the real run; target < ~150 ms where achievable; stop-first ordering in the client event log. |
+| 6.4 | "dur" stops immediately; "devam" resumes correctly; "tekrar oku"; "ikinci maddeyi tekrar oku"; "biraz daha yavaş/hızlı"; "özet geç"; "detaya gir"; "burayı atla" | `NOT_YET_PROVEN` | Each intent spoken by the owner, resolved by the intent resolver, and the resulting narration/session state change observed. |
+| 6.5 | Semantic end-of-turn: normal Turkish hesitation is not cut off | `NOT_YET_PROVEN` | False-barge rate on the real hesitation set (`VOICE_TURKISH_EVAL_SET.md`), recorded by the harness. |
+| 6.6 | Turkish pronunciation/prosody; mixed TR/EN terminology; ı İ ğ ş ç ö ü | `NOT_YET_PROVEN` | The M12 terminology and phonetics sets spoken back; owner evaluation. |
+| 6.7 | Microphone switching; headset/laptop/phone mics; AEC; noise suppression; noisy room | `NOT_YET_PROVEN` | Real device switch mid-session; a noisy-room run with the harness. |
+| 6.8 | Network interruption → voice-session recovery | `NOT_YET_PROVEN` | Tailnet down/up during a session; reattach observed; no owner intervention. |
+| 6.9 | Conversation continuity across desktop/web/mobile | `NOT_YET_PROVEN` | `attach` from a second client with state carried; mobile leg is M15. |
+| 6.10 | Long-running tool: natural preamble, session alive, mid-task redirection changes the plan | `NOT_YET_PROVEN` | Real research request; preamble spoken; "Sadece OpenAI kısmına bak" produces `plan_changed` on the same plan. |
+| 6.11 | Five latency metrics recorded against the real environment | `NOT_YET_PROVEN` | Harness JSON report from the owner's machine: mic→uplink, EOT→first audio (< ~500–700 ms target), barge-in→stop, tool preamble, tool done→speech; no unexplained gaps. |
+| 6.12 | Modes explicit; VoiceIdentity never the sole root of authentication | `NOT_YET_PROVEN` | Code + a real session where identity augments, never replaces, device trust + owner session. |
+| 6.13 | Provider credential never leaves Cloud Core; only the ephemeral per-session credential reaches a client | `NOT_YET_PROVEN` | Real session: client receives only the ephemeral value; audit rows carry ids/timings only. |
+| 6.14 | Subjective owner evaluation of voice quality | `NOT_YET_PROVEN` | The owner says so, after the real session. |
+
 ## Stage 6 — Real browser qualification
 
 | # | Criterion | Status |
