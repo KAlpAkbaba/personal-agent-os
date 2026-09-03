@@ -11,6 +11,8 @@ Gate facts for Windows-agent work that cost a round trip each the first time (20
 - `scripts/tests/installer-strictmode.tests.ps1` lints install-device-service.ps1 AND verify-device-service.ps1 for bare `$x.Count` (must be `@($x).Count`); `$home` is a read-only automatic variable in PS 5.1 (use `$venvHome`). `scripts/quality-gate.ps1` enumerates test scripts explicitly, so a new scripts/tests/*.tests.ps1 is NOT picked up by the gate until quality-gate.ps1 lists it.
 - Referencing an Exe project from the test csproj copies its apphost `.exe` beside the tests (verified on SDK 10.0.400), so a fake worker process can be a plain console project and spawned by path.
 - A fresh agent worktree can be behind `main`; `git merge --ff-only main` inside the worktree is allowed by the isolation guard, `git -C <main checkout>` is not.
+- The isolation guard also refuses a Bash call containing a shell `for` loop (and heredocs / `&&`-chained cd); one plain `cd <worktree> && <single command>` per call works, so run build, each test pass and format as separate calls.
+- The fake Browser Worker serialises requests per `session_id` (contract §7); a host/dispatch test that wants two requests to overlap must give them different sessions or it queues and the `IsCompleted` assertions invert.
 
 **Why:** each of these produced a red gate that looked like a code problem but was tooling.
 **How to apply:** before reporting a Windows-agent change, run dotnet format (fix mode), then verify, then the six installer PS suites with the absolute powershell.exe path.
