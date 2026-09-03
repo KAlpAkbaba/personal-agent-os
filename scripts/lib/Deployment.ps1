@@ -149,7 +149,10 @@ function Invoke-AgentDeployment {
         [Parameter(Mandatory = $true)][scriptblock]$StartRuntime,
         [Parameter(Mandatory = $true)][scriptblock]$TestHealth,
         [scriptblock]$ApplyAcl,
-        [string]$Version = (Get-Date -Format "yyyyMMdd-HHmmss")
+        [string]$Version = (Get-Date -Format "yyyyMMdd-HHmmss"),
+        # Components that carry no PagentOS executable (M13: the Browser Worker tree holds a
+        # Python environment). They must still be non-empty to be promoted.
+        [string[]]$NonExecutableComponents = @()
     )
 
     $stagingRoot = Join-Path $Root ".staging"
@@ -160,6 +163,12 @@ function Invoke-AgentDeployment {
         $staged = Join-Path $stagingRoot $component
         if (-not (Test-Path -LiteralPath $staged)) {
             throw "no staged candidate for '$component' at $staged; nothing was changed"
+        }
+        if ($NonExecutableComponents -contains $component) {
+            if (@(Get-ChildItem -LiteralPath $staged -Force -ErrorAction SilentlyContinue).Count -eq 0) {
+                throw "staged '$component' is empty; refusing to promote a broken candidate"
+            }
+            continue
         }
         $exe = @(Get-ChildItem -LiteralPath $staged -Filter "PagentOS.*.exe" -ErrorAction SilentlyContinue)
         if (@($exe).Count -eq 0) {

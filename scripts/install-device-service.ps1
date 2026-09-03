@@ -82,6 +82,13 @@ $agentRoot = Join-Path $repoRoot "devices\windows-agent"
 . (Join-Path $PSScriptRoot "lib\ServiceInstall.ps1")
 . (Join-Path $PSScriptRoot "lib\InstallAcl.ps1")
 . (Join-Path $PSScriptRoot "lib\BrowserProvision.ps1")
+# The journaled deployment engine (stop -> swap -> start -> health -> commit, rollback
+# otherwise), its production runtime handlers, and the post-install evidence. The inline
+# swap this replaced renamed live directories under running processes; NTFS refused, and
+# on 2026-09-03 the owner's M13 update looked successful while the old binaries kept running.
+. (Join-Path $PSScriptRoot "lib\Deployment.ps1")
+. (Join-Path $PSScriptRoot "lib\AgentRuntime.ps1")
+. (Join-Path $PSScriptRoot "lib\InstallEvidence.ps1")
 
 function Assert-Elevated {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -322,8 +329,28 @@ function Register-CompanionAutostart {
 # ------------------------------------------------------------------------------- install
 
 Assert-Elevated
+
+# Every run is transcribed under ProgramData: an elevated window that closes on error must
+# not take the only copy of the failure with it (that is how the 2026-09-03 rerun went
+# undiagnosed). The path is printed first and again on failure.
+$installLogDir = Join-Path $env:ProgramData "PagentOS\install-logs"
+New-Item -ItemType Directory -Force -Path $installLogDir | Out-Null
+$script:InstallLog = Join-Path $installLogDir ("install-" + (Get-Date -Format "yyyyMMdd-HHmmss") + ".log")
+Start-Transcript -Path $script:InstallLog -Append | Out-Null
+Write-Host "install log: $script:InstallLog"
+trap {
+    Write-Host ""
+    Write-Host "INSTALL FAILED: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "nothing that failed was left half-done: the deployment engine restores the previous trees and restarts the runtime on any failure after the swap."
+    Write-Host "install log: $script:InstallLog"
+    try { Stop-Transcript | Out-Null } catch { }
+    break
+}
+
 $OwnerSid = Resolve-OwnerSid -Explicit $OwnerSid
 $serviceDir = Join-Path $InstallRoot "service"
+Write-Host "repo HEAD: $(Get-RepoHead -RepoRoot $repoRoot)"
+Write-Host "parameters: SkipBuild=$([bool]$SkipBuild) SkipBrowser=$([bool]$SkipBrowser) BrowserChannel=$BrowserChannel InstallRoot=$InstallRoot"
 
 # M13 upgrade safety: a re-run that does not name a broker keeps the one the installed
 # service already dials (after RQ-2 that is the Hetzner tailnet address, written in place by
@@ -348,6 +375,25 @@ $serviceExe = Join-Path $serviceDir "PagentOS.DeviceService.exe"
 $recovery = Invoke-InstallRecovery -Root $InstallRoot -Components @("service", "companion", "browser")
 foreach ($line in @($recovery.Messages)) {
     Write-Host $line
+}
+# The engine's own journal (.deploy-journal.json, versioned .previous\<version>\<component>):
+# a run interrupted after its swap but before health verification is put back first.
+$resolution = Resolve-InterruptedDeployment -Root $InstallRoot -Components @("service", "companion")
+Write-Host "previous deployment state: $($resolution.Action) - $($resolution.Reason)"
+if ($resolution.Action -eq "Blocked") {
+    throw "refusing to continue: $($resolution.Reason)"
+}
+if ($resolution.Action -eq "RollbackToPrevious") {
+    $journal = Read-DeployJournal -Root $InstallRoot
+    foreach ($component in @("service", "companion", "browser")) {
+        $live = Join-Path $InstallRoot $component
+        $previous = Join-Path (Join-Path (Join-Path $InstallRoot ".previous") $journal.version) $component
+        if ((Test-Path -LiteralPath $previous) -and -not (Test-Path -LiteralPath $live)) {
+            Move-Item -LiteralPath $previous -Destination $live -Force
+            Write-Host "restored '$component' from the interrupted deployment $($journal.version)"
+        }
+    }
+    Write-DeployPhase -Root $InstallRoot -Version $journal.version -Phase "rolled_back" -Detail "restored by the installer before a new attempt"
 }
 
 # --- stage everything before touching the live tree ---------------------------------------
@@ -377,6 +423,9 @@ else {
         if (-not (Test-Path $required)) { throw "expected $required after publish; nothing to install" }
     }
 }
+
+# Evidence, part 1: the bytes the build produced (before any configuration is written).
+$sourceHashes = if ($SkipBuild) { Get-ArtifactHashes -Root $InstallRoot } else { Get-ArtifactHashes -Root (Join-Path $InstallRoot ".staging") }
 
 # --- browser worker (M13), staged and PROVEN before anything is swapped -------------------
 #
@@ -441,25 +490,68 @@ if (-not $SkipBrowser) {
     Write-Host "browser data directory $browserDataDir is writable by SID $OwnerSid"
 }
 
-# --- swap staging into place, atomically ---------------------------------------------------
-$deployed = @()
-if (-not $SkipBuild) {
-    Publish-StagedDirectory -Root $InstallRoot -Component "service" -StagedPath $stagedServiceDir | Out-Null
-    Publish-StagedDirectory -Root $InstallRoot -Component "companion" -StagedPath $stagedCompanionDir | Out-Null
-    $deployed += @("service", "companion")
+# --- register, then deploy through the journaled engine ----------------------------------
+#
+# Registration happens BEFORE the swap because the engine starts the runtime inside its
+# transaction (service through the SCM, companion through its logon task in the owner's
+# session) and judges health on the result. Both registrations are idempotent and point at
+# the final live paths.
+Install-Service -Name $ServiceName -Exe $serviceExe | Out-Null
+Register-CompanionAutostart -CompanionExe $companionExe -OwnerSid $OwnerSid
+
+$enrolled = Test-Path (Join-Path $DataDir "state.json")
+$components = @()
+if (-not $SkipBuild) { $components += @("service", "companion") }
+if ($browserStaging) { $components += "browser" }
+
+# Evidence, part 2: the staged bytes right before the swap (configuration written, nothing moved).
+$stagedHashes = if ($SkipBuild) { Get-ArtifactHashes -Root $InstallRoot } else { Get-ArtifactHashes -Root (Join-Path $InstallRoot ".staging") }
+
+$stopRuntime = { Stop-AgentRuntime -ServiceName $ServiceName -InstallRoot $InstallRoot }
+$startRuntime = {
+    # An unenrolled agent exits immediately by design; starting it would turn a correct
+    # first install into a health failure and a rollback.
+    if ($enrolled) { Start-AgentRuntime -ServiceName $ServiceName -InstallRoot $InstallRoot }
 }
-if ($browserStaging) {
-    Publish-StagedDirectory -Root $InstallRoot -Component "browser" -StagedPath $browserStaging.StagedPath | Out-Null
-    $deployed += "browser"
+$testHealth = {
+    # Health = the INSTALLED binary supports M13 (capabilities verb, browser family when
+    # provisioned) AND, when enrolled, service + companion + pipe are up and both processes
+    # run from the new trees. A pre-M13 binary here means the swap did not take: roll back.
+    $manifest = Get-InstalledAgentManifest -ServiceExe $serviceExe
+    try {
+        Assert-InstalledAgentSupportsM13 -Manifest $manifest -ExpectBrowser (-not $SkipBrowser)
+    }
+    catch {
+        Write-Warning "health: $($_.Exception.Message)"
+        return $false
+    }
+    if (-not $enrolled) { return $true }
+    if (-not (Test-AgentRuntimeHealth -ServiceName $ServiceName -ConfigPath (Join-Path $serviceDir "appsettings.json") -TimeoutSeconds 45)) {
+        Write-Warning "health: service, companion or the pipe did not come up within 45 s"
+        return $false
+    }
+    $images = Get-RunningAgentImages -ServiceName $ServiceName
+    if (($images.Service -ne $serviceExe) -or ($images.Companion -ne $companionExe)) {
+        Write-Warning "health: running images are not the installed binaries (service: $($images.Service); companion: $($images.Companion))"
+        return $false
+    }
+    return $true
 }
-if (@($deployed).Count -gt 0) {
-    Remove-Item -LiteralPath (Join-Path $InstallRoot ".staging") -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Host "deployed $($deployed -join ', ')"
+$applyAcl = {
+    Set-InstallAcl -Path $InstallRoot
+    Assert-InstallPosture -Path $InstallRoot
 }
 
-# --- harden last, then prove it ------------------------------------------------------------
-Set-InstallAcl -Path $InstallRoot
-Assert-InstallPosture -Path $InstallRoot
+if (@($components).Count -gt 0) {
+    Write-Host "deploying $($components -join ', ') through the journaled engine (runtime stopped by PID, same-volume renames, rollback on any failure)"
+    [void](Invoke-AgentDeployment -Root $InstallRoot -Components $components -NonExecutableComponents @("browser") `
+        -StopRuntime $stopRuntime -StartRuntime $startRuntime -TestHealth $testHealth -ApplyAcl $applyAcl)
+    Write-Host "deployed $($components -join ', '); journal: $(Get-DeployJournalPath -Root $InstallRoot)"
+}
+else {
+    Set-InstallAcl -Path $InstallRoot
+    Assert-InstallPosture -Path $InstallRoot
+}
 
 if ($browserStaging) {
     # The venv was built in staging and moved: prove it still starts from its final,
@@ -478,7 +570,6 @@ if ($browserStaging) {
     Write-Host "browser worker starts from the installed tree: $($live.Hello.worker_version), $(@($live.Capabilities).Count) capabilities"
 }
 
-$enrolled = Test-Path (Join-Path $DataDir "state.json")
 if ($EnrollmentToken) {
     Write-Host "enrolling the device with the broker at $BrokerRestUrl"
     $enrollResult = Invoke-NativeProcess -FilePath $serviceExe -Arguments @(
@@ -489,16 +580,15 @@ if ($EnrollmentToken) {
     $enrolled = $true
 }
 
-Install-Service -Name $ServiceName -Exe $serviceExe | Out-Null
-Register-CompanionAutostart -CompanionExe $companionExe -OwnerSid $OwnerSid
-
 # Starting is conditional on enrollment, and that is not a caveat — an unenrolled agent
 # exits immediately by design, so starting it here would turn "the install worked" into a
-# service-start failure and hide the fact that registration succeeded.
+# service-start failure and hide the fact that registration succeeded. (When the engine ran
+# for an enrolled device it already started and health-checked the runtime.)
 if ($enrolled) {
-    Start-Service -Name $ServiceName
-    (Get-Service -Name $ServiceName).WaitForStatus("Running", (New-TimeSpan -Seconds 30))
-    Write-Host "service started"
+    if ((Get-Service -Name $ServiceName).Status -ne "Running" -or -not (Get-Process -Name "PagentOS.SessionCompanion" -ErrorAction SilentlyContinue)) {
+        Start-AgentRuntime -ServiceName $ServiceName -InstallRoot $InstallRoot
+        Write-Host "service and companion started"
+    }
 }
 else {
     Write-Host ""
@@ -524,5 +614,54 @@ else {
     Write-Host "  browser   not provisioned (-SkipBrowser); desktop family only"
 }
 Write-Host ""
-Write-Host "next: sign out and back in (or start the companion by hand once), then verify with"
+Write-Host "next: verify with"
 Write-Host "  .\scripts\verify-device-service.ps1"
+
+# --- evidence, part 3: what is actually installed, registered and running ----------------
+$installedHashes = Get-ArtifactHashes -Root $InstallRoot
+$hashMismatch = @(Compare-ArtifactHashes -Expected $stagedHashes -Actual $installedHashes)
+$manifest = Get-InstalledAgentManifest -ServiceExe $serviceExe
+$registered = Get-RegisteredExecutablePaths -ServiceName $ServiceName
+$running = Get-RunningAgentImages -ServiceName $ServiceName
+$workerPath = "not provisioned (-SkipBrowser)"
+if ($browserStaging) {
+    $liveCompanionConfig = [System.IO.File]::ReadAllText((Join-Path $companionDir "appsettings.json")) | ConvertFrom-Json
+    $workerPath = if ($liveCompanionConfig.PSObject.Properties.Name -contains "BrowserWorkerCommand") { [string]$liveCompanionConfig.BrowserWorkerCommand } else { "MISSING from companion appsettings" }
+}
+$journalDoc = Read-DeployJournal -Root $InstallRoot
+$journalSummary = if ($journalDoc) { "$($journalDoc.version) phase=$($journalDoc.phase)" } else { "none" }
+$capabilitySummary = if ($manifest.Ok) {
+    "$(@($manifest.Capabilities).Count) capabilities, browser_enabled=$($manifest.BrowserEnabled), family=$(@($manifest.Capabilities) -contains 'browser.chrome')"
+} else { "capabilities verb NOT answered (exit $($manifest.ExitCode))" }
+Write-InstallEvidence -Evidence ([pscustomobject]@{
+    RepoHead            = Get-RepoHead -RepoRoot $repoRoot
+    SourceHashes        = $sourceHashes
+    StagedHashes        = $stagedHashes
+    InstalledHashes     = $installedHashes
+    ServiceExe          = $serviceExe
+    RegisteredService   = $registered.Service
+    RunningService      = $running.Service
+    CompanionExe        = $companionExe
+    RegisteredCompanion = $registered.Companion
+    RunningCompanion    = $running.Companion
+    BrowserWorker       = $workerPath
+    CapabilitySummary   = $capabilitySummary
+    Journal             = $journalSummary
+    LogPath             = $script:InstallLog
+})
+if (@($hashMismatch).Count -gt 0) {
+    throw "installed artifacts differ from what was staged: $($hashMismatch -join '; ')"
+}
+if ($registered.Service -ne $serviceExe) { throw "the SCM runs '$($registered.Service)', not the installed '$serviceExe'" }
+if ($registered.Companion -ne $companionExe) { throw "the logon task runs '$($registered.Companion)', not the installed '$companionExe'" }
+Assert-InstalledAgentSupportsM13 -Manifest $manifest -ExpectBrowser (-not $SkipBrowser)
+if ($browserStaging -and ($workerPath -like "MISSING*" -or -not (Test-Path -LiteralPath $workerPath))) {
+    throw "the companion's BrowserWorkerCommand is missing or does not exist: $workerPath"
+}
+if ($enrolled) {
+    if ($running.Service -ne $serviceExe) { throw "the service process is not running the installed binary: $($running.Service)" }
+    if ($running.Companion -ne $companionExe) { throw "the companion process is not running the installed binary: $($running.Companion)" }
+}
+Write-Host ""
+Write-Host "INSTALL VERIFIED: the live tree is the staged build, the service and the companion point at it$(if ($enrolled) { ' and run from it' }), and the installed service supports M13." -ForegroundColor Green
+try { Stop-Transcript | Out-Null } catch { }

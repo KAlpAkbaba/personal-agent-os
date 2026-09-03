@@ -269,7 +269,7 @@ public static extern uint GetShortPathNameW(string longPath, System.Text.StringB
         Assert-True -Condition ($installer -match 'lib\\BrowserProvision\.ps1') -Because "dot-sources the provisioning library"
         Assert-True -Condition ($installer -match '@\("service", "companion", "browser"\)') -Because "browser is a recoverable component"
         Assert-True -Condition ($installer -match '"sync", "--frozen", "--no-dev", "--no-editable"') -Because "frozen, no dev deps, no editable .pth"
-        Assert-True -Condition ($installer -match 'Publish-StagedDirectory -Root \$InstallRoot -Component "browser"') -Because "published through the same swap"
+        Assert-True -Condition ($installer -match 'Invoke-AgentDeployment -Root \$InstallRoot -Components \$components -NonExecutableComponents @\("browser"\)') -Because "deployed through the journaled engine as a non-executable component"
         Assert-True -Condition ($installer -match 'BrowserEnabled\s+=\s+\$BrowserEnabled') -Because "the service is told"
         Assert-True -Condition ($installer -match 'C:\\Users' -eq $false) -Because "no user-profile path is hardcoded"
     }

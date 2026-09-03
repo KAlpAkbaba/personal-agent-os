@@ -175,6 +175,7 @@ jobs:
           powershell -NoProfile -File scripts\tests\installer-deploy.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\installer-acl.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\installer-browser.tests.ps1 && ^
+          powershell -NoProfile -File scripts\tests\installer-evidence.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\machine-readable.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\identity-restore.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\provision.tests.ps1 && ^

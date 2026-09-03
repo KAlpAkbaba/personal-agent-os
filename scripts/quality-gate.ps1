@@ -239,6 +239,15 @@ if (-not $Fast) {
     Assert-ExitCode "installer browser tests"
   }
 
+  Invoke-Step "Installer evidence + engine wiring tests (PS 5.1)" {
+    # 2026-09-03: the installer's inline swap failed under running processes and looked
+    # successful; these pin the journaled engine as the only deploy path, the evidence
+    # block, and the fail-loud M13 support assertion.
+    $script = Join-Path $repoRoot "scripts\tests\installer-evidence.tests.ps1"
+    & (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -NoProfile -File $script
+    Assert-ExitCode "installer evidence tests"
+  }
+
   Invoke-Step "Recovery supervisor tests" {
     if (-not $uv) { throw "uv not found" }
     Push-Location (Join-Path $repoRoot "services\recovery-supervisor")

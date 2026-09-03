@@ -121,14 +121,27 @@ to `pagentos-core` over the tailnet, prints no secret):
 Step B — update the Windows agent once (this provisions the Browser Worker: a Python
 environment under `C:\Program Files\PagentOS\agent\browser`, the real Chrome channel, a
 dedicated PagentOS profile under `%ProgramData%\PagentOS\companion\browser`; it preserves
-the tailnet broker endpoints, the device identity and the enrollment; one UAC prompt):
+the tailnet broker endpoints, the device identity and the enrollment; one UAC prompt).
+
+Your first attempt (2026-09-03 16:41 and 17:09) built and staged the M13 binaries and then
+failed silently at the swap: the installer still used the pre-engine directory rename, which
+NTFS refuses while the service and companion run from those directories — the same incident
+the journaled deployment engine was written for on 2026-09-01, which the installer had never
+been wired to. It now deploys through that engine (stop by PID → same-volume renames →
+ACL → start → health → commit, rollback on any failure), writes a transcript under
+`C:\ProgramData\PagentOS\install-logs\`, prints the evidence block (repo HEAD, source /
+staged / installed artifact hashes, the executables the SCM and the logon task point at and
+are running, the worker path, the installed capability manifest) and **fails loudly** if the
+live binary does not answer the `capabilities` verb with the browser family.
 
 ```powershell
-Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile -ExecutionPolicy Bypass -File "E:\AI\PersonalAgentOS_Claude_Autonomous_Build_Package_v1\scripts\install-device-service.ps1"'
+Start-Process powershell -Verb RunAs -Wait -ArgumentList '-NoProfile -ExecutionPolicy Bypass -NoExit -File "E:\AI\PersonalAgentOS_Claude_Autonomous_Build_Package_v1\scripts\install-device-service.ps1"'
 ```
 
-then, in an ordinary shell, confirm the device advertises the browser family and the worker
-self-check passes:
+(`-NoExit` keeps the elevated window open so the last lines are visible: either
+`INSTALL VERIFIED …` in green or `INSTALL FAILED: …` in red with the log path.) Then, in an
+ordinary shell, confirm the device advertises the browser family and the worker self-check
+passes as you:
 
 ```powershell
 .\scripts\verify-device-service.ps1

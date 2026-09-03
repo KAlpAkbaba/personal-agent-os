@@ -2474,3 +2474,22 @@ embedded Temporal worker). Facts and decisions that were not in the design:
 9. **The e2e harness owns a database** (`pagentos_e2e_m13`): the shared dev database is
    truncated and re-migrated by the integration suites, which wiped a real run mid-fetch during
    the concurrent reviews; the API log is captured into the evidence directory.
+
+10. **The installer deploys through the journaled engine, and proves the result** (2026-09-03,
+    real owner run). The owner's M13 agent update built and staged the new binaries and then
+    failed at the swap: `install-device-service.ps1` still used the pre-engine
+    `Publish-StagedDirectory` rename, which NTFS refuses while the service and the companion
+    execute from those directories — the exact incident `scripts/lib/Deployment.ps1` was
+    written for on 2026-09-01 and which only `finalize-qualification.ps1` had adopted. The
+    elevated window closed on the error, `.previous` stayed empty, `.staging` held the M13
+    candidate, the old binaries kept running, and the verifier reported the agent as pre-M13.
+    Now: `Invoke-AgentDeployment` with production handlers (`scripts/lib/AgentRuntime.ps1`:
+    companion, service and any process executing from the install root — the Browser
+    Worker's python.exe — stopped and awaited by PID), registration before the swap, health =
+    installed binary answers the `capabilities` verb with the browser family when provisioned
+    AND service + companion + pipe up AND both processes running from the new trees, a
+    transcript under `ProgramData\PagentOS\install-logs`, an evidence block
+    (`scripts/lib/InstallEvidence.ps1`: repo HEAD read from `.git`, source/staged/installed
+    artifact hashes compared, SCM and logon-task executable paths read back, running image
+    paths, worker path, manifest), and a loud failure when any of it disagrees.
+    `installer-evidence.tests.ps1` pins the engine as the only deploy path.
