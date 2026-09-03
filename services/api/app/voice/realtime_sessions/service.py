@@ -790,6 +790,8 @@ BREAKDOWN_FIELDS: dict[str, tuple[str, ...]] = {
 BREAKDOWN_FLAGS: dict[str, tuple[str, ...]] = {
     "uplink_first_packet": ("basis",),
     "barge_in_start": ("anomaly",),
+    # first_audio: basis 1 = first audible local sample, 0 = provider-mark fallback
+    "first_audio": ("basis",),
 }
 
 
