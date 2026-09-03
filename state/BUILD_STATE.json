@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "project": "personal-agent-os",
-  "current_milestone": "M12_REALTIME_VOICE_FOUNDATION",
-  "status": "IN_PROGRESS_AWAITING_OWNER_CREDENTIAL",
+  "current_milestone": "M13_REAL_BROWSER_RESEARCH",
+  "status": "BUILT_REVIEWED_PROVEN_PROXY_AWAITING_OWNER_RELEASE_AND_AGENT_UPDATE",
   "last_completed_milestone": "REAL_CLOUD_BRINGUP",
-  "last_updated": "2026-09-03T07:40:00+03:00",
+  "last_updated": "2026-09-03T13:30:00+03:00",
   "qualification": {
     "matrix": "docs/QUALIFICATION.md",
     "owner_queue": "docs/OWNER_ACTIONS.md",
@@ -15,18 +15,26 @@
     "stage_4_github_ci": "DONE 2026-09-01, CI GREEN (all 7 jobs). gh was already authenticated, so no owner action was needed: private repo KAlpAkbaba/personal-agent-os created (verified PRIVATE before any push), main pushed, CI green on run 4. The first four CI runs found SIX defects the local gate satisfies by accident: (1) pytest -m 'not integration' deselected ALL 1418 tests and asserted nothing - an unscoped conftest hook; (2) the real-browser-profile guard was a no-op on Linux, the platform the browser agent runs on; (3+4) two Windows agent tests asserted the host's ELEVATION, not the policy (an elevated token owns new objects as BUILTIN\\Administrators, which ServiceMode trusts); (5) a working-directory test compared path SPELLINGS (8.3 short path vs long); (6) the M6 self-healing E2E hardcoded taskkill so it had never run on Linux, the supervisor's production platform. Recurring pattern, named in DECISIONS.md: a guard or recovery path verified only on the platform it does NOT run on."
   },
   "m13_browser_research": {
-    "status": "DESIGN_AND_SKELETON_COMPLETE_OFFLINE",
-    "branch": "worktree-agent-a5e28a2166b24ad9b",
-    "decision": "docs/DECISIONS.md ADR-0035",
-    "summary": "Full offline-testable M13 pipeline built in parallel with M12: services/api/app/research/{dates,plan,evidence,synthesis,executive,browser_gateway,browser_provider}.py (Turkish relative-date parsing incl. 'son üç gün', plan generation, provenance-complete evidence, deterministic dedup/ranking, source_fact|model_inference|recommendation|uncertainty labelling, Executive Summary->Why it matters->Recommended action->Details on demand, DeterministicSynthesisProvider + inert ClaudeSynthesisProvider seam); services/browser/browser_agent/{evidence,research}.py (semantic-only evidence extraction via BrowserSession.page_text/title, multi-source gather with partial-failure handling) plus owner_authorized_for_research on BrowserEnrollment + ErrorClass.SECURITY_SCOPE_ERROR (unauthorized real-profile use refused, unit-tested). Not done: browser.* device-capability dispatch (ADR-0035 lists exactly what's missing), search/URL-discovery provider choice, durable Temporal wrapper, real owner-Chrome authorization (owner-gated, deferred with M12's real-audio split precedent).",
-    "tests": "services/api unit 1323->1392 (69 new), services/browser unit 75->97 (22 new); both ruff-clean; existing M3/M2 gates unmodified and still passing.",
-    "last_updated": "2026-09-02"
+    "status": "BUILT_AND_REVIEWED; PROVEN_PROXY on the local real chain; NOT PROVEN_REAL (cloud leg pending)",
+    "decision": "docs/DECISIONS.md ADR-0050 (+ addendum); contracts packages/protocol/BROWSER_CAPABILITIES.md, docs/M13_RESEARCH_SPEC.md",
+    "on_main": {
+      "windows": "Session Companion BrowserWorkerHost (stdio JSON worker host, lazy start, restart with backoff and ceiling, 120 s browser cap, op allowlist, normalised forbidden-key scan, stderr sanitiser, bounded stdout), DeviceService browser.* routing, capability manifest (browser.chrome + 24 ops), installer provisions the worker venv and preserves installed broker endpoints",
+      "browser_worker": "services/browser/browser_agent/worker.py + policy/page_kind/extraction/search_engines/injection/destination; real Chrome channel with a dedicated profile (headful is the qualified posture); DDG/Bing/Brave parsers verified on real markup; device-side destination policy",
+      "cloud_core": "app/devices (inventory/presence/capabilities/health/selection with Turkish aliases, PATCH/select routes, DeviceCommandClient, sweep delivery), app/research real pipeline (sources registry, HN/arXiv/RSS discovery with redirects and 2 MiB cap, DeviceBrowserGateway, dedup/syndication, ResearchReport + provenance gate for every label, deterministic/OpenAI/Anthropic synthesis with bounds, injection boundary with folded text, forbidden-key scan, destination policy, memory boundary), BrowserResearchWorkflow with idempotent per-URL fetch attempts and a visible failure path, migrations 0012+0013, /v1/research routes, embedded Temporal worker (PAGENTOS_WORKER_MODE=embedded in prod compose)",
+      "web": "apps/web/app/research (topic, device chooser with selection preview, live progress, report in the spec order with citation chips, previous tasks)"
+    },
+    "tests": "API unit 1935 (+ integration incl. restart-mid-fetch), browser unit 246 + browser e2e 57 + live 2 (real Chrome), Windows agent 272 + 135, web 160, PS5.1 suites incl. installer-browser 15 and installer-invocation 32; ruff/oxlint clean",
+    "local_real_chain": "scripts/e2e-m13-research.ps1 PASS 2026-09-03 (run 7): 108 candidates, 12 fetched through real Chrome, 7 findings, artifact READY pdf+docx, memory written, Cloud Core restart mid-job resumed with unique evidence; isolated database pagentos_e2e_m13",
+    "reviews": "test-engineer + security (Critical memory boundary, High destination policy, High Cloud Core forbidden-key scan, Mediums) all fixed with regressions; see ADR-0050 addendum",
+    "owner_actions": "docs/OWNER_ACTIONS.md item 10: release-cloud-core.ps1, install-device-service.ps1 (UAC, preserves endpoints), first real research from /research",
+    "last_updated": "2026-09-03"
   },
   "owner_actions_pending": [
-    "CURRENT: docs/OWNER_ACTIONS.md item 9 - K66 re-qualification after the instrumentation + noise pass; fetch-benchmark.ps1 -Latest. Later: Chrome authorisation for M13; a phone for M15.",
+    "M13 item 10 (ready): release the Cloud Core, update the Windows agent once (UAC), run the first real research from /research and give a verdict.",
+    "M12 item 9 (current, evening): K66 re-qualification after the instrumentation + noise pass; fetch-benchmark.ps1 -Latest.",
     "M8 asset enrollment: enroll the real hosts/networks/devices you authorize, with evidence and scope.",
     "HARD GATE - runtime confinement before enabling any I/O-capable generated operation or a non-deterministic skill generator (M7 review verdict (d)).",
-    "Deferred: 2.2b fresh-logon companion autostart and full Windows reboot proof land incidentally at the next natural sign-out/reboot.",
+    "Deferred: 2.2b fresh-logon companion autostart and full Windows reboot proof land incidentally at the next natural sign-out/reboot; Chrome session enrollment (item 5) for authenticated-site research; a phone for M15.",
     "Recommended, non-blocking: move Docker Desktop disk image location from C: to E:."
   ],
   "quality_gate": {
@@ -35,7 +43,7 @@
     "scope": "Full gate on merged main after M12 tracks A+E, B, C, C2, D and the credential path: secret hygiene (shape-based scan), ruff, API unit 1609 + integration, PS5.1 suites incl. the new cloud-secret suite (33), recovery supervisor, browser, Windows agent 145 + 134 xUnit, web build.",
     "ci": "GREEN 2026-09-02 on 9e213ae (7/7) after every M12 merge; each track was independently verified in its worktree before merging (ruff/pytest, dotnet build+test, vitest/oxlint/next build) and re-verified on the merged tree."
   },
-  "notes": "RQ-1 and RQ-2 closed on real infrastructure. M12 Realtime Voice Foundation: every track on main, reviews closed, offline gates green, QUALIFICATION Stage 6 pre-registered and empty. The system is now waiting on the one thing only the owner can do - the provider credential - after which the real-microphone session is the next and only path to PROVEN_REAL. M13 skeleton unchanged (ADR-0035) with the pipeline-level provenance gate added.",
+  "notes": "M12 voice: implementation and evidence frozen pending the owner's evening K66 rerun (item 9). M13: design (ADR-0050) built in four parallel tracks, merged, reviewed and fixed the same day; the local real chain passes with real Chrome and the live Internet; real acceptance needs the cloud release and one agent update (item 10). M19 multi-device recorded (ADR-0049), not started.",
   "m12_realtime_voice": {
     "status": "FOUNDATION_COMPLETE_OFFLINE_GATED; NOTHING PROVEN_REAL",
     "decisions": "ADR-0034 (architecture), ADR-0036 (A+E), ADR-0037 (C), ADR-0038 (B), ADR-0039 (C2 integration), ADR-0040 (D), ADR-0041 (credential path)",

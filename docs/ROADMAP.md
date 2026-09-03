@@ -254,6 +254,15 @@ and the web `/research` surface. Real acceptance (`docs/ACCEPTANCE_TESTS.md` M13
 (UAC) — and then the first real research run on "Son üç gündeki yapay zekâ ajanlarıyla ilgili
 önemli gelişmeleri araştır." Fixtures remain gates, never `PROVEN_REAL`.
 
+Status 2026-09-03 evening — **built, independently reviewed, `PROVEN_PROXY` on the local real
+chain; waiting on two owner actions.** All four tracks merged; test-engineering and security
+reviews closed (one Critical, two Highs and the Mediums fixed with regressions; ADR-0050
+addendum). `scripts/e2e-m13-research.ps1` passes end to end with real Chrome and the live
+Internet: discovery through feeds/Hacker News/arXiv and three search engines, 12 sources
+fetched through Chrome, a labelled report, PDF/DOCX artifact, memory entry, and a Cloud Core
+restart mid-job that resumed without duplicate evidence. `docs/OWNER_ACTIONS.md` item 10:
+release the Cloud Core, update the agent once, run the first real research.
+
 ## M14 — Voice + Browser/Research integration
 
 "Son üç gündeki yapay zekâ ajanlarıyla ilgili önemli gelişmeleri araştır" spoken, answered

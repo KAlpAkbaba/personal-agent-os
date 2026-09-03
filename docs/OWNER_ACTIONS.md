@@ -21,6 +21,13 @@ Status vocabulary matches `docs/QUALIFICATION.md`: `PROVEN_REAL`, `PROVEN_PROXY`
 
 ## Now
 
+Two independent actions are ready; do them in whichever order suits the evening:
+
+- **Item 10 — M13 Real Browser + Research**: release the Cloud Core, update the Windows agent
+  once (UAC), then run the first real research from the web page. Everything before it is
+  built, reviewed and proven on the local real chain (real Chrome, live Internet).
+- **Item 9 — K66 voice re-qualification** (unchanged from this morning).
+
 **Item 8 below: the combined voice-character + noise qualification session.** Your first
 real session (item 7) said: generally good, keep the architecture, target voice Arbor, and
 one real defect — the K66 microphone lets room noise drive turns. The response is on
@@ -87,6 +94,69 @@ Unblocks: real-browser qualification against sites you are already signed into.
 
 The agent will give you the exact enrollment step when it reaches this point; it needs the
 browser closed once, and it never asks for a password.
+
+### 10. M13 Real Browser + Research — release, agent update, first real research — **ready**
+
+Unblocks: `docs/QUALIFICATION.md` Stage 9 rows 9.1–9.10 (`PROVEN_REAL`); today they are
+`PROVEN_PROXY` from the local real chain (`scripts/e2e-m13-research.ps1`: dev Cloud Core →
+dev DeviceService/Companion → Browser Worker → real Chrome → live Internet → 12 sources →
+report → PDF/DOCX artifact → memory → Cloud Core restart mid-job resumed without duplicate
+evidence).
+
+What changed since the last release (`a139e28`): the research pipeline and device layer
+(ADR-0050), migrations `0012`/`0013`, `PAGENTOS_WORKER_MODE=embedded` on the `api` service,
+the `/v1/research` and `/v1/devices/select|PATCH` routes, plus every M12 client fix. The
+release transaction is the proven one (ADR-0042): build → migrate → recreate `api` only →
+health → contract v2 → key PRESENT → provider listed → real Realtime mint → rollback on any
+failure. PostgreSQL, Redis, MinIO, Temporal, the device row and the owner identity are
+untouched.
+
+Step A — release the Cloud Core (from the repository root, ordinary shell; the script talks
+to `pagentos-core` over the tailnet, prints no secret):
+
+```powershell
+.\scripts\cloud\release-cloud-core.ps1
+```
+
+Step B — update the Windows agent once (this provisions the Browser Worker: a Python
+environment under `C:\Program Files\PagentOS\agent\browser`, the real Chrome channel, a
+dedicated PagentOS profile under `%ProgramData%\PagentOS\companion\browser`; it preserves
+the tailnet broker endpoints, the device identity and the enrollment; one UAC prompt):
+
+```powershell
+Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile -ExecutionPolicy Bypass -File "E:\AI\PersonalAgentOS_Claude_Autonomous_Build_Package_v1\scripts\install-device-service.ps1"'
+```
+
+then, in an ordinary shell, confirm the device advertises the browser family and the worker
+self-check passes:
+
+```powershell
+.\scripts\verify-device-service.ps1
+```
+
+Step C — the first real research. Start the web client against the Cloud Core and open the
+research page:
+
+```powershell
+.\scripts\voice\start-web-voice.ps1
+```
+
+Open `http://localhost:3000/research`, sign in with the Owner Credential (masked, as on the
+voice page), keep the prefilled topic "Son üç gündeki yapay zekâ ajanlarıyla ilgili önemli
+gelişmeleri araştır.", device "Otomatik" (or type `ev bilgisayarımda araştır` to prove the
+explicit target), press **Başlat**. Expect a visible Chrome window on this PC working
+through searches and pages for two to four minutes; the page shows the stage and counters
+live. When it reads "ready", the report appears (Yönetici Özeti → Bulgular → Neden Önemli →
+Sonraki Sinyaller → Ayrıntılar → Kaynaklar), the artifact lands in the inbox with PDF/DOCX,
+and the memory entry exists.
+
+Your verdict, in a sentence or two: is the executive summary concise, do the 3–7 findings
+matter, are the sources traceable? Paste the task id (the page shows it) or the
+"Rapor JSON'unu kopyala" output. Note: without an LLM key on the host the synthesis is the
+deterministic provider (findings are provenance summaries, not prose); the owner's existing
+OpenAI key on the host makes `auto` pick OpenAI automatically once
+`PAGENTOS_OPENAI_API_KEY` is set there — say so if you want that switched on before the run,
+it is one `set-cloud-secret.ps1` call with the same key value.
 
 ### 9. K66 re-qualification after the instrumentation + noise pass — **this is the current action**
 
