@@ -56,9 +56,12 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
     /// </summary>
     public const int MaxStdoutLineBytes = 4 * BrowserCapabilities.MaxResultBytes;
 
+    private const string AuditOrphanReaped = "browser_chrome_reaped";
+
     private readonly BrowserWorkerOptions _options;
     private readonly ILogger _logger;
     private readonly AuditLog? _audit;
+    private readonly ChromeOrphanReaper _reaper;
     private readonly BackoffPolicy _restartBackoff;
     private readonly TimeSpan _helloTimeout;
     private readonly TimeSpan _pingInterval;
@@ -78,6 +81,7 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
     private int _pongsReceived;
     private int _livenessKills;
     private int _oversizeLineKills;
+    private int _orphanChromesReaped;
 
     public BrowserWorkerHost(
         BrowserWorkerOptions options,
@@ -87,11 +91,13 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
         TimeSpan? helloTimeout = null,
         TimeSpan? pingInterval = null,
         TimeSpan? shutdownGrace = null,
-        int? eagerRestartCeiling = null)
+        int? eagerRestartCeiling = null,
+        ChromeOrphanReaper? reaper = null)
     {
         _options = options;
         _logger = logger;
         _audit = audit;
+        _reaper = reaper ?? new ChromeOrphanReaper(options.ProfileDir, logger);
         _restartBackoff = restartBackoff ?? new BackoffPolicy(baseSeconds: 1.0, maxSeconds: 60.0);
         _helloTimeout = helloTimeout ?? TimeSpan.FromSeconds(20);
         _pingInterval = pingInterval ?? TimeSpan.FromSeconds(15);
@@ -129,6 +135,14 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
 
     /// <summary>Workers killed for writing a stdout line longer than <see cref="MaxStdoutLineBytes"/>.</summary>
     public int OversizeLineKills => Volatile.Read(ref _oversizeLineKills);
+
+    /// <summary>
+    /// Chrome main processes on the PagentOS profile terminated by the companion because
+    /// no worker owned them any more (<see cref="ChromeOrphanReaper"/>): after every kill
+    /// or unexpected exit, and before every start. Non-zero means a worker died without
+    /// cleaning up — the 2026-09-03 cascade in the making, stopped.
+    /// </summary>
+    public int OrphanChromesReaped => Volatile.Read(ref _orphanChromesReaped);
 
     /// <summary>Consecutive failed starts / unexpected exits since the last successful request.</summary>
     public int ConsecutiveFailures => Volatile.Read(ref _consecutiveFailures);
@@ -291,6 +305,14 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
                     retryable: false);
             }
 
+            if (string.Equals(errorClass, ErrorClasses.BrowserLifecycleViolation, StringComparison.Ordinal))
+            {
+                // Passes through as itself and is NEVER retryable, whatever the worker
+                // said: a retry is a fresh launch on a profile something else holds, and
+                // that is the window cascade of 2026-09-03.
+                throw new CapabilityException(errorClass, Truncate(errorMessage), retryable: false);
+            }
+
             throw new CapabilityException(errorClass, Truncate(errorMessage), retryable);
         }
 
@@ -407,6 +429,11 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
 
             await WaitForBackoffAsync(cancellationToken).ConfigureAwait(false);
 
+            // A worker that died earlier — or one killed while the companion was not
+            // running — cannot have closed its Chrome. Launching a new one onto a
+            // profile an orphan still holds opens a window in the orphan instead.
+            ReapOrphans("before worker start");
+
             var worker = Spawn();
             _worker = worker;
             Interlocked.Increment(ref _starts);
@@ -425,6 +452,7 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
             catch (TimeoutException)
             {
                 _logger.LogError("browser worker (pid={Pid}) sent no hello within {Seconds:F0} s; killing it", worker.Pid, _helloTimeout.TotalSeconds);
+                worker.KillReason = $"no hello within {_helloTimeout.TotalSeconds:F0} s";
                 worker.Kill();
                 HandleExit(worker);
                 throw new CapabilityException(
@@ -439,6 +467,11 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
             catch (Exception ex)
             {
                 // Exited before hello, or the hello was malformed.
+                if (worker.Alive)
+                {
+                    worker.KillReason = $"hello failed: {ex.Message}";
+                }
+
                 worker.Kill();
                 HandleExit(worker);
                 throw new CapabilityException(
@@ -587,23 +620,35 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
         if (unexpected)
         {
             _logger.LogWarning(
-                "browser worker (pid={Pid}) exited with code {Code}; {Pending} in-flight request(s) failed dependency_unavailable; consecutive failures={Failures}",
+                "browser worker (pid={Pid}) exited with code {Code} ({Reason}); {Pending} in-flight request(s) failed dependency_unavailable; consecutive failures={Failures}",
                 worker.Pid,
                 exitCode,
+                worker.KillReason is { } reason ? $"killed by the companion: {reason}" : "exited on its own",
                 pending,
                 Volatile.Read(ref _consecutiveFailures));
         }
         else
         {
-            _logger.LogInformation("browser worker (pid={Pid}) exited with code {Code} after shutdown", worker.Pid, exitCode);
+            _logger.LogInformation(
+                "browser worker (pid={Pid}) exited with code {Code} after shutdown ({Reason})",
+                worker.Pid,
+                exitCode,
+                worker.KillReason is { } reason ? $"killed by the companion: {reason}" : "exited on its own");
         }
 
         _audit?.Write(
             AuditWorkerExited,
             status: unexpected ? "unexpected" : "shutdown",
-            detail: $"pid={worker.Pid}; exit_code={exitCode?.ToString(CultureInfo.InvariantCulture) ?? "?"}; in_flight_failed={pending}; consecutive_failures={Volatile.Read(ref _consecutiveFailures)}");
+            detail: $"pid={worker.Pid}; exit_code={exitCode?.ToString(CultureInfo.InvariantCulture) ?? "?"}; kill_reason={worker.KillReason ?? "-"}; in_flight_failed={pending}; consecutive_failures={Volatile.Read(ref _consecutiveFailures)}");
 
         worker.DisposeQuietly();
+
+        // Whatever took the worker down, its Chrome is nobody's now. The process-tree kill
+        // usually gets it, but "usually" is how the 2026-09-03 cascade started: reap by
+        // profile, and say which pids.
+        ReapOrphans(worker.KillReason is { } killedFor
+            ? $"after killing the worker: {killedFor}"
+            : unexpected ? "after an unexpected worker exit" : "after worker shutdown");
 
         if (unexpected && _options.Eager && !_lifetime.IsCancellationRequested)
         {
@@ -840,6 +885,7 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
             catch (TimeoutException)
             {
                 _logger.LogWarning("browser worker (pid={Pid}) ignored shutdown for {Seconds:F0} s; killing it", worker.Pid, _shutdownGrace.TotalSeconds);
+                worker.KillReason = $"ignored shutdown for {_shutdownGrace.TotalSeconds:F0} s";
                 worker.Kill();
             }
         }
@@ -862,6 +908,30 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
             ? $"request_id={requestId}; duration_ms={durationMs}"
             : $"request_id={requestId}; duration_ms={durationMs}; retryable={(retryable.Value ? "true" : "false")}";
         _audit?.Write(AuditRequestEvent, capability: capability, status: status, detail: detail);
+        // The same row in the companion log, so the file alone can reconstruct a sequence.
+        _logger.LogInformation("browser request {Capability} request_id={RequestId} outcome={Outcome} duration_ms={DurationMs}{Retryable}", capability, requestId, status, durationMs, retryable is null ? string.Empty : $" retryable={(retryable.Value ? "true" : "false")}");
+    }
+
+    private void ReapOrphans(string reason)
+    {
+        var pids = _reaper.Reap(reason);
+        if (pids.Count == 0)
+        {
+            return;
+        }
+
+        Interlocked.Add(ref _orphanChromesReaped, pids.Count);
+        var list = string.Join(",", pids.Select(pid => pid.ToString(CultureInfo.InvariantCulture)));
+        _logger.LogWarning(
+            "{Class}: {Count} orphan {Process} process(es) on the PagentOS profile terminated {Reason}: pids={Pids} (profile={Profile}; total reaped={Total})",
+            ErrorClasses.BrowserLifecycleViolation,
+            pids.Count,
+            _reaper.ProcessName,
+            reason,
+            list,
+            _reaper.ProfileDir,
+            OrphanChromesReaped);
+        _audit?.Write(AuditOrphanReaped, status: ErrorClasses.BrowserLifecycleViolation, detail: $"pids={list}; reason={reason}; total={OrphanChromesReaped}");
     }
 
     private static string Truncate(string message)

@@ -144,17 +144,28 @@ binding contract; this section only states how the family is carried on the devi
   forbidden-key rule (`cookie`, `authorization`, `set-cookie`, `localstorage`,
   `sessionstorage`, `password`, `token`, `secret`, `apikey` — case-insensitive substring of
   any key at any depth → `security_scope_error`). Error classes outside §8's taxonomy are
-  reported as `internal_bug`. The worker's stderr goes to the companion log, never into a
-  result.
+  reported as `internal_bug`; `browser_lifecycle_violation` (the worker found, or left, the
+  PagentOS profile's Chrome outside its own lifecycle — an orphan holding the profile lock)
+  passes through as itself and is **never retryable**, whatever the worker said. The
+  worker's stderr goes to the companion log, never into a result.
 - **Worker lifecycle.** Started lazily on the first `browser.*` request (or eagerly with
   `BrowserWorkerEager=true`), one at a time; restarted with exponential backoff after an
   exit, with in-flight requests failed `dependency_unavailable` (retryable) immediately;
   pinged for liveness; told `shutdown` and then killed (process tree) when the companion
-  stops.
+  stops. **Orphan Chrome (2026-09-03 incident):** whenever the companion kills the worker
+  (no hello, missed pings, oversize stdout line, ignored shutdown) or observes it exit, and
+  before every worker start, it terminates every `chrome.exe` main process whose command
+  line carries `--user-data-dir=<BrowserProfileDir>` — that profile only, never another
+  Chrome — logs the pids, and counts them (`OrphanChromesReaped`). The installer's
+  `Stop-AgentRuntime` does the same after stopping the worker.
+- **Companion log.** The companion logs to its console and to
+  `<companion DataDir>\logs\companion.log` (the service's JSONL format, size-bounded and
+  rotated): every worker start / exit / kill with its reason, the sanitised worker stderr,
+  and one line per browser request (capability, `request_id`, outcome, `duration_ms`).
 - **Audit.** The companion writes one `browser_request` row per request — capability,
   `request_id`, outcome class, `duration_ms`, never payload or result text, never a URL —
-  plus `browser_worker_started` / `browser_worker_exited` rows; the service writes its usual
-  per-command rows.
+  plus `browser_worker_started` / `browser_worker_exited` / `browser_chrome_reaped` rows;
+  the service writes its usual per-command rows.
 
 Configuration (all `PAGENTOS_AGENT_`-prefixed, nothing machine-specific): service
 `BrowserEnabled` (default false); companion `BrowserWorkerCommand`, `BrowserWorkerArgs`,

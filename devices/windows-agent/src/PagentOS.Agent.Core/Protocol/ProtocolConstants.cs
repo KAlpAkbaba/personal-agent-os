@@ -203,12 +203,20 @@ public static class ErrorClasses
     public const string SecurityScopeError = "security_scope_error";
     public const string InternalBug = "internal_bug";
 
+    /// <summary>
+    /// M13 (2026-09-03 incident): the Browser Worker found, or left, the PagentOS profile's
+    /// Chrome outside its own lifecycle — an orphan holding the profile lock, a launch that
+    /// landed in it. Never retryable: retrying a launch on a locked profile is exactly what
+    /// cascaded windows across the owner's desktop.
+    /// </summary>
+    public const string BrowserLifecycleViolation = "browser_lifecycle_violation";
+
     public static readonly IReadOnlySet<string> All = new HashSet<string>(StringComparer.Ordinal)
     {
         ValidationError, AuthError, DeviceOffline, CapabilityMissing, DependencyUnavailable,
         ProviderRateLimited, ProviderError, UiTargetNotFound, UiStateChanged, Timeout,
         CommandExpired, Cancelled, RetryExhausted, ArtifactRenderError, VoiceProviderError,
-        SecurityScopeError, InternalBug,
+        SecurityScopeError, InternalBug, BrowserLifecycleViolation,
     };
 }
 
