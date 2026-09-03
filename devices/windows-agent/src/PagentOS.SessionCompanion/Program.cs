@@ -160,6 +160,28 @@ public static class Program
         // the pipe loop itself neither executes nor answers them.
         var sidebandSource = new PagentOS.Companion.Audio.Sideband.PipeSidebandPushSource(loggerFactory.CreateLogger("Sideband"));
 
+        // M13 (BROWSER_CAPABILITIES.md §7): the Browser Worker is a child of THIS process,
+        // in the owner's session, started only when configured. No command configured means
+        // no browser family advertised and browser.* answered capability_missing.
+        var browserOptions = BrowserWorkerOptions.FromConfiguration(configuration, dataDir);
+        BrowserWorkerHost? browserHost = null;
+        if (browserOptions.IsConfigured)
+        {
+            browserHost = new BrowserWorkerHost(browserOptions, loggerFactory.CreateLogger("BrowserWorker"), audit);
+            logger.LogInformation(
+                "browser worker: configured command={Command} args=[{Args}] channel={Channel} visible={Visible} data_dir={DataDir} eager={Eager}",
+                browserOptions.WorkerCommand,
+                string.Join(' ', browserOptions.BuildArgumentList()),
+                browserOptions.Channel,
+                browserOptions.Visible,
+                browserOptions.DataDir,
+                browserOptions.Eager);
+        }
+        else
+        {
+            logger.LogInformation("browser worker: not configured (PAGENTOS_AGENT_BrowserWorkerCommand is empty); browser.* capabilities are not advertised");
+        }
+
         var runtime = new CompanionRuntime(
             pipeName,
             new AppLauncher(allowlist),
@@ -167,7 +189,14 @@ public static class Program
             logger,
             backoff: null,
             servicePolicy: servicePolicy,
-            sidebandSink: sidebandSource);
+            sidebandSink: sidebandSource,
+            browserWorker: browserHost);
+        logger.LogInformation("capabilities advertised to the device service: {Capabilities}", string.Join(",", runtime.AdvertisedCapabilities));
+
+        if (browserHost is not null && browserOptions.Eager)
+        {
+            await browserHost.StartAsync(cts.Token).ConfigureAwait(false);
+        }
 
         // M12 track C: the realtime voice client is ADDITIVE and OFF by default. It runs beside
         // the qualified pipe loop, never inside it, and a voice failure can only log — the
@@ -188,8 +217,20 @@ public static class Program
             logger.LogInformation("voice: disabled (PAGENTOS_AGENT_VoiceEnabled=true plus PAGENTOS_AGENT_CloudCoreUrl, or --voice, enables it)");
         }
 
-        await runtime.RunAsync(cts.Token).ConfigureAwait(false);
-        await voiceTask.ConfigureAwait(false);
+        try
+        {
+            await runtime.RunAsync(cts.Token).ConfigureAwait(false);
+            await voiceTask.ConfigureAwait(false);
+        }
+        finally
+        {
+            if (browserHost is not null)
+            {
+                // "shutdown" on stdin, a bounded wait, then the process tree — Chrome included.
+                await browserHost.StopAsync().ConfigureAwait(false);
+            }
+        }
+
         return 0;
     }
 

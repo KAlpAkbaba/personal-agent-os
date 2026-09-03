@@ -105,6 +105,63 @@ Payload: `{"path":"<absolute local file path>","artifact_id":"<uuid>"?}`. The se
 
 Allowlist (checked in order): reject non-absolute/blank/UNC paths (`validation_error`); hard-deny executable extensions even inside a root (`security_scope_error`); require a document extension in the configurable allowlist, default `.pdf .docx .html .htm .txt .md` (`capability_missing`); require the canonical resolved path (symlinks/`..` collapsed) to lie under a configured artifact root, default `%LOCALAPPDATA%\PagentOS\agent\artifacts` plus configured extra roots (`security_scope_error`); require the file to exist (`dependency_unavailable`). Every attempt is written to the companion's local JSONL audit with path, artifact_id and result.
 
+## 6b. Capability family: `browser.*` (M13)
+
+The browser family rides this protocol unchanged — one command envelope, one
+`accepted → running → succeeded|failed` lifecycle, one idempotency store, one audit log.
+Names, payloads, results, sessions, risk classes and the companion ↔ worker stdio protocol
+are specified in **`packages/protocol/BROWSER_CAPABILITIES.md`** (ADR-0050), which is the
+binding contract; this section only states how the family is carried on the device side.
+
+- **Advertisement.** The family marker `browser.chrome` and the per-operation names
+  (`browser.session_open` … `browser.fetch_evidence`) appear in `hello.capabilities` and in
+  the enrollment manifest **only when the device has a configured Browser Worker**:
+  service option `BrowserEnabled=true` (written by the installer after the worker's
+  self-check passed) and, on the companion, `BrowserWorkerCommand` set. The two desktop
+  names are advertised unconditionally, exactly as before. A device never advertises a
+  family it cannot execute; Cloud Core selects devices by capability (§8 of the browser
+  contract), so an absent name means `no_capable_device`, not a hang.
+- **Routing.** The Device Service (Session 0) forwards every `browser.*` command over the
+  authenticated companion pipe like `desktop.*`; the Session Companion (owner session)
+  hands it to the Browser Worker child process it owns. With `BrowserEnabled=false` the
+  service answers `capability_missing` (not retryable) before consulting the companion.
+  With no companion connected the answer is `dependency_unavailable` (retryable), as for
+  the desktop family. A companion without a configured worker answers `capability_missing`.
+  Unknown names in the `browser.` namespace, and the marker `browser.chrome` itself, are
+  `capability_missing`.
+- **Timeout cap.** The service caps the time one command may hold the companion per family:
+  **60 s for `desktop.*`** (unchanged), **120 s for `browser.*`**. The pipe request carries
+  `timeout_ms` (the remaining command life clamped to [1 s, cap]); the companion forwards
+  it to the worker (less a 500 ms headroom so the typed `timeout` arrives before the
+  service synthesises one), cancels the worker's request when it elapses, and answers
+  `timeout` (retryable).
+- **Concurrency.** Browser requests execute concurrently on the companion and their
+  responses may interleave on the pipe; `request_id` correlates them, every frame still
+  carries the connection id and a strictly increasing sequence (ADR-0028), and one
+  `exec_response` answers one `exec_request`. Desktop requests are unaffected.
+- **Companion-side checks.** Before a worker result crosses the pipe the companion enforces
+  the contract's result cap (48 KiB → `internal_bug`; the worker must truncate) and the
+  forbidden-key rule (`cookie`, `authorization`, `set-cookie`, `localstorage`,
+  `sessionstorage`, `password`, `token`, `secret`, `apikey` — case-insensitive substring of
+  any key at any depth → `security_scope_error`). Error classes outside §8's taxonomy are
+  reported as `internal_bug`. The worker's stderr goes to the companion log, never into a
+  result.
+- **Worker lifecycle.** Started lazily on the first `browser.*` request (or eagerly with
+  `BrowserWorkerEager=true`), one at a time; restarted with exponential backoff after an
+  exit, with in-flight requests failed `dependency_unavailable` (retryable) immediately;
+  pinged for liveness; told `shutdown` and then killed (process tree) when the companion
+  stops.
+- **Audit.** The companion writes one `browser_request` row per request — capability,
+  `request_id`, outcome class, `duration_ms`, never payload or result text, never a URL —
+  plus `browser_worker_started` / `browser_worker_exited` rows; the service writes its usual
+  per-command rows.
+
+Configuration (all `PAGENTOS_AGENT_`-prefixed, nothing machine-specific): service
+`BrowserEnabled` (default false); companion `BrowserWorkerCommand`, `BrowserWorkerArgs`,
+`BrowserDataDir` (default `<companion DataDir>\browser`), `BrowserProfileDir` (default
+`<BrowserDataDir>\profile`), `BrowserChannel` (default `chrome`), `BrowserVisible` (default
+true), `BrowserIdleTimeoutS` (default 600), `BrowserWorkerEager` (default false).
+
 ## 7. Audit
 
 Broker persists an `audit_events` row for: enrollment, session start/end, command created, delivered, each ack transition, cancel, expiry. Events carry `trace_id`, `device_id`, `command_id`, never secrets or payload bodies larger than 4 KB.

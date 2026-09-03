@@ -20,6 +20,8 @@
     <ProjectReference Include="..\..\src\PagentOS.Agent.Core\PagentOS.Agent.Core.csproj" />
     <ProjectReference Include="..\..\src\PagentOS.DeviceService\PagentOS.DeviceService.csproj" />
     <ProjectReference Include="..\..\src\PagentOS.SessionCompanion\PagentOS.SessionCompanion.csproj" />
+    <!-- The fake Browser Worker is a separate executable the tests spawn over real stdio. -->
+    <ProjectReference Include="..\PagentOS.Agent.Tests.FakeBrowserWorker\PagentOS.Agent.Tests.FakeBrowserWorker.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -1,4 +1,4 @@
-﻿using System.IO.Pipes;
+using System.IO.Pipes;
 using System.Security.Principal;
 using System.Text;
 using Microsoft.Extensions.Configuration;

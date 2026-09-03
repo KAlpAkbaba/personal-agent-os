@@ -84,6 +84,13 @@ public sealed class CompanionPipeServer : BackgroundService
     public PipePeer? ConnectedPeer => _connection?.Peer;
 
     /// <summary>
+    /// What the currently admitted companion said it can execute (its hello), or null when
+    /// none is connected. Telemetry and a test seam for the M13 manifest composition; the
+    /// service's own advertisement to the broker is configuration, not this list.
+    /// </summary>
+    public IReadOnlyList<string>? CompanionCapabilities => _connection?.Capabilities;
+
+    /// <summary>
     /// The effective security descriptor of the most recently created pipe instance, as
     /// SDDL, read back from the REAL handle — not from the PipeSecurity object we asked for.
     ///
@@ -389,6 +396,7 @@ public sealed class CompanionPipeServer : BackgroundService
             return false;
         }
 
+        connection.Capabilities = hello.Capabilities;
         _logger.LogInformation(
             "session companion admitted (sid={Sid}, session={Session}, pid={Pid}, capabilities: {Capabilities})",
             connection.Peer.Sid,
@@ -575,6 +583,8 @@ public sealed class CompanionPipeServer : BackgroundService
         public IpcChannelGuard Guard { get; }
 
         public PipePeer Peer { get; }
+
+        public IReadOnlyList<string>? Capabilities { get; set; }
 
         public async Task WriteLineAsync(string line, CancellationToken cancellationToken)
         {

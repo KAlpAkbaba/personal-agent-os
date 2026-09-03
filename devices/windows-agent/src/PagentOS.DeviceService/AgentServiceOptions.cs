@@ -53,6 +53,17 @@ public sealed record AgentServiceOptions
 
     public double? HeartbeatIntervalOverrideS { get; init; }
 
+    /// <summary>
+    /// M13 (BROWSER_CAPABILITIES.md §1, §8): advertise and route the <c>browser.*</c> family.
+    /// Off by default; the installer sets it after the Browser Worker's self-check passed.
+    /// A service with this on but a companion without a worker answers <c>capability_missing</c>
+    /// from the companion — never a hang.
+    /// </summary>
+    public bool BrowserEnabled { get; init; }
+
+    /// <summary>The capability manifest this service advertises at enrollment and in every WS hello.</summary>
+    public IReadOnlyList<string> AdvertisedCapabilities => Agent.Core.Protocol.AgentCapabilities.Compose(BrowserEnabled);
+
     public double BackoffBaseSeconds { get; init; } = 1.0;
 
     public double BackoffMaxSeconds { get; init; } = 60.0;
@@ -117,8 +128,18 @@ public sealed record AgentServiceOptions
             CompanionImagePath = configuration["CompanionImagePath"],
             CompanionSessionId = companionSessionId,
             HeartbeatIntervalOverrideS = heartbeatOverride,
+            BrowserEnabled = ParseBool(configuration["BrowserEnabled"]),
             BackoffBaseSeconds = configuration.GetValue("BackoffBaseSeconds", 1.0),
             BackoffMaxSeconds = configuration.GetValue("BackoffMaxSeconds", 60.0),
         };
+    }
+
+    /// <summary>"true"/"1"/"yes" (any case) are true; absent, blank and anything else are false.</summary>
+    public static bool ParseBool(string? raw)
+    {
+        var value = raw?.Trim();
+        return string.Equals(value, "true", StringComparison.OrdinalIgnoreCase)
+               || string.Equals(value, "1", StringComparison.Ordinal)
+               || string.Equals(value, "yes", StringComparison.OrdinalIgnoreCase);
     }
 }
