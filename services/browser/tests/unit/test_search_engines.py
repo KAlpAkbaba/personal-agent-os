@@ -255,7 +255,8 @@ DDG_REAL = """
  <div class="links_main links_deep result__body">
   <h2 class="result__title">
    <a class="result__a" rel="nofollow"
-      href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fagents&amp;rut=4348">AI Agents News</a>
+      href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fagents&amp;rut=4348"
+      >AI Agents News</a>
   </h2>
   <a class="result__snippet"
      href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fagents">Daily updates on agents.</a>
