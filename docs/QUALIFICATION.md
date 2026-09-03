@@ -190,11 +190,26 @@ subjective parts and on the session's benchmark for the counted parts.
 | 6.20 | Semantic end-of-turn unchanged by the noise pipeline: normal hesitation still does not cause premature responses; barge-in stays fast | `NOT_YET_PROVEN` | Hesitation set and barge-in metric re-measured under the final configuration. |
 | 6.21 | Browser processing verified by read-back on the owner's microphone; AGC chosen from measurement, not assumption | `NOT_YET_PROVEN` | Applied MediaTrackSettings/capabilities from the owner's browser recorded in the microphone profile; AGC on/off benchmark result recorded. |
 
-## Stage 6 — Real browser qualification
+## Stage 9 — M13 Real Browser + Research (pre-registered 2026-09-03; nothing proven yet)
 
-| # | Criterion | Status |
-|---|---|---|
-| 6.1 | Owner's enrolled Chrome/Edge session drives a real authenticated site | `NOT_YET_PROVEN` |
+Real only: the owner's actual Windows machine, actual Chrome, live Internet, the real
+Hetzner Cloud Core over Tailscale. The local dev-topology proof (`scripts/e2e-m13-research.ps1`)
+is recorded as `PROVEN_PROXY` where it runs the real browser and live sources but not the
+real cloud.
+
+| # | Criterion | Status | Evidence required |
+|---|---|---|---|
+| 9.1 | Installed agent advertises `browser.chrome` and the `browser.*` operations after the installer update; worker self-check passes on the owner's machine | `NOT_YET_PROVEN` | `verify-device-service.ps1` report; `GET /v1/devices` capabilities from Hetzner. |
+| 9.2 | Hetzner → Tailscale → DeviceService → Companion → worker → real Chrome: `browser.session_open` + `browser.fetch_evidence` of a public page succeed with metadata | `NOT_YET_PROVEN` | Command rows with `command_id`/`trace_id`; companion audit; Chrome window observed. |
+| 9.3 | First use case end to end: plan → device selection → discovery (APIs + `browser.search`) → ≥ 8 live sources fetched through Chrome → evidence → dedup/ranking → synthesis → report | `NOT_YET_PROVEN` | `GET /v1/research/{task_id}` stats; the report JSON. |
+| 9.4 | Every `source_fact` traces to a fetched source with URL, title, publisher, date, retrieval time, excerpt, device command | `NOT_YET_PROVEN` | Report `sources` cross-checked against `research_evidence`. |
+| 9.5 | Durable artifact (JSON + Markdown + PDF/DOCX) with citations preserved; visible in the inbox | `NOT_YET_PROVEN` | Artifact id, renders, citation markers in the PDF. |
+| 9.6 | Episodic research memory written with provenance; no raw page text in memory | `NOT_YET_PROVEN` | Memory id; inspect endpoint. |
+| 9.7 | Website error vs browser error observed for real (one unavailable/blocked source recorded as a fetch failure without aborting the job) | `NOT_YET_PROVEN` | `fetch_failed` ≥ 1 with `page_kind`/error class recorded. |
+| 9.8 | Recovery on the real chain: Cloud Core restart or Tailscale interruption mid-job → job resumes, no duplicate evidence | `NOT_YET_PROVEN` | Workflow history; evidence row count unchanged. |
+| 9.9 | Device selection: explicit Turkish target ("ev bilgisayarımda araştır") resolves to the enrolled machine; `no_capable_device` when the device is offline | `NOT_YET_PROVEN` | `POST /v1/devices/select` results. |
+| 9.10 | Owner verdict: concise executive summary, 3–7 findings that matter, sources traceable | `NOT_YET_PROVEN` | Owner feedback recorded in the memory entry. |
+| 9.11 | Owner's enrolled Chrome/Edge session drives a real authenticated site (contract v2, explicit research grant) | `NOT_YET_PROVEN` | Deferred: requires the owner's browser-session authorisation (OWNER_ACTIONS item 5). |
 
 ## Stage 7 — Real voice
 

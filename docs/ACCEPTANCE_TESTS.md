@@ -280,6 +280,57 @@ Turkish speech, network and the real Hetzner Cloud Core. Fakes are gates, never 
   VoiceIdentity — and VoiceIdentity is never the sole root of authentication;
 - subjective owner evaluation of voice quality is an explicit, final gate.
 
+## M13 Real Browser + Research
+
+Real-only acceptance: `PROVEN_REAL` only when the actual system executes Hetzner Cloud
+Core → Tailscale → the owner's actual Windows machine → actual Chrome → live Internet →
+multiple current sources → evidence → synthesis → artifact → memory on a harmless public
+topic (first use case: "Son üç gündeki yapay zekâ ajanlarıyla ilgili önemli gelişmeleri
+araştır."). Fixture websites are gates, never acceptance.
+
+Deterministic gates (offline, every CI run):
+
+- real browser control surface through the device protocol: open URL, navigate,
+  back/forward, tabs (create/close/switch), inspect URL/title, DOM query, accessibility-tree
+  targeting, semantic click, type, select, scroll, wait for navigation/content, extract text
+  and structured data, screenshot only where needed, owner-authorised download, auth-wall
+  detection — each a typed command; coordinates are not expressible in the contract;
+- browser errors (typed command errors) are distinguished from website errors
+  (`page_kind`/`site_error` results); a CAPTCHA is reported, never solved;
+- the owner's real Chrome session is unreachable through contract v1; the worker refuses a
+  real `User Data` profile; results never carry cookies, storage, headers or the profile path
+  (forbidden-key scan on both sides);
+- research objects exist with provenance: every `source_fact` cites gathered evidence with
+  URL, title, publisher, publication date when available, retrieval time, verbatim excerpt,
+  confidence/importance and the device command that fetched it; labels are exactly
+  `source_fact | model_inference | recommendation | uncertainty`; an inference is never
+  presented as an attributed fact (provenance gate + excerpt-support downgrade);
+- planner derives sub-queries and source classes independently for the first use case;
+  duplicates/syndicated copies are rejected; primary sources preferred; ranking explained;
+- report shape and order: Executive Summary → 3–7 findings → Why this matters → What I
+  would watch next → Details (collapsed) → Sources; Turkish;
+- durable artifact (JSON + Markdown canonical + PDF/DOCX/HTML/TXT) with citations preserved
+  across export; one episodic memory per research with question, window, findings, source
+  references, implications, owner feedback; raw page text never enters memory;
+- hostile-page tests on both sides: planted instructions never cause navigation, submission,
+  download, secret disclosure, policy/memory change or command execution; flagged evidence
+  stays quoted data; `injection_dropped` counted;
+- risk classes READ / NAVIGATE / REVERSIBLE_WRITE / EXTERNAL_COMMUNICATION / HIGH_IMPACT
+  enforced by the worker before acting and by Cloud Core before sending; research sessions
+  are READ+NAVIGATE only;
+- recovery matrix: Chrome crash, tab closed, navigation timeout, website unavailable, Cloud
+  Core restart, DeviceService restart, network and Tailscale interruption — the research job
+  resumes from durable state, and duplicate deliveries produce no duplicate side effects;
+- device-aware contracts: inventory, presence, capabilities (from hello), health, selection
+  (explicit target incl. Turkish aliases → online → capability → policy → health); the
+  current machine is nowhere hardcoded as the browser executor (guard test);
+- local real-chain proof (`scripts/e2e-m13-research.ps1`): dev Cloud Core → dev
+  DeviceService/Companion → worker → real Chrome → live Internet on the first use case.
+
+Real gates (owner machine, `docs/QUALIFICATION.md` Stage 9): the chain above end to end;
+the report shown in the web `/research` surface and in the artifact inbox; the memory entry
+present; the owner's verdict that the summary is concise and the findings matter.
+
 ## M19 Multi-device / roaming owner qualification
 
 Real-only acceptance on at least two owner-authorised physical computers (PC-A, PC-B) and

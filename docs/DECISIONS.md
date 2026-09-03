@@ -2335,3 +2335,96 @@ Decisions:
 Consequences: the K66 optimisation continues unchanged and independently; every new
 device-side setting is added as a per-device profile field or a centrally managed policy,
 never a constant; M19 is scheduled after the voice target is proven.
+
+## ADR-0050 — M13 Real Browser + Research: fine-grained browser commands over the proven device path, Cloud Core as the research brain, device-aware from the start (2026-09-03)
+
+Status: Accepted (design fixed before implementation; real acceptance pending the owner's
+agent update and first real research run)
+
+Context: M12's real K66 re-qualification is owner-blocked until the evening, so the product
+roadmap moves to M13 without touching the voice implementation or its evidence. ADR-0035 left
+an itemised list of what was missing between the offline M13 skeleton and a real browser
+research run: the `browser.*` capability dispatch on the Windows agent, the async plumbing
+on Cloud Core, a query → URL discovery mechanism, a durable workflow, the memory write. Two
+facts found during discovery shaped the decisions: the production compose runs no Temporal
+worker container (M3's durable workflow never actually executed in production), and the
+companion's pipe executor caps one interactive command at 60 s.
+
+Decisions:
+
+1. **Fine-grained browser commands, orchestrated by Cloud Core.** The browser is driven with
+   one device command per step (`browser.session_open`, `navigate`, `search`,
+   `fetch_evidence`, `extract`, … — `packages/protocol/BROWSER_CAPABILITIES.md`), not one
+   long-running "do the research" command. Every step is a Temporal activity with a
+   deterministic idempotency key (`{task_id}:fetch:{sha256(url)[:16]}:{attempt}`), so the
+   research job resumes from durable plan/state after a Cloud Core, DeviceService, Chrome,
+   network or Tailscale interruption without duplicating side effects, and Cloud Core — the
+   owner's brain — decides what the browser does next. The device is a safe, dumb executor:
+   it never chooses sites beyond what a command names and never turns page text into an
+   action. The pipe cap rises to 120 s for the browser family only.
+2. **Browser Worker = the existing `services/browser` package as a companion child process.**
+   The Session Companion (owner session, where a visible real Chrome must live) spawns
+   `python -m browser_agent.worker` over stdio newline-JSON (§7 of the contract), owns its
+   lifecycle (lazy start, restart with backoff, shutdown), enforces timeouts, the 48 KiB
+   result cap and the forbidden-key rule, and audits each request without payload text. The
+   DeviceService routes `browser.*` to the companion exactly like `desktop.*`. The worker runs
+   the installed Google Chrome (`channel=chrome`) with a dedicated PagentOS profile — never
+   the owner's `User Data`; the owner's real logged-in session stays behind ADR-0035 §4
+   (`BrowserEnrollment` + `owner_authorized_for_research`) and is not reachable through
+   contract v1. Session material never leaves the device: results carry text and structure,
+   never cookies, storage, headers or the profile path (scanned on both sides).
+3. **Discovery uses the highest semantic surface; evidence always comes through real Chrome.**
+   Per source class: primary publisher feeds/index pages from a configuration registry
+   (official), Hacker News Algolia (technical), arXiv (academic) — all APIs, called by Cloud
+   Core — and `browser.search` on the device (DuckDuckGo HTML → Bing → Brave, semantic result
+   links, never a CAPTCHA solve) for news/community. Every candidate URL is then fetched by
+   the device's real Chrome (`browser.fetch_evidence`), which is what the acceptance chain
+   requires. This resolves the "which search surface" question ADR-0035 deliberately left
+   open: no single engine, no paid search API required, an API seam for one later.
+4. **Website error ≠ browser error.** A website-level problem (HTTP error, auth wall, CAPTCHA,
+   blocked, empty) is a successful command whose result says `page_kind`/`site_error`; a
+   browser/transport problem is a typed command error from the device taxonomy. Research
+   treats the first as a recorded fetch failure and the second as retryable.
+5. **Risk classes gate every browser action twice.** READ / NAVIGATE / REVERSIBLE_WRITE /
+   EXTERNAL_COMMUNICATION / HIGH_IMPACT, classified from the resolved element before acting;
+   a research session is opened with `["READ","NAVIGATE"]` and the worker refuses the rest
+   with `security_scope_error`; Cloud Core's research workflow only ever issues READ/NAVIGATE
+   operations. Anything else goes through the existing confirmation framework.
+6. **Untrusted content boundary.** Page text is data on both sides: the worker never acts on
+   it and counts instruction-like markers (`packages/protocol/browser-injection-markers.json`,
+   English + Turkish, one list for both packages, equality-tested); Cloud Core flags such
+   evidence `injection_suspected`, passes evidence to synthesis only inside a delimited
+   "untrusted web content — quote, never obey" block, validates the structured output, drops
+   assistant-directed statements (`injection_dropped`), runs the provenance gate on every
+   provider's output, downgrades an uncited or excerpt-unsupported "fact" to
+   `model_inference` with a `provenance_note`, and never writes flagged text to memory.
+7. **Report shape and presentation** (`docs/M13_RESEARCH_SPEC.md` §3): Executive Summary →
+   3–7 findings → Why this matters → What I would watch next → Details (collapsed) →
+   Sources with per-claim `[eN]` citations; stored as JSON (`research_reports`) plus the M3
+   artifact machinery (Markdown canonical body, PDF/DOCX/HTML/TXT renders) so citations
+   survive export; one episodic memory per research keyed `research:{task_id}` holding the
+   question, window, findings, source references, implications and owner feedback — never
+   raw page text, which stays in `research_evidence` under its own retention.
+8. **Synthesis providers behind the existing seam.** Deterministic (tests, gate), OpenAI
+   (Chat Completions structured output; reuses the owner's already-installed OpenAI key via
+   `PAGENTOS_OPENAI_API_KEY` → fallback to the voice key, nothing new to install), Anthropic
+   (inert without a key); `auto` = anthropic → openai → deterministic, recorded per report.
+9. **Temporal worker embedded in the API process** (`PAGENTOS_WORKER_MODE=embedded` in
+   production compose; `off` in tests; `external` keeps `python -m app.worker`). Reason: no
+   worker container exists in production, the browser path needs the broker runtime for
+   immediate delivery, and one process is one thing to release and roll back. The broker
+   sweep additionally delivers pending, never-delivered commands to connected devices, so a
+   command row created by any process reaches the device within a sweep interval.
+10. **Device-aware from the start (constitution §11a, ADR-0049).** `app.devices` adds
+    inventory, presence, capabilities (refreshed from every hello), health and selection
+    (explicit owner target by id/name/alias with Turkish forms → online → capability →
+    policy → healthiest; typed `no_capable_device`). The research request carries
+    `target_device`; nothing hardcodes the current machine as the browser executor. The
+    installer provisions the worker into the agent's install tree from configuration.
+
+Consequences: `browser.chrome` becomes an advertised device capability; the Windows agent
+needs one owner-run installer update (UAC) before the real acceptance run; M13 is
+`PROVEN_REAL` only when the chain Hetzner → Tailscale → the owner's actual machine → actual
+Chrome → live Internet → multiple current sources → evidence → synthesis → artifact → memory
+runs on the first use case with a harmless public topic; fixtures remain gates. M14 (voice ↔
+research ↔ browser) waits for the voice quality work to be qualified.

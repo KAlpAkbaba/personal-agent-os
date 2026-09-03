@@ -191,7 +191,7 @@ microphone, speakers/headset, Turkish speech, network and the real Hetzner Cloud
 real Chrome and live Internet sources for research; a physical phone for mobile.
 Mocks and fixtures remain gates, never `PROVEN_REAL`.
 
-## M12 — Realtime Voice Foundation (CURRENT)
+## M12 — Realtime Voice Foundation (owner-blocked: evening K66 re-qualification pending)
 
 Goal: ChatGPT-Voice-class conversational interaction, as close as publicly available APIs
 and this architecture allow — behavioural and perceptual parity, never a claim of an
@@ -239,6 +239,20 @@ DOM/accessibility/browser APIs first; coordinates only as a last resort; the own
 existing Chrome session only where explicitly authorised. Every fact keeps provenance and
 is labelled source fact / model inference / recommendation / uncertainty. Proceeds in
 parallel with M12 where foundations are independent.
+
+**CURRENT from 2026-09-03** (the voice rerun is owner-blocked until the evening; the voice
+implementation and evidence are frozen as they stand). Design fixed in ADR-0050 with two
+binding contracts: `packages/protocol/BROWSER_CAPABILITIES.md` (fine-grained `browser.*`
+device commands, risk classes, the website-error vs browser-error split, the untrusted
+content boundary, the companion ↔ worker stdio protocol) and `docs/M13_RESEARCH_SPEC.md`
+(plan/discovery/evidence/report shapes, REST, durable workflow and recovery matrix,
+synthesis providers, memory policy, presentation). Built as four parallel tracks: the Session
+Companion's browser worker host + installer provisioning, the `services/browser` worker and
+operations, Cloud Core's device layer + real research pipeline (embedded Temporal worker),
+and the web `/research` surface. Real acceptance (`docs/ACCEPTANCE_TESTS.md` M13,
+`docs/QUALIFICATION.md` Stage 9) needs one owner action — the Windows agent installer update
+(UAC) — and then the first real research run on "Son üç gündeki yapay zekâ ajanlarıyla ilgili
+önemli gelişmeleri araştır." Fixtures remain gates, never `PROVEN_REAL`.
 
 ## M14 — Voice + Browser/Research integration
 
