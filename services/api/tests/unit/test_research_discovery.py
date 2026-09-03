@@ -243,3 +243,34 @@ def test_response_just_under_the_cap_is_accepted() -> None:
         transport=_transport(handler),
     )
     assert candidates == []
+
+
+def test_fetch_rss_follows_a_bounded_redirect() -> None:
+    # Seen live: Google's AI feed moved and answers 301; a feed behind one redirect
+    # must still parse, and the follow is bounded (max_redirects) by the client.
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/technology/ai/rss/":
+            return httpx.Response(301, headers={"location": "https://blog.example/new/rss/"})
+        assert request.url.path == "/new/rss/"
+        return httpx.Response(200, text=RSS_XML, headers={"content-type": "application/rss+xml"})
+
+    candidates = discovery.fetch_rss(
+        "https://blog.example/technology/ai/rss/",
+        publisher="Google AI Blog",
+        query_id="q1",
+        transport=_transport(handler),
+    )
+    assert len(candidates) == 2
+
+
+def test_fetch_rss_redirect_loop_is_a_discovery_error_not_a_hang() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(302, headers={"location": str(request.url)})
+
+    with pytest.raises(discovery.DiscoveryError):
+        discovery.fetch_rss(
+            "https://blog.example/loop/",
+            publisher="x",
+            query_id="q1",
+            transport=_transport(handler),
+        )

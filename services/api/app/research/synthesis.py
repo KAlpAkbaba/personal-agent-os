@@ -165,12 +165,25 @@ class DeterministicSynthesisProvider:
             ),
         )
 
+        # A source whose page yielded no readable text (blocked, empty, script-only) is
+        # still provenance, but it cannot be quoted: it gets a provenance sentence
+        # labelled model_inference instead of an empty "source_fact" (seen live:
+        # Statement() refused an empty excerpt and the whole synthesis failed).
         details = tuple(
             DetailSection(
                 heading=f"{e.rank or i + 1}. {e.title}",
                 statements=(
                     Statement(
                         text=e.excerpt, label=STATEMENT_LABEL_SOURCE_FACT, evidence_ids=(e.id,)
+                    )
+                    if e.excerpt.strip()
+                    else Statement(
+                        text=(
+                            f"'{e.title}' kaynağından okunabilir metin alınamadı; "
+                            "yalnızca kaynak kaydı tutuldu."
+                        ),
+                        label=STATEMENT_LABEL_MODEL_INFERENCE,
+                        evidence_ids=(e.id,),
                     ),
                 ),
             )

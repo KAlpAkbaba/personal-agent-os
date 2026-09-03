@@ -1000,3 +1000,30 @@ def test_remember_activity_memory_value_never_contains_a_long_excerpt_substring(
             chunk = long_excerpt[start : start + 80]
             assert chunk not in blob
     engine.dispose()
+
+
+# ----------------------------------------------------------------- fail_run
+
+
+def test_fail_run_activity_records_a_visible_terminal_state(task_id: str) -> None:
+    # Seen live: synthesis exhausted its retries, the workflow failed inside Temporal and
+    # the run row kept "ranking" until the harness timed out.
+    ba.plan_activity(task_id, "yapay zeka ajanları", None, 12)
+    assert ba.fail_run_activity(task_id, "research_failed", "sentez başarısız") is True
+    from sqlalchemy import create_engine as _ce
+    from sqlalchemy.orm import sessionmaker
+
+    from app.artifacts import service as artifact_service
+
+    engine = _ce(ba.get_settings().database_url)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    with factory() as session:
+        run = runs_service.get_run(session, uuid.UUID(task_id))
+        task = artifact_service.get_task(session, uuid.UUID(task_id))
+        assert run is not None and run.stage == "failed"
+        assert run.error == "sentez başarısız"
+        assert task is not None and task.status == "FAILED_TERMINAL"
+        assert (run.events_json or [])[-1]["stage"] == "failed"
+    engine.dispose()
+    # Idempotent: a second call changes nothing and says so.
+    assert ba.fail_run_activity(task_id, "research_failed", "again") is False

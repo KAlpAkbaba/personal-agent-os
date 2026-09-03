@@ -26,6 +26,7 @@ with workflow.unsafe.imports_passed_through():
     from app.research.browser_activities import (
         close_session_activity,
         discover_activity,
+        fail_run_activity,
         fetch_activity,
         fetch_targets_activity,
         persist_artifact_activity,
@@ -131,35 +132,65 @@ class BrowserResearchWorkflow:
             except ActivityError:
                 continue  # recorded as a fetch failure; one bad URL never fails the run
 
-        await workflow.execute_activity(
-            rank_activity,
-            args=[
-                request.task_id, plan["topic"], plan["recency"]["start"], plan["recency"]["end"],
-            ],
-            start_to_close_timeout=_SHORT,
-            retry_policy=_STANDARD_RETRY,
-        )
+        try:
+            await workflow.execute_activity(
+                rank_activity,
+                args=[
+                    request.task_id,
+                    plan["topic"],
+                    plan["recency"]["start"],
+                    plan["recency"]["end"],
+                ],
+                start_to_close_timeout=_SHORT,
+                retry_policy=_STANDARD_RETRY,
+            )
 
-        report = await workflow.execute_activity(
-            synthesize_activity,
-            args=[request.task_id, plan["topic"], plan["recency"], request.synthesis],
-            start_to_close_timeout=_MEDIUM,
-            retry_policy=_STANDARD_RETRY,
-        )
+            report = await workflow.execute_activity(
+                synthesize_activity,
+                args=[request.task_id, plan["topic"], plan["recency"], request.synthesis],
+                start_to_close_timeout=_MEDIUM,
+                retry_policy=_STANDARD_RETRY,
+            )
 
-        persisted = await workflow.execute_activity(
-            persist_artifact_activity,
-            args=[request.task_id, plan["topic"]],
-            start_to_close_timeout=_MEDIUM,
-            retry_policy=_STANDARD_RETRY,
-        )
+            persisted = await workflow.execute_activity(
+                persist_artifact_activity,
+                args=[request.task_id, plan["topic"]],
+                start_to_close_timeout=_MEDIUM,
+                retry_policy=_STANDARD_RETRY,
+            )
 
-        memory_id = await workflow.execute_activity(
-            remember_activity,
-            args=[request.task_id, plan["topic"]],
-            start_to_close_timeout=_SHORT,
-            retry_policy=_STANDARD_RETRY,
-        )
+            memory_id = await workflow.execute_activity(
+                remember_activity,
+                args=[request.task_id, plan["topic"]],
+                start_to_close_timeout=_SHORT,
+                retry_policy=_STANDARD_RETRY,
+            )
+
+        except ActivityError as exc:
+            # The run must end in a visible terminal state even when an activity
+            # exhausts its retries (seen live: a synthesis failure left the status
+            # endpoint on 'ranking' until the harness gave up).
+            detail = self._error_detail(exc)
+            error_class = self._error_class(exc)
+            try:
+                await workflow.execute_activity(
+                    fail_run_activity,
+                    args=[request.task_id, error_class, detail],
+                    start_to_close_timeout=_SHORT,
+                    retry_policy=_STANDARD_RETRY,
+                )
+            except ActivityError:
+                pass
+            try:
+                await workflow.execute_activity(
+                    close_session_activity,
+                    args=[request.task_id, device_id],
+                    start_to_close_timeout=_SHORT,
+                    retry_policy=_NO_RETRY,
+                )
+            except ActivityError:
+                pass
+            return self._failed(request.task_id, plan, detail, error_class)
 
         try:
             await workflow.execute_activity(
@@ -187,6 +218,12 @@ class BrowserResearchWorkflow:
         if isinstance(cause, ApplicationError):
             return str(cause.message)
         return str(exc)
+
+    def _error_class(self, exc: ActivityError) -> str:
+        cause = exc.cause
+        if isinstance(cause, ApplicationError) and cause.type:
+            return str(cause.type)
+        return "research_failed"
 
     def _failed(self, task_id: str, plan: dict, detail: str, error_class: str) -> dict:
         return {

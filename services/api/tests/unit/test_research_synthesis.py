@@ -331,3 +331,29 @@ def test_parse_synthesis_response_caps_findings_at_seven_keeping_highest_importa
     kept_ids = {f.id for f in result.findings}
     assert kept_ids == {"f0", "f1", "f2", "f3", "f4", "f5", "f6"}
     assert min(f.importance for f in result.findings) >= 2
+
+
+def test_deterministic_provider_survives_an_evidence_item_with_no_readable_text() -> None:
+    # Seen live: a blocked/empty page produced an empty excerpt and Statement() refused it,
+    # failing the whole synthesis. Such a source keeps its provenance and gets a
+    # model_inference sentence instead of an empty source_fact.
+    raw = [
+        EvidenceRecord(
+            url=f"https://example.com/{i}",
+            title=f"Kaynak {i}",
+            excerpt="" if i == 1 else f"{TOPIC} hakkında bulgu {i}",
+            fetched_at=NOW,
+            extraction_method="dom_text",
+            source_class="news",
+        )
+        for i in range(4)
+    ]
+    ranked = assign_evidence_ids(dedup_and_rank(raw, topic=TOPIC))
+    result = DeterministicSynthesisProvider().synthesize(TOPIC, ranked, recency_label=RECENCY_LABEL)
+    empty = [e for e in ranked if not e.excerpt]
+    assert empty, "fixture must contain the empty-excerpt item"
+    statements = [st for section in result.details for st in section.statements]
+    for st in statements:
+        assert st.text.strip()
+        if empty[0].id in st.evidence_ids:
+            assert st.label == "model_inference"

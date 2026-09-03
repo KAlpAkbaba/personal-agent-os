@@ -93,7 +93,7 @@ class ResearchCandidateRow(Base):
     url: Mapped[str] = mapped_column(String(2048), nullable=False)
     publisher: Mapped[str | None] = mapped_column(String(256), nullable=True)
     discovered_by: Mapped[str] = mapped_column(String(64), nullable=False)
-    query_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    query_id: Mapped[str] = mapped_column(Text, nullable=False)
     published_hint: Mapped[str | None] = mapped_column(String(256), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

@@ -69,7 +69,13 @@ def _bounded_get_text(
     rather than a real network call."""
     import httpx
 
-    client_kwargs: dict[str, Any] = {"timeout": timeout_s}
+    # Publishers move their feeds behind redirects (seen live: Google's AI feed answers
+    # 301); follow a bounded number of them, http(s) only via httpx's own handling.
+    client_kwargs: dict[str, Any] = {
+        "timeout": timeout_s,
+        "follow_redirects": True,
+        "max_redirects": 5,
+    }
     if transport is not None:
         client_kwargs["transport"] = transport
     try:

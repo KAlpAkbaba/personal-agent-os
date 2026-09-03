@@ -746,6 +746,38 @@ def close_session_activity(task_id: str, device_id: str) -> bool:
     return True
 
 
+@activity.defn(name="browser_research_fail_run")
+def fail_run_activity(task_id: str, error_class: str, detail: str) -> bool:
+    """Record a terminal failure of the run (stage failed, task FAILED, one event).
+
+    Seen live: when synthesis exhausted its retries the workflow failed inside Temporal
+    but the run row kept its last stage, so the owner's status endpoint showed
+    "ranking" forever. Idempotent: a run already failed/ready is left as it is.
+    """
+    tid = uuid.UUID(task_id)
+    with _session_factory()() as session:
+        run = runs_service.get_run(session, tid)
+        if run is not None and run.stage in (STAGE_FAILED, STAGE_READY):
+            return False
+        task = artifact_service.get_task(session, tid)
+        if task is not None and task.status not in (
+            TASK_STATUS_FAILED_TERMINAL,
+        ):
+            try:
+                _transition_task(
+                    session, tid, TASK_STATUS_FAILED_TERMINAL,
+                    error_class=error_class, error_message=detail[:2000],
+                )
+            except Exception:  # noqa: BLE001 - an illegal transition must not mask the failure
+                pass
+        runs_service.update_run(
+            session, tid, stage=STAGE_FAILED, error=detail[:2000],
+            event={"stage": STAGE_FAILED, "detail": f"{error_class}: {detail[:300]}"},
+        )
+        session.commit()
+    return True
+
+
 BROWSER_RESEARCH_ACTIVITIES = (
     plan_activity,
     select_device_activity,
@@ -757,6 +789,7 @@ BROWSER_RESEARCH_ACTIVITIES = (
     persist_artifact_activity,
     remember_activity,
     close_session_activity,
+    fail_run_activity,
 )
 
 __all__ = [

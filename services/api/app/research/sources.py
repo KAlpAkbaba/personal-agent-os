@@ -43,7 +43,7 @@ REGISTRY: tuple[SourceRegistryEntry, ...] = (
         publisher="Google AI Blog",
         source_class="official",
         index_url="https://blog.google/technology/ai/",
-        feed_url="https://blog.google/technology/ai/rss/",
+        feed_url="https://blog.google/innovation-and-ai/technology/ai/rss/",
         topics=("ai", "agents", "google", "gemini", "llm"),
     ),
     SourceRegistryEntry(
