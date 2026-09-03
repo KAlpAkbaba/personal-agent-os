@@ -323,11 +323,18 @@ function Register-CompanionAutostart {
 
 Assert-Elevated
 $OwnerSid = Resolve-OwnerSid -Explicit $OwnerSid
-if (-not $BrokerWsUrl) {
-    $BrokerWsUrl = ($BrokerRestUrl -replace '^http', 'ws').TrimEnd('/') + "/v1/devices/connect"
-}
-
 $serviceDir = Join-Path $InstallRoot "service"
+
+# M13 upgrade safety: a re-run that does not name a broker keeps the one the installed
+# service already dials (after RQ-2 that is the Hetzner tailnet address, written in place by
+# switch-agent-broker.ps1). The loopback default is for a FIRST install only.
+$endpoints = Resolve-BrokerEndpoints -ExplicitRestUrl $BrokerRestUrl -ExplicitWsUrl $BrokerWsUrl `
+    -RestUrlWasExplicit ($PSBoundParameters.ContainsKey("BrokerRestUrl")) `
+    -Installed (Get-InstalledBrokerEndpoints -ServiceDir $serviceDir) `
+    -DefaultRestUrl "http://127.0.0.1:8001"
+$BrokerRestUrl = $endpoints.BrokerRestUrl
+$BrokerWsUrl = $endpoints.BrokerWsUrl
+Write-Host "broker endpoints ($($endpoints.Source)): $BrokerRestUrl | $BrokerWsUrl"
 $companionDir = Join-Path $InstallRoot "companion"
 $companionExe = Join-Path $companionDir "PagentOS.SessionCompanion.exe"
 $serviceExe = Join-Path $serviceDir "PagentOS.DeviceService.exe"

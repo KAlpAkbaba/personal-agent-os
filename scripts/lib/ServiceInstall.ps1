@@ -219,3 +219,62 @@ function Install-DeviceServiceRegistration {
     Write-Host "verified: $ServiceName runs $($verified.PathName) as $($verified.StartName) ($($verified.StartMode))"
     return $verified
 }
+
+
+function Get-InstalledBrokerEndpoints {
+    <#
+    .SYNOPSIS
+        The broker endpoints an EXISTING install is configured with, or $null.
+    .DESCRIPTION
+        M13 upgrade safety: after RQ-2 the installed service dials the Hetzner tailnet
+        address (switch-agent-broker.ps1 rewrote appsettings.json in place, no reinstall).
+        A re-run of the installer that forgot -BrokerRestUrl would otherwise silently write
+        the loopback default back and disconnect the qualified device from its Cloud Core.
+        Reads only; never throws on a missing or unreadable file - "nothing installed" is a
+        normal answer, and the caller decides what to do with it.
+    #>
+    param([Parameter(Mandatory = $true)][string]$ServiceDir)
+    $path = Join-Path $ServiceDir "appsettings.json"
+    if (-not (Test-Path -LiteralPath $path)) { return $null }
+    try {
+        $config = [System.IO.File]::ReadAllText($path) | ConvertFrom-Json
+    }
+    catch { return $null }
+    $rest = Get-OptionalProperty -InputObject $config -Name "BrokerRestUrl"
+    $ws = Get-OptionalProperty -InputObject $config -Name "BrokerWsUrl"
+    if (-not $rest) { return $null }
+    return [pscustomobject]@{ BrokerRestUrl = [string]$rest; BrokerWsUrl = [string]$ws }
+}
+
+function Resolve-BrokerEndpoints {
+    <#
+    .SYNOPSIS
+        Decide which broker endpoints an install run should write, and say why.
+    .DESCRIPTION
+        Precedence: an endpoint the operator passed explicitly on the command line always
+        wins; otherwise an endpoint an existing install already uses is preserved (upgrade);
+        only a first install falls back to the loopback default. The WebSocket URL is derived
+        from the REST URL whenever it was not given by the same source, so the two can never
+        point at different brokers. Returns BrokerRestUrl, BrokerWsUrl and Source
+        ("explicit" | "installed" | "default").
+    #>
+    param(
+        [AllowNull()][AllowEmptyString()][string]$ExplicitRestUrl,
+        [AllowNull()][AllowEmptyString()][string]$ExplicitWsUrl,
+        [bool]$RestUrlWasExplicit,
+        $Installed,
+        [Parameter(Mandatory = $true)][string]$DefaultRestUrl
+    )
+    $derive = { param([string]$rest) ($rest -replace '^http', 'ws').TrimEnd('/') + "/v1/devices/connect" }
+    if ($RestUrlWasExplicit -and $ExplicitRestUrl) {
+        $ws = if ($ExplicitWsUrl) { $ExplicitWsUrl } else { & $derive $ExplicitRestUrl }
+        return [pscustomobject]@{ BrokerRestUrl = $ExplicitRestUrl; BrokerWsUrl = $ws; Source = "explicit" }
+    }
+    if ($null -ne $Installed -and $Installed.BrokerRestUrl) {
+        $ws = if ($Installed.BrokerWsUrl) { [string]$Installed.BrokerWsUrl } else { & $derive $Installed.BrokerRestUrl }
+        if ($ExplicitWsUrl) { $ws = $ExplicitWsUrl }
+        return [pscustomobject]@{ BrokerRestUrl = [string]$Installed.BrokerRestUrl; BrokerWsUrl = $ws; Source = "installed" }
+    }
+    $ws = if ($ExplicitWsUrl) { $ExplicitWsUrl } else { & $derive $DefaultRestUrl }
+    return [pscustomobject]@{ BrokerRestUrl = $DefaultRestUrl; BrokerWsUrl = $ws; Source = "default" }
+}

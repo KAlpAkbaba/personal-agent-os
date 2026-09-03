@@ -415,6 +415,45 @@ Test-Case "a missing tool fails with a message naming the path" {
     }
 }
 
+
+Write-Host ""
+Write-Host "broker endpoint preservation on re-install (M13 upgrade safety)"
+
+$installedTailnet = [pscustomobject]@{ BrokerRestUrl = "http://pagentos-core:8001"; BrokerWsUrl = "ws://pagentos-core:8001/v1/devices/connect" }
+
+Test-Case "a re-run without -BrokerRestUrl preserves the installed (tailnet) endpoint" {
+    $r = Resolve-BrokerEndpoints -ExplicitRestUrl "http://127.0.0.1:8001" -ExplicitWsUrl "" -RestUrlWasExplicit $false -Installed $installedTailnet -DefaultRestUrl "http://127.0.0.1:8001"
+    Assert-Equal -Expected "installed" -Actual $r.Source -Because "the parameter default must never overwrite a configured broker"
+    Assert-Equal -Expected "http://pagentos-core:8001" -Actual $r.BrokerRestUrl -Because "REST endpoint preserved"
+    Assert-Equal -Expected "ws://pagentos-core:8001/v1/devices/connect" -Actual $r.BrokerWsUrl -Because "WS endpoint preserved"
+}
+
+Test-Case "an explicit -BrokerRestUrl wins over the installed one and derives the WS URL" {
+    $r = Resolve-BrokerEndpoints -ExplicitRestUrl "https://new-core:8443" -ExplicitWsUrl "" -RestUrlWasExplicit $true -Installed $installedTailnet -DefaultRestUrl "http://127.0.0.1:8001"
+    Assert-Equal -Expected "explicit" -Actual $r.Source -Because "the operator's choice wins"
+    Assert-Equal -Expected "wss://new-core:8443/v1/devices/connect" -Actual $r.BrokerWsUrl -Because "WS derived from the explicit REST URL, never from the old install"
+}
+
+Test-Case "a first install falls back to the loopback default" {
+    $r = Resolve-BrokerEndpoints -ExplicitRestUrl "http://127.0.0.1:8001" -ExplicitWsUrl "" -RestUrlWasExplicit $false -Installed $null -DefaultRestUrl "http://127.0.0.1:8001"
+    Assert-Equal -Expected "default" -Actual $r.Source -Because "nothing installed, nothing explicit"
+    Assert-Equal -Expected "ws://127.0.0.1:8001/v1/devices/connect" -Actual $r.BrokerWsUrl -Because "derived from the default"
+}
+
+Test-Case "installed endpoints are read from appsettings.json and a missing file is null" {
+    $dir = Join-Path $env:TEMP ("pagentos-installtest-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+    New-Item -ItemType Directory -Force $dir | Out-Null
+    try {
+        Assert-True -Condition ($null -eq (Get-InstalledBrokerEndpoints -ServiceDir $dir)) -Because "no appsettings.json yet"
+        [System.IO.File]::WriteAllText((Join-Path $dir "appsettings.json"), '{"BrokerRestUrl":"http://pagentos-core:8001","BrokerWsUrl":"ws://pagentos-core:8001/v1/devices/connect","DataDir":"x"}')
+        $got = Get-InstalledBrokerEndpoints -ServiceDir $dir
+        Assert-Equal -Expected "http://pagentos-core:8001" -Actual $got.BrokerRestUrl -Because "read back"
+        [System.IO.File]::WriteAllText((Join-Path $dir "appsettings.json"), 'not json')
+        Assert-True -Condition ($null -eq (Get-InstalledBrokerEndpoints -ServiceDir $dir)) -Because "an unreadable file is treated as nothing installed, never a crash"
+    }
+    finally { Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
 Write-Host ""
 Write-Host "$($script:Passes) passed, $($script:Failures) failed"
 exit $script:Failures
