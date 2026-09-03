@@ -82,6 +82,7 @@ async def test_worker_subprocess_full_session_lifecycle(site_url, tmp_path: Path
             },
         )
         opened = await _read_json_line(proc.stdout)
+        lifecycle = opened["result"]["lifecycle"]
         assert opened == {
             "type": "result",
             "request_id": "open1",
@@ -93,8 +94,18 @@ async def test_worker_subprocess_full_session_lifecycle(site_url, tmp_path: Path
                 "browser_version": opened["result"]["browser_version"],
                 "idle_timeout_s": 600,
                 "policy": {"allowed_risk_classes": ["NAVIGATE", "READ"], "visible": False},
+                "lifecycle": lifecycle,
             },
         }
+        # M13 lifecycle (contract: session_open identity/proof, owner-machine
+        # incident 2026-09-03): a fresh launch is never "reused", and an
+        # isolated (non-persistent) session has no profile_dir.
+        assert lifecycle["reused"] is False
+        assert lifecycle["profile_dir"] is None
+        assert lifecycle["tab_count"] == 1
+        assert lifecycle["max_tabs"] == 6
+        assert lifecycle["max_windows"] == 1
+        assert isinstance(lifecycle["session_uid"], str) and lifecycle["session_uid"]
 
         await _send(
             proc,
@@ -142,6 +153,7 @@ async def test_worker_subprocess_full_session_lifecycle(site_url, tmp_path: Path
         closed = await _read_json_line(proc.stdout)
         assert closed["ok"] is True
         assert closed["result"]["closed"] is True
+        assert closed["result"]["browser_pid_exited"] is True
 
         await _send(proc, {"type": "shutdown"})
         exit_code = await asyncio.wait_for(proc.wait(), timeout=15)

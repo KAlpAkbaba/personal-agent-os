@@ -24,12 +24,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import atexit
 import base64
 import json
 import re
 import sys
 import threading
 import time
+import uuid
 from collections.abc import AsyncIterator, Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -41,7 +43,7 @@ from urllib.parse import urlencode, urlsplit
 from playwright.async_api import Frame, Page
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
-from . import policy, search_engines
+from . import lifecycle, policy, search_engines
 from .backends import ManagedBackend
 from .destination import require_public_destination
 from .detect import BrowserInfo, detect_browser
@@ -75,6 +77,13 @@ DEFAULT_NAV_TIMEOUT_MS = 15_000
 DEFAULT_IDLE_TIMEOUT_S = 600
 MAX_RESULT_BYTES = 48 * 1024
 _REAP_INTERVAL_S = 15.0
+# M13 lifecycle guard (owner-machine incident, 2026-09-03): "deliberate and
+# bounded" tabs. DEFAULT_MAX_TABS is the per-session ceiling unless a
+# session_open payload raises it (never above MAX_TABS_CEILING) for a plan
+# that genuinely needs more open tabs.
+DEFAULT_MAX_TABS = 6
+MAX_TABS_CEILING = 12
+BROWSER_PID_EXIT_TIMEOUT_S = 10.0
 # fetch_evidence's post-load settle (contract §3a): a bounded, DOM-driven
 # "networkidle" wait (exceptions swallowed) replaces the old fixed sleep.
 _FETCH_EVIDENCE_NETWORKIDLE_TIMEOUT_MS = 3_000
@@ -293,6 +302,16 @@ class SessionState:
     browser_version: str | None
     profile: str
     last_used: float
+    # M13 lifecycle (owner-machine incident, 2026-09-03): identity/proof
+    # fields carried on every session-scoped result (see
+    # Worker._lifecycle_info). ``session_uid`` is a fresh uuid4 per actual
+    # browser launch — unchanged across a mere reopen (narrow_reopen) of the
+    # SAME live browser, regenerated only when the browser itself is
+    # recreated (fresh session_open, or after a dead-browser discard).
+    session_uid: str = ""
+    profile_dir: Path | None = None
+    max_tabs: int = DEFAULT_MAX_TABS
+    popups_closed: int = 0
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     # Set when a browser.search (interstitial="handoff") returns
     # state=waiting_for_owner_verification, holding the query that was
@@ -412,6 +431,14 @@ class Worker:
         self._shutting_down = False
         self._start_time = time.monotonic()
         self._browser_info: BrowserInfo | None = None
+        # M13 lifecycle (owner-machine incident 2026-09-03): the single
+        # session_id currently allowed to hold the persistent "research"
+        # profile/browser. A second session_open for a *different*
+        # session_id with profile="research" while this is set (and that
+        # session is still tracked) is refused with
+        # browser_lifecycle_violation instead of ever attempting a second
+        # launch on the same profile.
+        self._research_owner_session_id: str | None = None
 
     # ------------------------------------------------------------------ #
     # top-level lifecycle
@@ -461,6 +488,28 @@ class Worker:
             await self._close_all_sessions()
         return 0
 
+    def _atexit_cleanup(self) -> None:
+        """Last-resort synchronous safety net registered by :func:`main` on
+        the real CLI process (never on an in-process ``Worker`` used by
+        tests): the worker must never exit leaving a Chrome it launched. This
+        runs after the asyncio loop is gone — e.g. an unhandled exception
+        escaped ``run()``'s own ``finally`` above — so it is a synchronous
+        OS-level reap of ``--profile-dir``, not a graceful
+        ``BrowserSession.close()``. Best effort: swallows every error, since
+        this is the process's last chance to clean up, not a place to raise."""
+        try:
+            pids = lifecycle.find_profile_chrome_pids(self._profile_dir)
+        except Exception:
+            return
+        if not pids:
+            return
+        logger.warning("browser.atexit_orphan_reap", profile_dir=str(self._profile_dir), pids=pids)
+        for pid in pids:
+            with suppress(Exception):
+                lifecycle.terminate_pid(pid)
+        with suppress(Exception):
+            lifecycle.wait_for_pids_exit(pids, timeout_s=BROWSER_PID_EXIT_TIMEOUT_S)
+
     async def _reap_idle_sessions(self) -> None:
         while True:
             await asyncio.sleep(_REAP_INTERVAL_S)
@@ -477,26 +526,103 @@ class Worker:
                     if current is None or now - current.last_used < self._idle_timeout_s:
                         continue
                     del self._sessions[session_id]
-                try:
-                    await state.browser_session.close()
-                except Exception as exc:  # cleanup must not crash the reaper
-                    logger.warning(
-                        "browser.idle_close_error", session_id=session_id, error=str(exc)[:200]
-                    )
-                else:
-                    logger.info("browser.session_idle_closed", session_id=session_id)
+                exited = await self._close_session_state(session_id, state, op="idle_close")
+                logger.info(
+                    "browser.session_idle_closed", session_id=session_id, browser_pid_exited=exited
+                )
 
     async def _close_all_sessions(self) -> None:
+        # M13 lifecycle (owner-machine incident 2026-09-03): shutdown closes
+        # every session the SAME way session_close/idle-reap do — a
+        # BrowserSession.close() plus a bounded wait for the OS process to be
+        # gone — never just "close and hope" (the worker must never exit
+        # leaving a Chrome it launched).
         for session_id in list(self._sessions):
             state = self._sessions.pop(session_id, None)
             if state is None:
                 continue
-            try:
-                await state.browser_session.close()
-            except Exception as exc:
-                logger.warning(
-                    "browser.shutdown_close_error", session_id=session_id, error=str(exc)[:200]
-                )
+            await self._close_session_state(session_id, state, op="shutdown_close")
+
+    async def _close_session_state(
+        self, session_id: str, state: SessionState, *, op: str
+    ) -> bool:
+        """Close one session's browser and wait (bounded) for its OS
+        process(es) to actually exit. Shared by session_close, the idle
+        reaper and worker shutdown so all three answer ``browser_pid_exited``
+        the same honest way. Never raises — cleanup must not crash the
+        caller."""
+        if self._research_owner_session_id == session_id:
+            self._research_owner_session_id = None
+        try:
+            await state.browser_session.close()
+        except Exception as exc:
+            logger.warning(f"browser.{op}_error", session_id=session_id, error=str(exc)[:200])
+        return await self._await_browser_pid_exit(state)
+
+    async def _await_browser_pid_exit(self, state: SessionState) -> bool:
+        """Bounded (10s) wait for the browser process(es) this session
+        launched to actually be gone from the OS process list — answers
+        ``browser_pid_exited`` truthfully rather than assuming a
+        Playwright-level ``close()`` call tore down the OS process."""
+        if state.profile_dir is not None:
+            return await asyncio.to_thread(
+                lifecycle.wait_for_profile_clear,
+                state.profile_dir,
+                timeout_s=BROWSER_PID_EXIT_TIMEOUT_S,
+            )
+        pid = state.backend.main_pid
+        if pid is None:
+            return True
+        still_alive = await asyncio.to_thread(
+            lifecycle.wait_for_pids_exit, [pid], timeout_s=BROWSER_PID_EXIT_TIMEOUT_S
+        )
+        return not still_alive
+
+    async def _current_tab_count(self, state: SessionState) -> int:
+        try:
+            return len(await state.browser_session.list_tabs())
+        except Exception:
+            return 0
+
+    async def _close_popup(self, session_id: str, page: Page) -> None:
+        """``ManagedBackend.on_popup`` callback (M13 lifecycle, owner-machine
+        incident 2026-09-03): a page the loaded page opened on its own is
+        closed immediately and counted, never left as a silent extra tab.
+        Fire-and-forget (scheduled via ``asyncio.ensure_future``, never
+        blocks the event that triggered it); best effort — never raises."""
+        state = self._sessions.get(session_id)
+        if state is not None:
+            state.popups_closed += 1
+        logger.warning(
+            "browser.popup_opened",
+            session_id=session_id,
+            url=redact_url(page.url) if page.url else None,
+        )
+        with suppress(Exception):
+            if not page.is_closed():
+                await page.close()
+        logger.info(
+            "browser.popup_closed",
+            session_id=session_id,
+            popups_closed=state.popups_closed if state is not None else None,
+        )
+
+    def _lifecycle_info(
+        self, state: SessionState, *, tab_count: int, reused: bool
+    ) -> dict[str, Any]:
+        """The ``lifecycle`` block carried on every session-scoped result
+        (M13 lifecycle contract, owner-machine incident 2026-09-03) — lets a
+        consumer PROVE it is talking to the same one owned browser across a
+        sequence of commands rather than a silently-relaunched second one."""
+        return {
+            "session_uid": state.session_uid,
+            "browser_pid": state.backend.main_pid,
+            "profile_dir": str(state.profile_dir) if state.profile_dir is not None else None,
+            "tab_count": tab_count,
+            "max_tabs": state.max_tabs,
+            "max_windows": 1,
+            "reused": reused,
+        }
 
     # ------------------------------------------------------------------ #
     # protocol loop
@@ -650,7 +776,16 @@ class Worker:
                 risk_class = policy.CAPABILITY_RISK_CLASS[capability]
                 policy.enforce(state.policy_allowed, risk_class, capability=capability)
             handler = _HANDLERS[capability]
-            return await handler(self, state, payload)
+            result = await handler(self, state, payload)
+            # M13 lifecycle backstop (owner-machine incident 2026-09-03):
+            # tab_new/fetch_evidence already refuse BEFORE opening a tab that
+            # would cross max_tabs; this is defense in depth for anything
+            # that slipped past that pre-check (e.g. a popup racing its
+            # auto-close) — discovered here, on ANY op, as a violation.
+            tab_count = await self._current_tab_count(state)
+            lifecycle.check_tab_count_within_budget(tab_count, state.max_tabs, op=capability)
+            result["lifecycle"] = self._lifecycle_info(state, tab_count=tab_count, reused=True)
+            return result
 
     # ------------------------------------------------------------------ #
     # session_open / session_close / worker_status
@@ -682,6 +817,17 @@ class Worker:
         requested_classes: frozenset[policy.RiskClass] | None = None
         if "allowed_risk_classes" in policy_payload:
             requested_classes = policy.parse_risk_classes(policy_payload["allowed_risk_classes"])
+        max_tabs = payload.get("max_tabs", DEFAULT_MAX_TABS)
+        if (
+            not isinstance(max_tabs, int)
+            or isinstance(max_tabs, bool)
+            or not (1 <= max_tabs <= MAX_TABS_CEILING)
+        ):
+            raise BrowserError(
+                ErrorClass.VALIDATION_ERROR,
+                f"session_open: max_tabs must be an integer in 1..{MAX_TABS_CEILING}",
+                retryable=False,
+            )
 
         existing = self._sessions.get(session_id)
         if existing is not None and not await existing.backend.is_alive():
@@ -691,8 +837,13 @@ class Worker:
             # next session_open recreates the session" — a stale entry must
             # never be silently reused as if it were still live, so this
             # falls through to the normal creation path below instead of the
-            # narrow-reopen path.
+            # narrow-reopen path. This is also the ONE place a
+            # dependency_unavailable browser is allowed to be relaunched —
+            # exactly once, by the normal creation path's single _launch()
+            # attempt below, never a retry loop.
             del self._sessions[session_id]
+            if self._research_owner_session_id == session_id:
+                self._research_owner_session_id = None
             with suppress(Exception):
                 await existing.browser_session.close()
             logger.info("browser.session_recreated_after_crash", session_id=session_id)
@@ -700,7 +851,9 @@ class Worker:
         if existing is not None:
             new_allowed = policy.narrow_reopen(existing.policy_allowed, requested_classes)
             existing.policy_allowed = new_allowed
+            existing.max_tabs = max_tabs
             existing.last_used = time.monotonic()
+            tab_count = await self._current_tab_count(existing)
             return {
                 "session_id": session_id,
                 "created": False,
@@ -711,13 +864,40 @@ class Worker:
                     "allowed_risk_classes": sorted(c.value for c in new_allowed),
                     "visible": existing.visible,
                 },
+                "lifecycle": self._lifecycle_info(existing, tab_count=tab_count, reused=True),
             }
+
+        # M13 lifecycle guard (owner-machine incident 2026-09-03): one owned
+        # research browser. The persistent "research" profile is a single
+        # shared directory (self._profile_dir) across every session_id this
+        # worker tracks — only ONE session_id may hold it at a time. A
+        # DIFFERENT session_id requesting it while the current owner is still
+        # tracked is refused outright; the worker never attempts a second
+        # launch on the same profile (that second launch is exactly what
+        # opens a new window in the existing Chrome on the owner's machine).
+        if (
+            profile == "research"
+            and self._research_owner_session_id is not None
+            and self._research_owner_session_id != session_id
+            and self._research_owner_session_id in self._sessions
+        ):
+            owner = self._research_owner_session_id
+            raise BrowserError(
+                ErrorClass.BROWSER_LIFECYCLE_VIOLATION,
+                f"session '{owner}' already owns the research browser; close it first",
+                retryable=False,
+                evidence={"owner_session_id": owner, "requested_session_id": session_id},
+            )
 
         allowed = (
             requested_classes if requested_classes is not None else policy.RESEARCH_SESSION_CLASSES
         )
         profile_dir = self._profile_dir if profile == "research" else None
         backend = ManagedBackend(headless=not visible, profile_dir=profile_dir, channel=channel)
+        # A single, non-retried launch attempt (ManagedBackend._launch reaps
+        # any orphan on profile_dir first); any BrowserError here — including
+        # browser_lifecycle_violation if the profile is still locked after
+        # reaping — propagates to the caller as-is. Never retried in a loop.
         await backend.connect()
         browser_session = BrowserSession(backend, file_io_root=self._data_dir)
         browser_version = (
@@ -734,16 +914,35 @@ class Worker:
             channel=channel or "chromium",
             browser_version=browser_version,
             profile=profile,
+            session_uid=str(uuid.uuid4()),
+            profile_dir=profile_dir,
+            max_tabs=max_tabs,
             last_used=time.monotonic(),
         )
         self._sessions[session_id] = state
+        if profile == "research":
+            self._research_owner_session_id = session_id
+        # M13 lifecycle (owner-machine incident 2026-09-03): "deliberate and
+        # bounded" tabs — a page the loaded page opens on its own
+        # (window.open / target=_blank), as opposed to a tab_new/
+        # fetch_evidence(tab=new) WE requested, is closed immediately rather
+        # than left to silently inflate the session's tab count. Opt-in on
+        # the backend (see ManagedBackend.on_popup) — direct
+        # BrowserSession/ManagedBackend callers outside the worker are
+        # unaffected (M2 semantics unchanged there).
+        backend.on_popup(
+            lambda page, sid=session_id: asyncio.ensure_future(self._close_popup(sid, page))
+        )
         logger.info(
             "browser.session_opened",
             session_id=session_id,
+            session_uid=state.session_uid,
+            browser_pid=backend.main_pid,
             profile=profile,
             channel=state.channel,
             visible=visible,
         )
+        tab_count = await self._current_tab_count(state)
         return {
             "session_id": session_id,
             "created": True,
@@ -754,29 +953,32 @@ class Worker:
                 "allowed_risk_classes": sorted(c.value for c in allowed),
                 "visible": visible,
             },
+            "lifecycle": self._lifecycle_info(state, tab_count=tab_count, reused=False),
         }
 
     async def _op_session_close(self, session_id: str) -> dict[str, Any]:
         state = self._sessions.pop(session_id, None)
         if state is None:
-            return {"closed": True, "session_id": session_id}
-        try:
-            await state.browser_session.close()
-        except Exception as exc:
-            logger.warning(
-                "browser.session_close_error", session_id=session_id, error=str(exc)[:200]
-            )
-        return {"closed": True, "session_id": session_id}
+            return {"closed": True, "session_id": session_id, "browser_pid_exited": True}
+        tab_count = await self._current_tab_count(state)
+        lifecycle_info = self._lifecycle_info(state, tab_count=tab_count, reused=True)
+        # M13 lifecycle (owner-machine incident 2026-09-03): close the
+        # context AND wait (bounded 10s) for the profile's chrome process(es)
+        # to actually be gone from the OS — the worker must never report a
+        # session closed while its Chrome is still alive.
+        exited = await self._close_session_state(session_id, state, op="session_close")
+        return {
+            "closed": True,
+            "session_id": session_id,
+            "browser_pid_exited": exited,
+            "lifecycle": lifecycle_info,
+        }
 
     async def _op_worker_status(self) -> dict[str, Any]:
         now = time.monotonic()
         sessions_info = []
         for sid, state in self._sessions.items():
-            try:
-                tabs = await state.browser_session.list_tabs()
-                tab_count = len(tabs)
-            except Exception:
-                tab_count = 0
+            tab_count = await self._current_tab_count(state)
             try:
                 current_url = redact_url(state.browser_session.backend.current_page.url)
             except Exception:
@@ -784,7 +986,10 @@ class Worker:
             sessions_info.append(
                 {
                     "session_id": sid,
+                    "session_uid": state.session_uid,
+                    "browser_pid": state.backend.main_pid,
                     "tabs": tab_count,
+                    "tab_count": tab_count,
                     "idle_s": round(now - state.last_used, 1),
                     "current_url": current_url,
                 }
@@ -888,6 +1093,11 @@ class Worker:
             )
         if url:
             self._check_destination(url, op="tab_new")
+        # M13 lifecycle (owner-machine incident 2026-09-03): refuse BEFORE
+        # opening anything when the new tab would cross max_tabs — the tab
+        # count is therefore unchanged by a refused call.
+        current = await self._current_tab_count(state)
+        lifecycle.check_tab_budget(current, state.max_tabs, op="tab_new")
         index = await state.browser_session.new_tab(url)
         return {"index": index}
 
@@ -1538,6 +1748,10 @@ class Worker:
                 # then navigate normally through the session so the Google
                 # results tab (contract §3a) is never disturbed.
                 tabs_before = await browser_session.list_tabs()
+                # M13 lifecycle (owner-machine incident 2026-09-03): refuse
+                # BEFORE opening anything when this would cross max_tabs —
+                # the tab count is therefore unchanged by a refused call.
+                lifecycle.check_tab_budget(len(tabs_before), state.max_tabs, op="fetch_evidence")
                 previous_tab_index = next(
                     (t.index for t in tabs_before if t.is_current), 0
                 )
@@ -1695,6 +1909,15 @@ def main(argv: list[str] | None = None) -> int:
     configure_logging(stream=sys.stderr)
     args = build_arg_parser().parse_args(argv)
     worker = Worker(args)
+    # M13 lifecycle (owner-machine incident 2026-09-03): the worker must
+    # never exit leaving a Chrome it launched. run()'s own finally already
+    # closes every session gracefully; this is the best-effort synchronous
+    # backstop for the case where even that does not run (an unhandled
+    # exception escaping asyncio.run, a plain sys.exit, ...). Registered only
+    # here — the real CLI process — never for an in-process Worker created
+    # directly by tests (tests/conftest.py's `worker` fixture bypasses main()
+    # and closes sessions itself in fixture teardown).
+    atexit.register(worker._atexit_cleanup)
     return asyncio.run(worker.run())
 
 

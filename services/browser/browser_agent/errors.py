@@ -40,6 +40,12 @@ Mapping table (also reproduced in services/browser/README.md):
 
 The class names are the project-wide taxonomy from docs/API_AND_PROTOCOLS.md
 section 8; this module uses the browser-relevant subset.
+
+``browser_lifecycle_violation`` is not produced by :func:`map_playwright_error`
+above; it is raised deliberately by ``browser_agent.lifecycle`` and its
+callers (``ManagedBackend._launch``/``Worker`` session/tab-budget guards) when
+the one-owned-research-browser invariant would otherwise be violated. See
+``browser_agent/lifecycle.py``.
 """
 
 from __future__ import annotations
@@ -75,6 +81,16 @@ class ErrorClass(StrEnum):
     # a bot-block page for this query — retryable because it is a transient
     # provider condition, not a permanent refusal.
     PROVIDER_RATE_LIMITED = "provider_rate_limited"
+    # M13 lifecycle guard (browser_agent.lifecycle; owner-machine incident,
+    # 2026-09-03): a second session tried to own the single persistent
+    # research browser/profile, a tab-budget guard was exceeded, or a
+    # persistent-profile launch hit a still-locked profile after orphan
+    # reaping. Never retryable — a bounded retry of the SAME request is
+    # exactly the cascade this class exists to prevent (Chrome's own
+    # single-instance hand-off opens a new window in the existing process on
+    # every failed relaunch attempt); the caller must close the conflicting
+    # session / reduce concurrency / raise max_tabs instead.
+    BROWSER_LIFECYCLE_VIOLATION = "browser_lifecycle_violation"
 
 
 class Phase(StrEnum):

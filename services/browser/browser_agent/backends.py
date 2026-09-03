@@ -28,8 +28,10 @@ Implemented backends:
 
 from __future__ import annotations
 
+import asyncio
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 from typing import TYPE_CHECKING
@@ -42,6 +44,7 @@ from playwright.async_api import (
     async_playwright,
 )
 
+from . import lifecycle
 from .capabilities import BrowserCapabilities
 from .enrollment import BrowserEnrollment, Transport, is_loopback_endpoint
 from .errors import (
@@ -130,6 +133,13 @@ class _PlaywrightBackendBase(BrowserBackend):
         self._page: Page | None = None
         self._context_closed = False
         self._closed = False
+        self._main_pid: int | None = None
+        # Set around our OWN deliberate context.new_page() calls (new_tab) so
+        # an installed popup handler (see on_popup below) can tell a page WE
+        # opened apart from one a page opened on its own (window.open /
+        # target=_blank) — both fire the same context "page" event.
+        self._expecting_new_page = False
+        self._popup_handler: Callable[[Page], None] | None = None
 
     # -- helpers -------------------------------------------------------- #
 
@@ -146,9 +156,31 @@ class _PlaywrightBackendBase(BrowserBackend):
         context = self._require_connected()
         return [page for page in context.pages if not page.is_closed()]
 
+    def on_popup(self, handler: Callable[[Page], None] | None) -> None:
+        """Register (or, with ``None``, clear) a callback invoked whenever a
+        page appears in this backend's context that was NOT opened through
+        :meth:`new_tab` -- i.e. a popup / ``window.open`` / ``target=_blank``
+        page the loaded page opened on its own.
+
+        Opt-in only, default ``None``: with no handler installed, such a page
+        behaves exactly like any other tab (M2 semantics, unchanged — direct
+        :class:`~browser_agent.session.BrowserSession`/``ManagedBackend``
+        callers, e.g. ``tests/browser/test_scenarios.py``'s popup-as-tab
+        scenario, are unaffected). ``browser_agent.worker.Worker`` supplies a
+        handler per session that closes the page (M13 lifecycle:
+        "deliberate and bounded" tabs, owner-machine incident 2026-09-03).
+        """
+        self._popup_handler = handler
+
     def _mark_context(self, context: BrowserContext) -> None:
         self._context_closed = False
         context.on("close", lambda _ctx: setattr(self, "_context_closed", True))
+        context.on("page", self._on_new_page)
+
+    def _on_new_page(self, page: Page) -> None:
+        if self._expecting_new_page or page is self._page or self._popup_handler is None:
+            return
+        self._popup_handler(page)
 
     async def _stop_playwright(self) -> None:
         if self._playwright is not None:
@@ -173,6 +205,7 @@ class _PlaywrightBackendBase(BrowserBackend):
         self._browser = None
         self._context = None
         self._page = None
+        self._main_pid = None
 
     # -- page/tab surface ------------------------------------------------ #
 
@@ -204,10 +237,13 @@ class _PlaywrightBackendBase(BrowserBackend):
         if url is not None:
             require_navigable_url(url, op="new_tab")
         context = self._require_connected()
+        self._expecting_new_page = True
         try:
             page = await context.new_page()
         except Exception as exc:
             raise map_playwright_error(exc, phase=Phase.OTHER, op="new_tab") from exc
+        finally:
+            self._expecting_new_page = False
         self._page = page
         if url is not None:
             try:
@@ -400,15 +436,59 @@ class ManagedBackend(_PlaywrightBackendBase):
         channel_kwargs: dict[str, str] = {"channel": self._channel} if self._channel else {}
         if self._profile_dir is not None:
             self._profile_dir.mkdir(parents=True, exist_ok=True)
-            context = await self._playwright.chromium.launch_persistent_context(
-                str(self._profile_dir),
-                headless=self._headless,
-                args=self._browser_args,
-                **channel_kwargs,
+            # One owned research browser (M13 lifecycle, owner-machine
+            # incident 2026-09-03): reap any chrome.exe still holding this
+            # exact profile BEFORE every persistent-profile launch attempt,
+            # never after a failure -- this call is what prevents Chrome's
+            # own single-instance hand-off from ever firing in the first
+            # place. `owned_pid=None` is correct here: by the time `_launch`
+            # runs, the caller (Worker._op_session_open) has already refused
+            # a conflicting session_id for this profile, so anything still
+            # found on the profile at this point is a true orphan, never a
+            # session this process still considers live.
+            reaped = await asyncio.to_thread(
+                lifecycle.reap_orphan_chrome, self._profile_dir, owned_pid=None
             )
+            if reaped:
+                logger.info(
+                    "browser.orphan_reaped",
+                    profile_dir=str(self._profile_dir),
+                    pids=reaped,
+                )
+            try:
+                context = await self._playwright.chromium.launch_persistent_context(
+                    str(self._profile_dir),
+                    headless=self._headless,
+                    args=self._browser_args,
+                    **channel_kwargs,
+                )
+            except Exception as exc:
+                if lifecycle.is_locked_profile_error(exc):
+                    # Never retried: a bounded retry loop here is exactly the
+                    # cascade the incident report describes (each failed
+                    # relaunch attempt opens another window in the existing
+                    # Chrome). The caller must reap again / investigate, not
+                    # this method.
+                    raise BrowserError(
+                        ErrorClass.BROWSER_LIFECYCLE_VIOLATION,
+                        "managed_connect: the research profile is still held by another "
+                        "Chrome process after orphan reaping; refusing to launch a second "
+                        "browser on the same profile",
+                        retryable=False,
+                        evidence={"profile_dir": str(self._profile_dir)},
+                    ) from exc
+                raise
             self._browser = context.browser  # None on some persistent launches
             self._context = context
             self._page = context.pages[0] if context.pages else await context.new_page()
+            pids = await asyncio.to_thread(lifecycle.find_profile_chrome_pids, self._profile_dir)
+            if len(pids) > 1:
+                logger.warning(
+                    "browser.multiple_processes_on_profile",
+                    profile_dir=str(self._profile_dir),
+                    pids=pids,
+                )
+            self._main_pid = pids[0] if pids else None
         else:
             browser = await self._playwright.chromium.launch(
                 headless=self._headless, args=self._browser_args, **channel_kwargs
@@ -416,7 +496,30 @@ class ManagedBackend(_PlaywrightBackendBase):
             self._browser = browser
             self._context = await browser.new_context()
             self._page = await self._context.new_page()
+            self._main_pid = await self._cdp_main_pid()
         self._mark_context(self._context)
+
+    async def _cdp_main_pid(self) -> int | None:
+        """Best-effort OS pid of this backend's own browser process, over
+        CDP (used for the isolated/non-persistent path, where there is no
+        profile directory for the OS-level pid scan to key off)."""
+        if self._browser is None:
+            return None
+        try:
+            cdp = await self._browser.new_browser_cdp_session()
+            info = await cdp.send("SystemInfo.getProcessInfo")
+            return next(
+                (p["id"] for p in info["processInfo"] if p["type"] == "browser"), None
+            )
+        except Exception:
+            return None
+
+    @property
+    def main_pid(self) -> int | None:
+        """OS pid of the browser process this backend owns (M13 lifecycle
+        session-identity proof), or ``None`` before ``connect()``/if it could
+        not be determined."""
+        return self._main_pid
 
     async def is_alive(self) -> bool:
         if self._closed or self._context is None or self._context_closed:
@@ -426,7 +529,13 @@ class ManagedBackend(_PlaywrightBackendBase):
         return self._page is not None and not self._page.is_closed()
 
     async def reconnect(self) -> None:
-        """Relaunch a fresh managed browser (isolated) / reopen the profile."""
+        """Relaunch a fresh managed browser (isolated) / reopen the profile.
+
+        Goes through the exact same ``_launch()`` (orphan-reap + no-retry
+        locked-profile guard) as ``connect()`` — a persistent-profile
+        relaunch here is held to the identical one-owned-research-browser
+        invariant, never a bare retry.
+        """
         start = time.perf_counter()
         await self._discard_dead_browser()
         self._closed = False
@@ -434,6 +543,8 @@ class ManagedBackend(_PlaywrightBackendBase):
             self._playwright = await async_playwright().start()
         try:
             await self._launch()
+        except BrowserError:
+            raise
         except Exception as exc:
             raise map_playwright_error(exc, phase=Phase.CONNECT, op="managed_reconnect") from exc
         logger.info("browser.backend_reconnected", backend="managed", duration_ms=_ms(start))
@@ -453,6 +564,7 @@ class ManagedBackend(_PlaywrightBackendBase):
             self._browser = None
             self._context = None
             self._page = None
+            self._main_pid = None
             await self._stop_playwright()
         logger.info("browser.backend_closed", backend="managed")
 
