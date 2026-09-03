@@ -110,7 +110,7 @@ describe("§1 mic→uplink from the transport's counters", () => {
     expect(t.core.events.find((e) => e.kind === "mic_speech_start")).toMatchObject({
       t_ms: 880,
       turn: 1,
-      payload: { source: "local", gate_ms: 70, capture_lag_ms: 12, pre_roll_ms: 50 },
+      payload: { source: 1, gate_ms: 70, capture_lag_ms: 12, pre_roll_ms: 50 },
     });
     const uplinks = t.core.events.filter((e) => e.kind === "uplink_first_packet");
     expect(uplinks).toHaveLength(1);
@@ -221,7 +221,7 @@ describe("§2 barge-in split and the reversible early mute", () => {
         early_mute: 1,
         audible: 1,
         anomaly: 0,
-        source: "local",
+        source: 1,
       },
     });
     expect(t.core.events.find((e) => e.kind === "playback_stopped")).toMatchObject({ t_ms: 540, turn: 1, payload: { anomaly: 0, early_mute: 1 } });
@@ -229,6 +229,35 @@ describe("§2 barge-in split and the reversible early mute", () => {
     expect(t.controller.getSnapshot().latency.barge_in_to_stop_ms?.value).toBe(90);
     expect(t.controller.getSnapshot().micMetrics.early_mutes).toBe(1);
     assertServerSafe(t.core);
+  });
+
+  it("a response that ends while an early mute is still pending restores playback (the uplink track is never touched)", async () => {
+    const t = await setup();
+    t.transport.emit({ type: "response_started", at: 0 });
+    t.transport.emit({ type: "audio_started", at: 100 });
+    t.playback.activity(120);
+    t.scheduler.advance(540);
+    t.localSpeech.evidence(540, 500);
+    expect(t.playback.muted).toBe(true);
+    // Neither evidence_lost nor an open: the provider simply finishes.
+    t.scheduler.advance(60);
+    t.transport.emit({ type: "response_done", at: 600 });
+    expect(t.playback.muted).toBe(false); // the gain is back at 1 NOW, not at the next arm()
+    expect(t.playback.unmutes).toEqual([600]);
+    expect(t.controller.getSnapshot().state).toBe("listening");
+    expect(t.controller.getSnapshot().micMetrics).toMatchObject({ early_mutes: 1, early_mute_reverts: 1 });
+    expect(t.transport.sent).toEqual([]);
+    expect(t.transport.audioIn).toEqual([]); // the microphone/uplink path was never touched
+    // The same holds when the provider cancels the response underneath a pending mute.
+    t.transport.emit({ type: "response_started", at: 1000 });
+    t.transport.emit({ type: "audio_started", at: 1100 });
+    t.playback.activity(1120);
+    t.scheduler.advance(600); // now = 1200
+    t.localSpeech.evidence(1200, 1160);
+    expect(t.playback.muted).toBe(true);
+    t.transport.emit({ type: "response_cancelled", at: 1250 });
+    expect(t.playback.muted).toBe(false);
+    expect(t.playback.unmutes).toEqual([600, 1200]);
   });
 
   it("an onset that collapses restores playback and cancels nothing", async () => {
@@ -266,7 +295,7 @@ describe("§2 barge-in split and the reversible early mute", () => {
     b.scheduler.advance(500);
     b.transport.emit({ type: "speech_started", at: 500 });
     await b.controller.flushEvents();
-    expect(b.core.events.find((e) => e.kind === "barge_in_start")?.payload).toMatchObject({ playback_stopped_ms: 0, audible: 1, anomaly: 1, source: "provider" });
+    expect(b.core.events.find((e) => e.kind === "barge_in_start")?.payload).toMatchObject({ playback_stopped_ms: 0, audible: 1, anomaly: 1, source: 2 });
     // (c) provider-first, but the gate had a candidate under evaluation: that is the measured onset
     const c = await setup();
     c.transport.emit({ type: "response_started", at: 0 });
@@ -342,7 +371,7 @@ describe("§3 end-of-turn → first audio decomposition", () => {
     await t.controller.flushEvents();
     expect(t.core.events.find((e) => e.kind === "end_of_turn")).toMatchObject({
       t_ms: 1300,
-      payload: { hold_ms: 200, hesitation: "none", vad_lag_ms: 400 },
+      payload: { hold_ms: 200, hesitation: 0, vad_lag_ms: 400 },
     });
   });
 });
@@ -408,11 +437,92 @@ describe("§5 calibration evidence semantics", () => {
 });
 
 describe("payload contract", () => {
+  /** The latency-metric kinds are numbers-only without exception. */
+  const METRIC_KINDS = ["mic_speech_start", "uplink_first_packet", "end_of_turn", "first_audio", "barge_in_start", "playback_stopped", "response_done"];
+  /** Tool relay and network kinds carry the identifiers the server relays; everything else on them is a number too. */
+  const IDENTIFIER_KEYS: Record<string, string[]> = {
+    tool_call: ["call_id", "name"],
+    tool_done: ["call_id", "name", "status"],
+    preamble_audio_start: ["call_id"],
+    speech_resumed: ["call_id"],
+    network_lost: ["reason"],
+    network_restored: [],
+  };
+
+  it("every timing-kind payload of a full synthetic session is numbers-only (identifiers excepted where the server relays them)", async () => {
+    const t = await setup({
+      transport: { uplinkStats: streaming },
+    });
+    // Turn 1: local start with accounting, RTP probe, provider confirmation, hesitation tail, response with a barge-in.
+    t.scheduler.advance(1000);
+    t.localSpeech.speechStart(880, { candidateAt: 930, decidedAt: 1000, preRollMs: 50, captureLagMs: 12 });
+    await t.pump(40);
+    t.scheduler.advance(310);
+    t.transport.emit({ type: "speech_started", at: 1350 });
+    t.transport.emit({ type: "owner_transcript", at: 1800, text: "raporu oku şey", final: true });
+    t.scheduler.advance(650);
+    t.transport.emit({ type: "speech_stopped", at: 2000 });
+    t.scheduler.advance(900); // filler hold elapses → end_of_turn
+    t.transport.emit({ type: "response_started", at: 3000 });
+    t.scheduler.advance(200);
+    t.transport.emit({ type: "audio_started", at: 3200 });
+    t.scheduler.advance(30);
+    t.playback.activity(3230);
+    t.scheduler.advance(500); // now = 3730
+    t.localSpeech.evidence(3730, 3690);
+    t.scheduler.advance(60);
+    t.localSpeech.speechStart(3640, { candidateAt: 3690, decidedAt: 3790, preRollMs: 50, captureLagMs: 9, duringPlayback: true });
+    await t.pump(40);
+    t.transport.emit({ type: "speech_started", at: 4100 });
+    t.transport.emit({ type: "response_cancelled", at: 4110 });
+    // Turn 2: provider-first start inside a hesitation hold → premature response cancelled with hesitation_resume.
+    t.transport.emit({ type: "owner_transcript", at: 4500, text: "yani", final: true });
+    t.scheduler.advance(400);
+    t.transport.emit({ type: "speech_stopped", at: 4500 });
+    t.scheduler.advance(300);
+    t.transport.emit({ type: "response_started", at: 4800 });
+    t.scheduler.advance(100);
+    t.transport.emit({ type: "speech_started", at: 4900 });
+    t.transport.emit({ type: "response_cancelled", at: 4910 });
+    t.transport.emit({ type: "owner_transcript", at: 5300, text: "devam et", final: true });
+    t.scheduler.advance(500);
+    t.transport.emit({ type: "speech_stopped", at: 5400 });
+    t.scheduler.advance(200);
+    t.transport.emit({ type: "response_started", at: 5600 });
+    t.transport.emit({ type: "audio_started", at: 5800 });
+    t.scheduler.advance(300); // provider fallback for first_audio
+    t.transport.emit({ type: "response_done", at: 7000 });
+    // A tool call, a network drop and a restore.
+    t.transport.emit({ type: "tool_call", at: 7100, callId: "call-1", name: "clock.now", arguments: {} });
+    await tick(8);
+    t.transport.emit({ type: "disconnected", at: 7200, reason: "peer_failed" });
+    await tick(8);
+    await t.controller.disconnect();
+
+    const timing = t.core.events.filter((e) => !["state", "utterance", "summary", "intent", "error"].includes(e.kind));
+    const kindsSeen = new Set<string>(timing.map((e) => e.kind));
+    for (const kind of [...METRIC_KINDS, "tool_call", "tool_done", "network_lost", "network_restored"]) {
+      expect(kindsSeen.has(kind), `session emitted ${kind}`).toBe(true);
+    }
+    expect(timing.some((e) => e.kind === "barge_in_start" && e.payload?.hesitation_resume === 1)).toBe(true);
+    expect(timing.some((e) => e.kind === "end_of_turn" && e.payload?.hesitation === 1)).toBe(true);
+    for (const event of timing) {
+      const allowed = IDENTIFIER_KEYS[event.kind] ?? [];
+      if (!METRIC_KINDS.includes(event.kind)) expect(event.kind in IDENTIFIER_KEYS, `known timing kind ${event.kind}`).toBe(true);
+      for (const [key, value] of Object.entries(event.payload ?? {})) {
+        expect(isForbiddenKey(key), key).toBe(false);
+        if (allowed.includes(key)) continue;
+        expect(typeof value, `${event.kind}.${key}`).toBe("number");
+        expect(Number.isFinite(value as number), `${event.kind}.${key}`).toBe(true);
+      }
+    }
+  });
+
   it("every ADR-0047 key passes the server's forbidden-key rule; the rejected spelling is pinned", () => {
     const keys = [
       "source", "gate_ms", "capture_lag_ms", "pre_roll_ms",
       "basis", "rtp_ms", "provider_ms",
-      "unmatched", "provider_first", "false_start", "false_barge_in", "network_lost", "superseded", "session_end",
+      "unmatched", "provider_first", "false_start", "false_barge_in", "network_lost", "superseded", "session_end", "hesitation",
       "playback_stopped_ms", "detect_ms", "stop_command_ms", "gain_zero_ms", "output_latency_ms", "early_mute", "audible", "anomaly", "hesitation_resume",
       "response_created_ms", "first_delta_ms", "playback_ms", "vad_lag_ms", "hold_ms", "hesitation",
       "mic_calibration", "mic_calibration_attempt", "measured", "samples", "dead_frames", "retry", "contaminated",

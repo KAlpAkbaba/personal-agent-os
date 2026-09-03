@@ -107,7 +107,7 @@ describe("VoiceSessionController", () => {
     const kinds = t.core.kinds();
     expect(kinds.indexOf("barge_in_start")).toBeLessThan(kinds.indexOf("playback_stopped"));
     const barge = t.core.events.find((e) => e.kind === "barge_in_start");
-    expect(barge).toMatchObject({ t_ms: 1480, turn: 1, payload: { playback_stopped_ms: 20, source: "provider" } });
+    expect(barge).toMatchObject({ t_ms: 1480, turn: 1, payload: { playback_stopped_ms: 20, source: 2 } });
     expect(t.core.events.find((e) => e.kind === "playback_stopped")).toMatchObject({ t_ms: 1500, turn: 1 });
     expect(t.core.events.find((e) => e.kind === "mic_speech_start")).toMatchObject({ t_ms: 1480, turn: 1 });
     expect(t.core.events.filter((e) => e.kind === "first_audio")).toHaveLength(1);
@@ -166,10 +166,10 @@ describe("VoiceSessionController", () => {
     await t.controller.flushEvents();
     const eot = t.core.events.filter((e) => e.kind === "end_of_turn");
     expect(eot).toHaveLength(1);
-    expect(eot[0]).toMatchObject({ t_ms: 1500, turn: 1, payload: { hold_ms: 200, hesitation: "none" } });
+    expect(eot[0]).toMatchObject({ t_ms: 1500, turn: 1, payload: { hold_ms: 200, hesitation: 0 } });
     expect(t.core.events.filter((e) => e.kind === "mic_speech_start")).toHaveLength(1);
     expect(t.core.events.filter((e) => e.kind === "barge_in_start")[0].payload).toMatchObject({
-      hesitation_resume: true,
+      hesitation_resume: 1,
     });
     // Both utterances reached Cloud Core for intent resolution; no audio did.
     expect(t.core.events.filter((e) => e.kind === "utterance").map((e) => e.text)).toEqual([

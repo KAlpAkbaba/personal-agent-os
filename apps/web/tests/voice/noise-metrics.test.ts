@@ -83,7 +83,7 @@ describe("noise qualification metrics (ADR-0044 §7)", () => {
     expect(t.controller.getSnapshot().turn).toBe(2);
     await t.controller.flushEvents();
     const starts = t.core.events.filter((e) => e.kind === "mic_speech_start");
-    expect(starts.map((e) => e.payload?.source)).toEqual(["local", "provider"]);
+    expect(starts.map((e) => e.payload?.source)).toEqual([1, 2]);
     expect(t.core.events.filter((e) => e.kind === "uplink_first_packet")).toHaveLength(0);
     const metric = t.core.events.find((e) => e.kind === "state" && e.payload?.mic_metrics === 1);
     expect(metric).toMatchObject({ t_ms: 700, payload: { false_start: 1, false_starts: 1, gate_opens: 1 } });

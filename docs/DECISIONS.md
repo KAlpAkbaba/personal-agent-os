@@ -2266,3 +2266,31 @@ Decisions:
 Consequences: the next real K66 session yields attributable numbers; the client-side
 optimisation pass (ADR-0047) is judged against them; the revised voice target remains
 NOT PROVEN until the owner's rerun.
+
+### ADR-0047 addendum — review fixes: numbers-only is enforced end to end; the early mute is always reversed (2026-09-03)
+
+Two Low findings from the independent security review of the ADR-0047 branch, fixed on
+the same branch with tests:
+
+1. **Numbers-only was a convention, not an invariant.** `mic_speech_start` started from
+   `{source: "local" | "provider"}` and `barge_in_start` spread the caller's `extra`
+   (`hesitation_resume: true`) past `numbersOnly()`. Now every metric payload is built
+   through `numbersOnly()`: `source` is a code (`1` local gate, `2` provider VAD —
+   `SOURCE_CODE`), `end_of_turn.hesitation` is a code (`0` none, `1` filler, `2`
+   elongated — `HESITATION_CODE`), `hesitation_resume` is `1`, and `tool_done.replayed`
+   is `0/1`. `tests/voice/latency.test.ts` runs a full synthetic session (hesitation hold
+   with a premature response, a barge-in through the early mute, the RTP probe, the
+   provider fallback, a tool relay, a network drop) and asserts that every timing-kind
+   payload value is a finite number — without exception on the seven metric kinds
+   (`mic_speech_start`, `uplink_first_packet`, `end_of_turn`, `first_audio`,
+   `barge_in_start`, `playback_stopped`, `response_done`), and on the tool/network kinds
+   except the identifier keys the server relays (`call_id`, `name`, `status`, `reason`).
+   A future string field on any of them fails the suite. The server's
+   `timing_breakdown` reads only numeric fields and ignores `source`/`hesitation`, so
+   the encoding changes nothing it aggregates.
+2. **The reversible mute had one path that did not reverse it.** `onResponseDone` cleared
+   `earlyMute` without restoring the gain; a `response.done` (or `response.cancelled`)
+   arriving while a candidate was still pending left the output at zero until the next
+   `arm()`. Both now go through the single `revertEarlyMute()` path `evidence_lost`
+   uses; a test pins the unmute at the response's end, the counter, and that the
+   microphone/uplink track is never touched. `apps/web` tests 120 → 122.

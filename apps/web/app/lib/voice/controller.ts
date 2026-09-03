@@ -244,6 +244,12 @@ const DEFAULT_PLAYBACK_CONFIRM_MS = 300;
 /** A read-back boolean as a payload number; unknown (null) is omitted, never a sentinel. */
 const bit = (v: boolean | null): number | undefined => (v === null ? undefined : v ? 1 : 0);
 
+/** Who opened the owner turn, as a payload number: 1 the local gate, 2 the provider's VAD. */
+export const SOURCE_CODE = { local: 1, provider: 2 } as const;
+
+/** The hesitation guard's verdict on the transcript tail, as a payload number. */
+export const HESITATION_CODE = { none: 0, filler: 1, elongated: 2 } as const;
+
 const EMPTY_MIC_METRICS: MicMetrics = {
   false_starts: 0,
   false_barge_ins: 0,
@@ -715,6 +721,7 @@ export class VoiceSessionController {
         this.responseAudible = false;
         this.awaitingFirstAudio = false;
         this.clearPlaybackConfirmTimer();
+        this.revertEarlyMute(event.at);
         if (this.snapshot.state === "interrupted") this.setState("listening", "LISTENING");
         return;
       case "tool_call":
@@ -774,7 +781,7 @@ export class VoiceSessionController {
       this.ownerSpeaking = true;
       this.patch({ hesitation: { ...this.guard.stats(), last: "resumed_within_hold" } });
       if (this.prematureResponse && (this.responseActive || this.deps.playback.playing)) {
-        this.bargeIn(at, source, detail, onsetKnown, { hesitation_resume: true });
+        this.bargeIn(at, source, detail, onsetKnown, numbersOnly({ hesitation_resume: 1 }));
       }
       this.prematureResponse = false;
       return;
@@ -794,12 +801,14 @@ export class VoiceSessionController {
     this.turnJudgement = { turn, providerConfirmed: source === "provider", hadTranscript: false };
     if (source === "provider") this.metrics.confirmed_turns += 1;
     this.patch({ turn, ownerText: "" });
-    const payload: Record<string, unknown> = { source };
-    if (detail) {
-      payload.gate_ms = msOrOmit(detail.decidedAt - detail.candidateAt);
-      payload.capture_lag_ms = msOrOmit(detail.captureLagMs);
-      payload.pre_roll_ms = msOrOmit(detail.preRollMs);
-    }
+    // Numbers only, through the one filter (ADR-0047 review): a string here
+    // would be dropped by numbersOnly(), and a test sweeps every timing payload.
+    const payload = numbersOnly({
+      source: SOURCE_CODE[source],
+      gate_ms: detail ? msOrOmit(detail.decidedAt - detail.candidateAt) : undefined,
+      capture_lag_ms: detail ? msOrOmit(detail.captureLagMs) : undefined,
+      pre_roll_ms: detail ? msOrOmit(detail.preRollMs) : undefined,
+    });
     this.reporter.report({ kind: "mic_speech_start", t_ms: at, turn, payload });
     this.uplink = {
       turn,
@@ -931,6 +940,15 @@ export class VoiceSessionController {
   }
 
   private onLocalEvidenceLost(at: number): void {
+    this.revertEarlyMute(at);
+  }
+
+  /**
+   * The ONE reversal path (ADR-0047 review): a pending early mute is undone
+   * here whether the candidate collapsed or the response ended underneath it
+   * — the gain must never stay at zero until the next `arm()`.
+   */
+  private revertEarlyMute(at: number): void {
     if (!this.earlyMute || this.bargedResponse) return;
     this.earlyMute = null;
     this.deps.playback.unmute();
@@ -944,7 +962,7 @@ export class VoiceSessionController {
     source: "local" | "provider",
     detail: SpeechStartDetail | undefined,
     onsetKnown: boolean,
-    extra: Record<string, unknown> = {},
+    extra: Record<string, number> = {},
   ): void {
     if (!this.reporter || this.bargedResponse) return;
     this.bargedResponse = true;
@@ -978,13 +996,10 @@ export class VoiceSessionController {
       early_mute: early ? 1 : 0,
       audible: audible ? 1 : 0,
       anomaly,
+      source: SOURCE_CODE[source],
+      ...numbersOnly(extra),
     });
-    this.reporter.report({
-      kind: "barge_in_start",
-      t_ms: at,
-      turn,
-      payload: { ...breakdown, source, ...extra },
-    });
+    this.reporter.report({ kind: "barge_in_start", t_ms: at, turn, payload: breakdown });
     this.reporter.report({ kind: "playback_stopped", t_ms: stopAt, turn, payload: { anomaly, early_mute: early ? 1 : 0 } });
     this.log("report.barge_in");
     this.responseActive = false;
@@ -1171,7 +1186,7 @@ export class VoiceSessionController {
         kind: "end_of_turn",
         t_ms: at,
         turn,
-        payload: { hold_ms: decision.holdMs, hesitation: decision.reason, ...(vadLagMs === undefined ? {} : { vad_lag_ms: vadLagMs }) },
+        payload: numbersOnly({ hold_ms: decision.holdMs, hesitation: HESITATION_CODE[decision.reason], vad_lag_ms: vadLagMs }),
       });
       this.log("report.end_of_turn");
       if (this.snapshot.state === "interrupted") this.setState("listening", "LISTENING");
@@ -1316,7 +1331,8 @@ export class VoiceSessionController {
     this.responseActive = false;
     this.awaitingFirstAudio = false;
     this.clearPlaybackConfirmTimer();
-    this.earlyMute = null;
+    // A candidate still pending when the response ends: restore the gain now.
+    this.revertEarlyMute(at);
     this.reporter?.report({ kind: "response_done", t_ms: at, turn: this.snapshot.turn });
     if (this.longRunning.size > 0) {
       this.setState("tool_running", "TOOL_RUNNING");
@@ -1384,7 +1400,7 @@ export class VoiceSessionController {
     this.reporter.report({
       kind: "tool_done",
       turn: this.snapshot.turn,
-      payload: { call_id: callId, name, status: response.status, replayed: response.replayed },
+      payload: { call_id: callId, name, status: response.status, replayed: response.replayed ? 1 : 0 },
     });
     this.transport?.submitToolResult(
       callId,
