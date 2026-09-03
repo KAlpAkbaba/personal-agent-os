@@ -4,7 +4,7 @@
   "current_milestone": "M13_REAL_BROWSER_RESEARCH",
   "status": "BUILT_REVIEWED_PROVEN_PROXY_AWAITING_OWNER_RELEASE_AND_AGENT_UPDATE",
   "last_completed_milestone": "REAL_CLOUD_BRINGUP",
-  "last_updated": "2026-09-03T13:30:00+03:00",
+  "last_updated": "2026-09-03T14:05:00+03:00",
   "qualification": {
     "matrix": "docs/QUALIFICATION.md",
     "owner_queue": "docs/OWNER_ACTIONS.md",
@@ -38,10 +38,10 @@
     "Recommended, non-blocking: move Docker Desktop disk image location from C: to E:."
   ],
   "quality_gate": {
-    "status": "PASS - full gate on f1de20e: every step PASS except the Windows agent step, which failed on a contention-only flake (2 OrchestratorTests); fixed in b4253e0 (DrainAsync) and the Windows step re-run green: solution-level 2x (145 + 135) plus 3 concurrent audio-suite runs, 0 failures. CI re-run on the pushed head is the record.",
-    "last_run": "2026-09-02",
-    "scope": "Full gate on merged main after M12 tracks A+E, B, C, C2, D and the credential path: secret hygiene (shape-based scan), ruff, API unit 1609 + integration, PS5.1 suites incl. the new cloud-secret suite (33), recovery supervisor, browser, Windows agent 145 + 134 xUnit, web build.",
-    "ci": "GREEN 2026-09-02 on 9e213ae (7/7) after every M12 merge; each track was independently verified in its worktree before merging (ruff/pytest, dotnet build+test, vitest/oxlint/next build) and re-verified on the merged tree."
+    "status": "PASS - full gate on the merged M13 tree (282ec79): every step PASS incl. API unit 1935 + integration, PS5.1 suites (installer-browser 16, installer-invocation 32), browser 246 unit + 57 e2e, Windows agent 272 + 135, web build",
+    "last_run": "2026-09-03",
+    "scope": "M13 all tracks + review fixes + live-run fixes",
+    "ci": "GREEN 2026-09-03 on bebed8f (7/7) after two runner-only fixes: 8.3 short TEMP path in package staging, and a timing-based ordering test rewritten to elapsed-time proof"
   },
   "notes": "M12 voice: implementation and evidence frozen pending the owner's evening K66 rerun (item 9). M13: design (ADR-0050) built in four parallel tracks, merged, reviewed and fixed the same day; the local real chain passes with real Chrome and the live Internet; real acceptance needs the cloud release and one agent update (item 10). M19 multi-device recorded (ADR-0049), not started.",
   "m12_realtime_voice": {
