@@ -156,13 +156,20 @@ public sealed class BrowserWorkerHostTests : IDisposable
         await using var host = NewHost();
         await host.StartAsync(CancellationToken.None);
 
-        var first = Exec(host, BrowserCapabilities.Navigate, Payload("sleep", "same", ("sleep_ms", 700), ("tag", "first")));
+        // A long sleep and an elapsed-time check instead of a tight 700 ms window: on a
+        // loaded CI runner the interleaving 'other' answer can itself take hundreds of
+        // milliseconds, which once made the first request look "already complete".
+        const int firstSleepMs = 4000;
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var first = Exec(host, BrowserCapabilities.Navigate, Payload("sleep", "same", ("sleep_ms", firstSleepMs), ("tag", "first")));
         await Task.Delay(50);
         var second = Exec(host, BrowserCapabilities.Extract, Payload("echo", "same", ("tag", "second")));
         var other = Exec(host, BrowserCapabilities.Inspect, Payload("echo", "other", ("tag", "other")));
 
         var otherResult = await other;
+        var otherAnsweredAtMs = clock.ElapsedMilliseconds;
         Assert.Equal("other", otherResult["echo"]!["tag"]!.GetValue<string>());
+        Assert.True(otherAnsweredAtMs < firstSleepMs, $"the other session must not wait for 'same' (answered after {otherAnsweredAtMs} ms)");
         Assert.False(first.IsCompleted, "the other session must not wait for 'same'");
         Assert.False(second.IsCompleted, "the second request on 'same' must queue behind the first");
 
