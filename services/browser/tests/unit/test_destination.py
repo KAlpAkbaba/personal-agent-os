@@ -51,7 +51,7 @@ def test_public_host_passes_when_every_address_is_public() -> None:
     require_public_destination(
         "https://example.com/news",
         op="navigate",
-        resolver=_resolver({"example.com": ["93.184.216.34", "2606:2800:220:1:248:1893:25c8:1946"]}),
+        resolver=_resolver({"example.com": ["93.184.216.34", "2606:2800:220:1::1946"]}),
     )
 
 

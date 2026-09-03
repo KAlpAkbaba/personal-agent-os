@@ -1344,7 +1344,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--allow-private-destinations",
         action="store_true",
-        help="Permit loopback/private/tailnet destinations (fixture tests only; never in production)",
+        help="Permit loopback/private/tailnet destinations (fixture tests only)",
     )
     parser.add_argument(
         "--self-check",

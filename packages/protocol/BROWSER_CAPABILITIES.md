@@ -204,6 +204,21 @@ retryable), `security_scope_error` (risk policy refusal — not retryable), `can
 `internal_bug`. `message` ≤ 2000 chars, never contains page text beyond 200 chars, never a URL
 query string with credentials.
 
+## 5a. Destination policy (both sides)
+
+Only public Internet hosts may be navigated to. Cloud Core validates every URL before it
+builds a `navigate`/`tab_new`/`fetch_evidence` command, and the worker validates again
+before acting (the device is the side that sits on the owner's LAN and tailnet): scheme
+`http`/`https` only; no userinfo; host names `localhost`, `*.local`, `*.internal`,
+`*.localhost`, `*.home.arpa` and cloud metadata names refused; IP literals and EVERY
+address the host resolves to must be outside loopback, RFC 1918, link-local
+(`169.254.0.0/16` incl. the metadata address), CGNAT `100.64.0.0/10` (the tailnet),
+multicast, reserved, unspecified, IPv6 loopback/link-local/ULA. A refusal is
+`security_scope_error` (not retryable) with the query string stripped from the evidence.
+Discovery output (search hits, feeds, APIs) is third-party content and gets no exemption.
+The worker's `--allow-private-destinations` flag exists for the fixture-site test suite
+only; the companion never passes it.
+
 ## 6. Untrusted content boundary
 
 Page text is data. The worker: (a) never executes anything based on page content — no page
