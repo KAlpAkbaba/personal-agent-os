@@ -10,8 +10,16 @@
  * which is a per-owner preference rather than a per-device one.
  */
 
-import type { EnvironmentMode, VadSensitivity } from "./calibration";
-import type { MicrophoneConstraints } from "./ports";
+import {
+  boundAdaptation,
+  EMPTY_ADAPTATION,
+  type EnvironmentMode,
+  type GateAdaptation,
+  type VadSensitivity,
+} from "./calibration";
+
+export { ADAPTATION_LIMITS } from "./calibration";
+import type { AppliedInputSettings, MicrophoneConstraints } from "./ports";
 
 export type AgcPreference = "off" | "on" | "auto";
 export type NoiseSuppressionMode = "auto" | "browser" | "off";
@@ -29,6 +37,26 @@ export type AgcBenchmark = {
   on: BenchmarkSample;
   recommended: "off" | "on";
   at: string;
+};
+
+/** The browser's applied input settings as READ BACK (ADR-0047 §4): measured values, never the request. */
+export type AppliedSettingsRecord = {
+  echoCancellation: boolean | null;
+  noiseSuppression: boolean | null;
+  autoGainControl: boolean | null;
+  voiceIsolation: boolean | null;
+  sampleRate: number | null;
+  channelCount: number | null;
+  inputLatencyMs: number | null;
+  notHonoured: string[];
+  measuredAt: string;
+};
+
+/** What the profile learned from its own sessions (ADR-0047 §4). */
+export type LearnedAdaptation = GateAdaptation & {
+  /** sessions that contributed */
+  sessions: number;
+  updatedAt: string | null;
 };
 
 export type MicrophoneProfile = {
@@ -50,7 +78,15 @@ export type MicrophoneProfile = {
   agcBenchmark: AgcBenchmark | null;
   /** Read back from the last getUserMedia: which opportunistic constraints were honoured. */
   appliedVoiceIsolation: boolean | null;
+  /** ADR-0047 §4: the full read-back of the last open, as measured. */
+  appliedSettings: AppliedSettingsRecord | null;
+  /** ADR-0047 §4: measured residual of the assistant's playback in this microphone (dBFS). */
+  measuredEchoResidualDb: number | null;
+  /** ADR-0047 §4: bounded per-device offsets learned from false starts. */
+  learned: LearnedAdaptation;
 };
+
+export const EMPTY_LEARNED: LearnedAdaptation = { ...EMPTY_ADAPTATION, sessions: 0, updatedAt: null };
 
 export type DeviceIdentity = { deviceId: string; label: string; groupId: string };
 
@@ -81,6 +117,9 @@ export function defaultProfile(device: DeviceIdentity): MicrophoneProfile {
     environmentMode: "auto",
     agcBenchmark: null,
     appliedVoiceIsolation: null,
+    appliedSettings: null,
+    measuredEchoResidualDb: null,
+    learned: { ...EMPTY_LEARNED },
   };
 }
 
@@ -96,6 +135,10 @@ function pick<T extends string>(value: unknown, allowed: ReadonlySet<string>, fa
 
 function numberOrNull(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function boolOrNull(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
 }
 
 function sample(value: unknown): BenchmarkSample | null {
@@ -133,6 +176,27 @@ export function normalizeProfile(raw: unknown): MicrophoneProfile | null {
       };
     }
   }
+  let appliedSettings: AppliedSettingsRecord | null = null;
+  if (r.appliedSettings && typeof r.appliedSettings === "object") {
+    const s = r.appliedSettings as Record<string, unknown>;
+    appliedSettings = {
+      echoCancellation: boolOrNull(s.echoCancellation),
+      noiseSuppression: boolOrNull(s.noiseSuppression),
+      autoGainControl: boolOrNull(s.autoGainControl),
+      voiceIsolation: boolOrNull(s.voiceIsolation),
+      sampleRate: numberOrNull(s.sampleRate),
+      channelCount: numberOrNull(s.channelCount),
+      inputLatencyMs: numberOrNull(s.inputLatencyMs),
+      notHonoured: Array.isArray(s.notHonoured) ? s.notHonoured.filter((x): x is string => typeof x === "string") : [],
+      measuredAt: typeof s.measuredAt === "string" ? s.measuredAt : "",
+    };
+  }
+  const learnedRaw = r.learned && typeof r.learned === "object" ? (r.learned as Record<string, unknown>) : null;
+  const learned: LearnedAdaptation = {
+    ...boundAdaptation(learnedRaw as Partial<GateAdaptation> | null),
+    sessions: Math.max(0, Math.round(numberOrNull(learnedRaw?.sessions) ?? 0)),
+    updatedAt: typeof learnedRaw?.updatedAt === "string" ? learnedRaw.updatedAt : null,
+  };
   return {
     ...base,
     fingerprint: r.fingerprint,
@@ -147,6 +211,71 @@ export function normalizeProfile(raw: unknown): MicrophoneProfile | null {
     environmentMode: pick(r.environmentMode, ENV_MODES, "auto"),
     agcBenchmark,
     appliedVoiceIsolation: typeof r.appliedVoiceIsolation === "boolean" ? r.appliedVoiceIsolation : null,
+    appliedSettings,
+    measuredEchoResidualDb: numberOrNull(r.measuredEchoResidualDb),
+    learned,
+  };
+}
+
+/** The measured read-back of an open, as the profile stores it (ADR-0047 §4). */
+export function appliedSettingsRecord(applied: AppliedInputSettings, at: string): AppliedSettingsRecord {
+  return {
+    echoCancellation: applied.echoCancellation,
+    noiseSuppression: applied.noiseSuppression,
+    autoGainControl: applied.autoGainControl,
+    voiceIsolation: applied.voiceIsolation,
+    sampleRate: applied.sampleRate,
+    channelCount: applied.channelCount,
+    inputLatencyMs: applied.inputLatencyMs,
+    notHonoured: [...applied.notHonoured],
+    measuredAt: at,
+  };
+}
+
+/** What one session contributes to the profile's learning (numbers the controller already counts). */
+export type SessionNoiseOutcome = {
+  false_starts: number;
+  false_barge_ins: number;
+  gate_opens: number;
+  /** provider-confirmed owner turns */
+  confirmed_turns: number;
+};
+
+/**
+ * Per-device learning from the session's own counters (ADR-0047 §4): the
+ * profile learns, it never asks the owner. Bounded (ADAPTATION_LIMITS) and
+ * reversible: a clean session with real turns decays the offsets so a noisy
+ * afternoon cannot ratchet a microphone permanently deaf to quiet speech.
+ *
+ * - ≥ 2 false starts outside playback → +1 dB margin, +10 ms onset;
+ * - ≥ 2 false barge-ins (false starts during playback) → +2 dB playback margin;
+ * - 0 false starts with ≥ 5 confirmed turns → −0.5 dB margin, −1 dB playback margin;
+ * - a session with no confirmed turns and no false starts teaches nothing.
+ */
+export function learnFromSession(profile: MicrophoneProfile, outcome: SessionNoiseOutcome, at: string): MicrophoneProfile {
+  const current = boundAdaptation(profile.learned);
+  const quiet = Math.max(0, outcome.false_starts - outcome.false_barge_ins);
+  let { marginDb, onsetMs, echoMarginDb } = current;
+  let taught = false;
+  if (quiet >= 2) {
+    marginDb += 1;
+    onsetMs += 10;
+    taught = true;
+  }
+  if (outcome.false_barge_ins >= 2) {
+    echoMarginDb += 2;
+    taught = true;
+  }
+  if (outcome.false_starts === 0 && outcome.confirmed_turns >= 5) {
+    marginDb -= 0.5;
+    echoMarginDb -= 1;
+    taught = true;
+  }
+  if (!taught) return profile;
+  const bounded = boundAdaptation({ marginDb, onsetMs, echoMarginDb });
+  return {
+    ...profile,
+    learned: { ...bounded, sessions: profile.learned.sessions + 1, updatedAt: at },
   };
 }
 

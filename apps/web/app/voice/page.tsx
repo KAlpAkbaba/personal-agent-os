@@ -27,10 +27,12 @@ import {
   type MicrophoneProfile,
   VOICE_CANDIDATES,
   type VoiceChoice,
+  appliedSettingsRecord,
   constraintsFor,
   defaultProfile,
   effectiveAgc,
   fingerprintDevice,
+  learnFromSession,
   loadVoiceChoice,
   normalizeVoiceChoice,
   saveVoiceChoice,
@@ -224,21 +226,40 @@ function VoiceConsole() {
       attenuationDb: () => (profileRef.current?.inputGainStrategy === "gated_attenuation" ? GATED_ATTENUATION_DB : 0),
       uplink: () => shaper,
       analysisStream: () => microphone.raw,
+      // ADR-0047 §4: the profile's learned offsets and last measured echo residual.
+      adaptation: () => profileRef.current?.learned ?? null,
+      initialEchoResidualDb: () => profileRef.current?.measuredEchoResidualDb ?? null,
     });
-    detector.onCalibration((c) => {
+    /** The default device only reveals its identity after the grant. */
+    const currentProfile = (): MicrophoneProfile | null => {
       const readBack = microphone.applied;
-      // The default device only reveals its identity after the grant.
-      const current =
+      return (
         profileRef.current ??
-        (readBack ? resolveProfile({ deviceId: readBack.deviceId ?? "", label: readBack.label, groupId: readBack.groupId ?? "" }) : null);
+        (readBack ? resolveProfile({ deviceId: readBack.deviceId ?? "", label: readBack.label, groupId: readBack.groupId ?? "" }) : null)
+      );
+    };
+    detector.onCalibration((c) => {
+      // ADR-0047 §5: only a MEASUREMENT updates the profile; a dead or
+      // contaminated window is reported, never persisted as "the room".
+      if (c.measured !== 1) return;
+      const readBack = microphone.applied;
+      const current = currentProfile();
       if (!current) return;
+      const at = new Date().toISOString();
       commitProfile({
         ...current,
         measuredNoiseFloorDb: c.noise_floor_db,
-        lastCalibratedAt: new Date().toISOString(),
+        lastCalibratedAt: at,
         appliedVoiceIsolation: readBack?.voiceIsolation ?? current.appliedVoiceIsolation,
+        appliedSettings: readBack ? appliedSettingsRecord(readBack, at) : current.appliedSettings,
         friendlyName: readBack?.label || current.friendlyName,
       });
+    });
+    // ADR-0047 §4: the measured echo residual is a per-device fact; persist it.
+    detector.onEchoResidualMeasured((residualDb) => {
+      const current = currentProfile();
+      if (!current || current.measuredEchoResidualDb === residualDb) return;
+      commitProfile({ ...current, measuredEchoResidualDb: residualDb });
     });
     rigRef.current = { playback, microphone, detector, store };
     setVoice(loadVoiceChoice());
@@ -264,6 +285,19 @@ function VoiceConsole() {
       localSpeech: detector,
       network: new BrowserNetworkMonitor(),
       now: () => performance.now(),
+      // ADR-0047 §4: the AGC A/B result travels with the read-back, as numbers.
+      inputEvidence: () => {
+        const bench = profileRef.current?.agcBenchmark;
+        if (!bench) return { agc_bench: 0 };
+        return {
+          agc_bench: 1,
+          agc_bench_off_score: bench.off.score,
+          agc_bench_on_score: bench.on.score,
+          agc_bench_off_floor_db: bench.off.noise_floor_db,
+          agc_bench_on_floor_db: bench.on.noise_floor_db,
+          agc_bench_recommended_on: bench.recommended === "on" ? 1 : 0,
+        };
+      },
     });
     controllerRef.current = controller;
     const unsubscribe = controller.subscribe(setSnapshot);
@@ -322,19 +356,42 @@ function VoiceConsole() {
   }, [live]);
 
   const connect = useCallback(async () => {
+    // ADR-0047 §3: the output AudioContext is created and resumed inside the
+    // owner's click, so the first response never waits for `resume()`.
+    rigRef.current?.playback.prepare();
     await controllerRef.current?.connect({ deviceId: micId || undefined, voice });
     // Labels are only revealed after a getUserMedia grant.
     void refreshDevices();
     const readBack = rigRef.current?.microphone.applied ?? null;
     setApplied(readBack);
-    if (readBack && !profileRef.current) {
-      resolveProfile({ deviceId: readBack.deviceId ?? "", label: readBack.label, groupId: readBack.groupId ?? "" });
+    if (readBack) {
+      const current =
+        profileRef.current ??
+        resolveProfile({ deviceId: readBack.deviceId ?? "", label: readBack.label, groupId: readBack.groupId ?? "" });
+      // ADR-0047 §4: the read-back is a measurement; the profile keeps it as one.
+      commitProfile({ ...current, appliedSettings: appliedSettingsRecord(readBack, new Date().toISOString()) });
     }
-  }, [micId, voice, refreshDevices, resolveProfile]);
+  }, [micId, voice, refreshDevices, resolveProfile, commitProfile]);
 
   const disconnect = useCallback(async () => {
-    await controllerRef.current?.disconnect();
-  }, []);
+    const controller = controllerRef.current;
+    if (!controller) return;
+    await controller.disconnect();
+    // ADR-0047 §4: the profile learns from the session's own counters — bounded, reversible, no owner question.
+    const current = profileRef.current;
+    const m = controller.getSnapshot().micMetrics;
+    if (current) {
+      const learned = learnFromSession(
+        current,
+        { false_starts: m.false_starts, false_barge_ins: m.false_barge_ins, gate_opens: m.gate_opens, confirmed_turns: m.confirmed_turns },
+        new Date().toISOString(),
+      );
+      if (learned !== current) {
+        commitProfile(learned);
+        rigRef.current?.detector.applyPreferences();
+      }
+    }
+  }, [commitProfile]);
 
   const changeMic = useCallback(async (deviceId: string) => {
     setMicId(deviceId);
@@ -747,8 +804,49 @@ function VoiceConsole() {
             <span>Kapı parametreleri</span>
             <span className="muted">
               {mic
-                ? `${mic.params.basis} · marj ${mic.params.openMarginDb} dB · başlangıç ${mic.params.minOnsetMs} ms · tutma ${mic.params.hangMs} ms · ön-kayıt ${mic.params.preRollMs} ms`
+                ? `${mic.params.basis} · marj ${mic.params.openMarginDb} dB · başlangıç ${mic.params.minOnsetMs} ms · tutma ${mic.params.hangMs} ms · ön-kayıt ${mic.params.preRollMs} ms` +
+                  ` · konuşma sırasında +${mic.params.echoExtraMarginDb} dB${mic.params.echoResidualAdjustDb > 0 ? " (ölçülen yankıdan)" : ""}` +
+                  (mic.params.adaptation.marginDb || mic.params.adaptation.onsetMs || mic.params.adaptation.echoMarginDb
+                    ? ` · öğrenilen +${mic.params.adaptation.marginDb} dB / +${mic.params.adaptation.onsetMs} ms / yankı +${mic.params.adaptation.echoMarginDb} dB`
+                    : "")
                 : "—"}
+            </span>
+          </div>
+          <div className="status-row">
+            <span>Zamanlama ölçümü</span>
+            <span className="muted">
+              {mic
+                ? `yakalama gecikmesi ${mic.captureLagMs === null ? "ölçülemiyor" : `${mic.captureLagMs} ms`}` +
+                  ` · son ön-kayıt ${mic.lastPreRollMs === null ? "—" : `${mic.lastPreRollMs} ms`}` +
+                  ` · yankı kalıntısı ${mic.echoResidualDb === null ? "ölçülmedi" : `${mic.echoResidualDb} dBFS`}` +
+                  (mic.deadWindows > 0 ? ` · ölü giriş pencereleri ${mic.deadWindows}` : "")
+                : "—"}
+            </span>
+          </div>
+          <div className="status-row">
+            <span>Gecikme bileşenleri</span>
+            <span className="muted" style={{ textAlign: "right" }}>
+              {(() => {
+                const d = snapshot.latencyDetail;
+                const parts: string[] = [];
+                if (d.barge_in) {
+                  parts.push(
+                    `söze girme: ${d.barge_in.playback_stopped_ms} ms = ön-kayıt ${d.barge_in.pre_roll_ms ?? "?"} + algılama ${d.barge_in.detect_ms ?? "?"} + kazanç→0 ${d.barge_in.gain_zero_ms ?? "?"} (komut ${d.barge_in.stop_command_ms})` +
+                      `${d.barge_in.early_mute ? " · erken sustur" : ""}${d.barge_in.anomaly ? " · ANOMALİ" : ""}`,
+                  );
+                }
+                if (d.first_audio) {
+                  parts.push(
+                    `ilk ses: yanıt ${d.first_audio.response_created_ms ?? "?"} + üretim ${d.first_audio.first_delta_ms ?? "?"} + çalma ${d.first_audio.playback_ms ?? "?"} ms (${d.first_audio.basis ? "yerel" : "sağlayıcı"})`,
+                  );
+                }
+                if (d.uplink) {
+                  parts.push(
+                    `uplink: ön-kayıt ${d.uplink.pre_roll_ms ?? "?"} + kapı ${d.uplink.gate_ms ?? "?"} + RTP ${d.uplink.rtp_ms ?? "?"} ms (sağlayıcı ${d.uplink.provider_ms ?? "?"} ms, ${d.uplink.basis ? "rtp" : "sağlayıcı"})`,
+                  );
+                }
+                return parts.length ? parts.join(" · ") : "—";
+              })()}
             </span>
           </div>
           <div className="status-row">
@@ -764,7 +862,7 @@ function VoiceConsole() {
             <span>Uygulanan kısıtlar</span>
             <span className="muted">
               {applied
-                ? `AEC ${String(applied.echoCancellation)} · NS ${String(applied.noiseSuppression)} · AGC ${String(applied.autoGainControl)} · kanal ${applied.channelCount ?? "?"} · ${applied.sampleRate ?? "?"} Hz` +
+                ? `AEC ${String(applied.echoCancellation)} · NS ${String(applied.noiseSuppression)} · AGC ${String(applied.autoGainControl)} · kanal ${applied.channelCount ?? "?"} · ${applied.sampleRate ?? "?"} Hz · giriş gecikmesi ${applied.inputLatencyMs === null ? "bilinmiyor" : `${applied.inputLatencyMs} ms`}` +
                   (applied.notHonoured.length ? ` · uygulanmayan: ${applied.notHonoured.join(", ")}` : " · istenenlerin hepsi uygulandı")
                 : "mikrofon açık değil"}
             </span>
@@ -772,7 +870,7 @@ function VoiceConsole() {
           <div className="status-row">
             <span>Sayaçlar</span>
             <span className="muted">
-              {`kapı ${snapshot.micMetrics.gate_opens} · arka plan ${snapshot.micMetrics.gated_out} · tık ${snapshot.micMetrics.click_rejects} · yanlış başlangıç ${snapshot.micMetrics.false_starts} · yanlış kesme ${snapshot.micMetrics.false_barge_ins} · boş tur ${snapshot.micMetrics.false_turns} · ölçüm ${snapshot.micMetrics.calibrations}`}
+              {`kapı ${snapshot.micMetrics.gate_opens} · arka plan ${snapshot.micMetrics.gated_out} · tık ${snapshot.micMetrics.click_rejects} · yanlış başlangıç ${snapshot.micMetrics.false_starts} · yanlış kesme ${snapshot.micMetrics.false_barge_ins} · boş tur ${snapshot.micMetrics.false_turns} · onaylı tur ${snapshot.micMetrics.confirmed_turns} · erken sustur ${snapshot.micMetrics.early_mutes} (geri ${snapshot.micMetrics.early_mute_reverts}) · ölçüm ${snapshot.micMetrics.calibrations}`}
             </span>
           </div>
           <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center", margin: "0.6rem 0" }}>

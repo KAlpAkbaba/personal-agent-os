@@ -141,16 +141,17 @@ describe("noise qualification metrics (ADR-0044 §7)", () => {
 
   it("reports a completed calibration and the session totals at close, numbers only, server-safe keys", async () => {
     const t = await setup();
-    t.localSpeech.emitCalibration({ noise_floor_db: -41.5, env: 2, sensitivity: 2, trigger: 0 });
-    expect(t.controller.getSnapshot().micMetrics).toMatchObject({ noise_floor_db: -41.5, env: 2, calibrations: 1 });
+    t.localSpeech.emitCalibration({ noise_floor_db: -41.5, env_class: 3, sensitivity_class: 3, trigger: 0 });
+    expect(t.controller.getSnapshot().micMetrics).toMatchObject({ noise_floor_db: -41.5, env: 3, calibrations: 1 });
     t.localSpeech.counters.gated_out = 7;
     t.localSpeech.counters.click_rejects = 12;
     await t.controller.disconnect();
     const calibration = t.core.events.find((e) => e.kind === "state" && e.payload?.mic_calibration === 1);
     expect(calibration?.payload).toMatchObject({
       noise_floor_db: -41.5,
-      env: 2,
-      sensitivity: 2,
+      env_class: 3,
+      sensitivity_class: 3,
+      measured: 1,
       open_margin_db: 10,
       min_onset_ms: 70,
       hang_ms: 450,
