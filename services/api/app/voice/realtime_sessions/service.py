@@ -263,6 +263,9 @@ def create_session(
             "model": str(getattr(provider, "model", "") or "") or None,
         },
         transcript_summary="",
+        # explicit, microsecond-precision creation time: the server default renders at
+        # one-second resolution on SQLite and "newest first" then breaks on ties
+        created_at=now,
         expires_at=now + timedelta(seconds=session_ttl_s),
         updated_at=now,
     )
@@ -931,7 +934,9 @@ def snapshot_benchmark_at_close(db: Session, row: RealtimeSessionRow) -> None:
 def list_recent_sessions(db: Session, *, limit: int = 20) -> list[dict[str, Any]]:
     """Newest first: what an owner needs to pick a session without transcribing a UUID."""
     rows = db.execute(
-        select(RealtimeSessionRow).order_by(RealtimeSessionRow.created_at.desc()).limit(limit)
+        select(RealtimeSessionRow)
+        .order_by(RealtimeSessionRow.created_at.desc(), RealtimeSessionRow.updated_at.desc())
+        .limit(limit)
     ).scalars()
     out: list[dict[str, Any]] = []
     for row in rows:

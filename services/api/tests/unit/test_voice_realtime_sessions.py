@@ -798,3 +798,21 @@ def test_benchmark_breakdown_aggregates_client_sub_phases_and_flags(wired) -> No
                                                   "env": 0, "peak_db": -100}}]})
     ctx2 = client.get(f"/v1/voice/realtime/sessions/{other}/benchmark").json()["context"]
     assert ctx2["noise"]["calibrations"] == 1 and ctx2["noise"]["calibration_measured"] is False
+
+
+def test_listing_is_newest_first_even_within_the_same_second(wired) -> None:
+    # -Latest trusts sessions[0]. The server default for created_at renders at one-second
+    # resolution on SQLite, so three sessions created in a burst tied and came back
+    # oldest-first (verification probe, 2026-09-03). created_at is now set explicitly
+    # with microseconds and the listing has a secondary key.
+    client, _, runtime, _, _, _ = wired
+    ids = [_create(client)["session_id"] for _ in range(3)]
+    listing = client.get("/v1/voice/realtime/sessions?limit=10").json()["sessions"]
+    assert [s["session_id"] for s in listing[:3]] == list(reversed(ids))
+    with runtime.session() as db:
+        rows = [db.get(RealtimeSessionRow, uuid.UUID(i)) for i in ids]
+        stamps = [r.created_at for r in rows]
+        assert stamps == sorted(stamps) and len(set(stamps)) == 3, "created_at must be distinct"
+        # the property that failed: ascending order is NOT newest-first
+        ascending = [str(r.id) for r in sorted(rows, key=lambda r: r.created_at)]
+        assert ascending == ids and ascending != [s["session_id"] for s in listing[:3]]
