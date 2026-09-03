@@ -94,7 +94,10 @@ function Copy-BrowserPackageTree {
         }
     }
 
-    $packageSource = Join-Path $Source "browser_agent"
+    # Resolve to the on-disk long form: Get-ChildItem reports long-form FullNames, while a
+    # caller may hand us an 8.3 short path (the GitHub runner's TEMP is C:\Users\RUNNER~1\...),
+    # and a Substring on the short length would misplace every nested file.
+    $packageSource = (Get-Item -LiteralPath (Join-Path $Source "browser_agent")).FullName
     $packageDestination = Join-Path $Destination "browser_agent"
     foreach ($item in @(Get-ChildItem -LiteralPath $packageSource -Recurse -File -Force)) {
         $relative = $item.FullName.Substring($packageSource.Length).TrimStart('\')

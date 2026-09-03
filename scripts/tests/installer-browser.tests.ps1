@@ -81,6 +81,35 @@ try {
         Assert-True -Condition (-not (Test-Path (Join-Path $destination "browser_agent\stale.pyc"))) -Because "compiled files never ship"
     }
 
+    Test-Case "the package copies correctly when the source is given as an 8.3 short path" {
+        # The GitHub runner's TEMP is C:\Users\RUNNER~1\...: Get-ChildItem reports long-form
+        # FullNames, so a relative path cut at the SHORT prefix length misplaces nested files.
+        if (-not ("PagentOS.ShortPath" -as [type])) {
+            Add-Type -Namespace PagentOS -Name ShortPath -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+public static extern uint GetShortPathNameW(string longPath, System.Text.StringBuilder shortPath, uint bufferSize);
+'@
+        }
+        $longDir = Join-Path $script:Sandbox "long-name-directory-for-short-path-test"
+        New-Item -ItemType Directory -Force -Path (Join-Path $longDir "browser_agent\sub") | Out-Null
+        Set-Content -LiteralPath (Join-Path $longDir "pyproject.toml") -Value "[project]" -Encoding ASCII
+        Set-Content -LiteralPath (Join-Path $longDir "uv.lock") -Value "version = 1" -Encoding ASCII
+        Set-Content -LiteralPath (Join-Path $longDir "browser_agent\__init__.py") -Value "" -Encoding ASCII
+        Set-Content -LiteralPath (Join-Path $longDir "browser_agent\sub\x.py") -Value "" -Encoding ASCII
+        $buffer = New-Object System.Text.StringBuilder 1024
+        $len = [PagentOS.ShortPath]::GetShortPathNameW($longDir, $buffer, 1024)
+        if ($len -eq 0) { throw "GetShortPathName failed" }
+        $shortDir = $buffer.ToString()
+        if ($shortDir -eq $longDir) {
+            Write-Host "        (8.3 names disabled on this volume; exercising the long form only)"
+        }
+        $destination = Join-Path $script:Sandbox "staged-short"
+        $count = Copy-BrowserPackageTree -Source $shortDir -Destination $destination
+        Assert-Equal -Expected 4 -Actual $count -Because "pyproject, uv.lock and two .py files"
+        Assert-True -Condition (Test-Path -LiteralPath (Join-Path $destination "browser_agent\sub\x.py")) -Because "nested file placed at its relative path even from a short source"
+        Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $destination "browser_agent\browser_agent"))) -Because "no doubled package directory"
+    }
+
     Test-Case "an incomplete package is refused before anything is copied" {
         $source = Join-Path $script:Sandbox "incomplete"
         New-Item -ItemType Directory -Force -Path $source | Out-Null
