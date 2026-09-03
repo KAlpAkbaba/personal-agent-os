@@ -39,7 +39,10 @@ param(
     # full = example.com + inspect/extract + search + policy refusal (M13 smoke, PROVEN_REAL);
     # search = session + one browser.search through the provider abstraction; PASS only when
     # the recorded provider is the requested primary (google) with no fallback.
-    [ValidateSet("full", "search")][string]$Mode = "full",
+    # lifecycle = one visible Chrome window, several operations on the SAME session (identity
+    # proven per command: session_uid, browser_pid, tab_count; exactly one PagentOS-profile
+    # Chrome process throughout), then a clean exit (zero PagentOS-profile Chrome processes).
+    [ValidateSet("full", "search", "lifecycle")][string]$Mode = "full",
     [string]$ExpectProvider = "google",
     # Run the elevated installer first (one UAC prompt; journaled engine, preserves broker
     # endpoints and identity) and wait for the device to come back online on the Cloud Core,
@@ -227,6 +230,78 @@ try {
         policy = @{ allowed_risk_classes = @("READ", "NAVIGATE"); visible = $true }; channel = "chrome"
     }
     Write-Host "      session created=$($opened.result.created) channel=$($opened.result.channel) browser=$($opened.result.browser_version)"
+
+    if ($Mode -eq "lifecycle") {
+        # Runtime invariant (ADR-0050 item 14): one research job = one worker + one Chrome
+        # process/profile + one window; every command reuses it; bounded tabs; clean exit.
+        $profileMarker = "PagentOS\companion\browser\profile"
+        function Get-ProfileChromes {
+            if ($SkipLocalEvidence) { return @() }
+            return @(Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like "*$profileMarker*" -and $_.CommandLine -notlike "*--type=*" })
+        }
+        function Get-ChromeWindowCount {
+            param($Pids)
+            if (@($Pids).Count -eq 0) { return 0 }
+            return @(Get-Process -Id $Pids -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 }).Count
+        }
+        $lc = Get-OptionalProperty -InputObject $opened.result -Name "lifecycle"
+        if ($null -eq $lc) { throw "contract/version mismatch: session_open returned no 'lifecycle' identity; the installed worker predates the lifecycle guards - rerun with -UpdateAgentFirst" }
+        $sessionUid = [string]$lc.session_uid; $browserPid = [int]$lc.browser_pid
+        Write-Host "      identity: session_uid=$sessionUid browser_pid=$browserPid tab_count=$($lc.tab_count) max_tabs=$($lc.max_tabs) max_windows=$($lc.max_windows) reused=$($lc.reused)"
+        $chromes = Get-ProfileChromes
+        $startPids = @($chromes | ForEach-Object { $_.ProcessId })
+        Write-Host "      PagentOS-profile Chrome main processes: $(@($chromes).Count) (pids $($startPids -join ',')); windows: $(Get-ChromeWindowCount $startPids)"
+        if (-not $SkipLocalEvidence) {
+            if (@($chromes).Count -ne 1) { throw "browser_lifecycle_violation: expected exactly 1 PagentOS-profile Chrome process, found $(@($chromes).Count)" }
+            if ([int]$chromes[0].ProcessId -ne $browserPid) { throw "the worker reports browser_pid=$browserPid but the profile is held by pid $($chromes[0].ProcessId)" }
+        }
+        $ops = @(
+            @{ cap = "browser.navigate"; payload = @{ url = "https://example.com/"; timeout_ms = 30000 } },
+            @{ cap = "browser.inspect"; payload = @{} },
+            @{ cap = "browser.extract"; payload = @{ mode = "text"; max_chars = 300 } },
+            @{ cap = "browser.tab_new"; payload = @{ url = "https://example.org/" } },
+            @{ cap = "browser.tab_list"; payload = @{} },
+            @{ cap = "browser.inspect"; payload = @{} },
+            @{ cap = "browser.tab_close"; payload = @{ index = 1 } },
+            @{ cap = "browser.navigate"; payload = @{ url = "https://example.net/"; timeout_ms = 30000 } },
+            @{ cap = "browser.back"; payload = @{} },
+            @{ cap = "browser.forward"; payload = @{} },
+            @{ cap = "browser.fetch_evidence"; payload = @{ url = "https://example.com/"; tab = "new"; excerpt_chars = 200 } },
+            @{ cap = "browser.worker_status"; payload = @{} }
+        )
+        $evidence.lifecycle = [ordered]@{ session_uid = $sessionUid; browser_pid = $browserPid; start_processes = @($chromes).Count; operations = @() }
+        $n = 0
+        foreach ($op in $ops) {
+            $n++
+            $payload = @{}
+            foreach ($k in $op.payload.Keys) { $payload[$k] = $op.payload[$k] }
+            if ($op.cap -ne "browser.worker_status") { $payload["session_id"] = $sessionId }
+            $r = Invoke-DeviceCommand -Capability $op.cap -Payload $payload
+            $rl = Get-OptionalProperty -InputObject $r.result -Name "lifecycle"
+            $now = Get-ProfileChromes
+            $line = [ordered]@{ n = $n; capability = $op.cap; session_uid = $(if ($rl) { [string]$rl.session_uid } else { $null }); browser_pid = $(if ($rl) { [int]$rl.browser_pid } else { $null }); tab_count = $(if ($rl) { [int]$rl.tab_count } else { $null }); processes = @($now).Count; windows = (Get-ChromeWindowCount @($now | ForEach-Object { $_.ProcessId })) }
+            $evidence.lifecycle.operations += $line
+            Write-Host ("      op {0,2} {1,-24} session_uid_same={2} browser_pid_same={3} tabs={4} processes={5} windows={6}" -f $n, $op.cap, ($line.session_uid -eq $sessionUid), ($line.browser_pid -eq $browserPid), $line.tab_count, $line.processes, $line.windows)
+            if ($op.cap -ne "browser.worker_status") {
+                if ($null -eq $rl) { throw "op $n ($($op.cap)) returned no lifecycle identity" }
+                if ($line.session_uid -ne $sessionUid -or $line.browser_pid -ne $browserPid) { throw "op $n ($($op.cap)) ran on a different browser session (uid $($line.session_uid), pid $($line.browser_pid))" }
+                if ($line.tab_count -gt [int]$lc.max_tabs) { throw "op $n exceeded the tab budget: $($line.tab_count) > $($lc.max_tabs)" }
+            }
+            if (-not $SkipLocalEvidence) {
+                if ($line.processes -ne 1) { throw "browser_lifecycle_violation after op ${n}: $($line.processes) PagentOS-profile Chrome processes" }
+                if ($line.windows -gt 1) { throw "browser_lifecycle_violation after op ${n}: $($line.windows) Chrome windows on the PagentOS profile" }
+            }
+        }
+        $closed = Invoke-DeviceCommand -Capability "browser.session_close" -Payload @{ session_id = $sessionId }
+        Start-Sleep -Seconds 2
+        $left = Get-ProfileChromes
+        $evidence.lifecycle.end_processes = @($left).Count
+        $evidence.lifecycle.browser_pid_exited = (Get-OptionalProperty -InputObject $closed.result -Name "browser_pid_exited")
+        Write-Host "      closed: browser_pid_exited=$($evidence.lifecycle.browser_pid_exited); PagentOS-profile Chrome processes left: $(@($left).Count)"
+        if (-not $SkipLocalEvidence -and @($left).Count -ne 0) { throw "session_close left $(@($left).Count) PagentOS-profile Chrome process(es) running" }
+        $evidence.verdict = "PASS"
+        throw [System.Management.Automation.RuntimeException]::new("__done__")
+    }
 
     if ($Mode -eq "search") {
         # Search-provider qualification: one browser.search through the provider abstraction.

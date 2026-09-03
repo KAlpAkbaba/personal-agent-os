@@ -175,3 +175,19 @@ def test_create_command_request_rejects_oversized_payload():
             capability="desktop.open_application",
             payload={"blob": "x" * (MAX_COMMAND_PAYLOAD_BYTES + 1)},
         )
+
+
+def test_browser_lifecycle_violation_is_a_known_error_class() -> None:
+    # ADR-0050 item 14: the device refuses to spawn a second Chrome/window/tab beyond the
+    # research-browser budget and says so with this class; the broker must accept it.
+    from app.broker.frames import ERROR_CLASSES, ErrorObject
+
+    assert "browser_lifecycle_violation" in ERROR_CLASSES
+    obj = ErrorObject.model_validate(
+        {
+            "class": "browser_lifecycle_violation",
+            "message": "second Chrome refused",
+            "retryable": False,
+        }
+    )
+    assert obj.error_class == "browser_lifecycle_violation" and obj.retryable is False

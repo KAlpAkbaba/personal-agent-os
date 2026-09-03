@@ -194,7 +194,30 @@ Expect a Chrome window to appear briefly on this PC. Paste the final lines (each
 status, `command_id`, `trace`) and `browser-smoke-1.json` (ids, timings, the example.com
 title/text and process images — no secret).
 
-### 12. Google-primary search through the installed worker — **ready**
+### 13. Browser lifecycle: one visible Chrome window, several operations, clean exit — **ready after the deploy**
+
+Unblocks: `docs/QUALIFICATION.md` 9.13; item 12 resumes after it. Your report of dozens of
+cascading Chrome windows was reproduced and root-caused (ADR-0050 item 14): every launch
+attempt on the dedicated profile while a PagentOS Chrome still held it opened one more
+window in that Chrome, and killed workers left such a Chrome behind. The worker now owns
+exactly one research browser, reaps its own orphans, refuses a second launch with
+`browser_lifecycle_violation` instead of retrying, bounds tabs, and proves reuse on every
+command; the companion and the installer clean up only PagentOS-profile Chrome.
+
+The command updates the installed agent first (one UAC prompt) and then runs the short
+lifecycle test: one Chrome window opens, twelve operations run in that same session
+(navigate, inspect, extract, a second tab opened and closed, back/forward, a fetch in a
+temporary tab, worker status), each line showing `session_uid_same=True`
+`browser_pid_same=True` `processes=1` `windows=1`, and the session closes leaving zero
+PagentOS-profile Chrome processes:
+
+```powershell
+.\scripts\browser\real-browser-smoke.ps1 -UpdateAgentFirst -Mode lifecycle -OutFile browser-lifecycle-1.json
+```
+
+Paste the final lines and the JSON. Expected: `REAL BROWSER SMOKE: PASS`.
+
+### 12. Google-primary search through the installed worker — **PAUSED (lifecycle regression, see item 13)**
 
 Unblocks: `docs/QUALIFICATION.md` 9.12; the larger research run (item 10 step C) waits for it.
 

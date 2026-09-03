@@ -38,6 +38,7 @@
             "artifact_render_error",
             "voice_provider_error",
             "security_scope_error",
+            "browser_lifecycle_violation",
             "internal_bug"
           ]
         },

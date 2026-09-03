@@ -37,6 +37,9 @@ ERROR_CLASSES = (
     "artifact_render_error",
     "voice_provider_error",
     "security_scope_error",
+    # M13 (ADR-0050 item 14): the device refuses to create a second Chrome/window/tab beyond
+    # the research-browser budget instead of spawning it; never retryable.
+    "browser_lifecycle_violation",
     "internal_bug",
 )
 

@@ -2572,3 +2572,21 @@ embedded Temporal worker). Facts and decisions that were not in the design:
     - Migration `0014_research_owner_verification` widens `ck_research_runs_stage` to accept
       the new `waiting_for_owner_verification` value; it is deliberately NOT added to
       `TERMINAL_STAGES` so the web client's poller keeps running through it.
+
+14. **Browser lifecycle invariant with hard guards** (2026-09-03 night, after a real
+    regression: dozens of Chrome windows cascading on the owner's desktop). Proven
+    mechanism: `launch_persistent_context` on the dedicated PagentOS profile while another
+    Chrome holds it fails in 0.1 s and opens a new window in that Chrome; an orphaned
+    PagentOS Chrome (its worker killed by the installer or companion) plus any retry source
+    turns into one window per attempt. Decisions: the worker owns at most ONE research
+    browser per profile (a different session id while one is alive is
+    `browser_lifecycle_violation`, a new device-protocol error class, non-retryable); orphan
+    PagentOS-profile Chromes are reaped before a launch (only processes carrying that
+    profile dir - never the owner's Chrome); a locked-profile launch failure is never
+    retried; every session-scoped result carries `lifecycle` identity (`session_uid`,
+    `browser_pid`, `tab_count`, budgets: max 1 window, max 6 tabs unless the plan raises it
+    to 12); `session_close` waits for the profile's Chrome to exit; the companion reaps
+    profile-bound Chrome when it kills or loses a worker and now keeps a file log; the
+    installer's runtime stop does the same. The owner's Chrome sessions are never touched.
+    Fixing this does not change Google's CAPTCHA/handoff behaviour, which stays a separate
+    provider concern.
