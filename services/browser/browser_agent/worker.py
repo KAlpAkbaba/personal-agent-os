@@ -42,6 +42,7 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from . import policy, search_engines
 from .backends import ManagedBackend
+from .destination import require_public_destination
 from .detect import BrowserInfo, detect_browser
 from .errors import BrowserError, ErrorClass, Phase, map_playwright_error, redact_url
 from .extraction import (
@@ -343,6 +344,12 @@ class Worker:
         self._default_channel: str | None = args.channel
         self._default_visible = bool(args.visible) and not args.headless
         self._idle_timeout_s = args.idle_timeout_s
+        # Loopback/private destinations are refused unless the worker was started with
+        # --allow-private-destinations (test fixture sites only; the companion never
+        # passes it). Cloud Core applies the same policy before dispatching.
+        self._allow_private_destinations = bool(
+            getattr(args, "allow_private_destinations", False)
+        )
         self._sessions: dict[str, SessionState] = {}
         self._session_locks: dict[str, asyncio.Lock] = {}
         self._inflight: dict[str, asyncio.Task[Any]] = {}
@@ -756,12 +763,18 @@ class Worker:
             "elapsed_ms": elapsed_ms,
         }
 
+    def _check_destination(self, url: str, *, op: str) -> None:
+        if self._allow_private_destinations:
+            return
+        require_public_destination(url, op=op)
+
     async def _op_navigate(self, state: SessionState, payload: dict[str, Any]) -> dict[str, Any]:
         url = payload.get("url")
         if not isinstance(url, str) or not url:
             raise BrowserError(
                 ErrorClass.VALIDATION_ERROR, "navigate: 'url' is required", retryable=False
             )
+        self._check_destination(url, op="navigate")
         timeout_ms = payload.get("timeout_ms", DEFAULT_NAV_TIMEOUT_MS)
         start = time.perf_counter()
         response = await state.browser_session.navigate(url, timeout_ms=timeout_ms)
@@ -806,6 +819,8 @@ class Worker:
                 "tab_new: 'url' must be a string or null",
                 retryable=False,
             )
+        if url:
+            self._check_destination(url, op="tab_new")
         index = await state.browser_session.new_tab(url)
         return {"index": index}
 
@@ -1221,6 +1236,7 @@ class Worker:
             raise BrowserError(
                 ErrorClass.VALIDATION_ERROR, "fetch_evidence: 'url' is required", retryable=False
             )
+        self._check_destination(url, op="fetch_evidence")
         query = payload.get("query") or ""
         source_class = payload.get("source_class") or "unknown"
         excerpt_chars = payload.get("excerpt_chars", 1_200)
@@ -1325,6 +1341,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--headless", action="store_true", help="Default session_open to headless (default)"
     )
     parser.add_argument("--idle-timeout-s", type=int, default=DEFAULT_IDLE_TIMEOUT_S)
+    parser.add_argument(
+        "--allow-private-destinations",
+        action="store_true",
+        help="Permit loopback/private/tailnet destinations (fixture tests only; never in production)",
+    )
     parser.add_argument(
         "--self-check",
         action="store_true",

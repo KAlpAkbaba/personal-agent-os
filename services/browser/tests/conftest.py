@@ -149,7 +149,16 @@ async def worker(tmp_path):
     data_dir = tmp_path / "worker-data"
     data_dir.mkdir()
     args = build_arg_parser().parse_args(
-        ["--data-dir", str(data_dir), "--channel", "chromium", "--headless"]
+        # The fixture site lives on loopback, which the destination policy refuses
+        # in production; the flag exists for exactly this suite.
+        [
+            "--data-dir",
+            str(data_dir),
+            "--channel",
+            "chromium",
+            "--headless",
+            "--allow-private-destinations",
+        ]
     )
     w = Worker(args)
     await w._print_hello()  # populates browser_info; also sanity-checks the channel resolves

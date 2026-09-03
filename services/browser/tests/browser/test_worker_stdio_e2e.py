@@ -50,6 +50,7 @@ async def test_worker_subprocess_full_session_lifecycle(site_url, tmp_path: Path
         "--channel",
         "chromium",
         "--headless",
+        "--allow-private-destinations",
         "--idle-timeout-s",
         "600",
         stdin=asyncio.subprocess.PIPE,
