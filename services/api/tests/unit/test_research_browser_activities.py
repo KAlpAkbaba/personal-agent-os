@@ -1064,3 +1064,19 @@ def test_select_fetch_order_covers_every_class_and_defers_listing_pages() -> Non
     ]
     assert len(urls) == len(set(urls))
     assert ba.select_fetch_order(rows, 4) == ordered  # deterministic
+
+
+def test_api_discovered_candidates_are_retagged_with_the_class_bearing_query_id() -> None:
+    from app.research import discovery
+
+    hits = discovery.parse_hn_response(
+        {
+            "hits": [
+                {"url": "https://example.com/x", "title": "x", "created_at": "2026-09-02T10:00:00Z"}
+            ]
+        },
+        query_id="AI agents important developments",
+    )
+    tagged = ba._retag(hits, "technical:3")
+    assert [c.query_id for c in tagged] == ["technical:3"]
+    assert ba._class_for_query(tagged[0].query_id) == "technical"

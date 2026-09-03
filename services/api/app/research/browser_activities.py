@@ -273,6 +273,15 @@ def _official_candidates(query_text: str, query_id: str) -> list[discovery.Disco
     return out
 
 
+def _retag(candidates: list, query_id: str) -> list:
+    """API discovery (Hacker News, arXiv) labels candidates with the query TEXT; the
+    workflow's ``<source_class>:<i>`` id is what carries the class into fetch ordering
+    and the report (seen live: every HN/arXiv source came out as class ``unknown``)."""
+    from dataclasses import replace
+
+    return [replace(c, query_id=query_id) for c in candidates]
+
+
 @activity.defn(name="browser_research_discover")
 def discover_activity(
     task_id: str,
@@ -290,8 +299,10 @@ def discover_activity(
     try:
         if source_class == "technical":
             candidates = discovery.fetch_hn(query_text, window_start=window_start)
+            candidates = _retag(candidates, query_id)
         elif source_class == "academic":
             candidates = discovery.fetch_arxiv(query_text)
+            candidates = _retag(candidates, query_id)
         elif source_class == "official":
             candidates = _official_candidates(query_text, query_id)
         else:  # "news" / "community": the device's real Chrome, semantic result links
