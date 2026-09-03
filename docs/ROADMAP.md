@@ -279,6 +279,30 @@ independent reviewer → shadow → canary → promotion → registry → retry 
 request. Never a hot edit of the running core; the proven recovery/security roots stay
 protected.
 
+## M19 — Multi-device / roaming owner qualification
+
+Owner requirement recorded 2026-09-03 (PROJECT_CONSTITUTION §11a, ADR-0049): the K66 work is
+a per-device audio-quality qualification; the product must be usable and centrally managed
+from any owner-authorised device, with Cloud Core as the authoritative control plane.
+
+Scope: device inventory on Cloud Core (online/offline, agent version, capabilities, last
+seen, health); centrally managed DeviceService/Companion configuration, policies and
+capability advertisement (browser, desktop control, microphone, speakers, GPU, filesystem,
+integrations); device selection by explicit target ("ev bilgisayarımda aç", "iş
+bilgisayarımda çalıştır", "laptopta devam et") or by presence + capability + policy; roaming
+of conversation, memory, tasks, research state and preferences; voice sessions moving between
+desktop, laptop, web and phone under one identity; per-device microphone profiles with
+automatic calibration of a new microphone, never cross-contaminating; centrally coordinated
+agent rollout, health check, rollback and version inventory; per-machine key material with
+central removal of a lost device without rotating the owner identity; reconnect after
+reboot/network loss without owner intervention; no authority from tailnet reachability alone.
+
+Real acceptance (all on real machines, none of it from fakes): PC-A → owner conversation →
+continue from PC-B → command PC-A from PC-B → PC-A offline → Cloud Core detects it → PC-B
+selected → PC-A returns → reconnects automatically → shared memory/state unchanged; plus
+per-device microphone profiles proven with at least two different physical audio devices.
+Not started; recorded so current work cannot make the system single-machine.
+
 ## M10 — Optimization (deferred behind the product phase)
 
 Gated on real use of M12+: no speculative optimization or new feature development until real cloud

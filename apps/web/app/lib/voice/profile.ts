@@ -1,6 +1,6 @@
 /**
  * MicrophoneProfile — the owner's persistent per-device input preference
- * (ADR-0044 §5). Not a global constant: the K66 gets its own profile, a laptop
+ * (ADR-0044 §5). Not a global constant: the owner's current microphone gets its own profile, a laptop
  * microphone another, keyed by a fingerprint of label + groupId (deviceIds are
  * per-origin and can rotate). Persisted in localStorage behind a store port so
  * it can later be mirrored to Cloud Core owner preferences; every storage

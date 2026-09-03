@@ -2294,3 +2294,44 @@ the same branch with tests:
    `arm()`. Both now go through the single `revertEarlyMute()` path `evidence_lost`
    uses; a test pins the unmute at the response's end, the counter, and that the
    microphone/uplink track is never touched. `apps/web` tests 120 → 122.
+
+## ADR-0049 — Multi-device / roaming owner is an architectural invariant; the K66 work is per-device (2026-09-03)
+
+Context: the K66 qualification is a per-device audio-quality qualification. The owner's
+standing requirement is that PersonalAgentOS is usable and centrally manageable from
+anywhere and from every owner-authorised computer or device, with the Hetzner Cloud Core
+as the authoritative control plane and owner brain. Recording this now keeps the current
+voice optimisation from quietly making the system single-machine.
+
+Decisions:
+
+1. **Invariant, not a feature**: PROJECT_CONSTITUTION §11a. Any enrolled, owner-authorised
+   device attaches to the same owner identity with no per-machine source edit or manual
+   configuration after enrollment; device configuration, capabilities, policies and updates
+   are centrally managed; Cloud Core selects the device (explicit target, else presence +
+   capability + policy); conversation, memory, tasks, research state and preferences roam;
+   voice sessions move between clients under one identity; microphone/DSP settings are
+   per-device profiles that never cross-contaminate; the Arbor target is owner-level; key
+   material is per machine; central revocation without rotating the owner identity; no
+   authority from tailnet reachability; automatic reconnect; nothing designed around a
+   machine name, path, audio device id or SID.
+2. **A guard runs in CI**: `services/api/tests/unit/test_multi_device_invariant.py` scans
+   application code (API, browser agent, web client, Windows agent sources - not docs,
+   tests or the owner's local dev configuration) for machine-specific literals (a
+   domain SID, the K66 model name, a `DESKTOP-` machine name, a CGNAT tailnet address,
+   the tailnet MagicDNS domain, a user-profile path) and asserts per-device state is
+   keyed by device fingerprint while the target voice profile is a server-level setting.
+3. **What already conforms**: the identity model (one owner, device-bound sessions,
+   central revocation, ADR-0027), the device broker (outbound-only, per-machine keys,
+   ADR-0028/0029), realtime session `attach` across clients (spec §7), per-device
+   microphone profiles keyed by fingerprint (ADR-0044), the owner-level Arbor profile
+   (ADR-0043). What does not yet exist and is the M19 milestone (`docs/ROADMAP.md`,
+   `docs/ACCEPTANCE_TESTS.md`): device inventory and presence on Cloud Core, central
+   device configuration/policy/capability advertisement, explicit and policy-based device
+   targeting, roaming of task/research state, coordinated agent rollout with health check,
+   rollback and version inventory across machines, and the real two-PC / two-microphone
+   acceptance run.
+
+Consequences: the K66 optimisation continues unchanged and independently; every new
+device-side setting is added as a per-device profile field or a centrally managed policy,
+never a constant; M19 is scheduled after the voice target is proven.

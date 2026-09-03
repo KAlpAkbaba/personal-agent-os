@@ -293,7 +293,7 @@ export class FakeMicrophone implements Microphone {
       ...constraints,
     };
     this.applied = {
-      label: "Fake K66",
+      label: "Fake USB microphone",
       deviceId: deviceId ?? "default",
       groupId: "group-1",
       echoCancellation: requested.echoCancellation,

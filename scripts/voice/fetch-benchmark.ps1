@@ -105,6 +105,47 @@ try {
         session    = $state
         benchmark  = $bench
     }
+    # A compact, human-readable summary first (the full JSON follows): what met its
+    # target, the noise counters, and the sub-phase breakdown - numbers only.
+    Write-Host ""
+    Write-Host ("== session {0}  state={1}  voice={2}  profile={3}  model={4}" -f $SessionId,
+        (Get-OptionalProperty -InputObject $state -Name "state"),
+        (Get-OptionalProperty -InputObject $state -Name "voice"),
+        (Get-OptionalProperty -InputObject $state -Name "voice_profile"),
+        (Get-OptionalProperty -InputObject (Get-OptionalProperty -InputObject $bench -Name "context") -Name "model"))
+    $check = Get-OptionalProperty -InputObject $bench -Name "target_check"
+    if ($null -ne $check) {
+        foreach ($prop in $check.PSObject.Properties) {
+            $v = $prop.Value
+            $line = "  {0,-24} target {1,5} ms  p95 {2,6}  met={3}" -f $prop.Name,
+                (Get-OptionalProperty -InputObject $v -Name "target_ms"),
+                (Get-OptionalProperty -InputObject $v -Name "observed_p95_ms"),
+                (Get-OptionalProperty -InputObject $v -Name "met")
+            Write-Host $line
+        }
+    }
+    $ctx = Get-OptionalProperty -InputObject $bench -Name "context"
+    $noise = if ($null -ne $ctx) { Get-OptionalProperty -InputObject $ctx -Name "noise" } else { $null }
+    if ($null -ne $noise) {
+        Write-Host ("  noise: false_starts={0} false_barge_ins={1} false_turns={2} gate_opens={3} calibrations={4} calibration_measured={5}" -f
+            (Get-OptionalProperty -InputObject $noise -Name "false_starts"), (Get-OptionalProperty -InputObject $noise -Name "false_barge_ins"),
+            (Get-OptionalProperty -InputObject $noise -Name "false_turns"), (Get-OptionalProperty -InputObject $noise -Name "gate_opens"),
+            (Get-OptionalProperty -InputObject $noise -Name "calibrations"), (Get-OptionalProperty -InputObject $noise -Name "calibration_measured"))
+    }
+    $breakdown = if ($null -ne $ctx) { Get-OptionalProperty -InputObject $ctx -Name "breakdown" } else { $null }
+    if ($null -ne $breakdown) {
+        foreach ($kind in $breakdown.PSObject.Properties) {
+            $parts = @()
+            foreach ($field in $kind.Value.PSObject.Properties) {
+                if ($field.Value -is [System.Management.Automation.PSCustomObject]) {
+                    $parts += ("{0} n={1} p50={2} p95={3}" -f $field.Name, $field.Value.n, $field.Value.p50_ms, $field.Value.p95_ms)
+                }
+                elseif ($field.Name -match "_count$|^events$|^without_breakdown$") { $parts += ("{0}={1}" -f $field.Name, $field.Value) }
+            }
+            Write-Host ("  breakdown {0}: {1}" -f $kind.Name, ($parts -join "; "))
+        }
+    }
+    Write-Host ""
     $json = $report | ConvertTo-Json -Depth 14
     Write-Output $json
     if ($OutFile) {

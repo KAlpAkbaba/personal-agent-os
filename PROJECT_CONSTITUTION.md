@@ -92,6 +92,27 @@ Prefer local capture and owner-controlled storage for sensitive persistent conte
 
 No critical domain concept may be owned by a single external AI provider. Model, TTS, STT, embedding, object-storage and coding-agent providers must be replaceable behind interfaces.
 
+## 11a. Multi-device, roaming owner (architectural invariant)
+
+PersonalAgentOS is never tied to one microphone, one Windows PC or one SID. The Hetzner
+Cloud Core is the authoritative control plane and owner brain; any owner-authorised,
+enrolled device attaches to the same owner identity without per-machine source edits or
+manual configuration after enrollment. Device configuration, capabilities, policies and
+updates are centrally managed; each device advertises its capabilities (browser, desktop
+control, microphone, speakers, GPU, filesystem, integrations) and Cloud Core selects the
+device for an action - explicitly when the owner names one ("ev bilgisayarımda aç", "iş
+bilgisayarımda çalıştır", "laptopta devam et"), otherwise by presence, capability and
+policy. Conversation, memory, tasks, research state and preferences roam; a voice session
+may move between desktop, laptop, web and phone without a new identity. Microphone/DSP
+settings are per-device, per-microphone profiles - a newly encountered microphone is
+calibrated automatically and stored on its own, and one noisy profile never degrades
+another machine. The Arbor target voice is an owner-level profile across devices. Device
+key material is unique per machine; a lost device is removable centrally without rotating
+the owner identity; reaching the tailnet grants nothing by itself. Reconnect after reboot
+or network loss needs no owner intervention. Nothing is designed around a hardcoded machine
+name, path, audio device id or SID (guarded by a test). Acceptance is the
+MULTI-DEVICE / ROAMING OWNER QUALIFICATION milestone in `docs/ROADMAP.md`.
+
 ## 11. Reliability over novelty
 
 A new autonomous feature is promoted only when measurable quality is at least as good as the current version on required regression/evaluation suites. Otherwise it is rejected or remains experimental.

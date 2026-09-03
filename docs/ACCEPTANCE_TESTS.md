@@ -279,3 +279,28 @@ Turkish speech, network and the real Hetzner Cloud Core. Fakes are gates, never 
 - modes are explicit capabilities: ConversationRealtime, Narration, Transcription,
   VoiceIdentity — and VoiceIdentity is never the sole root of authentication;
 - subjective owner evaluation of voice quality is an explicit, final gate.
+
+## M19 Multi-device / roaming owner qualification
+
+Real-only acceptance on at least two owner-authorised physical computers (PC-A, PC-B) and
+the real Hetzner Cloud Core; nothing here is accepted from fakes or a single machine.
+
+- Cloud Core device inventory lists both machines with online/offline state, agent
+  version, advertised capabilities, last seen and health;
+- an owner conversation started on PC-A continues from PC-B with the same identity,
+  conversation, memory, tasks, research state and preferences;
+- from PC-B the owner commands PC-A explicitly ("ev bilgisayarımda aç" or equivalent) and
+  the action runs on PC-A;
+- PC-A goes offline: Cloud Core detects it within its presence window and an unspecified
+  action is routed to PC-B by presence + capability + policy;
+- PC-A returns: it reconnects automatically after reboot/network loss with no owner
+  intervention, and the shared memory/state is unchanged;
+- a voice session moves between desktop, laptop, web and phone without a new identity;
+- microphone profiles: two different physical audio devices are calibrated independently
+  and neither profile alters the other (the K66 profile never touches PC-B's microphone);
+- the Arbor target voice profile applies on both machines as an owner-level setting;
+- a device is revoked centrally and loses access without the owner identity rotating;
+- a freshly enrolled device with tailnet reachability but no authorisation gains nothing;
+- agent update: a centrally coordinated rollout to both machines with health check,
+  rollback of one machine, and a correct version inventory afterwards;
+- no per-machine source edit or manual configuration was needed after enrollment.
