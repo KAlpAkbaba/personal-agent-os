@@ -42,8 +42,8 @@ async def test_fetch_evidence_openai_news_has_metadata(live_worker: Worker) -> N
         "browser.session_open",
         {
             "session_id": "live1",
-            "profile": "isolated",
-            "policy": {"allowed_risk_classes": ["READ", "NAVIGATE"], "visible": False},
+            "profile": "research",
+            "policy": {"allowed_risk_classes": ["READ", "NAVIGATE"], "visible": True},
         },
     )
     assert opened["created"] is True
@@ -80,8 +80,8 @@ async def test_search_ai_agents_engine_auto_returns_results(live_worker: Worker)
         "browser.session_open",
         {
             "session_id": "live2",
-            "profile": "isolated",
-            "policy": {"allowed_risk_classes": ["READ", "NAVIGATE"], "visible": False},
+            "profile": "research",
+            "policy": {"allowed_risk_classes": ["READ", "NAVIGATE"], "visible": True},
         },
     )
     assert opened["created"] is True
