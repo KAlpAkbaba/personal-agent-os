@@ -15,9 +15,7 @@ class _SometimesFailingDriver:
     async def navigate(self, url: str, *, timeout_ms: float = 15_000) -> None:
         self.navigated_to.append(url)
         if "bad" in url:
-            raise BrowserError(
-                ErrorClass.TIMEOUT, f"navigate timed out: {url}", retryable=True
-            )
+            raise BrowserError(ErrorClass.TIMEOUT, f"navigate timed out: {url}", retryable=True)
 
     async def title(self) -> str:
         return "Title"

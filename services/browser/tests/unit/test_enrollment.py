@@ -21,9 +21,7 @@ from browser_agent.enrollment import (
 
 
 def test_cdp_loopback_convenience_constructor() -> None:
-    enrollment = BrowserEnrollment.cdp_loopback(
-        "http://127.0.0.1:9222", name="owner-edge"
-    )
+    enrollment = BrowserEnrollment.cdp_loopback("http://127.0.0.1:9222", name="owner-edge")
     assert enrollment.transport is Transport.CDP_LOOPBACK
     assert enrollment.endpoint == "http://127.0.0.1:9222"
     assert enrollment.name == "owner-edge"
@@ -240,9 +238,7 @@ def test_research_authorization_absent_field_defaults_false_never_inferred_true(
     import json
 
     path = tmp_path / "enrollments.json"
-    old_record = BrowserEnrollment.cdp_loopback(
-        "http://127.0.0.1:9222", name="pre-m13"
-    ).as_dict()
+    old_record = BrowserEnrollment.cdp_loopback("http://127.0.0.1:9222", name="pre-m13").as_dict()
     del old_record["owner_authorized_for_research"]
     path.write_text(json.dumps({"enrollments": [old_record]}), encoding="utf-8")
 

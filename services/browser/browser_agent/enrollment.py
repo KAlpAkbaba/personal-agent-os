@@ -233,9 +233,7 @@ class EnrollmentRegistry:
     def _save(self) -> None:
         if self._path is None:
             return
-        payload = json.dumps(
-            {"enrollments": [e.as_dict() for e in self.list()]}, indent=2
-        )
+        payload = json.dumps({"enrollments": [e.as_dict() for e in self.list()]}, indent=2)
         self._path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self._path.with_suffix(self._path.suffix + ".tmp")
         tmp.write_text(payload, encoding="utf-8")

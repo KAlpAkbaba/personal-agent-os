@@ -1,0 +1,244 @@
+"""Unit tests for browser_agent.search_engines: SERP parsers + auto fallover.
+
+No browser: parsers run against saved HTML fixture files
+(tests/fixtures/serp/*.html), and ``run_search``'s fallover logic is driven
+with an injected fake ``fetch`` coroutine instead of a real navigation.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from browser_agent.errors import BrowserError, ErrorClass
+from browser_agent.search_engines import (
+    build_search_url,
+    parse_bing_html,
+    parse_brave_html,
+    parse_duckduckgo_html,
+    parse_engine_html,
+    run_search,
+)
+
+FIXTURES = Path(__file__).parent.parent / "fixtures" / "serp"
+
+
+def _read(name: str) -> str:
+    return (FIXTURES / name).read_text(encoding="utf-8")
+
+
+class TestDuckDuckGoParser:
+    def test_drops_ads_and_own_domain_keeps_organic_results(self) -> None:
+        results = parse_duckduckgo_html(_read("duckduckgo.html"))
+        urls = [r.url for r in results]
+        assert "https://sponsor.example.com/ad" not in urls
+        assert not any("duckduckgo.com" in u for u in urls)
+        assert urls == [
+            "https://example.com/ai-agents-overview",
+            "https://blog.example.org/agents-in-production",
+        ]
+
+    def test_extracts_title_and_snippet(self) -> None:
+        results = parse_duckduckgo_html(_read("duckduckgo.html"))
+        first = results[0]
+        assert first.title == "AI agents: an overview"
+        assert "survey of current AI agent frameworks" in first.snippet
+
+    def test_published_hint_extracted_from_snippet(self) -> None:
+        results = parse_duckduckgo_html(_read("duckduckgo.html"))
+        assert results[0].published_hint == "2 days ago"
+
+    def test_max_results_caps_output(self) -> None:
+        results = parse_duckduckgo_html(_read("duckduckgo.html"), max_results=1)
+        assert len(results) == 1
+
+
+class TestBingParser:
+    def test_drops_ads_and_own_domain(self) -> None:
+        results = parse_bing_html(_read("bing.html"))
+        urls = [r.url for r in results]
+        assert "https://www.bing.com/aclk?ad=1" not in urls
+        assert not any(u.startswith("https://www.bing.com/search") for u in urls)
+        assert urls == [
+            "https://example.com/bing-ai-agents",
+            "https://news.example.net/agent-roundup",
+        ]
+
+    def test_published_hint(self) -> None:
+        results = parse_bing_html(_read("bing.html"))
+        assert results[0].published_hint == "3 days ago"
+
+
+class TestBraveParser:
+    def test_drops_ad_data_type_and_own_domain(self) -> None:
+        results = parse_brave_html(_read("brave.html"))
+        urls = [r.url for r in results]
+        assert "https://sponsor.example.com/brave-ad" not in urls
+        assert not any("search.brave.com" in u for u in urls)
+        assert urls == [
+            "https://example.com/brave-ai-agents",
+            "https://research.example.edu/agents-paper",
+        ]
+
+    def test_title_and_snippet(self) -> None:
+        results = parse_brave_html(_read("brave.html"))
+        assert results[0].title == "Understanding AI agents"
+        assert "primer on AI agent architectures" in results[0].snippet
+
+
+def test_parse_engine_html_dispatches_by_name() -> None:
+    results = parse_engine_html("bing", _read("bing.html"))
+    assert len(results) == 2
+
+
+def test_parse_engine_html_unknown_engine_is_validation_error() -> None:
+    with pytest.raises(BrowserError) as exc_info:
+        parse_engine_html("altavista", "<html></html>")
+    assert exc_info.value.error_class == ErrorClass.VALIDATION_ERROR
+
+
+class TestBuildSearchUrl:
+    def test_base_urls_match_contract(self) -> None:
+        assert build_search_url("duckduckgo", "ai agents").startswith(
+            "https://html.duckduckgo.com/html/?"
+        )
+        assert build_search_url("bing", "ai agents").startswith("https://www.bing.com/search?")
+        assert build_search_url("brave", "ai agents").startswith("https://search.brave.com/search?")
+
+    def test_recency_days_maps_to_engine_param(self) -> None:
+        assert "df=d" in build_search_url("duckduckgo", "x", recency_days=1)
+        assert "freshness=Week" in build_search_url("bing", "x", recency_days=5)
+        assert "tf=pm" in build_search_url("brave", "x", recency_days=20)
+
+    def test_no_recency_param_when_absent(self) -> None:
+        url = build_search_url("duckduckgo", "x")
+        assert "df=" not in url
+
+
+class TestRunSearchFallover:
+    async def test_auto_uses_first_engine_when_it_succeeds(self) -> None:
+        calls: list[str] = []
+
+        async def fetch(engine: str, url: str) -> tuple[str, str, int | None]:
+            calls.append(engine)
+            return _read("duckduckgo.html"), "ok", 200
+
+        outcome = await run_search("ai agents", "auto", fetch=fetch)
+        assert calls == ["duckduckgo"]
+        assert outcome.engine == "duckduckgo"
+        assert len(outcome.results) == 2
+        assert outcome.page_kind == "ok"
+
+    async def test_auto_falls_over_on_captcha_to_next_engine(self) -> None:
+        calls: list[str] = []
+
+        async def fetch(engine: str, url: str) -> tuple[str, str, int | None]:
+            calls.append(engine)
+            if engine == "duckduckgo":
+                return "<html>captcha challenge</html>", "captcha", 200
+            return _read("bing.html"), "ok", 200
+
+        outcome = await run_search("ai agents", "auto", fetch=fetch)
+        assert calls == ["duckduckgo", "bing"]
+        assert outcome.engine == "bing"
+        assert len(outcome.results) == 2
+
+    async def test_auto_falls_over_on_blocked_and_empty(self) -> None:
+        calls: list[str] = []
+
+        async def fetch(engine: str, url: str) -> tuple[str, str, int | None]:
+            calls.append(engine)
+            if engine == "duckduckgo":
+                return "<html>blocked</html>", "blocked", 403
+            if engine == "bing":
+                return "<html></html>", "empty", 200
+            return _read("brave.html"), "ok", 200
+
+        outcome = await run_search("ai agents", "auto", fetch=fetch)
+        assert calls == ["duckduckgo", "bing", "brave"]
+        assert outcome.engine == "brave"
+
+    async def test_all_engines_captcha_or_blocked_raises_provider_rate_limited(self) -> None:
+        async def fetch(engine: str, url: str) -> tuple[str, str, int | None]:
+            return "<html>captcha</html>", "captcha" if engine != "bing" else "blocked", 200
+
+        with pytest.raises(BrowserError) as exc_info:
+            await run_search("ai agents", "auto", fetch=fetch)
+        assert exc_info.value.error_class == ErrorClass.PROVIDER_RATE_LIMITED
+        assert exc_info.value.retryable is True
+
+    async def test_explicit_engine_never_falls_over(self) -> None:
+        calls: list[str] = []
+
+        async def fetch(engine: str, url: str) -> tuple[str, str, int | None]:
+            calls.append(engine)
+            return "<html>captcha</html>", "captcha", 200
+
+        with pytest.raises(BrowserError) as exc_info:
+            await run_search("ai agents", "bing", fetch=fetch)
+        assert calls == ["bing"]
+        assert exc_info.value.error_class == ErrorClass.PROVIDER_RATE_LIMITED
+
+    async def test_auto_falls_over_on_transport_error_from_one_engine(self) -> None:
+        # Observed live against Brave Search: a network-level abort (bot
+        # filtering) raises BrowserError from the navigation itself, before
+        # any page_kind can be read. "auto" should still try the next engine
+        # rather than aborting the whole search.
+        calls: list[str] = []
+
+        async def fetch(engine: str, url: str) -> tuple[str, str, int | None]:
+            calls.append(engine)
+            if engine == "duckduckgo":
+                raise BrowserError(
+                    ErrorClass.DEPENDENCY_UNAVAILABLE, "net::ERR_ABORTED", retryable=True
+                )
+            return _read("bing.html"), "ok", 200
+
+        outcome = await run_search("ai agents", "auto", fetch=fetch)
+        assert calls == ["duckduckgo", "bing"]
+        assert outcome.engine == "bing"
+
+    async def test_explicit_engine_transport_error_propagates_unchanged(self) -> None:
+        async def fetch(engine: str, url: str) -> tuple[str, str, int | None]:
+            raise BrowserError(
+                ErrorClass.DEPENDENCY_UNAVAILABLE, "net::ERR_ABORTED", retryable=True
+            )
+
+        with pytest.raises(BrowserError) as exc_info:
+            await run_search("ai agents", "brave", fetch=fetch)
+        assert exc_info.value.error_class == ErrorClass.DEPENDENCY_UNAVAILABLE
+
+    async def test_all_engines_transport_error_raises_provider_rate_limited(self) -> None:
+        async def fetch(engine: str, url: str) -> tuple[str, str, int | None]:
+            raise BrowserError(
+                ErrorClass.DEPENDENCY_UNAVAILABLE, "net::ERR_ABORTED", retryable=True
+            )
+
+        with pytest.raises(BrowserError) as exc_info:
+            await run_search("ai agents", "auto", fetch=fetch)
+        assert exc_info.value.error_class == ErrorClass.PROVIDER_RATE_LIMITED
+
+    async def test_no_results_parsed_is_treated_as_empty_not_error(self) -> None:
+        async def fetch(engine: str, url: str) -> tuple[str, str, int | None]:
+            return "<html><body>no results here</body></html>", "ok", 200
+
+        outcome = await run_search("ai agents", "duckduckgo", fetch=fetch)
+        assert outcome.results == ()
+        assert outcome.page_kind == "empty"
+
+    async def test_max_results_out_of_range_is_validation_error(self) -> None:
+        async def fetch(engine: str, url: str) -> tuple[str, str, int | None]:
+            return _read("duckduckgo.html"), "ok", 200
+
+        with pytest.raises(BrowserError) as exc_info:
+            await run_search("ai agents", "duckduckgo", fetch=fetch, max_results=21)
+        assert exc_info.value.error_class == ErrorClass.VALIDATION_ERROR
+
+    async def test_unknown_explicit_engine_is_validation_error(self) -> None:
+        async def fetch(engine: str, url: str) -> tuple[str, str, int | None]:
+            return "", "ok", 200
+
+        with pytest.raises(BrowserError) as exc_info:
+            await run_search("q", "altavista", fetch=fetch)
+        assert exc_info.value.error_class == ErrorClass.VALIDATION_ERROR

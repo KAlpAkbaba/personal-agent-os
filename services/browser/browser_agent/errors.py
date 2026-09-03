@@ -71,6 +71,10 @@ class ErrorClass(StrEnum):
     # failure, so it gets its own class rather than overloading
     # capability_missing/validation_error.
     SECURITY_SCOPE_ERROR = "security_scope_error"
+    # M13 (contract §5): every configured search engine ended in a CAPTCHA or
+    # a bot-block page for this query — retryable because it is a transient
+    # provider condition, not a permanent refusal.
+    PROVIDER_RATE_LIMITED = "provider_rate_limited"
 
 
 class Phase(StrEnum):
@@ -140,8 +144,7 @@ def require_navigable_url(url: str, *, op: str) -> None:
     if scheme not in ALLOWED_NAV_SCHEMES:
         raise BrowserError(
             ErrorClass.VALIDATION_ERROR,
-            f"{op}: URL scheme {scheme or '<none>'!r} is not allowed "
-            "(http/https only)",
+            f"{op}: URL scheme {scheme or '<none>'!r} is not allowed (http/https only)",
             retryable=False,
             evidence={"url": redact_url(url)},
         )
@@ -237,8 +240,7 @@ def map_playwright_error(
         if phase in (Phase.ACT, Phase.NAVIGATE) and _contains(message, _STATE_CHANGE_MARKERS):
             return BrowserError(
                 ErrorClass.UI_STATE_CHANGED,
-                f"{op}: page/element state changed while acting (DOM mutation "
-                "or navigation race)",
+                f"{op}: page/element state changed while acting (DOM mutation or navigation race)",
                 retryable=True,
                 evidence=ev,
             )

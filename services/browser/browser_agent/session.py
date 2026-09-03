@@ -42,7 +42,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from playwright.async_api import FrameLocator, Locator, Page
+from playwright.async_api import FrameLocator, Locator, Page, Response
 
 from .backends import (
     BrowserBackend,
@@ -89,9 +89,7 @@ class DownloadResult:
 class BrowserSession:
     """One semantic browser automation session over a backend. Not thread-safe."""
 
-    def __init__(
-        self, backend: BrowserBackend, *, file_io_root: Path | str | None = None
-    ) -> None:
+    def __init__(self, backend: BrowserBackend, *, file_io_root: Path | str | None = None) -> None:
         """``file_io_root``: the only directory tree this session may read
         upload sources from or write screenshot files to (defense in depth
         against page-content-influenced path arguments; M2 security review
@@ -193,12 +191,21 @@ class BrowserSession:
 
     async def navigate(
         self, url: str, *, timeout_ms: float = DEFAULT_NAV_TIMEOUT_MS
-    ) -> None:
-        """Navigate the page and wait for the load event (http/https only)."""
+    ) -> Response | None:
+        """Navigate the page and wait for the load event (http/https only).
+
+        Returns the navigation's :class:`~playwright.async_api.Response`
+        (``None`` for same-document navigations Playwright reports without
+        one) so callers needing HTTP status (M13 ``page_kind``/site-error
+        classification, contract §3) can read ``response.status`` without a
+        second round trip. Existing callers that only awaited this for its
+        side effect are unaffected — the return value was ``None`` before and
+        is simply not ``None`` now when a response exists.
+        """
         require_navigable_url(url, op="navigate")
         async with self._oplog("navigate", url=redact_url(url)):
             try:
-                await self._page.goto(url, timeout=timeout_ms, wait_until="load")
+                return await self._page.goto(url, timeout=timeout_ms, wait_until="load")
             except BrowserError:
                 raise
             except Exception as exc:
@@ -228,9 +235,7 @@ class BrowserSession:
             except BrowserError:
                 raise
             except Exception as exc:
-                raise map_playwright_error(
-                    exc, phase=Phase.NAVIGATE, op="forward"
-                ) from exc
+                raise map_playwright_error(exc, phase=Phase.NAVIGATE, op="forward") from exc
             return self._page.url
 
     # ------------------------------------------------------------------ #
@@ -330,9 +335,7 @@ class BrowserSession:
         """Read the rendered inner text of a semantic target."""
         spec = coerce_target(target)
         async with self._oplog("read_text", target=spec.as_dict(), frame=frame):
-            locator = await self._resolve(
-                spec, timeout_ms=timeout_ms, op="read_text", frame=frame
-            )
+            locator = await self._resolve(spec, timeout_ms=timeout_ms, op="read_text", frame=frame)
             try:
                 return await locator.inner_text(timeout=timeout_ms)
             except Exception as exc:
@@ -360,9 +363,7 @@ class BrowserSession:
                 spec, timeout_ms=timeout_ms, op="select_option", frame=frame
             )
             try:
-                return await locator.select_option(
-                    value=value, label=label, timeout=timeout_ms
-                )
+                return await locator.select_option(value=value, label=label, timeout=timeout_ms)
             except Exception as exc:
                 raise self._act_error(exc, "select_option", spec) from exc
 
@@ -382,9 +383,7 @@ class BrowserSession:
                 retryable=False,
             )
         spec = coerce_target(target)
-        async with self._oplog(
-            "set_checked", target=spec.as_dict(), checked=checked, frame=frame
-        ):
+        async with self._oplog("set_checked", target=spec.as_dict(), checked=checked, frame=frame):
             locator = await self._resolve(
                 spec, timeout_ms=timeout_ms, op="set_checked", frame=frame
             )
@@ -414,12 +413,8 @@ class BrowserSession:
                 evidence={"file_path": str(path)},
             )
         spec = coerce_target(target)
-        async with self._oplog(
-            "upload", target=spec.as_dict(), file=str(path), frame=frame
-        ):
-            locator = await self._resolve(
-                spec, timeout_ms=timeout_ms, op="upload", frame=frame
-            )
+        async with self._oplog("upload", target=spec.as_dict(), file=str(path), frame=frame):
+            locator = await self._resolve(spec, timeout_ms=timeout_ms, op="upload", frame=frame)
             try:
                 await locator.set_input_files(path, timeout=timeout_ms)
             except Exception as exc:
@@ -468,9 +463,7 @@ class BrowserSession:
                     evidence={"url": redact_url(self._page.url)},
                 ) from exc
 
-    async def accessibility_snapshot(
-        self, *, timeout_ms: float = DEFAULT_TIMEOUT_MS
-    ) -> str:
+    async def accessibility_snapshot(self, *, timeout_ms: float = DEFAULT_TIMEOUT_MS) -> str:
         """Structured accessibility (ARIA) snapshot of the page as YAML text."""
         async with self._oplog("accessibility_snapshot"):
             try:
@@ -519,15 +512,11 @@ class BrowserSession:
             path = self._require_within_file_io_root(Path(path), op="screenshot")
         async with self._oplog("screenshot"):
             try:
-                return await self._page.screenshot(
-                    path=str(path) if path else None, full_page=True
-                )
+                return await self._page.screenshot(path=str(path) if path else None, full_page=True)
             except BrowserError:
                 raise
             except Exception as exc:
-                raise map_playwright_error(
-                    exc, phase=Phase.OTHER, op="screenshot"
-                ) from exc
+                raise map_playwright_error(exc, phase=Phase.OTHER, op="screenshot") from exc
 
     async def escape_hatch_click_xy(self, x: float, y: float) -> None:
         """LAST RESORT: raw coordinate click (lowest control-surface rung).
@@ -606,9 +595,7 @@ class BrowserSession:
             }
             if frame is not None:
                 evidence["frame"] = frame
-            raise map_playwright_error(
-                exc, phase=Phase.RESOLVE, op=op, evidence=evidence
-            ) from exc
+            raise map_playwright_error(exc, phase=Phase.RESOLVE, op=op, evidence=evidence) from exc
         return locator
 
     def _act_error(self, exc: Exception, op: str, spec: TargetSpec) -> BrowserError:

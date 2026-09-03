@@ -65,8 +65,7 @@ class BrowserCapabilities:
         if unknown:
             raise BrowserError(
                 ErrorClass.VALIDATION_ERROR,
-                "unknown capability override(s): "
-                f"{', '.join(sorted(str(u) for u in unknown))}",
+                f"unknown capability override(s): {', '.join(sorted(str(u) for u in unknown))}",
                 retryable=False,
                 evidence={"known_flags": list(CAPABILITY_FLAGS)},
             )

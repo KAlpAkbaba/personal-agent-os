@@ -149,9 +149,7 @@ async def test_cdp_disconnect_is_typed_and_reattach_to_fresh_browser(
     external = await playwright.chromium.launch(
         headless=True, args=[f"--remote-debugging-port={port}"]
     )
-    backend = ExistingSessionBackend(
-        BrowserEnrollment.cdp_loopback(endpoint, name="throwaway")
-    )
+    backend = ExistingSessionBackend(BrowserEnrollment.cdp_loopback(endpoint, name="throwaway"))
     await backend.connect()
     session = BrowserSession(backend)
     try:
