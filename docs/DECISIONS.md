@@ -2518,3 +2518,44 @@ embedded Temporal worker). Facts and decisions that were not in the design:
     of inventing a provider, and the smoke refuses to search on a lower contract with a
     message naming the installed version. `-UpdateAgentFirst` runs the journaled installer and
     waits for the device to reconnect so the update and the qualification are one action.
+
+13. **Persistent research session, Google-UI search and owner handoff — Cloud Core side**
+    (2026-09-03, M13_RESEARCH_SPEC.md §5a / BROWSER_CAPABILITIES.md §3a). Implementation
+    decisions made while wiring the contract that the spec left to the API side:
+    - **Known-open session registry is process-wide, not per-gateway-instance.** Every
+      activity (`discover_activity`, `fetch_activity`, `await_verification_activity`,
+      `close_session_activity`) constructs its own `DeviceBrowserGateway` — Temporal
+      activities are plain functions with no shared state across calls — so "one
+      `browser.session_open` per job per process" has to live in a module-level registry
+      keyed `(device_id, session_id)` (`app.research.browser_gateway._KNOWN_OPEN_SESSIONS`),
+      reset per-test via an autouse fixture (`tests/conftest.py`) so fixture reuse across test
+      cases (same device/task ids) does not leak "already open" state between tests. On an
+      "unknown session" `validation_error` the registry entry is invalidated and reopened
+      with a NEW idempotency key (`session_open:<attempt>`) — reusing the original key would
+      just replay the broker's already-stored terminal ack instead of dispatching a real
+      command, per DEVICE_PROTOCOL's idempotency-by-key contract.
+    - **Owner-handoff budget is per waiting occurrence, not cumulative across the whole job.**
+      The spec names `interactive_wait_s` "the interactive budget" without saying whether a
+      job that hits a second interstitial after clearing the first gets a fresh allowance.
+      Chosen: each `waiting_for_owner_verification` occurrence gets the full
+      `interactive_wait_s`, since a second CAPTCHA minutes after the first is not the owner's
+      fault and a job-wide budget would silently starve it. `POST /v1/research` bounds
+      `interactive_wait_s` to 60–1800s (one `browser.wait` slice to 30 minutes).
+    - **Dedup ("identical (query, provider) searches within a job are not re-issued")** is
+      implemented as: before a "news"/"community" `discover_activity` call searches, it checks
+      whether `research_candidates` already has a row for that `query_id`; if so it returns
+      `{"status":"done","candidates":0,"path":"cached",...}` without dispatching
+      `browser.search` at all. This is compatible with the handoff-cleared/timeout-fallback
+      re-issue by construction: an interrupted (waiting) search never inserts candidates for
+      its query, so the retry always finds none and proceeds to search for real.
+    - **`await_verification_activity` never raises** on a device/transport error — it reports
+      `{"satisfied": false, ...}` so the workflow's own budget loop treats a broker hiccup the
+      same as "not cleared yet" rather than letting a Temporal retry re-consume the wait slice
+      it already spent.
+    - Adaptive device-command polling (`app.devices.commands.DeviceCommandClient`) starts at
+      0.2s and backs off ×1.5 to a 1s ceiling (was a fixed 0.5s); `poll_interval_s` on the
+      constructor is still the STARTING interval, so existing tests that pass a small fixed
+      value keep working unchanged.
+    - Migration `0014_research_owner_verification` widens `ck_research_runs_stage` to accept
+      the new `waiting_for_owner_verification` value; it is deliberately NOT added to
+      `TERMINAL_STAGES` so the web client's poller keeps running through it.

@@ -43,7 +43,17 @@ from app.logging import get_logger
 
 logger = get_logger("app.devices.commands")
 
-DEFAULT_POLL_INTERVAL_S = 0.5
+#: Spec M13_RESEARCH_SPEC.md §5a: "the command poll on Cloud Core starts at
+#: 0.2 s and backs off to 1 s" — adaptive so a fast-completing command (most
+#: of them) is noticed almost immediately while a slow one (a 60-120s
+#: browser.* command) does not spin the DB with a poll every 0.2s for a
+#: minute. `poll_interval_s` on the constructor is the STARTING interval
+#: (kept as the parameter name/semantics existing tests already rely on,
+#: e.g. `DeviceCommandClient(factory, poll_interval_s=0.01)`); it backs off
+#: by DEFAULT_POLL_BACKOFF_FACTOR each iteration up to DEFAULT_MAX_POLL_INTERVAL_S.
+DEFAULT_POLL_INTERVAL_S = 0.2
+DEFAULT_MAX_POLL_INTERVAL_S = 1.0
+DEFAULT_POLL_BACKOFF_FACTOR = 1.5
 
 # Device-taxonomy classes considered retryable by a caller that gets one back
 # as a CommandFailed (DEVICE_PROTOCOL.md §8 / BROWSER_CAPABILITIES.md §5).
@@ -129,10 +139,16 @@ class DeviceCommandClient:
         *,
         broker_runtime: BrokerRuntime | None = None,
         poll_interval_s: float = DEFAULT_POLL_INTERVAL_S,
+        max_poll_interval_s: float = DEFAULT_MAX_POLL_INTERVAL_S,
+        poll_backoff_factor: float = DEFAULT_POLL_BACKOFF_FACTOR,
     ) -> None:
         self._session_factory = session_factory
         self._broker_runtime = broker_runtime
         self._poll_interval_s = poll_interval_s
+        # A caller-supplied poll_interval_s above the default max (e.g. a
+        # test using a larger fixed interval) must not be clamped down.
+        self._max_poll_interval_s = max(max_poll_interval_s, poll_interval_s)
+        self._poll_backoff_factor = poll_backoff_factor
 
     @contextmanager
     def _session(self) -> Iterator[Session]:
@@ -208,6 +224,7 @@ class DeviceCommandClient:
         expires_at: datetime,
         heartbeat: Callable[[], None] | None,
     ) -> CommandOutcome:
+        interval = self._poll_interval_s
         while True:
             with self._session() as db:
                 row = service.get_command(db, device_id, command_id)
@@ -230,7 +247,10 @@ class DeviceCommandClient:
                 return CommandExpired()
             if heartbeat is not None:
                 heartbeat()
-            time.sleep(self._poll_interval_s)
+            time.sleep(interval)
+            # Adaptive backoff (spec §5a): start fast, back off toward the max
+            # so a slow browser.* command does not spin the DB every 0.2s.
+            interval = min(interval * self._poll_backoff_factor, self._max_poll_interval_s)
 
 
 __all__ = [

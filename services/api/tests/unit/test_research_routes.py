@@ -163,6 +163,45 @@ def test_create_research_rejects_max_sources_over_ceiling(client: TestClient) ->
     assert response.status_code == 422
 
 
+def test_create_research_accepts_interactive_and_forwards_wait_budget(
+    client: TestClient,
+) -> None:
+    _enroll_online_device(client)
+    fake_client = AsyncMock()
+    fake_client.start_workflow = AsyncMock(return_value=None)
+    with patch("app.research.routes.Client.connect", AsyncMock(return_value=fake_client)):
+        response = client.post(
+            "/v1/research",
+            json={"input": "konu", "interactive": True, "interactive_wait_s": 120},
+        )
+    assert response.status_code == 202
+    request_arg = fake_client.start_workflow.call_args.args[1]
+    assert request_arg.interactive is True
+    assert request_arg.interactive_wait_s == 120
+
+
+def test_create_research_defaults_interactive_false_and_wait_600(client: TestClient) -> None:
+    _enroll_online_device(client)
+    fake_client = AsyncMock()
+    fake_client.start_workflow = AsyncMock(return_value=None)
+    with patch("app.research.routes.Client.connect", AsyncMock(return_value=fake_client)):
+        response = client.post("/v1/research", json={"input": "konu"})
+    assert response.status_code == 202
+    request_arg = fake_client.start_workflow.call_args.args[1]
+    assert request_arg.interactive is False
+    assert request_arg.interactive_wait_s == 600
+
+
+def test_create_research_rejects_interactive_wait_s_below_minimum(client: TestClient) -> None:
+    response = client.post("/v1/research", json={"input": "konu", "interactive_wait_s": 59})
+    assert response.status_code == 422
+
+
+def test_create_research_rejects_interactive_wait_s_above_maximum(client: TestClient) -> None:
+    response = client.post("/v1/research", json={"input": "konu", "interactive_wait_s": 1801})
+    assert response.status_code == 422
+
+
 def test_get_research_unknown_task_404(client: TestClient) -> None:
     response = client.get(f"/v1/research/{uuid.uuid4()}")
     assert response.status_code == 404

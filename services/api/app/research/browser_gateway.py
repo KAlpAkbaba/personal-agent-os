@@ -21,7 +21,9 @@ testable today without any of it existing yet.
 from __future__ import annotations
 
 import hashlib
+import threading
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol, runtime_checkable
@@ -169,7 +171,12 @@ class SearchHit:
 @dataclass(frozen=True, slots=True)
 class SearchEvidence:
     """Provider evidence returned with every device search (BROWSER_CAPABILITIES.md §3):
-    which provider was requested, which one answered, whether a fallback happened and why."""
+    which provider was requested, which one answered, whether a fallback happened and why.
+
+    §3a extends the contract with an owner-handoff outcome: ``state`` ("ok" or
+    "waiting_for_owner_verification"), ``path`` (which route the worker took —
+    google_ui/google_url/fallback/handoff_pending/handoff_cleared/
+    handoff_timeout_fallback) and ``verification_url`` (set while waiting)."""
 
     requested_provider: str
     provider: str
@@ -180,6 +187,10 @@ class SearchEvidence:
     attempts: tuple[dict[str, Any], ...] = ()
     schema_version: int = 0
     locale: str | None = None
+    state: str = "ok"
+    path: str | None = None
+    verification_url: str | None = None
+    page_kind: str | None = None
 
     #: The search response schema that carries provider evidence (BROWSER_CAPABILITIES §3).
     REQUIRED_SCHEMA_VERSION = 2
@@ -187,6 +198,10 @@ class SearchEvidence:
     @property
     def contract_ok(self) -> bool:
         return self.schema_version >= self.REQUIRED_SCHEMA_VERSION
+
+    @property
+    def waiting_for_owner_verification(self) -> bool:
+        return self.state == "waiting_for_owner_verification"
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -200,6 +215,10 @@ class SearchEvidence:
             "query": self.query,
             "result_count": self.result_count,
             "attempts": list(self.attempts),
+            "state": self.state,
+            "path": self.path,
+            "verification_url": self.verification_url,
+            "page_kind": self.page_kind,
         }
 
     @classmethod
@@ -221,6 +240,12 @@ class SearchEvidence:
             query=str(result.get("query") or query),
             result_count=int(result.get("result_count", len(hits))),
             attempts=tuple(a for a in (result.get("attempts") or []) if isinstance(a, dict)),
+            state=str(result.get("state") or "ok"),
+            path=(str(result["path"]) if result.get("path") else None),
+            verification_url=(
+                str(result["verification_url"]) if result.get("verification_url") else None
+            ),
+            page_kind=(str(result["page_kind"]) if result.get("page_kind") else None),
         )
 
 
@@ -259,14 +284,54 @@ def fetch_idempotency_key(task_id: str, url: str, *, attempt: int = 1) -> str:
     return f"{task_id}:fetch:{digest}:{attempt}"
 
 
+def _is_unknown_session_error(exc: BrowserDispatchError) -> bool:
+    """BROWSER_CAPABILITIES.md §2: "An operation on an unknown session fails
+    with ``validation_error`` (``message`` starts with ``unknown session``) —
+    Cloud Core re-opens and retries"."""
+    return exc.error_class == "validation_error" and exc.message.lower().startswith(
+        "unknown session"
+    )
+
+
+# --------------------------------------------------------- process-wide session registry
+#
+# Spec §5a: "DeviceBrowserGateway opens it [the session] once per process (a
+# known-open cache keyed by device+session, invalidated by an "unknown
+# session" answer, then re-opened once)". Every activity constructs its own
+# DeviceBrowserGateway instance (Temporal activities are plain functions with
+# no shared state across calls), so the cache has to live at module level,
+# keyed by (device_id, session_id), rather than on the instance — otherwise
+# every discover/fetch/await_verification activity in a job would re-issue
+# ``browser.session_open`` even though the device's own idempotency store
+# would just no-op it. It is an optimisation only: on a fresh process (e.g.
+# after a worker restart) ``ensure_session`` simply reopens once more, which
+# is safe because ``browser.session_open`` is itself idempotent/reuse-safe.
+_registry_lock = threading.Lock()
+_KNOWN_OPEN_SESSIONS: set[tuple[str, str]] = set()
+
+
+def reset_known_open_sessions() -> None:
+    """Test-only: clear the process-wide registry so tests that reuse the
+    same device/task id fixtures do not leak "already open" state between
+    each other. Harmless to call in production (just forces one extra
+    ``browser.session_open`` the next time a gateway is used)."""
+    with _registry_lock:
+        _KNOWN_OPEN_SESSIONS.clear()
+
+
 class DeviceBrowserGateway:
     last_search_evidence: SearchEvidence | None = None
     """Real gateway: dispatches ``browser.*`` commands to one selected device
     over :class:`~app.devices.commands.DeviceCommandClientProtocol`, using
     exactly the payload/result shapes of ``packages/protocol/
-    BROWSER_CAPABILITIES.md`` §2-§3. A research session is opened READ+NAVIGATE
-    only (§4) and reused for every command in the run — ``session_id`` is the
-    research task id, per the contract's own suggestion (§2).
+    BROWSER_CAPABILITIES.md`` §2-§3/§3a. A research session is opened
+    READ+NAVIGATE only (§4) and reused for every command in the run —
+    ``session_id`` is the research task id, per the contract's own suggestion
+    (§2). ``ensure_session`` consults the process-wide known-open registry
+    (spec §5a) so ``browser.session_open`` is dispatched at most once per job
+    per process, and any command that comes back with an "unknown session"
+    ``validation_error`` invalidates the registry entry, reopens once, and
+    retries that one command (never more than once).
     """
 
     name = "device"
@@ -288,10 +353,13 @@ class DeviceBrowserGateway:
         self._timeout_s = timeout_s
         self._excerpt_chars = excerpt_chars
         self._session_opened = False
+        self._session_open_attempt = 0
 
-    def ensure_session(self) -> dict[str, Any]:
-        if self._session_opened:
-            return {"created": False}
+    def _registry_key(self) -> tuple[str, str]:
+        return (str(self._device_id), self._session_id)
+
+    def _open_session(self) -> dict[str, Any]:
+        self._session_open_attempt += 1
         outcome = self._client.run(
             device_id=self._device_id,
             capability="browser.session_open",
@@ -301,35 +369,103 @@ class DeviceBrowserGateway:
                 "policy": {"allowed_risk_classes": ["READ", "NAVIGATE"], "visible": True},
                 "channel": "chrome",
             },
-            idempotency_key=f"{self._session_id}:session_open",
+            idempotency_key=f"{self._session_id}:session_open:{self._session_open_attempt}",
             timeout_s=self._timeout_s,
             trace_id=self._trace_id,
         )
         result = _outcome_or_raise(outcome)
+        with _registry_lock:
+            _KNOWN_OPEN_SESSIONS.add(self._registry_key())
         self._session_opened = True
         return result
 
-    def search(
-        self, query: str, *, source_class: str = "unknown", max_results: int = 10
-    ) -> list[SearchHit]:
+    def ensure_session(self) -> dict[str, Any]:
+        with _registry_lock:
+            already_open = self._registry_key() in _KNOWN_OPEN_SESSIONS
+        if already_open:
+            self._session_opened = True
+            return {"created": False}
+        return self._open_session()
+
+    def _invalidate_session(self) -> None:
+        with _registry_lock:
+            _KNOWN_OPEN_SESSIONS.discard(self._registry_key())
+        self._session_opened = False
+
+    def _run(
+        self,
+        capability: str,
+        payload: dict[str, Any],
+        idempotency_key: str,
+        *,
+        heartbeat: Callable[[], None] | None = None,
+    ) -> tuple[dict[str, Any], uuid.UUID | None]:
+        """Dispatch one ``browser.*`` command, opening the session first
+        (no-op after the first call in this process, spec §5a). A single
+        "unknown session" answer invalidates the registry, reopens once with
+        a fresh idempotency key (so the reopen is a real dispatch, not a
+        replay of the stale terminal ack), and retries this SAME command
+        exactly once with a distinct idempotency key of its own — never more
+        than one retry."""
         self.ensure_session()
-        digest = hashlib.sha256(f"{query}:{source_class}".encode()).hexdigest()[:16]
         outcome = self._client.run(
             device_id=self._device_id,
-            capability="browser.search",
-            payload={
+            capability=capability,
+            payload=payload,
+            idempotency_key=idempotency_key,
+            timeout_s=self._timeout_s,
+            trace_id=self._trace_id,
+            heartbeat=heartbeat,
+        )
+        try:
+            result = _outcome_or_raise(outcome)
+        except BrowserDispatchError as exc:
+            if not _is_unknown_session_error(exc):
+                raise
+            self._invalidate_session()
+            self._open_session()
+            outcome = self._client.run(
+                device_id=self._device_id,
+                capability=capability,
+                payload=payload,
+                idempotency_key=f"{idempotency_key}:session-retry",
+                timeout_s=self._timeout_s,
+                trace_id=self._trace_id,
+                heartbeat=heartbeat,
+            )
+            result = _outcome_or_raise(outcome)
+        _reject_forbidden_keys(result)
+        command_id = outcome.command_id if isinstance(outcome, CommandSucceeded) else None
+        return result, command_id
+
+    def search(
+        self,
+        query: str,
+        *,
+        source_class: str = "unknown",
+        max_results: int = 10,
+        interstitial: str = "fallback",
+    ) -> list[SearchHit]:
+        """``browser.search`` (BROWSER_CAPABILITIES.md §3/§3a). ``interstitial``
+        selects the owner-handoff behaviour: "fallback" (unattended — the
+        worker tries the next provider) or "handoff" (owner present — the
+        worker brings Chrome forward and returns
+        ``state=waiting_for_owner_verification`` instead of solving/retrying
+        anything). Provider evidence (including the §3a additions) is
+        recorded on ``self.last_search_evidence`` after every call."""
+        digest = hashlib.sha256(f"{query}:{source_class}".encode()).hexdigest()[:16]
+        result, _command_id = self._run(
+            "browser.search",
+            {
                 "session_id": self._session_id,
                 "query": query,
                 "engine": "auto",
                 "max_results": max_results,
                 "recency_days": 3,
+                "interstitial": interstitial,
             },
-            idempotency_key=f"{self._session_id}:search:{digest}",
-            timeout_s=self._timeout_s,
-            trace_id=self._trace_id,
+            f"{self._session_id}:search:{digest}",
         )
-        result = _outcome_or_raise(outcome)
-        _reject_forbidden_keys(result)
         self.last_search_evidence = SearchEvidence.from_result(query, result)
         return [
             SearchHit(
@@ -342,6 +478,38 @@ class DeviceBrowserGateway:
             for i, r in enumerate(result.get("results", []))
         ]
 
+    def await_verification(
+        self,
+        *,
+        timeout_s: float = 60.0,
+        iteration: int = 0,
+        heartbeat: Callable[[], None] | None = None,
+    ) -> dict[str, Any]:
+        """``browser.wait for=verification_cleared`` (BROWSER_CAPABILITIES.md
+        §3a): polls the owner's Chrome window until the interstitial is
+        cleared or ``timeout_ms`` elapses. The contract caps a single
+        ``browser.wait`` command at 60s (browser-family commands run up to
+        120s, but the workflow re-issues this call in a loop so it can
+        heartbeat and re-check its overall budget between calls); ``iteration``
+        makes each call in that loop its own idempotency key (this is NOT a
+        retry of the same wait — every call is a genuinely new poll)."""
+        capped = min(timeout_s, 60.0)
+        result, _command_id = self._run(
+            "browser.wait",
+            {
+                "session_id": self._session_id,
+                "for": "verification_cleared",
+                "timeout_ms": int(capped * 1000),
+            },
+            f"{self._session_id}:wait_verification:{iteration}",
+            heartbeat=heartbeat,
+        )
+        return {
+            "satisfied": bool(result.get("satisfied", False)),
+            "url": result.get("url"),
+            "elapsed_ms": result.get("elapsed_ms"),
+        }
+
     def fetch_url(
         self,
         url: str,
@@ -349,32 +517,30 @@ class DeviceBrowserGateway:
         query: str = "",
         source_class: str = "unknown",
         attempt: int = 1,
+        tab: str = "same",
     ) -> EvidenceRecord:
-        """One ``browser.fetch_evidence`` command for a single URL."""
+        """One ``browser.fetch_evidence`` command for a single URL.
+        ``tab="new"`` (BROWSER_CAPABILITIES.md §3a) opens the URL in a new tab
+        and reselects the previous one afterwards, so the research pipeline's
+        persistent Google results tab stays loaded between searches."""
         try:
             validate_fetch_target(url)
         except DestinationPolicyError as exc:
             raise BrowserDispatchError("security_scope_error", str(exc), False) from exc
 
-        self.ensure_session()
-        outcome = self._client.run(
-            device_id=self._device_id,
-            capability="browser.fetch_evidence",
-            payload={
+        result, command_id = self._run(
+            "browser.fetch_evidence",
+            {
                 "session_id": self._session_id,
                 "url": url,
                 "query": query,
                 "source_class": source_class,
                 "excerpt_chars": self._excerpt_chars,
                 "timeout_ms": int(self._timeout_s * 1000),
+                "tab": tab,
             },
-            idempotency_key=fetch_idempotency_key(self._session_id, url, attempt=attempt),
-            timeout_s=self._timeout_s,
-            trace_id=self._trace_id,
+            fetch_idempotency_key(self._session_id, url, attempt=attempt),
         )
-        result = _outcome_or_raise(outcome)
-        _reject_forbidden_keys(result)
-        command_id = outcome.command_id if isinstance(outcome, CommandSucceeded) else None
         fetched_at_raw = result.get("fetched_at")
         fetched_at = (
             datetime.fromisoformat(str(fetched_at_raw)) if fetched_at_raw else datetime.now(UTC)
@@ -415,7 +581,7 @@ class DeviceBrowserGateway:
         except BrowserDispatchError:
             pass  # best-effort (spec §5: "ignored when the device is gone")
         finally:
-            self._session_opened = False
+            self._invalidate_session()
 
     # ------------------------------------------------- BrowserGateway Protocol
 
@@ -457,4 +623,5 @@ __all__ = [
     "SearchHit",
     "UnwiredBrowserGateway",
     "fetch_idempotency_key",
+    "reset_known_open_sessions",
 ]

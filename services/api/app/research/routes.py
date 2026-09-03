@@ -63,6 +63,12 @@ async def _temporal_client(request: Request) -> Client:
     return await Client.connect(settings.temporal_address, namespace=settings.temporal_namespace)
 
 
+#: spec §5a: interactive_wait_s bounds (60s = one browser.wait slice; 1800s = 30 minutes).
+MIN_INTERACTIVE_WAIT_S = 60
+MAX_INTERACTIVE_WAIT_S = 1800
+DEFAULT_INTERACTIVE_WAIT_S = 600
+
+
 class CreateResearchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -71,6 +77,15 @@ class CreateResearchRequest(BaseModel):
     recency_days: int | None = Field(default=None, ge=1, le=365)
     max_sources: int = Field(default=12, ge=1, le=MAX_SOURCES_CEILING)
     synthesis: str = Field(default="auto", max_length=32)
+    #: spec §5a: owner-handoff mode. The web page sends `true`; the CLI
+    #: runner (scripts/research_smoke.py) has `--interactive`. False
+    #: (default) never waits on a Google interstitial.
+    interactive: bool = Field(default=False)
+    interactive_wait_s: int = Field(
+        default=DEFAULT_INTERACTIVE_WAIT_S,
+        ge=MIN_INTERACTIVE_WAIT_S,
+        le=MAX_INTERACTIVE_WAIT_S,
+    )
 
 
 def _device_summary(view: Any) -> dict[str, Any]:
@@ -144,6 +159,8 @@ async def create_research(request: Request, body: CreateResearchRequest) -> JSON
                 recency_days=body.recency_days,
                 max_sources=body.max_sources,
                 synthesis=body.synthesis,
+                interactive=body.interactive,
+                interactive_wait_s=body.interactive_wait_s,
             ),
             id=workflow_id,
             task_queue=artifacts.settings.temporal_task_queue,

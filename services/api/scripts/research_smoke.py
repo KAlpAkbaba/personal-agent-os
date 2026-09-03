@@ -66,13 +66,24 @@ def _client(api_base: str, token: str):
 
 
 def start_research(
-    client: Any, *, topic: str, device: str | None, synthesis: str
+    client: Any,
+    *,
+    topic: str,
+    device: str | None,
+    synthesis: str,
+    interactive: bool = False,
 ) -> dict[str, Any]:
     import httpx
 
     body: dict[str, Any] = {"input": topic, "synthesis": synthesis}
     if device:
         body["target_device"] = device
+    if interactive:
+        # spec §5a: owner-handoff mode — the worker brings Chrome to the
+        # front on a Google interstitial instead of falling back to
+        # DuckDuckGo, and the run waits (stage waiting_for_owner_verification)
+        # for the operator running this script to clear it by hand.
+        body["interactive"] = True
     resp = client.post("/v1/research", json=body)
     if resp.status_code == 409:
         detail = resp.json().get("detail", {})
@@ -117,13 +128,27 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--synthesis", default="auto", choices=("auto", "deterministic"))
     parser.add_argument("--wait", action="store_true", help="poll until the run is terminal")
     parser.add_argument("--timeout", type=float, default=600.0)
+    parser.add_argument(
+        "--interactive",
+        action="store_true",
+        help=(
+            "owner-handoff mode (spec §5a): on a Google interstitial the worker "
+            "brings Chrome to the front and the run waits in "
+            "waiting_for_owner_verification for you to clear it by hand, instead "
+            "of falling back to DuckDuckGo immediately"
+        ),
+    )
     args = parser.parse_args(argv)
 
     token = _read_token()
     client = _client(args.api_base, token)
     try:
         started = start_research(
-            client, topic=args.topic, device=args.device, synthesis=args.synthesis
+            client,
+            topic=args.topic,
+            device=args.device,
+            synthesis=args.synthesis,
+            interactive=args.interactive,
         )
         task_id = started["task_id"]
         _log(f"research_smoke: started task_id={task_id} device={started.get('device')}")
