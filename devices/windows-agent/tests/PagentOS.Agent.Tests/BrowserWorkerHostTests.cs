@@ -174,9 +174,13 @@ public sealed class BrowserWorkerHostTests : IDisposable
         Assert.False(second.IsCompleted, "the second request on 'same' must queue behind the first");
 
         var secondResult = await second;
-        Assert.True(first.IsCompleted, "the second request on a session completes only after the first");
+        var secondAnsweredAtMs = clock.ElapsedMilliseconds;
+        // Ordering is proven by time, not by the outer tasks' completion flags: the worker
+        // queues 'second' behind the 4 s sleep, so it cannot be answered earlier, while the
+        // host's async continuations may surface the two results in either order.
+        Assert.True(secondAnsweredAtMs >= firstSleepMs - 100, $"the second request on a session completes only after the first (answered after {secondAnsweredAtMs} ms)");
         Assert.Equal("second", secondResult["echo"]!["tag"]!.GetValue<string>());
-        Assert.Equal("first", (await first)["echo"]!["tag"]!.GetValue<string>());
+        Assert.Equal("first", (await first.WaitAsync(TimeSpan.FromSeconds(5)))["echo"]!["tag"]!.GetValue<string>());
     }
 
     [Fact]
