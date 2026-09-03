@@ -45,7 +45,7 @@ function Invoke-JsonUtf8 {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Uri,
-        [ValidateSet("GET", "POST")][string]$Method = "GET",
+        [ValidateSet("GET", "POST", "PATCH")][string]$Method = "GET",
         [hashtable]$Headers = @{},
         [AllowNull()][AllowEmptyString()][string]$Body = $null,
         [int]$TimeoutSec = 20
@@ -57,7 +57,7 @@ function Invoke-JsonUtf8 {
     $request.ReadWriteTimeout = $TimeoutSec * 1000
     $request.Accept = "application/json"
     foreach ($key in $Headers.Keys) { $request.Headers.Add([string]$key, [string]$Headers[$key]) }
-    if ($Method -eq "POST") {
+    if ($Method -in @("POST", "PATCH")) {
         $bytes = $utf8.GetBytes([string]$(if ($null -eq $Body) { "" } else { $Body }))
         $request.ContentType = "application/json; charset=utf-8"
         $request.ContentLength = $bytes.Length
