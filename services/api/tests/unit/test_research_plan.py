@@ -33,7 +33,7 @@ def test_build_plan_generates_multiple_distinct_queries() -> None:
     plan = build_plan(TOPIC, now=NOW)
     assert len(plan.queries) >= 2
     assert len(plan.queries) == len(set(plan.queries))
-    assert all(TOPIC.strip() in q or TOPIC.strip() == q for q in plan.queries)
+    assert sum(1 for q in plan.queries if TOPIC.strip() in q) >= 2
 
 
 def test_build_plan_short_topic_dedups_identical_query_templates() -> None:
@@ -76,3 +76,26 @@ def test_plan_as_dict_is_json_shaped() -> None:
     assert isinstance(d["queries"], list)
     assert isinstance(d["recency"], dict)
     assert "start" in d["recency"] and "end" in d["recency"]
+
+
+def test_plan_adds_english_core_query_and_agent_entity_subqueries() -> None:
+    from app.research.plan import english_core_query
+
+    plan = build_plan("Son üç gündeki yapay zekâ ajanlarıyla ilgili önemli gelişmeleri araştır.")
+    core = english_core_query(
+        "Son üç gündeki yapay zekâ ajanlarıyla ilgili önemli gelişmeleri araştır."
+    )
+    assert core is not None and "AI agents" in core and "important" in core
+    assert not any(ch in core for ch in "çğıöşü")
+    assert core in plan.queries
+    assert "OpenAI agents announcement" in plan.queries
+    assert "AI agent security incident" in plan.queries
+    assert len(plan.queries) == len(set(plan.queries))
+
+
+def test_plan_without_a_mappable_term_stays_turkish_only() -> None:
+    from app.research.plan import english_core_query
+
+    assert english_core_query("Kadıköy'de iyi bir fırın") is None
+    plan = build_plan("Kadıköy'de iyi bir fırın")
+    assert all("announcement" not in q for q in plan.queries)

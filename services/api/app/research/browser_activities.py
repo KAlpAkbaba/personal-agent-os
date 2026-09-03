@@ -333,6 +333,63 @@ def discover_activity(
     return inserted
 
 
+# URL shapes that are listing/search/tag pages rather than articles. The first live run
+# spent its whole budget on such pages (a newspaper's "yapay zeka" search listing is
+# discovered first by every engine); they carry no dated claim and mostly links.
+_LISTING_PATH_MARKERS = (
+    "/haberleri/", "/arama", "/search", "/tag/", "/tags/", "/etiket/", "/konu/", "/topics/",
+    "/topic/", "/kategori/", "/category/", "/k/", "/keyword/",
+)
+_CLASS_PRIORITY = {"official": 0, "technical": 1, "academic": 2, "news": 3, "community": 4}
+
+
+def _looks_like_listing(url: str) -> bool:
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(url)
+    path = (parts.path or "/").lower()
+    if not path.endswith("/"):
+        path += "/"
+    if any(marker in path for marker in _LISTING_PATH_MARKERS):
+        return True
+    query = (parts.query or "").lower()
+    return query.startswith("q=") or "&q=" in query or "search=" in query
+
+
+def select_fetch_order(candidates: list, max_sources: int) -> list:
+    """Order the pending candidates so the fetch budget covers every source class.
+
+    Primary sources first (official > technical > academic > news > community), a
+    per-class quota so one engine's early results cannot crowd out feeds, Hacker News
+    and arXiv, listing/search pages deferred to the very end, and discovery order kept
+    within a class (deterministic; the same rows always yield the same order).
+    """
+    by_class: dict[str, list] = {}
+    deferred: list = []
+    for c in candidates:
+        if _looks_like_listing(c.url):
+            deferred.append(c)
+            continue
+        by_class.setdefault(_class_for_query(c.query_id), []).append(c)
+    classes = sorted(by_class, key=lambda k: (_CLASS_PRIORITY.get(k, 9), k))
+    ordered: list = []
+    if classes and max_sources > 0:
+        quota = max(1, -(-max_sources // len(classes)))  # ceiling division
+        for k in classes:
+            ordered.extend(by_class[k][:quota])
+        for k in classes:
+            ordered.extend(by_class[k][quota:])
+    ordered.extend(deferred)
+    seen: set = set()
+    unique: list = []
+    for c in ordered:
+        if c.url in seen:
+            continue
+        seen.add(c.url)
+        unique.append(c)
+    return unique
+
+
 @activity.defn(name="browser_research_fetch_targets")
 def fetch_targets_activity(task_id: str, max_sources: int) -> list[dict[str, str]]:
     """Candidate URLs not yet fetched, oldest-discovered first, capped at
@@ -350,6 +407,7 @@ def fetch_targets_activity(task_id: str, max_sources: int) -> list[dict[str, str
         candidates = runs_service.list_candidates(session, tid)
         already = {r.url for r in runs_service.list_evidence(session, tid)}
         pending = [c for c in candidates if c.url not in already]
+        pending = select_fetch_order(pending, max_sources)
         targets = []
         for c in pending:
             try:

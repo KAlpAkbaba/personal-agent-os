@@ -1027,3 +1027,40 @@ def test_fail_run_activity_records_a_visible_terminal_state(task_id: str) -> Non
     engine.dispose()
     # Idempotent: a second call changes nothing and says so.
     assert ba.fail_run_activity(task_id, "research_failed", "again") is False
+
+
+# ------------------------------------------------------------ fetch order
+
+
+def test_select_fetch_order_covers_every_class_and_defers_listing_pages() -> None:
+    from types import SimpleNamespace
+
+    def cand(url: str, query_id: str):
+        return SimpleNamespace(url=url, query_id=query_id)
+
+    rows = [
+        cand("https://www.hurriyet.com.tr/haberleri/yapay-zeka", "news:0"),
+        cand("https://news.example/a1", "news:0"),
+        cand("https://news.example/a2", "news:1"),
+        cand("https://news.example/a3", "news:1"),
+        cand("https://news.example/a4", "news:2"),
+        cand("https://openai.com/index/agents-update", "official:0"),
+        cand("https://arxiv.org/abs/2609.00001", "academic:0"),
+        cand("https://blog.example/post", "technical:0"),
+        cand("https://site.example/search?q=ai", "community:0"),
+    ]
+    ordered = ba.select_fetch_order(rows, 4)
+    urls = [c.url for c in ordered]
+    # Primary classes first, one each within the quota, listings last.
+    assert urls[:4] == [
+        "https://openai.com/index/agents-update",
+        "https://blog.example/post",
+        "https://arxiv.org/abs/2609.00001",
+        "https://news.example/a1",
+    ]
+    assert urls[-2:] == [
+        "https://www.hurriyet.com.tr/haberleri/yapay-zeka",
+        "https://site.example/search?q=ai",
+    ]
+    assert len(urls) == len(set(urls))
+    assert ba.select_fetch_order(rows, 4) == ordered  # deterministic

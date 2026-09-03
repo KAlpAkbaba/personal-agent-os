@@ -443,7 +443,9 @@ Invoke-Step "Artifact (renders, citations) and memory (provenance, no raw page t
   Write-Host ("  artifact state={0} renders={1}" -f $art.state, (($renders | ForEach-Object { $_.format }) -join ","))
   if (-not (Get-OptionalProperty -InputObject $art -Name "executive_summary")) { throw "artifact has no executive summary" }
   $canon = Invoke-WebRequest -Uri "$baseUrl/v1/artifacts/$($script:artifactId)/canonical" -Headers $script:ownerHeaders -TimeoutSec 20 -UseBasicParsing
-  $body = [System.Text.Encoding]::UTF8.GetString($canon.Content)
+  # PS 5.1 hands back a string for text/* responses and bytes otherwise.
+  $body = if ($canon.Content -is [byte[]]) { [System.Text.Encoding]::UTF8.GetString($canon.Content) } else { [string]$canon.Content }
+  [IO.File]::WriteAllText((Join-Path $OutDir "run1-canonical.md"), $body, (New-Object System.Text.UTF8Encoding($false)))
   if ($body -notmatch "\[e\d+\]") { throw "canonical body carries no [eN] citation markers" }
   $mem = Get-Json "/v1/memory/$($script:memoryId)"
   $memJson = $mem | ConvertTo-Json -Depth 12 -Compress
