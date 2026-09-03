@@ -171,6 +171,29 @@ OpenAI key on the host makes `auto` pick OpenAI automatically once
 `PAGENTOS_OPENAI_API_KEY` is set there — say so if you want that switched on before the run,
 it is one `set-cloud-secret.ps1` call with the same key value.
 
+### 11. M13 real browser action through the whole owner path — **ready**
+
+Unblocks: `docs/QUALIFICATION.md` 9.2 (`PROVEN_REAL`), the first real evidence that a
+command travels Hetzner → Tailscale → DeviceService → your-session companion → installed
+Browser Worker → real Chrome and back, with correlated ids. Step B of item 10 is done
+(6b.1/6b.2 `PROVEN_REAL`, 2026-09-03).
+
+Harmless and deterministic: opens `https://example.com/`, reads its title and text, runs one
+web search, asks for a download the research policy must refuse, closes the session. Every
+step is one device command with its own trace id, awaited on the Cloud Core; the script
+records the companion image, the worker process (python from the installed tree, child of
+the companion, running as you), the Chrome process on the PagentOS profile, and the
+companion's `browser_request` audit rows for these commands. The credential is typed
+masked and the session is revoked at the end. From the repository root, ordinary shell:
+
+```powershell
+.\scripts\browser\real-browser-smoke.ps1 -OutFile browser-smoke-1.json
+```
+
+Expect a Chrome window to appear briefly on this PC. Paste the final lines (each command's
+status, `command_id`, `trace`) and `browser-smoke-1.json` (ids, timings, the example.com
+title/text and process images — no secret).
+
 ### 9. K66 re-qualification after the instrumentation + noise pass — **this is the current action**
 
 Unblocks: rows 6.16–6.21 with attributable numbers; the revised voice target stays NOT

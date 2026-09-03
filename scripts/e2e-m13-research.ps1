@@ -424,6 +424,20 @@ Invoke-Step "Device selection (auto and explicit Turkish alias)" {
   Write-Host "  selection ok (auto + '$target')"
 }
 
+Invoke-Step "Owner browser smoke script against the dev chain (example.com, search, policy refusal)" {
+  # The same script the owner runs against Hetzner, driven here with the harness's session
+  # token (dev-only switch) and without the installed-tree process checks (this chain runs
+  # the repo build, not the installed agent).
+  $env:PAGENTOS_SMOKE_TOKEN = ([string]$script:ownerHeaders["Authorization"]) -replace '^Bearer\s+', ''
+  try {
+    & $powershell5 -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot "scripts\browser\real-browser-smoke.ps1") `
+      -BaseUrl $baseUrl -Device $script:deviceId -SessionTokenFromEnv -SkipLocalEvidence `
+      -OutFile (Join-Path $OutDir "browser-smoke.json")
+    if ($LASTEXITCODE -ne 0) { throw "real-browser-smoke.ps1 exited $LASTEXITCODE" }
+  }
+  finally { Remove-Item Env:\PAGENTOS_SMOKE_TOKEN -ErrorAction SilentlyContinue }
+}
+
 Invoke-Step "Real research: first owner use case through Chrome + live Internet" {
   $started = Post-Json "/v1/research" @{ input = $Topic; synthesis = $Synthesis; max_sources = $MaxSources }
   $script:taskId = [string]$started.task_id

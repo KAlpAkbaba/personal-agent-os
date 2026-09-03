@@ -4,7 +4,7 @@
   "current_milestone": "M13_REAL_BROWSER_RESEARCH",
   "status": "BUILT_REVIEWED_PROVEN_PROXY_AWAITING_OWNER_RELEASE_AND_AGENT_UPDATE",
   "last_completed_milestone": "REAL_CLOUD_BRINGUP",
-  "last_updated": "2026-09-03T17:45:00+03:00",
+  "last_updated": "2026-09-03T18:20:00+03:00",
   "qualification": {
     "matrix": "docs/QUALIFICATION.md",
     "owner_queue": "docs/OWNER_ACTIONS.md",
@@ -28,7 +28,7 @@
     "reviews": "test-engineer + security (Critical memory boundary, High destination policy, High Cloud Core forbidden-key scan, Mediums) all fixed with regressions; see ADR-0050 addendum",
     "owner_actions": "docs/OWNER_ACTIONS.md item 10: release-cloud-core.ps1, install-device-service.ps1 (UAC, preserves endpoints), first real research from /research",
     "last_updated": "2026-09-03",
-    "owner_run_2026_09_03": "Cloud Core release succeeded (0012/0013, health). Agent update FAILED silently: installer's inline swap refused by NTFS under running processes (same as the 2026-09-01 incident); fixed by wiring the installer through the journaled deployment engine with real runtime handlers, transcript, evidence block and fail-loud M13 assertion. 6b.1/6b.2 remain NOT_YET_PROVEN until the owner's rerun."
+    "owner_run_2026_09_03": "Cloud Core release succeeded (0012/0013, health). Agent update FAILED silently: installer's inline swap refused by NTFS under running processes (same as the 2026-09-01 incident); fixed by wiring the installer through the journaled deployment engine with real runtime handlers, transcript, evidence block and fail-loud M13 assertion. 6b.1/6b.2 remain NOT_YET_PROVEN until the owner's rerun. UPDATE 18:xx: after the engine-based installer the owner's verify-device-service.ps1 reports 6b.1 and 6b.2 PROVEN_REAL (worker as the owner from the installed tree, Chrome available, 24 ops + browser.chrome agree). Next: item 11, real browser smoke through the owner path (scripts/browser/real-browser-smoke.ps1)."
   },
   "owner_actions_pending": [
     "M13 item 10 (ready): release the Cloud Core, update the Windows agent once (UAC), run the first real research from /research and give a verdict.",
