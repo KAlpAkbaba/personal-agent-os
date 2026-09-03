@@ -166,3 +166,66 @@ async def worker(tmp_path):
         yield w
     finally:
         await w._close_all_sessions()
+
+
+# ---------------------------------------------------------------------------
+# Desktop hygiene guards (2026-09-03): a background test iteration on the owner's
+# machine opened dozens of "Chrome for Testing" windows. No test outside the `live`
+# marker may launch a visible browser, and every Chromium this pytest process spawned
+# must be gone when the session ends, whatever the tests did.
+
+import os as _os
+import subprocess as _subprocess
+import sys as _sys
+
+_POWERSHELL = _os.path.join(
+    _os.environ.get("SystemRoot", r"C:/Windows"), "System32", "WindowsPowerShell", "v1.0", "powershell.exe"
+)
+
+
+@pytest.fixture(autouse=True)
+def _headless_only_outside_live(request, monkeypatch):
+    """Force every ManagedBackend to headless unless the test is marked `live`."""
+    if request.node.get_closest_marker("live") is not None:
+        yield
+        return
+    from browser_agent import backends as _backends
+
+    original_init = _backends.ManagedBackend.__init__
+
+    def headless_init(self, *args, **kwargs):
+        kwargs["headless"] = True
+        original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(_backends.ManagedBackend, "__init__", headless_init)
+    yield
+
+
+def _reap_chromium_spawned_by_this_pytest() -> None:
+    """Kill Playwright Chromium roots whose ancestor is this pytest process (Windows)."""
+    if _sys.platform != "win32" or not _os.path.exists(_POWERSHELL):
+        return
+    script = (
+        "$me = " + str(_os.getpid()) + "; "
+        "$all = Get-CimInstance Win32_Process; "
+        "$byId = @{}; foreach ($p in $all) { $byId[[int]$p.ProcessId] = $p }; "
+        "function Is-Descendant($pid0) { $cur = $pid0; for ($i = 0; $i -lt 12; $i++) { "
+        "  if ($cur -eq $me) { return $true }; if (-not $byId.ContainsKey($cur)) { return $false }; "
+        "  $cur = [int]$byId[$cur].ParentProcessId; if ($cur -le 0) { return $false } }; return $false }; "
+        "foreach ($p in $all) { if ($p.Name -eq 'chrome.exe' -and $p.ExecutablePath -like '*ms-playwright*' "
+        "  -and $p.CommandLine -notlike '*--type=*' -and (Is-Descendant ([int]$p.ProcessId))) { "
+        "  Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue; Write-Output ('reaped ' + $p.ProcessId) } }"
+    )
+    try:
+        out = _subprocess.run(
+            [_POWERSHELL, "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True, text=True, timeout=60,
+        )
+        if out.stdout.strip():
+            print("[conftest] leftover Chromium reaped:", " ".join(out.stdout.split()))
+    except Exception:  # noqa: BLE001 - hygiene must never fail the suite
+        pass
+
+
+def pytest_sessionfinish(session, exitstatus):  # noqa: ARG001
+    _reap_chromium_spawned_by_this_pytest()
