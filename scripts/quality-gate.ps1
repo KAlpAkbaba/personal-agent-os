@@ -230,6 +230,15 @@ if (-not $Fast) {
     Assert-ExitCode "installer ACL tests"
   }
 
+  Invoke-Step "Installer browser-worker provisioning tests (PS 5.1)" {
+    # M13 (ADR-0050): the installer provisions the Browser Worker venv into the agent's
+    # install tree, self-checks it in staging and after publish, and writes the companion's
+    # worker configuration; these tests pin that transaction without touching an install.
+    $script = Join-Path $repoRoot "scripts\tests\installer-browser.tests.ps1"
+    & (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -NoProfile -File $script
+    Assert-ExitCode "installer browser tests"
+  }
+
   Invoke-Step "Recovery supervisor tests" {
     if (-not $uv) { throw "uv not found" }
     Push-Location (Join-Path $repoRoot "services\recovery-supervisor")
