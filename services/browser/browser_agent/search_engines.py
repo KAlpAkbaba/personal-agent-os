@@ -21,7 +21,7 @@ from __future__ import annotations
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
-from urllib.parse import parse_qs, unquote, urlencode, urlsplit
+from urllib.parse import parse_qs, parse_qsl, unquote, urlencode, urlsplit, urlunsplit
 
 from bs4 import BeautifulSoup
 from bs4.element import Tag
@@ -89,22 +89,40 @@ class SearchAttempt:
 @dataclass(frozen=True, slots=True)
 class SearchOutcome:
     """Results plus provider evidence: which provider was asked for, which one answered,
-    whether a fallback happened and why. ``engine`` is kept as an alias of ``provider``."""
+    whether a fallback happened and why. ``engine`` is kept as an alias of ``provider``.
+
+    Contract v1.1 (§3a) additions: ``path`` names how the results were reached
+    (``google_ui`` — typed into Google's real search box; ``google_url`` —
+    the loaded results page was re-fetched by URL, e.g. applying
+    ``recency_days``'s ``tbs`` filter; ``fallback`` — a non-Google provider
+    answered; ``handoff_pending`` — an owner-handoff interstitial is waiting;
+    ``handoff_cleared`` — a previously-pending search resumed against the
+    already-cleared results page). ``state`` is ``ok`` or
+    ``waiting_for_owner_verification``. ``provider`` is ``None`` only for a
+    ``handoff_pending`` outcome (nothing answered yet).
+    """
 
     requested_provider: str
-    provider: str
+    provider: str | None
     query: str
     results: tuple[SearchResult, ...]
     page_kind: str
     attempts: tuple[SearchAttempt, ...] = ()
     locale: str | None = None
+    path: str = "fallback"
+    state: str = "ok"
+    verification_url: str | None = None
 
     @property
-    def engine(self) -> str:
+    def engine(self) -> str | None:
         return self.provider
 
     @property
     def fallback(self) -> bool:
+        # A pending handoff hasn't "fallen back" to anything — it is still
+        # waiting on the requested provider itself.
+        if self.provider is None:
+            return False
         return self.provider != self.requested_provider
 
     @property
@@ -115,7 +133,7 @@ class SearchOutcome:
         return "; ".join(f"{a.provider}:{a.outcome}" for a in failed) or "unknown"
 
     def as_dict(self) -> dict[str, object]:
-        return {
+        result: dict[str, object] = {
             "schema_version": SEARCH_SCHEMA_VERSION,
             "engine": self.provider,
             "requested_provider": self.requested_provider,
@@ -128,7 +146,12 @@ class SearchOutcome:
             "attempts": [a.as_dict() for a in self.attempts],
             "results": [r.as_dict() for r in self.results],
             "page_kind": self.page_kind,
+            "path": self.path,
+            "state": self.state,
         }
+        if self.verification_url is not None:
+            result["verification_url"] = self.verification_url
+        return result
 
 
 def _extract_published_hint(text: str) -> str | None:
@@ -174,7 +197,7 @@ def resolve_result_url(href: str, engine: str) -> str | None:
     return href
 
 
-def _recency_param(engine: str, recency_days: int | None) -> dict[str, str]:
+def recency_param(engine: str, recency_days: int | None) -> dict[str, str]:
     """Best-effort mapping of ``recency_days`` to each engine's own recency
     query parameter (contract §3: "recency_days mapped to each engine's own
     recency parameter where it exists"). ``None`` -> no parameter (engine
@@ -202,7 +225,7 @@ def _recency_param(engine: str, recency_days: int | None) -> dict[str, str]:
     return {}
 
 
-def _locale_params(locale: str | None) -> dict[str, str]:
+def locale_params(locale: str | None) -> dict[str, str]:
     """Google's ``hl`` (interface language) and ``gl`` (region) from a BCP-47 locale such as
     ``tr-TR``; nothing is assumed when no locale is known."""
     if not locale:
@@ -220,9 +243,9 @@ def build_search_url(
     engine: str, query: str, *, recency_days: int | None = None, locale: str | None = None
 ) -> str:
     """The engine's search-results URL for ``query`` (contract §3 base URLs)."""
-    params = {"q": query, **_recency_param(engine, recency_days)}
+    params = {"q": query, **recency_param(engine, recency_days)}
     if engine == "google":
-        params.update(_locale_params(locale))
+        params.update(locale_params(locale))
         params["num"] = "10"
         return f"https://www.google.com/search?{urlencode(params)}"
     if engine == "duckduckgo":
@@ -368,6 +391,41 @@ def _google_result_url(href: str) -> str | None:
     return href
 
 
+def append_recency_param(url: str, recency_days: int) -> str:
+    """Add Google's own recency filter (``tbs=qdr:x``) to an already-loaded
+    results URL, preserving every other query parameter (contract §3a:
+    ``recency_days`` is applied to the loaded results page as Google's own
+    time filter, not by rebuilding the search from scratch)."""
+    parts = urlsplit(url)
+    query = dict(parse_qsl(parts.query))
+    query.update(recency_param("google", recency_days))
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+
+
+def is_verification_cleared(url: str, html: str) -> bool:
+    """``True`` once a Google interstitial (the unusual-traffic ``/sorry/``
+    page or the ``consent.google.*`` page) is no longer showing (contract
+    §3a's ``browser.wait for=verification_cleared`` decision). Pure and
+    testable with fake page states — no browser required."""
+    return detect_google_interstitial(html, url) is None
+
+
+class GoogleHandoffPending(Exception):
+    """Raised by a caller-supplied ``fetch`` to signal that the Google
+    attempt hit an interstitial while running in owner-handoff mode
+    (contract §3a ``interstitial: "handoff"``): :func:`run_search` stops
+    immediately — no further providers are tried — and turns this into a
+    SUCCESSFUL outcome with ``state="waiting_for_owner_verification"``,
+    ``path="handoff_pending"``, ``provider=None``, ``results=[]``.
+    """
+
+    def __init__(self, *, page_kind: str, verification_url: str, detail: str = "") -> None:
+        self.page_kind = page_kind
+        self.verification_url = verification_url
+        self.detail = detail
+        super().__init__(f"google handoff pending: {page_kind}")
+
+
 def detect_google_interstitial(html: str, final_url: str | None = None) -> str | None:
     """``"captcha"`` for the unusual-traffic interstitial, ``"consent"`` for the consent
     page, ``None`` for a normal page. Detection only — neither is ever answered."""
@@ -462,9 +520,15 @@ async def run_search(
     ``engine="auto"`` (the default) tries ``AUTO_ORDER`` — Google first, DuckDuckGo as the
     fallback — and records every attempt with its outcome; a named engine is used alone.
     ``fetch(engine, url)`` performs the real navigation and returns
-    ``(html, page_kind, http_status)`` or ``(html, page_kind, http_status, final_url)`` —
-    injected so the fallover/evidence logic is unit-testable without a browser; the live
-    worker path supplies a closure that drives the real session.
+    ``(html, page_kind, http_status)``, ``(html, page_kind, http_status, final_url)`` or
+    ``(html, page_kind, http_status, final_url, path_hint)`` — injected so the
+    fallover/evidence logic is unit-testable without a browser; the live worker path
+    supplies a closure that drives the real session. ``path_hint`` (5th element, optional)
+    overrides the outcome's ``path`` field for a successful provider (contract §3a:
+    ``google_ui``/``google_url``/``handoff_cleared``); when absent, ``path`` defaults to
+    ``google_ui`` for provider ``google`` and ``fallback`` for any other provider.
+    ``fetch`` may also raise :class:`GoogleHandoffPending` (owner-handoff mode) instead of
+    returning, which stops the loop immediately — see that class's docstring.
     """
     if max_results < 1 or max_results > MAX_RESULTS_CAP:
         raise BrowserError(
@@ -488,6 +552,29 @@ async def run_search(
         url = build_search_url(provider, query, recency_days=recency_days, locale=locale)
         try:
             fetched = await fetch(provider, url)
+        except GoogleHandoffPending as handoff:
+            # Owner-handoff mode (contract §3a): stop immediately, no further
+            # provider is ever tried — this is a SUCCESSFUL, waiting outcome,
+            # not a failure to record and fall over from.
+            attempts.append(
+                SearchAttempt(
+                    provider,
+                    handoff.page_kind,
+                    handoff.detail or "handoff: owner verification required",
+                )
+            )
+            return SearchOutcome(
+                requested_provider=requested,
+                provider=None,
+                query=query,
+                results=(),
+                page_kind=handoff.page_kind,
+                attempts=tuple(attempts),
+                locale=locale,
+                path="handoff_pending",
+                state="waiting_for_owner_verification",
+                verification_url=handoff.verification_url,
+            )
         except BrowserError as exc:
             # A transport failure reaching THIS provider (a network-level abort from anti-bot
             # filtering, seen live against Brave) is as good a reason to try the next one as
@@ -499,6 +586,7 @@ async def run_search(
             continue
         html, page_kind, _http_status = fetched[0], fetched[1], fetched[2]
         final_url = fetched[3] if len(fetched) > 3 else None
+        path_hint = fetched[4] if len(fetched) > 4 else None
         interstitial = detect_google_interstitial(html, final_url) if provider == "google" else None
         if interstitial is not None:
             attempts.append(
@@ -522,6 +610,7 @@ async def run_search(
             continue
         attempts.append(SearchAttempt(provider, "ok", f"{len(results)} results"))
         ranked = tuple(replace(r, rank=i + 1) for i, r in enumerate(results))
+        default_path = "google_ui" if provider == "google" else "fallback"
         return SearchOutcome(
             requested_provider=requested,
             provider=provider,
@@ -530,6 +619,8 @@ async def run_search(
             page_kind="ok",
             attempts=tuple(attempts),
             locale=locale,
+            path=path_hint or default_path,
+            state="ok",
         )
 
     kinds = [a.outcome for a in attempts]
@@ -553,6 +644,8 @@ async def run_search(
         page_kind=last_kind,
         attempts=tuple(attempts),
         locale=locale,
+        path="fallback",
+        state="ok",
     )
 
 
@@ -560,8 +653,13 @@ __all__ = [
     "AUTO_ORDER",
     "PRIMARY_PROVIDER",
     "SEARCH_SCHEMA_VERSION",
+    "GoogleHandoffPending",
     "SearchAttempt",
+    "append_recency_param",
     "detect_google_interstitial",
+    "is_verification_cleared",
+    "locale_params",
+    "recency_param",
     "parse_google_html",
     "ENGINES",
     "MAX_RESULTS_CAP",

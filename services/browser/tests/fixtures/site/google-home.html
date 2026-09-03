@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head><meta charset="utf-8"><title>Google</title></head>
+<body>
+<form id="sf" role="search" action="/google-results.html" method="get">
+  <input type="text" role="combobox" aria-label="Search" name="q" autocomplete="off">
+  <button type="submit">Google Search</button>
+</form>
+<script>
+  // Test-only hook (tests/browser/test_google_ui_e2e.py, owner-handoff
+  // scenario): a `simulate=sorry` query param on THIS page's own URL points
+  // the form at the interstitial fixture instead of the results fixture, so
+  // the worker's very first Google UI search deterministically lands on
+  // google-sorry.html. The fixture site is a static file server (no
+  // server-side logic), so this is done client-side instead.
+  var params = new URLSearchParams(location.search);
+  if (params.get('simulate') === 'sorry') {
+    document.getElementById('sf').action = '/google-sorry.html';
+  }
+</script>
+</body>
+</html>

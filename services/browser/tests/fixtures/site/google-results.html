@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head><meta charset="utf-8"><title>Google Sonuçları</title></head>
+<body>
+<form id="sf" role="search" action="/google-results.html" method="get">
+  <input type="text" role="combobox" aria-label="Search" name="q" id="searchbox" autocomplete="off">
+  <button type="submit">Google Search</button>
+</form>
+<div id="search"><div id="rso">
+  <div class="MjjYud">
+    <div class="g" data-hveid="CAoQAA">
+      <a href="https://openai.com/index/agents-update"><h3 class="LC20lb">OpenAI ajan güncellemesi</h3></a>
+      <div class="VwiC3b">OpenAI, ajan platformunda yeni özellikler duyurdu.</div>
+    </div>
+  </div>
+  <div class="MjjYud">
+    <div class="g" data-hveid="CAsQAA">
+      <a href="https://www.anthropic.com/news/agents"><h3 class="LC20lb">Anthropic ajan haberleri</h3></a>
+      <div class="VwiC3b">Anthropic, Claude ajanları için yeni yetenekler yayınladı.</div>
+    </div>
+  </div>
+</div></div>
+<script>
+  // Reflects the submitted query into the (otherwise static) search box so
+  // the worker's "already a results page with a matching query" checks
+  // (contract §3a: reuse-in-place, resume-after-clearance) have something
+  // real to compare against.
+  var params = new URLSearchParams(location.search);
+  var q = params.get('q');
+  if (q) { document.getElementById('searchbox').value = q; }
+</script>
+</body>
+</html>

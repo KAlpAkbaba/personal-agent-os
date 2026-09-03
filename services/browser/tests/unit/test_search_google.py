@@ -16,8 +16,11 @@ from browser_agent.errors import BrowserError, ErrorClass
 from browser_agent.search_engines import (
     AUTO_ORDER,
     PRIMARY_PROVIDER,
+    GoogleHandoffPending,
+    append_recency_param,
     build_search_url,
     detect_google_interstitial,
+    is_verification_cleared,
     parse_engine_html,
     parse_google_html,
     run_search,
@@ -216,3 +219,128 @@ class TestSchemaVersion:
 
         assert CONTRACTS["browser.search"] == 2
         assert tuple(int(x) for x in WORKER_VERSION.split(".")) >= (0, 2, 0)
+
+
+class TestVerificationCleared:
+    """``browser.wait for=verification_cleared`` decision (contract §3a), a
+    pure helper tested with fake page states — no browser required."""
+
+    def test_sorry_page_is_not_cleared(self) -> None:
+        sorry = _read("google-sorry.html")
+        assert is_verification_cleared("https://www.google.com/sorry/index?c=x", sorry) is False
+        assert is_verification_cleared("https://www.google.com/search?q=x", sorry) is False
+
+    def test_consent_page_is_not_cleared(self) -> None:
+        consent = _read("google-consent.html")
+        assert is_verification_cleared("https://consent.google.com/m?c=x", consent) is False
+
+    def test_normal_results_page_is_cleared(self) -> None:
+        ok = _read("google.html")
+        assert is_verification_cleared("https://www.google.com/search?q=x", ok) is True
+
+    def test_empty_page_with_no_interstitial_markers_is_cleared(self) -> None:
+        assert is_verification_cleared("https://www.google.com/search?q=x", "<html></html>") is True
+
+
+class TestAppendRecencyParam:
+    def test_adds_tbs_and_preserves_other_params(self) -> None:
+        url = append_recency_param("https://www.google.com/search?q=ai+agents&hl=tr", 3)
+        assert "tbs=qdr%3Aw" in url
+        assert "q=ai+agents" in url
+        assert "hl=tr" in url
+
+    def test_overwrites_an_existing_tbs(self) -> None:
+        url = append_recency_param("https://www.google.com/search?q=x&tbs=qdr:y", 1)
+        assert "tbs=qdr%3Ad" in url
+        assert "tbs=qdr%3Ay" not in url
+
+
+class TestHandoffOutcome:
+    """``run_search`` turns a ``GoogleHandoffPending`` from ``fetch`` into a
+    SUCCESSFUL, waiting outcome — never a fallback, never a second attempt."""
+
+    async def test_handoff_pending_outcome_shape(self) -> None:
+        calls: list[str] = []
+
+        async def fetch(engine: str, url: str):
+            calls.append(engine)
+            raise GoogleHandoffPending(
+                page_kind="captcha", verification_url="https://www.google.com/sorry/index"
+            )
+
+        outcome = await run_search("yapay zeka ajanları", "auto", fetch=fetch)
+        # Never falls back: duckduckgo is never even attempted.
+        assert calls == ["google"]
+        d = outcome.as_dict()
+        assert d["state"] == "waiting_for_owner_verification"
+        assert d["path"] == "handoff_pending"
+        assert d["provider"] is None
+        assert d["requested_provider"] == "google"
+        assert d["results"] == []
+        assert d["result_count"] == 0
+        assert d["page_kind"] == "captcha"
+        assert d["verification_url"] == "https://www.google.com/sorry/index"
+        # Not a fallback: nothing else was ever tried on the requested provider's behalf.
+        assert d["fallback"] is False
+        assert d["fallback_reason"] is None
+        assert [a["provider"] for a in d["attempts"]] == ["google"]
+        assert d["schema_version"] == 2
+
+    async def test_handoff_pending_explicit_google_engine(self) -> None:
+        async def fetch(engine: str, url: str):
+            raise GoogleHandoffPending(
+                page_kind="consent", verification_url="https://consent.google.com/m"
+            )
+
+        outcome = await run_search("q", "google", fetch=fetch)
+        assert outcome.state == "waiting_for_owner_verification"
+        assert outcome.page_kind == "consent"
+
+    async def test_verification_url_key_omitted_when_not_waiting(self) -> None:
+        async def fetch(engine: str, url: str):
+            return _read("google.html"), "ok", 200, url
+
+        d = (await run_search("q", "auto", fetch=fetch)).as_dict()
+        assert "verification_url" not in d
+
+
+class TestPathValues:
+    async def test_google_success_defaults_to_google_ui_path(self) -> None:
+        async def fetch(engine: str, url: str):
+            return _read("google.html"), "ok", 200, url
+
+        outcome = await run_search("q", "auto", fetch=fetch)
+        assert outcome.path == "google_ui"
+        assert outcome.state == "ok"
+
+    async def test_fetch_may_override_the_path_with_a_fifth_element(self) -> None:
+        async def fetch(engine: str, url: str):
+            return _read("google.html"), "ok", 200, url, "google_url"
+
+        outcome = await run_search("q", "auto", fetch=fetch)
+        assert outcome.path == "google_url"
+
+    async def test_handoff_cleared_path_via_fetch_hint(self) -> None:
+        async def fetch(engine: str, url: str):
+            return _read("google.html"), "ok", 200, url, "handoff_cleared"
+
+        outcome = await run_search("q", "auto", fetch=fetch)
+        assert outcome.path == "handoff_cleared"
+        assert outcome.provider == "google"
+
+    async def test_fallback_to_duckduckgo_has_fallback_path(self) -> None:
+        async def fetch(engine: str, url: str):
+            if engine == "google":
+                return _read("google-sorry.html"), "ok", 200, "https://www.google.com/sorry/index"
+            return _read("duckduckgo.html"), "ok", 200, url
+
+        outcome = await run_search("q", "auto", fetch=fetch)
+        assert outcome.provider == "duckduckgo"
+        assert outcome.path == "fallback"
+
+    async def test_explicit_non_google_engine_has_fallback_path(self) -> None:
+        async def fetch(engine: str, url: str):
+            return _read("duckduckgo.html"), "ok", 200, url
+
+        outcome = await run_search("q", "duckduckgo", fetch=fetch)
+        assert outcome.path == "fallback"
