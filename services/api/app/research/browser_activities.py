@@ -58,6 +58,7 @@ from app.research.models import (
     STAGE_READY,
     STAGE_SELECTING_DEVICE,
     STAGE_SYNTHESIZING,
+    STAGE_WAITING_FOR_OWNER_VERIFICATION,
 )
 from app.research.plan import build_plan
 from app.research.report import (
@@ -290,12 +291,21 @@ def discover_activity(
     query_text: str,
     source_class: str,
     window_start_iso: str,
-) -> int:
+    interstitial: str = "fallback",
+) -> dict[str, Any]:
+    """Returns ``{"status": "done"|"waiting", "candidates": n, "path": …,
+    "verification_url": …}`` (spec §5a). ``status=="waiting"`` means the
+    device handed a Google interstitial back to the owner
+    (``interstitial="handoff"``) instead of solving or falling back; the
+    workflow is responsible for looping ``await_verification_activity`` and
+    re-calling this activity for the SAME query afterwards."""
     task_id_var.set(task_id)
     tid = uuid.UUID(task_id)
     window_start = datetime.fromisoformat(window_start_iso)
 
     candidates: list[discovery.DiscoveredCandidate] = []
+    path: str | None = None
+    verification_url: str | None = None
     try:
         if source_class == "technical":
             candidates = discovery.fetch_hn(query_text, window_start=window_start)
@@ -306,17 +316,37 @@ def discover_activity(
         elif source_class == "official":
             candidates = _official_candidates(query_text, query_id)
         else:  # "news" / "community": the device's real Chrome, semantic result links
+            factory0 = _session_factory()
+            with factory0() as session:
+                already_discovered = any(
+                    c.query_id == query_id for c in runs_service.list_candidates(session, tid)
+                )
+            if already_discovered:
+                # spec §5a: "identical (query, provider) searches within a job
+                # are not re-issued" — this query already produced candidates
+                # (or is in flight elsewhere); nothing new to search for.
+                return {
+                    "status": "done", "candidates": 0, "path": "cached", "verification_url": None,
+                }
+
             gateway = DeviceBrowserGateway(
                 _command_client(), device_id=uuid.UUID(device_id), task_id=task_id
             )
             try:
-                hits = gateway.search(query_text, source_class=source_class, max_results=10)
+                hits = gateway.search(
+                    query_text,
+                    source_class=source_class,
+                    max_results=10,
+                    interstitial=interstitial,
+                )
             except BrowserDispatchError as exc:
                 if exc.retryable:
                     raise _retryable(exc.error_class, exc.message) from exc
                 raise _non_retryable(exc.error_class, exc.message) from exc
             evidence = gateway.last_search_evidence
             provider = evidence.provider if evidence else "unknown"
+            path = evidence.path if evidence else None
+            verification_url = evidence.verification_url if evidence else None
             if evidence is not None and not evidence.contract_ok:
                 # An installed worker that predates the provider abstraction answers without
                 # evidence fields: say so in the run record instead of inventing a provider.
@@ -346,6 +376,7 @@ def discover_activity(
                                     else ""
                                 )
                                 + f" result_count={evidence.result_count}"
+                                + (f" path={evidence.path}" if evidence.path else "")
                                 + (
                                     f" CONTRACT MISMATCH: worker search schema "
                                     f"{evidence.schema_version} < "
@@ -358,6 +389,39 @@ def discover_activity(
                         },
                     )
                     session.commit()
+
+            if evidence is not None and evidence.waiting_for_owner_verification:
+                # spec §5a: the owner-handoff outcome. Record the stage/event
+                # (naming the provider, the page kind and verification_url)
+                # and surface verification_url on progress_json too, so the
+                # web client (GET /v1/research/{id}) can show it without
+                # scraping the event's free-text detail.
+                with _session_factory()() as session:
+                    runs_service.update_run(
+                        session,
+                        tid,
+                        stage=STAGE_WAITING_FOR_OWNER_VERIFICATION,
+                        progress={
+                            "verification_url": verification_url,
+                            "verification_provider": provider,
+                        },
+                        event={
+                            "stage": STAGE_WAITING_FOR_OWNER_VERIFICATION,
+                            "detail": (
+                                f"{query_id}: sahibin doğrulaması bekleniyor "
+                                f"provider={provider} page_kind={evidence.page_kind} "
+                                f"verification_url={verification_url}"
+                            ),
+                        },
+                    )
+                    session.commit()
+                return {
+                    "status": "waiting",
+                    "candidates": 0,
+                    "path": path,
+                    "verification_url": verification_url,
+                }
+
             candidates = [
                 discovery.DiscoveredCandidate(
                     url=h.url,
@@ -381,10 +445,10 @@ def discover_activity(
             session,
             tid,
             stage=STAGE_DISCOVERING,
-            progress={"discovered": total},
+            progress={"discovered": total, "verification_url": None},
             event={"stage": STAGE_DISCOVERING, "detail": f"{query_id}: +{inserted} candidates"},
         )
-    return inserted
+    return {"status": "done", "candidates": inserted, "path": path, "verification_url": None}
 
 
 # URL shapes that are listing/search/tag pages rather than articles. The first live run
@@ -511,7 +575,11 @@ def fetch_activity(task_id: str, device_id: str, url: str, query: str, source_cl
         _command_client(), device_id=uuid.UUID(device_id), task_id=task_id
     )
     try:
-        record = gateway.fetch_url(url, query=query, source_class=source_class, attempt=attempt)
+        # tab="new" (spec §5a): fetch in a separate tab so the job's persistent
+        # Google results tab stays loaded for the next discover_activity call.
+        record = gateway.fetch_url(
+            url, query=query, source_class=source_class, attempt=attempt, tab="new"
+        )
     except BrowserDispatchError as exc:
         factory = _session_factory()
         with factory() as session:
@@ -550,6 +618,42 @@ def fetch_activity(task_id: str, device_id: str, url: str, query: str, source_cl
             event={"stage": STAGE_FETCHING, "detail": f"fetched {url}"},
         )
     return "fetched" if created else "duplicate"
+
+
+# --------------------------------------------------------- await_verification
+
+
+@activity.defn(name="browser_research_await_verification")
+def await_verification_activity(
+    task_id: str, device_id: str, timeout_s: float, iteration: int
+) -> dict[str, Any]:
+    """One ``browser.wait for=verification_cleared`` poll, capped at 60s
+    (spec §5a). The workflow calls this in a loop, decrementing its own
+    ``interactive_wait_s`` budget by ``timeout_s`` each time, until it is
+    satisfied or the budget runs out — never raises on a device/transport
+    problem, it just reports ``satisfied: false`` so the workflow's loop
+    treats it the same as "not cleared yet" and keeps going (or gives up and
+    falls back once the budget is spent)."""
+    task_id_var.set(task_id)
+    heartbeat_fn = activity.heartbeat if activity.in_activity() else None
+    if heartbeat_fn is not None:
+        heartbeat_fn()
+    gateway = DeviceBrowserGateway(
+        _command_client(), device_id=uuid.UUID(device_id), task_id=task_id
+    )
+    try:
+        result = gateway.await_verification(
+            timeout_s=timeout_s, iteration=iteration, heartbeat=heartbeat_fn
+        )
+    except BrowserDispatchError as exc:
+        logger.warning(
+            "browser_research_await_verification_failed",
+            task_id=task_id,
+            error_class=exc.error_class,
+            error=exc.message,
+        )
+        return {"satisfied": False, "url": None, "elapsed_ms": None}
+    return result
 
 
 # -------------------------------------------------------------------- rank
@@ -894,6 +998,7 @@ BROWSER_RESEARCH_ACTIVITIES = (
     plan_activity,
     select_device_activity,
     discover_activity,
+    await_verification_activity,
     fetch_targets_activity,
     fetch_activity,
     rank_activity,
@@ -906,6 +1011,7 @@ BROWSER_RESEARCH_ACTIVITIES = (
 
 __all__ = [
     "BROWSER_RESEARCH_ACTIVITIES",
+    "await_verification_activity",
     "close_session_activity",
     "discover_activity",
     "fetch_activity",

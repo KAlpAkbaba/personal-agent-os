@@ -84,6 +84,36 @@ export default function ProgressPanel({
           {error}
         </p>
       )}
+      {stage === "waiting_for_owner_verification" && (
+        <p
+          className="notice"
+          style={{
+            margin: "0.5rem 0",
+            padding: "0.6rem 0.8rem",
+            borderRadius: 8,
+            border: "1px solid var(--warn, #b26a00)",
+            background: "rgba(232, 179, 57, 0.1)",
+            color: "var(--warn, #b26a00)",
+            lineHeight: 1.5,
+          }}
+        >
+          Google bir doğrulama sayfası gösterdi. Chrome penceresi öne getirildi; sayfayı
+          tamamlayın, araştırma otomatik olarak devam eder.
+          {progress.verification_url && (
+            <>
+              {" "}
+              <a
+                href={progress.verification_url}
+                target="_blank"
+                rel="noreferrer noopener"
+                style={{ color: "inherit", textDecoration: "underline" }}
+              >
+                Doğrulama sayfasını aç
+              </a>
+            </>
+          )}
+        </p>
+      )}
       {stage === "ready" && task.report && (
         <p style={{ margin: "0.5rem 0", color: "var(--ok)" }}>
           Araştırma tamamlandı. Rapor aşağıda; artifact gelen kutusuna da düştü.

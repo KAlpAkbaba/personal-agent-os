@@ -35,6 +35,7 @@ JSONColumn = JSON().with_variant(JSONB(), "postgresql")
 STAGE_PLANNED = "planned"
 STAGE_SELECTING_DEVICE = "selecting_device"
 STAGE_DISCOVERING = "discovering"
+STAGE_WAITING_FOR_OWNER_VERIFICATION = "waiting_for_owner_verification"
 STAGE_FETCHING = "fetching"
 STAGE_RANKING = "ranking"
 STAGE_SYNTHESIZING = "synthesizing"
@@ -47,6 +48,7 @@ STAGES = (
     STAGE_PLANNED,
     STAGE_SELECTING_DEVICE,
     STAGE_DISCOVERING,
+    STAGE_WAITING_FOR_OWNER_VERIFICATION,
     STAGE_FETCHING,
     STAGE_RANKING,
     STAGE_SYNTHESIZING,
@@ -55,6 +57,9 @@ STAGES = (
     STAGE_FAILED,
     STAGE_CANCELLED,
 )
+#: waiting_for_owner_verification is NOT terminal (spec §5a/§4): polling
+#: continues through it and the workflow resumes discovery on its own once
+#: the owner clears the page or the interactive budget is spent.
 TERMINAL_STAGES = frozenset({STAGE_READY, STAGE_FAILED, STAGE_CANCELLED})
 
 
@@ -155,6 +160,7 @@ __all__ = [
     "STAGE_READY",
     "STAGE_SELECTING_DEVICE",
     "STAGE_SYNTHESIZING",
+    "STAGE_WAITING_FOR_OWNER_VERIFICATION",
     "TERMINAL_STAGES",
     "ResearchCandidateRow",
     "ResearchEvidenceRow",

@@ -157,6 +157,9 @@ export type StartResearchInput = {
   recency_days?: number;
   max_sources?: number;
   synthesis?: "auto" | "deterministic";
+  /** Owner-handoff mode (spec §5a): the /research page always sends `true`. */
+  interactive?: boolean;
+  interactive_wait_s?: number;
 };
 
 export async function startResearch(req: StartResearchInput): Promise<StartResearchResponse> {
@@ -165,6 +168,8 @@ export async function startResearch(req: StartResearchInput): Promise<StartResea
   if (req.recency_days != null) body.recency_days = req.recency_days;
   if (req.max_sources != null) body.max_sources = req.max_sources;
   if (req.synthesis) body.synthesis = req.synthesis;
+  if (req.interactive != null) body.interactive = req.interactive;
+  if (req.interactive_wait_s != null) body.interactive_wait_s = req.interactive_wait_s;
   const response = await apiFetch("/v1/research", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

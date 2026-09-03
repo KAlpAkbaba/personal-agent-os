@@ -14,6 +14,22 @@ def settings() -> Settings:
     return Settings()
 
 
+@pytest.fixture(autouse=True)
+def _reset_browser_gateway_session_registry():
+    """``DeviceBrowserGateway``'s known-open session registry (spec §5a) is
+    process-wide by design (M13_RESEARCH_SPEC.md §5a) so it survives across
+    the many gateway instances one research job constructs. Tests reuse the
+    same device/task ids across cases, so without a reset the SECOND test to
+    touch a given (device_id, session_id) would see it as "already open" and
+    skip dispatching ``browser.session_open`` — reset it before (and after)
+    every test so each test starts from a clean registry."""
+    from app.research.browser_gateway import reset_known_open_sessions
+
+    reset_known_open_sessions()
+    yield
+    reset_known_open_sessions()
+
+
 @pytest.fixture()
 def owner_auth() -> Callable[..., object]:
     """M9: `owner_auth(app, client)` bootstraps identity and authenticates.

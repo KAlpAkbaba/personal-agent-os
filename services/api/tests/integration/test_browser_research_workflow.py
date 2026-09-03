@@ -219,6 +219,210 @@ async def test_browser_research_workflow_end_to_end(
         assert memory.memory_class == "episodic"
 
 
+# ------------------------------------------------ interactive owner handoff (spec §5a)
+
+
+async def test_browser_research_workflow_interactive_handoff_cleared_reaches_ready(
+    settings: Settings, _no_network_discovery: None, monkeypatch
+) -> None:
+    """An interactive run whose Google search hits an interstitial waits for
+    the owner (browser.wait), then — once satisfied — re-issues the SAME
+    search (path=handoff_cleared) and the run still reaches ready. Reaching
+    ready at all is itself evidence the new `waiting_for_owner_verification`
+    stage value is accepted by the DB (migration 0014's widened CHECK
+    constraint), since `update_run` would raise otherwise."""
+    search_waited_for: set[str] = set()
+
+    def factory(*, capability: str, payload: dict[str, Any], **_kwargs) -> Any:
+        if capability == "browser.wait":
+            return CommandSucceeded(
+                {"satisfied": True, "url": "https://www.google.com/search?q=x", "elapsed_ms": 500}
+            )
+        if capability == "browser.search":
+            query = payload["query"]
+            if payload.get("interstitial") == "handoff" and query not in search_waited_for:
+                search_waited_for.add(query)
+                return CommandSucceeded(
+                    {
+                        "schema_version": 2, "requested_provider": "google", "provider": None,
+                        "state": "waiting_for_owner_verification", "path": "handoff_pending",
+                        "page_kind": "captcha",
+                        "verification_url": "https://www.google.com/sorry/index",
+                        "results": [], "result_count": 0,
+                    }
+                )
+            return CommandSucceeded(
+                {
+                    "schema_version": 2, "requested_provider": "google", "provider": "google",
+                    "fallback": False, "fallback_reason": None, "state": "ok",
+                    "path": "handoff_cleared", "result_count": 2,
+                    "results": [
+                        {
+                            "url": f"https://news.example.com/{query}/1",
+                            "title": f"{query} haberi 1",
+                        },
+                        {
+                            "url": f"https://news.example.com/{query}/2",
+                            "title": f"{query} haberi 2",
+                        },
+                    ],
+                }
+            )
+        return _fake_command_factory(capability=capability, payload=payload)
+
+    fake_client = FakeDeviceCommandClient(factory=factory)
+    monkeypatch.setattr(browser_activities, "_command_client", lambda: fake_client)
+
+    from app.artifacts import service as artifact_service
+
+    af_factory, _store = build_artifact_context(settings)
+    with af_factory() as session:
+        task = artifact_service.create_task(session, intent=TOPIC)
+        task_id = task.id
+
+    broker_runtime = BrokerRuntime(settings)
+    with broker_runtime.session() as db:
+        device = broker_service.enroll_device(
+            db, name="interactive-pc", platform="windows", public_key_spki_b64=_spki(),
+            capabilities=["browser.chrome"], trace_id=None,
+        )
+    broker_runtime.connections[device.id] = DeviceConnection(
+        device_id=device.id, session_id=uuid.uuid4(), websocket=object()
+    )
+    register_broker_runtime(broker_runtime)
+    try:
+        with af_factory() as session:
+            runs_service.update_run(session, task_id, device_id=device.id)
+
+        client = await Client.connect(
+            settings.temporal_address, namespace=settings.temporal_namespace
+        )
+        task_queue = f"pagentos-m13-interactive-cleared-{uuid.uuid4().hex[:8]}"
+        async with build_worker(client, task_queue):
+            result = await client.execute_workflow(
+                BrowserResearchWorkflow.run,
+                BrowserResearchRequest(
+                    task_id=str(task_id), topic=TOPIC, target_device=None, max_sources=6,
+                    synthesis="deterministic", interactive=True, interactive_wait_s=120,
+                ),
+                id=f"research-browser-{task_id}",
+                task_queue=task_queue,
+            )
+    finally:
+        register_broker_runtime(None)
+
+    assert result["stage"] == "ready"
+    assert search_waited_for, "the fake never saw an interstitial=handoff search to wait on"
+
+    runtime = ArtifactRuntime(settings)
+    with runtime.session() as session:
+        # The retried search after "cleared" actually inserted candidates —
+        # durable proof (unlike the capped-at-50 events list) that discovery
+        # resumed rather than silently giving up.
+        candidates = runs_service.list_candidates(session, task_id)
+        assert any(c.discovered_by == "browser_search:google" for c in candidates)
+
+        report_row = runs_service.get_report(session, task_id)
+        assert report_row is not None
+        assert report_row.report_json["schema_version"] == 1
+
+
+async def test_browser_research_workflow_interactive_handoff_timeout_falls_back(
+    settings: Settings, _no_network_discovery: None, monkeypatch
+) -> None:
+    """The owner never clears the interstitial within the budget: the
+    workflow gives up waiting and retries with interstitial="fallback"
+    (path=handoff_timeout_fallback) rather than hanging or failing the run."""
+
+    def factory(*, capability: str, payload: dict[str, Any], **_kwargs) -> Any:
+        if capability == "browser.wait":
+            return CommandSucceeded({"satisfied": False, "url": None, "elapsed_ms": 30000})
+        if capability == "browser.search":
+            if payload.get("interstitial") == "handoff":
+                return CommandSucceeded(
+                    {
+                        "schema_version": 2, "requested_provider": "google", "provider": None,
+                        "state": "waiting_for_owner_verification", "path": "handoff_pending",
+                        "page_kind": "captcha",
+                        "verification_url": "https://www.google.com/sorry/index",
+                        "results": [], "result_count": 0,
+                    }
+                )
+            query = payload["query"]
+            return CommandSucceeded(
+                {
+                    "schema_version": 2, "requested_provider": "google", "provider": "duckduckgo",
+                    "fallback": True, "fallback_reason": "google:captcha", "state": "ok",
+                    "path": "handoff_timeout_fallback", "result_count": 2,
+                    "results": [
+                        {
+                            "url": f"https://news.example.com/{query}/1",
+                            "title": f"{query} haberi 1",
+                        },
+                        {
+                            "url": f"https://news.example.com/{query}/2",
+                            "title": f"{query} haberi 2",
+                        },
+                    ],
+                }
+            )
+        return _fake_command_factory(capability=capability, payload=payload)
+
+    fake_client = FakeDeviceCommandClient(factory=factory)
+    monkeypatch.setattr(browser_activities, "_command_client", lambda: fake_client)
+
+    from app.artifacts import service as artifact_service
+
+    af_factory, _store = build_artifact_context(settings)
+    with af_factory() as session:
+        task = artifact_service.create_task(session, intent=TOPIC)
+        task_id = task.id
+
+    broker_runtime = BrokerRuntime(settings)
+    with broker_runtime.session() as db:
+        device = broker_service.enroll_device(
+            db, name="interactive-timeout-pc", platform="windows", public_key_spki_b64=_spki(),
+            capabilities=["browser.chrome"], trace_id=None,
+        )
+    broker_runtime.connections[device.id] = DeviceConnection(
+        device_id=device.id, session_id=uuid.uuid4(), websocket=object()
+    )
+    register_broker_runtime(broker_runtime)
+    try:
+        with af_factory() as session:
+            runs_service.update_run(session, task_id, device_id=device.id)
+
+        client = await Client.connect(
+            settings.temporal_address, namespace=settings.temporal_namespace
+        )
+        task_queue = f"pagentos-m13-interactive-timeout-{uuid.uuid4().hex[:8]}"
+        async with build_worker(client, task_queue):
+            # A small interactive_wait_s (< 60s) keeps this test fast: the
+            # scripted browser.wait never blocks for real, only the workflow's
+            # own budget bookkeeping needs an exhaustible number.
+            result = await client.execute_workflow(
+                BrowserResearchWorkflow.run,
+                BrowserResearchRequest(
+                    task_id=str(task_id), topic=TOPIC, target_device=None, max_sources=6,
+                    synthesis="deterministic", interactive=True, interactive_wait_s=60,
+                ),
+                id=f"research-browser-{task_id}",
+                task_queue=task_queue,
+            )
+    finally:
+        register_broker_runtime(None)
+
+    assert result["stage"] == "ready"
+
+    runtime = ArtifactRuntime(settings)
+    with runtime.session() as session:
+        candidates = runs_service.list_candidates(session, task_id)
+        assert any(c.discovered_by == "browser_search:duckduckgo" for c in candidates)
+
+        report_row = runs_service.get_report(session, task_id)
+        assert report_row is not None
+
+
 # --------------------------------------------------- restart mid-fetch (LOW-10)
 
 

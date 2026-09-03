@@ -244,10 +244,10 @@ def test_discover_activity_technical_persists_candidates(monkeypatch, db_url, ta
             )
         ],
     )
-    inserted = ba.discover_activity(
+    result = ba.discover_activity(
         task_id, str(uuid.uuid4()), "technical:0", "ai agents", "technical", NOW.isoformat()
     )
-    assert inserted == 1
+    assert result == {"status": "done", "candidates": 1, "path": None, "verification_url": None}
     from sqlalchemy import create_engine as _ce
     from sqlalchemy.orm import sessionmaker
 
@@ -280,8 +280,135 @@ def test_discover_activity_deduplicates_on_replay(monkeypatch, db_url, task_id: 
     second = ba.discover_activity(
         task_id, str(uuid.uuid4()), "academic:0", "agents", "academic", NOW.isoformat()
     )
-    assert first == 1
-    assert second == 0  # already present; insert-or-ignore
+    assert first["candidates"] == 1
+    assert second["candidates"] == 0  # already present; insert-or-ignore
+
+
+# ---------------------------------------------------- discover: owner handoff (spec §5a)
+
+
+def _handoff_command_factory(*, capability, payload, **_kwargs):
+    if capability == "browser.session_open":
+        return CommandSucceeded({"created": True})
+    if capability == "browser.session_close":
+        return CommandSucceeded({"closed": True})
+    if capability == "browser.search":
+        return CommandSucceeded(
+            {
+                "schema_version": 2,
+                "requested_provider": "google",
+                "provider": None,
+                "state": "waiting_for_owner_verification",
+                "path": "handoff_pending",
+                "page_kind": "captcha",
+                "verification_url": "https://www.google.com/sorry/index",
+                "results": [],
+                "result_count": 0,
+            }
+        )
+    raise AssertionError(capability)  # pragma: no cover
+
+
+def test_discover_activity_interstitial_handoff_returns_waiting(
+    monkeypatch, db_url, task_id: str
+) -> None:
+    fake = FakeDeviceCommandClient(factory=_handoff_command_factory)
+    monkeypatch.setattr(ba, "_command_client", lambda: fake)
+    result = ba.discover_activity(
+        task_id, str(uuid.uuid4()), "news:0", "ai agents", "news", NOW.isoformat(),
+        interstitial="handoff",
+    )
+    assert result["status"] == "waiting"
+    assert result["candidates"] == 0
+    assert result["path"] == "handoff_pending"
+    assert result["verification_url"] == "https://www.google.com/sorry/index"
+
+
+def test_discover_activity_waiting_sets_stage_and_records_verification_url(
+    monkeypatch, db_url, task_id: str
+) -> None:
+    from app.research.models import STAGE_WAITING_FOR_OWNER_VERIFICATION
+
+    fake = FakeDeviceCommandClient(factory=_handoff_command_factory)
+    monkeypatch.setattr(ba, "_command_client", lambda: fake)
+    ba.discover_activity(
+        task_id, str(uuid.uuid4()), "news:0", "ai agents", "news", NOW.isoformat(),
+        interstitial="handoff",
+    )
+
+    from sqlalchemy import create_engine as _ce
+    from sqlalchemy.orm import sessionmaker
+
+    engine = _ce(ba.get_settings().database_url)
+    with sessionmaker(bind=engine, expire_on_commit=False)() as session:
+        run = runs_service.get_run(session, uuid.UUID(task_id))
+        assert run.stage == STAGE_WAITING_FOR_OWNER_VERIFICATION
+        assert run.progress_json.get("verification_url") == "https://www.google.com/sorry/index"
+        last_event = run.events_json[-1]
+        assert last_event["stage"] == STAGE_WAITING_FOR_OWNER_VERIFICATION
+        assert "verification_url=https://www.google.com/sorry/index" in last_event["detail"]
+        assert "provider=" in last_event["detail"]
+    engine.dispose()
+
+
+def test_discover_activity_unattended_never_asks_for_interstitial_handoff(
+    monkeypatch, db_url, task_id: str
+) -> None:
+    """Unattended runs pass interstitial="fallback" — verify the payload the
+    gateway sends never asks the device to hand off, and a plain "ok" search
+    (as the device answers under fallback) comes back status="done"."""
+    seen_payloads: list[dict] = []
+
+    def factory(*, capability, payload, **_kwargs):
+        if capability == "browser.session_open":
+            return CommandSucceeded({"created": True})
+        if capability == "browser.search":
+            seen_payloads.append(payload)
+            return CommandSucceeded(
+                {
+                    "schema_version": 2, "requested_provider": "google", "provider": "duckduckgo",
+                    "fallback": True, "fallback_reason": "google:captcha", "state": "ok",
+                    "path": "fallback", "results": [{"url": "https://a", "title": "A"}],
+                    "result_count": 1,
+                }
+            )
+        raise AssertionError(capability)  # pragma: no cover
+
+    fake = FakeDeviceCommandClient(factory=factory)
+    monkeypatch.setattr(ba, "_command_client", lambda: fake)
+    result = ba.discover_activity(
+        task_id, str(uuid.uuid4()), "news:0", "ai agents", "news", NOW.isoformat(),
+        interstitial="fallback",
+    )
+    assert result["status"] == "done"
+    assert result["candidates"] == 1
+    assert seen_payloads[0]["interstitial"] == "fallback"
+
+
+def test_discover_activity_dedups_identical_query_before_searching(
+    monkeypatch, db_url, task_id: str
+) -> None:
+    """spec §5a: "identical (query, provider) searches within a job are not
+    re-issued" — a query that already produced candidates must not dispatch
+    a second browser.search at all."""
+    _insert_candidate(db_url, task_id, url="https://news.example.com/already", query_id="news:0")
+    search_dispatched = {"n": 0}
+
+    def factory(*, capability, **_kwargs):
+        if capability == "browser.session_open":
+            return CommandSucceeded({"created": True})
+        search_dispatched["n"] += 1
+        raise AssertionError(
+            "browser.search must not be dispatched for an already-discovered query"
+        )
+
+    fake = FakeDeviceCommandClient(factory=factory)
+    monkeypatch.setattr(ba, "_command_client", lambda: fake)
+    result = ba.discover_activity(
+        task_id, str(uuid.uuid4()), "news:0", "ai agents", "news", NOW.isoformat(),
+    )
+    assert result == {"status": "done", "candidates": 0, "path": "cached", "verification_url": None}
+    assert search_dispatched["n"] == 0
 
 
 # --------------------------------------------------------------------- fetch
@@ -313,6 +440,28 @@ def test_fetch_activity_persists_evidence(monkeypatch, db_url, task_id: str) -> 
         assert len(rows) == 1
         assert rows[0].evidence_json["url"] == "https://a"
     engine.dispose()
+
+
+def test_fetch_activity_fetches_in_a_new_tab(monkeypatch, db_url, task_id: str) -> None:
+    """spec §5a: fetch activities pass tab="new" so the persistent Google
+    results tab stays loaded for the next discover_activity call."""
+    seen_payloads: list[dict] = []
+
+    def factory(*, capability, payload, **_kwargs):
+        if capability == "browser.session_open":
+            return CommandSucceeded({"created": True})
+        seen_payloads.append(payload)
+        return CommandSucceeded(
+            {
+                "url": payload["url"], "excerpt": "x", "fetched_at": NOW.isoformat(),
+                "extraction_method": "dom_text",
+            }
+        )
+
+    fake = FakeDeviceCommandClient(factory=factory)
+    monkeypatch.setattr(ba, "_command_client", lambda: fake)
+    ba.fetch_activity(task_id, str(uuid.uuid4()), "https://a", "q", "news")
+    assert seen_payloads[0]["tab"] == "new"
 
 
 def test_fetch_activity_duplicate_url_is_idempotent(monkeypatch, db_url, task_id: str) -> None:
@@ -389,6 +538,45 @@ def test_fetch_activity_flags_hostile_excerpt_as_injection_suspected(
         rows = runs_service.list_evidence(session, uuid.UUID(task_id))
         assert rows[0].injection_suspected is True
     engine.dispose()
+
+
+# --------------------------------------------------------- await_verification
+
+
+def test_await_verification_activity_returns_satisfied_true(monkeypatch, task_id: str) -> None:
+    fake = FakeDeviceCommandClient(
+        default_outcome=CommandSucceeded(
+            {"satisfied": True, "url": "https://www.google.com/search?q=x", "elapsed_ms": 3000}
+        )
+    )
+    monkeypatch.setattr(ba, "_command_client", lambda: fake)
+    result = ba.await_verification_activity(task_id, str(uuid.uuid4()), 60.0, 0)
+    assert result == {
+        "satisfied": True, "url": "https://www.google.com/search?q=x", "elapsed_ms": 3000,
+    }
+
+
+def test_await_verification_activity_returns_satisfied_false_on_timeout(
+    monkeypatch, task_id: str
+) -> None:
+    fake = FakeDeviceCommandClient(default_outcome=CommandSucceeded({"satisfied": False}))
+    monkeypatch.setattr(ba, "_command_client", lambda: fake)
+    result = ba.await_verification_activity(task_id, str(uuid.uuid4()), 60.0, 0)
+    assert result["satisfied"] is False
+
+
+def test_await_verification_activity_never_raises_on_dispatch_error(
+    monkeypatch, task_id: str
+) -> None:
+    """A device/transport problem degrades to "not satisfied" rather than
+    failing the activity — the workflow's own budget loop decides what to do
+    next, not a Temporal retry of a single wait slice."""
+    fake = FakeDeviceCommandClient(
+        default_outcome=CommandFailed("dependency_unavailable", "worker gone", True)
+    )
+    monkeypatch.setattr(ba, "_command_client", lambda: fake)
+    result = ba.await_verification_activity(task_id, str(uuid.uuid4()), 60.0, 0)
+    assert result == {"satisfied": False, "url": None, "elapsed_ms": None}
 
 
 # --------------------------------------------------------------------- rank

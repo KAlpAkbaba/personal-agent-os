@@ -293,6 +293,230 @@ def test_search_clean_result_still_works() -> None:
     assert len(hits) == 1
 
 
+# --------------------------------------------- process-wide session registry (spec §5a)
+
+
+def test_session_open_dispatched_once_across_many_gateway_instances() -> None:
+    """Every activity in a job constructs its OWN DeviceBrowserGateway, so the
+    "one session_open per job per process" guarantee (spec §5a) has to live
+    in a registry keyed (device_id, session_id), not on the instance."""
+    client = FakeDeviceCommandClient(default_outcome=CommandSucceeded({"created": True}))
+    _gateway(client).ensure_session()
+    _gateway(client).search("q1")
+    _gateway(client).search("q2")
+    session_opens = [c for c in client.calls if c.capability == "browser.session_open"]
+    assert len(session_opens) == 1
+
+
+def test_session_open_dispatched_again_for_a_different_session_id() -> None:
+    client = FakeDeviceCommandClient(default_outcome=CommandSucceeded({"created": True}))
+    DeviceBrowserGateway(client, device_id=DEVICE_ID, task_id="task-abc").ensure_session()
+    DeviceBrowserGateway(client, device_id=DEVICE_ID, task_id="task-xyz").ensure_session()
+    session_opens = [c for c in client.calls if c.capability == "browser.session_open"]
+    assert len(session_opens) == 2
+
+
+def test_unknown_session_error_triggers_exactly_one_reopen_and_retry() -> None:
+    session_open_calls: list[str] = []
+    search_calls: list[str] = []
+
+    def factory(*, capability, idempotency_key, **_kwargs):
+        if capability == "browser.session_open":
+            session_open_calls.append(idempotency_key)
+            return CommandSucceeded({"created": True})
+        if capability == "browser.search":
+            search_calls.append(idempotency_key)
+            if len(search_calls) == 1:
+                return CommandFailed("validation_error", "unknown session: task-abc", False)
+            return CommandSucceeded({"results": [{"url": "https://a"}]})
+        raise AssertionError(capability)  # pragma: no cover
+
+    client = FakeDeviceCommandClient(factory=factory)
+    hits = _gateway(client).search("q")
+
+    assert [h.url for h in hits] == ["https://a"]
+    # Opened, invalidated by "unknown session", reopened exactly once.
+    assert len(session_open_calls) == 2
+    assert session_open_calls[0] != session_open_calls[1]
+    # The retried search used a NEW idempotency key — replaying the failed
+    # command's key would just replay the same terminal failure forever.
+    assert len(search_calls) == 2
+    assert search_calls[0] != search_calls[1]
+
+
+def test_unknown_session_error_only_retried_once_then_raises() -> None:
+    """A SECOND "unknown session" answer (even after the one reopen) must
+    propagate rather than loop forever."""
+    client = FakeDeviceCommandClient(
+        factory=lambda *, capability, **_kwargs: (
+            CommandSucceeded({"created": True})
+            if capability == "browser.session_open"
+            else CommandFailed("validation_error", "unknown session: task-abc", False)
+        )
+    )
+    with pytest.raises(BrowserDispatchError) as exc_info:
+        _gateway(client).search("q")
+    assert exc_info.value.error_class == "validation_error"
+
+
+def test_a_non_session_error_is_not_retried() -> None:
+    calls = {"search": 0}
+
+    def factory(*, capability, **_kwargs):
+        if capability == "browser.session_open":
+            return CommandSucceeded({"created": True})
+        calls["search"] += 1
+        return CommandFailed("timeout", "navigation timed out", True)
+
+    client = FakeDeviceCommandClient(factory=factory)
+    with pytest.raises(BrowserDispatchError) as exc_info:
+        _gateway(client).search("q")
+    assert exc_info.value.error_class == "timeout"
+    assert calls["search"] == 1  # no unknown-session-style retry for an unrelated error
+
+
+# ------------------------------------------------------- interstitial (spec §3a)
+
+
+def test_search_defaults_interstitial_to_fallback() -> None:
+    client = FakeDeviceCommandClient(default_outcome=CommandSucceeded({"results": []}))
+    _gateway(client).search("q")
+    call = next(c for c in client.calls if c.capability == "browser.search")
+    assert call.payload["interstitial"] == "fallback"
+
+
+def test_search_passes_interstitial_handoff_through() -> None:
+    client = FakeDeviceCommandClient(default_outcome=CommandSucceeded({"results": []}))
+    _gateway(client).search("q", interstitial="handoff")
+    call = next(c for c in client.calls if c.capability == "browser.search")
+    assert call.payload["interstitial"] == "handoff"
+
+
+def test_search_evidence_carries_owner_handoff_fields() -> None:
+    client = FakeDeviceCommandClient(
+        default_outcome=CommandSucceeded(
+            {
+                "schema_version": 2,
+                "requested_provider": "google",
+                "provider": None,
+                "state": "waiting_for_owner_verification",
+                "path": "handoff_pending",
+                "page_kind": "captcha",
+                "verification_url": "https://www.google.com/sorry/index",
+                "results": [],
+                "result_count": 0,
+            }
+        )
+    )
+    gw = _gateway(client)
+    hits = gw.search("q", interstitial="handoff")
+    assert hits == []
+    evidence = gw.last_search_evidence
+    assert evidence is not None
+    assert evidence.state == "waiting_for_owner_verification"
+    assert evidence.waiting_for_owner_verification is True
+    assert evidence.path == "handoff_pending"
+    assert evidence.page_kind == "captcha"
+    assert evidence.verification_url == "https://www.google.com/sorry/index"
+    assert evidence.as_dict()["verification_url"] == "https://www.google.com/sorry/index"
+
+
+def test_search_evidence_defaults_state_ok_when_absent() -> None:
+    client = FakeDeviceCommandClient(
+        default_outcome=CommandSucceeded({"results": [{"url": "https://a"}]})
+    )
+    gw = _gateway(client)
+    gw.search("q")
+    assert gw.last_search_evidence.state == "ok"
+    assert gw.last_search_evidence.waiting_for_owner_verification is False
+    assert gw.last_search_evidence.verification_url is None
+
+
+# --------------------------------------------------------- await_verification
+
+
+def test_await_verification_payload_matches_contract() -> None:
+    client = FakeDeviceCommandClient(
+        default_outcome=CommandSucceeded(
+            {"satisfied": True, "url": "https://www.google.com/search?q=x", "elapsed_ms": 4200}
+        )
+    )
+    gw = _gateway(client)
+    result = gw.await_verification(timeout_s=60.0, iteration=0)
+    call = next(c for c in client.calls if c.capability == "browser.wait")
+    assert call.payload["session_id"] == TASK_ID
+    assert call.payload["for"] == "verification_cleared"
+    assert call.payload["timeout_ms"] == 60000
+    assert result == {
+        "satisfied": True, "url": "https://www.google.com/search?q=x", "elapsed_ms": 4200,
+    }
+
+
+def test_await_verification_caps_timeout_at_60s() -> None:
+    client = FakeDeviceCommandClient(default_outcome=CommandSucceeded({"satisfied": False}))
+    _gateway(client).await_verification(timeout_s=600.0, iteration=0)
+    call = next(c for c in client.calls if c.capability == "browser.wait")
+    assert call.payload["timeout_ms"] == 60000
+
+
+def test_await_verification_not_satisfied_on_timeout() -> None:
+    client = FakeDeviceCommandClient(
+        default_outcome=CommandSucceeded(
+            {"satisfied": False, "url": "https://x", "elapsed_ms": 60000}
+        )
+    )
+    result = _gateway(client).await_verification(timeout_s=60.0, iteration=1)
+    assert result["satisfied"] is False
+
+
+def test_await_verification_iterations_use_distinct_idempotency_keys() -> None:
+    client = FakeDeviceCommandClient(default_outcome=CommandSucceeded({"satisfied": False}))
+    gw = _gateway(client)
+    gw.await_verification(timeout_s=60.0, iteration=0)
+    gw.await_verification(timeout_s=60.0, iteration=1)
+    waits = [c for c in client.calls if c.capability == "browser.wait"]
+    assert len(waits) == 2
+    assert waits[0].idempotency_key != waits[1].idempotency_key
+
+
+def test_await_verification_calls_heartbeat() -> None:
+    client = FakeDeviceCommandClient(default_outcome=CommandSucceeded({"satisfied": True}))
+    seen = {"count": 0}
+
+    def heartbeat() -> None:
+        seen["count"] += 1
+
+    _gateway(client).await_verification(timeout_s=60.0, iteration=0, heartbeat=heartbeat)
+    assert seen["count"] >= 1
+
+
+# ---------------------------------------------------------------- fetch tab=new
+
+
+def test_fetch_url_defaults_tab_to_same() -> None:
+    client = FakeDeviceCommandClient(
+        default_outcome=CommandSucceeded(
+            {"url": "https://a", "excerpt": "x", "fetched_at": "2026-09-03T09:00:00Z",
+             "extraction_method": "dom_text"}
+        )
+    )
+    _gateway(client).fetch_url("https://a")
+    call = next(c for c in client.calls if c.capability == "browser.fetch_evidence")
+    assert call.payload["tab"] == "same"
+
+
+def test_fetch_url_passes_tab_new_through() -> None:
+    client = FakeDeviceCommandClient(
+        default_outcome=CommandSucceeded(
+            {"url": "https://a", "excerpt": "x", "fetched_at": "2026-09-03T09:00:00Z",
+             "extraction_method": "dom_text"}
+        )
+    )
+    _gateway(client).fetch_url("https://a", tab="new")
+    call = next(c for c in client.calls if c.capability == "browser.fetch_evidence")
+    assert call.payload["tab"] == "new"
+
+
 def test_search_evidence_from_an_old_worker_is_a_contract_mismatch_not_a_crash() -> None:
     from app.research.browser_gateway import SearchEvidence
 
