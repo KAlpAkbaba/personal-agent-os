@@ -103,3 +103,58 @@ async def test_search_ai_agents_engine_auto_returns_results(live_worker: Worker)
         assert r["title"]
 
     await live_worker._execute("browser.session_close", {"session_id": "live2"})
+
+
+async def test_google_search_ui_handoff_mode_reports_shape_honestly(live_worker: Worker) -> None:
+    """Real Google, through the real UI, in owner-handoff mode (contract §3a).
+
+    Google may answer this address with its unusual-traffic interstitial —
+    that is a valid, expected outcome here (``state=waiting_for_owner_
+    verification``), not a test failure: this asserts the RESULT SHAPE only,
+    then reports what actually happened. A clean result (``state=ok``,
+    ``path=google_ui``) is just as valid an outcome to report.
+    """
+    opened = await live_worker._execute(
+        "browser.session_open",
+        {
+            "session_id": "live3",
+            "profile": "research",
+            "policy": {"allowed_risk_classes": ["READ", "NAVIGATE"], "visible": True},
+        },
+    )
+    assert opened["created"] is True
+
+    outcome = await live_worker._execute(
+        "browser.search",
+        {
+            "session_id": "live3",
+            "query": "AI agents",
+            "engine": "google",
+            "max_results": 10,
+            "interstitial": "handoff",
+        },
+    )
+    print(
+        f"\n[live] google UI handoff: state={outcome['state']} path={outcome['path']} "
+        f"provider={outcome['provider']} page_kind={outcome['page_kind']} "
+        f"result_count={outcome['result_count']}"
+    )
+
+    assert outcome["schema_version"] == 2
+    assert outcome["requested_provider"] == "google"
+    assert outcome["state"] in ("ok", "waiting_for_owner_verification")
+    if outcome["state"] == "waiting_for_owner_verification":
+        assert outcome["path"] == "handoff_pending"
+        assert outcome["provider"] is None
+        assert outcome["results"] == []
+        assert outcome["page_kind"] in ("captcha", "consent")
+        assert outcome["verification_url"]
+        print(f"[live] owner verification would be needed at {outcome['verification_url']}")
+    else:
+        assert outcome["path"] in ("google_ui", "google_url")
+        assert outcome["provider"] == "google"
+        for r in outcome["results"]:
+            assert r["url"].startswith("http")
+            assert r["title"]
+
+    await live_worker._execute("browser.session_close", {"session_id": "live3"})

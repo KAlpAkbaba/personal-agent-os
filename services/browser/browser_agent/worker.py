@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode, urlsplit
 
 from playwright.async_api import Frame, Page
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
@@ -56,8 +57,9 @@ from .extraction import (
 from .injection import count_injection_markers
 from .obs_logging import configure_logging, get_logger
 from .page_kind import classify_page
+from .search_engines import detect_google_interstitial
 from .session import BrowserSession
-from .targets import coerce_target
+from .targets import TargetSpec, coerce_target
 
 logger = get_logger(__name__)
 
@@ -73,9 +75,17 @@ DEFAULT_NAV_TIMEOUT_MS = 15_000
 DEFAULT_IDLE_TIMEOUT_S = 600
 MAX_RESULT_BYTES = 48 * 1024
 _REAP_INTERVAL_S = 15.0
-_FETCH_EVIDENCE_SETTLE_S = 0.3
+# fetch_evidence's post-load settle (contract §3a): a bounded, DOM-driven
+# "networkidle" wait (exceptions swallowed) replaces the old fixed sleep.
+_FETCH_EVIDENCE_NETWORKIDLE_TIMEOUT_MS = 3_000
 _SCREENSHOT_MAX_BYTES = 300 * 1024
 _SCREENSHOT_QUALITIES: tuple[int, ...] = (80, 60, 40, 20)
+# Google-through-the-UI (contract §3a): readiness/verification polling never
+# uses a single fixed sleep — both loops poll a real DOM/navigation condition
+# on a short interval, bounded by an overall timeout.
+_GOOGLE_READY_TIMEOUT_MS = 10_000
+_GOOGLE_READY_POLL_S = 0.25
+_VERIFICATION_CLEARED_POLL_S = 0.5
 
 _SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 _CAPABILITY_NAME_RE = re.compile(policy.CAPABILITY_NAME_RE_SOURCE)
@@ -284,6 +294,11 @@ class SessionState:
     profile: str
     last_used: float
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    # Set when a browser.search (interstitial="handoff") returns
+    # state=waiting_for_owner_verification, holding the query that was
+    # pending; consumed (and cleared) by the next browser.search for this
+    # session (contract §3a "resume after clearance").
+    awaiting_verification_query: str | None = None
 
 
 # ----------------------------------------------------------------------- #
@@ -333,7 +348,13 @@ _SCROLL_JS = r"""
 
 _SCROLL_DIRECTIONS = frozenset({"down", "up", "to_end", "to_top"})
 _EXTRACT_MODES = frozenset({"text", "links", "metadata", "structured", "all"})
-_WAIT_FOR_VALUES = frozenset({"navigation", "text", "target", "load"})
+_WAIT_FOR_VALUES = frozenset({"navigation", "text", "target", "load", "verification_cleared"})
+_FETCH_EVIDENCE_TAB_VALUES = frozenset({"same", "new"})
+_INTERSTITIAL_MODES = frozenset({"fallback", "handoff"})
+#: Semantic target for Google's real search box (contract §3a): a single
+#: role=combobox on the page, resolved with ``.first`` like every other
+#: locator in this module — never CSS/XPath, never coordinates.
+_GOOGLE_SEARCH_BOX_TARGET = TargetSpec(role="combobox")
 
 
 def detect_user_locale() -> str | None:
@@ -379,6 +400,12 @@ class Worker:
         self._allow_private_destinations = bool(
             getattr(args, "allow_private_destinations", False)
         )
+        # Base URL for Google's home page (contract §3a). Defaults to the real
+        # Google; the browser e2e suite points this at the fixture site so
+        # the Google-through-the-UI flow is deterministic and offline.
+        self._google_base_url: str = getattr(
+            args, "google_base_url", None
+        ) or "https://www.google.com"
         self._sessions: dict[str, SessionState] = {}
         self._session_locks: dict[str, asyncio.Lock] = {}
         self._inflight: dict[str, asyncio.Task[Any]] = {}
@@ -750,8 +777,17 @@ class Worker:
                 tab_count = len(tabs)
             except Exception:
                 tab_count = 0
+            try:
+                current_url = redact_url(state.browser_session.backend.current_page.url)
+            except Exception:
+                current_url = None
             sessions_info.append(
-                {"session_id": sid, "tabs": tab_count, "idle_s": round(now - state.last_used, 1)}
+                {
+                    "session_id": sid,
+                    "tabs": tab_count,
+                    "idle_s": round(now - state.last_used, 1),
+                    "current_url": current_url,
+                }
             )
         browser_dict: dict[str, Any] = (
             self._browser_info.as_dict()
@@ -1066,6 +1102,8 @@ class Worker:
             )
         timeout_ms = payload.get("timeout_ms", 10_000)
         page = state.browser_session.backend.current_page
+        if wait_for == "verification_cleared":
+            return await self._wait_verification_cleared(page, timeout_ms=timeout_ms)
         start = time.perf_counter()
         try:
             if wait_for in ("navigation", "load"):
@@ -1097,6 +1135,174 @@ class Worker:
         except Exception as exc:
             raise map_playwright_error(exc, phase=Phase.ACT, op="wait") from exc
         return {"satisfied": True, "elapsed_ms": _elapsed_ms(start)}
+
+    async def _wait_verification_cleared(
+        self, page: Page, *, timeout_ms: float
+    ) -> dict[str, Any]:
+        """``browser.wait for=verification_cleared`` (contract §3a, READ).
+
+        Polls the page every ~500 ms — a bounded DOM/navigation condition,
+        never a fixed sleep — until :func:`search_engines.is_verification_cleared`
+        is true or ``timeout_ms`` elapses. ``satisfied: false`` on timeout is
+        the normal "still waiting" answer, not an error.
+        """
+        start = time.perf_counter()
+        deadline = time.monotonic() + timeout_ms / 1000
+        while True:
+            try:
+                html = await page.content()
+            except Exception:
+                html = ""
+            cleared = search_engines.is_verification_cleared(page.url, html)
+            if cleared or time.monotonic() >= deadline:
+                return {"satisfied": cleared, "url": page.url, "elapsed_ms": _elapsed_ms(start)}
+            await asyncio.sleep(_VERIFICATION_CLEARED_POLL_S)
+
+    # ------------------------------------------------------------------ #
+    # Google through the real UI (contract §3a)
+    # ------------------------------------------------------------------ #
+
+    def _google_home_url(self, locale: str | None) -> str:
+        """Google's home page URL, with ``hl``/``gl`` when a locale is known.
+
+        Built from ``--google-base-url`` (default the real Google; the
+        browser e2e suite points it at the fixture site), not hardcoded, so
+        the query string appends onto whatever base is configured — a plain
+        host (``https://www.google.com``) or a fixture path that already
+        carries its own query string.
+        """
+        params = search_engines.locale_params(locale)
+        if not params:
+            return self._google_base_url
+        sep = "&" if "?" in self._google_base_url else "?"
+        return f"{self._google_base_url}{sep}{urlencode(params)}"
+
+    async def _is_google_results_page(self, page: Page) -> bool:
+        """Whether the current page is already on the Google host with a
+        visible search box — i.e. a second search can type into it directly
+        instead of navigating home again (contract §3a)."""
+        try:
+            if urlsplit(page.url).netloc != urlsplit(self._google_base_url).netloc:
+                return False
+        except Exception:
+            return False
+        try:
+            return (await _GOOGLE_SEARCH_BOX_TARGET.to_locator(page).count()) > 0
+        except Exception:
+            return False
+
+    async def _google_box_value(self, page: Page) -> str | None:
+        """The current value typed into Google's search box, or ``None`` when
+        it cannot be read (no box, detached page, …)."""
+        try:
+            return await _GOOGLE_SEARCH_BOX_TARGET.to_locator(page).first.input_value()
+        except Exception:
+            return None
+
+    async def _wait_google_ready(self, page: Page, *, timeout_ms: float) -> None:
+        """Poll until the results region (``#search``/``#rso``) or an
+        interstitial appears, or ``timeout_ms`` elapses — a DOM/navigation
+        condition, never a fixed sleep (contract §3a)."""
+        deadline = time.monotonic() + timeout_ms / 1000
+        while True:
+            try:
+                has_results = (await page.locator("#search, #rso").count()) > 0
+            except Exception:
+                has_results = False
+            if has_results:
+                return
+            try:
+                html = await page.content()
+            except Exception:
+                html = ""
+            if detect_google_interstitial(html, page.url) is not None:
+                return
+            if time.monotonic() >= deadline:
+                return
+            await asyncio.sleep(_GOOGLE_READY_POLL_S)
+
+    async def _google_ui_fetch(
+        self,
+        state: SessionState,
+        query: str,
+        *,
+        locale: str | None,
+        recency_days: int | None,
+        interstitial_mode: str,
+    ) -> tuple[str, str, int | None, str, str | None]:
+        """One Google attempt, driven through the real page (contract §3a).
+
+        Returns a 5-tuple compatible with :func:`search_engines.run_search`'s
+        ``fetch`` seam: ``(html, page_kind, http_status, final_url,
+        path_hint)``. Raises :class:`search_engines.GoogleHandoffPending`
+        instead of returning when ``interstitial_mode == "handoff"`` and an
+        interstitial is hit — ``run_search`` stops immediately on that, never
+        falling back (never looping).
+        """
+        browser_session = state.browser_session
+        page = browser_session.backend.current_page
+
+        # Resume after an owner-handoff clearance (contract §3a): consumed
+        # regardless of outcome — a stale/mismatched query falls through to
+        # a normal (typed) attempt below.
+        awaiting_query = state.awaiting_verification_query
+        state.awaiting_verification_query = None
+        if awaiting_query is not None and awaiting_query == query:
+            html = await page.content()
+            if (
+                detect_google_interstitial(html, page.url) is None
+                and await self._google_box_value(page) == query
+            ):
+                return html, "ok", None, page.url, "handoff_cleared"
+
+        if not await self._is_google_results_page(page):
+            home_url = self._google_home_url(locale)
+            self._check_destination(home_url, op="search")
+            await browser_session.navigate(home_url, timeout_ms=DEFAULT_NAV_TIMEOUT_MS)
+            page = browser_session.backend.current_page
+
+        box = _GOOGLE_SEARCH_BOX_TARGET.to_locator(page).first
+        try:
+            await box.wait_for(state="visible", timeout=5_000)
+            await box.fill(query)
+            await box.press("Enter")
+        except Exception as exc:
+            raise map_playwright_error(
+                exc, phase=Phase.ACT, op="search", evidence={"url": redact_url(page.url)}
+            ) from exc
+
+        await self._wait_google_ready(page, timeout_ms=_GOOGLE_READY_TIMEOUT_MS)
+        raw = await read_raw_page_data(page)
+        body_text = await browser_session.page_text()
+        kind_result = classify_page(
+            title=raw.title,
+            heading_text=raw.heading_text,
+            body_text=body_text,
+            has_password_field=raw.has_password_field,
+            http_status=None,
+        )
+        html = await page.content()
+        final_url = page.url
+        interstitial = detect_google_interstitial(html, final_url)
+
+        if interstitial is not None and interstitial_mode == "handoff":
+            await page.bring_to_front()
+            state.awaiting_verification_query = query
+            raise search_engines.GoogleHandoffPending(
+                page_kind=interstitial, verification_url=final_url
+            )
+
+        if interstitial is None and recency_days is not None:
+            filtered_url = search_engines.append_recency_param(final_url, recency_days)
+            self._check_destination(filtered_url, op="search")
+            await browser_session.navigate(filtered_url, timeout_ms=DEFAULT_NAV_TIMEOUT_MS)
+            page = browser_session.backend.current_page
+            await self._wait_google_ready(page, timeout_ms=_GOOGLE_READY_TIMEOUT_MS)
+            html = await page.content()
+            final_url = page.url
+            return html, kind_result.page_kind, None, final_url, "google_url"
+
+        return html, kind_result.page_kind, None, final_url, "google_ui"
 
     # ------------------------------------------------------------------ #
     # extract / snapshot / screenshot / download
@@ -1235,6 +1441,13 @@ class Worker:
                 "search: recency_days must be an integer or null",
                 retryable=False,
             )
+        interstitial_mode = payload.get("interstitial", "fallback")
+        if interstitial_mode not in _INTERSTITIAL_MODES:
+            raise BrowserError(
+                ErrorClass.VALIDATION_ERROR,
+                f"search: interstitial must be one of {sorted(_INTERSTITIAL_MODES)}",
+                retryable=False,
+            )
 
         locale = payload.get("locale") or self._locale
         if locale is not None and not isinstance(locale, str):
@@ -1245,7 +1458,18 @@ class Worker:
             )
         browser_session = state.browser_session
 
-        async def fetch(_engine: str, url: str) -> tuple[str, str, int | None, str]:
+        async def fetch(_engine: str, url: str) -> tuple[str, str, int | None, str, str | None]:
+            if _engine == "google":
+                # Google is driven through the real page, not fetched by URL
+                # (contract §3a) — ``url`` (Google's results URL) is unused
+                # here; the attempt navigates/types instead.
+                return await self._google_ui_fetch(
+                    state,
+                    query,
+                    locale=locale,
+                    recency_days=recency_days,
+                    interstitial_mode=interstitial_mode,
+                )
             response = await browser_session.navigate(url, timeout_ms=15_000)
             page = browser_session.backend.current_page
             http_status = response.status if response is not None else None
@@ -1259,7 +1483,7 @@ class Worker:
                 http_status=http_status,
             )
             html = await page.content()
-            return html, kind_result.page_kind, http_status, page.url
+            return html, kind_result.page_kind, http_status, page.url, None
 
         outcome = await search_engines.run_search(
             query,
@@ -1278,6 +1502,8 @@ class Worker:
             result_count=len(outcome.results),
             query_chars=len(query),
             attempts=[a.as_dict() for a in outcome.attempts],
+            path=outcome.path,
+            state=outcome.state,
         )
         return outcome.as_dict()
 
@@ -1294,44 +1520,88 @@ class Worker:
         source_class = payload.get("source_class") or "unknown"
         excerpt_chars = payload.get("excerpt_chars", 1_200)
         timeout_ms = payload.get("timeout_ms", 30_000)
+        tab = payload.get("tab", "same")
+        if tab not in _FETCH_EVIDENCE_TAB_VALUES:
+            raise BrowserError(
+                ErrorClass.VALIDATION_ERROR,
+                f"fetch_evidence: tab must be one of {sorted(_FETCH_EVIDENCE_TAB_VALUES)}",
+                retryable=False,
+            )
 
         browser_session = state.browser_session
-        page = browser_session.backend.current_page
-        response = await browser_session.navigate(url, timeout_ms=timeout_ms)
-        await asyncio.sleep(
-            _FETCH_EVIDENCE_SETTLE_S
-        )  # domcontentloaded/load already awaited; short settle
+        new_tab_index: int | None = None
+        previous_tab_index: int | None = None
+        try:
+            if tab == "new":
+                # Open a blank tab first (no direct URL nav here — that
+                # wouldn't hand back a Response for http_status), select it,
+                # then navigate normally through the session so the Google
+                # results tab (contract §3a) is never disturbed.
+                tabs_before = await browser_session.list_tabs()
+                previous_tab_index = next(
+                    (t.index for t in tabs_before if t.is_current), 0
+                )
+                new_tab_index = await browser_session.new_tab(None)
 
-        raw = await read_raw_page_data(page)
-        body_text = await browser_session.page_text()
-        primary_text = await read_primary_text(page)
-        http_status = response.status if response is not None else None
-        kind_result = classify_page(
-            title=raw.title,
-            heading_text=raw.heading_text,
-            body_text=body_text,
-            has_password_field=raw.has_password_field,
-            http_status=http_status,
+            response = await browser_session.navigate(url, timeout_ms=timeout_ms)
+            page = browser_session.backend.current_page
+            # DOM/navigation-driven settle (bounded, exceptions swallowed) —
+            # replaces the old fixed sleep (contract §3a).
+            with suppress(Exception):
+                await page.wait_for_load_state(
+                    "networkidle", timeout=_FETCH_EVIDENCE_NETWORKIDLE_TIMEOUT_MS
+                )
+
+            raw = await read_raw_page_data(page)
+            body_text = await browser_session.page_text()
+            primary_text = await read_primary_text(page)
+            http_status = response.status if response is not None else None
+            kind_result = classify_page(
+                title=raw.title,
+                heading_text=raw.heading_text,
+                body_text=body_text,
+                has_password_field=raw.has_password_field,
+                http_status=http_status,
+            )
+            excerpt, _truncated = truncate_text(primary_text.strip(), max_chars=excerpt_chars)
+            links = build_links(raw.links, base_url=page.url)
+
+            result: dict[str, Any] = {
+                "url": url,
+                "final_url": page.url,
+                "title": raw.title,
+                "excerpt": excerpt,
+                "text_chars": len(body_text),
+                "fetched_at": _utc_now_iso(),
+                "extraction_method": "dom_text",
+                "page_kind": kind_result.page_kind,
+                "http_status": http_status,
+                "metadata": build_metadata(raw).as_dict(),
+                "source_class": source_class,
+                "query": query,
+                "injection_markers": count_injection_markers(body_text),
+                "links_count": len(links),
+                "tab_used": tab,
+            }
+        finally:
+            if new_tab_index is not None:
+                with suppress(Exception):
+                    await browser_session.close_tab(new_tab_index)
+                if previous_tab_index is not None:
+                    with suppress(Exception):
+                        await browser_session.select_tab(previous_tab_index)
+
+        # Audit/log line after the result is known (never blocking the
+        # interactive path above).
+        logger.info(
+            "browser.fetch_evidence",
+            url=redact_url(url),
+            page_kind=result["page_kind"],
+            tab=tab,
+            text_chars=result["text_chars"],
+            injection_markers=result["injection_markers"],
         )
-        excerpt, _truncated = truncate_text(primary_text.strip(), max_chars=excerpt_chars)
-        links = build_links(raw.links, base_url=page.url)
-
-        return {
-            "url": url,
-            "final_url": page.url,
-            "title": raw.title,
-            "excerpt": excerpt,
-            "text_chars": len(body_text),
-            "fetched_at": _utc_now_iso(),
-            "extraction_method": "dom_text",
-            "page_kind": kind_result.page_kind,
-            "http_status": http_status,
-            "metadata": build_metadata(raw).as_dict(),
-            "source_class": source_class,
-            "query": query,
-            "injection_markers": count_injection_markers(body_text),
-            "links_count": len(links),
-        }
+        return result
 
 
 # ----------------------------------------------------------------------- #
@@ -1403,6 +1673,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--allow-private-destinations",
         action="store_true",
         help="Permit loopback/private/tailnet destinations (fixture tests only)",
+    )
+    parser.add_argument(
+        "--google-base-url",
+        default=None,
+        help=(
+            "Base URL for Google's home page used by the Google-through-the-UI "
+            "browser.search flow (contract §3a; default: https://www.google.com). "
+            "The browser e2e suite points this at the fixture site."
+        ),
     )
     parser.add_argument(
         "--self-check",

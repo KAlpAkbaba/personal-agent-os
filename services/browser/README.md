@@ -337,6 +337,64 @@ is raised only when every attempted engine ended `captcha`/`blocked`.
 `recency_days` maps to each engine's own freshness parameter (`df`,
 `freshness`, `tf`) where one exists.
 
+### Google through the real UI, owner handoff (contract v1.1, §3a)
+
+One session per research job: the worker keeps the loaded Google results tab
+and the profile (cookies, locale, consent) between commands and between
+normal runs — nothing is spoofed or masked (no stealth plugins, no
+fingerprint/webdriver masking, no CAPTCHA solving of any kind).
+
+`browser.search` for provider `google` (in `auto` or explicit) drives the
+real page instead of navigating straight to a results URL: if the session's
+current page is already a Google results page with a search box (same host
+as `--google-base-url`, a `role=combobox` present), it types the query into
+that box (`fill` + `Enter`) in place; otherwise it navigates to the Google
+home page first (`--google-base-url`, default `https://www.google.com`; the
+locale comes from the payload, else `--locale`, else the machine's user
+locale) and then types + submits. Readiness is a DOM/navigation condition —
+the results region (`#search`/`#rso`) or an interstitial
+(`detect_google_interstitial` on the landed URL/HTML), polled on a bounded
+~250 ms interval, never a fixed sleep — capped at ~10 s. `recency_days` is
+applied to the already-loaded results page as Google's own time filter
+(`append_recency_param` re-navigates the current results URL with
+`tbs=qdr:x`) only when requested; that specific re-fetch is by URL, so it is
+the one case where the result's `path` is `google_url` instead of the
+default `google_ui`. Every other engine keeps its existing URL-based flow
+(`path=fallback` when one of them answers).
+
+Payload gains `"interstitial": "fallback" | "handoff"` (default `fallback`,
+unattended: an interstitial is recorded as that attempt's outcome and the
+next provider is tried, same as before). `"handoff"` (owner present): on an
+interstitial the worker brings the Chrome window to the foreground
+(`page.bring_to_front()`), leaves the page exactly as it is, and returns a
+**successful** result with `"state": "waiting_for_owner_verification"`,
+`page_kind` (`captcha`/`consent`), `provider: null`, `results: []`,
+`"path": "handoff_pending"`, `"verification_url"` — nothing is retried in a
+loop and nothing is solved. `browser.wait` gains `"for":
+"verification_cleared"` (READ): polls the session's current page every
+~500 ms (`search_engines.is_verification_cleared`, a pure decision function —
+URL off `/sorry/`/`consent.google.*` and no interstitial markers in the
+HTML) until cleared or `timeout_ms` elapses → `{"satisfied", "url",
+"elapsed_ms"}`. After `satisfied: true` the same `browser.search` (same
+`session_id`, same query, `interstitial="handoff"`) resumes: if the already-
+loaded results page's search box still shows that query, the worker parses
+it in place without retyping (`path=handoff_cleared`); otherwise it types the
+query again through the normal flow.
+
+`browser.fetch_evidence` gains `"tab": "same" | "new"` (default `same`):
+`"new"` opens the URL in a fresh tab, extracts there, closes that tab and
+reselects the previously-current tab (so a loaded Google results tab is
+never disturbed), and the result carries `"tab_used"`. The old fixed
+post-navigation sleep is replaced by a bounded `wait_for_load_state
+("networkidle", …)` with exceptions swallowed; the audit log line is written
+once the result is known, never before or during the interactive path.
+
+`browser.worker_status`'s `sessions[]` entries gain `"current_url"` (query
+string stripped via `redact_url`) so a caller can see what each open session
+is looking at without a separate `browser.inspect` round trip; reopening an
+existing session (`browser.session_open` on a live `session_id`) still never
+recreates the browser or its tabs — it only ever narrows the policy.
+
 ### Untrusted content (`browser_agent.injection`)
 
 Page text is data, never instructions: no worker operation ever derives a
@@ -382,12 +440,24 @@ owner browser or profile is ever involved, and nothing binds non-loopback.
 `tests/fixtures/site/hostile.html` carries real injection-style text and a
 meta-refresh/auto-submit form timed to 30s (present in the DOM for
 inspection, harmless during a normal test run) to prove the worker only
-*reports* on hostile content, never acts on it.
+*reports* on hostile content, never acts on it. `google-home.html` /
+`google-results.html` / `google-sorry.html` / `duckduckgo-results.html`
+(contract §3a, `tests/browser/test_google_ui_e2e.py`) let the Google-through-
+the-UI, owner-handoff and provider-fallback scenarios run fully offline
+against real headless Chromium — a worker started with `--google-base-url
+<fixture site>/google-home.html` types into the fixture's search box and
+parses the fixture's results exactly like the real page, and
+`?simulate=sorry` on that same fixture URL deterministically routes the form
+to the interstitial fixture instead, for the handoff scenarios.
 
 `-m live` (`tests/live/`) is opt-in, excluded from the default run, and hits
 real public sites and a real search engine through the real installed Google
 Chrome (`--channel chrome`): `browser.fetch_evidence` against a real news
-page, `browser.search "AI agents" engine=auto`. These are inherently
+page, `browser.search "AI agents" engine=auto`, and a real Google-UI search
+in `interstitial="handoff"` mode (contract §3a) — Google may answer from a
+qualification machine's address with its own unusual-traffic interstitial;
+that is a valid, expected outcome (`state="waiting_for_owner_verification"`)
+asserted by shape, not a failure. These are inherently
 non-deterministic — target-side anti-bot measures can and do change the
 outcome (observed live: a 403 from a real publisher classifies as
 `auth_wall` per the contract's own HTTP-401/403 rule even when the real
