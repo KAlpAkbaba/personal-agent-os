@@ -36,9 +36,11 @@ def test_auth_wall_from_http_401() -> None:
     assert result.site_error.http_status == 401
 
 
-def test_auth_wall_from_http_403() -> None:
+def test_bare_http_403_is_blocked_not_auth_wall() -> None:
+    # Refined after the 2026-09-03 live run: a 403 with no login form or wording is
+    # bot filtering; only a password field / login marker / 401 means "sign in".
     result = _classify(http_status=403)
-    assert result.page_kind == "auth_wall"
+    assert result.page_kind == "blocked"
 
 
 def test_auth_wall_from_english_title_marker() -> None:
@@ -124,3 +126,34 @@ def test_empty_not_triggered_by_error_status() -> None:
 def test_none_http_status_does_not_crash_and_defaults_ok() -> None:
     result = _classify(http_status=None)
     assert result.page_kind == "ok"
+
+
+# -------------------------------------------------------- real-world refinements
+
+
+def test_bare_403_without_login_markers_is_blocked_not_auth_wall() -> None:
+    # A public newsroom answered headless Chrome with 403 on 2026-09-03: bot filtering,
+    # not a login wall. Research must record it as a refused source, not "needs sign-in".
+    result = classify_page(
+        title="Forbidden", heading_text="", body_text="Forbidden", has_password_field=False,
+        http_status=403,
+    )
+    assert result.page_kind == "blocked"
+    assert result.site_error is not None and result.site_error.http_status == 403
+
+
+def test_403_with_a_password_field_stays_auth_wall() -> None:
+    result = classify_page(
+        title="Members", heading_text="", body_text="", has_password_field=True,
+        http_status=403,
+    )
+    assert result.page_kind == "auth_wall"
+
+
+def test_duckduckgo_anomaly_wording_is_captcha() -> None:
+    result = classify_page(
+        title="DuckDuckGo", heading_text="",
+        body_text="Unfortunately, bots use DuckDuckGo too. Please complete the challenge.",
+        has_password_field=False, http_status=200,
+    )
+    assert result.page_kind == "captcha"

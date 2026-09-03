@@ -18,6 +18,7 @@ from browser_agent.search_engines import (
     parse_brave_html,
     parse_duckduckgo_html,
     parse_engine_html,
+    resolve_result_url,
     run_search,
 )
 
@@ -242,3 +243,48 @@ class TestRunSearchFallover:
         with pytest.raises(BrowserError) as exc_info:
             await run_search("q", "altavista", fetch=fetch)
         assert exc_info.value.error_class == ErrorClass.VALIDATION_ERROR
+
+
+# --------------------------------------------------------------- real redirects
+# Shapes copied from real SERPs fetched with headful Chrome on 2026-09-03: the
+# engines wrap every organic link in a click-tracking redirect on their own
+# domain, which the first parser version dropped as "own domain" (0 results).
+
+DDG_REAL = """
+<div class="result results_links results_links_deep web-result">
+ <div class="links_main links_deep result__body">
+  <h2 class="result__title">
+   <a class="result__a" rel="nofollow"
+      href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fagents&amp;rut=4348">AI Agents News</a>
+  </h2>
+  <a class="result__snippet"
+     href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fagents">Daily updates on agents.</a>
+ </div>
+</div>
+"""
+
+BING_REAL = """
+<ol id="b_results">
+ <li class="b_algo"><h2><a
+   href="https://www.bing.com/ck/a?!&amp;&amp;p=c83369cf&amp;u=a1aHR0cHM6Ly9haWFnZW50c3RvcmUuYWkvYWktYWdlbnQtbmV3cy90aGlzLXdlZWs&amp;ntb=1"
+   >AI Agents News</a></h2><div class="b_caption"><p>Weekly agent news.</p></div></li>
+ <li class="b_algo"><h2><a href="https://www.bing.com/ck/a?u=zz-not-base64-!!!">Broken</a></h2></li>
+</ol>
+"""
+
+
+class TestRealRedirectShapes:
+    def test_duckduckgo_uddg_redirect_is_unwrapped(self) -> None:
+        results = parse_duckduckgo_html(DDG_REAL)
+        assert [r.url for r in results] == ["https://example.com/agents"]
+        assert results[0].snippet == "Daily updates on agents."
+
+    def test_bing_ck_redirect_is_base64url_decoded_and_broken_ones_dropped(self) -> None:
+        results = parse_bing_html(BING_REAL)
+        assert [r.url for r in results] == ["https://aiagentstore.ai/ai-agent-news/this-week"]
+
+    def test_resolve_result_url_rejects_non_http_destinations(self) -> None:
+        bad = "//duckduckgo.com/l/?uddg=javascript%3Aalert(1)"
+        assert resolve_result_url(bad, "duckduckgo") is None
+        assert resolve_result_url("mailto:a@b", "bing") is None
+        assert resolve_result_url("https://example.com/x", "brave") == "https://example.com/x"

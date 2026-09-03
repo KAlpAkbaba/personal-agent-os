@@ -24,7 +24,10 @@ async def live_worker(tmp_path: Path):
     data_dir = tmp_path / "live-worker-data"
     data_dir.mkdir()
     args = build_arg_parser().parse_args(
-        ["--data-dir", str(data_dir), "--channel", "chrome", "--headless"]
+        # Headful is the production posture (contract §2 `visible: true`) and the one
+        # that works: on 2026-09-03 the same public newsroom answered headless Chrome
+        # with 403 and headful Chrome with 200, and every engine served results headful.
+        ["--data-dir", str(data_dir), "--channel", "chrome", "--visible"]
     )
     w = Worker(args)
     await w._print_hello()

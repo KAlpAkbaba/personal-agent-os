@@ -85,6 +85,39 @@ def _is_own_domain(url: str, engine: str) -> bool:
     return any(host == d or host.endswith("." + d) for d in _ENGINE_OWN_DOMAINS[engine])
 
 
+def resolve_result_url(href: str, engine: str) -> str | None:
+    """Turn a SERP result link into the destination URL, or ``None``.
+
+    Real engines wrap organic links in a click-tracking redirect on their own
+    domain (seen on 2026-09-03 with real Chrome): DuckDuckGo HTML uses
+    ``//duckduckgo.com/l/?uddg=<url-encoded destination>`` and Bing uses
+    ``https://www.bing.com/ck/a?…&u=a1<base64url destination>``. Without
+    unwrapping, every organic result looks like the engine's own domain and is
+    dropped. Only ``http(s)`` destinations are accepted; anything else is
+    ``None`` (dropped by the caller), never a guess.
+    """
+    import base64
+    from urllib.parse import parse_qs, unquote
+
+    if href.startswith("//"):
+        href = "https:" + href
+    parts = urlsplit(href)
+    host = parts.netloc.lower()
+    if engine == "duckduckgo" and host.endswith("duckduckgo.com") and parts.path.startswith("/l/"):
+        target = parse_qs(parts.query).get("uddg", [""])[0]
+        href = unquote(target)
+    elif engine == "bing" and host.endswith("bing.com") and parts.path.startswith("/ck/"):
+        packed = parse_qs(parts.query).get("u", [""])[0]
+        raw = packed[2:] if packed.startswith("a1") else packed
+        try:
+            href = base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)).decode("utf-8")
+        except (ValueError, UnicodeDecodeError):
+            return None
+    if not href.startswith(("http://", "https://")):
+        return None
+    return href
+
+
 def _recency_param(engine: str, recency_days: int | None) -> dict[str, str]:
     """Best-effort mapping of ``recency_days`` to each engine's own recency
     query parameter (contract §3: "recency_days mapped to each engine's own
@@ -142,8 +175,8 @@ def parse_duckduckgo_html(html: str, *, max_results: int = 10) -> list[SearchRes
         title_link = block.select_one("a.result__a")
         if title_link is None or not title_link.get("href"):
             continue
-        url = str(title_link["href"])
-        if _is_own_domain(url, "duckduckgo"):
+        url = resolve_result_url(str(title_link["href"]), "duckduckgo")
+        if url is None or _is_own_domain(url, "duckduckgo"):
             continue
         snippet_el = block.select_one("a.result__snippet") or block.select_one(
             "div.result__snippet"
@@ -174,8 +207,8 @@ def parse_bing_html(html: str, *, max_results: int = 10) -> list[SearchResult]:
         title_link = item.select_one("h2 a[href]")
         if title_link is None:
             continue
-        url = str(title_link["href"])
-        if _is_own_domain(url, "bing"):
+        url = resolve_result_url(str(title_link["href"]), "bing")
+        if url is None or _is_own_domain(url, "bing"):
             continue
         caption = item.select_one(".b_caption") or item
         snippet = _clean(caption.get_text())

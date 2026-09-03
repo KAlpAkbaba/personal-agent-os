@@ -106,10 +106,15 @@ Navigation result (`navigate`, `back`, `forward`, `tab_select`, `wait` with navi
 `page_kind ≠ ok` (with `site_error: {"kind":"http_error|auth_wall|captcha|blocked|dns|reset",
 "http_status": 503|null, "detail":"…"}`), whereas a browser/transport problem is a typed
 command error (`timeout`, `dependency_unavailable`, `ui_state_changed`, …). Auth walls are
-detected from password fields on the landing page, HTTP 401/403, and a small marker list
-(login/sign in/oturum aç/giriş yap in the title or main heading); CAPTCHA pages from known
-markers (recaptcha/hcaptcha/turnstile/"verify you are human"). The worker never attempts to
-solve a CAPTCHA.
+detected from password fields on the landing page, HTTP 401, and a small marker list
+(login/sign in/oturum aç/giriş yap in the title or main heading); a bare HTTP 403 without
+login markers is `blocked` (bot filtering, observed for real on a public newsroom against
+headless Chrome); CAPTCHA pages from known markers (recaptcha/hcaptcha/turnstile/"verify you
+are human"/"bots use duckduckgo"/"checking your browser"/"just a moment"/"are you a robot").
+The worker never attempts to solve a CAPTCHA. Headful real Chrome with the dedicated
+persistent profile (`visible: true`, the default) is the qualified posture: on 2026-09-03 all
+three engines and the primary newsrooms served headful Chrome normally while headless Chrome
+was refused or challenged.
 
 `browser.extract` payload `{"session_id":"…","mode":"text|links|metadata|structured|all","max_chars":24000,"frame":null}` → 
 

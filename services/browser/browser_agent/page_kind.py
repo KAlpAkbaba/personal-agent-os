@@ -37,6 +37,14 @@ _CAPTCHA_MARKERS: tuple[str, ...] = (
     "hcaptcha",
     "turnstile",
     "verify you are human",
+    # Seen for real on 2026-09-03 (contract §3 list extended): DuckDuckGo's anomaly
+    # page, Cloudflare's interstitial and generic robot checks.
+    "bots use duckduckgo",
+    "unfortunately, bots",
+    "checking your browser",
+    "just a moment...",
+    "are you a robot",
+    "prove you are human",
 )
 
 _LOGIN_MARKERS: tuple[str, ...] = (
@@ -116,11 +124,8 @@ def classify_page(
             SiteError("captcha", http_status, "CAPTCHA challenge markers detected"),
         )
 
-    if (
-        has_password_field
-        or (http_status in AUTH_WALL_HTTP_STATUSES)
-        or _contains_any(title_and_heading, _LOGIN_MARKERS)
-    ):
+    login_markers = has_password_field or _contains_any(title_and_heading, _LOGIN_MARKERS)
+    if login_markers or http_status == 401:
         detail = (
             f"HTTP {http_status} on landing page"
             if http_status in AUTH_WALL_HTTP_STATUSES
@@ -128,9 +133,16 @@ def classify_page(
         )
         return PageKindResult("auth_wall", SiteError("auth_wall", http_status, detail))
 
-    if _contains_any(body_text, _BLOCKED_MARKERS) or http_status == BLOCKED_HTTP_STATUS:
+    # A bare 403 with no login form or sign-in wording is bot filtering, not a login
+    # wall (seen for real: a public newsroom answering headless Chrome with 403). It
+    # is reported as `blocked` so research treats it as a source that refused automation.
+    if (
+        _contains_any(body_text, _BLOCKED_MARKERS)
+        or http_status == BLOCKED_HTTP_STATUS
+        or http_status == 403
+    ):
         return PageKindResult(
-            "blocked", SiteError("blocked", http_status, "bot-block markers detected")
+            "blocked", SiteError("blocked", http_status, "bot-block markers or HTTP 403")
         )
 
     if http_status is not None and http_status >= 400:
