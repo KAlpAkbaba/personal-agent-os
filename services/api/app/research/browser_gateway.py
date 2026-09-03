@@ -178,9 +178,21 @@ class SearchEvidence:
     query: str
     result_count: int
     attempts: tuple[dict[str, Any], ...] = ()
+    schema_version: int = 0
+    locale: str | None = None
+
+    #: The search response schema that carries provider evidence (BROWSER_CAPABILITIES §3).
+    REQUIRED_SCHEMA_VERSION = 2
+
+    @property
+    def contract_ok(self) -> bool:
+        return self.schema_version >= self.REQUIRED_SCHEMA_VERSION
 
     def as_dict(self) -> dict[str, Any]:
         return {
+            "schema_version": self.schema_version,
+            "contract_ok": self.contract_ok,
+            "locale": self.locale,
             "requested_provider": self.requested_provider,
             "provider": self.provider,
             "fallback": self.fallback,
@@ -192,10 +204,14 @@ class SearchEvidence:
 
     @classmethod
     def from_result(cls, query: str, result: dict[str, Any]) -> SearchEvidence:
-        provider = str(result.get("provider") or result.get("engine") or "unknown")
-        requested = str(result.get("requested_provider") or provider)
+        schema_version = result.get("schema_version")
+        schema_version = int(schema_version) if isinstance(schema_version, int) else 0
+        provider = str(result.get("provider") or "unknown")
+        requested = str(result.get("requested_provider") or "unknown")
         hits = result.get("results") or []
         return cls(
+            schema_version=schema_version,
+            locale=(str(result["locale"]) if result.get("locale") else None),
             requested_provider=requested,
             provider=provider,
             fallback=bool(result.get("fallback", provider != requested)),

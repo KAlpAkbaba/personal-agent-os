@@ -33,6 +33,8 @@ ENGINES: tuple[str, ...] = ("google", "duckduckgo", "bing", "brave")
 # the fallback; Bing and Brave stay selectable by name only.
 AUTO_ORDER: tuple[str, ...] = ("google", "duckduckgo")
 PRIMARY_PROVIDER = AUTO_ORDER[0]
+# Response schema of browser.search (2 = provider evidence fields present).
+SEARCH_SCHEMA_VERSION = 2
 MAX_RESULTS_CAP = 20
 
 _ENGINE_OWN_DOMAINS: dict[str, tuple[str, ...]] = {
@@ -114,6 +116,7 @@ class SearchOutcome:
 
     def as_dict(self) -> dict[str, object]:
         return {
+            "schema_version": SEARCH_SCHEMA_VERSION,
             "engine": self.provider,
             "requested_provider": self.requested_provider,
             "provider": self.provider,
@@ -556,6 +559,7 @@ async def run_search(
 __all__ = [
     "AUTO_ORDER",
     "PRIMARY_PROVIDER",
+    "SEARCH_SCHEMA_VERSION",
     "SearchAttempt",
     "detect_google_interstitial",
     "parse_google_html",

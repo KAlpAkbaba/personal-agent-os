@@ -317,6 +317,15 @@ def discover_activity(
                 raise _non_retryable(exc.error_class, exc.message) from exc
             evidence = gateway.last_search_evidence
             provider = evidence.provider if evidence else "unknown"
+            if evidence is not None and not evidence.contract_ok:
+                # An installed worker that predates the provider abstraction answers without
+                # evidence fields: say so in the run record instead of inventing a provider.
+                logger.warning(
+                    "browser_research_search_contract_mismatch",
+                    task_id=task_id,
+                    schema_version=evidence.schema_version,
+                    required=evidence.REQUIRED_SCHEMA_VERSION,
+                )
             if evidence is not None:
                 # Provider evidence is part of the durable run record (owner requirement):
                 # requested vs actual provider, fallback and its reason, query, result count.
@@ -337,6 +346,13 @@ def discover_activity(
                                     else ""
                                 )
                                 + f" result_count={evidence.result_count}"
+                                + (
+                                    f" CONTRACT MISMATCH: worker search schema "
+                                    f"{evidence.schema_version} < "
+                                    f"{evidence.REQUIRED_SCHEMA_VERSION}"
+                                    if not evidence.contract_ok
+                                    else ""
+                                )
                             ),
                             "search": evidence.as_dict(),
                         },

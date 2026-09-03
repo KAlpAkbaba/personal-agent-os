@@ -291,3 +291,33 @@ def test_search_clean_result_still_works() -> None:
     )
     hits = _gateway(client).search("q")
     assert len(hits) == 1
+
+
+def test_search_evidence_from_an_old_worker_is_a_contract_mismatch_not_a_crash() -> None:
+    from app.research.browser_gateway import SearchEvidence
+
+    legacy = {
+        "engine": "duckduckgo",
+        "query": "q",
+        "results": [{"url": "https://a", "title": "t"}],
+        "page_kind": "ok",
+    }
+    ev = SearchEvidence.from_result("q", legacy)
+    assert ev.schema_version == 0 and ev.contract_ok is False
+    assert ev.provider == "unknown" and ev.requested_provider == "unknown"
+    assert ev.result_count == 1
+    assert ev.as_dict()["contract_ok"] is False
+
+    current = {
+        "schema_version": 2,
+        "requested_provider": "google",
+        "provider": "duckduckgo",
+        "fallback": True,
+        "fallback_reason": "google:captcha", "query": "q", "result_count": 2, "locale": "tr-TR",
+        "attempts": [{"provider": "google", "outcome": "captcha", "detail": ""}],
+        "results": [{}, {}],
+    }
+    ev2 = SearchEvidence.from_result("q", current)
+    assert ev2.contract_ok and ev2.provider == "duckduckgo" and ev2.fallback
+    assert ev2.locale == "tr-TR"
+    assert ev2.as_dict()["fallback_reason"] == "google:captcha"

@@ -212,12 +212,25 @@ network-level "unusual traffic" block ("the block will expire shortly after thos
 stop"), after a day of probe traffic. If the run reports `fallback_reason=google:captcha`,
 wait a while and rerun; nothing is solved or bypassed by design.
 
+Your first search-mode run (2026-09-03 evening) reported a `browser.search` success with
+empty provider fields and then a missing-property error: the installed worker under
+`C:\Program Files\PagentOS\agent\browser` still held the 11:32 build (no provider abstraction),
+because the last installer run (19:10) predates the provider commit (19:52). That run is
+neither a Google success nor a fallback; it had no provider evidence. Two things changed:
+the worker now advertises `contracts: {"browser.search": 2}` and stamps `schema_version` on
+every search result, and the smoke checks that contract before searching, so a stale worker
+yields a clear `contract/version mismatch` naming the installed version. The single command
+below updates the installed agent first through the journaled installer (one UAC prompt,
+preserves endpoints and identity), waits for the device to reconnect, and then runs the
+qualification:
+
 ```powershell
-.\scripts\browser\real-browser-smoke.ps1 -Mode search -SearchQuery "yapay zeka ajanları son gelişmeler" -OutFile google-search-smoke-1.json
+.\scripts\browser\real-browser-smoke.ps1 -UpdateAgentFirst -Mode search -SearchQuery "yapay zeka ajanları son gelişmeler" -OutFile google-search-smoke-2.json
 ```
 
-Paste the final lines (`requested_provider`, `provider`, `fallback`, the attempts, the first
-results, the `command_id`/`trace` lines, `REAL BROWSER SMOKE: PASS`) and the JSON.
+Paste the final lines (worker version and `browser.search schema`, `requested_provider`,
+`provider`, `fallback`, the attempts, the first results, the `command_id`/`trace` lines,
+`REAL BROWSER SMOKE: PASS`) and the JSON.
 
 ### 9. K66 re-qualification after the instrumentation + noise pass — **this is the current action**
 

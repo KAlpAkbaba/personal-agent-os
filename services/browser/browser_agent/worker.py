@@ -61,7 +61,12 @@ from .targets import coerce_target
 
 logger = get_logger(__name__)
 
-WORKER_VERSION = "0.1.0"
+WORKER_VERSION = "0.2.0"
+# Per-capability response schema versions (BROWSER_CAPABILITIES.md §3). A consumer that
+# needs the search-provider evidence checks `contracts["browser.search"] >= 2` on the hello
+# or worker_status BEFORE searching, so an old installed worker yields a clear contract/
+# version mismatch instead of a missing-property error (owner run, 2026-09-03).
+CONTRACTS: dict[str, int] = {"browser.search": 2}
 PROTOCOL_VERSION = 1
 DEFAULT_TIMEOUT_MS = 30_000
 DEFAULT_NAV_TIMEOUT_MS = 15_000
@@ -399,6 +404,7 @@ class Worker:
                 "type": "hello",
                 "worker_version": WORKER_VERSION,
                 "protocol_version": PROTOCOL_VERSION,
+                "contracts": dict(CONTRACTS),
                 "capabilities": list(policy.CAPABILITIES),
                 "browser": self._browser_info.as_dict(),
             }
@@ -755,6 +761,7 @@ class Worker:
         browser_dict = {**browser_dict, "alive": bool(browser_dict.get("available"))}
         return {
             "worker_version": WORKER_VERSION,
+            "contracts": dict(CONTRACTS),
             "browser": browser_dict,
             "sessions": sessions_info,
             "uptime_s": round(now - self._start_time, 1),

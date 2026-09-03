@@ -133,7 +133,7 @@ Metadata comes from `<meta property="article:published_time">`, `<meta name="dat
 `browser.search` payload `{"session_id":"…","query":"…","engine":"auto|google|duckduckgo|bing|brave","max_results":10,"recency_days":3,"locale":"tr-TR"}` →
 
 ```json
-{"engine":"google","requested_provider":"google","provider":"google","fallback":false,"fallback_reason":null,
+{"schema_version":2,"engine":"google","requested_provider":"google","provider":"google","fallback":false,"fallback_reason":null,
  "query":"…","result_count":8,"locale":"tr-TR",
  "attempts":[{"provider":"google","outcome":"ok"}],
  "results":[{"rank":1,"url":"…","title":"…","snippet":"…","published_hint":"2 gün önce"}],"page_kind":"ok"}
@@ -153,7 +153,12 @@ locale. Google organic results are read from the results region only: ads (`#tad
 `data-text-ad`), "People also ask", knowledge-panel and other right-hand links, carousels and
 Google's own domains are excluded; each result carries `rank`, `title`, `url`
 (`/url?q=` redirects unwrapped) and the visible snippet when present. `max_results` ≤ 20.
-`bing`/`brave` remain selectable by name only.
+`bing`/`brave` remain selectable by name only. **Schema versioning**: the result carries
+`schema_version` (2 = provider evidence present), and the hello / `browser.worker_status`
+carry `contracts: {"browser.search": 2}`; a consumer checks the contract BEFORE searching and
+reports a *contract/version mismatch* naming the installed worker version when it is lower,
+never a missing-property failure (an installed worker predating this schema answered a real
+owner run without evidence on 2026-09-03).
 
 `browser.fetch_evidence` payload `{"session_id":"…","url":"…","query":"…","source_class":"news","excerpt_chars":1200,"timeout_ms":30000}` →
 

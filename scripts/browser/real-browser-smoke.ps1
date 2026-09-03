@@ -41,6 +41,12 @@ param(
     # the recorded provider is the requested primary (google) with no fallback.
     [ValidateSet("full", "search")][string]$Mode = "full",
     [string]$ExpectProvider = "google",
+    # Run the elevated installer first (one UAC prompt; journaled engine, preserves broker
+    # endpoints and identity) and wait for the device to come back online on the Cloud Core,
+    # so a stale installed worker is updated in the same action as the qualification.
+    [switch]$UpdateAgentFirst,
+    # browser.search response schema this script consumes (BROWSER_CAPABILITIES.md §3).
+    [int]$RequiredSearchSchema = 2,
     # DEV/TEST ONLY: take an already-minted owner session token from PAGENTOS_SMOKE_TOKEN
     # instead of the masked credential prompt (the e2e harness uses this; never for the owner).
     [switch]$SessionTokenFromEnv,
@@ -95,8 +101,20 @@ function Post-Json {
     return Invoke-JsonUtf8 -Method POST -Uri "$BaseUrl$Path" -Headers $h -Body $json -TimeoutSec 30
 }
 
+if ($UpdateAgentFirst) {
+    $installer = Join-Path (Split-Path -Parent $PSScriptRoot) "install-device-service.ps1"
+    Write-Host "updating the installed agent first (elevated installer, journaled deployment; one UAC prompt)..."
+    $proc = Start-Process -FilePath (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -Verb RunAs -Wait -PassThru `
+        -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$installer`"")
+    if ($proc.ExitCode -ne 0) {
+        throw "the installer exited $($proc.ExitCode); see the newest log under $env:ProgramData\PagentOS\install-logs before rerunning"
+    }
+    Write-Host "installer finished (exit 0); waiting for the device to reconnect to the Cloud Core..."
+}
+
 $evidence = [ordered]@{
     run_id       = $runId
+    update_agent = [bool]$UpdateAgentFirst
     started_at   = $startedAt.ToString("o")
     cloud        = $BaseUrl
     device       = $null
@@ -109,17 +127,21 @@ $evidence = [ordered]@{
 
 try {
     # ---------------------------------------------------------------- device
-    $listing = Get-Json "/v1/devices"
-    $devices = @(Get-OptionalProperty -InputObject $listing -Name "devices")
     $chosen = $null
-    foreach ($d in $devices) {
-        $caps = @(Get-OptionalProperty -InputObject $d -Name "capabilities")
-        $status = [string](Get-OptionalProperty -InputObject $d -Name "status")
-        if ($Device) {
-            if ([string]$d.device_id -eq $Device -or [string]$d.name -eq $Device) { $chosen = $d; break }
+    $waitUntil = (Get-Date).AddSeconds($(if ($UpdateAgentFirst) { 150 } else { 1 }))
+    do {
+        $listing = Get-Json "/v1/devices"
+        $devices = @(Get-OptionalProperty -InputObject $listing -Name "devices")
+        foreach ($d in $devices) {
+            $caps = @(Get-OptionalProperty -InputObject $d -Name "capabilities")
+            $status = [string](Get-OptionalProperty -InputObject $d -Name "status")
+            if ($Device) {
+                if (([string]$d.device_id -eq $Device -or [string]$d.name -eq $Device) -and (-not $UpdateAgentFirst -or $status -eq "online")) { $chosen = $d; break }
+            }
+            elseif ($status -eq "online" -and ($caps -contains "browser.chrome")) { $chosen = $d; break }
         }
-        elseif ($status -eq "online" -and ($caps -contains "browser.chrome")) { $chosen = $d; break }
-    }
+        if ($null -eq $chosen -and (Get-Date) -lt $waitUntil) { Start-Sleep -Seconds 3 }
+    } while ($null -eq $chosen -and (Get-Date) -lt $waitUntil)
     if ($null -eq $chosen) {
         Write-Host "devices known to the Cloud Core:"
         foreach ($d in $devices) { Write-Host ("  {0}  {1,-8} {2}  caps={3}" -f $d.device_id, $d.status, $d.name, @(Get-OptionalProperty -InputObject $d -Name "capabilities").Count) }
@@ -186,7 +208,14 @@ try {
     Write-Host "commands (each awaited to its terminal ack on the Cloud Core):"
     $status = Invoke-DeviceCommand -Capability "browser.worker_status" -Payload @{}
     $browser = Get-OptionalProperty -InputObject $status.result -Name "browser"
-    Write-Host "      worker $($status.result.worker_version), browser channel=$($browser.channel) version=$($browser.version) available=$($browser.available)"
+    $contracts = Get-OptionalProperty -InputObject $status.result -Name "contracts"
+    $searchSchema = 0
+    if ($null -ne $contracts) { $v = Get-OptionalProperty -InputObject $contracts -Name "browser.search"; if ($null -ne $v) { $searchSchema = [int]$v } }
+    Write-Host "      worker $($status.result.worker_version), browser channel=$($browser.channel) version=$($browser.version) available=$($browser.available), browser.search schema=$searchSchema"
+    $evidence.worker = [ordered]@{ worker_version = [string]$status.result.worker_version; search_schema = $searchSchema; browser_version = [string]$browser.version }
+    if ($Mode -eq "search" -and $searchSchema -lt $RequiredSearchSchema) {
+        throw "contract/version mismatch: the installed worker ($($status.result.worker_version)) answers browser.search with schema $searchSchema; this qualification needs schema $RequiredSearchSchema (provider evidence). The installed tree predates the search-provider change - rerun with -UpdateAgentFirst (one UAC prompt) to update it through the journaled installer."
+    }
 
     $opened = Invoke-DeviceCommand -Capability "browser.session_open" -Payload @{
         session_id = $sessionId; profile = "research"
@@ -200,6 +229,13 @@ try {
         # a fallback is reported honestly with its reason and FAILS this mode.
         $search = Invoke-DeviceCommand -Capability "browser.search" -Payload @{ session_id = $sessionId; query = $SearchQuery; engine = "auto"; max_results = 8 }
         $sr = $search.result
+        $resultSchema = Get-OptionalProperty -InputObject $sr -Name "schema_version"
+        if ($null -eq $resultSchema -or [int]$resultSchema -lt $RequiredSearchSchema) {
+            throw "contract/version mismatch: browser.search answered with schema '$resultSchema' (needs $RequiredSearchSchema); the worker that executed it predates the provider abstraction - rerun with -UpdateAgentFirst"
+        }
+        foreach ($field in @("requested_provider", "provider", "fallback", "query", "result_count", "attempts", "locale")) {
+            if (-not (Test-ObjectProperty -InputObject $sr -Name $field)) { throw "provider evidence field '$field' missing from the schema-$resultSchema search result" }
+        }
         $results = @(Get-OptionalProperty -InputObject $sr -Name "results")
         $attempts = @(Get-OptionalProperty -InputObject $sr -Name "attempts")
         Write-Host ("      requested_provider={0} provider={1} fallback={2} fallback_reason={3} query='{4}' result_count={5} locale={6}" -f
@@ -216,9 +252,6 @@ try {
             query = (Get-OptionalProperty -InputObject $sr -Name "query"); result_count = (Get-OptionalProperty -InputObject $sr -Name "result_count")
             locale = (Get-OptionalProperty -InputObject $sr -Name "locale"); attempts = $attempts
             results = @($results | ForEach-Object { [ordered]@{ rank = $_.rank; title = $_.title; url = $_.url } })
-        }
-        foreach ($field in @("requested_provider", "provider", "fallback", "query", "result_count", "attempts")) {
-            if ($null -eq (Get-OptionalProperty -InputObject $sr -Name $field)) { throw "provider evidence field '$field' missing from the search result" }
         }
         if ($ExpectProvider -ne "any") {
             if ([string](Get-OptionalProperty -InputObject $sr -Name "requested_provider") -ne $ExpectProvider) { throw "requested provider is not $ExpectProvider" }

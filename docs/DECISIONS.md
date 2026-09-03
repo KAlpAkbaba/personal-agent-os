@@ -2507,3 +2507,14 @@ embedded Temporal worker). Facts and decisions that were not in the design:
     (URL and text) and never answered — a probe from the owner's address on the same day hit
     that block after a day of automated traffic, which is exactly the recorded fallback case.
     The M13 browser smoke (9.2) is unchanged and its `full` mode still passes.
+
+12. **Capability response schemas are versioned and checked before use** (2026-09-03, real
+    owner run). The first Google-primary qualification ran against an installed worker that
+    predated the provider change (installed 19:10, change committed 19:52): `browser.search`
+    succeeded with no provider fields and the smoke died on a missing property. Now the worker
+    is `0.2.0`, its hello and `browser.worker_status` carry `contracts: {"browser.search": 2}`,
+    every search result carries `schema_version`, Cloud Core's `SearchEvidence` records
+    `schema_version`/`contract_ok` and writes a CONTRACT MISMATCH into the run's events instead
+    of inventing a provider, and the smoke refuses to search on a lower contract with a
+    message naming the installed version. `-UpdateAgentFirst` runs the journaled installer and
+    waits for the device to reconnect so the update and the qualification are one action.

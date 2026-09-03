@@ -199,3 +199,20 @@ class TestProviderAbstraction:
 
         d = (await run_search("q", "auto", fetch=fetch)).as_dict()
         assert d["provider"] == "google" and d["result_count"] == 3
+
+
+class TestSchemaVersion:
+    async def test_search_result_carries_schema_version_2(self) -> None:
+        from browser_agent.search_engines import SEARCH_SCHEMA_VERSION
+
+        async def fetch(engine: str, url: str):
+            return _read("google.html"), "ok", 200, url
+
+        d = (await run_search("q", "auto", fetch=fetch)).as_dict()
+        assert SEARCH_SCHEMA_VERSION == 2 and d["schema_version"] == 2
+
+    def test_worker_advertises_the_search_contract(self) -> None:
+        from browser_agent.worker import CONTRACTS, WORKER_VERSION
+
+        assert CONTRACTS["browser.search"] == 2
+        assert tuple(int(x) for x in WORKER_VERSION.split(".")) >= (0, 2, 0)
