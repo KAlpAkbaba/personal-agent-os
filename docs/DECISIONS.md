@@ -2590,3 +2590,41 @@ embedded Temporal worker). Facts and decisions that were not in the design:
     installer's runtime stop does the same. The owner's Chrome sessions are never touched.
     Fixing this does not change Google's CAPTCHA/handoff behaviour, which stays a separate
     provider concern.
+
+15. **The persistent launcher was browser *detection*, and tests must never own a desktop
+    window** (2026-09-03, late night, second real incident: "Chrome for Testing" windows kept
+    appearing after the qualification command had exited). Proven under a desktop window
+    monitor (scratch `desktop-window-monitor.ps1`: per-second `EnumWindows` + `Win32_Process`
+    sampling, evidence in QUALIFICATION 9.13): `browser_agent.detect` read the browser
+    version by running `<chrome.exe> --version`. On Windows Chrome has no print-and-exit
+    `--version`; it starts the full browser with the default profile, the window outlives
+    the caller (11 processes still alive after the probe exited), and with Google Chrome
+    already running it hands off and opens a new window in the OWNER's Chrome. That ran on
+    every worker start (hello), every installer/verify self-check, every companion worker
+    restart and every test fixture - the same function behind both incidents. Decisions:
+    (a) detection never starts any process that is a browser: Windows reads the PE
+    VERSIONINFO resource through `version.dll`, POSIX keeps `--version` (there it does print
+    and exit), and the headless-launch fallback is deleted (`tests/unit/test_detect_no_launch.py`
+    forbids browser executables in any subprocess call during detection); (b) the browser
+    test suite forces every `ManagedBackend` headless outside the `live` marker and reaps
+    every Playwright Chromium the pytest process spawned at session end
+    (`services/browser/tests/conftest.py`), and every future browser-suite run on the owner's
+    desktop is executed under the window monitor with `max_visible_chrome_for_testing_windows
+    == 0` as a hard expectation; (c) cross-process guards in `browser_agent.launch_guard`:
+    an OS-level exclusive launch lock per profile (named mutex - released by the kernel when
+    the holder dies, so it cannot go stale; a second worker process gets
+    `browser_lifecycle_violation` without touching anything), a durable launch-rate circuit
+    breaker (only *recovery* launches count - after an orphan reap or a failed launch; three
+    within ten minutes write `browser-lifecycle-fault.json` in the worker data dir and every
+    further research-profile launch is refused until it ages out, across worker restarts,
+    surfaced in the hello as `lifecycle_fault`), and a Windows Job Object with
+    kill-on-close holding the Chrome root so the kernel terminates the whole tree whenever
+    the worker process ends (crash, `taskkill /F`, normal exit alike); (d) durable ownership
+    (`browser-ownership.json`: research job id, browser session id, worker pid, Chrome root
+    pid and start time, transport, profile path, lock name, tab ids, closed_at,
+    browser_pid_exited) and the same identity on every result (`lifecycle.worker_pid`,
+    `launch_kind`, `launch_lock`, `job_object_assigned`); (e) the stdio error envelope
+    carries bounded `evidence` so the companion audit records which guard refused. Cross-
+    process attach to an existing Chrome is deliberately NOT supported: it would need an
+    open CDP debug port on the research browser; the "one controlled recovery attempt" is
+    reap-then-single-launch, and the launch lock guarantees the reaped process was an orphan.

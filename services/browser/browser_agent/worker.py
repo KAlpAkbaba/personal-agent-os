@@ -27,6 +27,7 @@ import asyncio
 import atexit
 import base64
 import json
+import os
 import re
 import sys
 import threading
@@ -43,7 +44,7 @@ from urllib.parse import urlencode, urlsplit
 from playwright.async_api import Frame, Page
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
-from . import lifecycle, policy, search_engines
+from . import launch_guard, lifecycle, policy, search_engines
 from .backends import ManagedBackend
 from .destination import require_public_destination
 from .detect import BrowserInfo, detect_browser
@@ -222,12 +223,31 @@ def _ok_result(request_id: str, result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _err_result(request_id: str, error_class: str, message: str, retryable: bool) -> dict[str, Any]:
+def _err_result(
+    request_id: str,
+    error_class: str,
+    message: str,
+    retryable: bool,
+    evidence: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    error: dict[str, Any] = {
+        "class": error_class,
+        "message": message[:2000],
+        "retryable": retryable,
+    }
+    if evidence:
+        # Structured, bounded context (lifecycle guard name, pids, profile
+        # path, fault file). Rendered through the same JSON-safe path as
+        # results; never page content.
+        serialized = json.dumps(evidence, default=str)
+        error["evidence"] = (
+            json.loads(serialized) if len(serialized) <= 8000 else {"truncated": True}
+        )
     return {
         "type": "result",
         "request_id": request_id,
         "ok": False,
-        "error": {"class": error_class, "message": message[:2000], "retryable": retryable},
+        "error": error,
     }
 
 
@@ -399,6 +419,7 @@ def detect_user_locale() -> str | None:
         pass
     return None
 
+
 class Worker:
     """One worker process: session registry, dispatch, idle reaper."""
 
@@ -416,15 +437,13 @@ class Worker:
         # Loopback/private destinations are refused unless the worker was started with
         # --allow-private-destinations (test fixture sites only; the companion never
         # passes it). Cloud Core applies the same policy before dispatching.
-        self._allow_private_destinations = bool(
-            getattr(args, "allow_private_destinations", False)
-        )
+        self._allow_private_destinations = bool(getattr(args, "allow_private_destinations", False))
         # Base URL for Google's home page (contract §3a). Defaults to the real
         # Google; the browser e2e suite points this at the fixture site so
         # the Google-through-the-UI flow is deterministic and offline.
-        self._google_base_url: str = getattr(
-            args, "google_base_url", None
-        ) or "https://www.google.com"
+        self._google_base_url: str = (
+            getattr(args, "google_base_url", None) or "https://www.google.com"
+        )
         self._sessions: dict[str, SessionState] = {}
         self._session_locks: dict[str, asyncio.Lock] = {}
         self._inflight: dict[str, asyncio.Task[Any]] = {}
@@ -439,6 +458,11 @@ class Worker:
         # browser_lifecycle_violation instead of ever attempting a second
         # launch on the same profile.
         self._research_owner_session_id: str | None = None
+        # Cross-process guards (launch_guard): durable launch-rate breaker and
+        # the ownership record, both under the worker data directory so they
+        # survive this process.
+        self._breaker = launch_guard.LaunchBreaker(self._data_dir)
+        self._ownership = launch_guard.OwnershipRecord(self._data_dir)
 
     # ------------------------------------------------------------------ #
     # top-level lifecycle
@@ -461,6 +485,7 @@ class Worker:
                 "contracts": dict(CONTRACTS),
                 "capabilities": list(policy.CAPABILITIES),
                 "browser": self._browser_info.as_dict(),
+                "lifecycle_fault": self._breaker.current_fault(),
             }
         )
 
@@ -543,9 +568,7 @@ class Worker:
                 continue
             await self._close_session_state(session_id, state, op="shutdown_close")
 
-    async def _close_session_state(
-        self, session_id: str, state: SessionState, *, op: str
-    ) -> bool:
+    async def _close_session_state(self, session_id: str, state: SessionState, *, op: str) -> bool:
         """Close one session's browser and wait (bounded) for its OS
         process(es) to actually exit. Shared by session_close, the idle
         reaper and worker shutdown so all three answer ``browser_pid_exited``
@@ -557,7 +580,15 @@ class Worker:
             await state.browser_session.close()
         except Exception as exc:
             logger.warning(f"browser.{op}_error", session_id=session_id, error=str(exc)[:200])
-        return await self._await_browser_pid_exit(state)
+        exited = await self._await_browser_pid_exit(state)
+        if state.profile == "research":
+            with suppress(Exception):
+                self._ownership.update(
+                    closed_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    closed_by=op,
+                    browser_pid_exited=exited,
+                )
+        return exited
 
     async def _await_browser_pid_exit(self, state: SessionState) -> bool:
         """Bounded (10s) wait for the browser process(es) this session
@@ -617,11 +648,15 @@ class Worker:
         return {
             "session_uid": state.session_uid,
             "browser_pid": state.backend.main_pid,
+            "worker_pid": os.getpid(),
             "profile_dir": str(state.profile_dir) if state.profile_dir is not None else None,
             "tab_count": tab_count,
             "max_tabs": state.max_tabs,
             "max_windows": 1,
             "reused": reused,
+            "launch_kind": state.backend.last_launch_kind,
+            "launch_lock": state.backend.launch_lock_name,
+            "job_object_assigned": state.backend.job_object_assigned,
         }
 
     # ------------------------------------------------------------------ #
@@ -716,7 +751,11 @@ class Worker:
             )
             return
         except BrowserError as err:
-            _write_line(_err_result(request_id, str(err.error_class), err.message, err.retryable))
+            _write_line(
+                _err_result(
+                    request_id, str(err.error_class), err.message, err.retryable, err.evidence
+                )
+            )
             return
         except Exception as exc:  # the worker must never crash on a bad op
             logger.error(
@@ -785,6 +824,12 @@ class Worker:
             tab_count = await self._current_tab_count(state)
             lifecycle.check_tab_count_within_budget(tab_count, state.max_tabs, op=capability)
             result["lifecycle"] = self._lifecycle_info(state, tab_count=tab_count, reused=True)
+            if state.profile == "research" and capability in (
+                "browser.tab_new",
+                "browser.tab_close",
+            ):
+                with suppress(Exception):
+                    self._ownership.update(tab_ids=list(range(tab_count)))
             return result
 
     # ------------------------------------------------------------------ #
@@ -894,6 +939,8 @@ class Worker:
         )
         profile_dir = self._profile_dir if profile == "research" else None
         backend = ManagedBackend(headless=not visible, profile_dir=profile_dir, channel=channel)
+        if profile_dir is not None:
+            backend.breaker = self._breaker
         # A single, non-retried launch attempt (ManagedBackend._launch reaps
         # any orphan on profile_dir first); any BrowserError here — including
         # browser_lifecycle_violation if the profile is still locked after
@@ -922,6 +969,33 @@ class Worker:
         self._sessions[session_id] = state
         if profile == "research":
             self._research_owner_session_id = session_id
+            self._ownership.write(
+                {
+                    "research_job_id": payload.get("research_job_id") or session_id,
+                    "session_id": session_id,
+                    "browser_session_id": state.session_uid,
+                    "worker_pid": os.getpid(),
+                    "chrome_root_pid": backend.main_pid,
+                    "chrome_start_time": (
+                        launch_guard.process_start_time_iso(backend.main_pid)
+                        if backend.main_pid is not None
+                        else None
+                    ),
+                    "launched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "launch_kind": backend.last_launch_kind,
+                    "transport": "playwright-pipe",
+                    "cdp_endpoint": None,
+                    "profile_path": str(profile_dir),
+                    "launch_lock": backend.launch_lock_name,
+                    "job_object_assigned": backend.job_object_assigned,
+                    "channel": state.channel,
+                    "visible": visible,
+                    "max_tabs": max_tabs,
+                    "tab_ids": [0],
+                    "closed_at": None,
+                    "browser_pid_exited": None,
+                }
+            )
         # M13 lifecycle (owner-machine incident 2026-09-03): "deliberate and
         # bounded" tabs — a page the loaded page opens on its own
         # (window.open / target=_blank), as opposed to a tab_new/
@@ -1346,9 +1420,7 @@ class Worker:
             raise map_playwright_error(exc, phase=Phase.ACT, op="wait") from exc
         return {"satisfied": True, "elapsed_ms": _elapsed_ms(start)}
 
-    async def _wait_verification_cleared(
-        self, page: Page, *, timeout_ms: float
-    ) -> dict[str, Any]:
+    async def _wait_verification_cleared(self, page: Page, *, timeout_ms: float) -> dict[str, Any]:
         """``browser.wait for=verification_cleared`` (contract §3a, READ).
 
         Polls the page every ~500 ms — a bounded DOM/navigation condition,
@@ -1752,9 +1824,7 @@ class Worker:
                 # BEFORE opening anything when this would cross max_tabs —
                 # the tab count is therefore unchanged by a refused call.
                 lifecycle.check_tab_budget(len(tabs_before), state.max_tabs, op="fetch_evidence")
-                previous_tab_index = next(
-                    (t.index for t in tabs_before if t.is_current), 0
-                )
+                previous_tab_index = next((t.index for t in tabs_before if t.is_current), 0)
                 new_tab_index = await browser_session.new_tab(None)
 
             response = await browser_session.navigate(url, timeout_ms=timeout_ms)

@@ -83,9 +83,7 @@ async def handoff_worker(tmp_path, site_url):
 # --------------------------------------------------------------------------- #
 
 
-async def test_google_search_via_ui_types_query_and_parses_results(
-    google_worker, site_url
-) -> None:
+async def test_google_search_via_ui_types_query_and_parses_results(google_worker, site_url) -> None:
     worker = google_worker
     await worker._execute("browser.session_open", _open_payload())
 
@@ -152,9 +150,7 @@ async def test_second_search_reuses_loaded_results_page_no_home_navigation(
 # --------------------------------------------------------------------------- #
 
 
-async def test_handoff_interstitial_then_clearance_then_resume(
-    handoff_worker, site_url
-) -> None:
+async def test_handoff_interstitial_then_clearance_then_resume(handoff_worker, site_url) -> None:
     worker = handoff_worker
     await worker._execute("browser.session_open", _open_payload())
     query = "yapay zeka ajanları"
@@ -226,9 +222,7 @@ async def test_wait_verification_cleared_times_out_while_still_on_interstitial(
 # --------------------------------------------------------------------------- #
 
 
-async def test_fetch_evidence_tab_new_keeps_results_tab_selected(
-    google_worker, site_url
-) -> None:
+async def test_fetch_evidence_tab_new_keeps_results_tab_selected(google_worker, site_url) -> None:
     worker = google_worker
     await worker._execute("browser.session_open", _open_payload())
     await worker._execute(

@@ -58,6 +58,13 @@ public sealed record BrowserWorkerHello
 
     public string? BrowserVersion { get; init; }
 
+    /// <summary>
+    /// The worker's durable lifecycle fault (browser launch-rate circuit breaker tripped),
+    /// as compact JSON, or null. Present means the worker will refuse research-profile
+    /// launches until the fault ages out; the companion logs it loudly and puts it in the audit.
+    /// </summary>
+    public string? LifecycleFault { get; init; }
+
     /// <summary>Throws <see cref="FormatException"/> when the object is not a usable hello.</summary>
     public static BrowserWorkerHello Parse(JsonObject message)
     {
@@ -88,6 +95,7 @@ public sealed record BrowserWorkerHello
             BrowserChannel = browser?["channel"]?.GetValue<string>(),
             BrowserAvailable = browser?["available"] is JsonValue av && av.TryGetValue<bool>(out var available) && available,
             BrowserVersion = browser?["version"]?.GetValue<string>(),
+            LifecycleFault = message["lifecycle_fault"] is JsonObject fault ? fault.ToJsonString() : null,
         };
     }
 }

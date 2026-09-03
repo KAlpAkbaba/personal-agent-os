@@ -265,7 +265,9 @@ function Invoke-BrowserWorkerStaging {
     }
     Write-Host "worker environment is relocatable (interpreter: $(Get-VenvHome -VenvDir $venv))"
 
-    # The self-check launches the real channel headless, prints the hello and exits. It
+    # The self-check resolves the real channel executable and reads its file version (it
+    # never starts a browser - chrome.exe --version on Windows opens a window), prints the
+    # hello and exits. It
     # runs against a throwaway data directory so nothing owned by this ELEVATED process
     # lands where the owner's companion must later write.
     $probeData = Join-Path $env:TEMP "pagentos-browser-selfcheck-$([guid]::NewGuid().ToString('N'))"

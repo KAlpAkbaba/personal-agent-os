@@ -56,8 +56,13 @@ def test_public_host_passes_when_every_address_is_public() -> None:
 
 
 def test_ip_literals_in_private_ranges_are_refused() -> None:
-    for url in ("http://127.0.0.1:8000/", "http://169.254.169.254/latest/meta-data/",
-                "http://100.101.102.103/", "http://[::1]/", "http://10.0.0.5/"):
+    for url in (
+        "http://127.0.0.1:8000/",
+        "http://169.254.169.254/latest/meta-data/",
+        "http://100.101.102.103/",
+        "http://[::1]/",
+        "http://10.0.0.5/",
+    ):
         err = _refused(url)
         assert err.error_class == ErrorClass.SECURITY_SCOPE_ERROR
         assert err.retryable is False
@@ -72,8 +77,13 @@ def test_rebinding_host_with_one_private_address_is_refused() -> None:
 
 
 def test_local_host_names_and_userinfo_are_refused() -> None:
-    for url in ("http://localhost/", "http://printer.local/", "http://core.internal/",
-                "http://user:pw@example.com/", "http://metadata.google.internal/"):
+    for url in (
+        "http://localhost/",
+        "http://printer.local/",
+        "http://core.internal/",
+        "http://user:pw@example.com/",
+        "http://metadata.google.internal/",
+    ):
         assert _refused(url).error_class == ErrorClass.SECURITY_SCOPE_ERROR
 
 

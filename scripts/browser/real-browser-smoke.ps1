@@ -248,6 +248,27 @@ try {
         if ($null -eq $lc) { throw "contract/version mismatch: session_open returned no 'lifecycle' identity; the installed worker predates the lifecycle guards - rerun with -UpdateAgentFirst" }
         $sessionUid = [string]$lc.session_uid; $browserPid = [int]$lc.browser_pid
         Write-Host "      identity: session_uid=$sessionUid browser_pid=$browserPid tab_count=$($lc.tab_count) max_tabs=$($lc.max_tabs) max_windows=$($lc.max_windows) reused=$($lc.reused)"
+        # ADR-0050 item 15 guards: the installed worker must be the one with the OS-level launch
+        # lock, the kill-on-close job object and the launch classification; an older worker
+        # (no such fields) is a contract mismatch, never a pass.
+        $workerPid = Get-OptionalProperty -InputObject $lc -Name "worker_pid"
+        $launchKind = Get-OptionalProperty -InputObject $lc -Name "launch_kind"
+        $launchLock = Get-OptionalProperty -InputObject $lc -Name "launch_lock"
+        $jobAssigned = Get-OptionalProperty -InputObject $lc -Name "job_object_assigned"
+        if ($null -eq $workerPid -or $null -eq $launchKind -or $null -eq $jobAssigned) { throw "contract/version mismatch: session_open lifecycle lacks worker_pid/launch_kind/job_object_assigned; the installed worker predates the launch guards (ADR-0050 item 15) - rerun with -UpdateAgentFirst" }
+        Write-Host "      guards: worker_pid=$workerPid launch_kind=$launchKind launch_lock=$launchLock job_object_assigned=$jobAssigned"
+        if (-not $SkipLocalEvidence) {
+            if ($jobAssigned -ne $true) { throw "the worker could not place its Chrome in a kill-on-close job object (job_object_assigned=$jobAssigned)" }
+            if (-not (Get-Process -Id ([int]$workerPid) -ErrorAction SilentlyContinue)) { throw "the worker reports worker_pid=$workerPid but no such process exists" }
+        }
+        function Get-OwnerChromeWindowCount {
+            # windows of chrome.exe main processes that are NOT on the PagentOS profile: the owner's
+            # own Chrome must never gain a window from this test
+            if ($SkipLocalEvidence) { return 0 }
+            $ownerPids = @(Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -notlike "*$profileMarker*" -and $_.CommandLine -notlike "*--type=*" } | ForEach-Object { $_.ProcessId })
+            return (Get-ChromeWindowCount $ownerPids)
+        }
+        $ownerWindowsBefore = Get-OwnerChromeWindowCount
         $chromes = Get-ProfileChromes
         $startPids = @($chromes | ForEach-Object { $_.ProcessId })
         Write-Host "      PagentOS-profile Chrome main processes: $(@($chromes).Count) (pids $($startPids -join ',')); windows: $(Get-ChromeWindowCount $startPids)"
@@ -269,7 +290,7 @@ try {
             @{ cap = "browser.fetch_evidence"; payload = @{ url = "https://example.com/"; tab = "new"; excerpt_chars = 200 } },
             @{ cap = "browser.worker_status"; payload = @{} }
         )
-        $evidence.lifecycle = [ordered]@{ session_uid = $sessionUid; browser_pid = $browserPid; start_processes = @($chromes).Count; operations = @() }
+        $evidence.lifecycle = [ordered]@{ session_uid = $sessionUid; browser_pid = $browserPid; worker_pid = $workerPid; launch_kind = $launchKind; launch_lock = $launchLock; job_object_assigned = $jobAssigned; owner_chrome_windows_before = $ownerWindowsBefore; start_processes = @($chromes).Count; operations = @() }
         $n = 0
         foreach ($op in $ops) {
             $n++
@@ -299,6 +320,23 @@ try {
         $evidence.lifecycle.browser_pid_exited = (Get-OptionalProperty -InputObject $closed.result -Name "browser_pid_exited")
         Write-Host "      closed: browser_pid_exited=$($evidence.lifecycle.browser_pid_exited); PagentOS-profile Chrome processes left: $(@($left).Count)"
         if (-not $SkipLocalEvidence -and @($left).Count -ne 0) { throw "session_close left $(@($left).Count) PagentOS-profile Chrome process(es) running" }
+        $ownerWindowsAfter = Get-OwnerChromeWindowCount
+        $evidence.lifecycle.owner_chrome_windows_after = $ownerWindowsAfter
+        Write-Host "      owner's own Chrome windows: before=$ownerWindowsBefore after=$ownerWindowsAfter"
+        if (-not $SkipLocalEvidence -and $ownerWindowsAfter -gt $ownerWindowsBefore) { throw "the owner's own Chrome gained $($ownerWindowsAfter - $ownerWindowsBefore) window(s) during the test - a PagentOS component touched the owner's browser" }
+        if (-not $SkipLocalEvidence) {
+            # Durable ownership + fault files written by the worker under the companion's browser data dir.
+            $browserData = Join-Path $env:ProgramData "PagentOS\companion\browser"
+            $ownershipPath = Join-Path $browserData "browser-ownership.json"
+            $faultPath = Join-Path $browserData "browser-lifecycle-fault.json"
+            if (-not (Test-Path -LiteralPath $ownershipPath)) { throw "no browser-ownership.json under $browserData - the installed worker predates the ownership record" }
+            $ownership = Get-Content -LiteralPath $ownershipPath -Raw | ConvertFrom-Json
+            $evidence.lifecycle.ownership = $ownership
+            Write-Host "      ownership: job=$($ownership.research_job_id) chrome_root_pid=$($ownership.chrome_root_pid) started=$($ownership.chrome_start_time) closed_at=$($ownership.closed_at) browser_pid_exited=$($ownership.browser_pid_exited)"
+            if ([int]$ownership.chrome_root_pid -ne $browserPid) { throw "ownership record names chrome_root_pid=$($ownership.chrome_root_pid), the session reported $browserPid" }
+            if ($null -eq $ownership.closed_at -or $ownership.browser_pid_exited -ne $true) { throw "ownership record was not closed cleanly (closed_at=$($ownership.closed_at) browser_pid_exited=$($ownership.browser_pid_exited))" }
+            if (Test-Path -LiteralPath $faultPath) { $evidence.lifecycle.fault = (Get-Content -LiteralPath $faultPath -Raw | ConvertFrom-Json); throw "a durable browser lifecycle fault is recorded at $faultPath - the launch-rate breaker tripped; paste the evidence, do not rerun" }
+        }
         $evidence.verdict = "PASS"
         throw [System.Management.Automation.RuntimeException]::new("__done__")
     }

@@ -168,7 +168,9 @@ class TestProviderAbstraction:
         d = (await run_search("q", "auto", fetch=fetch)).as_dict()
         assert d["provider"] == "duckduckgo"
         assert d["attempts"][0] == {
-            "provider": "google", "outcome": "transport_error", "detail": "dependency_unavailable"
+            "provider": "google",
+            "outcome": "transport_error",
+            "detail": "dependency_unavailable",
         }
 
     async def test_all_providers_blocked_raises_rate_limited_with_attempts(self) -> None:

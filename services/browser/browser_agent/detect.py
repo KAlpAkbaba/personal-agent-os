@@ -1,23 +1,32 @@
-"""M13 worker hello: detect browser availability/version without opening a window.
+"""M13 worker hello: detect browser availability/version WITHOUT running the browser.
 
 The worker's ``hello`` line (contract §7) must report ``browser.available``
-and ``browser.version`` up front. Launching a full Chrome window just to
-answer that would be wasteful and, per the task contract, is explicitly the
-*last* resort: "resolve the channel executable and read its version; if you
-must launch, launch headless and close."
+and ``browser.version`` up front. Detection must never start a browser
+process, visible or not.
 
-Strategy, in order:
+Root cause of the 2026-09-03 owner-machine incident ("browser processes
+keep spawning even after the command exited"): the previous implementation
+ran ``<chrome.exe> --version`` as a subprocess to read the version. On
+Windows, Chrome does not implement ``--version`` as a print-and-exit flag:
+it starts the full browser with the default profile (a visible window that
+outlives the caller; with Google Chrome already running it hands off to
+that instance and opens a new window there). Every worker start, every
+installer/verify self-check and every test fixture therefore opened one
+more window. Proven by experiment under a desktop window monitor
+(docs/QUALIFICATION.md 9.13).
+
+Strategy now, in order:
 
 1. Resolve the channel's executable path (Playwright's own bundled Chromium
-   via ``BrowserType.executable_path``, well-known per-OS install locations
+   via ``BrowserType.executable_path``; well-known per-OS install locations
    for the ``"chrome"`` channel, overridable by
-   ``PAGENTOS_BROWSER_CHROME_PATH`` for non-standard installs).
-2. If found, run ``<executable> --version`` as a plain subprocess (prints
-   version text and exits immediately — this never opens a browser UI
-   window) and parse the version string out of it.
-3. If the executable exists but ``--version`` could not be parsed, fall back
-   to actually launching headless and reading ``Browser.version``, then
-   closing immediately — the documented last resort.
+   ``PAGENTOS_BROWSER_CHROME_PATH``).
+2. Read the version from the executable's own metadata: the PE VERSIONINFO
+   resource on Windows (``version.dll``, no process created); on other
+   platforms ``<executable> --version`` genuinely prints and exits.
+3. If the version cannot be read the browser is still ``available``
+   (the executable exists); the version is ``None``. There is no launch
+   fallback of any kind.
 4. If no executable is found at all, ``available=False`` (worker
    ``--self-check`` exits non-zero in this case).
 """
@@ -25,6 +34,7 @@ Strategy, in order:
 from __future__ import annotations
 
 import asyncio
+import ctypes
 import os
 import re
 import shutil
@@ -35,6 +45,7 @@ from pathlib import Path
 from playwright.async_api import async_playwright
 
 _VERSION_SUBPROCESS_TIMEOUT_S = 5.0
+IS_WINDOWS = sys.platform == "win32"
 
 # Well-known Google Chrome install locations per OS. Checked in order; the
 # first that exists wins. `PAGENTOS_BROWSER_CHROME_PATH` overrides all of
@@ -100,7 +111,45 @@ def _resolve_chrome_executable() -> str | None:
     return None
 
 
-async def _version_via_subprocess(executable: str) -> str | None:
+def file_version_windows(executable: str) -> str | None:
+    """``a.b.c.d`` from the PE VERSIONINFO resource (``version.dll``); no process.
+
+    Returns ``None`` when the file carries no version resource or the API
+    fails. Never raises.
+    """
+    if not IS_WINDOWS:  # pragma: no cover - Windows only
+        return None
+    try:
+        version_dll = ctypes.WinDLL("version.dll")  # type: ignore[attr-defined]
+        size = version_dll.GetFileVersionInfoSizeW(ctypes.c_wchar_p(executable), None)
+        if not size:
+            return None
+        buffer = ctypes.create_string_buffer(size)
+        if not version_dll.GetFileVersionInfoW(ctypes.c_wchar_p(executable), 0, size, buffer):
+            return None
+        fixed_ptr = ctypes.c_void_p()
+        fixed_len = ctypes.c_uint()
+        if not version_dll.VerQueryValueW(
+            buffer, ctypes.c_wchar_p("\\"), ctypes.byref(fixed_ptr), ctypes.byref(fixed_len)
+        ):
+            return None
+        if not fixed_ptr.value or fixed_len.value < 20:
+            return None
+        # VS_FIXEDFILEINFO: dwSignature, dwStrucVersion, dwFileVersionMS, dwFileVersionLS, ...
+        raw = ctypes.string_at(fixed_ptr.value, 16)
+        ms = int.from_bytes(raw[8:12], "little")
+        ls = int.from_bytes(raw[12:16], "little")
+        return f"{ms >> 16}.{ms & 0xFFFF}.{ls >> 16}.{ls & 0xFFFF}"
+    except Exception:  # noqa: BLE001 - detection must never fail the worker
+        return None
+
+
+async def _version_via_subprocess_posix(executable: str) -> str | None:
+    """``<executable> --version`` -- POSIX only, where Chrome/Chromium print
+    the version and exit without starting the browser. NEVER used on
+    Windows (see module docstring)."""
+    if IS_WINDOWS:
+        raise RuntimeError("browser executables must never be run for detection on Windows")
     try:
         proc = await asyncio.create_subprocess_exec(
             executable,
@@ -113,12 +162,6 @@ async def _version_via_subprocess(executable: str) -> str | None:
                 proc.communicate(), timeout=_VERSION_SUBPROCESS_TIMEOUT_S
             )
         finally:
-            # Windows ProactorEventLoop schedules pipe-transport cleanup via
-            # call_soon; without yielding once more here, asyncio.run() can
-            # tear the loop down before that callback runs, and the
-            # transport's __del__ then fires during interpreter shutdown as a
-            # noisy (but harmless) ResourceWarning traceback on stderr. One
-            # extra loop iteration lets the scheduled close happen cleanly.
             await asyncio.sleep(0)
     except (OSError, TimeoutError):
         return None
@@ -126,31 +169,24 @@ async def _version_via_subprocess(executable: str) -> str | None:
     return match.group(1) if match else None
 
 
-async def _version_via_headless_launch(channel: str | None, executable: str | None) -> str | None:
-    """Last resort per the task contract: launch headless, read version, close."""
-    try:
-        async with async_playwright() as p:
-            kwargs: dict[str, str] = {}
-            if channel:
-                kwargs["channel"] = channel
-            elif executable:
-                kwargs["executable_path"] = executable
-            browser = await p.chromium.launch(headless=True, **kwargs)
-            try:
-                return browser.version
-            finally:
-                await browser.close()
-    except Exception:
-        return None
+async def read_executable_version(executable: str) -> str | None:
+    """Version of a browser executable without starting it."""
+    if IS_WINDOWS:
+        return file_version_windows(executable)
+    return await _version_via_subprocess_posix(executable)
 
 
-async def detect_browser(channel: str | None, *, allow_launch_fallback: bool = True) -> BrowserInfo:
+async def detect_browser(
+    channel: str | None, *, allow_launch_fallback: bool = False
+) -> BrowserInfo:
     """Detect availability/version for ``channel`` ("chrome"/"chromium"/None).
 
     ``None``/``"chromium"`` resolve Playwright's own bundled build (no system
     install needed — the CI-friendly path); ``"chrome"`` resolves the
-    installed Google Chrome.
+    installed Google Chrome. ``allow_launch_fallback`` is accepted for
+    call-site compatibility and ignored: detection never launches a browser.
     """
+    del allow_launch_fallback
     effective_channel = channel or "chromium"
     executable: str | None = None
 
@@ -168,11 +204,7 @@ async def detect_browser(channel: str | None, *, allow_launch_fallback: bool = T
     if executable is None:
         return BrowserInfo(effective_channel, available=False, version=None, executable_path=None)
 
-    version = await _version_via_subprocess(executable)
-    if version is None and allow_launch_fallback:
-        version = await _version_via_headless_launch(
-            channel if channel else None, executable if not channel else None
-        )
+    version = await read_executable_version(executable)
     return BrowserInfo(
         effective_channel, available=True, version=version, executable_path=executable
     )
@@ -183,4 +215,4 @@ def which_chromedriver_hint() -> str | None:  # pragma: no cover - diagnostic he
     return shutil.which("chrome") or shutil.which("google-chrome")
 
 
-__all__ = ["BrowserInfo", "detect_browser"]
+__all__ = ["BrowserInfo", "detect_browser", "file_version_windows", "read_executable_version"]

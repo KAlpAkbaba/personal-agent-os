@@ -38,8 +38,16 @@ SEARCH_SCHEMA_VERSION = 2
 MAX_RESULTS_CAP = 20
 
 _ENGINE_OWN_DOMAINS: dict[str, tuple[str, ...]] = {
-    "google": ("google.com", "google.com.tr", "googleadservices.com", "googleusercontent.com",
-               "gstatic.com", "google.co.uk", "google.de", "google.fr"),
+    "google": (
+        "google.com",
+        "google.com.tr",
+        "googleadservices.com",
+        "googleusercontent.com",
+        "gstatic.com",
+        "google.co.uk",
+        "google.de",
+        "google.fr",
+    ),
     "duckduckgo": ("duckduckgo.com",),
     "bing": ("bing.com", "microsoft.com", "msn.com"),
     "brave": ("brave.com", "search.brave.com"),
@@ -357,7 +365,10 @@ def parse_brave_html(html: str, *, max_results: int = 10) -> list[SearchResult]:
 
 _GOOGLE_EXCLUDED_ANCESTOR_IDS = {"tads", "tadsb", "taw", "rhs", "bottomads", "topads"}
 _GOOGLE_EXCLUDED_ANCESTOR_CLASSES = (
-    "related-question-pair", "kp-wholepage", "uEierd", "commercial-unit",
+    "related-question-pair",
+    "kp-wholepage",
+    "uEierd",
+    "commercial-unit",
 )
 _GOOGLE_EXCLUDED_ANCESTOR_TAGS = {"g-scrolling-carousel", "g-section-with-header"}
 
@@ -478,6 +489,7 @@ def parse_google_html(html: str, *, max_results: int = 10) -> list[SearchResult]
         if len(results) >= max_results:
             break
     return results
+
 
 _PARSERS: dict[str, Callable[..., list[SearchResult]]] = {
     "google": parse_google_html,

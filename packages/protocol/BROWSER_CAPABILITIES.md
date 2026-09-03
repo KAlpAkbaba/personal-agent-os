@@ -72,9 +72,37 @@ id). A session is one Playwright context in one Chrome instance with its own tab
 - `channel`: `chrome` (installed Google Chrome; the qualification target) or `chromium`
   (Playwright's bundled build, CI only). Missing channel → `dependency_unavailable`.
 
-Result: `{"session_id":"…","created":true|false,"channel":"chrome","browser_version":"…","idle_timeout_s":600,"policy":{…}}`.
+Result: `{"session_id":"…","created":true|false,"channel":"chrome","browser_version":"…","idle_timeout_s":600,"policy":{…},"lifecycle":{…}}`.
 Reopening an existing session returns `created:false` and the existing policy (policy is not
 widened by a second open; a narrower reopen is applied).
+
+**Lifecycle invariant and identity (ADR-0050 items 14/15).** One research job = one worker
+process + one Chrome process on the dedicated profile + one window; tabs are bounded
+(`max_tabs`, default 6, ceiling 12, settable in `session_open`). Every session-scoped result
+carries `lifecycle`:
+
+```json
+{"session_uid":"uuid per actual browser launch","browser_pid":12345,"worker_pid":678,"profile_dir":"…","tab_count":1,"max_tabs":6,"max_windows":1,"reused":true,"launch_kind":"clean|recovery","launch_lock":"Local\\PagentOS.BrowserProfile.<hash>","job_object_assigned":true}
+```
+
+`session_uid` and `browser_pid` are identical across every command of a job; a consumer that
+sees them change is looking at a relaunch. Guards, all answered with
+`browser_lifecycle_violation` (non-retryable, `evidence.guard` names the guard): a second
+session id while one owns the research profile; a tab that would cross `max_tabs` (refused
+before anything opens); another worker *process* holding the OS-level launch lock for the
+profile (`launch_lock`); the launch-rate circuit breaker (`launch_breaker`: three *recovery*
+launches — after an orphan reap or a failed launch — within ten minutes write a durable
+`browser-lifecycle-fault.json` under the worker data dir and every research-profile launch is
+refused until it ages out, across worker restarts; the hello reports it as `lifecycle_fault`).
+Before a launch the worker reaps only Chrome processes whose command line names the PagentOS
+profile directory (never the owner's Chrome), and the launched Chrome root is placed in a
+Windows Job Object with kill-on-close held by the worker alone: when the worker process ends,
+however it ends, the kernel terminates the whole Chrome tree. `session_close` waits for the
+root to exit and answers `browser_pid_exited`. Ownership is durable in
+`browser-ownership.json` (research job id, browser session id, worker pid, Chrome root pid and
+start time, transport `playwright-pipe`, profile path, lock name, tab ids, `closed_at`,
+`browser_pid_exited`). Browser detection for the hello never starts a browser (Windows reads
+the executable's version resource; `chrome.exe --version` would open a window).
 
 Sessions close after `idle_timeout_s` without a command, on `session_close`, or when the
 worker restarts. An operation on an unknown session fails with `validation_error`
@@ -305,13 +333,13 @@ The companion starts the worker as a child process (`BrowserWorkerCommand` + arg
 configuration; no hardcoded path) with stdin/stdout pipes, newline-delimited UTF-8 JSON, one
 object per line. stderr is the worker's log (companion forwards it to its own log).
 
-Worker → companion on start: `{"type":"hello","worker_version":"…","protocol_version":1,"capabilities":["browser.session_open",…],"browser":{"channel":"chrome","available":true,"version":"…"}}`.
+Worker → companion on start: `{"type":"hello","worker_version":"…","protocol_version":1,"capabilities":["browser.session_open",…],"browser":{"channel":"chrome","available":true,"version":"…"},"lifecycle_fault":null|{…}}`.
 
 Companion → worker: `{"type":"exec","request_id":"…","capability":"browser.navigate","payload":{…},"timeout_ms":30000}`;
 `{"type":"cancel","request_id":"…"}`; `{"type":"ping"}`; `{"type":"shutdown"}`.
 
 Worker → companion: `{"type":"result","request_id":"…","ok":true,"result":{…}}` or
-`{"type":"result","request_id":"…","ok":false,"error":{"class":"timeout","message":"…","retryable":true}}`;
+`{"type":"result","request_id":"…","ok":false,"error":{"class":"timeout","message":"…","retryable":true,"evidence":{…}}}` (`evidence` optional, bounded to 8 KB, structured context such as the lifecycle guard that refused — never page content);
 `{"type":"pong","sessions":n}`; `{"type":"log","level":"info","event":"…"}` (optional).
 
 Companion lifecycle: start lazily on the first `browser.*` request (or eagerly when

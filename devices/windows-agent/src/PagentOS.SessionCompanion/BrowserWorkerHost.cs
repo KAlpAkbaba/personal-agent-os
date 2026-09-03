@@ -484,7 +484,11 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
             _audit?.Write(
                 AuditWorkerStarted,
                 status: "ok",
-                detail: $"pid={worker.Pid}; worker_version={hello.WorkerVersion}; browser={hello.BrowserChannel ?? "-"}/{hello.BrowserVersion ?? "-"}; available={hello.BrowserAvailable}; capabilities={hello.Capabilities.Count}; start={Starts}");
+                detail: $"pid={worker.Pid}; worker_version={hello.WorkerVersion}; browser={hello.BrowserChannel ?? "-"}/{hello.BrowserVersion ?? "-"}; available={hello.BrowserAvailable}; capabilities={hello.Capabilities.Count}; start={Starts}; lifecycle_fault={hello.LifecycleFault ?? "none"}");
+            if (hello.LifecycleFault is not null)
+            {
+                _logger.LogError("browser worker (pid={Pid}) reports a durable lifecycle fault; research-profile launches are refused until it ages out: {Fault}", worker.Pid, hello.LifecycleFault);
+            }
             _logger.LogInformation(
                 "browser worker hello: version={Version} browser={Channel}/{BrowserVersion} available={Available} capabilities={Count}",
                 hello.WorkerVersion,

@@ -44,7 +44,7 @@ from playwright.async_api import (
     async_playwright,
 )
 
-from . import lifecycle
+from . import launch_guard, lifecycle
 from .capabilities import BrowserCapabilities
 from .enrollment import BrowserEnrollment, Transport, is_loopback_endpoint
 from .errors import (
@@ -389,6 +389,21 @@ class ManagedBackend(_PlaywrightBackendBase):
                 retryable=False,
             )
         self._channel = channel
+        # Cross-process guards (launch_guard): the exclusive launch lock and the
+        # kill-on-close job exist only for the persistent (profile) path; the
+        # breaker is attached by the worker (it lives in the worker data dir).
+        self._launch_lock: launch_guard.LaunchLock | None = (
+            launch_guard.LaunchLock(self._profile_dir) if self._profile_dir is not None else None
+        )
+        self._job = launch_guard.KillOnCloseJob()
+        self.breaker: launch_guard.LaunchBreaker | None = None
+        self.last_launch_kind: str | None = None
+        self.job_object_assigned = False
+        self._previous_launch_failed = False
+
+    @property
+    def launch_lock_name(self) -> str | None:
+        return self._launch_lock.name if self._launch_lock is not None else None
 
     @property
     def channel(self) -> str | None:
@@ -446,6 +461,11 @@ class ManagedBackend(_PlaywrightBackendBase):
             # a conflicting session_id for this profile, so anything still
             # found on the profile at this point is a true orphan, never a
             # session this process still considers live.
+            # Guard 1 (launch_guard.LaunchLock): the OS-level exclusive lock
+            # for this profile. Refuses -- before any reap -- when another
+            # live worker PROCESS holds it: its Chrome is not an orphan.
+            assert self._launch_lock is not None
+            self._launch_lock.acquire()
             reaped = await asyncio.to_thread(
                 lifecycle.reap_orphan_chrome, self._profile_dir, owned_pid=None
             )
@@ -455,6 +475,13 @@ class ManagedBackend(_PlaywrightBackendBase):
                     profile_dir=str(self._profile_dir),
                     pids=reaped,
                 )
+            # Guard 2 (launch_guard.LaunchBreaker): a launch that had to reap
+            # an orphan, or that follows a failed launch, is a *recovery*
+            # launch; the breaker allows at most a few of those per window
+            # and then records a durable fault. Clean launches never count.
+            about_to_recover = bool(reaped) or self._previous_launch_failed
+            if self.breaker is not None:
+                self.breaker.check(self._profile_dir, about_to_recover=about_to_recover)
             try:
                 context = await self._playwright.chromium.launch_persistent_context(
                     str(self._profile_dir),
@@ -463,6 +490,11 @@ class ManagedBackend(_PlaywrightBackendBase):
                     **channel_kwargs,
                 )
             except Exception as exc:
+                self._previous_launch_failed = True
+                if self.breaker is not None:
+                    self.breaker.record_launch(
+                        self._profile_dir, kind="failed", detail={"error": str(exc)[:200]}
+                    )
                 if lifecycle.is_locked_profile_error(exc):
                     # Never retried: a bounded retry loop here is exactly the
                     # cascade the incident report describes (each failed
@@ -489,6 +521,20 @@ class ManagedBackend(_PlaywrightBackendBase):
                     pids=pids,
                 )
             self._main_pid = pids[0] if pids else None
+            self._previous_launch_failed = False
+            self.last_launch_kind = "recovery" if about_to_recover else "clean"
+            if self.breaker is not None:
+                self.breaker.record_launch(
+                    self._profile_dir,
+                    kind=self.last_launch_kind,
+                    detail={"chrome_root_pid": self._main_pid, "reaped": reaped},
+                )
+            # Guard 3 (launch_guard.KillOnCloseJob): the Chrome root joins a job
+            # object this process alone holds; the kernel terminates the tree
+            # when this process ends, however it ends.
+            self.job_object_assigned = (
+                self._job.assign(self._main_pid) if self._main_pid is not None else False
+            )
         else:
             browser = await self._playwright.chromium.launch(
                 headless=self._headless, args=self._browser_args, **channel_kwargs
@@ -508,9 +554,7 @@ class ManagedBackend(_PlaywrightBackendBase):
         try:
             cdp = await self._browser.new_browser_cdp_session()
             info = await cdp.send("SystemInfo.getProcessInfo")
-            return next(
-                (p["id"] for p in info["processInfo"] if p["type"] == "browser"), None
-            )
+            return next((p["id"] for p in info["processInfo"] if p["type"] == "browser"), None)
         except Exception:
             return None
 
@@ -561,12 +605,30 @@ class ManagedBackend(_PlaywrightBackendBase):
         except Exception as exc:
             logger.warning("browser.close_error", error=str(exc)[:200])
         finally:
+            main_pid = self._main_pid
             self._browser = None
             self._context = None
             self._page = None
             self._main_pid = None
             await self._stop_playwright()
+            await self._release_os_guards(main_pid)
         logger.info("browser.backend_closed", backend="managed")
+
+    async def _release_os_guards(self, main_pid: int | None) -> None:
+        """Bounded wait for the browser root to exit, then close the job (which
+        terminates anything still inside it) and release the launch lock --
+        in that order, so the profile is never unlocked while its Chrome
+        might still be alive."""
+        if main_pid is not None:
+            still_alive = await asyncio.to_thread(
+                lifecycle.wait_for_pids_exit, [main_pid], timeout_s=lifecycle.DEFAULT_WAIT_TIMEOUT_S
+            )
+            if still_alive:
+                logger.warning("browser.root_still_alive_at_close", pid=main_pid)
+        self._job.close()
+        self.job_object_assigned = False
+        if self._launch_lock is not None:
+            self._launch_lock.release()
 
     # Diagnostics/testing only (e.g. crash injection); never used for control.
     @property
