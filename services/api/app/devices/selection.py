@@ -110,6 +110,11 @@ def select_device(
     now: datetime | None = None,
 ) -> SelectionResult:
     del now  # presence is already resolved on each DeviceView by the caller
+    # A revoked device is not a device any more for selection purposes: it can neither
+    # be chosen (by id, name, alias or automatically) nor make an alias ambiguous. Found
+    # by the e2e harness: retired harness devices still holding "ev" made the live one
+    # unselectable by its Turkish alias.
+    devices = [d for d in devices if d.status != "revoked"]
     candidates = devices
     explicit = False
     reason = REASON_AUTO

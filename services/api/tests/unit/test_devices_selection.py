@@ -186,3 +186,20 @@ def test_ambiguous_alias_does_not_shadow_id_or_name_matches() -> None:
     result = select_device([a, b], capability="browser.chrome", target="laptop")
     assert result.device.name == "laptop"
     assert result.reason == REASON_EXPLICIT_NAME
+
+
+def test_revoked_devices_never_match_and_never_make_an_alias_ambiguous() -> None:
+    # Found by the e2e harness: devices retired by earlier runs still held the alias.
+    from dataclasses import replace
+
+    live = _view("pc-live", aliases=("ev",))
+    retired = replace(_view("pc-old", aliases=("ev",)), status="revoked")
+    result = select_device(
+        [retired, live], capability="browser.chrome", target="ev bilgisayarımda araştır"
+    )
+    assert result.device.id == live.id
+    assert result.reason == REASON_EXPLICIT_ALIAS
+    with pytest.raises(NoCapableDeviceError):
+        select_device([retired], capability="browser.chrome", target=str(retired.id))
+    with pytest.raises(NoCapableDeviceError):
+        select_device([retired], capability="browser.chrome")
