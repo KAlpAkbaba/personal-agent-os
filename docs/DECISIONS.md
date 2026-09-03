@@ -2067,3 +2067,45 @@ Decisions:
 Consequences: the qualification instructions use `-Latest` or the copy button; the
 Cloud Core is released once more (api workload only) so the listing and the snapshot
 exist in production; the qualified baseline, the provider and the K66 work are untouched.
+
+## ADR-0048 — Evidence is UTF-8 end to end, decomposed into measured sub-phases, and never a sentinel (2026-09-03)
+
+Context: the owner's second real session (VOICE_OWNER_FEEDBACK.md, 2026-09-03) proved
+persistence and exposed three instrumentation defects: Turkish text displayed as
+mojibake, headline latencies with no component attribution (six unmatched mic-start
+samples, a barge-in latency that was always 209–210 ms, one 0 ms sample), and
+calibration values (`env=0, sensitivity=0, peak_db=-100`) that could not be told from
+"not measured".
+
+Decisions:
+
+1. **UTF-8 is declared and decoded, not assumed.** Traced on the host: the database
+   holds correct UTF-8 (`ş`/`ğ` at real positions, no `Ã` anywhere); the API sent
+   `application/json` without a charset and Windows PowerShell 5.1 decoded the body as
+   Latin-1. Every JSON response now declares `charset=utf-8`
+   (`UTF8JSONResponse`), and the repository's own scripts read raw bytes through
+   `HttpWebRequest` and decode UTF-8 regardless of the header (`scripts/lib/HttpJson.ps1`,
+   used by `fetch-benchmark.ps1`), so a non-2xx body is intact too. Historical evidence
+   was not mutated; the tests reproduce the defect on the exact bytes and prove the
+   round trip (`utf8-json.tests.ps1`; a pytest posts Turkish text and checks the raw
+   response bytes).
+2. **Sub-phases ride existing timing kinds as payload numbers**, so no contract bump
+   is needed: `mic_speech_start {gate_ms, capture_lag_ms}`, `uplink_first_packet
+   {basis (1 = RTP stats, 0 = provider fallback), rtp_ms, provider_ms}`, `barge_in_start
+   {detect_ms, stop_command_ms, gain_zero_ms, anomaly}`, `first_audio {response_created_ms,
+   first_delta_ms, playback_ms}`. The benchmark context carries `breakdown`: per
+   sub-phase n/p50/p95 with the same nearest-index percentile as the headline metrics,
+   plus fallback and anomaly counts and how many events carried no breakdown. A latency
+   is attributed to transport only when its components were measured. (`stop_cmd_ms` was
+   rejected by the forbidden-key rule - it normalises to a string containing `pcm` -
+   which is why the key is spelled out.)
+3. **"Measured zero" is distinct from "not measured".** A calibration counts as measured
+   only when the client reports `measured: 1` with `samples > 0`; the benchmark exposes
+   `noise.calibration_measured`, and clients omit unmeasured quantities instead of
+   sending a sentinel. Class-like values are not encoded as index 0.
+4. **Scope of any conclusion.** `tool_preamble` and `tool_done_to_speech` stay out of the
+   qualification conclusion while their sample count is zero.
+
+Consequences: the next real K66 session yields attributable numbers; the client-side
+optimisation pass (ADR-0047) is judged against them; the revised voice target remains
+NOT PROVEN until the owner's rerun.

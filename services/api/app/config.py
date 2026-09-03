@@ -99,7 +99,8 @@ class Settings(BaseSettings):
     # the owner's machine, never assumed.
     voice_realtime_openai_base_url: str = "https://api.openai.com/v1"
     voice_realtime_openai_model: str = "gpt-realtime-2.1"
-    voice_realtime_openai_voice: str = "marin"
+    # The owner's A/B verdict (2026-09-03): cedar is closer to the Arbor target.
+    voice_realtime_openai_voice: str = "cedar"
     # ADR-0043: the owner's perceptual target is ChatGPT's "Arbor", which the Realtime
     # API does not expose (live discovery 2026-09-02). The profile is realised through
     # the closest supported voice + the style block in the persona + output pacing;

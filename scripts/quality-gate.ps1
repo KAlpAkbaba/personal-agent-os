@@ -305,6 +305,14 @@ if (-not $Fast) {
     Assert-ExitCode "cloud release tests"
   }
 
+  Invoke-Step "UTF-8 JSON decoding (PS5.1)" {
+    # A real qualification record showed Turkish letters as mojibake: 5.1 decoded a
+    # charset-less JSON body as Latin-1 while the database held correct UTF-8.
+    $script = Join-Path $repoRoot "scripts\tests\utf8-json.tests.ps1"
+    & (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -NoProfile -File $script
+    Assert-ExitCode "utf8 json tests"
+  }
+
   Invoke-Step "Config swap transaction (PS5.1)" {
     # A real broker switch died inside [IO.File]::Replace: PowerShell binds $null to a
     # [string] parameter as an EMPTY string, which .NET refuses as a path. These reproduce

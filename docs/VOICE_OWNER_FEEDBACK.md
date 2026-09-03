@@ -38,6 +38,32 @@ triggers conversational turns.
   modes (`Otomatik` default, `Sessiz ortam`, `Gürültülü ortam`, `Çok gürültülü ortam`),
   and a real 14-scenario noise qualification matrix on the owner's machine.
 
+## 2026-09-03 — second real session (cedar, Arbor profile, K66), fetched after disconnect
+
+Persistence closed as PROVEN_REAL by the owner: session `93f9b4f7-…-f294d3a949ae`, state
+`closed`, `closed_at` set, `benchmark_snapshot_at_close = true`, the same canonical id
+survived the provider/WebRTC closure, benchmark fetched from a separate PowerShell process.
+
+Real metrics (client-reported, target in brackets): mic→uplink p50 391 / p95 472 ms
+[120] FAIL, with 6 unmatched mic-start samples; EOT→first audio p50 674 / p95 1059 ms
+[700] FAIL (outliers 925/1059); barge-in→playback stop p50 210 / p95 210 ms [150] FAIL,
+almost every sample 209–210 ms, one 0 ms sample; audio gaps 0 PASS. K66 noise: false
+starts 5, false barge-ins 4, false turns 0, gate opens 15, gated out 6, click rejects 6.
+Persisted calibration carried `env=0, sensitivity=0, peak_db=-100` (ambiguous). The
+transcript summary displayed with mojibake (`Ã`, `Å`). `tool_preamble` and
+`tool_done_to_speech` were not exercised (n=0) and are excluded from any conclusion.
+
+**What the system did with this (ADR-0047/0048):** the encoding defect was traced to the
+reading side (the database holds correct UTF-8; the API now declares `charset=utf-8` and
+the scripts decode bytes as UTF-8); the five metrics are now decomposed into measured
+sub-phases (capture, local gate, RTP send, provider receipt; detect/stop-command/gain-zero
+for barge-in; response-created/first-delta/playback for EOT); calibration reports
+`measured: 1` with sample counts and never a sentinel; the client-side optimisation pass
+targets the fixed 210 ms barge-in delay and the K66 false starts/barge-ins without a global
+threshold. The revised voice target stays NOT PROVEN until the owner's rerun meets or
+materially approaches the latency targets and ambient noise no longer causes distracting
+activations.
+
 **Acceptance for the revised voice target** (owner confirms, nothing else counts):
 voice character perceptually close enough to Arbor; normal room noise no longer causes
 distracting activations; the owner's Turkish stays natural and complete; interruption

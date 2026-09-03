@@ -11,6 +11,11 @@
     snapshot taken at close), never from browser memory, so a closed session is
     fetchable any time later. Nothing in it is audio or a secret.
 
+    Bodies are decoded as UTF-8 regardless of the response charset
+    (scripts/lib/HttpJson.ps1): a real record once came back as "Ã"/"Å" because Windows
+    PowerShell 5.1 decoded a charset-less JSON body as Latin-1 while the database held
+    correct UTF-8. The file is written as UTF-8 without BOM.
+
     Never transcribe a UUID by hand: -Latest fetches the newest session; without it the
     id must be the full UUID (use the page's "Session ID kopyala" button). On a 404 the
     script lists the recent sessions so the right one can be picked.
@@ -34,6 +39,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot "..\lib\NativeProcess.ps1")
+. (Join-Path $PSScriptRoot "..\lib\HttpJson.ps1")
 
 $base = "http://${BrokerHost}:$ApiPort"
 if (-not $Latest) {
@@ -51,7 +57,7 @@ finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
 $issued = $null
 try {
     $body = @{ owner_credential = $credential; client_kind = $ClientKind; label = "fetch-benchmark" } | ConvertTo-Json -Compress
-    $issued = Invoke-RestMethod -Method Post -Uri "$base/v1/identity/sessions" -ContentType "application/json" -Body $body -TimeoutSec 20
+    $issued = Invoke-JsonUtf8 -Method POST -Uri "$base/v1/identity/sessions" -Body $body
 }
 finally {
     $credential = $null
@@ -64,7 +70,7 @@ $mintedId = Get-OptionalProperty -InputObject $issued -Name "session_id"
 
 function Show-RecentSessions {
     param([hashtable]$Headers)
-    $listing = Invoke-RestMethod -Uri "$base/v1/voice/realtime/sessions?limit=10" -Headers $Headers -TimeoutSec 20
+    $listing = Invoke-JsonUtf8 -Uri "$base/v1/voice/realtime/sessions?limit=10" -Headers $Headers
     $sessions = @(Get-OptionalProperty -InputObject $listing -Name "sessions")
     Write-Host "recent sessions on $BrokerHost (newest first):"
     foreach ($s in $sessions) {
@@ -81,11 +87,11 @@ try {
         Write-Host "using the newest session: $SessionId"
     }
     try {
-        $state = Invoke-RestMethod -Uri "$base/v1/voice/realtime/sessions/$SessionId" -Headers $headers -TimeoutSec 20
+        $state = Invoke-JsonUtf8 -Uri "$base/v1/voice/realtime/sessions/$SessionId" -Headers $headers
     }
     catch {
         $status = $null
-        try { $status = [int]$_.Exception.Response.StatusCode } catch { }
+        try { $status = [int](Get-OptionalProperty -InputObject $_.Exception -Name "StatusCode") } catch { }
         if ($status -eq 404) {
             Write-Host "no session with id $SessionId (a mistyped character is the usual cause; nothing was lost)."
             Show-RecentSessions -Headers $headers | Out-Null
@@ -93,7 +99,7 @@ try {
         }
         throw
     }
-    $bench = Invoke-RestMethod -Uri "$base/v1/voice/realtime/sessions/$SessionId/benchmark" -Headers $headers -TimeoutSec 20
+    $bench = Invoke-JsonUtf8 -Uri "$base/v1/voice/realtime/sessions/$SessionId/benchmark" -Headers $headers
     $report = [ordered]@{
         fetched_at = (Get-Date).ToUniversalTime().ToString("o")
         session    = $state
@@ -103,12 +109,12 @@ try {
     Write-Output $json
     if ($OutFile) {
         [IO.File]::WriteAllText($OutFile, $json + "`n", (New-Object System.Text.UTF8Encoding($false)))
-        Write-Host "written to $OutFile (ids and timings only; no audio, no secret)"
+        Write-Host "written to $OutFile (UTF-8, no BOM; ids and timings only; no audio, no secret)"
     }
 }
 finally {
     if ($mintedId) {
-        try { Invoke-RestMethod -Method Post -Uri "$base/v1/identity/sessions/$mintedId/revoke" -Headers $headers -TimeoutSec 20 | Out-Null; Write-Host "the session minted for this fetch was revoked" }
+        try { Invoke-JsonUtf8 -Method POST -Uri "$base/v1/identity/sessions/$mintedId/revoke" -Headers $headers -Body "{}" | Out-Null; Write-Host "the session minted for this fetch was revoked" }
         catch { Write-Host "note: could not revoke the fetch session ($($_.Exception.Message)); it expires on its own" }
     }
     $token = $null

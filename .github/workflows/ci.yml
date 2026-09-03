@@ -180,7 +180,8 @@ jobs:
           powershell -NoProfile -File scripts\tests\config-swap.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\agent-audit.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\cloud-secret.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\cloud-release.tests.ps1
+          powershell -NoProfile -File scripts\tests\cloud-release.tests.ps1 && ^
+          powershell -NoProfile -File scripts\tests\utf8-json.tests.ps1
 
   web-build:
     name: Web shell build

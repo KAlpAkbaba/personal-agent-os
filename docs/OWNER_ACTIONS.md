@@ -88,7 +88,46 @@ Unblocks: real-browser qualification against sites you are already signed into.
 The agent will give you the exact enrollment step when it reaches this point; it needs the
 browser closed once, and it never asks for a password.
 
-### 8. Combined voice-character + noise qualification — **this is the current action**
+### 9. K66 re-qualification after the instrumentation + noise pass — **this is the current action**
+
+Unblocks: rows 6.16–6.21 with attributable numbers; the revised voice target stays NOT
+PROVEN until this rerun meets or materially approaches the latency targets and room noise
+no longer causes distracting activations (your verdict).
+
+What changed since your session 2 (ADR-0047/0048): every headline latency is now split
+into measured components (capture → local gate → RTP send → provider receipt; detect →
+stop command → gain zero for barge-in; response created → first delta → playback for
+end-of-turn), the fixed ~210 ms barge-in delay was targeted, the K66 false starts and
+false barge-ins were addressed without a global threshold, calibration reports whether it
+actually measured, and Turkish text renders correctly in the fetched record. Cedar with
+the Arbor profile is the default; `Sözleşme: v2` stays.
+
+1. Start and sign in as before (`.\scripts\voice\start-web-voice.ps1`,
+   http://localhost:3000/voice). Leave `Ses = Cedar`, mode `Otomatik`. Let the calibration
+   finish (the mic area shows `Ortam`), then open **Tanılama** once and copy its JSON.
+2. Run the same 14-scenario noise matrix as item 8 Part B (silent room, fan, typing, mouse,
+   desk knock, air conditioner, TV speech, another person, music, street, the assistant on
+   speakers interrupted with "dur", you quiet, normal, farther), then the hesitation check
+   and a headset "dur" barge-in, plus five or six normal turns so the latency samples have
+   n ≥ 5.
+3. Pull the record:
+
+   ```powershell
+   .\scripts\voice\fetch-benchmark.ps1 -Latest -OutFile voice-session-3.json
+   ```
+
+Paste the JSON, the Tanılama JSON, and your verdict on: interruptions (did "dur" stop it
+at once?), false activations (which scenarios still triggered it), and whether your quiet
+or far speech was ever cut. What happens next, automatically: the breakdown says which
+component owns each remaining millisecond, the noise counters go into rows 6.16–6.21, and
+the K66 profile is pinned from the measured settings.
+
+### 8. Combined voice-character + noise qualification — **DONE (2026-09-03)**
+
+Result recorded in `docs/VOICE_OWNER_FEEDBACK.md`: persistence PROVEN_REAL; Cedar chosen;
+latency targets not met (mic→uplink 391/472, EOT→first audio 674/1059, barge-in 210 ms
+fixed), K66 false starts 5 / false barge-ins 4; mojibake in the fetched record (reading
+side; fixed). The procedure below stays as the reference.
 
 Unblocks: `docs/QUALIFICATION.md` rows 6.15–6.21, and the rest of Stage 6 as a side effect.
 

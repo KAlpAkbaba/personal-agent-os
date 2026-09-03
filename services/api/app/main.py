@@ -11,6 +11,7 @@ from typing import Any
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app import __version__
 from app.artifacts.routes import router as artifacts_router
@@ -43,6 +44,19 @@ from app.voice.runtime import VoiceRuntime
 configure_logging()
 logger = get_logger("app.main")
 
+
+
+class UTF8JSONResponse(JSONResponse):
+    """``application/json; charset=utf-8`` on every JSON response.
+
+    The body was always UTF-8 (the database holds ``ş``/``ğ`` correctly); without
+    the charset a Windows PowerShell 5.1 client decoded it as Latin-1 and showed
+    the owner ``Ã``/``Å`` mojibake in a real qualification record. Declaring it
+    fixes every RFC-conformant client; the repository's own scripts decode bytes as
+    UTF-8 regardless.
+    """
+
+    media_type = "application/json; charset=utf-8"
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
@@ -80,6 +94,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # once this is reachable over a network, so they follow the environment.
     docs_enabled = settings.environment == "dev"
     app = FastAPI(
+        default_response_class=UTF8JSONResponse,
         title=settings.app_name,
         version=__version__,
         lifespan=lifespan,

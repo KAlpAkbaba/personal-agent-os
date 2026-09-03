@@ -772,6 +772,77 @@ def client_timing_rows(db: Session, session_id: uuid.UUID) -> list[dict[str, Any
 
 NOISE_COUNTERS = ("false_starts", "false_barge_ins", "false_turns", "gate_opens")
 
+#: Sub-phase numbers the client reports as payload on EXISTING timing kinds (ADR-0047),
+#: so the five headline metrics can be decomposed without new event kinds:
+#:   mic_speech_start:    gate_ms, capture_lag_ms
+#:   uplink_first_packet: rtp_ms, provider_ms, basis (1 = RTP stats, 0 = provider fallback)
+#:   barge_in_start:      detect_ms, stop_command_ms, gain_zero_ms, anomaly (1 = flagged)
+#:   first_audio:         response_created_ms, first_delta_ms, playback_ms
+BREAKDOWN_FIELDS: dict[str, tuple[str, ...]] = {
+    "mic_speech_start": ("gate_ms", "capture_lag_ms"),
+    "uplink_first_packet": ("rtp_ms", "provider_ms"),
+    "barge_in_start": ("detect_ms", "stop_command_ms", "gain_zero_ms"),
+    "first_audio": ("response_created_ms", "first_delta_ms", "playback_ms"),
+}
+BREAKDOWN_FLAGS: dict[str, tuple[str, ...]] = {
+    "uplink_first_packet": ("basis",),
+    "barge_in_start": ("anomaly",),
+}
+
+
+def _percentile(values: list[float], q: float) -> float:
+    ordered = sorted(values)
+    if not ordered:
+        return 0.0
+    index = max(0, min(len(ordered) - 1, int(round(q * (len(ordered) - 1)))))
+    return float(ordered[index])
+
+
+def timing_breakdown(client_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Per sub-phase: n, p50, p95 (ms) from the client's payload numbers, plus the
+    per-kind flag counts (RTP-measured vs fallback uplinks, flagged barge-in samples)
+    and how many timing events carried no breakdown at all. Numbers only."""
+    samples: dict[str, dict[str, list[float]]] = {
+        kind: {f: [] for f in fields} for kind, fields in BREAKDOWN_FIELDS.items()
+    }
+    flags: dict[str, dict[str, int]] = {
+        kind: {f: 0 for f in fields} for kind, fields in BREAKDOWN_FLAGS.items()
+    }
+    seen: dict[str, int] = {kind: 0 for kind in BREAKDOWN_FIELDS}
+    without: dict[str, int] = {kind: 0 for kind in BREAKDOWN_FIELDS}
+    for meta in client_rows:
+        kind = meta.get("kind")
+        if kind not in BREAKDOWN_FIELDS:
+            continue
+        seen[kind] += 1
+        payload = meta.get("payload") or {}
+        if not isinstance(payload, dict):
+            without[kind] += 1
+            continue
+        got_any = False
+        for field_name in BREAKDOWN_FIELDS[kind]:
+            value = payload.get(field_name)
+            if isinstance(value, int | float) and not isinstance(value, bool):
+                samples[kind][field_name].append(float(value))
+                got_any = True
+        for flag in BREAKDOWN_FLAGS.get(kind, ()):
+            value = payload.get(flag)
+            if isinstance(value, int | float) and value:
+                flags[kind][flag] += 1
+        if not got_any:
+            without[kind] += 1
+    out: dict[str, Any] = {}
+    for kind, fields in BREAKDOWN_FIELDS.items():
+        entry: dict[str, Any] = {"events": seen[kind], "without_breakdown": without[kind]}
+        for field_name in fields:
+            values = samples[kind][field_name]
+            entry[field_name] = {"n": len(values), "p50_ms": round(_percentile(values, 0.5), 1),
+                                 "p95_ms": round(_percentile(values, 0.95), 1)}
+        for flag in BREAKDOWN_FLAGS.get(kind, ()):
+            entry[flag + "_count"] = flags[kind][flag]
+        out[kind] = entry
+    return out
+
 
 def noise_summary(client_rows: list[dict[str, Any]]) -> dict[str, Any]:
     """The microphone/noise evidence for QUALIFICATION rows 6.16-6.21 (ADR-0044).
@@ -800,12 +871,16 @@ def noise_summary(client_rows: list[dict[str, Any]]) -> dict[str, Any]:
             value = last_metrics.get(name)
             if isinstance(value, int | float):
                 counters[name] = int(value)
+    calibration = {k: v for k, v in (last_calibration or {}).items() if k != "mic_calibration"}
+    # "measured zero" vs "not measured": a calibration counts as measured only when the
+    # client says so (measured: 1 with samples > 0); anything else is reported as such.
+    measured = bool(calibration.get("measured")) and float(calibration.get("samples") or 0) > 0
     return {
         "reported": last_metrics is not None,
         **counters,
         "calibrations": calibrations,
-        "calibration": {k: v for k, v in (last_calibration or {}).items()
-                        if k != "mic_calibration"},
+        "calibration_measured": measured,
+        "calibration": calibration,
         "metrics": {k: v for k, v in (last_metrics or {}).items() if k != "mic_metrics"},
     }
 
@@ -830,7 +905,8 @@ def benchmark_report(db: Session, row: RealtimeSessionRow) -> RealtimeBenchRepor
                  "ended_at": _iso(row.closed_at) if row.closed_at else None,
                  "benchmark_snapshot_at_close": bool(
                      (row.context_json or {}).get(BENCHMARK_SNAPSHOT_KEY)),
-                 "noise": noise_summary(rows)},
+                 "noise": noise_summary(rows),
+                 "breakdown": timing_breakdown(rows)},
     )
 
 
@@ -900,6 +976,7 @@ __all__ = [
     "list_recent_sessions",
     "noise_summary",
     "snapshot_benchmark_at_close",
+    "timing_breakdown",
     "record_client_events",
     "require_leg",
     "require_live",

@@ -732,3 +732,69 @@ def test_lifecycle_benchmark_fetchable_after_disconnect_and_secret_revocation(wi
     # a mistyped id is a 404, not an evidence loss
     wrong = sid[:-4] + ("0000" if not sid.endswith("0000") else "1111")
     assert client.get(f"/v1/voice/realtime/sessions/{wrong}/benchmark").status_code == 404
+
+
+def test_turkish_transcript_summary_round_trips_as_utf8_bytes(wired) -> None:
+    # The owner's qualification record showed "Ã"/"Å": the database held correct UTF-8
+    # (proven on the host) and the JSON response carried no charset, so a PowerShell 5.1
+    # client decoded Latin-1. Responses now declare charset=utf-8, and the bytes are UTF-8.
+    client, *_ = wired
+    sid = _create(client)["session_id"]
+    text = "Şey... yani İstanbul'da ığüşöç harfleri: Işık ve Görüş"
+    r = client.post(f"/v1/voice/realtime/sessions/{sid}/events",
+                    json={"events": [{"kind": "summary", "t_ms": 1, "text": text}]})
+    assert r.status_code == 200, r.text
+    state = client.get(f"/v1/voice/realtime/sessions/{sid}")
+    assert state.headers["content-type"].lower().startswith("application/json; charset=utf-8")
+    assert state.json()["transcript_summary"] == text
+    assert text.encode("utf-8") in state.content  # the raw bytes are UTF-8, never double-encoded
+    assert "Ã" not in state.content.decode("utf-8")
+
+
+def test_benchmark_breakdown_aggregates_client_sub_phases_and_flags(wired) -> None:
+    # ADR-0047: sub-phase numbers ride EXISTING timing kinds as payload; the report
+    # decomposes the headline metrics and counts fallbacks/anomalies, numbers only.
+    client, *_ = wired
+    sid = _create(client)["session_id"]
+    r = client.post(f"/v1/voice/realtime/sessions/{sid}/events", json={"events": [
+        {"kind": "mic_speech_start", "t_ms": 100, "turn": 0,
+         "payload": {"source": 1, "gate_ms": 72, "capture_lag_ms": 21}},
+        {"kind": "uplink_first_packet", "t_ms": 160, "turn": 0,
+         "payload": {"basis": 1, "rtp_ms": 38, "provider_ms": 260}},
+        {"kind": "mic_speech_start", "t_ms": 5000, "turn": 1, "payload": {"gate_ms": 90}},
+        {"kind": "uplink_first_packet", "t_ms": 5400, "turn": 1,
+         "payload": {"basis": 0, "provider_ms": 391}},
+        {"kind": "barge_in_start", "t_ms": 8000, "turn": 2,
+         "payload": {"playback_stopped_ms": 210, "detect_ms": 90, "stop_command_ms": 3,
+                     "gain_zero_ms": 117}},
+        {"kind": "playback_stopped", "t_ms": 8210, "turn": 2},
+        {"kind": "barge_in_start", "t_ms": 9000, "turn": 3,
+         "payload": {"playback_stopped_ms": 0, "anomaly": 1}},
+        {"kind": "playback_stopped", "t_ms": 9000, "turn": 3},
+        {"kind": "first_audio", "t_ms": 12000, "turn": 4,
+         "payload": {"response_created_ms": 310, "first_delta_ms": 290, "playback_ms": 74}},
+        {"kind": "first_audio", "t_ms": 15000, "turn": 5},  # legacy client: no breakdown
+        {"kind": "state", "t_ms": 15001, "payload": {"mic_calibration": 1, "measured": 1,
+                                                      "samples": 84, "noise_floor_db": -51.5}},
+    ]})
+    assert r.status_code == 200, r.text
+    ctx = client.get(f"/v1/voice/realtime/sessions/{sid}/benchmark").json()["context"]
+    bd = ctx["breakdown"]
+    assert bd["mic_speech_start"]["events"] == 2
+    # same nearest-index percentile as realtime_bench: two samples -> p50 is the lower one
+    assert bd["mic_speech_start"]["gate_ms"] == {"n": 2, "p50_ms": 72.0, "p95_ms": 90.0}
+    assert bd["mic_speech_start"]["capture_lag_ms"]["n"] == 1
+    assert bd["uplink_first_packet"]["basis_count"] == 1  # one RTP-measured, one fallback
+    assert bd["uplink_first_packet"]["provider_ms"]["n"] == 2
+    assert bd["barge_in_start"]["anomaly_count"] == 1
+    assert bd["barge_in_start"]["detect_ms"] == {"n": 1, "p50_ms": 90.0, "p95_ms": 90.0}
+    assert bd["first_audio"]["events"] == 2 and bd["first_audio"]["without_breakdown"] == 1
+    assert bd["first_audio"]["response_created_ms"]["p50_ms"] == 310.0
+    assert ctx["noise"]["calibration_measured"] is True
+    # and a calibration without the measured flag is reported as NOT measured
+    other = _create(client)["session_id"]
+    client.post(f"/v1/voice/realtime/sessions/{other}/events", json={"events": [
+        {"kind": "state", "t_ms": 1, "payload": {"mic_calibration": 1, "noise_floor_db": -60.0,
+                                                  "env": 0, "peak_db": -100}}]})
+    ctx2 = client.get(f"/v1/voice/realtime/sessions/{other}/benchmark").json()["context"]
+    assert ctx2["noise"]["calibrations"] == 1 and ctx2["noise"]["calibration_measured"] is False
