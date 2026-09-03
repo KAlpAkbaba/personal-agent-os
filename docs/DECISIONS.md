@@ -2428,3 +2428,49 @@ needs one owner-run installer update (UAC) before the real acceptance run; M13 i
 Chrome → live Internet → multiple current sources → evidence → synthesis → artifact → memory
 runs on the first use case with a harmless public topic; fixtures remain gates. M14 (voice ↔
 research ↔ browser) waits for the voice quality work to be qualified.
+
+### ADR-0050 addendum (2026-09-03): what the build, the live runs and the reviews changed
+
+Built as four parallel tracks and merged the same day (web `/research`, companion browser host +
+installer provisioning, browser worker + operations, Cloud Core devices layer + pipeline +
+embedded Temporal worker). Facts and decisions that were not in the design:
+
+1. **Headful real Chrome with the dedicated persistent profile is the qualified posture.** On
+   the live Internet the same public newsroom answered headless Chrome with 403 and headful
+   Chrome with 200; every search engine served headful Chrome and challenged headless. The
+   contract default `visible: true` stands; the live tests run headful. DuckDuckGo and Bing wrap
+   organic links in click-tracking redirects (`uddg=`, `/ck/a?u=a1<base64url>`), unwrapped by
+   `search_engines.resolve_result_url`; Mojeek and Startpage block automation and are not used.
+   A bare HTTP 403 without login markers is `blocked` (bot filtering), not `auth_wall`.
+2. **Destination policy on both sides** (§5a of the contract): public Internet hosts only,
+   every resolved address checked (DNS rebinding), CGNAT/tailnet refused. Found by the security
+   review: discovery output is third-party content, so a Hacker News submission or a search hit
+   could have pointed the owner's browser at a LAN or metadata address.
+3. **Forbidden-key scan is enforced three times** with one normalised rule (lowercase, strip
+   non-alphanumerics, substring): worker, companion (`BrowserCapabilities.IsForbiddenKey`) and
+   Cloud Core (`app.research.forbidden_keys`, parity-tested against the worker's list). The
+   companion's first version matched raw substrings and missed `api-key`/`x-api-key`.
+4. **The deterministic synthesis provider never writes page text into memory.** Its finding
+   summaries are built from provenance fields only; `remember_activity` stores a summary only
+   for a model-backed provider and only when no cited evidence is injection-suspected and the
+   text carries no marker. Found by the security review as the one path that bypassed §6.
+5. **Injection markers are grouped correctly and text is folded before matching** (NFKC,
+   zero-width characters removed, whitespace collapsed) on both sides; the first list's
+   alternation matched the bare word "reveal". The boundary is structural — page text has no
+   path into any action — the detector is telemetry for Cloud Core's flag.
+6. **Companion hardening**: only the 24 contract operations are forwarded (`capability_missing`
+   before the worker's stdin), worker stderr is sanitised before logging (query strings, credential
+   `key: value` lines, 2000-char cap), stdout lines are bounded (4 × 48 KiB, over → kill and
+   restart with backoff), eager restarts stop after ten consecutive failures, the pipe cap of 120 s
+   for `browser.*` was proven end to end (`timeout_ms_seen == 120000 − 500`).
+7. **Provenance gate for every label**: dangling citations are stripped from all statements, not
+   only `source_fact`, so the rendered Markdown never carries an `[eN]` without a Sources entry;
+   sources carry `device_id` and `command_id` to the exact device command that fetched them;
+   LLM output is bounded (3–7 findings, per-field caps); discovery bodies are capped at 2 MiB;
+   device aliases must be unique (409) and an ambiguous alias is `no_capable_device`.
+8. **Installer upgrade safety**: a re-run without `-BrokerRestUrl` preserves the installed
+   broker endpoints (after RQ-2 the tailnet address), so the owner's agent update cannot silently
+   repoint the qualified device at loopback.
+9. **The e2e harness owns a database** (`pagentos_e2e_m13`): the shared dev database is
+   truncated and re-migrated by the integration suites, which wiped a real run mid-fetch during
+   the concurrent reviews; the API log is captured into the evidence directory.

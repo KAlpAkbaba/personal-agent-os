@@ -405,6 +405,16 @@ Invoke-Step "Start agent service + companion; device online with browser.chrome"
 }
 
 Invoke-Step "Device selection (auto and explicit Turkish alias)" {
+  # Devices enrolled by earlier runs persist in the harness database and may still hold
+  # the alias; aliases are unique across enrolled devices (409 alias_conflict), so retire
+  # every device that is not the one this run enrolled.
+  $listing = Get-Json "/v1/devices"
+  foreach ($d in @($listing.devices)) {
+    if ([string]$d.device_id -ne [string]$script:deviceId -and $d.status -ne "revoked") {
+      Post-Json "/v1/devices/$($d.device_id)/revoke" "{}" | Out-Null
+      Write-Host "  revoked stale harness device $($d.device_id)"
+    }
+  }
   Send-Json -Path "/v1/devices/$($script:deviceId)" -Method PATCH -Body @{ aliases = @("ev") } | Out-Null
   $sel = Post-Json "/v1/devices/select" @{ capability = "browser.chrome" }
   if ([string](Get-OptionalProperty -InputObject $sel -Name "device_id") -ne [string]$script:deviceId) { throw "auto selection did not pick the enrolled device: $($sel | ConvertTo-Json -Compress)" }
