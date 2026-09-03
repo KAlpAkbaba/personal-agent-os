@@ -20,6 +20,7 @@ parallel M13 track from the same §6 list) the two stay byte-identical; see
 from __future__ import annotations
 
 import re
+import unicodedata
 
 #: Verbatim from BROWSER_CAPABILITIES.md §6 (English then Turkish), in the
 #: order the contract lists them. Each entry is a regex pattern (some are
@@ -27,8 +28,8 @@ import re
 MARKERS: tuple[str, ...] = (
     r"ignore (all|previous|prior) instructions",
     r"system prompt",
-    r"reveal|print your (instructions|prompt|secrets)",
-    r"execute|run (the|this) command",
+    r"(reveal|print) your (instructions|prompt|secrets)",
+    r"(execute|run) (the|this) command",
     r"upload",
     r"install",
     r"change (the )?policy",
@@ -44,6 +45,28 @@ _COMPILED: tuple[re.Pattern[str], ...] = tuple(
     re.compile(marker, re.IGNORECASE) for marker in MARKERS
 )
 
+# Zero-width / joiner code points an adversarial page can drop into a phrase so a
+# human still reads "ignore previous instructions" while a regex sees two words.
+_ZERO_WIDTH = re.compile("[\u200b\u200c\u200d\u2060\ufeff\u00ad]")
+_WHITESPACE = re.compile(r"\s+")
+
+
+def normalize_for_markers(text: str) -> str:
+    """Fold the cheap evasions before matching (contract §6, both sides).
+
+    NFKC maps fullwidth/compatibility forms (``ｉｇｎｏｒｅ`` → ``ignore``, NBSP →
+    space), zero-width characters are removed, and any whitespace run collapses
+    to one space so line breaks/tabs inside a phrase do not split it. Homoglyphs
+    from other scripts are deliberately not folded here (a confusables table is
+    a larger, separate decision); the boundary itself is structural and does
+    not depend on this detector.
+    """
+    if not text:
+        return ""
+    folded = unicodedata.normalize("NFKC", text)
+    folded = _ZERO_WIDTH.sub("", folded)
+    return _WHITESPACE.sub(" ", folded)
+
 
 def count_injection_markers(text: str) -> int:
     """Total number of marker-pattern matches found in ``text``.
@@ -57,7 +80,8 @@ def count_injection_markers(text: str) -> int:
     """
     if not text:
         return 0
-    return sum(len(pattern.findall(text)) for pattern in _COMPILED)
+    folded = normalize_for_markers(text)
+    return sum(len(pattern.findall(folded)) for pattern in _COMPILED)
 
 
-__all__ = ["MARKERS", "count_injection_markers"]
+__all__ = ["MARKERS", "count_injection_markers", "normalize_for_markers"]

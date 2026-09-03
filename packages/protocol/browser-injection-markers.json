@@ -1,8 +1,8 @@
 [
   "ignore (all|previous|prior) instructions",
   "system prompt",
-  "reveal|print your (instructions|prompt|secrets)",
-  "execute|run (the|this) command",
+  "(reveal|print) your (instructions|prompt|secrets)",
+  "(execute|run) (the|this) command",
   "upload",
   "install",
   "change (the )?policy",

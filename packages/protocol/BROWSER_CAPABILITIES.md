@@ -212,9 +212,13 @@ are command payloads; (b) never includes cookies, storage, headers, form values 
 the profile path in any result (results are scanned with the shared forbidden-key rule:
 `cookie`, `authorization`, `set-cookie`, `localstorage`, `sessionstorage`, `password`, `token`,
 `secret`, `apikey`); (c) counts `injection_markers` with the same pattern list Cloud Core uses
-(`ignore (all|previous|prior) instructions`, `system prompt`, `reveal|print your (instructions|prompt|secrets)`,
-`execute|run (the|this) command`, `upload`, `install`, `change (the )?policy`, `you are now`,
-`as an ai`, `assistant:`, Turkish: `önceki talimatları yok say`, `komutu çalıştır`, `şifreyi göster`).
+(`ignore (all|previous|prior) instructions`, `system prompt`, `(reveal|print) your (instructions|prompt|secrets)`,
+`(execute|run) (the|this) command`, `upload`, `install`, `change (the )?policy`, `you are now`,
+`as an ai`, `assistant:`, Turkish: `önceki talimatları yok say`, `komutu çalıştır`, `şifreyi göster`;
+the canonical list is `packages/protocol/browser-injection-markers.json`). Before matching, both
+sides fold the text the same way: NFKC normalisation, zero-width/joiner characters removed,
+whitespace runs collapsed to one space. The detector is telemetry for Cloud Core's flag; the
+safety boundary is structural (page text has no path into any action) and does not depend on it.
 Cloud Core flags evidence with markers `injection_suspected=true`, keeps it as quoted evidence
 only, excludes it from any synthesis prompt as an instruction source (it is wrapped as a
 quoted, delimited data block with an explicit "untrusted web content" header) and never writes

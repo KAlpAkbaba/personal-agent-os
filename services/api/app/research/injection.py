@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -43,8 +44,8 @@ MARKERS_PATH = _REPO_ROOT / "packages" / "protocol" / "browser-injection-markers
 DEFAULT_MARKERS: tuple[str, ...] = (
     "ignore (all|previous|prior) instructions",
     "system prompt",
-    "reveal|print your (instructions|prompt|secrets)",
-    "execute|run (the|this) command",
+    "(reveal|print) your (instructions|prompt|secrets)",
+    "(execute|run) (the|this) command",
     "upload",
     "install",
     "change (the )?policy",
@@ -76,10 +77,27 @@ def _compiled() -> tuple[re.Pattern[str], ...]:
     return tuple(re.compile(m, re.IGNORECASE) for m in load_markers())
 
 
+_ZERO_WIDTH = re.compile("[\u200b\u200c\u200d\u2060\ufeff\u00ad]")
+_WHITESPACE = re.compile(r"\s+")
+
+
+def normalize_for_markers(text: str) -> str:
+    """Same folding as the browser worker (contract §6): NFKC, zero-width characters
+    removed, whitespace runs collapsed - so a phrase split by a zero-width space or
+    written in fullwidth letters still matches. Homoglyphs from other scripts are not
+    folded; the boundary is structural and does not depend on this detector."""
+    if not text:
+        return ""
+    folded = unicodedata.normalize("NFKC", text)
+    folded = _ZERO_WIDTH.sub("", folded)
+    return _WHITESPACE.sub(" ", folded)
+
+
 def count_markers(text: str) -> int:
     if not text:
         return 0
-    return sum(1 for pattern in _compiled() if pattern.search(text))
+    folded = normalize_for_markers(text)
+    return sum(1 for pattern in _compiled() if pattern.search(folded))
 
 
 def is_injection_suspected(text: str) -> bool:

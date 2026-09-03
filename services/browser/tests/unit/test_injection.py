@@ -28,7 +28,9 @@ def test_counts_english_markers() -> None:
     # "ignore (all|previous|prior) instructions" -> "Ignore previous instructions";
     # "system prompt" -> "system prompt"; "reveal|print your (...)" -> the bare
     # word "reveal" also matches its first alternative. 3 matches total.
-    assert count_injection_markers(text) == 3
+    # "reveal your system prompt" is not the grouped `(reveal|print) your (…)` phrase;
+    # two marker phrases remain: the ignore-instructions one and "system prompt".
+    assert count_injection_markers(text) == 2
 
 
 def test_counts_repeated_marker_multiple_times() -> None:
@@ -64,3 +66,21 @@ def test_markers_match_track_a_protocol_json_when_present() -> None:
     # Accept either a bare list or an {"markers": [...]} wrapper.
     other = data if isinstance(data, list) else data.get("markers")
     assert list(MARKERS) == other
+
+
+# ------------------------------------------------------ evasions and precision
+
+
+def test_bare_reveal_or_run_no_longer_matches() -> None:
+    # The first marker list had `reveal|print your ...` which, by regex precedence,
+    # matched the bare word "reveal"; the contract now groups the alternation.
+    assert count_injection_markers("The sun will reveal itself at dawn.") == 0
+    assert count_injection_markers("Please run the command now.") == 1
+    assert count_injection_markers("reveal your secrets") == 1
+
+
+def test_zero_width_fullwidth_and_whitespace_evasions_are_folded() -> None:
+    assert count_injection_markers("ig​nore previous‍ instructions") == 1
+    assert count_injection_markers("ｉｇｎｏｒｅ previous instructions") == 1
+    assert count_injection_markers("ignore\n\t previous instructions") == 1
+    assert count_injection_markers("system‌ prompt") == 1

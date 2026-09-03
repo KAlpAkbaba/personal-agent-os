@@ -11,6 +11,7 @@
  */
 
 import { apiFetch } from "../session";
+import { describeErrorDetail } from "../voice/api";
 import {
   BROWSER_CAPABILITY,
   type DeviceInfo,
@@ -68,8 +69,17 @@ export async function toApiError(response: Response): Promise<ResearchApiError> 
   let detail: string | null = null;
 
   const d = body.detail;
+  let validationShaped = false;
   if (typeof d === "string") {
     detail = d;
+  } else if (Array.isArray(d)) {
+    // FastAPI's validation shape (`[{loc, msg, type}]`): the voice client already
+    // renders it as `alan … · neden …` lines without echoing values; reuse it so a
+    // rejected field is named instead of degrading to "API hatası".
+    validationShaped = true;
+    const lines = describeErrorDetail(d);
+    if (lines.length) detail = lines.join(" | ");
+    code = "validation_error";
   } else if (d && typeof d === "object") {
     const obj = d as Record<string, unknown>;
     if (typeof obj.code === "string") code = obj.code;
@@ -83,7 +93,7 @@ export async function toApiError(response: Response): Promise<ResearchApiError> 
 
   // The spec pins 409 to no_capable_device even when the body only carries
   // the Turkish sentence.
-  if (response.status === 409 && !code) code = NO_CAPABLE_DEVICE;
+  if (response.status === 409 && !code && !validationShaped) code = NO_CAPABLE_DEVICE;
   if (detail && !code && detail.includes(NO_CAPABLE_DEVICE)) code = NO_CAPABLE_DEVICE;
 
   return new ResearchApiError(

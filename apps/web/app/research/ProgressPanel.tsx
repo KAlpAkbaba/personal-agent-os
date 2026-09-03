@@ -84,9 +84,15 @@ export default function ProgressPanel({
           {error}
         </p>
       )}
-      {stage === "ready" && (
+      {stage === "ready" && task.report && (
         <p style={{ margin: "0.5rem 0", color: "var(--ok)" }}>
           Araştırma tamamlandı. Rapor aşağıda; artifact gelen kutusuna da düştü.
+        </p>
+      )}
+      {stage === "ready" && !task.report && (
+        <p style={{ margin: "0.5rem 0", color: "var(--warn, #b26a00)" }}>
+          Araştırma tamamlandı ama rapor kaydı bulunamadı; sayfayı yenileyin veya görevi yeniden
+          açın.
         </p>
       )}
       {pollError && (
