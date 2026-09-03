@@ -27,6 +27,7 @@ public static class Program
                 "enroll" => await EnrollAsync(args.Skip(1).ToArray()).ConfigureAwait(false),
                 "run" => await RunAsync(args.Skip(1).ToArray()).ConfigureAwait(false),
                 "identity" => Identity(),
+                "capabilities" => Capabilities(),
                 _ => PrintUsage(),
             };
         }
@@ -43,7 +44,27 @@ public static class Program
         Console.Error.WriteLine("  PagentOS.DeviceService enroll --broker-url <http-base> --token <one-time-token> --name <device-name>");
         Console.Error.WriteLine("  PagentOS.DeviceService run");
         Console.Error.WriteLine("  PagentOS.DeviceService identity");
+        Console.Error.WriteLine("  PagentOS.DeviceService capabilities");
         return 2;
+    }
+
+    /// <summary>
+    /// Print the capability manifest this install would advertise, as exactly one JSON
+    /// document on stdout: <c>{"browser_enabled":bool,"capabilities":[…]}</c>. Reads only
+    /// appsettings.json and the environment — no data directory, no key — so the verifier
+    /// can run it unelevated and compare what the service says with what the worker says.
+    /// </summary>
+    private static int Capabilities()
+    {
+        var options = AgentServiceOptions.FromConfiguration(BuildConfiguration());
+        var document = new System.Text.Json.Nodes.JsonObject
+        {
+            ["browser_enabled"] = options.BrowserEnabled,
+            ["capabilities"] = new System.Text.Json.Nodes.JsonArray(
+                [.. options.AdvertisedCapabilities.Select(c => (System.Text.Json.Nodes.JsonNode)c)]),
+        };
+        Console.WriteLine(document.ToJsonString());
+        return 0;
     }
 
     /// <summary>
@@ -147,7 +168,7 @@ public static class Program
             token,
             name,
             identity.PublicKeySpkiBase64,
-            AgentCapabilities.All).ConfigureAwait(false);
+            options.AdvertisedCapabilities).ConfigureAwait(false);
 
         var state = new AgentState
         {
@@ -338,7 +359,9 @@ public static class Program
             provider.GetRequiredService<ILogger<CompanionPipeServer>>(),
             provider.GetRequiredService<AuditLog>()));
         builder.Services.AddSingleton<ICapabilityExecutor>(provider =>
-            new InteractiveCapabilityExecutor(provider.GetRequiredService<CompanionPipeServer>()));
+            new InteractiveCapabilityExecutor(
+                provider.GetRequiredService<CompanionPipeServer>(),
+                browserEnabled: options.BrowserEnabled));
         builder.Services.AddSingleton(provider => new CommandDispatcher(
             provider.GetRequiredService<IdempotencyStore>(),
             provider.GetRequiredService<ICapabilityExecutor>(),
@@ -349,6 +372,8 @@ public static class Program
             {
                 BrokerWsUrl = new Uri(options.BrokerWsUrl),
                 DeviceId = state.DeviceId,
+                // M13: the browser family is advertised only when this service routes it.
+                Capabilities = options.AdvertisedCapabilities,
                 BackoffBaseSeconds = options.BackoffBaseSeconds,
                 BackoffMaxSeconds = options.BackoffMaxSeconds,
                 HeartbeatIntervalOverrideS = options.HeartbeatIntervalOverrideS,
@@ -388,6 +413,10 @@ public static class Program
             admission.AuthorizedSid,
             admission.ExpectedSessionId?.ToString() ?? "any interactive",
             admission.ExpectedImagePath ?? "not pinned");
+        logger.LogInformation(
+            "capabilities advertised: {Capabilities} (browser family {BrowserState})",
+            string.Join(",", options.AdvertisedCapabilities),
+            options.BrowserEnabled ? "enabled" : "disabled");
         await host.RunAsync().ConfigureAwait(false);
         return 0;
     }

@@ -11,8 +11,9 @@ discriminator).
 | --- | --- |
 | `src/PagentOS.Agent.Core` | Protocol models + System.Text.Json serialization, message validation, ECDSA P-256 device identity, enrollment REST client, WebSocket connection loop (handshake, heartbeat, reconnect with 1 s → 60 s full-jitter backoff), command dispatcher (expiry, cancellation), persistent LRU idempotency store, JSONL audit log, structured file logging with `trace_id`. |
 | `src/PagentOS.DeviceService` | Background worker (Windows Service-capable via `AddWindowsService`, runs as console in dev). Owns keys/config/state and the named-pipe **server** for the companion. CLI verbs: `enroll`, `run`. |
-| `src/PagentOS.SessionCompanion` | Console app for the interactive owner session. Connects to the service pipe, executes `desktop.open_application` against a configurable allowlist (default: `notepad`, `calc`) and `desktop.open_artifact` against an artifact-root + extension allowlist, reconnects with backoff. |
-| `tests/PagentOS.Agent.Tests` | xUnit suite: schema fixtures, signature verification, idempotency/LRU, backoff bounds, allowlist, real named-pipe round trips, and a Kestrel fake broker covering handshake, duplicate delivery, cancel, malformed frames and broker-restart reconnection. |
+| `src/PagentOS.SessionCompanion` | Console app for the interactive owner session. Connects to the service pipe, executes `desktop.open_application` against a configurable allowlist (default: `notepad`, `calc`) and `desktop.open_artifact` against an artifact-root + extension allowlist, reconnects with backoff. M13: hosts the Browser Worker child process (`BrowserWorkerHost`) and dispatches the `browser.*` family to it asynchronously. |
+| `tests/PagentOS.Agent.Tests` | xUnit suite: schema fixtures, signature verification, idempotency/LRU, backoff bounds, allowlist, real named-pipe round trips, a Kestrel fake broker covering handshake, duplicate delivery, cancel, malformed frames and broker-restart reconnection, and (M13) the Browser Worker host driven over real stdio against the fake worker plus the service→pipe→companion→worker chain. |
+| `tests/PagentOS.Agent.Tests.FakeBrowserWorker` | A .NET stand-in for `python -m browser_agent.worker` speaking the exact §7 stdio protocol (hello, exec/result, cancel, ping/pong, shutdown) with payload-selected behaviours (echo, typed error, sleep, crash, oversize, forbidden key). Needs no Python or browser; built beside the tests and spawned by them. |
 | `src/PagentOS.Companion.Audio` | M12 track C (ADR-0037): the realtime voice client, additive to the companion. WASAPI capture/playback with device enumeration and switching (NAudio), a Communications-category capture path for driver AEC/NS with fallback, DC blocker + noise gate, echo-aware energy VAD, the Turkish hesitation guard, the M4-faithful client FSM, stop-playback-first barge-in, the WebSocket media leg with a pure OpenAI wire codec (WebRTC adapter reserved, deferred), the Cloud Core sideband (session, tool-call relay, event reporting, reattach) over the DPAPI-stored owner session token, and an in-process fake Cloud Core + deterministic fake media leg for tests and the bench. |
 | `src/PagentOS.Companion.Audio.Bench` | Offline latency harness: the real client against fake devices, a scripted provider and the fake Cloud Core; prints mic→uplink, end-of-turn→first audio, barge-in→playback stopped, tool preamble and tool-done→speech. `--list-devices` enumerates real WASAPI endpoints without opening a stream. |
 | `tests/PagentOS.Companion.Audio.Tests` | xUnit: FSM ordering, barge-in stop→cancel→report with measured latency, hesitation guard and end-of-turn detector on synthetic frames, device selection/switching, sideband idempotency (client_seq, call_id, retries), DPAPI round trip through real `powershell.exe`, wire codec mappings, the WebSocket leg against a loopback Kestrel provider, the orchestrator end-to-end on fakes, and the offline bench. |
@@ -127,6 +128,62 @@ Roots default to `%LOCALAPPDATA%\PagentOS\agent\artifacts` plus any semicolon-se
 `PAGENTOS_AGENT_ArtifactRoots`. Both `desktop.open_application` and `desktop.open_artifact` are
 advertised in the enrollment capability manifest (`AgentCapabilities.All`) and forwarded over the
 same service→companion named pipe.
+
+## Capability family: `browser.*` (M13, off by default)
+
+Contract: `packages/protocol/BROWSER_CAPABILITIES.md` (binding) and `DEVICE_PROTOCOL.md`
+§6b (routing, advertisement, timeout cap). The chain is
+
+```
+Cloud Core --command--> Device Service (Session 0) --pipe exec_request--> Session Companion (owner session)
+                                                                            └─ stdio JSON lines ──> Browser Worker (python -m browser_agent.worker) ──> Chrome
+```
+
+- **Manifest.** `AgentCapabilities.Desktop` is what every device advertises;
+  `AgentCapabilities.Compose(browserEnabled)` adds `BrowserCapabilities.All` (the marker
+  `browser.chrome` + 24 operations) only when the family is configured. The service uses
+  its `BrowserEnabled` option (enrollment and every WS hello); the companion uses "is a
+  worker command configured" (companion hello). `PagentOS.DeviceService.exe capabilities`
+  prints the manifest an install would advertise, as one JSON document.
+- **Service.** `InteractiveCapabilityExecutor` routes `browser.*` over the same pipe as
+  `desktop.*`, with a per-family cap: desktop 60 s, browser 120 s. `BrowserEnabled=false`
+  → `capability_missing` before the companion is consulted; no companion →
+  `dependency_unavailable` (retryable).
+- **Companion.** `CompanionRuntime` runs browser requests concurrently on their own tasks
+  and answers through one sequenced writer (same `conn_id`/`seq` rules, one response per
+  request; desktop requests unchanged). `BrowserWorkerHost` spawns the worker from
+  configuration with redirected UTF-8 stdio, waits for its `hello` (20 s bound),
+  correlates `exec`/`result` by `request_id`, honours `timeout_ms` (cancel forwarded,
+  answer `timeout` retryable), pings for liveness, restarts with exponential backoff after
+  an exit (in-flight requests fail `dependency_unavailable` retryable), sends `shutdown`
+  then kills the process tree on stop, forwards worker stderr into the companion log,
+  enforces the 48 KiB result cap (`internal_bug`) and the forbidden-key rule
+  (`security_scope_error`), and writes one `browser_request` audit row per request
+  (capability, request id, outcome class, duration — never payload/result text or URLs).
+- **Configuration** (`PAGENTOS_AGENT_` prefix; nothing hardcoded to a machine):
+  service `BrowserEnabled` (default false); companion `BrowserWorkerCommand` (executable,
+  e.g. the provisioned venv's `python.exe`), `BrowserWorkerArgs` (e.g.
+  `-m browser_agent.worker`), `BrowserDataDir` (default `<DataDir>\browser`),
+  `BrowserProfileDir` (default `<BrowserDataDir>\profile`), `BrowserChannel` (`chrome`),
+  `BrowserVisible` (true), `BrowserIdleTimeoutS` (600), `BrowserWorkerEager` (false — lazy
+  start on the first request). The host appends `--data-dir --profile-dir --channel
+  --visible|--headless --idle-timeout-s` to the configured arguments.
+- **Installer.** `scripts/install-device-service.ps1` provisions the worker unless
+  `-SkipBrowser`: copies `services\browser` into `<InstallRoot>\browser` through the same
+  staging/publish swap as the binaries, runs `uv sync --frozen --no-dev --no-editable`
+  there (uv resolved like `preflight.ps1`; interpreter under `<InstallRoot>\python`),
+  proves the venv is relocatable, requires `python -m browser_agent.worker --self-check
+  --channel chrome` to exit 0 in staging (Chrome/package missing → readable failure, previous
+  tree intact), writes the companion `BrowserWorker*` settings (data under
+  `%ProgramData%\PagentOS\companion\browser`, granted to the owner SID explicitly) and the
+  service `BrowserEnabled=true`, then re-runs the self-check from the hardened tree.
+  `scripts/verify-device-service.ps1` repeats the self-check unelevated as the owner
+  (6b.1) and compares the advertised manifest with the worker's hello (6b.2). Regression
+  tests: `scripts/tests/installer-browser.tests.ps1`.
+- **Developer run.** Point the companion at any worker:
+  `PAGENTOS_AGENT_BrowserWorkerCommand=<venv>\Scripts\python.exe`,
+  `PAGENTOS_AGENT_BrowserWorkerArgs=-m browser_agent.worker`, and start the service with
+  `PAGENTOS_AGENT_BrowserEnabled=true`.
 
 ## Realtime voice client (M12 track C, additive, off by default)
 

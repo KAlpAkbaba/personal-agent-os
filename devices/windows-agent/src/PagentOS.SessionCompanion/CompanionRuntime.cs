@@ -40,9 +40,18 @@ public sealed class CompanionRuntime(
     BackoffPolicy? backoff = null,
     ServiceAdmissionPolicy? servicePolicy = null,
     IPipeOwnerInspector? ownerInspector = null,
-    ISidebandForwardSink? sidebandSink = null)
+    ISidebandForwardSink? sidebandSink = null,
+    BrowserWorkerHost? browserWorker = null)
 {
     private const int ConnectTimeoutMs = 2000;
+
+    /// <summary>
+    /// Headroom the companion keeps under the service's own wait on a browser request, so
+    /// the typed answer (timeout) arrives before the service gives up and synthesises one.
+    /// </summary>
+    private static readonly TimeSpan BrowserTimeoutMargin = TimeSpan.FromMilliseconds(500);
+    private static readonly TimeSpan BrowserMinimumBudget = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan InFlightDrainTimeout = TimeSpan.FromSeconds(3);
 
     private readonly BackoffPolicy _backoff = backoff ?? new BackoffPolicy(baseSeconds: 1.0, maxSeconds: 30.0);
     private readonly ServiceAdmissionPolicy _servicePolicy = servicePolicy ?? DefaultServicePolicy();
@@ -60,6 +69,14 @@ public sealed class CompanionRuntime(
     private int _sidebandAccepted;
 
     private readonly Dictionary<IpcRefusal, int> _refusals = new();
+
+    /// <summary>
+    /// The capabilities this companion announces in its hello: the desktop family always,
+    /// the browser family only when a worker is configured (M13). Advertising a name is a
+    /// promise to answer it with something other than a hang.
+    /// </summary>
+    public IReadOnlyList<string> AdvertisedCapabilities
+        => AgentCapabilities.Compose(browserWorker?.IsConfigured == true);
 
     /// <summary>
     /// The default is the PRODUCTION posture: only a pipe owned by an account that can host
@@ -193,13 +210,72 @@ public sealed class CompanionRuntime(
         var guard = new IpcChannelGuard(challenge.ConnectionId);
         var hello = new CompanionHello
         {
-            Capabilities = AgentCapabilities.All,
+            Capabilities = AdvertisedCapabilities,
             ConnectionId = challenge.ConnectionId,
             Nonce = challenge.Nonce,
             Seq = guard.NextOutboundSeq(),
         };
         await writer.WriteLineAsync(PipeJson.Serialize(hello).AsMemory(), cancellationToken).ConfigureAwait(false);
 
+        // One writer, one sequence. Browser responses are produced concurrently, and the
+        // service refuses a frame whose sequence is not strictly greater than the last one
+        // it saw — so the sequence number is taken under the same lock as the write, never
+        // before it. The desktop path goes through the same helper so its framing is what
+        // it always was: one ExecResponse per ExecRequest, same conn_id, increasing seq.
+        using var connectionCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        using var writeLock = new SemaphoreSlim(1, 1);
+        var inFlight = new System.Collections.Concurrent.ConcurrentDictionary<string, Task>(StringComparer.Ordinal);
+
+        async Task SendResponseAsync(ExecResponse response)
+        {
+            await writeLock.WaitAsync(connectionCts.Token).ConfigureAwait(false);
+            try
+            {
+                var framed = response with
+                {
+                    ConnectionId = guard.ConnectionId,
+                    Seq = guard.NextOutboundSeq(),
+                };
+                await writer.WriteLineAsync(PipeJson.Serialize(framed).AsMemory(), connectionCts.Token).ConfigureAwait(false);
+            }
+            finally
+            {
+                writeLock.Release();
+            }
+        }
+
+        try
+        {
+            await ServeRequestsAsync(reader, guard, SendResponseAsync, inFlight, connectionCts.Token).ConfigureAwait(false);
+        }
+        finally
+        {
+            // The pipe is gone (or we are stopping): every browser request still running is
+            // cancelled — the host forwards the cancel to the worker — and given a moment to
+            // settle before the writer they would answer on is disposed.
+            connectionCts.Cancel();
+            var pending = inFlight.Values.ToArray();
+            if (pending.Length > 0)
+            {
+                try
+                {
+                    await Task.WhenAll(pending).WaitAsync(InFlightDrainTimeout).ConfigureAwait(false);
+                }
+                catch (Exception)
+                {
+                    // Teardown only; each task logs its own outcome.
+                }
+            }
+        }
+    }
+
+    private async Task ServeRequestsAsync(
+        StreamReader reader,
+        IpcChannelGuard guard,
+        Func<ExecResponse, Task> sendResponse,
+        System.Collections.Concurrent.ConcurrentDictionary<string, Task> inFlight,
+        CancellationToken cancellationToken)
+    {
         while (true)
         {
             var line = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false);
@@ -252,12 +328,103 @@ public sealed class CompanionRuntime(
                 continue;
             }
 
-            var response = Execute(request) with
+            if (AgentCapabilities.IsBrowser(request.Capability))
             {
-                ConnectionId = guard.ConnectionId,
-                Seq = guard.NextOutboundSeq(),
+                // M13: browser requests are long (a navigation, an extraction) and may run
+                // concurrently; the read loop must not stall on them. Each one answers on
+                // its own task through the shared, sequenced writer; request_id correlates.
+                var task = Task.Run(async () =>
+                {
+                    var browserResponse = await ExecuteBrowserAsync(request, cancellationToken).ConfigureAwait(false);
+                    try
+                    {
+                        await sendResponse(browserResponse).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning(
+                            "browser response for {RequestId} could not be written (pipe gone): {Reason}",
+                            request.RequestId,
+                            ex.Message);
+                    }
+                    finally
+                    {
+                        inFlight.TryRemove(request.RequestId, out _);
+                    }
+                }, CancellationToken.None);
+                inFlight[request.RequestId] = task;
+                continue;
+            }
+
+            await sendResponse(Execute(request)).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// The browser family: forwarded to the worker host, which owns the worker process and
+    /// the contract's companion-side checks. Not configured → <c>capability_missing</c>,
+    /// exactly like an unknown desktop capability, because to Cloud Core they are the same
+    /// fact: this device cannot do that.
+    /// </summary>
+    private async Task<ExecResponse> ExecuteBrowserAsync(ExecRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (browserWorker is null || !browserWorker.IsConfigured)
+            {
+                throw new CapabilityException(
+                    ErrorClasses.CapabilityMissing,
+                    $"capability '{request.Capability}' is not available: no browser worker is configured on this companion",
+                    retryable: false);
+            }
+
+            if (string.Equals(request.Capability, BrowserCapabilities.Family, StringComparison.Ordinal))
+            {
+                throw new CapabilityException(
+                    ErrorClasses.CapabilityMissing,
+                    $"'{BrowserCapabilities.Family}' is the family marker, not an operation",
+                    retryable: false);
+            }
+
+            var requested = TimeSpan.FromMilliseconds(Math.Max(1, request.TimeoutMs));
+            var budget = requested - BrowserTimeoutMargin;
+            if (budget < BrowserMinimumBudget)
+            {
+                budget = requested < BrowserMinimumBudget ? requested : BrowserMinimumBudget;
+            }
+
+            var result = await browserWorker.ExecuteAsync(request.Capability, request.Payload, budget, cancellationToken).ConfigureAwait(false);
+            logger.LogInformation("executed {Capability}: ok", request.Capability);
+            return new ExecResponse { RequestId = request.RequestId, Ok = true, Result = result };
+        }
+        catch (CapabilityException ex)
+        {
+            logger.LogWarning("capability {Capability} failed: {Class}: {Reason}", request.Capability, ex.ErrorClass, ex.Message);
+            return new ExecResponse
+            {
+                RequestId = request.RequestId,
+                Ok = false,
+                Error = ErrorObjects.Create(ex.ErrorClass, ex.Message, ex.Retryable),
             };
-            await writer.WriteLineAsync(PipeJson.Serialize(response).AsMemory(), cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return new ExecResponse
+            {
+                RequestId = request.RequestId,
+                Ok = false,
+                Error = ErrorObjects.Create(ErrorClasses.Cancelled, "companion connection closed while the browser request was running", retryable: true),
+            };
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "capability {Capability} crashed", request.Capability);
+            return new ExecResponse
+            {
+                RequestId = request.RequestId,
+                Ok = false,
+                Error = ErrorObjects.Create(ErrorClasses.InternalBug, ex.Message, retryable: false),
+            };
         }
     }
 

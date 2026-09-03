@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging.Abstractions;
 using PagentOS.Agent.Core.Commands;

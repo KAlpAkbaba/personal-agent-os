@@ -35,6 +35,18 @@
 .PARAMETER InstallRoot
     Defaults to "$env:ProgramFiles\PagentOS\agent".
 
+.PARAMETER SkipBrowser
+    Do not provision the Browser Worker (M13). The service then advertises the desktop
+    family only (BrowserEnabled=false) and the companion is written without BrowserWorker*
+    settings; an existing <InstallRoot>\browser tree is left alone but unused.
+
+.PARAMETER BrowserChannel
+    "chrome" (installed Google Chrome — the qualification target, default) or "chromium".
+
+.PARAMETER UvPath
+    Explicit path to uv.exe. By default uv is resolved the way scripts\preflight.ps1
+    resolves it (PATH, then the known install locations) — never assumed.
+
 .EXAMPLE
     # From an elevated PowerShell, at the repository root:
     .\scripts\install-device-service.ps1 -BrokerRestUrl http://100.x.y.z:8001 -EnrollmentToken <token>
@@ -48,7 +60,10 @@ param(
     [string]$InstallRoot = (Join-Path $env:ProgramFiles "PagentOS\agent"),
     [string]$DataDir = (Join-Path $env:ProgramData "PagentOS\agent"),
     [string]$ServiceName = "PagentOSDeviceAgent",
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    [switch]$SkipBrowser,
+    [ValidateSet("chrome", "chromium")][string]$BrowserChannel = "chrome",
+    [string]$UvPath
 )
 
 $ErrorActionPreference = "Stop"
@@ -66,6 +81,7 @@ $agentRoot = Join-Path $repoRoot "devices\windows-agent"
 . (Join-Path $PSScriptRoot "lib\NativeProcess.ps1")
 . (Join-Path $PSScriptRoot "lib\ServiceInstall.ps1")
 . (Join-Path $PSScriptRoot "lib\InstallAcl.ps1")
+. (Join-Path $PSScriptRoot "lib\BrowserProvision.ps1")
 
 function Assert-Elevated {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -158,7 +174,8 @@ function Write-ServiceConfig {
         [string]$OwnerSid,
         [string]$DataDir,
         [string]$BrokerRestUrl,
-        [string]$BrokerWsUrl
+        [string]$BrokerWsUrl,
+        [bool]$BrowserEnabled
     )
     $config = [ordered]@{
         BrokerRestUrl      = $BrokerRestUrl
@@ -171,10 +188,106 @@ function Write-ServiceConfig {
         # LocalSystem that identity is not the owner's.
         CompanionSid       = $OwnerSid
         CompanionImagePath = $CompanionExe
+        # M13: advertise and route browser.* only when a worker was provisioned and proved
+        # to start. Never true by default; a device must not promise what it cannot do.
+        BrowserEnabled     = $BrowserEnabled
     }
     $path = Join-Path $ServiceDir "appsettings.json"
     Write-JsonFile -Path $path -Content ($config | ConvertTo-Json -Depth 4)
     Write-Host "wrote $path (no secrets: URLs, paths and the owner SID only)"
+}
+
+function Invoke-BrowserWorkerStaging {
+    <#
+    .SYNOPSIS
+        Stage the Browser Worker (M13): copy services\browser, create its venv with uv,
+        prove the venv is relocatable, and prove the worker starts (--self-check exit 0).
+        Nothing touches the live tree; a failure here throws with the reason and leaves the
+        previous install exactly as it was.
+    #>
+    param(
+        [string]$RepoRoot,
+        [string]$InstallRoot,
+        [string]$Channel,
+        [string]$ExplicitUv
+    )
+
+    $uv = Resolve-UvPath -Explicit $ExplicitUv
+    Write-Host "uv: $uv"
+
+    $source = Join-Path $RepoRoot "services\browser"
+    $staged = New-StagingDirectory -Root $InstallRoot -Name "browser"
+    $copied = Copy-BrowserPackageTree -Source $source -Destination $staged
+    Write-Host "staged browser package ($copied files) -> $staged"
+
+    # The interpreter goes under the install root too, so the tree is self-contained and
+    # admin-protected like the binaries it serves; `copy` link mode keeps site-packages
+    # from hard-linking into the installing account's cache. `--no-editable` installs the
+    # package as a real copy: an editable .pth would name the STAGING path and break the
+    # moment the directory is moved into place.
+    $saved = @{
+        UV_PYTHON_INSTALL_DIR = $env:UV_PYTHON_INSTALL_DIR
+        UV_PYTHON_PREFERENCE  = $env:UV_PYTHON_PREFERENCE
+        UV_LINK_MODE          = $env:UV_LINK_MODE
+        UV_PROJECT_ENVIRONMENT = $env:UV_PROJECT_ENVIRONMENT
+    }
+    try {
+        $env:UV_PYTHON_INSTALL_DIR = Join-Path $InstallRoot "python"
+        $env:UV_PYTHON_PREFERENCE = "managed"
+        $env:UV_LINK_MODE = "copy"
+        $env:UV_PROJECT_ENVIRONMENT = $null
+        Write-Host "creating the worker environment: uv sync --frozen --no-dev --no-editable (python under $($env:UV_PYTHON_INSTALL_DIR))"
+        $sync = Invoke-NativeProcess -FilePath $uv -Arguments @("sync", "--frozen", "--no-dev", "--no-editable") `
+            -WorkingDirectory $staged -TimeoutSeconds 1800
+        Assert-NativeSuccess -Result $sync -Activity "uv sync (browser worker environment)"
+    }
+    finally {
+        foreach ($name in @($saved.Keys)) {
+            if ($null -eq $saved[$name]) { Remove-Item -Path "Env:$name" -ErrorAction SilentlyContinue }
+            else { Set-Item -Path "Env:$name" -Value $saved[$name] }
+        }
+    }
+
+    $venv = Join-Path $staged ".venv"
+    $python = Get-BrowserWorkerPython -BrowserRoot $staged
+    if (-not (Test-Path -LiteralPath $python)) { throw "uv sync finished but $python does not exist" }
+    $stagingRoot = Join-Path $InstallRoot ".staging"
+    $references = @(Test-VenvStagingReferences -VenvDir $venv -StagingRoot $stagingRoot)
+    if (@($references).Count -gt 0) {
+        throw ("the worker environment names its staging path and would break when moved into place:`n  - " + ($references -join "`n  - "))
+    }
+    Write-Host "worker environment is relocatable (interpreter: $(Get-VenvHome -VenvDir $venv))"
+
+    # The self-check launches the real channel headless, prints the hello and exits. It
+    # runs against a throwaway data directory so nothing owned by this ELEVATED process
+    # lands where the owner's companion must later write.
+    $probeData = Join-Path $env:TEMP "pagentos-browser-selfcheck-$([guid]::NewGuid().ToString('N'))"
+    try {
+        Write-Host "self-check: python -m browser_agent.worker --self-check --channel $Channel"
+        $check = Invoke-BrowserWorkerSelfCheck -Python $python -Channel $Channel -DataDir $probeData -WorkingDirectory $staged
+    }
+    finally {
+        Remove-Item -LiteralPath $probeData -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if (-not $check.Ok) {
+        $lines = @(
+            "the Browser Worker self-check failed (exit $($check.ExitCode)); the previous install is untouched.",
+            "  A non-zero exit means Google Chrome (channel '$Channel') or the worker package is not usable on this machine.",
+            "  Install Chrome (or pass -BrowserChannel chromium), or rerun with -SkipBrowser to install without the browser family.",
+            "  command: $python -m browser_agent.worker --self-check --channel $Channel"
+        )
+        if ($check.StdErr -and $check.StdErr.Trim()) {
+            $lines += "  stderr : $((($check.StdErr.Trim() -split "`r?`n") | Select-Object -Last 12) -join "`n           ")"
+        }
+        throw ($lines -join [Environment]::NewLine)
+    }
+    Write-Host "self-check ok: worker $($check.Hello.worker_version), $(@($check.Capabilities).Count) capabilities, browser $($check.Hello.browser.channel) $($check.Hello.browser.version)"
+
+    return [pscustomobject]@{
+        StagedPath   = $staged
+        Hello        = $check.Hello
+        Capabilities = @($check.Capabilities)
+    }
 }
 
 function Install-Service {
@@ -225,7 +338,7 @@ $serviceExe = Join-Path $serviceDir "PagentOS.DeviceService.exe"
 # with /T stripped every existing file to an empty DACL. Recovering from that is the
 # installer's job, not the owner's, so it happens first and unconditionally.
 
-$recovery = Invoke-InstallRecovery -Root $InstallRoot -Components @("service", "companion")
+$recovery = Invoke-InstallRecovery -Root $InstallRoot -Components @("service", "companion", "browser")
 foreach ($line in @($recovery.Messages)) {
     Write-Host $line
 }
@@ -258,6 +371,24 @@ else {
     }
 }
 
+# --- browser worker (M13), staged and PROVEN before anything is swapped -------------------
+#
+# The worker is provisioned through the same staging/publish path as the binaries. Its
+# self-check must pass in staging: a machine without Chrome, or a package that cannot
+# import, fails the install here with the previous tree intact — and the service is never
+# told to advertise a family it cannot serve.
+
+$browserDir = Join-Path $InstallRoot "browser"
+$companionDataDir = Join-Path $env:ProgramData "PagentOS\companion"
+$browserDataDir = Join-Path $companionDataDir "browser"
+$browserStaging = $null
+if ($SkipBrowser) {
+    Write-Host "browser worker: skipped (-SkipBrowser); the service will advertise the desktop family only"
+}
+else {
+    $browserStaging = Invoke-BrowserWorkerStaging -RepoRoot $repoRoot -InstallRoot $InstallRoot -Channel $BrowserChannel -ExplicitUv $UvPath
+}
+
 # Service state lives under ProgramData, not the owner's profile: a Session-0 service
 # writing into a user profile resolves to the system profile and is a topology bug.
 # Root-only ACEs with inheritance — the old raw icacls /T call here reintroduced the
@@ -276,25 +407,69 @@ if (Test-Path -LiteralPath $keyPath) {
 # is the ordering fix: the previous version wrote config into the live tree after it had
 # been hardened, and an existing appsettings.json could not be replaced.
 Write-ServiceConfig -ServiceDir $stagedServiceDir -CompanionExe $companionExe -OwnerSid $OwnerSid `
-    -DataDir $DataDir -BrokerRestUrl $BrokerRestUrl -BrokerWsUrl $BrokerWsUrl
+    -DataDir $DataDir -BrokerRestUrl $BrokerRestUrl -BrokerWsUrl $BrokerWsUrl -BrowserEnabled (-not $SkipBrowser)
 
 # The companion reads its own settings from its own directory.
-Write-JsonFile -Path (Join-Path $stagedCompanionDir "appsettings.json") -Content ([ordered]@{
+$companionConfig = [ordered]@{
     PipeName = "pagentos-companion-$OwnerSid"
-    DataDir  = (Join-Path $env:ProgramData "PagentOS\companion")
-} | ConvertTo-Json -Depth 4)
+    DataDir  = $companionDataDir
+}
+if (-not $SkipBrowser) {
+    # Paths the companion will use at runtime: the LIVE browser tree (not staging) and a
+    # data directory the OWNER can write, created below with an explicit grant.
+    foreach ($entry in (New-CompanionBrowserSettings -BrowserRoot $browserDir -BrowserDataDir $browserDataDir -Channel $BrowserChannel).GetEnumerator()) {
+        $companionConfig[$entry.Key] = $entry.Value
+    }
+}
+Write-JsonFile -Path (Join-Path $stagedCompanionDir "appsettings.json") -Content ($companionConfig | ConvertTo-Json -Depth 4)
+
+if (-not $SkipBrowser) {
+    # ProgramData's inherited ACL would make a directory created by this ELEVATED process
+    # unwritable for the owner's non-elevated companion — and the worker must write its
+    # profile, downloads and logs exactly there and nowhere else (Program Files is
+    # read-only to it). The grant is explicit and inheritable, on the companion's data root
+    # and the browser directory under it.
+    Set-OwnerWritableDirectory -Path $companionDataDir -OwnerSid $OwnerSid
+    Set-OwnerWritableDirectory -Path $browserDataDir -OwnerSid $OwnerSid
+    Write-Host "browser data directory $browserDataDir is writable by SID $OwnerSid"
+}
 
 # --- swap staging into place, atomically ---------------------------------------------------
+$deployed = @()
 if (-not $SkipBuild) {
     Publish-StagedDirectory -Root $InstallRoot -Component "service" -StagedPath $stagedServiceDir | Out-Null
     Publish-StagedDirectory -Root $InstallRoot -Component "companion" -StagedPath $stagedCompanionDir | Out-Null
+    $deployed += @("service", "companion")
+}
+if ($browserStaging) {
+    Publish-StagedDirectory -Root $InstallRoot -Component "browser" -StagedPath $browserStaging.StagedPath | Out-Null
+    $deployed += "browser"
+}
+if (@($deployed).Count -gt 0) {
     Remove-Item -LiteralPath (Join-Path $InstallRoot ".staging") -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Host "deployed service and companion"
+    Write-Host "deployed $($deployed -join ', ')"
 }
 
 # --- harden last, then prove it ------------------------------------------------------------
 Set-InstallAcl -Path $InstallRoot
 Assert-InstallPosture -Path $InstallRoot
+
+if ($browserStaging) {
+    # The venv was built in staging and moved: prove it still starts from its final,
+    # hardened location. (The verifier repeats this later as the OWNER, unelevated.)
+    $probeData = Join-Path $env:TEMP "pagentos-browser-postinstall-$([guid]::NewGuid().ToString('N'))"
+    try {
+        $live = Invoke-BrowserWorkerSelfCheck -Python (Get-BrowserWorkerPython -BrowserRoot $browserDir) -Channel $BrowserChannel `
+            -DataDir $probeData -WorkingDirectory $browserDir
+    }
+    finally {
+        Remove-Item -LiteralPath $probeData -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if (-not $live.Ok) {
+        throw "the Browser Worker passed its self-check in staging but not from $browserDir (exit $($live.ExitCode)). Rerun the installer; if it repeats, report stderr:`n$($live.StdErr)"
+    }
+    Write-Host "browser worker starts from the installed tree: $($live.Hello.worker_version), $(@($live.Capabilities).Count) capabilities"
+}
 
 $enrolled = Test-Path (Join-Path $DataDir "state.json")
 if ($EnrollmentToken) {
@@ -334,6 +509,13 @@ Write-Host "  service   $serviceExe (LocalSystem, automatic start)"
 Write-Host "  companion $companionExe (logon task, owner session)"
 Write-Host "  data      $DataDir"
 Write-Host "  admits    SID $OwnerSid running exactly that companion binary, in an interactive session"
+if ($browserStaging) {
+    Write-Host "  browser   $browserDir (worker $($browserStaging.Hello.worker_version), channel $BrowserChannel; data $browserDataDir)"
+    Write-Host "            service advertises browser.chrome + $(@($browserStaging.Capabilities).Count) browser.* operations"
+}
+else {
+    Write-Host "  browser   not provisioned (-SkipBrowser); desktop family only"
+}
 Write-Host ""
 Write-Host "next: sign out and back in (or start the companion by hand once), then verify with"
 Write-Host "  .\scripts\verify-device-service.ps1"

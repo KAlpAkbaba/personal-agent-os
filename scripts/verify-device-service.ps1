@@ -26,6 +26,7 @@ param(
 $ErrorActionPreference = "Continue"
 . (Join-Path $PSScriptRoot "lib\NativeProcess.ps1")
 . (Join-Path $PSScriptRoot "lib\InstallAcl.ps1")
+. (Join-Path $PSScriptRoot "lib\BrowserProvision.ps1")
 
 $results = New-Object System.Collections.ArrayList
 
@@ -243,6 +244,104 @@ else {
     }
     else {
         Add-Result "5.2" "No inbound listener owned by the agent" "PROVEN_REAL" "checked pids $($agentPids -join ', '): no listening TCP socket"
+    }
+}
+
+# --- 6b browser worker (M13, BROWSER_CAPABILITIES.md §7) -------------------------
+# Two facts, measured rather than read off the installer's output: the worker really
+# starts from the hardened tree AS THIS (unelevated, owner) account and writes only to a
+# throwaway data directory; and the manifest the service advertises agrees with what the
+# worker says it can do. The service's `capabilities` verb reads only appsettings.json, so
+# it runs unelevated too.
+
+$companionSettingsPath = Join-Path $InstallRoot "companion\appsettings.json"
+$workerCommand = $null
+$workerChannel = "chrome"
+if (Test-Path -LiteralPath $companionSettingsPath) {
+    try {
+        $companionSettings = Get-Content -LiteralPath $companionSettingsPath -Raw | ConvertFrom-Json
+        if (Test-ObjectProperty -InputObject $companionSettings -Name "BrowserWorkerCommand") { $workerCommand = $companionSettings.BrowserWorkerCommand }
+        if ((Test-ObjectProperty -InputObject $companionSettings -Name "BrowserChannel") -and $companionSettings.BrowserChannel) { $workerChannel = $companionSettings.BrowserChannel }
+    } catch { }
+}
+
+$workerCheck = $null
+if (-not $workerCommand) {
+    Add-Result "6b.1" "Browser worker starts as the owner from the installed tree" "NOT_YET_PROVEN" `
+        "the companion has no BrowserWorkerCommand (installed with -SkipBrowser, or before M13); rerun the installer to provision it"
+}
+elseif (-not (Test-Path -LiteralPath $workerCommand)) {
+    Add-Result "6b.1" "Browser worker starts as the owner from the installed tree" "NOT_YET_PROVEN" "configured worker interpreter is missing: $workerCommand"
+}
+else {
+    $probeData = Join-Path $env:TEMP "pagentos-browser-verify-$([guid]::NewGuid().ToString('N'))"
+    try {
+        $workerCheck = Invoke-BrowserWorkerSelfCheck -Python $workerCommand -Channel $workerChannel -DataDir $probeData -TimeoutSeconds 120
+    }
+    catch {
+        $workerCheck = [pscustomobject]@{ Ok = $false; ExitCode = -1; Hello = $null; Capabilities = @(); StdOut = ""; StdErr = $_.Exception.Message }
+    }
+    finally {
+        Remove-Item -LiteralPath $probeData -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    if ($workerCheck.Ok) {
+        $browserInfo = "-"
+        if (Test-ObjectProperty -InputObject $workerCheck.Hello -Name "browser") {
+            $browserInfo = "$($workerCheck.Hello.browser.channel) $($workerCheck.Hello.browser.version) available=$($workerCheck.Hello.browser.available)"
+        }
+        Add-Result "6b.1" "Browser worker starts as the owner from the installed tree" "PROVEN_REAL" `
+            "self-check exit 0 as $([Security.Principal.WindowsIdentity]::GetCurrent().Name): worker $($workerCheck.Hello.worker_version), browser $browserInfo, $(@($workerCheck.Capabilities).Count) capabilities"
+    }
+    else {
+        $stderrTail = ""
+        if ($workerCheck.StdErr) { $stderrTail = ((($workerCheck.StdErr.Trim() -split "`r?`n") | Select-Object -Last 3) -join " | ") }
+        Add-Result "6b.1" "Browser worker starts as the owner from the installed tree" "NOT_YET_PROVEN" `
+            "self-check exit $($workerCheck.ExitCode) ($workerCommand -m browser_agent.worker --self-check --channel $workerChannel): $stderrTail"
+    }
+}
+
+$serviceExePath = Join-Path $InstallRoot "service\PagentOS.DeviceService.exe"
+$advertised = $null
+$browserEnabled = $null
+if (Test-Path -LiteralPath $serviceExePath) {
+    try {
+        $capsResult = Invoke-NativeProcess -FilePath $serviceExePath -Arguments @("capabilities") -TimeoutSeconds 30 -WorkingDirectory (Split-Path -Parent $serviceExePath)
+        if ($capsResult.ExitCode -eq 0 -and $capsResult.StdOut.Trim()) {
+            $capsDoc = ConvertFrom-Json ($capsResult.StdOut.Trim() -split "`r?`n" | Select-Object -Last 1)
+            $advertised = @($capsDoc.capabilities)
+            $browserEnabled = [bool]$capsDoc.browser_enabled
+        }
+    } catch { }
+}
+
+if ($null -eq $advertised) {
+    Add-Result "6b.2" "Advertised capability manifest agrees with the worker" "NOT_YET_PROVEN" `
+        "the installed service binary does not answer the 'capabilities' verb (predates M13, or not installed); reinstall to update it"
+}
+else {
+    $hasFamily = ($advertised -contains "browser.chrome")
+    $browserOps = @($advertised | Where-Object { $_ -like "browser.*" -and $_ -ne "browser.chrome" })
+    $listing = "BrowserEnabled=$browserEnabled; advertised: $($advertised -join ', ')"
+    if ($browserEnabled -ne $hasFamily) {
+        Add-Result "6b.2" "Advertised capability manifest agrees with the worker" "NOT_YET_PROVEN" "family marker/BrowserEnabled disagree; $listing"
+    }
+    elseif (-not $browserEnabled) {
+        $status = if ($workerCommand) { "NOT_YET_PROVEN" } else { "PROVEN_REAL" }
+        Add-Result "6b.2" "Advertised capability manifest agrees with the worker" $status "desktop family only (BrowserEnabled=false, companion worker $(if ($workerCommand) { 'configured - mismatch' } else { 'not configured - consistent' })); $listing"
+    }
+    elseif ($workerCheck -and $workerCheck.Ok) {
+        $missing = @($workerCheck.Capabilities | Where-Object { $advertised -notcontains $_ })
+        $extra = @($browserOps | Where-Object { $workerCheck.Capabilities -notcontains $_ })
+        if (@($missing).Count -eq 0 -and @($extra).Count -eq 0) {
+            Add-Result "6b.2" "Advertised capability manifest agrees with the worker" "PROVEN_REAL" "worker and service agree on $(@($browserOps).Count) browser.* operations plus browser.chrome; $listing"
+        }
+        else {
+            Add-Result "6b.2" "Advertised capability manifest agrees with the worker" "NOT_YET_PROVEN" "worker-only: [$($missing -join ', ')] service-only: [$($extra -join ', ')]; $listing"
+        }
+    }
+    else {
+        Add-Result "6b.2" "Advertised capability manifest agrees with the worker" "NOT_YET_PROVEN" "the service advertises the browser family but the worker self-check did not pass; $listing"
     }
 }
 
