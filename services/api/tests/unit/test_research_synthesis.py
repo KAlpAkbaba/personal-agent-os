@@ -247,8 +247,13 @@ def _payload(**overrides):
         "executive_summary": "özet",
         "findings": [
             {
-                "id": "f1", "title": "t", "summary": "s", "why_it_matters": "w",
-                "importance": 3, "label": "source_fact", "evidence_ids": ["e1"],
+                "id": "f1",
+                "title": "t",
+                "summary": "s",
+                "why_it_matters": "w",
+                "importance": 3,
+                "label": "source_fact",
+                "evidence_ids": ["e1"],
                 "first_seen": None,
             }
         ],
@@ -321,8 +326,14 @@ def test_parse_synthesis_response_caps_findings_at_seven_keeping_highest_importa
     importances = [5, 5, 4, 4, 3, 3, 2, 2, 1, 1]
     findings = [
         {
-            "id": f"f{i}", "title": f"t{i}", "summary": "s", "why_it_matters": "w",
-            "importance": imp, "label": "source_fact", "evidence_ids": ["e1"], "first_seen": None,
+            "id": f"f{i}",
+            "title": f"t{i}",
+            "summary": "s",
+            "why_it_matters": "w",
+            "importance": imp,
+            "label": "source_fact",
+            "evidence_ids": ["e1"],
+            "first_seen": None,
         }
         for i, imp in enumerate(importances)
     ]
@@ -357,3 +368,34 @@ def test_deterministic_provider_survives_an_evidence_item_with_no_readable_text(
         assert st.text.strip()
         if empty[0].id in st.evidence_ids:
             assert st.label == "model_inference"
+
+
+def test_deterministic_provider_survives_an_evidence_item_with_no_title() -> None:
+    # harness run 14 (2026-09-03): a live page without <title> reached synthesis and the
+    # Finding validation refused an empty title; the title now falls back to the
+    # publisher, then the URL host, never empty.
+    raw = [
+        EvidenceRecord(
+            url="https://untitled.example.org/post/1",
+            title="   ",
+            excerpt=f"{TOPIC} hakkında başlıksız bulgu",
+            fetched_at=NOW,
+            extraction_method="dom_text",
+            source_class="blog",
+        ),
+        EvidenceRecord(
+            url="https://example.com/2",
+            title="",
+            excerpt=f"{TOPIC} hakkında yayıncılı bulgu",
+            fetched_at=NOW,
+            extraction_method="dom_text",
+            source_class="news",
+            publisher="Örnek Gazete",
+        ),
+    ]
+    ranked = assign_evidence_ids(dedup_and_rank(raw, topic=TOPIC))
+    result = DeterministicSynthesisProvider().synthesize(TOPIC, ranked, recency_label=RECENCY_LABEL)
+    titles = {f.title for f in result.findings}
+    assert all(t.strip() for t in titles)
+    assert "Örnek Gazete" in titles
+    assert "untitled.example.org" in titles

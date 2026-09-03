@@ -100,6 +100,21 @@ def _provenance_summary(record: EvidenceRecord) -> str:
     return f"Kaynak: {publisher} — {title} ({date})"
 
 
+def _finding_title(e: EvidenceRecord) -> str:
+    """A finding title that is never empty: the evidence title, else the publisher,
+    else the URL host (live pages sometimes carry no <title>; harness run 14)."""
+    title = (e.title or "").strip()
+    if title:
+        return title
+    publisher = (e.publisher or "").strip()
+    if publisher:
+        return publisher
+    from urllib.parse import urlsplit
+
+    host = urlsplit(e.url or "").netloc.strip()
+    return host or e.source_class or "Kaynak"
+
+
 class DeterministicSynthesisProvider:
     """Seeded, offline synthesis: no model call, fully reproducible.
 
@@ -120,7 +135,9 @@ class DeterministicSynthesisProvider:
             return self._no_evidence(topic, recency_label)
 
         top = evidence[: min(MAX_FINDINGS, len(evidence))]
-        highlights = "; ".join(f"{e.title} ({e.source_class}, skor {e.score:.2f})" for e in top[:3])
+        highlights = "; ".join(
+            f"{_finding_title(e)} ({e.source_class}, skor {e.score:.2f})" for e in top[:3]
+        )
         executive_summary = (
             f"'{topic}' konusunda {recency_label} kapsamında {len(evidence)} kaynak "
             f"incelendi. Öne çıkanlar: {highlights}."
@@ -129,7 +146,7 @@ class DeterministicSynthesisProvider:
         findings = tuple(
             Finding(
                 id=f"f{i + 1}",
-                title=e.title,
+                title=_finding_title(e),
                 summary=_provenance_summary(e),
                 why_it_matters=(
                     f"Bu bilgi {e.publisher or e.source_class} kaynağından doğrulandı ve "
