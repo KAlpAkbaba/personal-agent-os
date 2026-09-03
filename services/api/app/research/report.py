@@ -31,6 +31,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from app.research.evidence import (
+    STATEMENT_LABEL_MODEL_INFERENCE,
     STATEMENT_LABEL_SOURCE_FACT,
     STATEMENT_LABELS,
     EvidenceRecord,
@@ -208,6 +209,10 @@ class ReportStats:
     evidence: int = 0
     injection_suspected_evidence: int = 0
     injection_dropped: int = 0
+    #: Text fields a synthesis provider's output had to be truncated on to
+    #: stay within the per-field length caps (finding MEDIUM-7,
+    #: app.research.synthesis.parse_synthesis_response).
+    truncated_fields: int = 0
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -219,6 +224,7 @@ class ReportStats:
             "evidence": self.evidence,
             "injection_suspected_evidence": self.injection_suspected_evidence,
             "injection_dropped": self.injection_dropped,
+            "truncated_fields": self.truncated_fields,
         }
 
 
@@ -339,11 +345,71 @@ def apply_excerpt_overlap_downgrade(
     )
 
 
+def _strip_unknown_ids(
+    label: str, evidence_ids: tuple[str, ...], evidence_ids_known: set[str]
+) -> tuple[str, tuple[str, ...], str | None]:
+    unknown = [i for i in evidence_ids if i not in evidence_ids_known]
+    if not unknown:
+        return label, evidence_ids, None
+    kept = tuple(i for i in evidence_ids if i in evidence_ids_known)
+    note = f"cited unknown evidence id(s) removed: {sorted(set(unknown))}"
+    if label == STATEMENT_LABEL_SOURCE_FACT and not kept:
+        # A source_fact whose citations become empty once fabricated ids are
+        # removed is downgraded, never dropped (finding MEDIUM-4) — the same
+        # never-drop-only-relabel discipline apply_excerpt_overlap_downgrade
+        # already follows for excerpt-unsupported source_facts below.
+        label = STATEMENT_LABEL_MODEL_INFERENCE
+    return label, kept, note
+
+
+def strip_dangling_citations(
+    report: ResearchReport, evidence_ids: set[str]
+) -> ResearchReport:
+    """Every labelled statement/finding — all four labels, not only
+    ``source_fact`` — may only cite evidence ids the pipeline actually
+    gathered (finding MEDIUM-4). An id a synthesis provider invents (most
+    dangerously: a model reading untrusted page text and fabricating a
+    citation) is removed from the citation list and the removal is recorded
+    via ``provenance_note``, rather than the whole research run crashing over
+    one bad citation — that hard-failure behaviour is still available via
+    :func:`require_source_fact_provenance` called directly, but
+    ``run_provenance_gate`` (the pipeline's own gate) never lets a dangling
+    id reach the rendered report: any ``[eN]`` marker in the Markdown always
+    has a matching Sources entry."""
+
+    def fix_statement(s: Statement) -> Statement:
+        label, ids, note = _strip_unknown_ids(s.label, s.evidence_ids, evidence_ids)
+        if note is None:
+            return s
+        return replace(s, label=label, evidence_ids=ids, provenance_note=note)
+
+    def fix_finding(f: Finding) -> Finding:
+        label, ids, note = _strip_unknown_ids(f.label, f.evidence_ids, evidence_ids)
+        if note is None:
+            return f
+        return replace(f, label=label, evidence_ids=ids, provenance_note=note)
+
+    return replace(
+        report,
+        findings=tuple(fix_finding(f) for f in report.findings),
+        why_it_matters=tuple(fix_statement(s) for s in report.why_it_matters),
+        watch_next=tuple(fix_statement(s) for s in report.watch_next),
+        details=tuple(
+            replace(d, statements=tuple(fix_statement(s) for s in d.statements))
+            for d in report.details
+        ),
+        uncertainty=tuple(fix_statement(s) for s in report.uncertainty),
+    )
+
+
 def run_provenance_gate(
     report: ResearchReport, evidence_by_id: dict[str, EvidenceRecord]
 ) -> ResearchReport:
-    """The full pipeline-owned gate: hard-require citations exist, then
-    soft-downgrade unsupported ``source_fact`` statements."""
+    """The full pipeline-owned gate: strip any dangling citation first (so a
+    fabricated id never reaches the rendered report), hard-require a
+    source_fact that still cites nothing at all, then soft-downgrade
+    excerpt-unsupported ``source_fact`` statements."""
+    report = strip_dangling_citations(report, set(evidence_by_id))
     require_source_fact_provenance(report, set(evidence_by_id))
     return apply_excerpt_overlap_downgrade(report, evidence_by_id)
 
@@ -439,4 +505,5 @@ __all__ = [
     "render_research_markdown",
     "require_source_fact_provenance",
     "run_provenance_gate",
+    "strip_dangling_citations",
 ]

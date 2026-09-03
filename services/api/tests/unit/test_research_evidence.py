@@ -124,3 +124,81 @@ def test_dedup_and_rank_rewards_keyword_overlap() -> None:
 
 def test_dedup_and_rank_empty_input() -> None:
     assert dedup_and_rank([]) == []
+
+
+# ---------------------------------------- near-duplicate-title syndication
+
+
+def _titled(
+    url: str, title: str, *, source_class: str = "news"
+) -> EvidenceRecord:
+    return EvidenceRecord(
+        url=url,
+        title=title,
+        excerpt="içerik metni burada",
+        fetched_at=NOW,
+        extraction_method="dom_text",
+        source_class=source_class,
+    )
+
+
+def test_near_duplicate_titles_across_distinct_urls_mark_syndication() -> None:
+    """Two different URLs whose (normalized) titles share >=0.9 token
+    Jaccard are near-duplicates (spec §2) — syndication, not a dedup-by-URL
+    case (their normalized URLs differ)."""
+    official = _titled(
+        "https://openai.com/a", "OpenAI announces new agent framework today",
+        source_class="official",
+    )
+    community = _titled(
+        "https://forum.example.com/b", "OpenAI announces new agent framework today",
+        source_class="community",
+    )
+    ranked = dedup_and_rank([official, community])
+    assert len(ranked) == 2  # both kept (still stored/auditable), not dropped
+    primary = next(r for r in ranked if r.source_class == "official")
+    copy = next(r for r in ranked if r.source_class == "community")
+    assert primary.syndicated_of is None
+    assert copy.syndicated_of == primary.url
+
+
+def test_near_duplicate_title_syndication_prefers_higher_priority_source_class() -> None:
+    """official > technical > academic > news > community > unknown (spec
+    §2) — the primary must always be the higher-priority class regardless of
+    input order."""
+    technical = _titled(
+        "https://news.ycombinator.com/x", "Multi agent systems survey released",
+        source_class="technical",
+    )
+    academic = _titled(
+        "https://arxiv.org/abs/1", "Multi agent systems survey released",
+        source_class="academic",
+    )
+    ranked = dedup_and_rank([academic, technical])  # input order deliberately reversed
+    academic_r = next(r for r in ranked if r.source_class == "academic")
+    technical_r = next(r for r in ranked if r.source_class == "technical")
+    assert technical_r.syndicated_of is None  # technical outranks academic
+    assert academic_r.syndicated_of == technical_r.url
+
+
+def test_near_duplicate_title_syndication_is_order_independent() -> None:
+    a = _titled(
+        "https://gov.example.com/1", "Major policy update announced", source_class="official"
+    )
+    b = _titled(
+        "https://forum.example.com/2", "Major policy update announced", source_class="community"
+    )
+    forward = dedup_and_rank([a, b])
+    backward = dedup_and_rank([b, a])
+
+    def primary_url(records: list[EvidenceRecord]) -> str:
+        return next(r.url for r in records if r.syndicated_of is None)
+
+    assert primary_url(forward) == primary_url(backward) == "https://gov.example.com/1"
+
+
+def test_dissimilar_titles_are_not_marked_as_syndicated() -> None:
+    a = _titled("https://a.example.com/1", "Completely unrelated headline about weather")
+    b = _titled("https://b.example.com/2", "A totally different story on economics")
+    ranked = dedup_and_rank([a, b])
+    assert all(r.syndicated_of is None for r in ranked)

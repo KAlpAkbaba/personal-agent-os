@@ -145,3 +145,45 @@ def test_presence_stale_after_configurable_threshold(db: Session, runtime: Broke
     view = devices_service.get_device_view(db, runtime, device.id, now=now, stale_after_s=30)
     assert view is not None
     assert view.presence == "stale"
+
+
+# --------------------------------------------------- alias conflicts (LOW-9)
+
+
+def test_find_alias_conflict_detects_alias_used_by_another_enrolled_device(db: Session) -> None:
+    a = _enroll(db, name="ev-pc")
+    devices_service.update_metadata(db, a.id, aliases=["ev"])
+    b = _enroll(db, name="laptop")
+    conflict = devices_service.find_alias_conflict(db, device_id=b.id, aliases=["ev"])
+    assert conflict == "ev"
+
+
+def test_find_alias_conflict_returns_none_for_free_alias(db: Session) -> None:
+    a = _enroll(db, name="ev-pc")
+    devices_service.update_metadata(db, a.id, aliases=["ev"])
+    b = _enroll(db, name="laptop")
+    assert devices_service.find_alias_conflict(db, device_id=b.id, aliases=["is"]) is None
+
+
+def test_find_alias_conflict_ignores_the_device_updating_itself(db: Session) -> None:
+    a = _enroll(db, name="ev-pc")
+    devices_service.update_metadata(db, a.id, aliases=["ev"])
+    # a re-submitting its own existing alias (e.g. alongside a new one) must
+    # not be treated as a conflict with itself.
+    assert devices_service.find_alias_conflict(db, device_id=a.id, aliases=["ev", "yeni"]) is None
+
+
+def test_find_alias_conflict_is_case_and_whitespace_insensitive(db: Session) -> None:
+    a = _enroll(db, name="ev-pc")
+    devices_service.update_metadata(db, a.id, aliases=["Ev"])
+    b = _enroll(db, name="laptop")
+    conflict = devices_service.find_alias_conflict(db, device_id=b.id, aliases=[" ev "])
+    assert conflict == " ev "  # returns the caller's raw alias for a readable message
+
+
+def test_find_alias_conflict_ignores_revoked_devices(db: Session) -> None:
+    a = _enroll(db, name="ev-pc")
+    devices_service.update_metadata(db, a.id, aliases=["ev"])
+    broker_service.revoke_device(db, a.id, trace_id=None)
+    b = _enroll(db, name="laptop")
+    assert devices_service.find_alias_conflict(db, device_id=b.id, aliases=["ev"]) is None

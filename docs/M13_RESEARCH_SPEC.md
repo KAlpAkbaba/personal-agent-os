@@ -82,7 +82,8 @@ bonus + importance from synthesis; final list is bounded to `max_sources`.
 `findings` has 3–7 entries ordered by importance; when fewer than 3 qualify the report says so
 in `uncertainty` instead of padding. Presentation order (web, artifact, later voice):
 Executive Summary → Findings (3–7) → Why this matters → What I would watch next → Detailed
-findings (collapsed) → Sources (each claim links to its evidence ids).
+findings (collapsed) → Belirsizlikler (uncertainty, when non-empty) → Sources (each claim
+links to its evidence ids).
 
 The canonical artifact body is the Turkish Markdown rendering of this JSON
 (`render_research_markdown`), stored through the existing M3 artifact machinery (artifact
@@ -166,10 +167,17 @@ and any statement mentioning instructions to the assistant is dropped with a rec
 ## 7. Memory
 
 One `episodic` memory per completed research (key `research:{task_id}`), value:
-`{question, window, generated_at, findings:[{title, summary, label, evidence_urls}], sources:[{url,title,publisher,published_at}], implications:[…], owner_feedback:null, artifact_id}`;
+`{question, window, generated_at, findings:[{title, label, importance, evidence_urls, summary?}], sources:[{url,title,publisher,published_at}], implications:[…], owner_feedback:null, artifact_id}`;
 retention `standard`; actor `system`; `provenance` lists the source URLs. Raw page text and
 excerpts are NOT written to memory; they live in `research_evidence` under the research
-retention policy (excerpts kept with the task; `text_chars` only, never full text).
+retention policy (excerpts kept with the task; `text_chars` only, never full text). The
+`DeterministicSynthesisProvider` (§6) stores no summary text in memory at all: its
+`Finding.summary` is built from provenance fields only (publisher/title/published date), never
+the page excerpt, and even so `findings[].summary` is included in the memory value ONLY when
+the synthesis provider is not deterministic AND no evidence the finding cites is
+`injection_suspected` AND the summary text itself carries no injection markers
+(`app.research.injection.count_markers` == 0); otherwise the `summary` key is omitted from that
+finding's memory entry entirely, never truncated or replaced with a placeholder.
 
 ## 8. Owner presentation
 
