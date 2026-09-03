@@ -2,12 +2,21 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using PagentOS.Agent.Core.Audit;
 using PagentOS.Agent.Core.Ipc;
+using PagentOS.Agent.Core.Logging;
 using PagentOS.Agent.Core.Protocol;
 
 namespace PagentOS.SessionCompanion;
 
 public static class Program
 {
+    /// <summary>Rotation bound for <c>companion.log</c>; with <see cref="CompanionLogKeepRotated"/> older files the disk cost is bounded at three times this.</summary>
+    public const long CompanionLogMaxBytes = 8L * 1024 * 1024;
+
+    public const int CompanionLogKeepRotated = 2;
+
+    /// <summary><c>&lt;companion DataDir&gt;\logs\companion.log</c> — beside the audit, like the Device Service's <c>logs\device-service.log</c>.</summary>
+    public static string CompanionLogPath(string dataDir) => Path.Combine(dataDir, "logs", "companion.log");
+
     /// <summary>
     /// Which pipes this companion is willing to take orders from.
     ///
@@ -114,12 +123,26 @@ public static class Program
         var audit = new AuditLog(Path.Combine(dataDir, "audit", "companion-audit.jsonl"));
         var artifactOpener = new ArtifactOpener(artifactRoots, new ShellFileOpener(), allowedExtensions, audit);
 
-        using var loggerFactory = LoggerFactory.Create(logging => logging.AddSimpleConsole(console =>
+        // Console AND a size-bounded file (the same lines, the Device Service's JSONL
+        // format). The 2026-09-03 incident — dozens of Chrome windows on the owner's
+        // desktop — could not be reconstructed because the companion, which owns the
+        // Browser Worker and its Chrome, had no log anyone could read after the fact.
+        var logFilePath = CompanionLogPath(dataDir);
+        using var loggerFactory = LoggerFactory.Create(logging =>
         {
-            console.SingleLine = true;
-            console.TimestampFormat = "HH:mm:ss ";
-        }));
+            logging.AddSimpleConsole(console =>
+            {
+                console.SingleLine = true;
+                console.TimestampFormat = "HH:mm:ss ";
+            });
+            logging.AddProvider(new FileLoggerProvider(logFilePath, maxBytes: CompanionLogMaxBytes, keepRotated: CompanionLogKeepRotated));
+        });
         var logger = loggerFactory.CreateLogger("SessionCompanion");
+        logger.LogInformation(
+            "session companion log file: {Path} (rotated at {MaxMiB} MiB, {Keep} older file(s) kept)",
+            logFilePath,
+            CompanionLogMaxBytes / (1024 * 1024),
+            CompanionLogKeepRotated);
 
         using var cts = new CancellationTokenSource();
         Console.CancelKeyPress += (_, eventArgs) =>

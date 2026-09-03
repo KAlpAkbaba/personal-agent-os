@@ -21,6 +21,7 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 . (Join-Path $repoRoot "scripts\lib\InstallEvidence.ps1")
+. (Join-Path $repoRoot "scripts\lib\AgentRuntime.ps1")
 
 $script:Failures = 0
 $script:Passes = 0
@@ -66,6 +67,55 @@ try {
         Assert-True -Condition ($lib -match 'Get-ProcessesExecutingUnder') -Because "the Browser Worker's python.exe locks the browser tree too"
         Assert-True -Condition ($lib -match 'WaitForStatus\("Stopped"') -Because "the service stop is awaited"
         Assert-True -Condition ($lib -match 'Wait-ProcessGone') -Because "stopped means the PID is gone, not that the SCM said so"
+    }
+
+    Write-Host ""
+    Write-Host "orphan chrome on the PagentOS profile (2026-09-03 window cascade)"
+
+    $profileDir = Join-Path $env:ProgramData "PagentOS\companion\browser\profile"
+    $chromeExe = '"C:\Program Files\Google\Chrome\Application\chrome.exe"'
+    function New-FakeProcess { param([string]$Name, [int]$ProcessId, $CommandLine)
+        return [pscustomobject]@{ Name = $Name; ProcessId = $ProcessId; CommandLine = $CommandLine }
+    }
+
+    Test-Case "Stop-AgentRuntime ends orphan chrome after the worker, defaulting to the ProgramData profile" {
+        $lib = [System.IO.File]::ReadAllText((Join-Path $repoRoot "scripts\lib\AgentRuntime.ps1"))
+        Assert-True -Condition ($lib -match 'Stop-OrphanBrowserProcesses -ProfileDir \$BrowserProfileDir') -Because "the stop must reap the profile's Chrome"
+        Assert-Equal -Expected $profileDir -Actual (Get-DefaultBrowserProfileDir) -Because "the installer's profile location"
+        $stopParams = (Get-Command Stop-AgentRuntime).Parameters
+        Assert-True -Condition $stopParams.ContainsKey("BrowserProfileDir") -Because "the profile is a parameter with the installer default"
+    }
+
+    Test-Case "the command-line test matches only --user-data-dir=<profile>, whole path, any case, quoted or not" {
+        Assert-True -Condition (Test-BrowserProfileCommandLine -CommandLine "$chromeExe --user-data-dir=$profileDir --no-first-run" -ProfileDir $profileDir) -Because "plain"
+        Assert-True -Condition (Test-BrowserProfileCommandLine -CommandLine "$chromeExe --user-data-dir=""$profileDir"" --no-first-run" -ProfileDir $profileDir) -Because "quoted value"
+        Assert-True -Condition (Test-BrowserProfileCommandLine -CommandLine "$chromeExe ""--user-data-dir=$profileDir"" --no-first-run" -ProfileDir $profileDir) -Because "quoted argument"
+        Assert-True -Condition (Test-BrowserProfileCommandLine -CommandLine "$chromeExe --user-data-dir=$profileDir\" -ProfileDir $profileDir) -Because "trailing separator"
+        Assert-True -Condition (Test-BrowserProfileCommandLine -CommandLine "$chromeExe --USER-DATA-DIR=$($profileDir.ToUpperInvariant())" -ProfileDir $profileDir) -Because "case-insensitive"
+        Assert-True -Condition (-not (Test-BrowserProfileCommandLine -CommandLine "$chromeExe --user-data-dir=${profileDir}2" -ProfileDir $profileDir)) -Because "a prefix is not the profile"
+        Assert-True -Condition (-not (Test-BrowserProfileCommandLine -CommandLine "$chromeExe --user-data-dir=$(Split-Path -Parent $profileDir)" -ProfileDir $profileDir)) -Because "the parent is not the profile"
+        Assert-True -Condition (-not (Test-BrowserProfileCommandLine -CommandLine "$chromeExe --user-data-dir=C:\Users\owner\AppData\Local\Google\Chrome\User Data" -ProfileDir $profileDir)) -Because "the owner's User Data"
+        Assert-True -Condition (-not (Test-BrowserProfileCommandLine -CommandLine "$chromeExe --flag-switches-begin --flag-switches-end" -ProfileDir $profileDir)) -Because "no switch at all"
+        Assert-True -Condition (-not (Test-BrowserProfileCommandLine -CommandLine $null -ProfileDir $profileDir)) -Because "null command line (WMI answers null for a process it cannot read)"
+        Assert-True -Condition (-not (Test-BrowserProfileCommandLine -CommandLine "" -ProfileDir $profileDir)) -Because "empty command line"
+    }
+
+    Test-Case "the process filter selects chrome.exe main processes on the profile and nothing else" {
+        $records = @(
+            (New-FakeProcess -Name "chrome.exe" -ProcessId 101 -CommandLine "$chromeExe --user-data-dir=$profileDir --no-first-run"),
+            (New-FakeProcess -Name "chrome.exe" -ProcessId 102 -CommandLine "$chromeExe --type=renderer --user-data-dir=$profileDir --lang=tr"),
+            (New-FakeProcess -Name "chrome.exe" -ProcessId 103 -CommandLine "$chromeExe --type=gpu-process --user-data-dir=$profileDir"),
+            (New-FakeProcess -Name "chrome.exe" -ProcessId 104 -CommandLine "$chromeExe --profile-directory=Default"),
+            (New-FakeProcess -Name "chrome.exe" -ProcessId 105 -CommandLine "$chromeExe --user-data-dir=${profileDir}-old"),
+            (New-FakeProcess -Name "chrome.exe" -ProcessId 106 -CommandLine $null),
+            (New-FakeProcess -Name "msedge.exe" -ProcessId 107 -CommandLine "msedge.exe --user-data-dir=$profileDir"),
+            (New-FakeProcess -Name "python.exe" -ProcessId 108 -CommandLine "python.exe -m browser_agent.worker --profile-dir $profileDir --user-data-dir=$profileDir"),
+            (New-FakeProcess -Name "CHROME.EXE" -ProcessId 109 -CommandLine "$chromeExe ""--user-data-dir=$profileDir""")
+        )
+        $selected = @(Select-OrphanBrowserProcess -Processes $records -ProfileDir $profileDir)
+        Assert-Equal -Expected "101,109" -Actual (($selected | ForEach-Object { $_.ProcessId }) -join ",") -Because "only the two main processes on the profile"
+        Assert-Equal -Expected 0 -Actual @(Select-OrphanBrowserProcess -Processes @() -ProfileDir $profileDir).Count -Because "an empty process list selects nothing"
+        Assert-Equal -Expected 0 -Actual @(Select-OrphanBrowserProcess -Processes $records -ProfileDir (Join-Path $script:Sandbox "elsewhere")).Count -Because "another profile selects nothing"
     }
 
     Write-Host ""
