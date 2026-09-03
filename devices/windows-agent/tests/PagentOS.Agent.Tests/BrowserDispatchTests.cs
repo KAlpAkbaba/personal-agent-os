@@ -216,6 +216,61 @@ public sealed class BrowserDispatchTests : IDisposable
         Assert.Equal(ErrorClasses.CapabilityMissing, ex.ErrorClass);
     }
 
+    [Fact]
+    public async Task With_browser_disabled_the_transport_is_never_invoked()
+    {
+        // Not inferred from the error class: the transport throws if touched, and its
+        // call count is asserted to be zero.
+        var transport = new UnreachableCompanionTransport();
+        var executor = new InteractiveCapabilityExecutor(transport, browserEnabled: false);
+
+        var ex = await Assert.ThrowsAsync<CapabilityException>(() => executor.ExecuteAsync(
+            TestCommands.New(BrowserCapabilities.Navigate, new JsonObject { ["session_id"] = "t", ["url"] = "https://example.org/" }),
+            CancellationToken.None));
+
+        Assert.Equal(ErrorClasses.CapabilityMissing, ex.ErrorClass);
+        Assert.False(ex.Retryable);
+        Assert.Contains("BrowserEnabled", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(0, transport.Calls);
+
+        // And with the family unknown to the device at all, same seam, same proof.
+        var voice = await Assert.ThrowsAsync<CapabilityException>(() => executor.ExecuteAsync(TestCommands.New("voice.speak"), CancellationToken.None));
+        Assert.Equal(ErrorClasses.CapabilityMissing, voice.ErrorClass);
+        Assert.Equal(0, transport.Calls);
+    }
+
+    [Theory]
+    [InlineData("browser.anything")]
+    [InlineData("browser.chrome")]
+    [InlineData("browser.navigate_")]
+    [InlineData("browser.")]
+    public async Task With_browser_enabled_an_operation_outside_the_contract_is_refused_before_the_pipe(string capability)
+    {
+        var transport = new UnreachableCompanionTransport();
+        var executor = new InteractiveCapabilityExecutor(transport, browserEnabled: true);
+
+        var ex = await Assert.ThrowsAsync<CapabilityException>(() => executor.ExecuteAsync(
+            TestCommands.New(capability, new JsonObject { ["session_id"] = "t" }), CancellationToken.None));
+
+        Assert.Equal(ErrorClasses.CapabilityMissing, ex.ErrorClass);
+        Assert.False(ex.Retryable);
+        Assert.Equal(0, transport.Calls);
+    }
+
+    [Fact]
+    public async Task With_browser_enabled_a_contract_operation_is_forwarded_to_the_transport()
+    {
+        // The complement of the refusal tests: the seam is reached for a real operation.
+        var transport = new UnreachableCompanionTransport();
+        var executor = new InteractiveCapabilityExecutor(transport, browserEnabled: true);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => executor.ExecuteAsync(
+            TestCommands.New(BrowserCapabilities.Navigate, new JsonObject { ["session_id"] = "t", ["url"] = "https://example.org/" }),
+            CancellationToken.None));
+
+        Assert.Equal(1, transport.Calls);
+    }
+
     // ------------------------------------------------------------- companion over the real pipe
 
     private CompanionRuntime NewCompanion(string pipeName, BrowserWorkerHost? browserWorker)
@@ -273,7 +328,8 @@ public sealed class BrowserDispatchTests : IDisposable
         var pipeName = IpcTestSupport.NewPipeName();
         var server = IpcTestSupport.NewServer(pipeName);
         await server.StartAsync(CancellationToken.None);
-        await using var host = FakeWorkerLauncher.NewHost(_dir);
+        var hostLog = new ListLogger();
+        await using var host = FakeWorkerLauncher.NewHost(_dir, hostLog);
         using var companionCts = new CancellationTokenSource();
         var companion = NewCompanion(pipeName, host);
         var companionTask = Task.Run(() => companion.RunAsync(companionCts.Token));
@@ -305,9 +361,10 @@ public sealed class BrowserDispatchTests : IDisposable
 
             // Concurrency: a slow browser request must not block a desktop request behind it,
             // and the two browser responses may arrive in either order — request_id
-            // correlates, the sequence stays strictly increasing, nothing is refused.
+            // correlates, the sequence stays strictly increasing, nothing is refused. The
+            // fast request is on ANOTHER session: within a session the worker serialises.
             var slow = executor.ExecuteAsync(
-                TestCommands.New(BrowserCapabilities.Extract, new JsonObject { ["mode"] = "sleep", ["sleep_ms"] = 800, ["session_id"] = "t", ["tag"] = "slow" }),
+                TestCommands.New(BrowserCapabilities.Extract, new JsonObject { ["mode"] = "sleep", ["sleep_ms"] = 800, ["session_id"] = "t-slow", ["tag"] = "slow" }),
                 CancellationToken.None);
             var desktop = await server.ExecuteCapabilityAsync(
                 AgentCapabilities.DesktopOpenApplication,
@@ -329,6 +386,25 @@ public sealed class BrowserDispatchTests : IDisposable
             var marker = await Assert.ThrowsAsync<CapabilityException>(() => executor.ExecuteAsync(
                 TestCommands.New(BrowserCapabilities.Family, new JsonObject()), CancellationToken.None));
             Assert.Equal(ErrorClasses.CapabilityMissing, marker.ErrorClass);
+
+            // An unknown operation is refused at the companion too (bypassing the executor's
+            // own allowlist by calling the pipe directly), and never reaches the worker: the
+            // fake acknowledges every exec on stderr, and a later valid request proves the
+            // log is caught up.
+            var unknown = await Assert.ThrowsAsync<CapabilityException>(() => server.ExecuteCapabilityAsync(
+                "browser.anything", new JsonObject { ["session_id"] = "t" }, TimeSpan.FromSeconds(10), CancellationToken.None));
+            Assert.Equal(ErrorClasses.CapabilityMissing, unknown.ErrorClass);
+            Assert.False(unknown.Retryable);
+            await server.ExecuteCapabilityAsync(
+                BrowserCapabilities.WorkerStatus, new JsonObject { ["mode"] = "echo" }, TimeSpan.FromSeconds(10), CancellationToken.None);
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            while (!hostLog.Any("exec capability=browser.worker_status"))
+            {
+                Assert.True(DateTime.UtcNow < deadline, "worker_status was not acknowledged by the fake worker in time");
+                await Task.Delay(20);
+            }
+
+            Assert.False(hostLog.Any("exec capability=browser.anything"), "the unknown operation crossed the pipe and reached the worker");
         }
         finally
         {

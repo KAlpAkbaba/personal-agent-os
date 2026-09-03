@@ -386,6 +386,17 @@ public sealed class CompanionRuntime(
                     retryable: false);
             }
 
+            if (!BrowserCapabilities.IsOperation(request.Capability))
+            {
+                // Only names the contract defines are ever written to the worker's stdin.
+                // The host repeats this check; refusing here keeps the companion's own
+                // answer independent of how the host is wired.
+                throw new CapabilityException(
+                    ErrorClasses.CapabilityMissing,
+                    $"capability '{request.Capability}' is not a browser operation this companion knows (BROWSER_CAPABILITIES.md §1)",
+                    retryable: false);
+            }
+
             var requested = TimeSpan.FromMilliseconds(Math.Max(1, request.TimeoutMs));
             var budget = requested - BrowserTimeoutMargin;
             if (budget < BrowserMinimumBudget)

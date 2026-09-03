@@ -118,15 +118,63 @@ public static class BrowserCapabilities
     public static readonly TimeSpan CommandTimeoutCap = TimeSpan.FromSeconds(120);
 
     /// <summary>
-    /// §6(b): a result carrying any key whose name contains one of these (case-insensitive,
-    /// at any depth) is refused with <c>security_scope_error</c> before it leaves the
-    /// companion. Session material never crosses the pipe, whatever the worker did.
+    /// §6(b): a result carrying any key whose NORMALISED name (see <see cref="NormalizeKey"/>)
+    /// contains one of these, at any depth, is refused with <c>security_scope_error</c>
+    /// before it leaves the companion. Session material never crosses the pipe, whatever
+    /// the worker did.
+    ///
+    /// The fragments are stored already normalised (the document's <c>set-cookie</c> is
+    /// <c>setcookie</c> here) so the list and the rule agree by construction: a raw
+    /// substring match against the document's spelling lets <c>api-key</c>, <c>api_key</c>
+    /// and <c>Set_Cookie</c> through while the Browser Worker (<c>_FORBIDDEN_KEY_TOKENS</c>
+    /// in <c>browser_agent/worker.py</c>) refuses them — the two sides must agree, and the
+    /// companion is the higher-assurance one.
     /// </summary>
     public static readonly IReadOnlyList<string> ForbiddenResultKeyFragments =
     [
-        "cookie", "authorization", "set-cookie", "localstorage", "sessionstorage",
+        "cookie", "authorization", "setcookie", "localstorage", "sessionstorage",
         "password", "token", "secret", "apikey",
     ];
+
+    /// <summary>
+    /// The worker's <c>_normalize_key</c>, verbatim: lower-case, then drop every character
+    /// that is not a letter or a digit. <c>x-Api-Key</c>, <c>api_key</c> and <c>APIKEY</c>
+    /// all become <c>apikey</c>.
+    /// </summary>
+    public static string NormalizeKey(string key)
+    {
+        var lowered = key.ToLowerInvariant();
+        var builder = new System.Text.StringBuilder(lowered.Length);
+        foreach (var ch in lowered)
+        {
+            if (char.IsLetterOrDigit(ch))
+            {
+                builder.Append(ch);
+            }
+        }
+
+        return builder.ToString();
+    }
+
+    /// <summary>
+    /// The shared forbidden-key rule: true when the normalised key contains any fragment.
+    /// It is a SUBSTRING rule by contract, so <c>tokens_count</c> is forbidden (it contains
+    /// <c>token</c>) while <c>text_chars</c> and <c>links_count</c> are not; the worker's
+    /// result vocabulary (§3) is chosen to stay clear of the fragments.
+    /// </summary>
+    public static bool IsForbiddenKey(string key)
+    {
+        var normalized = NormalizeKey(key);
+        foreach (var fragment in ForbiddenResultKeyFragments)
+        {
+            if (normalized.Contains(fragment, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     public static bool IsFamilyMember(string capability)
         => capability.StartsWith(Prefix, StringComparison.Ordinal);

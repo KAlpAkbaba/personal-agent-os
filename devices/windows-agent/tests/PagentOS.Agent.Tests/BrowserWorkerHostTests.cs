@@ -33,12 +33,16 @@ public sealed class BrowserWorkerHostTests : IDisposable
         }
     }
 
-    private BrowserWorkerHost NewHost(AuditLog? audit = null, string extraArgs = "", bool eager = false, TimeSpan? helloTimeout = null, TimeSpan? pingInterval = null)
-        => FakeWorkerLauncher.NewHost(_dir, _log, audit, extraArgs, eager, helloTimeout, pingInterval);
+    private BrowserWorkerHost NewHost(AuditLog? audit = null, string extraArgs = "", bool eager = false, TimeSpan? helloTimeout = null, TimeSpan? pingInterval = null, int? eagerRestartCeiling = null)
+        => FakeWorkerLauncher.NewHost(_dir, _log, audit, extraArgs, eager, helloTimeout, pingInterval, eagerRestartCeiling);
 
     private static JsonObject Payload(string mode, params (string Key, JsonNode? Value)[] extra)
+        => Payload(mode, "t1", extra);
+
+    /// <summary>The fake worker serialises per session (§7), so a test that wants two requests to overlap gives them different sessions.</summary>
+    private static JsonObject Payload(string mode, string sessionId, params (string Key, JsonNode? Value)[] extra)
     {
-        var payload = new JsonObject { ["mode"] = mode, ["session_id"] = "t1" };
+        var payload = new JsonObject { ["mode"] = mode, ["session_id"] = sessionId };
         foreach (var (key, value) in extra)
         {
             payload[key] = value;
@@ -125,13 +129,13 @@ public sealed class BrowserWorkerHostTests : IDisposable
     }
 
     [Fact]
-    public async Task Concurrent_requests_interleave_and_each_gets_its_own_answer()
+    public async Task Concurrent_requests_on_different_sessions_interleave_and_each_gets_its_own_answer()
     {
         await using var host = NewHost();
         await host.StartAsync(CancellationToken.None);
 
-        var slow = Exec(host, BrowserCapabilities.Extract, Payload("sleep", ("sleep_ms", 700), ("tag", "slow")));
-        var fast = Exec(host, BrowserCapabilities.Inspect, Payload("echo", ("tag", "fast")));
+        var slow = Exec(host, BrowserCapabilities.Extract, Payload("sleep", "s1", ("sleep_ms", 700), ("tag", "slow")));
+        var fast = Exec(host, BrowserCapabilities.Inspect, Payload("echo", "s2", ("tag", "fast")));
 
         var fastResult = await fast;
         Assert.False(slow.IsCompleted, "the fast request must not queue behind the slow one");
@@ -140,6 +144,32 @@ public sealed class BrowserWorkerHostTests : IDisposable
         Assert.Equal("fast", fastResult["echo"]!["tag"]!.GetValue<string>());
         Assert.Equal("slow", slowResult["echo"]!["tag"]!.GetValue<string>());
         Assert.Equal(1, host.Starts);
+    }
+
+    [Fact]
+    public async Task Requests_on_the_same_session_complete_in_order_while_another_session_interleaves()
+    {
+        // §7, last clause: "executed concurrently by the worker per session but serially
+        // within a session". The host does not enforce this — the worker does — but the
+        // suite must exercise it so the host's concurrency model is proven against a
+        // worker that behaves like the real one.
+        await using var host = NewHost();
+        await host.StartAsync(CancellationToken.None);
+
+        var first = Exec(host, BrowserCapabilities.Navigate, Payload("sleep", "same", ("sleep_ms", 700), ("tag", "first")));
+        await Task.Delay(50);
+        var second = Exec(host, BrowserCapabilities.Extract, Payload("echo", "same", ("tag", "second")));
+        var other = Exec(host, BrowserCapabilities.Inspect, Payload("echo", "other", ("tag", "other")));
+
+        var otherResult = await other;
+        Assert.Equal("other", otherResult["echo"]!["tag"]!.GetValue<string>());
+        Assert.False(first.IsCompleted, "the other session must not wait for 'same'");
+        Assert.False(second.IsCompleted, "the second request on 'same' must queue behind the first");
+
+        var secondResult = await second;
+        Assert.True(first.IsCompleted, "the second request on a session completes only after the first");
+        Assert.Equal("second", secondResult["echo"]!["tag"]!.GetValue<string>());
+        Assert.Equal("first", (await first)["echo"]!["tag"]!.GetValue<string>());
     }
 
     [Fact]
@@ -175,14 +205,38 @@ public sealed class BrowserWorkerHostTests : IDisposable
         Assert.Contains("made_up_class", ex.Message, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public async Task An_unknown_browser_operation_is_refused_by_the_worker_as_capability_missing()
+    [Theory]
+    [InlineData("browser.teleport")]
+    [InlineData("browser.anything")]
+    [InlineData("browser.chrome")]
+    [InlineData("browser.")]
+    public async Task An_unknown_browser_operation_is_refused_by_the_host_before_a_lazy_worker_is_even_started(string capability)
     {
         await using var host = NewHost();
 
-        var ex = await Assert.ThrowsAsync<CapabilityException>(() => Exec(host, "browser.teleport", Payload("echo")));
+        var ex = await Assert.ThrowsAsync<CapabilityException>(() => Exec(host, capability, Payload("echo")));
 
         Assert.Equal(ErrorClasses.CapabilityMissing, ex.ErrorClass);
+        Assert.False(ex.Retryable);
+        Assert.Equal(0, host.Starts);
+        Assert.False(host.WorkerRunning);
+    }
+
+    [Fact]
+    public async Task An_unknown_browser_operation_never_reaches_a_running_worker()
+    {
+        await using var host = NewHost();
+        await host.StartAsync(CancellationToken.None);
+
+        var ex = await Assert.ThrowsAsync<CapabilityException>(() => Exec(host, "browser.anything", Payload("echo")));
+        Assert.Equal(ErrorClasses.CapabilityMissing, ex.ErrorClass);
+
+        // The fake acknowledges every exec it receives on stderr, in order. A later, valid
+        // request proves the log is caught up — and the refused name is not in it.
+        await Exec(host, BrowserCapabilities.Inspect, Payload("echo"));
+        await WaitUntilAsync(() => _log.Any("fake-worker: exec capability=browser.inspect"), TimeSpan.FromSeconds(5));
+        Assert.False(_log.Any("exec capability=browser.anything"), "the unknown operation was written to the worker's stdin");
+        Assert.Equal(1, host.Starts);
     }
 
     // ------------------------------------------------------------------- timeout / cancel
@@ -234,7 +288,7 @@ public sealed class BrowserWorkerHostTests : IDisposable
     {
         await using var host = NewHost();
         await host.StartAsync(CancellationToken.None);
-        var firstPid = host.WorkerPid;
+        Assert.NotNull(host.WorkerPid);
 
         var ex = await Assert.ThrowsAsync<CapabilityException>(() => Exec(host, BrowserCapabilities.Navigate, Payload("crash")));
 
@@ -246,7 +300,9 @@ public sealed class BrowserWorkerHostTests : IDisposable
         Assert.Equal(BrowserCapabilities.Inspect, result["capability"]!.GetValue<string>());
         Assert.Equal(2, host.Starts);
         Assert.Equal(1, host.Restarts);
-        Assert.NotEqual(firstPid, host.WorkerPid);
+        // Windows reuses pids quickly, so a second start — not pid inequality — is the proof of a replacement.
+        Assert.Equal(2, host.Starts);
+        Assert.True(host.WorkerRunning);
     }
 
     [Fact]
@@ -255,10 +311,10 @@ public sealed class BrowserWorkerHostTests : IDisposable
         await using var host = NewHost();
         await host.StartAsync(CancellationToken.None);
 
-        var slow = Exec(host, BrowserCapabilities.Extract, Payload("sleep", ("sleep_ms", 60_000)), timeoutS: 60);
+        var slow = Exec(host, BrowserCapabilities.Extract, Payload("sleep", "s1", ("sleep_ms", 60_000)), timeoutS: 60);
         await Task.Delay(200);
         var stopwatch = Stopwatch.StartNew();
-        var crash = Assert.ThrowsAsync<CapabilityException>(() => Exec(host, BrowserCapabilities.Navigate, Payload("crash")));
+        var crash = Assert.ThrowsAsync<CapabilityException>(() => Exec(host, BrowserCapabilities.Navigate, Payload("crash", "s2")));
 
         var ex = await Assert.ThrowsAsync<CapabilityException>(() => slow);
         await crash;
@@ -284,7 +340,7 @@ public sealed class BrowserWorkerHostTests : IDisposable
     {
         await using var host = NewHost(extraArgs: "--no-pong", pingInterval: TimeSpan.FromMilliseconds(100));
         await host.StartAsync(CancellationToken.None);
-        var firstPid = host.WorkerPid;
+        Assert.NotNull(host.WorkerPid);
 
         await WaitUntilAsync(() => host.LivenessKills >= 1, TimeSpan.FromSeconds(10));
         Assert.True(host.PingsSent >= 3);
@@ -292,7 +348,65 @@ public sealed class BrowserWorkerHostTests : IDisposable
 
         var result = await Exec(host, BrowserCapabilities.Inspect, Payload("echo"));
         Assert.Equal(BrowserCapabilities.Inspect, result["capability"]!.GetValue<string>());
-        Assert.NotEqual(firstPid, host.WorkerPid);
+        // Windows reuses pids quickly, so a second start — not pid inequality — is the proof of a replacement.
+        Assert.Equal(2, host.Starts);
+        Assert.True(host.WorkerRunning);
+    }
+
+    [Fact]
+    public async Task A_stdout_line_over_the_ceiling_kills_the_worker_fails_the_request_dependency_unavailable_and_the_next_request_gets_a_fresh_one()
+    {
+        await using var host = NewHost();
+        await host.StartAsync(CancellationToken.None);
+        Assert.NotNull(host.WorkerPid);
+        var stopwatch = Stopwatch.StartNew();
+
+        var ex = await Assert.ThrowsAsync<CapabilityException>(() => Exec(
+            host, BrowserCapabilities.Extract, Payload("longline", ("bytes", 1024 * 1024)), timeoutS: 30));
+
+        Assert.Equal(ErrorClasses.DependencyUnavailable, ex.ErrorClass);
+        Assert.True(ex.Retryable);
+        Assert.Contains("stdout line over", ex.Message, StringComparison.Ordinal);
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(20), $"took {stopwatch.Elapsed}");
+        Assert.Equal(1, host.OversizeLineKills);
+        Assert.Equal(4 * BrowserCapabilities.MaxResultBytes, BrowserWorkerHost.MaxStdoutLineBytes);
+        Assert.True(_log.Any("wrote a stdout line over"));
+
+        // Restart through the backoff; the next request succeeds on a new process.
+        var result = await Exec(host, BrowserCapabilities.Inspect, Payload("echo"));
+        Assert.Equal(BrowserCapabilities.Inspect, result["capability"]!.GetValue<string>());
+        Assert.Equal(2, host.Starts);
+        // Windows reuses pids quickly, so a second start — not pid inequality — is the proof of a replacement.
+        Assert.Equal(2, host.Starts);
+        Assert.True(host.WorkerRunning);
+    }
+
+    [Fact]
+    public async Task An_eager_host_stops_background_restarts_after_the_ceiling_logs_once_and_still_starts_on_the_next_request()
+    {
+        const int Ceiling = 3;
+        await using var host = NewHost(extraArgs: "--no-hello", eager: true, helloTimeout: TimeSpan.FromMilliseconds(150), eagerRestartCeiling: Ceiling);
+        Assert.Equal(Ceiling, host.EagerRestartCeiling);
+        Assert.Equal(10, BrowserWorkerHost.DefaultEagerRestartCeiling);
+
+        await host.StartAsync(CancellationToken.None);
+
+        await WaitUntilAsync(() => host.EagerRestartSuspended, TimeSpan.FromSeconds(20));
+        // Settle: no further background start may follow the suspension.
+        await Task.Delay(600);
+        Assert.Equal(Ceiling, host.Starts);
+        Assert.Equal(Ceiling, host.ConsecutiveFailures);
+        Assert.False(host.WorkerRunning);
+        Assert.Equal(1, _log.Lines.Count(line => line.Contains("eager background restarts are suspended", StringComparison.Ordinal)));
+
+        // An explicit request still tries (and, with this worker, still fails typed) —
+        // and the suspension does not log a second time.
+        var ex = await Assert.ThrowsAsync<CapabilityException>(() => Exec(host, BrowserCapabilities.Inspect, Payload("echo")));
+        Assert.Equal(ErrorClasses.DependencyUnavailable, ex.ErrorClass);
+        Assert.Equal(Ceiling + 1, host.Starts);
+        await Task.Delay(400);
+        Assert.Equal(Ceiling + 1, host.Starts);
+        Assert.Equal(1, _log.Lines.Count(line => line.Contains("eager background restarts are suspended", StringComparison.Ordinal)));
     }
 
     [Fact]
@@ -335,6 +449,16 @@ public sealed class BrowserWorkerHostTests : IDisposable
     [InlineData("csrfToken")]
     [InlineData("client_secret")]
     [InlineData("ApiKey")]
+    // The separator/case spellings a raw substring match let through (worker parity).
+    [InlineData("api-key")]
+    [InlineData("api_key")]
+    [InlineData("x-api-key")]
+    [InlineData("API-KEY")]
+    [InlineData("Set_Cookie")]
+    [InlineData("SET COOKIE")]
+    [InlineData("local-storage")]
+    [InlineData("session.storage")]
+    [InlineData("tokens_count")]
     public async Task A_result_carrying_a_forbidden_key_at_any_depth_is_refused_with_security_scope_error(string key)
     {
         await using var host = NewHost();
@@ -345,6 +469,75 @@ public sealed class BrowserWorkerHostTests : IDisposable
         Assert.Equal(ErrorClasses.SecurityScopeError, ex.ErrorClass);
         Assert.False(ex.Retryable);
         Assert.Contains(key, ex.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("api-key")]
+    [InlineData("Set_Cookie")]
+    public async Task A_forbidden_key_inside_nested_arrays_of_objects_is_still_refused(string key)
+    {
+        await using var host = NewHost();
+
+        var ex = await Assert.ThrowsAsync<CapabilityException>(() => Exec(
+            host, BrowserCapabilities.Extract, Payload("forbidden_nested", ("key", key))));
+
+        Assert.Equal(ErrorClasses.SecurityScopeError, ex.ErrorClass);
+        Assert.Contains($"result.links[1].attrs[0][0].{key}", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("text_chars")]
+    [InlineData("links_count")]
+    [InlineData("injection_markers")]
+    [InlineData("final_url")]
+    [InlineData("http_status")]
+    [InlineData("session_id")]
+    [InlineData("truncated")]
+    public async Task The_contracts_own_result_vocabulary_passes_the_forbidden_key_scan(string key)
+    {
+        await using var host = NewHost();
+
+        var result = await Exec(host, BrowserCapabilities.Extract, Payload("forbidden", ("key", key)));
+
+        Assert.Equal("ok", result["page"]!["title"]!.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData("api-key", true)]
+    [InlineData("api_key", true)]
+    [InlineData("x-api-key", true)]
+    [InlineData("API-KEY", true)]
+    [InlineData("apiKey", true)]
+    [InlineData("Set_Cookie", true)]
+    [InlineData("set-cookie", true)]
+    [InlineData("Set-Cookie", true)]
+    [InlineData("x-AUTHORIZATION-header", true)]
+    [InlineData("access_token", true)]
+    // "token" is a SUBSTRING rule by contract (§6b): tokens_count is forbidden, and the
+    // worker's result vocabulary avoids it (text_chars, links_count). Documented here so a
+    // future "fix" does not silently narrow the rule on one side only.
+    [InlineData("tokens_count", true)]
+    [InlineData("text_chars", false)]
+    [InlineData("links_count", false)]
+    [InlineData("session_id", false)]
+    [InlineData("secretary", true)]
+    [InlineData("authorised", false)]
+    [InlineData("", false)]
+    public void The_forbidden_key_rule_normalises_like_the_worker_before_matching(string key, bool forbidden)
+    {
+        Assert.Equal(forbidden, BrowserCapabilities.IsForbiddenKey(key));
+    }
+
+    [Fact]
+    public void The_forbidden_fragments_are_stored_normalised_so_the_list_and_the_rule_agree()
+    {
+        Assert.All(BrowserCapabilities.ForbiddenResultKeyFragments, fragment => Assert.Equal(fragment, BrowserCapabilities.NormalizeKey(fragment)));
+        Assert.Contains("setcookie", BrowserCapabilities.ForbiddenResultKeyFragments);
+        Assert.DoesNotContain("set-cookie", BrowserCapabilities.ForbiddenResultKeyFragments);
+        Assert.Equal("xapikey", BrowserCapabilities.NormalizeKey("X-Api_Key"));
+        Assert.Equal("apikey", BrowserCapabilities.NormalizeKey("Api_Key"));
+        Assert.Equal("setcookie", BrowserCapabilities.NormalizeKey("Set-Cookie"));
+        Assert.Equal("", BrowserCapabilities.NormalizeKey("-_.:"));
     }
 
     [Fact]
@@ -365,6 +558,12 @@ public sealed class BrowserWorkerHostTests : IDisposable
             },
         };
         Assert.Equal("$.page.items[0].x-AUTHORIZATION-header", BrowserWorkerHost.FindForbiddenKey(dirty));
+
+        var nestedArrays = new JsonObject
+        {
+            ["rows"] = new JsonArray(new JsonArray(new JsonObject { ["fine"] = 1 }, new JsonObject { ["api-key"] = "k" })),
+        };
+        Assert.Equal("$.rows[0][1].api-key", BrowserWorkerHost.FindForbiddenKey(nestedArrays));
     }
 
     // ------------------------------------------------------------------- not configured
@@ -394,6 +593,51 @@ public sealed class BrowserWorkerHostTests : IDisposable
 
         await WaitUntilAsync(() => _log.Any("browser worker stderr: fake-worker: started"), TimeSpan.FromSeconds(5));
         Assert.DoesNotContain("fake-worker", result.ToJsonString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Worker_stderr_is_sanitised_before_it_reaches_the_companion_log()
+    {
+        await using var host = NewHost();
+        var flood = new string('f', 5000);
+
+        await Exec(host, BrowserCapabilities.Inspect, Payload("stderr", ("lines", new JsonArray(
+            "plain line ok LINE-A",
+            "fetching https://example.org/search?q=QUERY-MARKER&token=TOKEN-MARKER#frag then more",
+            "authorization: Bearer AUTH-MARKER",
+            "api_key=KEY-MARKER",
+            "x-api-key = KEY2-MARKER",
+            "Set-Cookie: SESSION-MARKER",
+            "request_id=abc session=t1 tokens_used=3 LINE-B",
+            flood))));
+
+        // The flood is the last line the fake writes; stderr is read in order, so once it
+        // has been logged every earlier line has been through the sanitiser.
+        await WaitUntilAsync(() => _log.Lines.Any(line => line.Contains("fffff", StringComparison.Ordinal)), TimeSpan.FromSeconds(5));
+
+        // 1. Plain lines pass; 2. the query string and fragment are gone, scheme://host/path stays.
+        Assert.True(_log.Any("browser worker stderr: plain line ok LINE-A"));
+        Assert.True(_log.Any("browser worker stderr: fetching https://example.org/search then more"));
+        Assert.False(_log.Any("QUERY-MARKER"));
+        Assert.False(_log.Any("TOKEN-MARKER"));
+        Assert.False(_log.Any("#frag"));
+
+        // 3. "credential-like key" + ':' or '=' → the whole line becomes the marker.
+        Assert.False(_log.Any("AUTH-MARKER"));
+        Assert.False(_log.Any("KEY-MARKER"));
+        Assert.False(_log.Any("KEY2-MARKER"));
+        Assert.False(_log.Any("SESSION-MARKER"));
+        // Four credential lines plus LINE-B: "tokens_used=" is caught by the same substring
+        // rule — documented, not accidental — so that line must not survive verbatim either.
+        Assert.Equal(5, _log.Lines.Count(line => line.Contains(WorkerLogSanitizer.RedactedMarker, StringComparison.Ordinal)));
+        Assert.False(_log.Any("LINE-B"), "a 'token…=' line was logged verbatim");
+
+        // 4. Capped: no log line carries the whole 5000-char flood.
+        var floodLines = _log.Lines.Where(line => line.Contains("fffff", StringComparison.Ordinal)).ToList();
+        Assert.Single(floodLines);
+        Assert.DoesNotContain(flood, floodLines[0], StringComparison.Ordinal);
+        Assert.Contains(new string('f', WorkerLogSanitizer.MaxLineChars), floodLines[0], StringComparison.Ordinal);
+        Assert.Contains("[+3000 chars cut]", floodLines[0], StringComparison.Ordinal);
     }
 
     [Fact]
