@@ -4,7 +4,7 @@
   "current_milestone": "M13_REAL_BROWSER_RESEARCH",
   "status": "BUILT_REVIEWED_PROVEN_PROXY_AWAITING_OWNER_RELEASE_AND_AGENT_UPDATE",
   "last_completed_milestone": "REAL_CLOUD_BRINGUP",
-  "last_updated": "2026-09-03T19:55:00+03:00",
+  "last_updated": "2026-09-03T20:40:00+03:00",
   "qualification": {
     "matrix": "docs/QUALIFICATION.md",
     "owner_queue": "docs/OWNER_ACTIONS.md",
@@ -29,7 +29,7 @@
     "owner_actions": "docs/OWNER_ACTIONS.md item 10: release-cloud-core.ps1, install-device-service.ps1 (UAC, preserves endpoints), first real research from /research",
     "last_updated": "2026-09-03",
     "owner_run_2026_09_03": "Cloud Core release succeeded (0012/0013, health). Agent update FAILED silently: installer's inline swap refused by NTFS under running processes (same as the 2026-09-01 incident); fixed by wiring the installer through the journaled deployment engine with real runtime handlers, transcript, evidence block and fail-loud M13 assertion. 6b.1/6b.2 remain NOT_YET_PROVEN until the owner's rerun. UPDATE 18:xx: after the engine-based installer the owner's verify-device-service.ps1 reports 6b.1 and 6b.2 PROVEN_REAL (worker as the owner from the installed tree, Chrome available, 24 ops + browser.chrome agree). Next: item 11, real browser smoke through the owner path (scripts/browser/real-browser-smoke.ps1). Owner smoke (real-browser-smoke.ps1) PASSED on the real chain -> 9.2 PROVEN_REAL.",
-    "search_provider": "Google primary, DuckDuckGo fallback (owner decision 2026-09-03 evening): provider abstraction in services/browser/browser_agent/search_engines.py with evidence fields (requested_provider/provider/fallback/fallback_reason/query/result_count/attempts), Google organic parser, interstitial/consent detection (never answered), locale hl/gl from payload/--locale/user locale; Cloud Core records the evidence in research run events and discovered_by=browser_search:<provider>. Live from this address on 2026-09-03: Google served its 'unusual traffic' interstitial (network-level, after a day of probe traffic) -> fallback duckduckgo recorded; owner qualification item 12 pending (9.12)."
+    "search_provider": "Google primary, DuckDuckGo fallback (owner decision 2026-09-03 evening): provider abstraction in services/browser/browser_agent/search_engines.py with evidence fields (requested_provider/provider/fallback/fallback_reason/query/result_count/attempts), Google organic parser, interstitial/consent detection (never answered), locale hl/gl from payload/--locale/user locale; Cloud Core records the evidence in research run events and discovered_by=browser_search:<provider>. Live from this address on 2026-09-03: Google served its 'unusual traffic' interstitial (network-level, after a day of probe traffic) -> fallback duckduckgo recorded; owner qualification item 12 pending (9.12). Owner's first search-mode run hit a STALE installed worker (11:32 build; installer last ran 19:10, provider commit 19:52): no provider evidence, missing-property error - not a Google outcome. Fix: worker 0.2.0 with contracts {browser.search: 2} on hello/status, schema_version on results, Cloud Core SearchEvidence.contract_ok + CONTRACT MISMATCH event, smoke refuses a lower contract and -UpdateAgentFirst runs the journaled installer before qualifying."
   },
   "owner_actions_pending": [
     "M13 item 10 (ready): release the Cloud Core, update the Windows agent once (UAC), run the first real research from /research and give a verdict.",
