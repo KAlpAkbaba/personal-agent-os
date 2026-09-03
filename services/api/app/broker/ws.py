@@ -274,6 +274,16 @@ async def device_connect(websocket: WebSocket) -> None:
                 },
                 trace_id=None,
             )
+            # M13/app.devices §8: every hello is authoritative for what THIS
+            # device can do and which build it runs right now (DeviceCapabilities,
+            # DeviceHealth.software_version) — refreshed on every handshake, not
+            # just at enrollment.
+            service.apply_hello(
+                db,
+                device_id,
+                capabilities=hello.capabilities,
+                software_version=hello.software_version,
+            )
             return row.id
 
     session_id = await asyncio.to_thread(start_session)

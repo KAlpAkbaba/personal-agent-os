@@ -36,7 +36,15 @@ ALL_CHECKS = DEPENDENCY_CHECKS | {
     # M12 adds "voice_realtime" (capability-selected ConversationRealtime
     # provider + tool manifest; the simulator is always selectable offline).
     "voice_realtime",
+    # M13 adds "temporal_worker" (embedded-worker run state; "skipped", not
+    # "fail", when PAGENTOS_WORKER_MODE is not "embedded" — every test here)
+    # and "research" (synthesis-provider configuration posture; no I/O).
+    "temporal_worker",
+    "research",
 }
+# "skipped" (temporal_worker when worker_mode != embedded) is a legitimate
+# non-degraded status alongside "ok" — see app.main's degraded computation.
+NON_DEGRADED_STATUSES = ("ok", "skipped")
 
 
 def make_client(monkeypatch, checks: dict[str, dict]) -> TestClient:
@@ -69,9 +77,10 @@ def test_health_ok_shape(monkeypatch) -> None:
     assert body["status"] == "ok"
     assert body["version"] == __version__
     assert set(body["checks"].keys()) == ALL_CHECKS
-    for check in body["checks"].values():
-        assert check["status"] == "ok"
-        assert isinstance(check["latency_ms"], int | float)
+    for name, check in body["checks"].items():
+        assert check["status"] in NON_DEGRADED_STATUSES
+        if name != "temporal_worker":  # skipped in tests; carries no latency_ms
+            assert isinstance(check["latency_ms"], int | float)
 
 
 def test_health_broker_check_shape(monkeypatch) -> None:
@@ -148,3 +157,22 @@ def test_health_serves_the_realtime_contract_version() -> None:
     with TestClient(app) as client:
         doc = client.get("/v1/system/health").json()
     assert doc["checks"]["voice_realtime"]["contract_version"] == CONTRACT_VERSION == 2
+
+
+def test_health_temporal_worker_skipped_when_worker_mode_off(monkeypatch) -> None:
+    with make_client(monkeypatch, ALL_OK) as client:
+        response = client.get("/v1/system/health")
+    body = response.json()
+    assert body["status"] == "ok"  # "skipped" is not degraded
+    assert body["checks"]["temporal_worker"] == {
+        "status": "skipped", "mode": "off", "running": False,
+    }
+
+
+def test_health_research_check_reports_deterministic_by_default(monkeypatch) -> None:
+    with make_client(monkeypatch, ALL_OK) as client:
+        response = client.get("/v1/system/health")
+    research = response.json()["checks"]["research"]
+    assert research["status"] == "ok"
+    assert research["effective_synthesis"] == "deterministic"
+    assert research["providers_configured"]["deterministic"] is True

@@ -1,0 +1,15 @@
+[
+  "ignore (all|previous|prior) instructions",
+  "system prompt",
+  "reveal|print your (instructions|prompt|secrets)",
+  "execute|run (the|this) command",
+  "upload",
+  "install",
+  "change (the )?policy",
+  "you are now",
+  "as an ai",
+  "assistant:",
+  "önceki talimatları yok say",
+  "komutu çalıştır",
+  "şifreyi göster"
+]

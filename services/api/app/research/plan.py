@@ -9,7 +9,7 @@ browser, the network or a database.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from app.research.dates import RecencyWindow, default_window, parse_recency_window
 
@@ -59,13 +59,16 @@ def build_plan(
     now: datetime | None = None,
     source_classes: tuple[str, ...] = DEFAULT_SOURCE_CLASSES,
     max_sources_per_query: int = DEFAULT_MAX_SOURCES_PER_QUERY,
+    recency_days_override: int | None = None,
 ) -> ResearchPlan:
     """Build a deterministic research plan for ``topic``.
 
     The recency window is parsed out of the topic text itself (the owner's
     own phrasing, e.g. "son üç günde ..."); when the topic carries no
     recognizable Turkish relative-date phrase, :func:`app.research.dates.default_window`
-    (``DEFAULT_RECENCY_DAYS``) applies instead of guessing.
+    (``DEFAULT_RECENCY_DAYS``) applies instead of guessing. ``recency_days_override``
+    (REST ``recency_days``) is the owner's explicit, structured override and
+    always wins over both the parsed phrase and the default.
     """
     if not topic or not topic.strip():
         raise ValueError("topic must be a non-empty string")
@@ -76,9 +79,17 @@ def build_plan(
         now = now.replace(tzinfo=UTC)
 
     clean_topic = topic.strip()
-    window = parse_recency_window(clean_topic, now=now) or default_window(
-        now, days=DEFAULT_RECENCY_DAYS
-    )
+    if recency_days_override is not None:
+        if recency_days_override < 1:
+            raise ValueError("recency_days_override must be >= 1")
+        window = RecencyWindow(
+            start=now - timedelta(days=recency_days_override), end=now,
+            label=f"son {recency_days_override} gün", amount=recency_days_override, unit="day",
+        )
+    else:
+        window = parse_recency_window(clean_topic, now=now) or default_window(
+            now, days=DEFAULT_RECENCY_DAYS
+        )
     queries = tuple(
         dict.fromkeys(template.format(topic=clean_topic).strip() for template in _QUERY_TEMPLATES)
     )

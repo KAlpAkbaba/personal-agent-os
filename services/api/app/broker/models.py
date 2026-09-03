@@ -73,6 +73,12 @@ class Device(Base):
         String(16), nullable=False, default=DEVICE_STATUS_ENROLLED
     )
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # M13/app.devices: owner-set aliases/labels/policy ({"aliases": [...],
+    # "labels": [...], "policy": {...}}), never a machine literal in code.
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSONColumn, nullable=False, default=dict)
+    # Refreshed from every hello (ws.py); last known agent build, distinct from
+    # a single DeviceSession's software_version (which is per-connection history).
+    software_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class DeviceSession(Base):

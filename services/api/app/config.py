@@ -121,6 +121,35 @@ class Settings(BaseSettings):
     broker_default_command_timeout_s: float = 300.0
     broker_handshake_timeout_s: float = 10.0
 
+    # Devices layer (M13 track C, PROJECT_CONSTITUTION.md §11a). Presence is
+    # "online" (live WS) vs "stale" (recently seen but disconnected, within
+    # this gap) vs "offline"; selection only ever picks an "online" device.
+    device_presence_stale_after_s: float = 30.0
+
+    # M13 research pipeline (ADR-0050). Temporal worker mode: "off" (tests,
+    # default — nothing starts in-process), "embedded" (the API process runs
+    # the worker in-process; production compose, no separate worker
+    # container), "external" (the standalone `python -m app.worker`, unchanged).
+    worker_mode: str = "off"
+
+    # Synthesis providers (app.research.synthesis, M13_RESEARCH_SPEC.md §6).
+    # Deterministic is always available offline; OpenAI/Anthropic are inert
+    # (SynthesisNotConfiguredError, no I/O) without a key. `openai_api_key` is
+    # checked first, falling back to the already-installed
+    # `voice_openai_api_key` (same owner key, nothing new to install) — env
+    # vars PAGENTOS_OPENAI_API_KEY / PAGENTOS_ANTHROPIC_API_KEY per spec.
+    openai_api_key: str = ""
+    research_openai_model: str = "gpt-4o-mini"
+    research_openai_base_url: str = "https://api.openai.com/v1"
+    research_openai_timeout_s: float = 30.0
+    anthropic_api_key: str = ""
+    research_anthropic_model: str = "claude-3-5-haiku-20241022"
+    research_anthropic_base_url: str = "https://api.anthropic.com"
+    research_anthropic_timeout_s: float = 30.0
+    research_default_synthesis: str = "auto"
+    research_default_max_sources: int = 12
+    research_max_sources_ceiling: int = 30
+
     # Owner identity / API authentication (M9, ADR-0027).
     #
     # There is NO default credential. `identity_root_dir` holds the SHA-256 hash

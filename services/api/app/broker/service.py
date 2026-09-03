@@ -149,6 +149,95 @@ def touch_last_seen(session: Session, device_id: uuid.UUID) -> None:
         .execution_options(synchronize_session=False)
     )
     session.commit()
+    session.expire_all()  # an already-loaded Device in this session must see the refresh
+
+
+def apply_hello(
+    session: Session,
+    device_id: uuid.UUID,
+    *,
+    capabilities: list[str],
+    software_version: str,
+) -> None:
+    """Refresh capabilities_json/software_version from a fresh hello (M13 §8).
+
+    Every handshake is authoritative for what the device can do right now — a
+    device that lost the browser worker since its last connection must stop
+    being selected for browser.* capabilities, so this always overwrites
+    rather than merging.
+    """
+    session.execute(
+        update(Device)
+        .where(Device.id == device_id)
+        .values(capabilities_json=capabilities, software_version=software_version)
+        .execution_options(synchronize_session=False)
+    )
+    session.commit()
+    session.expire_all()  # an already-loaded Device in this session must see the refresh
+
+
+def update_device_metadata(
+    session: Session,
+    device_id: uuid.UUID,
+    *,
+    aliases: list[str] | None = None,
+    labels: list[str] | None = None,
+    policy: dict[str, Any] | None = None,
+    trace_id: str | None = None,
+) -> Device | None:
+    """Owner PATCH of aliases/labels/policy (app.devices). Merges by key; a
+    key the caller omits (None) is left as-is, an explicit [] / {} clears it."""
+    device = session.get(Device, device_id)
+    if device is None:
+        return None
+    current = dict(device.metadata_json or {})
+    if aliases is not None:
+        current["aliases"] = aliases
+    if labels is not None:
+        current["labels"] = labels
+    if policy is not None:
+        current["policy"] = policy
+    device.metadata_json = current
+    changed_keys = [
+        key
+        for key, value in (("aliases", aliases), ("labels", labels), ("policy", policy))
+        if value is not None
+    ]
+    record_audit_event(
+        session,
+        category=CATEGORY_DEVICE,
+        action="device_metadata_updated",
+        subject_ref=f"device:{device.id}",
+        device_id=device.id,
+        trace_id=trace_id,
+        metadata={"keys": changed_keys},
+    )
+    session.commit()
+    return device
+
+
+def recent_command_outcomes(
+    session: Session, device_id: uuid.UUID, *, limit: int = 5
+) -> list[DeviceCommand]:
+    """Last N terminal commands for a device, newest first (app.devices health)."""
+    return list(
+        session.execute(
+            select(DeviceCommand)
+            .where(
+                DeviceCommand.device_id == device_id,
+                DeviceCommand.status.in_(
+                    (
+                        COMMAND_STATUS_SUCCEEDED,
+                        COMMAND_STATUS_FAILED,
+                        COMMAND_STATUS_EXPIRED,
+                        COMMAND_STATUS_CANCELLED,
+                    )
+                ),
+            )
+            .order_by(DeviceCommand.terminal_at.desc())
+            .limit(limit)
+        ).scalars()
+    )
 
 
 # -------------------------------------------------------------------- sessions
@@ -303,6 +392,30 @@ def get_command(
     if command is None or command.device_id != device_id:
         return None
     return command
+
+
+def pending_undelivered_commands(
+    session: Session, device_ids: list[uuid.UUID]
+) -> list[DeviceCommand]:
+    """PENDING (never delivered), non-expired commands for the given devices.
+
+    Used by the sweeper (BrokerRuntime._sweep_loop) so a command row created
+    by ANOTHER process while this device happens to be connected here is
+    still delivered within one sweep interval, not only on the device's next
+    (re)connect (M13 spec §5: "the broker sweep ... now also delivers
+    pending, undelivered commands to connected devices every sweep interval").
+    """
+    if not device_ids:
+        return []
+    return list(
+        session.execute(
+            select(DeviceCommand).where(
+                DeviceCommand.device_id.in_(device_ids),
+                DeviceCommand.status == COMMAND_STATUS_PENDING,
+                DeviceCommand.expires_at > utcnow(),
+            )
+        ).scalars()
+    )
 
 
 def deliverable_commands(session: Session, device_id: uuid.UUID) -> list[DeviceCommand]:

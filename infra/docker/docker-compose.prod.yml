@@ -125,6 +125,11 @@ services:
       PAGENTOS_WEB_ORIGINS: ${PAGENTOS_WEB_ORIGINS:-[]}
       # Bootstrap runs ONCE, from the host itself, through this loopback-only guard.
       PAGENTOS_IDENTITY_BOOTSTRAP_LOOPBACK_ONLY: "true"
+      # M13/ADR-0050 §9: production runs no separate worker container, and the
+      # browser-research fetch path needs this process's own BrokerRuntime for
+      # immediate device-command delivery anyway — so the Temporal worker runs
+      # embedded, in-process. Tests default to PAGENTOS_WORKER_MODE=off.
+      PAGENTOS_WORKER_MODE: embedded
     volumes:
       # ADR-0027: the owner-credential hash lives OUTSIDE the database and OUTSIDE the
       # image, on the persistent volume, so neither a DB restore nor an image rebuild
