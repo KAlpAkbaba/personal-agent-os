@@ -25,6 +25,7 @@ const ALL_STAGES = [
   "planned",
   "selecting_device",
   "discovering",
+  "waiting_for_owner_verification",
   "fetching",
   "ranking",
   "synthesizing",
@@ -47,6 +48,7 @@ describe("stage labels", () => {
     expect(stageLabel("failed")).toBe("Başarısız");
     expect(stageLabel("cancelled")).toBe("İptal edildi");
     expect(stageLabel("selecting_device")).toBe("Cihaz seçiliyor");
+    expect(stageLabel("waiting_for_owner_verification")).toBe("Sahibin doğrulaması bekleniyor");
   });
 
   it("falls back for unknown or missing stages", () => {
@@ -63,6 +65,10 @@ describe("stage labels", () => {
     expect(isTerminal({ stage: "persisting", status: "READY" })).toBe(true);
     expect(isTerminal({ stage: "fetching", status: "FAILED" })).toBe(true);
     expect(isTerminal({ stage: null, status: "PLANNED" })).toBe(false);
+    // waiting_for_owner_verification is NOT terminal (spec §5a): polling
+    // continues through it while the owner clears the interstitial.
+    expect(TERMINAL_STAGES.has("waiting_for_owner_verification")).toBe(false);
+    expect(isTerminal({ stage: "waiting_for_owner_verification", status: "RUNNING" })).toBe(false);
   });
 });
 

@@ -168,6 +168,7 @@ export type ResearchStage =
   | "planned"
   | "selecting_device"
   | "discovering"
+  | "waiting_for_owner_verification"
   | "fetching"
   | "ranking"
   | "synthesizing"
@@ -180,6 +181,7 @@ export const STAGE_LABEL: Record<ResearchStage, string> = {
   planned: "Planlandı",
   selecting_device: "Cihaz seçiliyor",
   discovering: "Kaynaklar keşfediliyor",
+  waiting_for_owner_verification: "Sahibin doğrulaması bekleniyor",
   fetching: "Sayfalar Chrome ile getiriliyor",
   ranking: "Kaynaklar sıralanıyor",
   synthesizing: "Rapor yazılıyor",
@@ -225,6 +227,9 @@ export type ResearchProgress = {
   fetch_done?: number;
   fetch_failed?: number;
   evidence?: number;
+  /** Set while stage === "waiting_for_owner_verification" (spec §5a); cleared once discovery resumes. */
+  verification_url?: string | null;
+  verification_provider?: string | null;
 };
 
 export type ResearchEvent = { at: string; stage: string; detail?: string | null };

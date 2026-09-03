@@ -112,4 +112,37 @@ describe("ProgressPanel", () => {
     expect(html).toContain("Kaynaklar sıralanıyor…");
     expect(html).toContain("Durum alınamadı, yeniden denenecek: ağ koptu");
   });
+
+  it("shows a prominent Turkish notice while waiting for the owner and keeps polling", () => {
+    const html = renderToStaticMarkup(
+      <ProgressPanel
+        task={taskAt("waiting_for_owner_verification", {
+          progress: {
+            queries_total: 9, queries_done: 4, discovered: 12, fetch_total: 12, fetch_done: 3,
+            fetch_failed: 1, evidence: 2, verification_url: "https://www.google.com/sorry/index",
+          },
+        })}
+        onCancel={noop}
+      />,
+    );
+    expect(html).toContain('data-stage="waiting_for_owner_verification"');
+    // Not terminal: the cancel button and the "…" progress suffix both stay.
+    expect(html).toContain('data-terminal="no"');
+    expect(html).toContain("Sahibin doğrulaması bekleniyor…");
+    expect(html).toContain("İptal et");
+    expect(html).toContain(
+      "Google bir doğrulama sayfası gösterdi. Chrome penceresi öne getirildi; sayfayı " +
+        "tamamlayın, araştırma otomatik olarak devam eder.",
+    );
+    expect(html).toContain('href="https://www.google.com/sorry/index"');
+    expect(html).toContain("Doğrulama sayfasını aç");
+  });
+
+  it("omits the verification link when the run has not surfaced one yet", () => {
+    const html = renderToStaticMarkup(
+      <ProgressPanel task={taskAt("waiting_for_owner_verification")} onCancel={noop} />,
+    );
+    expect(html).toContain("Google bir doğrulama sayfası gösterdi");
+    expect(html).not.toContain("Doğrulama sayfasını aç");
+  });
 });

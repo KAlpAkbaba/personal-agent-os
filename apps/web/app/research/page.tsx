@@ -150,6 +150,10 @@ function ResearchSurface() {
         target_device: deviceValue || null,
         recency_days: clampRecencyDays(recencyDays),
         max_sources: clampMaxSources(maxSources),
+        // Owner-handoff mode (spec §5a): the web page is always attended, so
+        // a Google interstitial brings Chrome to the front instead of
+        // silently falling back to DuckDuckGo.
+        interactive: true,
       });
       setActive({
         task_id: started.task_id,

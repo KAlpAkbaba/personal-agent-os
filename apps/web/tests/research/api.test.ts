@@ -54,6 +54,15 @@ describe("startResearch", () => {
     expect(JSON.parse(init.body as string)).toEqual({ input: "konu" });
   });
 
+  it("sends interactive (owner-handoff mode) only when explicitly set", async () => {
+    apiFetch.mockResolvedValueOnce(json(202, { task_id: "t1", status: "planned", device: null }));
+    await startResearch({ input: "konu", interactive: true, interactive_wait_s: 120 });
+    const [, init] = apiFetch.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({
+      input: "konu", interactive: true, interactive_wait_s: 120,
+    });
+  });
+
   it("turns a 409 no_capable_device into a typed error with the Turkish detail explained", async () => {
     apiFetch.mockResolvedValueOnce(
       json(409, { detail: "browser.chrome yeteneğine sahip çevrimiçi cihaz yok." }),
