@@ -143,6 +143,41 @@ undelivered commands to connected devices every sweep interval. The Temporal wor
 `off` in tests, `external` = the existing `python -m app.worker`), because the production
 compose has no worker container and the browser path needs the broker runtime anyway.
 
+## 5a. Persistent research browser session and owner handoff (2026-09-03)
+
+Experience: owner asks → Chrome opens once → Google searches visibly in the real page →
+PagentOS opens and reads sources in tabs → the synthesis returns → the Chrome session closes
+when the job finishes.
+
+- **One session per job**: `session_id` = task id; `DeviceBrowserGateway` opens it once per
+  process (a known-open cache keyed by device+session, invalidated by an "unknown session"
+  answer, then re-opened once); every discover/fetch activity reuses it; `close_session` runs
+  at the end (and on failure/cancel). No per-query bootstrap.
+- **Google through the UI**: `browser.search` with `engine=auto` (Google first) drives the real
+  page (contract §3a); sources are fetched with `fetch_evidence tab=new` so the results tab
+  stays loaded.
+- **Speed**: DOM/navigation readiness instead of fixed sleeps on the device; the command poll
+  on Cloud Core starts at 0.2 s and backs off to 1 s; identical (query, provider) searches
+  within a job are served from the run's stored candidates instead of re-searching; audit and
+  events are written off the interactive path (after the result is known, never before).
+- **Owner handoff**: `POST /v1/research {"interactive": true}` (the web page sets it; the CLI
+  runner has `--interactive`) selects `interstitial=handoff`. When a search returns
+  `state=waiting_for_owner_verification`, the run enters stage
+  `waiting_for_owner_verification` (new stage value, migration `0014`) with an event naming
+  the provider, the page kind and `verification_url`; the workflow then loops
+  `await_verification` (`browser.wait for=verification_cleared`, ≤ 60 s per command, with
+  heartbeats) until cleared or the interactive budget (`interactive_wait_s`, default 600 s)
+  is spent. Cleared → the same search is re-issued (`path=handoff_cleared`) and the stage
+  returns to `discovering`. Budget spent → the policy fallback (`interstitial=fallback`,
+  DuckDuckGo) with `path=handoff_timeout_fallback`. Unattended runs (`interactive=false`) use
+  the fallback path immediately (`path=fallback`). The chosen path is recorded per query in
+  the run's events and in `research_candidates.discovered_by` (`browser_search:<provider>`).
+- **UI**: stage label "Sahibin doğrulaması bekleniyor" with the explanation that Chrome has
+  been brought to the front and the research continues automatically once the page is
+  completed; no button is needed.
+- **Boundaries unchanged**: risk policy READ+NAVIGATE, installed-worker proof, command/trace
+  correlation, idempotency keys per step and attempt, forbidden-key scan, destination policy.
+
 ## 6. Synthesis providers
 
 `SynthesisProvider.synthesize(plan, evidence) -> ResearchReport`:

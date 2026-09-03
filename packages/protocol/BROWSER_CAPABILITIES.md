@@ -194,6 +194,47 @@ paraphrase; `injection_markers` counts instruction-like patterns found in the pa
 
 `browser.worker_status` → `{"worker_version":"…","browser":{"channel":"chrome","version":"…","alive":true},"sessions":[{"session_id","tabs","idle_s"}],"uptime_s":…}`.
 
+## 3a. Persistent research session, Google through the real UI, owner handoff (contract v1.1)
+
+One browser session per research job: Cloud Core opens the session once (`session_id` =
+task id), reuses it for every search, navigation, inspection and extraction of that job, and
+closes it when the job finishes; a consumer that sees `validation_error` "unknown session"
+re-opens once and retries. The worker keeps the loaded Google results tab and the profile
+(cookies, locale, consent) between commands and between normal runs; nothing is spoofed or
+masked (no stealth plugins, no fingerprint or webdriver masking, no CAPTCHA solving).
+
+`browser.search` for `google` drives the real page: the worker navigates to Google's home
+page the first time (or reuses the already loaded results tab afterwards), types the query
+into the search box (`role=combobox`), submits it, waits for the results region
+(`#search`/`#rso`) or an interstitial — readiness is a DOM/navigation condition, never a
+fixed sleep — and parses the organic results (§3). `recency_days` is applied to the loaded
+results page as Google's own time filter. Every other engine keeps its results URL.
+
+Payload additions: `"interstitial": "fallback" | "handoff"` (default `fallback`). Result
+additions: `"state": "ok" | "waiting_for_owner_verification"`, `"path"`:
+`google_ui | google_url | fallback | handoff_pending | handoff_cleared | handoff_timeout_fallback`,
+`"verification_url"` (when waiting).
+
+- `fallback` (unattended): an interstitial (`captcha` = Google's unusual-traffic page,
+  `consent`, `blocked`) is recorded as the attempt's outcome and the next provider is tried
+  (§3), `path=fallback`.
+- `handoff` (owner present): on an interstitial the worker brings the Chrome window to the
+  foreground (`bring_to_front`), leaves the page exactly as it is, and returns a SUCCESSFUL
+  command with `state=waiting_for_owner_verification`, `page_kind=captcha|consent`,
+  `provider=null`, `results=[]`, `path=handoff_pending`. Nothing is retried in a loop and
+  nothing is solved: the owner completes the page by hand.
+
+`browser.wait` gains `"for": "verification_cleared"` (READ): polls the current page of the
+session every ~500 ms until it is no longer an interstitial (URL off `/sorry/` and
+`consent.google.*`, results region or a normal page present) or `timeout_ms` elapses →
+`{"satisfied": true|false, "url": …, "elapsed_ms": …}`. After `satisfied: true` the consumer
+re-issues the same `browser.search`; the worker parses the already loaded results page when
+its query matches (`path=handoff_cleared`), otherwise types the query again.
+
+`browser.fetch_evidence` gains `"tab": "same" | "new"` (default `same`): `new` opens the URL in
+a new tab, extracts there, closes that tab and reselects the previous one, so the Google
+results tab stays loaded for the next search; the result carries `"tab_used"`.
+
 ## 4. Risk classes and enforcement
 
 `READ` (inspect, find, wait, extract, snapshot, screenshot, worker_status) ·
