@@ -11,16 +11,18 @@ namespace PagentOS.DeviceService;
 /// Two families ride the same pipe (DEVICE_PROTOCOL.md §6, §6a, §6b):
 /// <list type="bullet">
 /// <item><c>desktop.*</c> — always routed; per-command cap 60 s (M1 behaviour, unchanged).</item>
-/// <item><c>browser.*</c> — routed only when <c>BrowserEnabled</c> is configured, otherwise
-/// refused here with <c>capability_missing</c> before the companion is consulted; per-command
-/// cap 120 s (BROWSER_CAPABILITIES.md §3), because a real navigation plus extraction on a
-/// slow site is legitimately longer than opening Notepad.</item>
+/// <item><c>browser.*</c> — routed only when <c>BrowserEnabled</c> is configured AND the name
+/// is one of the contract's operations (BROWSER_CAPABILITIES.md §1); anything else in the
+/// namespace is refused here with <c>capability_missing</c> before the companion is
+/// consulted, so an unknown operation never crosses the pipe. Per-command cap 120 s (§3),
+/// because a real navigation plus extraction on a slow site is legitimately longer than
+/// opening Notepad.</item>
 /// </list>
 /// The "no companion connected → <c>dependency_unavailable</c>, retryable" rule belongs to
 /// the pipe server and applies to both families.
 /// </summary>
 public sealed class InteractiveCapabilityExecutor(
-    CompanionPipeServer pipeServer,
+    ICompanionCapabilityTransport pipeServer,
     TimeProvider? timeProvider = null,
     bool browserEnabled = false) : ICapabilityExecutor
 {
@@ -61,6 +63,18 @@ public sealed class InteractiveCapabilityExecutor(
                 throw new CapabilityException(
                     ErrorClasses.CapabilityMissing,
                     $"capability '{command.Capability}' is not enabled on this device (BrowserEnabled=false)",
+                    retryable: false);
+            }
+
+            if (!BrowserCapabilities.IsOperation(command.Capability))
+            {
+                // The family marker and any made-up name: refused on the service side so the
+                // pipe only ever carries names the contract defines. The companion and the
+                // worker host repeat this check (defence in depth), but this is the first
+                // trust boundary the command meets on the device.
+                throw new CapabilityException(
+                    ErrorClasses.CapabilityMissing,
+                    $"capability '{command.Capability}' is not a browser operation this device knows (BROWSER_CAPABILITIES.md §1)",
                     retryable: false);
             }
         }

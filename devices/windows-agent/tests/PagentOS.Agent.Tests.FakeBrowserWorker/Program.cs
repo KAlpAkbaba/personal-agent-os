@@ -10,7 +10,16 @@ namespace PagentOS.Agent.Tests.FakeBrowserWorker;
 /// of BROWSER_CAPABILITIES.md §7 and nothing else. It needs no Python, no Playwright and
 /// no browser, so the companion's <c>BrowserWorkerHost</c> can be driven over REAL stdin/
 /// stdout in the unit suite: hello, exec/result correlation, typed errors, timeouts,
-/// cancel forwarding, crashes mid-request, oversize and forbidden results, pings, shutdown.
+/// cancel forwarding, crashes mid-request, oversize and forbidden results, pings, shutdown,
+/// hostile stderr and a flooded stdout.
+///
+/// Like the real worker (§7, last clause) it executes requests concurrently across sessions
+/// but SERIALLY within one <c>session_id</c>: a request queues behind the previous one on
+/// the same session, and a request without a session runs at once.
+///
+/// Every exec is acknowledged on stderr (<c>fake-worker: exec capability=… request_id=…</c>)
+/// before it is handled, so a test can prove from the companion log which requests reached
+/// the worker — and which never did.
 ///
 /// Behaviour is chosen by the request payload's <c>mode</c> field (default: echo) and by a
 /// few process flags, so one binary covers every scenario:
@@ -28,6 +37,7 @@ public static class Program
 {
     private static readonly object StdoutLock = new();
     private static readonly ConcurrentDictionary<string, CancellationTokenSource> InFlight = new(StringComparer.Ordinal);
+    private static readonly ConcurrentDictionary<string, Task> SessionTails = new(StringComparer.Ordinal);
 
     public static async Task<int> Main(string[] args)
     {
@@ -109,7 +119,7 @@ public static class Program
             switch (message["type"]?.GetValue<string>())
             {
                 case "exec":
-                    _ = Task.Run(() => HandleExecAsync(stdout, message));
+                    await EnqueueExecAsync(stdout, message);
                     break;
 
                 case "cancel":
@@ -141,16 +151,43 @@ public static class Program
         }
     }
 
-    private static async Task HandleExecAsync(StreamWriter stdout, JsonObject message)
+    /// <summary>
+    /// Registers the request as in flight (so a cancel that arrives while it is still queued
+    /// is honoured), then runs it: at once when it carries no session, otherwise after the
+    /// previous request on the same session has finished.
+    /// </summary>
+    private static async Task EnqueueExecAsync(StreamWriter stdout, JsonObject message)
     {
         var requestId = message["request_id"]?.GetValue<string>() ?? Guid.NewGuid().ToString("N");
         var capability = message["capability"]?.GetValue<string>() ?? "";
         var payload = message["payload"] as JsonObject ?? new JsonObject();
+        var sessionId = payload["session_id"]?.GetValue<string>();
+
+        await Console.Error.WriteLineAsync($"fake-worker: exec capability={capability} request_id={requestId} session={sessionId ?? "-"}");
+
+        var cts = new CancellationTokenSource();
+        InFlight[requestId] = cts;
+
+        if (string.IsNullOrEmpty(sessionId))
+        {
+            _ = Task.Run(() => HandleExecAsync(stdout, message, requestId, capability, payload, cts));
+            return;
+        }
+
+        var tail = SessionTails.AddOrUpdate(
+            sessionId,
+            _ => Task.Run(() => HandleExecAsync(stdout, message, requestId, capability, payload, cts)),
+            (_, previous) => previous.ContinueWith(
+                _ => HandleExecAsync(stdout, message, requestId, capability, payload, cts),
+                TaskContinuationOptions.ExecuteSynchronously).Unwrap());
+        _ = tail;
+    }
+
+    private static async Task HandleExecAsync(StreamWriter stdout, JsonObject message, string requestId, string capability, JsonObject payload, CancellationTokenSource cts)
+    {
         var timeoutMs = message["timeout_ms"]?.GetValue<int>() ?? 0;
         var mode = payload["mode"]?.GetValue<string>() ?? "echo";
 
-        using var cts = new CancellationTokenSource();
-        InFlight[requestId] = cts;
         try
         {
             if (!BrowserCapabilities.IsOperation(capability))
@@ -206,8 +243,61 @@ public static class Program
                     }));
                     return;
 
+                case "forbidden_nested":
+                    // The key sits three levels down, inside an array of objects inside an
+                    // array — where a shallow scan would not look.
+                    var nestedKey = payload["key"]?.GetValue<string>() ?? "api-key";
+                    WriteLine(stdout, Success(requestId, new JsonObject
+                    {
+                        ["links"] = new JsonArray(
+                            new JsonObject { ["href"] = "https://example.org/", ["text"] = "fine" },
+                            new JsonObject
+                            {
+                                ["href"] = "https://example.org/2",
+                                ["attrs"] = new JsonArray(new JsonArray(new JsonObject { [nestedKey] = "leak" })),
+                            }),
+                    }));
+                    return;
+
                 case "unknown_class":
                     WriteLine(stdout, Failure(requestId, "made_up_class", "not in the taxonomy", retryable: false));
+                    return;
+
+                case "stderr":
+                    // Say whatever the test wants on stderr (the worker's log channel),
+                    // then answer normally.
+                    if (payload["lines"] is JsonArray lines)
+                    {
+                        foreach (var node in lines)
+                        {
+                            await Console.Error.WriteLineAsync(node?.GetValue<string>() ?? string.Empty);
+                        }
+
+                        await Console.Error.FlushAsync();
+                    }
+
+                    break;
+
+                case "longline":
+                    // Flood the protocol channel: one stdout line of N bytes that is not a
+                    // message, then never answer. The host must not buffer it.
+                    var lineBytes = payload["bytes"]?.GetValue<int>() ?? (1024 * 1024);
+                    lock (StdoutLock)
+                    {
+                        var block = new string('x', 64 * 1024);
+                        var written = 0;
+                        while (written < lineBytes)
+                        {
+                            var chunk = Math.Min(block.Length, lineBytes - written);
+                            stdout.Write(block.AsSpan(0, chunk));
+                            written += chunk;
+                        }
+
+                        stdout.WriteLine();
+                        stdout.Flush();
+                    }
+
+                    await Task.Delay(Timeout.Infinite, cts.Token);
                     return;
 
                 default:
@@ -221,9 +311,14 @@ public static class Program
                 ["timeout_ms_seen"] = timeoutMs,
             }));
         }
+        catch (OperationCanceledException)
+        {
+            WriteLine(stdout, Failure(requestId, ErrorClasses.Cancelled, "cancelled by companion", retryable: false));
+        }
         finally
         {
             InFlight.TryRemove(requestId, out _);
+            cts.Dispose();
         }
     }
 

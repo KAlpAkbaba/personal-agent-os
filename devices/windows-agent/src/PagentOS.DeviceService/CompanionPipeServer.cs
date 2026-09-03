@@ -40,7 +40,7 @@ namespace PagentOS.DeviceService;
 /// audit trail, where the owner can see it and an attacker cannot.
 /// </summary>
 [SupportedOSPlatform("windows")]
-public sealed class CompanionPipeServer : BackgroundService
+public sealed class CompanionPipeServer : BackgroundService, ICompanionCapabilityTransport
 {
     private static readonly TimeSpan HandshakeTimeout = TimeSpan.FromSeconds(10);
 

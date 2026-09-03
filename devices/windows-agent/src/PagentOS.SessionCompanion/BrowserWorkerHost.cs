@@ -19,10 +19,13 @@ namespace PagentOS.SessionCompanion;
 /// down and then killed when the companion stops.
 ///
 /// The host is a transport, not a judge: it never looks at a payload or a result beyond the
-/// three checks the contract puts on this side — the result size cap, the forbidden-key
-/// scan (session material never crosses the pipe), and that an error class is one the
-/// device taxonomy knows. Everything else the worker says is passed through typed, and the
-/// worker's stderr goes to the companion log, never into a result.
+/// checks the contract puts on this side — the operation allowlist (only §1 names are ever
+/// written to the worker), the result size cap, the forbidden-key scan (session material
+/// never crosses the pipe, under the same normalised rule the worker applies), that an
+/// error class is one the device taxonomy knows, and a ceiling on one stdout line so the
+/// worker cannot exhaust the companion. Everything else the worker says is passed through
+/// typed, and the worker's stderr goes to the companion log — sanitised, never into a
+/// result.
 ///
 /// Concurrency: requests run concurrently (the worker serialises per session itself);
 /// <c>request_id</c> correlates a result with its request, and a single writer lock keeps
@@ -37,6 +40,22 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
     private const string AuditWorkerExited = "browser_worker_exited";
     private const int LivenessMissedPongs = 3;
 
+    /// <summary>
+    /// After this many consecutive failed starts / unexpected exits an eager host stops
+    /// restarting the worker in the background (it still restarts on the next explicit
+    /// request). Without a ceiling a worker that dies on every start would be respawned
+    /// forever, once a minute, for as long as the companion lives.
+    /// </summary>
+    public const int DefaultEagerRestartCeiling = 10;
+
+    /// <summary>
+    /// The longest stdout line the host will assemble: a protocol message is one result
+    /// (≤ <see cref="BrowserCapabilities.MaxResultBytes"/>) plus its envelope, so four
+    /// times the cap is generous for anything legitimate and small enough that one bad
+    /// line cannot take the companion — and with it desktop and voice — down.
+    /// </summary>
+    public const int MaxStdoutLineBytes = 4 * BrowserCapabilities.MaxResultBytes;
+
     private readonly BrowserWorkerOptions _options;
     private readonly ILogger _logger;
     private readonly AuditLog? _audit;
@@ -44,11 +63,13 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
     private readonly TimeSpan _helloTimeout;
     private readonly TimeSpan _pingInterval;
     private readonly TimeSpan _shutdownGrace;
+    private readonly int _eagerRestartCeiling;
     private readonly SemaphoreSlim _startLock = new(1, 1);
     private readonly CancellationTokenSource _lifetime = new();
 
     private WorkerProcess? _worker;
     private int _consecutiveFailures;
+    private int _eagerRestartSuspended;
     private DateTimeOffset? _lastExitAt;
     private volatile bool _stopping;
     private int _starts;
@@ -56,6 +77,7 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
     private int _pingsSent;
     private int _pongsReceived;
     private int _livenessKills;
+    private int _oversizeLineKills;
 
     public BrowserWorkerHost(
         BrowserWorkerOptions options,
@@ -64,7 +86,8 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
         BackoffPolicy? restartBackoff = null,
         TimeSpan? helloTimeout = null,
         TimeSpan? pingInterval = null,
-        TimeSpan? shutdownGrace = null)
+        TimeSpan? shutdownGrace = null,
+        int? eagerRestartCeiling = null)
     {
         _options = options;
         _logger = logger;
@@ -73,6 +96,7 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
         _helloTimeout = helloTimeout ?? TimeSpan.FromSeconds(20);
         _pingInterval = pingInterval ?? TimeSpan.FromSeconds(15);
         _shutdownGrace = shutdownGrace ?? TimeSpan.FromSeconds(5);
+        _eagerRestartCeiling = Math.Max(1, eagerRestartCeiling ?? DefaultEagerRestartCeiling);
     }
 
     public BrowserWorkerOptions Options => _options;
@@ -102,6 +126,17 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
     public int PongsReceived => Volatile.Read(ref _pongsReceived);
 
     public int LivenessKills => Volatile.Read(ref _livenessKills);
+
+    /// <summary>Workers killed for writing a stdout line longer than <see cref="MaxStdoutLineBytes"/>.</summary>
+    public int OversizeLineKills => Volatile.Read(ref _oversizeLineKills);
+
+    /// <summary>Consecutive failed starts / unexpected exits since the last successful request.</summary>
+    public int ConsecutiveFailures => Volatile.Read(ref _consecutiveFailures);
+
+    public int EagerRestartCeiling => _eagerRestartCeiling;
+
+    /// <summary>True while eager background restarts are suspended (ceiling reached); an explicit request lifts it by succeeding.</summary>
+    public bool EagerRestartSuspended => Volatile.Read(ref _eagerRestartSuspended) == 1;
 
     /// <summary>Eager start: spawn the worker now and wait for its hello. Failures are logged, never thrown — the next request retries.</summary>
     public async Task StartAsync(CancellationToken cancellationToken)
@@ -138,6 +173,18 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
                 retryable: false);
         }
 
+        if (!BrowserCapabilities.IsOperation(capability))
+        {
+            // Allowlist before anything is written to the worker's stdin — and before a
+            // lazy worker is even started for it. The worker refuses unknown names too, but
+            // the companion is the higher-assurance side of that pipe and must not depend
+            // on the child to do its filtering.
+            var reason = string.Equals(capability, BrowserCapabilities.Family, StringComparison.Ordinal)
+                ? $"'{BrowserCapabilities.Family}' is the family marker, not an operation"
+                : $"'{capability}' is not a browser operation this companion knows (BROWSER_CAPABILITIES.md §1); nothing was sent to the worker";
+            throw new CapabilityException(ErrorClasses.CapabilityMissing, reason, retryable: false);
+        }
+
         if (_stopping)
         {
             throw new CapabilityException(ErrorClasses.DependencyUnavailable, "the session companion is stopping", retryable: true);
@@ -152,6 +199,7 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
             var result = await ExecuteOnWorkerAsync(worker, requestId, capability, payload, timeout, cancellationToken).ConfigureAwait(false);
             worker.SawSuccess = true;
             Interlocked.Exchange(ref _consecutiveFailures, 0);
+            Interlocked.Exchange(ref _eagerRestartSuspended, 0);
             AuditRequest(capability, requestId, "ok", stopwatch.ElapsedMilliseconds, retryable: null);
             return result;
         }
@@ -277,7 +325,10 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
         return result;
     }
 
-    /// <summary>§6(b): any key containing a forbidden fragment, case-insensitively, at any depth.</summary>
+    /// <summary>
+    /// §6(b): any key that <see cref="BrowserCapabilities.IsForbiddenKey"/> refuses — the
+    /// normalised-substring rule the worker applies — at any depth, arrays included.
+    /// </summary>
     public static string? FindForbiddenKey(JsonNode? node, string path = "$")
     {
         switch (node)
@@ -285,12 +336,9 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
             case JsonObject obj:
                 foreach (var pair in obj)
                 {
-                    foreach (var fragment in BrowserCapabilities.ForbiddenResultKeyFragments)
+                    if (BrowserCapabilities.IsForbiddenKey(pair.Key))
                     {
-                        if (pair.Key.Contains(fragment, StringComparison.OrdinalIgnoreCase))
-                        {
-                            return $"{path}.{pair.Key}";
-                        }
+                        return $"{path}.{pair.Key}";
                     }
 
                     var nested = FindForbiddenKey(pair.Value, $"{path}.{pair.Key}");
@@ -522,11 +570,14 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
         Interlocked.CompareExchange(ref _worker, null, worker);
 
         var pending = worker.Pending.Count;
+        var exitText = worker.KillReason is { } killReason
+            ? $"the browser worker was killed by the companion ({killReason})"
+            : $"the browser worker exited (code {exitCode?.ToString(CultureInfo.InvariantCulture) ?? "?"})";
         foreach (var pair in worker.Pending)
         {
             pair.Value.TrySetException(new CapabilityException(
                 ErrorClasses.DependencyUnavailable,
-                $"the browser worker exited (code {exitCode?.ToString(CultureInfo.InvariantCulture) ?? "?"}) while this request was in flight; it is being restarted",
+                $"{exitText} while this request was in flight; it is being restarted",
                 retryable: true));
         }
 
@@ -556,6 +607,22 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
 
         if (unexpected && _options.Eager && !_lifetime.IsCancellationRequested)
         {
+            var failures = Volatile.Read(ref _consecutiveFailures);
+            if (failures >= _eagerRestartCeiling)
+            {
+                // Ceiling: stop spending process starts on a worker that cannot stay up.
+                // Logged once per episode; the next explicit request still tries (through
+                // the backoff), and a success re-arms eager restarts.
+                if (Interlocked.Exchange(ref _eagerRestartSuspended, 1) == 0)
+                {
+                    _logger.LogWarning(
+                        "browser worker failed {Failures} times in a row; eager background restarts are suspended until a browser request succeeds (it is still started on the next request)",
+                        failures);
+                }
+
+                return;
+            }
+
             // An eager worker is kept warm: restart in the background, through the same
             // backoff, so the next request finds it up instead of paying the start cost.
             _ = Task.Run(async () =>
@@ -574,11 +641,33 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
 
     private async Task ReadStdoutAsync(WorkerProcess worker)
     {
+        var reader = new BoundedLineReader(worker.StdoutStream, MaxStdoutLineBytes);
         try
         {
             while (true)
             {
-                var line = await worker.Stdout.ReadLineAsync(CancellationToken.None).ConfigureAwait(false);
+                string? line;
+                try
+                {
+                    line = await reader.ReadLineAsync(CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (LineTooLongException ex)
+                {
+                    // The protocol channel is being flooded. Whatever the worker meant, the
+                    // companion will not buffer it: kill the whole tree, let the exit path
+                    // fail every in-flight request dependency_unavailable (retryable) and
+                    // count it as a failure for the restart backoff.
+                    _logger.LogError(
+                        "browser worker (pid={Pid}) wrote a stdout line over {Max} bytes ({Seen}+ seen); killing it — in-flight requests fail dependency_unavailable and it is restarted",
+                        worker.Pid,
+                        ex.MaxLineBytes,
+                        ex.SeenBytes);
+                    Interlocked.Increment(ref _oversizeLineKills);
+                    worker.KillReason = $"stdout line over {ex.MaxLineBytes} bytes";
+                    worker.Kill();
+                    return;
+                }
+
                 if (line is null)
                 {
                     return;
@@ -651,8 +740,8 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
             case BrowserWorkerMessageTypes.Log:
                 _logger.LogInformation(
                     "browser worker log [{Level}]: {Event}",
-                    message["level"]?.GetValue<string>() ?? "info",
-                    message["event"]?.GetValue<string>() ?? "-");
+                    WorkerLogSanitizer.Sanitize(message["level"]?.GetValue<string>() ?? "info"),
+                    WorkerLogSanitizer.Sanitize(message["event"]?.GetValue<string>() ?? "-"));
                 break;
 
             default:
@@ -675,8 +764,10 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
 
                 if (line.Length > 0)
                 {
-                    // The worker's log is the companion's log. Never a result.
-                    _logger.LogInformation("browser worker stderr: {Line}", line);
+                    // The worker's log is the companion's log — after the sanitiser: no
+                    // query strings, no "key: value" credential lines, no unbounded lines.
+                    // Never a result.
+                    _logger.LogInformation("browser worker stderr: {Line}", WorkerLogSanitizer.Sanitize(line));
                 }
             }
         }
@@ -705,6 +796,7 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
                         worker.Pid,
                         worker.OutstandingPings);
                     Interlocked.Increment(ref _livenessKills);
+                    worker.KillReason = $"missed {worker.OutstandingPings} consecutive pings";
                     worker.Kill();
                     return;
                 }
@@ -791,15 +883,20 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
             Pid = process.Id;
             _stdin = process.StandardInput;
             _stdin.AutoFlush = true;
-            Stdout = process.StandardOutput;
+            // The raw byte stream, not the StreamReader: the host reads it through a
+            // BoundedLineReader so one line can never grow without limit.
+            StdoutStream = process.StandardOutput.BaseStream;
             Stderr = process.StandardError;
         }
 
         public int Pid { get; }
 
-        public StreamReader Stdout { get; }
+        public Stream StdoutStream { get; }
 
         public StreamReader Stderr { get; }
+
+        /// <summary>Why the companion killed this worker, when it did; null for a worker that exited on its own.</summary>
+        public volatile string? KillReason;
 
         public ConcurrentDictionary<string, TaskCompletionSource<JsonObject>> Pending { get; } = new(StringComparer.Ordinal);
 
