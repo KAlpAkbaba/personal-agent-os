@@ -162,3 +162,27 @@ def test_healthiest_tie_break_prefers_more_recently_seen() -> None:
     newer = _view("newer-pc", last_seen=NOW)
     result = select_device([older, newer], capability="browser.chrome")
     assert result.device.name == "newer-pc"
+
+
+def test_ambiguous_alias_across_two_devices_raises_ambiguous_alias() -> None:
+    """PATCH refuses to create this state going forward (finding LOW-9), but
+    selection must not assume it can never happen — two devices sharing a
+    matching alias must fail closed rather than silently picking the first
+    one found."""
+    a = _view("ev-pc", aliases=("ev",))
+    b = _view("laptop", aliases=("ev",))
+    with pytest.raises(NoCapableDeviceError) as exc_info:
+        select_device([a, b], capability="browser.chrome", target="ev")
+    assert exc_info.value.reason == "ambiguous_alias"
+    assert exc_info.value.detail_tr  # Turkish, non-empty
+
+
+def test_ambiguous_alias_does_not_shadow_id_or_name_matches() -> None:
+    """An exact id/name match still wins even when an unrelated pair of
+    devices shares an alias elsewhere — ambiguity is only checked for the
+    alias-matching step, which id/name matches never reach."""
+    a = _view("ev-pc", aliases=("ev",))
+    b = _view("laptop", aliases=("ev",))
+    result = select_device([a, b], capability="browser.chrome", target="laptop")
+    assert result.device.name == "laptop"
+    assert result.reason == REASON_EXPLICIT_NAME

@@ -7,6 +7,7 @@ import uuid
 import pytest
 
 from app.devices.commands import CommandExpired, CommandFailed, CommandSucceeded
+from app.research import destination
 from app.research.browser_gateway import (
     BrowserDispatchError,
     DeviceBrowserGateway,
@@ -17,6 +18,17 @@ from tests.device_command_support import FakeDeviceCommandClient
 
 DEVICE_ID = uuid.uuid4()
 TASK_ID = "task-abc"
+PUBLIC_IP = "93.184.216.34"
+
+
+@pytest.fixture(autouse=True)
+def _permissive_destination(monkeypatch):
+    """These payload/idempotency tests use placeholder hostnames
+    ("https://a") that do not resolve on the real internet; the
+    destination-policy boundary itself is exercised by the dedicated tests
+    below (which override this fixture per-test) and unit-tested standalone
+    in tests/unit/test_research_destination.py."""
+    monkeypatch.setattr(destination, "resolve_hostname", lambda host: [PUBLIC_IP])
 
 
 def _gateway(client: FakeDeviceCommandClient) -> DeviceBrowserGateway:
@@ -99,6 +111,8 @@ def test_fetch_url_payload_and_idempotency_key() -> None:
     assert record.publisher == "A Yayın"
     assert record.page_kind == "ok"
     assert record.injection_suspected is False
+    assert record.device_id == str(DEVICE_ID)
+    assert record.command_id  # populated from the command outcome (spec §3/§5)
 
 
 def test_fetch_url_flags_injection_markers() -> None:
@@ -196,3 +210,84 @@ def test_fetch_evidence_protocol_composes_search_then_fetch() -> None:
     records = gw.fetch_evidence([FetchQuery(query="q", source_class="news", max_results=2)])
     assert {r.url for r in records} == {"https://a/1", "https://a/2"}
     assert any(c.capability == "browser.session_close" for c in client.calls)
+
+
+# ---------------------------------------------- destination policy (HIGH-2)
+
+
+def test_fetch_url_refuses_a_url_that_resolves_to_a_private_address(monkeypatch) -> None:
+    monkeypatch.setattr(destination, "resolve_hostname", lambda host: ["10.0.0.5"])
+    client = FakeDeviceCommandClient(default_outcome=CommandSucceeded({"created": True}))
+    with pytest.raises(BrowserDispatchError) as exc_info:
+        _gateway(client).fetch_url("https://internal.example.com/a")
+    assert exc_info.value.error_class == "security_scope_error"
+    assert exc_info.value.retryable is False
+    # No command was ever dispatched for the refused URL.
+    assert client.calls == []
+
+
+def test_fetch_url_refuses_a_non_http_scheme_before_dispatch(monkeypatch) -> None:
+    client = FakeDeviceCommandClient(default_outcome=CommandSucceeded({"created": True}))
+    with pytest.raises(BrowserDispatchError) as exc_info:
+        _gateway(client).fetch_url("javascript:alert(1)")
+    assert exc_info.value.error_class == "security_scope_error"
+    assert client.calls == []
+
+
+# ------------------------------------------------ forbidden-key scan (HIGH-3)
+
+
+def test_fetch_url_refuses_result_containing_a_forbidden_key() -> None:
+    client = FakeDeviceCommandClient(
+        default_outcome=CommandSucceeded(
+            {
+                "url": "https://a",
+                "excerpt": "x",
+                "fetched_at": "2026-09-03T09:00:00Z",
+                "extraction_method": "dom_text",
+                "cookie": "session=abc123",
+            }
+        )
+    )
+    with pytest.raises(BrowserDispatchError) as exc_info:
+        _gateway(client).fetch_url("https://a")
+    assert exc_info.value.error_class == "security_scope_error"
+    assert exc_info.value.retryable is False
+
+
+def test_fetch_url_refuses_result_with_nested_forbidden_key() -> None:
+    client = FakeDeviceCommandClient(
+        default_outcome=CommandSucceeded(
+            {
+                "url": "https://a",
+                "excerpt": "x",
+                "fetched_at": "2026-09-03T09:00:00Z",
+                "extraction_method": "dom_text",
+                "metadata": {"nested": {"x-api-key": "secret-value"}},
+            }
+        )
+    )
+    with pytest.raises(BrowserDispatchError) as exc_info:
+        _gateway(client).fetch_url("https://a")
+    assert exc_info.value.error_class == "security_scope_error"
+
+
+def test_search_refuses_result_containing_a_forbidden_key() -> None:
+    client = FakeDeviceCommandClient(
+        default_outcome=CommandSucceeded(
+            {
+                "results": [{"url": "https://a", "title": "A", "Set-Cookie": "abc"}],
+            }
+        )
+    )
+    with pytest.raises(BrowserDispatchError) as exc_info:
+        _gateway(client).search("q")
+    assert exc_info.value.error_class == "security_scope_error"
+
+
+def test_search_clean_result_still_works() -> None:
+    client = FakeDeviceCommandClient(
+        default_outcome=CommandSucceeded({"results": [{"url": "https://a", "title": "A"}]})
+    )
+    hits = _gateway(client).search("q")
+    assert len(hits) == 1

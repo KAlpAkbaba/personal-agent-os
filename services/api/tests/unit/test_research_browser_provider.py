@@ -85,14 +85,7 @@ def test_pipeline_respects_recency_phrase_absent_topic_uses_default_window() -> 
     assert "varsayılan" in result.plan.recency.label
 
 
-@pytest.mark.parametrize(
-    "citation",
-    [(), ("e999",)],
-    ids=["uncited", "foreign-id"],
-)
-def test_pipeline_rejects_any_synthesis_provider_whose_source_facts_lack_real_provenance(
-    citation: tuple[str, ...],
-) -> None:
+def _steered_provider(citation: tuple[str, ...]) -> BrowserResearchProvider:
     # Security review (M13 prep): "source_fact always cites gathered evidence" used to
     # be true only because DeterministicSynthesisProvider happens to cite the id of the
     # excerpt it quotes. Page excerpts are untrusted; a model-backed provider steered by
@@ -112,9 +105,32 @@ def test_pipeline_rejects_any_synthesis_provider_whose_source_facts_lack_real_pr
                 executive_summary="x", findings=(), why_it_matters=(planted,),
             )
 
-    provider = BrowserResearchProvider(gateway=FakeBrowserGateway(), synthesis=SteeredSynthesis())
+    return BrowserResearchProvider(gateway=FakeBrowserGateway(), synthesis=SteeredSynthesis())
+
+
+def test_pipeline_rejects_a_source_fact_that_cites_nothing_at_all() -> None:
+    """A source_fact that never cited anything to begin with is still a hard
+    failure — the strongest possible signal that a provider fabricated a
+    "fact" with zero grounding (report.py's module docstring, step 1)."""
+    provider = _steered_provider(())
     with pytest.raises(ProvenanceError):
         provider.run(TOPIC, now=NOW)
+
+
+def test_pipeline_a_source_fact_citing_only_a_foreign_id_is_downgraded_not_crashed() -> None:
+    """finding MEDIUM-4: a source_fact citing an id the pipeline never
+    gathered (a model fabricating a citation, most dangerously while reading
+    untrusted page text) no longer crashes the whole research run — the
+    dangling id is stripped and, since that empties its citations, the
+    statement is downgraded to model_inference and the removal is recorded
+    via provenance_note; it is never silently dropped or presented as a
+    fact."""
+    provider = _steered_provider(("e999",))
+    result = provider.run(TOPIC, now=NOW)  # must not raise
+    statement = result.report.why_it_matters[0]
+    assert statement.label == "model_inference"
+    assert statement.evidence_ids == ()
+    assert statement.provenance_note and "e999" in statement.provenance_note
 
 
 def test_pipeline_report_is_a_research_report() -> None:

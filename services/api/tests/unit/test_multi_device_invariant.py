@@ -28,7 +28,15 @@ FORBIDDEN = (
     (re.compile(r"S-1-5-21-\d+-\d+-\d+"), "a machine/domain-specific Windows SID"),
     (re.compile(r"\bK66\b"), "the owner's current microphone model as a literal"),
     (re.compile(r"\bDESKTOP-[A-Z0-9]{6,}\b"), "a Windows machine name"),
-    (re.compile(r"\b100\.\d{1,3}\.\d{1,3}\.\d{1,3}\b"), "a tailnet IP address (CGNAT range)"),
+    # (?!/\d{1,2}) excludes a CIDR-notated network (e.g. "100.64.0.0/10", the
+    # RFC 6598 CGNAT block definition app.research.destination checks other
+    # addresses against) from this guard — that is a protocol-level range,
+    # not one owner's specific tailnet address, which is what this pattern
+    # exists to catch (a bare "100.x.x.x" with no prefix length still is).
+    (
+        re.compile(r"\b100\.\d{1,3}\.\d{1,3}\.\d{1,3}\b(?!/\d{1,2})"),
+        "a tailnet IP address (CGNAT range)",
+    ),
     (re.compile(r"\btail[0-9a-f]{6}\.ts\.net\b"), "the owner's tailnet MagicDNS domain"),
     (re.compile(r"[A-Za-z]:\\\\Users\\\\[A-Za-z0-9_]+"), "a user-profile path on one PC"),
 )

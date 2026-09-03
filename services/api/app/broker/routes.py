@@ -188,6 +188,12 @@ async def patch_device(
 
     def update() -> dict[str, Any] | None:
         with runtime.session() as db:
+            if body.aliases:
+                conflict = devices_service.find_alias_conflict(
+                    db, device_id=device_id, aliases=body.aliases
+                )
+                if conflict is not None:
+                    raise devices_service.AliasConflictError(conflict)
             device = devices_service.update_metadata(
                 db,
                 device_id,
@@ -202,7 +208,16 @@ async def patch_device(
             assert view is not None
             return {**view.as_dict(), **_device_payload(runtime, device)}
 
-    payload = await asyncio.to_thread(update)
+    try:
+        payload = await asyncio.to_thread(update)
+    except devices_service.AliasConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error_class": "alias_conflict",
+                "detail": f"'{exc.alias}' takma adı zaten başka bir cihazda kullanılıyor.",
+            },
+        ) from exc
     if payload is None:
         raise HTTPException(status_code=404, detail="unknown device")
     logger.info("broker_device_metadata_updated", device_id=str(device_id))

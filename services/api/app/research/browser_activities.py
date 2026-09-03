@@ -45,8 +45,9 @@ from app.memory.service import remember_explicit
 from app.memory.types import MemoryClass
 from app.research import discovery, runs_service, sources
 from app.research.browser_gateway import BrowserDispatchError, DeviceBrowserGateway
+from app.research.destination import DestinationPolicyError, validate_fetch_target
 from app.research.evidence import EvidenceRecord, dedup_and_rank
-from app.research.injection import is_injection_suspected
+from app.research.injection import count_markers, is_injection_suspected
 from app.research.models import (
     STAGE_DISCOVERING,
     STAGE_FAILED,
@@ -335,14 +336,42 @@ def discover_activity(
 @activity.defn(name="browser_research_fetch_targets")
 def fetch_targets_activity(task_id: str, max_sources: int) -> list[dict[str, str]]:
     """Candidate URLs not yet fetched, oldest-discovered first, capped at
-    ``max_sources`` (the owner's budget for this run)."""
+    ``max_sources`` (the owner's budget for this run).
+
+    Destination policy (finding HIGH-2) is enforced HERE too, not only in
+    ``DeviceBrowserGateway.fetch_url`` — a candidate that fails it never
+    becomes a fetch target at all, so it never costs a Temporal activity or a
+    device command, and it is never retried (there is nothing to retry: the
+    URL itself is refused, not a transient dispatch failure)."""
     task_id_var.set(task_id)
     tid = uuid.UUID(task_id)
     factory = _session_factory()
     with factory() as session:
         candidates = runs_service.list_candidates(session, tid)
         already = {r.url for r in runs_service.list_evidence(session, tid)}
-    targets = [c for c in candidates if c.url not in already][:max_sources]
+        pending = [c for c in candidates if c.url not in already]
+        targets = []
+        for c in pending:
+            try:
+                validate_fetch_target(c.url)
+            except DestinationPolicyError as exc:
+                logger.warning(
+                    "browser_research_fetch_target_rejected",
+                    task_id=task_id, url=c.url, error=str(exc),
+                )
+                runs_service.update_run(
+                    session,
+                    tid,
+                    stage=STAGE_FETCHING,
+                    event={
+                        "stage": STAGE_FETCHING,
+                        "detail": f"target rejected {c.url}: security_scope_error",
+                    },
+                )
+                continue
+            targets.append(c)
+            if len(targets) >= max_sources:
+                break
     return [
         {"url": c.url, "query": c.query_id, "source_class": _class_for_query(c.query_id)}
         for c in targets
@@ -397,7 +426,7 @@ def fetch_activity(task_id: str, device_id: str, url: str, query: str, source_cl
             url,
             evidence_json=record.as_dict(),
             device_id=uuid.UUID(device_id),
-            command_id=None,
+            command_id=uuid.UUID(record.command_id) if record.command_id else None,
             injection_suspected=record.injection_suspected,
         )
         fetch_done = len(runs_service.list_evidence(session, tid))
@@ -471,6 +500,7 @@ def synthesize_activity(
             fetch_failed=0,
             deduplicated=len(rows) - len(ranked),
             evidence=len(ranked),
+            truncated_fields=result.truncated_fields,
         )
         report = ResearchReport(
             task_id=task_id,
@@ -593,6 +623,48 @@ def persist_artifact_activity(task_id: str, topic: str) -> dict[str, Any]:
 # ------------------------------------------------------------------ remember
 
 
+def _finding_memory_entry(
+    finding: dict[str, Any], source_by_id: dict[str, Any], *, synthesis_provider: str
+) -> dict[str, Any]:
+    """Everything a finding may contribute to episodic memory (spec §7,
+    ADR-0050 §6/§7, memory-boundary review finding CRITICAL-1). Title/label/
+    importance/evidence_urls are always structured, provider-independent
+    data — never raw page text. ``summary`` is the one field that started
+    life as (or could still carry) untrusted page text, so it is included
+    ONLY when every one of these holds:
+
+    - the synthesis provider is not ``deterministic`` (that provider's
+      summary is now provenance-only text, but the memory boundary must not
+      depend on which provider ran — it is enforced on the TEXT, not on
+      trusting a particular provider's output shape);
+    - none of the evidence this finding cites is ``injection_suspected``;
+    - the summary text itself carries no injection markers
+      (``app.research.injection.count_markers``).
+
+    Otherwise the ``summary`` key is omitted entirely — never truncated,
+    never replaced with a placeholder, simply not written."""
+    evidence_ids = finding.get("evidence_ids", [])
+    entry: dict[str, Any] = {
+        "title": finding["title"],
+        "label": finding["label"],
+        "importance": finding.get("importance"),
+        "evidence_urls": [
+            source_by_id[eid]["url"] for eid in evidence_ids if eid in source_by_id
+        ],
+    }
+    summary = finding.get("summary", "")
+    cited_evidence_suspected = any(
+        source_by_id.get(eid, {}).get("injection_suspected") for eid in evidence_ids
+    )
+    if (
+        synthesis_provider != "deterministic"
+        and not cited_evidence_suspected
+        and count_markers(summary) == 0
+    ):
+        entry["summary"] = summary
+    return entry
+
+
 @activity.defn(name="browser_research_remember")
 def remember_activity(task_id: str, topic: str) -> str | None:
     task_id_var.set(task_id)
@@ -609,6 +681,7 @@ def remember_activity(task_id: str, topic: str) -> str | None:
     mem_engine = build_engine(settings.database_url)
     mem_factory = build_session_factory(mem_engine)
     embedder = DeterministicEmbedder()
+    synthesis_provider = report_json.get("synthesis_provider", "deterministic")
     with mem_factory() as session:
         source_by_id = {s["id"]: s for s in report_json.get("sources", [])}
         value = {
@@ -616,16 +689,7 @@ def remember_activity(task_id: str, topic: str) -> str | None:
             "window": report_json.get("window"),
             "generated_at": report_json.get("generated_at"),
             "findings": [
-                {
-                    "title": f["title"],
-                    "summary": f["summary"],
-                    "label": f["label"],
-                    "evidence_urls": [
-                        source_by_id[eid]["url"]
-                        for eid in f.get("evidence_ids", [])
-                        if eid in source_by_id
-                    ],
-                }
+                _finding_memory_entry(f, source_by_id, synthesis_provider=synthesis_provider)
                 for f in report_json.get("findings", [])
             ],
             "sources": [

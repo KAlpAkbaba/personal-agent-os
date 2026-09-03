@@ -1,7 +1,9 @@
 """app.research.discovery: pure request/parse halves only (no network in unit tests)."""
 
 import json
+from datetime import UTC, datetime
 
+import httpx
 import pytest
 
 from app.research import discovery
@@ -142,3 +144,102 @@ def test_discovered_candidate_is_json_serializable_shape() -> None:
     json.dumps(
         {"url": c.url, "title": c.title, "publisher": c.publisher, "discovered_by": c.discovered_by}
     )
+
+
+# --------------------------------------------------- bounded body (fake transport)
+
+
+def _transport(handler) -> httpx.MockTransport:
+    return httpx.MockTransport(handler)
+
+
+def test_fetch_hn_end_to_end_with_fake_transport() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/search_by_date"
+        return httpx.Response(200, json=HN_PAYLOAD)
+
+    candidates = discovery.fetch_hn(
+        "ai agents", window_start=datetime(2026, 9, 1, tzinfo=UTC), transport=_transport(handler)
+    )
+    assert len(candidates) == 2
+    assert candidates[0].url == "https://example.com/a"
+
+
+def test_fetch_arxiv_end_to_end_with_fake_transport() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=ARXIV_XML, headers={"content-type": "application/xml"})
+
+    candidates = discovery.fetch_arxiv("multi-agent systems", transport=_transport(handler))
+    assert len(candidates) == 2
+    assert candidates[0].publisher == "arXiv"
+
+
+def test_fetch_rss_end_to_end_with_fake_transport() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=RSS_XML, headers={"content-type": "application/rss+xml"})
+
+    candidates = discovery.fetch_rss(
+        "https://openai.com/feed", publisher="OpenAI", query_id="q1", transport=_transport(handler)
+    )
+    assert len(candidates) == 2
+    assert candidates[0].publisher == "OpenAI"
+
+
+def test_fetch_hn_http_error_raises_discovery_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, text="service unavailable")
+
+    with pytest.raises(discovery.DiscoveryError):
+        discovery.fetch_hn(
+            "ai agents",
+            window_start=datetime(2026, 9, 1, tzinfo=UTC),
+            transport=_transport(handler),
+        )
+
+
+def test_fetch_hn_invalid_json_raises_discovery_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="not json at all")
+
+    with pytest.raises(discovery.DiscoveryError):
+        discovery.fetch_hn(
+            "ai agents",
+            window_start=datetime(2026, 9, 1, tzinfo=UTC),
+            transport=_transport(handler),
+        )
+
+
+def test_oversize_response_body_is_a_discovery_error_not_an_unbounded_read() -> None:
+    """The body is capped at MAX_DISCOVERY_BODY_BYTES (2 MiB); a response
+    that exceeds it must fail as a recorded DiscoveryError, streamed and cut
+    off rather than fully buffered first."""
+    oversized = b"x" * (discovery.MAX_DISCOVERY_BODY_BYTES + 1024)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=oversized)
+
+    with pytest.raises(discovery.DiscoveryError):
+        discovery.fetch_rss(
+            "https://openai.com/feed",
+            publisher="OpenAI",
+            query_id="q1",
+            transport=_transport(handler),
+        )
+
+
+def test_response_just_under_the_cap_is_accepted() -> None:
+    """A response comfortably under the cap (but still invalid feed XML) must
+    fail on PARSING, not on the size check — proves the cap itself isn't
+    accidentally rejecting normal-sized bodies."""
+    small_body = "<rss version='2.0'><channel></channel></rss>"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=small_body)
+
+    candidates = discovery.fetch_rss(
+        "https://openai.com/feed",
+        publisher="OpenAI",
+        query_id="q1",
+        transport=_transport(handler),
+    )
+    assert candidates == []

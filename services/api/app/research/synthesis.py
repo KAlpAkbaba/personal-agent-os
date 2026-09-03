@@ -62,6 +62,10 @@ class SynthesisResult:
     watch_next: tuple[Statement, ...] = field(default_factory=tuple)
     details: tuple[DetailSection, ...] = field(default_factory=tuple)
     uncertainty: tuple[Statement, ...] = field(default_factory=tuple)
+    #: How many text fields ``parse_synthesis_response`` had to truncate to
+    #: stay within the per-field length caps (finding MEDIUM-7). Always 0 for
+    #: DeterministicSynthesisProvider, which never parses untrusted text.
+    truncated_fields: int = 0
 
 
 @runtime_checkable
@@ -81,6 +85,19 @@ def _importance_from_score(score: float) -> int:
 def _first_seen(record: EvidenceRecord) -> str | None:
     moment = record.published_at or record.retrieved_at or record.fetched_at
     return moment.isoformat() if moment else None
+
+
+def _provenance_summary(record: EvidenceRecord) -> str:
+    """A Finding.summary built ONLY from provenance fields — never the page
+    excerpt (memory-boundary review CRITICAL-1a: ``remember_activity`` copies
+    ``Finding.summary`` toward episodic memory, so this is the field that
+    must never carry raw/untrusted page text; the excerpt itself is still
+    kept, quoted, in ``sources[].excerpt`` and in the report's Details
+    section, neither of which ever reaches memory)."""
+    publisher = record.publisher or record.source_class
+    date = record.published_at.date().isoformat() if record.published_at else "tarih bilinmiyor"
+    title = record.title.strip() or record.url
+    return f"Kaynak: {publisher} — {title} ({date})"
 
 
 class DeterministicSynthesisProvider:
@@ -113,7 +130,7 @@ class DeterministicSynthesisProvider:
             Finding(
                 id=f"f{i + 1}",
                 title=e.title,
-                summary=e.excerpt,
+                summary=_provenance_summary(e),
                 why_it_matters=(
                     f"Bu bilgi {e.publisher or e.source_class} kaynağından doğrulandı ve "
                     f"'{topic}' konusuyla doğrudan ilgili."
@@ -240,22 +257,52 @@ def build_prompt(topic: str, evidence: list[EvidenceRecord], *, recency_label: s
     return f"{_SYSTEM_INSTRUCTIONS}\n\nKonu: {topic}\nZaman aralığı: {recency_label}\n\n{block}"
 
 
-def _parse_statement(data: dict[str, Any]) -> Statement:
+#: Per-field length caps (finding MEDIUM-7): a model's structured output is
+#: untrusted, so it is bounded the same way any other external input is
+#: bounded elsewhere in this project (MAX_COMMAND_PAYLOAD_BYTES etc.) — a
+#: field over the cap is truncated (never silently dropped, never allowed to
+#: balloon the report/artifact/memory downstream), and the truncation is
+#: counted on the result rather than hidden.
+TITLE_MAX_CHARS = 200
+BODY_MAX_CHARS = 1200  # Finding.summary / Finding.why_it_matters / Statement.text
+EXECUTIVE_SUMMARY_MAX_CHARS = 3000
+
+
+def _require_str(value: Any, *, field_name: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{field_name!r} must be a string, got {type(value).__name__}")
+    return value
+
+
+def _capped(value: str, max_chars: int, counter: list[int]) -> str:
+    if len(value) > max_chars:
+        counter[0] += 1
+        return value[:max_chars]
+    return value
+
+
+def _parse_statement(data: dict[str, Any], counter: list[int]) -> Statement:
+    text = _capped(_require_str(data["text"], field_name="text"), BODY_MAX_CHARS, counter)
     return Statement(
-        text=str(data["text"]),
-        label=str(data["label"]),
+        text=text,
+        label=_require_str(data["label"], field_name="label"),
         evidence_ids=tuple(str(x) for x in data.get("evidence_ids", ())),
     )
 
 
-def _parse_finding(data: dict[str, Any]) -> Finding:
+def _parse_finding(data: dict[str, Any], counter: list[int]) -> Finding:
+    title = _capped(_require_str(data["title"], field_name="title"), TITLE_MAX_CHARS, counter)
+    summary = _capped(_require_str(data["summary"], field_name="summary"), BODY_MAX_CHARS, counter)
+    why_it_matters = _capped(
+        _require_str(data["why_it_matters"], field_name="why_it_matters"), BODY_MAX_CHARS, counter
+    )
     return Finding(
         id=str(data["id"]),
-        title=str(data["title"]),
-        summary=str(data["summary"]),
-        why_it_matters=str(data["why_it_matters"]),
+        title=title,
+        summary=summary,
+        why_it_matters=why_it_matters,
         importance=int(data["importance"]),
-        label=str(data["label"]),
+        label=_require_str(data["label"], field_name="label"),
         evidence_ids=tuple(str(x) for x in data.get("evidence_ids", ())),
         first_seen=data.get("first_seen"),
     )
@@ -263,20 +310,63 @@ def _parse_finding(data: dict[str, Any]) -> Finding:
 
 def parse_synthesis_response(payload: dict[str, Any]) -> SynthesisResult:
     """Validate + parse a model's structured JSON output into SynthesisResult.
-    Raises ValueError/TypeError on malformed output (never a raw model echo)."""
+
+    Raises ``TypeError``/``ValueError`` on malformed output (never a raw
+    model echo) — a text-bearing field (``executive_summary``, finding
+    ``title``/``summary``/``why_it_matters``, any statement ``text``) that is
+    not a string is rejected outright rather than coerced with ``str()``.
+
+    Bounds a model cannot exceed (finding MEDIUM-7):
+
+    - each text field above its length cap is truncated, and the count of
+      truncated fields is recorded on the result (``truncated_fields``);
+    - more than ``MAX_FINDINGS`` findings keeps only the ``MAX_FINDINGS``
+      highest-``importance`` ones (never silently accepts an unbounded list);
+    - fewer than ``MIN_FINDINGS`` findings is NOT a failure — the findings are
+      kept as-is and an ``uncertainty`` statement noting the shortfall is
+      appended, matching the "fewer than 3 -> uncertainty, never padding"
+      rule ``DeterministicSynthesisProvider`` already follows.
+    """
+    counter = [0]
+    executive_summary = _capped(
+        _require_str(payload["executive_summary"], field_name="executive_summary"),
+        EXECUTIVE_SUMMARY_MAX_CHARS,
+        counter,
+    )
+    findings = [_parse_finding(f, counter) for f in payload.get("findings", [])]
+    why_it_matters = tuple(_parse_statement(s, counter) for s in payload.get("why_it_matters", []))
+    watch_next = tuple(_parse_statement(s, counter) for s in payload.get("watch_next", []))
+    details = tuple(
+        DetailSection(
+            heading=str(d["heading"]),
+            statements=tuple(_parse_statement(s, counter) for s in d.get("statements", [])),
+        )
+        for d in payload.get("details", [])
+    )
+    uncertainty = tuple(_parse_statement(s, counter) for s in payload.get("uncertainty", []))
+
+    if len(findings) > MAX_FINDINGS:
+        findings = sorted(findings, key=lambda f: -f.importance)[:MAX_FINDINGS]
+    if len(findings) < MIN_FINDINGS:
+        uncertainty = uncertainty + (
+            Statement(
+                text=(
+                    f"Model yalnızca {len(findings)} bulgu üretti (en az {MIN_FINDINGS} "
+                    "beklenir); bulgular sınırlı sayıda kaynağa dayanıyor olabilir ve "
+                    "bağımsız biçimde teyit edilmemiş olabilir."
+                ),
+                label=STATEMENT_LABEL_UNCERTAINTY,
+            ),
+        )
+
     return SynthesisResult(
-        executive_summary=str(payload["executive_summary"]),
-        findings=tuple(_parse_finding(f) for f in payload.get("findings", [])),
-        why_it_matters=tuple(_parse_statement(s) for s in payload.get("why_it_matters", [])),
-        watch_next=tuple(_parse_statement(s) for s in payload.get("watch_next", [])),
-        details=tuple(
-            DetailSection(
-                heading=str(d["heading"]),
-                statements=tuple(_parse_statement(s) for s in d.get("statements", [])),
-            )
-            for d in payload.get("details", [])
-        ),
-        uncertainty=tuple(_parse_statement(s) for s in payload.get("uncertainty", [])),
+        executive_summary=executive_summary,
+        findings=tuple(findings),
+        why_it_matters=why_it_matters,
+        watch_next=watch_next,
+        details=details,
+        uncertainty=uncertainty,
+        truncated_fields=counter[0],
     )
 
 
@@ -315,6 +405,7 @@ def _drop_assistant_directed(result: SynthesisResult) -> tuple[SynthesisResult, 
             watch_next=tuple(s for s in result.watch_next if keep_statement(s)),
             details=filtered_details,
             uncertainty=tuple(s for s in result.uncertainty if keep_statement(s)),
+            truncated_fields=result.truncated_fields,
         ),
         dropped,
     )

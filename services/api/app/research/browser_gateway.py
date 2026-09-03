@@ -34,7 +34,9 @@ from app.devices.commands import (
     CommandSucceeded,
     DeviceCommandClientProtocol,
 )
+from app.research.destination import DestinationPolicyError, validate_fetch_target
 from app.research.evidence import EvidenceRecord
+from app.research.forbidden_keys import find_forbidden_keys
 
 # Fixed fallback "now" so FakeBrowserGateway is deterministic even when the
 # caller does not pass `now` explicitly (mirrors DeterministicResearchProvider's
@@ -175,6 +177,21 @@ def _outcome_or_raise(outcome: CommandOutcome) -> dict[str, Any]:
     )
 
 
+def _reject_forbidden_keys(result: dict[str, Any]) -> None:
+    """Cloud-Core-side half of the forbidden-key scan (finding HIGH-3): any
+    device command result that becomes evidence is scanned again here, even
+    though the worker already scrubs it on the device side — a hit refuses
+    the result outright rather than storing a partially-redacted evidence
+    item."""
+    forbidden = find_forbidden_keys(result)
+    if forbidden:
+        raise BrowserDispatchError(
+            "security_scope_error",
+            f"device result contained forbidden key(s): {sorted(set(forbidden))}",
+            False,
+        )
+
+
 def fetch_idempotency_key(task_id: str, url: str, *, attempt: int = 1) -> str:
     """``{task_id}:fetch:{sha256(url)[:16]}:{attempt}`` (spec §5) — a NEW key
     per attempt so a retry after ``expired``/``dependency_unavailable`` never
@@ -252,6 +269,7 @@ class DeviceBrowserGateway:
             trace_id=self._trace_id,
         )
         result = _outcome_or_raise(outcome)
+        _reject_forbidden_keys(result)
         return [
             SearchHit(
                 url=str(r["url"]),
@@ -271,6 +289,11 @@ class DeviceBrowserGateway:
         attempt: int = 1,
     ) -> EvidenceRecord:
         """One ``browser.fetch_evidence`` command for a single URL."""
+        try:
+            validate_fetch_target(url)
+        except DestinationPolicyError as exc:
+            raise BrowserDispatchError("security_scope_error", str(exc), False) from exc
+
         self.ensure_session()
         outcome = self._client.run(
             device_id=self._device_id,
@@ -288,6 +311,8 @@ class DeviceBrowserGateway:
             trace_id=self._trace_id,
         )
         result = _outcome_or_raise(outcome)
+        _reject_forbidden_keys(result)
+        command_id = outcome.command_id if isinstance(outcome, CommandSucceeded) else None
         fetched_at_raw = result.get("fetched_at")
         fetched_at = (
             datetime.fromisoformat(str(fetched_at_raw)) if fetched_at_raw else datetime.now(UTC)
@@ -309,6 +334,8 @@ class DeviceBrowserGateway:
             page_kind=str(result.get("page_kind") or "ok"),
             http_status=result.get("http_status"),
             injection_suspected=bool(result.get("injection_markers", 0)),
+            device_id=str(self._device_id),
+            command_id=str(command_id) if command_id else None,
         )
 
     def close_session(self) -> None:

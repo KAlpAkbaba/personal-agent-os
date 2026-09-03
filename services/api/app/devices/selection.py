@@ -69,7 +69,9 @@ def _policy_allows(policy: dict[str, Any], capability: str) -> bool:
     return any(has_capability([capability], a) or has_capability([a], capability) for a in allow)
 
 
-def _match_explicit(devices: list[DeviceView], target: str) -> tuple[DeviceView, str] | None:
+def _match_explicit(
+    devices: list[DeviceView], target: str, *, capability: str
+) -> tuple[DeviceView, str] | None:
     stripped = target.strip()
     # 1) device id (exact)
     for d in devices:
@@ -80,10 +82,23 @@ def _match_explicit(devices: list[DeviceView], target: str) -> tuple[DeviceView,
     for d in devices:
         if d.name.casefold() == lowered:
             return d, REASON_EXPLICIT_NAME
-    # 3) alias (owner-configured, matched via Turkish phrase extraction)
-    for d in devices:
-        if aliases.alias_matches(list(d.aliases), stripped):
-            return d, REASON_EXPLICIT_ALIAS
+    # 3) alias (owner-configured, matched via Turkish phrase extraction).
+    # Collected in full (not "first match wins") so two devices sharing a
+    # misconfigured alias raise ambiguous_alias instead of one silently
+    # shadowing the other (finding LOW-9; PATCH already refuses to create
+    # this state going forward, but selection must not trust that it never
+    # happened by some other path).
+    alias_matches = [d for d in devices if aliases.alias_matches(list(d.aliases), stripped)]
+    if len(alias_matches) > 1:
+        raise NoCapableDeviceError(
+            f"'{target}' takma adı birden fazla cihazda tanımlı; lütfen cihaz adını "
+            "veya kimliğini kullanın ya da takma adları güncelleyin.",
+            capability=capability,
+            target=target,
+            reason="ambiguous_alias",
+        )
+    if alias_matches:
+        return alias_matches[0], REASON_EXPLICIT_ALIAS
     return None
 
 
@@ -100,7 +115,7 @@ def select_device(
     reason = REASON_AUTO
 
     if target and target.strip():
-        match = _match_explicit(devices, target)
+        match = _match_explicit(devices, target, capability=capability)
         if match is None:
             raise NoCapableDeviceError(
                 f"'{target}' adında veya takma adında kayıtlı bir cihaz bulunamadı.",

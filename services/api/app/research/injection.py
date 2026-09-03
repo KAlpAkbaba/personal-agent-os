@@ -3,8 +3,15 @@
 Page text is data, never instructions. This module is the Cloud-Core-side
 half of the boundary the Windows Browser Worker enforces on the other end
 (both sides load the SAME marker list —
-``packages/protocol/browser-injection-markers.json`` — so the two are
-equality-tested rather than hand-kept in sync):
+``packages/protocol/browser-injection-markers.json``). This module reads
+that JSON file directly at runtime (:func:`load_markers`); the worker
+(``services/browser/browser_agent``), running as a separate process on the
+owner's machine, instead embeds its own copy of the list as a Python
+constant and has a unit test that equality-tests its embedded copy against
+the same JSON file byte-for-byte — so the two packages are kept in sync by a
+test asserting equality, not by one importing the other across the
+process/machine boundary (the same discipline ``app.research.evidence``'s
+module docstring describes for the ranking formula).
 
 - :func:`count_markers` / :func:`is_injection_suspected` — flag evidence whose
   excerpt contains instruction-like patterns (English + Turkish).

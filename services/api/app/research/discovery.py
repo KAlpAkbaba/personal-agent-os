@@ -14,6 +14,7 @@ against the real endpoints and is never run by default CI.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -23,6 +24,15 @@ DEFAULT_TIMEOUT_S = 10.0
 HN_ALGOLIA_URL = "https://hn.algolia.com/api/v1/search_by_date"
 ARXIV_API_URL = "https://export.arxiv.org/api/query"
 ATOM_NS = {"atom": "http://www.w3.org/2005/Atom"}
+
+#: A discovery HTTP response is bounded at 2 MiB (finding MEDIUM-8): a
+#: publisher feed or third-party API is untrusted, and an unbounded response
+#: body could otherwise be read entirely into memory before anything checks
+#: its size. The body is streamed and cut off as soon as it would exceed the
+#: cap; oversize is a DiscoveryError (a recorded discovery failure the caller
+#: already treats as "this one source failed", per every fetch_* docstring
+#: below), never an unbounded read.
+MAX_DISCOVERY_BODY_BYTES = 2 * 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +50,45 @@ class DiscoveredCandidate:
 
 class DiscoveryError(RuntimeError):
     """A discovery HTTP call failed or returned an unparseable body."""
+
+
+def _bounded_get_text(
+    method: str,
+    url: str,
+    *,
+    params: dict[str, Any] | None = None,
+    timeout_s: float = DEFAULT_TIMEOUT_S,
+    max_bytes: int = MAX_DISCOVERY_BODY_BYTES,
+    transport: Any = None,
+) -> str:
+    """GET (streaming) ``url``, stopping and raising :class:`DiscoveryError`
+    the moment the body would exceed ``max_bytes`` — the body is never read
+    unbounded into memory before its size is known. ``transport`` is
+    injectable (an ``httpx.MockTransport``) so this bound, and the three
+    ``fetch_*`` functions built on it, are unit-tested with a fake transport
+    rather than a real network call."""
+    import httpx
+
+    client_kwargs: dict[str, Any] = {"timeout": timeout_s}
+    if transport is not None:
+        client_kwargs["transport"] = transport
+    try:
+        with httpx.Client(**client_kwargs) as client:
+            with client.stream(method, url, params=params) as resp:
+                resp.raise_for_status()
+                total = 0
+                chunks: list[bytes] = []
+                for chunk in resp.iter_bytes():
+                    total += len(chunk)
+                    if total > max_bytes:
+                        raise DiscoveryError(
+                            f"response body for {url} exceeded {max_bytes} bytes"
+                        )
+                    chunks.append(chunk)
+                encoding = resp.encoding or "utf-8"
+        return b"".join(chunks).decode(encoding, errors="replace")
+    except httpx.HTTPError as exc:
+        raise DiscoveryError(f"request failed for {url}: {type(exc).__name__}") from exc
 
 
 # --------------------------------------------------------------- HN Algolia
@@ -86,16 +135,15 @@ def fetch_hn(
     window_start: datetime,
     max_results: int = 10,
     timeout_s: float = DEFAULT_TIMEOUT_S,
-) -> list[DiscoveredCandidate]:  # pragma: no cover - real network, live-tested only
-    import httpx
-
+    transport: Any = None,
+) -> list[DiscoveredCandidate]:
     url, params = build_hn_request(query, window_start=window_start, max_results=max_results)
+    text = _bounded_get_text("GET", url, params=params, timeout_s=timeout_s, transport=transport)
     try:
-        resp = httpx.get(url, params=params, timeout=timeout_s)
-        resp.raise_for_status()
-        return parse_hn_response(resp.json(), query_id=query)
-    except httpx.HTTPError as exc:
-        raise DiscoveryError(f"hn algolia request failed: {type(exc).__name__}") from exc
+        payload = json.loads(text)
+    except ValueError as exc:
+        raise DiscoveryError("hn algolia response was not valid JSON") from exc
+    return parse_hn_response(payload, query_id=query)
 
 
 # -------------------------------------------------------------------- arXiv
@@ -140,17 +188,15 @@ def parse_arxiv_response(xml_text: str, *, query_id: str) -> list[DiscoveredCand
 
 
 def fetch_arxiv(
-    query: str, *, max_results: int = 10, timeout_s: float = DEFAULT_TIMEOUT_S
-) -> list[DiscoveredCandidate]:  # pragma: no cover - real network, live-tested only
-    import httpx
-
+    query: str,
+    *,
+    max_results: int = 10,
+    timeout_s: float = DEFAULT_TIMEOUT_S,
+    transport: Any = None,
+) -> list[DiscoveredCandidate]:
     url, params = build_arxiv_request(query, max_results=max_results)
-    try:
-        resp = httpx.get(url, params=params, timeout=timeout_s)
-        resp.raise_for_status()
-        return parse_arxiv_response(resp.text, query_id=query)
-    except httpx.HTTPError as exc:
-        raise DiscoveryError(f"arxiv request failed: {type(exc).__name__}") from exc
+    text = _bounded_get_text("GET", url, params=params, timeout_s=timeout_s, transport=transport)
+    return parse_arxiv_response(text, query_id=query)
 
 
 # --------------------------------------------------------------- RSS / Atom
@@ -207,22 +253,22 @@ def parse_rss_or_atom(
 
 
 def fetch_rss(
-    feed_url: str, *, publisher: str, query_id: str, timeout_s: float = DEFAULT_TIMEOUT_S
-) -> list[DiscoveredCandidate]:  # pragma: no cover - real network, live-tested only
-    import httpx
-
-    try:
-        resp = httpx.get(feed_url, timeout=timeout_s)
-        resp.raise_for_status()
-        return parse_rss_or_atom(resp.text, publisher=publisher, query_id=query_id)
-    except httpx.HTTPError as exc:
-        raise DiscoveryError(f"feed request failed for {publisher}: {type(exc).__name__}") from exc
+    feed_url: str,
+    *,
+    publisher: str,
+    query_id: str,
+    timeout_s: float = DEFAULT_TIMEOUT_S,
+    transport: Any = None,
+) -> list[DiscoveredCandidate]:
+    text = _bounded_get_text("GET", feed_url, timeout_s=timeout_s, transport=transport)
+    return parse_rss_or_atom(text, publisher=publisher, query_id=query_id)
 
 
 __all__ = [
     "ARXIV_API_URL",
     "DEFAULT_TIMEOUT_S",
     "HN_ALGOLIA_URL",
+    "MAX_DISCOVERY_BODY_BYTES",
     "DiscoveredCandidate",
     "DiscoveryError",
     "build_arxiv_request",

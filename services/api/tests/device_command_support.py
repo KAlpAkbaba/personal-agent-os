@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from app.devices.commands import CommandOutcome, CommandSucceeded
@@ -65,18 +65,31 @@ class FakeDeviceCommandClient:
                 device_id=device_id, capability=capability, payload=payload,
                 idempotency_key=idempotency_key,
             )
+            outcome = _with_command_id(outcome, idempotency_key)
             self._last_by_key[idempotency_key] = outcome
             return outcome
 
         queue = self.outcomes_by_key.get(idempotency_key)
         if queue:
-            outcome = queue.pop(0)
+            outcome = _with_command_id(queue.pop(0), idempotency_key)
             self._last_by_key[idempotency_key] = outcome
             return outcome
         if idempotency_key in self._last_by_key:
             return self._last_by_key[idempotency_key]  # terminal-ack replay
-        self._last_by_key[idempotency_key] = self.default_outcome
-        return self.default_outcome
+        outcome = _with_command_id(self.default_outcome, idempotency_key)
+        self._last_by_key[idempotency_key] = outcome
+        return outcome
+
+
+def _with_command_id(outcome: CommandOutcome, idempotency_key: str) -> CommandOutcome:
+    """A scripted ``CommandSucceeded`` that did not set ``command_id`` gets a
+    deterministic one derived from the idempotency key, so tests that don't
+    care about command provenance (most of them) still exercise the real
+    device_id/command_id -> SourceItem plumbing (spec §3/§5) without every
+    caller having to construct one by hand."""
+    if isinstance(outcome, CommandSucceeded) and outcome.command_id is None:
+        return replace(outcome, command_id=uuid.uuid5(uuid.NAMESPACE_URL, idempotency_key))
+    return outcome
 
 
 __all__ = ["FakeDeviceCommandClient", "RecordedCall"]

@@ -17,11 +17,44 @@ from sqlalchemy.orm import Session
 from app.broker import service as broker_service
 from app.broker.models import Device
 from app.broker.runtime import BrokerRuntime
+from app.devices import aliases as alias_module
 from app.devices.health import build_health
 from app.devices.presence import DEFAULT_STALE_AFTER_S, compute_presence
 from app.devices.types import DeviceView
 
 RECENT_OUTCOME_LIMIT = 5
+
+
+class AliasConflictError(Exception):
+    """An owner PATCH tried to set an alias already used by another
+    enrolled device (finding LOW-9). ``alias`` is the raw (un-normalized)
+    alias the caller submitted, for a readable Turkish error message."""
+
+    def __init__(self, alias: str) -> None:
+        super().__init__(f"alias {alias!r} is already used by another enrolled device")
+        self.alias = alias
+
+
+def find_alias_conflict(
+    session: Session, *, device_id: uuid.UUID, aliases: list[str]
+) -> str | None:
+    """The first alias in ``aliases`` already configured on a DIFFERENT,
+    still-enrolled (not revoked) device, or ``None``. Comparison is
+    normalized (``app.devices.aliases.normalize`` — casefolded, stripped)
+    so ``"Ev"`` and ``"ev "`` are recognized as the same alias."""
+    wanted = {alias_module.normalize(a): a for a in aliases if a.strip()}
+    if not wanted:
+        return None
+    for device in broker_service.list_devices(session):
+        if device.id == device_id or device.revoked_at is not None:
+            continue
+        existing = {
+            alias_module.normalize(a) for a in (device.metadata_json or {}).get("aliases") or []
+        }
+        conflict = set(wanted) & existing
+        if conflict:
+            return wanted[sorted(conflict)[0]]
+    return None
 
 
 def _aware(dt: datetime | None) -> datetime | None:
@@ -114,6 +147,8 @@ def update_metadata(
 
 __all__ = [
     "RECENT_OUTCOME_LIMIT",
+    "AliasConflictError",
+    "find_alias_conflict",
     "get_device_view",
     "list_device_views",
     "to_view",

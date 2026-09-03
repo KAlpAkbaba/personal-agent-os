@@ -80,6 +80,10 @@ def get_broker_runtime() -> BrokerRuntime | None:
 @dataclass(frozen=True, slots=True)
 class CommandSucceeded:
     result: dict[str, Any] = field(default_factory=dict)
+    # The command row's own id (spec §3/§5: SourceItem.command_id provenance).
+    # Optional so existing scripted-outcome tests that build CommandSucceeded
+    # without it keep working; the real DeviceCommandClient always sets it.
+    command_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,7 +214,7 @@ class DeviceCommandClient:
             if row is None:  # pragma: no cover - defensive; row was just created
                 return CommandFailed("internal_bug", "command vanished", False)
             if row.status == COMMAND_STATUS_SUCCEEDED:
-                return CommandSucceeded(row.result_json or {})
+                return CommandSucceeded(row.result_json or {}, command_id=command_id)
             if row.status == COMMAND_STATUS_FAILED:
                 return CommandFailed(
                     row.error_class or "internal_bug",
