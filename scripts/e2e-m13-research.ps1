@@ -85,6 +85,12 @@ $procs = @{}
 $dataDir = Join-Path $env:TEMP ("pagentos-e2e-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
 $identityDir = Join-Path $env:TEMP ("pagentos-e2e-identity-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
 $browserDataDir = Join-Path $dataDir "browser"
+# The harness owns a database of its own inside the dev Postgres container: the shared
+# `pagentos` dev database is truncated and re-migrated by the integration suites, which
+# once wiped a real run mid-fetch (tasks and runs gone, the status endpoint answering 500).
+# Same credentials as the dev default in app/config.py (a dev-only, non-secret value).
+$E2eDb = "pagentos_e2e_m13"
+$e2eDbUrl = "postgresql+psycopg://pagentos:pagentos-dev@127.0.0.1:15432/$E2eDb"
 $script:ownerHeaders = @{}
 $script:deviceId = $null
 $pipeName = "pagentos-e2e-" + (Split-Path $dataDir -Leaf)
@@ -165,12 +171,16 @@ function Post-Json {
 
 function Start-Broker {
   $psi = New-Object System.Diagnostics.ProcessStartInfo
-  $psi.FileName = $uv
-  $psi.Arguments = "run uvicorn app.main:app --host 127.0.0.1 --port $ApiPort --ws-max-size 262144"
+  # Through cmd.exe so the API's own log (uvicorn + structlog) lands in the evidence
+  # directory; a 500 seen by the harness is otherwise undiagnosable once cleanup runs.
+  $apiLog = Join-Path $OutDir "api.log"
+  $psi.FileName = Join-Path $env:SystemRoot "System32\cmd.exe"
+  $psi.Arguments = '/d /c ""' + $uv + '" run uvicorn app.main:app --host 127.0.0.1 --port ' + $ApiPort + ' --ws-max-size 262144 >> "' + $apiLog + '" 2>&1"'
   $psi.WorkingDirectory = $apiRoot
   $psi.UseShellExecute = $false
   $psi.CreateNoWindow = $true
   $psi.EnvironmentVariables["PAGENTOS_IDENTITY_ROOT_DIR"] = $identityDir
+  $psi.EnvironmentVariables["PAGENTOS_DATABASE_URL"] = $e2eDbUrl
   # The research workflow runs in the API process (ADR-0050 §9).
   $psi.EnvironmentVariables["PAGENTOS_WORKER_MODE"] = "embedded"
   $script:procs["broker"] = [System.Diagnostics.Process]::Start($psi)
@@ -329,8 +339,18 @@ function Assert-Report {
 Invoke-Step "Dev stack + migrations" {
   & $powershell5 -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot "scripts\dev-up.ps1")
   if ($LASTEXITCODE -ne 0) { throw "dev-up failed" }
+  $exists = & $docker exec pagentos-postgres psql -U pagentos -d pagentos -t -A -c "SELECT 1 FROM pg_database WHERE datname = '$E2eDb';"
+  if (($exists | Out-String).Trim() -ne "1") {
+    & $docker exec pagentos-postgres psql -U pagentos -d pagentos -c "CREATE DATABASE $E2eDb;" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "could not create $E2eDb" }
+    Write-Host "  created isolated database $E2eDb"
+  }
   Push-Location $apiRoot
-  try { & $uv run alembic upgrade head; if ($LASTEXITCODE -ne 0) { throw "alembic failed" } }
+  try {
+    $env:PAGENTOS_DATABASE_URL = $e2eDbUrl
+    try { & $uv run alembic upgrade head; if ($LASTEXITCODE -ne 0) { throw "alembic failed" } }
+    finally { Remove-Item Env:\PAGENTOS_DATABASE_URL -ErrorAction SilentlyContinue }
+  }
   finally { Pop-Location }
 }
 
@@ -450,7 +470,7 @@ Invoke-Step "Recovery: Cloud Core restart mid-job, no duplicate evidence" {
   $urls = @($rep.sources | ForEach-Object { $_.url })
   if ($urls.Count -ne @($urls | Select-Object -Unique).Count) { throw "duplicate evidence after recovery" }
   $sql = "SELECT count(*) - count(DISTINCT url) FROM research_evidence WHERE task_id = '$tid';"
-  $dups = & $docker exec pagentos-postgres psql -U pagentos -d pagentos -t -A -c $sql
+  $dups = & $docker exec pagentos-postgres psql -U pagentos -d $E2eDb -t -A -c $sql
   if ($LASTEXITCODE -eq 0 -and [int]($dups | Select-Object -Last 1) -ne 0) { throw "duplicate research_evidence rows: $dups" }
   Write-Host "  recovered without duplicate evidence"
 }
