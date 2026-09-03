@@ -8,16 +8,40 @@
 
 import type { AudioOutput, Unsubscribe } from "./transport";
 
+/**
+ * What a silence request measured (ADR-0047 §2): `at` is the main-thread
+ * monotonic time the request was made; `gainZeroAt` is when the audio thread
+ * will have the gain at zero AT THE OUTPUT (mapped onto the same clock; null
+ * when the platform cannot say); `outputLatencyMs` is the context's own
+ * output latency; `changed` is false when the path was already silent.
+ */
+export type PlaybackStop = {
+  at: number;
+  gainZeroAt: number | null;
+  outputLatencyMs: number | null;
+  changed: boolean;
+};
+
 export interface Playback {
   attach(output: AudioOutput): void;
   /**
-   * Silence the output path NOW (synchronous) and return the monotonic time
-   * at which it went silent. This is the latency-critical barge-in step.
+   * Silence the output path NOW (synchronous). This is the latency-critical
+   * barge-in step; `playing` becomes false.
    */
-  stop(): number;
+  stop(): PlaybackStop;
+  /**
+   * Reversible silence (ADR-0047 §2): the gate saw a confident onset while the
+   * assistant was audible. `playing` stays true; `unmute()` restores the gain
+   * if the onset turns out to be nothing.
+   */
+  mute(): PlaybackStop;
+  unmute(): void;
   /** Re-enable output for the next response. */
   arm(): void;
+  /** Create/resume the output path inside a user gesture, so the first response never waits for it. */
+  prepare?(): void;
   readonly playing: boolean;
+  readonly muted: boolean;
   /** First audible energy after `arm()`; used for first-audio timing. */
   onActivity(sink: (at: number) => void): Unsubscribe;
   setOutputDevice?(deviceId: string): Promise<void>;
@@ -49,6 +73,8 @@ export type AppliedInputSettings = {
   suppressLocalAudioPlayback: boolean | null;
   channelCount: number | null;
   sampleRate: number | null;
+  /** MediaTrackSettings.latency (seconds) as milliseconds where the browser reports it; null otherwise. */
+  inputLatencyMs: number | null;
   /** Requested booleans the track did NOT honour (constraint names). */
   notHonoured: string[];
   requested: MicrophoneConstraints;
@@ -76,39 +102,82 @@ export type SpeechDetectorStats = {
   click_rejects: number;
   speech_ms: number;
   calibrations: number;
+  /** ADR-0047 §2: reversible playback mutes the gate asked for, and how many collapsed. */
+  evidence_events?: number;
+  evidence_lost?: number;
+  /** ADR-0047 §4: measured residual of the assistant's playback in the microphone (omitted until measured). */
+  echo_residual_db?: number;
+  /** The playback margin in force (preset or echo-derived). */
+  echo_margin_db?: number;
 };
 
-/** A completed noise-floor calibration, reduced to reportable numbers. */
+/**
+ * A completed noise-floor calibration, reduced to reportable numbers
+ * (ADR-0047 §5): `measured: 1` and `samples` on every measurement, classes
+ * 1-based, `peak_db` absent when no peak was observed — never a sentinel.
+ */
 export type SpeechDetectorCalibration = {
+  measured: 1;
+  /** live frames the numbers came from */
+  samples: number;
   noise_floor_db: number;
   stationary_db: number;
   spread_db: number;
-  peak_db: number;
+  peak_db?: number;
   clip_risk: number;
   hum_ratio: number;
   contaminated: 0 | 1;
-  /** 0 low, 1 normal, 2 high */
-  sensitivity: number;
-  /** 0 quiet, 1 normal, 2 noisy, 3 very noisy */
-  env: number;
+  /** 1 low, 2 normal, 3 high */
+  sensitivity_class: number;
+  /** 1 quiet, 2 normal, 3 noisy, 4 very noisy */
+  env_class: number;
   /** derived gate parameters actually applied */
   open_margin_db: number;
   min_onset_ms: number;
   hang_ms: number;
   pre_roll_ms: number;
+  echo_margin_db: number;
   /** 1 when triggered by drift, 2 manual, 0 initial */
   trigger: number;
+  /** all-zero frames skipped while measuring */
+  dead_frames: number;
+};
+
+/** A calibration window that produced NO measurement (dead input, or contaminated and retried). */
+export type SpeechDetectorCalibrationAttempt = {
+  measured: 0;
+  samples: number;
+  dead_frames: number;
+  contaminated: 0 | 1;
+  trigger: number;
+  /** 1 when another window follows, 0 when the detector gave up for now */
+  retry: 0 | 1;
+};
+
+/** Onset accounting handed to the controller with a local speech start (ADR-0047 §1). */
+export type SpeechStartDetail = {
+  candidateAt: number;
+  decidedAt: number;
+  preRollMs: number;
+  /** main-thread observation of the onset frame minus its audio-thread time; null when unmeasurable */
+  captureLagMs: number | null;
+  duringPlayback: boolean;
 };
 
 export interface SpeechDetector {
   start(stream: MediaStream): void;
   stop(): void;
-  onSpeechStart(sink: (at: number) => void): Unsubscribe;
+  onSpeechStart(sink: (at: number, detail?: SpeechStartDetail) => void): Unsubscribe;
   onSpeechEnd(sink: (at: number) => void): Unsubscribe;
   /** Optional: counters for the qualification matrix. */
   stats?(): SpeechDetectorStats;
-  /** Optional: fires when a noise-floor calibration completes. */
-  onCalibration?(sink: (calibration: SpeechDetectorCalibration) => void): Unsubscribe;
+  /** Optional: fires when a noise-floor calibration window completes (measurement or attempt). */
+  onCalibration?(sink: (calibration: SpeechDetectorCalibration | SpeechDetectorCalibrationAttempt) => void): Unsubscribe;
+  /** Optional (ADR-0047 §2): confident onset during playback → reversible local mute; and its collapse. */
+  onEvidence?(sink: (at: number, candidateAt: number) => void): Unsubscribe;
+  onEvidenceLost?(sink: (at: number) => void): Unsubscribe;
+  /** Optional: the onset candidate under evaluation right now (provider-first barge-ins use it as the onset). */
+  onsetCandidate?(): { candidateAt: number; preRollMs: number } | null;
 }
 
 export interface NetworkMonitor {

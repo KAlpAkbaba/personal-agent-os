@@ -7,7 +7,10 @@
  * 1. Barge-in: owner speech while the assistant is audible → STOP LOCAL
  *    PLAYBACK FIRST (synchronous), then cancel the provider's response, then
  *    report `barge_in_start` + `playback_stopped` with the client-measured
- *    stop latency. The order is fixed; a test pins it.
+ *    stop latency. The order is fixed; a test pins it. ADR-0047 §2: a
+ *    confident onset during playback mutes locally BEFORE the turn is
+ *    confirmed (reversible), and every barge-in payload carries its split
+ *    (detect / stop command / gain-to-zero) as numbers.
  * 2. End-of-turn with the Turkish hesitation guard: the provider's
  *    `speech_stopped` opens a hold whose length depends on the transcript
  *    tail; speech inside the hold is a continuation, not a new turn, and a
@@ -17,6 +20,11 @@
  *    provider; long-running tools get the Turkish preamble now and the final
  *    outcome when the `tool_completed` sideband frame lands.
  * 4. Every timing/state transition is reported with monotonic timestamps.
+ *    ADR-0047 §1/§3: mic→uplink is measured from the transport's own outbound
+ *    counters (never inferred from a provider event), every local speech
+ *    start is settled by exactly one `uplink_first_packet` or an explicit
+ *    unmatched marker, and first audio is decomposed into provider decision,
+ *    generation and local playback.
  * 5. Network loss: `network_lost`, transport torn down, `attach` on restore
  *    (fresh credential, replayed sideband), `network_restored`.
  *
@@ -43,6 +51,8 @@ import type {
   Playback,
   SpeechDetector,
   SpeechDetectorCalibration,
+  SpeechDetectorCalibrationAttempt,
+  SpeechStartDetail,
 } from "./ports";
 import {
   type ResolvedContract,
@@ -52,6 +62,7 @@ import {
   unknownVersionNotice,
   validateCreateBody,
 } from "./session-contract";
+import { msOrOmit, UplinkProbe } from "./timing";
 import {
   type RealtimeTransport,
   type TransportDescriptor,
@@ -75,7 +86,7 @@ export type LatencySample = { value: number; at: number };
 
 /**
  * Per-session microphone / noise counters for the qualification matrix
- * (ADR-0044 §7). Numbers only; reported through `state` events.
+ * (ADR-0044 §7, ADR-0047). Numbers only; reported through `state` events.
  */
 export type MicMetrics = {
   /** local gate opened, the provider never heard speech for it */
@@ -84,13 +95,37 @@ export type MicMetrics = {
   false_barge_ins: number;
   /** provider-confirmed turns that produced no transcript */
   false_turns: number;
+  /** provider-confirmed owner turns (what the profile learns against) */
+  confirmed_turns: number;
+  /** reversible playback mutes on a confident onset, and how many were reverted */
+  early_mutes: number;
+  early_mute_reverts: number;
   gate_opens: number;
   gated_out: number;
   click_rejects: number;
   calibrations: number;
   noise_floor_db: number | null;
-  /** 0 quiet, 1 normal, 2 noisy, 3 very noisy; null before calibration */
+  /** 1 quiet, 2 normal, 3 noisy, 4 very noisy; null before calibration (never 0) */
   env: number | null;
+  /** measured residual of the assistant's playback in the microphone; null until measured */
+  echo_residual_db: number | null;
+};
+
+/** The last measured decomposition of each latency (ADR-0047), for the diagnostics view. */
+export type LatencyDetail = {
+  uplink?: { basis: number; rtp_ms?: number; provider_ms?: number; gate_ms?: number; capture_lag_ms?: number; pre_roll_ms?: number };
+  barge_in?: {
+    playback_stopped_ms: number;
+    detect_ms?: number;
+    pre_roll_ms?: number;
+    stop_command_ms: number;
+    gain_zero_ms?: number;
+    output_latency_ms?: number;
+    early_mute: number;
+    audible: number;
+    anomaly: number;
+  };
+  first_audio?: { basis: number; response_created_ms?: number; first_delta_ms?: number; playback_ms?: number };
 };
 
 /**
@@ -140,6 +175,8 @@ export type ControllerSnapshot = {
     tool_preamble_ms?: LatencySample;
     tool_done_to_speech_ms?: LatencySample;
   };
+  /** ADR-0047: the components behind the latencies above. */
+  latencyDetail: LatencyDetail;
   toolsRunning: string[];
   sidebandLog: string[];
   hesitation: { held: number; resumed_within_hold: number; last?: string };
@@ -169,26 +206,58 @@ export type ControllerDeps = {
    * and silently disable the next barge-in.
    */
   localSpeechGraceMs?: number;
+  /** ADR-0047 §1: the RTP probe's poll interval and bound. */
+  uplinkProbe?: { pollMs?: number; maxMs?: number };
+  /** ADR-0047 §3: how long after the provider's audio-start to wait for LOCAL audibility before falling back. */
+  playbackConfirmMs?: number;
+  /**
+   * ADR-0047 §4: extra numbers the page knows about the input path (the AGC
+   * A/B benchmark from the profile), merged into the `mic_input` read-back
+   * report. Numbers only; anything else is dropped.
+   */
+  inputEvidence?: () => Record<string, unknown>;
   /** Ordered operation log — tests pin ordering with it. */
   log?: (op: string) => void;
 };
 
 type LongRunning = { name: string; startedAt: number; preamble?: string };
 
+/** What the current owner turn knows about its uplink (ADR-0047 §1). */
+type UplinkTracking = {
+  turn: number;
+  /** the gate's decision time (origin of rtp_ms / provider_ms); null when the start came from the provider */
+  decisionAt: number | null;
+  detail: SpeechStartDetail | null;
+  rtp: { rtpAt: number; rtpMs: number } | null;
+  probeRunning: boolean;
+  providerAt: number | null;
+  settled: boolean;
+};
+
+type EarlyMute = { at: number; decisionAt: number; gainZeroAt: number | null; outputLatencyMs: number | null; candidateAt: number };
+
 const SIDEBAND_LOG_MAX = 20;
 const REQUEST_LOG_MAX = 20;
 const DEFAULT_LOCAL_GRACE_MS = 700;
+const DEFAULT_PLAYBACK_CONFIRM_MS = 300;
+
+/** A read-back boolean as a payload number; unknown (null) is omitted, never a sentinel. */
+const bit = (v: boolean | null): number | undefined => (v === null ? undefined : v ? 1 : 0);
 
 const EMPTY_MIC_METRICS: MicMetrics = {
   false_starts: 0,
   false_barge_ins: 0,
   false_turns: 0,
+  confirmed_turns: 0,
+  early_mutes: 0,
+  early_mute_reverts: 0,
   gate_opens: 0,
   gated_out: 0,
   click_rejects: 0,
   calibrations: 0,
   noise_floor_db: null,
   env: null,
+  echo_residual_db: null,
 };
 
 export class VoiceSessionController {
@@ -213,13 +282,16 @@ export class VoiceSessionController {
   private ownerSpeechStartedAt: number | null = null;
   private ownerSpeechSource: "local" | "provider" | null = null;
   private uplinkReported = false;
+  private uplink: UplinkTracking | null = null;
+  private probe: UplinkProbe | null = null;
+  private localCloseAt: number | null = null;
   private ownerTranscriptTail = "";
   private eotTimer: unknown = null;
   private lastEotAt: number | null = null;
   private prematureResponse = false;
-  // noise qualification (ADR-0044 §7)
+  // noise qualification (ADR-0044 §7, ADR-0047)
   private localGraceTimer: unknown = null;
-  private metrics = { false_starts: 0, false_barge_ins: 0, false_turns: 0 };
+  private metrics = { false_starts: 0, false_barge_ins: 0, false_turns: 0, confirmed_turns: 0, early_mutes: 0, early_mute_reverts: 0 };
   /** the open turn awaiting its transcript verdict: judged when the next turn starts / at close */
   private turnJudgement: { turn: number; providerConfirmed: boolean; hadTranscript: boolean } | null = null;
   private lastCalibration: SpeechDetectorCalibration | null = null;
@@ -228,7 +300,11 @@ export class VoiceSessionController {
   private responseActive = false;
   private responseAudible = false;
   private awaitingFirstAudio = false;
+  private responseStartedAt: number | null = null;
+  private audioStartedAt: number | null = null;
+  private playbackConfirmTimer: unknown = null;
   private bargedResponse = false;
+  private earlyMute: EarlyMute | null = null;
   private assistantBuffer = "";
 
   // tools
@@ -269,6 +345,7 @@ export class VoiceSessionController {
       contractNotice: null,
       requestLog: [],
       latency: {},
+      latencyDetail: {},
       toolsRunning: [],
       sidebandLog: [],
       hesitation: { held: 0, resumed_within_hold: 0 },
@@ -363,9 +440,12 @@ export class VoiceSessionController {
     }
     this.closing = false;
     this.t0 = this.deps.now();
-    this.metrics = { false_starts: 0, false_barge_ins: 0, false_turns: 0 };
+    this.metrics = { false_starts: 0, false_barge_ins: 0, false_turns: 0, confirmed_turns: 0, early_mutes: 0, early_mute_reverts: 0 };
     this.turnJudgement = null;
     this.lastCalibration = null;
+    this.uplink = null;
+    this.earlyMute = null;
+    this.localCloseAt = null;
     this.patch({
       state: "creating",
       lastError: null,
@@ -374,6 +454,8 @@ export class VoiceSessionController {
       assistantText: "",
       ownerText: "",
       micMetrics: { ...EMPTY_MIC_METRICS },
+      latency: {},
+      latencyDetail: {},
     });
     // ADR-0045: honour the contract version of the server we are talking to.
     const contract = await this.probeContract();
@@ -433,6 +515,7 @@ export class VoiceSessionController {
       await this.closeServerSession("connect_failed");
       return;
     }
+    this.reportInputReadBack();
     this.setState("listening", "LISTENING");
   }
 
@@ -463,16 +546,58 @@ export class VoiceSessionController {
     this.log("transport.connected");
   }
 
+  /**
+   * ADR-0047 §4: what the browser ACTUALLY applied to the input track, as
+   * numbers, plus the page's input evidence (AGC A/B). Verified by read-back
+   * — a requested constraint the browser ignored shows up as `not_honoured`.
+   */
+  private reportInputReadBack(): void {
+    const applied = this.deps.microphone?.applied;
+    if (!applied || !this.reporter) return;
+    this.reporter.report({
+      kind: "state",
+      turn: this.snapshot.turn,
+      payload: numbersOnly({
+        mic_input: 1,
+        aec: bit(applied.echoCancellation),
+        ns: bit(applied.noiseSuppression),
+        agc: bit(applied.autoGainControl),
+        voice_isolation: bit(applied.voiceIsolation),
+        sample_rate: applied.sampleRate ?? undefined,
+        channels: applied.channelCount ?? undefined,
+        input_latency_ms: applied.inputLatencyMs ?? undefined,
+        not_honoured: applied.notHonoured.length,
+        ...this.deps.inputEvidence?.(),
+      }),
+    });
+    this.log("report.mic_input");
+  }
+
   /** Subscribe once per leg (a reattach re-wires instead of stacking sinks). */
   private wireLocalSpeech(detector: SpeechDetector): void {
     for (const unsub of this.localSpeechUnsubs) unsub();
     this.localSpeechUnsubs = [
-      detector.onSpeechStart((at) => this.onOwnerSpeechStart(at - this.t0, "local")),
+      detector.onSpeechStart((at, detail) => this.onOwnerSpeechStart(at - this.t0, "local", detail ? this.localDetail(detail) : undefined)),
       detector.onSpeechEnd((at) => this.onLocalSpeechEnd(at - this.t0)),
     ];
     if (detector.onCalibration) {
       this.localSpeechUnsubs.push(detector.onCalibration((c) => this.onCalibration(c)));
     }
+    if (detector.onEvidence) {
+      this.localSpeechUnsubs.push(detector.onEvidence((at, candidateAt) => this.onLocalEvidence(at - this.t0, candidateAt - this.t0)));
+    }
+    if (detector.onEvidenceLost) {
+      this.localSpeechUnsubs.push(detector.onEvidenceLost((at) => this.onLocalEvidenceLost(at - this.t0)));
+    }
+  }
+
+  /** The detector's accounting is on the device clock; the session clock starts at t0. */
+  private localDetail(detail: SpeechStartDetail): SpeechStartDetail {
+    return {
+      ...detail,
+      candidateAt: detail.candidateAt - this.t0,
+      decidedAt: detail.decidedAt - this.t0,
+    };
   }
 
   /** Swap the microphone without dropping the session. */
@@ -484,6 +609,7 @@ export class VoiceSessionController {
     if (track) this.transport.sendAudio({ kind: "track", track });
     this.deps.localSpeech?.stop();
     this.deps.localSpeech?.start(stream);
+    this.reportInputReadBack();
   }
 
   /** Close the media leg and the server session; report the summary first. */
@@ -493,7 +619,9 @@ export class VoiceSessionController {
     this.clearEotTimer();
     this.clearReattachTimer();
     this.clearLocalGraceTimer();
+    this.clearPlaybackConfirmTimer();
     if (this.reporter) {
+      this.settleUplink({ session_end: 1 });
       this.judgeOpenTurn();
       if (this.deps.localSpeech) this.reportMicMetrics({ session_end: 1 });
       const summary = this.recentLines.join(" | ").slice(0, MAX_SUMMARY_CHARS);
@@ -512,11 +640,15 @@ export class VoiceSessionController {
   private teardownLeg(reason: string): void {
     for (const unsub of this.transportUnsubs) unsub();
     this.transportUnsubs = [];
+    this.probe?.cancel();
+    this.probe = null;
+    this.clearPlaybackConfirmTimer();
     this.deps.playback.stop();
     this.transport?.close(reason);
     this.transport = null;
     this.responseActive = false;
     this.responseAudible = false;
+    this.earlyMute = null;
   }
 
   private async closeServerSession(reason: string): Promise<void> {
@@ -570,7 +702,7 @@ export class VoiceSessionController {
         this.onResponseText(event.text, event.final);
         return;
       case "audio_started":
-        this.onAudioActivity(event.at);
+        this.onProviderAudioStarted(event.at);
         return;
       case "audio_stopped":
         this.responseAudible = false;
@@ -582,6 +714,7 @@ export class VoiceSessionController {
         this.responseActive = false;
         this.responseAudible = false;
         this.awaitingFirstAudio = false;
+        this.clearPlaybackConfirmTimer();
         if (this.snapshot.state === "interrupted") this.setState("listening", "LISTENING");
         return;
       case "tool_call":
@@ -603,30 +736,36 @@ export class VoiceSessionController {
 
   // ------------------------------------------------------ owner speech
 
-  private onOwnerSpeechStart(at: number, source: "local" | "provider"): void {
+  private onOwnerSpeechStart(at: number, source: "local" | "provider", detail?: SpeechStartDetail): void {
     if (this.closing || !this.reporter) return;
     if (this.ownerSpeaking) {
       // A second signal for the same speech (local detector first, provider
-      // VAD later): the provider hearing it is the closest thing a WebRTC
-      // client has to "first uplink packet acknowledged".
+      // VAD later): the provider hearing it confirms the turn; the uplink
+      // itself was measured from the transport's counters (ADR-0047 §1).
       if (source === "provider" && !this.uplinkReported && this.ownerSpeechStartedAt !== null) {
         this.uplinkReported = true;
         this.clearLocalGraceTimer();
         if (this.turnJudgement) this.turnJudgement.providerConfirmed = true;
-        this.reporter.report({
-          kind: "uplink_first_packet",
-          t_ms: at,
-          turn: this.snapshot.turn,
-          payload: { basis: "provider_speech_started" },
-        });
-        this.patch({
-          latency: {
-            ...this.snapshot.latency,
-            mic_to_uplink_ms: { value: Math.max(0, at - this.ownerSpeechStartedAt), at },
-          },
-        });
+        this.metrics.confirmed_turns += 1;
+        this.onProviderConfirmed(at);
       }
       return;
+    }
+    // ADR-0047 §2: a provider-first start during playback is not "now" — if
+    // the gate has an onset candidate under evaluation, that is the measured
+    // onset; otherwise the onset is unknown and the sample is flagged.
+    let onsetKnown = source === "local";
+    if (source === "provider") {
+      const candidate = this.deps.localSpeech?.onsetCandidate?.() ?? null;
+      if (candidate) {
+        const candidateAt = candidate.candidateAt - this.t0;
+        const onset = Math.max(0, candidateAt - candidate.preRollMs);
+        if (onset <= at) {
+          detail = { candidateAt, decidedAt: at, preRollMs: candidate.preRollMs, captureLagMs: null, duringPlayback: this.responseAudible };
+          at = onset;
+          onsetKnown = true;
+        }
+      }
     }
     const resumed = this.guard.speechStarted(at);
     this.clearEotTimer();
@@ -635,15 +774,16 @@ export class VoiceSessionController {
       this.ownerSpeaking = true;
       this.patch({ hesitation: { ...this.guard.stats(), last: "resumed_within_hold" } });
       if (this.prematureResponse && (this.responseActive || this.deps.playback.playing)) {
-        this.bargeIn(at, source, { hesitation_resume: true });
+        this.bargeIn(at, source, detail, onsetKnown, { hesitation_resume: true });
       }
       this.prematureResponse = false;
       return;
     }
     this.prematureResponse = false;
     if (this.responseActive || this.deps.playback.playing) {
-      this.bargeIn(at, source);
+      this.bargeIn(at, source, detail, onsetKnown);
     }
+    this.settleUplink({ superseded: 1 });
     this.judgeOpenTurn();
     this.ownerSpeaking = true;
     this.ownerSpeechStartedAt = at;
@@ -652,37 +792,221 @@ export class VoiceSessionController {
     this.ownerTranscriptTail = "";
     const turn = this.snapshot.turn + 1;
     this.turnJudgement = { turn, providerConfirmed: source === "provider", hadTranscript: false };
+    if (source === "provider") this.metrics.confirmed_turns += 1;
     this.patch({ turn, ownerText: "" });
-    this.reporter.report({ kind: "mic_speech_start", t_ms: at, turn, payload: { source } });
+    const payload: Record<string, unknown> = { source };
+    if (detail) {
+      payload.gate_ms = msOrOmit(detail.decidedAt - detail.candidateAt);
+      payload.capture_lag_ms = msOrOmit(detail.captureLagMs);
+      payload.pre_roll_ms = msOrOmit(detail.preRollMs);
+    }
+    this.reporter.report({ kind: "mic_speech_start", t_ms: at, turn, payload });
+    this.uplink = {
+      turn,
+      decisionAt: detail ? detail.decidedAt : null,
+      detail: detail ?? null,
+      rtp: null,
+      probeRunning: false,
+      providerAt: null,
+      settled: false,
+    };
+    if (source === "local") {
+      this.startUplinkProbe();
+    } else {
+      // No local onset: nothing to measure against. Explicit, never silent.
+      this.uplink.settled = true;
+      this.reportMicMetrics({ unmatched: 1, provider_first: 1 }, at);
+    }
     if (this.snapshot.state !== "tool_running" && this.snapshot.state !== "interrupted") {
       this.setState("listening");
     }
   }
 
-  private bargeIn(at: number, source: "local" | "provider", extra: Record<string, unknown> = {}): void {
+  // ------------------------------------------------------ uplink (§1)
+
+  /** Poll the transport's outbound counters for the first packet after the gate's decision. */
+  private startUplinkProbe(): void {
+    const tracking = this.uplink;
+    const stats = this.transport?.outboundAudioStats?.bind(this.transport);
+    if (!tracking || tracking.decisionAt === null || !stats) return;
+    this.probe?.cancel();
+    const probe = new UplinkProbe({
+      stats,
+      now: () => this.now(),
+      scheduler: this.scheduler,
+      pollMs: this.deps.uplinkProbe?.pollMs,
+      maxMs: this.deps.uplinkProbe?.maxMs,
+    });
+    this.probe = probe;
+    tracking.probeRunning = true;
+    void probe.run(tracking.decisionAt).then((result) => {
+      if (this.probe === probe) this.probe = null;
+      if (this.uplink !== tracking) return;
+      tracking.probeRunning = false;
+      if (result) tracking.rtp = { rtpAt: result.rtpAt, rtpMs: result.rtpMs };
+      this.log(result ? `uplink.rtp:${result.rtpMs}` : "uplink.rtp:none");
+      if (tracking.providerAt !== null) this.reportUplink(tracking);
+    });
+  }
+
+  /** The provider's `speech_started` for the current local turn. */
+  private onProviderConfirmed(at: number): void {
+    const tracking = this.uplink;
+    if (!tracking || tracking.settled) return;
+    tracking.providerAt = at;
+    if (!tracking.probeRunning) this.reportUplink(tracking);
+    // else: the probe's completion reports (bounded by its maxMs).
+  }
+
+  /** Exactly one `uplink_first_packet` per local start (ADR-0047 §1). */
+  private reportUplink(tracking: UplinkTracking): void {
+    if (tracking.settled || !this.reporter) return;
+    tracking.settled = true;
+    const origin = tracking.decisionAt ?? this.ownerSpeechStartedAt ?? 0;
+    const providerMs = tracking.providerAt === null ? undefined : msOrOmit(tracking.providerAt - origin);
+    const basis = tracking.rtp ? 1 : 0;
+    const tMs = tracking.rtp ? tracking.rtp.rtpAt : (tracking.providerAt ?? this.now());
+    const payload = numbersOnly({
+      basis,
+      rtp_ms: tracking.rtp ? msOrOmit(tracking.rtp.rtpMs) : undefined,
+      provider_ms: providerMs,
+    });
+    this.reporter.report({ kind: "uplink_first_packet", t_ms: tMs, turn: tracking.turn, payload });
+    const start = this.ownerSpeechStartedAt ?? 0;
+    const detail = tracking.detail;
+    this.patch({
+      latency: { ...this.snapshot.latency, mic_to_uplink_ms: { value: Math.max(0, Math.round(tMs - start)), at: tMs } },
+      latencyDetail: {
+        ...this.snapshot.latencyDetail,
+        uplink: {
+          basis,
+          rtp_ms: payload.rtp_ms,
+          provider_ms: payload.provider_ms,
+          gate_ms: detail ? msOrOmit(detail.decidedAt - detail.candidateAt) : undefined,
+          capture_lag_ms: detail ? msOrOmit(detail.captureLagMs) : undefined,
+          pre_roll_ms: detail ? msOrOmit(detail.preRollMs) : undefined,
+        },
+      },
+    });
+    this.log(`report.uplink:${basis}`);
+  }
+
+  /**
+   * The current local start will never get a provider confirmation (false
+   * start, network loss, session end, superseded by a new start): say so
+   * explicitly on a follow-up `state` event rather than losing it silently.
+   */
+  private settleUplink(reason: Record<string, number>): void {
+    const tracking = this.uplink;
+    if (!tracking || tracking.settled) return;
+    tracking.settled = true;
+    this.probe?.cancel();
+    this.probe = null;
+    this.reportMicMetrics({ unmatched: 1, ...reason });
+  }
+
+  // ---------------------------------------------------- barge-in (§2)
+
+  /**
+   * ADR-0047 §2: the gate saw a confident, speech-like onset while the
+   * assistant was audible. Mute locally NOW — reversibly: if the onset
+   * collapses before the gate opens, the gain is restored and nothing was
+   * cancelled. The irreversible cancel waits for the confirmed open.
+   */
+  private onLocalEvidence(at: number, candidateAt: number): void {
+    if (this.closing || this.bargedResponse || this.earlyMute) return;
+    if (!(this.responseAudible || this.deps.playback.playing)) return;
+    const decisionAt = this.now();
+    const stop = this.deps.playback.mute();
+    this.earlyMute = {
+      at: stop.at - this.t0,
+      decisionAt,
+      gainZeroAt: stop.gainZeroAt === null ? null : stop.gainZeroAt - this.t0,
+      outputLatencyMs: stop.outputLatencyMs,
+      candidateAt,
+    };
+    this.metrics.early_mutes += 1;
+    this.log(`playback.mute@${Math.round(at)}`);
+    this.refreshMicMetrics();
+  }
+
+  private onLocalEvidenceLost(at: number): void {
+    if (!this.earlyMute || this.bargedResponse) return;
+    this.earlyMute = null;
+    this.deps.playback.unmute();
+    this.metrics.early_mute_reverts += 1;
+    this.log(`playback.unmute@${Math.round(at)}`);
+    this.refreshMicMetrics();
+  }
+
+  private bargeIn(
+    at: number,
+    source: "local" | "provider",
+    detail: SpeechStartDetail | undefined,
+    onsetKnown: boolean,
+    extra: Record<string, unknown> = {},
+  ): void {
     if (!this.reporter || this.bargedResponse) return;
     this.bargedResponse = true;
-    // 1. stop local playback FIRST — the latency-critical action
-    const stoppedAt = this.deps.playback.stop();
+    const decisionAt = this.now();
+    const audible = this.responseAudible;
+    const early = this.earlyMute;
+    this.earlyMute = null;
+    // 1. stop local playback FIRST — the latency-critical action (an early
+    //    mute already silenced it; the stop is then bookkeeping)
+    const stop = this.deps.playback.stop();
     // 2. cancel the provider's in-flight response
     this.transport?.cancelResponse();
+    const cancelSentAt = this.now();
     this.log("transport.cancel");
-    // 3. report with the client-measured latency
-    const stopMs = Math.max(0, Math.round(stoppedAt - this.t0 - at));
+    // 3. report with the client-measured latency, decomposed
+    const stopAt = early ? early.at : stop.at - this.t0;
+    const gainZeroAt = early ? early.gainZeroAt : stop.gainZeroAt === null ? null : stop.gainZeroAt - this.t0;
+    const gainDecisionAt = early ? early.decisionAt : decisionAt;
+    const stopMs = Math.max(0, Math.round(stopAt - at));
+    // A stop latency is only a measurement when something audible was stopped
+    // and the onset is known; otherwise the sample is flagged, never silent.
+    const anomaly = !audible || !onsetKnown ? 1 : 0;
     const turn = this.snapshot.turn + 1;
+    const breakdown = numbersOnly({
+      playback_stopped_ms: stopMs,
+      detect_ms: detail ? msOrOmit(detail.decidedAt - detail.candidateAt) : undefined,
+      pre_roll_ms: detail ? msOrOmit(detail.preRollMs) : undefined,
+      stop_command_ms: msOrOmit(cancelSentAt - decisionAt),
+      gain_zero_ms: gainZeroAt === null ? undefined : msOrOmit(gainZeroAt - gainDecisionAt),
+      output_latency_ms: msOrOmit(early ? early.outputLatencyMs : stop.outputLatencyMs),
+      early_mute: early ? 1 : 0,
+      audible: audible ? 1 : 0,
+      anomaly,
+    });
     this.reporter.report({
       kind: "barge_in_start",
       t_ms: at,
       turn,
-      payload: { playback_stopped_ms: stopMs, source, ...extra },
+      payload: { ...breakdown, source, ...extra },
     });
-    this.reporter.report({ kind: "playback_stopped", t_ms: at + stopMs, turn });
+    this.reporter.report({ kind: "playback_stopped", t_ms: stopAt, turn, payload: { anomaly, early_mute: early ? 1 : 0 } });
     this.log("report.barge_in");
     this.responseActive = false;
     this.responseAudible = false;
     this.awaitingFirstAudio = false;
+    this.clearPlaybackConfirmTimer();
     this.patch({
       latency: { ...this.snapshot.latency, barge_in_to_stop_ms: { value: stopMs, at } },
+      latencyDetail: {
+        ...this.snapshot.latencyDetail,
+        barge_in: {
+          playback_stopped_ms: stopMs,
+          detect_ms: breakdown.detect_ms,
+          pre_roll_ms: breakdown.pre_roll_ms,
+          stop_command_ms: breakdown.stop_command_ms ?? 0,
+          gain_zero_ms: breakdown.gain_zero_ms,
+          output_latency_ms: breakdown.output_latency_ms,
+          early_mute: breakdown.early_mute,
+          audible: breakdown.audible,
+          anomaly,
+        },
+      },
     });
     this.setState("interrupted", "INTERRUPTED");
   }
@@ -693,7 +1017,9 @@ export class VoiceSessionController {
    * for a locally opened turn — after a short grace it was noise.
    */
   private onLocalSpeechEnd(at: number): void {
-    if (this.closing || !this.ownerSpeaking) return;
+    if (this.closing) return;
+    this.localCloseAt = at;
+    if (!this.ownerSpeaking) return;
     if (this.ownerSpeechSource !== "local" || this.uplinkReported) return;
     this.clearLocalGraceTimer();
     const grace = this.deps.localSpeechGraceMs ?? DEFAULT_LOCAL_GRACE_MS;
@@ -714,7 +1040,15 @@ export class VoiceSessionController {
     this.metrics.false_starts += 1;
     if (wasBargeIn) this.metrics.false_barge_ins += 1;
     this.log(wasBargeIn ? "gate.false_barge_in" : "gate.false_start");
-    this.reportMicMetrics({ false_start: 1, false_barge_in: wasBargeIn ? 1 : 0 }, at);
+    // The unmatched marker rides on the same metrics event (ADR-0047 §1).
+    if (this.uplink && !this.uplink.settled) {
+      this.uplink.settled = true;
+      this.probe?.cancel();
+      this.probe = null;
+      this.reportMicMetrics({ false_start: 1, false_barge_in: wasBargeIn ? 1 : 0, unmatched: 1 }, at);
+    } else {
+      this.reportMicMetrics({ false_start: 1, false_barge_in: wasBargeIn ? 1 : 0 }, at);
+    }
     if (wasBargeIn) this.setState("listening", "LISTENING");
   }
 
@@ -735,15 +1069,30 @@ export class VoiceSessionController {
     this.reportMicMetrics({ false_turn: 1 });
   }
 
-  private onCalibration(calibration: SpeechDetectorCalibration): void {
+  /**
+   * ADR-0047 §5: a measurement is reported as `mic_calibration: 1` with
+   * `measured: 1` and `samples`; a window that measured nothing (dead input,
+   * contaminated retry) is `mic_calibration_attempt: 1` with `measured: 0`,
+   * so the server's "calibration in force" is never a window that saw zeros.
+   */
+  private onCalibration(calibration: SpeechDetectorCalibration | SpeechDetectorCalibrationAttempt): void {
     if (this.closing || !this.reporter) return;
-    this.lastCalibration = calibration;
-    this.reporter.report({
-      kind: "state",
-      turn: this.snapshot.turn,
-      payload: numbersOnly({ mic_calibration: 1, ...calibration }),
-    });
-    this.log("report.mic_calibration");
+    if (calibration.measured === 1) {
+      this.lastCalibration = calibration;
+      this.reporter.report({
+        kind: "state",
+        turn: this.snapshot.turn,
+        payload: numbersOnly({ mic_calibration: 1, ...calibration }),
+      });
+      this.log("report.mic_calibration");
+    } else {
+      this.reporter.report({
+        kind: "state",
+        turn: this.snapshot.turn,
+        payload: numbersOnly({ mic_calibration_attempt: 1, ...calibration }),
+      });
+      this.log("report.mic_calibration_attempt");
+    }
     this.refreshMicMetrics();
   }
 
@@ -757,13 +1106,17 @@ export class VoiceSessionController {
             gated_out: stats.gated_out,
             click_rejects: stats.click_rejects,
             calibrations: stats.calibrations,
+            echo_residual_db: stats.echo_residual_db ?? null,
           }
         : {}),
       false_starts: this.metrics.false_starts,
       false_barge_ins: this.metrics.false_barge_ins,
       false_turns: this.metrics.false_turns,
+      confirmed_turns: this.metrics.confirmed_turns,
+      early_mutes: this.metrics.early_mutes,
+      early_mute_reverts: this.metrics.early_mute_reverts,
       noise_floor_db: this.lastCalibration?.noise_floor_db ?? null,
-      env: this.lastCalibration?.env ?? null,
+      env: this.lastCalibration?.env_class ?? null,
     };
   }
 
@@ -786,6 +1139,9 @@ export class VoiceSessionController {
         false_starts: this.metrics.false_starts,
         false_barge_ins: this.metrics.false_barge_ins,
         false_turns: this.metrics.false_turns,
+        confirmed_turns: this.metrics.confirmed_turns,
+        early_mutes: this.metrics.early_mutes,
+        early_mute_reverts: this.metrics.early_mute_reverts,
         ...extra,
       }),
     });
@@ -800,6 +1156,13 @@ export class VoiceSessionController {
     this.patch({ hesitation: { ...this.guard.stats(), last: decision.reason } });
     this.clearEotTimer();
     const turn = this.snapshot.turn;
+    // ADR-0047 §3: how far the provider's stop trails the local gate's close
+    // (the owner's perceived end of speech), when the local close came first.
+    const localClose = this.localCloseAt;
+    const vadLagMs =
+      localClose !== null && this.ownerSpeechStartedAt !== null && localClose >= this.ownerSpeechStartedAt && localClose <= at
+        ? msOrOmit(at - localClose)
+        : undefined;
     const commit = (): void => {
       this.eotTimer = null;
       this.guard.expire();
@@ -808,7 +1171,7 @@ export class VoiceSessionController {
         kind: "end_of_turn",
         t_ms: at,
         turn,
-        payload: { hold_ms: decision.holdMs, hesitation: decision.reason },
+        payload: { hold_ms: decision.holdMs, hesitation: decision.reason, ...(vadLagMs === undefined ? {} : { vad_lag_ms: vadLagMs }) },
       });
       this.log("report.end_of_turn");
       if (this.snapshot.state === "interrupted") this.setState("listening", "LISTENING");
@@ -848,7 +1211,11 @@ export class VoiceSessionController {
     this.responseActive = true;
     this.responseAudible = false;
     this.awaitingFirstAudio = true;
+    this.responseStartedAt = at;
+    this.audioStartedAt = null;
+    this.clearPlaybackConfirmTimer();
     this.bargedResponse = false;
+    this.earlyMute = null;
     this.assistantBuffer = "";
     this.prematureResponse = this.guard.isHolding;
     this.deps.playback.arm();
@@ -856,13 +1223,54 @@ export class VoiceSessionController {
     if (this.snapshot.state !== "tool_running") this.setState("speaking", "ASSISTANT_SPEAKING");
   }
 
+  /**
+   * The provider says its audio started (WebRTC `output_audio_buffer.started`).
+   * ADR-0047 §3: this is the generation component, not first audio — the
+   * first AUDIBLE sample is what the local analyser reports; if it never does
+   * inside `playbackConfirmMs`, the provider's mark is used with `basis: 0`.
+   */
+  private onProviderAudioStarted(at: number): void {
+    if (!this.awaitingFirstAudio) return;
+    this.responseAudible = true;
+    if (this.audioStartedAt === null) this.audioStartedAt = at;
+    this.clearPlaybackConfirmTimer();
+    this.playbackConfirmTimer = this.scheduler.setTimeout(() => {
+      this.playbackConfirmTimer = null;
+      this.reportFirstAudio(at, 0);
+    }, this.deps.playbackConfirmMs ?? DEFAULT_PLAYBACK_CONFIRM_MS);
+  }
+
+  /** Local: the first audible energy after `arm()`. */
   private onAudioActivity(at: number): void {
+    if (!this.awaitingFirstAudio) return;
+    this.reportFirstAudio(at, 1);
+  }
+
+  private reportFirstAudio(at: number, basis: 0 | 1): void {
     if (!this.reporter || !this.awaitingFirstAudio) return;
     this.awaitingFirstAudio = false;
+    this.clearPlaybackConfirmTimer();
     this.responseAudible = true;
     const turn = this.snapshot.turn;
-    this.reporter.report({ kind: "first_audio", t_ms: at, turn });
+    const responseCreated =
+      this.lastEotAt !== null && this.responseStartedAt !== null && this.responseStartedAt >= this.lastEotAt
+        ? msOrOmit(this.responseStartedAt - this.lastEotAt)
+        : undefined;
+    const firstDelta =
+      this.audioStartedAt !== null && this.responseStartedAt !== null ? msOrOmit(this.audioStartedAt - this.responseStartedAt) : undefined;
+    const playback = basis === 1 && this.audioStartedAt !== null ? msOrOmit(at - this.audioStartedAt) : undefined;
+    const payload = numbersOnly({
+      basis,
+      response_created_ms: responseCreated,
+      first_delta_ms: firstDelta,
+      playback_ms: playback,
+    });
+    this.reporter.report({ kind: "first_audio", t_ms: at, turn, payload });
     const latency = { ...this.snapshot.latency };
+    const latencyDetail = {
+      ...this.snapshot.latencyDetail,
+      first_audio: { basis, response_created_ms: responseCreated, first_delta_ms: firstDelta, playback_ms: playback },
+    };
     if (this.lastEotAt !== null && at >= this.lastEotAt) {
       latency.eot_to_first_audio_ms = { value: Math.round(at - this.lastEotAt), at };
       this.lastEotAt = null;
@@ -887,7 +1295,15 @@ export class VoiceSessionController {
       latency.tool_done_to_speech_ms = { value: Math.round(at - this.pendingResume.at), at };
       this.pendingResume = null;
     }
-    this.patch({ latency });
+    this.log(`report.first_audio:${basis}`);
+    this.patch({ latency, latencyDetail });
+  }
+
+  private clearPlaybackConfirmTimer(): void {
+    if (this.playbackConfirmTimer !== null) {
+      this.scheduler.clearTimeout(this.playbackConfirmTimer);
+      this.playbackConfirmTimer = null;
+    }
   }
 
   private onResponseText(text: string, final: boolean): void {
@@ -899,6 +1315,8 @@ export class VoiceSessionController {
   private onResponseDone(at: number): void {
     this.responseActive = false;
     this.awaitingFirstAudio = false;
+    this.clearPlaybackConfirmTimer();
+    this.earlyMute = null;
     this.reporter?.report({ kind: "response_done", t_ms: at, turn: this.snapshot.turn });
     if (this.longRunning.size > 0) {
       this.setState("tool_running", "TOOL_RUNNING");
@@ -1093,6 +1511,7 @@ export class VoiceSessionController {
     this.log(`network.lost:${reason}`);
     this.clearEotTimer();
     this.clearLocalGraceTimer();
+    this.settleUplink({ network_lost: 1 });
     this.teardownLeg(reason);
     this.ownerSpeaking = false;
     this.patch({ state: "reconnecting" });

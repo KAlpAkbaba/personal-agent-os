@@ -124,6 +124,19 @@ export type ConnectOptions = {
 export type Unsubscribe = () => void;
 
 /**
+ * Outbound audio counters as the transport's own stack reports them
+ * (WebRTC: `RTCRtpSender.getStats()` outbound-rtp). ADR-0047 §1 measures the
+ * real first uplink packet after a speech onset from the first INCREASE of
+ * `packetsSent`, never from a provider event.
+ */
+export type OutboundAudioStats = {
+  packetsSent: number;
+  bytesSent: number;
+  /** The stats object's own timestamp (ms; clock as the platform defines it). */
+  timestamp: number;
+};
+
+/**
  * The interface every media transport implements. The controller depends on
  * nothing else; the WebRTC implementation and the deterministic fake are
  * interchangeable.
@@ -137,6 +150,8 @@ export interface RealtimeTransport {
   ): Promise<void>;
   /** Push audio toward the provider (a track swap on WebRTC, frames elsewhere). */
   sendAudio(input: AudioInput): void;
+  /** Optional: the uplink's outbound audio counters right now; null when there is no sender/stats. */
+  outboundAudioStats?(): Promise<OutboundAudioStats | null>;
   onAudio(sink: (output: AudioOutput) => void): Unsubscribe;
   onEvent(sink: (event: TransportEvent) => void): Unsubscribe;
   /** Cancel the provider's in-flight response (barge-in step 2). */

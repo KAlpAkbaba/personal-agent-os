@@ -29,15 +29,19 @@ import type {
   MicrophoneConstraints,
   NetworkMonitor,
   Playback,
+  PlaybackStop,
   SpeechDetector,
   SpeechDetectorCalibration,
+  SpeechDetectorCalibrationAttempt,
   SpeechDetectorStats,
+  SpeechStartDetail,
 } from "./ports";
 import { BUNDLED_CONTRACT, CONTRACT_PATH, type ContractDocument, createSessionFields } from "./session-contract";
 import type {
   AudioInput,
   AudioOutput,
   ConnectOptions,
+  OutboundAudioStats,
   RealtimeTransport,
   TransportDescriptor,
   TransportEvent,
@@ -97,6 +101,12 @@ export type FakeTransportOptions = {
   now?: () => number;
   /** Fail `connect` this many times before succeeding. */
   failConnects?: number;
+  /**
+   * ADR-0047 §1: scripted outbound-rtp counters as a function of the clock
+   * (e.g. one packet per 20 ms for a continuously streaming track). Absent =
+   * the transport has no `outboundAudioStats` at all (the provider fallback).
+   */
+  uplinkStats?: (now: number) => OutboundAudioStats | null;
 };
 
 export class FakeTransport implements RealtimeTransport {
@@ -106,13 +116,24 @@ export class FakeTransport implements RealtimeTransport {
   readonly audioIn: AudioInput[] = [];
   closedWith: string | null = null;
   connected = false;
+  statsPolls = 0;
   private eventSinks = new Set<(event: TransportEvent) => void>();
   private audioSinks = new Set<(output: AudioOutput) => void>();
   private now: () => number;
 
   constructor(private readonly options: FakeTransportOptions = {}) {
     this.now = options.now ?? (() => 0);
+    if (options.uplinkStats) {
+      const script = options.uplinkStats;
+      this.outboundAudioStats = async () => {
+        this.statsPolls += 1;
+        return script(this.now());
+      };
+    }
   }
+
+  /** Present only when the fake was given `uplinkStats` (see FakeTransportOptions). */
+  outboundAudioStats?: () => Promise<OutboundAudioStats | null>;
 
   async connect(
     descriptor: TransportDescriptor,
@@ -181,7 +202,13 @@ export class FakeTransport implements RealtimeTransport {
 
 export class FakePlayback implements Playback {
   playing = false;
+  muted = false;
   stops: number[] = [];
+  mutes: number[] = [];
+  unmutes: number[] = [];
+  /** Scripted audio-thread delay from a silence request to the gain reaching zero at the output. */
+  gainZeroDelayMs = 3;
+  outputLatencyMs = 10;
   private activitySinks = new Set<(at: number) => void>();
 
   constructor(
@@ -193,16 +220,41 @@ export class FakePlayback implements Playback {
     /* audio path is virtual */
   }
 
-  stop(): number {
-    this.playing = false;
+  private silence(): PlaybackStop {
     const at = this.now();
-    this.stops.push(at);
+    return { at, gainZeroAt: at + this.gainZeroDelayMs, outputLatencyMs: this.outputLatencyMs, changed: !this.muted };
+  }
+
+  stop(): PlaybackStop {
+    const result = this.silence();
+    this.playing = false;
+    this.muted = true;
+    this.stops.push(result.at);
     this.log?.("playback.stop");
-    return at;
+    return result;
+  }
+
+  mute(): PlaybackStop {
+    const result = this.silence();
+    this.muted = true;
+    this.mutes.push(result.at);
+    this.log?.("playback.mute");
+    return result;
+  }
+
+  unmute(): void {
+    this.muted = false;
+    this.unmutes.push(this.now());
+    this.log?.("playback.unmute");
   }
 
   arm(): void {
     this.playing = true;
+    this.muted = false;
+  }
+
+  prepare(): void {
+    /* nothing to warm up */
   }
 
   onActivity(sink: (at: number) => void): Unsubscribe {
@@ -251,6 +303,7 @@ export class FakeMicrophone implements Microphone {
       suppressLocalAudioPlayback: null,
       channelCount: 1,
       sampleRate: 48_000,
+      inputLatencyMs: 10,
       notHonoured: requested.voiceIsolation ? ["voiceIsolation"] : [],
       requested,
       settings: { sampleRate: 48_000, channelCount: 1 },
@@ -269,9 +322,15 @@ export class FakeMicrophone implements Microphone {
 export class FakeSpeechDetector implements SpeechDetector {
   started = 0;
   counters: SpeechDetectorStats = { gate_opens: 0, gated_out: 0, click_rejects: 0, speech_ms: 0, calibrations: 0 };
-  private startSinks = new Set<(at: number) => void>();
+  /** What `onsetCandidate()` answers (a provider-first barge-in reads it). */
+  candidate: { candidateAt: number; preRollMs: number } | null = null;
+  private startSinks = new Set<(at: number, detail?: SpeechStartDetail) => void>();
   private endSinks = new Set<(at: number) => void>();
-  private calibrationSinks = new Set<(calibration: SpeechDetectorCalibration) => void>();
+  private evidenceSinks = new Set<(at: number, candidateAt: number) => void>();
+  private evidenceLostSinks = new Set<(at: number) => void>();
+  private calibrationSinks = new Set<
+    (calibration: SpeechDetectorCalibration | SpeechDetectorCalibrationAttempt) => void
+  >();
 
   start(): void {
     this.started += 1;
@@ -281,7 +340,7 @@ export class FakeSpeechDetector implements SpeechDetector {
     /* nothing to release */
   }
 
-  onSpeechStart(sink: (at: number) => void): Unsubscribe {
+  onSpeechStart(sink: (at: number, detail?: SpeechStartDetail) => void): Unsubscribe {
     this.startSinks.add(sink);
     return () => this.startSinks.delete(sink);
   }
@@ -291,28 +350,74 @@ export class FakeSpeechDetector implements SpeechDetector {
     return () => this.endSinks.delete(sink);
   }
 
-  onCalibration(sink: (calibration: SpeechDetectorCalibration) => void): Unsubscribe {
+  onEvidence(sink: (at: number, candidateAt: number) => void): Unsubscribe {
+    this.evidenceSinks.add(sink);
+    return () => this.evidenceSinks.delete(sink);
+  }
+
+  onEvidenceLost(sink: (at: number) => void): Unsubscribe {
+    this.evidenceLostSinks.add(sink);
+    return () => this.evidenceLostSinks.delete(sink);
+  }
+
+  onCalibration(
+    sink: (calibration: SpeechDetectorCalibration | SpeechDetectorCalibrationAttempt) => void,
+  ): Unsubscribe {
     this.calibrationSinks.add(sink);
     return () => this.calibrationSinks.delete(sink);
+  }
+
+  onsetCandidate(): { candidateAt: number; preRollMs: number } | null {
+    return this.candidate;
   }
 
   stats(): SpeechDetectorStats {
     return { ...this.counters };
   }
 
-  speechStart(at: number): void {
+  /**
+   * A gate open at `at` (the backdated onset). Without `detail` the fake
+   * behaves like the pre-ADR-0047 detector; with it the accounting flows to
+   * the controller (`gate_ms`, `capture_lag_ms`, `pre_roll_ms`).
+   */
+  speechStart(at: number, detail?: Partial<SpeechStartDetail>): void {
     this.counters.gate_opens += 1;
-    for (const sink of this.startSinks) sink(at);
+    this.candidate = null;
+    const full: SpeechStartDetail | undefined = detail
+      ? {
+          candidateAt: detail.candidateAt ?? at + (detail.preRollMs ?? 0),
+          decidedAt: detail.decidedAt ?? at + (detail.preRollMs ?? 0),
+          preRollMs: detail.preRollMs ?? 0,
+          captureLagMs: detail.captureLagMs ?? null,
+          duringPlayback: detail.duringPlayback ?? false,
+        }
+      : undefined;
+    for (const sink of this.startSinks) sink(at, full);
   }
 
   speechEnd(at: number): void {
     for (const sink of this.endSinks) sink(at);
   }
 
-  /** Script a completed calibration (numbers only, like the real detector). */
+  /** Playback-only confident onset (reversible mute request) and its collapse. */
+  evidence(at: number, candidateAt: number): void {
+    this.counters.evidence_events = (this.counters.evidence_events ?? 0) + 1;
+    this.candidate = { candidateAt, preRollMs: 40 };
+    for (const sink of this.evidenceSinks) sink(at, candidateAt);
+  }
+
+  evidenceLost(at: number): void {
+    this.counters.evidence_lost = (this.counters.evidence_lost ?? 0) + 1;
+    this.candidate = null;
+    for (const sink of this.evidenceLostSinks) sink(at);
+  }
+
+  /** Script a completed calibration (numbers only, like the real detector; ADR-0047 §5 shape). */
   emitCalibration(partial: Partial<SpeechDetectorCalibration> = {}): void {
     this.counters.calibrations += 1;
     const calibration: SpeechDetectorCalibration = {
+      measured: 1,
+      samples: 84,
       noise_floor_db: -52.5,
       stationary_db: -55,
       spread_db: 4,
@@ -320,16 +425,32 @@ export class FakeSpeechDetector implements SpeechDetector {
       clip_risk: 0,
       hum_ratio: 0.2,
       contaminated: 0,
-      sensitivity: 1,
-      env: 1,
+      sensitivity_class: 2,
+      env_class: 2,
       open_margin_db: 10,
       min_onset_ms: 70,
       hang_ms: 450,
       pre_roll_ms: 120,
+      echo_margin_db: 6,
       trigger: 0,
+      dead_frames: 0,
       ...partial,
     };
     for (const sink of this.calibrationSinks) sink(calibration);
+  }
+
+  /** Script a window that measured nothing (dead input / contaminated retry). */
+  emitCalibrationAttempt(partial: Partial<SpeechDetectorCalibrationAttempt> = {}): void {
+    const attempt: SpeechDetectorCalibrationAttempt = {
+      measured: 0,
+      samples: 0,
+      dead_frames: 150,
+      contaminated: 0,
+      trigger: 0,
+      retry: 1,
+      ...partial,
+    };
+    for (const sink of this.calibrationSinks) sink(attempt);
   }
 }
 

@@ -76,6 +76,19 @@ export function speechLike(samples: number, db: number, options: { f0?: number; 
   return scaleToDb(out, db);
 }
 
+/**
+ * ADR-0047 §4 — "speaker echo of assistant speech": the assistant's own voice
+ * through the loudspeaker into the microphone AFTER the browser's echo
+ * canceller. Speech-shaped (a different, higher voice than the owner's, a
+ * slower phrase rhythm) with a non-linear residual (broadband noise ≈ −14 dB
+ * below it), scaled to `db` dBFS RMS. This is what a false barge-in hears.
+ */
+export function echoResidual(samples: number, db: number): Float32Array {
+  const voice = speechLike(samples, db, { f0: 175, syllableHz: 3 });
+  const residual = whiteNoise(samples, db - 14, 41);
+  return scaleToDb(overlay(voice, residual, 0), db);
+}
+
 /** A broadband decaying transient (`widthSamples` long) at `db` dBFS peak-ish RMS. */
 export function click(widthSamples: number, db: number, seed = 11): Float32Array {
   const gen = noiseGen(seed);

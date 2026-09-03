@@ -2067,3 +2067,160 @@ Decisions:
 Consequences: the qualification instructions use `-Latest` or the copy button; the
 Cloud Core is released once more (api workload only) so the listing and the snapshot
 exist in production; the qualified baseline, the provider and the K66 work are untouched.
+
+## ADR-0047 — Realtime voice client: measured latency decomposition, reversible early mute, echo-aware and self-learning noise gate, non-sentinel calibration evidence (2026-09-03)
+
+Status: accepted. Owners: voice-engineer. Scope: `apps/web` only; the server's
+aggregation (`realtime_bench.py`, `service.py`) reads the payload contract below and
+is not changed here. Cedar + the Arbor profile, the WebRTC architecture, the provider,
+session handling, the sideband and the noise pipeline's speech-preservation rules are
+untouched. No threshold is raised globally; the owner is asked to tune nothing.
+
+Context — the owner's closed K66 session (voice cedar, profile arbor) measured:
+mic→uplink p50 391 / p95 472 ms (target 120) with 6 unmatched mic-start samples;
+EOT→first audio p50 674 / p95 1059 (target 700; outliers 925/1059); barge-in→stop p50
+210 / p95 210 (target 150) — almost every sample 209–210 ms, one 0 ms; false starts 5,
+false barge-ins 4, gate opens 15, gated out 6, click rejects 6; the persisted calibration
+carried `env=0, sensitivity=0, peak_db=-100`. Root causes found in the client's data model:
+
+- **Barge-in 210 ms is deterministic and self-inflicted.** `barge_in_start.t_ms` is the
+  gate's onset BACKDATED by the mode table's `preRollMs` (120 ms in "normal") and the stop
+  happens at the gate's open decision (`minOnsetMs` 70 ms + one 20 ms poll): 120 + 70 + 20
+  = 210. The WebAudio gain reaches zero within a render quantum; nothing waits for the
+  provider. The single 0 ms sample is a provider-sourced barge-in: `speech_started`
+  arrival = onset = stop time.
+- **Mic→uplink 391 ms measured nothing about the wire.** `uplink_first_packet` was the
+  provider's `speech_started` (`basis: provider_speech_started`): pre-roll (120) + onset
+  (70) + the provider's own VAD delay. The 6 unmatched samples are the 5 false starts
+  (no `uplink_first_packet` is ever emitted for them) plus provider-first turns
+  (`uplinkReported = true` at start, nothing emitted) — silent loss.
+- **`peak_db = -100` means every sample of the 1.8 s window was exactly zero**: the
+  analyser read digital silence (a suspended AudioContext / a track not yet flowing).
+  The floor then clamps to −75 dBFS, every ambient frame sits 15+ dB above it, and the
+  gate opens on room noise — a plausible driver of the K66 false starts, and a dead
+  window could become "the calibration in force". `env=0` / `sensitivity=0` were also
+  ambiguous between "first class" and "unmeasured".
+- **False barge-ins (4 of 5 false starts) happened during playback**: the residual of
+  the assistant's own voice through the loudspeaker is speech-shaped, and the playback
+  margin was a constant (+6 dB) chosen without measuring that residual.
+
+Decisions:
+
+1. **Mic→uplink is measured in components, never inferred from a provider event.**
+   The gate's `open` carries its onset accounting (`candidateAt`, `decidedAt`, the
+   pre-roll applied); the detector stamps every analyser frame with its audio-thread
+   time mapped onto the main clock (`AudioContext.getOutputTimestamp()`, output latency
+   removed) so `capture_lag_ms` is measured for the onset frame; after the decision an
+   `UplinkProbe` polls `RTCRtpSender.getStats()` outbound-rtp every 10 ms (bound 400 ms)
+   and the first INCREASE of `packetsSent` is the real first uplink packet. Payloads,
+   numbers only: `mic_speech_start {source, gate_ms, capture_lag_ms, pre_roll_ms}`;
+   `uplink_first_packet {basis: 1 rtp_stats / 0 provider fallback, rtp_ms, provider_ms}`
+   with `t_ms` = the RTP observation (basis 1) or the provider's confirmation (basis 0),
+   both relative to the gate's decision. Every local start is settled by exactly one
+   `uplink_first_packet` OR an explicit follow-up `state` event `{mic_metrics: 1,
+   unmatched: 1, false_start | provider_first | network_lost | superseded | session_end}`.
+   Honest consequence: with the metric defined as `mic_speech_start.t_ms →
+   uplink_first_packet.t_ms`, the sample now equals pre-roll + gate decision + RTP
+   cadence; the transport component alone is `capture_lag_ms + rtp_ms`. No transport
+   latency is claimed beyond what those two numbers say.
+2. **Barge-in: reversible early mute, measured split, flagged anomalies.** During
+   playback the gate emits `evidence` once a candidate has persisted `EVIDENCE_ONSET_MS`
+   (40 ms) with two consecutive speech-like frames (spectral score ≥ 0.5); the
+   controller mutes local playback at once (`Playback.mute()`, gain 0 at the next
+   quantum) WITHOUT cancelling anything; if the candidate collapses (`evidence_lost`)
+   the gain is restored and nothing was relayed. The irreversible open (turn, provider
+   cancel) needs `minOnsetMs + BARGE_ONSET_EXTRA_MS` (30 ms) and the same spectral run —
+   stronger temporal consistency during playback only. The reported pre-roll becomes
+   MEASURED (`capture_lag + frame + poll`, ≈ 50–60 ms) with the mode table as the cap,
+   so the backdating no longer overstates the onset by ~60–90 ms. Expected in the
+   browser: onset → silence ≈ 50 (pre-roll) + 40 (evidence) + ~5 (quantum) ≈ 95–110 ms,
+   under the 150 ms target; the irreversible cancel follows at ~150 ms without the owner
+   hearing it. `barge_in_start` payload: `{playback_stopped_ms, detect_ms (candidate →
+   decision), pre_roll_ms, stop_command_ms (decision → response.cancel sent),
+   gain_zero_ms (decision → gain at zero at the output), output_latency_ms, early_mute,
+   audible, anomaly}`; `playback_stopped {anomaly, early_mute}`. `anomaly: 1` when
+   nothing audible was stopped (response armed, no first audio) or the onset is unknown
+   (provider-first with no gate candidate); a provider-first start WITH a gate candidate
+   uses the candidate as the measured onset. A 0 ms sample can therefore no longer be
+   silent. `stop_command_ms` is the name — `stop_cmd_ms` normalises to "stopcmdms",
+   which contains "pcm" and the server refuses it; a test pins the rejected spelling.
+3. **End-of-turn → first audio is decomposed and the client's share removed.**
+   `first_audio.t_ms` is the first AUDIBLE sample (the local analyser, now polled every
+   10 ms); the provider's `output_audio_buffer.started` is the generation mark. Payload
+   `{basis: 1 local / 0 provider fallback, response_created_ms (end_of_turn →
+   response.created: provider semantic-VAD decision + queue), first_delta_ms
+   (response.created → audio started: generation), playback_ms (audio started → first
+   audible sample: network/jitter/decode/WebAudio)}`; when nothing audible arrives
+   within 300 ms of the provider's mark, the mark is used with `basis: 0` and
+   `playback_ms` absent. `end_of_turn` gains `vad_lag_ms` (local gate close → provider
+   `speech_stopped`) so the owner-perceived wait is visible. The output AudioContext is
+   created and resumed inside the Connect click (`Playback.prepare()`), removing the
+   only client-side contributor to a first-response outlier (a suspended context waiting
+   for `resume()`). On the 925/1059 ms outliers: the hesitation guard cannot cause them
+   (it delays the REPORT, not `t_ms`, and a resumed turn cancels the pair); in this data
+   model they can only live in `response_created_ms` (the provider's semantic VAD waiting
+   on an ambiguous Turkish ending) or `first_delta_ms` (generation) — which the rerun
+   will now show. `tool_preamble` / `tool_done_to_speech` are excluded (n = 0).
+4. **K66 ambient robustness without a global threshold.** (a) Echo-aware margin: the
+   detector measures the residual of the assistant's playback on closed-gate playback
+   frames (`EchoResidualTracker`: p80 per 1.5 s window, the first window applies at
+   once, later windows raise immediately and lower ≤ 1 dB per window); the playback open
+   threshold is placed 6 dB above that residual, the preset's constant is the MINIMUM,
+   and the threshold is capped at −28 dBFS so barge-in stays physically possible. The
+   residual persists in the profile (`measuredEchoResidualDb`) and seeds the next
+   session. (b) Playback-only temporal/spectral consistency (decision 2). (c) The profile
+   learns from its own session (`learnFromSession`): ≥ 2 false starts outside playback →
+   +1 dB margin, +10 ms onset; ≥ 2 false barge-ins → +2 dB playback margin; a clean
+   session with ≥ 5 confirmed turns decays them; bounds +4 dB / +30 ms / +6 dB
+   (`ADAPTATION_LIMITS`), applied per device in `deriveGateParameters`, never a global
+   constant, never an owner question. (d) The read-back is evidence: after every open the
+   controller reports `state {mic_input: 1, aec, ns, agc, voice_isolation (omitted when
+   unknown), sample_rate, channels, input_latency_ms, not_honoured, agc_bench,
+   agc_bench_off_score, agc_bench_on_score, agc_bench_off_floor_db, agc_bench_on_floor_db,
+   agc_bench_recommended_on}` and the profile stores `appliedSettings` as measured values.
+   Synthetic proof (tests): on hum, clicks, loud broadband noise, a −38 dBFS and a −40 dBFS
+   "speaker echo of assistant speech" signal, the ADR-0044 gate opens falsely ≥ 1 time and
+   the new gate 0 times, with quiet speech at −35 dBFS still covered ≥ 90 % (also at the
+   adaptation cap) and an owner at −22 dBFS still barging in through the measured margin.
+5. **Calibration evidence can never be a sentinel.** Every measurement carries
+   `measured: 1` and `samples: N` (live frames); classes are 1-based (`env_class` 1–4,
+   `sensitivity_class` 1–3; the old `env` / `sensitivity` keys are gone); `peak_db` is
+   absent when no peak was observed; an all-zero frame is dead input — counted, never
+   measured; a window with only dead input for 3 s is a `mic_calibration_attempt: 1
+   {measured: 0, samples, dead_frames, retry}` (also for a contaminated retry), keeps the
+   parameters in force (the default −60 dBFS floor before a first measurement, never the
+   clamped minimum) and retries at most 3 times; the detector resumes its context on
+   start and treats a non-running context as dead. The server's "last calibration in
+   force" can only ever be a measurement.
+
+Consequences: `apps/web` tests 96 → 120 in 11 files (uplink probe with a streaming
+track, provider-during-probe, DTX fallback with `basis: 0`, one-settlement-per-start
+across false start / provider-first / network loss; early mute before the turn with the
+split as numbers, collapse restores playback, the three anomaly shapes; first-audio
+decomposition and the provider fallback; `vad_lag_ms`; read-back as numbers; uncalibrated
+session reports no calibration numbers; attempt vs measurement; every ADR-0047 key
+through `isForbiddenKey` with `stop_cmd_ms` pinned as refused; echo margin before/after,
+cap, tracker dynamics, evidence ordering, click/collapse behaviour, the synthetic set,
+measured pre-roll cap, learned adaptation bounds/decay/normalisation, dead windows). Two
+existing tests moved from the provider's audio mark to local audibility. `pnpm --dir
+apps/web test`, `lint`, `build` green. New payload keys, exact: `gate_ms`,
+`capture_lag_ms`, `pre_roll_ms`, `basis`, `rtp_ms`, `provider_ms`, `unmatched`,
+`provider_first`, `superseded`, `network_lost`, `detect_ms`, `stop_command_ms`,
+`gain_zero_ms`, `output_latency_ms`, `early_mute`, `audible`, `anomaly`,
+`response_created_ms`, `first_delta_ms`, `playback_ms`, `vad_lag_ms`, `measured`,
+`samples`, `dead_frames`, `retry`, `env_class`, `sensitivity_class`, `echo_margin_db`,
+`echo_residual_db`, `mic_calibration_attempt`, `mic_input`, `aec`, `ns`, `agc`,
+`voice_isolation`, `sample_rate`, `channels`, `input_latency_ms`, `not_honoured`,
+`agc_bench*`, `confirmed_turns`, `early_mutes`, `early_mute_reverts`, `evidence_events`,
+`evidence_lost`.
+
+What only the owner's real rerun can confirm: the measured `capture_lag_ms` and RTP
+cadence on the K66 (whether the uplink's `rtp_ms` sits at one packetisation interval, and
+whether the track streams continuously or DTX applies); the barge-in total under 150 ms
+with the measured pre-roll on the real audio thread; `gain_zero_ms` and
+`output_latency_ms` on the owner's output device; where the 925/1059 ms outliers land
+(`response_created_ms` vs `first_delta_ms`); the K66's measured echo residual and whether
+the false barge-in count falls to zero with the owner still able to interrupt at normal
+speaking level; that no dead calibration window occurs after `prepare()`/`resume()`, and
+the read-back of `echoCancellation` / `noiseSuppression` / `voiceIsolation` on the
+owner's browser.

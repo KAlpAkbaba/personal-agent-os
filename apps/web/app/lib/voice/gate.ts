@@ -17,6 +17,14 @@
  * is a FEATURE (a larger energy margin while the assistant is audible), so
  * barge-in keeps working in headset and open-speaker modes.
  *
+ * ADR-0047 adds, during playback only, a two-stage decision: `evidence` (a
+ * confident, speech-like onset that has persisted `evidenceOnsetMs`) asks the
+ * controller for a REVERSIBLE local mute; the irreversible `open` (turn,
+ * provider cancel) needs `minOnsetMs + bargeOnsetExtraMs` and two consecutive
+ * speech-like frames. An `open` reports its onset accounting (`candidateAt`,
+ * `decidedAt`, the pre-roll actually applied) so every reported latency can be
+ * decomposed instead of guessed.
+ *
  * Pure and deterministic; the caller supplies frames and the clock.
  */
 
@@ -30,6 +38,8 @@ const SPECTRAL_WEIGHT = 1 - ENERGY_ONLY_CAP;
 const ENERGY_SLOPE_DB = 3;
 /** Any energy rise above the floor by this much releases the (optional) attenuation immediately. */
 const ATTENUATION_RELEASE_DB = 3;
+/** Consecutive speech-like frames required during playback (ADR-0047 §4). */
+const EVIDENCE_SPECTRAL_RUN = 2;
 
 export type SpeechScore = {
   prob: number;
@@ -62,10 +72,26 @@ export function speechProbability(
   return { prob, energyScore, spectralScore, marginDb };
 }
 
+/** Onset accounting attached to an `open` (ADR-0047 §1). */
+export type OnsetAccounting = {
+  /** Observation time of the first frame that scored above the open threshold. */
+  candidateAt: number;
+  /** Observation time of the frame on which the gate opened (the decision). */
+  decidedAt: number;
+  /** How far `at` was backdated from `candidateAt` (measured when a hint was given, else the mode table). */
+  preRollMs: number;
+  /** Whether the assistant was audible when the decision was made. */
+  duringPlayback: boolean;
+};
+
 export type GateEvent =
-  | { type: "open"; at: number }
+  | ({ type: "open"; at: number } & OnsetAccounting)
   | { type: "close"; at: number }
-  | { type: "background"; at: number; kind: "click" | "noise"; durationMs: number };
+  | { type: "background"; at: number; kind: "click" | "noise"; durationMs: number }
+  /** Playback only: a confident onset — mute locally now, reversibly. */
+  | { type: "evidence"; at: number; candidateAt: number }
+  /** The candidate behind an `evidence` collapsed before the gate opened: restore. */
+  | { type: "evidence_lost"; at: number };
 
 export type GateClassification = "speech" | "background" | "quiet";
 
@@ -83,17 +109,34 @@ export type GateSnapshot = {
   stats: SpeechDetectorStats;
 };
 
+/** Per-frame hint from the caller: the measured pre-roll for THIS frame (ADR-0047 §1). */
+export type FrameHint = {
+  /** capture lag + frame length + poll interval, measured; the mode table caps it. */
+  preRollMs?: number;
+};
+
 export class SpeechGate {
   private params: GateParameters;
   private open = false;
   private candidateSince: number | null = null;
+  private candidatePreRoll: number | null = null;
+  private spectralRun = 0;
+  private evidenceSent = false;
   private lastVoicedAt = 0;
   private burstSince: number | null = null;
   private last: SpeechScore = { prob: 0, energyScore: 0, spectralScore: 0, marginDb: -100 };
   private lastFeatures: FrameFeatures | null = null;
   private lastPlayback = false;
   private uplinkGain = 1;
-  private counters = { gate_opens: 0, gated_out: 0, click_rejects: 0, speech_ms: 0, calibrations: 0 };
+  private counters = {
+    gate_opens: 0,
+    gated_out: 0,
+    click_rejects: 0,
+    speech_ms: 0,
+    calibrations: 0,
+    evidence_events: 0,
+    evidence_lost: 0,
+  };
 
   constructor(params: GateParameters) {
     this.params = params;
@@ -116,13 +159,28 @@ export class SpeechGate {
     return this.uplinkGain;
   }
 
+  /**
+   * The onset candidate currently under evaluation (ADR-0047 §2): when the
+   * provider's VAD confirms speech before the gate opened, this is the
+   * client's measured onset estimate instead of "now".
+   */
+  onsetCandidate(): { candidateAt: number; preRollMs: number } | null {
+    if (this.open || this.candidateSince === null) return null;
+    return { candidateAt: this.candidateSince, preRollMs: this.effectivePreRoll() };
+  }
+
   /** A calibration completed (counted here so stats() has one source). */
   noteCalibration(): void {
     this.counters.calibrations += 1;
   }
 
+  private effectivePreRoll(): number {
+    const table = this.params.preRollMs;
+    return this.candidatePreRoll === null ? table : Math.min(table, Math.max(0, this.candidatePreRoll));
+  }
+
   /** Feed one frame observed at `now` (ms, frame end). Returns the events it caused. */
-  update(features: FrameFeatures, now: number, playbackActive = false): GateEvent[] {
+  update(features: FrameFeatures, now: number, playbackActive = false, hint: FrameHint = {}): GateEvent[] {
     const events: GateEvent[] = [];
     const p = this.params;
     const score = speechProbability(features, p, playbackActive);
@@ -133,9 +191,21 @@ export class SpeechGate {
 
     if (!this.open) {
       if (score.prob >= p.openProb) {
-        if (this.candidateSince === null) this.candidateSince = now;
-      } else {
+        if (this.candidateSince === null) {
+          this.candidateSince = now;
+          this.candidatePreRoll = hint.preRollMs ?? null;
+          this.spectralRun = 0;
+        }
+        this.spectralRun = score.spectralScore >= p.evidenceSpectralMin ? this.spectralRun + 1 : 0;
+      } else if (this.candidateSince !== null) {
+        if (this.evidenceSent) {
+          this.counters.evidence_lost += 1;
+          events.push({ type: "evidence_lost", at: now });
+        }
         this.candidateSince = null;
+        this.candidatePreRoll = null;
+        this.spectralRun = 0;
+        this.evidenceSent = false;
       }
       if (aboveFloor) {
         if (this.burstSince === null) this.burstSince = now;
@@ -150,14 +220,36 @@ export class SpeechGate {
           events.push({ type: "background", at: now, kind: "noise", durationMs });
         }
       }
-      if (this.candidateSince !== null && now - this.candidateSince >= p.minOnsetMs) {
-        this.open = true;
-        this.lastVoicedAt = now;
-        this.counters.gate_opens += 1;
-        this.counters.speech_ms += now - this.candidateSince;
-        events.push({ type: "open", at: Math.max(0, this.candidateSince - p.preRollMs) });
-        this.candidateSince = null;
-        this.burstSince = null;
+      if (this.candidateSince !== null) {
+        const persisted = now - this.candidateSince;
+        const speechLike = this.spectralRun >= EVIDENCE_SPECTRAL_RUN;
+        // Playback: the reversible local mute on a confident, speech-like onset.
+        if (playbackActive && !this.evidenceSent && persisted >= p.evidenceOnsetMs && speechLike) {
+          this.evidenceSent = true;
+          this.counters.evidence_events += 1;
+          events.push({ type: "evidence", at: now, candidateAt: this.candidateSince });
+        }
+        const onsetMs = playbackActive ? p.minOnsetMs + p.bargeOnsetExtraMs : p.minOnsetMs;
+        if (persisted >= onsetMs && (!playbackActive || speechLike)) {
+          const preRollMs = this.effectivePreRoll();
+          this.open = true;
+          this.lastVoicedAt = now;
+          this.counters.gate_opens += 1;
+          this.counters.speech_ms += persisted;
+          events.push({
+            type: "open",
+            at: Math.max(0, this.candidateSince - preRollMs),
+            candidateAt: this.candidateSince,
+            decidedAt: now,
+            preRollMs,
+            duringPlayback: playbackActive,
+          });
+          this.candidateSince = null;
+          this.candidatePreRoll = null;
+          this.spectralRun = 0;
+          this.evidenceSent = false;
+          this.burstSince = null;
+        }
       }
     } else if (
       score.prob >= p.closeProb ||
@@ -213,6 +305,9 @@ export class SpeechGate {
   resetState(): void {
     this.open = false;
     this.candidateSince = null;
+    this.candidatePreRoll = null;
+    this.spectralRun = 0;
+    this.evidenceSent = false;
     this.burstSince = null;
     this.uplinkGain = 1;
   }

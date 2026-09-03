@@ -11,8 +11,10 @@ import {
   type CalibrationResult,
   type DerivedGateParameters,
   deriveGateParameters,
+  EchoResidualTracker,
   ENVIRONMENT_CLASS_INDEX,
   type EnvironmentMode,
+  type GateAdaptation,
   NoiseFloorCalibrator,
   RunningNoiseFloor,
   SENSITIVITY_INDEX,
@@ -28,12 +30,37 @@ import type {
   MicrophoneConstraints,
   NetworkMonitor,
   Playback,
+  PlaybackStop,
   SpeechDetector,
   SpeechDetectorCalibration,
+  SpeechDetectorCalibrationAttempt,
   SpeechDetectorStats,
+  SpeechStartDetail,
 } from "./ports";
+import { type ClockPair, mapAudioTimeToMainClock } from "./timing";
 import type { AudioOutput, Unsubscribe } from "./transport";
 import type { UplinkShaper } from "./uplink";
+
+/** `AudioContext.getOutputTimestamp()` where the platform has it; null otherwise (never a guess). */
+function clockPairOf(context: AudioContext): ClockPair | null {
+  const withTs = context as AudioContext & { getOutputTimestamp?: () => { contextTime?: number; performanceTime?: number } };
+  if (typeof withTs.getOutputTimestamp !== "function") return null;
+  try {
+    const ts = withTs.getOutputTimestamp();
+    if (typeof ts.contextTime !== "number" || typeof ts.performanceTime !== "number") return null;
+    return { contextTime: ts.contextTime, performanceTime: ts.performanceTime };
+  } catch {
+    return null;
+  }
+}
+
+function outputLatencyMsOf(context: AudioContext): number | null {
+  const value = (context as AudioContext & { outputLatency?: number }).outputLatency;
+  return typeof value === "number" && Number.isFinite(value) ? value * 1000 : null;
+}
+
+/** One render quantum, seconds. */
+const RENDER_QUANTUM = 128;
 
 export async function listAudioDevices(): Promise<AudioDevice[]> {
   if (typeof navigator === "undefined" || !navigator.mediaDevices?.enumerateDevices) return [];
@@ -127,6 +154,8 @@ export function readBackTrack(
     suppressLocalAudioPlayback: boolOrNull(settings.suppressLocalAudioPlayback),
     channelCount: numberOrNull(settings.channelCount),
     sampleRate: numberOrNull(settings.sampleRate),
+    // MediaTrackSettings.latency is seconds where reported (Chromium); measured, not assumed.
+    inputLatencyMs: numberOrNull(settings.latency) === null ? null : Math.round((settings.latency as number) * 1000),
     notHonoured,
     requested,
     settings: bounded(settings) ?? {},
@@ -251,6 +280,7 @@ export function measureNoiseFloor(
  */
 export class WebAudioPlayback implements Playback {
   playing = false;
+  muted = false;
   private context: AudioContext | null = null;
   private gain: GainNode | null = null;
   private analyser: AnalyserNode | null = null;
@@ -264,15 +294,51 @@ export class WebAudioPlayback implements Playback {
 
   private ensureContext(): AudioContext {
     if (!this.context) {
-      this.context = new AudioContext();
+      this.context = new AudioContext({ latencyHint: "interactive" });
       this.gain = this.context.createGain();
       this.analyser = this.context.createAnalyser();
       this.analyser.fftSize = 512;
       this.gain.connect(this.analyser);
       this.analyser.connect(this.context.destination);
-      this.poll = setInterval(() => this.sample(), 20);
+      // 10 ms: the first-audio observation resolution (ADR-0047 §3).
+      this.poll = setInterval(() => this.sample(), 10);
     }
     return this.context;
+  }
+
+  /**
+   * Create and resume the context inside the owner's Connect click (ADR-0047
+   * §3): an AudioContext created later from a WebRTC `ontrack` callback can
+   * start suspended and make the FIRST response wait for `resume()`.
+   */
+  prepare(): void {
+    const context = this.ensureContext();
+    void context.resume();
+  }
+
+  /**
+   * Drive the gain to zero at the next render quantum and say when that is on
+   * the main clock (ADR-0047 §2 `gain_zero_ms`). `changed` is false when the
+   * path was already silent (an earlier mute).
+   */
+  private silence(): PlaybackStop {
+    const at = performance.now();
+    if (!this.gain || !this.context) return { at, gainZeroAt: null, outputLatencyMs: null, changed: false };
+    const changed = !this.muted;
+    const context = this.context;
+    const applyAt = context.currentTime;
+    this.gain.gain.cancelScheduledValues(applyAt);
+    this.gain.gain.setValueAtTime(0, applyAt);
+    this.muted = true;
+    // The value takes effect on the quantum after `currentTime`; the pair maps
+    // that render position onto performance.now(), output latency included.
+    const effective = applyAt + RENDER_QUANTUM / context.sampleRate;
+    return {
+      at,
+      gainZeroAt: mapAudioTimeToMainClock(effective, clockPairOf(context)),
+      outputLatencyMs: outputLatencyMsOf(context),
+      changed,
+    };
   }
 
   attach(output: AudioOutput): void {
@@ -307,19 +373,29 @@ export class WebAudioPlayback implements Playback {
     }
   }
 
-  stop(): number {
+  stop(): PlaybackStop {
+    const result = this.silence();
     this.playing = false;
+    this.armedSinceActivity = false;
+    return result;
+  }
+
+  mute(): PlaybackStop {
+    return this.silence();
+  }
+
+  unmute(): void {
+    this.muted = false;
     if (this.gain && this.context) {
       this.gain.gain.cancelScheduledValues(this.context.currentTime);
-      this.gain.gain.setValueAtTime(0, this.context.currentTime);
+      this.gain.gain.setValueAtTime(1, this.context.currentTime);
     }
-    this.armedSinceActivity = false;
-    return performance.now();
   }
 
   arm(): void {
     this.playing = true;
     this.armedSinceActivity = true;
+    this.muted = false;
     if (this.gain && this.context) {
       this.gain.gain.cancelScheduledValues(this.context.currentTime);
       this.gain.gain.setValueAtTime(1, this.context.currentTime);
@@ -369,6 +445,9 @@ export type GatedDetectorOptions = {
   uplink?: () => UplinkShaper | null;
   /** Analyse this stream instead of the one handed to start() (the raw capture when a shaper is active). */
   analysisStream?: () => MediaStream | null;
+  /** ADR-0047 §4: the profile's learned offsets and last measured echo residual, read live. */
+  adaptation?: () => Partial<GateAdaptation> | null;
+  initialEchoResidualDb?: () => number | null;
   pollMs?: number;
   fftSize?: number;
   calibrationMs?: number;
@@ -376,6 +455,8 @@ export type GatedDetectorOptions = {
   driftDb?: number;
   driftSustainMs?: number;
   recalibrateCooldownMs?: number;
+  /** How many dead-input windows in a row before the detector stops retrying until the next drift/manual trigger. */
+  maxDeadRetries?: number;
   now?: () => number;
 };
 
@@ -390,12 +471,30 @@ export type GatedDetectorSnapshot = {
   /** 0 initial, 1 drift, 2 manual */
   lastTrigger: number;
   contaminatedRetries: number;
+  /** dead-input windows seen in a row (ADR-0047 §5) */
+  deadWindows: number;
+  /** measured residual of the assistant's playback in the microphone, dBFS (ADR-0047 §4) */
+  echoResidualDb: number | null;
+  /** last measured capture lag (audio thread → main-thread observation), ms */
+  captureLagMs: number | null;
+  /** pre-roll the last open actually applied */
+  lastPreRollMs: number | null;
 };
+
+/** Frames the gate saw recently: `now` → capture lag, so an open can name the lag of ITS onset frame. */
+const LAG_RING = 16;
 
 /**
  * The calibrated speech gate on the microphone stream. Barge-in and the
  * client's own turn bookkeeping listen to `onSpeechStart`/`onSpeechEnd`; the
  * uplink track itself is untouched (unless an UplinkShaper is opted in).
+ *
+ * ADR-0047: every frame is stamped with its audio-thread time (mapped onto
+ * the main clock) so the reported onset carries a MEASURED pre-roll and a
+ * `capture_lag_ms`; all-zero frames are dead input and never calibrate; the
+ * residual of the assistant's own playback is measured and feeds the
+ * playback margin; a confident onset during playback asks for a reversible
+ * mute before the irreversible turn.
  */
 export class GatedSpeechDetector implements SpeechDetector {
   private context: AudioContext | null = null;
@@ -408,17 +507,29 @@ export class GatedSpeechDetector implements SpeechDetector {
   private calibrator: NoiseFloorCalibrator | null = null;
   private calibration: CalibrationResult | null = null;
   private tracker: RunningNoiseFloor | null = null;
+  private echo: EchoResidualTracker;
+  private lastPlayback = false;
   private lastDrift = 0;
   private lastTrigger = 0;
   private lastCalibrationAt = -Infinity;
   private contaminatedRetries = 0;
-  private startSinks = new Set<(at: number) => void>();
+  private deadWindows = 0;
+  private lagRing: Array<{ now: number; lagMs: number | null }> = [];
+  private lastLagMs: number | null = null;
+  private lastPreRollMs: number | null = null;
+  private startSinks = new Set<(at: number, detail?: SpeechStartDetail) => void>();
   private endSinks = new Set<(at: number) => void>();
-  private calibrationSinks = new Set<(calibration: SpeechDetectorCalibration) => void>();
+  private evidenceSinks = new Set<(at: number, candidateAt: number) => void>();
+  private evidenceLostSinks = new Set<(at: number) => void>();
+  private calibrationSinks = new Set<
+    (calibration: SpeechDetectorCalibration | SpeechDetectorCalibrationAttempt) => void
+  >();
+  private echoSinks = new Set<(residualDb: number) => void>();
   private readonly now: () => number;
 
   constructor(private readonly options: GatedDetectorOptions = {}) {
     this.now = options.now ?? (() => performance.now());
+    this.echo = new EchoResidualTracker({ initialDb: options.initialEchoResidualDb?.() ?? null });
     this.params = this.derive(null);
     this.gate = new SpeechGate(this.params);
   }
@@ -429,12 +540,18 @@ export class GatedSpeechDetector implements SpeechDetector {
       mode: this.options.mode?.() ?? "auto",
       sensitivity: this.options.sensitivity?.() ?? "auto",
       attenuationDb: this.options.attenuationDb?.() ?? 0,
+      echoResidualDb: this.echo.residualDb,
+      adaptation: this.options.adaptation?.() ?? null,
     });
   }
 
   start(stream: MediaStream): void {
     this.stop();
-    this.context = new AudioContext();
+    this.context = new AudioContext({ latencyHint: "interactive" });
+    // A context created outside a user gesture can start suspended; a
+    // suspended analyser reads zeros, which is exactly the dead window the
+    // owner's session persisted. Resume, and treat zeros as dead anyway.
+    void this.context.resume();
     this.analyser = this.context.createAnalyser();
     this.analyser.fftSize = this.options.fftSize ?? 1024;
     this.frame = new Float32Array(this.analyser.fftSize);
@@ -443,7 +560,12 @@ export class GatedSpeechDetector implements SpeechDetector {
     // A new stream is a new device or a new session: calibrate it on its own.
     this.calibration = null;
     this.contaminatedRetries = 0;
+    this.deadWindows = 0;
+    this.lagRing = [];
+    this.echo.reset(this.options.initialEchoResidualDb?.() ?? null);
     this.gate.resetState();
+    this.params = this.derive(null);
+    this.gate.setParameters(this.params);
     this.recalibrate(0);
     this.poll = setInterval(() => this.sample(), this.options.pollMs ?? 20);
   }
@@ -452,37 +574,84 @@ export class GatedSpeechDetector implements SpeechDetector {
   recalibrate(trigger = 2): void {
     this.calibrator = new NoiseFloorCalibrator({ durationMs: this.options.calibrationMs ?? 1800 });
     this.lastTrigger = trigger;
-    if (trigger !== 0) this.contaminatedRetries = 0;
+    if (trigger !== 0) {
+      this.contaminatedRetries = 0;
+      this.deadWindows = 0;
+    }
   }
 
-  /** The owner changed the mode / sensitivity / attenuation preference: re-derive now. */
+  /** The owner changed the mode / sensitivity / attenuation preference (or the profile learned): re-derive now. */
   applyPreferences(): void {
     this.params = this.derive(this.calibration);
     this.gate.setParameters(this.params);
   }
 
+  /** The audio-thread end time of the frame just read, on the main clock; null when the platform cannot say. */
+  private frameEndOnMainClock(): number | null {
+    if (!this.context) return null;
+    const pair = clockPairOf(this.context);
+    return mapAudioTimeToMainClock(this.context.currentTime, pair, outputLatencyMsOf(this.context) ?? 0);
+  }
+
   private sample(): void {
     if (!this.analyser || !this.context || !this.frame) return;
     this.analyser.getFloatTimeDomainData(this.frame);
+    const frameEnd = this.frameEndOnMainClock();
     const features = analyseFrame(this.frame, this.context.sampleRate);
     const now = this.now();
     const playback = this.options.playbackActive?.() ?? false;
+    const lagMs = frameEnd === null ? null : Math.max(0, now - frameEnd);
+    this.lastLagMs = lagMs;
+    this.lagRing.push({ now, lagMs });
+    if (this.lagRing.length > LAG_RING) this.lagRing.shift();
+    const running = this.context.state === "running";
 
     // Layer 2: the measurement skips frames while the assistant is audible so
-    // its (echo-cancelled) residual never becomes "the room".
+    // its (echo-cancelled) residual never becomes "the room"; a suspended
+    // context or an all-zero frame is dead input, counted and never measured.
     if (this.calibrator && !playback && !this.gate.isOpen) {
-      if (this.calibrator.push(features)) this.finishCalibration(now);
+      const dead = !running || features.peak === 0;
+      if (this.calibrator.push(dead ? { ...features, peak: 0 } : features)) this.finishCalibration(now);
     }
 
-    // Layer 3.
-    for (const event of this.gate.update(features, now, playback)) {
-      if (event.type === "open") for (const sink of this.startSinks) sink(event.at);
-      else if (event.type === "close") for (const sink of this.endSinks) sink(event.at);
+    // Layer 3 (with the ADR-0047 onset accounting).
+    const pollMs = this.options.pollMs ?? 20;
+    const hint = lagMs === null ? {} : { preRollMs: lagMs + features.durationMs + pollMs };
+    for (const event of this.gate.update(features, now, playback, hint)) {
+      if (event.type === "open") {
+        const onsetFrame = this.lagRing.find((entry) => entry.now === event.candidateAt);
+        const detail: SpeechStartDetail = {
+          candidateAt: event.candidateAt,
+          decidedAt: event.decidedAt,
+          preRollMs: event.preRollMs,
+          captureLagMs: onsetFrame ? onsetFrame.lagMs : null,
+          duringPlayback: event.duringPlayback,
+        };
+        this.lastPreRollMs = event.preRollMs;
+        for (const sink of this.startSinks) sink(event.at, detail);
+      } else if (event.type === "close") {
+        for (const sink of this.endSinks) sink(event.at);
+      } else if (event.type === "evidence") {
+        for (const sink of this.evidenceSinks) sink(event.at, event.candidateAt);
+      } else if (event.type === "evidence_lost") {
+        for (const sink of this.evidenceLostSinks) sink(event.at);
+      }
     }
     this.options.uplink?.()?.setGain(this.gate.uplinkGainTarget);
 
+    // ADR-0047 §4: the residual of the assistant's own playback, measured on
+    // closed-gate playback frames; the playback margin follows it.
+    if (playback && running && features.peak > 0 && !this.gate.isOpen) {
+      const residual = this.echo.push(features.rmsDb, features.durationMs);
+      if (residual !== null) this.onEchoResidual(residual);
+    } else if (!playback && this.lastPlayback) {
+      const residual = this.echo.flush();
+      if (residual !== null) this.onEchoResidual(residual);
+    }
+    this.lastPlayback = playback;
+
     // Running floor between turns; a sustained drift triggers recalibration.
-    if (this.tracker && !this.gate.isOpen && !playback && !this.calibrator) {
+    if (this.tracker && !this.gate.isOpen && !playback && !this.calibrator && running && features.peak > 0) {
       const drift = this.tracker.update(features.rmsDb, now);
       this.lastDrift = drift.driftDb;
       const cooldown = this.options.recalibrateCooldownMs ?? 30_000;
@@ -496,13 +665,48 @@ export class GatedSpeechDetector implements SpeechDetector {
     }
   }
 
+  private onEchoResidual(residualDb: number): void {
+    this.params = this.derive(this.calibration);
+    this.gate.setParameters(this.params);
+    for (const sink of this.echoSinks) sink(residualDb);
+  }
+
   private finishCalibration(now: number): void {
-    const result = this.calibrator?.result() ?? null;
+    const outcome = this.calibrator?.outcome() ?? null;
     this.calibrator = null;
-    if (!result) return;
+    if (!outcome) return;
+    if (outcome.kind === "dead") {
+      // Nothing was measured: keep the parameters in force (the default floor
+      // before a first calibration, never the clamped minimum) and try again a
+      // bounded number of times.
+      this.deadWindows += 1;
+      const retry = this.deadWindows <= (this.options.maxDeadRetries ?? 3);
+      const attempt: SpeechDetectorCalibrationAttempt = {
+        measured: 0,
+        samples: outcome.liveFrames,
+        dead_frames: outcome.deadFrames,
+        contaminated: 0,
+        trigger: this.lastTrigger,
+        retry: retry ? 1 : 0,
+      };
+      for (const sink of this.calibrationSinks) sink(attempt);
+      if (retry) this.calibrator = new NoiseFloorCalibrator({ durationMs: this.options.calibrationMs ?? 1800 });
+      return;
+    }
+    const result = outcome.result;
+    this.deadWindows = 0;
     if (result.contaminated && this.contaminatedRetries < 2) {
       // The owner was talking: keep the current parameters and measure again.
       this.contaminatedRetries += 1;
+      const attempt: SpeechDetectorCalibrationAttempt = {
+        measured: 0,
+        samples: result.frames,
+        dead_frames: result.deadFrames,
+        contaminated: 1,
+        trigger: this.lastTrigger,
+        retry: 1,
+      };
+      for (const sink of this.calibrationSinks) sink(attempt);
       this.calibrator = new NoiseFloorCalibrator({ durationMs: this.options.calibrationMs ?? 1800 });
       return;
     }
@@ -520,20 +724,24 @@ export class GatedSpeechDetector implements SpeechDetector {
       });
     }
     const summary: SpeechDetectorCalibration = {
+      measured: 1,
+      samples: result.frames,
       noise_floor_db: result.noiseFloorDb,
       stationary_db: result.stationaryNoiseDb,
       spread_db: result.spreadDb,
-      peak_db: result.peakDb,
+      ...(result.peakDb === null ? {} : { peak_db: result.peakDb }),
       clip_risk: result.clipRisk,
       hum_ratio: result.humRatio,
       contaminated: result.contaminated ? 1 : 0,
-      sensitivity: SENSITIVITY_INDEX[result.sensitivity],
-      env: ENVIRONMENT_CLASS_INDEX[result.environment],
+      sensitivity_class: SENSITIVITY_INDEX[result.sensitivity],
+      env_class: ENVIRONMENT_CLASS_INDEX[result.environment],
       open_margin_db: this.params.openMarginDb,
       min_onset_ms: this.params.minOnsetMs,
       hang_ms: this.params.hangMs,
       pre_roll_ms: this.params.preRollMs,
+      echo_margin_db: this.params.echoExtraMarginDb,
       trigger: this.lastTrigger,
+      dead_frames: result.deadFrames,
     };
     for (const sink of this.calibrationSinks) sink(summary);
   }
@@ -551,7 +759,7 @@ export class GatedSpeechDetector implements SpeechDetector {
     this.gate.resetState();
   }
 
-  onSpeechStart(sink: (at: number) => void): Unsubscribe {
+  onSpeechStart(sink: (at: number, detail?: SpeechStartDetail) => void): Unsubscribe {
     this.startSinks.add(sink);
     return () => this.startSinks.delete(sink);
   }
@@ -561,13 +769,39 @@ export class GatedSpeechDetector implements SpeechDetector {
     return () => this.endSinks.delete(sink);
   }
 
-  onCalibration(sink: (calibration: SpeechDetectorCalibration) => void): Unsubscribe {
+  onEvidence(sink: (at: number, candidateAt: number) => void): Unsubscribe {
+    this.evidenceSinks.add(sink);
+    return () => this.evidenceSinks.delete(sink);
+  }
+
+  onEvidenceLost(sink: (at: number) => void): Unsubscribe {
+    this.evidenceLostSinks.add(sink);
+    return () => this.evidenceLostSinks.delete(sink);
+  }
+
+  onCalibration(
+    sink: (calibration: SpeechDetectorCalibration | SpeechDetectorCalibrationAttempt) => void,
+  ): Unsubscribe {
     this.calibrationSinks.add(sink);
     return () => this.calibrationSinks.delete(sink);
   }
 
+  /** ADR-0047 §4: a (re)measured echo residual, for the profile to persist. */
+  onEchoResidualMeasured(sink: (residualDb: number) => void): Unsubscribe {
+    this.echoSinks.add(sink);
+    return () => this.echoSinks.delete(sink);
+  }
+
+  onsetCandidate(): { candidateAt: number; preRollMs: number } | null {
+    return this.gate.onsetCandidate();
+  }
+
   stats(): SpeechDetectorStats {
-    return this.gate.stats();
+    return {
+      ...this.gate.stats(),
+      ...(this.echo.residualDb === null ? {} : { echo_residual_db: this.echo.residualDb }),
+      echo_margin_db: this.params.echoExtraMarginDb,
+    };
   }
 
   snapshot(): GatedDetectorSnapshot {
@@ -581,6 +815,10 @@ export class GatedSpeechDetector implements SpeechDetector {
       driftDb: this.lastDrift,
       lastTrigger: this.lastTrigger,
       contaminatedRetries: this.contaminatedRetries,
+      deadWindows: this.deadWindows,
+      echoResidualDb: this.echo.residualDb,
+      captureLagMs: this.lastLagMs === null ? null : Math.round(this.lastLagMs * 10) / 10,
+      lastPreRollMs: this.lastPreRollMs,
     };
   }
 }

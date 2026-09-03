@@ -74,8 +74,10 @@ describe("VoiceSessionController", () => {
     expect(t.transport.connects[0].credential.secret).toBe("ephemeral-1");
     expect(t.transport.connects[0].descriptor.kind).toBe("webrtc");
     await t.controller.flushEvents();
-    expect(t.core.kinds()).toEqual(["state"]);
-    expect(t.core.events[0].payload).toEqual({ state: "LISTENING" });
+    // ADR-0047 §4: the input read-back (measured numbers) precedes LISTENING.
+    expect(t.core.kinds()).toEqual(["state", "state"]);
+    expect(t.core.events[0].payload).toMatchObject({ mic_input: 1, aec: 1, ns: 1, agc: 0, sample_rate: 48_000, channels: 1, not_honoured: 0 });
+    expect(t.core.events[1].payload).toEqual({ state: "LISTENING" });
   });
 
   it("barge-in: stops local playback FIRST, then cancels, then reports with the measured latency", async () => {
@@ -118,8 +120,9 @@ describe("VoiceSessionController", () => {
     t.localSpeech.speechStart(500);
     expect(t.log).toContain("playback.stop");
     expect(t.transport.sent).toEqual(["cancel"]);
-    // The provider's later speech_started is the same speech: no second barge-in,
-    // but it is the closest thing to an uplink acknowledgement.
+    // The provider's later speech_started is the same speech: no second barge-in.
+    // Without transport counters (this fake has none) the uplink falls back to
+    // the provider's confirmation, marked as such: basis 0 (ADR-0047 §1).
     t.scheduler.advance(90);
     t.transport.emit({ type: "speech_started", at: 590 });
     expect(t.transport.sent).toEqual(["cancel"]);
@@ -127,7 +130,7 @@ describe("VoiceSessionController", () => {
     expect(t.core.events.filter((e) => e.kind === "barge_in_start")).toHaveLength(1);
     expect(t.core.events.find((e) => e.kind === "uplink_first_packet")).toMatchObject({
       t_ms: 590,
-      payload: { basis: "provider_speech_started" },
+      payload: { basis: 0 },
     });
     expect(t.controller.getSnapshot().latency.mic_to_uplink_ms?.value).toBe(90);
   });
@@ -185,7 +188,12 @@ describe("VoiceSessionController", () => {
     t.transport.emit({ type: "response_started", at: 1400 });
     t.scheduler.advance(400);
     t.transport.emit({ type: "audio_started", at: 1600 });
-    expect(t.controller.getSnapshot().latency.eot_to_first_audio_ms?.value).toBe(600);
+    // ADR-0047 §3: the provider's audio-start is a component, not first audio;
+    // the first AUDIBLE sample from the local analyser is.
+    expect(t.controller.getSnapshot().latency.eot_to_first_audio_ms).toBeUndefined();
+    t.scheduler.advance(20);
+    t.playback.activity(1620);
+    expect(t.controller.getSnapshot().latency.eot_to_first_audio_ms?.value).toBe(620);
     t.transport.emit({ type: "response_text", at: 1700, text: "Saat ", final: false });
     t.transport.emit({ type: "response_text", at: 1800, text: "on.", final: false });
     expect(t.controller.getSnapshot().assistantText).toBe("Saat on.");
@@ -193,8 +201,10 @@ describe("VoiceSessionController", () => {
     expect(t.controller.getSnapshot().state).toBe("listening");
     await t.controller.flushEvents();
     expect(t.core.kinds()).toEqual([
-      "state",
+      "state", // mic_input read-back (ADR-0047 §4)
+      "state", // LISTENING
       "mic_speech_start",
+      "state", // provider-first start: explicit unmatched marker (ADR-0047 §1)
       "utterance",
       "end_of_turn",
       "state",
@@ -202,6 +212,13 @@ describe("VoiceSessionController", () => {
       "response_done",
       "state",
     ]);
+    expect(t.core.events[3].payload).toMatchObject({ mic_metrics: 1, unmatched: 1, provider_first: 1 });
+    expect(t.core.events.find((e) => e.kind === "first_audio")?.payload).toMatchObject({
+      basis: 1,
+      response_created_ms: 400,
+      first_delta_ms: 200,
+      playback_ms: 20,
+    });
     for (const event of t.core.events) {
       expect(Number.isInteger(event.t_ms)).toBe(true);
       expect(event.t_ms).toBeGreaterThanOrEqual(0);
@@ -268,6 +285,9 @@ describe("VoiceSessionController", () => {
     t.transport.emit({ type: "response_started", at: 4500 });
     t.scheduler.advance(300);
     t.transport.emit({ type: "audio_started", at: 4700 });
+    // No local analyser activity in this script: the provider's mark is used
+    // after the playback-confirm bound (basis 0), stamped at the provider's time.
+    t.scheduler.advance(300);
     await t.controller.flushEvents();
     const kinds = t.core.kinds();
     for (const kind of ["tool_call", "preamble_audio_start", "tool_done", "speech_resumed"]) {

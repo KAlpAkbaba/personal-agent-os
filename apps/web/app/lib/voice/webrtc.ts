@@ -15,6 +15,7 @@ import {
   type AudioOutput,
   type ConnectOptions,
   type Dialect,
+  type OutboundAudioStats,
   type RealtimeTransport,
   type TransportDescriptor,
   type TransportEvent,
@@ -185,6 +186,37 @@ export class WebRtcTransport implements RealtimeTransport {
     } else {
       this.sender = this.pc.addTrack(input.track);
     }
+  }
+
+  /**
+   * The uplink's outbound-rtp counters from the sender's own stats report
+   * (ADR-0047 §1). Null before a microphone track is attached, when the
+   * platform has no `getStats`, or when no outbound-rtp entry exists yet.
+   */
+  async outboundAudioStats(): Promise<OutboundAudioStats | null> {
+    const sender = this.sender;
+    if (!sender || typeof sender.getStats !== "function") return null;
+    let report: RTCStatsReport;
+    try {
+      report = await sender.getStats();
+    } catch {
+      return null;
+    }
+    let found: OutboundAudioStats | null = null;
+    report.forEach((entry: unknown) => {
+      if (found || !entry || typeof entry !== "object") return;
+      const stat = entry as Record<string, unknown>;
+      if (stat.type !== "outbound-rtp") return;
+      if (stat.kind !== undefined && stat.kind !== "audio") return;
+      const packets = typeof stat.packetsSent === "number" ? stat.packetsSent : null;
+      if (packets === null) return;
+      found = {
+        packetsSent: packets,
+        bytesSent: typeof stat.bytesSent === "number" ? stat.bytesSent : 0,
+        timestamp: typeof stat.timestamp === "number" ? stat.timestamp : 0,
+      };
+    });
+    return found;
   }
 
   onAudio(sink: (output: AudioOutput) => void): Unsubscribe {
