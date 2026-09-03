@@ -157,7 +157,5 @@ def test_ranking_rewards_recency_within_window() -> None:
 def test_ranking_rewards_keyword_overlap_with_topic() -> None:
     relevant = _mk("https://example.com/rel", excerpt="yapay zeka ajanlari haberleri")
     irrelevant = _mk("https://example.com/irrel", excerpt="tamamen alakasiz bir konu")
-    ranked = dedup_and_rank_evidence(
-        [irrelevant, relevant], topic="yapay zeka ajanlari"
-    )
+    ranked = dedup_and_rank_evidence([irrelevant, relevant], topic="yapay zeka ajanlari")
     assert ranked[0].evidence.url == "https://example.com/rel"

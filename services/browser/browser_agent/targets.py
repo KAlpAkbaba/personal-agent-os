@@ -49,8 +49,7 @@ class TargetSpec:
         if len(set_fields) == 0:
             raise BrowserError(
                 ErrorClass.VALIDATION_ERROR,
-                "target spec is empty: set exactly one of "
-                f"{', '.join(_PRIMARY_FIELDS)}",
+                f"target spec is empty: set exactly one of {', '.join(_PRIMARY_FIELDS)}",
                 retryable=False,
                 evidence={"target": self.as_dict()},
             )

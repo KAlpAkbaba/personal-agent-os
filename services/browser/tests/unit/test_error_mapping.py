@@ -64,9 +64,7 @@ def test_connection_marker_is_dependency_unavailable_in_any_phase() -> None:
         "net::ERR_CONNECTION_REFUSED at http://127.0.0.1:1/",
         "Target page, context or browser has been closed",
     ):
-        err = map_playwright_error(
-            PlaywrightError(message), phase=Phase.NAVIGATE, op="navigate"
-        )
+        err = map_playwright_error(PlaywrightError(message), phase=Phase.NAVIGATE, op="navigate")
         assert err.error_class is ErrorClass.DEPENDENCY_UNAVAILABLE, message
         assert err.retryable is True
 
@@ -141,8 +139,5 @@ def test_navigable_url_scheme_allowlist():
 def test_redact_url_strips_query_and_fragment():
     from browser_agent.errors import redact_url
 
-    assert (
-        redact_url("https://h.example/cb?code=SECRET&state=x#frag")
-        == "https://h.example/cb"
-    )
+    assert redact_url("https://h.example/cb?code=SECRET&state=x#frag") == "https://h.example/cb"
     assert redact_url("http://127.0.0.1:8080/path") == "http://127.0.0.1:8080/path"

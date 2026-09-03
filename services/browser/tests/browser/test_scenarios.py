@@ -87,9 +87,7 @@ async def test_closing_last_tab_is_refused_typed(session: BrowserSession, site_u
 # --------------------------------------------------------------------------- #
 
 
-async def test_select_dropdown_by_value_and_label(
-    session: BrowserSession, site_url: str
-) -> None:
+async def test_select_dropdown_by_value_and_label(session: BrowserSession, site_url: str) -> None:
     await session.navigate(f"{site_url}/form.html")
     selected = await session.select_option(TargetSpec(label="Favorite color"), value="green")
     assert selected == ["green"]
@@ -100,9 +98,7 @@ async def test_select_dropdown_by_value_and_label(
     assert await session.read_text(TargetSpec(test_id="color-echo")) == "blue"
 
 
-async def test_checkbox_set_checked_and_unchecked(
-    session: BrowserSession, site_url: str
-) -> None:
+async def test_checkbox_set_checked_and_unchecked(session: BrowserSession, site_url: str) -> None:
     await session.navigate(f"{site_url}/form.html")
     await session.set_checked(TargetSpec(label="Subscribe to updates"), True)
     assert await session.read_text(TargetSpec(test_id="subscribe-echo")) == "on"

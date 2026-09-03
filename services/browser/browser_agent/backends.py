@@ -321,6 +321,14 @@ def _reject_real_profile_dir(profile_dir: Path) -> None:
                 )
 
 
+#: Channels ``ManagedBackend`` accepts (M13). ``None``/omitted keeps M2's
+#: behavior: Playwright's own bundled Chromium build, launched with no
+#: ``channel=`` argument at all. ``"chrome"`` is the qualification target
+#: (installed Google Chrome); ``"chromium"`` explicitly asks Playwright's
+#: channel-aliased bundled build (CI-friendly, no system install needed).
+ALLOWED_CHANNELS: frozenset[str] = frozenset({"chrome", "chromium"})
+
+
 class ManagedBackend(_PlaywrightBackendBase):
     """Playwright-managed Chromium (isolated or persistent dedicated profile)."""
 
@@ -330,6 +338,7 @@ class ManagedBackend(_PlaywrightBackendBase):
         headless: bool = True,
         browser_args: list[str] | None = None,
         profile_dir: Path | str | None = None,
+        channel: str | None = None,
     ) -> None:
         super().__init__()
         self._headless = headless
@@ -337,6 +346,17 @@ class ManagedBackend(_PlaywrightBackendBase):
         self._profile_dir = Path(profile_dir) if profile_dir is not None else None
         if self._profile_dir is not None:
             _reject_real_profile_dir(self._profile_dir)
+        if channel is not None and channel not in ALLOWED_CHANNELS:
+            raise BrowserError(
+                ErrorClass.VALIDATION_ERROR,
+                f"channel must be one of {sorted(ALLOWED_CHANNELS)} or None, got {channel!r}",
+                retryable=False,
+            )
+        self._channel = channel
+
+    @property
+    def channel(self) -> str | None:
+        return self._channel
 
     @property
     def persistent(self) -> bool:
@@ -366,9 +386,7 @@ class ManagedBackend(_PlaywrightBackendBase):
             raise
         except Exception as exc:
             await self._stop_playwright()
-            raise map_playwright_error(
-                exc, phase=Phase.CONNECT, op="managed_connect"
-            ) from exc
+            raise map_playwright_error(exc, phase=Phase.CONNECT, op="managed_connect") from exc
         logger.info(
             "browser.backend_connected",
             backend="managed",
@@ -379,19 +397,21 @@ class ManagedBackend(_PlaywrightBackendBase):
 
     async def _launch(self) -> None:
         assert self._playwright is not None
+        channel_kwargs: dict[str, str] = {"channel": self._channel} if self._channel else {}
         if self._profile_dir is not None:
             self._profile_dir.mkdir(parents=True, exist_ok=True)
             context = await self._playwright.chromium.launch_persistent_context(
                 str(self._profile_dir),
                 headless=self._headless,
                 args=self._browser_args,
+                **channel_kwargs,
             )
             self._browser = context.browser  # None on some persistent launches
             self._context = context
             self._page = context.pages[0] if context.pages else await context.new_page()
         else:
             browser = await self._playwright.chromium.launch(
-                headless=self._headless, args=self._browser_args
+                headless=self._headless, args=self._browser_args, **channel_kwargs
             )
             self._browser = browser
             self._context = await browser.new_context()
@@ -415,12 +435,8 @@ class ManagedBackend(_PlaywrightBackendBase):
         try:
             await self._launch()
         except Exception as exc:
-            raise map_playwright_error(
-                exc, phase=Phase.CONNECT, op="managed_reconnect"
-            ) from exc
-        logger.info(
-            "browser.backend_reconnected", backend="managed", duration_ms=_ms(start)
-        )
+            raise map_playwright_error(exc, phase=Phase.CONNECT, op="managed_reconnect") from exc
+        logger.info("browser.backend_reconnected", backend="managed", duration_ms=_ms(start))
 
     async def close(self) -> None:
         if self._closed:

@@ -116,9 +116,16 @@ How this package enforces it:
 
 ```python
 from browser_agent import (
-    BrowserSession, ManagedBackend, ExistingSessionBackend,
-    BrowserEnrollment, EnrollmentRegistry, TargetSpec,
-    BrowserCommandExecutor, CancelToken, with_retry, require_capability,
+    BrowserSession,
+    ManagedBackend,
+    ExistingSessionBackend,
+    BrowserEnrollment,
+    EnrollmentRegistry,
+    TargetSpec,
+    BrowserCommandExecutor,
+    CancelToken,
+    with_retry,
+    require_capability,
 )
 
 # Managed (isolated) — deterministic default
@@ -134,9 +141,12 @@ await backend.connect()
 session = BrowserSession(backend)
 
 await session.navigate(url)
-await session.back(); await session.forward()
-await session.new_tab(url); await session.list_tabs()
-await session.select_tab(0); await session.close_tab(1)
+await session.back()
+await session.forward()
+await session.new_tab(url)
+await session.list_tabs()
+await session.select_tab(0)
+await session.close_tab(1)
 await session.click(TargetSpec(role="button", name="Greet"))
 await session.fill(TargetSpec(label="Your name"), "Alp")
 await session.select_option(TargetSpec(label="Favorite color"), value="green")
@@ -220,6 +230,126 @@ the current URL, and the truncated Playwright message.
 | capability declarations + orchestrator guard | `tests/unit/test_capabilities.py` |
 | enrollment model / loopback-only / reserved transport | `tests/unit/test_enrollment.py` |
 
+## M13 — Browser Worker (stdio protocol)
+
+`browser_agent.worker` is the standalone process the owner-session companion
+spawns on the device (`packages/protocol/BROWSER_CAPABILITIES.md`, binding
+contract). It speaks newline-delimited JSON over stdin/stdout — **stdout is
+protocol-only**; every log line goes to stderr
+(`configure_logging(stream=sys.stderr)`) — and turns each `browser.*`
+capability into calls against `BrowserSession`/`ManagedBackend`, adding
+everything the M2 semantic engine didn't need on its own: sessions, risk
+policy, page-kind/website-error classification, metadata/link extraction,
+search, and the untrusted-content guards.
+
+```
+python -m browser_agent.worker --data-dir <dir> [--profile-dir <dir>]
+       [--channel chrome|chromium] [--visible|--headless]
+       [--idle-timeout-s 600] [--self-check]
+```
+
+`--self-check` prints the `hello` line (worker/protocol version, capability
+list, browser channel/version detected **without opening a browser window**
+— `browser_agent.detect` resolves the channel's executable and runs
+`--version` as a plain subprocess; it only falls back to an actual
+headless-launch-then-close if that fails) and exits `0` when the browser is
+available, non-zero with a one-line stderr reason otherwise (e.g. Chrome not
+installed).
+
+### Sessions
+
+`browser.session_open` creates or reuses one `BrowserSession` per
+`session_id`, keyed off a `profile` (`research` — a persistent dedicated
+profile under `--profile-dir`, never the owner's real `User Data`; or
+`isolated` — a fresh non-persistent context) and a `policy` naming the
+session's `allowed_risk_classes`. Reopening an existing session **never
+widens** its policy — the effective set is the intersection of the existing
+and requested sets (`browser_agent.policy.narrow_reopen`) — except when the
+underlying browser process has died (crash/kill): a dead session is
+discarded and recreated fresh rather than silently reused. An idle-timeout
+background sweep closes sessions that saw no command for `idle_timeout_s`.
+Commands against the *same* session run serially (one `asyncio.Lock` per
+`session_id`); commands against *different* sessions run concurrently.
+
+### Risk classes (`browser_agent.policy`)
+
+Every capability has a static risk class — `READ`, `NAVIGATE`,
+`REVERSIBLE_WRITE`, `EXTERNAL_COMMUNICATION`, `HIGH_IMPACT` — except
+`browser.click`, whose class is resolved dynamically from the *resolved*
+clicked element, in this priority order:
+
+1. Accessible-name marker (buy/purchase/pay/delete/remove/send/submit
+   order/satın al/öde/sil/gönder) -> `HIGH_IMPACT`
+2. A submit control, or a click that would submit an enclosing `<form>` ->
+   `EXTERNAL_COMMUNICATION`
+3. `a[href]` without a JS click handler -> `NAVIGATE`
+4. Otherwise -> `REVERSIBLE_WRITE`
+
+`browser.download` is `HIGH_IMPACT` *and* additionally requires a non-empty
+`authorization_ref` in the payload — missing either refuses with
+`security_scope_error` before any I/O. Every enforcement happens **before**
+the operation touches the page (`policy.enforce`), naming the missing class
+in the refusal message.
+
+| Capability | Risk class |
+| --- | --- |
+| `session_open`, `session_close`, `navigate`, `back`, `forward`, `tab_*`, `scroll`, `search`, `fetch_evidence` | NAVIGATE |
+| `worker_status`, `inspect`, `find`, `wait`, `extract`, `snapshot`, `screenshot` | READ |
+| `fill`, `select_option`, `set_checked` | REVERSIBLE_WRITE |
+| `download` | HIGH_IMPACT (+ `authorization_ref`) |
+| `click` | dynamic (see above) |
+
+### `page_kind` — website error vs browser error (`browser_agent.page_kind`)
+
+Every navigation-shaped result carries `page_kind ∈ ok | auth_wall | captcha
+| error_page | blocked | empty` plus a `site_error` object when it isn't
+`ok`. This is a **successful command** describing a website-level problem —
+distinct from a *browser*-level problem (`timeout`, `dependency_unavailable`,
+`ui_state_changed`, …), which is always a typed command error instead.
+Detection order: `captcha` (recaptcha/hcaptcha/turnstile/"verify you are
+human") -> `auth_wall` (password field on the landing page, HTTP 401/403, or
+a login-title/heading marker incl. Turkish "oturum aç"/"giriş yap") ->
+`blocked` (bot-block wording, HTTP 429) -> `error_page` (any other HTTP
+≥ 400) -> `empty` (page loaded but rendered near-zero text) -> `ok`. The
+worker never attempts to solve a CAPTCHA.
+
+### Extraction (`browser_agent.extraction`) and search (`browser_agent.search_engines`)
+
+`browser.extract` (modes `text`/`links`/`metadata`/`structured`/`all`) and
+`browser.fetch_evidence` read metadata from `<meta property="article:
+published_time">` -> `<meta name="date">` -> `<time datetime>` -> JSON-LD
+`datePublished` (priority order), `og:site_name`/JSON-LD `publisher`,
+`<html lang>`, `<link rel=canonical>`, and `meta[name=description]`
+(absent -> `null`, never guessed); dates normalise to ISO-8601 UTC when
+parseable, otherwise pass through unchanged. Links are deduped, filtered to
+`http(s)`, and capped at 200. `fetch_evidence` prefers `<main>`/`<article>`
+text over the whole body and counts `injection_markers` (never acts on them
+— see below).
+
+`browser.search` parses DuckDuckGo HTML (`html.duckduckgo.com/html`), Bing
+and Brave result pages with BeautifulSoup, dropping ads/sponsored entries and
+each engine's own domains. `engine="auto"` tries duckduckgo -> bing -> brave
+in order, moving to the next engine on a `captcha`/`blocked`/`empty`
+`page_kind` **or** on a genuine browser-level failure reaching that engine
+(e.g. a network-level abort) — an explicitly-named engine gets no such
+fallover, its failure propagates as-is. `provider_rate_limited` (retryable)
+is raised only when every attempted engine ended `captcha`/`blocked`.
+`recency_days` maps to each engine's own freshness parameter (`df`,
+`freshness`, `tf`) where one exists.
+
+### Untrusted content (`browser_agent.injection`)
+
+Page text is data, never instructions: no worker operation ever derives a
+navigation/click/download/config decision from what a page says — the only
+inputs to any operation are command payloads. `injection.count_injection_markers`
+counts instruction-like patterns (English + Turkish, verbatim from
+`BROWSER_CAPABILITIES.md` §6) so Cloud Core can flag evidence as
+`injection_suspected`; every result additionally passes a last-line
+forbidden-key scan (`cookie`, `authorization`, `set-cookie`, `localstorage`,
+`sessionstorage`, `password`, `token`, `secret`, `apikey` — matched on a
+normalized, separator/case-stripped key so `apiKey`/`api-key`/`APIKEY` are
+all caught) and a 48 KiB size cap with `truncated: true`.
+
 ## Playwright MCP note
 
 Playwright MCP is used by the *development-time* Claude tooling (interactive
@@ -236,6 +366,7 @@ spawned-shell PATH is broken there):
 uv run ruff check .          # lint
 uv run pytest -q             # unit suite (no browser binary needed)
 uv run pytest -q -m browser  # E2E against real headless Chromium (throwaway)
+uv run pytest -q -m live     # opt-in: real Chrome + real network (see below)
 ```
 
 One-time browser provisioning: `uv run playwright install chromium`
@@ -243,7 +374,26 @@ One-time browser provisioning: `uv run playwright install chromium`
 
 Tests serve the fixture site in `tests/fixtures/site` from a stdlib
 `http.server` on a random loopback port — no internet access. Dynamic
-endpoints: `POST /upload` (echoes the SHA-256 of the uploaded bytes) and
-`GET /slow` (deterministic slow response for timeout/cancellation scenarios).
-Crash tests terminate throwaway browser processes by PID; no owner browser or
-profile is ever involved, and nothing binds non-loopback.
+endpoints: `POST /upload` (echoes the SHA-256 of the uploaded bytes),
+`GET /slow` (deterministic slow response for timeout/cancellation scenarios)
+and `GET /error503` (deterministic HTTP 503 for `page_kind=error_page`
+scenarios). Crash tests terminate throwaway browser processes by PID; no
+owner browser or profile is ever involved, and nothing binds non-loopback.
+`tests/fixtures/site/hostile.html` carries real injection-style text and a
+meta-refresh/auto-submit form timed to 30s (present in the DOM for
+inspection, harmless during a normal test run) to prove the worker only
+*reports* on hostile content, never acts on it.
+
+`-m live` (`tests/live/`) is opt-in, excluded from the default run, and hits
+real public sites and a real search engine through the real installed Google
+Chrome (`--channel chrome`): `browser.fetch_evidence` against a real news
+page, `browser.search "AI agents" engine=auto`. These are inherently
+non-deterministic — target-side anti-bot measures can and do change the
+outcome (observed live: a 403 from a real publisher classifies as
+`auth_wall` per the contract's own HTTP-401/403 rule even when the real
+cause is bot-filtering rather than a login wall; DuckDuckGo's actual
+CAPTCHA challenge text doesn't match the contract's fixed marker list so it
+surfaces as an empty result set rather than `page_kind=captcha`; Brave
+Search hard-aborts the connection for automated requests, which `auto`'s
+fallover now survives) — so treat a `live` failure as a qualification signal
+to investigate, not a broken gate.

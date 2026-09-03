@@ -15,9 +15,14 @@ from browser_agent import (
 class _CountingOp:
     """Async op that counts executions and can be made slow or failing."""
 
-    def __init__(self, *, result: object = "ok", delay: float = 0.0,
-                 error: BrowserError | None = None,
-                 exception: Exception | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        result: object = "ok",
+        delay: float = 0.0,
+        error: BrowserError | None = None,
+        exception: Exception | None = None,
+    ) -> None:
         self.calls = 0
         self.completed = 0
         self._result = result
@@ -160,13 +165,9 @@ async def test_duplicate_with_different_op_fingerprint_fails_loudly():
     async def op():
         return "v1"
 
-    assert (
-        await executor.execute("c1", "key-fp", op, op_fingerprint="fp-aaa") == "v1"
-    )
+    assert await executor.execute("c1", "key-fp", op, op_fingerprint="fp-aaa") == "v1"
     # same key + same fingerprint replays fine
-    assert (
-        await executor.execute("c2", "key-fp", op, op_fingerprint="fp-aaa") == "v1"
-    )
+    assert await executor.execute("c2", "key-fp", op, op_fingerprint="fp-aaa") == "v1"
     # same key + DIFFERENT fingerprint must not replay another command's result
     with pytest.raises(BrowserError) as exc_info:
         await executor.execute("c3", "key-fp", op, op_fingerprint="fp-bbb")

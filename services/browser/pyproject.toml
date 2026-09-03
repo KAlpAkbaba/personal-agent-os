@@ -6,6 +6,7 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     "playwright>=1.49",
     "structlog>=24.1",
+    "beautifulsoup4>=4.12",
 ]
 
 [dependency-groups]
@@ -25,10 +26,11 @@ packages = ["browser_agent"]
 [tool.pytest.ini_options]
 markers = [
     "browser: requires the real (Playwright-managed) Chromium binary",
+    "live: opt-in, hits real network/search-engine/site endpoints with real Chrome",
 ]
-# Default run is the fast unit suite; `-m browser` on the command line overrides
-# this because pytest honors the last -m expression given.
-addopts = "-m \"not browser\""
+# Default run is the fast unit suite; `-m browser` or `-m live` on the command
+# line overrides this because pytest honors the last -m expression given.
+addopts = "-m \"not browser and not live\""
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 

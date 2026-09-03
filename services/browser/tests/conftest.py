@@ -73,6 +73,13 @@ class _FixtureSiteHandler(SimpleHTTPRequestHandler):
                 "<body><h1>Slow page</h1></body></html>",
             )
             return
+        if self.path.split("?", 1)[0] == "/error503":
+            self._send_html(
+                503,
+                "<!DOCTYPE html><html><head><title>Service Unavailable</title></head>"
+                "<body><h1>503 - try again later</h1></body></html>",
+            )
+            return
         super().do_GET()
 
     def do_POST(self) -> None:  # noqa: N802 - http.server API
@@ -124,3 +131,29 @@ async def session() -> AsyncIterator[BrowserSession]:
         yield browser_session
     finally:
         await browser_session.close()
+
+
+@pytest.fixture()
+async def worker(tmp_path):
+    """A real M13 :class:`~browser_agent.worker.Worker`, driven in-process.
+
+    Uses the ``chromium`` channel (Playwright's bundled build — CI-friendly,
+    no system Chrome install required) so ``-m browser`` stays deterministic;
+    the live/real-Chrome path is exercised separately under ``-m live``.
+    Tests call ``await worker._execute(capability, payload)`` directly
+    (no stdio/subprocess) except the one dedicated real-stdio-subprocess
+    scenario (tests/browser/test_worker_stdio_e2e.py).
+    """
+    from browser_agent.worker import Worker, build_arg_parser
+
+    data_dir = tmp_path / "worker-data"
+    data_dir.mkdir()
+    args = build_arg_parser().parse_args(
+        ["--data-dir", str(data_dir), "--channel", "chromium", "--headless"]
+    )
+    w = Worker(args)
+    await w._print_hello()  # populates browser_info; also sanity-checks the channel resolves
+    try:
+        yield w
+    finally:
+        await w._close_all_sessions()
