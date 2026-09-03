@@ -130,16 +130,30 @@ Metadata comes from `<meta property="article:published_time">`, `<meta name="dat
 `<time datetime>`, JSON-LD `datePublished/dateModified`, `og:site_name`, `<html lang>`,
 `<link rel=canonical>`; absent → `null`, never guessed. `links` ≤ 200, http(s) only.
 
-`browser.search` payload `{"session_id":"…","query":"…","engine":"auto|duckduckgo|bing|brave","max_results":10,"recency_days":3}` →
+`browser.search` payload `{"session_id":"…","query":"…","engine":"auto|google|duckduckgo|bing|brave","max_results":10,"recency_days":3,"locale":"tr-TR"}` →
 
 ```json
-{"engine":"duckduckgo","query":"…","results":[{"url":"…","title":"…","snippet":"…","published_hint":"2 days ago"}],"page_kind":"ok"}
+{"engine":"google","requested_provider":"google","provider":"google","fallback":false,"fallback_reason":null,
+ "query":"…","result_count":8,"locale":"tr-TR",
+ "attempts":[{"provider":"google","outcome":"ok"}],
+ "results":[{"rank":1,"url":"…","title":"…","snippet":"…","published_hint":"2 gün önce"}],"page_kind":"ok"}
 ```
 
-`auto` tries the engines in order and moves to the next on `captcha|blocked|empty`; a search
-that ends in a CAPTCHA on every engine fails with `provider_rate_limited` (retryable). Result
-links are read from the results list semantically (role=link within the results region);
-ads/sponsored entries and the engine's own domains are dropped; `max_results` ≤ 20.
+Provider abstraction: **Google is the primary provider; DuckDuckGo is the fallback.** `auto`
+(the default) means `google → duckduckgo`; a named engine is used alone. A provider is
+abandoned, with the reason recorded, on `captcha` (Google's `/sorry/` "unusual traffic"
+interstitial is detected by URL and text and is never solved), `consent` (a consent
+interstitial), `blocked`, `empty` (no organic result parsed), a transport error, or
+malformed markup. When every provider fails the command fails with `provider_rate_limited`
+(retryable) and the evidence still lists the attempts. Evidence fields are mandatory:
+`requested_provider`, `provider` (the one that produced the results), `fallback`,
+`fallback_reason`, `query`, `result_count`, `attempts`. `locale` (payload, else the worker's
+`--locale`, else the machine's user locale) sets Google's `hl`/`gl`; nothing assumes one
+locale. Google organic results are read from the results region only: ads (`#tads`,
+`data-text-ad`), "People also ask", knowledge-panel and other right-hand links, carousels and
+Google's own domains are excluded; each result carries `rank`, `title`, `url`
+(`/url?q=` redirects unwrapped) and the visible snippet when present. `max_results` ≤ 20.
+`bing`/`brave` remain selectable by name only.
 
 `browser.fetch_evidence` payload `{"session_id":"…","url":"…","query":"…","source_class":"news","excerpt_chars":1200,"timeout_ms":30000}` →
 

@@ -36,6 +36,11 @@ param(
     [string]$Device = "",
     [string]$OutFile = "",
     [string]$SearchQuery = "Personal Agent OS",
+    # full = example.com + inspect/extract + search + policy refusal (M13 smoke, PROVEN_REAL);
+    # search = session + one browser.search through the provider abstraction; PASS only when
+    # the recorded provider is the requested primary (google) with no fallback.
+    [ValidateSet("full", "search")][string]$Mode = "full",
+    [string]$ExpectProvider = "google",
     # DEV/TEST ONLY: take an already-minted owner session token from PAGENTOS_SMOKE_TOKEN
     # instead of the masked credential prompt (the e2e harness uses this; never for the owner).
     [switch]$SessionTokenFromEnv,
@@ -189,6 +194,57 @@ try {
     }
     Write-Host "      session created=$($opened.result.created) channel=$($opened.result.channel) browser=$($opened.result.browser_version)"
 
+    if ($Mode -eq "search") {
+        # Search-provider qualification: one browser.search through the provider abstraction.
+        # PASS requires the recorded provider to be the requested primary with no fallback;
+        # a fallback is reported honestly with its reason and FAILS this mode.
+        $search = Invoke-DeviceCommand -Capability "browser.search" -Payload @{ session_id = $sessionId; query = $SearchQuery; engine = "auto"; max_results = 8 }
+        $sr = $search.result
+        $results = @(Get-OptionalProperty -InputObject $sr -Name "results")
+        $attempts = @(Get-OptionalProperty -InputObject $sr -Name "attempts")
+        Write-Host ("      requested_provider={0} provider={1} fallback={2} fallback_reason={3} query='{4}' result_count={5} locale={6}" -f
+            (Get-OptionalProperty -InputObject $sr -Name "requested_provider"), (Get-OptionalProperty -InputObject $sr -Name "provider"),
+            (Get-OptionalProperty -InputObject $sr -Name "fallback"), (Get-OptionalProperty -InputObject $sr -Name "fallback_reason"),
+            (Get-OptionalProperty -InputObject $sr -Name "query"), (Get-OptionalProperty -InputObject $sr -Name "result_count"),
+            (Get-OptionalProperty -InputObject $sr -Name "locale"))
+        foreach ($a in $attempts) { Write-Host ("      attempt: {0} -> {1} {2}" -f $a.provider, $a.outcome, $a.detail) }
+        $shown = 0
+        foreach ($r in $results) { if ($shown -lt 5) { Write-Host ("      #{0} {1} | {2}" -f $r.rank, $r.title, $r.url); $shown++ } }
+        $evidence.search = [ordered]@{
+            requested_provider = (Get-OptionalProperty -InputObject $sr -Name "requested_provider"); provider = (Get-OptionalProperty -InputObject $sr -Name "provider")
+            fallback = (Get-OptionalProperty -InputObject $sr -Name "fallback"); fallback_reason = (Get-OptionalProperty -InputObject $sr -Name "fallback_reason")
+            query = (Get-OptionalProperty -InputObject $sr -Name "query"); result_count = (Get-OptionalProperty -InputObject $sr -Name "result_count")
+            locale = (Get-OptionalProperty -InputObject $sr -Name "locale"); attempts = $attempts
+            results = @($results | ForEach-Object { [ordered]@{ rank = $_.rank; title = $_.title; url = $_.url } })
+        }
+        foreach ($field in @("requested_provider", "provider", "fallback", "query", "result_count", "attempts")) {
+            if ($null -eq (Get-OptionalProperty -InputObject $sr -Name $field)) { throw "provider evidence field '$field' missing from the search result" }
+        }
+        if ($ExpectProvider -ne "any") {
+            if ([string](Get-OptionalProperty -InputObject $sr -Name "requested_provider") -ne $ExpectProvider) { throw "requested provider is not $ExpectProvider" }
+            if ([string](Get-OptionalProperty -InputObject $sr -Name "provider") -ne $ExpectProvider) {
+                throw "the search fell back to $((Get-OptionalProperty -InputObject $sr -Name 'provider')) (reason: $((Get-OptionalProperty -InputObject $sr -Name 'fallback_reason'))); $ExpectProvider did not produce results"
+            }
+        }
+        if (@($results).Count -lt 1) { throw "$ExpectProvider produced no organic results" }
+        foreach ($r in $results) { if (-not $r.title -or -not $r.url -or -not ($r.url -like "http*")) { throw "malformed result #$($r.rank)" } }
+        if (-not $SkipLocalEvidence) {
+            $companionProc = Get-CimInstance Win32_Process -Filter "Name='PagentOS.SessionCompanion.exe'" -ErrorAction SilentlyContinue | Select-Object -First 1
+            $workers = @(Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.ExecutablePath -like "*\PagentOS\agent\browser\*" })
+            $evidence.local = [ordered]@{
+                companion_image = $(if ($companionProc) { $companionProc.ExecutablePath } else { "not running" })
+                worker_image = $(if (@($workers).Count -gt 0) { $workers[0].ExecutablePath } else { "not found" })
+                worker_parent_is_companion = $(if (@($workers).Count -gt 0 -and $companionProc) { $workers[0].ParentProcessId -eq $companionProc.ProcessId } else { $false })
+            }
+            Write-Host "      local: companion=$($evidence.local.companion_image) worker=$($evidence.local.worker_image) (parent is companion: $($evidence.local.worker_parent_is_companion))"
+            if ($evidence.local.worker_image -notlike "C:\Program Files\PagentOS\agent\browser\*") { throw "the worker is not the installed one: $($evidence.local.worker_image)" }
+            if (-not $evidence.local.worker_parent_is_companion) { throw "the worker is not a child of the installed companion" }
+        }
+        [void](Invoke-DeviceCommand -Capability "browser.session_close" -Payload @{ session_id = $sessionId })
+        $evidence.verdict = "PASS"
+        throw [System.Management.Automation.RuntimeException]::new("__done__")
+    }
+
     $nav = Invoke-DeviceCommand -Capability "browser.navigate" -Payload @{ session_id = $sessionId; url = "https://example.com/"; timeout_ms = 30000 }
     Write-Host "      navigated: url=$($nav.result.url) title='$($nav.result.title)' http_status=$($nav.result.http_status) page_kind=$($nav.result.page_kind)"
     if ([string]$nav.result.title -ne "Example Domain") { throw "unexpected title for example.com: '$($nav.result.title)'" }
@@ -261,8 +317,10 @@ try {
     $evidence.verdict = "PASS"
 }
 catch {
-    $evidence.verdict = "FAIL: $($_.Exception.Message)"
-    Write-Host "FAILED: $($_.Exception.Message)" -ForegroundColor Red
+    if ($_.Exception.Message -ne "__done__") {
+        $evidence.verdict = "FAIL: $($_.Exception.Message)"
+        Write-Host "FAILED: $($_.Exception.Message)" -ForegroundColor Red
+    }
 }
 finally {
     $evidence.finished_at = (Get-Date).ToUniversalTime().ToString("o")

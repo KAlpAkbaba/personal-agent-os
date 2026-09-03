@@ -20,26 +20,37 @@ from __future__ import annotations
 
 import re
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
-from urllib.parse import urlencode, urlsplit
+from dataclasses import dataclass, replace
+from urllib.parse import parse_qs, unquote, urlencode, urlsplit
 
 from bs4 import BeautifulSoup
 from bs4.element import Tag
 
 from .errors import BrowserError, ErrorClass
 
-ENGINES: tuple[str, ...] = ("duckduckgo", "bing", "brave")
-AUTO_ORDER: tuple[str, ...] = ("duckduckgo", "bing", "brave")
+ENGINES: tuple[str, ...] = ("google", "duckduckgo", "bing", "brave")
+# Provider abstraction (owner decision 2026-09-03): Google is the primary provider, DuckDuckGo
+# the fallback; Bing and Brave stay selectable by name only.
+AUTO_ORDER: tuple[str, ...] = ("google", "duckduckgo")
+PRIMARY_PROVIDER = AUTO_ORDER[0]
 MAX_RESULTS_CAP = 20
 
 _ENGINE_OWN_DOMAINS: dict[str, tuple[str, ...]] = {
+    "google": ("google.com", "google.com.tr", "googleadservices.com", "googleusercontent.com",
+               "gstatic.com", "google.co.uk", "google.de", "google.fr"),
     "duckduckgo": ("duckduckgo.com",),
     "bing": ("bing.com", "microsoft.com", "msn.com"),
     "brave": ("brave.com", "search.brave.com"),
 }
 
+# Google's "unusual traffic" interstitial and its consent page: recognised, never solved.
+_GOOGLE_SORRY_MARKERS = ("unusual traffic from your computer network", "/sorry/index")
+_GOOGLE_CONSENT_MARKERS = ("consent.google.com",)
+
 _PUBLISHED_HINT_RE = re.compile(
-    r"\b\d+\s+(?:second|minute|hour|day|week|month|year)s?\s+ago\b", re.IGNORECASE
+    r"\b\d+\s+(?:second|minute|hour|day|week|month|year)s?\s+ago\b"
+    r"|\b\d+\s+(?:saniye|dakika|saat|gün|hafta|ay|yıl)\s+önce\b",
+    re.IGNORECASE,
 )
 
 
@@ -49,9 +60,11 @@ class SearchResult:
     title: str
     snippet: str
     published_hint: str | None
+    rank: int = 0
 
-    def as_dict(self) -> dict[str, str | None]:
+    def as_dict(self) -> dict[str, object]:
         return {
+            "rank": self.rank,
             "url": self.url,
             "title": self.title,
             "snippet": self.snippet,
@@ -60,16 +73,56 @@ class SearchResult:
 
 
 @dataclass(frozen=True, slots=True)
+class SearchAttempt:
+    """One provider tried for a query and how it ended (evidence, contract §3)."""
+
+    provider: str
+    outcome: str  # ok | captcha | consent | blocked | empty | malformed | transport_error
+    detail: str = ""
+
+    def as_dict(self) -> dict[str, str]:
+        return {"provider": self.provider, "outcome": self.outcome, "detail": self.detail}
+
+
+@dataclass(frozen=True, slots=True)
 class SearchOutcome:
-    engine: str
+    """Results plus provider evidence: which provider was asked for, which one answered,
+    whether a fallback happened and why. ``engine`` is kept as an alias of ``provider``."""
+
+    requested_provider: str
+    provider: str
     query: str
     results: tuple[SearchResult, ...]
     page_kind: str
+    attempts: tuple[SearchAttempt, ...] = ()
+    locale: str | None = None
+
+    @property
+    def engine(self) -> str:
+        return self.provider
+
+    @property
+    def fallback(self) -> bool:
+        return self.provider != self.requested_provider
+
+    @property
+    def fallback_reason(self) -> str | None:
+        if not self.fallback:
+            return None
+        failed = [a for a in self.attempts if a.provider != self.provider]
+        return "; ".join(f"{a.provider}:{a.outcome}" for a in failed) or "unknown"
 
     def as_dict(self) -> dict[str, object]:
         return {
-            "engine": self.engine,
+            "engine": self.provider,
+            "requested_provider": self.requested_provider,
+            "provider": self.provider,
+            "fallback": self.fallback,
+            "fallback_reason": self.fallback_reason,
             "query": self.query,
+            "result_count": len(self.results),
+            "locale": self.locale,
+            "attempts": [a.as_dict() for a in self.attempts],
             "results": [r.as_dict() for r in self.results],
             "page_kind": self.page_kind,
         }
@@ -133,6 +186,8 @@ def _recency_param(engine: str, recency_days: int | None) -> dict[str, str]:
         bucket = "month"
     else:
         bucket = "year"
+    if engine == "google":
+        return {"tbs": {"day": "qdr:d", "week": "qdr:w", "month": "qdr:m", "year": "qdr:y"}[bucket]}
     if engine == "duckduckgo":
         return {"df": {"day": "d", "week": "w", "month": "m", "year": "y"}[bucket]}
     if engine == "bing":
@@ -144,9 +199,29 @@ def _recency_param(engine: str, recency_days: int | None) -> dict[str, str]:
     return {}
 
 
-def build_search_url(engine: str, query: str, *, recency_days: int | None = None) -> str:
+def _locale_params(locale: str | None) -> dict[str, str]:
+    """Google's ``hl`` (interface language) and ``gl`` (region) from a BCP-47 locale such as
+    ``tr-TR``; nothing is assumed when no locale is known."""
+    if not locale:
+        return {}
+    parts = locale.replace("_", "-").split("-")
+    params: dict[str, str] = {}
+    if parts and parts[0]:
+        params["hl"] = parts[0].lower()
+    if len(parts) > 1 and len(parts[-1]) == 2 and parts[-1].isalpha():
+        params["gl"] = parts[-1].lower()
+    return params
+
+
+def build_search_url(
+    engine: str, query: str, *, recency_days: int | None = None, locale: str | None = None
+) -> str:
     """The engine's search-results URL for ``query`` (contract §3 base URLs)."""
     params = {"q": query, **_recency_param(engine, recency_days)}
+    if engine == "google":
+        params.update(_locale_params(locale))
+        params["num"] = "10"
+        return f"https://www.google.com/search?{urlencode(params)}"
     if engine == "duckduckgo":
         return f"https://html.duckduckgo.com/html/?{urlencode(params)}"
     if engine == "bing":
@@ -254,7 +329,97 @@ def parse_brave_html(html: str, *, max_results: int = 10) -> list[SearchResult]:
     return results
 
 
+_GOOGLE_EXCLUDED_ANCESTOR_IDS = {"tads", "tadsb", "taw", "rhs", "bottomads", "topads"}
+_GOOGLE_EXCLUDED_ANCESTOR_CLASSES = (
+    "related-question-pair", "kp-wholepage", "uEierd", "commercial-unit",
+)
+_GOOGLE_EXCLUDED_ANCESTOR_TAGS = {"g-scrolling-carousel", "g-section-with-header"}
+
+
+def _google_block_excluded(block: Tag) -> bool:
+    for ancestor in (block, *block.parents):
+        if not isinstance(ancestor, Tag):
+            continue
+        if ancestor.name in _GOOGLE_EXCLUDED_ANCESTOR_TAGS:
+            return True
+        if ancestor.get("id") in _GOOGLE_EXCLUDED_ANCESTOR_IDS:
+            return True
+        if ancestor.has_attr("data-text-ad"):
+            return True
+        classes = ancestor.get("class") or []
+        if any(c in _GOOGLE_EXCLUDED_ANCESTOR_CLASSES for c in classes):
+            return True
+    return False
+
+
+def _google_result_url(href: str) -> str | None:
+    """Direct URLs pass; Google's ``/url?q=<destination>`` redirect is unwrapped; anything
+    else (javascript:, relative Google paths, data:) is dropped."""
+    if href.startswith("/url?"):
+        target = parse_qs(urlsplit(href).query).get("q", [""])[0]
+        href = unquote(target)
+    if href.startswith("//"):
+        href = "https:" + href
+    if not href.startswith(("http://", "https://")):
+        return None
+    return href
+
+
+def detect_google_interstitial(html: str, final_url: str | None = None) -> str | None:
+    """``"captcha"`` for the unusual-traffic interstitial, ``"consent"`` for the consent
+    page, ``None`` for a normal page. Detection only — neither is ever answered."""
+    lowered_url = (final_url or "").lower()
+    if "google." in lowered_url and "/sorry/" in lowered_url:
+        return "captcha"
+    if lowered_url.startswith(("https://consent.google.", "http://consent.google.")):
+        return "consent"
+    lowered = html.lower()
+    if any(marker in lowered for marker in _GOOGLE_SORRY_MARKERS):
+        return "captcha"
+    if any(marker in lowered for marker in _GOOGLE_CONSENT_MARKERS) and "<form" in lowered:
+        return "consent"
+    return None
+
+
+def parse_google_html(html: str, *, max_results: int = 10) -> list[SearchResult]:
+    """Google organic results only: blocks with an ``h3`` title inside the results region,
+    excluding ads, "People also ask", the knowledge panel / right-hand column, carousels,
+    and Google's own domains."""
+    soup = BeautifulSoup(html, "html.parser")
+    container = soup.select_one("#rso") or soup.select_one("#search") or soup
+    results: list[SearchResult] = []
+    seen_urls: set[str] = set()
+    seen_titles: set[int] = set()
+    for block in container.select("div.g, div[data-hveid]"):
+        if _google_block_excluded(block):
+            continue
+        h3 = block.find("h3")
+        if h3 is None or id(h3) in seen_titles:
+            continue
+        link = h3.find_parent("a", href=True)
+        if link is None:
+            continue
+        seen_titles.add(id(h3))
+        url = _google_result_url(str(link["href"]))
+        if url is None or _is_own_domain(url, "google") or url in seen_urls:
+            continue
+        seen_urls.add(url)
+        snippet_el = block.select_one("[data-sncf], .VwiC3b, div[data-content-feature]")
+        snippet = _clean(snippet_el.get_text(" ") if snippet_el else "")
+        results.append(
+            SearchResult(
+                url=url,
+                title=_clean(h3.get_text()),
+                snippet=snippet,
+                published_hint=_extract_published_hint(snippet),
+            )
+        )
+        if len(results) >= max_results:
+            break
+    return results
+
 _PARSERS: dict[str, Callable[..., list[SearchResult]]] = {
+    "google": parse_google_html,
     "duckduckgo": parse_duckduckgo_html,
     "bing": parse_bing_html,
     "brave": parse_brave_html,
@@ -274,9 +439,9 @@ def parse_engine_html(engine: str, html: str, *, max_results: int = 10) -> list[
 
 #: One fetch attempt's outcome: rendered HTML, the page's classified kind,
 #: and the HTTP status (worker supplies this from a real navigation).
-FetchFn = Callable[[str, str], Awaitable[tuple[str, str, int | None]]]
+FetchFn = Callable[[str, str], Awaitable[tuple]]
 
-_TERMINAL_FALLOVER_KINDS = frozenset({"captcha", "blocked"})
+_TERMINAL_FALLOVER_KINDS = frozenset({"captcha", "blocked", "consent", "transport_error"})
 _SKIP_KINDS = frozenset({"captcha", "blocked", "empty"})
 
 
@@ -287,14 +452,16 @@ async def run_search(
     fetch: FetchFn,
     max_results: int = 10,
     recency_days: int | None = None,
+    locale: str | None = None,
 ) -> SearchOutcome:
-    """Run a search, trying engines in order for ``engine="auto"``.
+    """Run a search through the provider abstraction.
 
-    ``fetch(engine, url)`` performs the real navigation + page_kind read and
-    returns ``(html, page_kind, http_status)`` — injected so this function
-    (and its fallover/terminal-error logic) is unit-testable without a
-    browser (see ``tests/unit/test_search_engines.py``); the live worker path
-    supplies a closure that drives the real session.
+    ``engine="auto"`` (the default) tries ``AUTO_ORDER`` — Google first, DuckDuckGo as the
+    fallback — and records every attempt with its outcome; a named engine is used alone.
+    ``fetch(engine, url)`` performs the real navigation and returns
+    ``(html, page_kind, http_status)`` or ``(html, page_kind, http_status, final_url)`` —
+    injected so the fallover/evidence logic is unit-testable without a browser; the live
+    worker path supplies a closure that drives the real session.
     """
     if max_results < 1 or max_results > MAX_RESULTS_CAP:
         raise BrowserError(
@@ -302,59 +469,96 @@ async def run_search(
             f"max_results must be between 1 and {MAX_RESULTS_CAP}, got {max_results}",
             retryable=False,
         )
-    order = AUTO_ORDER if engine == "auto" else (engine,)
-    if engine != "auto" and engine not in ENGINES:
+    auto_mode = engine == "auto"
+    if not auto_mode and engine not in ENGINES:
         raise BrowserError(
             ErrorClass.VALIDATION_ERROR,
             f"unknown search engine {engine!r}; known: auto, {', '.join(ENGINES)}",
             retryable=False,
         )
+    order = AUTO_ORDER if auto_mode else (engine,)
+    requested = order[0]
 
-    attempted_kinds: list[str] = []
+    attempts: list[SearchAttempt] = []
     last_kind = "empty"
-    auto_mode = engine == "auto"
-    for eng in order:
-        url = build_search_url(eng, query, recency_days=recency_days)
+    for provider in order:
+        url = build_search_url(provider, query, recency_days=recency_days, locale=locale)
         try:
-            html, page_kind, _http_status = await fetch(eng, url)
-        except BrowserError:
-            # A genuine browser/transport failure reaching THIS engine (e.g.
-            # a network-level abort from anti-bot filtering, observed live
-            # against Brave Search: net::ERR_ABORTED) is at least as good a
-            # reason to try the next engine as a captcha/blocked page_kind
-            # is — "auto" exists precisely for this resilience. An
-            # explicitly-requested single engine gets no such fallover: its
-            # transport failure is accurate and actionable as-is, so it
-            # propagates unchanged.
+            fetched = await fetch(provider, url)
+        except BrowserError as exc:
+            # A transport failure reaching THIS provider (a network-level abort from anti-bot
+            # filtering, seen live against Brave) is as good a reason to try the next one as
+            # a captcha page. An explicitly requested single engine gets no fallover.
             if not auto_mode:
                 raise
-            attempted_kinds.append("blocked")
+            attempts.append(SearchAttempt(provider, "transport_error", str(exc.error_class)))
             last_kind = "blocked"
             continue
+        html, page_kind, _http_status = fetched[0], fetched[1], fetched[2]
+        final_url = fetched[3] if len(fetched) > 3 else None
+        interstitial = detect_google_interstitial(html, final_url) if provider == "google" else None
+        if interstitial is not None:
+            attempts.append(
+                SearchAttempt(provider, interstitial, "interstitial detected; not answered")
+            )
+            last_kind = "captcha" if interstitial == "captcha" else "blocked"
+            continue
         if page_kind in _SKIP_KINDS:
-            attempted_kinds.append(page_kind)
+            attempts.append(SearchAttempt(provider, page_kind))
             last_kind = page_kind
             continue
-        results = parse_engine_html(eng, html, max_results=max_results)
-        if not results:
-            attempted_kinds.append("empty")
+        try:
+            results = parse_engine_html(provider, html, max_results=max_results)
+        except Exception as exc:  # noqa: BLE001 - malformed markup is a provider outcome, not a crash
+            attempts.append(SearchAttempt(provider, "malformed", type(exc).__name__))
             last_kind = "empty"
             continue
-        return SearchOutcome(engine=eng, query=query, results=tuple(results), page_kind="ok")
+        if not results:
+            attempts.append(SearchAttempt(provider, "empty"))
+            last_kind = "empty"
+            continue
+        attempts.append(SearchAttempt(provider, "ok", f"{len(results)} results"))
+        ranked = tuple(replace(r, rank=i + 1) for i, r in enumerate(results))
+        return SearchOutcome(
+            requested_provider=requested,
+            provider=provider,
+            query=query,
+            results=ranked,
+            page_kind="ok",
+            attempts=tuple(attempts),
+            locale=locale,
+        )
 
-    if attempted_kinds and all(k in _TERMINAL_FALLOVER_KINDS for k in attempted_kinds):
+    kinds = [a.outcome for a in attempts]
+    if kinds and all(k in _TERMINAL_FALLOVER_KINDS for k in kinds):
         raise BrowserError(
             ErrorClass.PROVIDER_RATE_LIMITED,
-            f"browser.search: every engine ({', '.join(order)}) ended in "
-            "captcha/blocked for this query",
+            f"browser.search: every provider ({', '.join(order)}) ended in "
+            f"{'/'.join(sorted(set(kinds)))} for this query",
             retryable=True,
-            evidence={"engines": list(order), "kinds": attempted_kinds, "query": query},
+            evidence={
+                "requested_provider": requested,
+                "attempts": [a.as_dict() for a in attempts],
+                "query": query,
+            },
         )
-    return SearchOutcome(engine=order[-1], query=query, results=(), page_kind=last_kind)
+    return SearchOutcome(
+        requested_provider=requested,
+        provider=order[-1],
+        query=query,
+        results=(),
+        page_kind=last_kind,
+        attempts=tuple(attempts),
+        locale=locale,
+    )
 
 
 __all__ = [
     "AUTO_ORDER",
+    "PRIMARY_PROVIDER",
+    "SearchAttempt",
+    "detect_google_interstitial",
+    "parse_google_html",
     "ENGINES",
     "MAX_RESULTS_CAP",
     "FetchFn",

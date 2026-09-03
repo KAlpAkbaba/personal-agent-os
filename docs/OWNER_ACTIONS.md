@@ -194,6 +194,31 @@ Expect a Chrome window to appear briefly on this PC. Paste the final lines (each
 status, `command_id`, `trace`) and `browser-smoke-1.json` (ids, timings, the example.com
 title/text and process images — no secret).
 
+### 12. Google-primary search through the installed worker — **ready**
+
+Unblocks: `docs/QUALIFICATION.md` 9.12; the larger research run (item 10 step C) waits for it.
+
+`browser.search` now goes through a provider abstraction: **Google is the primary provider,
+DuckDuckGo the fallback**, and every search returns provider evidence (`requested_provider`,
+`provider`, `fallback`, `fallback_reason`, `query`, `result_count`, `attempts`) that the
+Cloud Core also writes into the research run's event trail. Google's "unusual traffic"
+interstitial and its consent page are recognised and never answered; they are recorded
+fallback reasons. The search-mode smoke PASSES only when Chrome actually searched Google and
+organic results (rank, title, URL, snippet) came back with `provider=google` and
+`fallback=false`; any fallback is printed with its reason and fails the run honestly.
+
+Note from the same-day probes: from this address, automated Chrome hit Google's
+network-level "unusual traffic" block ("the block will expire shortly after those requests
+stop"), after a day of probe traffic. If the run reports `fallback_reason=google:captcha`,
+wait a while and rerun; nothing is solved or bypassed by design.
+
+```powershell
+.\scripts\browser\real-browser-smoke.ps1 -Mode search -SearchQuery "yapay zeka ajanları son gelişmeler" -OutFile google-search-smoke-1.json
+```
+
+Paste the final lines (`requested_provider`, `provider`, `fallback`, the attempts, the first
+results, the `command_id`/`trace` lines, `REAL BROWSER SMOKE: PASS`) and the JSON.
+
 ### 9. K66 re-qualification after the instrumentation + noise pass — **this is the current action**
 
 Unblocks: rows 6.16–6.21 with attributable numbers; the revised voice target stays NOT

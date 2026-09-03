@@ -315,12 +315,39 @@ def discover_activity(
                 if exc.retryable:
                     raise _retryable(exc.error_class, exc.message) from exc
                 raise _non_retryable(exc.error_class, exc.message) from exc
+            evidence = gateway.last_search_evidence
+            provider = evidence.provider if evidence else "unknown"
+            if evidence is not None:
+                # Provider evidence is part of the durable run record (owner requirement):
+                # requested vs actual provider, fallback and its reason, query, result count.
+                with _session_factory()() as session:
+                    runs_service.update_run(
+                        session,
+                        tid,
+                        stage=STAGE_DISCOVERING,
+                        event={
+                            "stage": STAGE_DISCOVERING,
+                            "detail": (
+                                f"{query_id}: search requested_provider="
+                                f"{evidence.requested_provider} provider={evidence.provider} "
+                                f"fallback={str(evidence.fallback).lower()}"
+                                + (
+                                    f" reason={evidence.fallback_reason}"
+                                    if evidence.fallback_reason
+                                    else ""
+                                )
+                                + f" result_count={evidence.result_count}"
+                            ),
+                            "search": evidence.as_dict(),
+                        },
+                    )
+                    session.commit()
             candidates = [
                 discovery.DiscoveredCandidate(
                     url=h.url,
                     title=h.title,
                     publisher="",
-                    discovered_by="browser_search",
+                    discovered_by=f"browser_search:{provider}",
                     query_id=query_id,
                     published_hint=h.published_hint,
                 )

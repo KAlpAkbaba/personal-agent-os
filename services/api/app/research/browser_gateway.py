@@ -163,6 +163,49 @@ class SearchHit:
     title: str
     snippet: str
     published_hint: str | None = None
+    rank: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SearchEvidence:
+    """Provider evidence returned with every device search (BROWSER_CAPABILITIES.md §3):
+    which provider was requested, which one answered, whether a fallback happened and why."""
+
+    requested_provider: str
+    provider: str
+    fallback: bool
+    fallback_reason: str | None
+    query: str
+    result_count: int
+    attempts: tuple[dict[str, Any], ...] = ()
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "requested_provider": self.requested_provider,
+            "provider": self.provider,
+            "fallback": self.fallback,
+            "fallback_reason": self.fallback_reason,
+            "query": self.query,
+            "result_count": self.result_count,
+            "attempts": list(self.attempts),
+        }
+
+    @classmethod
+    def from_result(cls, query: str, result: dict[str, Any]) -> SearchEvidence:
+        provider = str(result.get("provider") or result.get("engine") or "unknown")
+        requested = str(result.get("requested_provider") or provider)
+        hits = result.get("results") or []
+        return cls(
+            requested_provider=requested,
+            provider=provider,
+            fallback=bool(result.get("fallback", provider != requested)),
+            fallback_reason=(
+                str(result["fallback_reason"]) if result.get("fallback_reason") else None
+            ),
+            query=str(result.get("query") or query),
+            result_count=int(result.get("result_count", len(hits))),
+            attempts=tuple(a for a in (result.get("attempts") or []) if isinstance(a, dict)),
+        )
 
 
 def _outcome_or_raise(outcome: CommandOutcome) -> dict[str, Any]:
@@ -201,6 +244,7 @@ def fetch_idempotency_key(task_id: str, url: str, *, attempt: int = 1) -> str:
 
 
 class DeviceBrowserGateway:
+    last_search_evidence: SearchEvidence | None = None
     """Real gateway: dispatches ``browser.*`` commands to one selected device
     over :class:`~app.devices.commands.DeviceCommandClientProtocol`, using
     exactly the payload/result shapes of ``packages/protocol/
@@ -270,14 +314,16 @@ class DeviceBrowserGateway:
         )
         result = _outcome_or_raise(outcome)
         _reject_forbidden_keys(result)
+        self.last_search_evidence = SearchEvidence.from_result(query, result)
         return [
             SearchHit(
                 url=str(r["url"]),
                 title=str(r.get("title", "")),
                 snippet=str(r.get("snippet", "")),
                 published_hint=r.get("published_hint"),
+                rank=int(r.get("rank", i + 1)),
             )
-            for r in result.get("results", [])
+            for i, r in enumerate(result.get("results", []))
         ]
 
     def fetch_url(
@@ -385,6 +431,7 @@ def _parse_optional_dt(value: Any) -> datetime | None:
 
 
 __all__ = [
+    "SearchEvidence",
     "BrowserDispatchError",
     "BrowserGateway",
     "BrowserGatewayNotConfiguredError",

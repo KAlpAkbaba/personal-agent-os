@@ -438,6 +438,20 @@ Invoke-Step "Owner browser smoke script against the dev chain (example.com, sear
   finally { Remove-Item Env:\PAGENTOS_SMOKE_TOKEN -ErrorAction SilentlyContinue }
 }
 
+Invoke-Step "Owner search-provider smoke against the dev chain (Google primary, evidence, fallback recorded)" {
+  # Provider-agnostic here (-ExpectProvider any): the dev chain proves the evidence fields
+  # and the fallback mechanics; whether Google itself answers from this address is the
+  # owner-machine qualification's question (OWNER_ACTIONS item 12), not a gate.
+  $env:PAGENTOS_SMOKE_TOKEN = ([string]$script:ownerHeaders["Authorization"]) -replace '^Bearer\s+', ''
+  try {
+    & $powershell5 -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot "scripts\browser\real-browser-smoke.ps1") `
+      -BaseUrl $baseUrl -Device $script:deviceId -SessionTokenFromEnv -SkipLocalEvidence -Mode search -ExpectProvider any `
+      -OutFile (Join-Path $OutDir "search-smoke.json")
+    if ($LASTEXITCODE -ne 0) { throw "real-browser-smoke.ps1 -Mode search exited $LASTEXITCODE" }
+  }
+  finally { Remove-Item Env:\PAGENTOS_SMOKE_TOKEN -ErrorAction SilentlyContinue }
+}
+
 Invoke-Step "Real research: first owner use case through Chrome + live Internet" {
   $started = Post-Json "/v1/research" @{ input = $Topic; synthesis = $Synthesis; max_sources = $MaxSources }
   $script:taskId = [string]$started.task_id

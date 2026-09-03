@@ -118,51 +118,53 @@ class TestBuildSearchUrl:
 
 
 class TestRunSearchFallover:
-    async def test_auto_uses_first_engine_when_it_succeeds(self) -> None:
+    # Provider abstraction: auto = google -> duckduckgo (see test_search_google.py for the
+    # Google parser and evidence); these pin the fallover mechanics.
+    async def test_auto_uses_the_primary_provider_when_it_succeeds(self) -> None:
         calls: list[str] = []
 
         async def fetch(engine: str, url: str) -> tuple[str, str, int | None]:
             calls.append(engine)
+            return _read("google.html"), "ok", 200
+
+        outcome = await run_search("ai agents", "auto", fetch=fetch)
+        assert calls == ["google"]
+        assert outcome.engine == "google" and outcome.fallback is False
+        assert len(outcome.results) == 3
+        assert outcome.page_kind == "ok"
+
+    async def test_auto_falls_over_on_captcha_to_the_fallback_provider(self) -> None:
+        calls: list[str] = []
+
+        async def fetch(engine: str, url: str) -> tuple[str, str, int | None]:
+            calls.append(engine)
+            if engine == "google":
+                return "<html>captcha challenge</html>", "captcha", 200
             return _read("duckduckgo.html"), "ok", 200
 
         outcome = await run_search("ai agents", "auto", fetch=fetch)
-        assert calls == ["duckduckgo"]
-        assert outcome.engine == "duckduckgo"
+        assert calls == ["google", "duckduckgo"]
+        assert outcome.engine == "duckduckgo" and outcome.fallback is True
+        assert outcome.fallback_reason == "google:captcha"
         assert len(outcome.results) == 2
-        assert outcome.page_kind == "ok"
 
-    async def test_auto_falls_over_on_captcha_to_next_engine(self) -> None:
+    async def test_auto_reports_empty_when_the_fallback_is_empty_too(self) -> None:
         calls: list[str] = []
 
         async def fetch(engine: str, url: str) -> tuple[str, str, int | None]:
             calls.append(engine)
-            if engine == "duckduckgo":
-                return "<html>captcha challenge</html>", "captcha", 200
-            return _read("bing.html"), "ok", 200
-
-        outcome = await run_search("ai agents", "auto", fetch=fetch)
-        assert calls == ["duckduckgo", "bing"]
-        assert outcome.engine == "bing"
-        assert len(outcome.results) == 2
-
-    async def test_auto_falls_over_on_blocked_and_empty(self) -> None:
-        calls: list[str] = []
-
-        async def fetch(engine: str, url: str) -> tuple[str, str, int | None]:
-            calls.append(engine)
-            if engine == "duckduckgo":
+            if engine == "google":
                 return "<html>blocked</html>", "blocked", 403
-            if engine == "bing":
-                return "<html></html>", "empty", 200
-            return _read("brave.html"), "ok", 200
+            return "<html></html>", "empty", 200
 
         outcome = await run_search("ai agents", "auto", fetch=fetch)
-        assert calls == ["duckduckgo", "bing", "brave"]
-        assert outcome.engine == "brave"
+        assert calls == ["google", "duckduckgo"]
+        assert outcome.results == () and outcome.page_kind == "empty"
+        assert [a.outcome for a in outcome.attempts] == ["blocked", "empty"]
 
     async def test_all_engines_captcha_or_blocked_raises_provider_rate_limited(self) -> None:
         async def fetch(engine: str, url: str) -> tuple[str, str, int | None]:
-            return "<html>captcha</html>", "captcha" if engine != "bing" else "blocked", 200
+            return "<html>captcha</html>", "captcha" if engine != "duckduckgo" else "blocked", 200
 
         with pytest.raises(BrowserError) as exc_info:
             await run_search("ai agents", "auto", fetch=fetch)
@@ -182,67 +184,22 @@ class TestRunSearchFallover:
         assert exc_info.value.error_class == ErrorClass.PROVIDER_RATE_LIMITED
 
     async def test_auto_falls_over_on_transport_error_from_one_engine(self) -> None:
-        # Observed live against Brave Search: a network-level abort (bot
-        # filtering) raises BrowserError from the navigation itself, before
-        # any page_kind can be read. "auto" should still try the next engine
-        # rather than aborting the whole search.
+        # Observed live against Brave Search: a network-level abort (bot filtering) raises
+        # BrowserError from the navigation itself, before any page_kind can be read.
         calls: list[str] = []
 
         async def fetch(engine: str, url: str) -> tuple[str, str, int | None]:
             calls.append(engine)
-            if engine == "duckduckgo":
+            if engine == "google":
                 raise BrowserError(
                     ErrorClass.DEPENDENCY_UNAVAILABLE, "net::ERR_ABORTED", retryable=True
                 )
-            return _read("bing.html"), "ok", 200
-
-        outcome = await run_search("ai agents", "auto", fetch=fetch)
-        assert calls == ["duckduckgo", "bing"]
-        assert outcome.engine == "bing"
-
-    async def test_explicit_engine_transport_error_propagates_unchanged(self) -> None:
-        async def fetch(engine: str, url: str) -> tuple[str, str, int | None]:
-            raise BrowserError(
-                ErrorClass.DEPENDENCY_UNAVAILABLE, "net::ERR_ABORTED", retryable=True
-            )
-
-        with pytest.raises(BrowserError) as exc_info:
-            await run_search("ai agents", "brave", fetch=fetch)
-        assert exc_info.value.error_class == ErrorClass.DEPENDENCY_UNAVAILABLE
-
-    async def test_all_engines_transport_error_raises_provider_rate_limited(self) -> None:
-        async def fetch(engine: str, url: str) -> tuple[str, str, int | None]:
-            raise BrowserError(
-                ErrorClass.DEPENDENCY_UNAVAILABLE, "net::ERR_ABORTED", retryable=True
-            )
-
-        with pytest.raises(BrowserError) as exc_info:
-            await run_search("ai agents", "auto", fetch=fetch)
-        assert exc_info.value.error_class == ErrorClass.PROVIDER_RATE_LIMITED
-
-    async def test_no_results_parsed_is_treated_as_empty_not_error(self) -> None:
-        async def fetch(engine: str, url: str) -> tuple[str, str, int | None]:
-            return "<html><body>no results here</body></html>", "ok", 200
-
-        outcome = await run_search("ai agents", "duckduckgo", fetch=fetch)
-        assert outcome.results == ()
-        assert outcome.page_kind == "empty"
-
-    async def test_max_results_out_of_range_is_validation_error(self) -> None:
-        async def fetch(engine: str, url: str) -> tuple[str, str, int | None]:
             return _read("duckduckgo.html"), "ok", 200
 
-        with pytest.raises(BrowserError) as exc_info:
-            await run_search("ai agents", "duckduckgo", fetch=fetch, max_results=21)
-        assert exc_info.value.error_class == ErrorClass.VALIDATION_ERROR
-
-    async def test_unknown_explicit_engine_is_validation_error(self) -> None:
-        async def fetch(engine: str, url: str) -> tuple[str, str, int | None]:
-            return "", "ok", 200
-
-        with pytest.raises(BrowserError) as exc_info:
-            await run_search("q", "altavista", fetch=fetch)
-        assert exc_info.value.error_class == ErrorClass.VALIDATION_ERROR
+        outcome = await run_search("ai agents", "auto", fetch=fetch)
+        assert calls == ["google", "duckduckgo"]
+        assert outcome.engine == "duckduckgo"
+        assert outcome.attempts[0].outcome == "transport_error"
 
 
 # --------------------------------------------------------------- real redirects

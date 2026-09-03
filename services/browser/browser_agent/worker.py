@@ -331,6 +331,29 @@ _EXTRACT_MODES = frozenset({"text", "links", "metadata", "structured", "all"})
 _WAIT_FOR_VALUES = frozenset({"navigation", "text", "target", "load"})
 
 
+def detect_user_locale() -> str | None:
+    """The machine's user locale as BCP-47 (``tr-TR``) without assuming one: Windows'
+    GetUserDefaultLocaleName first, then the CRT locale, else ``None``."""
+    try:
+        import ctypes
+
+        buf = ctypes.create_unicode_buffer(85)
+        if ctypes.windll.kernel32.GetUserDefaultLocaleName(buf, 85):  # type: ignore[attr-defined]
+            value = buf.value.strip()
+            if value:
+                return value
+    except Exception:  # noqa: BLE001 - not Windows, or no kernel32
+        pass
+    try:
+        import locale as _locale
+
+        name = _locale.getlocale()[0]
+        if name and "_" in name:
+            return name.replace("_", "-")
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
 class Worker:
     """One worker process: session registry, dispatch, idle reaper."""
 
@@ -344,6 +367,7 @@ class Worker:
         self._default_channel: str | None = args.channel
         self._default_visible = bool(args.visible) and not args.headless
         self._idle_timeout_s = args.idle_timeout_s
+        self._locale = getattr(args, "locale", None) or detect_user_locale()
         # Loopback/private destinations are refused unless the worker was started with
         # --allow-private-destinations (test fixture sites only; the companion never
         # passes it). Cloud Core applies the same policy before dispatching.
@@ -1205,9 +1229,16 @@ class Worker:
                 retryable=False,
             )
 
+        locale = payload.get("locale") or self._locale
+        if locale is not None and not isinstance(locale, str):
+            raise BrowserError(
+                ErrorClass.VALIDATION_ERROR,
+                "search: locale must be a string or null",
+                retryable=False,
+            )
         browser_session = state.browser_session
 
-        async def fetch(_engine: str, url: str) -> tuple[str, str, int | None]:
+        async def fetch(_engine: str, url: str) -> tuple[str, str, int | None, str]:
             response = await browser_session.navigate(url, timeout_ms=15_000)
             page = browser_session.backend.current_page
             http_status = response.status if response is not None else None
@@ -1221,10 +1252,25 @@ class Worker:
                 http_status=http_status,
             )
             html = await page.content()
-            return html, kind_result.page_kind, http_status
+            return html, kind_result.page_kind, http_status, page.url
 
         outcome = await search_engines.run_search(
-            query, engine, fetch=fetch, max_results=max_results, recency_days=recency_days
+            query,
+            engine,
+            fetch=fetch,
+            max_results=max_results,
+            recency_days=recency_days,
+            locale=locale,
+        )
+        logger.info(
+            "browser.search_provider",
+            requested_provider=outcome.requested_provider,
+            provider=outcome.provider,
+            fallback=outcome.fallback,
+            fallback_reason=outcome.fallback_reason,
+            result_count=len(outcome.results),
+            query_chars=len(query),
+            attempts=[a.as_dict() for a in outcome.attempts],
         )
         return outcome.as_dict()
 
@@ -1341,6 +1387,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--headless", action="store_true", help="Default session_open to headless (default)"
     )
     parser.add_argument("--idle-timeout-s", type=int, default=DEFAULT_IDLE_TIMEOUT_S)
+    parser.add_argument(
+        "--locale",
+        default=None,
+        help="BCP-47 locale for search providers (default: the machine's user locale)",
+    )
     parser.add_argument(
         "--allow-private-destinations",
         action="store_true",

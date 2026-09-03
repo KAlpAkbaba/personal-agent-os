@@ -2493,3 +2493,17 @@ embedded Temporal worker). Facts and decisions that were not in the design:
     artifact hashes compared, SCM and logon-task executable paths read back, running image
     paths, worker path, manifest), and a loud failure when any of it disagrees.
     `installer-evidence.tests.ps1` pins the engine as the only deploy path.
+
+11. **Google is the primary search provider; DuckDuckGo the fallback** (owner decision,
+    2026-09-03 evening). `browser.search` runs through a provider abstraction: `auto` =
+    `google → duckduckgo`, named engines alone (Bing/Brave stay selectable by name). Every
+    outcome carries provider evidence — `requested_provider`, `provider`, `fallback`,
+    `fallback_reason`, `query`, `result_count`, `attempts` — and Cloud Core writes it into the
+    research run's events (`discovered_by=browser_search:<provider>`). Google organic results
+    are read from the results region only (ads, "People also ask", knowledge panel, carousels
+    and Google's own domains excluded; `/url?q=` unwrapped; rank/title/URL/snippet), the
+    locale comes from the payload, the worker's `--locale`, or the machine's user locale
+    (`hl`/`gl`), and Google's "unusual traffic" interstitial and consent page are recognised
+    (URL and text) and never answered — a probe from the owner's address on the same day hit
+    that block after a day of automated traffic, which is exactly the recorded fallback case.
+    The M13 browser smoke (9.2) is unchanged and its `full` mode still passes.
