@@ -47,6 +47,11 @@ param(
     [switch]$UpdateAgentFirst,
     # browser.search response schema this script consumes (BROWSER_CAPABILITIES.md §3).
     [int]$RequiredSearchSchema = 2,
+    # Search mode only: interstitial=handoff (contract §3a). If Google shows a verification or
+    # consent page, Chrome is brought to the front and this script WAITS for you to complete
+    # it (nothing is solved or bypassed), then re-issues the same search on the same session.
+    [switch]$Handoff,
+    [int]$HandoffTimeoutSec = 600,
     # DEV/TEST ONLY: take an already-minted owner session token from PAGENTOS_SMOKE_TOKEN
     # instead of the masked credential prompt (the e2e harness uses this; never for the owner).
     [switch]$SessionTokenFromEnv,
@@ -227,8 +232,31 @@ try {
         # Search-provider qualification: one browser.search through the provider abstraction.
         # PASS requires the recorded provider to be the requested primary with no fallback;
         # a fallback is reported honestly with its reason and FAILS this mode.
-        $search = Invoke-DeviceCommand -Capability "browser.search" -Payload @{ session_id = $sessionId; query = $SearchQuery; engine = "auto"; max_results = 8 }
+        $interstitial = if ($Handoff) { "handoff" } else { "fallback" }
+        $search = Invoke-DeviceCommand -Capability "browser.search" -Payload @{ session_id = $sessionId; query = $SearchQuery; engine = "auto"; max_results = 8; interstitial = $interstitial }
         $sr = $search.result
+        $handoffRounds = 0
+        while ([string](Get-OptionalProperty -InputObject $sr -Name "state") -eq "waiting_for_owner_verification" -and $Handoff) {
+            $handoffRounds++
+            $vurl = [string](Get-OptionalProperty -InputObject $sr -Name "verification_url")
+            Write-Host ""
+            Write-Host "      WAITING_FOR_OWNER_VERIFICATION: Google shows a $((Get-OptionalProperty -InputObject $sr -Name 'page_kind')) page. Chrome was brought to the front." -ForegroundColor Yellow
+            Write-Host "      Complete the page by hand in that Chrome window (nothing is solved or bypassed here); this script resumes the SAME session automatically." -ForegroundColor Yellow
+            if ($vurl) { Write-Host "      page: $vurl" }
+            $evidence.handoff = [ordered]@{ rounds = $handoffRounds; page_kind = (Get-OptionalProperty -InputObject $sr -Name "page_kind"); verification_url = $vurl; cleared = $false }
+            $deadline = (Get-Date).AddSeconds($HandoffTimeoutSec)
+            $cleared = $false
+            while ((Get-Date) -lt $deadline -and -not $cleared) {
+                $wait = Invoke-DeviceCommand -Capability "browser.wait" -Payload @{ session_id = $sessionId; for = "verification_cleared"; timeout_ms = 45000 }
+                $cleared = [bool](Get-OptionalProperty -InputObject $wait.result -Name "satisfied")
+            }
+            if (-not $cleared) { throw "the verification page was not completed within $HandoffTimeoutSec s; the research session was left as it is" }
+            $evidence.handoff.cleared = $true
+            Write-Host "      verification cleared; re-issuing the same search on the same session"
+            $search = Invoke-DeviceCommand -Capability "browser.search" -Payload @{ session_id = $sessionId; query = $SearchQuery; engine = "auto"; max_results = 8; interstitial = $interstitial }
+            $sr = $search.result
+            if ($handoffRounds -ge 3) { throw "Google kept asking for verification three times; stopping honestly" }
+        }
         $resultSchema = Get-OptionalProperty -InputObject $sr -Name "schema_version"
         if ($null -eq $resultSchema -or [int]$resultSchema -lt $RequiredSearchSchema) {
             throw "contract/version mismatch: browser.search answered with schema '$resultSchema' (needs $RequiredSearchSchema); the worker that executed it predates the provider abstraction - rerun with -UpdateAgentFirst"
@@ -238,6 +266,7 @@ try {
         }
         $results = @(Get-OptionalProperty -InputObject $sr -Name "results")
         $attempts = @(Get-OptionalProperty -InputObject $sr -Name "attempts")
+        Write-Host ("      state={0} path={1}" -f (Get-OptionalProperty -InputObject $sr -Name "state"), (Get-OptionalProperty -InputObject $sr -Name "path"))
         Write-Host ("      requested_provider={0} provider={1} fallback={2} fallback_reason={3} query='{4}' result_count={5} locale={6}" -f
             (Get-OptionalProperty -InputObject $sr -Name "requested_provider"), (Get-OptionalProperty -InputObject $sr -Name "provider"),
             (Get-OptionalProperty -InputObject $sr -Name "fallback"), (Get-OptionalProperty -InputObject $sr -Name "fallback_reason"),

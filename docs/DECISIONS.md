@@ -2518,3 +2518,16 @@ embedded Temporal worker). Facts and decisions that were not in the design:
     of inventing a provider, and the smoke refuses to search on a lower contract with a
     message naming the installed version. `-UpdateAgentFirst` runs the journaled installer and
     waits for the device to reconnect so the update and the qualification are one action.
+
+13. **Persistent, owner-visible, UI-driven research browser session** (owner decision,
+    2026-09-03 night; contract v1.1 §3a, spec §5a). One Chrome session per research job,
+    reused for every search/navigation/extraction and closed when the job ends; Google is
+    driven through its real page (typed query, DOM/navigation readiness, no fixed sleeps),
+    sources are fetched in new tabs so the results tab stays loaded, the dedicated PagentOS
+    profile keeps legitimate cookies/locale/consent between runs. Interstitials are handled
+    by owner handoff when the owner is present (`interactive=true`): Chrome is brought to
+    the front, the run enters `waiting_for_owner_verification`, the workflow polls
+    `browser.wait for=verification_cleared` and resumes the same session after the owner
+    completes the page; unattended runs fall back to DuckDuckGo. The chosen path is recorded
+    per query. Explicitly NOT stealth: no fingerprint spoofing, webdriver masking, stealth
+    plugins or automatic CAPTCHA solving.

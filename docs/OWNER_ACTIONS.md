@@ -224,13 +224,21 @@ below updates the installed agent first through the journaled installer (one UAC
 preserves endpoints and identity), waits for the device to reconnect, and then runs the
 qualification:
 
+The runtime now uses one persistent, owner-visible Chrome research session driven through
+Google's real page, with owner handoff on verification pages (contract v1.1 §3a, ADR-0050
+item 13): if Google shows its verification or consent page, Chrome is brought to the front,
+the script prints `WAITING_FOR_OWNER_VERIFICATION` and waits for you to complete the page
+by hand (nothing is solved or bypassed), then re-issues the same search on the same
+session. The command updates the installed agent first (one UAC prompt), then runs the
+qualification:
+
 ```powershell
-.\scripts\browser\real-browser-smoke.ps1 -UpdateAgentFirst -Mode search -SearchQuery "yapay zeka ajanları son gelişmeler" -OutFile google-search-smoke-2.json
+.\scripts\browser\real-browser-smoke.ps1 -UpdateAgentFirst -Mode search -Handoff -SearchQuery "yapay zeka ajanları son gelişmeler" -OutFile google-search-smoke-2.json
 ```
 
-Paste the final lines (worker version and `browser.search schema`, `requested_provider`,
-`provider`, `fallback`, the attempts, the first results, the `command_id`/`trace` lines,
-`REAL BROWSER SMOKE: PASS`) and the JSON.
+Paste the final lines (worker version and `browser.search schema`, `state`/`path`,
+`requested_provider`, `provider`, `fallback`, the attempts, the first results, the
+`command_id`/`trace` lines, `REAL BROWSER SMOKE: PASS`) and the JSON.
 
 ### 9. K66 re-qualification after the instrumentation + noise pass — **this is the current action**
 
