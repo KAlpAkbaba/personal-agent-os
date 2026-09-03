@@ -410,6 +410,7 @@ dependencies = [
     { name = "cryptography" },
     { name = "fastapi" },
     { name = "fpdf2" },
+    { name = "httpx" },
     { name = "markdown" },
     { name = "pgvector" },
     { name = "psycopg", extra = ["binary"] },
@@ -425,7 +426,6 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "httpx" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "ruff" },
@@ -439,6 +439,7 @@ requires-dist = [
     { name = "cryptography", specifier = ">=43" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "fpdf2", specifier = ">=2.7" },
+    { name = "httpx", specifier = ">=0.27" },
     { name = "markdown", specifier = ">=3.6" },
     { name = "pgvector", specifier = ">=0.5.0" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.1" },
@@ -454,7 +455,6 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "httpx", specifier = ">=0.27" },
     { name = "pytest", specifier = ">=8.2" },
     { name = "pytest-asyncio", specifier = ">=0.23" },
     { name = "ruff", specifier = ">=0.6" },

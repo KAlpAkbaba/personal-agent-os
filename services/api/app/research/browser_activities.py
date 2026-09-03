@@ -1,0 +1,710 @@
+"""Temporal activities for BrowserResearchWorkflow (M13 spec §5).
+
+Each activity is idempotent on ``(task_id, step_key, attempt)`` so the
+durable workflow can be replayed/resumed after a worker restart without
+duplicating device commands, evidence rows, the artifact or the memory
+write. DB + device-command + object-store access happens only here (never in
+the workflow), built from settings so the code runs identically embedded in
+the API process or in the standalone ``python -m app.worker``.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+import uuid
+from datetime import UTC, datetime
+from typing import Any
+
+from temporalio import activity
+from temporalio.exceptions import ApplicationError
+
+from app.artifacts import render_store
+from app.artifacts import service as artifact_service
+from app.artifacts.models import (
+    ARTIFACT_KIND_RESEARCH_REPORT,
+    ARTIFACT_STATE_CANONICAL_READY,
+    ARTIFACT_STATE_READY,
+    ARTIFACT_STATE_RENDERS_PENDING,
+    TASK_STATUS_FAILED_TERMINAL,
+    TASK_STATUS_PLANNED,
+    TASK_STATUS_READY,
+    TASK_STATUS_RENDERING,
+    TASK_STATUS_RUNNING,
+)
+from app.artifacts.renderers import DEFAULT_RENDER_FORMATS, content_hash
+from app.artifacts.runtime import build_artifact_context
+from app.artifacts.state import IllegalTransition
+from app.config import get_settings
+from app.db import build_engine, build_session_factory
+from app.devices import service as devices_service
+from app.devices.commands import DeviceCommandClient, get_broker_runtime
+from app.devices.selection import NoCapableDeviceError, select_device
+from app.logging import get_logger, task_id_var
+from app.memory.embedding import DeterministicEmbedder
+from app.memory.service import remember_explicit
+from app.memory.types import MemoryClass
+from app.research import discovery, runs_service, sources
+from app.research.browser_gateway import BrowserDispatchError, DeviceBrowserGateway
+from app.research.evidence import EvidenceRecord, dedup_and_rank
+from app.research.injection import is_injection_suspected
+from app.research.models import (
+    STAGE_DISCOVERING,
+    STAGE_FAILED,
+    STAGE_FETCHING,
+    STAGE_PERSISTING,
+    STAGE_PLANNED,
+    STAGE_RANKING,
+    STAGE_READY,
+    STAGE_SELECTING_DEVICE,
+    STAGE_SYNTHESIZING,
+)
+from app.research.plan import build_plan
+from app.research.report import (
+    DetailSection,
+    Finding,
+    ReportStats,
+    ReportWindow,
+    ResearchReport,
+    SourceItem,
+    Statement,
+    assign_evidence_ids,
+    render_research_markdown,
+    run_provenance_gate,
+)
+from app.research.synthesis import resolve_synthesis_provider
+
+logger = get_logger("app.research.browser_activities")
+
+RETRYABLE_ERROR_CLASSES = frozenset(
+    {"dependency_unavailable", "timeout", "ui_state_changed", "provider_rate_limited"}
+)
+
+
+def _session_factory():
+    settings = get_settings()
+    engine = build_engine(settings.database_url)
+    return build_session_factory(engine)
+
+
+def _command_client() -> DeviceCommandClient:
+    return DeviceCommandClient(_session_factory())
+
+
+def _current_attempt() -> int:
+    return activity.info().attempt if activity.in_activity() else 1
+
+
+def _non_retryable(error_type: str, message: str) -> ApplicationError:
+    return ApplicationError(message, type=error_type, non_retryable=True)
+
+
+def _retryable(error_type: str, message: str) -> ApplicationError:
+    return ApplicationError(message, type=error_type, non_retryable=False)
+
+
+def _transition_task(session, tid: uuid.UUID, status: str, **kwargs: Any) -> None:
+    """Best-effort Task.status transition — a replayed activity may re-request
+    a transition already applied; the state machine's own idempotent
+    re-assert (``new == current``) covers most of that, and any genuinely
+    illegal edge (a race between two activities) must not fail the activity."""
+    try:
+        artifact_service.transition_task(session, tid, status, **kwargs)
+    except IllegalTransition as exc:
+        logger.debug("browser_research_task_transition_skipped", task_id=str(tid), error=str(exc))
+
+
+def _report_from_json(report_json: dict[str, Any]) -> ResearchReport:
+    def statement(d: dict[str, Any]) -> Statement:
+        return Statement(
+            text=d["text"],
+            label=d["label"],
+            evidence_ids=tuple(d.get("evidence_ids", ())),
+            provenance_note=d.get("provenance_note"),
+        )
+
+    def finding(d: dict[str, Any]) -> Finding:
+        return Finding(
+            id=d["id"],
+            title=d["title"],
+            summary=d["summary"],
+            why_it_matters=d["why_it_matters"],
+            importance=d["importance"],
+            label=d["label"],
+            evidence_ids=tuple(d.get("evidence_ids", ())),
+            first_seen=d.get("first_seen"),
+            provenance_note=d.get("provenance_note"),
+        )
+
+    return ResearchReport(
+        task_id=report_json["task_id"],
+        topic=report_json["topic"],
+        window=ReportWindow(**report_json["window"]),
+        generated_at=report_json["generated_at"],
+        synthesis_provider=report_json["synthesis_provider"],
+        executive_summary=report_json["executive_summary"],
+        findings=tuple(finding(f) for f in report_json["findings"]),
+        why_it_matters=tuple(statement(s) for s in report_json["why_it_matters"]),
+        watch_next=tuple(statement(s) for s in report_json["watch_next"]),
+        details=tuple(
+            DetailSection(
+                heading=d["heading"], statements=tuple(statement(s) for s in d["statements"])
+            )
+            for d in report_json["details"]
+        ),
+        uncertainty=tuple(statement(s) for s in report_json["uncertainty"]),
+        sources=tuple(SourceItem(**s) for s in report_json["sources"]),
+        stats=ReportStats(**report_json["stats"]),
+    )
+
+
+# --------------------------------------------------------------------- plan
+
+
+@activity.defn(name="browser_research_plan")
+def plan_activity(
+    task_id: str, topic: str, recency_days: int | None, max_sources: int
+) -> dict[str, Any]:
+    task_id_var.set(task_id)
+    tid = uuid.UUID(task_id)
+    factory = _session_factory()
+    with factory() as session:
+        existing = runs_service.get_run(session, tid)
+        if existing is not None and existing.plan_json:
+            return existing.plan_json
+        plan = build_plan(
+            topic,
+            now=datetime.now(UTC),
+            recency_days_override=recency_days,
+            max_sources_per_query=max(1, max_sources // 4 or 1),
+        )
+        plan_dict = plan.as_dict()
+        _transition_task(session, tid, TASK_STATUS_PLANNED)
+        runs_service.update_run(
+            session,
+            tid,
+            stage=STAGE_PLANNED,
+            plan_json=plan_dict,
+            event={"stage": STAGE_PLANNED, "detail": "plan built"},
+        )
+    logger.info("browser_research_planned", task_id=task_id)
+    return plan_dict
+
+
+# ------------------------------------------------------------- select_device
+
+
+@activity.defn(name="browser_research_select_device")
+def select_device_activity(task_id: str, target_device: str | None) -> dict[str, Any]:
+    task_id_var.set(task_id)
+    tid = uuid.UUID(task_id)
+    factory = _session_factory()
+
+    runtime = get_broker_runtime()
+    if runtime is None:
+        raise _non_retryable(
+            "dependency_unavailable", "broker runtime not registered in this process"
+        )
+
+    with factory() as session:
+        run = runs_service.get_run(session, tid)
+        if run is not None and run.device_id is not None:
+            view = devices_service.get_device_view(session, runtime, run.device_id)
+            if view is not None and view.presence == "online":
+                # This is the COMMON path in production: POST /v1/research
+                # already selected + persisted the device before starting the
+                # workflow (app/research/routes.py), so RUNNING must be
+                # entered here too, not only on the (replay-only) re-select
+                # path below.
+                _transition_task(session, tid, TASK_STATUS_RUNNING)
+                return {"device_id": str(run.device_id), "name": view.name, "reused": True}
+        views = devices_service.list_device_views(
+            session, runtime, stale_after_s=get_settings().device_presence_stale_after_s
+        )
+        try:
+            result = select_device(views, capability="browser.chrome", target=target_device)
+        except NoCapableDeviceError as exc:
+            _transition_task(
+                session,
+                tid,
+                TASK_STATUS_FAILED_TERMINAL,
+                error_class="no_capable_device",
+                error_message=exc.detail_tr,
+            )
+            runs_service.update_run(
+                session,
+                tid,
+                stage=STAGE_FAILED,
+                error=exc.detail_tr,
+                event={"stage": STAGE_FAILED, "detail": exc.detail_tr},
+            )
+            raise _non_retryable("no_capable_device", exc.detail_tr) from exc
+        _transition_task(session, tid, TASK_STATUS_RUNNING)
+        runs_service.update_run(
+            session,
+            tid,
+            stage=STAGE_SELECTING_DEVICE,
+            device_id=result.device.id,
+            event={"stage": STAGE_SELECTING_DEVICE, "detail": f"selected {result.device.name}"},
+        )
+    logger.info(
+        "browser_research_device_selected", task_id=task_id, device_id=str(result.device.id)
+    )
+    return {"device_id": str(result.device.id), "name": result.device.name, "reused": False}
+
+
+# ------------------------------------------------------------------ discover
+
+
+def _official_candidates(query_text: str, query_id: str) -> list[discovery.DiscoveredCandidate]:
+    out: list[discovery.DiscoveredCandidate] = []
+    for entry in sources.for_topics(tuple(query_text.split())):
+        if not entry.feed_url:
+            continue
+        try:
+            out.extend(
+                discovery.fetch_rss(entry.feed_url, publisher=entry.publisher, query_id=query_id)
+            )
+        except discovery.DiscoveryError as exc:
+            # One feed failing must not fail discovery for the whole run.
+            logger.warning(
+                "browser_research_feed_failed", publisher=entry.publisher, error=str(exc)
+            )
+    return out
+
+
+@activity.defn(name="browser_research_discover")
+def discover_activity(
+    task_id: str,
+    device_id: str,
+    query_id: str,
+    query_text: str,
+    source_class: str,
+    window_start_iso: str,
+) -> int:
+    task_id_var.set(task_id)
+    tid = uuid.UUID(task_id)
+    window_start = datetime.fromisoformat(window_start_iso)
+
+    candidates: list[discovery.DiscoveredCandidate] = []
+    try:
+        if source_class == "technical":
+            candidates = discovery.fetch_hn(query_text, window_start=window_start)
+        elif source_class == "academic":
+            candidates = discovery.fetch_arxiv(query_text)
+        elif source_class == "official":
+            candidates = _official_candidates(query_text, query_id)
+        else:  # "news" / "community": the device's real Chrome, semantic result links
+            gateway = DeviceBrowserGateway(
+                _command_client(), device_id=uuid.UUID(device_id), task_id=task_id
+            )
+            try:
+                hits = gateway.search(query_text, source_class=source_class, max_results=10)
+            except BrowserDispatchError as exc:
+                if exc.retryable:
+                    raise _retryable(exc.error_class, exc.message) from exc
+                raise _non_retryable(exc.error_class, exc.message) from exc
+            candidates = [
+                discovery.DiscoveredCandidate(
+                    url=h.url,
+                    title=h.title,
+                    publisher="",
+                    discovered_by="browser_search",
+                    query_id=query_id,
+                    published_hint=h.published_hint,
+                )
+                for h in hits
+            ]
+    except discovery.DiscoveryError as exc:
+        logger.warning("browser_research_discovery_failed", task_id=task_id, error=str(exc))
+        candidates = []
+
+    factory = _session_factory()
+    with factory() as session:
+        inserted = runs_service.insert_candidates(session, tid, candidates)
+        total = len(runs_service.list_candidates(session, tid))
+        runs_service.update_run(
+            session,
+            tid,
+            stage=STAGE_DISCOVERING,
+            progress={"discovered": total},
+            event={"stage": STAGE_DISCOVERING, "detail": f"{query_id}: +{inserted} candidates"},
+        )
+    return inserted
+
+
+@activity.defn(name="browser_research_fetch_targets")
+def fetch_targets_activity(task_id: str, max_sources: int) -> list[dict[str, str]]:
+    """Candidate URLs not yet fetched, oldest-discovered first, capped at
+    ``max_sources`` (the owner's budget for this run)."""
+    task_id_var.set(task_id)
+    tid = uuid.UUID(task_id)
+    factory = _session_factory()
+    with factory() as session:
+        candidates = runs_service.list_candidates(session, tid)
+        already = {r.url for r in runs_service.list_evidence(session, tid)}
+    targets = [c for c in candidates if c.url not in already][:max_sources]
+    return [
+        {"url": c.url, "query": c.query_id, "source_class": _class_for_query(c.query_id)}
+        for c in targets
+    ]
+
+
+def _class_for_query(query_id: str) -> str:
+    # query_id is formatted "<source_class>:<query index>" by the workflow.
+    return query_id.split(":", 1)[0] if ":" in query_id else "unknown"
+
+
+# ----------------------------------------------------------------- fetch(url)
+
+
+@activity.defn(name="browser_research_fetch")
+def fetch_activity(task_id: str, device_id: str, url: str, query: str, source_class: str) -> str:
+    """Returns ``"fetched" | "duplicate"``; a website-level failure
+    (``page_kind != ok``) is still a successful command and recorded as
+    evidence — only a browser/transport error raises."""
+    task_id_var.set(task_id)
+    tid = uuid.UUID(task_id)
+    attempt = _current_attempt()
+
+    gateway = DeviceBrowserGateway(
+        _command_client(), device_id=uuid.UUID(device_id), task_id=task_id
+    )
+    try:
+        record = gateway.fetch_url(url, query=query, source_class=source_class, attempt=attempt)
+    except BrowserDispatchError as exc:
+        factory = _session_factory()
+        with factory() as session:
+            runs_service.update_run(
+                session,
+                tid,
+                stage=STAGE_FETCHING,
+                event={"stage": STAGE_FETCHING, "detail": f"fetch failed {url}: {exc.error_class}"},
+            )
+        if exc.error_class in RETRYABLE_ERROR_CLASSES:
+            if activity.in_activity():
+                activity.heartbeat()
+            raise _retryable(exc.error_class, exc.message) from exc
+        raise _non_retryable(exc.error_class, exc.message) from exc
+
+    if not record.injection_suspected and is_injection_suspected(record.excerpt):
+        record = dataclasses.replace(record, injection_suspected=True)
+
+    factory = _session_factory()
+    with factory() as session:
+        _row, created = runs_service.upsert_evidence(
+            session,
+            tid,
+            url,
+            evidence_json=record.as_dict(),
+            device_id=uuid.UUID(device_id),
+            command_id=None,
+            injection_suspected=record.injection_suspected,
+        )
+        fetch_done = len(runs_service.list_evidence(session, tid))
+        runs_service.update_run(
+            session,
+            tid,
+            stage=STAGE_FETCHING,
+            progress={"fetch_done": fetch_done},
+            event={"stage": STAGE_FETCHING, "detail": f"fetched {url}"},
+        )
+    return "fetched" if created else "duplicate"
+
+
+# -------------------------------------------------------------------- rank
+
+
+@activity.defn(name="browser_research_rank")
+def rank_activity(
+    task_id: str, topic: str, window_start_iso: str, window_end_iso: str
+) -> dict[str, int]:
+    task_id_var.set(task_id)
+    tid = uuid.UUID(task_id)
+    window_start = datetime.fromisoformat(window_start_iso)
+    window_end = datetime.fromisoformat(window_end_iso)
+
+    factory = _session_factory()
+    with factory() as session:
+        rows = runs_service.list_evidence(session, tid)
+        records = [EvidenceRecord.from_dict(r.evidence_json) for r in rows]
+        ranked = assign_evidence_ids(
+            dedup_and_rank(records, topic=topic, window_start=window_start, window_end=window_end)
+        )
+        runs_service.update_evidence_ranking(session, tid, ranked)
+        runs_service.update_run(
+            session,
+            tid,
+            stage=STAGE_RANKING,
+            progress={"evidence": len(ranked)},
+            event={"stage": STAGE_RANKING, "detail": f"{len(ranked)} evidence ranked"},
+        )
+    return {"evidence": len(ranked), "deduplicated": len(records) - len(ranked)}
+
+
+# --------------------------------------------------------------- synthesize
+
+
+@activity.defn(name="browser_research_synthesize")
+def synthesize_activity(
+    task_id: str, topic: str, window_json: dict[str, Any], synthesis_name: str
+) -> dict[str, Any]:
+    task_id_var.set(task_id)
+    tid = uuid.UUID(task_id)
+    settings = get_settings()
+
+    factory = _session_factory()
+    with factory() as session:
+        rows = runs_service.list_evidence(session, tid)
+        candidate_count = len(runs_service.list_candidates(session, tid))
+        ranked = [EvidenceRecord.from_dict(r.evidence_json) for r in rows]
+        ranked.sort(key=lambda r: (r.rank or 9999, r.url))
+        evidence_by_id = {e.id: e for e in ranked}
+        primary_only = [e for e in ranked if not e.syndicated_of]
+
+        provider = resolve_synthesis_provider(synthesis_name, settings)
+        result = provider.synthesize(topic, primary_only, recency_label=window_json["label"])
+
+        stats = ReportStats(
+            queries=0,
+            discovered=candidate_count,
+            fetched=len(rows),
+            fetch_failed=0,
+            deduplicated=len(rows) - len(ranked),
+            evidence=len(ranked),
+        )
+        report = ResearchReport(
+            task_id=task_id,
+            topic=topic,
+            # window_json is plan["recency"] (RecencyWindow.as_dict()): start/
+            # end/label/amount/unit. ReportWindow only carries start/end/label.
+            window=ReportWindow(
+                start=window_json["start"], end=window_json["end"], label=window_json["label"]
+            ),
+            generated_at=datetime.now(UTC).isoformat(),
+            synthesis_provider=provider.name,
+            executive_summary=result.executive_summary,
+            findings=result.findings,
+            why_it_matters=result.why_it_matters,
+            watch_next=result.watch_next,
+            details=result.details,
+            uncertainty=result.uncertainty,
+            sources=tuple(SourceItem.from_evidence(e.id, e) for e in ranked),
+            stats=stats,
+        )
+        report = run_provenance_gate(report, evidence_by_id)
+
+        runs_service.upsert_report(
+            session, tid, report_json=report.as_dict(), synthesis_provider=provider.name
+        )
+        runs_service.update_run(
+            session,
+            tid,
+            stage=STAGE_SYNTHESIZING,
+            event={"stage": STAGE_SYNTHESIZING, "detail": f"synthesized via {provider.name}"},
+        )
+    logger.info("browser_research_synthesized", task_id=task_id, provider=provider.name)
+    return report.as_dict()
+
+
+# ---------------------------------------------------------------- persist
+
+
+def _artifact_title(topic: str) -> str:
+    return f"Araştırma Raporu: {topic.strip()}"
+
+
+@activity.defn(name="browser_research_persist_artifact")
+def persist_artifact_activity(task_id: str, topic: str) -> dict[str, Any]:
+    task_id_var.set(task_id)
+    tid = uuid.UUID(task_id)
+    settings = get_settings()
+
+    factory = _session_factory()
+    with factory() as session:
+        report_row = runs_service.get_report(session, tid)
+        if report_row is None:
+            raise _non_retryable("internal_bug", f"no synthesized report for task {task_id}")
+        report_json = dict(report_row.report_json)
+        synthesis_provider = report_row.synthesis_provider
+
+    markdown = render_research_markdown(_report_from_json(report_json))
+    body_hash = content_hash(markdown.encode("utf-8"))
+
+    af_factory, store = build_artifact_context(settings)
+    with af_factory() as session:
+        artifact = artifact_service.get_or_create_artifact_for_task(
+            session,
+            task_id=tid,
+            title=_artifact_title(topic),
+            kind=ARTIFACT_KIND_RESEARCH_REPORT,
+        )
+        version = artifact_service.add_artifact_version(
+            session,
+            artifact_id=artifact.id,
+            canonical_body=markdown,
+            content_hash=body_hash,
+            source_manifest=report_json,
+        )
+        artifact_service.set_executive_summary(
+            session, artifact.id, report_json.get("executive_summary", "")
+        )
+        if artifact.state != ARTIFACT_STATE_CANONICAL_READY:
+            artifact_service.set_artifact_state(
+                session, artifact.id, ARTIFACT_STATE_CANONICAL_READY
+            )
+        rows = render_store.ensure_renders(
+            session,
+            store,
+            version=version,
+            title=artifact.title,
+            formats=DEFAULT_RENDER_FORMATS,
+        )
+        if artifact.state != ARTIFACT_STATE_RENDERS_PENDING:
+            artifact_service.set_artifact_state(
+                session, artifact.id, ARTIFACT_STATE_RENDERS_PENDING
+            )
+        if artifact.state != ARTIFACT_STATE_READY:
+            artifact_service.set_artifact_state(session, artifact.id, ARTIFACT_STATE_READY)
+        artifact_id = artifact.id
+        version_no = version.version
+
+    with factory() as session:
+        runs_service.upsert_report(
+            session,
+            tid,
+            report_json=report_json,
+            synthesis_provider=synthesis_provider,
+            artifact_id=artifact_id,
+        )
+        _transition_task(session, tid, TASK_STATUS_RENDERING)
+        _transition_task(session, tid, TASK_STATUS_READY)
+        runs_service.update_run(
+            session,
+            tid,
+            stage=STAGE_PERSISTING,
+            event={"stage": STAGE_PERSISTING, "detail": f"artifact {artifact_id} v{version_no}"},
+        )
+    logger.info(
+        "browser_research_artifact_persisted", task_id=task_id, artifact_id=str(artifact_id)
+    )
+    return {"artifact_id": str(artifact_id), "version": version_no, "render_count": len(rows)}
+
+
+# ------------------------------------------------------------------ remember
+
+
+@activity.defn(name="browser_research_remember")
+def remember_activity(task_id: str, topic: str) -> str | None:
+    task_id_var.set(task_id)
+    tid = uuid.UUID(task_id)
+    settings = get_settings()
+
+    factory = _session_factory()
+    with factory() as session:
+        report_row = runs_service.get_report(session, tid)
+        if report_row is None:
+            return None
+        report_json = report_row.report_json
+
+    mem_engine = build_engine(settings.database_url)
+    mem_factory = build_session_factory(mem_engine)
+    embedder = DeterministicEmbedder()
+    with mem_factory() as session:
+        source_by_id = {s["id"]: s for s in report_json.get("sources", [])}
+        value = {
+            "question": topic,
+            "window": report_json.get("window"),
+            "generated_at": report_json.get("generated_at"),
+            "findings": [
+                {
+                    "title": f["title"],
+                    "summary": f["summary"],
+                    "label": f["label"],
+                    "evidence_urls": [
+                        source_by_id[eid]["url"]
+                        for eid in f.get("evidence_ids", [])
+                        if eid in source_by_id
+                    ],
+                }
+                for f in report_json.get("findings", [])
+            ],
+            "sources": [
+                {
+                    "url": s["url"],
+                    "title": s["title"],
+                    "publisher": s["publisher"],
+                    "published_at": s["published_at"],
+                }
+                for s in report_json.get("sources", [])
+            ],
+            "implications": [s["text"] for s in report_json.get("why_it_matters", [])],
+            "owner_feedback": None,
+            "artifact_id": str(report_row.artifact_id) if report_row.artifact_id else None,
+        }
+        result = remember_explicit(
+            session,
+            embedder,
+            text=f"Araştırma tamamlandı: {topic}",
+            memory_class=MemoryClass.EPISODIC,
+            key=f"research:{task_id}",
+            value=value,
+            source={"kind": "research", "task_id": task_id},
+        )
+        memory_id = result.memory_id
+
+    if memory_id is not None:
+        with factory() as session:
+            runs_service.set_report_memory(session, tid, memory_id)
+            runs_service.update_run(
+                session,
+                tid,
+                stage=STAGE_READY,
+                event={"stage": STAGE_READY, "detail": f"memory {memory_id}"},
+            )
+    return str(memory_id) if memory_id else None
+
+
+# --------------------------------------------------------------- close_session
+
+
+@activity.defn(name="browser_research_close_session")
+def close_session_activity(task_id: str, device_id: str) -> bool:
+    task_id_var.set(task_id)
+    gateway = DeviceBrowserGateway(
+        _command_client(), device_id=uuid.UUID(device_id), task_id=task_id
+    )
+    gateway._session_opened = True  # best-effort close regardless of local tracking
+    try:
+        gateway.close_session()
+    except Exception as exc:  # noqa: BLE001 - close is best-effort (spec §5)
+        logger.warning("browser_research_close_session_failed", task_id=task_id, error=str(exc))
+        return False
+    return True
+
+
+BROWSER_RESEARCH_ACTIVITIES = (
+    plan_activity,
+    select_device_activity,
+    discover_activity,
+    fetch_targets_activity,
+    fetch_activity,
+    rank_activity,
+    synthesize_activity,
+    persist_artifact_activity,
+    remember_activity,
+    close_session_activity,
+)
+
+__all__ = [
+    "BROWSER_RESEARCH_ACTIVITIES",
+    "close_session_activity",
+    "discover_activity",
+    "fetch_activity",
+    "fetch_targets_activity",
+    "persist_artifact_activity",
+    "plan_activity",
+    "rank_activity",
+    "remember_activity",
+    "select_device_activity",
+    "synthesize_activity",
+]

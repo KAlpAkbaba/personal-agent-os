@@ -149,6 +149,7 @@ class BrokerRuntime:
                             device_id=device_id,
                             command_trace_id=trace_id,
                         )
+                await self._deliver_pending_for_connected()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 - sweeper must survive DB outages
@@ -158,6 +159,34 @@ class BrokerRuntime:
         with self.session() as db:
             due = service.expire_due_commands(db)
             return [(str(c.id), str(c.device_id), c.trace_id) for c in due]
+
+    async def _deliver_pending_for_connected(self) -> None:
+        """M13 spec §5: every sweep also delivers PENDING commands for devices
+        that are connected to THIS process — not only on (re)connect — so a
+        command row created by another process (e.g. a Temporal activity
+        talking to the broker via app.devices.commands) reaches an
+        already-connected device within one sweep interval."""
+        device_ids = list(self.connections)
+        if not device_ids:
+            return
+        pending = await asyncio.to_thread(self._load_pending, device_ids)
+        if not pending:
+            return
+        # Local import: app.broker.ws imports BrokerRuntime/DeviceConnection
+        # from this module, so a top-level import here would be circular.
+        from app.broker.ws import deliver_command
+
+        for command in pending:
+            connection = self.connections.get(command.device_id)
+            if connection is None:
+                continue
+            delivered = await deliver_command(self, connection, command)
+            if delivered:
+                self.counters["commands_sweep_delivered"] += 1
+
+    def _load_pending(self, device_ids: list[uuid.UUID]) -> list[Any]:
+        with self.session() as db:
+            return service.pending_undelivered_commands(db, device_ids)
 
     # ----------------------------------------------------------------- health
 

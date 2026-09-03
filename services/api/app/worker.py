@@ -22,6 +22,8 @@ from app.research.activities import (
     plan_activity,
     render_activity,
 )
+from app.research.browser_activities import BROWSER_RESEARCH_ACTIVITIES
+from app.research.browser_workflow import BrowserResearchWorkflow
 from app.research.workflow import ResearchWorkflow
 from app.workflows import HealthPingWorkflow, ping_activity
 
@@ -40,15 +42,16 @@ def build_worker(
 ) -> Worker:
     """Construct a Worker with all pagentos workflows/activities registered.
 
-    Shared by the CLI entrypoint and the integration tests so registration stays
-    in one place.
+    Shared by the CLI entrypoint, the API's embedded-worker lifespan
+    (ADR-0050 §9) and the integration tests so registration stays in one
+    place.
     """
     executor = activity_executor or ThreadPoolExecutor(max_workers=8)
     return Worker(
         client,
         task_queue=task_queue,
-        workflows=[HealthPingWorkflow, ResearchWorkflow],
-        activities=[ping_activity, *RESEARCH_ACTIVITIES],
+        workflows=[HealthPingWorkflow, ResearchWorkflow, BrowserResearchWorkflow],
+        activities=[ping_activity, *RESEARCH_ACTIVITIES, *BROWSER_RESEARCH_ACTIVITIES],
         activity_executor=executor,
     )
 

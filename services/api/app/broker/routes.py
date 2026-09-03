@@ -25,6 +25,8 @@ from app.broker.frames import CAPABILITY_PATTERN
 from app.broker.models import DEVICE_STATUS_REVOKED, Device, DeviceCommand
 from app.broker.runtime import BrokerRuntime
 from app.broker.ws import deliver_command
+from app.devices import service as devices_service
+from app.devices.selection import NoCapableDeviceError, select_device
 from app.identity.dependencies import require_owner_session
 from app.logging import get_logger, trace_id_var
 
@@ -154,13 +156,97 @@ def _device_payload(runtime: BrokerRuntime, device: Device) -> dict[str, Any]:
 async def get_devices(request: Request) -> dict[str, Any]:
     runtime = _runtime(request)
 
-
-    def load() -> list[Device]:
+    def load() -> list[dict[str, Any]]:
         with runtime.session() as db:
-            return service.list_devices(db)
+            views = devices_service.list_device_views(db, runtime)
+            return [
+                {**v.as_dict(), **_device_payload(runtime, service.get_device(db, v.id))}
+                for v in views
+            ]
 
     devices = await asyncio.to_thread(load)
-    return {"devices": [_device_payload(runtime, d) for d in devices]}
+    return {"devices": devices}
+
+
+# --------------------------------------------------------------- M13 devices
+
+
+class UpdateDeviceMetadataRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    aliases: list[str] | None = Field(default=None, max_length=32)
+    labels: list[str] | None = Field(default=None, max_length=32)
+    policy: dict[str, Any] | None = None
+
+
+@router.patch("/{device_id}", dependencies=[Depends(require_owner_session)])
+async def patch_device(
+    request: Request, device_id: uuid.UUID, body: UpdateDeviceMetadataRequest
+) -> dict[str, Any]:
+    runtime = _runtime(request)
+    trace_id = trace_id_var.get()
+
+    def update() -> dict[str, Any] | None:
+        with runtime.session() as db:
+            device = devices_service.update_metadata(
+                db,
+                device_id,
+                aliases=body.aliases,
+                labels=body.labels,
+                policy=body.policy,
+                trace_id=trace_id,
+            )
+            if device is None:
+                return None
+            view = devices_service.get_device_view(db, runtime, device_id)
+            assert view is not None
+            return {**view.as_dict(), **_device_payload(runtime, device)}
+
+    payload = await asyncio.to_thread(update)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="unknown device")
+    logger.info("broker_device_metadata_updated", device_id=str(device_id))
+    return payload
+
+
+class SelectDeviceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    capability: str = Field(pattern=CAPABILITY_PATTERN)
+    target: str | None = Field(default=None, max_length=256)
+
+
+@router.post("/select", dependencies=[Depends(require_owner_session)])
+async def select_device_route(request: Request, body: SelectDeviceRequest) -> dict[str, Any]:
+    runtime = _runtime(request)
+
+    def load_and_select() -> dict[str, Any]:
+        with runtime.session() as db:
+            views = devices_service.list_device_views(db, runtime)
+            try:
+                result = select_device(views, capability=body.capability, target=body.target)
+            except NoCapableDeviceError as exc:
+                return {
+                    "selected": False,
+                    "error_class": "no_capable_device",
+                    "detail": exc.detail_tr,
+                    "reason": exc.reason,
+                }
+            # device_id/name/... live at the TOP level (not nested) so callers
+            # can read `response.device_id` directly, matching the shape every
+            # other device-selection consumer (scripts/e2e-m13-research.ps1,
+            # POST /v1/research's `device` field) expects.
+            return {
+                "selected": True,
+                **result.device.as_dict(),
+                "reason": result.reason,
+                "explicit": result.explicit,
+            }
+
+    payload = await asyncio.to_thread(load_and_select)
+    if not payload["selected"]:
+        raise HTTPException(status_code=409, detail=payload)
+    return payload
 
 
 @router.post("/{device_id}/revoke", dependencies=[Depends(require_owner_session)])

@@ -20,6 +20,7 @@ from app.broker.routes import router as broker_router
 from app.broker.runtime import BrokerRuntime
 from app.broker.ws import router as broker_ws_router
 from app.config import Settings, get_settings
+from app.devices.commands import register_broker_runtime
 from app.evolution.routes import router as evolution_router
 from app.evolution.runtime import EvolutionRuntime
 from app.health import run_health_checks
@@ -32,6 +33,9 @@ from app.middleware import TraceIdMiddleware
 from app.mobile.routes import router as mobile_router
 from app.mobile.runtime import MobileRuntime
 from app.narration.routes import router as narration_router
+from app.research.embedded_worker import EmbeddedWorkerRuntime
+from app.research.health import research_health
+from app.research.routes import router as research_router
 from app.security.routes import router as security_router
 from app.security.runtime import SecurityRuntime
 from app.selfhealing.routes import router as selfhealing_router
@@ -72,20 +76,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # M12: realtime voice sessions push sideband messages over the broker's
     # device WebSocket, so the runtime is handed the broker (never a socket).
     voice_realtime = RealtimeVoiceRuntime(settings, broker=broker)
+    # M13/ADR-0050 §9: the research pipeline's fetch activities dispatch
+    # device commands through THIS process's BrokerRuntime for immediate
+    # delivery (app.devices.commands); embedded_worker optionally runs the
+    # Temporal worker in-process too (PAGENTOS_WORKER_MODE=embedded).
+    embedded_worker = EmbeddedWorkerRuntime(settings)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await broker.start()
+        register_broker_runtime(broker)
         await artifacts.start()
         # M9: the artifact-ready announcer runs HERE, in the process that holds
         # the push registrations. The Temporal worker only makes a task READY;
         # this drains READY-but-unannounced tasks (app/mobile/announcer.py).
         await mobile.announcer.start()
+        await embedded_worker.start()
         logger.info("broker_started")
         try:
             yield
         finally:
+            await embedded_worker.stop()
             await mobile.announcer.stop()
+            register_broker_runtime(None)
             await broker.stop()
             logger.info("broker_stopped")
 
@@ -112,6 +125,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.identity = identity
     app.state.mobile = mobile
     app.state.voice_realtime = voice_realtime
+    app.state.embedded_worker = embedded_worker
     # Scoped CORS: the web shell is a separate origin from the API. Allow only
     # the configured loopback/private web origins (never "*"); M0 review #3.
     app.add_middleware(
@@ -140,6 +154,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(evolution_router)
     app.include_router(security_router)
     app.include_router(mobile_router)
+    app.include_router(research_router)
 
     @app.get("/v1/system/health")
     async def system_health() -> dict[str, Any]:
@@ -167,7 +182,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # M12: which ConversationRealtime provider a session would select, by
         # capability, and why (no I/O, no secrets).
         checks["voice_realtime"] = await asyncio.to_thread(voice_realtime.health_check)
-        degraded = any(check["status"] != "ok" for check in checks.values())
+        # M13: the embedded Temporal worker's own run state (ok when running,
+        # "skipped" — not degraded — when PAGENTOS_WORKER_MODE is not
+        # "embedded", e.g. every test and the "off"/"external" defaults).
+        checks["temporal_worker"] = await asyncio.to_thread(embedded_worker.health_check)
+        # M13: synthesis-provider configuration posture (no I/O, no secrets).
+        checks["research"] = await asyncio.to_thread(research_health, settings)
+        degraded = any(
+            check["status"] not in ("ok", "skipped") for check in checks.values()
+        )
         status = "degraded" if degraded else "ok"
         logger.info("health_checked", status=status, checks=checks)
         return {"status": status, "version": __version__, "checks": checks}
