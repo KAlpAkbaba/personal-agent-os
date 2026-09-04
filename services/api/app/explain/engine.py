@@ -25,6 +25,7 @@ from app.explain.classify import (
     QUERY_MODULE_PROBLEM,
     QUERY_PROBLEMS_NOW,
     QUERY_SHADOW_READY,
+    QUERY_SINCE_YOU_LEFT,
     QUERY_SUBSYSTEM_STATUS,
     QUERY_TESTS,
     QUERY_TODAY,
@@ -789,6 +790,8 @@ def explain(
 
     research_job_id: str | None = None
     facts: dict[str, Any] = {}
+    #: Real activity, without the annotations that describe other events.
+    activities = [e for e in recent if e.event_type not in _ANNOTATION_EVENT_TYPES]
 
     if query.kind in (QUERY_FAILURES, QUERY_WHY_FAILED):
         failed = [e for e in recent if e.status == "failed"]
@@ -892,6 +895,89 @@ def explain(
                     )
                 )
         executive.append(Statement("Bilginize.", LABEL_FACT, ()))
+
+    elif query.kind == QUERY_SINCE_YOU_LEFT:
+        # The returning owner gets ONE briefing in the order they asked for: what was
+        # completed, what was learned, what is shadow-ready, what failed, and what needs
+        # them. Each part is a count with its evidence; the detail carries the items.
+        completed = [
+            e
+            for e in activities
+            if e.status == "completed" and owner_relevance(e) in MEANINGFUL_CLASSES
+        ]
+        failures = [e for e in activities if e.status == "failed"]
+        lessons = _call(source, "lessons", limit=20)
+        promoted = [lesson for lesson in lessons if lesson.get("status") == "promoted"]
+        shadow = [
+            o for o in _call(source, "opportunities", limit=20) if o.get("status") == "SHADOW_READY"
+        ]
+        needs_action, culprit = _needs_owner_action(activities)
+        if not activities and not lessons and not shadow:
+            executive.append(
+                Statement("Siz yokken kayda geçen bir iş olmadı.", LABEL_UNCERTAINTY, ())
+            )
+        else:
+            executive.append(
+                Statement(
+                    f"Efendim, siz yokken {cardinal(len(completed))} işi tamamladım.",
+                    LABEL_FACT,
+                    tuple(e.ref for e in completed[:8]),
+                )
+            )
+            if promoted:
+                executive.append(
+                    Statement(
+                        f"{cardinal(len(promoted)).capitalize()} ders çıkardım; ilki: "
+                        f"{promoted[0].get('statement')}",
+                        LABEL_FACT,
+                        (_lesson_ref(promoted[0]),),
+                    )
+                )
+            if shadow:
+                executive.append(
+                    Statement(
+                        f"{cardinal(len(shadow)).capitalize()} yetenek gölge durumda hazır; "
+                        "hiçbiri canlıda değil.",
+                        LABEL_FACT,
+                        tuple(_opportunity_ref(o) for o in shadow[:5]),
+                    )
+                )
+            if failures:
+                executive.append(
+                    Statement(
+                        f"{cardinal(len(failures)).capitalize()} iş başarısız oldu.",
+                        LABEL_FACT,
+                        tuple(e.ref for e in failures[:5]),
+                    )
+                )
+            if needs_action and culprit is not None:
+                executive.append(
+                    Statement(
+                        f"Müdahalenizi gerektiren bir konu var: {culprit.factual_summary}",
+                        LABEL_FACT,
+                        (culprit.ref,),
+                    )
+                )
+            else:
+                executive.append(
+                    Statement(
+                        "Müdahalenizi gerektiren bir konu yok.",
+                        LABEL_INFERENCE,
+                        tuple(e.ref for e in activities[:5]),
+                    )
+                )
+        for event in completed[:MAX_DETAILED_ITEMS]:
+            detailed.append(_event_item(event))
+            add_refs((event.ref,))
+        for lesson in promoted[:3]:
+            detailed.append(_lesson_item(lesson))
+            add_refs((_lesson_ref(lesson),))
+        for opportunity in shadow[:3]:
+            detailed.append(_opportunity_item(opportunity))
+            add_refs((_opportunity_ref(opportunity),))
+        for event in failures[:3]:
+            technical.append(_event_item(event))
+            add_refs((event.ref,))
 
     elif query.kind == QUERY_LEARNED:
         lessons = _call(source, "lessons", limit=20)
@@ -1075,7 +1161,6 @@ def explain(
 
     else:
         # last_activity / today / subsystem_status / research_detail / technical / evidence
-        activities = [e for e in recent if e.event_type not in _ANNOTATION_EVENT_TYPES]
         # Owner relevance, not chronology: narration and voice bookkeeping never lead an
         # executive briefing unless the owner asked about that subsystem.
         asked_meta = query.subsystem in ("voice", "ledger")

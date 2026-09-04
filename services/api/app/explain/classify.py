@@ -29,6 +29,7 @@ QUERY_SHADOW_READY = "shadow_ready"  # hazır modüllerin neler / canlıya alın
 QUERY_WHY_BUILT = "why_built"  # bu özelliği neden geliştirdin
 QUERY_TESTS = "tests"  # test sonuçlarını anlat
 QUERY_GOALS = "goals"  # neyi hedefliyorsun / hedeflerin ne durumda
+QUERY_SINCE_YOU_LEFT = "since_you_left"  # siz yokken / yokluğumda ne oldu
 
 QUERY_KINDS = (
     QUERY_LAST_ACTIVITY,
@@ -47,6 +48,7 @@ QUERY_KINDS = (
     QUERY_WHY_BUILT,
     QUERY_TESTS,
     QUERY_GOALS,
+    QUERY_SINCE_YOU_LEFT,
 )
 
 LEVEL_EXECUTIVE = "executive"
@@ -75,6 +77,11 @@ _SUBSYSTEM_WORDS: tuple[tuple[str, str], ...] = (
 
 # (all of these stems present) -> kind; first match wins, so specific phrasings come first.
 _PATTERNS: tuple[tuple[tuple[str, ...], str], ...] = (
+    # --- the returning owner: one briefing for a whole absence ------------------
+    (("yokken",), QUERY_SINCE_YOU_LEFT),
+    (("yokluğum",), QUERY_SINCE_YOU_LEFT),
+    (("ben", "yokken"), QUERY_SINCE_YOU_LEFT),
+    (("gece", "ne"), QUERY_SINCE_YOU_LEFT),
     # --- what did you learn / what are you building (M17 phase 9) ---------------
     (("neden", "geliştir"), QUERY_WHY_BUILT),
     (("neden", "yaptın"), QUERY_WHY_BUILT),
@@ -192,6 +199,10 @@ def classify(
         since = now.replace(hour=0, minute=0, second=0, microsecond=0)
     elif kind in (QUERY_LAST_ACTIVITY, QUERY_FAILURES, QUERY_PROBLEMS_NOW):
         since = now - timedelta(days=7)
+    elif kind == QUERY_SINCE_YOU_LEFT:
+        # an absence is measured from the owner's last interaction; the caller may narrow
+        # it, and a day is the honest default for "while you were away"
+        since = now - timedelta(days=1)
     elif kind in (QUERY_LEARNED, QUERY_EVOLUTION, QUERY_SHADOW_READY, QUERY_TESTS, QUERY_GOALS):
         # what was learned and what is being built are not this week's news
         since = now - timedelta(days=90)
@@ -230,6 +241,7 @@ __all__ = [
     "QUERY_WHY_BUILT",
     "QUERY_TESTS",
     "QUERY_GOALS",
+    "QUERY_SINCE_YOU_LEFT",
     "QUERY_LAST_ACTIVITY",
     "QUERY_MODULE_PROBLEM",
     "QUERY_PROBLEMS_NOW",

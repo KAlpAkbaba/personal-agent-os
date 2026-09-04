@@ -25,6 +25,7 @@ from app.explain.classify import (
 )
 from app.explain.engine import (
     LABEL_FACT,
+    LABEL_INFERENCE,
     LABEL_UNCERTAINTY,
     EventView,
     explain,
@@ -241,3 +242,82 @@ def test_test_sonuclarini_anlat_reads_test_events_from_the_ledger() -> None:
 def test_no_test_records_says_so() -> None:
     briefing = _briefing(LearningSource(), "Test sonuçlarını anlat.")
     assert speech_for_level(briefing, LEVEL_EXECUTIVE) == "Kayıtlarımda test sonucu bulamadım."
+
+
+# ------------------------------------------------------------------ the returning owner
+
+
+def test_siz_yokken_is_one_briefing_in_the_order_the_owner_asked_for() -> None:
+    """Completed work, what was learned, shadow candidates, failures, owner action -
+    in that order, each with its evidence, in a listening budget."""
+    completed = EventView(
+        event_id="ev-done",
+        occurred_at=NOW - timedelta(hours=4),
+        event_type="research.completed",
+        subsystem="research",
+        status="completed",
+        severity="info",
+        factual_summary="Araştırma tamamlandı: 5 bulgu, 5 kaynak.",
+    )
+    deployed = EventView(
+        event_id="ev-rel",
+        occurred_at=NOW - timedelta(hours=3),
+        event_type="deployment.cloud_core.released",
+        subsystem="deployment",
+        status="completed",
+        severity="info",
+        factual_summary="Cloud Core yayına alındı.",
+    )
+    failed = EventView(
+        event_id="ev-fail",
+        occurred_at=NOW - timedelta(hours=2),
+        event_type="evolution.tests_failed",
+        subsystem="evolution",
+        status="failed",
+        severity="warning",
+        factual_summary="Kaynak çeşitliliği ölçer: 2 test başarısız.",
+    )
+    source = LearningSource(
+        [completed, deployed, failed],
+        lessons=[LESSON_RUNTIME],
+        opportunities=[SHADOW_OPPORTUNITY],
+    )
+    briefing = _briefing(source, "Siz yokken neler yaptın?")
+    assert briefing.query.kind == "since_you_left"
+    speech = speech_for_level(briefing, LEVEL_EXECUTIVE)
+    assert speech.startswith("Efendim, siz yokken iki işi tamamladım.")
+    assert "Bir ders çıkardım" in speech
+    assert "Bir yetenek gölge durumda hazır; hiçbiri canlıda değil." in speech
+    assert "Bir iş başarısız oldu." in speech
+    assert speech.rstrip().endswith(
+        "Müdahalenizi gerektiren bir konu var: Kaynak çeşitliliği ölçer: 2 test başarısız."
+    )
+
+    detail = speech_for_level(briefing, LEVEL_DETAILED)
+    assert "Araştırma tamamlandı" in detail
+    assert "Runtime provenance" in detail
+    assert "Diagnostic Observer" in detail
+    kinds = {r["kind"] for r in briefing.evidence_refs}
+    assert {"activity_event", "experience_lesson", "evolution_opportunity"} <= kinds
+
+
+def test_siz_yokken_with_nothing_recorded_says_so() -> None:
+    briefing = _briefing(LearningSource(), "Ben yokken ne oldu?")
+    assert speech_for_level(briefing, LEVEL_EXECUTIVE) == "Siz yokken kayda geçen bir iş olmadı."
+    assert briefing.executive[0].label == LABEL_UNCERTAINTY
+
+
+def test_siz_yokken_without_failures_closes_calmly() -> None:
+    completed = EventView(
+        event_id="ev-ok",
+        occurred_at=NOW - timedelta(hours=1),
+        event_type="research.completed",
+        subsystem="research",
+        status="completed",
+        severity="info",
+        factual_summary="Araştırma tamamlandı.",
+    )
+    briefing = _briefing(LearningSource([completed]), "Siz yokken neler oldu?")
+    speech = speech_for_level(briefing, LEVEL_EXECUTIVE)
+    assert speech.endswith("Müdahalenizi gerektiren bir konu yok.")
+    assert briefing.executive[-1].label == LABEL_INFERENCE
