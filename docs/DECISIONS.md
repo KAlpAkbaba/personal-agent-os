@@ -2989,3 +2989,30 @@ question surface ("Diagnostic Observer'da sorun ne?" already resolves to
 has no record). Open: semantic intent scoring for research relevance (ADR-0050 item 24),
 and the proactive `say` path is exercised only through fakes until a live session
 receives a completion briefing.
+
+### ADR-0051 addendum — independent review and the real-database run (2026-09-04)
+
+Security review (read-only, security-reviewer) verified as sound: owner-session gating of
+`/v1/ledger/*`, bounded reads, `require_leg` on `spoken` events, the transcript never
+reaching audit rows or the ledger, the alignment cursor bounded to the attached artifact,
+no cross-session narration hijack, no announcer/inbox leak from briefing artifacts. It
+found one real gap and two small ones, all fixed the same day: (1) free text posted
+through `POST /v1/ledger/events` (and the owner script's evidence-file ingest) would be
+spoken verbatim without the injection screen the research pipeline already applies - the
+route now refuses instruction-shaped `factual_summary`/`detail_json` values (shared
+markers plus ledger-local spoken-text patterns, Turkish and English; the shared marker file
+in `packages/protocol` is frozen with the installed worker and was not touched), and the
+engine flattens and bounds evidence-file strings before speaking them; (2) `severity=critical`
+maps to the `immediate` briefing policy, so it may be posted only by `deployment`,
+`security`, `cloud_core`, `device_service`; (3) `detail_json` is capped at 16 KiB.
+
+The real dev database (`tests/integration/test_ledger_explain_over_real_runs.py`) found
+two defects no unit fixture had: a release component with hyphens
+(`browser-agent-demo-4326f3af`) made the whole backfill raise - components are now slugged
+into the event type with the raw name kept on `module`, and one bad row or source never
+ends the others (counted, named); and an ISO timestamp with a `T` separator inside a
+briefing crashed the narration normaliser (`"T18"` handed to `int()`) - the normaliser now
+parses the time tail (T, fraction, zone) and the engine renders times spoken-friendly.
+Over the workflow tests' own research run the engine said "Efendim, son araştırma görevi
+tamamlandı. Beş sonuç ve beş kaynak ürettim. Dört tekrar eden olayı eledim…" and did not
+claim a qualification, because none was recorded - the behaviour the design requires.
