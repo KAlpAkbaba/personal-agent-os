@@ -18,7 +18,12 @@ from app.ledger.models import ActivityEventRow
 from app.selfhealing.models import Incident, Release
 from app.selfmodel import query
 from app.selfmodel.indexer import IndexConfig, build_index
-from app.selfmodel.models import TRUTH_EVIDENCE, TRUTH_INSTALLED, TRUTH_RUNTIME
+from app.selfmodel.models import (
+    TRUTH_EVIDENCE,
+    TRUTH_INSTALLED,
+    TRUTH_RUNTIME,
+    CodeModule,
+)
 from app.selfmodel.query import REQUIRED_GATES, is_stale, normalize_key
 from tests.selfmodel_support import (
     FIXTURE_MODULE,
@@ -546,3 +551,24 @@ def test_a_naive_timestamp_is_treated_as_utc_rather_than_crashing() -> None:
 def test_an_unknown_truth_kind_is_never_guessed_stale() -> None:
     assert not is_stale("something_else", datetime(2020, 1, 1, tzinfo=UTC))
     assert not is_stale(TRUTH_RUNTIME, None)
+
+
+def test_an_underscore_query_does_not_match_everything(sessions) -> None:
+    """ "_" is LIKE's single-character wildcard as well as a normal identifier
+    character, so an unescaped needle of "___" quietly matched every three-character
+    name (review, 2026-09-05)."""
+    with sessions() as session:
+        session.add_all(
+            [
+                CodeModule(
+                    module_id="app.ledger.service", kind="module", path="a.py", language="python"
+                ),
+                CodeModule(
+                    module_id="app.explain.engine", kind="module", path="b.py", language="python"
+                ),
+            ]
+        )
+        session.commit()
+        assert query.search(session, "___")["modules"] == []
+        found = query.search(session, "ledger")["modules"]
+        assert [m["module_id"] for m in found] == ["app.ledger.service"]

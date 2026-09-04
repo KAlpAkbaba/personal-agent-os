@@ -17,7 +17,8 @@ Two entry points, deliberately different:
 
 * :func:`screen_text` REFUSES - used at an API boundary, where the right answer is to
   reject the request and keep the ledger clean;
-* :func:`safe_evidence_text` REPLACES - used where text is about to be spoken. A
+* :func:`safe_evidence_text` REPLACES - it also redacts secrets - and is used where
+  text is about to be spoken. A
   refusal there must not delete the record or drop the answer: the owner is told a
   stored value was refused, and the evidence reference still points at it so it can be
   read rather than listened to.
@@ -29,6 +30,7 @@ import re
 from typing import Any, Final
 
 from app.research.injection import is_assistant_directed, is_injection_suspected
+from app.security.redaction import redact_text
 
 #: Phrasings the shared browser marker set (packages/protocol, frozen with the installed
 #: worker) does not cover but a spoken briefing must still refuse.
@@ -128,6 +130,11 @@ def safe_evidence_text(value: Any, *, max_len: int = MAX_EVIDENCE_CHARS) -> str:
         return ""
     if is_unsafe_to_speak(text):
         return REFUSED_TEXT_TR
+    # A module docstring, an exception message or an incident's evidence blob can carry
+    # a credential. The same redactor the security subsystem uses runs here, so the
+    # shape of the exposure survives ("[REDACTED:aws_access_key_id]") while the value
+    # never reaches the speaker - or the transcript (security review, 2026-09-05).
+    text, _ = redact_text(text)
     if len(text) > max_len:
         return text[: max_len - 1].rstrip() + "…"
     return text

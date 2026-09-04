@@ -137,3 +137,14 @@ def test_an_honest_lesson_is_still_spoken_in_full() -> None:
     speech = _speech([HONEST_LESSON])
     assert REFUSED_TEXT_TR not in speech
     assert "varsayılamaz" in speech
+
+
+def test_a_secret_in_a_stored_row_is_never_read_aloud() -> None:
+    """A module docstring, an exception message or an incident's evidence blob can
+    carry a credential; the self model indexes docstrings verbatim."""
+    literal = "AKIA" + "ABCDEFGHIJKLMNOP"  # composed so the CI secret scan stays quiet
+    spoken = safe_evidence_text(f"Modül {literal} anahtarını kullanıyor.")
+    assert literal not in spoken
+    assert "REDACTED" in spoken
+    # the shape survives, so the owner learns that a credential is sitting in the text
+    assert "anahtarını kullanıyor" in spoken

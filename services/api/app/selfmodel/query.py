@@ -244,9 +244,7 @@ STALE_AFTER: Final[dict[str, timedelta]] = {
 }
 
 
-def is_stale(
-    truth_kind: str, observed_at: datetime | None, *, now: datetime | None = None
-) -> bool:
+def is_stale(truth_kind: str, observed_at: datetime | None, *, now: datetime | None = None) -> bool:
     """True when an observation of this kind is too old to be reported as current."""
     ttl = STALE_AFTER.get(truth_kind)
     if ttl is None or observed_at is None:
@@ -780,17 +778,29 @@ def ready_for_production(session: Session, module_key: str) -> Answer:
     )
 
 
+#: LIKE escape character. "!" cannot appear in a normalized key, so it can never be
+#: part of a needle and never needs escaping itself.
+LIKE_ESCAPE: Final[str] = "!"
+
+
 def search(session: Session, q: str, *, limit: int = 25) -> dict[str, Any]:
     """Substring search across module ids, purposes and symbol names."""
     needle = normalize_key(q)
     if not needle:
         return {"query": q, "normalized": needle, "modules": [], "symbols": []}
-    like = f"%{needle.replace('.', '%')}%"
+    # "_" survives normalize_key because module ids contain it - and it is also LIKE's
+    # single-character wildcard, so "___" would silently match every three-character
+    # name. Escape it; "." stays a deliberate wildcard, since the owner says
+    # "app ledger" for "app.ledger" (review, 2026-09-05).
+    escaped = needle.replace("_", f"{LIKE_ESCAPE}_")
+    like = f"%{escaped.replace('.', '%')}%"
     modules = session.scalars(
-        select(CodeModule).where(CodeModule.module_id.ilike(like)).limit(limit)
+        select(CodeModule).where(CodeModule.module_id.ilike(like, escape=LIKE_ESCAPE)).limit(limit)
     ).all()
     symbols = session.scalars(
-        select(CodeSymbol).where(CodeSymbol.name.ilike(f"%{needle}%")).limit(limit)
+        select(CodeSymbol)
+        .where(CodeSymbol.name.ilike(f"%{escaped}%", escape=LIKE_ESCAPE))
+        .limit(limit)
     ).all()
     return {
         "query": q,
