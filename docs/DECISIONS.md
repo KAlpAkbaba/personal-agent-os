@@ -3246,3 +3246,56 @@ narration levels. What is deliberately NOT claimed: general intelligence, autono
 deployment, or that any of this is proven beyond the tests and the real runs recorded in
 `docs/QUALIFICATION.md`. Deferred: scheduled compilation, the shadow-run execution harness
 (M18), and any production-side evolution writer.
+
+### ADR-0053 addendum 1 — what the independent security review found, and what is still open (2026-09-05)
+
+An independent review of the night's architecture ran against `537112a..HEAD` before the
+overnight session ended. Three defects were found; each was **reproduced** before being
+fixed, because a security finding that cannot be demonstrated is a guess.
+
+**Fixed.**
+
+1. *Production authority by ordinary subclassing (critical).* `Authority.__post_init__`
+   was the only thing refusing a production grant. A two-line subclass overriding it with
+   `pass` produced a fully privileged authority — DEPLOY, SIGN_RELEASE,
+   WRITE_PRODUCTION_DB, MODIFY_POLICY_KERNEL — that `guard_production_action` accepted,
+   with no forbidden import, no private name and no owner session, so
+   `scan_evolution_package` could never have seen it. `Authority` and `OwnerCapability`
+   are now runtime-final, and the choke point additionally requires the exact type and
+   the module's own mint token, which also refuses an instance rebuilt around the
+   constructor by pickle or `object.__new__`. Two locks, deliberately: removing either
+   one alone does not reopen the door.
+2. *The injection screen lived in one HTTP route.* Incidents, compiled lessons and every
+   internal caller of `ledger.service.record` bypassed it, and their text reached the
+   realtime voice provider verbatim. The screen moved to `app/ledger/screening.py` and is
+   applied where every path meets — the point text becomes speech — and now redacts
+   secrets as well, because the self model indexes docstrings verbatim.
+3. *`stale` was documented but never computed.* It was written as `False` everywhere, so
+   every answer claimed a freshness it had not checked. Both models now derive it from
+   the observation's age, per truth kind.
+
+**A correction worth recording.** The first attempt at (2) reused the browser marker set,
+which matches the bare word "install". This system says "installed version" constantly, so
+true sentences were replaced with a refusal notice — the system lying by omission about
+its own work, which is worse than the risk being guarded against. The speech screen is
+therefore deliberately narrower than the ingress screen: an ingress refusal is loud and
+recoverable, a mid-sentence refusal is silent. A test asserts the ingress screen stays
+strictly broader, and another asserts that ordinary operational Turkish is spoken
+unchanged.
+
+**Explicitly NOT claimed, and open.**
+
+- *In-process containment.* Any code running inside the API process can reach
+  module-private names by ordinary introspection. The authority checks make the boundary
+  hold against ordinary code, careless refactors and the import scanner's blind spot —
+  they are not a sandbox. The real boundary for untrusted candidate code is the
+  process/sandbox boundary, and nothing tonight executed candidate code in-process.
+- *67 medium acceptance-wording findings*, all in test files, found by the shadow
+  candidate scanning this repository. Not triaged, not fixed; the candidate stays
+  advisory rather than becoming a gate until they are.
+- *The Experience Compiler has no pattern for this defect class.* It produced only its
+  generic "recurring voice failure" lesson from the two real incidents, so the claim "the
+  lesson is already compiled" is not yet true on the evidence — the specific lesson lives
+  only in this document.
+- *Two low-severity items not addressed*: the self-model index takes no cross-process
+  lock, and a security gate accepts `status="info"` as a pass.

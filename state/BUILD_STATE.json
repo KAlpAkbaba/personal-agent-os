@@ -4,7 +4,7 @@
   "current_milestone": "M17_COGNITIVE_FOUNDATIONS",
   "status": "M17 BUILT_AND_GATED_OFFLINE (all proxies green); M16 PROVEN_REAL except rows 10.5/10.6, which need one 15-second owner command (OWNER_ACTIONS item 17)",
   "last_completed_milestone": "M15_RESEARCH_ENGINE",
-  "last_updated": "2026-09-05T07:40:00+03:00",
+  "last_updated": "2026-09-05T08:20:00+03:00",
   "qualification": {
     "matrix": "docs/QUALIFICATION.md",
     "owner_queue": "docs/OWNER_ACTIONS.md",
@@ -113,6 +113,9 @@
     "explain": "app/explain answers 'ne ogrendin', 'kendi uzerinde ne gelistiriyorsun', 'canliya alinmayi bekleyen ne var', 'bu ozelligi neden gelistirdin', 'test sonuclarini anlat', 'ben yokken neler oldu' from these subsystems, at the existing narration levels and budgets",
     "background_loops": "none: app/main.py wires routers only. Indexing, compilation and lab work are invoked explicitly (ADR-0053 decision 8)",
     "deployment": "none. Nothing was deployed for M17; no Windows component changed",
-    "qualification": "docs/QUALIFICATION.md Stage 11 (11.1-11.10), all PROVEN_PROXY. Nothing in M17 is PROVEN_REAL: the owner has not heard it yet. These rows ride along with the next ordinary voice session and need no separate long qualification"
+    "qualification": "docs/QUALIFICATION.md Stage 11 (11.1-11.10), all PROVEN_PROXY. Nothing in M17 is PROVEN_REAL: the owner has not heard it yet. These rows ride along with the next ordinary voice session and need no separate long qualification",
+    "shadow_candidate": "Acceptance Wording Guard at services/api/lab/candidates/acceptance_wording_guard: built from two real incidents, driven to SHADOW_READY through the real EvolutionService, wired to nothing, deployed nowhere. Awaiting owner approval that will not be sought tonight. 0 high findings when run against this repository; 67 medium, all in test files, untriaged - the candidate stays advisory",
+    "security_review": "Independent review 2026-09-05 found three defects, all reproduced then fixed: a critical production-authority bypass by ordinary subclassing, an injection screen that covered only one HTTP route while incidents and compiled lessons reached speech unscreened, and a 'stale' field that was documented but never computed. Open and recorded in ADR-0053 addendum 1: in-process containment is NOT claimed, the 67 wording findings are untriaged, the Experience Compiler has no pattern for this defect class, and two low-severity items remain",
+    "tests": "2838 unit, 103 integration, ruff clean"
   }
 }
