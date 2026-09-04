@@ -240,7 +240,9 @@ Expected last line: `REAL BROWSER SMOKE: PASS`, preceded by `live worker proven:
 If it stops with `deployment/version mismatch` or `INSTALL FAILED`, paste the message, the
 install log it names and the output of `.\scripts\verify-device-service.ps1`; do not rerun.
 
-### 15. The first real Research run — DuckDuckGo, no deployment — **this is the current action**
+### 15. The first real Research run — DuckDuckGo, no deployment — **DONE (2026-09-04)**
+
+Your run at 17:28-17:33 UTC ended `OWNER RESEARCH: PASS`: five findings from five distinct publishers, 28 refused pages recorded by reason, Chrome clean before and after, no agent deployment, one Cloud Core release. QUALIFICATION 9.16-9.19 are PROVEN_REAL and the Research Engine milestone is closed. Kept as a non-blocking backlog item: some accepted findings were broad AI news rather than agent-specific developments (ADR-0050 item 24).
 
 Unblocks: `docs/QUALIFICATION.md` 9.16 and 9.17; then the Activity Ledger + Voice Narration
 step of the roadmap.

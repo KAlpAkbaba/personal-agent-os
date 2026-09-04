@@ -2879,3 +2879,19 @@ embedded Temporal worker). Facts and decisions that were not in the design:
     Result: the full dev-chain harness passes end to end against the live web, including
     recovery after a Cloud Core restart mid-job, with five findings, five sources and
     nineteen refusals recorded by reason.
+
+24. **Research Engine closed PROVEN_REAL; one quality backlog item kept open, non-blocking**
+    (2026-09-04, owner run 17:28-17:33 UTC). `OWNER RESEARCH: PASS` with five findings from
+    five distinct publishers, 28 refused pages recorded by reason, Chrome clean before and
+    after, deployment skipped because the installed runtime matched, and the durable evidence
+    in `research-1.json`. QUALIFICATION 9.16-9.19 are PROVEN_REAL and the slice is closed; the
+    owner asked for no rerun.
+
+    The owner's own reading of the report: some accepted findings were broader AI developments
+    (a ministry's 2026-2030 AI plan, AI in the judiciary, data centres) rather than strongly
+    agent-specific ones. The gate is doing what it was built to do - those pages are on topic
+    by lexicon, dated, real and distinct - but "about AI agents" and "mentions agents while
+    being about something else" are different questions, and only semantic intent scoring
+    can tell them apart. Recorded as a backlog item for the eligibility layer: score how
+    central the agent development is to the page, not only whether the concepts occur. It
+    does not hold the infrastructure milestone open.

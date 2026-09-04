@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "project": "personal-agent-os",
-  "current_milestone": "M15_RESEARCH_ENGINE",
-  "status": "BUILT_REVIEWED_PROVEN_PROXY_AWAITING_OWNER_RELEASE_AND_AGENT_UPDATE",
-  "last_completed_milestone": "REAL_CLOUD_BRINGUP",
-  "last_updated": "2026-09-03T20:40:00+03:00",
+  "current_milestone": "M16_ACTIVITY_LEDGER_SELF_EXPLANATION_VOICE_NARRATION",
+  "status": "STARTED",
+  "last_completed_milestone": "M15_RESEARCH_ENGINE",
+  "last_updated": "2026-09-04T21:00:00+03:00",
   "qualification": {
     "matrix": "docs/QUALIFICATION.md",
     "owner_queue": "docs/OWNER_ACTIONS.md",
@@ -77,8 +77,8 @@
     "optimisation_pass_2026_09_03": "ADR-0046 (durable self-describing record, listing, -Latest, copy button), ADR-0047 (client: RTP-stats uplink measurement + component split, reversible early mute targeting <150 ms barge-in, echo-residual-derived playback margin + bounded self-learning profile, non-sentinel calibration with measured/samples), ADR-0048 (UTF-8 declared + decoded end to end, benchmark context.breakdown, calibration_measured). Not proven on the K66 yet: only the owner's rerun can confirm."
   },
   "roadmap_after_research": [
-    "Research (M15, current): DuckDuckGo discovery, real pages, dedup, dated findings, durable evidence",
-    "Activity Ledger + Voice Narration: what the agent did, narrated in Turkish",
+    "Research (M15): CLOSED PROVEN_REAL 2026-09-04",
+    "Activity Ledger + Self Explanation + Voice Narration (M16, current): one durable structured activity stream, evidence-first answers to 'Son yaptiklarini anlat', stateful Turkish narration over the existing realtime transport, proactive briefing policy",
     "Memory: durable owner memory over research and activity",
     "Cognitive Core: planning and judgement over that memory",
     "Self Model: the agent's model of its own capabilities and limits",
@@ -87,6 +87,7 @@
   "m15_research": {
     "search_policy": "DuckDuckGo is the production provider (PAGENTOS_RESEARCH_SEARCH_PROVIDER, default duckduckgo); Google stays fully implemented incl. the owner-verification handoff and is selected explicitly. ADR-0050 item 19.",
     "deployment": "Execution never installs: Test-AgentReleaseCurrent compares the checkout with the installed source AND the venv copy that runs; the smoke has -AgentUpdate auto|never|force; owner-research.ps1 never installs and releases the Cloud Core only when its research policy predates the checkout.",
-    "owner_action": "OWNER_ACTIONS item 15: scripts/research/owner-research.ps1 (QUALIFICATION 9.16, 9.17)."
+    "owner_action": "OWNER_ACTIONS item 15: scripts/research/owner-research.ps1 (QUALIFICATION 9.16, 9.17).",
+    "closure": "PROVEN_REAL and CLOSED 2026-09-04 on the owner run (research-1.json): OWNER RESEARCH: PASS, findings=5, sources=5, distinct publishers=5, Chrome before=0 after=0, deployment skipped (installed 0.4.0 matched), 28 refused pages by reason, one Cloud Core release to research policy 4. QUALIFICATION 9.16-9.19 PROVEN_REAL. Backlog (non-blocking, ADR-0050 item 24): semantic intent scoring so broad AI news does not pass as agent-specific."
   }
 }
