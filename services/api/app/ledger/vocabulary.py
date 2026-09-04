@@ -144,6 +144,18 @@ EVENT_TYPE_BRIEFING_DELIVERED = "briefing.delivered"
 #: not in spec §1.3's list verbatim; see module docstring.
 EVENT_TYPE_INCIDENT_OPENED = "incident.opened"
 
+#: Goal Engine / Cognitive Core foundation (overnight plan Phase 4, added here
+#: per this module's own rule: every event_type the ledger accepts is
+#: enumerated, never discovered from a caller's payload). ``app.goals.service``
+#: writes the first three on every goal lifecycle change; ``app.goals.cognitive``
+#: writes the loop-specific ``step_executed``/``escalated``/``error`` events.
+EVENT_TYPE_GOAL_CREATED = "goal.created"
+EVENT_TYPE_GOAL_STATUS_CHANGED = "goal.status_changed"
+EVENT_TYPE_GOAL_ACHIEVED = "goal.achieved"
+EVENT_TYPE_GOAL_STEP_EXECUTED = "goal.step_executed"
+EVENT_TYPE_GOAL_ESCALATED = "goal.escalated"
+EVENT_TYPE_GOAL_ERROR = "goal.error"
+
 EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_RESEARCH_PLANNED,
     EVENT_TYPE_RESEARCH_COMPLETED,
@@ -168,6 +180,12 @@ EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_BRIEFING_QUEUED,
     EVENT_TYPE_BRIEFING_DELIVERED,
     EVENT_TYPE_INCIDENT_OPENED,
+    EVENT_TYPE_GOAL_CREATED,
+    EVENT_TYPE_GOAL_STATUS_CHANGED,
+    EVENT_TYPE_GOAL_ACHIEVED,
+    EVENT_TYPE_GOAL_STEP_EXECUTED,
+    EVENT_TYPE_GOAL_ESCALATED,
+    EVENT_TYPE_GOAL_ERROR,
 )
 
 #: Reserved for the Evolution Engine (M18): constants exist now, writers come
