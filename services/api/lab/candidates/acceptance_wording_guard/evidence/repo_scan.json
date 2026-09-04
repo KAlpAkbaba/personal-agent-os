@@ -1,0 +1,3890 @@
+{
+  "default": {
+    "guard_version": "0.1.0",
+    "root": "E:\\AI\\PersonalAgentOS_Claude_Autonomous_Build_Package_v1\\.claude\\worktrees\\agent-a014862b094ffed36",
+    "surfaces": [
+      "scripts",
+      "services/api/tests"
+    ],
+    "min_severity": "medium",
+    "files_scanned": 232,
+    "bytes_scanned": 2525550,
+    "duration_s": 0.3435,
+    "truncated": false,
+    "counts": {
+      "high": 0,
+      "medium": 67,
+      "low": 0
+    },
+    "findings": [
+      {
+        "path": "services/api/tests/integration/test_ledger_explain_over_real_runs.py",
+        "line": 82,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "record.speech",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 3,
+          "chars": 22,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:7ca1f5ccd4e1"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/integration/test_ledger_explain_over_real_runs.py",
+        "line": 97,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "record.speech",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 3,
+          "chars": 15,
+          "non_ascii": false,
+          "turkish": false,
+          "wildcard": false,
+          "digest": "sha256:ff122c3138ae"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/integration/test_ledger_explain_over_real_runs.py",
+        "line": 100,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "record.speech",
+        "operator": "not in",
+        "shape": {
+          "kind": "prose",
+          "words": 2,
+          "chars": 8,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:e3d668f870d2"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/integration/test_narration_pronunciation.py",
+        "line": 69,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "preview[spoken]",
+        "operator": "==",
+        "shape": {
+          "kind": "prose",
+          "words": 4,
+          "chars": 19,
+          "non_ascii": false,
+          "turkish": false,
+          "wildcard": false,
+          "digest": "sha256:a60881637c11"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_engine.py",
+        "line": 223,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 8,
+          "chars": 62,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:b8590796ab18"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_engine.py",
+        "line": 226,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "endswith",
+        "shape": {
+          "kind": "prose",
+          "words": 7,
+          "chars": 46,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:05514daabe07"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_engine.py",
+        "line": 259,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 4,
+          "chars": 24,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:834a3da3a892"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_engine.py",
+        "line": 260,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 2,
+          "chars": 11,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:46ed76f7c04a"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_engine.py",
+        "line": 270,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 4,
+          "chars": 26,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:e434820b89c6"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_engine.py",
+        "line": 271,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 6,
+          "chars": 52,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:e279cc1a882b"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_engine.py",
+        "line": 273,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 13,
+          "chars": 79,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:2a36033b13c3"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_engine.py",
+        "line": 275,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 7,
+          "chars": 52,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:efc9bcb15f8a"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_engine.py",
+        "line": 310,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "briefing.executive[...].text",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 7,
+          "chars": 42,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:cc53ce4c688a"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_engine.py",
+        "line": 323,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "briefing.executive[...].text",
+        "operator": "==",
+        "shape": {
+          "kind": "prose",
+          "words": 7,
+          "chars": 45,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:d19f0c78f38c"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_engine.py",
+        "line": 339,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "briefing.executive[...].text",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 3,
+          "chars": 25,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:e5fe9042e99e"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_engine.py",
+        "line": 398,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "briefing.executive[...].text",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 2,
+          "chars": 12,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:0f897285378e"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_engine.py",
+        "line": 442,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech_for_level()",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 3,
+          "chars": 24,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:91a67b034093"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_learning_questions.py",
+        "line": 126,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 8,
+          "chars": 49,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:19803d2340c1"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_learning_questions.py",
+        "line": 127,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 2,
+          "chars": 17,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:a2aa0309c766"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_learning_questions.py",
+        "line": 146,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech_for_level()",
+        "operator": "==",
+        "shape": {
+          "kind": "prose",
+          "words": 6,
+          "chars": 39,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:9328b76481be"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_learning_questions.py",
+        "line": 165,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 4,
+          "chars": 35,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:5a4421407872"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_learning_questions.py",
+        "line": 166,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 5,
+          "chars": 30,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:d760b566be6e"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_learning_questions.py",
+        "line": 167,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 5,
+          "chars": 32,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:e1c3da1892cc"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_learning_questions.py",
+        "line": 176,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 4,
+          "chars": 28,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:42fe3fea7dcb"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_learning_questions.py",
+        "line": 177,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 2,
+          "chars": 20,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:d16c5dac0461"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_learning_questions.py",
+        "line": 184,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 9,
+          "chars": 54,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:18e3be7ce7aa"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_learning_questions.py",
+        "line": 193,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 4,
+          "chars": 40,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:f2aa8584fbd3"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_learning_questions.py",
+        "line": 194,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 5,
+          "chars": 34,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:e0fcda3b1754"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_learning_questions.py",
+        "line": 211,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 4,
+          "chars": 20,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:ff59b394f636"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_learning_questions.py",
+        "line": 212,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 6,
+          "chars": 45,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:bddcd1f836c8"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_learning_questions.py",
+        "line": 238,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 7,
+          "chars": 38,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:77fb775273a6"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_learning_questions.py",
+        "line": 244,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech_for_level()",
+        "operator": "==",
+        "shape": {
+          "kind": "prose",
+          "words": 4,
+          "chars": 35,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:a32aaef5de10"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_learning_questions.py",
+        "line": 288,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 6,
+          "chars": 39,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:51af5130dba7"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_learning_questions.py",
+        "line": 289,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 3,
+          "chars": 17,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:b8b17e1b6329"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_learning_questions.py",
+        "line": 290,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 8,
+          "chars": 55,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:86f0b2e4c656"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_learning_questions.py",
+        "line": 291,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 4,
+          "chars": 22,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:a664e4fb7eec"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_learning_questions.py",
+        "line": 292,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech.rstrip()",
+        "operator": "endswith",
+        "shape": {
+          "kind": "prose",
+          "words": 11,
+          "chars": 81,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:36b4d8adadff"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_learning_questions.py",
+        "line": 306,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech_for_level()",
+        "operator": "==",
+        "shape": {
+          "kind": "prose",
+          "words": 7,
+          "chars": 37,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:6ef020164143"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_learning_questions.py",
+        "line": 322,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "endswith",
+        "shape": {
+          "kind": "prose",
+          "words": 5,
+          "chars": 37,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:d32e2442e1af"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_ledger_briefing.py",
+        "line": 120,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 4,
+          "chars": 25,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:90db9c987635"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_ledger_briefing.py",
+        "line": 126,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "briefing_service.speech_for()",
+        "operator": "==",
+        "shape": {
+          "kind": "prose",
+          "words": 8,
+          "chars": 83,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:c8fab81c64a6"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_ledger_briefing.py",
+        "line": 134,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "==",
+        "shape": {
+          "kind": "prose",
+          "words": 8,
+          "chars": 57,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:5c7b7d127b9e"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_ledger_briefing.py",
+        "line": 145,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "briefing_service.speech_for()",
+        "operator": "==",
+        "shape": {
+          "kind": "prose",
+          "words": 7,
+          "chars": 51,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:40983fb51ca4"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_ledger_service.py",
+        "line": 314,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "row.factual_summary",
+        "operator": "==",
+        "shape": {
+          "kind": "prose",
+          "words": 9,
+          "chars": 57,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:6728a9d6c26a"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_ledger_service.py",
+        "line": 321,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "gate_row.factual_summary",
+        "operator": "==",
+        "shape": {
+          "kind": "prose",
+          "words": 5,
+          "chars": 31,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:e9e288dd942c"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_ledger_service.py",
+        "line": 377,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "row.factual_summary",
+        "operator": "==",
+        "shape": {
+          "kind": "prose",
+          "words": 4,
+          "chars": 49,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:bd2154210e69"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_ledger_service.py",
+        "line": 432,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "row.factual_summary",
+        "operator": "==",
+        "shape": {
+          "kind": "prose",
+          "words": 3,
+          "chars": 25,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:90df96054184"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_narration_align.py",
+        "line": 55,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech_from()",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 4,
+          "chars": 31,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:38179b72203f"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_narration_align.py",
+        "line": 104,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech_from()",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 4,
+          "chars": 25,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:2992ca338862"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_voice_explain_tools.py",
+        "line": 109,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "detail[speech]",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 8,
+          "chars": 47,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:456f512e4341"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_voice_explain_tools.py",
+        "line": 110,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "detail[speech]",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 3,
+          "chars": 16,
+          "non_ascii": false,
+          "turkish": false,
+          "wildcard": false,
+          "digest": "sha256:8b3a7c959afb"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_voice_explain_tools.py",
+        "line": 119,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "technical[speech]",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 5,
+          "chars": 28,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:b7c4eb6f0dab"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_voice_explain_tools.py",
+        "line": 121,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "technical[speech]",
+        "operator": "not in",
+        "shape": {
+          "kind": "prose",
+          "words": 2,
+          "chars": 13,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:6fdc5bbed9d6"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_voice_explain_tools.py",
+        "line": 126,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "summary[speech]",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 5,
+          "chars": 37,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:442c88d258c4"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_voice_explain_tools.py",
+        "line": 171,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "resumed[speech]",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 6,
+          "chars": 44,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:33087565f027"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_voice_explain_tools.py",
+        "line": 172,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "resumed[speech]",
+        "operator": "endswith",
+        "shape": {
+          "kind": "prose",
+          "words": 3,
+          "chars": 14,
+          "non_ascii": false,
+          "turkish": false,
+          "wildcard": false,
+          "digest": "sha256:71a81ed5cb12"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_voice_explain_tools.py",
+        "line": 183,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "second[speech]",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 4,
+          "chars": 25,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:2992ca338862"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_voice_explain_tools.py",
+        "line": 188,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "explained[speech]",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 8,
+          "chars": 47,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:456f512e4341"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_voice_explain_tools.py",
+        "line": 193,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "back[speech]",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 4,
+          "chars": 25,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:2992ca338862"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_voice_explain_tools.py",
+        "line": 202,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "everything[speech]",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 3,
+          "chars": 24,
+          "non_ascii": false,
+          "turkish": false,
+          "wildcard": false,
+          "digest": "sha256:fac10189cfba"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_voice_explain_tools.py",
+        "line": 214,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "result[speech]",
+        "operator": "==",
+        "shape": {
+          "kind": "prose",
+          "words": 4,
+          "chars": 26,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:f908b99c82d8"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_voice_explain_tools.py",
+        "line": 319,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "explain[speech_head]",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 5,
+          "chars": 37,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:442c88d258c4"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_voice_explain_tools.py",
+        "line": 324,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "resume[speech_head]",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 6,
+          "chars": 37,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:41b4a36537d9"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_voice_explain_tools.py",
+        "line": 399,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "resumed[speech]",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 8,
+          "chars": 47,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:456f512e4341"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_voice_explain_tools.py",
+        "line": 463,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "resumed[speech]",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 6,
+          "chars": 37,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:41b4a36537d9"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_voice_explain_tools.py",
+        "line": 489,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "again[speech]",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 6,
+          "chars": 44,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:33087565f027"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_voice_realtime_sessions.py",
+        "line": 469,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "r[result][narration][current_chunk][text]",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 2,
+          "chars": 12,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:500d47541ed9"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      }
+    ],
+    "allowed": [],
+    "suppressed": [
+      {
+        "path": "scripts/tests/owner-explain.tests.ps1",
+        "line": 164,
+        "rule": "possible_wording_assertion",
+        "reason": "subject_holds_file_contents"
+      },
+      {
+        "path": "scripts/tests/owner-explain.tests.ps1",
+        "line": 176,
+        "rule": "possible_wording_assertion",
+        "reason": "subject_holds_file_contents"
+      },
+      {
+        "path": "scripts/tests/owner-explain.tests.ps1",
+        "line": 177,
+        "rule": "possible_wording_assertion",
+        "reason": "subject_holds_file_contents"
+      },
+      {
+        "path": "scripts/tests/owner-explain.tests.ps1",
+        "line": 178,
+        "rule": "possible_wording_assertion",
+        "reason": "subject_holds_file_contents"
+      },
+      {
+        "path": "scripts/tests/owner-explain.tests.ps1",
+        "line": 192,
+        "rule": "possible_wording_assertion",
+        "reason": "subject_holds_file_contents"
+      }
+    ],
+    "skipped": []
+  },
+  "including_low": {
+    "guard_version": "0.1.0",
+    "root": "E:\\AI\\PersonalAgentOS_Claude_Autonomous_Build_Package_v1\\.claude\\worktrees\\agent-a014862b094ffed36",
+    "surfaces": [
+      "scripts",
+      "services/api/tests"
+    ],
+    "min_severity": "low",
+    "files_scanned": 232,
+    "bytes_scanned": 2525550,
+    "duration_s": 0.3396,
+    "truncated": false,
+    "counts": {
+      "high": 0,
+      "medium": 67,
+      "low": 55
+    },
+    "findings": [
+      {
+        "path": "services/api/tests/integration/test_ledger_explain_over_real_runs.py",
+        "line": 82,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "record.speech",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 3,
+          "chars": 22,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:7ca1f5ccd4e1"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/integration/test_ledger_explain_over_real_runs.py",
+        "line": 97,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "record.speech",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 3,
+          "chars": 15,
+          "non_ascii": false,
+          "turkish": false,
+          "wildcard": false,
+          "digest": "sha256:ff122c3138ae"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/integration/test_ledger_explain_over_real_runs.py",
+        "line": 100,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "record.speech",
+        "operator": "not in",
+        "shape": {
+          "kind": "prose",
+          "words": 2,
+          "chars": 8,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:e3d668f870d2"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/integration/test_narration_pronunciation.py",
+        "line": 69,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "preview[spoken]",
+        "operator": "==",
+        "shape": {
+          "kind": "prose",
+          "words": 4,
+          "chars": 19,
+          "non_ascii": false,
+          "turkish": false,
+          "wildcard": false,
+          "digest": "sha256:a60881637c11"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_engine.py",
+        "line": 223,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 8,
+          "chars": 62,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:b8590796ab18"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_engine.py",
+        "line": 226,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "endswith",
+        "shape": {
+          "kind": "prose",
+          "words": 7,
+          "chars": 46,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:05514daabe07"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_engine.py",
+        "line": 259,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 4,
+          "chars": 24,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:834a3da3a892"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_engine.py",
+        "line": 260,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 2,
+          "chars": 11,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:46ed76f7c04a"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_engine.py",
+        "line": 270,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 4,
+          "chars": 26,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:e434820b89c6"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_engine.py",
+        "line": 271,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 6,
+          "chars": 52,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:e279cc1a882b"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_engine.py",
+        "line": 273,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 13,
+          "chars": 79,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:2a36033b13c3"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_engine.py",
+        "line": 275,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 7,
+          "chars": 52,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:efc9bcb15f8a"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_engine.py",
+        "line": 310,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "briefing.executive[...].text",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 7,
+          "chars": 42,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:cc53ce4c688a"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_engine.py",
+        "line": 323,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "briefing.executive[...].text",
+        "operator": "==",
+        "shape": {
+          "kind": "prose",
+          "words": 7,
+          "chars": 45,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:d19f0c78f38c"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_engine.py",
+        "line": 339,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "briefing.executive[...].text",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 3,
+          "chars": 25,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:e5fe9042e99e"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_engine.py",
+        "line": 398,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "briefing.executive[...].text",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 2,
+          "chars": 12,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:0f897285378e"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_engine.py",
+        "line": 442,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech_for_level()",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 3,
+          "chars": 24,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:91a67b034093"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_learning_questions.py",
+        "line": 126,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 8,
+          "chars": 49,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:19803d2340c1"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_learning_questions.py",
+        "line": 127,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 2,
+          "chars": 17,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:a2aa0309c766"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_learning_questions.py",
+        "line": 146,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech_for_level()",
+        "operator": "==",
+        "shape": {
+          "kind": "prose",
+          "words": 6,
+          "chars": 39,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:9328b76481be"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_learning_questions.py",
+        "line": 165,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 4,
+          "chars": 35,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:5a4421407872"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_learning_questions.py",
+        "line": 166,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 5,
+          "chars": 30,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:d760b566be6e"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_learning_questions.py",
+        "line": 167,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 5,
+          "chars": 32,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:e1c3da1892cc"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_learning_questions.py",
+        "line": 176,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 4,
+          "chars": 28,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:42fe3fea7dcb"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_learning_questions.py",
+        "line": 177,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 2,
+          "chars": 20,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:d16c5dac0461"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_learning_questions.py",
+        "line": 184,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 9,
+          "chars": 54,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:18e3be7ce7aa"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_learning_questions.py",
+        "line": 193,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 4,
+          "chars": 40,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:f2aa8584fbd3"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_learning_questions.py",
+        "line": 194,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 5,
+          "chars": 34,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:e0fcda3b1754"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_learning_questions.py",
+        "line": 211,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 4,
+          "chars": 20,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:ff59b394f636"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_learning_questions.py",
+        "line": 212,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 6,
+          "chars": 45,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:bddcd1f836c8"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_learning_questions.py",
+        "line": 238,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 7,
+          "chars": 38,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:77fb775273a6"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_learning_questions.py",
+        "line": 244,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech_for_level()",
+        "operator": "==",
+        "shape": {
+          "kind": "prose",
+          "words": 4,
+          "chars": 35,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:a32aaef5de10"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_learning_questions.py",
+        "line": 288,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 6,
+          "chars": 39,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:51af5130dba7"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_learning_questions.py",
+        "line": 289,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 3,
+          "chars": 17,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:b8b17e1b6329"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_learning_questions.py",
+        "line": 290,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 8,
+          "chars": 55,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:86f0b2e4c656"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_learning_questions.py",
+        "line": 291,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 4,
+          "chars": 22,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:a664e4fb7eec"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_learning_questions.py",
+        "line": 292,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech.rstrip()",
+        "operator": "endswith",
+        "shape": {
+          "kind": "prose",
+          "words": 11,
+          "chars": 81,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:36b4d8adadff"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_learning_questions.py",
+        "line": 306,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech_for_level()",
+        "operator": "==",
+        "shape": {
+          "kind": "prose",
+          "words": 7,
+          "chars": 37,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:6ef020164143"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_learning_questions.py",
+        "line": 322,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "endswith",
+        "shape": {
+          "kind": "prose",
+          "words": 5,
+          "chars": 37,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:d32e2442e1af"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_ledger_briefing.py",
+        "line": 120,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 4,
+          "chars": 25,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:90db9c987635"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_ledger_briefing.py",
+        "line": 126,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "briefing_service.speech_for()",
+        "operator": "==",
+        "shape": {
+          "kind": "prose",
+          "words": 8,
+          "chars": 83,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:c8fab81c64a6"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_ledger_briefing.py",
+        "line": 134,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech",
+        "operator": "==",
+        "shape": {
+          "kind": "prose",
+          "words": 8,
+          "chars": 57,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:5c7b7d127b9e"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_ledger_briefing.py",
+        "line": 145,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "briefing_service.speech_for()",
+        "operator": "==",
+        "shape": {
+          "kind": "prose",
+          "words": 7,
+          "chars": 51,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:40983fb51ca4"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_ledger_service.py",
+        "line": 314,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "row.factual_summary",
+        "operator": "==",
+        "shape": {
+          "kind": "prose",
+          "words": 9,
+          "chars": 57,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:6728a9d6c26a"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_ledger_service.py",
+        "line": 321,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "gate_row.factual_summary",
+        "operator": "==",
+        "shape": {
+          "kind": "prose",
+          "words": 5,
+          "chars": 31,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:e9e288dd942c"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_ledger_service.py",
+        "line": 377,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "row.factual_summary",
+        "operator": "==",
+        "shape": {
+          "kind": "prose",
+          "words": 4,
+          "chars": 49,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:bd2154210e69"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_ledger_service.py",
+        "line": 432,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "row.factual_summary",
+        "operator": "==",
+        "shape": {
+          "kind": "prose",
+          "words": 3,
+          "chars": 25,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:90df96054184"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_narration_align.py",
+        "line": 55,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech_from()",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 4,
+          "chars": 31,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:38179b72203f"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_narration_align.py",
+        "line": 104,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "speech_from()",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 4,
+          "chars": 25,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:2992ca338862"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_voice_explain_tools.py",
+        "line": 109,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "detail[speech]",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 8,
+          "chars": 47,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:456f512e4341"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_voice_explain_tools.py",
+        "line": 110,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "detail[speech]",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 3,
+          "chars": 16,
+          "non_ascii": false,
+          "turkish": false,
+          "wildcard": false,
+          "digest": "sha256:8b3a7c959afb"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_voice_explain_tools.py",
+        "line": 119,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "technical[speech]",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 5,
+          "chars": 28,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:b7c4eb6f0dab"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_voice_explain_tools.py",
+        "line": 121,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "technical[speech]",
+        "operator": "not in",
+        "shape": {
+          "kind": "prose",
+          "words": 2,
+          "chars": 13,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:6fdc5bbed9d6"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_voice_explain_tools.py",
+        "line": 126,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "summary[speech]",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 5,
+          "chars": 37,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:442c88d258c4"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_voice_explain_tools.py",
+        "line": 171,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "resumed[speech]",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 6,
+          "chars": 44,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:33087565f027"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_voice_explain_tools.py",
+        "line": 172,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "resumed[speech]",
+        "operator": "endswith",
+        "shape": {
+          "kind": "prose",
+          "words": 3,
+          "chars": 14,
+          "non_ascii": false,
+          "turkish": false,
+          "wildcard": false,
+          "digest": "sha256:71a81ed5cb12"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_voice_explain_tools.py",
+        "line": 183,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "second[speech]",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 4,
+          "chars": 25,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:2992ca338862"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_voice_explain_tools.py",
+        "line": 188,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "explained[speech]",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 8,
+          "chars": 47,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:456f512e4341"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_voice_explain_tools.py",
+        "line": 193,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "back[speech]",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 4,
+          "chars": 25,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:2992ca338862"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_voice_explain_tools.py",
+        "line": 202,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "everything[speech]",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 3,
+          "chars": 24,
+          "non_ascii": false,
+          "turkish": false,
+          "wildcard": false,
+          "digest": "sha256:fac10189cfba"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_voice_explain_tools.py",
+        "line": 214,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "result[speech]",
+        "operator": "==",
+        "shape": {
+          "kind": "prose",
+          "words": 4,
+          "chars": 26,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:f908b99c82d8"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_voice_explain_tools.py",
+        "line": 319,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "explain[speech_head]",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 5,
+          "chars": 37,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:442c88d258c4"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_voice_explain_tools.py",
+        "line": 324,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "resume[speech_head]",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 6,
+          "chars": 37,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:41b4a36537d9"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_voice_explain_tools.py",
+        "line": 399,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "resumed[speech]",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 8,
+          "chars": 47,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:456f512e4341"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_voice_explain_tools.py",
+        "line": 463,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "resumed[speech]",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 6,
+          "chars": 37,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:41b4a36537d9"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_voice_explain_tools.py",
+        "line": 489,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "again[speech]",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 6,
+          "chars": 44,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:33087565f027"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_voice_realtime_sessions.py",
+        "line": 469,
+        "surface": "python",
+        "context": "test",
+        "rule": "generated_wording_assertion",
+        "severity": "medium",
+        "subject": "r[result][narration][current_chunk][text]",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 2,
+          "chars": 12,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:500d47541ed9"
+        },
+        "suggestion": "Assert on the structure the sentence was built from, not the sentence: the provenance block's cited event ids, the job/session id they belong to, the evidence kinds, and the numbers themselves (findings, sources, rejected, verdict). Paraphrasing must stay free; an unsupported claim must not."
+      },
+      {
+        "path": "services/api/tests/unit/test_evolution_failure_matrix.py",
+        "line": 205,
+        "surface": "python",
+        "context": "test",
+        "rule": "possible_wording_assertion",
+        "severity": "low",
+        "subject": "result.summary",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 3,
+          "chars": 20,
+          "non_ascii": false,
+          "turkish": false,
+          "wildcard": false,
+          "digest": "sha256:77b4f6f28e47"
+        },
+        "suggestion": "If this value is generated, assert on its provenance/ids/counts instead. If it is a fixed machine token the repository authors, compare it to that token exactly, or mark the line '# wording-guard: allow <reason>'."
+      },
+      {
+        "path": "services/api/tests/unit/test_evolution_failure_matrix.py",
+        "line": 240,
+        "surface": "python",
+        "context": "test",
+        "rule": "possible_wording_assertion",
+        "severity": "low",
+        "subject": "result.summary",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 3,
+          "chars": 22,
+          "non_ascii": false,
+          "turkish": false,
+          "wildcard": false,
+          "digest": "sha256:578e6ab05e49"
+        },
+        "suggestion": "If this value is generated, assert on its provenance/ids/counts instead. If it is a fixed machine token the repository authors, compare it to that token exactly, or mark the line '# wording-guard: allow <reason>'."
+      },
+      {
+        "path": "services/api/tests/unit/test_evolution_improvement.py",
+        "line": 198,
+        "surface": "python",
+        "context": "test",
+        "rule": "possible_wording_assertion",
+        "severity": "low",
+        "subject": "result.summary",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 3,
+          "chars": 24,
+          "non_ascii": false,
+          "turkish": false,
+          "wildcard": false,
+          "digest": "sha256:4c36803aba8b"
+        },
+        "suggestion": "If this value is generated, assert on its provenance/ids/counts instead. If it is a fixed machine token the repository authors, compare it to that token exactly, or mark the line '# wording-guard: allow <reason>'."
+      },
+      {
+        "path": "services/api/tests/unit/test_evolution_pipeline.py",
+        "line": 412,
+        "surface": "python",
+        "context": "test",
+        "rule": "possible_wording_assertion",
+        "severity": "low",
+        "subject": "result.summary",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 3,
+          "chars": 19,
+          "non_ascii": false,
+          "turkish": false,
+          "wildcard": false,
+          "digest": "sha256:acbabcbc1955"
+        },
+        "suggestion": "If this value is generated, assert on its provenance/ids/counts instead. If it is a fixed machine token the repository authors, compare it to that token exactly, or mark the line '# wording-guard: allow <reason>'."
+      },
+      {
+        "path": "services/api/tests/unit/test_evolution_pipeline.py",
+        "line": 514,
+        "surface": "python",
+        "context": "test",
+        "rule": "possible_wording_assertion",
+        "severity": "low",
+        "subject": "result.summary.lower()",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 4,
+          "chars": 33,
+          "non_ascii": false,
+          "turkish": false,
+          "wildcard": false,
+          "digest": "sha256:e05a8076dc92"
+        },
+        "suggestion": "If this value is generated, assert on its provenance/ids/counts instead. If it is a fixed machine token the repository authors, compare it to that token exactly, or mark the line '# wording-guard: allow <reason>'."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_engine.py",
+        "line": 255,
+        "surface": "python",
+        "context": "test",
+        "rule": "possible_wording_assertion",
+        "severity": "low",
+        "subject": "first[...].text",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 3,
+          "chars": 16,
+          "non_ascii": false,
+          "turkish": false,
+          "wildcard": false,
+          "digest": "sha256:8b3a7c959afb"
+        },
+        "suggestion": "If this value is generated, assert on its provenance/ids/counts instead. If it is a fixed machine token the repository authors, compare it to that token exactly, or mark the line '# wording-guard: allow <reason>'."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_engine.py",
+        "line": 256,
+        "surface": "python",
+        "context": "test",
+        "rule": "possible_wording_assertion",
+        "severity": "low",
+        "subject": "first[...].text",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 2,
+          "chars": 12,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:623fd924ebc4"
+        },
+        "suggestion": "If this value is generated, assert on its provenance/ids/counts instead. If it is a fixed machine token the repository authors, compare it to that token exactly, or mark the line '# wording-guard: allow <reason>'."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_engine.py",
+        "line": 257,
+        "surface": "python",
+        "context": "test",
+        "rule": "possible_wording_assertion",
+        "severity": "low",
+        "subject": "first[...].text",
+        "operator": "==",
+        "shape": {
+          "kind": "prose",
+          "words": 4,
+          "chars": 25,
+          "non_ascii": false,
+          "turkish": false,
+          "wildcard": false,
+          "digest": "sha256:2e3f84b2cf9d"
+        },
+        "suggestion": "If this value is generated, assert on its provenance/ids/counts instead. If it is a fixed machine token the repository authors, compare it to that token exactly, or mark the line '# wording-guard: allow <reason>'."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_engine.py",
+        "line": 288,
+        "surface": "python",
+        "context": "test",
+        "rule": "turkish_prose_assertion",
+        "severity": "low",
+        "subject": "body",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 7,
+          "chars": 45,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:9f72c70bb9b8"
+        },
+        "suggestion": "Turkish prose inside an assertion literal is almost always assistant output. Assert on the record the sentence was rendered from (ids, counts, enum status), and let the phrasing change freely."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_engine.py",
+        "line": 289,
+        "surface": "python",
+        "context": "test",
+        "rule": "turkish_prose_assertion",
+        "severity": "low",
+        "subject": "body",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 6,
+          "chars": 33,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:e5aa1eac1d89"
+        },
+        "suggestion": "Turkish prose inside an assertion literal is almost always assistant output. Assert on the record the sentence was rendered from (ids, counts, enum status), and let the phrasing change freely."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_engine.py",
+        "line": 290,
+        "surface": "python",
+        "context": "test",
+        "rule": "turkish_prose_assertion",
+        "severity": "low",
+        "subject": "body",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 4,
+          "chars": 22,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:fdb50d9f13f5"
+        },
+        "suggestion": "Turkish prose inside an assertion literal is almost always assistant output. Assert on the record the sentence was rendered from (ids, counts, enum status), and let the phrasing change freely."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_engine.py",
+        "line": 291,
+        "surface": "python",
+        "context": "test",
+        "rule": "turkish_prose_assertion",
+        "severity": "low",
+        "subject": "body",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 5,
+          "chars": 40,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:7d51dd2bfec2"
+        },
+        "suggestion": "Turkish prose inside an assertion literal is almost always assistant output. Assert on the record the sentence was rendered from (ids, counts, enum status), and let the phrasing change freely."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_engine.py",
+        "line": 347,
+        "surface": "python",
+        "context": "test",
+        "rule": "possible_wording_assertion",
+        "severity": "low",
+        "subject": "clean.executive[...].text",
+        "operator": "==",
+        "shape": {
+          "kind": "prose",
+          "words": 7,
+          "chars": 34,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:139a217032b6"
+        },
+        "suggestion": "If this value is generated, assert on its provenance/ids/counts instead. If it is a fixed machine token the repository authors, compare it to that token exactly, or mark the line '# wording-guard: allow <reason>'."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_engine.py",
+        "line": 357,
+        "surface": "python",
+        "context": "test",
+        "rule": "possible_wording_assertion",
+        "severity": "low",
+        "subject": "s.text",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 3,
+          "chars": 19,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:9ff5b1909cd9"
+        },
+        "suggestion": "If this value is generated, assert on its provenance/ids/counts instead. If it is a fixed machine token the repository authors, compare it to that token exactly, or mark the line '# wording-guard: allow <reason>'."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_engine.py",
+        "line": 379,
+        "surface": "python",
+        "context": "test",
+        "rule": "possible_wording_assertion",
+        "severity": "low",
+        "subject": "s.text",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 4,
+          "chars": 20,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:d5d0f041ff73"
+        },
+        "suggestion": "If this value is generated, assert on its provenance/ids/counts instead. If it is a fixed machine token the repository authors, compare it to that token exactly, or mark the line '# wording-guard: allow <reason>'."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_engine.py",
+        "line": 391,
+        "surface": "python",
+        "context": "test",
+        "rule": "possible_wording_assertion",
+        "severity": "low",
+        "subject": "s.text",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 5,
+          "chars": 35,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:3d8d1c3d7799"
+        },
+        "suggestion": "If this value is generated, assert on its provenance/ids/counts instead. If it is a fixed machine token the repository authors, compare it to that token exactly, or mark the line '# wording-guard: allow <reason>'."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_engine.py",
+        "line": 499,
+        "surface": "python",
+        "context": "test",
+        "rule": "possible_wording_assertion",
+        "severity": "low",
+        "subject": "closing.text",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 5,
+          "chars": 37,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:2552fd6ec14a"
+        },
+        "suggestion": "If this value is generated, assert on its provenance/ids/counts instead. If it is a fixed machine token the repository authors, compare it to that token exactly, or mark the line '# wording-guard: allow <reason>'."
+      },
+      {
+        "path": "services/api/tests/unit/test_explain_learning_questions.py",
+        "line": 132,
+        "surface": "python",
+        "context": "test",
+        "rule": "turkish_prose_assertion",
+        "severity": "low",
+        "subject": "detail",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 6,
+          "chars": 36,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:eb77cc064cb7"
+        },
+        "suggestion": "Turkish prose inside an assertion literal is almost always assistant output. Assert on the record the sentence was rendered from (ids, counts, enum status), and let the phrasing change freely."
+      },
+      {
+        "path": "services/api/tests/unit/test_goals_routes.py",
+        "line": 99,
+        "surface": "python",
+        "context": "test",
+        "rule": "possible_wording_assertion",
+        "severity": "low",
+        "subject": "response.json()[title]",
+        "operator": "==",
+        "shape": {
+          "kind": "prose",
+          "words": 3,
+          "chars": 16,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:535c04ee4f66"
+        },
+        "suggestion": "If this value is generated, assert on its provenance/ids/counts instead. If it is a fixed machine token the repository authors, compare it to that token exactly, or mark the line '# wording-guard: allow <reason>'."
+      },
+      {
+        "path": "services/api/tests/unit/test_memory_service.py",
+        "line": 669,
+        "surface": "python",
+        "context": "test",
+        "rule": "possible_wording_assertion",
+        "severity": "low",
+        "subject": "db.get().text",
+        "operator": "==",
+        "shape": {
+          "kind": "prose",
+          "words": 6,
+          "chars": 30,
+          "non_ascii": false,
+          "turkish": false,
+          "wildcard": false,
+          "digest": "sha256:c472b550d75d"
+        },
+        "suggestion": "If this value is generated, assert on its provenance/ids/counts instead. If it is a fixed machine token the repository authors, compare it to that token exactly, or mark the line '# wording-guard: allow <reason>'."
+      },
+      {
+        "path": "services/api/tests/unit/test_narration_align.py",
+        "line": 40,
+        "surface": "python",
+        "context": "test",
+        "rule": "turkish_prose_assertion",
+        "severity": "low",
+        "subject": "resumed",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 4,
+          "chars": 23,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:52cd73f4f743"
+        },
+        "suggestion": "Turkish prose inside an assertion literal is almost always assistant output. Assert on the record the sentence was rendered from (ids, counts, enum status), and let the phrasing change freely."
+      },
+      {
+        "path": "services/api/tests/unit/test_narration_engine.py",
+        "line": 141,
+        "surface": "python",
+        "context": "test",
+        "rule": "possible_wording_assertion",
+        "severity": "low",
+        "subject": "table_chunks[...].text",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 2,
+          "chars": 15,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:b84e291edd58"
+        },
+        "suggestion": "If this value is generated, assert on its provenance/ids/counts instead. If it is a fixed machine token the repository authors, compare it to that token exactly, or mark the line '# wording-guard: allow <reason>'."
+      },
+      {
+        "path": "services/api/tests/unit/test_narration_normalizer.py",
+        "line": 113,
+        "surface": "python",
+        "context": "test",
+        "rule": "turkish_prose_assertion",
+        "severity": "low",
+        "subject": "normalize()",
+        "operator": "==",
+        "shape": {
+          "kind": "prose",
+          "words": 7,
+          "chars": 35,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:3b9616e5e66d"
+        },
+        "suggestion": "Turkish prose inside an assertion literal is almost always assistant output. Assert on the record the sentence was rendered from (ids, counts, enum status), and let the phrasing change freely."
+      },
+      {
+        "path": "services/api/tests/unit/test_narration_normalizer.py",
+        "line": 114,
+        "surface": "python",
+        "context": "test",
+        "rule": "turkish_prose_assertion",
+        "severity": "low",
+        "subject": "normalize()",
+        "operator": "==",
+        "shape": {
+          "kind": "prose",
+          "words": 5,
+          "chars": 24,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:765a7cac1399"
+        },
+        "suggestion": "Turkish prose inside an assertion literal is almost always assistant output. Assert on the record the sentence was rendered from (ids, counts, enum status), and let the phrasing change freely."
+      },
+      {
+        "path": "services/api/tests/unit/test_narration_normalizer.py",
+        "line": 115,
+        "surface": "python",
+        "context": "test",
+        "rule": "turkish_prose_assertion",
+        "severity": "low",
+        "subject": "normalize()",
+        "operator": "==",
+        "shape": {
+          "kind": "prose",
+          "words": 8,
+          "chars": 39,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:8968a7565bb4"
+        },
+        "suggestion": "Turkish prose inside an assertion literal is almost always assistant output. Assert on the record the sentence was rendered from (ids, counts, enum status), and let the phrasing change freely."
+      },
+      {
+        "path": "services/api/tests/unit/test_narration_normalizer.py",
+        "line": 117,
+        "surface": "python",
+        "context": "test",
+        "rule": "turkish_prose_assertion",
+        "severity": "low",
+        "subject": "normalize()",
+        "operator": "==",
+        "shape": {
+          "kind": "prose",
+          "words": 11,
+          "chars": 59,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:fbcbd72ff2b0"
+        },
+        "suggestion": "Turkish prose inside an assertion literal is almost always assistant output. Assert on the record the sentence was rendered from (ids, counts, enum status), and let the phrasing change freely."
+      },
+      {
+        "path": "services/api/tests/unit/test_narration_normalizer.py",
+        "line": 147,
+        "surface": "python",
+        "context": "test",
+        "rule": "turkish_prose_assertion",
+        "severity": "low",
+        "subject": "normalize()",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 7,
+          "chars": 25,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:fa89b8447109"
+        },
+        "suggestion": "Turkish prose inside an assertion literal is almost always assistant output. Assert on the record the sentence was rendered from (ids, counts, enum status), and let the phrasing change freely."
+      },
+      {
+        "path": "services/api/tests/unit/test_narration_normalizer.py",
+        "line": 156,
+        "surface": "python",
+        "context": "test",
+        "rule": "turkish_prose_assertion",
+        "severity": "low",
+        "subject": "out",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 6,
+          "chars": 27,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:3765b5dda1b7"
+        },
+        "suggestion": "Turkish prose inside an assertion literal is almost always assistant output. Assert on the record the sentence was rendered from (ids, counts, enum status), and let the phrasing change freely."
+      },
+      {
+        "path": "services/api/tests/unit/test_narration_normalizer.py",
+        "line": 157,
+        "surface": "python",
+        "context": "test",
+        "rule": "turkish_prose_assertion",
+        "severity": "low",
+        "subject": "out",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 5,
+          "chars": 24,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:765a7cac1399"
+        },
+        "suggestion": "Turkish prose inside an assertion literal is almost always assistant output. Assert on the record the sentence was rendered from (ids, counts, enum status), and let the phrasing change freely."
+      },
+      {
+        "path": "services/api/tests/unit/test_narration_normalizer.py",
+        "line": 163,
+        "surface": "python",
+        "context": "test",
+        "rule": "turkish_prose_assertion",
+        "severity": "low",
+        "subject": "normalize()",
+        "operator": "==",
+        "shape": {
+          "kind": "prose",
+          "words": 13,
+          "chars": 65,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:3ae6759a4542"
+        },
+        "suggestion": "Turkish prose inside an assertion literal is almost always assistant output. Assert on the record the sentence was rendered from (ids, counts, enum status), and let the phrasing change freely."
+      },
+      {
+        "path": "services/api/tests/unit/test_narration_normalizer.py",
+        "line": 166,
+        "surface": "python",
+        "context": "test",
+        "rule": "turkish_prose_assertion",
+        "severity": "low",
+        "subject": "normalize()",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 7,
+          "chars": 34,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:be75cbb3a187"
+        },
+        "suggestion": "Turkish prose inside an assertion literal is almost always assistant output. Assert on the record the sentence was rendered from (ids, counts, enum status), and let the phrasing change freely."
+      },
+      {
+        "path": "services/api/tests/unit/test_narration_normalizer.py",
+        "line": 168,
+        "surface": "python",
+        "context": "test",
+        "rule": "turkish_prose_assertion",
+        "severity": "low",
+        "subject": "normalize()",
+        "operator": "endswith",
+        "shape": {
+          "kind": "prose",
+          "words": 5,
+          "chars": 23,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:7054bd077f48"
+        },
+        "suggestion": "Turkish prose inside an assertion literal is almost always assistant output. Assert on the record the sentence was rendered from (ids, counts, enum status), and let the phrasing change freely."
+      },
+      {
+        "path": "services/api/tests/unit/test_narration_tables.py",
+        "line": 26,
+        "surface": "python",
+        "context": "test",
+        "rule": "possible_wording_assertion",
+        "severity": "low",
+        "subject": "result.text",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 2,
+          "chars": 15,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:b84e291edd58"
+        },
+        "suggestion": "If this value is generated, assert on its provenance/ids/counts instead. If it is a fixed machine token the repository authors, compare it to that token exactly, or mark the line '# wording-guard: allow <reason>'."
+      },
+      {
+        "path": "services/api/tests/unit/test_narration_tables.py",
+        "line": 27,
+        "surface": "python",
+        "context": "test",
+        "rule": "possible_wording_assertion",
+        "severity": "low",
+        "subject": "result.text",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 3,
+          "chars": 16,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:9786b303cbf7"
+        },
+        "suggestion": "If this value is generated, assert on its provenance/ids/counts instead. If it is a fixed machine token the repository authors, compare it to that token exactly, or mark the line '# wording-guard: allow <reason>'."
+      },
+      {
+        "path": "services/api/tests/unit/test_narration_tables.py",
+        "line": 34,
+        "surface": "python",
+        "context": "test",
+        "rule": "possible_wording_assertion",
+        "severity": "low",
+        "subject": "result.text",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 3,
+          "chars": 13,
+          "non_ascii": false,
+          "turkish": false,
+          "wildcard": false,
+          "digest": "sha256:0c5e2cb11d75"
+        },
+        "suggestion": "If this value is generated, assert on its provenance/ids/counts instead. If it is a fixed machine token the repository authors, compare it to that token exactly, or mark the line '# wording-guard: allow <reason>'."
+      },
+      {
+        "path": "services/api/tests/unit/test_narration_tables.py",
+        "line": 35,
+        "surface": "python",
+        "context": "test",
+        "rule": "possible_wording_assertion",
+        "severity": "low",
+        "subject": "result.text",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 4,
+          "chars": 15,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:4b848fa0a7b7"
+        },
+        "suggestion": "If this value is generated, assert on its provenance/ids/counts instead. If it is a fixed machine token the repository authors, compare it to that token exactly, or mark the line '# wording-guard: allow <reason>'."
+      },
+      {
+        "path": "services/api/tests/unit/test_narration_tables.py",
+        "line": 45,
+        "surface": "python",
+        "context": "test",
+        "rule": "possible_wording_assertion",
+        "severity": "low",
+        "subject": "result.text",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 3,
+          "chars": 23,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:1a7acbeff90d"
+        },
+        "suggestion": "If this value is generated, assert on its provenance/ids/counts instead. If it is a fixed machine token the repository authors, compare it to that token exactly, or mark the line '# wording-guard: allow <reason>'."
+      },
+      {
+        "path": "services/api/tests/unit/test_narration_tables.py",
+        "line": 62,
+        "surface": "python",
+        "context": "test",
+        "rule": "possible_wording_assertion",
+        "severity": "low",
+        "subject": "result.text",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 2,
+          "chars": 8,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:f42b188344b3"
+        },
+        "suggestion": "If this value is generated, assert on its provenance/ids/counts instead. If it is a fixed machine token the repository authors, compare it to that token exactly, or mark the line '# wording-guard: allow <reason>'."
+      },
+      {
+        "path": "services/api/tests/unit/test_narration_tables.py",
+        "line": 74,
+        "surface": "python",
+        "context": "test",
+        "rule": "turkish_prose_assertion",
+        "severity": "low",
+        "subject": "out",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 5,
+          "chars": 33,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:ca57c4b59772"
+        },
+        "suggestion": "Turkish prose inside an assertion literal is almost always assistant output. Assert on the record the sentence was rendered from (ids, counts, enum status), and let the phrasing change freely."
+      },
+      {
+        "path": "services/api/tests/unit/test_renderers.py",
+        "line": 57,
+        "surface": "python",
+        "context": "test",
+        "rule": "possible_wording_assertion",
+        "severity": "low",
+        "subject": "text",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 2,
+          "chars": 14,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:3ba7e695ecc7"
+        },
+        "suggestion": "If this value is generated, assert on its provenance/ids/counts instead. If it is a fixed machine token the repository authors, compare it to that token exactly, or mark the line '# wording-guard: allow <reason>'."
+      },
+      {
+        "path": "services/api/tests/unit/test_renderers.py",
+        "line": 117,
+        "surface": "python",
+        "context": "test",
+        "rule": "possible_wording_assertion",
+        "severity": "low",
+        "subject": "text",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 4,
+          "chars": 24,
+          "non_ascii": false,
+          "turkish": false,
+          "wildcard": false,
+          "digest": "sha256:953c646f4b21"
+        },
+        "suggestion": "If this value is generated, assert on its provenance/ids/counts instead. If it is a fixed machine token the repository authors, compare it to that token exactly, or mark the line '# wording-guard: allow <reason>'."
+      },
+      {
+        "path": "services/api/tests/unit/test_research_browser_activities.py",
+        "line": 1327,
+        "surface": "python",
+        "context": "test",
+        "rule": "possible_wording_assertion",
+        "severity": "low",
+        "subject": "memory.value_json[findings][...][summary]",
+        "operator": "==",
+        "shape": {
+          "kind": "prose",
+          "words": 5,
+          "chars": 23,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:606b5d8d72ba"
+        },
+        "suggestion": "If this value is generated, assert on its provenance/ids/counts instead. If it is a fixed machine token the repository authors, compare it to that token exactly, or mark the line '# wording-guard: allow <reason>'."
+      },
+      {
+        "path": "services/api/tests/unit/test_research_synthesis.py",
+        "line": 222,
+        "surface": "python",
+        "context": "test",
+        "rule": "possible_wording_assertion",
+        "severity": "low",
+        "subject": "summary",
+        "operator": "not in",
+        "shape": {
+          "kind": "prose",
+          "words": 3,
+          "chars": 28,
+          "non_ascii": false,
+          "turkish": false,
+          "wildcard": false,
+          "digest": "sha256:2e4221a7f996"
+        },
+        "suggestion": "If this value is generated, assert on its provenance/ids/counts instead. If it is a fixed machine token the repository authors, compare it to that token exactly, or mark the line '# wording-guard: allow <reason>'."
+      },
+      {
+        "path": "services/api/tests/unit/test_research_synthesis.py",
+        "line": 223,
+        "surface": "python",
+        "context": "test",
+        "rule": "possible_wording_assertion",
+        "severity": "low",
+        "subject": "summary",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 2,
+          "chars": 11,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:08ddc9db8791"
+        },
+        "suggestion": "If this value is generated, assert on its provenance/ids/counts instead. If it is a fixed machine token the repository authors, compare it to that token exactly, or mark the line '# wording-guard: allow <reason>'."
+      },
+      {
+        "path": "services/api/tests/unit/test_research_synthesis.py",
+        "line": 224,
+        "surface": "python",
+        "context": "test",
+        "rule": "possible_wording_assertion",
+        "severity": "low",
+        "subject": "summary",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 2,
+          "chars": 18,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:64b202fedb7a"
+        },
+        "suggestion": "If this value is generated, assert on its provenance/ids/counts instead. If it is a fixed machine token the repository authors, compare it to that token exactly, or mark the line '# wording-guard: allow <reason>'."
+      },
+      {
+        "path": "services/api/tests/unit/test_selfhealing_pipeline.py",
+        "line": 245,
+        "surface": "python",
+        "context": "test",
+        "rule": "possible_wording_assertion",
+        "severity": "low",
+        "subject": "result.summary",
+        "operator": "in",
+        "shape": {
+          "kind": "prose",
+          "words": 3,
+          "chars": 23,
+          "non_ascii": false,
+          "turkish": false,
+          "wildcard": false,
+          "digest": "sha256:d24a70679e3f"
+        },
+        "suggestion": "If this value is generated, assert on its provenance/ids/counts instead. If it is a fixed machine token the repository authors, compare it to that token exactly, or mark the line '# wording-guard: allow <reason>'."
+      },
+      {
+        "path": "services/api/tests/unit/test_selfmodel_indexer.py",
+        "line": 150,
+        "surface": "python",
+        "context": "test",
+        "rule": "possible_wording_assertion",
+        "severity": "low",
+        "subject": "observe.docstring_summary",
+        "operator": "==",
+        "shape": {
+          "kind": "prose",
+          "words": 9,
+          "chars": 44,
+          "non_ascii": false,
+          "turkish": false,
+          "wildcard": false,
+          "digest": "sha256:97c561b5b45c"
+        },
+        "suggestion": "If this value is generated, assert on its provenance/ids/counts instead. If it is a fixed machine token the repository authors, compare it to that token exactly, or mark the line '# wording-guard: allow <reason>'."
+      },
+      {
+        "path": "services/api/tests/unit/test_voice_explain_tools.py",
+        "line": 276,
+        "surface": "python",
+        "context": "test",
+        "rule": "turkish_prose_assertion",
+        "severity": "low",
+        "subject": "version.canonical_body",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 5,
+          "chars": 32,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:01f1768a45ae"
+        },
+        "suggestion": "Turkish prose inside an assertion literal is almost always assistant output. Assert on the record the sentence was rendered from (ids, counts, enum status), and let the phrasing change freely."
+      },
+      {
+        "path": "services/api/tests/unit/test_voice_intents.py",
+        "line": 54,
+        "surface": "python",
+        "context": "test",
+        "rule": "possible_wording_assertion",
+        "severity": "low",
+        "subject": "text",
+        "operator": "==",
+        "shape": {
+          "kind": "prose",
+          "words": 4,
+          "chars": 25,
+          "non_ascii": false,
+          "turkish": false,
+          "wildcard": false,
+          "digest": "sha256:528acda3c941"
+        },
+        "suggestion": "If this value is generated, assert on its provenance/ids/counts instead. If it is a fixed machine token the repository authors, compare it to that token exactly, or mark the line '# wording-guard: allow <reason>'."
+      },
+      {
+        "path": "services/api/tests/unit/test_voice_intents.py",
+        "line": 198,
+        "surface": "python",
+        "context": "test",
+        "rule": "possible_wording_assertion",
+        "severity": "low",
+        "subject": "plan.chunk_at().text",
+        "operator": "==",
+        "shape": {
+          "kind": "prose",
+          "words": 3,
+          "chars": 20,
+          "non_ascii": false,
+          "turkish": false,
+          "wildcard": false,
+          "digest": "sha256:5b36eb4bf696"
+        },
+        "suggestion": "If this value is generated, assert on its provenance/ids/counts instead. If it is a fixed machine token the repository authors, compare it to that token exactly, or mark the line '# wording-guard: allow <reason>'."
+      },
+      {
+        "path": "services/api/tests/unit/test_voice_intents.py",
+        "line": 224,
+        "surface": "python",
+        "context": "test",
+        "rule": "possible_wording_assertion",
+        "severity": "low",
+        "subject": "plan.chunk_at().text",
+        "operator": "startswith",
+        "shape": {
+          "kind": "prose",
+          "words": 2,
+          "chars": 12,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:500d47541ed9"
+        },
+        "suggestion": "If this value is generated, assert on its provenance/ids/counts instead. If it is a fixed machine token the repository authors, compare it to that token exactly, or mark the line '# wording-guard: allow <reason>'."
+      },
+      {
+        "path": "services/api/tests/unit/test_voice_openai_realtime.py",
+        "line": 544,
+        "surface": "python",
+        "context": "test",
+        "rule": "possible_wording_assertion",
+        "severity": "low",
+        "subject": "input_transcript()",
+        "operator": "==",
+        "shape": {
+          "kind": "prose",
+          "words": 4,
+          "chars": 25,
+          "non_ascii": false,
+          "turkish": false,
+          "wildcard": false,
+          "digest": "sha256:528acda3c941"
+        },
+        "suggestion": "If this value is generated, assert on its provenance/ids/counts instead. If it is a fixed machine token the repository authors, compare it to that token exactly, or mark the line '# wording-guard: allow <reason>'."
+      },
+      {
+        "path": "services/api/tests/unit/test_voice_realtime_sessions.py",
+        "line": 242,
+        "surface": "python",
+        "context": "test",
+        "rule": "turkish_prose_assertion",
+        "severity": "low",
+        "subject": "redirect[result][plan][scope]",
+        "operator": "==",
+        "shape": {
+          "kind": "prose",
+          "words": 4,
+          "chars": 25,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:a2b3880758d6"
+        },
+        "suggestion": "Turkish prose inside an assertion literal is almost always assistant output. Assert on the record the sentence was rendered from (ids, counts, enum status), and let the phrasing change freely."
+      },
+      {
+        "path": "services/api/tests/unit/test_voice_realtime_sessions.py",
+        "line": 329,
+        "surface": "python",
+        "context": "test",
+        "rule": "possible_wording_assertion",
+        "severity": "low",
+        "subject": "state[transcript_summary]",
+        "operator": "==",
+        "shape": {
+          "kind": "prose",
+          "words": 5,
+          "chars": 38,
+          "non_ascii": false,
+          "turkish": false,
+          "wildcard": false,
+          "digest": "sha256:32c36d3ae641"
+        },
+        "suggestion": "If this value is generated, assert on its provenance/ids/counts instead. If it is a fixed machine token the repository authors, compare it to that token exactly, or mark the line '# wording-guard: allow <reason>'."
+      },
+      {
+        "path": "services/api/tests/unit/test_voice_realtime_sessions.py",
+        "line": 385,
+        "surface": "python",
+        "context": "test",
+        "rule": "possible_wording_assertion",
+        "severity": "low",
+        "subject": "data[state][transcript_summary]",
+        "operator": "==",
+        "shape": {
+          "kind": "prose",
+          "words": 2,
+          "chars": 18,
+          "non_ascii": true,
+          "turkish": true,
+          "wildcard": false,
+          "digest": "sha256:491ba68daab6"
+        },
+        "suggestion": "If this value is generated, assert on its provenance/ids/counts instead. If it is a fixed machine token the repository authors, compare it to that token exactly, or mark the line '# wording-guard: allow <reason>'."
+      }
+    ],
+    "allowed": [],
+    "suppressed": [
+      {
+        "path": "scripts/tests/owner-explain.tests.ps1",
+        "line": 164,
+        "rule": "possible_wording_assertion",
+        "reason": "subject_holds_file_contents"
+      },
+      {
+        "path": "scripts/tests/owner-explain.tests.ps1",
+        "line": 176,
+        "rule": "possible_wording_assertion",
+        "reason": "subject_holds_file_contents"
+      },
+      {
+        "path": "scripts/tests/owner-explain.tests.ps1",
+        "line": 177,
+        "rule": "possible_wording_assertion",
+        "reason": "subject_holds_file_contents"
+      },
+      {
+        "path": "scripts/tests/owner-explain.tests.ps1",
+        "line": 178,
+        "rule": "possible_wording_assertion",
+        "reason": "subject_holds_file_contents"
+      },
+      {
+        "path": "scripts/tests/owner-explain.tests.ps1",
+        "line": 192,
+        "rule": "possible_wording_assertion",
+        "reason": "subject_holds_file_contents"
+      }
+    ],
+    "skipped": []
+  }
+}
