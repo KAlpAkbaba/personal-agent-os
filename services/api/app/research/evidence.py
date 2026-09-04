@@ -157,9 +157,17 @@ class EvidenceRecord:
         observed value class, which the caller quarantines - it never becomes a ValueError
         that fails a whole research job (owner incident, 2026-09-04).
         """
-        from app.research.contracts import ENTITY_EVIDENCE_ITEM, require_number, require_text
+        from app.research.contracts import (
+            ENTITY_EVIDENCE_ITEM,
+            require_number,
+            require_text,
+        )
+        from app.research.contracts import (
+            schema as entity_schema,
+        )
 
         entity = ENTITY_EVIDENCE_ITEM
+        item_schema = entity_schema(ENTITY_EVIDENCE_ITEM)
 
         def text(field_name: str, default: str = "") -> str:
             return require_text(
@@ -177,8 +185,14 @@ class EvidenceRecord:
             url=url,
             title=text("title"),
             excerpt=text("excerpt"),
-            fetched_at=datetime.fromisoformat(str(data["fetched_at"])),
-            extraction_method=str(data["extraction_method"]),
+            fetched_at=datetime.fromisoformat(
+                str(item_schema.read(data, "fetched_at", entity_id=url, stage=stage)).replace(
+                    "Z", "+00:00"
+                )
+            ),
+            extraction_method=str(
+                item_schema.read(data, "extraction_method", entity_id=url, stage=stage)
+            ),
             source_class=text("source_class", "unknown"),
             query=str(data.get("query", "")),
             rank=int(number("rank", 0)),

@@ -34,7 +34,7 @@ from app.logging import get_logger, trace_id_var
 from app.research import runs_service
 from app.research.browser_gateway import SearchEvidence
 from app.research.browser_workflow import BrowserResearchRequest, BrowserResearchWorkflow
-from app.research.contracts import MIN_VALID_EVIDENCE
+from app.research.contracts import MIN_VALID_EVIDENCE, SCHEMAS
 from app.research.models import STAGE_CANCELLED, STAGE_FAILED, STAGE_PLANNED, ResearchRunRow
 
 logger = get_logger("app.research.routes")
@@ -217,7 +217,9 @@ async def create_research(request: Request, body: CreateResearchRequest) -> JSON
 #: lower number, which is the signal that one release is needed.
 #: 1 - DuckDuckGo default provider, per-request search_provider (2026-09-04)
 #: 2 - typed field contracts + per-candidate quarantine (ADR-0050 item 20, 2026-09-04)
-RESEARCH_POLICY_VERSION = 2
+#: 3 - named, versioned entity schemas: required/optional/derived fields, per-item quarantine
+#:     for statements and detail sections (ADR-0050 item 21, 2026-09-04)
+RESEARCH_POLICY_VERSION = 3
 
 
 @router.get("/policy")
@@ -246,6 +248,7 @@ async def get_research_policy(request: Request) -> dict[str, Any]:
             "typed_fields": True,
             "quarantine": "invalid_evidence_contract",
             "min_valid_evidence": MIN_VALID_EVIDENCE,
+            "schemas": {name: entity.version for name, entity in sorted(SCHEMAS.items())},
         },
         "verification_timeout_policies": ["fallback", "fail"],
         "modes": ["interactive", "unattended"],

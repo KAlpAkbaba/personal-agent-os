@@ -266,9 +266,25 @@ def _payload(**overrides):
     return base
 
 
-def test_parse_synthesis_response_rejects_non_string_executive_summary() -> None:
-    with pytest.raises(TypeError):
+def test_parse_synthesis_response_rejects_a_response_without_a_usable_summary() -> None:
+    """The response's own required field: a model that returns no usable executive summary has
+    not answered at all, so this is fatal for the response (the activity then falls back to the
+    deterministic provider) rather than quarantinable."""
+    from app.research.contracts import ContractViolation
+
+    with pytest.raises(ContractViolation) as excinfo:
         parse_synthesis_response(_payload(executive_summary=12345))
+    detail = excinfo.value.as_dict()
+    assert detail["entity_type"] == "synthesis_response"
+    assert detail["field"] == "executive_summary"
+    assert detail["producer"] == "synthesis_provider"
+    assert detail["schema_version"] == 1
+
+    with pytest.raises(ContractViolation) as missing:
+        payload = _payload()
+        del payload["executive_summary"]
+        parse_synthesis_response(payload)
+    assert missing.value.as_dict()["reason"] == "missing_required_field"
 
 
 def test_parse_synthesis_response_quarantines_a_finding_with_a_non_string_title() -> None:
@@ -287,12 +303,17 @@ def test_parse_synthesis_response_quarantines_a_finding_with_a_non_string_title(
     assert entry["error_class"] == "invalid_evidence_contract"
 
 
-def test_parse_synthesis_response_rejects_non_string_statement_text() -> None:
+def test_parse_synthesis_response_quarantines_a_statement_with_unusable_text() -> None:
     payload = _payload(
-        why_it_matters=[{"text": None, "label": "model_inference", "evidence_ids": []}]
+        why_it_matters=[
+            {"text": None, "label": "model_inference", "evidence_ids": []},
+            {"text": "geçerli", "label": "model_inference", "evidence_ids": []},
+        ]
     )
-    with pytest.raises(TypeError):
-        parse_synthesis_response(payload)
+    result = parse_synthesis_response(payload)
+    assert [s.text for s in result.why_it_matters] == ["geçerli"]
+    assert result.quarantined[0]["field"] == "text"
+    assert result.quarantined[0]["entity_type"] == "statement"
 
 
 def test_parse_synthesis_response_truncates_overlong_title_and_records_it() -> None:
@@ -474,3 +495,56 @@ def test_numbers_arriving_in_finding_text_fields_are_quarantined() -> None:
     assert [f.id for f in result.findings] == ["f2"]
     assert result.quarantined[0]["field"] == "title"
     assert result.quarantined[0]["reason"] == "number_is_not_text"
+
+
+def test_a_statement_without_its_label_is_quarantined_with_full_identification() -> None:
+    """The exact shape of the second owner incident (2026-09-04, after policy v2): the model
+    returned a statement with no ``label`` and the pipeline did data["label"], raising
+    KeyError('label') mid-run. The report now keeps the rest and the reason names the entity
+    type, the id, the field, the stage, the producer and the schema version."""
+    payload = _payload(
+        why_it_matters=[
+            {"text": "etiketsiz"},
+            {"text": "etiketli", "label": "model_inference"},
+        ],
+        details=[{"heading": "başlık", "statements": [{"text": "yine etiketsiz"}]}],
+    )
+    result = parse_synthesis_response(payload)
+
+    assert [s.text for s in result.why_it_matters] == ["etiketli"]
+    assert result.details[0].heading == "başlık"
+    assert result.details[0].statements == ()
+    assert len(result.quarantined) == 2
+    first = result.quarantined[0]
+    assert first["entity_type"] == "statement"
+    assert first["entity_id"] == "why_it_matters[0]"
+    assert first["field"] == "label"
+    assert first["stage"] == "synthesizing"
+    assert first["producer"] == "synthesis_provider"
+    assert first["schema_version"] == 1
+    assert first["reason"] == "missing_required_field"
+    assert result.quarantined[1]["entity_id"] == "details[0].statements[0]"
+
+
+def test_a_statement_label_outside_the_taxonomy_is_quarantined() -> None:
+    payload = _payload(why_it_matters=[{"text": "x", "label": "önemli"}])
+    result = parse_synthesis_response(payload)
+    assert result.why_it_matters == ()
+    assert result.quarantined[0]["reason"] == "not_an_allowed_value"
+
+
+def test_a_detail_section_without_a_heading_is_quarantined_not_fatal() -> None:
+    payload = _payload(details=[{"statements": []}, {"heading": "iyi", "statements": []}])
+    result = parse_synthesis_response(payload)
+    assert [d.heading for d in result.details] == ["iyi"]
+    assert result.quarantined[0]["entity_type"] == "detail_section"
+    assert result.quarantined[0]["field"] == "heading"
+
+
+def test_optional_statement_fields_have_canonical_defaults() -> None:
+    """`evidence_ids` is optional: absent means "no citation", never a KeyError, and never a
+    reason to drop the statement."""
+    payload = _payload(why_it_matters=[{"text": "x", "label": "model_inference"}])
+    result = parse_synthesis_response(payload)
+    assert result.why_it_matters[0].evidence_ids == ()
+    assert result.quarantined == ()

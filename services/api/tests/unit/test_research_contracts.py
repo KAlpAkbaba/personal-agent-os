@@ -15,6 +15,9 @@ candidate structures - and the inverse, a number arriving where a title/snippet 
 
 from __future__ import annotations
 
+import pathlib
+import re
+
 import pytest
 
 from app.research.contracts import (
@@ -261,3 +264,158 @@ def test_insufficient_valid_evidence_reports_counts_and_reasons() -> None:
     assert detail["valid"] == 1 and detail["required"] == 3
     assert detail["quarantined_total"] == 1
     assert "1 contract-valid item(s)" in str(exc)
+
+
+# --------------------------------------------------------------------------- #
+# named, versioned entity schemas (second incident: KeyError('label'))
+# --------------------------------------------------------------------------- #
+
+from app.research.contracts import (  # noqa: E402 - grouped with the schema tests below
+    ENTITY_DETAIL_SECTION,
+    ENTITY_STATEMENT,
+    ENTITY_SYNTHESIS_RESPONSE,
+    FIELD_DERIVED,
+    FIELD_OPTIONAL,
+    FIELD_REQUIRED,
+    SCHEMAS,
+    STATEMENT_LABELS,
+    schema,
+)
+
+
+def test_every_schema_is_named_versioned_and_names_its_producer() -> None:
+    assert SCHEMAS
+    for name, entity_schema in SCHEMAS.items():
+        assert entity_schema.name == name
+        assert entity_schema.version >= 1
+        assert entity_schema.producer in (
+            "search_provider",
+            "device_worker",
+            "synthesis_provider",
+            "cloud_core",
+        )
+        assert entity_schema.fields, f"{name} declares no fields"
+        for spec in entity_schema.fields:
+            assert spec.kind in (FIELD_REQUIRED, FIELD_OPTIONAL, FIELD_DERIVED)
+            assert spec.provenance and len(spec.provenance) > 8
+            if spec.kind == FIELD_OPTIONAL:
+                # canonical nullable/default semantics: an optional field always has one
+                assert spec.default is not None or spec.default is None
+
+
+def test_the_statement_schema_makes_label_required_within_the_taxonomy() -> None:
+    statement = schema(ENTITY_STATEMENT)
+    assert "label" in statement.required_names
+    assert "text" in statement.required_names
+    assert "evidence_ids" in statement.optional_names
+    assert statement.field("label").allowed == STATEMENT_LABELS
+
+
+def test_reading_a_missing_required_field_names_everything_an_operator_needs() -> None:
+    """entity_type, entity_id, field, stage, producer, schema_version - the owner's list."""
+    with pytest.raises(ContractViolation) as excinfo:
+        schema(ENTITY_STATEMENT).validate(
+            {"text": "etiketsiz"}, entity_id="why_it_matters[0]", stage="synthesizing"
+        )
+    detail = excinfo.value.as_dict()
+    assert detail["entity_type"] == "statement"
+    assert detail["entity_id"] == "why_it_matters[0]"
+    assert detail["field"] == "label"
+    assert detail["stage"] == "synthesizing"
+    assert detail["producer"] == "synthesis_provider"
+    assert detail["schema_version"] == 1
+    assert detail["reason"] == "missing_required_field"
+
+
+def test_optional_fields_take_their_declared_default_and_are_never_fatal() -> None:
+    fields = schema(ENTITY_STATEMENT).validate(
+        {"text": "x", "label": "model_inference"}, entity_id="s1"
+    )
+    assert fields["evidence_ids"] == ()
+    assert fields["provenance_note"] is None
+
+
+def test_a_derived_field_is_never_read_from_a_producer_payload() -> None:
+    evidence = schema(ENTITY_EVIDENCE_ITEM)
+    assert "rank" in evidence.derived_names and "score" in evidence.derived_names
+    with pytest.raises(LookupError):
+        evidence.read({"rank": 3}, "rank")
+
+
+def test_an_enum_outside_the_taxonomy_and_a_wrong_type_are_named_precisely() -> None:
+    statement = schema(ENTITY_STATEMENT)
+    with pytest.raises(ContractViolation) as bad_label:
+        statement.validate({"text": "x", "label": "önemli"}, entity_id="s1")
+    assert bad_label.value.as_dict()["reason"] == "not_an_allowed_value"
+
+    with pytest.raises(ContractViolation) as bad_text:
+        statement.validate({"text": 5, "label": "model_inference"}, entity_id="s1")
+    assert bad_text.value.as_dict()["reason"] == "number_is_not_text"
+
+    with pytest.raises(ContractViolation) as not_object:
+        statement.validate("not an object", entity_id="s1")
+    assert not_object.value.as_dict()["reason"] == "not_an_object"
+
+
+def test_the_detail_and_response_schemas_declare_their_required_fields() -> None:
+    assert schema(ENTITY_DETAIL_SECTION).required_names == ("heading",)
+    assert schema(ENTITY_SYNTHESIS_RESPONSE).required_names == ("executive_summary",)
+
+
+def test_the_evidence_schema_covers_every_field_the_device_produces() -> None:
+    evidence = schema(ENTITY_EVIDENCE_ITEM)
+    assert set(evidence.required_names) == {
+        "url",
+        "title",
+        "excerpt",
+        "fetched_at",
+        "extraction_method",
+    }
+    assert "publisher" in evidence.optional_names
+    assert evidence.producer == "device_worker"
+
+
+# --------------------------------------------------------------------------- #
+# schema-boundary audit: no raw indexing of producer-controlled payloads
+# --------------------------------------------------------------------------- #
+
+RESEARCH_PACKAGE = pathlib.Path(__file__).resolve().parents[2] / "app" / "research"
+
+#: Names that hold a payload some OTHER producer controls (a model, the device worker, a
+#: search provider, or a document an older release of this Cloud Core wrote). Indexing one of
+#: these with obj["key"] is how the pipeline used to die on the first missing key.
+UNTRUSTED_PAYLOAD_NAMES = (
+    "data",
+    "payload",
+    "result",
+    "raw",
+    "raw_finding",
+    "raw_detail",
+    "item",
+    "hit",
+    "report_json",
+)
+
+RAW_INDEX = re.compile(
+    r"\b(" + "|".join(UNTRUSTED_PAYLOAD_NAMES) + r")\[" + chr(34) + r"[a-z_]+" + chr(34) + r"\]"
+)
+
+
+def test_no_parse_boundary_indexes_a_producer_payload_by_raw_key() -> None:
+    """The audit the owner asked for: after the KeyError('label') incident, no research module
+    may reach into a producer-controlled payload with a bare key. Every such read goes through
+    the schema layer, which names the entity, the field, the producer and the version instead
+    of failing one missing key at a time in an owner qualification."""
+    offenders: list[str] = []
+    for path in sorted(RESEARCH_PACKAGE.glob("*.py")):
+        if path.name == "contracts.py":
+            continue  # the contract layer itself is where the reads legitimately happen
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            stripped = line.strip()
+            if stripped.startswith("#") or stripped.startswith('"'):
+                continue
+            if RAW_INDEX.search(line):
+                offenders.append(f"{path.name}:{number}: {stripped}")
+    assert not offenders, "raw producer-payload indexing outside the contract layer:\n" + "\n".join(
+        offenders
+    )

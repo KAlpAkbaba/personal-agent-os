@@ -40,6 +40,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 # --------------------------------------------------------------------------- #
@@ -242,7 +243,11 @@ class ContractViolation(Exception):
         entity_id: str | None = None,
         stage: str | None = None,
         reason: str = "type",
+        producer: str | None = None,
+        schema_version: int | None = None,
     ) -> None:
+        self.producer = producer
+        self.schema_version = schema_version
         self.entity = entity
         self.entity_id = entity_id or "unknown"
         self.field_name = field_name
@@ -264,6 +269,9 @@ class ContractViolation(Exception):
     def as_dict(self) -> dict[str, Any]:
         return {
             "error_class": ERROR_INVALID_EVIDENCE_CONTRACT,
+            "entity_type": self.entity,
+            "producer": self.producer,
+            "schema_version": self.schema_version,
             "entity": self.entity,
             "entity_id": self.entity_id,
             "field": self.field_name,
@@ -507,6 +515,21 @@ class QuarantineLedger:
 
 __all__ = [
     "ENTITIES",
+    "ENTITY_DETAIL_SECTION",
+    "ENTITY_STATEMENT",
+    "ENTITY_SYNTHESIS_RESPONSE",
+    "FIELD_DERIVED",
+    "FIELD_OPTIONAL",
+    "FIELD_REQUIRED",
+    "PRODUCER_CLOUD_CORE",
+    "PRODUCER_DEVICE_WORKER",
+    "PRODUCER_SEARCH_PROVIDER",
+    "PRODUCER_SYNTHESIS_PROVIDER",
+    "SCHEMAS",
+    "STATEMENT_LABELS",
+    "EntitySchema",
+    "FieldSpec",
+    "schema",
     "ENTITY_DISCOVERED_RESULT",
     "ENTITY_EVIDENCE_ITEM",
     "ENTITY_FETCHED_SOURCE",
@@ -526,3 +549,348 @@ __all__ = [
     "require_number",
     "require_text",
 ]
+
+
+# --------------------------------------------------------------------------- #
+# named, versioned entity schemas
+#
+# Second owner incident, 2026-09-04 (run after policy v2): the synthesis model returned a
+# statement without its ``label`` and ``_parse_statement`` did ``data["label"]`` - a bare
+# KeyError('label') that ended a run whose discovery, fetching and ranking had all succeeded
+# (evidence=12, quarantined=0). The numeric contract added earlier did not cover it, because
+# the defect was not a numeric field: it was an ABSENT required field on a model-produced
+# object read by raw dictionary indexing.
+#
+# So every research entity now has a named schema with a version and a producer, and every
+# field is one of three kinds:
+#   required - absent or wrong-typed is a ContractViolation naming the field;
+#   optional - may be absent; the schema's default is used, and downstream code must treat it
+#              as nullable (never "it will be there");
+#   derived  - never read from the producer's payload at all; the pipeline computes it (rank,
+#              score, evidence ids). Reading a derived field from untrusted input is a bug.
+# --------------------------------------------------------------------------- #
+
+ENTITY_STATEMENT = "statement"
+ENTITY_DETAIL_SECTION = "detail_section"
+ENTITY_SYNTHESIS_RESPONSE = "synthesis_response"
+
+PRODUCER_SEARCH_PROVIDER = "search_provider"
+PRODUCER_DEVICE_WORKER = "device_worker"
+PRODUCER_SYNTHESIS_PROVIDER = "synthesis_provider"
+PRODUCER_CLOUD_CORE = "cloud_core"
+
+FIELD_REQUIRED = "required"
+FIELD_OPTIONAL = "optional"
+FIELD_DERIVED = "derived"
+
+#: The four statement labels (spec §3). A statement without one has no provenance meaning.
+STATEMENT_LABELS = ("source_fact", "model_inference", "recommendation", "uncertainty")
+
+
+@dataclass(frozen=True, slots=True)
+class FieldSpec:
+    """One field of one entity: its kind, its type, and where a legitimate value comes from."""
+
+    name: str
+    kind: str  # required | optional | derived
+    type_: str  # text | int | float | enum | list | mapping | iso_datetime | any
+    provenance: str
+    allowed: tuple[str, ...] | None = None
+    default: Any = None
+
+    def describe(self) -> str:
+        if self.type_ == "enum" and self.allowed:
+            return "one of " + "/".join(self.allowed)
+        return self.type_
+
+
+@dataclass(frozen=True, slots=True)
+class EntitySchema:
+    """A named, versioned schema for one research entity."""
+
+    name: str
+    version: int
+    producer: str
+    fields: tuple[FieldSpec, ...]
+
+    def field(self, name: str) -> FieldSpec:
+        for spec in self.fields:
+            if spec.name == name:
+                return spec
+        raise LookupError(f"{self.name} v{self.version} declares no field {name!r}")
+
+    @property
+    def required_names(self) -> tuple[str, ...]:
+        return tuple(f.name for f in self.fields if f.kind == FIELD_REQUIRED)
+
+    @property
+    def optional_names(self) -> tuple[str, ...]:
+        return tuple(f.name for f in self.fields if f.kind == FIELD_OPTIONAL)
+
+    @property
+    def derived_names(self) -> tuple[str, ...]:
+        return tuple(f.name for f in self.fields if f.kind == FIELD_DERIVED)
+
+    def read(
+        self,
+        payload: Any,
+        name: str,
+        *,
+        entity_id: str | None = None,
+        stage: str | None = None,
+    ) -> Any:
+        """Read one field through its contract. Raises :class:`ContractViolation`."""
+        spec = self.field(name)
+        if spec.kind == FIELD_DERIVED:  # pragma: no cover - a caller bug, covered by tests
+            raise LookupError(
+                f"{self.name}.{name} is derived: the pipeline computes it, it is never read "
+                "from a producer's payload"
+            )
+        if not isinstance(payload, dict):
+            raise ContractViolation(
+                entity=self.name,
+                field_name=name,
+                expected="an object carrying " + name,
+                observed=payload,
+                entity_id=entity_id,
+                stage=stage,
+                reason="not_an_object",
+                producer=self.producer,
+                schema_version=self.version,
+            )
+        present = name in payload
+        value = payload.get(name)
+        if not present or value is None:
+            if spec.kind == FIELD_REQUIRED:
+                raise ContractViolation(
+                    entity=self.name,
+                    field_name=name,
+                    expected=spec.describe(),
+                    observed=_MISSING if not present else None,
+                    entity_id=entity_id,
+                    stage=stage,
+                    reason="missing_required_field",
+                    producer=self.producer,
+                    schema_version=self.version,
+                )
+            return spec.default
+        return self._coerce(value, spec, entity_id=entity_id, stage=stage)
+
+    def _coerce(
+        self, value: Any, spec: FieldSpec, *, entity_id: str | None, stage: str | None
+    ) -> Any:
+        def violation(reason: str) -> ContractViolation:
+            return ContractViolation(
+                entity=self.name,
+                field_name=spec.name,
+                expected=spec.describe(),
+                observed=value,
+                entity_id=entity_id,
+                stage=stage,
+                reason=reason,
+                producer=self.producer,
+                schema_version=self.version,
+            )
+
+        if spec.type_ == "text":
+            if isinstance(value, str):
+                return value
+            raise violation(
+                "number_is_not_text"
+                if isinstance(value, (int, float)) and not isinstance(value, bool)
+                else "wrong_type"
+            )
+        if spec.type_ == "enum":
+            if not isinstance(value, str):
+                raise violation("wrong_type")
+            if spec.allowed and value not in spec.allowed:
+                raise violation("not_an_allowed_value")
+            return value
+        if spec.type_ in ("int", "float"):
+            return require_number(value, self.name, spec.name, entity_id=entity_id, stage=stage)
+        if spec.type_ == "list":
+            if isinstance(value, (list, tuple)):
+                return list(value)
+            raise violation("wrong_type")
+        if spec.type_ == "mapping":
+            if isinstance(value, dict):
+                return value
+            raise violation("wrong_type")
+        if spec.type_ == "iso_datetime":
+            if not isinstance(value, str):
+                raise violation("wrong_type")
+            try:
+                datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                raise violation("not_an_iso_datetime") from None
+            return value
+        return value
+
+    def validate(
+        self, payload: Any, *, entity_id: str | None = None, stage: str | None = None
+    ) -> dict[str, Any]:
+        """Every declared non-derived field, read through its contract."""
+        out: dict[str, Any] = {}
+        for spec in self.fields:
+            if spec.kind == FIELD_DERIVED:
+                continue
+            out[spec.name] = self.read(payload, spec.name, entity_id=entity_id, stage=stage)
+        return out
+
+
+def _field(name: str, kind: str, type_: str, provenance: str, **kwargs: Any) -> FieldSpec:
+    return FieldSpec(name=name, kind=kind, type_=type_, provenance=provenance, **kwargs)
+
+
+SCHEMAS: dict[str, EntitySchema] = {
+    ENTITY_DISCOVERED_RESULT: EntitySchema(
+        name=ENTITY_DISCOVERED_RESULT,
+        version=1,
+        producer=PRODUCER_SEARCH_PROVIDER,
+        fields=(
+            _field("url", FIELD_REQUIRED, "text", "the search provider's organic result link"),
+            _field("title", FIELD_OPTIONAL, "text", "the result's link text", default=""),
+            _field("snippet", FIELD_OPTIONAL, "text", "the provider's summary line", default=""),
+            _field(
+                "published_hint",
+                FIELD_OPTIONAL,
+                "text",
+                "a relative date the provider showed",
+                default=None,
+            ),
+            _field(
+                "rank",
+                FIELD_OPTIONAL,
+                "int",
+                "position in the organic list (1-based)",
+                default=None,
+            ),
+        ),
+    ),
+    ENTITY_EVIDENCE_ITEM: EntitySchema(
+        name=ENTITY_EVIDENCE_ITEM,
+        version=1,
+        producer=PRODUCER_DEVICE_WORKER,
+        fields=(
+            _field("url", FIELD_REQUIRED, "text", "the page the device opened"),
+            _field("title", FIELD_REQUIRED, "text", "the page's own title"),
+            _field("excerpt", FIELD_REQUIRED, "text", "extracted page text (never a summary)"),
+            _field("fetched_at", FIELD_REQUIRED, "iso_datetime", "when the device fetched it"),
+            _field(
+                "extraction_method", FIELD_REQUIRED, "text", "how the device extracted the text"
+            ),
+            _field(
+                "source_class",
+                FIELD_OPTIONAL,
+                "text",
+                "official/technical/academic/news/community",
+                default="unknown",
+            ),
+            _field("publisher", FIELD_OPTIONAL, "text", "site or organisation name", default=""),
+            _field(
+                "published_at",
+                FIELD_OPTIONAL,
+                "text",
+                "the page's own publication date",
+                default=None,
+            ),
+            _field("rank", FIELD_DERIVED, "int", "assigned by dedup_and_rank"),
+            _field("score", FIELD_DERIVED, "float", "computed by dedup_and_rank"),
+            _field("id", FIELD_DERIVED, "text", "assigned by assign_evidence_ids"),
+        ),
+    ),
+    ENTITY_STATEMENT: EntitySchema(
+        name=ENTITY_STATEMENT,
+        version=1,
+        producer=PRODUCER_SYNTHESIS_PROVIDER,
+        fields=(
+            _field("text", FIELD_REQUIRED, "text", "the statement itself"),
+            _field(
+                "label",
+                FIELD_REQUIRED,
+                "enum",
+                "the provenance taxonomy every statement must carry (spec §3); a statement "
+                "without one cannot be attributed and is not publishable",
+                allowed=STATEMENT_LABELS,
+            ),
+            _field(
+                "evidence_ids",
+                FIELD_OPTIONAL,
+                "list",
+                "ids of the evidence it rests on",
+                default=(),
+            ),
+            _field(
+                "provenance_note",
+                FIELD_OPTIONAL,
+                "text",
+                "why a citation was dropped",
+                default=None,
+            ),
+        ),
+    ),
+    ENTITY_FINDING: EntitySchema(
+        name=ENTITY_FINDING,
+        version=1,
+        producer=PRODUCER_SYNTHESIS_PROVIDER,
+        fields=(
+            _field("id", FIELD_REQUIRED, "text", "the provider's own id for the finding"),
+            _field("title", FIELD_REQUIRED, "text", "the finding's headline"),
+            _field("summary", FIELD_REQUIRED, "text", "what happened"),
+            _field("why_it_matters", FIELD_REQUIRED, "text", "why the owner should care"),
+            _field("importance", FIELD_REQUIRED, "int", "the provider's own 1..5 rating"),
+            _field(
+                "label", FIELD_REQUIRED, "enum", "provenance taxonomy", allowed=STATEMENT_LABELS
+            ),
+            _field(
+                "evidence_ids",
+                FIELD_OPTIONAL,
+                "list",
+                "ids of the evidence it rests on",
+                default=(),
+            ),
+            _field(
+                "first_seen",
+                FIELD_OPTIONAL,
+                "text",
+                "earliest publication among its sources",
+                default=None,
+            ),
+        ),
+    ),
+    ENTITY_DETAIL_SECTION: EntitySchema(
+        name=ENTITY_DETAIL_SECTION,
+        version=1,
+        producer=PRODUCER_SYNTHESIS_PROVIDER,
+        fields=(
+            _field("heading", FIELD_REQUIRED, "text", "the section heading"),
+            _field(
+                "statements",
+                FIELD_OPTIONAL,
+                "list",
+                "the section's labelled statements",
+                default=(),
+            ),
+        ),
+    ),
+    ENTITY_SYNTHESIS_RESPONSE: EntitySchema(
+        name=ENTITY_SYNTHESIS_RESPONSE,
+        version=1,
+        producer=PRODUCER_SYNTHESIS_PROVIDER,
+        fields=(
+            _field("executive_summary", FIELD_REQUIRED, "text", "the report's opening paragraph"),
+            _field("findings", FIELD_OPTIONAL, "list", "the findings", default=()),
+            _field("why_it_matters", FIELD_OPTIONAL, "list", "labelled statements", default=()),
+            _field("watch_next", FIELD_OPTIONAL, "list", "labelled statements", default=()),
+            _field("details", FIELD_OPTIONAL, "list", "detail sections", default=()),
+            _field("uncertainty", FIELD_OPTIONAL, "list", "labelled statements", default=()),
+        ),
+    ),
+}
+
+
+def schema(name: str) -> EntitySchema:
+    try:
+        return SCHEMAS[name]
+    except KeyError:  # pragma: no cover - caller typo, covered by tests
+        raise LookupError(f"no schema declared for entity {name!r}") from None

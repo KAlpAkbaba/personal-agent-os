@@ -122,47 +122,79 @@ def _transition_task(session, tid: uuid.UUID, status: str, **kwargs: Any) -> Non
         logger.debug("browser_research_task_transition_skipped", task_id=str(tid), error=str(exc))
 
 
+def _stored(payload: Any, key: str, *, entity: str, entity_id: str = "") -> Any:
+    """Read a key from a document THIS Cloud Core wrote (a stored report, a plan window).
+
+    Not a model's output, but the same class of boundary: a document written by an older
+    release can lack a key, and a bare ``KeyError`` at that point says nothing about which
+    entity or field was missing (2026-09-04: KeyError('label') from a model statement). This
+    reports the same structured violation, with the producer named as this Cloud Core.
+    """
+    from app.research.contracts import PRODUCER_CLOUD_CORE, ContractViolation
+
+    if not isinstance(payload, dict) or key not in payload:
+        raise ContractViolation(
+            entity=entity,
+            field_name=key,
+            expected="a stored " + entity + " carrying " + key,
+            observed=payload if not isinstance(payload, dict) else _MISSING_KEY,
+            entity_id=entity_id or entity,
+            stage="composing",
+            reason="missing_required_field",
+            producer=PRODUCER_CLOUD_CORE,
+            schema_version=1,
+        )
+    return payload[key]
+
+
+_MISSING_KEY = object()
+
+
 def _report_from_json(report_json: dict[str, Any]) -> ResearchReport:
     def statement(d: dict[str, Any]) -> Statement:
         return Statement(
-            text=d["text"],
-            label=d["label"],
+            text=_stored(d, "text", entity="statement"),
+            label=_stored(d, "label", entity="statement"),
             evidence_ids=tuple(d.get("evidence_ids", ())),
             provenance_note=d.get("provenance_note"),
         )
 
     def finding(d: dict[str, Any]) -> Finding:
         return Finding(
-            id=d["id"],
-            title=d["title"],
-            summary=d["summary"],
-            why_it_matters=d["why_it_matters"],
-            importance=d["importance"],
-            label=d["label"],
+            id=_stored(d, "id", entity="finding"),
+            title=_stored(d, "title", entity="finding"),
+            summary=_stored(d, "summary", entity="finding"),
+            why_it_matters=_stored(d, "why_it_matters", entity="finding"),
+            importance=_stored(d, "importance", entity="finding"),
+            label=_stored(d, "label", entity="finding", entity_id=str(d.get("id", ""))),
             evidence_ids=tuple(d.get("evidence_ids", ())),
             first_seen=d.get("first_seen"),
             provenance_note=d.get("provenance_note"),
         )
 
     return ResearchReport(
-        task_id=report_json["task_id"],
-        topic=report_json["topic"],
-        window=ReportWindow(**report_json["window"]),
-        generated_at=report_json["generated_at"],
-        synthesis_provider=report_json["synthesis_provider"],
-        executive_summary=report_json["executive_summary"],
-        findings=tuple(finding(f) for f in report_json["findings"]),
-        why_it_matters=tuple(statement(s) for s in report_json["why_it_matters"]),
-        watch_next=tuple(statement(s) for s in report_json["watch_next"]),
+        task_id=_stored(report_json, "task_id", entity="report"),
+        topic=_stored(report_json, "topic", entity="report"),
+        window=ReportWindow(**_stored(report_json, "window", entity="report")),
+        generated_at=_stored(report_json, "generated_at", entity="report"),
+        synthesis_provider=_stored(report_json, "synthesis_provider", entity="report"),
+        executive_summary=_stored(report_json, "executive_summary", entity="report"),
+        findings=tuple(finding(f) for f in _stored(report_json, "findings", entity="report")),
+        why_it_matters=tuple(
+            statement(s) for s in _stored(report_json, "why_it_matters", entity="report")
+        ),
+        watch_next=tuple(statement(s) for s in _stored(report_json, "watch_next", entity="report")),
         details=tuple(
             DetailSection(
                 heading=d["heading"], statements=tuple(statement(s) for s in d["statements"])
             )
-            for d in report_json["details"]
+            for d in _stored(report_json, "details", entity="report")
         ),
-        uncertainty=tuple(statement(s) for s in report_json["uncertainty"]),
-        sources=tuple(SourceItem(**s) for s in report_json["sources"]),
-        stats=ReportStats(**report_json["stats"]),
+        uncertainty=tuple(
+            statement(s) for s in _stored(report_json, "uncertainty", entity="report")
+        ),
+        sources=tuple(SourceItem(**s) for s in _stored(report_json, "sources", entity="report")),
+        stats=ReportStats(**_stored(report_json, "stats", entity="report")),
     )
 
 
@@ -1050,8 +1082,8 @@ def remember_activity(task_id: str, topic: str) -> str | None:
             ],
             "sources": [
                 {
-                    "url": s["url"],
-                    "title": s["title"],
+                    "url": _stored(s, "url", entity="report_source"),
+                    "title": _stored(s, "title", entity="report_source"),
                     "publisher": s["publisher"],
                     "published_at": s["published_at"],
                 }

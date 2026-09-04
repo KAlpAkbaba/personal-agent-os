@@ -143,6 +143,17 @@ undelivered commands to connected devices every sweep interval. The Temporal wor
 `off` in tests, `external` = the existing `python -m app.worker`), because the production
 compose has no worker container and the browser path needs the broker runtime anyway.
 
+**Entity schemas (2026-09-04).** Every research entity has a named, versioned schema in
+`app/research/contracts.py` with its producer named: `discovered_result` (search provider),
+`evidence_item` (device worker), `statement`, `finding`, `detail_section`, `synthesis_response`
+(synthesis provider). Fields are required, optional (with a canonical default, treated as
+nullable downstream) or derived (computed by the pipeline, never read from a producer payload).
+A violation reports `entity_type`, `entity_id`, `field`, `stage`, `producer` and
+`schema_version`. `statement.label` is required and must be one of the four provenance labels.
+A malformed statement, detail section or finding is quarantined individually; only a missing
+`executive_summary` invalidates the whole response, and the activity then falls back to the
+deterministic provider. `GET /v1/research/policy` reports the schema registry and its versions.
+
 **Typed field contracts (2026-09-04).** Every numeric field the pipeline reads from data it
 did not compute is declared in `app/research/contracts.py` with a name, a type, a valid range
 and a provenance sentence, and is validated before use: `discovered_result.rank`,

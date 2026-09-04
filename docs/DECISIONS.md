@@ -2777,3 +2777,31 @@ embedded Temporal worker). Facts and decisions that were not in the design:
     output violates the contract is replaced for that run by the deterministic provider, which
     builds findings only from validated evidence - recorded, never silent. Research policy
     version 2 carries the evidence contract, so exactly one Cloud Core release ships it.
+
+21. **Named, versioned entity schemas; no research boundary reads a producer payload by raw key**
+    (2026-09-04, the run after policy v2: DuckDuckGo discovery found 238 candidates, 12 were
+    fetched and ranked with zero quarantined, and the job then died with `KeyError: 'label'`).
+    Proven cause: `synthesis._parse_statement` did `data["label"]` and the synthesis model had
+    returned a statement without one. `label` belongs to the synthesis output's labelled-statement
+    taxonomy (spec §3), and it is REQUIRED - a statement without its provenance label cannot be
+    attributed and is not publishable - but it is produced by a model, so it must be validated at
+    the boundary rather than assumed.
+
+    Decisions: (a) every research entity has a named, versioned schema in
+    `app/research/contracts.py` (`discovered_result`, `evidence_item`, `statement`, `finding`,
+    `detail_section`, `synthesis_response`), each naming its producer (search provider, device
+    worker, synthesis provider, this Cloud Core); (b) every field is declared **required**
+    (absent is a violation), **optional** (absent takes the schema's canonical default, and
+    downstream code treats it as nullable) or **derived** (never read from a producer payload at
+    all - rank, score and evidence ids are computed by the pipeline, and reading one from input
+    is a programming error the schema refuses); (c) a violation reports `entity_type`,
+    `entity_id`, `field`, `stage`, `producer` and `schema_version` instead of a bare KeyError;
+    (d) a malformed statement, detail section or finding is quarantined individually and the
+    rest of the report is kept - only the response's own required `executive_summary` is fatal,
+    and even then the activity falls back to the deterministic provider; (e) the audit the
+    incident demanded: a test scans every research module and fails if any producer-controlled
+    payload is indexed by raw key, which moved the remaining boundaries (the model providers'
+    HTTP envelopes, this Cloud Core's own stored reports, the device's evidence rows) into the
+    contract layer instead of waiting for each missing key to fail one owner run at a time.
+    Research policy version 3 carries the schema registry, so exactly one Cloud Core release
+    ships it; the Windows worker is untouched (0.4.0 already matches).

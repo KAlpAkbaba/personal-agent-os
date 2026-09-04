@@ -25,11 +25,13 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from app.research.contracts import (
+    ENTITY_DETAIL_SECTION,
     ENTITY_FINDING,
+    ENTITY_STATEMENT,
+    ENTITY_SYNTHESIS_RESPONSE,
     ContractViolation,
     QuarantineLedger,
-    require_number,
-    require_text,
+    schema,
 )
 from app.research.evidence import (
     STATEMENT_LABEL_MODEL_INFERENCE,
@@ -322,67 +324,102 @@ def _capped(value: str, max_chars: int, counter: list[int]) -> str:
     return value
 
 
-def _parse_statement(data: dict[str, Any], counter: list[int]) -> Statement:
-    text = _capped(_require_str(data["text"], field_name="text"), BODY_MAX_CHARS, counter)
-    return Statement(
-        text=text,
-        label=_require_str(data["label"], field_name="label"),
-        evidence_ids=tuple(str(x) for x in data.get("evidence_ids", ())),
-    )
+def _provider_envelope_text(payload: Any, path: tuple[Any, ...], *, provider: str) -> str:
+    """Walk a model provider's HTTP envelope by a declared path, naming what is missing.
 
-
-def _parse_finding(
-    data: dict[str, Any], counter: list[int], *, stage: str = "synthesizing"
-) -> Finding:
-    """One finding, every field validated against its declared contract.
-
-    ``importance`` is a rated number (1..5) and nothing else: the 2026-09-04 incident was a
-    model answering it with a Turkish prose sentence, which ``int()`` turned into a
-    ``ValueError`` that failed the whole job. The text fields are checked in the same pass, so
-    a number arriving where a title belongs is refused just as loudly (contracts.require_text).
+    The provider controls this shape as much as it controls the JSON inside it. Reaching in
+    into the envelope by hand fails as an unexplained KeyError or IndexError the moment an API
+    answers with an error body or a changed envelope - the same class of defect as the missing
+    statement label (2026-09-04).
     """
-    finding_id = str(data.get("id", "")) or "unidentified-finding"
-    title = _capped(
-        require_text(data.get("title"), ENTITY_FINDING, "title", entity_id=finding_id, stage=stage),
-        TITLE_MAX_CHARS,
-        counter,
+    from app.research.contracts import (
+        ENTITY_SYNTHESIS_RESPONSE,
+        PRODUCER_SYNTHESIS_PROVIDER,
+        ContractViolation,
     )
-    summary = _capped(
-        require_text(
-            data.get("summary"), ENTITY_FINDING, "summary", entity_id=finding_id, stage=stage
-        ),
-        BODY_MAX_CHARS,
-        counter,
+
+    cursor: Any = payload
+    for step in path:
+        ok = (
+            isinstance(cursor, dict) and step in cursor
+            if isinstance(step, str)
+            else isinstance(cursor, (list, tuple)) and len(cursor) > int(step)
+        )
+        if not ok:
+            raise ContractViolation(
+                entity=ENTITY_SYNTHESIS_RESPONSE,
+                field_name=".".join(str(part) for part in path),
+                expected="the provider's response envelope",
+                observed=cursor,
+                entity_id=provider,
+                stage="synthesizing",
+                reason="missing_envelope_field",
+                producer=PRODUCER_SYNTHESIS_PROVIDER,
+                schema_version=1,
+            )
+        cursor = cursor[step]
+    return str(cursor)
+
+
+def _parse_statement(
+    data: Any, counter: list[int], *, entity_id: str = "statement", stage: str = "synthesizing"
+) -> Statement:
+    """One labelled statement, read through its named schema.
+
+    ``label`` is REQUIRED (spec §3: a statement without its provenance label cannot be
+    attributed and is not publishable). The 2026-09-04 incident was a model omitting it and a
+    a bare dictionary index raising KeyError('label') mid-run; the schema now names the entity,
+    the field, the producer and the schema version instead.
+    """
+    fields = schema(ENTITY_STATEMENT).validate(data, entity_id=entity_id, stage=stage)
+    return Statement(
+        text=_capped(fields["text"], BODY_MAX_CHARS, counter),
+        label=fields["label"],
+        evidence_ids=tuple(str(x) for x in (fields["evidence_ids"] or ())),
     )
-    why_it_matters = _capped(
-        require_text(
-            data.get("why_it_matters"),
-            ENTITY_FINDING,
-            "why_it_matters",
-            entity_id=finding_id,
-            stage=stage,
-        ),
-        BODY_MAX_CHARS,
-        counter,
-    )
-    importance = require_number(
-        data.get("importance", None),
-        ENTITY_FINDING,
-        "importance",
-        entity_id=finding_id,
-        stage=stage,
-    )
+
+
+def _parse_statements(
+    raw: Any, counter: list[int], quarantine: QuarantineLedger, *, group: str
+) -> tuple[Statement, ...]:
+    """Every statement of one group, each validated on its own.
+
+    Fault isolation: a statement that breaks its contract is quarantined with its reason and
+    the rest of the group is kept - one malformed statement never ends a research run.
+    """
+    statements: list[Statement] = []
+    for index, item in enumerate(raw or ()):
+        entity_id = f"{group}[{index}]"
+        try:
+            statements.append(
+                _parse_statement(item, counter, entity_id=entity_id, stage=quarantine.stage)
+            )
+        except ContractViolation as violation:
+            quarantine.record(violation)
+    return tuple(statements)
+
+
+def _parse_finding(data: Any, counter: list[int], *, stage: str = "synthesizing") -> Finding:
+    """One finding, every field read through the named finding schema.
+
+    ``importance`` is a rated number (1..5): the first 2026-09-04 incident was a model
+    answering it with a Turkish prose sentence. ``label`` is one of the four provenance
+    labels. Text fields refuse numbers, so a positional mix-up is caught here rather than
+    three stages later.
+    """
+    finding_schema = schema(ENTITY_FINDING)
+    finding_id = str(data.get("id", "")) if isinstance(data, dict) else ""
+    entity_id = finding_id or "unidentified-finding"
+    fields = finding_schema.validate(data, entity_id=entity_id, stage=stage)
     return Finding(
-        id=finding_id,
-        title=title,
-        summary=summary,
-        why_it_matters=why_it_matters,
-        importance=int(importance),
-        label=require_text(
-            data.get("label"), ENTITY_FINDING, "label", entity_id=finding_id, stage=stage
-        ),
-        evidence_ids=tuple(str(x) for x in data.get("evidence_ids", ())),
-        first_seen=data.get("first_seen"),
+        id=str(fields["id"]),
+        title=_capped(fields["title"], TITLE_MAX_CHARS, counter),
+        summary=_capped(fields["summary"], BODY_MAX_CHARS, counter),
+        why_it_matters=_capped(fields["why_it_matters"], BODY_MAX_CHARS, counter),
+        importance=int(fields["importance"]),
+        label=fields["label"],
+        evidence_ids=tuple(str(x) for x in (fields["evidence_ids"] or ())),
+        first_seen=fields["first_seen"],
     )
 
 
@@ -406,36 +443,54 @@ def parse_synthesis_response(payload: dict[str, Any]) -> SynthesisResult:
       rule ``DeterministicSynthesisProvider`` already follows.
     """
     counter = [0]
-    executive_summary = _capped(
-        _require_str(payload["executive_summary"], field_name="executive_summary"),
-        EXECUTIVE_SUMMARY_MAX_CHARS,
-        counter,
-    )
-    # Fault isolation (owner requirement, 2026-09-04): one malformed finding is quarantined
-    # with its reason, not allowed to kill a run whose discovery, fetching and ranking all
-    # succeeded. The caller decides whether what is left is enough (InsufficientValidEvidence).
     quarantine = QuarantineLedger(stage="synthesizing")
+    response_schema = schema(ENTITY_SYNTHESIS_RESPONSE)
+    # The response's own required field. A model that returns no executive summary has not
+    # answered at all, so this one is fatal for the response (the caller falls back to the
+    # deterministic provider) rather than quarantinable.
+    response = response_schema.validate(payload, entity_id="synthesis_response")
+    executive_summary = _capped(response["executive_summary"], EXECUTIVE_SUMMARY_MAX_CHARS, counter)
+    # Fault isolation (owner requirement, 2026-09-04): one malformed finding or statement is
+    # quarantined with its reason, not allowed to kill a run whose discovery, fetching and
+    # ranking all succeeded. The caller decides whether what is left is enough.
     findings = []
-    for raw_finding in payload.get("findings", []):
-        if not isinstance(raw_finding, dict):
-            quarantine.record_reason(
-                entity=ENTITY_FINDING, entity_id="unidentified-finding", reason="not_an_object"
-            )
-            continue
+    for index, raw_finding in enumerate(response["findings"] or ()):
         try:
             findings.append(_parse_finding(raw_finding, counter))
         except ContractViolation as violation:
+            if violation.entity_id in ("", "unidentified-finding"):
+                violation.entity_id = f"findings[{index}]"
             quarantine.record(violation)
-    why_it_matters = tuple(_parse_statement(s, counter) for s in payload.get("why_it_matters", []))
-    watch_next = tuple(_parse_statement(s, counter) for s in payload.get("watch_next", []))
-    details = tuple(
-        DetailSection(
-            heading=str(d["heading"]),
-            statements=tuple(_parse_statement(s, counter) for s in d.get("statements", [])),
-        )
-        for d in payload.get("details", [])
+    why_it_matters = _parse_statements(
+        response["why_it_matters"], counter, quarantine, group="why_it_matters"
     )
-    uncertainty = tuple(_parse_statement(s, counter) for s in payload.get("uncertainty", []))
+    watch_next = _parse_statements(response["watch_next"], counter, quarantine, group="watch_next")
+    detail_schema = schema(ENTITY_DETAIL_SECTION)
+    detail_sections: list[DetailSection] = []
+    for index, raw_detail in enumerate(response["details"] or ()):
+        entity_id = f"details[{index}]"
+        try:
+            detail_fields = detail_schema.validate(
+                raw_detail, entity_id=entity_id, stage="synthesizing"
+            )
+        except ContractViolation as violation:
+            quarantine.record(violation)
+            continue
+        detail_sections.append(
+            DetailSection(
+                heading=detail_fields["heading"],
+                statements=_parse_statements(
+                    detail_fields["statements"],
+                    counter,
+                    quarantine,
+                    group=f"{entity_id}.statements",
+                ),
+            )
+        )
+    details = tuple(detail_sections)
+    uncertainty = _parse_statements(
+        response["uncertainty"], counter, quarantine, group="uncertainty"
+    )
 
     findings = list(findings)
     if len(findings) > MAX_FINDINGS:
@@ -604,7 +659,9 @@ class OpenAISynthesisProvider(_HttpJsonSynthesisProvider):
         return "POST", f"{self._base_url}/chat/completions", headers, body
 
     def _extract_json_text(self, payload: Any) -> str:
-        return str(payload["choices"][0]["message"]["content"])
+        return _provider_envelope_text(
+            payload, ("choices", 0, "message", "content"), provider=self.name
+        )
 
 
 class AnthropicSynthesisProvider(_HttpJsonSynthesisProvider):

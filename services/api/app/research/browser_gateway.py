@@ -248,7 +248,7 @@ class SearchEvidence:
         verification = dict(verification) if isinstance(verification, dict) else None
         # Schema 3 keeps the interstitial kind ONLY in the verification block and reports
         # page_kind="waiting" while a handoff is pending; older workers put it at the top level.
-        page_kind = str(result["page_kind"]) if result.get("page_kind") else None
+        page_kind = str(result.get("page_kind")) if result.get("page_kind") else None
         if verification and verification.get("interstitial") and page_kind in (None, "waiting"):
             page_kind = str(verification["interstitial"])
         verification_url = result.get("verification_url") or (
@@ -256,18 +256,18 @@ class SearchEvidence:
         )
         return cls(
             schema_version=schema_version,
-            locale=(str(result["locale"]) if result.get("locale") else None),
+            locale=(str(result.get("locale")) if result.get("locale") else None),
             requested_provider=requested,
             provider=provider,
             fallback=bool(result.get("fallback", provider != requested)),
             fallback_reason=(
-                str(result["fallback_reason"]) if result.get("fallback_reason") else None
+                str(result.get("fallback_reason")) if result.get("fallback_reason") else None
             ),
             query=str(result.get("query") or query),
             result_count=int(result.get("result_count", len(hits))),
             attempts=tuple(a for a in (result.get("attempts") or []) if isinstance(a, dict)),
             state=str(result.get("state") or "ok"),
-            path=(str(result["path"]) if result.get("path") else None),
+            path=(str(result.get("path")) if result.get("path") else None),
             verification_url=(str(verification_url) if verification_url else None),
             page_kind=page_kind,
             verification=verification,

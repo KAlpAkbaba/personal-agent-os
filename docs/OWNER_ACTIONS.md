@@ -253,6 +253,19 @@ your machine:
 
 What it does, in order:
 
+**Your second attempt (2026-09-04) got past the numeric defect and failed on the next one of
+the same family**: a synthesis model returned a statement without its `label`, and the pipeline
+read that key directly, so `KeyError: 'label'` ended a run that had discovered 238 candidates
+and fetched and ranked 12 with nothing quarantined. `label` is the provenance taxonomy every
+statement must carry, so it is genuinely required - but it comes from a model, so it is now
+validated at the boundary. Every research entity has a named, versioned schema; each field is
+required, optional (with a defined default) or derived; a violation names the entity type, the
+id, the field, the stage, the producer and the schema version; and a malformed statement,
+section or finding is quarantined while the rest of the report survives. To stop this being a
+one-missing-key-per-run sequence, a test now scans the whole research package and fails if any
+producer-controlled payload is read by raw key: that audit found and fixed the model providers'
+HTTP envelopes and this Cloud Core's own stored-report reads before you ever ran into them.
+
 **Your first attempt (2026-09-04, task `f6eb5021`) got all the way to ranking**: the Cloud Core
 released, the policy became version 1, DuckDuckGo was the provider, 243 candidates were
 discovered and 12 were fetched and ranked. It then failed on a typed-data defect: the synthesis
@@ -270,7 +283,7 @@ contract, so this rerun performs exactly one Cloud Core release and no Windows a
    no swap, no service restart. If they ever differ incompatibly it stops and prints the one
    update command instead of doing it silently.
 2. **Cloud Core policy.** It asks the Cloud Core for its research policy version. The deployed
-   one is version 1 and this checkout expects 2 (the evidence contract), so it releases the
+   one is version 2 and this checkout expects 3 (the entity schemas), so it releases the
    Cloud Core once (the proven transactional release: build, migrate, recreate the api
    container only, health, rollback on any failure). That is the only deployment in this
    command, and only because the source really changed.
