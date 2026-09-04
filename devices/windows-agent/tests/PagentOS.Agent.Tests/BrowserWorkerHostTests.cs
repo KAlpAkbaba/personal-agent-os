@@ -265,6 +265,13 @@ public sealed class BrowserWorkerHostTests : IDisposable
         Assert.Equal(ErrorClasses.Timeout, ex.ErrorClass);
         Assert.True(ex.Retryable);
         Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(8), $"took {stopwatch.Elapsed}");
+        // The cancel is sent without blocking the timeout answer (so the typed error always
+        // beats the caller's own deadline); it lands shortly after, so wait for it.
+        var cancelDeadline = DateTime.UtcNow.AddSeconds(5);
+        while (host.CancelsSent == 0 && DateTime.UtcNow < cancelDeadline)
+        {
+            await Task.Delay(25);
+        }
         Assert.Equal(1, host.CancelsSent);
 
         // The worker acknowledged the cancel on its stderr, which the host forwards to the

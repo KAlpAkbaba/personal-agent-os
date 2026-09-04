@@ -270,9 +270,13 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            // The request's budget elapsed: tell the worker to stop working on it, then
-            // answer timeout. A late result for this id is dropped by the reader.
-            await SendCancelAsync(worker, requestId).ConfigureAwait(false);
+            // The request's budget elapsed. Tell the worker to stop working on it, but do NOT
+            // wait for that write before answering: the cancel is a second pipe round trip, and
+            // on a loaded machine it can consume the whole headroom this budget reserves below
+            // the caller's own deadline. When that happened the caller timed out first and the
+            // owner saw an untyped "did not answer" instead of this typed one (intermittent CI
+            // failure, 2026-09-04). A late result for this id is dropped by the reader either way.
+            _ = SendCancelAsync(worker, requestId);
             throw new CapabilityException(
                 ErrorClasses.Timeout,
                 $"browser worker did not answer {capability} within {timeout.TotalSeconds:F1} s",

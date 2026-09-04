@@ -437,6 +437,14 @@ public sealed class BrowserDispatchTests : IDisposable
             Assert.True(ex.Retryable);
             // The companion's message, not the service's "did not answer" one.
             Assert.Contains("browser worker did not answer", ex.Message, StringComparison.Ordinal);
+            // The cancel is sent without blocking the answer (so the typed error always beats
+            // the caller's own deadline), so it lands shortly after: wait for it rather than
+            // assuming it has already happened.
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            while (host.CancelsSent == 0 && DateTime.UtcNow < deadline)
+            {
+                await Task.Delay(25);
+            }
             Assert.Equal(1, host.CancelsSent);
         }
         finally
