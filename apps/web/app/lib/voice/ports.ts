@@ -154,6 +154,18 @@ export type SpeechDetectorCalibrationAttempt = {
   retry: 0 | 1;
 };
 
+/**
+ * The local gate's measured level for the onset under evaluation (two-stage
+ * interruption, interruption.ts): the PEAK margin above the gate's open
+ * threshold (floor + open margin + playback margin, learned offsets included)
+ * and the mean spectral score over the onset's frames. Numbers only.
+ */
+export type OnsetLevel = {
+  marginDb: number;
+  spectralScore: number;
+  frames: number;
+};
+
 /** Onset accounting handed to the controller with a local speech start (ADR-0047 §1). */
 export type SpeechStartDetail = {
   candidateAt: number;
@@ -178,6 +190,12 @@ export interface SpeechDetector {
   onEvidenceLost?(sink: (at: number) => void): Unsubscribe;
   /** Optional: the onset candidate under evaluation right now (provider-first barge-ins use it as the onset). */
   onsetCandidate?(): { candidateAt: number; preRollMs: number } | null;
+  /**
+   * Optional: the level of the onset the gate is evaluating or has opened on;
+   * null when the gate sees no candidate and is closed (the speech never
+   * cleared the calibrated margin). Absent = the detector measures no levels.
+   */
+  onsetLevel?(): OnsetLevel | null;
 }
 
 export interface NetworkMonitor {

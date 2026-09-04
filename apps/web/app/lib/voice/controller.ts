@@ -17,6 +17,12 @@
  *    0`) — the provider has nothing to cancel and would answer with an error.
  *    Should such a "no active response" cancel error still arrive, it is
  *    benign: counted, reported as `error_class: cancel_noop`, never shown.
+ *    The CLIENT owns interruption (the provider is configured with
+ *    `interrupt_response = false`) through a two-stage policy (interruption.ts):
+ *    a control phrase in any owner transcript stops at once (fast lane); any
+ *    other speech onset only mutes reversibly and becomes a potential barge-in
+ *    that must earn its cancel — stable onset, near-field level from the local
+ *    gate, a plausible word — inside a short window, else playback resumes.
  * 2. End-of-turn with the Turkish hesitation guard: the provider's
  *    `speech_stopped` opens a hold whose length depends on the transcript
  *    tail; speech inside the hold is a continuation, not a new turn, and a
@@ -51,9 +57,19 @@ import type {
 import { MAX_EVENT_TEXT_CHARS, MAX_SUMMARY_CHARS } from "./contract";
 import { EventReporter, numbersOnly, type Scheduler, realScheduler } from "./events";
 import { HesitationGuard, type HesitationGuardConfig } from "./hesitation";
+import {
+  BARGE_IN_CONFIRM_WINDOW_MS,
+  BARGE_IN_STABLE_ONSET_MS,
+  FALSE_INTERRUPTION_WINDOW_MS,
+  findControlPhrase,
+  hasPlausibleWord,
+  isNearField,
+  strongerLevel,
+} from "./interruption";
 import type {
   Microphone,
   NetworkMonitor,
+  OnsetLevel,
   Playback,
   SpeechDetector,
   SpeechDetectorCalibration,
@@ -117,6 +133,19 @@ export type MicMetrics = {
   echo_residual_db: number | null;
   /** provider "no active response" answers to a cancel — benign, never an error state */
   cancel_noop_errors: number;
+  // Two-stage interruption (interruption.ts), the funnel from onset to cancel:
+  /** every owner-speech onset the client processed (local gate or provider VAD), any state */
+  speech_detected: number;
+  /** onsets while the assistant was speaking: muted reversibly, evidence awaited */
+  potential_barge_in: number;
+  /** potentials that earned the cancel (stable, near-field, a plausible word) */
+  accepted_owner_interruption: number;
+  /** potentials whose window elapsed (or ended as a burst): mute reverted, nothing cancelled */
+  rejected_background_speech: number;
+  /** control phrases ("dur", "bekle", …) that stopped the assistant through the fast lane */
+  explicit_stop_command: number;
+  /** accepted interruptions followed by no final owner utterance within the watch window */
+  false_interruption: number;
 };
 
 /** The last measured decomposition of each latency (ADR-0047), for the diagnostics view. */
@@ -134,6 +163,8 @@ export type LatencyDetail = {
     anomaly: number;
     /** 1 when a provider response was active and cancelled; 0 when only draining audio was stopped */
     provider_cancel: number;
+    /** which lane stopped the assistant: 1 explicit control phrase, 2 confirmed conversational barge-in, 0 hesitation resume */
+    lane?: number;
   };
   first_audio?: { basis: number; response_created_ms?: number; first_delta_ms?: number; playback_ms?: number };
 };
@@ -292,6 +323,38 @@ type UplinkTracking = {
 
 type EarlyMute = { at: number; decisionAt: number; gainZeroAt: number | null; outputLatencyMs: number | null; candidateAt: number };
 
+/** The onset that opened the current turn — what a fast-lane stop measures its latency from. */
+type TurnOnset = {
+  turn: number;
+  at: number;
+  source: "local" | "provider";
+  detail: SpeechStartDetail | undefined;
+  onsetKnown: boolean;
+};
+
+/**
+ * A speech onset while the assistant was speaking (interruption.ts lane B):
+ * muted reversibly, waiting inside its window for the evidence that makes it
+ * an owner interruption rather than someone else in the room.
+ */
+type PendingInterruption = TurnOnset & {
+  /** the speech has lasted BARGE_IN_STABLE_ONSET_MS (timer or an end event past it) */
+  stable: boolean;
+  /** an end event (provider stop / local close) has been seen */
+  ended: boolean;
+  /** the detector can measure onset levels at all (else the rule cannot block) */
+  levelKnown: boolean;
+  /** the strongest level seen for this onset */
+  level: OnsetLevel | null;
+  /** a provisional/final transcript carried a non-filler word */
+  hadWord: boolean;
+  stableTimer: unknown;
+  windowTimer: unknown;
+};
+
+/** `barge_in_start.lane`: how the assistant was stopped. */
+export const LANE_CODE = { hesitation_resume: 0, explicit_stop: 1, conversational: 2 } as const;
+
 const SIDEBAND_LOG_MAX = 20;
 const REQUEST_LOG_MAX = 20;
 const DEFAULT_LOCAL_GRACE_MS = 700;
@@ -321,6 +384,12 @@ const EMPTY_MIC_METRICS: MicMetrics = {
   env: null,
   echo_residual_db: null,
   cancel_noop_errors: 0,
+  speech_detected: 0,
+  potential_barge_in: 0,
+  accepted_owner_interruption: 0,
+  rejected_background_speech: 0,
+  explicit_stop_command: 0,
+  false_interruption: 0,
 };
 
 const EMPTY_COUNTERS = {
@@ -331,6 +400,12 @@ const EMPTY_COUNTERS = {
   early_mutes: 0,
   early_mute_reverts: 0,
   cancel_noop_errors: 0,
+  speech_detected: 0,
+  potential_barge_in: 0,
+  accepted_owner_interruption: 0,
+  rejected_background_speech: 0,
+  explicit_stop_command: 0,
+  false_interruption: 0,
 };
 
 /**
@@ -390,10 +465,17 @@ export class VoiceSessionController {
   private playbackConfirmTimer: unknown = null;
   private bargedResponse = false;
   private earlyMute: EarlyMute | null = null;
+  // two-stage interruption (interruption.ts)
+  private pending: PendingInterruption | null = null;
+  private turnOnset: TurnOnset | null = null;
+  /** the turn whose control phrase already stopped the assistant (a final transcript must not stop twice) */
+  private stopHandledTurn: number | null = null;
+  private falseInterruptionTimer: unknown = null;
   /** the assistant's transcript for the CURRENT response only; reset on response_started */
   private assistantBuffer = "";
   /** 1-based count of provider responses this leg saw (`spoken.payload.response_seq`) */
   private responseSeq = 0;
+  private responseTurn = 0;
   /** a `spoken` event went out for the current response (a cut or a completion, never both) */
   private spokenReported = false;
 
@@ -537,6 +619,10 @@ export class VoiceSessionController {
     this.uplink = null;
     this.earlyMute = null;
     this.localCloseAt = null;
+    this.dropPending();
+    this.clearFalseInterruptionWatch();
+    this.turnOnset = null;
+    this.stopHandledTurn = null;
     this.patch({
       state: "creating",
       lastError: null,
@@ -711,6 +797,8 @@ export class VoiceSessionController {
     this.clearReattachTimer();
     this.clearLocalGraceTimer();
     this.clearPlaybackConfirmTimer();
+    this.dropPending();
+    this.clearFalseInterruptionWatch();
     if (this.reporter) {
       this.settleUplink({ session_end: 1 });
       this.judgeOpenTurn();
@@ -734,6 +822,8 @@ export class VoiceSessionController {
     this.probe?.cancel();
     this.probe = null;
     this.clearPlaybackConfirmTimer();
+    this.dropPending();
+    this.clearFalseInterruptionWatch();
     this.deps.playback.stop();
     this.transport?.close(reason);
     this.transport = null;
@@ -781,10 +871,11 @@ export class VoiceSessionController {
         this.onOwnerSpeechStart(event.at, "provider");
         return;
       case "speech_stopped":
+        this.onPendingSpeechEnded(event.at);
         this.onOwnerSpeechStopped(event.at);
         return;
       case "owner_transcript":
-        this.onOwnerTranscript(event.text, event.final);
+        this.onOwnerTranscript(event.text, event.final, event.at);
         return;
       case "response_started":
         this.onResponseStarted(event.at);
@@ -806,6 +897,8 @@ export class VoiceSessionController {
         this.responseAudible = false;
         this.awaitingFirstAudio = false;
         this.clearPlaybackConfirmTimer();
+        // The response is gone: a potential barge-in has nothing left to decide.
+        this.dropPending();
         this.revertEarlyMute(event.at);
         if (this.snapshot.state === "interrupted") this.setState("listening", "LISTENING");
         return;
@@ -881,15 +974,19 @@ export class VoiceSessionController {
       this.ownerSpeaking = true;
       this.patch({ hesitation: { ...this.guard.stats(), last: "resumed_within_hold" } });
       if (this.prematureResponse && (this.responseActive || this.deps.playback.playing)) {
-        this.bargeIn(at, source, detail, onsetKnown, numbersOnly({ hesitation_resume: 1 }));
+        // The guard's own verdict: the owner had not finished, the response was
+        // premature. Cancelled at once, as before — lane B is for responses
+        // that started legitimately.
+        this.bargeIn(at, source, detail, onsetKnown, numbersOnly({ hesitation_resume: 1, lane: LANE_CODE.hesitation_resume }));
       }
       this.prematureResponse = false;
       return;
     }
     this.prematureResponse = false;
-    if (this.responseActive || this.deps.playback.playing) {
-      this.bargeIn(at, source, detail, onsetKnown);
-    }
+    // Interruption is no longer decided here: while the assistant speaks, the
+    // onset becomes a potential barge-in (reversible mute now, cancel only on
+    // evidence — interruption.ts lane B) once the turn is booked below.
+    const interruptible = this.responseActive || this.deps.playback.playing;
     this.settleUplink({ superseded: 1 });
     this.judgeOpenTurn();
     this.ownerSpeaking = true;
@@ -900,6 +997,8 @@ export class VoiceSessionController {
     const turn = this.snapshot.turn + 1;
     this.turnJudgement = { turn, providerConfirmed: source === "provider", hadTranscript: false };
     if (source === "provider") this.metrics.confirmed_turns += 1;
+    this.metrics.speech_detected += 1;
+    this.turnOnset = { turn, at, source, detail, onsetKnown };
     this.patch({ turn, ownerText: "" });
     // Numbers only, through the one filter (ADR-0047 review): a string here
     // would be dropped by numbersOnly(), and a test sweeps every timing payload.
@@ -926,7 +1025,10 @@ export class VoiceSessionController {
       this.uplink.settled = true;
       this.reportMicMetrics({ unmatched: 1, provider_first: 1 }, at);
     }
-    if (this.snapshot.state !== "tool_running" && this.snapshot.state !== "interrupted") {
+    if (interruptible) {
+      // The assistant keeps its "speaking" state until the evidence decides.
+      this.beginPotentialBargeIn(this.turnOnset);
+    } else if (this.snapshot.state !== "tool_running" && this.snapshot.state !== "interrupted") {
       this.setState("listening");
     }
   }
@@ -1040,6 +1142,9 @@ export class VoiceSessionController {
   }
 
   private onLocalEvidenceLost(at: number): void {
+    // A potential barge-in owns the mute until its window decides; the gate's
+    // collapsing candidate is then just one more (negative) level sample.
+    if (this.pending) return;
     this.revertEarlyMute(at);
   }
 
@@ -1057,15 +1162,18 @@ export class VoiceSessionController {
     this.refreshMicMetrics();
   }
 
+  /** Stops the assistant; false when there was nothing (left) to stop. `turn` defaults to the next turn (hesitation resume). */
   private bargeIn(
     at: number,
     source: "local" | "provider",
     detail: SpeechStartDetail | undefined,
     onsetKnown: boolean,
     extra: Record<string, number> = {},
-  ): void {
-    if (!this.reporter || this.bargedResponse) return;
+    turn: number = this.snapshot.turn + 1,
+  ): boolean {
+    if (!this.reporter || this.bargedResponse) return false;
     this.bargedResponse = true;
+    this.dropPending();
     const decisionAt = this.now();
     const audible = this.responseAudible;
     // Only an ACTIVE provider response can be cancelled. After `response_done`
@@ -1094,7 +1202,6 @@ export class VoiceSessionController {
     // A stop latency is only a measurement when something audible was stopped
     // and the onset is known; otherwise the sample is flagged, never silent.
     const anomaly = !audible || !onsetKnown ? 1 : 0;
-    const turn = this.snapshot.turn + 1;
     const breakdown = numbersOnly({
       playback_stopped_ms: stopMs,
       detect_ms: detail ? msOrOmit(detail.decidedAt - detail.candidateAt) : undefined,
@@ -1135,10 +1242,213 @@ export class VoiceSessionController {
           audible: breakdown.audible,
           anomaly,
           provider_cancel: breakdown.provider_cancel,
+          lane: breakdown.lane,
         },
       },
     });
     this.setState("interrupted", "INTERRUPTED");
+    return true;
+  }
+
+  // ------------------------------------- two-stage interruption (lanes A/B)
+
+  /**
+   * Lane B: the onset of the turn just booked happened while the assistant was
+   * speaking. Mute locally NOW (reversibly) and wait for the evidence inside
+   * `BARGE_IN_CONFIRM_WINDOW_MS`: a stable onset, a near-field level from the
+   * gate, a plausible word. Nothing is cancelled here.
+   */
+  private beginPotentialBargeIn(onset: TurnOnset | null): void {
+    if (!onset || !this.reporter || this.bargedResponse) return;
+    if (this.pending) this.rejectPending(this.now(), { superseded: 1 });
+    if (!this.earlyMute) {
+      const decisionAt = this.now();
+      const stop = this.deps.playback.mute();
+      this.earlyMute = {
+        at: stop.at - this.t0,
+        decisionAt,
+        gainZeroAt: stop.gainZeroAt === null ? null : stop.gainZeroAt - this.t0,
+        outputLatencyMs: stop.outputLatencyMs,
+        candidateAt: onset.detail?.candidateAt ?? onset.at,
+      };
+      this.metrics.early_mutes += 1;
+      this.log(`playback.mute@${Math.round(onset.at)}`);
+    }
+    this.metrics.potential_barge_in += 1;
+    const now = this.now();
+    const pending: PendingInterruption = {
+      ...onset,
+      stable: false,
+      ended: false,
+      levelKnown: typeof this.deps.localSpeech?.onsetLevel === "function",
+      level: strongerLevel(null, this.sampleOnsetLevel()),
+      hadWord: false,
+      stableTimer: null,
+      windowTimer: null,
+    };
+    // Stability is speech DURATION (from the reported onset); the window is
+    // decision time (from now), so a late provider VAD never shortens it.
+    pending.stableTimer = this.scheduler.setTimeout(
+      () => {
+        pending.stableTimer = null;
+        pending.stable = true;
+        this.evaluatePending();
+      },
+      Math.max(0, BARGE_IN_STABLE_ONSET_MS - (now - onset.at)),
+    );
+    pending.windowTimer = this.scheduler.setTimeout(() => {
+      pending.windowTimer = null;
+      this.rejectPending(this.now(), { window_elapsed: 1 });
+    }, BARGE_IN_CONFIRM_WINDOW_MS);
+    this.pending = pending;
+    this.log(`barge_in.potential@${Math.round(onset.at)}`);
+    this.refreshMicMetrics();
+  }
+
+  private sampleOnsetLevel(): OnsetLevel | null | undefined {
+    return this.deps.localSpeech?.onsetLevel?.();
+  }
+
+  /** Re-check lane B's three conditions with the freshest level sample. */
+  private evaluatePending(): void {
+    const pending = this.pending;
+    if (!pending) return;
+    pending.level = strongerLevel(pending.level, this.sampleOnsetLevel());
+    const near = pending.levelKnown ? isNearField(pending.level) : undefined;
+    if (!pending.stable || !pending.hadWord || near === false) return;
+    this.confirmPending(pending, near);
+  }
+
+  private confirmPending(pending: PendingInterruption, near: boolean | undefined): void {
+    const now = this.now();
+    this.clearPendingTimers(pending);
+    this.pending = null;
+    this.log(`barge_in.accepted@${Math.round(now)}`);
+    const stopped = this.bargeIn(
+      pending.at,
+      pending.source,
+      pending.detail,
+      pending.onsetKnown,
+      numbersOnly({
+        lane: LANE_CODE.conversational,
+        confirm_ms: msOrOmit(now - pending.at),
+        near_field: near === undefined ? undefined : near ? 1 : 0,
+        margin_db: pending.level?.marginDb,
+        spectral: pending.level?.spectralScore,
+      }),
+      pending.turn,
+    );
+    if (!stopped) return;
+    this.metrics.accepted_owner_interruption += 1;
+    this.refreshMicMetrics();
+    this.watchFalseInterruption(pending.turn);
+  }
+
+  /** The window elapsed, the speech was a burst, or the turn was released: playback resumes, nothing was cancelled. */
+  private rejectPending(now: number, reason: Record<string, number>): void {
+    const pending = this.pending;
+    if (!pending) return;
+    this.clearPendingTimers(pending);
+    this.pending = null;
+    this.metrics.rejected_background_speech += 1;
+    this.revertEarlyMute(now);
+    this.log(`barge_in.rejected@${Math.round(now)}`);
+    const near = pending.levelKnown ? isNearField(pending.level) : undefined;
+    this.reporter?.report({
+      kind: "state",
+      t_ms: now,
+      turn: pending.turn,
+      payload: numbersOnly({
+        background_speech_rejected: 1,
+        onset_ms: msOrOmit(now - pending.at),
+        stable: pending.stable ? 1 : 0,
+        near_field: near === undefined ? undefined : near ? 1 : 0,
+        plausible_word: pending.hadWord ? 1 : 0,
+        margin_db: pending.level?.marginDb,
+        spectral: pending.level?.spectralScore,
+        source: SOURCE_CODE[pending.source],
+        ...reason,
+      }),
+    });
+    this.refreshMicMetrics();
+  }
+
+  /** Forget a potential barge-in without a verdict (the response ended or the leg closed). */
+  private dropPending(): void {
+    const pending = this.pending;
+    if (!pending) return;
+    this.clearPendingTimers(pending);
+    this.pending = null;
+    this.log("barge_in.dropped");
+  }
+
+  private clearPendingTimers(pending: PendingInterruption): void {
+    if (pending.stableTimer !== null) this.scheduler.clearTimeout(pending.stableTimer);
+    if (pending.windowTimer !== null) this.scheduler.clearTimeout(pending.windowTimer);
+    pending.stableTimer = null;
+    pending.windowTimer = null;
+  }
+
+  /** The speech behind a potential barge-in ended at `at` (provider stop or local close). */
+  private onPendingSpeechEnded(at: number): void {
+    const pending = this.pending;
+    if (!pending || pending.ended) return;
+    pending.ended = true;
+    if (at - pending.at < BARGE_IN_STABLE_ONSET_MS) {
+      // A burst, whatever else arrives: revert now so playback resumes at once
+      // (the fast lane still stops on a control phrase transcribed later).
+      this.rejectPending(this.now(), { short_burst: 1 });
+      return;
+    }
+    pending.stable = true;
+    this.evaluatePending();
+  }
+
+  /**
+   * Lane A: a control phrase in the owner's transcript stops the assistant at
+   * once — through the same barge-in path, whether a potential barge-in is
+   * still waiting, was already rejected, or never existed for this speech.
+   */
+  private fastLaneStop(at: number): void {
+    const pending = this.pending;
+    const onset =
+      pending ?? (this.turnOnset && this.turnOnset.turn === this.snapshot.turn ? this.turnOnset : null);
+    const turn = onset ? onset.turn : this.snapshot.turn;
+    const stopped = onset
+      ? this.bargeIn(onset.at, onset.source, onset.detail, onset.onsetKnown, numbersOnly({ lane: LANE_CODE.explicit_stop, after_reject: pending ? 0 : 1 }), turn)
+      : this.bargeIn(at, "provider", undefined, false, numbersOnly({ lane: LANE_CODE.explicit_stop }), turn);
+    if (!stopped) return;
+    this.stopHandledTurn = this.snapshot.turn;
+    this.metrics.explicit_stop_command += 1;
+    this.log("barge_in.explicit_stop");
+    this.refreshMicMetrics();
+    // Speech already over and nothing to cancel (draining audio): there is no
+    // later event to leave INTERRUPTED on, so leave it now.
+    if (!this.ownerSpeaking && !this.responseActive) this.setState("listening", "LISTENING");
+  }
+
+  /** An accepted conversational interruption must be followed by something said to the assistant. */
+  private watchFalseInterruption(turn: number): void {
+    this.clearFalseInterruptionWatch();
+    this.falseInterruptionTimer = this.scheduler.setTimeout(() => {
+      this.falseInterruptionTimer = null;
+      this.metrics.false_interruption += 1;
+      this.log("barge_in.false_interruption");
+      this.reporter?.report({
+        kind: "state",
+        t_ms: this.now(),
+        turn,
+        payload: numbersOnly({ false_interruption: 1, wait_ms: FALSE_INTERRUPTION_WINDOW_MS }),
+      });
+      this.refreshMicMetrics();
+    }, FALSE_INTERRUPTION_WINDOW_MS);
+  }
+
+  private clearFalseInterruptionWatch(): void {
+    if (this.falseInterruptionTimer !== null) {
+      this.scheduler.clearTimeout(this.falseInterruptionTimer);
+      this.falseInterruptionTimer = null;
+    }
   }
 
   /**
@@ -1149,6 +1459,9 @@ export class VoiceSessionController {
   private onLocalSpeechEnd(at: number): void {
     if (this.closing) return;
     this.localCloseAt = at;
+    // For a locally opened turn the provider never confirmed, the gate's
+    // close is the only end signal a potential barge-in will get.
+    if (this.pending && this.pending.source === "local" && !this.uplinkReported) this.onPendingSpeechEnded(at);
     if (!this.ownerSpeaking) return;
     if (this.ownerSpeechSource !== "local" || this.uplinkReported) return;
     this.clearLocalGraceTimer();
@@ -1166,6 +1479,7 @@ export class VoiceSessionController {
     this.ownerSpeechSource = null;
     this.ownerSpeechStartedAt = null;
     this.turnJudgement = null; // counted as a false start, not a false turn
+    this.rejectPending(this.now(), { false_start: 1 });
     const wasBargeIn = this.snapshot.state === "interrupted";
     this.metrics.false_starts += 1;
     if (wasBargeIn) this.metrics.false_barge_ins += 1;
@@ -1246,6 +1560,12 @@ export class VoiceSessionController {
       early_mutes: this.metrics.early_mutes,
       early_mute_reverts: this.metrics.early_mute_reverts,
       cancel_noop_errors: this.metrics.cancel_noop_errors,
+      speech_detected: this.metrics.speech_detected,
+      potential_barge_in: this.metrics.potential_barge_in,
+      accepted_owner_interruption: this.metrics.accepted_owner_interruption,
+      rejected_background_speech: this.metrics.rejected_background_speech,
+      explicit_stop_command: this.metrics.explicit_stop_command,
+      false_interruption: this.metrics.false_interruption,
       noise_floor_db: this.lastCalibration?.noise_floor_db ?? null,
       env: this.lastCalibration?.env_class ?? null,
     };
@@ -1274,6 +1594,12 @@ export class VoiceSessionController {
         early_mutes: this.metrics.early_mutes,
         early_mute_reverts: this.metrics.early_mute_reverts,
         cancel_noop_errors: this.metrics.cancel_noop_errors,
+        speech_detected: this.metrics.speech_detected,
+        potential_barge_in: this.metrics.potential_barge_in,
+        accepted_owner_interruption: this.metrics.accepted_owner_interruption,
+        rejected_background_speech: this.metrics.rejected_background_speech,
+        explicit_stop_command: this.metrics.explicit_stop_command,
+        false_interruption: this.metrics.false_interruption,
         ...extra,
       }),
     });
@@ -1322,12 +1648,14 @@ export class VoiceSessionController {
     }
   }
 
-  private onOwnerTranscript(text: string, final: boolean): void {
+  private onOwnerTranscript(text: string, final: boolean, at: number): void {
     if (this.turnJudgement && text.trim()) this.turnJudgement.hadTranscript = true;
     if (final) {
       this.ownerTranscriptTail = text;
       this.patch({ ownerText: text });
       this.remember(`Sahip: ${text}`);
+      // Something was said to the assistant: the interruption was not false.
+      if (text.trim()) this.clearFalseInterruptionWatch();
       // Cloud Core resolves intents from the transcript (spec §5); the client
       // only reports it.
       this.reporter?.report({ kind: "utterance", turn: this.snapshot.turn, text });
@@ -1335,18 +1663,38 @@ export class VoiceSessionController {
       this.ownerTranscriptTail += text;
       this.patch({ ownerText: this.ownerTranscriptTail });
     }
+    if (!(this.responseActive || this.deps.playback.playing)) return;
+    // Lane A first: a control phrase in THIS fragment or in the turn's
+    // accumulated tail (a phrase split across deltas) stops immediately.
+    if (this.stopHandledTurn !== this.snapshot.turn && (findControlPhrase(text) || findControlPhrase(this.ownerTranscriptTail))) {
+      this.fastLaneStop(at);
+      return;
+    }
+    // Lane B: a plausible word is one of the three pieces of evidence.
+    if (this.pending && !this.pending.hadWord && (hasPlausibleWord(text) || hasPlausibleWord(this.ownerTranscriptTail))) {
+      this.pending.hadWord = true;
+      this.evaluatePending();
+    }
   }
 
   // ---------------------------------------------------- assistant speech
 
   private onResponseStarted(at: number): void {
     this.responseActive = true;
+    // The turn this response belongs to. `spoken` describes what the ASSISTANT said, so
+    // it is reported against this turn even when the owner's transcript (the fast control
+    // lane's trigger) has already opened the next one.
+    this.responseTurn = this.snapshot.turn;
     this.responseAudible = false;
     this.awaitingFirstAudio = true;
     this.responseStartedAt = at;
     this.audioStartedAt = null;
     this.clearPlaybackConfirmTimer();
     this.bargedResponse = false;
+    // A new response: whatever was pending against the old one is moot, and a
+    // control phrase may stop this one too.
+    this.dropPending();
+    this.stopHandledTurn = null;
     this.earlyMute = null;
     this.assistantBuffer = "";
     this.responseSeq += 1;
@@ -1464,15 +1812,17 @@ export class VoiceSessionController {
     const text = truncated ? full.slice(full.length - MAX_EVENT_TEXT_CHARS) : full;
     const payload: Record<string, number> = { final, response_seq: this.responseSeq, chars: full.length };
     if (truncated) payload.truncated = 1;
-    this.reporter.report({ kind: "spoken", t_ms: at, turn: this.snapshot.turn, text, payload });
+    this.reporter.report({ kind: "spoken", t_ms: at, turn: this.responseTurn, text, payload });
   }
 
   private onResponseDone(at: number): void {
     this.responseActive = false;
     this.awaitingFirstAudio = false;
     this.clearPlaybackConfirmTimer();
-    // A candidate still pending when the response ends: restore the gain now.
-    this.revertEarlyMute(at);
+    // A candidate still pending when the response ends: restore the gain now —
+    // unless a potential barge-in owns the mute; the audio may still be
+    // draining and its window (≤ BARGE_IN_CONFIRM_WINDOW_MS) decides.
+    if (!this.pending) this.revertEarlyMute(at);
     // A response that was cut already reported what was heard; a completed
     // one reports its whole transcript (once, and only when there is one).
     if (!this.bargedResponse) this.reportSpoken(1, at);

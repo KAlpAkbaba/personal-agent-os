@@ -203,8 +203,17 @@ describe("§2 barge-in split and the reversible early mute", () => {
     expect(t.playback.playing).toBe(true); // reversible: nothing cancelled yet
     expect(t.transport.sent).toEqual([]);
     t.scheduler.advance(60); // now = 600: the gate confirms the open
+    t.localSpeech.level = { marginDb: 16, spectralScore: 0.8, frames: 8 };
     t.localSpeech.speechStart(450, { candidateAt: 500, decidedAt: 600, preRollMs: 50, captureLagMs: 8, duringPlayback: true });
-    expect(t.log.slice(2, 6)).toEqual(["playback.stop", "fake.cancelResponse", "transport.cancel", "report.barge_in"]);
+    // The open is a potential barge-in: the mute stays (no second mute), nothing is cancelled yet.
+    expect(t.log).not.toContain("playback.stop");
+    expect(t.transport.sent).toEqual([]);
+    t.scheduler.advance(50);
+    t.transport.emit({ type: "owner_transcript", at: 650, text: "bugün neler yaptın", final: false });
+    t.scheduler.advance(150); // now = 800 = onset 450 + 350: stable → confirmed
+    const stop = t.log.indexOf("playback.stop");
+    expect(stop).toBeGreaterThan(-1);
+    expect(t.log.slice(stop, stop + 4)).toEqual(["playback.stop", "fake.cancelResponse", "transport.cancel", "report.barge_in"]);
     expect(t.transport.sent).toEqual(["cancel"]);
     await t.controller.flushEvents();
     const barge = t.core.events.find((e) => e.kind === "barge_in_start");
@@ -222,6 +231,9 @@ describe("§2 barge-in split and the reversible early mute", () => {
         audible: 1,
         anomaly: 0,
         source: 1,
+        lane: 2,
+        confirm_ms: 350,
+        near_field: 1,
       },
     });
     expect(t.core.events.find((e) => e.kind === "playback_stopped")).toMatchObject({ t_ms: 540, turn: 1, payload: { anomaly: 0, early_mute: 1 } });
@@ -279,11 +291,14 @@ describe("§2 barge-in split and the reversible early mute", () => {
   });
 
   it("the 0 ms sample cannot be silent: no audible playback or an unknown onset is flagged anomaly: 1", async () => {
+    // Every stop here goes through the fast lane ("dur"): the onset accounting
+    // is the same whichever lane confirmed the interruption.
     // (a) the response was armed but nothing audible had started
     const a = await setup();
     a.transport.emit({ type: "response_started", at: 0 });
     a.scheduler.advance(300);
     a.transport.emit({ type: "speech_started", at: 300 });
+    a.transport.emit({ type: "owner_transcript", at: 320, text: "dur", final: false });
     await a.controller.flushEvents();
     expect(a.core.events.find((e) => e.kind === "barge_in_start")?.payload).toMatchObject({ playback_stopped_ms: 0, audible: 0, anomaly: 1 });
     expect(a.core.events.find((e) => e.kind === "playback_stopped")?.payload).toMatchObject({ anomaly: 1 });
@@ -294,6 +309,7 @@ describe("§2 barge-in split and the reversible early mute", () => {
     b.playback.activity(120);
     b.scheduler.advance(500);
     b.transport.emit({ type: "speech_started", at: 500 });
+    b.transport.emit({ type: "owner_transcript", at: 520, text: "dur", final: false });
     await b.controller.flushEvents();
     expect(b.core.events.find((e) => e.kind === "barge_in_start")?.payload).toMatchObject({ playback_stopped_ms: 0, audible: 1, anomaly: 1, source: 2 });
     // (c) provider-first, but the gate had a candidate under evaluation: that is the measured onset
@@ -304,6 +320,7 @@ describe("§2 barge-in split and the reversible early mute", () => {
     c.scheduler.advance(500);
     c.localSpeech.candidate = { candidateAt: 470, preRollMs: 40 };
     c.transport.emit({ type: "speech_started", at: 500 });
+    c.transport.emit({ type: "owner_transcript", at: 520, text: "dur", final: false });
     await c.controller.flushEvents();
     expect(c.core.events.find((e) => e.kind === "barge_in_start")).toMatchObject({
       t_ms: 430,
@@ -473,6 +490,7 @@ describe("payload contract", () => {
     t.scheduler.advance(60);
     t.localSpeech.speechStart(3640, { candidateAt: 3690, decidedAt: 3790, preRollMs: 50, captureLagMs: 9, duringPlayback: true });
     await t.pump(40);
+    t.transport.emit({ type: "owner_transcript", at: 3800, text: "dur", final: false }); // fast lane
     t.transport.emit({ type: "speech_started", at: 4100 });
     t.transport.emit({ type: "response_cancelled", at: 4110 });
     // Turn 2: provider-first start inside a hesitation hold → premature response cancelled with hesitation_resume.

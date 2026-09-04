@@ -13,6 +13,16 @@ import {
   FakeTransport,
 } from "../../app/lib/voice/fake";
 
+/**
+ * The critical barge-in sequence, without the decision lane's own bookkeeping.
+ * The two-lane policy logs WHY it interrupted (`barge_in.accepted@…`,
+ * `barge_in.dropped`, `barge_in.explicit_stop`) before it acts; the ORDER that
+ * must never change is the acting part (ADR-0040 §3), so the assertions below
+ * read that and check the decision separately.
+ */
+const acted = (log: readonly string[]): string[] => log.filter((line) => !line.startsWith("barge_in."));
+
+
 const tick = async (rounds = 4): Promise<void> => {
   for (let i = 0; i < rounds; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
 };
@@ -80,7 +90,7 @@ describe("VoiceSessionController", () => {
     expect(t.core.events[1].payload).toEqual({ state: "LISTENING" });
   });
 
-  it("barge-in: stops local playback FIRST, then cancels, then reports with the measured latency", async () => {
+  it("barge-in (fast lane): the onset mutes reversibly; a control phrase stops playback FIRST, then cancels, then reports", async () => {
     const t = await setup();
     t.scheduler.advance(1000);
     t.transport.emit({ type: "response_started", at: 1000 });
@@ -90,9 +100,17 @@ describe("VoiceSessionController", () => {
     expect(t.playback.playing).toBe(true);
 
     t.log.length = 0;
-    t.scheduler.advance(200); // now = 1500: the owner starts talking
+    t.scheduler.advance(200); // now = 1500: someone starts talking
     t.transport.emit({ type: "speech_started", at: 1480 }); // provider VAD timestamp
-    expect(t.log.slice(0, 4)).toEqual([
+    // The onset alone cancels nothing: reversible mute, response still active.
+    expect(t.log).toContain("playback.mute");
+    expect(t.transport.sent).toEqual([]);
+    expect(t.playback.playing).toBe(true);
+    expect(t.controller.getSnapshot().state).toBe("speaking");
+
+    t.log.length = 0;
+    t.transport.emit({ type: "owner_transcript", at: 1520, text: "dur", final: false });
+    expect(acted(t.log).slice(0, 4)).toEqual([
       "playback.stop", // 1. local playback silenced (the fake playback logs it)
       "fake.cancelResponse", // 2. provider cancel goes out on the transport
       "transport.cancel",
@@ -101,38 +119,46 @@ describe("VoiceSessionController", () => {
     expect(t.playback.playing).toBe(false);
     expect(t.transport.sent).toEqual(["cancel"]);
     expect(t.controller.getSnapshot().state).toBe("interrupted");
-    expect(t.controller.getSnapshot().latency.barge_in_to_stop_ms?.value).toBe(20);
+    expect(t.controller.getSnapshot().latency.barge_in_to_stop_ms?.value).toBe(20); // onset 1480 → muted at 1500
 
     await t.controller.flushEvents();
     const kinds = t.core.kinds();
     expect(kinds.indexOf("barge_in_start")).toBeLessThan(kinds.indexOf("playback_stopped"));
     const barge = t.core.events.find((e) => e.kind === "barge_in_start");
-    expect(barge).toMatchObject({ t_ms: 1480, turn: 1, payload: { playback_stopped_ms: 20, source: 2 } });
+    expect(barge).toMatchObject({ t_ms: 1480, turn: 1, payload: { playback_stopped_ms: 20, source: 2, lane: 1 } });
     expect(t.core.events.find((e) => e.kind === "playback_stopped")).toMatchObject({ t_ms: 1500, turn: 1 });
     expect(t.core.events.find((e) => e.kind === "mic_speech_start")).toMatchObject({ t_ms: 1480, turn: 1 });
     expect(t.core.events.filter((e) => e.kind === "first_audio")).toHaveLength(1);
   });
 
-  it("barge-in from the local detector does not wait for the provider's VAD", async () => {
+  it("barge-in (conversational lane): a local onset is confirmed by stable speech, a near-field level and a word — the provider's VAD is not waited for", async () => {
     const t = await setup();
     t.transport.emit({ type: "response_started", at: 0 });
     t.scheduler.advance(500);
+    t.localSpeech.level = { marginDb: 14, spectralScore: 0.8, frames: 12 };
     t.localSpeech.speechStart(500);
-    expect(t.log).toContain("playback.stop");
-    expect(t.transport.sent).toEqual(["cancel"]);
-    // The provider's later speech_started is the same speech: no second barge-in.
+    expect(t.log).toContain("playback.mute");
+    expect(t.transport.sent).toEqual([]); // nothing irreversible yet
+    // The provider's later speech_started is the same speech: no second turn.
     // Without transport counters (this fake has none) the uplink falls back to
     // the provider's confirmation, marked as such: basis 0 (ADR-0047 §1).
     t.scheduler.advance(90);
     t.transport.emit({ type: "speech_started", at: 590 });
+    t.scheduler.advance(10);
+    t.transport.emit({ type: "owner_transcript", at: 600, text: "bugün neler", final: false });
+    expect(t.transport.sent).toEqual([]); // a word alone: the onset is not yet stable (350 ms)
+    t.scheduler.advance(250); // now = 850 = onset + 350
+    expect(t.log).toContain("playback.stop");
     expect(t.transport.sent).toEqual(["cancel"]);
     await t.controller.flushEvents();
     expect(t.core.events.filter((e) => e.kind === "barge_in_start")).toHaveLength(1);
+    expect(t.core.events.find((e) => e.kind === "barge_in_start")).toMatchObject({ t_ms: 500, turn: 1, payload: { lane: 2, near_field: 1, source: 1 } });
     expect(t.core.events.find((e) => e.kind === "uplink_first_packet")).toMatchObject({
       t_ms: 590,
       payload: { basis: 0 },
     });
     expect(t.controller.getSnapshot().latency.mic_to_uplink_ms?.value).toBe(90);
+    expect(t.controller.getSnapshot().micMetrics).toMatchObject({ speech_detected: 1, potential_barge_in: 1, accepted_owner_interruption: 1 });
   });
 
   it("hesitation guard: a filler tail extends end-of-turn; resuming inside the hold is not a new turn", async () => {

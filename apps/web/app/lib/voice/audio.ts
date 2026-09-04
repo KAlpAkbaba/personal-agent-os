@@ -29,6 +29,7 @@ import type {
   Microphone,
   MicrophoneConstraints,
   NetworkMonitor,
+  OnsetLevel,
   Playback,
   PlaybackStop,
   SpeechDetector,
@@ -794,6 +795,11 @@ export class GatedSpeechDetector implements SpeechDetector {
 
   onsetCandidate(): { candidateAt: number; preRollMs: number } | null {
     return this.gate.onsetCandidate();
+  }
+
+  /** Two-stage interruption: the level of the onset the gate is evaluating / has opened on. */
+  onsetLevel(): OnsetLevel | null {
+    return this.gate.onsetLevel();
   }
 
   stats(): SpeechDetectorStats {

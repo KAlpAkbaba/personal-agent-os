@@ -34,6 +34,16 @@ import {
   FakeTransport,
 } from "../../app/lib/voice/fake";
 
+/**
+ * The critical barge-in sequence, without the decision lane's own bookkeeping.
+ * The two-lane policy logs WHY it interrupted (`barge_in.accepted@…`,
+ * `barge_in.dropped`, `barge_in.explicit_stop`) before it acts; the ORDER that
+ * must never change is the acting part (ADR-0040 §3), so the assertions below
+ * read that and check the decision separately.
+ */
+const acted = (log: readonly string[]): string[] => log.filter((line) => !line.startsWith("barge_in."));
+
+
 const tick = async (rounds = 4): Promise<void> => {
   for (let i = 0; i < rounds; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
 };
@@ -103,11 +113,15 @@ describe("dur while the assistant speaks (unchanged, ADR-0040 §3)", () => {
   it("a. playback.stop → cancel → spoken → barge_in_start → playback_stopped, provider_cancel 1", async () => {
     const t = await setup();
     speakingResponse(t, 1000);
-    t.log.length = 0;
     t.scheduler.advance(200); // now = 1500
     t.transport.emit({ type: "speech_started", at: 1480 });
+    // The client owns interruption: the onset mutes reversibly; the control
+    // phrase in the first transcript delta is what stops and cancels.
+    expect(t.transport.sent).toEqual([]);
+    t.log.length = 0;
+    t.transport.emit({ type: "owner_transcript", at: 1520, text: "dur", final: false });
 
-    expect(t.log.slice(0, 7)).toEqual([
+    expect(acted(t.log).slice(0, 7)).toEqual([
       "playback.stop",
       "fake.cancelResponse",
       "transport.cancel",
@@ -126,8 +140,9 @@ describe("dur while the assistant speaks (unchanged, ADR-0040 §3)", () => {
     expect(kinds.indexOf("spoken")).toBeLessThan(kinds.indexOf("barge_in_start"));
     expect(kinds.indexOf("barge_in_start")).toBeLessThan(kinds.indexOf("playback_stopped"));
     const [barge] = t.events("barge_in_start");
-    expect(barge).toMatchObject({ t_ms: 1480, turn: 1, payload: { provider_cancel: 1, playback_stopped_ms: 20, source: 2 } });
+    expect(barge).toMatchObject({ t_ms: 1480, turn: 1, payload: { provider_cancel: 1, playback_stopped_ms: 20, source: 2, lane: 1 } });
     expect(barge.payload).toHaveProperty("stop_command_ms");
+    expect(t.controller.getSnapshot().micMetrics.explicit_stop_command).toBe(1);
     expect(t.events("spoken")).toHaveLength(1);
     expect(t.events("spoken")[0]).toMatchObject({ text: "İkinci madde: dağıtım gecikti.", payload: { final: 0, response_seq: 1 } });
     expect(t.events("playback_stopped")).toHaveLength(1);
@@ -141,10 +156,13 @@ describe("dur while the assistant speaks (unchanged, ADR-0040 §3)", () => {
     speakingResponse(t, 1000);
     t.scheduler.advance(200);
     t.transport.emit({ type: "speech_started", at: 1480 });
+    t.transport.emit({ type: "owner_transcript", at: 1520, text: "dur", final: false });
     expect(t.transport.sent).toEqual(["cancel"]);
     t.transport.emit({ type: "response_cancelled", at: 1600 });
     expect(t.controller.getSnapshot().state).toBe("listening");
+    // The final transcript of the same turn repeats the phrase: nothing to stop twice.
     t.transport.emit({ type: "owner_transcript", at: 1700, text: "dur", final: true });
+    expect(t.transport.sent).toEqual(["cancel"]);
     t.scheduler.advance(300);
     t.transport.emit({ type: "speech_stopped", at: 1800 });
     t.scheduler.advance(300); // past the end-of-turn hold
@@ -152,11 +170,12 @@ describe("dur while the assistant speaks (unchanged, ADR-0040 §3)", () => {
     // "Devam et" is answered by Cloud Core (server-side); on the client the
     // provider simply starts a new response, which must be interruptible.
     speakingResponse(t, 2500, "Üçüncü madde: ");
-    t.log.length = 0;
     t.scheduler.advance(200);
     t.transport.emit({ type: "speech_started", at: 2990 });
+    t.log.length = 0;
+    t.transport.emit({ type: "owner_transcript", at: 3020, text: "Dur.", final: false });
 
-    expect(t.log.slice(0, 3)).toEqual(["playback.stop", "fake.cancelResponse", "transport.cancel"]);
+    expect(acted(t.log).slice(0, 3)).toEqual(["playback.stop", "fake.cancelResponse", "transport.cancel"]);
     expect(t.transport.sent).toEqual(["cancel", "cancel"]);
     expect(t.controller.getSnapshot().state).toBe("interrupted");
     await t.controller.flushEvents();
@@ -167,6 +186,7 @@ describe("dur while the assistant speaks (unchanged, ADR-0040 §3)", () => {
     expect(t.events("spoken").map((e) => e.payload?.response_seq)).toEqual([1, 2]);
     expect(t.events("error")).toHaveLength(0);
     expect(t.controller.getSnapshot().lastError).toBeNull();
+    expect(t.controller.getSnapshot().micMetrics.explicit_stop_command).toBe(2);
   });
 });
 
@@ -180,13 +200,15 @@ describe("dur after the response already completed", () => {
     expect(t.controller.getSnapshot().state).toBe("listening");
     expect(t.playback.playing).toBe(true); // draining
 
-    t.log.length = 0;
     t.scheduler.advance(100); // now = 1500
     t.transport.emit({ type: "speech_started", at: 1480 });
+    expect(t.playback.muted).toBe(true); // reversible, over the draining audio too
+    t.log.length = 0;
+    t.transport.emit({ type: "owner_transcript", at: 1520, text: "dur", final: false });
 
     // Local playback is silenced first, exactly as for an active response;
     // the provider cancel is skipped because `responseActive` is false.
-    expect(t.log.slice(0, 5)).toEqual([
+    expect(acted(t.log).slice(0, 5)).toEqual([
       "playback.stop",
       "transport.cancel_skipped",
       "report.barge_in_start",
@@ -287,6 +309,7 @@ describe("provider 'no active response' cancel error (benign)", () => {
     t.transport.emit({ type: "response_done", at: 1400 });
     t.scheduler.advance(100);
     t.transport.emit({ type: "speech_started", at: 1480 });
+    t.transport.emit({ type: "owner_transcript", at: 1500, text: "dur", final: false });
     t.log.length = 0;
     t.transport.emit({ type: "error", at: 1520, code: "response_cancel_not_active", message: NO_ACTIVE_RESPONSE });
 

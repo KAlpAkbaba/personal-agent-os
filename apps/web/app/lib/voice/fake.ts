@@ -28,6 +28,7 @@ import type {
   Microphone,
   MicrophoneConstraints,
   NetworkMonitor,
+  OnsetLevel,
   Playback,
   PlaybackStop,
   SpeechDetector,
@@ -324,6 +325,13 @@ export class FakeSpeechDetector implements SpeechDetector {
   counters: SpeechDetectorStats = { gate_opens: 0, gated_out: 0, click_rejects: 0, speech_ms: 0, calibrations: 0 };
   /** What `onsetCandidate()` answers (a provider-first barge-in reads it). */
   candidate: { candidateAt: number; preRollMs: number } | null = null;
+  /**
+   * What `onsetLevel()` answers (the two-stage interruption's near-field rule).
+   * Null = the gate saw no candidate for this speech (below the calibrated
+   * margin: distant or too quiet); set it before the onset to script a
+   * near-field owner or a distant voice.
+   */
+  level: OnsetLevel | null = null;
   private startSinks = new Set<(at: number, detail?: SpeechStartDetail) => void>();
   private endSinks = new Set<(at: number) => void>();
   private evidenceSinks = new Set<(at: number, candidateAt: number) => void>();
@@ -369,6 +377,10 @@ export class FakeSpeechDetector implements SpeechDetector {
 
   onsetCandidate(): { candidateAt: number; preRollMs: number } | null {
     return this.candidate;
+  }
+
+  onsetLevel(): OnsetLevel | null {
+    return this.level;
   }
 
   stats(): SpeechDetectorStats {

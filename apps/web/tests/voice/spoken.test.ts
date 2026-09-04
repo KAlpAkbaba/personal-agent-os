@@ -25,6 +25,16 @@ import {
   FakeTransport,
 } from "../../app/lib/voice/fake";
 
+/**
+ * The critical barge-in sequence, without the decision lane's own bookkeeping.
+ * The two-lane policy logs WHY it interrupted (`barge_in.accepted@…`,
+ * `barge_in.dropped`, `barge_in.explicit_stop`) before it acts; the ORDER that
+ * must never change is the acting part (ADR-0040 §3), so the assertions below
+ * read that and check the decision separately.
+ */
+const acted = (log: readonly string[]): string[] => log.filter((line) => !line.startsWith("barge_in."));
+
+
 const tick = async (rounds = 4): Promise<void> => {
   for (let i = 0; i < rounds; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
 };
@@ -91,13 +101,14 @@ describe("spoken (M16 §3.2)", () => {
     t.playback.activity(1300);
     expect(t.playback.playing).toBe(true);
 
-    t.log.length = 0;
     t.scheduler.advance(200);
     t.transport.emit({ type: "speech_started", at: 1480 });
+    t.log.length = 0;
+    t.transport.emit({ type: "owner_transcript", at: 1500, text: "dur", final: false });
 
     // The fixed barge-in order is untouched; `spoken` is queued after the
     // stop and the cancel, immediately before barge_in_start.
-    expect(t.log.slice(0, 7)).toEqual([
+    expect(acted(t.log).slice(0, 7)).toEqual([
       "playback.stop",
       "fake.cancelResponse",
       "transport.cancel",
@@ -136,6 +147,7 @@ describe("spoken (M16 §3.2)", () => {
     t.playback.activity(300);
     t.scheduler.advance(200);
     t.transport.emit({ type: "speech_started", at: 500 });
+    t.transport.emit({ type: "owner_transcript", at: 520, text: "bekle", final: false });
     await t.controller.flushEvents();
     const spoken = t.spoken();
     expect(spoken).toHaveLength(1);
