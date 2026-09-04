@@ -24,6 +24,13 @@ import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
+from app.research.contracts import (
+    ENTITY_FINDING,
+    ContractViolation,
+    QuarantineLedger,
+    require_number,
+    require_text,
+)
 from app.research.evidence import (
     STATEMENT_LABEL_MODEL_INFERENCE,
     STATEMENT_LABEL_RECOMMENDATION,
@@ -66,6 +73,10 @@ class SynthesisResult:
     #: stay within the per-field length caps (finding MEDIUM-7). Always 0 for
     #: DeterministicSynthesisProvider, which never parses untrusted text.
     truncated_fields: int = 0
+    #: Findings excluded because they broke their field contract (2026-09-04 incident:
+    #: a model answered ``importance`` with prose). Each entry names the entity, the
+    #: field, what was expected and the observed value CLASS - never the content.
+    quarantined: tuple[dict[str, Any], ...] = field(default_factory=tuple)
 
 
 @runtime_checkable
@@ -320,19 +331,56 @@ def _parse_statement(data: dict[str, Any], counter: list[int]) -> Statement:
     )
 
 
-def _parse_finding(data: dict[str, Any], counter: list[int]) -> Finding:
-    title = _capped(_require_str(data["title"], field_name="title"), TITLE_MAX_CHARS, counter)
-    summary = _capped(_require_str(data["summary"], field_name="summary"), BODY_MAX_CHARS, counter)
+def _parse_finding(
+    data: dict[str, Any], counter: list[int], *, stage: str = "synthesizing"
+) -> Finding:
+    """One finding, every field validated against its declared contract.
+
+    ``importance`` is a rated number (1..5) and nothing else: the 2026-09-04 incident was a
+    model answering it with a Turkish prose sentence, which ``int()`` turned into a
+    ``ValueError`` that failed the whole job. The text fields are checked in the same pass, so
+    a number arriving where a title belongs is refused just as loudly (contracts.require_text).
+    """
+    finding_id = str(data.get("id", "")) or "unidentified-finding"
+    title = _capped(
+        require_text(data.get("title"), ENTITY_FINDING, "title", entity_id=finding_id, stage=stage),
+        TITLE_MAX_CHARS,
+        counter,
+    )
+    summary = _capped(
+        require_text(
+            data.get("summary"), ENTITY_FINDING, "summary", entity_id=finding_id, stage=stage
+        ),
+        BODY_MAX_CHARS,
+        counter,
+    )
     why_it_matters = _capped(
-        _require_str(data["why_it_matters"], field_name="why_it_matters"), BODY_MAX_CHARS, counter
+        require_text(
+            data.get("why_it_matters"),
+            ENTITY_FINDING,
+            "why_it_matters",
+            entity_id=finding_id,
+            stage=stage,
+        ),
+        BODY_MAX_CHARS,
+        counter,
+    )
+    importance = require_number(
+        data.get("importance", None),
+        ENTITY_FINDING,
+        "importance",
+        entity_id=finding_id,
+        stage=stage,
     )
     return Finding(
-        id=str(data["id"]),
+        id=finding_id,
         title=title,
         summary=summary,
         why_it_matters=why_it_matters,
-        importance=int(data["importance"]),
-        label=_require_str(data["label"], field_name="label"),
+        importance=int(importance),
+        label=require_text(
+            data.get("label"), ENTITY_FINDING, "label", entity_id=finding_id, stage=stage
+        ),
         evidence_ids=tuple(str(x) for x in data.get("evidence_ids", ())),
         first_seen=data.get("first_seen"),
     )
@@ -363,7 +411,21 @@ def parse_synthesis_response(payload: dict[str, Any]) -> SynthesisResult:
         EXECUTIVE_SUMMARY_MAX_CHARS,
         counter,
     )
-    findings = [_parse_finding(f, counter) for f in payload.get("findings", [])]
+    # Fault isolation (owner requirement, 2026-09-04): one malformed finding is quarantined
+    # with its reason, not allowed to kill a run whose discovery, fetching and ranking all
+    # succeeded. The caller decides whether what is left is enough (InsufficientValidEvidence).
+    quarantine = QuarantineLedger(stage="synthesizing")
+    findings = []
+    for raw_finding in payload.get("findings", []):
+        if not isinstance(raw_finding, dict):
+            quarantine.record_reason(
+                entity=ENTITY_FINDING, entity_id="unidentified-finding", reason="not_an_object"
+            )
+            continue
+        try:
+            findings.append(_parse_finding(raw_finding, counter))
+        except ContractViolation as violation:
+            quarantine.record(violation)
     why_it_matters = tuple(_parse_statement(s, counter) for s in payload.get("why_it_matters", []))
     watch_next = tuple(_parse_statement(s, counter) for s in payload.get("watch_next", []))
     details = tuple(
@@ -375,6 +437,7 @@ def parse_synthesis_response(payload: dict[str, Any]) -> SynthesisResult:
     )
     uncertainty = tuple(_parse_statement(s, counter) for s in payload.get("uncertainty", []))
 
+    findings = list(findings)
     if len(findings) > MAX_FINDINGS:
         findings = sorted(findings, key=lambda f: -f.importance)[:MAX_FINDINGS]
     if len(findings) < MIN_FINDINGS:
@@ -382,7 +445,13 @@ def parse_synthesis_response(payload: dict[str, Any]) -> SynthesisResult:
             Statement(
                 text=(
                     f"Model yalnızca {len(findings)} bulgu üretti (en az {MIN_FINDINGS} "
-                    "beklenir); bulgular sınırlı sayıda kaynağa dayanıyor olabilir ve "
+                    + (
+                        f"beklenir; {len(quarantine)} bulgu alan sözleşmesini ihlal ettiği "
+                        "için karantinaya alındı"
+                        if len(quarantine)
+                        else "beklenir"
+                    )
+                    + "); bulgular sınırlı sayıda kaynağa dayanıyor olabilir ve "
                     "bağımsız biçimde teyit edilmemiş olabilir."
                 ),
                 label=STATEMENT_LABEL_UNCERTAINTY,
@@ -397,6 +466,7 @@ def parse_synthesis_response(payload: dict[str, Any]) -> SynthesisResult:
         details=details,
         uncertainty=uncertainty,
         truncated_fields=counter[0],
+        quarantined=tuple(quarantine.entries),
     )
 
 

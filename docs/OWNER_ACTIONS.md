@@ -253,16 +253,27 @@ your machine:
 
 What it does, in order:
 
+**Your first attempt (2026-09-04, task `f6eb5021`) got all the way to ranking**: the Cloud Core
+released, the policy became version 1, DuckDuckGo was the provider, 243 candidates were
+discovered and 12 were fetched and ranked. It then failed on a typed-data defect: the synthesis
+model answered a finding's numeric `importance` field with a Turkish prose sentence and `int()`
+on that sentence ended the job. That is fixed at the contract level, not with a try/except:
+every numeric field in the pipeline now declares its type, range and provenance and is
+validated before use, text fields refuse numbers, and a candidate or finding that breaks its
+contract is quarantined with a named reason while the run continues on the valid remainder. The
+run fails only if fewer than three valid items remain. Research policy version 2 carries that
+contract, so this rerun performs exactly one Cloud Core release and no Windows agent install.
+
 1. **No deployment when nothing changed.** It compares this checkout's browser-worker release
    with the installed one (source AND the copy inside the installed venv that actually runs).
    They match today (0.4.0, installed by your 15:18 run), so it installs nothing: no staging,
    no swap, no service restart. If they ever differ incompatibly it stops and prints the one
    update command instead of doing it silently.
-2. **Cloud Core policy.** It asks the Cloud Core which search provider a default run uses. The
-   deployed one predates this policy, so it releases the Cloud Core once (the proven
-   transactional release: build, migrate, recreate the api container only, health, rollback on
-   any failure). That is the only deployment in this command, and only because the source
-   really changed.
+2. **Cloud Core policy.** It asks the Cloud Core for its research policy version. The deployed
+   one is version 1 and this checkout expects 2 (the evidence contract), so it releases the
+   Cloud Core once (the proven transactional release: build, migrate, recreate the api
+   container only, health, rollback on any failure). That is the only deployment in this
+   command, and only because the source really changed.
 3. **The research.** DuckDuckGo discovery (`requested_provider=duckduckgo`,
    `provider=duckduckgo`, `fallback=false`), one persistent Chrome window for the whole job,
    real source pages opened and extracted rather than search snippets, dedup across repeated

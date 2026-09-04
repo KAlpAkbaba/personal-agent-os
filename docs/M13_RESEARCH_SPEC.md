@@ -143,6 +143,18 @@ undelivered commands to connected devices every sweep interval. The Temporal wor
 `off` in tests, `external` = the existing `python -m app.worker`), because the production
 compose has no worker container and the browser path needs the broker runtime anyway.
 
+**Typed field contracts (2026-09-04).** Every numeric field the pipeline reads from data it
+did not compute is declared in `app/research/contracts.py` with a name, a type, a valid range
+and a provenance sentence, and is validated before use: `discovered_result.rank`,
+`fetched_source.http_status`, `evidence_item.rank/score`, `ranked_candidate.rank/score`,
+`finding.importance`. Declared text fields refuse numbers, so a rank can never be read as a
+title. A violation is a `ContractViolation` naming entity, entity id, field, expected
+type/range, observed type and observed value class (never the content) plus the stage. A
+malformed candidate or finding is quarantined (`invalid_evidence_contract`) with its reason,
+its raw evidence untouched, and the run continues; the run fails only when fewer than
+`MIN_VALID_EVIDENCE` items remain (`insufficient_valid_evidence`). A synthesis provider whose
+output breaks the contract is replaced for that run by the deterministic provider.
+
 **Provider policy (2026-09-04).** DuckDuckGo is the production default for discovery:
 `Settings.research_search_provider` (env `PAGENTOS_RESEARCH_SEARCH_PROVIDER`, default
 `duckduckgo`) flows into `BrowserResearchRequest.search_provider` and reaches the device as

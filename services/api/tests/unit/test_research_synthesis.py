@@ -271,11 +271,20 @@ def test_parse_synthesis_response_rejects_non_string_executive_summary() -> None
         parse_synthesis_response(_payload(executive_summary=12345))
 
 
-def test_parse_synthesis_response_rejects_non_string_title() -> None:
+def test_parse_synthesis_response_quarantines_a_finding_with_a_non_string_title() -> None:
+    """Fault isolation (2026-09-04): a finding that breaks its field contract is set aside
+    with a reason - it no longer takes the whole run down. The malformed finding never
+    reaches the report, and the reason names the field and the observed value class."""
     payload = _payload()
     payload["findings"][0]["title"] = ["not", "a", "string"]
-    with pytest.raises(TypeError):
-        parse_synthesis_response(payload)
+    result = parse_synthesis_response(payload)
+    assert result.findings == ()
+    assert len(result.quarantined) == 1
+    entry = result.quarantined[0]
+    assert entry["entity"] == "finding"
+    assert entry["field"] == "title"
+    assert entry["observed_class"] == "list"
+    assert entry["error_class"] == "invalid_evidence_contract"
 
 
 def test_parse_synthesis_response_rejects_non_string_statement_text() -> None:
@@ -399,3 +408,69 @@ def test_deterministic_provider_survives_an_evidence_item_with_no_title() -> Non
     assert all(t.strip() for t in titles)
     assert "Örnek Gazete" in titles
     assert "untitled.example.org" in titles
+
+
+# ------------------------------------------- typed contracts + fault isolation (2026-09-04)
+
+#: The exact value that failed owner run f6eb5021.
+INCIDENT_PROSE = (
+    "Bu model, yapay zeka uygulamalarının etkinliğini artıracak ve insan gibi düşünme "
+    "yeteneğine sahip sistemlerin geliştirilmesine olanak tanıyacak."
+)
+
+
+def _finding(idx: int, importance: object) -> dict:
+    return {
+        "id": f"f{idx}",
+        "title": f"başlık {idx}",
+        "summary": "özet",
+        "why_it_matters": "neden önemli",
+        "importance": importance,
+        "label": "source_fact",
+        "evidence_ids": ["e1"],
+        "first_seen": None,
+    }
+
+
+def test_prose_in_importance_quarantines_only_that_finding() -> None:
+    """The incident, end to end through the parser: the offending finding is set aside and
+    the valid ones still reach the report (before the fix this raised ValueError and the whole
+    research job failed after discovery, fetching and ranking had all succeeded)."""
+    payload = _payload(
+        findings=[_finding(1, INCIDENT_PROSE), _finding(2, 4), _finding(3, "3"), _finding(4, 5)]
+    )
+    result = parse_synthesis_response(payload)
+    assert [f.id for f in result.findings] == ["f2", "f3", "f4"]
+    assert [f.importance for f in result.findings] == [4, 3, 5]
+    assert len(result.quarantined) == 1
+    entry = result.quarantined[0]
+    assert entry["entity_id"] == "f1"
+    assert entry["field"] == "importance"
+    assert entry["observed_class"] == "prose_text"
+    assert "yapay zeka" not in repr(entry)
+
+
+def test_quarantining_below_the_minimum_reports_it_as_uncertainty_not_a_crash() -> None:
+    payload = _payload(findings=[_finding(1, INCIDENT_PROSE), _finding(2, "iki"), _finding(3, 4)])
+    result = parse_synthesis_response(payload)
+    assert len(result.findings) == 1
+    assert len(result.quarantined) == 2
+    assert result.uncertainty
+    assert "karantina" in result.uncertainty[-1].text
+
+
+def test_a_finding_that_is_not_an_object_is_quarantined_too() -> None:
+    payload = _payload(findings=["not a finding", _finding(2, 3)])
+    result = parse_synthesis_response(payload)
+    assert [f.id for f in result.findings] == ["f2"]
+    assert result.quarantined[0]["reason"] == "not_an_object"
+
+
+def test_numbers_arriving_in_finding_text_fields_are_quarantined() -> None:
+    bad = _finding(1, 3)
+    bad["title"] = 7  # a rank-looking number where a title belongs
+    payload = _payload(findings=[bad, _finding(2, 3)])
+    result = parse_synthesis_response(payload)
+    assert [f.id for f in result.findings] == ["f2"]
+    assert result.quarantined[0]["field"] == "title"
+    assert result.quarantined[0]["reason"] == "number_is_not_text"

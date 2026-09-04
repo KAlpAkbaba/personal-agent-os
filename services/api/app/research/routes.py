@@ -34,6 +34,7 @@ from app.logging import get_logger, trace_id_var
 from app.research import runs_service
 from app.research.browser_gateway import SearchEvidence
 from app.research.browser_workflow import BrowserResearchRequest, BrowserResearchWorkflow
+from app.research.contracts import MIN_VALID_EVIDENCE
 from app.research.models import STAGE_CANCELLED, STAGE_FAILED, STAGE_PLANNED, ResearchRunRow
 
 logger = get_logger("app.research.routes")
@@ -211,9 +212,12 @@ async def create_research(request: Request, body: CreateResearchRequest) -> JSON
     )
 
 
-#: Bumped whenever the research POLICY contract changes shape (not on every code change).
-#: A client compares it with what it expects; an older Cloud Core answers 404 instead.
-RESEARCH_POLICY_VERSION = 1
+#: Bumped whenever the research POLICY or EVIDENCE contract changes shape (not on every code
+#: change). A client compares it with what it expects; an older Cloud Core answers 404 or a
+#: lower number, which is the signal that one release is needed.
+#: 1 - DuckDuckGo default provider, per-request search_provider (2026-09-04)
+#: 2 - typed field contracts + per-candidate quarantine (ADR-0050 item 20, 2026-09-04)
+RESEARCH_POLICY_VERSION = 2
 
 
 @router.get("/policy")
@@ -237,6 +241,11 @@ async def get_research_policy(request: Request) -> dict[str, Any]:
             "default": DEFAULT_INTERACTIVE_WAIT_S,
             "min": MIN_INTERACTIVE_WAIT_S,
             "max": MAX_INTERACTIVE_WAIT_S,
+        },
+        "evidence_contract": {
+            "typed_fields": True,
+            "quarantine": "invalid_evidence_contract",
+            "min_valid_evidence": MIN_VALID_EVIDENCE,
         },
         "verification_timeout_policies": ["fallback", "fail"],
         "modes": ["interactive", "unattended"],

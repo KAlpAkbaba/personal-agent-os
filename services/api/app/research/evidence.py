@@ -148,20 +148,50 @@ class EvidenceRecord:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> EvidenceRecord:
+    def from_dict(cls, data: dict[str, Any], *, stage: str = "loading_evidence") -> EvidenceRecord:
+        """Rebuild a stored evidence row, validating every numeric field first.
+
+        ``rank`` and ``score`` go through the declared contract
+        (:mod:`app.research.contracts`) rather than a bare ``int()``/``float()``: a row whose
+        numeric field carries prose is a :class:`ContractViolation` naming the field and the
+        observed value class, which the caller quarantines - it never becomes a ValueError
+        that fails a whole research job (owner incident, 2026-09-04).
+        """
+        from app.research.contracts import ENTITY_EVIDENCE_ITEM, require_number, require_text
+
+        entity = ENTITY_EVIDENCE_ITEM
+
+        def text(field_name: str, default: str = "") -> str:
+            return require_text(
+                data.get(field_name, default), entity, field_name, entity_id=url, stage=stage
+            )
+
+        def number(field_name: str, default: float) -> float:
+            value = require_number(
+                data.get(field_name, default), entity, field_name, entity_id=url, stage=stage
+            )
+            return default if value is None else value
+
+        url = require_text(data.get("url"), entity, "url", stage=stage)
         return cls(
-            url=str(data["url"]),
-            title=str(data["title"]),
-            excerpt=str(data["excerpt"]),
+            url=url,
+            title=text("title"),
+            excerpt=text("excerpt"),
             fetched_at=datetime.fromisoformat(str(data["fetched_at"])),
             extraction_method=str(data["extraction_method"]),
-            source_class=str(data.get("source_class", "unknown")),
+            source_class=text("source_class", "unknown"),
             query=str(data.get("query", "")),
-            rank=int(data.get("rank", 0)),
-            score=float(data.get("score", 0.0)),
+            rank=int(number("rank", 0)),
+            score=float(number("score", 0.0)),
             id=str(data.get("id", "")),
             final_url=str(data.get("final_url", "")),
-            publisher=str(data.get("publisher", "")),
+            publisher=require_text(
+                data.get("publisher", ""),
+                ENTITY_EVIDENCE_ITEM,
+                "publisher",
+                entity_id=url,
+                stage=stage,
+            ),
             published_at=_parse_dt(data.get("published_at")),
             modified_at=_parse_dt(data.get("modified_at")),
             retrieved_at=_parse_dt(data.get("retrieved_at")),

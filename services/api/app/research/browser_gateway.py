@@ -36,6 +36,13 @@ from app.devices.commands import (
     CommandSucceeded,
     DeviceCommandClientProtocol,
 )
+from app.logging import get_logger
+from app.research.contracts import (
+    ENTITY_DISCOVERED_RESULT,
+    ContractViolation,
+    require_number,
+    require_text,
+)
 from app.research.destination import DestinationPolicyError, validate_fetch_target
 from app.research.evidence import EvidenceRecord
 from app.research.forbidden_keys import find_forbidden_keys
@@ -44,6 +51,9 @@ from app.research.forbidden_keys import find_forbidden_keys
 # caller does not pass `now` explicitly (mirrors DeterministicResearchProvider's
 # no-wall-clock discipline, M3).
 _EPOCH = datetime(2026, 1, 1, tzinfo=UTC)
+
+
+logger = get_logger("app.research.browser_gateway")
 
 
 @dataclass(frozen=True, slots=True)
@@ -492,16 +502,34 @@ class DeviceBrowserGateway:
             f"{self._session_id}:search:{digest}",
         )
         self.last_search_evidence = SearchEvidence.from_result(query, result)
-        return [
-            SearchHit(
-                url=str(r["url"]),
-                title=str(r.get("title", "")),
-                snippet=str(r.get("snippet", "")),
-                published_hint=r.get("published_hint"),
-                rank=int(r.get("rank", i + 1)),
-            )
-            for i, r in enumerate(result.get("results", []))
-        ]
+        # A malformed hit is skipped with its reason, never fatal: one bad row in a provider's
+        # result list must not lose the other nine (owner incident, 2026-09-04).
+        hits: list[SearchHit] = []
+        for i, r in enumerate(result.get("results", [])):
+            if not isinstance(r, dict):
+                logger.warning("research_search_hit_skipped", reason="not_an_object", position=i)
+                continue
+            try:
+                url = require_text(r.get("url"), ENTITY_DISCOVERED_RESULT, "url")
+                rank = require_number(
+                    r.get("rank", i + 1), ENTITY_DISCOVERED_RESULT, "rank", entity_id=url
+                )
+                hits.append(
+                    SearchHit(
+                        url=url,
+                        title=require_text(
+                            r.get("title", ""), ENTITY_DISCOVERED_RESULT, "title", entity_id=url
+                        ),
+                        snippet=require_text(
+                            r.get("snippet", ""), ENTITY_DISCOVERED_RESULT, "snippet", entity_id=url
+                        ),
+                        published_hint=r.get("published_hint"),
+                        rank=int(rank) if rank is not None else i + 1,
+                    )
+                )
+            except ContractViolation as violation:
+                logger.warning("research_search_hit_skipped", **violation.as_dict())
+        return hits
 
     def await_verification(
         self,

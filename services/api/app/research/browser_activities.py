@@ -45,6 +45,13 @@ from app.memory.service import remember_explicit
 from app.memory.types import MemoryClass
 from app.research import discovery, runs_service, sources
 from app.research.browser_gateway import BrowserDispatchError, DeviceBrowserGateway
+from app.research.contracts import (
+    ERROR_INSUFFICIENT_VALID_EVIDENCE,
+    MIN_VALID_EVIDENCE,
+    ContractViolation,
+    InsufficientValidEvidence,
+    QuarantineLedger,
+)
 from app.research.destination import DestinationPolicyError, validate_fetch_target
 from app.research.evidence import EvidenceRecord, dedup_and_rank
 from app.research.injection import count_markers, is_injection_suspected
@@ -330,7 +337,10 @@ def discover_activity(
                 # are not re-issued" — this query already produced candidates
                 # (or is in flight elsewhere); nothing new to search for.
                 return {
-                    "status": "done", "candidates": 0, "path": "cached", "verification_url": None,
+                    "status": "done",
+                    "candidates": 0,
+                    "path": "cached",
+                    "verification_url": None,
                 }
 
             gateway = DeviceBrowserGateway(
@@ -462,8 +472,19 @@ def discover_activity(
 # spent its whole budget on such pages (a newspaper's "yapay zeka" search listing is
 # discovered first by every engine); they carry no dated claim and mostly links.
 _LISTING_PATH_MARKERS = (
-    "/haberleri/", "/arama", "/search", "/tag/", "/tags/", "/etiket/", "/konu/", "/topics/",
-    "/topic/", "/kategori/", "/category/", "/k/", "/keyword/",
+    "/haberleri/",
+    "/arama",
+    "/search",
+    "/tag/",
+    "/tags/",
+    "/etiket/",
+    "/konu/",
+    "/topics/",
+    "/topic/",
+    "/kategori/",
+    "/category/",
+    "/k/",
+    "/keyword/",
 )
 _CLASS_PRIORITY = {"official": 0, "technical": 1, "academic": 2, "news": 3, "community": 4}
 
@@ -540,7 +561,9 @@ def fetch_targets_activity(task_id: str, max_sources: int) -> list[dict[str, str
             except DestinationPolicyError as exc:
                 logger.warning(
                     "browser_research_fetch_target_rejected",
-                    task_id=task_id, url=c.url, error=str(exc),
+                    task_id=task_id,
+                    url=c.url,
+                    error=str(exc),
                 )
                 runs_service.update_run(
                     session,
@@ -666,6 +689,50 @@ def await_verification_activity(
 # -------------------------------------------------------------------- rank
 
 
+def _load_evidence_with_quarantine(
+    rows: list[Any], *, stage: str
+) -> tuple[list[EvidenceRecord], QuarantineLedger]:
+    """Rebuild stored evidence rows, quarantining any that break their field contract.
+
+    Fault isolation (owner incident, 2026-09-04): one malformed row must not end a research
+    job. The offending row is left exactly as it is in the evidence store - nothing is
+    rewritten or deleted - and only its identity and the violated field are recorded, so the
+    run's event trail can say what was set aside and why.
+    """
+    records: list[EvidenceRecord] = []
+    quarantine = QuarantineLedger(stage=stage)
+    for row in rows:
+        payload = row.evidence_json if isinstance(row.evidence_json, dict) else {}
+        url = str(payload.get("url") or getattr(row, "url", "") or "unknown")
+        try:
+            records.append(EvidenceRecord.from_dict(payload, stage=stage))
+        except ContractViolation as violation:
+            quarantine.record(violation, url=url)
+            logger.warning("research_evidence_quarantined", **violation.as_dict())
+        except (KeyError, TypeError, ValueError) as exc:
+            quarantine.record_reason(
+                entity="evidence_item", entity_id=url, reason=type(exc).__name__, url=url
+            )
+            logger.warning(
+                "research_evidence_quarantined", entity_id=url, reason=type(exc).__name__
+            )
+    return records, quarantine
+
+
+def _require_enough_evidence(
+    records: list[EvidenceRecord], quarantine: QuarantineLedger, *, stage: str
+) -> None:
+    """Fail the run ONLY when quarantining left too little to answer the request."""
+    if len(records) >= MIN_VALID_EVIDENCE or (records and quarantine.empty):
+        return
+    raise InsufficientValidEvidence(
+        stage=stage,
+        valid=len(records),
+        required=MIN_VALID_EVIDENCE,
+        quarantined=quarantine.entries,
+    )
+
+
 @activity.defn(name="browser_research_rank")
 def rank_activity(
     task_id: str, topic: str, window_start_iso: str, window_end_iso: str
@@ -678,22 +745,68 @@ def rank_activity(
     factory = _session_factory()
     with factory() as session:
         rows = runs_service.list_evidence(session, tid)
-        records = [EvidenceRecord.from_dict(r.evidence_json) for r in rows]
+        records, quarantine = _load_evidence_with_quarantine(rows, stage=STAGE_RANKING)
+        try:
+            _require_enough_evidence(records, quarantine, stage=STAGE_RANKING)
+        except InsufficientValidEvidence as exc:
+            runs_service.update_run(
+                session,
+                tid,
+                event={
+                    "stage": STAGE_RANKING,
+                    "detail": "insufficient valid evidence",
+                    **exc.as_dict(),
+                },
+            )
+            raise _non_retryable(ERROR_INSUFFICIENT_VALID_EVIDENCE, str(exc)) from exc
         ranked = assign_evidence_ids(
             dedup_and_rank(records, topic=topic, window_start=window_start, window_end=window_end)
         )
         runs_service.update_evidence_ranking(session, tid, ranked)
+        event: dict[str, Any] = {
+            "stage": STAGE_RANKING,
+            "detail": f"{len(ranked)} evidence ranked",
+        }
+        if not quarantine.empty:
+            event.update(quarantine.summary())
+            event["quarantine"] = quarantine.entries[:10]
         runs_service.update_run(
             session,
             tid,
             stage=STAGE_RANKING,
-            progress={"evidence": len(ranked)},
-            event={"stage": STAGE_RANKING, "detail": f"{len(ranked)} evidence ranked"},
+            progress={"evidence": len(ranked), "quarantined": len(quarantine)},
+            event=event,
         )
-    return {"evidence": len(ranked), "deduplicated": len(records) - len(ranked)}
+    return {
+        "evidence": len(ranked),
+        "deduplicated": len(records) - len(ranked),
+        "quarantined": len(quarantine),
+    }
 
 
 # --------------------------------------------------------------- synthesize
+
+
+def _synthesize_with_fallback(
+    provider: Any, topic: str, evidence: list[EvidenceRecord], *, recency_label: str, settings: Any
+) -> tuple[Any, Any]:
+    """Synthesize, and fall back to the deterministic provider when a model's output cannot be
+    trusted.
+
+    A model that answers a contract-bound field with prose (2026-09-04: ``importance`` carrying
+    a Turkish sentence) has produced unusable output, not a reason to throw away a run whose
+    discovery, fetching and ranking all succeeded. The offending output is rejected as a whole
+    and the deterministic provider - which builds findings only from validated evidence -
+    produces the report instead. The substitution is recorded, never silent.
+    """
+    try:
+        return provider.synthesize(topic, evidence, recency_label=recency_label), provider
+    except (ContractViolation, InsufficientValidEvidence) as exc:
+        detail = exc.as_dict()
+        logger.warning("research_synthesis_fell_back", provider=provider.name, **detail)
+        fallback_provider = resolve_synthesis_provider("deterministic", settings)
+        result = fallback_provider.synthesize(topic, evidence, recency_label=recency_label)
+        return result, fallback_provider
 
 
 @activity.defn(name="browser_research_synthesize")
@@ -708,13 +821,29 @@ def synthesize_activity(
     with factory() as session:
         rows = runs_service.list_evidence(session, tid)
         candidate_count = len(runs_service.list_candidates(session, tid))
-        ranked = [EvidenceRecord.from_dict(r.evidence_json) for r in rows]
+        ranked, quarantine = _load_evidence_with_quarantine(rows, stage=STAGE_SYNTHESIZING)
+        try:
+            _require_enough_evidence(ranked, quarantine, stage=STAGE_SYNTHESIZING)
+        except InsufficientValidEvidence as exc:
+            runs_service.update_run(
+                session,
+                tid,
+                event={
+                    "stage": STAGE_SYNTHESIZING,
+                    "detail": "insufficient valid evidence",
+                    **exc.as_dict(),
+                },
+            )
+            raise _non_retryable(ERROR_INSUFFICIENT_VALID_EVIDENCE, str(exc)) from exc
         ranked.sort(key=lambda r: (r.rank or 9999, r.url))
         evidence_by_id = {e.id: e for e in ranked}
         primary_only = [e for e in ranked if not e.syndicated_of]
 
         provider = resolve_synthesis_provider(synthesis_name, settings)
-        result = provider.synthesize(topic, primary_only, recency_label=window_json["label"])
+        result, provider = _synthesize_with_fallback(
+            provider, topic, primary_only, recency_label=window_json["label"], settings=settings
+        )
+        synthesis_quarantine = list(quarantine.entries) + list(getattr(result, "quarantined", ()))
 
         stats = ReportStats(
             queries=0,
@@ -725,6 +854,12 @@ def synthesize_activity(
             evidence=len(ranked),
             truncated_fields=result.truncated_fields,
         )
+        if synthesis_quarantine:
+            logger.info(
+                "research_quarantine_summary",
+                stage=STAGE_SYNTHESIZING,
+                quarantined=len(synthesis_quarantine),
+            )
         report = ResearchReport(
             task_id=task_id,
             topic=topic,
@@ -871,9 +1006,7 @@ def _finding_memory_entry(
         "title": finding["title"],
         "label": finding["label"],
         "importance": finding.get("importance"),
-        "evidence_urls": [
-            source_by_id[eid]["url"] for eid in evidence_ids if eid in source_by_id
-        ],
+        "evidence_urls": [source_by_id[eid]["url"] for eid in evidence_ids if eid in source_by_id],
     }
     summary = finding.get("summary", "")
     cited_evidence_suspected = any(
@@ -983,18 +1116,22 @@ def fail_run_activity(task_id: str, error_class: str, detail: str) -> bool:
         if run is not None and run.stage in (STAGE_FAILED, STAGE_READY):
             return False
         task = artifact_service.get_task(session, tid)
-        if task is not None and task.status not in (
-            TASK_STATUS_FAILED_TERMINAL,
-        ):
+        if task is not None and task.status not in (TASK_STATUS_FAILED_TERMINAL,):
             try:
                 _transition_task(
-                    session, tid, TASK_STATUS_FAILED_TERMINAL,
-                    error_class=error_class, error_message=detail[:2000],
+                    session,
+                    tid,
+                    TASK_STATUS_FAILED_TERMINAL,
+                    error_class=error_class,
+                    error_message=detail[:2000],
                 )
             except Exception:  # noqa: BLE001 - an illegal transition must not mask the failure
                 pass
         runs_service.update_run(
-            session, tid, stage=STAGE_FAILED, error=detail[:2000],
+            session,
+            tid,
+            stage=STAGE_FAILED,
+            error=detail[:2000],
             event={"stage": STAGE_FAILED, "detail": f"{error_class}: {detail[:300]}"},
         )
         session.commit()

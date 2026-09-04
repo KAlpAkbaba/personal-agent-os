@@ -2747,3 +2747,33 @@ embedded Temporal worker). Facts and decisions that were not in the design:
     force). `scripts/research/owner-research.ps1` never installs at all: it refuses with the one
     update command when the installed contract is incompatible, and releases the Cloud Core only
     when the deployed research policy predates the checkout's.
+
+20. **Typed field contracts for research data; one bad candidate never kills a run**
+    (2026-09-04, owner run `f6eb5021`: DuckDuckGo discovery found 243 candidates, 12 were
+    fetched and ranked, and the job then died with
+    `ValueError: invalid literal for int() with base 10: 'Bu model, yapay zeka …'`).
+    Proven cause, reproduced exactly: `synthesis._parse_finding` did `int(data["importance"])`
+    on a synthesis model's finding, and that model had answered the numeric `importance` field
+    with a Turkish prose sentence. Nothing about the browser, DuckDuckGo, the device or the
+    deployment was involved; the defect was a numeric field with no declared type, no range, no
+    provenance and no validation, so free-form extracted text could reach it.
+
+    Decisions: (a) `app/research/contracts.py` declares every numeric field the pipeline reads
+    from data it did not compute - `discovered_result.rank`, `fetched_source.http_status`,
+    `evidence_item.rank/score`, `ranked_candidate.rank/score`, `finding.importance` - with a
+    name, a type, a valid range and a provenance sentence, and validates deterministically
+    before use: real numbers and clean numeric strings only, never prose, dates, empty strings,
+    booleans or containers. (b) The inverse guard is the same machinery: declared TEXT fields
+    (url/title/snippet/excerpt/publisher/label) refuse numbers, so a rank or score can never be
+    read as a title and a positional mix-up is caught at the field boundary. (c) A violation
+    raises `ContractViolation` carrying entity, entity id, field, expected type/range, observed
+    Python type and observed value CLASS (`prose_text`, `date_like_string`, …) plus the stage -
+    and never the offending content, which must not leak out of the evidence store. (d) Fault
+    isolation: a malformed finding or stored evidence row is quarantined
+    (`invalid_evidence_contract`), its raw row is left exactly as it is, its reason is recorded
+    in the run's event trail, and the run continues on the valid remainder; the run fails only
+    when fewer than `MIN_VALID_EVIDENCE` (3) valid items remain, as
+    `insufficient_valid_evidence` with counts and reasons. (e) A synthesis provider whose whole
+    output violates the contract is replaced for that run by the deterministic provider, which
+    builds findings only from validated evidence - recorded, never silent. Research policy
+    version 2 carries the evidence contract, so exactly one Cloud Core release ships it.

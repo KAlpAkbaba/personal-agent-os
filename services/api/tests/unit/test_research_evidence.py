@@ -129,9 +129,7 @@ def test_dedup_and_rank_empty_input() -> None:
 # ---------------------------------------- near-duplicate-title syndication
 
 
-def _titled(
-    url: str, title: str, *, source_class: str = "news"
-) -> EvidenceRecord:
+def _titled(url: str, title: str, *, source_class: str = "news") -> EvidenceRecord:
     return EvidenceRecord(
         url=url,
         title=title,
@@ -147,11 +145,13 @@ def test_near_duplicate_titles_across_distinct_urls_mark_syndication() -> None:
     Jaccard are near-duplicates (spec §2) — syndication, not a dedup-by-URL
     case (their normalized URLs differ)."""
     official = _titled(
-        "https://openai.com/a", "OpenAI announces new agent framework today",
+        "https://openai.com/a",
+        "OpenAI announces new agent framework today",
         source_class="official",
     )
     community = _titled(
-        "https://forum.example.com/b", "OpenAI announces new agent framework today",
+        "https://forum.example.com/b",
+        "OpenAI announces new agent framework today",
         source_class="community",
     )
     ranked = dedup_and_rank([official, community])
@@ -167,11 +167,13 @@ def test_near_duplicate_title_syndication_prefers_higher_priority_source_class()
     §2) — the primary must always be the higher-priority class regardless of
     input order."""
     technical = _titled(
-        "https://news.ycombinator.com/x", "Multi agent systems survey released",
+        "https://news.ycombinator.com/x",
+        "Multi agent systems survey released",
         source_class="technical",
     )
     academic = _titled(
-        "https://arxiv.org/abs/1", "Multi agent systems survey released",
+        "https://arxiv.org/abs/1",
+        "Multi agent systems survey released",
         source_class="academic",
     )
     ranked = dedup_and_rank([academic, technical])  # input order deliberately reversed
@@ -202,3 +204,50 @@ def test_dissimilar_titles_are_not_marked_as_syndicated() -> None:
     b = _titled("https://b.example.com/2", "A totally different story on economics")
     ranked = dedup_and_rank([a, b])
     assert all(r.syndicated_of is None for r in ranked)
+
+
+# ------------------------------------------- typed field contracts (2026-09-04 incident)
+
+
+def _stored(**overrides) -> dict:
+    base = {
+        "url": "https://example.com/1",
+        "title": "Kaynak başlığı",
+        "excerpt": "Yapay zekâ ajanları hakkında bir cümle.",
+        "fetched_at": "2026-09-04T10:00:00+00:00",
+        "extraction_method": "dom_text",
+        "source_class": "news",
+        "rank": 2,
+        "score": 1.5,
+    }
+    base.update(overrides)
+    return base
+
+
+def test_stored_evidence_round_trips_with_valid_numbers() -> None:
+    record = EvidenceRecord.from_dict(_stored())
+    assert record.rank == 2 and record.score == 1.5
+    assert EvidenceRecord.from_dict(_stored(rank="3", score="0.5")).rank == 3
+
+
+def test_prose_or_a_date_in_a_stored_numeric_field_is_a_named_violation() -> None:
+    """A stored row whose rank/score carries text is quarantined by the caller, never turned
+    into a ValueError that fails the whole research job (owner run f6eb5021)."""
+    from app.research.contracts import ContractViolation
+
+    for field_name, value in (("rank", "Bu model, yapay zeka..."), ("score", "2026-09-04")):
+        with pytest.raises(ContractViolation) as excinfo:
+            EvidenceRecord.from_dict(_stored(**{field_name: value}))
+        detail = excinfo.value.as_dict()
+        assert detail["field"] == field_name
+        assert detail["entity"] == "evidence_item"
+        assert detail["observed_class"] in ("prose_text", "date_like_string")
+        assert detail["entity_id"] == "https://example.com/1"
+
+
+def test_a_number_in_a_stored_text_field_is_a_named_violation() -> None:
+    from app.research.contracts import ContractViolation
+
+    with pytest.raises(ContractViolation) as excinfo:
+        EvidenceRecord.from_dict(_stored(title=5))
+    assert excinfo.value.as_dict()["reason"] == "number_is_not_text"
