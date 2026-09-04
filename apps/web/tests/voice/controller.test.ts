@@ -209,6 +209,7 @@ describe("VoiceSessionController", () => {
       "end_of_turn",
       "state",
       "first_audio",
+      "spoken", // M16 §3.2: the completed response's transcript, before response_done
       "response_done",
       "state",
     ]);

@@ -42,7 +42,7 @@ import type {
   SidebandFrame,
   ToolCallResponse,
 } from "./contract";
-import { MAX_SUMMARY_CHARS } from "./contract";
+import { MAX_EVENT_TEXT_CHARS, MAX_SUMMARY_CHARS } from "./contract";
 import { EventReporter, numbersOnly, type Scheduler, realScheduler } from "./events";
 import { HesitationGuard, type HesitationGuardConfig } from "./hesitation";
 import type {
@@ -129,6 +129,50 @@ export type LatencyDetail = {
 };
 
 /**
+ * M16 §3.2: the last narration cursor Cloud Core pushed on the
+ * `narration_cursor` sideband — where "dur" landed, in the plan's own ids
+ * (`s2` / `p3` / 0-based sentence index). Shown on /voice during acceptance.
+ */
+export type NarrationCursorView = {
+  state: string;
+  action: string | null;
+  sectionId: string | null;
+  paragraphId: string | null;
+  sentenceIndex: number | null;
+};
+
+/** Owner-readable position: `s2 ¶p3 · 3. cümle` (the server's sentence index is 0-based). */
+export function describeNarrationCursor(cursor: NarrationCursorView): string {
+  const parts: string[] = [];
+  if (cursor.sectionId) parts.push(cursor.sectionId);
+  if (cursor.paragraphId) parts.push(`¶${cursor.paragraphId}`);
+  if (cursor.sentenceIndex !== null) parts.push(`${cursor.sentenceIndex + 1}. cümle`);
+  return parts.length > 0 ? parts.join(" ") : "konum yok";
+}
+
+/** A plan id (`s2`, `p3`) or an action name from a sideband payload; null when absent. */
+function idOrNull(value: unknown): string | null {
+  if (typeof value === "string" && value) return value;
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return null;
+}
+
+function narrationCursorFrom(payload: Record<string, unknown>): NarrationCursorView {
+  const cursor =
+    payload.cursor && typeof payload.cursor === "object" ? (payload.cursor as Record<string, unknown>) : {};
+  const index = typeof cursor.sentence_index === "number" && Number.isFinite(cursor.sentence_index)
+    ? Math.max(0, Math.round(cursor.sentence_index))
+    : null;
+  return {
+    state: String(payload.state ?? ""),
+    action: idOrNull(payload.action),
+    sectionId: idOrNull(cursor.section_id),
+    paragraphId: idOrNull(cursor.paragraph_id),
+    sentenceIndex: index,
+  };
+}
+
+/**
  * ADR-0045: which realtime-session contract version the client is honouring.
  * `source` says how it was learned: the server's own document, a 404 (a v1
  * server), the bundled document because the server could not be asked
@@ -179,6 +223,8 @@ export type ControllerSnapshot = {
   latencyDetail: LatencyDetail;
   toolsRunning: string[];
   sidebandLog: string[];
+  /** M16 §3.2: the last `narration_cursor` sideband frame; null until one arrives. */
+  narrationCursor: NarrationCursorView | null;
   hesitation: { held: number; resumed_within_hold: number; last?: string };
   online: boolean;
   eventsAccepted: number;
@@ -311,7 +357,12 @@ export class VoiceSessionController {
   private playbackConfirmTimer: unknown = null;
   private bargedResponse = false;
   private earlyMute: EarlyMute | null = null;
+  /** the assistant's transcript for the CURRENT response only; reset on response_started */
   private assistantBuffer = "";
+  /** 1-based count of provider responses this leg saw (`spoken.payload.response_seq`) */
+  private responseSeq = 0;
+  /** a `spoken` event went out for the current response (a cut or a completion, never both) */
+  private spokenReported = false;
 
   // tools
   private relayed = new Map<string, Promise<void>>();
@@ -354,6 +405,7 @@ export class VoiceSessionController {
       latencyDetail: {},
       toolsRunning: [],
       sidebandLog: [],
+      narrationCursor: null,
       hesitation: { held: 0, resumed_within_hold: 0 },
       online: deps.network.online,
       eventsAccepted: 0,
@@ -999,6 +1051,10 @@ export class VoiceSessionController {
       source: SOURCE_CODE[source],
       ...numbersOnly(extra),
     });
+    // M16 §3.2: what the assistant had said when it was cut — queued only
+    // (no await, nothing before the stop), so Cloud Core can place the
+    // narration cursor at the sentence after the last one fully spoken.
+    this.reportSpoken(0, at);
     this.reporter.report({ kind: "barge_in_start", t_ms: at, turn, payload: breakdown });
     this.reporter.report({ kind: "playback_stopped", t_ms: stopAt, turn, payload: { anomaly, early_mute: early ? 1 : 0 } });
     this.log("report.barge_in");
@@ -1232,6 +1288,8 @@ export class VoiceSessionController {
     this.bargedResponse = false;
     this.earlyMute = null;
     this.assistantBuffer = "";
+    this.responseSeq += 1;
+    this.spokenReported = false;
     this.prematureResponse = this.guard.isHolding;
     this.deps.playback.arm();
     this.log(`response.started@${Math.round(at)}`);
@@ -1327,12 +1385,36 @@ export class VoiceSessionController {
     if (final && text) this.remember(`Asistan: ${text}`);
   }
 
+  /**
+   * M16 §3.2 `spoken`: the assistant transcript of the current response as
+   * top-level `text` (the owner's transcript never enters it — the buffer only
+   * ever holds `response_text`), with a numbers-only payload. `final: 0` at a
+   * barge-in with whatever was buffered (possibly nothing), `final: 1` at a
+   * completion when something was said. At most one per response. Longer than
+   * the server's text limit keeps the TAIL — the alignment needs the most
+   * recent sentences — and says so with `truncated: 1`.
+   */
+  private reportSpoken(final: 0 | 1, at: number): void {
+    if (!this.reporter || this.spokenReported) return;
+    const full = this.assistantBuffer;
+    if (final === 1 && !full) return;
+    this.spokenReported = true;
+    const truncated = full.length > MAX_EVENT_TEXT_CHARS;
+    const text = truncated ? full.slice(full.length - MAX_EVENT_TEXT_CHARS) : full;
+    const payload: Record<string, number> = { final, response_seq: this.responseSeq, chars: full.length };
+    if (truncated) payload.truncated = 1;
+    this.reporter.report({ kind: "spoken", t_ms: at, turn: this.snapshot.turn, text, payload });
+  }
+
   private onResponseDone(at: number): void {
     this.responseActive = false;
     this.awaitingFirstAudio = false;
     this.clearPlaybackConfirmTimer();
     // A candidate still pending when the response ends: restore the gain now.
     this.revertEarlyMute(at);
+    // A response that was cut already reported what was heard; a completed
+    // one reports its whole transcript (once, and only when there is one).
+    if (!this.bargedResponse) this.reportSpoken(1, at);
     this.reporter?.report({ kind: "response_done", t_ms: at, turn: this.snapshot.turn });
     if (this.longRunning.size > 0) {
       this.setState("tool_running", "TOOL_RUNNING");
@@ -1484,9 +1566,13 @@ export class VoiceSessionController {
       case "tool_progress":
         this.pushSideband(`ilerleme: ${JSON.stringify(payload).slice(0, 120)}`);
         return;
-      case "narration_cursor":
-        this.pushSideband(`anlatım imleci: ${String(payload.state ?? "")}`);
+      case "narration_cursor": {
+        const cursor = narrationCursorFrom(payload);
+        this.patch({ narrationCursor: cursor });
+        const action = cursor.action ? ` (${cursor.action})` : "";
+        this.pushSideband(`anlatım imleci: ${cursor.state}${action} — ${describeNarrationCursor(cursor)}`);
         return;
+      }
       case "leg_closed":
         this.pushSideband(`bu bağlantı devralındı (${String(payload.new_client_kind ?? "")})`);
         this.closing = true;

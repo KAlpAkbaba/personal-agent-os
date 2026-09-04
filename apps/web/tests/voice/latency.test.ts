@@ -12,7 +12,7 @@
 import { describe, expect, it } from "vitest";
 
 import { VoiceSessionApi } from "../../app/lib/voice/api";
-import { isForbiddenKey } from "../../app/lib/voice/contract";
+import { STATE_EVENT_KINDS, isForbiddenKey } from "../../app/lib/voice/contract";
 import { VoiceSessionController } from "../../app/lib/voice/controller";
 import {
   FakeCloudCore,
@@ -499,7 +499,7 @@ describe("payload contract", () => {
     await tick(8);
     await t.controller.disconnect();
 
-    const timing = t.core.events.filter((e) => !["state", "utterance", "summary", "intent", "error"].includes(e.kind));
+    const timing = t.core.events.filter((e) => !(STATE_EVENT_KINDS as readonly string[]).includes(e.kind));
     const kindsSeen = new Set<string>(timing.map((e) => e.kind));
     for (const kind of [...METRIC_KINDS, "tool_call", "tool_done", "network_lost", "network_restored"]) {
       expect(kindsSeen.has(kind), `session emitted ${kind}`).toBe(true);

@@ -135,6 +135,8 @@ export const STATE_EVENT_KINDS = [
   "intent",
   "state",
   "error",
+  /** M16 §3.2: the assistant transcript spoken so far (top-level `text`), at a cut or a completion. */
+  "spoken",
 ] as const;
 
 export const CLIENT_EVENT_KINDS = [
