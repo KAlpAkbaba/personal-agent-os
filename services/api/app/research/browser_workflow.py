@@ -157,7 +157,7 @@ class BrowserResearchWorkflow:
 
         targets = await workflow.execute_activity(
             fetch_targets_activity,
-            args=[request.task_id, request.max_sources],
+            args=[request.task_id, request.max_sources, request.topic],
             start_to_close_timeout=_SHORT,
             retry_policy=_STANDARD_RETRY,
         )

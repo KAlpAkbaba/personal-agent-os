@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import create_engine
@@ -61,6 +61,7 @@ def _permissive_destination(monkeypatch):
     resolver is stubbed to a fixed public address unless a test overrides it
     to specifically exercise a rejection."""
     monkeypatch.setattr(destination, "resolve_hostname", lambda host: [PUBLIC_IP])
+
 
 ALL_TABLES = [
     Device.__table__,
@@ -315,7 +316,12 @@ def test_discover_activity_interstitial_handoff_returns_waiting(
     fake = FakeDeviceCommandClient(factory=_handoff_command_factory)
     monkeypatch.setattr(ba, "_command_client", lambda: fake)
     result = ba.discover_activity(
-        task_id, str(uuid.uuid4()), "news:0", "ai agents", "news", NOW.isoformat(),
+        task_id,
+        str(uuid.uuid4()),
+        "news:0",
+        "ai agents",
+        "news",
+        NOW.isoformat(),
         interstitial="handoff",
     )
     assert result["status"] == "waiting"
@@ -332,7 +338,12 @@ def test_discover_activity_waiting_sets_stage_and_records_verification_url(
     fake = FakeDeviceCommandClient(factory=_handoff_command_factory)
     monkeypatch.setattr(ba, "_command_client", lambda: fake)
     ba.discover_activity(
-        task_id, str(uuid.uuid4()), "news:0", "ai agents", "news", NOW.isoformat(),
+        task_id,
+        str(uuid.uuid4()),
+        "news:0",
+        "ai agents",
+        "news",
+        NOW.isoformat(),
         interstitial="handoff",
     )
 
@@ -366,9 +377,14 @@ def test_discover_activity_unattended_never_asks_for_interstitial_handoff(
             seen_payloads.append(payload)
             return CommandSucceeded(
                 {
-                    "schema_version": 2, "requested_provider": "google", "provider": "duckduckgo",
-                    "fallback": True, "fallback_reason": "google:captcha", "state": "ok",
-                    "path": "fallback", "results": [{"url": "https://a", "title": "A"}],
+                    "schema_version": 2,
+                    "requested_provider": "google",
+                    "provider": "duckduckgo",
+                    "fallback": True,
+                    "fallback_reason": "google:captcha",
+                    "state": "ok",
+                    "path": "fallback",
+                    "results": [{"url": "https://a", "title": "A"}],
                     "result_count": 1,
                 }
             )
@@ -377,7 +393,12 @@ def test_discover_activity_unattended_never_asks_for_interstitial_handoff(
     fake = FakeDeviceCommandClient(factory=factory)
     monkeypatch.setattr(ba, "_command_client", lambda: fake)
     result = ba.discover_activity(
-        task_id, str(uuid.uuid4()), "news:0", "ai agents", "news", NOW.isoformat(),
+        task_id,
+        str(uuid.uuid4()),
+        "news:0",
+        "ai agents",
+        "news",
+        NOW.isoformat(),
         interstitial="fallback",
     )
     assert result["status"] == "done"
@@ -405,7 +426,12 @@ def test_discover_activity_dedups_identical_query_before_searching(
     fake = FakeDeviceCommandClient(factory=factory)
     monkeypatch.setattr(ba, "_command_client", lambda: fake)
     result = ba.discover_activity(
-        task_id, str(uuid.uuid4()), "news:0", "ai agents", "news", NOW.isoformat(),
+        task_id,
+        str(uuid.uuid4()),
+        "news:0",
+        "ai agents",
+        "news",
+        NOW.isoformat(),
     )
     assert result == {"status": "done", "candidates": 0, "path": "cached", "verification_url": None}
     assert search_dispatched["n"] == 0
@@ -453,7 +479,9 @@ def test_fetch_activity_fetches_in_a_new_tab(monkeypatch, db_url, task_id: str) 
         seen_payloads.append(payload)
         return CommandSucceeded(
             {
-                "url": payload["url"], "excerpt": "x", "fetched_at": NOW.isoformat(),
+                "url": payload["url"],
+                "excerpt": "x",
+                "fetched_at": NOW.isoformat(),
                 "extraction_method": "dom_text",
             }
         )
@@ -552,7 +580,9 @@ def test_await_verification_activity_returns_satisfied_true(monkeypatch, task_id
     monkeypatch.setattr(ba, "_command_client", lambda: fake)
     result = ba.await_verification_activity(task_id, str(uuid.uuid4()), 60.0, 0)
     assert result == {
-        "satisfied": True, "url": "https://www.google.com/search?q=x", "elapsed_ms": 3000,
+        "satisfied": True,
+        "url": "https://www.google.com/search?q=x",
+        "elapsed_ms": 3000,
     }
 
 
@@ -620,31 +650,124 @@ def _seed_evidence(db_url: str, task_id: str, records: list[dict]) -> None:
     engine.dispose()
 
 
+#: The quality gate (2026-09-04) refuses evidence that is off topic, outside the requested
+#: window or not real page content, so activity fixtures have to look like pages a person
+#: would actually accept as an answer. TOPIC/WINDOW below are what these tests research.
+TOPIC = "yapay zeka ajanlari"
+
+
+def _window_start() -> str:
+    return (NOW - timedelta(days=3)).isoformat()
+
+
+#: Three genuinely DIFFERENT stories. They have to differ in substance, not just in a
+#: number: near-identical pages are correctly collapsed into one by deduplication, which
+#: would leave a single finding and hide whatever the test meant to check.
+_USABLE_STORIES = (
+    (
+        "https://openai.example.com/agent-platform",
+        "OpenAI yeni yapay zeka ajani platformunu duyurdu",
+        "official",
+        "OpenAI, gelistiricilerin kendi yapay zeka ajanlarini kurmasina olanak taniyan bir "
+        "platform duyurdu. Ajanlar arac kullanimi, kalici hafiza ve cok adimli gorev "
+        "planlamasi yapabiliyor. Sirket, kurumsal musteriler icin erisimin bu hafta "
+        "acilacagini ve fiyatlandirmanin kullanim basina belirlenecegini bildirdi.",
+    ),
+    (
+        "https://framework.example.com/agent-2-0",
+        "Acik kaynak yapay zeka ajani cercevesi 2.0 yayinlandi",
+        "community",
+        "Populer acik kaynak yapay zeka ajani cercevesinin 2.0 surumu yayinlandi. Surum, "
+        "arac cagirma protokolu destegi, daha iyi hafiza yonetimi ve cok ajanli is akislari "
+        "icin bir planlayici iceriyor. Gelistiriciler, otonom ajanlarin uretim ortaminda "
+        "calistirilmasinin belirgin sekilde kolaylastigini soyluyor.",
+    ),
+    (
+        "https://enterprise.example.com/agent-adoption",
+        "Kurumsal yapay zeka ajani kullanimi hizlaniyor",
+        "news",
+        "Bu hafta yayimlanan arastirmaya gore kurumlar yapay zeka ajanlarini uretim "
+        "ortaminda kullanmaya basladi. Rapor, ajan is akislarinin otonom gorev tamamlama "
+        "oranlarini, insan onayi gereken adimlari ve arac entegrasyonlarinin maliyetini "
+        "olcuyor; en yaygin kullanim alani musteri destegi olarak one cikiyor.",
+    ),
+)
+
+
+def _on_topic_body(n: int) -> str:
+    return _USABLE_STORIES[(n - 1) % len(_USABLE_STORIES)][3]
+
+
+def _usable_evidence(count: int = 3, **overrides) -> list[dict]:
+    """Evidence the pre-synthesis quality gate accepts: on topic, inside the window, with
+    enough real text to judge, and distinct enough from each other to survive dedup."""
+    records = []
+    for url, title, source_class, excerpt in _USABLE_STORIES[:count]:
+        record = {
+            "url": url,
+            "title": title,
+            "excerpt": excerpt,
+            "fetched_at": NOW.isoformat(),
+            "published_at": (NOW - timedelta(hours=6)).isoformat(),
+            "extraction_method": "dom_text",
+            "source_class": source_class,
+        }
+        record.update(overrides)
+        records.append(record)
+    return records
+
+
+def _rank_ok(task_id: str) -> dict:
+    return ba.rank_activity(task_id, TOPIC, _window_start(), NOW.isoformat())
+
+
+def _window_ok() -> dict:
+    return {"start": _window_start(), "end": NOW.isoformat(), "label": "son 3 gun"}
+
+
 def test_rank_activity_assigns_ids_and_ranks(db_url, task_id: str) -> None:
+    # Real-shaped evidence: on topic, inside the window and with actual page text, because
+    # the quality gate (2026-09-04) refuses anything else before ranking sees it.
     _seed_evidence(
         db_url,
         task_id,
         [
             {
-                "url": "https://a",
-                "title": "A",
-                "excerpt": "yapay zeka konusu",
+                "url": "https://a.example.com/ai-agent-launch",
+                "title": "OpenAI yeni yapay zeka ajanı platformunu duyurdu",
+                "excerpt": (
+                    "OpenAI, geliştiricilerin kendi yapay zeka ajanlarını kurmasına olanak "
+                    "tanıyan yeni bir platform duyurdu. Ajanlar araç kullanımı, hafıza ve "
+                    "çok adımlı görev planlaması yapabiliyor; şirket, kurumsal müşteriler "
+                    "için erişimin bu hafta açılacağını belirtti. Duyuru, agentic AI "
+                    "alanındaki rekabetin hızlandığı bir döneme denk geliyor."
+                ),
                 "fetched_at": NOW.isoformat(),
+                "published_at": NOW.isoformat(),
                 "extraction_method": "dom_text",
                 "source_class": "official",
             },
             {
-                "url": "https://b",
-                "title": "B",
-                "excerpt": "başka bir konu",
+                "url": "https://b.example.com/agent-framework",
+                "title": "Açık kaynak AI agent çerçevesi 2.0 yayınlandı",
+                "excerpt": (
+                    "Popüler açık kaynak yapay zeka ajanı çerçevesinin 2.0 sürümü yayınlandı. "
+                    "Yeni sürüm, araç çağırma protokolü desteği, daha iyi hafıza yönetimi ve "
+                    "çok ajanlı iş akışları için bir planlayıcı içeriyor. Geliştiriciler, "
+                    "otonom ajanların üretim ortamında çalıştırılmasının kolaylaştığını "
+                    "söylüyor."
+                ),
                 "fetched_at": NOW.isoformat(),
+                "published_at": NOW.isoformat(),
                 "extraction_method": "dom_text",
                 "source_class": "community",
             },
         ],
     )
-    result = ba.rank_activity(task_id, "yapay zeka", NOW.isoformat(), NOW.isoformat())
+    window_start = (NOW - timedelta(days=3)).isoformat()
+    result = ba.rank_activity(task_id, "yapay zeka ajanları", window_start, NOW.isoformat())
     assert result["evidence"] == 2
+    assert result["rejected"] == 0
 
     from sqlalchemy import create_engine as _ce
     from sqlalchemy.orm import sessionmaker
@@ -654,7 +777,7 @@ def test_rank_activity_assigns_ids_and_ranks(db_url, task_id: str) -> None:
         rows = runs_service.list_evidence(session, uuid.UUID(task_id))
         ids = {r.evidence_json["id"] for r in rows}
         assert ids == {"e1", "e2"}
-        official = next(r for r in rows if r.url == "https://a")
+        official = next(r for r in rows if r.url.startswith("https://a."))
         assert official.evidence_json["rank"] == 1  # official outranks community
     engine.dispose()
 
@@ -663,23 +786,10 @@ def test_rank_activity_assigns_ids_and_ranks(db_url, task_id: str) -> None:
 
 
 def test_synthesize_activity_produces_provenance_complete_report(db_url, task_id: str) -> None:
-    _seed_evidence(
-        db_url,
-        task_id,
-        [
-            {
-                "url": "https://a",
-                "title": "A",
-                "excerpt": "konu hakkında bulgu",
-                "fetched_at": NOW.isoformat(),
-                "extraction_method": "dom_text",
-                "source_class": "official",
-            },
-        ],
-    )
-    ba.rank_activity(task_id, "konu", NOW.isoformat(), NOW.isoformat())
-    window = {"start": NOW.isoformat(), "end": NOW.isoformat(), "label": "son 3 gün"}
-    report = ba.synthesize_activity(task_id, "konu", window, "deterministic")
+    _seed_evidence(db_url, task_id, _usable_evidence())
+    _rank_ok(task_id)
+    window = _window_ok()
+    report = ba.synthesize_activity(task_id, TOPIC, window, "deterministic")
     assert report["schema_version"] == 1
     assert report["synthesis_provider"] == "deterministic"
     assert report["sources"]
@@ -708,24 +818,11 @@ def test_persist_artifact_activity_creates_artifact_with_markdown(
         ),
     )
     _advance_task_to_running(db_url, task_id)
-    _seed_evidence(
-        db_url,
-        task_id,
-        [
-            {
-                "url": "https://a",
-                "title": "A",
-                "excerpt": "konu hakkında bulgu",
-                "fetched_at": NOW.isoformat(),
-                "extraction_method": "dom_text",
-                "source_class": "official",
-            },
-        ],
-    )
-    ba.rank_activity(task_id, "konu", NOW.isoformat(), NOW.isoformat())
-    window = {"start": NOW.isoformat(), "end": NOW.isoformat(), "label": "son 3 gün"}
-    ba.synthesize_activity(task_id, "konu", window, "deterministic")
-    result = ba.persist_artifact_activity(task_id, "konu")
+    _seed_evidence(db_url, task_id, _usable_evidence())
+    _rank_ok(task_id)
+    window = _window_ok()
+    ba.synthesize_activity(task_id, TOPIC, window, "deterministic")
+    result = ba.persist_artifact_activity(task_id, TOPIC)
     assert result["artifact_id"]
     assert result["version"] == 1
 
@@ -756,24 +853,11 @@ def test_persist_artifact_activity_raises_when_not_synthesized(task_id: str) -> 
 
 
 def test_remember_activity_writes_episodic_memory_keyed_by_task(db_url, task_id: str) -> None:
-    _seed_evidence(
-        db_url,
-        task_id,
-        [
-            {
-                "url": "https://a",
-                "title": "A",
-                "excerpt": "konu hakkında bulgu",
-                "fetched_at": NOW.isoformat(),
-                "extraction_method": "dom_text",
-                "source_class": "official",
-            },
-        ],
-    )
-    ba.rank_activity(task_id, "konu", NOW.isoformat(), NOW.isoformat())
-    window = {"start": NOW.isoformat(), "end": NOW.isoformat(), "label": "son 3 gün"}
-    ba.synthesize_activity(task_id, "konu", window, "deterministic")
-    memory_id = ba.remember_activity(task_id, "konu")
+    _seed_evidence(db_url, task_id, _usable_evidence())
+    _rank_ok(task_id)
+    window = _window_ok()
+    ba.synthesize_activity(task_id, TOPIC, window, "deterministic")
+    memory_id = ba.remember_activity(task_id, TOPIC)
     assert memory_id is not None
 
     from sqlalchemy import create_engine as _ce
@@ -793,40 +877,36 @@ def test_remember_activity_writes_episodic_memory_keyed_by_task(db_url, task_id:
         # the deterministic provider used here never qualifies, so no
         # "summary" key is written at all.
         assert set(memory.value_json) == {
-            "question", "window", "generated_at", "findings", "sources",
-            "implications", "owner_feedback", "artifact_id",
+            "question",
+            "window",
+            "generated_at",
+            "findings",
+            "sources",
+            "implications",
+            "owner_feedback",
+            "artifact_id",
         }
         assert set(memory.value_json["findings"][0]) == {
-            "title", "label", "importance", "evidence_urls",
+            "title",
+            "label",
+            "importance",
+            "evidence_urls",
         }
     engine.dispose()
 
 
 def test_remember_activity_is_idempotent_keyed_on_task(db_url, task_id: str) -> None:
-    _seed_evidence(
-        db_url,
-        task_id,
-        [
-            {
-                "url": "https://a",
-                "title": "A",
-                "excerpt": "konu hakkında bulgu",
-                "fetched_at": NOW.isoformat(),
-                "extraction_method": "dom_text",
-                "source_class": "official",
-            },
-        ],
-    )
-    ba.rank_activity(task_id, "konu", NOW.isoformat(), NOW.isoformat())
-    window = {"start": NOW.isoformat(), "end": NOW.isoformat(), "label": "son 3 gün"}
-    ba.synthesize_activity(task_id, "konu", window, "deterministic")
-    first = ba.remember_activity(task_id, "konu")
-    second = ba.remember_activity(task_id, "konu")
+    _seed_evidence(db_url, task_id, _usable_evidence())
+    _rank_ok(task_id)
+    window = _window_ok()
+    ba.synthesize_activity(task_id, TOPIC, window, "deterministic")
+    first = ba.remember_activity(task_id, TOPIC)
+    second = ba.remember_activity(task_id, TOPIC)
     assert first == second  # same memory row updated, not duplicated
 
 
 def test_remember_activity_returns_none_when_no_report(task_id: str) -> None:
-    assert ba.remember_activity(task_id, "konu") is None
+    assert ba.remember_activity(task_id, TOPIC) is None
 
 
 # ------------------------------------ device_id/command_id provenance (MEDIUM-5)
@@ -865,24 +945,35 @@ def test_fetch_activity_stores_command_id_and_device_id_on_evidence(
 def test_synthesize_activity_sources_carry_device_id_and_command_id(
     monkeypatch, db_url, task_id: str
 ) -> None:
-    fake = FakeDeviceCommandClient(
-        default_outcome=CommandSucceeded(
+    # Three real fetches of three different pages: the report needs at least
+    # MIN_REPORT_FINDINGS findings, and one page can only support one.
+    def _page(**call) -> CommandSucceeded:
+        url = call["payload"].get("url")
+        story = next((st for st in _USABLE_STORIES if st[0] == url), None)
+        if story is None:  # session_open and friends carry no url
+            return CommandSucceeded({"session_id": call["payload"].get("session_id")})
+        return CommandSucceeded(
             {
-                "url": "https://a",
-                "title": "Bir başlık",
-                "excerpt": "konu hakkında bulgu",
+                "url": story[0],
+                "title": story[1],
+                "excerpt": story[3],
                 "fetched_at": NOW.isoformat(),
                 "extraction_method": "dom_text",
-                "metadata": {"publisher": "A"},
+                "metadata": {
+                    "publisher": story[0],
+                    "published_at": (NOW - timedelta(hours=6)).isoformat(),
+                },
             }
         )
-    )
+
+    fake = FakeDeviceCommandClient(factory=_page)
     monkeypatch.setattr(ba, "_command_client", lambda: fake)
     device_id = str(uuid.uuid4())
-    ba.fetch_activity(task_id, device_id, "https://a", "q", "news")
-    ba.rank_activity(task_id, "konu", NOW.isoformat(), NOW.isoformat())
-    window = {"start": NOW.isoformat(), "end": NOW.isoformat(), "label": "son 3 gün"}
-    report = ba.synthesize_activity(task_id, "konu", window, "deterministic")
+    for story in _USABLE_STORIES:
+        ba.fetch_activity(task_id, device_id, story[0], "q", "news")
+    _rank_ok(task_id)
+    window = _window_ok()
+    report = ba.synthesize_activity(task_id, TOPIC, window, "deterministic")
     assert report["sources"]
     for source in report["sources"]:
         assert source["device_id"] == device_id
@@ -905,7 +996,10 @@ def _insert_candidate(db_url: str, task_id: str, *, url: str, query_id: str = "n
             uuid.UUID(task_id),
             [
                 DiscoveredCandidate(
-                    url=url, title="t", publisher="p", discovered_by="browser_search",
+                    url=url,
+                    title="t",
+                    publisher="p",
+                    discovered_by="browser_search",
                     query_id=query_id,
                 )
             ],
@@ -970,20 +1064,19 @@ def test_remember_activity_deterministic_never_writes_excerpt_or_injection_text(
         task_id,
         [
             {
-                "url": "https://a",
-                "title": "Gündemdeki gelişme",
-                "excerpt": _HOSTILE_TEXT,
-                "fetched_at": NOW.isoformat(),
-                "extraction_method": "dom_text",
-                "source_class": "official",
-                "publisher": "Örnek Yayın",
+                **_usable_evidence(1)[0],
+                # A genuine, on-topic page that happens to carry injected instructions in
+                # its body - which is exactly how this reaches the pipeline in the wild.
+                "excerpt": _on_topic_body(1) + " " + _HOSTILE_TEXT,
+                "publisher": "Ornek Yayin",
             },
+            *_usable_evidence(3)[1:],
         ],
     )
-    ba.rank_activity(task_id, "konu", NOW.isoformat(), NOW.isoformat())
-    window = {"start": NOW.isoformat(), "end": NOW.isoformat(), "label": "son 3 gün"}
-    ba.synthesize_activity(task_id, "konu", window, "deterministic")
-    memory_id = ba.remember_activity(task_id, "konu")
+    _rank_ok(task_id)
+    window = _window_ok()
+    ba.synthesize_activity(task_id, TOPIC, window, "deterministic")
+    memory_id = ba.remember_activity(task_id, TOPIC)
     assert memory_id is not None
 
     from sqlalchemy import create_engine as _ce
@@ -1013,41 +1106,67 @@ def test_remember_activity_non_deterministic_provider_omits_summary_when_injecti
     engine = _ce(db_url)
     with sessionmaker(bind=engine, expire_on_commit=False)() as session:
         report_json = {
-            "schema_version": 1, "task_id": task_id, "topic": "konu",
+            "schema_version": 1,
+            "task_id": task_id,
+            "topic": "konu",
             "window": {"start": NOW.isoformat(), "end": NOW.isoformat(), "label": "son 3 gün"},
-            "generated_at": NOW.isoformat(), "synthesis_provider": "fake-llm",
-            "executive_summary": "özet", "why_it_matters": [], "watch_next": [],
-            "details": [], "uncertainty": [],
+            "generated_at": NOW.isoformat(),
+            "synthesis_provider": "fake-llm",
+            "executive_summary": "özet",
+            "why_it_matters": [],
+            "watch_next": [],
+            "details": [],
+            "uncertainty": [],
             "findings": [
                 {
-                    "id": "f1", "title": "Bulgu", "summary": "Zararsız görünen bir özet metni.",
-                    "why_it_matters": "x", "importance": 4, "label": "source_fact",
-                    "evidence_ids": ["e1"], "first_seen": None,
+                    "id": "f1",
+                    "title": "Bulgu",
+                    "summary": "Zararsız görünen bir özet metni.",
+                    "why_it_matters": "x",
+                    "importance": 4,
+                    "label": "source_fact",
+                    "evidence_ids": ["e1"],
+                    "first_seen": None,
                 }
             ],
             "sources": [
                 {
-                    "id": "e1", "url": "https://a", "final_url": "https://a", "title": "A",
-                    "publisher": "A Yayın", "source_class": "news", "published_at": None,
-                    "retrieved_at": NOW.isoformat(), "excerpt": _HOSTILE_TEXT,
+                    "id": "e1",
+                    "url": "https://a",
+                    "final_url": "https://a",
+                    "title": "A",
+                    "publisher": "A Yayın",
+                    "source_class": "news",
+                    "published_at": None,
+                    "retrieved_at": NOW.isoformat(),
+                    "excerpt": _HOSTILE_TEXT,
                     "injection_suspected": True,
                 },
             ],
-            "stats": {"queries": 0, "discovered": 0, "fetched": 1, "fetch_failed": 0,
-                       "deduplicated": 0, "evidence": 1},
+            "stats": {
+                "queries": 0,
+                "discovered": 0,
+                "fetched": 1,
+                "fetch_failed": 0,
+                "deduplicated": 0,
+                "evidence": 1,
+            },
         }
         runs_service.upsert_report(
             session, uuid.UUID(task_id), report_json=report_json, synthesis_provider="fake-llm"
         )
     engine.dispose()
 
-    memory_id = ba.remember_activity(task_id, "konu")
+    memory_id = ba.remember_activity(task_id, TOPIC)
     assert memory_id is not None
     with sessionmaker(bind=engine, expire_on_commit=False)() as session:
         memory = session.get(Memory, uuid.UUID(memory_id))
         assert "summary" not in memory.value_json["findings"][0]
         assert set(memory.value_json["findings"][0]) == {
-            "title", "label", "importance", "evidence_urls",
+            "title",
+            "label",
+            "importance",
+            "evidence_urls",
         }
 
 
@@ -1063,35 +1182,58 @@ def test_remember_activity_non_deterministic_provider_omits_summary_with_injecti
     engine = _ce(db_url)
     with sessionmaker(bind=engine, expire_on_commit=False)() as session:
         report_json = {
-            "schema_version": 1, "task_id": task_id, "topic": "konu",
+            "schema_version": 1,
+            "task_id": task_id,
+            "topic": "konu",
             "window": {"start": NOW.isoformat(), "end": NOW.isoformat(), "label": "son 3 gün"},
-            "generated_at": NOW.isoformat(), "synthesis_provider": "fake-llm",
-            "executive_summary": "özet", "why_it_matters": [], "watch_next": [],
-            "details": [], "uncertainty": [],
+            "generated_at": NOW.isoformat(),
+            "synthesis_provider": "fake-llm",
+            "executive_summary": "özet",
+            "why_it_matters": [],
+            "watch_next": [],
+            "details": [],
+            "uncertainty": [],
             "findings": [
                 {
-                    "id": "f1", "title": "Bulgu", "summary": _HOSTILE_TEXT,
-                    "why_it_matters": "x", "importance": 4, "label": "source_fact",
-                    "evidence_ids": ["e1"], "first_seen": None,
+                    "id": "f1",
+                    "title": "Bulgu",
+                    "summary": _HOSTILE_TEXT,
+                    "why_it_matters": "x",
+                    "importance": 4,
+                    "label": "source_fact",
+                    "evidence_ids": ["e1"],
+                    "first_seen": None,
                 }
             ],
             "sources": [
                 {
-                    "id": "e1", "url": "https://a", "final_url": "https://a", "title": "A",
-                    "publisher": "A Yayın", "source_class": "news", "published_at": None,
-                    "retrieved_at": NOW.isoformat(), "excerpt": "zararsız içerik",
+                    "id": "e1",
+                    "url": "https://a",
+                    "final_url": "https://a",
+                    "title": "A",
+                    "publisher": "A Yayın",
+                    "source_class": "news",
+                    "published_at": None,
+                    "retrieved_at": NOW.isoformat(),
+                    "excerpt": "zararsız içerik",
                     "injection_suspected": False,
                 },
             ],
-            "stats": {"queries": 0, "discovered": 0, "fetched": 1, "fetch_failed": 0,
-                       "deduplicated": 0, "evidence": 1},
+            "stats": {
+                "queries": 0,
+                "discovered": 0,
+                "fetched": 1,
+                "fetch_failed": 0,
+                "deduplicated": 0,
+                "evidence": 1,
+            },
         }
         runs_service.upsert_report(
             session, uuid.UUID(task_id), report_json=report_json, synthesis_provider="fake-llm"
         )
     engine.dispose()
 
-    memory_id = ba.remember_activity(task_id, "konu")
+    memory_id = ba.remember_activity(task_id, TOPIC)
     with sessionmaker(bind=engine, expire_on_commit=False)() as session:
         memory = session.get(Memory, uuid.UUID(memory_id))
         blob = json.dumps(memory.value_json, ensure_ascii=False)
@@ -1111,35 +1253,58 @@ def test_remember_activity_non_deterministic_provider_includes_clean_summary(
     engine = _ce(db_url)
     with sessionmaker(bind=engine, expire_on_commit=False)() as session:
         report_json = {
-            "schema_version": 1, "task_id": task_id, "topic": "konu",
+            "schema_version": 1,
+            "task_id": task_id,
+            "topic": "konu",
             "window": {"start": NOW.isoformat(), "end": NOW.isoformat(), "label": "son 3 gün"},
-            "generated_at": NOW.isoformat(), "synthesis_provider": "fake-llm",
-            "executive_summary": "özet", "why_it_matters": [], "watch_next": [],
-            "details": [], "uncertainty": [],
+            "generated_at": NOW.isoformat(),
+            "synthesis_provider": "fake-llm",
+            "executive_summary": "özet",
+            "why_it_matters": [],
+            "watch_next": [],
+            "details": [],
+            "uncertainty": [],
             "findings": [
                 {
-                    "id": "f1", "title": "Bulgu", "summary": "Temiz ve kısa bir özet.",
-                    "why_it_matters": "x", "importance": 4, "label": "source_fact",
-                    "evidence_ids": ["e1"], "first_seen": None,
+                    "id": "f1",
+                    "title": "Bulgu",
+                    "summary": "Temiz ve kısa bir özet.",
+                    "why_it_matters": "x",
+                    "importance": 4,
+                    "label": "source_fact",
+                    "evidence_ids": ["e1"],
+                    "first_seen": None,
                 }
             ],
             "sources": [
                 {
-                    "id": "e1", "url": "https://a", "final_url": "https://a", "title": "A",
-                    "publisher": "A Yayın", "source_class": "news", "published_at": None,
-                    "retrieved_at": NOW.isoformat(), "excerpt": "zararsız içerik",
+                    "id": "e1",
+                    "url": "https://a",
+                    "final_url": "https://a",
+                    "title": "A",
+                    "publisher": "A Yayın",
+                    "source_class": "news",
+                    "published_at": None,
+                    "retrieved_at": NOW.isoformat(),
+                    "excerpt": "zararsız içerik",
                     "injection_suspected": False,
                 },
             ],
-            "stats": {"queries": 0, "discovered": 0, "fetched": 1, "fetch_failed": 0,
-                       "deduplicated": 0, "evidence": 1},
+            "stats": {
+                "queries": 0,
+                "discovered": 0,
+                "fetched": 1,
+                "fetch_failed": 0,
+                "deduplicated": 0,
+                "evidence": 1,
+            },
         }
         runs_service.upsert_report(
             session, uuid.UUID(task_id), report_json=report_json, synthesis_provider="fake-llm"
         )
     engine.dispose()
 
-    memory_id = ba.remember_activity(task_id, "konu")
+    memory_id = ba.remember_activity(task_id, TOPIC)
     with sessionmaker(bind=engine, expire_on_commit=False)() as session:
         memory = session.get(Memory, uuid.UUID(memory_id))
         assert memory.value_json["findings"][0]["summary"] == "Temiz ve kısa bir özet."
@@ -1152,9 +1317,9 @@ def test_remember_activity_memory_value_never_contains_a_long_excerpt_substring(
     substring >= 80 chars, regardless of provider or injection status —
     the structural guarantee behind the boundary, checked generically rather
     than only via the specific hostile-phrase tests above."""
-    long_excerpt = (
-        "Bu uzun ve tamamen zararsız görünen ama yine de asla hafızaya kopyalanmaması "
-        "gereken bir sayfa alıntısıdır ve seksen karakterden uzundur kesinlikle."
+    long_excerpt = _on_topic_body(1) + (
+        " Bu uzun ve tamamen zararsiz gorunen ama yine de asla hafizaya kopyalanmamasi "
+        "gereken bir sayfa alintisidir ve seksen karakterden uzundur kesinlikle."
     )
     assert len(long_excerpt) >= 80
     _seed_evidence(
@@ -1162,20 +1327,17 @@ def test_remember_activity_memory_value_never_contains_a_long_excerpt_substring(
         task_id,
         [
             {
-                "url": "https://a",
-                "title": "Başlık",
+                **_usable_evidence(1)[0],
                 "excerpt": long_excerpt,
-                "fetched_at": NOW.isoformat(),
-                "extraction_method": "dom_text",
-                "source_class": "official",
-                "publisher": "Yayıncı",
+                "publisher": "Yayinci",
             },
+            *_usable_evidence(3)[1:],
         ],
     )
-    ba.rank_activity(task_id, "konu", NOW.isoformat(), NOW.isoformat())
-    window = {"start": NOW.isoformat(), "end": NOW.isoformat(), "label": "son 3 gün"}
-    ba.synthesize_activity(task_id, "konu", window, "deterministic")
-    memory_id = ba.remember_activity(task_id, "konu")
+    _rank_ok(task_id)
+    window = _window_ok()
+    ba.synthesize_activity(task_id, TOPIC, window, "deterministic")
+    memory_id = ba.remember_activity(task_id, TOPIC)
 
     from sqlalchemy import create_engine as _ce
     from sqlalchemy.orm import sessionmaker
@@ -1268,3 +1430,187 @@ def test_api_discovered_candidates_are_retagged_with_the_class_bearing_query_id(
     tagged = ba._retag(hits, "technical:3")
     assert [c.query_id for c in tagged] == ["technical:3"]
     assert ba._class_for_query(tagged[0].query_id) == "technical"
+
+
+# ----------------------------------------------- 2026-09-04 incident, end to end
+
+
+#: The twelve pages the real 2026-09-04 run fetched, in the shape they had. Three were
+#: usable; the rest were an old model card, unrelated arXiv abstracts, a Cloudflare
+#: interstitial and duplicate coverage of one announcement. All of them became evidence
+#: and the report was published with no findings. See
+#: tests/unit/test_research_regression_20260904.py for the per-item reasoning.
+def _incident_evidence(now: datetime) -> list[dict]:
+    inside = (now - timedelta(days=1)).isoformat()
+    usable = [
+        {
+            "url": url,
+            "title": title,
+            "excerpt": excerpt,
+            "source_class": source_class,
+        }
+        for url, title, source_class, excerpt in _USABLE_STORIES
+    ]
+    records = [
+        {
+            **item,
+            "fetched_at": now.isoformat(),
+            "published_at": inside,
+            "extraction_method": "dom_text",
+        }
+        for item in usable
+    ]
+    records.append(
+        {
+            "url": "https://huggingface.co/ibm-granite/granite-4.0",
+            "title": "IBM Granite 4.0 agentic model ailesi",
+            "excerpt": (
+                "Granite 4.0, arac cagirma ve cok adimli gorev planlamasi icin egitilmis "
+                "yapay zeka ajani modellerinden olusuyor. Model karti, ajan is akislarinda "
+                "kullanilmak uzere ince ayar yapilmis surumleri listeliyor."
+            ),
+            "fetched_at": now.isoformat(),
+            "published_at": (now - timedelta(days=10)).isoformat(),
+            "extraction_method": "dom_text",
+            "source_class": "official",
+        }
+    )
+    for suffix, title, excerpt in (
+        (
+            "2609.01123",
+            "A new series representation for Catalan constant",
+            "We derive a rapidly convergent series representation for the Catalan constant "
+            "and establish error bounds for its partial sums using a hypergeometric "
+            "transformation that yields improved numerical estimates.",
+        ),
+        (
+            "2609.01455",
+            "Halo density profiles in self-interacting dark matter simulations",
+            "We present cosmological simulations of self-interacting dark matter and "
+            "measure the resulting halo density profiles across a range of cross "
+            "sections, finding systematically different inner slopes. The simulations "
+            "resolve substructure down to dwarf galaxy scales and we compare the "
+            "resulting rotation curves against observed samples, discussing the "
+            "implications for constraints on the scattering cross section.",
+        ),
+    ):
+        records.append(
+            {
+                "url": f"https://arxiv.org/abs/{suffix}",
+                "title": title,
+                "excerpt": excerpt,
+                "fetched_at": now.isoformat(),
+                "published_at": inside,
+                "extraction_method": "dom_text",
+                "source_class": "academic",
+            }
+        )
+    records.append(
+        {
+            "url": "https://news.example.com/ai-agents-weekly",
+            "title": "Bir dakika lutfen...",
+            "excerpt": (
+                "Bir dakika lutfen... Devam etmeden once baglantinizin guvenligini "
+                "dogrulamamiz gerekiyor. Bu islem birkac saniye surebilir. Lutfen "
+                "tarayicinizda JavaScript etkin oldugundan emin olun."
+            ),
+            "fetched_at": now.isoformat(),
+            "published_at": inside,
+            "extraction_method": "dom_text",
+            "source_class": "news",
+        }
+    )
+    records.append(
+        {
+            "url": "https://mirror.example.com/openai-duyurdu",
+            "title": "OpenAI, yapay zeka ajani platformunu duyurdu",
+            "excerpt": _USABLE_STORIES[0][3],
+            "fetched_at": now.isoformat(),
+            "published_at": inside,
+            "extraction_method": "dom_text",
+            "source_class": "news",
+        }
+    )
+    return records
+
+
+def test_incident_20260904_evidence_is_gated_and_the_report_is_not_empty(
+    monkeypatch, db_url, task_id: str
+) -> None:
+    """The real run, replayed: the same pages must now produce a real report.
+
+    This is the acceptance shape the owner asked for - off-topic, out-of-window,
+    interstitial and duplicate pages rejected with named reasons, and at least three
+    evidence-backed findings out of what is left.
+    """
+    from sqlalchemy.orm import sessionmaker as _sessionmaker
+
+    from app.object_store import InMemoryObjectStore
+
+    monkeypatch.setattr(
+        ba,
+        "build_artifact_context",
+        lambda settings: (
+            _sessionmaker(bind=create_engine(db_url), expire_on_commit=False),
+            InMemoryObjectStore(),
+        ),
+    )
+    _advance_task_to_running(db_url, task_id)
+    _seed_evidence(db_url, task_id, _incident_evidence(NOW))
+    window_start = (NOW - timedelta(days=3)).isoformat()
+    topic = "yapay zeka ajanlari"
+
+    ranked = ba.rank_activity(task_id, topic, window_start, NOW.isoformat())
+    assert ranked["evidence"] == 3
+    assert ranked["rejected"] == 5
+
+    window = {"start": window_start, "end": NOW.isoformat(), "label": "son 3 gun"}
+    ba.synthesize_activity(task_id, topic, window, "deterministic")
+    ba.persist_artifact_activity(task_id, topic)
+
+    from sqlalchemy import create_engine as _ce
+    from sqlalchemy.orm import sessionmaker
+
+    from app.artifacts import service as artifact_service
+
+    engine = _ce(db_url)
+    with sessionmaker(bind=engine, expire_on_commit=False)() as session:
+        report = runs_service.get_report(session, uuid.UUID(task_id)).report_json
+        artifact = artifact_service.get_artifact_for_task(session, uuid.UUID(task_id))
+        body = artifact_service.get_current_version(session, artifact.id).canonical_body
+    engine.dispose()
+    assert len(report["findings"]) >= 3
+    assert all(f["evidence_ids"] for f in report["findings"])
+    assert report["executive_summary"].strip()
+    reasons = report["stats"]["rejected_by_reason"]
+    assert reasons["off_topic"] == 2
+    assert reasons["interstitial"] == 1
+    assert reasons["duplicate_event"] == 1
+    assert reasons["outside_recency_window"] == 1
+    # The owner has to be able to see the gate verdict in the report itself.
+    assert "Elenen Kaynaklar" in body
+    assert "Bir dakika" not in body
+
+
+def test_incident_20260904_all_bad_evidence_fails_instead_of_publishing(
+    db_url, task_id: str
+) -> None:
+    """With only unusable pages, the run must fail loudly rather than reach ready.
+
+    Publishing a fluent summary over nothing is the exact failure this gate exists to
+    prevent, so the absence of a report here is the assertion.
+    """
+    from temporalio.exceptions import ApplicationError
+
+    _seed_evidence(db_url, task_id, _incident_evidence(NOW)[3:])
+    window_start = (NOW - timedelta(days=3)).isoformat()
+    topic = "yapay zeka ajanlari"
+
+    ba.rank_activity(task_id, topic, window_start, NOW.isoformat())
+    window = {"start": window_start, "end": NOW.isoformat(), "label": "son 3 gun"}
+    with pytest.raises(ApplicationError) as exc_info:
+        ba.synthesize_activity(task_id, topic, window, "deterministic")
+    assert exc_info.value.type in {
+        "insufficient_valid_evidence",
+        "insufficient_valid_findings",
+    }

@@ -253,6 +253,31 @@ your machine:
 
 What it does, in order:
 
+**Your third attempt (2026-09-04) did not crash at all - which is why it was worse.** It
+reached `ready`, fetched and ranked twelve pages, quarantined nothing, and published a report
+with a fluent Turkish executive summary and ZERO findings. Your acceptance check caught it; the
+pipeline did not. Three things were wrong at once, and all three are fixed.
+
+Nothing had ever asked whether a fetched page was about your question. A ten-day-old IBM
+Granite model card and two unrelated arXiv abstracts (one on Catalan's constant, one on
+dark-matter halo profiles) were ranked as evidence for "the last three days in AI agents", and
+every page's retrieval time was quietly standing in for its publication date. A Cloudflare
+interstitial titled "Bir dakika lutfen..." was ranked as if it were an article. And zero
+findings still counted as a finished report.
+
+Now every fetched page is judged before it can be cited: is it real content or a block page,
+is it about the topic, is it inside the window, and is its publication date actually known. A
+page whose date cannot be established is marked uncertain rather than backdated to the moment
+we fetched it. Each refusal is recorded with its reason - off topic, outside the window, date
+uncertain, interstitial, duplicate coverage, not enough content - and the counts appear in the
+report itself, so you can tell a thin answer from a thin web. The report has a floor: at least
+three findings, each citing the evidence it rests on, target five. If the model returns fewer,
+the pipeline rejects that output, retries once against the same evidence, then builds findings
+deterministically from the validated evidence, and if there still are not three defensible
+ones it fails as `insufficient_valid_findings` instead of handing you an empty answer. It never
+invents a finding to reach five. Research policy version 4 carries this, so this rerun performs
+exactly one Cloud Core release and no Windows agent install.
+
 **Your second attempt (2026-09-04) got past the numeric defect and failed on the next one of
 the same family**: a synthesis model returned a statement without its `label`, and the pipeline
 read that key directly, so `KeyError: 'label'` ended a run that had discovered 238 candidates
@@ -283,8 +308,8 @@ contract, so this rerun performs exactly one Cloud Core release and no Windows a
    no swap, no service restart. If they ever differ incompatibly it stops and prints the one
    update command instead of doing it silently.
 2. **Cloud Core policy.** It asks the Cloud Core for its research policy version. The deployed
-   one is version 2 and this checkout expects 3 (the entity schemas), so it releases the
-   Cloud Core once (the proven transactional release: build, migrate, recreate the api
+   one is version 3 and this checkout expects 4 (the quality gate and the findings contract),
+   so it releases the Cloud Core once (the proven transactional release: build, migrate, recreate the api
    container only, health, rollback on any failure). That is the only deployment in this
    command, and only because the source really changed.
 3. **The research.** DuckDuckGo discovery (`requested_provider=duckduckgo`,
@@ -292,7 +317,8 @@ contract, so this rerun performs exactly one Cloud Core release and no Windows a
    real source pages opened and extracted rather than search snippets, dedup across repeated
    coverage, publication dates respected, then the report: executive summary first, the
    findings with why each matters, and the sources with title, URL, publisher and the device
-   command that fetched each one.
+   command that fetched each one. It also prints what was refused and why, so a short report
+   tells you whether the web was thin or the gate was strict.
 
 Expect a visible Chrome window working for two to four minutes. Leave it alone; it closes
 itself and the command checks that zero PagentOS Chrome processes remain.
@@ -303,8 +329,8 @@ itself and the command checks that zero PagentOS Chrome processes remain.
 
 It asks for the Owner Credential in a masked prompt, as usual. Expected last line:
 `OWNER RESEARCH: PASS`. Paste the printed report (or `research-1.json`) and your verdict in a
-sentence: is the executive summary worth reading, do the five items matter, are the sources
-traceable?
+sentence: is the executive summary worth reading, do the items matter, are the sources
+traceable, and does anything in the refused list look like it should have been kept?
 
 Google is not attempted: it stays available behind `-SearchProvider google` whenever you want
 it, with the verification handoff intact.

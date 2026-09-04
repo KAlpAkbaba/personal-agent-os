@@ -141,29 +141,17 @@ def test_build_prompt_wraps_evidence_in_untrusted_block() -> None:
     assert evidence[0].id in prompt
 
 
-def test_parse_synthesis_response_round_trips_minimal_payload() -> None:
-    payload = {
-        "executive_summary": "özet",
-        "findings": [
-            {
-                "id": "f1",
-                "title": "t",
-                "summary": "s",
-                "why_it_matters": "w",
-                "importance": 3,
-                "label": "source_fact",
-                "evidence_ids": ["e1"],
-                "first_seen": None,
-            }
-        ],
-        "why_it_matters": [{"text": "x", "label": "model_inference", "evidence_ids": ["e1"]}],
-        "watch_next": [{"text": "y", "label": "recommendation", "evidence_ids": []}],
-        "details": [{"heading": "h", "statements": []}],
-        "uncertainty": [],
-    }
+def test_parse_synthesis_response_round_trips_a_contract_valid_payload() -> None:
+    payload = _payload(
+        why_it_matters=[{"text": "x", "label": "model_inference", "evidence_ids": ["e1"]}],
+        watch_next=[{"text": "y", "label": "recommendation", "evidence_ids": []}],
+        details=[{"heading": "h", "statements": []}],
+    )
     result = parse_synthesis_response(payload)
     assert result.executive_summary == "özet"
     assert result.findings[0].id == "f1"
+    assert result.findings[0].confidence == 0.7
+    assert result.findings[0].evidence_ids == ("e1",)
     assert result.details[0].heading == "h"
 
 
@@ -242,21 +230,29 @@ def test_deterministic_finding_summary_is_not_the_verbatim_excerpt() -> None:
 # --------------------------------------------- parse_synthesis_response bounds
 
 
+def _valid_finding(index: int = 1, **overrides) -> dict:
+    """A finding that satisfies the output contract: rated, attributed and confident."""
+    finding = {
+        "id": f"f{index}",
+        "title": f"başlık {index}",
+        "summary": "özet",
+        "why_it_matters": "neden önemli",
+        "importance": 3,
+        "confidence": 0.7,
+        "label": "source_fact",
+        "evidence_ids": ["e1"],
+        "first_seen": None,
+    }
+    finding.update(overrides)
+    return finding
+
+
 def _payload(**overrides):
+    # MIN_REPORT_FINDINGS findings by default: a response with fewer is not an answer
+    # (owner requirement, 2026-09-04), so every test that is not ABOUT cardinality starts valid.
     base = {
         "executive_summary": "özet",
-        "findings": [
-            {
-                "id": "f1",
-                "title": "t",
-                "summary": "s",
-                "why_it_matters": "w",
-                "importance": 3,
-                "label": "source_fact",
-                "evidence_ids": ["e1"],
-                "first_seen": None,
-            }
-        ],
+        "findings": [_valid_finding(i) for i in (1, 2, 3)],
         "why_it_matters": [],
         "watch_next": [],
         "details": [],
@@ -291,10 +287,10 @@ def test_parse_synthesis_response_quarantines_a_finding_with_a_non_string_title(
     """Fault isolation (2026-09-04): a finding that breaks its field contract is set aside
     with a reason - it no longer takes the whole run down. The malformed finding never
     reaches the report, and the reason names the field and the observed value class."""
-    payload = _payload()
+    payload = _payload(findings=[_valid_finding(i) for i in (1, 2, 3, 4)])
     payload["findings"][0]["title"] = ["not", "a", "string"]
     result = parse_synthesis_response(payload)
-    assert result.findings == ()
+    assert [f.id for f in result.findings] == ["f2", "f3", "f4"]
     assert len(result.quarantined) == 1
     entry = result.quarantined[0]
     assert entry["entity"] == "finding"
@@ -342,11 +338,19 @@ def test_parse_synthesis_response_within_bounds_not_truncated() -> None:
     assert result.truncated_fields == 0
 
 
-def test_parse_synthesis_response_fewer_than_min_findings_adds_uncertainty_not_padding() -> None:
-    result = parse_synthesis_response(_payload())  # only 1 finding
-    assert len(result.findings) == 1  # kept, not padded
-    assert result.uncertainty
-    assert result.uncertainty[-1].label == STATEMENT_LABEL_UNCERTAINTY
+def test_parse_synthesis_response_refuses_fewer_than_min_findings_instead_of_noting_it() -> None:
+    """Before 2026-09-04 a short answer was accepted with an uncertainty note, and a run with
+    ZERO findings reached `ready`. Cardinality is now part of the contract: the caller retries,
+    then falls back deterministically, and only then fails."""
+    from app.research.contracts import InsufficientValidFindings
+
+    with pytest.raises(InsufficientValidFindings) as excinfo:
+        parse_synthesis_response(_payload(findings=[_valid_finding(1)]))
+    assert excinfo.value.as_dict()["produced"] == 1
+
+    with pytest.raises(InsufficientValidFindings) as empty:
+        parse_synthesis_response(_payload(findings=[]))
+    assert empty.value.as_dict()["produced"] == 0
 
 
 def test_parse_synthesis_response_caps_findings_at_seven_keeping_highest_importance() -> None:
@@ -354,19 +358,7 @@ def test_parse_synthesis_response_caps_findings_at_seven_keeping_highest_importa
     # inevitable with 10 findings; the two lowest-importance entries (the
     # trailing "1"s) must be the ones dropped when capping 10 -> 7.
     importances = [5, 5, 4, 4, 3, 3, 2, 2, 1, 1]
-    findings = [
-        {
-            "id": f"f{i}",
-            "title": f"t{i}",
-            "summary": "s",
-            "why_it_matters": "w",
-            "importance": imp,
-            "label": "source_fact",
-            "evidence_ids": ["e1"],
-            "first_seen": None,
-        }
-        for i, imp in enumerate(importances)
-    ]
+    findings = [_valid_finding(i, importance=imp) for i, imp in enumerate(importances)]
     result = parse_synthesis_response(_payload(findings=findings))
     assert len(result.findings) == 7
     kept_ids = {f.id for f in result.findings}
@@ -440,25 +432,17 @@ INCIDENT_PROSE = (
 )
 
 
-def _finding(idx: int, importance: object) -> dict:
-    return {
-        "id": f"f{idx}",
-        "title": f"başlık {idx}",
-        "summary": "özet",
-        "why_it_matters": "neden önemli",
-        "importance": importance,
-        "label": "source_fact",
-        "evidence_ids": ["e1"],
-        "first_seen": None,
-    }
-
-
 def test_prose_in_importance_quarantines_only_that_finding() -> None:
     """The incident, end to end through the parser: the offending finding is set aside and
     the valid ones still reach the report (before the fix this raised ValueError and the whole
     research job failed after discovery, fetching and ranking had all succeeded)."""
     payload = _payload(
-        findings=[_finding(1, INCIDENT_PROSE), _finding(2, 4), _finding(3, "3"), _finding(4, 5)]
+        findings=[
+            _valid_finding(1, importance=INCIDENT_PROSE),
+            _valid_finding(2, importance=4),
+            _valid_finding(3, importance="3"),
+            _valid_finding(4, importance=5),
+        ]
     )
     result = parse_synthesis_response(payload)
     assert [f.id for f in result.findings] == ["f2", "f3", "f4"]
@@ -472,27 +456,37 @@ def test_prose_in_importance_quarantines_only_that_finding() -> None:
 
 
 def test_quarantining_below_the_minimum_reports_it_as_uncertainty_not_a_crash() -> None:
-    payload = _payload(findings=[_finding(1, INCIDENT_PROSE), _finding(2, "iki"), _finding(3, 4)])
-    result = parse_synthesis_response(payload)
-    assert len(result.findings) == 1
-    assert len(result.quarantined) == 2
-    assert result.uncertainty
-    assert "karantina" in result.uncertainty[-1].text
+    from app.research.contracts import InsufficientValidFindings
+
+    payload = _payload(
+        findings=[
+            _valid_finding(1, importance=INCIDENT_PROSE),
+            _valid_finding(2, importance="iki"),
+            _valid_finding(3),
+        ]
+    )
+    with pytest.raises(InsufficientValidFindings) as excinfo:
+        parse_synthesis_response(payload)
+    detail = excinfo.value.as_dict()
+    assert detail["error_class"] == "insufficient_valid_findings"
+    assert detail["produced"] == 1 and detail["required"] == 3
+    assert detail["quarantined_total"] == 2
 
 
 def test_a_finding_that_is_not_an_object_is_quarantined_too() -> None:
-    payload = _payload(findings=["not a finding", _finding(2, 3)])
+    payload = _payload(
+        findings=["not a finding", _valid_finding(2), _valid_finding(3), _valid_finding(4)]
+    )
     result = parse_synthesis_response(payload)
-    assert [f.id for f in result.findings] == ["f2"]
+    assert [f.id for f in result.findings] == ["f2", "f3", "f4"]
     assert result.quarantined[0]["reason"] == "not_an_object"
 
 
 def test_numbers_arriving_in_finding_text_fields_are_quarantined() -> None:
-    bad = _finding(1, 3)
-    bad["title"] = 7  # a rank-looking number where a title belongs
-    payload = _payload(findings=[bad, _finding(2, 3)])
+    bad = _valid_finding(1, title=7)  # a rank-looking number where a title belongs
+    payload = _payload(findings=[bad, _valid_finding(2), _valid_finding(3), _valid_finding(4)])
     result = parse_synthesis_response(payload)
-    assert [f.id for f in result.findings] == ["f2"]
+    assert [f.id for f in result.findings] == ["f2", "f3", "f4"]
     assert result.quarantined[0]["field"] == "title"
     assert result.quarantined[0]["reason"] == "number_is_not_text"
 

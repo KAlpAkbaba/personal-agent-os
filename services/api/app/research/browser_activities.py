@@ -43,13 +43,16 @@ from app.logging import get_logger, task_id_var
 from app.memory.embedding import DeterministicEmbedder
 from app.memory.service import remember_explicit
 from app.memory.types import MemoryClass
-from app.research import discovery, runs_service, sources
+from app.research import discovery, eligibility, runs_service, sources
 from app.research.browser_gateway import BrowserDispatchError, DeviceBrowserGateway
 from app.research.contracts import (
     ERROR_INSUFFICIENT_VALID_EVIDENCE,
+    ERROR_INSUFFICIENT_VALID_FINDINGS,
+    MIN_REPORT_FINDINGS,
     MIN_VALID_EVIDENCE,
     ContractViolation,
     InsufficientValidEvidence,
+    InsufficientValidFindings,
     QuarantineLedger,
 )
 from app.research.destination import DestinationPolicyError, validate_fetch_target
@@ -534,7 +537,43 @@ def _looks_like_listing(url: str) -> bool:
     return query.startswith("q=") or "&q=" in query or "search=" in query
 
 
-def select_fetch_order(candidates: list, max_sources: int) -> list:
+def _prefetch_preference(candidate: Any, topic: str) -> tuple[int, float]:
+    """How promising a candidate looks BEFORE it is fetched, from what discovery stored.
+
+    Only the URL and the provider's date hint exist at this point (no title, no body), so this
+    is a preference, not a verdict - the real gate runs after the fetch. It exists because the
+    fetch budget is small: on 2026-09-04 twelve fetches were spent on pages that the gate would
+    later reject (a ten-day-old model card, two unrelated arXiv papers), leaving nothing to
+    synthesize from. Ordering by URL topicality and a within-window date hint spends the same
+    budget on candidates that can actually answer the question.
+    """
+    hint = (getattr(candidate, "published_hint", "") or "").lower()
+    recent_hint = any(
+        marker in hint
+        for marker in (
+            "saat",
+            "hour",
+            "dakika",
+            "minute",
+            "gün önce",
+            "day ago",
+            "days ago",
+            "dün",
+            "gun once",
+            "dun",
+            "bugun",
+            "yesterday",
+            "today",
+            "bugün",
+        )
+    )
+    relevance = eligibility.topic_relevance(
+        topic=topic, title="", excerpt="", url=str(getattr(candidate, "url", ""))
+    )
+    return (0 if recent_hint else 1, -relevance)
+
+
+def select_fetch_order(candidates: list, max_sources: int, topic: str = "") -> list:
     """Order the pending candidates so the fetch budget covers every source class.
 
     Primary sources first (official > technical > academic > news > community), a
@@ -549,6 +588,9 @@ def select_fetch_order(candidates: list, max_sources: int) -> list:
             deferred.append(c)
             continue
         by_class.setdefault(_class_for_query(c.query_id), []).append(c)
+    if topic:
+        for bucket in by_class.values():
+            bucket.sort(key=lambda c: _prefetch_preference(c, topic))
     classes = sorted(by_class, key=lambda k: (_CLASS_PRIORITY.get(k, 9), k))
     ordered: list = []
     if classes and max_sources > 0:
@@ -569,7 +611,7 @@ def select_fetch_order(candidates: list, max_sources: int) -> list:
 
 
 @activity.defn(name="browser_research_fetch_targets")
-def fetch_targets_activity(task_id: str, max_sources: int) -> list[dict[str, str]]:
+def fetch_targets_activity(task_id: str, max_sources: int, topic: str = "") -> list[dict[str, str]]:
     """Candidate URLs not yet fetched, oldest-discovered first, capped at
     ``max_sources`` (the owner's budget for this run).
 
@@ -585,7 +627,7 @@ def fetch_targets_activity(task_id: str, max_sources: int) -> list[dict[str, str
         candidates = runs_service.list_candidates(session, tid)
         already = {r.url for r in runs_service.list_evidence(session, tid)}
         pending = [c for c in candidates if c.url not in already]
-        pending = select_fetch_order(pending, max_sources)
+        pending = select_fetch_order(pending, max_sources, topic)
         targets = []
         for c in pending:
             try:
@@ -721,6 +763,30 @@ def await_verification_activity(
 # -------------------------------------------------------------------- rank
 
 
+def _gate_admits(payload: Any) -> bool:
+    """Whether the stored quality gate verdict lets this row be used as evidence.
+
+    A row with no verdict is admitted: ranking has simply not judged it yet (or the row
+    predates the gate), and refusing those would silently empty older runs. Only an
+    explicit refusal keeps a page out.
+    """
+    gate = payload.get("gate") if isinstance(payload, dict) else None
+    return not (isinstance(gate, dict) and gate.get("eligible") is False)
+
+
+def _gate_rejections(rows: list[Any]) -> dict[str, int]:
+    """Per-reason counts of the pages the gate refused, read back from the rows."""
+    counts: dict[str, int] = {}
+    for row in rows:
+        payload = row.evidence_json if isinstance(row.evidence_json, dict) else {}
+        gate = payload.get("gate")
+        if not isinstance(gate, dict) or gate.get("eligible") is not False:
+            continue
+        reason = str(gate.get("reason") or "unknown")
+        counts[reason] = counts.get(reason, 0) + 1
+    return counts
+
+
 def _load_evidence_with_quarantine(
     rows: list[Any], *, stage: str
 ) -> tuple[list[EvidenceRecord], QuarantineLedger]:
@@ -736,6 +802,8 @@ def _load_evidence_with_quarantine(
     for row in rows:
         payload = row.evidence_json if isinstance(row.evidence_json, dict) else {}
         url = str(payload.get("url") or getattr(row, "url", "") or "unknown")
+        if not _gate_admits(payload):
+            continue
         try:
             records.append(EvidenceRecord.from_dict(payload, stage=stage))
         except ContractViolation as violation:
@@ -765,6 +833,70 @@ def _require_enough_evidence(
     )
 
 
+def _apply_quality_gate(
+    records: list[EvidenceRecord],
+    *,
+    topic: str,
+    window_start: str,
+    window_end: str,
+    stage: str,
+    published_hints: dict[str, str] | None = None,
+) -> tuple[list[EvidenceRecord], dict[str, int], list[dict[str, Any]]]:
+    """Only evidence that can actually answer the request reaches ranking and synthesis.
+
+    The owner's run of 2026-09-04 ranked a Granite page from ten days earlier, a Turkish
+    article from outside the window, two unrelated arXiv papers (Catalan's constant, a halo
+    profile) and OpenAI pages whose extracted title was the interstitial "Bir dakika
+    lütfen...". Nothing in the pipeline had ever asked whether a fetched page was ON TOPIC,
+    INSIDE THE WINDOW or REAL CONTENT - the ranker only scored what it was given.
+
+    Every candidate is now judged by :mod:`app.research.eligibility` before it can become
+    evidence, and every rejection is recorded with its reason (off_topic,
+    outside_recency_window, date_uncertain, interstitial, duplicate_event,
+    insufficient_content) so the counts appear in the run's evidence.
+    """
+    kept: list[EvidenceRecord] = []
+    rejected: dict[str, int] = {}
+    details: list[dict[str, Any]] = []
+    seen_event_keys: list[str] = []
+    for record in records:
+        verdict = eligibility.evaluate_candidate(
+            title=record.title,
+            excerpt=record.excerpt,
+            url=record.url,
+            topic=topic,
+            http_status=record.http_status,
+            published_at=record.published_at.isoformat() if record.published_at else None,
+            # The search provider's own wording ("2 gun once") is weaker than a machine
+            # -readable date but far better than nothing: without it, every page whose
+            # HTML omits article:published_time is date_uncertain and gets refused, which
+            # would starve the report for a reason that has nothing to do with the page.
+            published_hint=(published_hints or {}).get(record.url),
+            retrieved_at=(record.retrieved_at or record.fetched_at).isoformat()
+            if (record.retrieved_at or record.fetched_at)
+            else None,
+            window_start=window_start,
+            window_end=window_end,
+            publisher=record.publisher,
+            existing_event_keys=tuple(seen_event_keys),
+        )
+        if verdict.eligible:
+            kept.append(record)
+            seen_event_keys.append(
+                eligibility.duplicate_event_key(
+                    title=record.title, url=record.url, publisher=record.publisher
+                )
+            )
+            continue
+        reason = verdict.reason or "off_topic"
+        rejected[reason] = rejected.get(reason, 0) + 1
+        entry = verdict.as_dict()
+        entry.update({"url": record.url, "stage": stage})
+        details.append(entry)
+        logger.info("research_candidate_rejected", reason=reason, url=record.url)
+    return kept, rejected, details
+
+
 @activity.defn(name="browser_research_rank")
 def rank_activity(
     task_id: str, topic: str, window_start_iso: str, window_end_iso: str
@@ -791,13 +923,44 @@ def rank_activity(
                 },
             )
             raise _non_retryable(ERROR_INSUFFICIENT_VALID_EVIDENCE, str(exc)) from exc
+        published_hints = {
+            c.url: c.published_hint
+            for c in runs_service.list_candidates(session, tid)
+            if getattr(c, "published_hint", None)
+        }
+        eligible, rejected, rejection_details = _apply_quality_gate(
+            records,
+            topic=topic,
+            window_start=window_start_iso,
+            window_end=window_end_iso,
+            stage=STAGE_RANKING,
+            published_hints=published_hints,
+        )
         ranked = assign_evidence_ids(
-            dedup_and_rank(records, topic=topic, window_start=window_start, window_end=window_end)
+            dedup_and_rank(eligible, topic=topic, window_start=window_start, window_end=window_end)
         )
         runs_service.update_evidence_ranking(session, tid, ranked)
+        # The verdict is written onto the rows themselves so the later synthesis activity
+        # cannot read a refused page back out of the store and cite it.
+        runs_service.record_evidence_gate(
+            session,
+            tid,
+            {
+                **{
+                    r.url: {"eligible": True, "reason": None, "stage": STAGE_RANKING}
+                    for r in eligible
+                },
+                **{
+                    d["url"]: {"eligible": False, "reason": d["reason"], "stage": STAGE_RANKING}
+                    for d in rejection_details
+                },
+            },
+        )
         event: dict[str, Any] = {
             "stage": STAGE_RANKING,
-            "detail": f"{len(ranked)} evidence ranked",
+            "detail": f"{len(ranked)} evidence ranked, {sum(rejected.values())} rejected",
+            "rejected": rejected,
+            "rejected_examples": rejection_details[:10],
         }
         if not quarantine.empty:
             event.update(quarantine.summary())
@@ -806,22 +969,47 @@ def rank_activity(
             session,
             tid,
             stage=STAGE_RANKING,
-            progress={"evidence": len(ranked), "quarantined": len(quarantine)},
+            progress={
+                "evidence": len(ranked),
+                "quarantined": len(quarantine),
+                "rejected": sum(rejected.values()),
+                # Persisted so the report can show WHY the web was thin, not just that it was.
+                "rejected_by_reason": rejected,
+            },
             event=event,
         )
     return {
         "evidence": len(ranked),
-        "deduplicated": len(records) - len(ranked),
+        "deduplicated": len(eligible) - len(ranked),
         "quarantined": len(quarantine),
+        "rejected": sum(rejected.values()),
     }
 
 
 # --------------------------------------------------------------- synthesize
 
 
+def _require_enough_findings(result: Any, provider_name: str) -> None:
+    """The report's floor applies to every provider, including the deterministic one.
+
+    Cardinality is a property of the answer, not of one parser: a model that returns valid
+    JSON with two findings and a deterministic pass that can only build one from thin
+    evidence are the same failure from the owner's side. Checking here - on the result -
+    rather than only inside the response parser is what makes the ladder's last rung real.
+    """
+    findings = list(getattr(result, "findings", ()) or ())
+    if len(findings) >= MIN_REPORT_FINDINGS:
+        return
+    raise InsufficientValidFindings(
+        produced=len(findings),
+        required=MIN_REPORT_FINDINGS,
+        provider=provider_name,
+    )
+
+
 def _synthesize_with_fallback(
     provider: Any, topic: str, evidence: list[EvidenceRecord], *, recency_label: str, settings: Any
-) -> tuple[Any, Any]:
+) -> tuple[Any, Any, list[dict[str, Any]]]:
     """Synthesize, and fall back to the deterministic provider when a model's output cannot be
     trusted.
 
@@ -831,14 +1019,48 @@ def _synthesize_with_fallback(
     and the deterministic provider - which builds findings only from validated evidence -
     produces the report instead. The substitution is recorded, never silent.
     """
-    try:
-        return provider.synthesize(topic, evidence, recency_label=recency_label), provider
-    except (ContractViolation, InsufficientValidEvidence) as exc:
-        detail = exc.as_dict()
-        logger.warning("research_synthesis_fell_back", provider=provider.name, **detail)
-        fallback_provider = resolve_synthesis_provider("deterministic", settings)
-        result = fallback_provider.synthesize(topic, evidence, recency_label=recency_label)
-        return result, fallback_provider
+    attempts: list[dict[str, Any]] = []
+    # 1. the configured provider
+    for attempt in (1, 2):
+        try:
+            result = provider.synthesize(topic, evidence, recency_label=recency_label)
+            _require_enough_findings(result, provider.name)
+            if attempt > 1:
+                logger.info("research_synthesis_retry_succeeded", provider=provider.name)
+            return result, provider, attempts
+        except (ContractViolation, InsufficientValidFindings, InsufficientValidEvidence) as exc:
+            detail = exc.as_dict()
+            attempts.append({"provider": provider.name, "attempt": attempt, **detail})
+            logger.warning("research_synthesis_attempt_rejected", attempt=attempt, **detail)
+            # 2. retry ONCE with the same validated evidence: the model is nondeterministic and
+            #    the prompt states the schema, so a second pass often answers correctly.
+            if attempt == 1 and provider.name != "deterministic":
+                continue
+            break
+
+    # 3. deterministic, evidence-backed synthesis from the validated evidence only
+    fallback_provider = resolve_synthesis_provider("deterministic", settings)
+    if fallback_provider.name != provider.name:
+        try:
+            result = fallback_provider.synthesize(topic, evidence, recency_label=recency_label)
+            _require_enough_findings(result, fallback_provider.name)
+            logger.warning(
+                "research_synthesis_fell_back",
+                provider=provider.name,
+                fallback=fallback_provider.name,
+                attempts=len(attempts),
+            )
+            return result, fallback_provider, attempts
+        except (ContractViolation, InsufficientValidFindings, InsufficientValidEvidence) as exc:
+            attempts.append({"provider": fallback_provider.name, "attempt": 3, **exc.as_dict()})
+
+    # 4. nothing defensible: fail honestly rather than invent findings
+    raise InsufficientValidFindings(
+        produced=0,
+        required=MIN_REPORT_FINDINGS,
+        provider=provider.name,
+        quarantined=attempts,
+    )
 
 
 @activity.defn(name="browser_research_synthesize")
@@ -853,6 +1075,7 @@ def synthesize_activity(
     with factory() as session:
         rows = runs_service.list_evidence(session, tid)
         candidate_count = len(runs_service.list_candidates(session, tid))
+        rejected_by_reason = _gate_rejections(rows)
         ranked, quarantine = _load_evidence_with_quarantine(rows, stage=STAGE_SYNTHESIZING)
         try:
             _require_enough_evidence(ranked, quarantine, stage=STAGE_SYNTHESIZING)
@@ -872,10 +1095,30 @@ def synthesize_activity(
         primary_only = [e for e in ranked if not e.syndicated_of]
 
         provider = resolve_synthesis_provider(synthesis_name, settings)
-        result, provider = _synthesize_with_fallback(
-            provider, topic, primary_only, recency_label=window_json["label"], settings=settings
+        try:
+            result, provider, synthesis_attempts = _synthesize_with_fallback(
+                provider,
+                topic,
+                primary_only,
+                recency_label=window_json["label"],
+                settings=settings,
+            )
+        except InsufficientValidFindings as exc:
+            runs_service.update_run(
+                session,
+                tid,
+                event={
+                    "stage": STAGE_SYNTHESIZING,
+                    "detail": "no defensible findings could be produced",
+                    **exc.as_dict(),
+                },
+            )
+            raise _non_retryable(ERROR_INSUFFICIENT_VALID_FINDINGS, str(exc)) from exc
+        synthesis_quarantine = (
+            list(quarantine.entries)
+            + list(getattr(result, "quarantined", ()))
+            + list(synthesis_attempts)
         )
-        synthesis_quarantine = list(quarantine.entries) + list(getattr(result, "quarantined", ()))
 
         stats = ReportStats(
             queries=0,
@@ -885,6 +1128,8 @@ def synthesize_activity(
             deduplicated=len(rows) - len(ranked),
             evidence=len(ranked),
             truncated_fields=result.truncated_fields,
+            rejected=sum(rejected_by_reason.values()),
+            rejected_by_reason=rejected_by_reason,
         )
         if synthesis_quarantine:
             logger.info(

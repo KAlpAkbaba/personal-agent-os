@@ -401,6 +401,18 @@ RAW_INDEX = re.compile(
 )
 
 
+def _is_plain_assignment(line: str, match: re.Match[str]) -> bool:
+    """Whether this occurrence WRITES the key rather than reading it.
+
+    The hazard being audited is reading a key a producer may not have sent, which is what
+    raised KeyError('label'). Writing a key we choose ourselves (``payload["gate"] = ...``)
+    cannot fail that way. An augmented assignment still reads first, so only a bare ``=``
+    counts, and only when it is not a comparison.
+    """
+    rest = line[match.end() :].lstrip()
+    return rest.startswith("=") and not rest.startswith("==")
+
+
 def test_no_parse_boundary_indexes_a_producer_payload_by_raw_key() -> None:
     """The audit the owner asked for: after the KeyError('label') incident, no research module
     may reach into a producer-controlled payload with a bare key. Every such read goes through
@@ -414,7 +426,8 @@ def test_no_parse_boundary_indexes_a_producer_payload_by_raw_key() -> None:
             stripped = line.strip()
             if stripped.startswith("#") or stripped.startswith('"'):
                 continue
-            if RAW_INDEX.search(line):
+            match = RAW_INDEX.search(line)
+            if match and not _is_plain_assignment(line, match):
                 offenders.append(f"{path.name}:{number}: {stripped}")
     assert not offenders, "raw producer-payload indexing outside the contract layer:\n" + "\n".join(
         offenders

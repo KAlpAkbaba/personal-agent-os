@@ -2805,3 +2805,43 @@ embedded Temporal worker). Facts and decisions that were not in the design:
     contract layer instead of waiting for each missing key to fail one owner run at a time.
     Research policy version 3 carries the schema registry, so exactly one Cloud Core release
     ships it; the Windows worker is untouched (0.4.0 already matches).
+
+22. **A page must be about the question, from the window and real before it can be cited; a
+    report with fewer than three attributable findings fails instead of publishing**
+    (2026-09-04, the run after policy v3: DuckDuckGo discovery, 12 pages fetched and ranked,
+    zero quarantined, status `ready` - and zero findings). Nothing crashed. The report was
+    published with a fluent executive summary and an empty findings list, and the owner's
+    acceptance check, not the pipeline, caught it.
+
+    Three separate defects met in that one run. (a) Nothing had ever asked whether a fetched
+    page was on topic or inside the requested window: a ten-day-old IBM Granite model card and
+    two unrelated arXiv abstracts (Catalan's constant, a dark-matter halo profile) were ranked
+    as evidence, and every item's retrieval time was implicitly read as its publication time.
+    (b) A Cloudflare interstitial whose extracted title was "Bir dakika lutfen..." was ranked
+    as an article. (c) Zero findings still reached `ready`, because cardinality was a
+    convention rather than a contract.
+
+    Decisions: (i) `app/research/eligibility.py` judges every fetched page before ranking -
+    page validity (`normal_content` / `consent` / `captcha` / `interstitial` /
+    `login_required` / `access_denied` / `empty` / `malformed`, and only `normal_content` may
+    become evidence), topic relevance against a Turkish/English agent lexicon, publication
+    -date confidence (`high`/`medium`/`low`/`none`) and a recency verdict
+    (`in_window`/`outside_recency_window`/`date_uncertain`), with retrieval time NEVER standing
+    in for a publication date; (ii) each refusal is recorded with a named reason (`off_topic`,
+    `outside_recency_window`, `date_uncertain`, `interstitial`, `duplicate_event`,
+    `insufficient_content`) and the counts appear in the report itself, so a thin answer can be
+    told apart from a thin web; (iii) the verdict is persisted onto the evidence row, because
+    synthesis reloads evidence from the store on a later activity - refusing a page at ranking
+    and letting synthesis read it back is how the interstitial became a source; (iv) a finding
+    must cite evidence and a report must carry at least three of them (target five), enforced
+    on every provider's result, with the ladder the owner asked for: reject the malformed
+    synthesis, retry once against the same validated evidence, fall back to deterministic
+    evidence-backed synthesis, then fail as `insufficient_valid_findings` - findings are never
+    invented to reach a number; (v) the fetch budget prefers candidates whose URL and date hint
+    suggest they can pass the gate, since twelve fetches spent on pages that will be refused is
+    the same failure by another route. The run is preserved as regression fixtures
+    (`tests/unit/test_research_regression_20260904.py` and the incident cases in
+    `tests/unit/test_research_browser_activities.py`), each asserting that the specific real
+    page can no longer be cited. Research policy version 4 carries the quality gate and the
+    findings contract, so exactly one Cloud Core release ships it; the Windows worker is
+    untouched (0.4.0 already matches, and none of this changes its contract).

@@ -164,8 +164,25 @@ NUMERIC_FIELDS: dict[tuple[str, str], NumericFieldSpec] = {
             5,
             provenance="the synthesis provider's own rating; a model's free text is NOT a rating",
         ),
+        _spec(
+            ENTITY_FINDING,
+            "confidence",
+            "float",
+            0.0,
+            1.0,
+            provenance=(
+                "how sure the synthesis provider is of this finding given the evidence it "
+                "cites; the deterministic provider derives it from the evidence score and class"
+            ),
+        ),
     )
 }
+
+#: A report must carry at least this many defensible findings, and aims for this many.
+MIN_REPORT_FINDINGS = 3
+TARGET_REPORT_FINDINGS = 5
+#: Reported when synthesis cannot reach MIN_REPORT_FINDINGS from validated evidence.
+ERROR_INSUFFICIENT_VALID_FINDINGS = "insufficient_valid_findings"
 
 #: Text fields that must never be handed a number (the inverse of the incident).
 TEXT_FIELDS: dict[str, tuple[str, ...]] = {
@@ -281,6 +298,40 @@ class ContractViolation(Exception):
             "observed_length": self.observed_length,
             "reason": self.reason,
             "stage": self.stage,
+        }
+
+
+class InsufficientValidFindings(Exception):
+    """Synthesis did not reach MIN_REPORT_FINDINGS defensible findings.
+
+    Never a reason to invent one: the pipeline retries the provider once with the validated
+    evidence, then builds findings deterministically from that evidence, and only then fails.
+    """
+
+    def __init__(
+        self,
+        *,
+        produced: int,
+        required: int,
+        provider: str,
+        quarantined: list[dict[str, Any]] | None = None,
+    ) -> None:
+        self.produced = produced
+        self.required = required
+        self.provider = provider
+        self.quarantined = quarantined or []
+        super().__init__(
+            f"{provider} produced {produced} defensible finding(s); {required} required"
+        )
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "error_class": ERROR_INSUFFICIENT_VALID_FINDINGS,
+            "produced": self.produced,
+            "required": self.required,
+            "provider": self.provider,
+            "quarantined": self.quarantined[:20],
+            "quarantined_total": len(self.quarantined),
         }
 
 
@@ -536,12 +587,16 @@ __all__ = [
     "ENTITY_FINDING",
     "ENTITY_RANKED_CANDIDATE",
     "ERROR_INSUFFICIENT_VALID_EVIDENCE",
+    "ERROR_INSUFFICIENT_VALID_FINDINGS",
+    "MIN_REPORT_FINDINGS",
+    "TARGET_REPORT_FINDINGS",
     "ERROR_INVALID_EVIDENCE_CONTRACT",
     "MIN_VALID_EVIDENCE",
     "NUMERIC_FIELDS",
     "TEXT_FIELDS",
     "ContractViolation",
     "InsufficientValidEvidence",
+    "InsufficientValidFindings",
     "NumericFieldSpec",
     "QuarantineLedger",
     "classify_value",
@@ -843,11 +898,23 @@ SCHEMAS: dict[str, EntitySchema] = {
                 "label", FIELD_REQUIRED, "enum", "provenance taxonomy", allowed=STATEMENT_LABELS
             ),
             _field(
+                "confidence",
+                FIELD_REQUIRED,
+                "float",
+                "how sure the provider is, given the evidence it cites (0..1)",
+            ),
+            _field(
                 "evidence_ids",
-                FIELD_OPTIONAL,
+                FIELD_REQUIRED,
                 "list",
-                "ids of the evidence it rests on",
-                default=(),
+                "ids of the evidence this finding rests on; a finding that cites nothing is "
+                "not attributable and is not publishable",
+            ),
+            _field(
+                "dates",
+                FIELD_DERIVED,
+                "mapping",
+                "publication/event dates taken from the cited evidence by the pipeline",
             ),
             _field(
                 "first_seen",

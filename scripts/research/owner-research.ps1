@@ -335,6 +335,21 @@ try {
         Write-Host "WHY IT MATTERS / NEDEN ONEMLI" -ForegroundColor Cyan
         foreach ($statement in $whyList) { Write-Host ("  - {0}" -f [string]$statement.text) }
     }
+    # What the quality gate refused, so a short report can be read correctly: a thin answer
+    # over a thin web is not the same failure as a gate that is too strict.
+    $stats = Get-OptionalProperty -InputObject $report -Name "stats"
+    $rejectedByReason = if ($null -ne $stats) { Get-OptionalProperty -InputObject $stats -Name "rejected_by_reason" } else { $null }
+    $rejectedTotal = if ($null -ne $stats) { [int](Get-OptionalProperty -InputObject $stats -Name "rejected") } else { 0 }
+    if ($rejectedTotal -gt 0) {
+        Write-Host ""
+        Write-Host "REFUSED PAGES / ELENEN SAYFALAR ($rejectedTotal)" -ForegroundColor Cyan
+        if ($null -ne $rejectedByReason) {
+            foreach ($property in $rejectedByReason.PSObject.Properties) {
+                Write-Host ("  {0}: {1}" -f $property.Name, $property.Value)
+            }
+        }
+    }
+
     Write-Host ""
     Write-Host "SOURCES / KAYNAKLAR ($($sources.Count))" -ForegroundColor Cyan
     foreach ($source in $sources) {
@@ -349,7 +364,9 @@ try {
         executive_summary = [string](Get-OptionalProperty -InputObject $report -Name "executive_summary")
         findings          = @($findings | ForEach-Object { [ordered]@{ id = [string]$_.id; title = [string]$_.title; summary = [string]$_.summary; why_it_matters = [string]$_.why_it_matters; importance = $_.importance; label = [string]$_.label; evidence_ids = @($_.evidence_ids) } })
         why_it_matters    = @($whyList | ForEach-Object { [string]$_.text })
-        stats             = (Get-OptionalProperty -InputObject $report -Name "stats")
+        stats             = $stats
+        rejected          = $rejectedTotal
+        rejected_by_reason = $rejectedByReason
         artifact_id       = [string](Get-OptionalProperty -InputObject $detail -Name "artifact_id")
         memory_id         = [string](Get-OptionalProperty -InputObject $detail -Name "memory_id")
     }
@@ -386,12 +403,20 @@ try {
         if (-not $source.title -or -not $source.url) { throw "a source is missing its title or URL" }
         if (-not ([string]$source.command_id)) { throw "source $($source.id) carries no device command id (no durable evidence)" }
     }
+    $sourceIds = @($sources | ForEach-Object { [string]$_.id })
     foreach ($finding in $findings) {
         if (-not [string]$finding.why_it_matters) { throw "finding $($finding.id) does not say why it matters" }
         if (@($finding.evidence_ids).Count -lt 1) { throw "finding $($finding.id) cites no source" }
+        foreach ($citedId in @($finding.evidence_ids)) {
+            # A citation that points at nothing is worse than no citation: it reads as
+            # attributed while nobody can check it.
+            if ($sourceIds -notcontains [string]$citedId) {
+                throw "finding $($finding.id) cites '$citedId', which is not one of the report's sources"
+            }
+        }
     }
     Write-Host ""
-    Write-Host "checks: findings=$(@($findings).Count) sources=$(@($sources).Count) distinct publishers=$distinctPublishers deployment=$(if ($evidence.deployment.deployed) { 'ran' } else { 'skipped' })"
+    Write-Host "checks: findings=$(@($findings).Count) sources=$(@($sources).Count) distinct publishers=$distinctPublishers refused=$rejectedTotal deployment=$(if ($evidence.deployment.deployed) { 'ran' } else { 'skipped' })"
     $evidence.verdict = "PASS"
 }
 finally {

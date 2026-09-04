@@ -34,7 +34,18 @@ from app.logging import get_logger, trace_id_var
 from app.research import runs_service
 from app.research.browser_gateway import SearchEvidence
 from app.research.browser_workflow import BrowserResearchRequest, BrowserResearchWorkflow
-from app.research.contracts import MIN_VALID_EVIDENCE, SCHEMAS
+from app.research.contracts import (
+    ERROR_INSUFFICIENT_VALID_FINDINGS,
+    MIN_REPORT_FINDINGS,
+    MIN_VALID_EVIDENCE,
+    SCHEMAS,
+    TARGET_REPORT_FINDINGS,
+)
+from app.research.eligibility import (
+    MIN_TOPIC_RELEVANCE,
+    PAGE_VALIDITY_KINDS,
+    REJECTION_REASONS,
+)
 from app.research.models import STAGE_CANCELLED, STAGE_FAILED, STAGE_PLANNED, ResearchRunRow
 
 logger = get_logger("app.research.routes")
@@ -219,7 +230,7 @@ async def create_research(request: Request, body: CreateResearchRequest) -> JSON
 #: 2 - typed field contracts + per-candidate quarantine (ADR-0050 item 20, 2026-09-04)
 #: 3 - named, versioned entity schemas: required/optional/derived fields, per-item quarantine
 #:     for statements and detail sections (ADR-0050 item 21, 2026-09-04)
-RESEARCH_POLICY_VERSION = 3
+RESEARCH_POLICY_VERSION = 4
 
 
 @router.get("/policy")
@@ -249,6 +260,20 @@ async def get_research_policy(request: Request) -> dict[str, Any]:
             "quarantine": "invalid_evidence_contract",
             "min_valid_evidence": MIN_VALID_EVIDENCE,
             "schemas": {name: entity.version for name, entity in sorted(SCHEMAS.items())},
+        },
+        "quality_gate": {
+            # Policy 4 (owner incident, 2026-09-04): fetched pages are judged for topic,
+            # recency and page validity BEFORE they can be cited, and a report that cannot
+            # reach the findings floor fails instead of publishing an empty answer.
+            "rejection_reasons": sorted(REJECTION_REASONS),
+            "min_topic_relevance": MIN_TOPIC_RELEVANCE,
+            "page_validity_kinds": sorted(PAGE_VALIDITY_KINDS),
+        },
+        "findings_contract": {
+            "min_findings": MIN_REPORT_FINDINGS,
+            "target_findings": TARGET_REPORT_FINDINGS,
+            "attribution_required": True,
+            "failure_error_class": ERROR_INSUFFICIENT_VALID_FINDINGS,
         },
         "verification_timeout_policies": ["fallback", "fail"],
         "modes": ["interactive", "unattended"],

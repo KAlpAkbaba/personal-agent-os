@@ -29,7 +29,9 @@ from app.research.contracts import (
     ENTITY_FINDING,
     ENTITY_STATEMENT,
     ENTITY_SYNTHESIS_RESPONSE,
+    MIN_REPORT_FINDINGS,
     ContractViolation,
+    InsufficientValidFindings,
     QuarantineLedger,
     schema,
 )
@@ -93,6 +95,30 @@ class SynthesisProvider(Protocol):
 def _importance_from_score(score: float) -> int:
     # score is roughly in [0, 1]; map to 1-5, never below 1 / above 5.
     return max(1, min(5, round(1 + score * 4)))
+
+
+def _confidence_from_evidence(record: EvidenceRecord) -> float:
+    """How sure a deterministic finding is: it rests on exactly one fetched page, so its
+    confidence is the evidence's own standing - the ranking score, lifted for a source class
+    that carries its own authority and lowered when the publication date is unknown."""
+    base = max(0.0, min(1.0, 0.4 + record.score * 0.4))
+    if record.source_class in ("official", "academic"):
+        base += 0.1
+    if record.published_at is None:
+        base -= 0.15
+    return round(max(0.05, min(0.95, base)), 2)
+
+
+def _finding_dates(record: EvidenceRecord) -> dict[str, str | None]:
+    """The dates a reader needs to judge a finding: when the source published it, when it was
+    last modified, and when we retrieved it - never conflated (owner requirement, 2026-09-04)."""
+    return {
+        "published_at": record.published_at.isoformat() if record.published_at else None,
+        "modified_at": record.modified_at.isoformat() if record.modified_at else None,
+        "retrieved_at": (record.retrieved_at or record.fetched_at).isoformat()
+        if (record.retrieved_at or record.fetched_at)
+        else None,
+    }
 
 
 def _first_seen(record: EvidenceRecord) -> str | None:
@@ -167,8 +193,10 @@ class DeterministicSynthesisProvider:
                 ),
                 importance=_importance_from_score(e.score),
                 label=STATEMENT_LABEL_SOURCE_FACT,
+                confidence=_confidence_from_evidence(e),
                 evidence_ids=(e.id,),
                 first_seen=_first_seen(e),
+                dates=_finding_dates(e),
             )
             for i, e in enumerate(top)
         )
@@ -411,6 +439,21 @@ def _parse_finding(data: Any, counter: list[int], *, stage: str = "synthesizing"
     finding_id = str(data.get("id", "")) if isinstance(data, dict) else ""
     entity_id = finding_id or "unidentified-finding"
     fields = finding_schema.validate(data, entity_id=entity_id, stage=stage)
+    # Attribution is part of the contract: a finding that cites no evidence cannot be checked
+    # against a source and is not publishable (owner requirement, 2026-09-04).
+    evidence_ids = tuple(str(x) for x in (fields["evidence_ids"] or ()) if str(x).strip())
+    if not evidence_ids:
+        raise ContractViolation(
+            entity=ENTITY_FINDING,
+            field_name="evidence_ids",
+            expected="at least one evidence id",
+            observed=fields["evidence_ids"],
+            entity_id=entity_id,
+            stage=stage,
+            reason="finding_without_attribution",
+            producer="synthesis_provider",
+            schema_version=finding_schema.version,
+        )
     return Finding(
         id=str(fields["id"]),
         title=_capped(fields["title"], TITLE_MAX_CHARS, counter),
@@ -418,7 +461,8 @@ def _parse_finding(data: Any, counter: list[int], *, stage: str = "synthesizing"
         why_it_matters=_capped(fields["why_it_matters"], BODY_MAX_CHARS, counter),
         importance=int(fields["importance"]),
         label=fields["label"],
-        evidence_ids=tuple(str(x) for x in (fields["evidence_ids"] or ())),
+        confidence=float(fields["confidence"]),
+        evidence_ids=evidence_ids,
         first_seen=fields["first_seen"],
     )
 
@@ -494,23 +538,17 @@ def parse_synthesis_response(payload: dict[str, Any]) -> SynthesisResult:
 
     findings = list(findings)
     if len(findings) > MAX_FINDINGS:
-        findings = sorted(findings, key=lambda f: -f.importance)[:MAX_FINDINGS]
-    if len(findings) < MIN_FINDINGS:
-        uncertainty = uncertainty + (
-            Statement(
-                text=(
-                    f"Model yalnızca {len(findings)} bulgu üretti (en az {MIN_FINDINGS} "
-                    + (
-                        f"beklenir; {len(quarantine)} bulgu alan sözleşmesini ihlal ettiği "
-                        "için karantinaya alındı"
-                        if len(quarantine)
-                        else "beklenir"
-                    )
-                    + "); bulgular sınırlı sayıda kaynağa dayanıyor olabilir ve "
-                    "bağımsız biçimde teyit edilmemiş olabilir."
-                ),
-                label=STATEMENT_LABEL_UNCERTAINTY,
-            ),
+        findings = sorted(findings, key=lambda f: (-f.importance, -f.confidence))[:MAX_FINDINGS]
+    # Cardinality is part of the requested output contract (owner requirement, 2026-09-04): a
+    # response with fewer than MIN_REPORT_FINDINGS defensible findings is not an answer, and an
+    # uncertainty note is not a substitute for one. The caller retries the provider once, then
+    # synthesizes deterministically from validated evidence, and only then fails the run.
+    if len(findings) < MIN_REPORT_FINDINGS:
+        raise InsufficientValidFindings(
+            produced=len(findings),
+            required=MIN_REPORT_FINDINGS,
+            provider="parsed_response",
+            quarantined=list(quarantine.entries),
         )
 
     return SynthesisResult(

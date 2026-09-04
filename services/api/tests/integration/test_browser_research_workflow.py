@@ -35,6 +35,7 @@ from app.config import Settings
 from app.devices.commands import CommandSucceeded, register_broker_runtime
 from app.object_store import S3ObjectStore
 from app.research import browser_activities, destination, discovery, runs_service
+from app.research.browser_gateway import _fake_page_body, _fake_page_title
 from app.research.browser_workflow import BrowserResearchRequest, BrowserResearchWorkflow
 from app.worker import build_worker
 from tests.device_command_support import FakeDeviceCommandClient
@@ -99,19 +100,43 @@ def _fake_command_factory(*, capability: str, payload: dict[str, Any], **_kwargs
             {
                 "url": payload["url"],
                 "final_url": payload["url"],
-                "title": f"Bulgu: {payload['query']}",
-                "excerpt": f"{payload['query']} ile ilgili gerçek zamanlı bir gelişme bulundu.",
+                "title": _fake_page_title(_story_index(payload["url"])),
+                # A page the quality gate accepts: on topic, dated, and long enough to
+                # judge. A one-line stub is not something a person would cite either.
+                "excerpt": _fake_page_body(payload["query"], "news", _story_index(payload["url"])),
                 "fetched_at": "2026-09-03T09:00:00Z",
                 "extraction_method": "dom_text",
                 "page_kind": "ok",
                 "http_status": 200,
-                "metadata": {"publisher": "Örnek Yayın"},
+                "metadata": {
+                    "publisher": "Örnek Yayın",
+                    "published_at": "2026-09-03T07:00:00Z",
+                },
                 "injection_markers": 0,
             }
         )
     raise AssertionError(
         f"unexpected capability in integration fake: {capability}"
     )  # pragma: no cover
+
+
+def _story_index(url: str) -> int:
+    """Which of the fake stories this URL is, deterministically.
+
+    The plan issues several related queries and each returns two results, so the index has
+    to depend on the query as well as the position - otherwise every query returns the same
+    two headlines and same-story detection collapses them into one, which is exactly what
+    it should do to real duplicate coverage.
+    """
+    query, _, tail = url.rpartition("/")
+    position = int(tail) if tail.isdigit() else 0
+    return (sum(ord(c) for c in query) + position) % 5
+
+
+def _url_index(url: str) -> int:
+    """The trailing "/1", "/2" of the fake search results, so each fetched page differs."""
+    tail = url.rsplit("/", 1)[-1]
+    return int(tail) if tail.isdigit() else 0
 
 
 async def _run_workflow(

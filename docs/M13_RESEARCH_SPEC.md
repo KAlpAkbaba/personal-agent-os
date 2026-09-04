@@ -69,18 +69,24 @@ bonus + importance from synthesis; final list is bounded to `max_sources`.
   "window": {"start": "…", "end": "…", "label": "son 3 gün"},
   "generated_at": "…", "synthesis_provider": "openai|anthropic|deterministic",
   "executive_summary": "3–6 cümle, Türkçe.",
-  "findings": [ {"id":"f1","title":"…","summary":"…","why_it_matters":"…","importance":5,"label":"source_fact","evidence_ids":["e3","e7"],"first_seen":"…"} ],
+  "findings": [ {"id":"f1","title":"…","summary":"…","why_it_matters":"…","importance":5,"label":"source_fact","confidence":0.72,"evidence_ids":["e3","e7"],"first_seen":"…","dates":{"published_at":"…","modified_at":null,"retrieved_at":"…"}} ],
   "why_it_matters": [ {"text":"…","label":"model_inference","evidence_ids":["e3"]} ],
   "watch_next":     [ {"text":"…","label":"recommendation","evidence_ids":[]} ],
   "details":        [ {"heading":"OpenAI","statements":[{"text":"…","label":"source_fact","evidence_ids":["e3"]}]} ],
   "uncertainty":    [ {"text":"…","label":"uncertainty","evidence_ids":[]} ],
   "sources":        [ {"id":"e3","url":"…","final_url":"…","title":"…","publisher":"…","source_class":"official","published_at":"…","retrieved_at":"…","excerpt":"…","device_id":"…","command_id":"…","injection_suspected":false,"syndicated_of":null} ],
-  "stats": {"queries": 9, "discovered": 41, "fetched": 18, "fetch_failed": 3, "deduplicated": 6, "evidence": 12}
+  "stats": {"queries": 9, "discovered": 41, "fetched": 18, "fetch_failed": 3, "deduplicated": 6, "evidence": 12,
+            "rejected": 6, "rejected_by_reason": {"off_topic": 3, "outside_recency_window": 2, "interstitial": 1}}
 }
 ```
 
-`findings` has 3–7 entries ordered by importance; when fewer than 3 qualify the report says so
-in `uncertainty` instead of padding. Presentation order (web, artifact, later voice):
+`findings` has 3–7 entries ordered by importance (target 5), and each one MUST cite at least
+one evidence id: a finding nobody can check against a source is not publishable. When fewer
+than 3 defensible findings can be produced the run FAILS as `insufficient_valid_findings`
+(owner incident, 2026-09-04, ADR-0050 item 22) rather than publishing an empty or padded
+report - the ladder is: reject the malformed synthesis, retry the provider once against the
+same validated evidence, fall back to deterministic evidence-backed synthesis, then fail. The
+floor is checked on every provider's result, not only inside the response parser. Presentation order (web, artifact, later voice):
 Executive Summary → Findings (3–7) → Why this matters → What I would watch next → Detailed
 findings (collapsed) → Belirsizlikler (uncertainty, when non-empty) → Sources (each claim
 links to its evidence ids).
@@ -90,6 +96,33 @@ The canonical artifact body is the Turkish Markdown rendering of this JSON
 `kind=research_report`, versions, PDF/DOCX/HTML/TXT renders, `executive_summary` column).
 Citations survive export because the Markdown embeds `[eN]` markers per statement and a
 Sources section with the same ids; the JSON itself is stored in `research_reports` (§5).
+
+## 3a. Pre-synthesis quality gate (`app.research.eligibility`, 2026-09-04)
+
+Ranking is not a filter: it orders whatever it is given. Before `dedup_and_rank` sees a
+fetched page, the gate decides whether that page may be cited at all, in this precedence:
+
+1. **Page validity** - `normal_content` | `consent` | `captcha` | `interstitial` |
+   `login_required` | `access_denied` | `empty` | `malformed`. Only `normal_content` may become
+   evidence; any blocked kind is refused as `interstitial` (there is no content underneath to
+   judge), and `empty`/`malformed` as `insufficient_content`.
+2. **Topic relevance** against a Turkish/English agent lexicon with diacritic folding, refused
+   below `MIN_TOPIC_RELEVANCE` as `off_topic`.
+3. **Duplicate coverage** - near-duplicate headlines of an already-accepted story are refused
+   as `duplicate_event`.
+4. **Recency** - publication, event and retrieval dates are DISTINCT. A retrieval timestamp is
+   never read as a publication date. The verdict is `in_window`, `outside_recency_window`, or
+   `date_uncertain` when no publication date can be established with confidence, and the
+   confidence itself is reported (`high` explicit ISO date, `medium` provider hint such as
+   "2 gun once", `low` year only, `none`).
+
+Every refusal is recorded with its reason and the counts appear in `stats.rejected_by_reason`
+and in the report's own "Elenen Kaynaklar" section, so a short report can be read correctly.
+The verdict is persisted onto the evidence row (`evidence_json.gate`), because synthesis
+reloads evidence from the store in a later activity - refusing a page at ranking without
+recording it there is how a Cloudflare interstitial became a cited source. The fetch budget
+also prefers candidates whose URL and provider date hint suggest they can pass, so the budget
+is not spent on pages that will be refused.
 
 ## 4. REST (owner-gated like every other surface)
 

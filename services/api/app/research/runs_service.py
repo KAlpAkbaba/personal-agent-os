@@ -207,6 +207,35 @@ def update_evidence_ranking(session: Session, task_id: uuid.UUID, records: list[
     session.commit()
 
 
+def record_evidence_gate(
+    session: Session, task_id: uuid.UUID, verdicts: dict[str, dict[str, Any]]
+) -> None:
+    """Persist the pre-synthesis quality gate verdict onto each evidence row.
+
+    The verdict has to live on the row, not only in the run's event trail, because
+    synthesis reloads evidence from the store on a later activity (and on replay). Before
+    this existed, ranking refused a page and synthesis then read the very same row back and
+    cited it - which is how a Cloudflare interstitial became source [e7] on 2026-09-04.
+
+    Rows are annotated, never deleted: the fetched page stays exactly as it was captured so
+    the run can still be audited, and only the verdict is added alongside it.
+    """
+    rows = {
+        r.url: r
+        for r in session.execute(
+            select(ResearchEvidenceRow).where(ResearchEvidenceRow.task_id == task_id)
+        ).scalars()
+    }
+    for url, verdict in verdicts.items():
+        row = rows.get(url)
+        if row is None:
+            continue
+        payload = dict(row.evidence_json or {})
+        payload["gate"] = verdict
+        row.evidence_json = payload
+    session.commit()
+
+
 def list_evidence(session: Session, task_id: uuid.UUID) -> list[ResearchEvidenceRow]:
     return list(
         session.execute(

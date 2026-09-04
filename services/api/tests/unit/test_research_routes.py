@@ -358,3 +358,22 @@ def test_research_policy_reports_the_effective_provider(client: TestClient) -> N
     assert set(body["search_providers"]) == {"duckduckgo", "google", "auto"}
     assert body["interactive_wait_s"]["min"] == 30
     assert body["modes"] == ["interactive", "unattended"]
+
+
+def test_research_policy_publishes_the_quality_gate_and_findings_floor(
+    client: TestClient,
+) -> None:
+    """Policy 4 (owner incident, 2026-09-04): the owner command compares the Cloud Core it is
+    talking to against the release it expects, so what the gate refuses and what a report
+    must contain have to be visible from outside, not only in the code."""
+    body = client.get("/v1/research/policy").json()
+    assert body["policy_version"] >= 4
+    gate = body["quality_gate"]
+    assert {"off_topic", "outside_recency_window", "interstitial"} <= set(gate["rejection_reasons"])
+    assert 0 < gate["min_topic_relevance"] < 1
+    assert "normal_content" in gate["page_validity_kinds"]
+    findings = body["findings_contract"]
+    assert findings["min_findings"] == 3
+    assert findings["target_findings"] == 5
+    assert findings["attribution_required"] is True
+    assert findings["failure_error_class"] == "insufficient_valid_findings"

@@ -104,6 +104,10 @@ class Finding:
     evidence_ids: tuple[str, ...] = field(default_factory=tuple)
     first_seen: str | None = None
     provenance_note: str | None = None
+    #: How sure the synthesis provider is of this finding given the evidence it cites (0..1).
+    confidence: float = 0.5
+    #: Publication/event dates of the cited evidence, filled by the pipeline (derived).
+    dates: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         validate_label(self.label)
@@ -122,6 +126,8 @@ class Finding:
             "label": self.label,
             "evidence_ids": list(self.evidence_ids),
             "first_seen": self.first_seen,
+            "confidence": self.confidence,
+            "dates": self.dates,
         }
         if self.provenance_note:
             out["provenance_note"] = self.provenance_note
@@ -213,6 +219,12 @@ class ReportStats:
     #: stay within the per-field length caps (finding MEDIUM-7,
     #: app.research.synthesis.parse_synthesis_response).
     truncated_fields: int = 0
+    #: Fetched pages the pre-synthesis quality gate refused as evidence.
+    rejected: int = 0
+    #: Those refusals by reason (off_topic, outside_recency_window, date_uncertain,
+    #: interstitial, duplicate_event, insufficient_content). The report shows them so a
+    #: thin answer can be told apart from a thin web.
+    rejected_by_reason: dict[str, int] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -225,6 +237,8 @@ class ReportStats:
             "injection_suspected_evidence": self.injection_suspected_evidence,
             "injection_dropped": self.injection_dropped,
             "truncated_fields": self.truncated_fields,
+            "rejected": self.rejected,
+            "rejected_by_reason": dict(self.rejected_by_reason),
         }
 
 
@@ -275,7 +289,9 @@ def iter_statements(report: ResearchReport) -> Iterator[Statement]:
     """Every citable statement, findings included (wrapped as ``Statement``)."""
     for f in report.findings:
         yield Statement(
-            text=f.summary, label=f.label, evidence_ids=f.evidence_ids,
+            text=f.summary,
+            label=f.label,
+            evidence_ids=f.evidence_ids,
             provenance_note=f.provenance_note,
         )
     yield from report.why_it_matters
@@ -362,9 +378,7 @@ def _strip_unknown_ids(
     return label, kept, note
 
 
-def strip_dangling_citations(
-    report: ResearchReport, evidence_ids: set[str]
-) -> ResearchReport:
+def strip_dangling_citations(report: ResearchReport, evidence_ids: set[str]) -> ResearchReport:
     """Every labelled statement/finding — all four labels, not only
     ``source_fact`` — may only cite evidence ids the pipeline actually
     gathered (finding MEDIUM-4). An id a synthesis provider invents (most
@@ -412,6 +426,17 @@ def run_provenance_gate(
     report = strip_dangling_citations(report, set(evidence_by_id))
     require_source_fact_provenance(report, set(evidence_by_id))
     return apply_excerpt_overlap_downgrade(report, evidence_by_id)
+
+
+#: Turkish labels for the quality gate's rejection reasons (app.research.eligibility).
+_REJECTION_LABELS_TR = {
+    "off_topic": "konu dışı",
+    "outside_recency_window": "zaman aralığı dışında",
+    "date_uncertain": "yayın tarihi doğrulanamadı",
+    "interstitial": "ara sayfa / doğrulama sayfası",
+    "duplicate_event": "aynı gelişmenin tekrarı",
+    "insufficient_content": "yeterli içerik yok",
+}
 
 
 def render_research_markdown(report: ResearchReport) -> str:
@@ -473,6 +498,18 @@ def render_research_markdown(report: ResearchReport) -> str:
         lines.append("")
         for s in report.uncertainty:
             lines.append(f"- [{s.label}] {s.text}")
+        lines.append("")
+
+    if report.stats.rejected:
+        # The owner has to be able to tell a thin answer from a thin web: these are the
+        # pages that were found and fetched but refused as evidence, and why.
+        lines.append("## Elenen Kaynaklar (Quality gate)")
+        lines.append("")
+        lines.append(
+            f"Bulunan sayfalardan {report.stats.rejected} tanesi kanıt olarak kabul edilmedi:"
+        )
+        for reason, count in sorted(report.stats.rejected_by_reason.items()):
+            lines.append(f"- {_REJECTION_LABELS_TR.get(reason, reason)} ({reason}): {count}")
         lines.append("")
 
     lines.append("## Kaynaklar (Sources)")

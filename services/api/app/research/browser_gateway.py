@@ -25,7 +25,7 @@ import threading
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol, runtime_checkable
 from urllib.parse import quote
 
@@ -114,6 +114,66 @@ class UnwiredBrowserGateway:
         )
 
 
+#: Distinct paragraphs per result index. The fake has to produce pages the quality gate
+#: accepts - on topic, long enough to judge, and different enough from each other to
+#: survive deduplication - because a stub of one sentence is neither realistic nor usable.
+_FAKE_ANGLES = (
+    (
+        "duyuruldu ve ilk kullanıcılara açıldı. Yayınlanan notlarda araç kullanımı, "
+        "kalıcı hafıza ve çok adımlı görev planlaması yeteneklerinin genişletildiği "
+        "belirtiliyor. Kurumsal erişimin bu hafta başlayacağı ve fiyatlandırmanın "
+        "kullanım başına belirleneceği açıklandı."
+    ),
+    (
+        "için yeni bir yapay zeka ajanı sürümü yayınlandı. Sürüm, araç çağırma "
+        "protokolü desteği, daha "
+        "iyi hafıza yönetimi ve çok ajanlı iş akışları için bir planlayıcı içeriyor. "
+        "Geliştiriciler, otonom ajanların üretim ortamında çalıştırılmasının belirgin "
+        "şekilde kolaylaştığını söylüyor."
+    ),
+    (
+        "üzerine yapılan yapay zeka ajanı araştırması yayımlandı. Rapor, otonom ajan "
+        "iş akışlarının görev tamamlama oranlarını, "
+        "insan onayı gereken adımları ve araç entegrasyonlarının maliyetini ölçüyor. En "
+        "yaygın kullanım alanı müşteri desteği olarak öne çıkıyor ve kurumların "
+        "ölçeklendirme planları aktarılıyor."
+    ),
+    (
+        "kapsamında yapay zeka ajanlarının güvenlik değerlendirmesi paylaşıldı. "
+        "Değerlendirme, ajanların yetki sınırlarını, araç çağrılarının denetlenmesini ve "
+        "istem enjeksiyonuna karşı alınan önlemleri ele alıyor. Ekipler, insan onayı "
+        "gerektiren adımların açıkça tanımlanmasını öneriyor."
+    ),
+    (
+        "ile ilgili ajan tabanlı otomasyon girişimi yeni bir yatırım turu duyurdu. "
+        "Şirket, yapay zeka ajanlarının kurumsal iş akışlarını uçtan uca yürütmesini "
+        "hedefliyor ve kaynağın ürün ekibi ile araç entegrasyonlarına ayrılacağını "
+        "belirtiyor."
+    ),
+)
+
+
+#: Headlines that describe genuinely different events. Same-story detection collapses
+#: pages whose titles say the same thing, so a fake that reused one headline would leave a
+#: single finding no matter how many pages it produced.
+_FAKE_TITLES = (
+    "Yapay zeka ajanı platformu duyuruldu",
+    "Açık kaynak yapay zeka ajanı çerçevesi 2.0 yayınlandı",
+    "Kurumsal yapay zeka ajanı kullanımı araştırması yayımlandı",
+    "Yapay zeka ajanları için güvenlik değerlendirmesi paylaşıldı",
+    "Ajan tabanlı otomasyon girişimi yeni yatırım aldı",
+)
+
+
+def _fake_page_title(index: int) -> str:
+    return _FAKE_TITLES[index % len(_FAKE_TITLES)]
+
+
+def _fake_page_body(query: str, source_class: str, index: int) -> str:
+    angle = _FAKE_ANGLES[index % len(_FAKE_ANGLES)]
+    return f"{query} konusunda {source_class} kaynağında yer alan gelişme {angle}"
+
+
 class FakeBrowserGateway:
     """Deterministic, offline, seeded gateway for tests and demos.
 
@@ -139,12 +199,14 @@ class FakeBrowserGateway:
                 records.append(
                     EvidenceRecord(
                         url=url,
-                        title=f"{q.query} — {q.source_class} kaynağı {i + 1}",
-                        excerpt=(
-                            f"{q.query} ile ilgili {q.source_class} sınıfından bir bulgu "
-                            f"(seri no {i + 1})."
-                        ),
+                        title=_fake_page_title(i),
+                        excerpt=_fake_page_body(q.query, q.source_class, i),
                         fetched_at=moment,
+                        # A page a person would accept as evidence says when it was
+                        # published; the pre-synthesis quality gate refuses undated pages,
+                        # so a fake that omitted this would exercise a pipeline no real
+                        # run can reach.
+                        published_at=moment - timedelta(hours=6 + i),
                         extraction_method="dom_text",
                         source_class=q.source_class,
                         query=q.query,
