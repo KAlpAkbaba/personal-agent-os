@@ -266,3 +266,57 @@ def test_activity_explain_persists_a_briefing_artifact(wired, monkeypatch) -> No
         assert version.canonical_body.startswith("# Özet\n\nEfendim, son araştırma motoru")
         assert "# Kanıt" in version.canonical_body
         assert version.source_manifest_json["generated_at"].startswith(str(NOW.year))
+
+
+def test_session_activity_is_the_durable_record_of_the_script(wired, monkeypatch) -> None:
+    """What the owner script asserts after the real session: every step from rows."""
+    client, _identity, _runtime, _sideband, _issued, _engine = wired
+    _use_real_run_evidence(monkeypatch)
+    sid = _create(client)["session_id"]
+    _tool(client, sid, "s1", "activity.explain", question="Son yaptıklarını anlat")
+    _control(client, sid, "s2", "Araştırmayı detaylandır")
+    _control(client, sid, "s3", "Teknik anlat")
+    _control(client, sid, "s4", "Özetle")
+    head = "Efendim, son araştırma motoru qualification'ı başarıyla tamamlandı. Beş sonuç ve"
+    _events(
+        client,
+        sid,
+        [
+            {
+                "kind": "spoken",
+                "t_ms": 900,
+                "turn": 1,
+                "text": head,
+                "payload": {"final": 0, "response_seq": 4, "chars": len(head)},
+            },
+            {
+                "kind": "barge_in_start",
+                "t_ms": 901,
+                "turn": 2,
+                "payload": {"playback_stopped_ms": 40},
+            },
+            {"kind": "playback_stopped", "t_ms": 941, "turn": 2, "payload": {}},
+            {"kind": "utterance", "t_ms": 1200, "turn": 2, "text": "dur"},
+        ],
+    )
+    _control(client, sid, "s5", "Devam et")
+
+    activity = client.get(f"/v1/voice/realtime/sessions/{sid}/activity").json()
+    names = [(c["name"], c["status"]) for c in activity["tool_calls"]]
+    assert names == [("activity.explain", "succeeded")] + [("narration.control", "succeeded")] * 4
+    explain, detail, technical, _summary, resume = activity["tool_calls"]
+    assert explain["level"] == "executive" and explain["speech_chars"] > 100
+    assert explain["speech_head"].startswith("Efendim, son araştırma motoru")
+    assert explain["facts"] >= 5 and explain["uncertainties"] == 0
+    assert detail["intent"] == "detail" and detail["action"] == "jump_level"
+    assert technical["intent"] == "technical"
+    assert resume["intent"] == "resume" and resume["narration_state"] == "READING"
+    assert resume["speech_head"].startswith("Beş sonuç ve beş farklı kaynak")
+    kinds = [e["kind"] for e in activity["client_events"]]
+    assert kinds == ["spoken", "barge_in_start", "playback_stopped"]
+    spoken = activity["client_events"][0]
+    assert spoken["aligned"] == 1 and spoken["action"] == "paused" and spoken["spoken_chunks"] == 1
+    assert "text" not in spoken and spoken["chars"] == len(head)
+    assert [i["intent"] for i in activity["intents"]] == ["stop"]
+    assert activity["barge_in_count"] == 1
+    assert activity["narration"]["state"] == "READING"

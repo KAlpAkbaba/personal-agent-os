@@ -87,8 +87,18 @@ MAX_SUMMARY_CHARS = 2000
 #: separators dropped - so ``apiKey``, ``api-key`` and ``API_KEY`` are all the
 #: same key as ``api_key``; the literal-substring check this replaced let the
 #: camelCase and hyphenated spellings through both the validator and the scrubber.
-FORBIDDEN_KEY_PARTS = ("audio", "pcm", "wave", "secret", "credential", "token", "apikey",
-                       "password", "text", "transcript")
+FORBIDDEN_KEY_PARTS = (
+    "audio",
+    "pcm",
+    "wave",
+    "secret",
+    "credential",
+    "token",
+    "apikey",
+    "password",
+    "text",
+    "transcript",
+)
 _KEY_NORMALIZER = re.compile(r"[^a-z0-9]+")
 
 
@@ -137,8 +147,12 @@ def scrub_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def _audit(
-    db: Session, action: str, row: RealtimeSessionRow | None, *,
-    trace_id: str | None = None, metadata: dict[str, Any] | None = None,
+    db: Session,
+    action: str,
+    row: RealtimeSessionRow | None,
+    *,
+    trace_id: str | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> None:
     record_audit_event(
         db,
@@ -158,23 +172,39 @@ def get_session(db: Session, session_id: uuid.UUID) -> RealtimeSessionRow | None
     return db.get(RealtimeSessionRow, session_id)
 
 
-def require_live(db: Session, row: RealtimeSessionRow, *, now: datetime | None = None,
-                 trace_id: str | None = None) -> RealtimeSessionRow:
+def require_live(
+    db: Session,
+    row: RealtimeSessionRow,
+    *,
+    now: datetime | None = None,
+    trace_id: str | None = None,
+) -> RealtimeSessionRow:
     """Refuse a closed/expired session; lazily mark expiry."""
     now = now or utcnow()
     if row.state in (REALTIME_STATE_CLOSED, REALTIME_STATE_EXPIRED):
-        raise VoiceError(VoiceErrorClass.VALIDATION_ERROR, f"session is {row.state}",
-                         details={"state": row.state})
+        raise VoiceError(
+            VoiceErrorClass.VALIDATION_ERROR,
+            f"session is {row.state}",
+            details={"state": row.state},
+        )
     expires = row.expires_at if row.expires_at.tzinfo else row.expires_at.replace(tzinfo=UTC)
     if expires <= now:
         row.state = REALTIME_STATE_EXPIRED
         row.closed_at = now
         row.updated_at = now
-        _audit(db, ACTION_SESSION_EXPIRED, row, trace_id=trace_id,
-               metadata={"expires_at": _iso(row.expires_at)})
+        _audit(
+            db,
+            ACTION_SESSION_EXPIRED,
+            row,
+            trace_id=trace_id,
+            metadata={"expires_at": _iso(row.expires_at)},
+        )
         db.commit()
-        raise VoiceError(VoiceErrorClass.VALIDATION_ERROR, "session has expired",
-                         details={"state": REALTIME_STATE_EXPIRED})
+        raise VoiceError(
+            VoiceErrorClass.VALIDATION_ERROR,
+            "session has expired",
+            details={"state": REALTIME_STATE_EXPIRED},
+        )
     return row
 
 
@@ -190,25 +220,35 @@ def require_leg(row: RealtimeSessionRow, owner: SessionContext) -> None:
 
 
 def mint_credential(
-    provider: RealtimeProvider, *, session_id: uuid.UUID, ttl_s: int, transport: str,
+    provider: RealtimeProvider,
+    *,
+    session_id: uuid.UUID,
+    ttl_s: int,
+    transport: str,
     session_config: RealtimeSessionConfig | None = None,
 ) -> EphemeralCredential:
     """Through the adapter interface only: the runtime never reads a vendor key here.
     ``session_config`` carries the persona instructions + tool manifest so a real
     provider bakes them into the session server-side (spec §4 step 1)."""
-    return provider.mint_credential(session_id=str(session_id), ttl_s=ttl_s, transport=transport,
-                                    session_config=session_config)
+    return provider.mint_credential(
+        session_id=str(session_id), ttl_s=ttl_s, transport=transport, session_config=session_config
+    )
 
 
 def _session_config(
-    row: RealtimeSessionRow, *, registry: ToolRegistry, prefs: Any,
+    row: RealtimeSessionRow,
+    *,
+    registry: ToolRegistry,
+    prefs: Any,
 ) -> RealtimeSessionConfig:
     ctx = row.context_json or {}
     return RealtimeSessionConfig(
         language=row.language,
         instructions=build_instructions(
-            prefs, narration_attached=bool(ctx.get("narration_session_id")),
-            plan=ctx.get("plan"), transcript_summary=row.transcript_summary,
+            prefs,
+            narration_attached=bool(ctx.get("narration_session_id")),
+            plan=ctx.get("plan"),
+            transcript_summary=row.transcript_summary,
             voice_profile=ctx.get("voice_profile"),
         ),
         tools=tuple(registry.manifest()),
@@ -239,8 +279,9 @@ def create_session(
     now = utcnow()
     if narration_session_id is not None:
         if narration_service.get_session(db, narration_session_id) is None:
-            raise VoiceError(VoiceErrorClass.VALIDATION_ERROR,
-                             "narration_session_id does not exist")
+            raise VoiceError(
+                VoiceErrorClass.VALIDATION_ERROR, "narration_session_id does not exist"
+            )
     row = RealtimeSessionRow(
         provider=provider.name,
         transport=transport,
@@ -275,25 +316,52 @@ def create_session(
     db.flush()
     prefs = voice_service.load_preferences(db)
     config = _session_config(row, registry=registry, prefs=prefs)
-    credential = mint_credential(provider, session_id=row.id, ttl_s=credential_ttl_s,
-                                 transport=transport, session_config=config)
-    _audit(db, ACTION_SESSION_CREATED, row, trace_id=trace_id, metadata={
-        "provider": row.provider, "transport": row.transport, "client_kind": row.client_kind,
-        "owner_session_id": str(owner.session_id), "expires_at": _iso(row.expires_at),
-        "narration_session_id": row.context_json.get("narration_session_id"),
-        "selection": selection or {}, "voice": voice, "voice_profile": voice_profile,
-    })
-    _audit(db, ACTION_CREDENTIAL_MINTED, row, trace_id=trace_id, metadata={
-        "provider": credential.provider, "session_ref": credential.session_ref,
-        "expires_at": _iso(credential.expires_at), "ttl_s": credential_ttl_s,
-    })
+    credential = mint_credential(
+        provider,
+        session_id=row.id,
+        ttl_s=credential_ttl_s,
+        transport=transport,
+        session_config=config,
+    )
+    _audit(
+        db,
+        ACTION_SESSION_CREATED,
+        row,
+        trace_id=trace_id,
+        metadata={
+            "provider": row.provider,
+            "transport": row.transport,
+            "client_kind": row.client_kind,
+            "owner_session_id": str(owner.session_id),
+            "expires_at": _iso(row.expires_at),
+            "narration_session_id": row.context_json.get("narration_session_id"),
+            "selection": selection or {},
+            "voice": voice,
+            "voice_profile": voice_profile,
+        },
+    )
+    _audit(
+        db,
+        ACTION_CREDENTIAL_MINTED,
+        row,
+        trace_id=trace_id,
+        metadata={
+            "provider": credential.provider,
+            "session_ref": credential.session_ref,
+            "expires_at": _iso(credential.expires_at),
+            "ttl_s": credential_ttl_s,
+        },
+    )
     db.commit()
     payload = _leg_payload(row, credential, registry=registry, config=config)
     return row, credential, payload
 
 
 def _leg_payload(
-    row: RealtimeSessionRow, credential: EphemeralCredential, *, registry: ToolRegistry,
+    row: RealtimeSessionRow,
+    credential: EphemeralCredential,
+    *,
+    registry: ToolRegistry,
     config: RealtimeSessionConfig,
 ) -> dict[str, Any]:
     """The client sees exactly the instructions/tools the credential was minted
@@ -320,11 +388,14 @@ def session_state(db: Session, row: RealtimeSessionRow) -> dict[str, Any]:
     if row.narration_session_id is not None:
         nrow = narration_service.get_session(db, row.narration_session_id)
         if nrow is not None:
-            cursor = {k: v for k, v in (nrow.semantic_cursor_json or {}).items()
-                      if k != "_state"}
-            narration = {"narration_session_id": str(nrow.id), "state": nrow.state,
-                         "speed": nrow.speed, "cursor": cursor,
-                         "artifact_id": str(nrow.artifact_id)}
+            cursor = {k: v for k, v in (nrow.semantic_cursor_json or {}).items() if k != "_state"}
+            narration = {
+                "narration_session_id": str(nrow.id),
+                "state": nrow.state,
+                "speed": nrow.speed,
+                "cursor": cursor,
+                "artifact_id": str(nrow.artifact_id),
+            }
     return {
         "session_id": str(row.id),
         "provider": row.provider,
@@ -367,20 +438,36 @@ def _set_context(row: RealtimeSessionRow, ctx: dict[str, Any]) -> None:
 
 
 def _deliver(
-    db: Session, row: RealtimeSessionRow, ctx: dict[str, Any], sideband: SidebandPusher,
-    event: str, payload: dict[str, Any], *, trace_id: str | None,
+    db: Session,
+    row: RealtimeSessionRow,
+    ctx: dict[str, Any],
+    sideband: SidebandPusher,
+    event: str,
+    payload: dict[str, Any],
+    *,
+    trace_id: str | None,
 ) -> bool:
     frame = sideband_frame(row.id, event, payload)
     delivered = sideband.push(device_id=row.device_id, frame=frame)
     if delivered:
-        _audit(db, ACTION_SIDEBAND_PUSHED, row, trace_id=trace_id,
-               metadata={"event": event, "device_id": str(row.device_id)})
+        _audit(
+            db,
+            ACTION_SIDEBAND_PUSHED,
+            row,
+            trace_id=trace_id,
+            metadata={"event": event, "device_id": str(row.device_id)},
+        )
         return True
     pending = list(ctx.get("pending_sideband") or [])
     pending.append(frame)
     ctx["pending_sideband"] = pending[-MAX_PENDING_SIDEBAND:]
-    _audit(db, ACTION_SIDEBAND_QUEUED, row, trace_id=trace_id,
-           metadata={"event": event, "queued": len(ctx["pending_sideband"])})
+    _audit(
+        db,
+        ACTION_SIDEBAND_QUEUED,
+        row,
+        trace_id=trace_id,
+        metadata={"event": event, "queued": len(ctx["pending_sideband"])},
+    )
     return False
 
 
@@ -395,11 +482,15 @@ def drain_pending_sideband(row: RealtimeSessionRow) -> list[dict[str, Any]]:
 # -------------------------------------------------------------- tool calls
 
 
-def _tool_row_payload(call: RealtimeToolCall, *, preamble: str | None = None,
-                      replayed: bool = False) -> dict[str, Any]:
+def _tool_row_payload(
+    call: RealtimeToolCall, *, preamble: str | None = None, replayed: bool = False
+) -> dict[str, Any]:
     out: dict[str, Any] = {
-        "call_id": call.call_id, "name": call.name, "status": call.status,
-        "long_running": call.long_running, "replayed": replayed,
+        "call_id": call.call_id,
+        "name": call.name,
+        "status": call.status,
+        "long_running": call.long_running,
+        "replayed": replayed,
     }
     if call.status == TOOL_STATUS_SUCCEEDED:
         out["result"] = call.result_json
@@ -440,18 +531,26 @@ def handle_tool_call(
     existing = get_tool_call(db, row.id, call_id)
     if existing is not None:
         spec = registry.get(existing.name)
-        _audit(db, ACTION_TOOL_CALL_REPLAYED, row, trace_id=trace_id,
-               metadata={"call_id": call_id, "name": existing.name, "status": existing.status})
+        _audit(
+            db,
+            ACTION_TOOL_CALL_REPLAYED,
+            row,
+            trace_id=trace_id,
+            metadata={"call_id": call_id, "name": existing.name, "status": existing.status},
+        )
         db.commit()
-        return _tool_row_payload(existing, preamble=spec.preamble if spec else None,
-                                 replayed=True)
+        return _tool_row_payload(existing, preamble=spec.preamble if spec else None, replayed=True)
 
     spec = registry.get(name)
     if spec is not None:
         name = spec.name  # the vendor spelling (research__start) is recorded canonically
     call = RealtimeToolCall(
-        session_id=row.id, call_id=call_id, name=name, arguments_json=dict(arguments),
-        status=TOOL_STATUS_RUNNING, long_running=bool(spec and spec.long_running),
+        session_id=row.id,
+        call_id=call_id,
+        name=name,
+        arguments_json=dict(arguments),
+        status=TOOL_STATUS_RUNNING,
+        long_running=bool(spec and spec.long_running),
     )
     db.add(call)
     try:
@@ -466,16 +565,20 @@ def handle_tool_call(
 
     ctx = dict(row.context_json or {})
     tool_ctx = ToolContext(
-        session_id=row.id, owner_session_id=owner.session_id, device_id=row.device_id,
-        client_kind=row.client_kind, context=ctx, db=db, now=now,
+        session_id=row.id,
+        owner_session_id=owner.session_id,
+        device_id=row.device_id,
+        client_kind=row.client_kind,
+        context=ctx,
+        db=db,
+        now=now,
     )
     started = utcnow()
     preamble: str | None = None
     if spec is None:
         call.status = TOOL_STATUS_FAILED
         call.error_class = VoiceErrorClass.CAPABILITY_MISSING.value
-        call.result_json = {"message": f"unknown tool {name!r}",
-                            "available": registry.names()}
+        call.result_json = {"message": f"unknown tool {name!r}", "available": registry.names()}
         call.completed_at = utcnow()
     else:
         try:
@@ -508,12 +611,22 @@ def handle_tool_call(
         _deliver(db, row, ctx, sideband, event, payload, trace_id=trace_id)
     _set_context(row, ctx)
     _touch(row, now)
-    _audit(db, ACTION_TOOL_CALL, row, trace_id=trace_id, metadata={
-        "call_id": call_id, "name": name, "status": call.status,
-        "long_running": call.long_running, "duration_ms": duration_ms,
-        "error_class": call.error_class, "plan_id": str(row.plan_id) if row.plan_id else None,
-        "preamble_chars": len(preamble or ""),
-    })
+    _audit(
+        db,
+        ACTION_TOOL_CALL,
+        row,
+        trace_id=trace_id,
+        metadata={
+            "call_id": call_id,
+            "name": name,
+            "status": call.status,
+            "long_running": call.long_running,
+            "duration_ms": duration_ms,
+            "error_class": call.error_class,
+            "plan_id": str(row.plan_id) if row.plan_id else None,
+            "preamble_chars": len(preamble or ""),
+        },
+    )
     db.commit()
     return _tool_row_payload(call, preamble=preamble)
 
@@ -547,9 +660,11 @@ def complete_tool_call(
     if call is None:
         raise VoiceError(VoiceErrorClass.VALIDATION_ERROR, f"unknown tool call {call_id!r}")
     if call.status != TOOL_STATUS_RUNNING:
-        raise VoiceError(VoiceErrorClass.VALIDATION_ERROR,
-                         f"tool call {call_id!r} is already {call.status}",
-                         details={"status": call.status})
+        raise VoiceError(
+            VoiceErrorClass.VALIDATION_ERROR,
+            f"tool call {call_id!r} is already {call.status}",
+            details={"status": call.status},
+        )
     if error:
         call.status = TOOL_STATUS_FAILED
         call.error_class = str(error.get("error_class") or VoiceErrorClass.DEPENDENCY_UNAVAILABLE)
@@ -564,18 +679,34 @@ def complete_tool_call(
         plan = dict(plan)
         plan["status"] = "completed" if call.status == TOOL_STATUS_SUCCEEDED else "failed"
         ctx["plan"] = plan
-    payload = {"call_id": call.call_id, "name": call.name, "status": call.status,
-               "result": call.result_json if call.status == TOOL_STATUS_SUCCEEDED else None,
-               "error": ({"error_class": call.error_class, **(call.result_json or {})}
-                         if call.status == TOOL_STATUS_FAILED else None)}
+    payload = {
+        "call_id": call.call_id,
+        "name": call.name,
+        "status": call.status,
+        "result": call.result_json if call.status == TOOL_STATUS_SUCCEEDED else None,
+        "error": (
+            {"error_class": call.error_class, **(call.result_json or {})}
+            if call.status == TOOL_STATUS_FAILED
+            else None
+        ),
+    }
     delivered = _deliver(db, row, ctx, sideband, SB_TOOL_COMPLETED, payload, trace_id=trace_id)
     _set_context(row, ctx)
     row.updated_at = now
-    _audit(db, ACTION_TOOL_COMPLETED, row, trace_id=trace_id, metadata={
-        "call_id": call_id, "name": call.name, "status": call.status,
-        "delivered": delivered, "error_class": call.error_class,
-        "running_ms": int((now - _aware(call.created_at, now)).total_seconds() * 1000),
-    })
+    _audit(
+        db,
+        ACTION_TOOL_COMPLETED,
+        row,
+        trace_id=trace_id,
+        metadata={
+            "call_id": call_id,
+            "name": call.name,
+            "status": call.status,
+            "delivered": delivered,
+            "error_class": call.error_class,
+            "running_ms": int((now - _aware(call.created_at, now)).total_seconds() * 1000),
+        },
+    )
     db.commit()
     return {**payload, "delivered": delivered}
 
@@ -632,15 +763,23 @@ def record_client_events(
             text = str(ev.get("text") or payload.get("utterance") or "")
             fsm = ctx.get("fsm_state")
             intent: ResolvedIntent = resolve_intent(
-                text, session_state=RealtimeState(fsm) if fsm else None,
+                text,
+                session_state=RealtimeState(fsm) if fsm else None,
                 narration=narration_state,
             )
             ctx["last_intent"] = intent.intent.value
-            resolved.append({"t_ms": t_ms, "turn": turn, **intent.to_dict(),
-                             "normalized_text": None})
-            meta.update({"intent": intent.intent.value, "scope": intent.scope,
-                         "target_index": intent.target_index, "chars": len(text),
-                         "fillers_removed": intent.fillers_removed})
+            resolved.append(
+                {"t_ms": t_ms, "turn": turn, **intent.to_dict(), "normalized_text": None}
+            )
+            meta.update(
+                {
+                    "intent": intent.intent.value,
+                    "scope": intent.scope,
+                    "target_index": intent.target_index,
+                    "chars": len(text),
+                    "fillers_removed": intent.fillers_removed,
+                }
+            )
             _audit(db, ACTION_INTENT_RESOLVED, row, trace_id=trace_id, metadata=meta)
             accepted += 1
             continue
@@ -649,8 +788,7 @@ def record_client_events(
             # the narration cursor, then dropped: the text itself is never audited.
             text = str(ev.get("text") or "")
             final = int(payload.get("final") or 0) == 1
-            aligned = _align_narration(db, row, ctx, sideband_payloads, text, final=final,
-                                       now=now)
+            aligned = _align_narration(db, row, ctx, sideband_payloads, text, final=final, now=now)
             meta.update({"chars": len(text), "final": int(final), **aligned})
             payload = {k: v for k, v in payload.items() if k != "text"}
         elif kind == "summary":
@@ -684,8 +822,12 @@ def record_client_events(
     _set_context(row, ctx)
     _touch(row, now)
     db.commit()
-    return {"accepted": accepted, "resolved_intents": resolved, "pending_sideband": pending,
-            "state": session_state(db, row)}
+    return {
+        "accepted": accepted,
+        "resolved_intents": resolved,
+        "pending_sideband": pending,
+        "state": session_state(db, row),
+    }
 
 
 def _align_narration(
@@ -719,51 +861,94 @@ def _align_narration(
     if version is None:
         version = artifact_service.get_current_version(db, nrow.artifact_id)
     body_md = version.canonical_body if version else ""
-    plan = build_plan(body_md, artifact_id=str(nrow.artifact_id), version=nrow.artifact_version,
-                      pronunciation=narration_service.pronunciation_map(db))
+    plan = build_plan(
+        body_md,
+        artifact_id=str(nrow.artifact_id),
+        version=nrow.artifact_version,
+        pronunciation=narration_service.pronunciation_map(db),
+    )
     state = _unpack_state(nrow)
     result = align(plan, state.cursor, spoken)
     if final:
-        new_state = replace(state, cursor=result.cursor or state.cursor,
-                            state=State.PAUSED if result.complete else state.state)
+        new_state = replace(
+            state,
+            cursor=result.cursor or state.cursor,
+            state=State.PAUSED if result.complete else state.state,
+        )
         action = "spoken_complete" if result.complete else "spoken_progress"
     else:
         new_state = replace(state, cursor=result.cursor or state.cursor, state=State.PAUSED)
         action = "paused"
-    narration_service.update_cursor(db, nrow.id, cursor=_pack_state(new_state),
-                                    state=new_state.state.value, device_id=row.device_id)
+    narration_service.update_cursor(
+        db,
+        nrow.id,
+        cursor=_pack_state(new_state),
+        state=new_state.state.value,
+        device_id=row.device_id,
+    )
     cursor_payload = {
         "narration_session_id": str(nrow.id),
         "cursor": new_state.cursor.as_dict() if new_state.cursor else None,
-        "state": new_state.state.value, "speed": new_state.speed, "action": action,
+        "state": new_state.state.value,
+        "speed": new_state.speed,
+        "action": action,
         "spoken_chunks": result.spoken_chunks,
     }
     pushes.append((SB_NARRATION_CURSOR, cursor_payload))
     if not final:
-        _ledger_narration_event(db, row, nrow.id, now, "voice.narration.paused",
-                                {"action": action, "cursor": cursor_payload["cursor"],
-                                 "spoken_chunks": result.spoken_chunks})
-    return {"aligned": 1, "spoken_chunks": result.spoken_chunks,
-            "complete": int(result.complete), "action": action}
+        _ledger_narration_event(
+            db,
+            row,
+            nrow.id,
+            now,
+            "voice.narration.paused",
+            {
+                "action": action,
+                "cursor": cursor_payload["cursor"],
+                "spoken_chunks": result.spoken_chunks,
+            },
+        )
+    return {
+        "aligned": 1,
+        "spoken_chunks": result.spoken_chunks,
+        "complete": int(result.complete),
+        "action": action,
+    }
 
 
-def _ledger_narration_event(db: Session, row: RealtimeSessionRow, narration_id: uuid.UUID,
-                            now: datetime, event_type: str, detail: dict[str, Any]) -> None:
+def _ledger_narration_event(
+    db: Session,
+    row: RealtimeSessionRow,
+    narration_id: uuid.UUID,
+    now: datetime,
+    event_type: str,
+    detail: dict[str, Any],
+) -> None:
     try:
         from app.ledger import service as ledger_service
         from app.ledger.service import ActivityEvent
     except ImportError:
         return
     try:
-        ledger_service.record(db, ActivityEvent(
-            event_type=event_type, subsystem="voice", status="completed", severity="info",
-            action=detail.get("action") or event_type, occurred_at=now,
-            factual_summary="Anlatım sahibin araya girmesiyle duraklatıldı.",
-            detail=detail, source="live",
-            source_ref=f"voice_narration:{narration_id}:{now.isoformat()}",
-            evidence_refs=[{"kind": "narration_session", "ref": str(narration_id)},
-                           {"kind": "realtime_session", "ref": str(row.id)}],
-        ))
+        ledger_service.record(
+            db,
+            ActivityEvent(
+                event_type=event_type,
+                subsystem="voice",
+                status="completed",
+                severity="info",
+                action=detail.get("action") or event_type,
+                occurred_at=now,
+                factual_summary="Anlatım sahibin araya girmesiyle duraklatıldı.",
+                detail=detail,
+                source="live",
+                source_ref=f"voice_narration:{narration_id}:{now.isoformat()}",
+                evidence_refs=[
+                    {"kind": "narration_session", "ref": str(narration_id)},
+                    {"kind": "realtime_session", "ref": str(row.id)},
+                ],
+            ),
+        )
     except Exception:  # noqa: BLE001 - evidence, not a dependency
         logger.warning("voice_ledger_note_failed", event_type=event_type)
 
@@ -792,18 +977,24 @@ def attach(
     now = utcnow()
     require_live(db, row, now=now, trace_id=trace_id)
     if provider.name != row.provider:
-        raise VoiceError(VoiceErrorClass.CAPABILITY_MISSING,
-                         f"session was opened on provider {row.provider!r}, "
-                         f"which is no longer selectable", provider=provider.name)
+        raise VoiceError(
+            VoiceErrorClass.CAPABILITY_MISSING,
+            f"session was opened on provider {row.provider!r}, which is no longer selectable",
+            provider=provider.name,
+        )
     ctx = dict(row.context_json or {})
-    previous = {"owner_session_id": str(row.owner_session_id),
-                "device_id": str(row.device_id) if row.device_id else None,
-                "client_kind": row.client_kind}
+    previous = {
+        "owner_session_id": str(row.owner_session_id),
+        "device_id": str(row.device_id) if row.device_id else None,
+        "client_kind": row.client_kind,
+    }
     same_leg = row.owner_session_id == owner.session_id
     if not same_leg:
-        frame = sideband_frame(row.id, SB_LEG_CLOSED, {"reason": "attached_elsewhere",
-                                                       "new_client_kind": client_kind
-                                                       or owner.client_kind})
+        frame = sideband_frame(
+            row.id,
+            SB_LEG_CLOSED,
+            {"reason": "attached_elsewhere", "new_client_kind": client_kind or owner.client_kind},
+        )
         sideband.push(device_id=row.device_id, frame=frame)
         _audit(db, ACTION_LEG_CLOSED, row, trace_id=trace_id, metadata=previous)
     row.owner_session_id = owner.session_id
@@ -819,17 +1010,40 @@ def attach(
     _touch(row, now)
     prefs = voice_service.load_preferences(db)
     config = _session_config(row, registry=registry, prefs=prefs)
-    credential = mint_credential(provider, session_id=row.id, ttl_s=credential_ttl_s,
-                                 transport=row.transport, session_config=config)
-    _audit(db, ACTION_CREDENTIAL_MINTED, row, trace_id=trace_id, metadata={
-        "provider": credential.provider, "session_ref": credential.session_ref,
-        "expires_at": _iso(credential.expires_at), "ttl_s": credential_ttl_s, "leg": ctx["legs"],
-    })
-    _audit(db, ACTION_SESSION_ATTACHED, row, trace_id=trace_id, metadata={
-        "owner_session_id": str(owner.session_id), "client_kind": row.client_kind,
-        "device_id": str(row.device_id) if row.device_id else None,
-        "same_leg": same_leg, "legs": ctx["legs"], "pending_sideband": len(pending),
-    })
+    credential = mint_credential(
+        provider,
+        session_id=row.id,
+        ttl_s=credential_ttl_s,
+        transport=row.transport,
+        session_config=config,
+    )
+    _audit(
+        db,
+        ACTION_CREDENTIAL_MINTED,
+        row,
+        trace_id=trace_id,
+        metadata={
+            "provider": credential.provider,
+            "session_ref": credential.session_ref,
+            "expires_at": _iso(credential.expires_at),
+            "ttl_s": credential_ttl_s,
+            "leg": ctx["legs"],
+        },
+    )
+    _audit(
+        db,
+        ACTION_SESSION_ATTACHED,
+        row,
+        trace_id=trace_id,
+        metadata={
+            "owner_session_id": str(owner.session_id),
+            "client_kind": row.client_kind,
+            "device_id": str(row.device_id) if row.device_id else None,
+            "same_leg": same_leg,
+            "legs": ctx["legs"],
+            "pending_sideband": len(pending),
+        },
+    )
     db.commit()
     payload = _leg_payload(row, credential, registry=registry, config=config)
     payload["state"] = session_state(db, row)
@@ -839,7 +1053,10 @@ def attach(
 
 
 def close_session(
-    db: Session, row: RealtimeSessionRow, *, reason: str = "client_closed",
+    db: Session,
+    row: RealtimeSessionRow,
+    *,
+    reason: str = "client_closed",
     trace_id: str | None = None,
 ) -> dict[str, Any]:
     now = utcnow()
@@ -848,10 +1065,17 @@ def close_session(
         row.closed_at = now
         row.updated_at = now
         created = _aware(row.created_at, now)
-        _audit(db, ACTION_SESSION_CLOSED, row, trace_id=trace_id, metadata={
-            "reason": reason[:64], "lifetime_ms": int((now - created).total_seconds() * 1000),
-            "barge_in_count": int((row.context_json or {}).get("barge_in_count", 0)),
-        })
+        _audit(
+            db,
+            ACTION_SESSION_CLOSED,
+            row,
+            trace_id=trace_id,
+            metadata={
+                "reason": reason[:64],
+                "lifetime_ms": int((now - created).total_seconds() * 1000),
+                "barge_in_count": int((row.context_json or {}).get("barge_in_count", 0)),
+            },
+        )
         snapshot_benchmark_at_close(db, row)
         db.commit()
     return {"session_id": str(row.id), "state": row.state, "closed_at": _iso(row.closed_at)}
@@ -864,13 +1088,120 @@ def client_timing_rows(db: Session, session_id: uuid.UUID) -> list[dict[str, Any
     from app.broker.models import AuditEvent
 
     rows = db.execute(
-        select(AuditEvent).where(
+        select(AuditEvent)
+        .where(
             AuditEvent.category == AUDIT_CATEGORY,
             AuditEvent.action == ACTION_CLIENT_EVENT,
             AuditEvent.subject_ref == str(session_id),
-        ).order_by(AuditEvent.id)
+        )
+        .order_by(AuditEvent.id)
     ).scalars()
     return [dict(r.metadata_json or {}) for r in rows]
+
+
+def _result_field(result: Any, *path: str) -> Any:
+    node = result
+    for key in path:
+        if not isinstance(node, dict):
+            return None
+        node = node.get(key)
+    return node
+
+
+def session_activity(db: Session, row: RealtimeSessionRow) -> dict[str, Any]:
+    """What happened in a session, from durable rows only (M16 spec §5).
+
+    Tool calls come from ``realtime_tool_calls`` (name, status, and a bounded view of the
+    result: level, intent, action, narration state, cursor, how much speech was handed
+    out), intents from the ``voice_intent_resolved`` audit rows, client events from the
+    ``voice_client_event`` rows (kinds and order only). No transcript, no credential.
+    """
+    from app.broker.models import AuditEvent
+
+    # Rows are ordered by the audit trail (a monotonic id), not by created_at: several
+    # calls can share one timestamp at the database's resolution, and the order the owner
+    # spoke them in is part of the evidence.
+    order_rows = db.execute(
+        select(AuditEvent)
+        .where(
+            AuditEvent.category == AUDIT_CATEGORY,
+            AuditEvent.subject_ref == str(row.id),
+            AuditEvent.action == ACTION_TOOL_CALL,
+        )
+        .order_by(AuditEvent.id)
+    ).scalars()
+    order = {str((a.metadata_json or {}).get("call_id")): n for n, a in enumerate(order_rows)}
+    calls = sorted(
+        db.execute(select(RealtimeToolCall).where(RealtimeToolCall.session_id == row.id)).scalars(),
+        key=lambda c: (order.get(c.call_id, len(order)), c.created_at or utcnow()),
+    )
+    tool_calls: list[dict[str, Any]] = []
+    for call in calls:
+        result = call.result_json or {}
+        speech = str(_result_field(result, "speech") or "")
+        tool_calls.append(
+            {
+                "call_id": call.call_id,
+                "name": call.name,
+                "status": call.status,
+                "created_at": _iso(call.created_at) if call.created_at else None,
+                "completed_at": _iso(call.completed_at) if call.completed_at else None,
+                "error_class": call.error_class,
+                "level": _result_field(result, "level"),
+                "intent": _result_field(result, "intent", "intent"),
+                "query_kind": _result_field(result, "intent", "query_kind"),
+                "action": _result_field(result, "narration", "action"),
+                "narration_state": _result_field(result, "narration", "narration_state"),
+                "cursor": (
+                    _result_field(result, "narration", "cursor") or _result_field(result, "cursor")
+                ),
+                "speech_chars": len(speech),
+                "speech_head": speech[:80],
+                "facts": _result_field(result, "facts"),
+                "uncertainties": _result_field(result, "uncertainties"),
+                "evidence_count": _result_field(result, "evidence_count"),
+                "narration_session_id": _result_field(result, "narration_session_id"),
+            }
+        )
+    audits = db.execute(
+        select(AuditEvent)
+        .where(
+            AuditEvent.category == AUDIT_CATEGORY,
+            AuditEvent.subject_ref == str(row.id),
+            AuditEvent.action.in_((ACTION_INTENT_RESOLVED, ACTION_CLIENT_EVENT)),
+        )
+        .order_by(AuditEvent.id)
+    ).scalars()
+    intents: list[dict[str, Any]] = []
+    client_events: list[dict[str, Any]] = []
+    for audit in audits:
+        meta = dict(audit.metadata_json or {})
+        at = _iso(audit.created_at) if getattr(audit, "created_at", None) else None
+        if audit.action == ACTION_INTENT_RESOLVED:
+            intents.append(
+                {
+                    "at": at,
+                    "t_ms": meta.get("t_ms"),
+                    "intent": meta.get("intent"),
+                    "scope": meta.get("scope"),
+                    "chars": meta.get("chars"),
+                }
+            )
+        else:
+            entry = {"at": at, "t_ms": meta.get("t_ms"), "kind": meta.get("kind")}
+            for key in ("chars", "final", "aligned", "spoken_chunks", "complete", "action"):
+                if key in meta:
+                    entry[key] = meta[key]
+            client_events.append(entry)
+    return {
+        "session_id": str(row.id),
+        "state": row.state,
+        "tool_calls": tool_calls,
+        "intents": intents,
+        "client_events": client_events,
+        "narration": session_state(db, row).get("narration"),
+        "barge_in_count": int((row.context_json or {}).get("barge_in_count", 0)),
+    }
 
 
 NOISE_COUNTERS = ("false_starts", "false_barge_ins", "false_turns", "gate_opens")
@@ -941,8 +1272,11 @@ def timing_breakdown(client_rows: list[dict[str, Any]]) -> dict[str, Any]:
         entry: dict[str, Any] = {"events": seen[kind], "without_breakdown": without[kind]}
         for field_name in fields:
             values = samples[kind][field_name]
-            entry[field_name] = {"n": len(values), "p50_ms": round(_percentile(values, 0.5), 1),
-                                 "p95_ms": round(_percentile(values, 0.95), 1)}
+            entry[field_name] = {
+                "n": len(values),
+                "p50_ms": round(_percentile(values, 0.5), 1),
+                "p95_ms": round(_percentile(values, 0.95), 1),
+            }
         for flag in BREAKDOWN_FLAGS.get(kind, ()):
             entry[flag + "_count"] = flags[kind][flag]
         out[kind] = entry
@@ -999,19 +1333,25 @@ def benchmark_report(db: Session, row: RealtimeSessionRow) -> RealtimeBenchRepor
     rows = client_timing_rows(db, row.id)
     events = events_from_client_reports(rows)
     return build_report(
-        events, source=SOURCE_CLIENT,
-        context={"session_id": str(row.id), "provider": row.provider,
-                 "model": (row.context_json or {}).get("model"),
-                 "transport": row.transport, "client_kind": row.client_kind,
-                 "voice": (row.context_json or {}).get("voice"),
-                 "voice_profile": (row.context_json or {}).get("voice_profile"),
-                 "state": row.state,
-                 "started_at": _iso(row.created_at) if getattr(row, "created_at", None) else None,
-                 "ended_at": _iso(row.closed_at) if row.closed_at else None,
-                 "benchmark_snapshot_at_close": bool(
-                     (row.context_json or {}).get(BENCHMARK_SNAPSHOT_KEY)),
-                 "noise": noise_summary(rows),
-                 "breakdown": timing_breakdown(rows)},
+        events,
+        source=SOURCE_CLIENT,
+        context={
+            "session_id": str(row.id),
+            "provider": row.provider,
+            "model": (row.context_json or {}).get("model"),
+            "transport": row.transport,
+            "client_kind": row.client_kind,
+            "voice": (row.context_json or {}).get("voice"),
+            "voice_profile": (row.context_json or {}).get("voice_profile"),
+            "state": row.state,
+            "started_at": _iso(row.created_at) if getattr(row, "created_at", None) else None,
+            "ended_at": _iso(row.closed_at) if row.closed_at else None,
+            "benchmark_snapshot_at_close": bool(
+                (row.context_json or {}).get(BENCHMARK_SNAPSHOT_KEY)
+            ),
+            "noise": noise_summary(rows),
+            "breakdown": timing_breakdown(rows),
+        },
     )
 
 
@@ -1043,14 +1383,20 @@ def list_recent_sessions(db: Session, *, limit: int = 20) -> list[dict[str, Any]
     out: list[dict[str, Any]] = []
     for row in rows:
         ctx = row.context_json or {}
-        out.append({
-            "session_id": str(row.id), "state": row.state, "provider": row.provider,
-            "model": ctx.get("model"), "voice": ctx.get("voice"),
-            "voice_profile": ctx.get("voice_profile"), "client_kind": row.client_kind,
-            "started_at": _iso(row.created_at) if getattr(row, "created_at", None) else None,
-            "ended_at": _iso(row.closed_at) if row.closed_at else None,
-            "benchmark_snapshot_at_close": bool(ctx.get(BENCHMARK_SNAPSHOT_KEY)),
-        })
+        out.append(
+            {
+                "session_id": str(row.id),
+                "state": row.state,
+                "provider": row.provider,
+                "model": ctx.get("model"),
+                "voice": ctx.get("voice"),
+                "voice_profile": ctx.get("voice_profile"),
+                "client_kind": row.client_kind,
+                "started_at": _iso(row.created_at) if getattr(row, "created_at", None) else None,
+                "ended_at": _iso(row.closed_at) if row.closed_at else None,
+                "benchmark_snapshot_at_close": bool(ctx.get(BENCHMARK_SNAPSHOT_KEY)),
+            }
+        )
     return out
 
 

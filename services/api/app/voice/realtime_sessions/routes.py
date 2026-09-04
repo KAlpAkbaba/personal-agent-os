@@ -219,8 +219,12 @@ async def list_realtime_providers(request: Request) -> dict[str, Any]:
     runtime = _runtime(request)
     caps = [p.capabilities().to_dict() for p in runtime.providers.values()]
     health = runtime.health_check()
-    return {"providers": caps, "count": len(caps), "selection": health["selection"],
-            "preference_order": list(runtime.settings.voice_realtime_provider_preference)}
+    return {
+        "providers": caps,
+        "count": len(caps),
+        "selection": health["selection"],
+        "preference_order": list(runtime.settings.voice_realtime_provider_preference),
+    }
 
 
 @router.post("/sessions", status_code=201)
@@ -240,10 +244,14 @@ async def create_session(request: Request, body: CreateSessionRequest) -> dict[s
         # can never forward an unvetted string to a vendor by omission.
         require = getattr(provider, "require_supported_voice", None)
         if require is None:
-            raise HTTPException(status_code=422, detail={
-                "error_class": "validation_error",
-                "message": f"provider {provider.name!r} declares no supported voices; "
-                           "omit 'voice' to use its default"})
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error_class": "validation_error",
+                    "message": f"provider {provider.name!r} declares no supported voices; "
+                    "omit 'voice' to use its default",
+                },
+            )
         try:
             require(voice)
         except VoiceError as exc:
@@ -251,21 +259,32 @@ async def create_session(request: Request, body: CreateSessionRequest) -> dict[s
     profile = (runtime.settings.voice_realtime_owner_target_voice_profile or "").strip().lower()
     voice_profile = profile if profile and profile != "none" else None
     if transport not in provider.capabilities().transports:
-        raise HTTPException(status_code=422, detail={
-            "error_class": "validation_error",
-            "message": f"provider {provider.name!r} does not offer transport {transport!r}",
-            "transports": list(provider.capabilities().transports)})
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error_class": "validation_error",
+                "message": f"provider {provider.name!r} does not offer transport {transport!r}",
+                "transports": list(provider.capabilities().transports),
+            },
+        )
 
     def work() -> dict[str, Any]:
         with runtime.session() as db:
             _, _, payload = service.create_session(
-                db, owner=owner, provider=provider, transport=transport,
-                client_kind=body.client_kind, language=body.language,
-                voice=voice, voice_profile=voice_profile,
+                db,
+                owner=owner,
+                provider=provider,
+                transport=transport,
+                client_kind=body.client_kind,
+                language=body.language,
+                voice=voice,
+                voice_profile=voice_profile,
                 session_ttl_s=body.session_ttl_s or runtime.settings.voice_realtime_session_ttl_s,
                 credential_ttl_s=runtime.settings.voice_realtime_credential_ttl_s,
-                narration_session_id=body.narration_session_id, registry=runtime.registry,
-                selection=selection.to_dict(), trace_id=trace_id,
+                narration_session_id=body.narration_session_id,
+                registry=runtime.registry,
+                selection=selection.to_dict(),
+                trace_id=trace_id,
             )
             return payload
 
@@ -273,8 +292,12 @@ async def create_session(request: Request, body: CreateSessionRequest) -> dict[s
         payload = await asyncio.to_thread(work)
     except VoiceError as exc:
         _raise_http(exc)
-    logger.info("voice_realtime_session_created", session_id=payload["session_id"],
-                provider=payload["provider"], transport=payload["transport"])
+    logger.info(
+        "voice_realtime_session_created",
+        session_id=payload["session_id"],
+        provider=payload["provider"],
+        transport=payload["transport"],
+    )
     return payload
 
 
@@ -326,8 +349,14 @@ async def relay_tool_call(
     def work() -> dict[str, Any]:
         with runtime.session() as db:
             return service.handle_tool_call(
-                db, _load(db, session_id), owner=owner, call_id=body.call_id, name=body.name,
-                arguments=body.arguments, registry=runtime.registry, sideband=runtime.sideband,
+                db,
+                _load(db, session_id),
+                owner=owner,
+                call_id=body.call_id,
+                name=body.name,
+                arguments=body.arguments,
+                registry=runtime.registry,
+                sideband=runtime.sideband,
                 trace_id=trace_id,
             )
 
@@ -335,8 +364,14 @@ async def relay_tool_call(
         result = await asyncio.to_thread(work)
     except VoiceError as exc:
         _raise_http(exc)
-    logger.info("voice_realtime_tool_call", session_id=str(session_id), call_id=body.call_id,
-                tool=body.name, status=result["status"], replayed=result["replayed"])
+    logger.info(
+        "voice_realtime_tool_call",
+        session_id=str(session_id),
+        call_id=body.call_id,
+        tool=body.name,
+        status=result["status"],
+        replayed=result["replayed"],
+    )
     return result
 
 
@@ -354,8 +389,14 @@ async def complete_tool_call(
     def work() -> dict[str, Any]:
         with runtime.session() as db:
             return service.complete_tool_call(
-                db, _load(db, session_id), owner=owner, call_id=call_id, result=body.result,
-                error=body.error, sideband=runtime.sideband, trace_id=trace_id,
+                db,
+                _load(db, session_id),
+                owner=owner,
+                call_id=call_id,
+                result=body.result,
+                error=body.error,
+                sideband=runtime.sideband,
+                trace_id=trace_id,
             )
 
     try:
@@ -377,7 +418,11 @@ async def report_events(
     def work() -> dict[str, Any]:
         with runtime.session() as db:
             return service.record_client_events(
-                db, _load(db, session_id), owner=owner, events=events, trace_id=trace_id,
+                db,
+                _load(db, session_id),
+                owner=owner,
+                events=events,
+                trace_id=trace_id,
                 sideband=runtime.sideband,
             )
 
@@ -403,12 +448,19 @@ async def attach_session(
             row = _load(db, session_id)
             provider = runtime.provider(row.provider)
             if provider is None:
-                raise VoiceError(VoiceErrorClass.CAPABILITY_MISSING,
-                                 f"provider {row.provider!r} is not registered",
-                                 provider=row.provider)
+                raise VoiceError(
+                    VoiceErrorClass.CAPABILITY_MISSING,
+                    f"provider {row.provider!r} is not registered",
+                    provider=row.provider,
+                )
             return service.attach(
-                db, row, owner=owner, provider=provider, registry=runtime.registry,
-                sideband=runtime.sideband, client_kind=body.client_kind,
+                db,
+                row,
+                owner=owner,
+                provider=provider,
+                registry=runtime.registry,
+                sideband=runtime.sideband,
+                client_kind=body.client_kind,
                 transport=body.transport,
                 credential_ttl_s=runtime.settings.voice_realtime_credential_ttl_s,
                 trace_id=trace_id,
@@ -418,8 +470,12 @@ async def attach_session(
         payload = await asyncio.to_thread(work)
     except VoiceError as exc:
         _raise_http(exc)
-    logger.info("voice_realtime_session_attached", session_id=str(session_id),
-                client_kind=payload["state"]["client_kind"], legs=payload["state"]["legs"])
+    logger.info(
+        "voice_realtime_session_attached",
+        session_id=str(session_id),
+        client_kind=payload["state"]["client_kind"],
+        legs=payload["state"]["legs"],
+    )
     return payload
 
 
@@ -433,12 +489,26 @@ async def close_session(
 
     def work() -> dict[str, Any]:
         with runtime.session() as db:
-            return service.close_session(db, _load(db, session_id), reason=body.reason,
-                                         trace_id=trace_id)
+            return service.close_session(
+                db, _load(db, session_id), reason=body.reason, trace_id=trace_id
+            )
 
     result = await asyncio.to_thread(work)
     logger.info("voice_realtime_session_closed", session_id=str(session_id), reason=body.reason)
     return result
+
+
+@router.get("/sessions/{session_id}/activity")
+async def session_activity(request: Request, session_id: uuid.UUID) -> dict[str, Any]:
+    """Durable record of a session's tool calls, intents and client events (M16 §5):
+    the owner's acceptance evidence for the self-explanation script, ids and kinds only."""
+    runtime = _runtime(request)
+
+    def work() -> dict[str, Any]:
+        with runtime.session() as db:
+            return service.session_activity(db, _load(db, session_id))
+
+    return await asyncio.to_thread(work)
 
 
 @router.get("/sessions/{session_id}/benchmark")
