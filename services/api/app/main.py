@@ -23,6 +23,8 @@ from app.config import Settings, get_settings
 from app.devices.commands import register_broker_runtime
 from app.evolution.routes import router as evolution_router
 from app.evolution.runtime import EvolutionRuntime
+from app.experience.routes import router as experience_router
+from app.goals.routes import router as goals_router
 from app.health import run_health_checks
 from app.identity.routes import router as identity_router
 from app.identity.runtime import IdentityRuntime
@@ -47,6 +49,7 @@ from app.voice.realtime_sessions.routes import router as voice_realtime_router
 from app.voice.realtime_sessions.runtime import RealtimeVoiceRuntime
 from app.voice.routes import router as voice_router
 from app.voice.runtime import VoiceRuntime
+from app.worldmodel.routes import router as world_router
 
 configure_logging()
 logger = get_logger("app.main")
@@ -171,6 +174,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(mobile_router)
     app.include_router(research_router)
     app.include_router(ui_state_router)
+    # M17 cognitive foundations: what was learned, what is being pursued, what is true now
+    app.include_router(experience_router)
+    app.include_router(goals_router)
+    app.include_router(world_router)
     app.include_router(ledger_router)
 
     @app.get("/v1/system/health")
