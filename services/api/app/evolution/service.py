@@ -262,28 +262,64 @@ _STATUS_TR: Final[dict[OpportunityStatus, str]] = {
 # ------------------------------------------------------------ UI-state seam
 
 
-class UiStatePublisher:
-    """What the service needs from the UI-state subsystem: one method.
+#: How far through the lab pipeline each status is, as real progress in [0, 1].
+#: ``None`` where progress is genuinely unknown — the UI contract says a renderer
+#: must not invent a bar for work whose length it cannot know.
+_LAB_PROGRESS: Final[dict[OpportunityStatus, float]] = {
+    OpportunityStatus.RESEARCHING: 0.2,
+    OpportunityStatus.DESIGN_READY: 0.4,
+    OpportunityStatus.BUILDING: 0.6,
+    OpportunityStatus.TESTING: 0.75,
+    OpportunityStatus.EVALUATING: 0.9,
+    OpportunityStatus.SHADOW_READY: 1.0,
+}
 
-    ``app/uistate`` is being built by another agent, so this module resolves it
-    lazily and degrades to a no-op rather than importing it at module load. A
-    missing UI surface must never stop the engine from working or block a
-    lifecycle transition — presentation and task completion are separate
-    concepts (constitution §4).
+
+class UiStateBridge:
+    """Publishes lab progress to ``app.uistate``, defensively.
+
+    ``app/uistate`` is resolved lazily rather than imported at module load: it
+    is a peer subsystem built on its own schedule, and a missing or changed UI
+    surface must never stop the engine from working or block a lifecycle
+    transition — presentation and task completion are separate concepts
+    (constitution §4). Every failure degrades to ``False`` and a warning.
+
+    Content-free by construction: the published event carries the opportunity
+    id, its status and its composite score. The opportunity's title and
+    statement are owner-authored prose and are deliberately not sent — the UI
+    contract carries state, never content.
     """
 
-    name = "resolved"
+    name = "uistate"
 
     def publish(self, key: str, payload: Mapping[str, Any]) -> bool:
-        publisher = _resolve_uistate_publisher()
-        if publisher is None:
+        try:
+            from app.uistate import UiState
+            from app.uistate import publish as uistate_publish
+        except ImportError:
             return False
         try:
-            publisher(key, dict(payload))
+            state = UiState(key)
+        except ValueError:
+            logger.warning("uistate_unknown_state", ui_state=key)
+            return False
+        status = str(payload.get("status") or "")
+        try:
+            event = uistate_publish(
+                state,
+                # The UI contract has its own subsystem vocabulary; it happens
+                # to agree with the ledger's here, but they are separate lists.
+                subsystem="evolution",
+                status=status or None,
+                module_id=str(payload.get("opportunity_id") or "") or None,
+                severity=(SEVERITY_NOTICE if key == "evolution.shadow_ready" else SEVERITY_INFO),
+                progress=payload.get("progress"),
+                metadata={"composite": payload.get("composite")},
+            )
         except Exception:  # noqa: BLE001 - a UI failure never breaks the engine
             logger.warning("uistate_publish_failed", ui_state=key)
             return False
-        return True
+        return event is not None
 
 
 class NullUiStatePublisher:
@@ -306,30 +342,6 @@ class RecordingUiStatePublisher:
     def publish(self, key: str, payload: Mapping[str, Any]) -> bool:
         self.published.append((key, dict(payload)))
         return True
-
-
-def _resolve_uistate_publisher() -> Callable[[str, dict[str, Any]], Any] | None:
-    """Find a publish callable in ``app.uistate`` without importing it eagerly.
-
-    Tries the conventional names in order. Returns ``None`` — never raises —
-    when the package is absent or exposes none of them.
-    """
-    try:
-        from app import uistate  # type: ignore[attr-defined]
-    except ImportError:
-        return None
-    module: Any = uistate
-    try:
-        from app.uistate import service as uistate_service  # type: ignore[attr-defined]
-
-        module = uistate_service
-    except ImportError:
-        pass
-    for attribute in ("publish", "publish_state", "set_state"):
-        candidate = getattr(module, attribute, None)
-        if callable(candidate):
-            return candidate
-    return None
 
 
 # ------------------------------------------------------- evidence resolution
@@ -388,7 +400,7 @@ def _verify_lesson(session: Session, ref: str) -> bool | None:
     if models is None:
         return None
     row_type = None
-    for name in ("Lesson", "ExperienceLesson", "LessonRow"):
+    for name in ("ExperienceLessonRow", "ExperienceLesson", "LessonRow", "Lesson"):
         candidate = getattr(models, name, None)
         if candidate is not None:
             row_type = candidate
@@ -416,7 +428,7 @@ class EvolutionService:
         session_factory: SessionFactory,
         *,
         authority: Authority | None = None,
-        ui: UiStatePublisher | NullUiStatePublisher | RecordingUiStatePublisher | None = None,
+        ui: UiStateBridge | NullUiStatePublisher | RecordingUiStatePublisher | None = None,
         release_evidence: ReleaseEvidenceProvider | None = None,
     ) -> None:
         self._session_factory = session_factory
@@ -431,7 +443,7 @@ class EvolutionService:
                 subject=resolved.subject,
             )
         self.authority = resolved
-        self.ui = ui if ui is not None else UiStatePublisher()
+        self.ui = ui if ui is not None else UiStateBridge()
         self.release_evidence = release_evidence or NullReleaseEvidenceProvider()
 
     # ------------------------------------------------------------- creation
@@ -675,9 +687,9 @@ class EvolutionService:
                 ui_state,
                 {
                     "opportunity_id": opportunity["opportunity_id"],
-                    "title": opportunity["title"],
                     "status": str(status),
                     "composite": opportunity["scores"]["composite"],
+                    "progress": _LAB_PROGRESS.get(status),
                 },
             )
 
@@ -819,5 +831,5 @@ __all__ = [
     "EvolutionService",
     "NullUiStatePublisher",
     "RecordingUiStatePublisher",
-    "UiStatePublisher",
+    "UiStateBridge",
 ]
