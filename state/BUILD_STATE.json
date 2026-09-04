@@ -2,9 +2,9 @@
   "schema_version": 1,
   "project": "personal-agent-os",
   "current_milestone": "M16_ACTIVITY_LEDGER_SELF_EXPLANATION_VOICE_NARRATION",
-  "status": "STARTED",
+  "status": "BUILT_AND_GATED_OFFLINE; NOT PROVEN_REAL (owner action 16 pending)",
   "last_completed_milestone": "M15_RESEARCH_ENGINE",
-  "last_updated": "2026-09-04T21:00:00+03:00",
+  "last_updated": "2026-09-04T23:30:00+03:00",
   "qualification": {
     "matrix": "docs/QUALIFICATION.md",
     "owner_queue": "docs/OWNER_ACTIONS.md",
@@ -89,5 +89,14 @@
     "deployment": "Execution never installs: Test-AgentReleaseCurrent compares the checkout with the installed source AND the venv copy that runs; the smoke has -AgentUpdate auto|never|force; owner-research.ps1 never installs and releases the Cloud Core only when its research policy predates the checkout.",
     "owner_action": "OWNER_ACTIONS item 15: scripts/research/owner-research.ps1 (QUALIFICATION 9.16, 9.17).",
     "closure": "PROVEN_REAL and CLOSED 2026-09-04 on the owner run (research-1.json): OWNER RESEARCH: PASS, findings=5, sources=5, distinct publishers=5, Chrome before=0 after=0, deployment skipped (installed 0.4.0 matched), 28 refused pages by reason, one Cloud Core release to research policy 4. QUALIFICATION 9.16-9.19 PROVEN_REAL. Backlog (non-blocking, ADR-0050 item 24): semantic intent scoring so broad AI news does not pass as agent-specific."
+  },
+  "m16_activity_ledger": {
+    "spec": "docs/M16_ACTIVITY_LEDGER_SPEC.md; ADR-0051",
+    "ledger": "app/ledger: activity_events + pending_briefings (migration 0015), vocabulary incl. the reserved evolution events, idempotent record/query/latest, backfill from research_runs/research_reports, voice audit, releases, incidents; live writers at research completed/failed/quality gate and voice session lifecycle; GET/POST /v1/ledger/*",
+    "explain": "app/explain: Turkish question classifier, evidence-first composition (known_fact / inference / uncertainty), briefing persisted as an activity_briefing artifact whose sections are the narration levels",
+    "voice": "activity.explain tool; narration.control returns speech from the new cursor; spoken client events align and pause the narration (app/narration/align.py); intents EXPLAIN/TECHNICAL/EXPLAIN_PREVIOUS; list entries are items inside the section being read; GET /v1/voice/realtime/sessions/{id}/activity",
+    "web": "apps/web voice client reports spoken (final 0 at barge-in after playback stop, final 1 at completion), shows the narration cursor",
+    "owner_action": "OWNER_ACTIONS item 16: scripts/voice/owner-explain.ps1 -OutFile explain-1.json (QUALIFICATION Stage 10)",
+    "deployment": "one transactional Cloud Core release (new tables + routes); web client from the checkout; no Windows component changed"
   }
 }

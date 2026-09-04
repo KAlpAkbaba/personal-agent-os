@@ -156,3 +156,10 @@ Autonomous engineering agents append concise accepted-change records here.
 - Tests: vitest added (36 tests: barge-in ordering, local-detector barge-in, hesitation guard, event shape/batching/scrubbing, tool-call relay idempotency, long-running tool + sideband, reattach on network loss with fresh credential, backoff, 409 retry, leg_closed, disconnect summary, dialect mapping, WebRTC SDP exchange with bearer credential). Lint moved to oxlint because `next lint` is gone in Next 16 and `eslint-config-next` cannot run on the pinned TypeScript 7 (ADR-0040). `pnpm install --frozen-lockfile`, lint, tests and `next build` pass.
 - Open for track B: return `transport_descriptor` with the WebRTC credential (ADR-0040 §1); until then the page has no real media leg.
 
+## 2026-09-04 — M16: Activity Ledger + Self Explanation + stateful voice narration
+
+- `app/ledger`: one append-only `activity_events` stream for every subsystem (spec fields, idempotent on `(source, source_ref)`), backfill from canonical rows only, live writers at research and voice transitions, `pending_briefings` with the proactive briefing policy, `/v1/ledger/*` routes; reserved Evolution Engine vocabulary.
+- `app/explain`: Turkish question classifier; evidence-first composition with `known_fact` / `inference` / `uncertainty` statements; the briefing is an `activity_briefing` artifact whose `# Özet` / `# Ayrıntı` / `# Teknik` sections are the narration levels.
+- Voice: `activity.explain` tool; `narration.control` returns `speech` from the new cursor; `spoken` client events align the narration cursor (`app/narration/align.py`) and pause it on barge-in; intents `EXPLAIN` / `TECHNICAL` / `EXPLAIN_PREVIOUS`; list entries count as items inside the section being read; `GET /v1/voice/realtime/sessions/{id}/activity`.
+- Web voice client: reports `spoken` (barge-in after playback stop, and completion), shows the narration cursor on `/voice`.
+- Owner action 16: `scripts/voice/owner-explain.ps1` (QUALIFICATION Stage 10 pre-registered).

@@ -2895,3 +2895,97 @@ embedded Temporal worker). Facts and decisions that were not in the design:
     can tell them apart. Recorded as a backlog item for the eligibility layer: score how
     central the agent development is to the page, not only whether the concepts occur. It
     does not hold the infrastructure milestone open.
+
+## ADR-0051 — M16 Activity Ledger + Self Explanation + stateful voice narration (2026-09-04)
+
+Status: Accepted (reversible at the seams named; spec `docs/M16_ACTIVITY_LEDGER_SPEC.md`)
+
+Context: with the Research Engine proven real, voice becomes the primary owner interface
+to all of PersonalAgentOS. The owner should hear what the system did ("Son yaptıklarını
+anlat") from durable evidence, drill into it ("Araştırmayı detaylandır", "Teknik anlat"),
+interrupt it ("Dur") and resume it ("Devam et") at the same semantic point - without
+PowerShell, dashboards or development output. M12 built the realtime control plane,
+M4 the narration engine with a durable semantic cursor, M13/M15 the research evidence.
+Nothing existed that could say what happened across subsystems, and nothing turned a
+tool's answer into a narration a cursor could follow.
+
+Decisions:
+
+1. **One append-only ledger, backfilled from canonical rows, never seeded.**
+   `activity_events` (`app/ledger`) is the single structured stream for every
+   subsystem, with the spec's fields (event_type, subsystem, module, version, status,
+   severity, production_state, command/trace/research/browser ids, `evidence_refs`,
+   `factual_summary`, `detail_json`) and idempotency on `(source, source_ref)`. Live
+   writers sit at existing transitions (research completed/failed and the quality gate,
+   voice session lifecycle, explanation, narration pause/resume). Backfill derives
+   events only from rows that exist (`research_runs`/`research_reports`, voice audit
+   rows, `releases`, `incidents`) and every backfilled event references its row; a
+   re-run records nothing new. The Evolution Engine's vocabulary
+   (`evolution.idea_created` … `evolution.rolled_back`, `production_state`
+   `shadow_ready`/`approval_required`/`deployed`) is reserved now so a future module can
+   be described - and questioned - through the same stream.
+2. **Knowledge and execution are separate permissions.** The ledger and the Self
+   Explanation engine are read-only over evidence; nothing in them can start, deploy,
+   promote or roll back anything. Production execution keeps its own path.
+3. **Evidence first, then words; every statement is typed.** `app/explain` classifies
+   the Turkish question (last activity, today, failures, problems now, subsystem status,
+   why failed, evidence, research detail, technical, module problem), retrieves ledger
+   events and the records they point at (the research report for findings, incidents
+   for problems), and composes a briefing whose statements are `known_fact` (carries
+   an evidence reference), `inference` (says so) or `uncertainty` (says so). No evidence
+   → "Bu konuda kayıt bulamadım." The owner's qualification verdict is folded in only
+   when the ledger holds it (`research.qualified`, recorded by the owner script from the
+   real `research-1.json` with its SHA-256); the database alone never yields
+   "doğrulanmış durumda" - that would be fabrication (unit test pins it).
+4. **A briefing is an artifact, and its sections are the narration levels.** The
+   briefing is persisted as `kind=activity_briefing` with a canonical Markdown body
+   `# Özet` / `# Ayrıntı` / `# Teknik` / `# Kanıt`; a `narration_sessions` row attached
+   to the realtime session carries the cursor. So `executive`/`detailed`/`technical`
+   are cursor jumps into one document (`level_section_cursor`), Task → Artifact →
+   Presentation holds, and the M4 machine's invariants ("dur" always wins, explain-then
+   -return restores the exact cursor) apply unchanged. Terminal logs are never read
+   verbatim.
+5. **The provider speaks what the tool returns, verbatim.** Cloud Core never carries
+   audio (ADR-0034). `activity.explain` returns `speech` for the requested level;
+   `narration.control` now returns `speech` = the text from the new cursor to the end
+   of its section. The persona instructs the provider to call these tools for the
+   explanation questions and narration commands and to read `speech` as it is - nothing
+   added, nothing invented. What is spoken is taken from the narration plan itself, so
+   "devam" continues from exactly the words that were said.
+6. **Where "dur" landed is computed, not guessed.** The client already receives the
+   provider's output transcript; it now reports a `spoken` state event (top-level `text`,
+   like `utterance`) when it cuts the assistant off (after playback stop, before
+   `barge_in_start`) and when a response completes. Cloud Core aligns that transcript
+   against the plan from the current cursor (`app/narration/align.py`: Turkish-folded,
+   order-preserving token overlap ≥ 0.6, exact match for short sentences) and persists
+   the cursor at the first sentence not fully spoken; the transcript itself is never
+   stored (the audit scrubber refuses `text`). Without a `spoken` event the cursor stays
+   at the start of the section handed out - still a correct semantic point. Barge-in
+   ordering (playback stop first) is untouched. `CONTRACT_VERSION` stays 2: no request
+   model changed, only an accepted event kind was added.
+7. **"Madde" means a list entry when a list is being read.** M4/ADR-0036 counted items
+   as content paragraphs document-wide. A briefing's findings are one numbered list per
+   section, kept by the plan as one paragraph with one chunk per entry; while that
+   section is read, "ikinci madde" / "önceki maddeyi açıkla" / "bunu atla" address ITS
+   entries. Plain documents keep the old rule (existing intent tests unchanged).
+8. **Proactive briefings are a policy with a durable queue.** `immediate`
+   (critical), `completion` (an owner-requested long task finished: "Efendim, bilginize;
+   araştırma tamamlandı. Beş önemli sonuç çıkardım. İsterseniz özetini anlatabilirim."),
+   `once` (a future module reaches shadow_ready), `digest`, `ledger_only`. With a live
+   session the sideband `say` speaks it; otherwise `pending_briefings` holds it for the
+   next session's instructions, marked delivered when spoken.
+9. **Acceptance is one owner action over the real stack.** `scripts/voice/owner-explain.ps1`
+   preflights (release blockers, realtime provider, ledger policy → one transactional
+   Cloud Core release if the deployed core has no ledger), records the real research
+   verdict, backfills, starts the web voice shell, prints the phrases, and after the
+   session asserts every step from `GET /v1/voice/realtime/sessions/{id}/activity` and
+   the ledger: explain answered from evidence, detail and technical read, `spoken` then
+   `barge_in_start` with an aligned cursor, resume from that cursor, clean close. No
+   Windows component changes; the web client runs from the checkout as before.
+
+Consequences: the Self Model and the Evolution Engine get their event contract and their
+question surface ("Diagnostic Observer'da sorun ne?" already resolves to
+`module_problem` and answers from the module's ledger events plus incidents, or says it
+has no record). Open: semantic intent scoring for research relevance (ADR-0050 item 24),
+and the proactive `say` path is exercised only through fakes until a live session
+receives a completion briefing.

@@ -278,6 +278,18 @@ generated; "Oku" from the phone narrates on the active phone session; "Gönder" 
 PDF/DOCX through the active client; "Aç" on the desktop opens it through the qualified
 Windows Agent.
 
+## M16 (re-sequenced 2026-09-04) — Activity Ledger + Self Explanation + Voice Narration
+
+After the Research Engine closed PROVEN_REAL, the owner re-sequenced the product phase:
+Research → **Activity Ledger + Self Explanation + Voice Narration** → Memory → Cognitive
+Core → Self Model → Evolution Engine. This milestone (spec `docs/M16_ACTIVITY_LEDGER_SPEC.md`,
+ADR-0051) delivers one durable structured activity stream for every subsystem, an
+evidence-first answer to "Son yaptıklarını anlat" / "Ne başarısız oldu?" / "Kanıtı ne?",
+three narration levels over the existing realtime transport with "dur" / "devam et" at the
+same semantic point, and a proactive briefing policy. The "Executive Assistant + Personal
+Memory" milestone below keeps its content and follows as Memory. `state/BUILD_STATE.json`
+names milestones by content, not by this list's numbers.
+
 ## M16 — Executive Assistant + Personal Memory
 
 Default structure: Executive Summary → Why it matters → Recommended action → Details on

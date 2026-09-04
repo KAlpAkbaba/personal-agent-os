@@ -240,6 +240,50 @@ Expected last line: `REAL BROWSER SMOKE: PASS`, preceded by `live worker proven:
 If it stops with `deployment/version mismatch` or `INSTALL FAILED`, paste the message, the
 install log it names and the output of `.\scripts\verify-device-service.ps1`; do not rerun.
 
+### 16. Ask it what it did — self explanation by voice — **this is the current action**
+
+Unblocks: `docs/QUALIFICATION.md` Stage 10 (10.1–10.6); then Memory on the roadmap.
+
+Voice is now the primary interface to PagentOS. This action proves it can tell you what it
+did, from durable evidence, and that you can steer the telling with your voice. One
+command does the preparation and the verification; you do the talking.
+
+What it does, in order:
+
+1. **Preflight.** Working-tree release blockers, the Cloud Core's realtime provider, and
+   the Cloud Core's ledger policy. The deployed Cloud Core has no activity ledger yet, so
+   this run performs ONE transactional Cloud Core release (build, migrate, recreate the
+   api container only, health, rollback on failure). Nothing on Windows is touched.
+2. **Evidence.** Your real research run (`research-1.json`, verdict PASS) is recorded in
+   the ledger as `research.qualified` with the file's SHA-256 as its reference - the
+   system never types a number by hand - and the ledger then backfills everything else it
+   can from the database (research runs and reports, voice sessions, releases,
+   incidents). Nothing is seeded.
+3. **The session.** The web voice shell starts as usual. Open http://localhost:3000/voice,
+   sign in, connect, and say, waiting for each answer:
+
+   1. `Son yaptıklarını anlat.` — it narrates the real research qualification from the ledger
+   2. `Araştırmayı detaylandır.` — the actual findings
+   3. `Teknik anlat.` — versions, counts, ids
+   4. `Dur.` — say it WHILE it is speaking; speech must stop at once
+   5. `Devam et.` — it resumes at the sentence it did not finish
+
+   Then disconnect and press Enter in the console.
+4. **Verification.** The newest session's durable activity record (tool calls, intents,
+   client events - ids and kinds, never a transcript) is fetched and every step is
+   checked: the briefing came from the ledger and cites evidence, detail and technical
+   were read, `dur` produced a `spoken` report followed by a barge-in with an aligned
+   cursor, `devam et` resumed from that cursor, and the ledger holds the explanation and
+   the pause. Expected last line: `OWNER EXPLAIN: PASS`.
+
+```powershell
+.\scripts\voice\owner-explain.ps1 -OutFile explain-1.json
+```
+
+It asks for the Owner Credential in a masked prompt, as usual. Paste `explain-1.json` and
+your verdict in a sentence: did it say what actually happened, did "dur" stop it at once,
+and did "devam et" pick up where it stopped?
+
 ### 15. The first real Research run — DuckDuckGo, no deployment — **DONE (2026-09-04)**
 
 Your run at 17:28-17:33 UTC ended `OWNER RESEARCH: PASS`: five findings from five distinct publishers, 28 refused pages recorded by reason, Chrome clean before and after, no agent deployment, one Cloud Core release. QUALIFICATION 9.16-9.19 are PROVEN_REAL and the Research Engine milestone is closed. Kept as a non-blocking backlog item: some accepted findings were broad AI news rather than agent-specific developments (ADR-0050 item 24).
