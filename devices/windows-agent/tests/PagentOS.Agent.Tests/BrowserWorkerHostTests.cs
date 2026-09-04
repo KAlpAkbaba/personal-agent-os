@@ -122,7 +122,11 @@ public sealed class BrowserWorkerHostTests : IDisposable
 
         Assert.Equal(BrowserCapabilities.Navigate, result["capability"]!.GetValue<string>());
         Assert.Equal("https://example.org/", result["echo"]!["url"]!.GetValue<string>());
-        Assert.Equal(7000, result["timeout_ms_seen"]!.GetValue<int>());
+        // The worker sees what is LEFT of the request's budget: the lazy start comes off the
+        // top, so a slow start is answered as a typed timeout instead of leaving the service
+        // to give up first (2026-09-05). A little under 7000, never above it.
+        var seen = result["timeout_ms_seen"]!.GetValue<int>();
+        Assert.InRange(seen, 7000 - 5000, 7000);
         // Lazy start: the first request started the worker.
         Assert.Equal(1, host.Starts);
         Assert.True(host.WorkerRunning);

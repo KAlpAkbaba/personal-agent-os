@@ -438,17 +438,30 @@ public sealed class BrowserDispatchTests : IDisposable
 
             Assert.Equal(ErrorClasses.Timeout, ex.ErrorClass);
             Assert.True(ex.Retryable);
-            // The companion's message, not the service's "did not answer" one.
-            Assert.Contains("browser worker did not answer", ex.Message, StringComparison.Ordinal);
+            // The COMPANION's typed message, never the service's synthesised "session
+            // companion did not answer". Which of the two companion-side timeouts it is
+            // depends on how loaded the machine is: a slow worker start is as typed as a
+            // slow answer, and both name what actually happened.
+            Assert.True(
+                ex.Message.Contains("browser worker did not answer", StringComparison.Ordinal)
+                    || ex.Message.Contains("browser worker did not start", StringComparison.Ordinal),
+                $"expected a typed companion timeout, got: {ex.Message}");
+            var answered = ex.Message.Contains("did not answer", StringComparison.Ordinal);
             // The cancel is sent without blocking the answer (so the typed error always beats
             // the caller's own deadline), so it lands shortly after: wait for it rather than
             // assuming it has already happened.
-            var deadline = DateTime.UtcNow.AddSeconds(5);
-            while (host.CancelsSent == 0 && DateTime.UtcNow < deadline)
+            if (answered)
             {
-                await Task.Delay(25);
+                // The cancel is sent without blocking the answer, so it lands shortly
+                // after: wait for it rather than assuming it has already happened. A
+                // request that timed out before the worker existed has nothing to cancel.
+                var deadline = DateTime.UtcNow.AddSeconds(5);
+                while (host.CancelsSent == 0 && DateTime.UtcNow < deadline)
+                {
+                    await Task.Delay(25);
+                }
+                Assert.Equal(1, host.CancelsSent);
             }
-            Assert.Equal(1, host.CancelsSent);
         }
         finally
         {

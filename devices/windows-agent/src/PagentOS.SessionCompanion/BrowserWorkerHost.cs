@@ -209,8 +209,19 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
         WorkerProcess? worker = null;
         try
         {
-            worker = await EnsureWorkerAsync(cancellationToken).ConfigureAwait(false);
-            var result = await ExecuteOnWorkerAsync(worker, requestId, capability, payload, timeout, cancellationToken).ConfigureAwait(false);
+            // The LAUNCH is inside the budget too. It used to be unbounded: starting the
+            // worker (a child process) on a loaded machine could outlast the whole command,
+            // and the service then synthesised its own untyped "session companion did not
+            // answer" while this side was still waiting for a process to exist (intermittent
+            // CI failure, 2026-09-04/05). A start that cannot finish in time is a typed,
+            // retryable timeout that names what actually happened.
+            worker = await EnsureWorkerWithinBudgetAsync(timeout, cancellationToken).ConfigureAwait(false);
+            var remaining = timeout - stopwatch.Elapsed;
+            if (remaining < MinimumExecBudget)
+            {
+                remaining = MinimumExecBudget;
+            }
+            var result = await ExecuteOnWorkerAsync(worker, requestId, capability, payload, remaining, cancellationToken).ConfigureAwait(false);
             worker.SawSuccess = true;
             Interlocked.Exchange(ref _consecutiveFailures, 0);
             Interlocked.Exchange(ref _eagerRestartSuspended, 0);
@@ -409,6 +420,36 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
     }
 
     // ------------------------------------------------------------------ lifecycle
+
+    /// <summary>
+    /// The smallest exec budget left after a slow start: enough for the worker to answer or
+    /// for this side to time out typed, never zero.
+    /// </summary>
+    private static readonly TimeSpan MinimumExecBudget = TimeSpan.FromMilliseconds(200);
+
+    /// <summary>
+    /// Start (or reuse) the worker within the request's own budget, so a slow start is
+    /// answered as a typed <see cref="ErrorClasses.Timeout"/> instead of leaving the
+    /// service to give up first.
+    /// </summary>
+    private async Task<WorkerProcess> EnsureWorkerWithinBudgetAsync(
+        TimeSpan budget,
+        CancellationToken cancellationToken)
+    {
+        using var startCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        startCts.CancelAfter(budget);
+        try
+        {
+            return await EnsureWorkerAsync(startCts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new CapabilityException(
+                ErrorClasses.Timeout,
+                $"the browser worker did not start within {budget.TotalSeconds:F1} s",
+                retryable: true);
+        }
+    }
 
     private async Task<WorkerProcess> EnsureWorkerAsync(CancellationToken cancellationToken)
     {
