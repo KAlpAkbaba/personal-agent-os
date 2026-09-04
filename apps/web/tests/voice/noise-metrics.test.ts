@@ -107,11 +107,18 @@ describe("noise qualification metrics (ADR-0044 §7)", () => {
     const t = await setup();
     t.transport.emit({ type: "response_started", at: 0 });
     t.scheduler.advance(400);
+    // The conversational lane confirms the interruption (near-field level, a
+    // word, 350 ms of speech) — but the provider's VAD never confirms the turn.
+    t.localSpeech.level = { marginDb: 12, spectralScore: 0.7, frames: 10 };
     t.localSpeech.speechStart(400);
+    expect(t.controller.getSnapshot().state).toBe("speaking"); // muted reversibly, not yet cut
+    t.scheduler.advance(100);
+    t.transport.emit({ type: "owner_transcript", at: 500, text: "bugün neler", final: false });
+    t.scheduler.advance(250); // now = 750 = onset + 350: confirmed
     expect(t.controller.getSnapshot().state).toBe("interrupted");
     expect(t.log).toContain("playback.stop"); // stop-first ordering untouched
-    t.scheduler.advance(100);
-    t.localSpeech.speechEnd(500);
+    t.scheduler.advance(50);
+    t.localSpeech.speechEnd(800);
     t.scheduler.advance(700);
     expect(t.controller.getSnapshot().state).toBe("listening");
     expect(t.controller.getSnapshot().micMetrics).toMatchObject({ false_starts: 1, false_barge_ins: 1 });

@@ -30,7 +30,7 @@
 
 import type { GateParameters } from "./calibration";
 import { clamp, dbToAmplitude, type FrameFeatures, round1, sigmoid } from "./dsp";
-import type { SpeechDetectorStats } from "./ports";
+import type { OnsetLevel, SpeechDetectorStats } from "./ports";
 
 /** What a frame with no spectral evidence can reach at most; below every openProb. */
 export const ENERGY_ONLY_CAP = 0.35;
@@ -128,6 +128,8 @@ export class SpeechGate {
   private lastFeatures: FrameFeatures | null = null;
   private lastPlayback = false;
   private uplinkGain = 1;
+  /** Level accumulator over the current onset (candidate → open → close); null when there is none. */
+  private onset: { peakMarginDb: number; spectralSum: number; frames: number } | null = null;
   private counters = {
     gate_opens: 0,
     gated_out: 0,
@@ -169,6 +171,29 @@ export class SpeechGate {
     return { candidateAt: this.candidateSince, preRollMs: this.effectivePreRoll() };
   }
 
+  /**
+   * The measured level of the onset under evaluation or of the open speech
+   * (two-stage interruption): peak margin above the open threshold in force
+   * (playback margin included while the assistant is audible) and the mean
+   * spectral score. Null when the gate is closed with no candidate.
+   */
+  onsetLevel(): OnsetLevel | null {
+    const onset = this.onset;
+    if (!onset || onset.frames === 0) return null;
+    return {
+      marginDb: round1(onset.peakMarginDb),
+      spectralScore: round1((onset.spectralSum / onset.frames) * 100) / 100,
+      frames: onset.frames,
+    };
+  }
+
+  private accumulateOnset(score: SpeechScore): void {
+    if (!this.onset) this.onset = { peakMarginDb: score.marginDb, spectralSum: 0, frames: 0 };
+    this.onset.peakMarginDb = Math.max(this.onset.peakMarginDb, score.marginDb);
+    this.onset.spectralSum += score.spectralScore;
+    this.onset.frames += 1;
+  }
+
   /** A calibration completed (counted here so stats() has one source). */
   noteCalibration(): void {
     this.counters.calibrations += 1;
@@ -195,8 +220,10 @@ export class SpeechGate {
           this.candidateSince = now;
           this.candidatePreRoll = hint.preRollMs ?? null;
           this.spectralRun = 0;
+          this.onset = null;
         }
         this.spectralRun = score.spectralScore >= p.evidenceSpectralMin ? this.spectralRun + 1 : 0;
+        this.accumulateOnset(score);
       } else if (this.candidateSince !== null) {
         if (this.evidenceSent) {
           this.counters.evidence_lost += 1;
@@ -206,6 +233,7 @@ export class SpeechGate {
         this.candidatePreRoll = null;
         this.spectralRun = 0;
         this.evidenceSent = false;
+        this.onset = null;
       }
       if (aboveFloor) {
         if (this.burstSince === null) this.burstSince = now;
@@ -259,8 +287,10 @@ export class SpeechGate {
       // close margin with a speech-like spectrum (hysteresis for quiet syllables).
       this.lastVoicedAt = now;
       this.counters.speech_ms += features.durationMs;
+      this.accumulateOnset(score);
     } else if (now - this.lastVoicedAt >= p.hangMs) {
       this.open = false;
+      this.onset = null;
       events.push({ type: "close", at: this.lastVoicedAt });
     }
 
@@ -310,5 +340,6 @@ export class SpeechGate {
     this.evidenceSent = false;
     this.burstSince = null;
     this.uplinkGain = 1;
+    this.onset = null;
   }
 }

@@ -873,6 +873,12 @@ function VoiceConsole() {
               {`kapı ${snapshot.micMetrics.gate_opens} · arka plan ${snapshot.micMetrics.gated_out} · tık ${snapshot.micMetrics.click_rejects} · yanlış başlangıç ${snapshot.micMetrics.false_starts} · yanlış kesme ${snapshot.micMetrics.false_barge_ins} · boş tur ${snapshot.micMetrics.false_turns} · onaylı tur ${snapshot.micMetrics.confirmed_turns} · erken sustur ${snapshot.micMetrics.early_mutes} (geri ${snapshot.micMetrics.early_mute_reverts}) · boş iptal ${snapshot.micMetrics.cancel_noop_errors} · ölçüm ${snapshot.micMetrics.calibrations}`}
             </span>
           </div>
+          <div className="status-row">
+            <span>Söze girme</span>
+            <span className="muted">
+              {`konuşma ${snapshot.micMetrics.speech_detected} · olası kesme ${snapshot.micMetrics.potential_barge_in} · kabul ${snapshot.micMetrics.accepted_owner_interruption} · arka plan reddi ${snapshot.micMetrics.rejected_background_speech} · dur komutu ${snapshot.micMetrics.explicit_stop_command} · boş kesme ${snapshot.micMetrics.false_interruption}`}
+            </span>
+          </div>
           <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center", margin: "0.6rem 0" }}>
             <label className="muted">
               AGC{" "}
