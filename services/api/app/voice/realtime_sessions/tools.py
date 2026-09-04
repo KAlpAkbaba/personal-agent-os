@@ -509,11 +509,13 @@ def default_registry() -> ToolRegistry:
         ToolSpec(
             name="activity.explain",
             description=(
-                "Sahibin sistemin kendi yaptıklarıyla ilgili sorusunu (son ne yaptın, "
-                "bugün neler yaptın, ne başarısız oldu, sorun var mı, araştırma motoru "
-                "ne durumda, kanıtı ne, araştırmayı detaylandır, teknik olarak ne "
-                "değişti) KAYITLI KANITTAN yanıtlar. Sonuçtaki 'speech' metnini aynen "
-                "oku; ekleme yapma."
+                "Sahibin sistemin kendisiyle ilgili sorusunu KAYITLI KANITTAN yanıtlar: "
+                "son ne yaptın, bugün neler yaptın, ne başarısız oldu, sorun var mı, "
+                "araştırma motoru ne durumda, kanıtı ne, araştırmayı detaylandır, teknik "
+                "olarak ne değişti, ne öğrendin, son hatalardan ne öğrendin, kendi üzerinde "
+                "ne geliştiriyorsun, hazır modüllerin neler, canlıya alınmayı bekleyen ne "
+                "var, bu özelliği neden geliştirdin, test sonuçlarını anlat, hedeflerin ne "
+                "durumda. Sonuçtaki 'speech' metnini aynen oku; ekleme yapma."
             ),
             parameters={
                 "type": "object",
