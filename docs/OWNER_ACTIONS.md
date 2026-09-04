@@ -194,7 +194,11 @@ Expect a Chrome window to appear briefly on this PC. Paste the final lines (each
 status, `command_id`, `trace`) and `browser-smoke-1.json` (ids, timings, the example.com
 title/text and process images — no secret).
 
-### 13. Browser lifecycle: update, PROVE the live worker, then one visible Chrome window — **ready**
+### 13. Browser lifecycle: update, PROVE the live worker, then one visible Chrome window — **DONE (2026-09-04)**
+
+Result: live worker 0.3.0, one Chrome process/window, twelve operations on one session, clean exit, owner's Chrome untouched; QUALIFICATION 6b.3, 6b.4 and 9.13 are `PROVEN_REAL`. Do not rerun.
+
+#### (record) what item 13 asked for
 
 Unblocks: `docs/QUALIFICATION.md` 6b.3, 6b.4, 9.13; item 12 resumes after it.
 
@@ -236,51 +240,33 @@ Expected last line: `REAL BROWSER SMOKE: PASS`, preceded by `live worker proven:
 If it stops with `deployment/version mismatch` or `INSTALL FAILED`, paste the message, the
 install log it names and the output of `.\scripts\verify-device-service.ps1`; do not rerun.
 
-### 12. Google-primary search through the installed worker — **PAUSED (lifecycle regression, see item 13)**
+### 12. Google-primary search through the installed worker — **this is the current action**
 
 Unblocks: `docs/QUALIFICATION.md` 9.12; the larger research run (item 10 step C) waits for it.
 
-`browser.search` now goes through a provider abstraction: **Google is the primary provider,
-DuckDuckGo the fallback**, and every search returns provider evidence (`requested_provider`,
-`provider`, `fallback`, `fallback_reason`, `query`, `result_count`, `attempts`) that the
-Cloud Core also writes into the research run's event trail. Google's "unusual traffic"
-interstitial and its consent page are recognised and never answered; they are recorded
-fallback reasons. The search-mode smoke PASSES only when Chrome actually searched Google and
-organic results (rank, title, URL, snippet) came back with `provider=google` and
-`fallback=false`; any fallback is printed with its reason and fails the run honestly.
+Runs on the already-installed 0.3.0 worker; nothing is redeployed (the script refuses to
+continue if the live worker were not this checkout's release). One `browser.search` with
+`engine=auto`: Google is the primary provider, DuckDuckGo the fallback. The output shows
+`requested_provider`, the provider actually used, `fallback` and `fallback_reason`, every
+attempt, up to five normalized organic results (rank, title, URL), the `command_id` and
+`trace` of every device command, and the session identity (`worker_pid`, `browser_pid`,
+`session_uid`) plus the local proof that the worker image lives under the installed tree and
+is a child of the installed companion. PASS requires `provider=google`, `fallback=False` and
+at least one organic result.
 
-Note from the same-day probes: from this address, automated Chrome hit Google's
-network-level "unusual traffic" block ("the block will expire shortly after those requests
-stop"), after a day of probe traffic. If the run reports `fallback_reason=google:captcha`,
-wait a while and rerun; nothing is solved or bypassed by design.
-
-Your first search-mode run (2026-09-03 evening) reported a `browser.search` success with
-empty provider fields and then a missing-property error: the installed worker under
-`C:\Program Files\PagentOS\agent\browser` still held the 11:32 build (no provider abstraction),
-because the last installer run (19:10) predates the provider commit (19:52). That run is
-neither a Google success nor a fallback; it had no provider evidence. Two things changed:
-the worker now advertises `contracts: {"browser.search": 2}` and stamps `schema_version` on
-every search result, and the smoke checks that contract before searching, so a stale worker
-yields a clear `contract/version mismatch` naming the installed version. The single command
-below updates the installed agent first through the journaled installer (one UAC prompt,
-preserves endpoints and identity), waits for the device to reconnect, and then runs the
-qualification:
-
-The runtime now uses one persistent, owner-visible Chrome research session driven through
-Google's real page, with owner handoff on verification pages (contract v1.1 §3a, ADR-0050
-item 13): if Google shows its verification or consent page, Chrome is brought to the front,
-the script prints `WAITING_FOR_OWNER_VERIFICATION` and waits for you to complete the page
-by hand (nothing is solved or bypassed), then re-issues the same search on the same
-session. The command updates the installed agent first (one UAC prompt), then runs the
-qualification:
+If Google shows its "unusual traffic" or consent page, the worker records
+`fallback_reason=google:captcha` (or `google:consent`), takes exactly one DuckDuckGo attempt,
+and the run ends `FAIL` with that reason in the JSON. That is the honest result: nothing is
+retried in a loop, solved or bypassed. Paste it as it is. (An optional later variant,
+`-Handoff`, would instead pause with `WAITING_FOR_OWNER_VERIFICATION` so you can complete
+Google's page yourself in the visible window and the same session resumes; not part of this
+action.)
 
 ```powershell
-.\scripts\browser\real-browser-smoke.ps1 -UpdateAgentFirst -Mode search -Handoff -SearchQuery "yapay zeka ajanları son gelişmeler" -OutFile google-search-smoke-2.json
+.\scripts\browser\real-browser-smoke.ps1 -Mode search -OutFile browser-search-1.json
 ```
 
-Paste the final lines (worker version and `browser.search schema`, `state`/`path`,
-`requested_provider`, `provider`, `fallback`, the attempts, the first results, the
-`command_id`/`trace` lines, `REAL BROWSER SMOKE: PASS`) and the JSON.
+Expected last line: `REAL BROWSER SMOKE: PASS`, with a `requested_provider=google provider=google fallback=False` line and result lines `#1 ...`. Paste the final lines and `browser-search-1.json`.
 
 ### 9. K66 re-qualification after the instrumentation + noise pass — **this is the current action**
 

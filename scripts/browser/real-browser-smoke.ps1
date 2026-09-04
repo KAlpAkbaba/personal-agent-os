@@ -268,6 +268,13 @@ try {
         policy = @{ allowed_risk_classes = @("READ", "NAVIGATE"); visible = $true }; channel = "chrome"
     }
     Write-Host "      session created=$($opened.result.created) channel=$($opened.result.channel) browser=$($opened.result.browser_version)"
+    $openedLc = Get-OptionalProperty -InputObject $opened.result -Name "lifecycle"
+    if ($null -ne $openedLc) {
+        # The same identity every mode can be checked against: which worker process and which
+        # Chrome root serve this session (contract §2 lifecycle block).
+        Write-Host "      identity: session_uid=$($openedLc.session_uid) worker_pid=$(Get-OptionalProperty -InputObject $openedLc -Name 'worker_pid') browser_pid=$($openedLc.browser_pid) launch_kind=$(Get-OptionalProperty -InputObject $openedLc -Name 'launch_kind')"
+        $evidence.session = [ordered]@{ session_uid = $openedLc.session_uid; worker_pid = (Get-OptionalProperty -InputObject $openedLc -Name "worker_pid"); browser_pid = $openedLc.browser_pid; launch_kind = (Get-OptionalProperty -InputObject $openedLc -Name "launch_kind") }
+    }
 
     if ($Mode -eq "lifecycle") {
         # Runtime invariant (ADR-0050 item 14): one research job = one worker + one Chrome
