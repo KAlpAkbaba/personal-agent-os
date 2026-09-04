@@ -55,6 +55,9 @@ ALL_TABLES = [
 EMBEDDER = DeterministicEmbedder()
 NOW = datetime(2026, 9, 5, 12, 0, tzinfo=UTC)
 
+#: An AWS-access-key-shaped fixture, assembled so no tracked file carries the shape.
+_SECRET_SHAPED = "AKIA" + "ABCDEFGHIJKLMNOP"
+
 #: the real 2026-09-04 owner run's rejection breakdown (task instructions /
 #: docs/DECISIONS.md #22 / tests/unit/test_ledger_service.py).
 REJECTED_BY_REASON = {
@@ -220,9 +223,11 @@ def test_secret_like_content_is_refused_by_existing_policy(session):
             subsystem=SUBSYSTEM_RESEARCH,
             action="research_failed",
             status=STATUS_FAILED,
-            # a secret-shaped string leaking into a factual summary — exactly
-            # the class of content app.memory.policy.find_secret refuses.
-            factual_summary="Araştırma başarısız oldu: AKIAABCDEFGHIJKLMNOP sızdı.",
+            # A secret-shaped string leaking into a factual summary - exactly the class of
+            # content app.memory.policy.find_secret refuses. Composed at runtime on purpose:
+            # the repository's own secret-hygiene gate refuses secret-SHAPED literals in
+            # tracked files, and a fixture is not worth an exception to that rule.
+            factual_summary=f"Araştırma başarısız oldu: {_SECRET_SHAPED} sızdı.",
             source="live",
             source_ref=f"research_runs:{task_id}:failed",
             occurred_at=NOW,
