@@ -1,0 +1,603 @@
+{
+  "generated_at": "2026-09-04T22:33:13.797177+00:00",
+  "note": "A real run of app.evolution.service against an ephemeral SQLite store. Every transition went through the real authority kernel, the real legal-transition table, the real ledger writer and the real UI-state bus. The run stops at shadow_ready; nothing is deployed and no owner approval exists.",
+  "evidence_backfilled": {
+    "incident_2": "22961142-fc35-4da2-afe8-6293f606d67f",
+    "incident_4": "4bd31ca4-980b-4c79-8657-155c5e04108f",
+    "resolution": "c7bc8544-6c86-47a1-b3b2-f68366aa52ba"
+  },
+  "experience_lessons": [
+    {
+      "compiled": 2,
+      "rows": [
+        {
+          "lesson_id": "d421c8e5-315f-48e8-b0d4-34add6695f62",
+          "title": "Recurring voice failure (incident.opened)",
+          "scope": "voice",
+          "status": "candidate",
+          "pattern": null
+        },
+        {
+          "lesson_id": "a6511c98-743a-4d00-9384-1761a195d295",
+          "title": "Recurring voice failure (incident.opened)",
+          "scope": "voice",
+          "status": "candidate",
+          "pattern": null
+        }
+      ]
+    }
+  ],
+  "opportunity": {
+    "opportunity_id": "516b018d-4ee4-4f22-8a7b-0977969a9bc1",
+    "title": "Acceptance Wording Guard",
+    "statement": "Acceptance and qualification checks must not depend on generated natural-language wording. Two owner qualification runs have been lost to this defect class (ADR-0051 addendum 2, 2026-09-04; ADR-0051 addendum 4, 2026-09-05, where `speech_head -like \"Efendim, son ara*\"` failed a system that was working because the briefing had been made shorter and better worded the same day). The recorded decision -- generated wording is never acceptance evidence; paraphrasing is free, an unsupported claim is not -- is enforced by nothing. Build a read-only checker that reports acceptance assertions resting on generated prose, with a low-false-positive, subject-driven design and a reasoned allow-list, and report the shape of each match rather than the matched text.",
+    "origin": [
+      {
+        "kind": "ledger_event",
+        "ref": "22961142-fc35-4da2-afe8-6293f606d67f",
+        "note": "ADR-0051 addendum 2 (2026-09-04) harness defect"
+      },
+      {
+        "kind": "ledger_event",
+        "ref": "4bd31ca4-980b-4c79-8657-155c5e04108f",
+        "note": "ADR-0051 addendum 4 (2026-09-05) wording gate"
+      },
+      {
+        "kind": "lesson",
+        "ref": "d421c8e5-315f-48e8-b0d4-34add6695f62",
+        "note": "experience compiler: Recurring voice failure (incident.opened)"
+      },
+      {
+        "kind": "lesson",
+        "ref": "a6511c98-743a-4d00-9384-1761a195d295",
+        "note": "experience compiler: Recurring voice failure (incident.opened)"
+      }
+    ],
+    "status": "shadow_ready",
+    "scores": {
+      "owner_relevance": 0.85,
+      "expected_utility": 0.65,
+      "recurrence": 0.6,
+      "confidence": 0.75,
+      "engineering_cost": 0.25,
+      "operational_risk": 0.1,
+      "composite": 0.576859
+    },
+    "workspace_ref": "services/api/lab/candidates/acceptance_wording_guard",
+    "candidate_ref": "services/api/lab/candidates/acceptance_wording_guard/src/acceptance_wording_guard.py@sha256:382ade0a88acdfef",
+    "approved_by": null,
+    "approved_at": null,
+    "created_at": "2026-09-04T22:33:13.095707",
+    "updated_at": "2026-09-04T22:33:13.793177",
+    "source": "ledger_event",
+    "source_ref": "docs/DECISIONS.md#adr-0051-addendum-4:4bd31ca4-980b-4c79-8657-155c5e04108f",
+    "detail": {
+      "adrs": [
+        "docs/DECISIONS.md#adr-0051-addendum-2",
+        "docs/DECISIONS.md#adr-0051-addendum-4"
+      ],
+      "defect_class": "acceptance_depends_on_generated_wording",
+      "qualification_runs_lost": 2,
+      "scoring_rationale": [
+        "benefit 0.730 = 0.45*relevance(0.85) + 0.35*utility(0.65) + 0.20*recurrence(0.60)",
+        "confidence 0.75 scales it by 0.875 -> expected value 0.639 (weak evidence halves value, it never discards the idea)",
+        "engineering cost 0.25 discounts up to 0.35 -> 0.583 (cost breaks ties; it does not set priority)",
+        "operational risk 0.10 costs 0.006 (0.60*risk^2) -> composite 0.577"
+      ],
+      "risk_vetoed": false,
+      "evidence_verification": [
+        {
+          "kind": "ledger_event",
+          "ref": "22961142-fc35-4da2-afe8-6293f606d67f",
+          "verified": true
+        },
+        {
+          "kind": "ledger_event",
+          "ref": "4bd31ca4-980b-4c79-8657-155c5e04108f",
+          "verified": true
+        },
+        {
+          "kind": "lesson",
+          "ref": "d421c8e5-315f-48e8-b0d4-34add6695f62",
+          "verified": true
+        },
+        {
+          "kind": "lesson",
+          "ref": "a6511c98-743a-4d00-9384-1761a195d295",
+          "verified": true
+        }
+      ],
+      "evolution_version": 1,
+      "transitions": [
+        {
+          "from": "idea",
+          "to": "researching",
+          "actor": "lab",
+          "at": "2026-09-04T22:33:13.787178+00:00",
+          "reason": "Surveyed the acceptance surfaces named by the two incidents: 232 files under scripts, services/api/tests."
+        },
+        {
+          "from": "researching",
+          "to": "design_ready",
+          "actor": "lab",
+          "at": "2026-09-04T22:33:13.789176+00:00",
+          "reason": "SPEC.md and THREAT_MODEL.md written; detection is subject-driven (a prose literal alone is never a finding) with a reasoned allow-list."
+        },
+        {
+          "from": "design_ready",
+          "to": "building",
+          "actor": "lab",
+          "at": "2026-09-04T22:33:13.790176+00:00",
+          "reason": "Implementation written to the lab workspace, outside app/ and outside every tree app/evolution/sandbox.py protects."
+        },
+        {
+          "from": "building",
+          "to": "testing",
+          "actor": "lab",
+          "at": "2026-09-04T22:33:13.791176+00:00",
+          "reason": "tests/unit/test_lab_acceptance_wording_guard.py covers both historical shapes, machine-token non-detection, the allow-list, robustness and the no-production-import guard (digest in artefacts)."
+        },
+        {
+          "from": "testing",
+          "to": "evaluating",
+          "actor": "lab",
+          "at": "2026-09-04T22:33:13.792177+00:00",
+          "reason": "Benchmark: 232 real files in 0.3435s; 0 high, 67 medium, 5 suppressed false positives."
+        },
+        {
+          "from": "evaluating",
+          "to": "shadow_ready",
+          "actor": "lab",
+          "at": "2026-09-04T22:33:13.793177+00:00",
+          "reason": "Built, tested, benchmarked, critiqued and explainable; wired to nothing. Owner approval is the only way past this point."
+        }
+      ]
+    }
+  },
+  "transitions": [
+    {
+      "to": "researching",
+      "reason": "Surveyed the acceptance surfaces named by the two incidents: 232 files under scripts, services/api/tests."
+    },
+    {
+      "to": "design_ready",
+      "reason": "SPEC.md and THREAT_MODEL.md written; detection is subject-driven (a prose literal alone is never a finding) with a reasoned allow-list."
+    },
+    {
+      "to": "building",
+      "reason": "Implementation written to the lab workspace, outside app/ and outside every tree app/evolution/sandbox.py protects."
+    },
+    {
+      "to": "testing",
+      "reason": "tests/unit/test_lab_acceptance_wording_guard.py covers both historical shapes, machine-token non-detection, the allow-list, robustness and the no-production-import guard (digest in artefacts)."
+    },
+    {
+      "to": "evaluating",
+      "reason": "Benchmark: 232 real files in 0.3435s; 0 high, 67 medium, 5 suppressed false positives."
+    },
+    {
+      "to": "shadow_ready",
+      "reason": "Built, tested, benchmarked, critiqued and explainable; wired to nothing. Owner approval is the only way past this point."
+    }
+  ],
+  "ledger_events": [
+    {
+      "event_id": "22961142-fc35-4da2-afe8-6293f606d67f",
+      "event_type": "incident.opened",
+      "subsystem": "voice",
+      "action": "qualification.harness_failed",
+      "status": "failed",
+      "severity": "warning",
+      "production_state": "n/a",
+      "source": "backfill",
+      "source_ref": "docs/DECISIONS.md#adr-0051-addendum-2",
+      "related_module_id": null,
+      "factual_summary": "Sesli açıklama yeterlilik koşusu, web kabuğu hazır olmadan oturum beklendiği için üretilen bir metin kontrolünde başarısız oldu; ürün çalışıyordu, koşum takımı çalışmıyordu.",
+      "occurred_at": "2026-09-04T20:00:00"
+    },
+    {
+      "event_id": "4bd31ca4-980b-4c79-8657-155c5e04108f",
+      "event_type": "incident.opened",
+      "subsystem": "voice",
+      "action": "qualification.wording_gate_failed",
+      "status": "failed",
+      "severity": "warning",
+      "production_state": "n/a",
+      "source": "backfill",
+      "source_ref": "docs/DECISIONS.md#adr-0051-addendum-4",
+      "related_module_id": null,
+      "factual_summary": "Çalışan bir sistem, brifing daha kısa ve daha iyi ifade edildiği için cümle önekini eşleyen kabul kontrolünde başarısız oldu; kanıt yapısal olmalı, ifade değil.",
+      "occurred_at": "2026-09-05T09:00:00"
+    },
+    {
+      "event_id": "c7bc8544-6c86-47a1-b3b2-f68366aa52ba",
+      "event_type": "voice.explained",
+      "subsystem": "voice",
+      "action": "qualification.verify_only_passed",
+      "status": "completed",
+      "severity": "info",
+      "production_state": "n/a",
+      "source": "backfill",
+      "source_ref": "docs/DECISIONS.md#adr-0051-addendum-4:verify-only",
+      "related_module_id": null,
+      "factual_summary": "Tamamlanmış oturum, yapısal provenance üzerinden yeniden doğrulandı: alıntılanan olay kimlikleri, araştırma görevi ve sayılar eşleşti.",
+      "occurred_at": "2026-09-05T12:00:00"
+    },
+    {
+      "event_id": "391d3490-1ba9-426a-bc89-e1187822c68d",
+      "event_type": "evolution.idea_created",
+      "subsystem": "evolution",
+      "action": "opportunity.idea",
+      "status": "completed",
+      "severity": "info",
+      "production_state": "idea",
+      "source": "live",
+      "source_ref": "evolution_opportunities:516b018d-4ee4-4f22-8a7b-0977969a9bc1:idea",
+      "related_module_id": "516b018d-4ee4-4f22-8a7b-0977969a9bc1",
+      "factual_summary": "Evrim fırsatı 'Acceptance Wording Guard' fikir durumuna geçti (lab).",
+      "occurred_at": "2026-09-04T22:33:13.095707"
+    },
+    {
+      "event_id": "d30966c9-97a7-40f4-8cd8-74d470dbb3dc",
+      "event_type": "evolution.module_designed",
+      "subsystem": "evolution",
+      "action": "opportunity.design_ready",
+      "status": "completed",
+      "severity": "info",
+      "production_state": "designed",
+      "source": "live",
+      "source_ref": "evolution_opportunities:516b018d-4ee4-4f22-8a7b-0977969a9bc1:design_ready",
+      "related_module_id": "516b018d-4ee4-4f22-8a7b-0977969a9bc1",
+      "factual_summary": "Evrim fırsatı 'Acceptance Wording Guard' tasarım hazır durumuna geçti (lab).",
+      "occurred_at": "2026-09-04T22:33:13.789176"
+    },
+    {
+      "event_id": "236d5953-deeb-40bf-9d67-b6cab20754e7",
+      "event_type": "evolution.build_started",
+      "subsystem": "evolution",
+      "action": "opportunity.building",
+      "status": "started",
+      "severity": "info",
+      "production_state": "designed",
+      "source": "live",
+      "source_ref": "evolution_opportunities:516b018d-4ee4-4f22-8a7b-0977969a9bc1:building",
+      "related_module_id": "516b018d-4ee4-4f22-8a7b-0977969a9bc1",
+      "factual_summary": "Evrim fırsatı 'Acceptance Wording Guard' geliştirme durumuna geçti (lab).",
+      "occurred_at": "2026-09-04T22:33:13.790176"
+    },
+    {
+      "event_id": "2f041677-9b3f-40b6-b830-7786bb20cd92",
+      "event_type": "evolution.build_completed",
+      "subsystem": "evolution",
+      "action": "opportunity.testing",
+      "status": "completed",
+      "severity": "info",
+      "production_state": "built",
+      "source": "live",
+      "source_ref": "evolution_opportunities:516b018d-4ee4-4f22-8a7b-0977969a9bc1:testing",
+      "related_module_id": "516b018d-4ee4-4f22-8a7b-0977969a9bc1",
+      "factual_summary": "Evrim fırsatı 'Acceptance Wording Guard' test durumuna geçti (lab).",
+      "occurred_at": "2026-09-04T22:33:13.791176"
+    },
+    {
+      "event_id": "02abc405-67b8-4c39-90d5-ece9d22647b8",
+      "event_type": "evolution.tests_passed",
+      "subsystem": "evolution",
+      "action": "opportunity.evaluating",
+      "status": "completed",
+      "severity": "info",
+      "production_state": "tested",
+      "source": "live",
+      "source_ref": "evolution_opportunities:516b018d-4ee4-4f22-8a7b-0977969a9bc1:evaluating",
+      "related_module_id": "516b018d-4ee4-4f22-8a7b-0977969a9bc1",
+      "factual_summary": "Evrim fırsatı 'Acceptance Wording Guard' değerlendirme durumuna geçti (lab).",
+      "occurred_at": "2026-09-04T22:33:13.792177"
+    },
+    {
+      "event_id": "f222d078-d636-44c4-a4be-959a9cb67bde",
+      "event_type": "evolution.shadow_ready",
+      "subsystem": "evolution",
+      "action": "opportunity.shadow_ready",
+      "status": "completed",
+      "severity": "notice",
+      "production_state": "shadow_ready",
+      "source": "live",
+      "source_ref": "evolution_opportunities:516b018d-4ee4-4f22-8a7b-0977969a9bc1:shadow_ready",
+      "related_module_id": "516b018d-4ee4-4f22-8a7b-0977969a9bc1",
+      "factual_summary": "Evrim fırsatı 'Acceptance Wording Guard' gölge çalıştırmaya hazır durumuna geçti (lab).",
+      "occurred_at": "2026-09-04T22:33:13.793177"
+    },
+    {
+      "event_id": "c81d8d5f-5275-408f-96fa-cb534a6e2b9e",
+      "event_type": "evolution.owner_approval_required",
+      "subsystem": "evolution",
+      "action": "opportunity.shadow_ready",
+      "status": "pending",
+      "severity": "notice",
+      "production_state": "approval_required",
+      "source": "live",
+      "source_ref": "evolution_opportunities:516b018d-4ee4-4f22-8a7b-0977969a9bc1:shadow_ready:approval_required",
+      "related_module_id": "516b018d-4ee4-4f22-8a7b-0977969a9bc1",
+      "factual_summary": "'Acceptance Wording Guard' gölge çalıştırmaya hazır; yayına alınması için sahip onayı gerekiyor.",
+      "occurred_at": "2026-09-04T22:33:13.793177"
+    }
+  ],
+  "ui_states": [
+    {
+      "event_id": "1c9de923-312f-4601-9353-211ed3c01634",
+      "sequence": 1,
+      "state": "evolution.researching",
+      "subsystem": "evolution",
+      "at": "2026-09-04T22:33:13.788177Z",
+      "intensity": null,
+      "progress": 0.2,
+      "severity": "info",
+      "status": "researching",
+      "task_id": null,
+      "goal_id": null,
+      "module_id": "516b018d-4ee4-4f22-8a7b-0977969a9bc1",
+      "session_id": null,
+      "label": null,
+      "metadata": {
+        "composite": 0.576859
+      }
+    },
+    {
+      "event_id": "71ee243d-6c39-4f39-a0ad-7378451f1047",
+      "sequence": 2,
+      "state": "evolution.designing",
+      "subsystem": "evolution",
+      "at": "2026-09-04T22:33:13.790176Z",
+      "intensity": null,
+      "progress": 0.4,
+      "severity": "info",
+      "status": "design_ready",
+      "task_id": null,
+      "goal_id": null,
+      "module_id": "516b018d-4ee4-4f22-8a7b-0977969a9bc1",
+      "session_id": null,
+      "label": null,
+      "metadata": {
+        "composite": 0.576859
+      }
+    },
+    {
+      "event_id": "1bdeecf3-4e36-4244-ad56-0b8428528d2b",
+      "sequence": 3,
+      "state": "evolution.building",
+      "subsystem": "evolution",
+      "at": "2026-09-04T22:33:13.791176Z",
+      "intensity": null,
+      "progress": 0.6,
+      "severity": "info",
+      "status": "building",
+      "task_id": null,
+      "goal_id": null,
+      "module_id": "516b018d-4ee4-4f22-8a7b-0977969a9bc1",
+      "session_id": null,
+      "label": null,
+      "metadata": {
+        "composite": 0.576859
+      }
+    },
+    {
+      "event_id": "6ae51961-e442-4e45-9d34-a27033c614eb",
+      "sequence": 4,
+      "state": "evolution.testing",
+      "subsystem": "evolution",
+      "at": "2026-09-04T22:33:13.792177Z",
+      "intensity": null,
+      "progress": 0.75,
+      "severity": "info",
+      "status": "testing",
+      "task_id": null,
+      "goal_id": null,
+      "module_id": "516b018d-4ee4-4f22-8a7b-0977969a9bc1",
+      "session_id": null,
+      "label": null,
+      "metadata": {
+        "composite": 0.576859
+      }
+    },
+    {
+      "event_id": "5999c29b-de49-45b5-b3d1-31fc2565e2f5",
+      "sequence": 5,
+      "state": "evolution.testing",
+      "subsystem": "evolution",
+      "at": "2026-09-04T22:33:13.793177Z",
+      "intensity": null,
+      "progress": 0.9,
+      "severity": "info",
+      "status": "evaluating",
+      "task_id": null,
+      "goal_id": null,
+      "module_id": "516b018d-4ee4-4f22-8a7b-0977969a9bc1",
+      "session_id": null,
+      "label": null,
+      "metadata": {
+        "composite": 0.576859
+      }
+    },
+    {
+      "event_id": "8073b943-5da8-4116-8466-23cafa6a7ece",
+      "sequence": 6,
+      "state": "evolution.shadow_ready",
+      "subsystem": "evolution",
+      "at": "2026-09-04T22:33:13.795176Z",
+      "intensity": null,
+      "progress": 1.0,
+      "severity": "notice",
+      "status": "shadow_ready",
+      "task_id": null,
+      "goal_id": null,
+      "module_id": "516b018d-4ee4-4f22-8a7b-0977969a9bc1",
+      "session_id": null,
+      "label": null,
+      "metadata": {
+        "composite": 0.576859
+      }
+    }
+  ],
+  "pending_owner_actions": {
+    "awaiting_approval": [
+      {
+        "opportunity_id": "516b018d-4ee4-4f22-8a7b-0977969a9bc1",
+        "title": "Acceptance Wording Guard",
+        "statement": "Acceptance and qualification checks must not depend on generated natural-language wording. Two owner qualification runs have been lost to this defect class (ADR-0051 addendum 2, 2026-09-04; ADR-0051 addendum 4, 2026-09-05, where `speech_head -like \"Efendim, son ara*\"` failed a system that was working because the briefing had been made shorter and better worded the same day). The recorded decision -- generated wording is never acceptance evidence; paraphrasing is free, an unsupported claim is not -- is enforced by nothing. Build a read-only checker that reports acceptance assertions resting on generated prose, with a low-false-positive, subject-driven design and a reasoned allow-list, and report the shape of each match rather than the matched text.",
+        "origin": [
+          {
+            "kind": "ledger_event",
+            "ref": "22961142-fc35-4da2-afe8-6293f606d67f",
+            "note": "ADR-0051 addendum 2 (2026-09-04) harness defect"
+          },
+          {
+            "kind": "ledger_event",
+            "ref": "4bd31ca4-980b-4c79-8657-155c5e04108f",
+            "note": "ADR-0051 addendum 4 (2026-09-05) wording gate"
+          },
+          {
+            "kind": "lesson",
+            "ref": "d421c8e5-315f-48e8-b0d4-34add6695f62",
+            "note": "experience compiler: Recurring voice failure (incident.opened)"
+          },
+          {
+            "kind": "lesson",
+            "ref": "a6511c98-743a-4d00-9384-1761a195d295",
+            "note": "experience compiler: Recurring voice failure (incident.opened)"
+          }
+        ],
+        "status": "shadow_ready",
+        "scores": {
+          "owner_relevance": 0.85,
+          "expected_utility": 0.65,
+          "recurrence": 0.6,
+          "confidence": 0.75,
+          "engineering_cost": 0.25,
+          "operational_risk": 0.1,
+          "composite": 0.576859
+        },
+        "workspace_ref": "services/api/lab/candidates/acceptance_wording_guard",
+        "candidate_ref": "services/api/lab/candidates/acceptance_wording_guard/src/acceptance_wording_guard.py@sha256:382ade0a88acdfef",
+        "approved_by": null,
+        "approved_at": null,
+        "created_at": "2026-09-04T22:33:13.095707",
+        "updated_at": "2026-09-04T22:33:13.793177",
+        "source": "ledger_event",
+        "source_ref": "docs/DECISIONS.md#adr-0051-addendum-4:4bd31ca4-980b-4c79-8657-155c5e04108f",
+        "detail": {
+          "adrs": [
+            "docs/DECISIONS.md#adr-0051-addendum-2",
+            "docs/DECISIONS.md#adr-0051-addendum-4"
+          ],
+          "defect_class": "acceptance_depends_on_generated_wording",
+          "qualification_runs_lost": 2,
+          "scoring_rationale": [
+            "benefit 0.730 = 0.45*relevance(0.85) + 0.35*utility(0.65) + 0.20*recurrence(0.60)",
+            "confidence 0.75 scales it by 0.875 -> expected value 0.639 (weak evidence halves value, it never discards the idea)",
+            "engineering cost 0.25 discounts up to 0.35 -> 0.583 (cost breaks ties; it does not set priority)",
+            "operational risk 0.10 costs 0.006 (0.60*risk^2) -> composite 0.577"
+          ],
+          "risk_vetoed": false,
+          "evidence_verification": [
+            {
+              "kind": "ledger_event",
+              "ref": "22961142-fc35-4da2-afe8-6293f606d67f",
+              "verified": true
+            },
+            {
+              "kind": "ledger_event",
+              "ref": "4bd31ca4-980b-4c79-8657-155c5e04108f",
+              "verified": true
+            },
+            {
+              "kind": "lesson",
+              "ref": "d421c8e5-315f-48e8-b0d4-34add6695f62",
+              "verified": true
+            },
+            {
+              "kind": "lesson",
+              "ref": "a6511c98-743a-4d00-9384-1761a195d295",
+              "verified": true
+            }
+          ],
+          "evolution_version": 1,
+          "transitions": [
+            {
+              "from": "idea",
+              "to": "researching",
+              "actor": "lab",
+              "at": "2026-09-04T22:33:13.787178+00:00",
+              "reason": "Surveyed the acceptance surfaces named by the two incidents: 232 files under scripts, services/api/tests."
+            },
+            {
+              "from": "researching",
+              "to": "design_ready",
+              "actor": "lab",
+              "at": "2026-09-04T22:33:13.789176+00:00",
+              "reason": "SPEC.md and THREAT_MODEL.md written; detection is subject-driven (a prose literal alone is never a finding) with a reasoned allow-list."
+            },
+            {
+              "from": "design_ready",
+              "to": "building",
+              "actor": "lab",
+              "at": "2026-09-04T22:33:13.790176+00:00",
+              "reason": "Implementation written to the lab workspace, outside app/ and outside every tree app/evolution/sandbox.py protects."
+            },
+            {
+              "from": "building",
+              "to": "testing",
+              "actor": "lab",
+              "at": "2026-09-04T22:33:13.791176+00:00",
+              "reason": "tests/unit/test_lab_acceptance_wording_guard.py covers both historical shapes, machine-token non-detection, the allow-list, robustness and the no-production-import guard (digest in artefacts)."
+            },
+            {
+              "from": "testing",
+              "to": "evaluating",
+              "actor": "lab",
+              "at": "2026-09-04T22:33:13.792177+00:00",
+              "reason": "Benchmark: 232 real files in 0.3435s; 0 high, 67 medium, 5 suppressed false positives."
+            },
+            {
+              "from": "evaluating",
+              "to": "shadow_ready",
+              "actor": "lab",
+              "at": "2026-09-04T22:33:13.793177+00:00",
+              "reason": "Built, tested, benchmarked, critiqued and explainable; wired to nothing. Owner approval is the only way past this point."
+            }
+          ]
+        }
+      }
+    ],
+    "count": 1,
+    "action": "POST /v1/evolution/opportunities/{opportunity_id}/approve",
+    "note": "Nothing here is deployed. Owner approval is the only transition out of shadow_ready, and no system or lab actor can perform it.",
+    "evolution_version": 1
+  },
+  "artefacts": [
+    {
+      "path": "services/api/lab/candidates/acceptance_wording_guard/SPEC.md",
+      "bytes": 6640,
+      "sha256": "40ee612d07f183733ce7c0ef5d1b996f94c7f101fb1e77a1b9d3bef259933b5a"
+    },
+    {
+      "path": "services/api/lab/candidates/acceptance_wording_guard/THREAT_MODEL.md",
+      "bytes": 6329,
+      "sha256": "eb5df202bd09d9e0a4c868dd2721b868725cf331cc9a7e7c8b6641fc2f0dea2e"
+    },
+    {
+      "path": "services/api/lab/candidates/acceptance_wording_guard/NOTES.md",
+      "bytes": 8325,
+      "sha256": "1adb46df0f266cbb8c1ea0c48b9aec120727ca30c9519af18212689999c9d567"
+    },
+    {
+      "path": "services/api/lab/candidates/acceptance_wording_guard/src/acceptance_wording_guard.py",
+      "bytes": 33424,
+      "sha256": "382ade0a88acdfefcbf57ba30041a84b29aeab7512c34a39c29d79bb25728ddf"
+    },
+    {
+      "path": "services/api/tests/unit/test_lab_acceptance_wording_guard.py",
+      "bytes": 18787,
+      "sha256": "8a1a19e09b4ac19079181049d4043fe862623932be5743c786e2f2acc6a3545b"
+    }
+  ]
+}
