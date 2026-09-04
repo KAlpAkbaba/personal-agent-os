@@ -80,6 +80,16 @@ public sealed record ExecRequest : PipeMessage
     [JsonPropertyName("timeout_ms")]
     public required int TimeoutMs { get; init; }
 
+    /// <summary>
+    /// The absolute moment (Unix ms, the shared machine clock) at which the service gives up
+    /// waiting for this request. Optional (0 = absent, older service): the companion then
+    /// budgets from <see cref="TimeoutMs"/> alone. With it, the companion's budget is what
+    /// is LEFT, so the pipe-in latency and its own processing are no longer charged against
+    /// the headroom that keeps its typed timeout ahead of the service's (CI race, 2026-09-04).
+    /// </summary>
+    [JsonPropertyName("deadline_utc_ms")]
+    public long DeadlineUtcMs { get; init; }
+
     [JsonPropertyName("conn_id")]
     public string? ConnectionId { get; init; }
 

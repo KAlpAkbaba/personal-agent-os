@@ -343,14 +343,17 @@ public sealed class BrowserDispatchTests : IDisposable
 
             var executor = new InteractiveCapabilityExecutor(server, browserEnabled: true);
 
-            // The service's 120 s cap reaches the worker as timeout_ms (minus the companion's
-            // 500 ms headroom, which is what keeps the typed timeout ahead of the service's).
+            // The service's 120 s cap reaches the worker as timeout_ms: what is LEFT of it at
+            // the companion, minus the 500 ms headroom that keeps the typed timeout ahead of
+            // the service's. Pipe latency and processing come off the top, so the value is a
+            // little under 119 500 - never above it, never absurdly below.
             var result = await executor.ExecuteAsync(
                 TestCommands.New(BrowserCapabilities.FetchEvidence, new JsonObject { ["mode"] = "echo", ["session_id"] = "t", ["url"] = "https://example.org/" }, expiresIn: TimeSpan.FromMinutes(30)),
                 CancellationToken.None);
             Assert.NotNull(result);
             Assert.Equal(BrowserCapabilities.FetchEvidence, result!["capability"]!.GetValue<string>());
-            Assert.Equal(120_000 - 500, result["timeout_ms_seen"]!.GetValue<int>());
+            var seen = result["timeout_ms_seen"]!.GetValue<int>();
+            Assert.InRange(seen, 120_000 - 500 - 5_000, 120_000 - 500);
 
             // Typed errors cross the pipe intact.
             var typed = await Assert.ThrowsAsync<CapabilityException>(() => executor.ExecuteAsync(

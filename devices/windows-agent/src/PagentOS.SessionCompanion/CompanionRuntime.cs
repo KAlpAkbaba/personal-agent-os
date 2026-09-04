@@ -53,6 +53,38 @@ public sealed class CompanionRuntime(
     private static readonly TimeSpan BrowserMinimumBudget = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan InFlightDrainTimeout = TimeSpan.FromSeconds(3);
 
+    /// <summary>
+    /// The worker's budget for a browser request: what is LEFT of the service's wait, minus
+    /// the headroom that keeps this side's typed timeout ahead of the service's own.
+    /// </summary>
+    /// <remarks>
+    /// With a deadline on the request (<see cref="ExecRequest.DeadlineUtcMs"/>), the budget
+    /// is measured from the service's clock, so pipe latency and this side's processing are
+    /// not charged against the headroom - on a loaded CI runner they once ate the whole
+    /// 500 ms and the service synthesised an untyped timeout first (2026-09-04). Without a
+    /// deadline (an older service) the budget is the requested duration, as before. The
+    /// minimum-budget rule is unchanged: a request that is already almost out of time still
+    /// gets one short attempt rather than a zero.
+    /// </remarks>
+    public static TimeSpan BrowserBudget(ExecRequest request, long nowUnixMs)
+    {
+        var requested = TimeSpan.FromMilliseconds(Math.Max(1, request.TimeoutMs));
+        if (request.DeadlineUtcMs > 0)
+        {
+            var remaining = TimeSpan.FromMilliseconds(Math.Max(1, request.DeadlineUtcMs - nowUnixMs));
+            if (remaining < requested)
+            {
+                requested = remaining;
+            }
+        }
+        var budget = requested - BrowserTimeoutMargin;
+        if (budget < BrowserMinimumBudget)
+        {
+            budget = requested < BrowserMinimumBudget ? requested : BrowserMinimumBudget;
+        }
+        return budget;
+    }
+
     private readonly BackoffPolicy _backoff = backoff ?? new BackoffPolicy(baseSeconds: 1.0, maxSeconds: 30.0);
     private readonly ServiceAdmissionPolicy _servicePolicy = servicePolicy ?? DefaultServicePolicy();
     private readonly IPipeOwnerInspector _ownerInspector = ownerInspector ?? new WindowsPipeOwnerInspector();
@@ -397,12 +429,7 @@ public sealed class CompanionRuntime(
                     retryable: false);
             }
 
-            var requested = TimeSpan.FromMilliseconds(Math.Max(1, request.TimeoutMs));
-            var budget = requested - BrowserTimeoutMargin;
-            if (budget < BrowserMinimumBudget)
-            {
-                budget = requested < BrowserMinimumBudget ? requested : BrowserMinimumBudget;
-            }
+            var budget = BrowserBudget(request, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
 
             var result = await browserWorker.ExecuteAsync(request.Capability, request.Payload, budget, cancellationToken).ConfigureAwait(false);
             logger.LogInformation("executed {Capability}: ok", request.Capability);

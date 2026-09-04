@@ -131,10 +131,12 @@ binding contract; this section only states how the family is carried on the devi
   `capability_missing`.
 - **Timeout cap.** The service caps the time one command may hold the companion per family:
   **60 s for `desktop.*`** (unchanged), **120 s for `browser.*`**. The pipe request carries
-  `timeout_ms` (the remaining command life clamped to [1 s, cap]); the companion forwards
-  it to the worker (less a 500 ms headroom so the typed `timeout` arrives before the
-  service synthesises one), cancels the worker's request when it elapses, and answers
-  `timeout` (retryable).
+  `timeout_ms` (the remaining command life clamped to [1 s, cap]) and, since 2026-09-04,
+  `deadline_utc_ms` (the absolute Unix-ms moment the service gives up; optional, 0 when
+  absent); the companion forwards what is LEFT of that to the worker (less a 500 ms headroom
+  so the typed `timeout` arrives before the service synthesises one - measured from the
+  deadline, so pipe latency is not charged against the headroom), cancels the worker's
+  request when it elapses, and answers `timeout` (retryable).
 - **Concurrency.** Browser requests execute concurrently on the companion and their
   responses may interleave on the pipe; `request_id` correlates them, every frame still
   carries the connection id and a strictly increasing sequence (ADR-0028), and one

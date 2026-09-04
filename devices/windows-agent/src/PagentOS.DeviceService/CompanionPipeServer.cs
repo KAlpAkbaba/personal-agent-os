@@ -222,19 +222,24 @@ public sealed class CompanionPipeServer : BackgroundService, ICompanionCapabilit
         _pending[requestId] = tcs;
         try
         {
+            // The deadline is fixed BEFORE the request is written and the timer below is
+            // armed from the same instant, so the companion's remaining budget is measured
+            // against exactly the moment this side gives up.
+            var deadline = DateTimeOffset.UtcNow.Add(timeout);
             var request = new ExecRequest
             {
                 RequestId = requestId,
                 Capability = capability,
                 Payload = (JsonObject)payload.DeepClone(),
                 TimeoutMs = (int)timeout.TotalMilliseconds,
+                DeadlineUtcMs = deadline.ToUnixTimeMilliseconds(),
                 ConnectionId = connection.Guard.ConnectionId,
                 Seq = connection.Guard.NextOutboundSeq(),
             };
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(deadline - DateTimeOffset.UtcNow);
             await connection.WriteLineAsync(PipeJson.Serialize(request), cancellationToken).ConfigureAwait(false);
 
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeoutCts.CancelAfter(timeout);
             await using var registration = timeoutCts.Token.Register(() => tcs.TrySetCanceled(timeoutCts.Token)).ConfigureAwait(false);
 
             ExecResponse response;
