@@ -16,7 +16,7 @@ import {
   measureNoiseFloor,
 } from "../lib/voice/audio";
 import type { EnvironmentClass, EnvironmentMode } from "../lib/voice/calibration";
-import { type ControllerSnapshot, VoiceSessionController } from "../lib/voice/controller";
+import { type ControllerSnapshot, VoiceSessionController, describeNarrationCursor } from "../lib/voice/controller";
 import { PassthroughDenoiser } from "../lib/voice/denoiser";
 import { FakeTransport } from "../lib/voice/fake";
 import type { AppliedInputSettings, AudioDevice } from "../lib/voice/ports";
@@ -1012,6 +1012,19 @@ function VoiceConsole() {
             <p className="muted" style={{ margin: "0 0 0.5rem" }}>Sahip: {snapshot.ownerText}</p>
           )}
           {snapshot.assistantText && <p style={{ margin: 0, lineHeight: 1.5 }}>{snapshot.assistantText}</p>}
+        </div>
+      )}
+
+      {snapshot?.narrationCursor && (
+        <div className="panel">
+          <strong>Anlatım imleci</strong>
+          <div className="status-row">
+            <span>
+              {snapshot.narrationCursor.state}
+              {snapshot.narrationCursor.action ? ` · ${snapshot.narrationCursor.action}` : ""}
+            </span>
+            <span className="muted">{describeNarrationCursor(snapshot.narrationCursor)}</span>
+          </div>
         </div>
       )}
 

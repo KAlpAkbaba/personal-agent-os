@@ -28,6 +28,7 @@ describe("event reporting shape", () => {
     expect(CLIENT_EVENT_KINDS).toContain("playback_stopped");
     expect(CLIENT_EVENT_KINDS).toContain("network_lost");
     expect(CLIENT_EVENT_KINDS).toContain("summary");
+    expect(CLIENT_EVENT_KINDS).toContain("spoken"); // M16 §3.2 state kind
     expect(() =>
       buildClientEvent({ kind: "telemetry" as unknown as "state" }, 0),
     ).toThrow(/unknown client event kind/);
