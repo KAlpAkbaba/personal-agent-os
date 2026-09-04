@@ -61,7 +61,9 @@ Test-Case "search payloads are built fresh with exactly one interstitial key; ha
     Assert-Equal "fallback" $b.interstitial "b"
     Assert-True (-not [object]::ReferenceEquals($a, $b)) "distinct objects"
     Assert-Equal 1 @($a.Keys | Where-Object { $_ -eq "interstitial" }).Count "one interstitial key"
-    Assert-Equal "s,q,auto,8,interactive,handoff" (@($a.session_id, $a.query, $a.engine, $a.max_results, $a.mode, $a.interstitial) -join ",") "fixed keys"
+    # duckduckgo is the production default engine (owner decision, 2026-09-04)
+    Assert-Equal "s,q,duckduckgo,8,interactive,handoff" (@($a.session_id, $a.query, $a.engine, $a.max_results, $a.mode, $a.interstitial) -join ",") "fixed keys"
+    Assert-Equal "google" (New-BrowserSearchPayload -SessionId "s" -Query "q" -Mode interactive -Interstitial handoff -Engine google).engine "google stays available explicitly"
     $b.interstitial = "handoff"   # mutating one never touches the other
     Assert-Equal "handoff" $a.interstitial "a unchanged"
 }
