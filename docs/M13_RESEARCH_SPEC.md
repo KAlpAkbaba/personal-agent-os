@@ -143,6 +143,17 @@ undelivered commands to connected devices every sweep interval. The Temporal wor
 `off` in tests, `external` = the existing `python -m app.worker`), because the production
 compose has no worker container and the browser path needs the broker runtime anyway.
 
+**Provider policy (2026-09-04).** DuckDuckGo is the production default for discovery:
+`Settings.research_search_provider` (env `PAGENTOS_RESEARCH_SEARCH_PROVIDER`, default
+`duckduckgo`) flows into `BrowserResearchRequest.search_provider` and reaches the device as
+`browser.search`'s `engine`, so a default run records `requested_provider=duckduckgo`,
+`provider=duckduckgo`, `fallback=false`. `POST /v1/research` accepts `search_provider`
+(`duckduckgo|google|auto`) per request; `GET /v1/research/policy` reports the deployed policy
+(`policy_version`, `search_provider`, the worker search contract, the interactive bounds) so a
+client can detect a Cloud Core that predates the policy instead of silently running the older
+Google-first order. Google remains fully implemented behind the explicit value, including the
+owner-verification handoff of §5a.
+
 ## 5a. Persistent research browser session and owner handoff (2026-09-03)
 
 Experience: owner asks → Chrome opens once → Google searches visibly in the real page →

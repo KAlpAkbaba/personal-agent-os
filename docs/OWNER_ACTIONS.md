@@ -240,7 +240,52 @@ Expected last line: `REAL BROWSER SMOKE: PASS`, preceded by `live worker proven:
 If it stops with `deployment/version mismatch` or `INSTALL FAILED`, paste the message, the
 install log it names and the output of `.\scripts\verify-device-service.ps1`; do not rerun.
 
-### 14. Google search with owner verification handoff — **this is the current action (45-second version)**
+### 15. The first real Research run — DuckDuckGo, no deployment — **this is the current action**
+
+Unblocks: `docs/QUALIFICATION.md` 9.16 and 9.17; then the Activity Ledger + Voice Narration
+step of the roadmap.
+
+This is the product, not an infrastructure test. One command runs the real research target on
+your machine:
+
+> Son uc gundeki yapay zeka ajanlariyla ilgili en onemli gelismeleri arastir. En onemli 5
+> gelismeyi sec, neden onemli olduklarini acikla ve kaynaklarini ver.
+
+What it does, in order:
+
+1. **No deployment when nothing changed.** It compares this checkout's browser-worker release
+   with the installed one (source AND the copy inside the installed venv that actually runs).
+   They match today (0.4.0, installed by your 15:18 run), so it installs nothing: no staging,
+   no swap, no service restart. If they ever differ incompatibly it stops and prints the one
+   update command instead of doing it silently.
+2. **Cloud Core policy.** It asks the Cloud Core which search provider a default run uses. The
+   deployed one predates this policy, so it releases the Cloud Core once (the proven
+   transactional release: build, migrate, recreate the api container only, health, rollback on
+   any failure). That is the only deployment in this command, and only because the source
+   really changed.
+3. **The research.** DuckDuckGo discovery (`requested_provider=duckduckgo`,
+   `provider=duckduckgo`, `fallback=false`), one persistent Chrome window for the whole job,
+   real source pages opened and extracted rather than search snippets, dedup across repeated
+   coverage, publication dates respected, then the report: executive summary first, the
+   findings with why each matters, and the sources with title, URL, publisher and the device
+   command that fetched each one.
+
+Expect a visible Chrome window working for two to four minutes. Leave it alone; it closes
+itself and the command checks that zero PagentOS Chrome processes remain.
+
+```powershell
+.\scripts\research\owner-research.ps1 -OutFile research-1.json
+```
+
+It asks for the Owner Credential in a masked prompt, as usual. Expected last line:
+`OWNER RESEARCH: PASS`. Paste the printed report (or `research-1.json`) and your verdict in a
+sentence: is the executive summary worth reading, do the five items matter, are the sources
+traceable?
+
+Google is not attempted: it stays available behind `-SearchProvider google` whenever you want
+it, with the verification handoff intact.
+
+### 14. Google search with owner verification handoff — **OPTIONAL / not a Research blocker (2026-09-04)**
 
 Unblocks: `docs/QUALIFICATION.md` 9.15 and, when Google answers, 9.12.
 

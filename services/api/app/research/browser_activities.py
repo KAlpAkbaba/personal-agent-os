@@ -292,13 +292,17 @@ def discover_activity(
     source_class: str,
     window_start_iso: str,
     interstitial: str = "fallback",
+    search_provider: str | None = None,
 ) -> dict[str, Any]:
     """Returns ``{"status": "done"|"waiting", "candidates": n, "path": …,
     "verification_url": …}`` (spec §5a). ``status=="waiting"`` means the
     device handed a Google interstitial back to the owner
     (``interstitial="handoff"``) instead of solving or falling back; the
     workflow is responsible for looping ``await_verification_activity`` and
-    re-calling this activity for the SAME query afterwards."""
+    re-calling this activity for the SAME query afterwards. ``search_provider``
+    (PRODUCT DECISION 2026-09-04: default DuckDuckGo) comes from the workflow
+    request; ``None`` falls back to ``Settings.research_search_provider``
+    (e.g. a direct/legacy activity call)."""
     task_id_var.set(task_id)
     tid = uuid.UUID(task_id)
     window_start = datetime.fromisoformat(window_start_iso)
@@ -330,7 +334,10 @@ def discover_activity(
                 }
 
             gateway = DeviceBrowserGateway(
-                _command_client(), device_id=uuid.UUID(device_id), task_id=task_id
+                _command_client(),
+                device_id=uuid.UUID(device_id),
+                task_id=task_id,
+                search_provider=search_provider or get_settings().research_search_provider,
             )
             try:
                 hits = gateway.search(

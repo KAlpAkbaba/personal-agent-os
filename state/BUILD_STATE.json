@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "project": "personal-agent-os",
-  "current_milestone": "M13_REAL_BROWSER_RESEARCH",
+  "current_milestone": "M15_RESEARCH_ENGINE",
   "status": "BUILT_REVIEWED_PROVEN_PROXY_AWAITING_OWNER_RELEASE_AND_AGENT_UPDATE",
   "last_completed_milestone": "REAL_CLOUD_BRINGUP",
   "last_updated": "2026-09-03T20:40:00+03:00",
@@ -75,5 +75,18 @@
     "noise_pipeline": "ADR-0044 on main (f34cfd6): browser read-back incl. voiceIsolation/suppressLocalAudioPlayback, AGC A/B benchmark, 1.8 s noise-floor calibration with drift-triggered recalibration, calibrated local speech gate (energy x spectral x temporal; energy alone cannot open it; pre-roll + hang; never mutes), per-device MicrophoneProfile (localStorage, K66 gets its own), modes Otomatik/Sessiz/Gurultulu/Cok gurultulu, diagnostics with copyable MediaTrack settings, Marin/Cedar selector, false-start/false-barge-in/false-turn counters reported as numbers and aggregated into the benchmark's context.noise. Denoiser + uplink shaper left as seams behind measurements. Reviews: security (1 Low fixed fail-closed; static page removed), test-engineer in flight.",
     "owner_session_2_2026_09_03": "Persistence PROVEN_REAL (durable record fetched after disconnect). Real metrics FAILED targets: mic->uplink 391/472 ms (6 unmatched), EOT->first audio 674/1059, barge-in 210 ms deterministic (+1 zero sample); K66 false starts 5 / false barge-ins 4; calibration sentinels; mojibake on read. Cedar chosen over marin (Arbor profile kept).",
     "optimisation_pass_2026_09_03": "ADR-0046 (durable self-describing record, listing, -Latest, copy button), ADR-0047 (client: RTP-stats uplink measurement + component split, reversible early mute targeting <150 ms barge-in, echo-residual-derived playback margin + bounded self-learning profile, non-sentinel calibration with measured/samples), ADR-0048 (UTF-8 declared + decoded end to end, benchmark context.breakdown, calibration_measured). Not proven on the K66 yet: only the owner's rerun can confirm."
+  },
+  "roadmap_after_research": [
+    "Research (M15, current): DuckDuckGo discovery, real pages, dedup, dated findings, durable evidence",
+    "Activity Ledger + Voice Narration: what the agent did, narrated in Turkish",
+    "Memory: durable owner memory over research and activity",
+    "Cognitive Core: planning and judgement over that memory",
+    "Self Model: the agent's model of its own capabilities and limits",
+    "Evolution Engine: gap -> spec -> branch -> tests -> review -> canary -> promote"
+  ],
+  "m15_research": {
+    "search_policy": "DuckDuckGo is the production provider (PAGENTOS_RESEARCH_SEARCH_PROVIDER, default duckduckgo); Google stays fully implemented incl. the owner-verification handoff and is selected explicitly. ADR-0050 item 19.",
+    "deployment": "Execution never installs: Test-AgentReleaseCurrent compares the checkout with the installed source AND the venv copy that runs; the smoke has -AgentUpdate auto|never|force; owner-research.ps1 never installs and releases the Cloud Core only when its research policy predates the checkout.",
+    "owner_action": "OWNER_ACTIONS item 15: scripts/research/owner-research.ps1 (QUALIFICATION 9.16, 9.17)."
   }
 }

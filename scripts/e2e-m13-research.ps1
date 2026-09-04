@@ -465,14 +465,14 @@ Invoke-Step "Owner browser smoke script against the dev chain (example.com, sear
   finally { Remove-Item Env:\PAGENTOS_SMOKE_TOKEN -ErrorAction SilentlyContinue }
 }
 
-Invoke-Step "Owner search-provider smoke against the dev chain (Google primary, evidence, fallback recorded)" {
+Invoke-Step "Owner search-provider smoke against the dev chain (DuckDuckGo production default, provider evidence)" {
   # Provider-agnostic here (-ExpectProvider any): the dev chain proves the evidence fields
   # and the fallback mechanics; whether Google itself answers from this address is the
   # owner-machine qualification's question (OWNER_ACTIONS item 12), not a gate.
   $env:PAGENTOS_SMOKE_TOKEN = ([string]$script:ownerHeaders["Authorization"]) -replace '^Bearer\s+', ''
   try {
     & $powershell5 -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot "scripts\browser\real-browser-smoke.ps1") `
-      -BaseUrl $baseUrl -Device $script:deviceId -SessionTokenFromEnv -SkipLocalEvidence -BrowserRoot $packagedBrowserRoot -Mode search -ExpectProvider any `
+      -BaseUrl $baseUrl -Device $script:deviceId -SessionTokenFromEnv -SkipLocalEvidence -BrowserRoot $packagedBrowserRoot -Mode search -ExpectProvider duckduckgo `
       -OutFile (Join-Path $OutDir "search-smoke.json")
     if ($LASTEXITCODE -ne 0) { throw "real-browser-smoke.ps1 -Mode search exited $LASTEXITCODE" }
   }

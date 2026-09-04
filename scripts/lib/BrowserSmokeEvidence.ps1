@@ -38,7 +38,8 @@ function New-BrowserSearchPayload {
         [Parameter(Mandatory = $true)][ValidateSet("interactive", "unattended")][string]$Mode,
         [Parameter(Mandatory = $true)][ValidateSet("handoff", "fallback")][string]$Interstitial,
         [int]$MaxResults = 8,
-        [string]$Engine = "auto"
+        # duckduckgo (production default for Research), google (explicit), or auto (ordered chain)
+        [ValidateSet("auto", "duckduckgo", "google")][string]$Engine = "duckduckgo"
     )
     return @{
         session_id   = $SessionId

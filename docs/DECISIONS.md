@@ -2718,3 +2718,32 @@ embedded Temporal worker). Facts and decisions that were not in the design:
     (minimum lowered to 30 for qualification runs; production default unchanged at 600), so an
     owner qualification never costs ten minutes. Worker release 0.4.0 carries schema 3;
     Cloud Core still accepts schema 2 workers (their verification fields stay null).
+
+19. **DuckDuckGo is the production research provider; deployment is separate from execution**
+    (owner product decision, 2026-09-04, after the Google provider path was proven and Google
+    kept answering automated Chrome with its verification page). Two decisions, both about
+    not letting infrastructure block the product:
+
+    (a) **Search policy.** DuckDuckGo is the default provider for Research: a default run
+    records `requested_provider=duckduckgo, provider=duckduckgo, fallback=false`. Google stays
+    fully implemented - the UI-driven search, interstitial detection, the owner-verification
+    handoff with its one-retry policy, the timeout decision and every test - and is selected
+    explicitly (`search_provider=google` on `POST /v1/research`, `engine=google` on
+    `browser.search`, `-SearchProvider google` / `-ExpectProvider google` on the scripts).
+    Nothing is deleted; Google is simply not attempted first for every job. The Cloud Core
+    setting `PAGENTOS_RESEARCH_SEARCH_PROVIDER` (default `duckduckgo`) and the request field
+    carry it, and `GET /v1/research/policy` reports the deployed policy so a client can tell a
+    stale Cloud Core from a current one instead of silently running the old order.
+
+    (b) **Deployment lifecycle separated from execution.** Qualification commands were running
+    the transactional installer every time, even when the installed worker was already the
+    right release. Normal execution now uses the installed worker with no installer, no
+    staging/swap and no service restart. `Test-AgentReleaseCurrent`
+    (`scripts/lib/BrowserRelease.ps1`) answers "is a deployment needed?" from files alone -
+    checkout release/digest versus the installed source tree AND the non-editable copy inside
+    the installed venv that actually executes - and separately answers whether the installed
+    contract can still serve this checkout. The owner smoke gains `-AgentUpdate auto|never|force`
+    (auto = deploy only on a difference; `-UpdateAgentFirst` is kept as the older spelling of
+    force). `scripts/research/owner-research.ps1` never installs at all: it refuses with the one
+    update command when the installed contract is incompatible, and releases the Cloud Core only
+    when the deployed research policy predates the checkout's.

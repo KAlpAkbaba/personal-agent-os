@@ -75,11 +75,41 @@ def test_search_payload_matches_contract() -> None:
     hits = gw.search("yapay zeka ajanları", source_class="news", max_results=5)
     call = next(c for c in client.calls if c.capability == "browser.search")
     assert call.payload["query"] == "yapay zeka ajanları"
-    assert call.payload["engine"] == "auto"
+    # PRODUCT DECISION (owner, 2026-09-04): DuckDuckGo is the default search
+    # provider now (was "auto"); Google stays fully selectable, see below.
+    assert call.payload["engine"] == "duckduckgo"
     assert call.payload["max_results"] == 5
     assert len(hits) == 1
     assert hits[0].url == "https://a"
     assert hits[0].published_hint == "2 gün önce"
+
+
+def test_search_sends_duckduckgo_engine_by_default() -> None:
+    client = FakeDeviceCommandClient(default_outcome=CommandSucceeded({"results": []}))
+    gw = _gateway(client)
+    gw.search("konu")
+    call = next(c for c in client.calls if c.capability == "browser.search")
+    assert call.payload["engine"] == "duckduckgo"
+
+
+def test_search_sends_the_configured_provider() -> None:
+    client = FakeDeviceCommandClient(default_outcome=CommandSucceeded({"results": []}))
+    gw = DeviceBrowserGateway(
+        client, device_id=DEVICE_ID, task_id=TASK_ID, search_provider="google"
+    )
+    gw.search("konu")
+    call = next(c for c in client.calls if c.capability == "browser.search")
+    assert call.payload["engine"] == "google"
+
+
+def test_search_engine_override_wins_over_the_configured_provider() -> None:
+    client = FakeDeviceCommandClient(default_outcome=CommandSucceeded({"results": []}))
+    gw = DeviceBrowserGateway(
+        client, device_id=DEVICE_ID, task_id=TASK_ID, search_provider="duckduckgo"
+    )
+    gw.search("konu", engine="google")
+    call = next(c for c in client.calls if c.capability == "browser.search")
+    assert call.payload["engine"] == "google"
 
 
 def test_fetch_url_payload_and_idempotency_key() -> None:

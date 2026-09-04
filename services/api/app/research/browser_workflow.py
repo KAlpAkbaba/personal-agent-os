@@ -89,6 +89,12 @@ class BrowserResearchRequest:
     #: primary provider, so the owner decides (rerun interactively, or unattended).
     #: Unattended runs never wait, so this never applies to them.
     on_verification_timeout: str = "fallback"
+    #: PRODUCT DECISION (owner, 2026-09-04): DuckDuckGo is the default
+    #: production search provider for every discovery search this run
+    #: issues; Google stays fully selectable ("google") — including its
+    #: CAPTCHA/owner-handoff machinery, unchanged — or "auto" to let the
+    #: device worker's own provider order decide.
+    search_provider: str = "duckduckgo"
 
 
 class OwnerVerificationTimeout(Exception):
@@ -300,6 +306,7 @@ class BrowserResearchWorkflow:
                         source_class,
                         window_start_iso,
                         interstitial,
+                        request.search_provider,
                     ],
                     start_to_close_timeout=_MEDIUM,
                     retry_policy=_STANDARD_RETRY,
@@ -382,6 +389,7 @@ class BrowserResearchWorkflow:
                     source_class,
                     window_start_iso,
                     "fallback",
+                    request.search_provider,
                 ],
                 start_to_close_timeout=_MEDIUM,
                 retry_policy=_STANDARD_RETRY,

@@ -1,5 +1,8 @@
 """Config loading unit tests (no external services)."""
 
+import pytest
+from pydantic import ValidationError
+
 from app.config import Settings
 
 
@@ -23,3 +26,22 @@ def test_env_override(monkeypatch) -> None:
 def test_health_timeout_is_bounded_default() -> None:
     s = Settings(_env_file=None)
     assert 0 < s.health_check_timeout_s <= 10
+
+
+def test_research_search_provider_defaults_to_duckduckgo() -> None:
+    """PRODUCT DECISION (owner, 2026-09-04): DuckDuckGo is the default
+    production search provider for Research."""
+    s = Settings(_env_file=None)
+    assert s.research_search_provider == "duckduckgo"
+
+
+def test_research_search_provider_env_override(monkeypatch) -> None:
+    monkeypatch.setenv("PAGENTOS_RESEARCH_SEARCH_PROVIDER", "google")
+    s = Settings(_env_file=None)
+    assert s.research_search_provider == "google"
+
+
+def test_research_search_provider_rejects_unknown_value(monkeypatch) -> None:
+    monkeypatch.setenv("PAGENTOS_RESEARCH_SEARCH_PROVIDER", "bing")
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)

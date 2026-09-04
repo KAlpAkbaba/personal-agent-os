@@ -360,6 +360,7 @@ class DeviceBrowserGateway:
         trace_id: str = "",
         timeout_s: float = 60.0,
         excerpt_chars: int = 1200,
+        search_provider: str = "duckduckgo",
     ) -> None:
         self._client = command_client
         self._device_id = device_id
@@ -367,6 +368,11 @@ class DeviceBrowserGateway:
         self._trace_id = trace_id or task_id
         self._timeout_s = timeout_s
         self._excerpt_chars = excerpt_chars
+        #: PRODUCT DECISION (owner, 2026-09-04): DuckDuckGo is the default
+        #: engine sent on every ``browser.search`` this gateway issues; Google
+        #: stays fully selectable (via this arg or the per-call `engine`
+        #: override on `search()`), including its CAPTCHA/owner-handoff path.
+        self._search_provider = search_provider
         self._session_opened = False
         self._session_open_attempt = 0
 
@@ -460,6 +466,7 @@ class DeviceBrowserGateway:
         source_class: str = "unknown",
         max_results: int = 10,
         interstitial: str = "fallback",
+        engine: str | None = None,
     ) -> list[SearchHit]:
         """``browser.search`` (BROWSER_CAPABILITIES.md §3/§3a). ``interstitial``
         selects the owner-handoff behaviour: "fallback" (unattended — the
@@ -467,14 +474,17 @@ class DeviceBrowserGateway:
         worker brings Chrome forward and returns
         ``state=waiting_for_owner_verification`` instead of solving/retrying
         anything). Provider evidence (including the §3a additions) is
-        recorded on ``self.last_search_evidence`` after every call."""
+        recorded on ``self.last_search_evidence`` after every call.
+        ``engine`` overrides the gateway's configured ``search_provider`` for
+        this one call when given; otherwise the configured provider (default
+        "duckduckgo", PRODUCT DECISION 2026-09-04) is sent."""
         digest = hashlib.sha256(f"{query}:{source_class}".encode()).hexdigest()[:16]
         result, _command_id = self._run(
             "browser.search",
             {
                 "session_id": self._session_id,
                 "query": query,
-                "engine": "auto",
+                "engine": engine if engine is not None else self._search_provider,
                 "max_results": max_results,
                 "recency_days": 3,
                 "interstitial": interstitial,

@@ -43,10 +43,17 @@ param(
     # proven per command: session_uid, browser_pid, tab_count; exactly one PagentOS-profile
     # Chrome process throughout), then a clean exit (zero PagentOS-profile Chrome processes).
     [ValidateSet("full", "search", "lifecycle")][string]$Mode = "full",
-    [string]$ExpectProvider = "google",
-    # Run the elevated installer first (one UAC prompt; journaled engine, preserves broker
-    # endpoints and identity) and wait for the device to come back online on the Cloud Core,
-    # so a stale installed worker is updated in the same action as the qualification.
+    # Which provider must answer for a PASS in -Mode search. DuckDuckGo is the production
+    # default for Research (owner decision, 2026-09-04); "google" qualifies the optional
+    # Google path, "any" accepts either (the dev-chain harness uses it).
+    [ValidateSet("duckduckgo", "google", "any")][string]$ExpectProvider = "duckduckgo",
+    # Deployment is separate from execution (owner decision, 2026-09-04):
+    #   auto  (default) - compare this checkout's release with the INSTALLED worker and run the
+    #                     elevated installer ONLY when they differ; otherwise start immediately.
+    #   never           - never install; refuse with the exact update command if incompatible.
+    #   force           - always install first (qualifying a new release).
+    [ValidateSet("auto", "never", "force")][string]$AgentUpdate = "auto",
+    # Older spelling of -AgentUpdate force (kept so existing owner notes still work).
     [switch]$UpdateAgentFirst,
     # browser.search response schema this script consumes (BROWSER_CAPABILITIES.md §3).
     [int]$RequiredSearchSchema = 2,
@@ -89,6 +96,8 @@ if (-not $PSBoundParameters.ContainsKey("RequiredSearchSchema") -and $expectedRe
     $RequiredSearchSchema = [int]$expectedRelease.Contracts["browser.search"]
 }
 $script:InstallerLog = $null
+$effectiveAgentUpdate = if ($UpdateAgentFirst) { "force" } else { $AgentUpdate }
+$script:AgentUpdateRan = $false
 # -Handoff is the older spelling of -SearchMode interactive; parameters are never reassigned.
 $effectiveSearchMode = if ($Handoff) { "interactive" } else { $SearchMode }
 $handoffEnabled = ($effectiveSearchMode -eq "interactive")
@@ -96,11 +105,11 @@ $handoffEnabled = ($effectiveSearchMode -eq "interactive")
 function Get-StaleWorkerAdvice {
     <#  What to tell the owner when the live worker is not this checkout's release.  #>
     param([Parameter(Mandatory = $true)][string]$Observed)
-    if ($UpdateAgentFirst) {
+    if ($script:AgentUpdateRan) {
         $log = if ($script:InstallerLog) { $script:InstallerLog } else { "the newest log under $env:ProgramData\PagentOS\install-logs" }
-        return "deployment/version mismatch: -UpdateAgentFirst already ran the installer (it reported success) but the live worker is still $Observed; expected release $($expectedRelease.Version) (worker.py $($expectedRelease.WorkerSha256.Substring(0,12))). This is a deployment truthfulness defect, not a browser failure. Do NOT rerun this command; paste this message, the install evidence from $log and the output of .\scripts\verify-device-service.ps1."
+        return "deployment/version mismatch: the installer just ran (it reported success) but the live worker is still $Observed; expected release $($expectedRelease.Version) (worker.py $($expectedRelease.WorkerSha256.Substring(0,12))). This is a deployment truthfulness defect, not a browser failure. Do NOT rerun this command; paste this message, the install evidence from $log and the output of .\scripts\verify-device-service.ps1."
     }
-    return "contract/version mismatch: the live worker is $Observed; this checkout expects release $($expectedRelease.Version). Rerun with -UpdateAgentFirst (one UAC prompt) to update it through the journaled installer, which now proves the live worker before reporting success."
+    return "contract/version mismatch: the live worker is $Observed; this checkout expects release $($expectedRelease.Version). Rerun with -AgentUpdate force (one UAC prompt) to deploy this release through the journaled installer, which proves the live worker before reporting success."
 }
 . (Join-Path $PSScriptRoot "..\lib\HttpJson.ps1")
 
@@ -144,7 +153,19 @@ function Post-Json {
     return Invoke-JsonUtf8 -Method POST -Uri "$BaseUrl$Path" -Headers $h -Body $json -TimeoutSec 30
 }
 
-if ($UpdateAgentFirst) {
+# Deployment lifecycle, separate from execution: decide from files whether a deployment is
+# needed at all. Normal runs on an up-to-date machine never touch the installer.
+$releaseStatus = Test-AgentReleaseCurrent -CheckoutBrowserSource (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "services\browser")
+Write-AgentReleaseStatus -Status $releaseStatus
+$needsUpdate = switch ($effectiveAgentUpdate) {
+    "force" { $true }
+    "never" { $false }
+    default { -not $releaseStatus.Current }
+}
+if ($effectiveAgentUpdate -eq "never" -and -not $releaseStatus.ContractCompatible) {
+    throw "the installed browser worker cannot serve this checkout (" + ($releaseStatus.Reasons -join "; ") + ") and -AgentUpdate never was given. Deploy it once with: .\scripts\browser\real-browser-smoke.ps1 -AgentUpdate force -Mode $Mode"
+}
+if ($needsUpdate) {
     $installer = Join-Path (Split-Path -Parent $PSScriptRoot) "install-device-service.ps1"
     Write-Host "updating the installed agent first (elevated installer, journaled deployment; one UAC prompt)..."
     $proc = Start-Process -FilePath (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -Verb RunAs -Wait -PassThru `
@@ -153,12 +174,16 @@ if ($UpdateAgentFirst) {
     if ($proc.ExitCode -ne 0) {
         throw "the installer exited $($proc.ExitCode) (INSTALL FAILED); see $script:InstallerLog before doing anything else"
     }
+    $script:AgentUpdateRan = $true
     Write-Host "installer finished (exit 0; log $script:InstallerLog); waiting for the device to reconnect to the Cloud Core..."
+}
+else {
+    Write-Host "no deployment: the installed worker is this checkout's release (execution only; nothing was staged, swapped or restarted)"
 }
 
 $evidence = [ordered]@{
     run_id       = $runId
-    update_agent = [bool]$UpdateAgentFirst
+    agent_update = [ordered]@{ mode = $effectiveAgentUpdate; installed_release_current = $releaseStatus.Current; deployed = $script:AgentUpdateRan }
     started_at   = $startedAt.ToString("o")
     cloud        = $BaseUrl
     device       = $null
@@ -172,7 +197,7 @@ $evidence = [ordered]@{
 try {
     # ---------------------------------------------------------------- device
     $chosen = $null
-    $waitUntil = (Get-Date).AddSeconds($(if ($UpdateAgentFirst) { 150 } else { 1 }))
+    $waitUntil = (Get-Date).AddSeconds($(if ($script:AgentUpdateRan) { 150 } else { 1 }))
     do {
         $listing = Get-Json "/v1/devices"
         $devices = @(Get-OptionalProperty -InputObject $listing -Name "devices")
@@ -180,7 +205,7 @@ try {
             $caps = @(Get-OptionalProperty -InputObject $d -Name "capabilities")
             $status = [string](Get-OptionalProperty -InputObject $d -Name "status")
             if ($Device) {
-                if (([string]$d.device_id -eq $Device -or [string]$d.name -eq $Device) -and (-not $UpdateAgentFirst -or $status -eq "online")) { $chosen = $d; break }
+                if (([string]$d.device_id -eq $Device -or [string]$d.name -eq $Device) -and (-not $script:AgentUpdateRan -or $status -eq "online")) { $chosen = $d; break }
             }
             elseif ($status -eq "online" -and ($caps -contains "browser.chrome")) { $chosen = $d; break }
         }
@@ -407,7 +432,11 @@ try {
         # Payloads are built fresh from fixed keys (BrowserSmokeEvidence.ps1), never merged:
         # merging two payloads that both carry the interstitial key threw a duplicate-key
         # dictionary error on the owner's 2026-09-04 run and lost the fallback attempt.
-        $searchPayload = New-BrowserSearchPayload -SessionId $sessionId -Query $SearchQuery -Mode $effectiveSearchMode -Interstitial $interstitial
+        # The engine follows -ExpectProvider: the production default asks DuckDuckGo directly
+        # (requested_provider=duckduckgo, provider=duckduckgo, fallback=false); "google" asks
+        # Google explicitly; "any" keeps the ordered auto chain.
+        $searchEngine = switch ($ExpectProvider) { "any" { "auto" } default { $ExpectProvider } }
+        $searchPayload = New-BrowserSearchPayload -SessionId $sessionId -Query $SearchQuery -Mode $effectiveSearchMode -Interstitial $interstitial -Engine $searchEngine
         Write-Host "      search mode: $effectiveSearchMode (interstitial=$interstitial, verification timeout $HandoffTimeoutSec s)"
         $search = Invoke-DeviceCommand -Capability "browser.search" -Payload $searchPayload
         $sr = $search.result
@@ -437,7 +466,7 @@ try {
             if ($cleared) {
                 $evidence.handoff.cleared = $true
                 Write-Host "      verification cleared after $($evidence.handoff.waited_s) s; retrying the pending Google search ONCE on the same session"
-                $search = Invoke-DeviceCommand -Capability "browser.search" -Payload (New-BrowserSearchPayload -SessionId $sessionId -Query $SearchQuery -Mode $effectiveSearchMode -Interstitial "handoff")
+                $search = Invoke-DeviceCommand -Capability "browser.search" -Payload (New-BrowserSearchPayload -SessionId $sessionId -Query $SearchQuery -Mode $effectiveSearchMode -Interstitial "handoff" -Engine $searchEngine)
                 $sr = $search.result
                 $evidence.handoff.resumed = $true
                 if ([string](Get-OptionalProperty -InputObject $sr -Name "state") -eq "waiting_for_owner_verification") {
@@ -445,7 +474,7 @@ try {
                     $evidence.handoff.repeat = $true
                     Write-Host "      Google showed another verification page after yours; not retried again (one-retry policy). Falling back per policy." -ForegroundColor Yellow
                     $evidence.handoff.fallback_issued = $true
-                    $search = Invoke-DeviceCommand -Capability "browser.search" -Payload (New-BrowserSearchPayload -SessionId $sessionId -Query $SearchQuery -Mode $effectiveSearchMode -Interstitial "fallback")
+                    $search = Invoke-DeviceCommand -Capability "browser.search" -Payload (New-BrowserSearchPayload -SessionId $sessionId -Query $SearchQuery -Mode $effectiveSearchMode -Interstitial "fallback" -Engine $searchEngine)
                     $sr = $search.result
                 }
             }
@@ -460,7 +489,7 @@ try {
                     # Exactly one fallback attempt on the SAME session: interstitial=fallback on
                     # the still-pending query makes the worker record the verification timeout
                     # and go to the next provider WITHOUT attempting Google again.
-                    $search = Invoke-DeviceCommand -Capability "browser.search" -Payload (New-BrowserSearchPayload -SessionId $sessionId -Query $SearchQuery -Mode $effectiveSearchMode -Interstitial "fallback")
+                    $search = Invoke-DeviceCommand -Capability "browser.search" -Payload (New-BrowserSearchPayload -SessionId $sessionId -Query $SearchQuery -Mode $effectiveSearchMode -Interstitial "fallback" -Engine $searchEngine)
                     $sr = $search.result
                 }
                 else {
@@ -565,9 +594,10 @@ try {
         if (@($chromes).Count -lt 1) { throw "no Chrome process is using the PagentOS profile" }
     }
 
-    $search = Invoke-DeviceCommand -Capability "browser.search" -Payload @{ session_id = $sessionId; query = $SearchQuery; engine = "auto"; max_results = 5 }
+    # The production provider (owner decision, 2026-09-04): DuckDuckGo, asked directly.
+    $search = Invoke-DeviceCommand -Capability "browser.search" -Payload @{ session_id = $sessionId; query = $SearchQuery; engine = "duckduckgo"; max_results = 5 }
     $results = @(Get-OptionalProperty -InputObject $search.result -Name "results")
-    Write-Host "      search engine=$($search.result.engine) results=$(@($results).Count) first=$(if (@($results).Count -gt 0) { $results[0].url } else { '-' })"
+    Write-Host "      search provider=$($search.result.provider) fallback=$($search.result.fallback) results=$(@($results).Count) first=$(if (@($results).Count -gt 0) { $results[0].url } else { '-' })"
     if (@($results).Count -lt 1) { throw "the search returned no results" }
 
     # Risk policy, proven on the real worker: a READ+NAVIGATE session must refuse a download.

@@ -8,12 +8,19 @@ variables or a .env file. No secrets live in this file.
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 #: services/api — the identity root lives beside the service, outside the repo's
 #: tracked tree (see .gitignore), never inside a database.
 _API_ROOT = Path(__file__).resolve().parents[1]
+
+#: PRODUCT DECISION (owner, 2026-09-04): DuckDuckGo is the default production
+#: search provider for Research; Google stays fully implemented (including
+#: the CAPTCHA/owner-handoff machinery, which must not be weakened) but is no
+#: longer attempted first automatically. "auto" lets the device worker's own
+#: provider order decide.
+_RESEARCH_SEARCH_PROVIDERS = ("duckduckgo", "google", "auto")
 
 
 def _default_identity_root_dir() -> str:
@@ -149,6 +156,21 @@ class Settings(BaseSettings):
     research_default_synthesis: str = "auto"
     research_default_max_sources: int = 12
     research_max_sources_ceiling: int = 30
+    # PRODUCT DECISION (owner, 2026-09-04): DuckDuckGo is the DEFAULT production
+    # search provider for Research; Google is not attempted first automatically
+    # any more but stays fully implemented and selectable, including its
+    # CAPTCHA/owner-handoff machinery (see ADR history in docs/DECISIONS.md).
+    research_search_provider: str = "duckduckgo"
+
+    @field_validator("research_search_provider")
+    @classmethod
+    def _validate_research_search_provider(cls, v: str) -> str:
+        if v not in _RESEARCH_SEARCH_PROVIDERS:
+            raise ValueError(
+                "PAGENTOS_RESEARCH_SEARCH_PROVIDER must be one of "
+                f"{_RESEARCH_SEARCH_PROVIDERS}, got {v!r}"
+            )
+        return v
 
     # Owner identity / API authentication (M9, ADR-0027).
     #

@@ -178,6 +178,7 @@ jobs:
           powershell -NoProfile -File scripts\tests\installer-evidence.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\installer-release.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\browser-smoke-evidence.tests.ps1 && ^
+          powershell -NoProfile -File scripts\tests\agent-release-currency.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\machine-readable.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\identity-restore.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\provision.tests.ps1 && ^

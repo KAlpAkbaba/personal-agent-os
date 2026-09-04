@@ -192,6 +192,39 @@ def test_create_research_defaults_interactive_false_and_wait_600(client: TestCli
     assert request_arg.interactive_wait_s == 600
 
 
+def test_create_research_defaults_search_provider_to_duckduckgo(client: TestClient) -> None:
+    """PRODUCT DECISION (owner, 2026-09-04): DuckDuckGo is the default
+    production search provider — a default research POST must carry
+    search_provider="duckduckgo" on the workflow request without the caller
+    naming it explicitly."""
+    _enroll_online_device(client)
+    fake_client = AsyncMock()
+    fake_client.start_workflow = AsyncMock(return_value=None)
+    with patch("app.research.routes.Client.connect", AsyncMock(return_value=fake_client)):
+        response = client.post("/v1/research", json={"input": "konu"})
+    assert response.status_code == 202
+    request_arg = fake_client.start_workflow.call_args.args[1]
+    assert request_arg.search_provider == "duckduckgo"
+
+
+def test_create_research_accepts_google_search_provider(client: TestClient) -> None:
+    """Google stays fully selectable — its CAPTCHA/owner-handoff machinery is
+    preserved, just no longer the automatic default."""
+    _enroll_online_device(client)
+    fake_client = AsyncMock()
+    fake_client.start_workflow = AsyncMock(return_value=None)
+    with patch("app.research.routes.Client.connect", AsyncMock(return_value=fake_client)):
+        response = client.post("/v1/research", json={"input": "konu", "search_provider": "google"})
+    assert response.status_code == 202
+    request_arg = fake_client.start_workflow.call_args.args[1]
+    assert request_arg.search_provider == "google"
+
+
+def test_create_research_rejects_unknown_search_provider(client: TestClient) -> None:
+    response = client.post("/v1/research", json={"input": "konu", "search_provider": "bing"})
+    assert response.status_code == 422
+
+
 def test_create_research_mode_alias_wins_over_interactive(client: TestClient) -> None:
     """contract §3a search modes: `mode` is the owner-facing spelling and wins."""
     _enroll_online_device(client)
@@ -311,3 +344,17 @@ def test_research_endpoints_require_owner_session(engine) -> None:
     unauthenticated_client = TestClient(app)
     response = unauthenticated_client.post("/v1/research", json={"input": "konu"})
     assert response.status_code == 401
+
+
+def test_research_policy_reports_the_effective_provider(client: TestClient) -> None:
+    """The owner research command probes this route: its absence (404 on an older Cloud
+    Core) is the signal to release, and its search_provider is what a default run uses."""
+    response = client.get("/v1/research/policy")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["search_provider"] == "duckduckgo"
+    assert body["policy_version"] >= 1
+    assert body["worker_search_contract"] >= 2
+    assert set(body["search_providers"]) == {"duckduckgo", "google", "auto"}
+    assert body["interactive_wait_s"]["min"] == 30
+    assert body["modes"] == ["interactive", "unattended"]

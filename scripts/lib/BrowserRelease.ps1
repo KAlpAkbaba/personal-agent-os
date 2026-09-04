@@ -346,3 +346,101 @@ function Test-LiveBrowserWorker {
     }
     return @($problems)
 }
+
+
+# --------------------------------------------------------------------------- #
+# Deployment lifecycle separation (owner decision, 2026-09-04)
+#
+# Normal execution must NOT run the installer: no staging, no swap, no service restart.
+# A deployment happens only when the source/runtime release actually changed, the installed
+# contract is incompatible, the owner asks for it, or a new release is being qualified.
+# Test-AgentReleaseCurrent answers "is a deployment needed?" from files alone - it starts no
+# process, touches no service and needs no elevation.
+# --------------------------------------------------------------------------- #
+
+function Test-AgentReleaseCurrent {
+    <#
+    .SYNOPSIS
+        Compare this checkout's browser-worker release with the INSTALLED tree (its source
+        copy and the non-editable copy inside its venv, which is what actually executes).
+    .OUTPUTS
+        Current            - $true when a deployment would change nothing
+        ContractCompatible - $true when the installed contracts satisfy the checkout's
+        Reasons            - why not current (empty when current)
+        Expected/Installed - the two release objects (Installed is $null when nothing is installed)
+        InstalledVenvDigest- the package digest of the copy that really runs
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$CheckoutBrowserSource,
+        [string]$InstalledBrowserRoot = (Join-Path $env:ProgramFiles "PagentOS\agent\browser")
+    )
+
+    $expected = Get-ExpectedWorkerRelease -BrowserSource $CheckoutBrowserSource
+    $reasons = @()
+    $installed = $null
+    $venvDigest = $null
+
+    if (-not (Test-Path -LiteralPath (Join-Path $InstalledBrowserRoot "browser_agent\worker.py"))) {
+        return [pscustomobject]@{
+            Current = $false; ContractCompatible = $false
+            Reasons = @("no browser worker is installed under $InstalledBrowserRoot")
+            Expected = $expected; Installed = $null; InstalledVenvDigest = $null
+            InstalledRoot = $InstalledBrowserRoot
+        }
+    }
+
+    $installed = Get-ExpectedWorkerRelease -BrowserSource $InstalledBrowserRoot
+    if ($installed.Version -ne $expected.Version) {
+        $reasons += "installed worker release $($installed.Version), checkout $($expected.Version)"
+    }
+    if ($installed.PackageSha256 -ne $expected.PackageSha256) {
+        $reasons += "installed source package digest $($installed.PackageSha256.Substring(0,12)), checkout $($expected.PackageSha256.Substring(0,12))"
+    }
+
+    $site = Get-SitePackagesBrowserAgentDir -BrowserRoot $InstalledBrowserRoot
+    if (-not (Test-Path -LiteralPath $site)) {
+        $reasons += "the installed venv has no browser_agent package ($site)"
+    }
+    else {
+        $venvDigest = Get-BrowserPackageDigest -PackageDir $site
+        if ($venvDigest -ne $expected.PackageSha256) {
+            $reasons += "the copy that actually runs (installed venv) has digest $($venvDigest.Substring(0,12)), checkout $($expected.PackageSha256.Substring(0,12))"
+        }
+    }
+
+    # Contract compatibility is the narrower question: can the installed worker still serve
+    # this checkout's callers? (A newer patch release with the same contracts can.)
+    $contractCompatible = $true
+    foreach ($name in $expected.Contracts.Keys) {
+        $live = if ($installed.Contracts.ContainsKey($name)) { $installed.Contracts[$name] } else { 0 }
+        if ($live -lt $expected.Contracts[$name]) {
+            $contractCompatible = $false
+            $reasons += "installed contract $name is $live, this checkout needs $($expected.Contracts[$name])"
+        }
+    }
+
+    return [pscustomobject]@{
+        Current = (@($reasons).Count -eq 0)
+        ContractCompatible = $contractCompatible
+        Reasons = @($reasons)
+        Expected = $expected
+        Installed = $installed
+        InstalledVenvDigest = $venvDigest
+        InstalledRoot = $InstalledBrowserRoot
+    }
+}
+
+function Write-AgentReleaseStatus {
+    <#  One or two lines the owner can read: what is installed and whether it matches.  #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)]$Status)
+    $installedVersion = if ($Status.Installed) { $Status.Installed.Version } else { "(none)" }
+    Write-Host "      release: checkout $($Status.Expected.Version), installed $installedVersion, package $(if ($Status.InstalledVenvDigest) { $Status.InstalledVenvDigest.Substring(0,12) } else { '-' }) vs $($Status.Expected.PackageSha256.Substring(0,12))"
+    if ($Status.Current) {
+        Write-Host "      the installed worker IS this release: no deployment, no staging/swap, no service restart" -ForegroundColor Green
+    }
+    else {
+        foreach ($reason in $Status.Reasons) { Write-Host "      release difference: $reason" -ForegroundColor Yellow }
+    }
+}

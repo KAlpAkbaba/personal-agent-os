@@ -32,6 +32,7 @@ from app.devices.selection import NoCapableDeviceError, select_device
 from app.identity.dependencies import require_owner_session
 from app.logging import get_logger, trace_id_var
 from app.research import runs_service
+from app.research.browser_gateway import SearchEvidence
 from app.research.browser_workflow import BrowserResearchRequest, BrowserResearchWorkflow
 from app.research.models import STAGE_CANCELLED, STAGE_FAILED, STAGE_PLANNED, ResearchRunRow
 
@@ -95,6 +96,11 @@ class CreateResearchRequest(BaseModel):
         ge=MIN_INTERACTIVE_WAIT_S,
         le=MAX_INTERACTIVE_WAIT_S,
     )
+    #: PRODUCT DECISION (owner, 2026-09-04): DuckDuckGo is the default
+    #: production search provider; None means "use the Settings default"
+    #: (research_search_provider). "google" stays fully selectable —
+    #: including its CAPTCHA/owner-handoff machinery, unchanged.
+    search_provider: str | None = Field(default=None, pattern="^(duckduckgo|google|auto)$")
 
 
 def _effective_interactive(body: CreateResearchRequest) -> bool:
@@ -180,6 +186,7 @@ async def create_research(request: Request, body: CreateResearchRequest) -> JSON
                 interactive=body.effective_interactive,
                 interactive_wait_s=body.interactive_wait_s,
                 on_verification_timeout=body.on_verification_timeout,
+                search_provider=body.search_provider or artifacts.settings.research_search_provider,
             ),
             id=workflow_id,
             task_queue=artifacts.settings.temporal_task_queue,
@@ -202,6 +209,38 @@ async def create_research(request: Request, body: CreateResearchRequest) -> JSON
             "device": device,
         },
     )
+
+
+#: Bumped whenever the research POLICY contract changes shape (not on every code change).
+#: A client compares it with what it expects; an older Cloud Core answers 404 instead.
+RESEARCH_POLICY_VERSION = 1
+
+
+@router.get("/policy")
+async def get_research_policy(request: Request) -> dict[str, Any]:
+    """The effective research policy of THIS Cloud Core (owner decision, 2026-09-04).
+
+    Side-effect free: a client (the owner research command, the web page) reads it to know
+    which search provider a default run will use and whether this deployment understands the
+    policy at all — an older Cloud Core has no such route and answers 404, which is the
+    signal that a Cloud Core release is needed, rather than silently running the older
+    Google-first discovery.
+    """
+    settings = _artifacts(request).settings
+    return {
+        "policy_version": RESEARCH_POLICY_VERSION,
+        "search_provider": settings.research_search_provider,
+        "search_providers": ["duckduckgo", "google", "auto"],
+        "worker_search_contract": SearchEvidence.REQUIRED_SCHEMA_VERSION,
+        "max_sources_ceiling": MAX_SOURCES_CEILING,
+        "interactive_wait_s": {
+            "default": DEFAULT_INTERACTIVE_WAIT_S,
+            "min": MIN_INTERACTIVE_WAIT_S,
+            "max": MAX_INTERACTIVE_WAIT_S,
+        },
+        "verification_timeout_policies": ["fallback", "fail"],
+        "modes": ["interactive", "unattended"],
+    }
 
 
 @router.get("")
