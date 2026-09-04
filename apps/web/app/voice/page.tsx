@@ -870,7 +870,7 @@ function VoiceConsole() {
           <div className="status-row">
             <span>Sayaçlar</span>
             <span className="muted">
-              {`kapı ${snapshot.micMetrics.gate_opens} · arka plan ${snapshot.micMetrics.gated_out} · tık ${snapshot.micMetrics.click_rejects} · yanlış başlangıç ${snapshot.micMetrics.false_starts} · yanlış kesme ${snapshot.micMetrics.false_barge_ins} · boş tur ${snapshot.micMetrics.false_turns} · onaylı tur ${snapshot.micMetrics.confirmed_turns} · erken sustur ${snapshot.micMetrics.early_mutes} (geri ${snapshot.micMetrics.early_mute_reverts}) · ölçüm ${snapshot.micMetrics.calibrations}`}
+              {`kapı ${snapshot.micMetrics.gate_opens} · arka plan ${snapshot.micMetrics.gated_out} · tık ${snapshot.micMetrics.click_rejects} · yanlış başlangıç ${snapshot.micMetrics.false_starts} · yanlış kesme ${snapshot.micMetrics.false_barge_ins} · boş tur ${snapshot.micMetrics.false_turns} · onaylı tur ${snapshot.micMetrics.confirmed_turns} · erken sustur ${snapshot.micMetrics.early_mutes} (geri ${snapshot.micMetrics.early_mute_reverts}) · boş iptal ${snapshot.micMetrics.cancel_noop_errors} · ölçüm ${snapshot.micMetrics.calibrations}`}
             </span>
           </div>
           <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center", margin: "0.6rem 0" }}>
