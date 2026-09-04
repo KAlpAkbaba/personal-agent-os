@@ -3050,3 +3050,62 @@ on to the next one. Regression coverage: `scripts/tests/owner-explain.tests.ps1`
 absent, already running, delayed connection, stale session, newest-wins, probe failure
 isolation, harness wiring), `tests/unit/test_voice_explain_tools.py` (Dur idempotence,
 Devam after completion, two interruptions), and the web client's `dur.test.ts`.
+
+### ADR-0051 addendum 3 — the owner's UX verdict: good, usable, three control defects (2026-09-04)
+
+Owner result on the real session: narration quality good; "Dur" stopped active speech and
+persisted the cursor; "Devam et" resumed from the paused semantic position. Three defects:
+other people talking in the room sometimes interrupted the assistant; the spoken answers
+were too long by default; and "detaylandır" / "teknik anlat" were not recorded as the
+expected narration-control intents even though the right explanations were produced (the
+provider had routed them to `activity.explain`).
+
+Decisions:
+
+1. **Two-lane interruption policy, owned by the client.** The provider session now has
+   `turn_detection.interrupt_response = false`: the provider no longer cancels its own
+   response the moment its VAD hears any speech. In the web client, a *fast control lane*
+   interrupts immediately on an explicit control phrase in the provisional transcript
+   (dur, durdur, bekle, sus, kes, yeter, bir dakika; token match, so "durum" is not "dur"),
+   through the unchanged stop-first barge-in path. A *conversational lane* treats a speech
+   onset as a candidate: the existing reversible early mute applies at once, and the
+   interruption is confirmed only with stable onset, near-field confidence from the
+   calibrated gate and owner profile (K66), and a plausible provisional transcript within a
+   short window - otherwise the mute reverts and the speech is counted as rejected
+   background. No voice biometrics, no transport redesign, no single global threshold.
+   Counters (`speech_detected`, `potential_barge_in`, `accepted_owner_interruption`,
+   `rejected_background_speech`, `explicit_stop_command`, `false_interruption`) ride the
+   existing `mic_metrics` state report into the benchmark's `noise` block and the session
+   activity record.
+2. **Narration budgets.** Narration is for listening. `executive` (default) is two to four
+   sentences - the outcome, why it matters, whether the owner is needed; counts and
+   identifiers belong to `detailed` and `technical`. `detailed` reads up to five findings
+   and stops at a sentence boundary within ~900 characters; `technical` is a concise
+   briefing of versions, evidence, failures and architecture (~700 characters, no recital
+   of ids); only `hepsini oku` / `tamamını anlat` / `bütün detayları oku` (`Intent.FULL`)
+   lift the budget. Budgets are enforced on the spoken text at the tool boundary
+   (`speech_budget`), chunks end at sentence boundaries, and the cursor keeps the
+   position, so "devam et" reads the next chunk. The owner's target sentence is now the
+   default: "Efendim, Research Engine gerçek ortam doğrulamasını başarıyla geçti. Beş
+   farklı kaynaktan beş sonuç üretti ve yirmi sekiz uygun olmayan sayfayı eledi. Tarayıcı
+   temiz kapandı; şu anda müdahalenizi gerektiren bir sorun yok."
+3. **Owner relevance over chronology.** Every ledger event is classed as task completion,
+   change, failure, security, evolution, telemetry or meta (`owner_relevance`). Meta -
+   voice sessions, narration, explanations, backfills, briefings - and routine telemetry
+   never lead an executive briefing unless the owner asks about that subsystem, so "Son
+   yaptıklarını anlat" cannot answer with the previous narration. A failure or security
+   event with nothing completed after it turns the closing sentence into a call for action.
+4. **Normalised intents in the durable record.** `detay ver` / `detaylandır` / `ayrıntı
+   ver` / `daha detaylı anlat` → `detail`; `teknik anlat` / `teknik detaya gir` / `kod
+   seviyesinde anlat` → `technical` ("teknik" outranks "detay"); the full-read phrases →
+   `full`; executive / stop / resume / skip / previous / next unchanged. When a briefing is
+   attached and the provider routes a level word to `activity.explain`, the tool performs
+   the same cursor jump as `narration.control` and records the normalised intent; the
+   qualification accepts the intent from either tool.
+5. **The owner test is under two minutes**: `Son yaptıklarını anlat` → concise briefing →
+   another distant voice while it speaks (it keeps speaking) → `Dur` → `Devam et` →
+   `Teknik anlat`. The harness verifies from the durable record: executive ≤ 420
+   characters, a `spoken`/`barge_in_start` pair with an aligned cursor, resume from that
+   cursor, `intent=technical` from either tool, and `false_interruption = 0` from the
+   client's counters. The Cloud Core changed (ledger policy version 2 carries the budgets
+   and ranking), so the command performs one transactional release; Windows is untouched.

@@ -39,6 +39,12 @@ from app.explain.engine import (
     speech_for_level,
 )
 
+OWNER_SENTENCE = (
+    "Efendim, Research Engine gerçek ortam doğrulamasını başarıyla geçti. "
+    "Beş farklı kaynaktan beş sonuç üretti ve yirmi sekiz uygun olmayan sayfayı eledi. "
+    "Tarayıcı temiz kapandı; şu anda müdahalenizi gerektiren bir sorun yok."
+)
+
 NOW = datetime(2026, 9, 4, 18, 0, tzinfo=UTC)
 TASK_ID = "2c1c0d2e-0d1a-4d51-9c6e-1e6a4a1f0b11"
 
@@ -190,17 +196,16 @@ def test_last_activity_is_the_owner_briefing_from_the_real_numbers() -> None:
 
     briefing = explain(source, "Son yaptıklarını anlat", query, now=NOW)
     speech = speech_for_level(briefing, LEVEL_EXECUTIVE)
-    assert speech == (
-        "Efendim, son araştırma motoru qualification'ı başarıyla tamamlandı. "
-        "Beş sonuç ve beş farklı kaynak ürettim. "
-        "Dokuz konu dışı sayfayı, on bir ara doğrulama sayfasını, üç tarihi doğrulanamayan "
-        "sonucu, bir tekrar eden olayı ve dört tarih dışı sonucu eledim. "
-        "Tarayıcı temiz şekilde kapandı. "
-        "Research Engine artık gerçek ortamda doğrulanmış durumda. Bilginize."
-    )
-    # every sentence but the closing word is a known fact tied to evidence
+    assert speech == OWNER_SENTENCE
+    # a listening budget, not a document: two to four sentences, well under twenty seconds
+    assert 2 <= len(briefing.executive) <= 4
+    assert len(speech) <= 420
+    assert "2c1c0d2e" not in speech and "sha256" not in speech
+    # the outcome sentences are known facts tied to evidence; the "nothing needs you"
+    # closing is an inference over the window and says so
     for statement in briefing.executive[:-1]:
         assert statement.label == LABEL_FACT and statement.evidence_refs
+    assert briefing.executive[-1].label == LABEL_INFERENCE
     assert {r["kind"] for r in briefing.evidence_refs} >= {
         "activity_event",
         "research_report",
@@ -215,9 +220,10 @@ def test_without_the_owner_verdict_the_engine_does_not_claim_qualification() -> 
     source = MemorySource([_research_completed()], REAL_REPORT)
     briefing = explain(source, "Son ne yaptın", classify("Son ne yaptın", now=NOW), now=NOW)
     speech = speech_for_level(briefing, LEVEL_EXECUTIVE)
-    assert speech.startswith("Efendim, son araştırma görevi tamamlandı. Beş sonuç")
-    assert "doğrulanmış" not in speech and "qualification" not in speech
+    assert speech.startswith("Efendim, son araştırma görevi tamamlandı. Beş farklı kaynaktan")
+    assert "doğrulama" not in speech and "Research Engine" not in speech
     assert "Tarayıcı" not in speech
+    assert speech.endswith("Şu anda müdahalenizi gerektiren bir sorun yok.")
 
 
 def test_no_evidence_is_said_not_invented() -> None:
@@ -260,13 +266,17 @@ def test_technical_level_carries_versions_ids_and_counts() -> None:
     assert query.level == LEVEL_TECHNICAL
     briefing = explain(source, "Teknik olarak ne değişti", query, now=NOW)
     speech = speech_for_level(briefing, LEVEL_TECHNICAL)
-    assert TASK_ID[:8] in speech and TASK_ID not in speech
-    assert "Keşfedilen aday 240, getirilen sayfa 33, kanıt 5, elenen 28." in speech
-    assert "Araştırma politikası sürümü 4." in speech
-    assert "Kurulu tarayıcı çalışanı sürümü 0.4.0; dağıtım yapılmadı." in speech
-    assert "commit 537112a" in speech
-    assert "2 kaynağın her biri bir cihaz komutuyla getirildi" in speech
-    assert "İz kimliği trace." in speech
+    # versions, evidence, failures, architecture - and no recital of identifiers
+    assert "Research policy v4 çalıştı" in speech
+    assert "browser worker 0.4.0 değişmedi, deployment gerekmedi" in speech
+    assert (
+        "240 aday keşfedildi, 33 sayfa getirildi, 5 kanıt kabul edildi, 28 sayfa elendi." in speech
+    )
+    assert "Kanıt kontrolleri geçti ve tarayıcı temizliği geçti." in speech
+    assert "Mimari" in speech
+    assert TASK_ID[:8] not in speech and "537112a" not in speech and "trace" not in speech
+    assert "Hata" not in speech
+    assert len(speech) <= 700
 
 
 def test_markdown_sections_are_the_narration_levels() -> None:
@@ -275,9 +285,9 @@ def test_markdown_sections_are_the_narration_levels() -> None:
         source, "Son yaptıklarını anlat", classify("Son yaptıklarını anlat", now=NOW), now=NOW
     )
     body = render_markdown(briefing)
-    assert body.startswith("# Özet\n\nEfendim, son araştırma motoru")
+    assert body.startswith("# Özet\n\nEfendim, Research Engine gerçek ortam")
     assert "\n# Ayrıntı\n\n1. Yapay zekâ ajanları" in body
-    assert "\n# Teknik\n\n1. Çalışma." in body
+    assert "\n# Teknik\n\n1. Sürümler." in body
     assert "\n# Kanıt\n\n- activity_event: ev-research-1" in body
     assert "file: research-1.json (sha256:abc)" in body
 
@@ -392,3 +402,114 @@ def test_evidence_question_lists_the_references() -> None:
 @pytest.mark.parametrize("label", ["known_fact", "inference", "uncertainty"])
 def test_statement_labels_are_the_three_the_spec_names(label: str) -> None:
     assert label in engine.STATEMENT_LABELS
+
+
+# ------------------------------------------------------------------ owner relevance
+
+
+def _voice_explained(minutes_ago: int) -> EventView:
+    return EventView(
+        event_id=f"ev-voice-{minutes_ago}",
+        occurred_at=NOW - timedelta(minutes=minutes_ago),
+        event_type="voice.explained",
+        subsystem="voice",
+        status="completed",
+        severity="info",
+        factual_summary="Sahibe executive düzeyinde etkinlik özeti anlatıldı: 5 olgu.",
+        source="live",
+    )
+
+
+def test_the_explanation_itself_never_leads_the_next_explanation() -> None:
+    """Owner UX result 2026-09-04: "Son yaptıklarını anlat" answered with the previous
+    narration. Voice and ledger bookkeeping are meta activity: ranked out of an executive
+    briefing unless the owner asks about Voice."""
+    source = MemorySource(
+        [_voice_explained(1), _voice_explained(3), _research_completed(), _qualified()],
+        REAL_REPORT,
+    )
+    briefing = explain(
+        source, "Son yaptıklarını anlat", classify("Son yaptıklarını anlat", now=NOW), now=NOW
+    )
+    speech = speech_for_level(briefing, LEVEL_EXECUTIVE)
+    assert speech == OWNER_SENTENCE
+    assert "anlatıldı" not in speech and "anlattım" not in speech
+
+    asked_about_voice = explain(
+        source, "Ses tarafında ne durumda", classify("Ses tarafında ne durumda", now=NOW), now=NOW
+    )
+    assert asked_about_voice.query.subsystem == "voice"
+    assert "etkinlik özeti anlatıldı" in speech_for_level(asked_about_voice, LEVEL_EXECUTIVE)
+
+
+def test_relevance_classes_cover_every_event_type_the_ledger_knows() -> None:
+    from app.explain.engine import RELEVANCE_CLASSES, owner_relevance
+
+    cases = {
+        "research.completed": "task_completion",
+        "research.qualified": "task_completion",
+        "research.failed": "failure",
+        "research.quality_gate": "telemetry",
+        "deployment.cloud_core.released": "change",
+        "incident.opened": "failure",
+        "evolution.shadow_ready": "evolution",
+        "voice.session.closed": "meta",
+        "voice.explained": "meta",
+        "ledger.backfill": "meta",
+        "briefing.delivered": "meta",
+    }
+    for event_type, expected in cases.items():
+        ev = EventView(
+            event_id="x",
+            occurred_at=NOW,
+            event_type=event_type,
+            subsystem=event_type.split(".")[0],
+            status="failed" if "fail" in event_type else "completed",
+            severity="info",
+            factual_summary="",
+        )
+        assert owner_relevance(ev) == expected, event_type
+        assert expected in RELEVANCE_CLASSES
+    critical = EventView(
+        event_id="c",
+        occurred_at=NOW,
+        event_type="deployment.cloud_core.released",
+        subsystem="deployment",
+        status="completed",
+        severity="critical",
+        factual_summary="",
+    )
+    assert owner_relevance(critical) == "security"
+
+
+def test_an_open_failure_turns_the_closing_into_a_call_for_action() -> None:
+    failed = _research_completed(
+        event_id="ev-failed",
+        event_type="research.failed",
+        status="failed",
+        occurred_at=NOW - timedelta(minutes=10),
+        factual_summary="Araştırma başarısız oldu: insufficient_valid_findings.",
+        detail={"error_class": "insufficient_valid_findings"},
+    )
+    source = MemorySource([failed, _research_completed(), _qualified()], REAL_REPORT)
+    briefing = explain(
+        source, "Son yaptıklarını anlat", classify("Son yaptıklarını anlat", now=NOW), now=NOW
+    )
+    closing = briefing.executive[-1]
+    assert closing.text.startswith("Müdahalenizi gerektiren bir konu var:")
+    assert closing.label == LABEL_FACT and closing.evidence_refs
+
+
+def test_detailed_level_stops_at_five_items_and_keeps_the_rest_in_the_report() -> None:
+    many = dict(REAL_REPORT)
+    many["findings"] = [
+        {**REAL_REPORT["findings"][0], "id": f"f{i}", "title": f"Bulgu {i}"} for i in range(1, 9)
+    ]
+    source = MemorySource([_research_completed(), _qualified()], many)
+    briefing = explain(
+        source, "Araştırmayı detaylandır", classify("Araştırmayı detaylandır", now=NOW), now=NOW
+    )
+    titles = [i.title for i in briefing.detailed]
+    assert titles[:5] == ["Bulgu 1", "Bulgu 2", "Bulgu 3", "Bulgu 4", "Bulgu 5"]
+    assert titles[-1] == "Elenen sayfalar"
+    assert "Bulgu 6" not in titles

@@ -36,7 +36,12 @@ from app.explain.engine import (
 from app.logging import get_logger
 from app.narration import service as narration_service
 from app.narration.engine import Cursor, build_plan
-from app.voice.intents import level_section_cursor, speech_from
+from app.voice.intents import (
+    PRESENTATION_FULL,
+    level_section_cursor,
+    speech_budget,
+    speech_from,
+)
 
 ARTIFACT_KIND_ACTIVITY_BRIEFING = "activity_briefing"
 
@@ -232,6 +237,8 @@ def explain_to_briefing(
         pronunciation=narration_service.pronunciation_map(db),
     )
     start = level_section_cursor(plan, _presentation_for(query.level))
+    if query.level == "full" and plan.chunks:
+        start = plan.chunks[0].cursor
     narration_id: uuid.UUID | None = None
     if attach_narration:
         from app.narration.commands import State
@@ -255,8 +262,16 @@ def explain_to_briefing(
         narration_id = row.id
     # What is spoken is what the narration plan holds, so "devam" continues from exactly
     # the words that were said; the engine's own rendering is the fallback for an empty plan.
+    presentation = _presentation_for(query.level)
     speech = (
-        speech_from(plan, start) if start is not None else speech_for_level(briefing, query.level)
+        speech_from(
+            plan,
+            start,
+            whole_section=presentation != PRESENTATION_FULL,
+            max_chars=speech_budget(presentation),
+        )
+        if start is not None
+        else speech_for_level(briefing, query.level)
     )
     logger.info(
         "activity_explained",
@@ -288,6 +303,7 @@ def _presentation_for(level: str) -> str:
         "executive": PRESENTATION_SUMMARY,
         "detailed": PRESENTATION_DETAIL,
         "technical": PRESENTATION_TECHNICAL,
+        "full": PRESENTATION_FULL,
     }.get(level, PRESENTATION_SUMMARY)
 
 

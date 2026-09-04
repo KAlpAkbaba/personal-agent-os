@@ -1257,10 +1257,27 @@ def session_activity(db: Session, row: RealtimeSessionRow) -> dict[str, Any]:
         "client_events": client_events,
         "narration": session_state(db, row).get("narration"),
         "barge_in_count": int((row.context_json or {}).get("barge_in_count", 0)),
+        # the interruption policy's own evidence (M16): what was heard while the assistant
+        # spoke and what was decided, cumulative, numbers only
+        "noise": noise_summary(client_timing_rows(db, row.id)),
     }
 
 
-NOISE_COUNTERS = ("false_starts", "false_barge_ins", "false_turns", "gate_opens")
+NOISE_COUNTERS = (
+    "false_starts",
+    "false_barge_ins",
+    "false_turns",
+    "gate_opens",
+    # M16 two-lane interruption policy (owner UX result 2026-09-04): what the client heard
+    # while the assistant spoke and what it decided, so background speech that was ignored
+    # and owner speech that was honoured are both in the evidence.
+    "speech_detected",
+    "potential_barge_in",
+    "accepted_owner_interruption",
+    "rejected_background_speech",
+    "explicit_stop_command",
+    "false_interruption",
+)
 
 #: Sub-phase numbers the client reports as payload on EXISTING timing kinds (ADR-0047),
 #: so the five headline metrics can be decomposed without new event kinds:

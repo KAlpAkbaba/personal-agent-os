@@ -33,12 +33,9 @@ from tests.unit.test_explain_engine import (
 from tests.unit.test_voice_realtime_sessions import _audit_rows, _create, wired  # noqa: F401
 
 OWNER_SENTENCE = (
-    "Efendim, son araştırma motoru qualification'ı başarıyla tamamlandı. "
-    "Beş sonuç ve beş farklı kaynak ürettim. "
-    "Dokuz konu dışı sayfayı, on bir ara doğrulama sayfasını, üç tarihi doğrulanamayan "
-    "sonucu, bir tekrar eden olayı ve dört tarih dışı sonucu eledim. "
-    "Tarayıcı temiz şekilde kapandı. "
-    "Research Engine artık gerçek ortamda doğrulanmış durumda. Bilginize."
+    "Efendim, Research Engine gerçek ortam doğrulamasını başarıyla geçti. "
+    "Beş farklı kaynaktan beş sonuç üretti ve yirmi sekiz uygun olmayan sayfayı eledi. "
+    "Tarayıcı temiz kapandı; şu anda müdahalenizi gerektiren bir sorun yok."
 )
 
 
@@ -89,8 +86,10 @@ def test_owner_acceptance_script_end_to_end(wired, monkeypatch) -> None:
     # 1-3. "Son yaptıklarını anlat" → the briefing, spoken verbatim from evidence
     result = _tool(client, sid, "x1", "activity.explain", question="Son yaptıklarını anlat")
     assert result["speech"] == OWNER_SENTENCE
-    assert result["level"] == "executive" and result["facts"] >= 5
+    assert len(result["speech"]) <= 420  # a listening budget, not a document
+    assert result["level"] == "executive" and result["facts"] >= 2
     assert result["uncertainties"] == 0
+    assert result["intent"]["intent"] == "explain"
     narration_id = result["narration_session_id"]
     assert narration_id
     assert sideband.events()[-1] == "narration_cursor"
@@ -107,25 +106,28 @@ def test_owner_acceptance_script_end_to_end(wired, monkeypatch) -> None:
     assert detail["narration"]["action"] == "jump_level"
     assert detail["speech"].startswith("Yapay zekâ ajanları ve ajan temelli yapay zekâ.")
     assert "Bilim ve Gelecek" in detail["speech"]
-    assert "Elenen sayfalar" in detail["speech"]
+    assert len(detail["speech"]) <= 900  # 30-60 s, cut at a sentence boundary
 
     # 6-7. "Teknik anlat" → technical evidence
     technical = _control(client, sid, "x3", "Teknik anlat")
     assert technical["intent"]["intent"] == "technical"
     assert technical["narration"]["presentation"] == "technical"
-    assert "Görev kimliği" in technical["speech"]
-    # versions are spoken, not spelled: "0.4.0" arrives as words
-    assert "sıfır nokta dört nokta sıfır" in technical["speech"]
-    assert "dağıtım yapılmadı" in technical["speech"]
+    # concise: versions, evidence, architecture; no identifiers unless something failed
+    assert "Research policy" in technical["speech"]
+    assert "sıfır nokta dört nokta sıfır" in technical["speech"]  # 0.4.0, spoken
+    assert "deployment gerekmedi" in technical["speech"]
+    assert "Görev kimliği" not in technical["speech"]
+    assert len(technical["speech"]) <= 700
 
     # back to the summary, then the owner interrupts it
     summary = _control(client, sid, "x4", "Özetle")
-    assert summary["speech"].startswith("Efendim, son araştırma motoru")
+    assert summary["speech"].startswith("Efendim, Research Engine gerçek ortam")
 
     # 8-9. "Dur." — the client stops playback first, then reports what was spoken so far
     spoken_so_far = (
-        "Efendim, son araştırma motoru qualification'ı başarıyla tamamlandı. "
-        "Beş sonuç ve beş farklı kaynak ürettim. Dokuz konu dışı"
+        "Efendim, Research Engine gerçek ortam doğrulamasını başarıyla geçti. "
+        "Beş farklı kaynaktan beş sonuç üretti ve yirmi sekiz uygun olmayan sayfayı eledi. "
+        "Tarayıcı temiz"
     )
     response = _events(
         client,
@@ -164,8 +166,8 @@ def test_owner_acceptance_script_end_to_end(wired, monkeypatch) -> None:
     resumed = _control(client, sid, "x5", "Devam et")
     assert resumed["intent"]["intent"] == "resume"
     assert resumed["narration"]["narration_state"] == "READING"
-    assert resumed["speech"].startswith("Dokuz konu dışı sayfayı, on bir ara doğrulama")
-    assert resumed["speech"].endswith("Bilginize.")
+    assert resumed["speech"].startswith("Tarayıcı temiz kapandı; şu anda müdahalenizi")
+    assert resumed["speech"].endswith("bir sorun yok.")
 
 
 def test_item_commands_explain_previous_returns_and_skip_moves_on(wired, monkeypatch) -> None:
@@ -191,6 +193,12 @@ def test_item_commands_explain_previous_returns_and_skip_moves_on(wired, monkeyp
     skipped = _control(client, sid, "e5", "Bunu atla")
     assert skipped["narration"]["action"] == "skipped"
     assert skipped["speech"].startswith("Elenen sayfalar.")
+
+    everything = _control(client, sid, "e6b", "Hepsini oku")
+    assert everything["intent"]["intent"] == "full"
+    assert everything["narration"]["action"] == "read_all"
+    assert everything["speech"].startswith("Efendim, Research Engine")
+    assert "Elenen sayfalar" in everything["speech"] and "Mimari" in everything["speech"]
 
     stopped = _control(client, sid, "e6", "Dur")
     assert stopped["narration"]["action"] == "paused" and stopped["speech"] == ""
@@ -263,7 +271,7 @@ def test_activity_explain_persists_a_briefing_artifact(wired, monkeypatch) -> No
         assert artifact.kind == "activity_briefing" and artifact.state == "READY"
         assert artifact.executive_summary == OWNER_SENTENCE
         version = db.query(ArtifactVersion).filter_by(artifact_id=artifact.id).one()
-        assert version.canonical_body.startswith("# Özet\n\nEfendim, son araştırma motoru")
+        assert version.canonical_body.startswith("# Özet\n\nEfendim, Research Engine")
         assert "# Kanıt" in version.canonical_body
         assert version.source_manifest_json["generated_at"].startswith(str(NOW.year))
 
@@ -277,7 +285,7 @@ def test_session_activity_is_the_durable_record_of_the_script(wired, monkeypatch
     _control(client, sid, "s2", "Araştırmayı detaylandır")
     _control(client, sid, "s3", "Teknik anlat")
     _control(client, sid, "s4", "Özetle")
-    head = "Efendim, son araştırma motoru qualification'ı başarıyla tamamlandı. Beş sonuç ve"
+    head = "Efendim, Research Engine gerçek ortam doğrulamasını başarıyla geçti. Beş farklı"
     _events(
         client,
         sid,
@@ -305,13 +313,13 @@ def test_session_activity_is_the_durable_record_of_the_script(wired, monkeypatch
     names = [(c["name"], c["status"]) for c in activity["tool_calls"]]
     assert names == [("activity.explain", "succeeded")] + [("narration.control", "succeeded")] * 4
     explain, detail, technical, _summary, resume = activity["tool_calls"]
-    assert explain["level"] == "executive" and explain["speech_chars"] > 100
-    assert explain["speech_head"].startswith("Efendim, son araştırma motoru")
+    assert explain["level"] == "executive" and 100 < explain["speech_chars"] <= 420
+    assert explain["speech_head"].startswith("Efendim, Research Engine gerçek ortam")
     assert explain["facts"] >= 5 and explain["uncertainties"] == 0
     assert detail["intent"] == "detail" and detail["action"] == "jump_level"
     assert technical["intent"] == "technical"
     assert resume["intent"] == "resume" and resume["narration_state"] == "READING"
-    assert resume["speech_head"].startswith("Beş sonuç ve beş farklı kaynak")
+    assert resume["speech_head"].startswith("Beş farklı kaynaktan beş sonuç üretti")
     kinds = [e["kind"] for e in activity["client_events"]]
     assert kinds == ["spoken", "barge_in_start", "playback_stopped"]
     spoken = activity["client_events"][0]
@@ -389,12 +397,46 @@ def test_dur_after_speech_completed_then_devam_continues_with_the_next_section(
     assert resumed["speech"].startswith("Yapay zekâ ajanları ve ajan temelli yapay zekâ.")
 
 
+def test_level_words_routed_to_activity_explain_move_within_the_briefing(
+    wired, monkeypatch
+) -> None:
+    """The owner's evidence showed the provider routing "detaylandır" / "teknik anlat" to
+    activity.explain instead of narration.control. With a briefing attached those are
+    moves through it: the same cursor jump, and the durable record carries the normalised
+    intent regardless of which tool the provider chose."""
+    client, _identity, _runtime, _sideband, _issued, _engine = wired
+    _use_real_run_evidence(monkeypatch)
+    sid = _create(client)["session_id"]
+    _tool(client, sid, "r1", "activity.explain", question="Son yaptıklarını anlat")
+    for call_id, phrase, intent in (
+        ("r2", "detaylandır", "detail"),
+        ("r3", "teknik detaya gir", "technical"),
+        ("r4", "kod seviyesinde anlat", "technical"),
+        ("r5", "özetle", "summarize"),
+        ("r6", "daha detaylı anlat", "detail"),
+    ):
+        moved = _tool(client, sid, call_id, "activity.explain", question=phrase)
+        assert moved["routed"] == "narration", phrase
+        assert moved["intent"]["intent"] == intent, phrase
+        assert moved["narration"]["action"] == "jump_level", phrase
+        assert moved["speech"], phrase
+    activity = client.get(f"/v1/voice/realtime/sessions/{sid}/activity").json()
+    recorded = [(c["name"], c["intent"]) for c in activity["tool_calls"][1:]]
+    assert recorded == [
+        ("activity.explain", "detail"),
+        ("activity.explain", "technical"),
+        ("activity.explain", "technical"),
+        ("activity.explain", "summarize"),
+        ("activity.explain", "detail"),
+    ]
+
+
 def test_two_interruptions_in_a_row_each_resume_from_their_own_point(wired, monkeypatch) -> None:
     client, _identity, _runtime, _sideband, _issued, _engine = wired
     _use_real_run_evidence(monkeypatch)
     sid = _create(client)["session_id"]
     _tool(client, sid, "i1", "activity.explain", question="Son yaptıklarını anlat")
-    first_cut = "Efendim, son araştırma motoru qualification'ı başarıyla tamamlandı. Beş"
+    first_cut = "Efendim, Research Engine gerçek ortam doğrulamasını başarıyla geçti. Beş"
     _events(
         client,
         sid,
@@ -416,8 +458,11 @@ def test_two_interruptions_in_a_row_each_resume_from_their_own_point(wired, monk
         ],
     )
     resumed = _control(client, sid, "i2", "Devam et")
-    assert resumed["speech"].startswith("Beş sonuç ve beş farklı kaynak ürettim.")
-    second_cut = "Beş sonuç ve beş farklı kaynak ürettim. Dokuz konu dışı sayfayı, on bir ara"
+    assert resumed["speech"].startswith("Beş farklı kaynaktan beş sonuç üretti")
+    second_cut = (
+        "Beş farklı kaynaktan beş sonuç üretti ve yirmi sekiz uygun olmayan sayfayı eledi. "
+        "Tarayıcı temiz"
+    )
     _events(
         client,
         sid,
@@ -439,4 +484,4 @@ def test_two_interruptions_in_a_row_each_resume_from_their_own_point(wired, monk
         ],
     )
     again = _control(client, sid, "i3", "Devam et")
-    assert again["speech"].startswith("Dokuz konu dışı sayfayı, on bir ara doğrulama")
+    assert again["speech"].startswith("Tarayıcı temiz kapandı; şu anda müdahalenizi")

@@ -28,7 +28,13 @@ from app.logging import get_logger
 from app.narration.commands import State
 from app.narration.engine import PARAGRAPH_LIST
 from app.voice.errors import VoiceError, VoiceErrorClass
-from app.voice.intents import Intent, apply_to_narration, resolve_intent, speech_from
+from app.voice.intents import (
+    Intent,
+    apply_to_narration,
+    resolve_intent,
+    speech_budget,
+    speech_from,
+)
 from app.voice.providers import cloud_tool_name
 from app.voice.realtime import RealtimeState
 from app.voice.realtime_sessions.sideband import SB_NARRATION_CURSOR, SB_PLAN_CHANGED
@@ -241,7 +247,15 @@ def narration_control(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, 
     # item two onward. Paused means silence; an explanation reads only that item.
     speech = ""
     if bridged.state.state == State.READING:
-        speech = speech_from(plan, bridged.state.cursor)
+        # Narration is for listening (owner UX result 2026-09-04): the level's budget bounds
+        # what is said now, at a sentence boundary; the cursor keeps the position and
+        # "devam et" reads the next chunk. Only "hepsini oku" lifts the budget.
+        speech = speech_from(
+            plan,
+            bridged.state.cursor,
+            whole_section=ctx.context.get("presentation") != "full",
+            max_chars=speech_budget(ctx.context.get("presentation")),
+        )
     elif bridged.state.state == State.EXPLAINING:
         speech = _item_speech(plan, bridged.state.cursor)
     _ledger_note(
@@ -340,9 +354,10 @@ def activity_explain(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, A
     madde / teknik anlat move through the same durable cursor (M16 spec §3.1)."""
     question = _require_str(arguments, "question", max_len=500)
     level = arguments.get("level")
-    if level is not None and level not in ("executive", "detailed", "technical"):
+    if level is not None and level not in ("executive", "detailed", "technical", "full"):
         raise VoiceError(
-            VoiceErrorClass.VALIDATION_ERROR, "level must be executive, detailed or technical"
+            VoiceErrorClass.VALIDATION_ERROR,
+            "level must be executive, detailed, technical or full",
         )
     if ctx.db is None:
         raise VoiceError(
@@ -351,6 +366,24 @@ def activity_explain(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, A
         )
     from app.explain.service import explain_to_briefing
     from app.voice.realtime_sessions.models import RealtimeSessionRow
+
+    # "Teknik anlat" / "detaylandır" / "özetle" / "hepsini oku" with a briefing already
+    # attached are moves through that briefing, not a new one: the provider may route them
+    # here, so they are honoured the same way narration.control does, and the durable
+    # record carries the normalised intent rather than the wording.
+    resolved = resolve_intent(question, session_state=ctx.fsm_state)
+    if ctx.context.get("narration_session_id") and resolved.intent in (
+        Intent.DETAIL,
+        Intent.TECHNICAL,
+        Intent.SUMMARIZE,
+        Intent.FULL,
+    ):
+        moved = narration_control(ctx, {"utterance": question})
+        return {
+            **moved,
+            "level": _level_for(ctx.context.get("presentation")),
+            "routed": "narration",
+        }
 
     record = explain_to_briefing(
         ctx.db, question, level=level, now=ctx.now, device_id=ctx.device_id
@@ -364,6 +397,7 @@ def activity_explain(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, A
         "executive": "summary",
         "detailed": "detail",
         "technical": "technical",
+        "full": "full",
     }[record.level]
     ctx.context["last_intent"] = "explain"
     ctx.context["briefing"] = {
@@ -384,7 +418,16 @@ def activity_explain(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, A
         },
     )
     _explained_note(ctx, record)
-    return record.as_dict()
+    return {**record.as_dict(), "intent": resolved.to_dict()}
+
+
+def _level_for(presentation: Any) -> str:
+    return {
+        "summary": "executive",
+        "detail": "detailed",
+        "technical": "technical",
+        "full": "full",
+    }.get(str(presentation or "summary"), "executive")
 
 
 def _explained_note(ctx: ToolContext, record: Any) -> None:
@@ -476,7 +519,10 @@ def default_registry() -> ToolRegistry:
                 "type": "object",
                 "properties": {
                     "question": {"type": "string", "maxLength": 500},
-                    "level": {"type": "string", "enum": ["executive", "detailed", "technical"]},
+                    "level": {
+                        "type": "string",
+                        "enum": ["executive", "detailed", "technical", "full"],
+                    },
                 },
                 "required": ["question"],
                 "additionalProperties": False,

@@ -76,10 +76,11 @@ $tr = @{
 }
 $phrases = @(
     ("Son yapt" + $tr.i_dotless + "klar" + $tr.i_dotless + "n" + $tr.i_dotless + " anlat."),
-    ("Ara" + $tr.s_ced + "t" + $tr.i_dotless + "rmay" + $tr.i_dotless + " detayland" + $tr.i_dotless + "r."),
-    "Teknik anlat.",
+    "(listen: a concise two-to-four sentence briefing)",
+    "(while it speaks: let another, distant voice talk in the room - it must keep speaking)",
     "Dur.",
-    "Devam et."
+    "Devam et.",
+    "Teknik anlat."
 )
 
 $evidence = [ordered]@{
@@ -308,16 +309,17 @@ try {
     }
 
     Write-Host ""
-    Write-Host "Open $voiceUrl, sign in, connect (Baglan), then say, waiting for each answer:" -ForegroundColor Cyan
+    Write-Host "Open $voiceUrl, sign in, connect (Baglan). Under two minutes, in this order:" -ForegroundColor Cyan
     $n = 0
     foreach ($phrase in $phrases) {
         $n++
         $hint = switch ($n) {
-            1 { "  (it narrates the real research qualification from the ledger)" }
-            2 { "  (the actual findings)" }
-            3 { "  (versions, counts, ids)" }
+            1 { "  (the real research qualification, from the ledger)" }
+            2 { "" }
+            3 { "" }
             4 { "  (say it WHILE it is speaking; speech must stop at once)" }
             5 { "  (it resumes at the sentence it did not finish)" }
+            6 { "  (a concise technical briefing: versions, evidence, checks)" }
         }
         Write-Host ("  {0}. {1}{2}" -f $n, $phrase, $hint)
     }
@@ -364,10 +366,22 @@ try {
         $(if ($null -ne $explain) { "level=$($explain.level) facts=$($explain.facts) uncertainties=$($explain.uncertainties) evidence=$($explain.evidence_count)" } else { "no successful activity.explain call" })
     Add-Check "briefing derived from the real research run" ($null -ne $explain -and [string]$explain.speech_head -like "Efendim, son ara*") `
         $(if ($null -ne $explain) { "'" + $explain.speech_head + "'" } else { "-" })
-    $detail = @($calls | Where-Object { $_.name -eq "narration.control" -and $_.intent -eq "detail" -and $_.status -eq "succeeded" }) | Select-Object -First 1
-    Add-Check "'detaylandir' read the findings" ($null -ne $detail -and [int]$detail.speech_chars -gt 0) $(if ($null -ne $detail) { "action=$($detail.action) speech=$($detail.speech_chars) chars" } else { "no narration.control with intent=detail" })
-    $technical = @($calls | Where-Object { $_.name -eq "narration.control" -and $_.intent -eq "technical" -and $_.status -eq "succeeded" }) | Select-Object -First 1
-    Add-Check "'teknik anlat' read the technical evidence" ($null -ne $technical -and [int]$technical.speech_chars -gt 0) $(if ($null -ne $technical) { "action=$($technical.action) speech=$($technical.speech_chars) chars" } else { "no narration.control with intent=technical" })
+    Add-Check "executive briefing is concise (listening budget)" ($null -ne $explain -and [int]$explain.speech_chars -le 420) `
+        $(if ($null -ne $explain) { "$($explain.speech_chars) chars (budget 420)" } else { "-" })
+    # "teknik anlat" is honoured whichever tool the provider routed it to; the durable
+    # record carries the normalised intent, never the wording
+    $technical = @($calls | Where-Object { $_.intent -eq "technical" -and $_.status -eq "succeeded" }) | Select-Object -Last 1
+    Add-Check "'teknik anlat' recorded as intent=technical and read concisely" ($null -ne $technical -and [int]$technical.speech_chars -gt 0 -and [int]$technical.speech_chars -le 700) `
+        $(if ($null -ne $technical) { "via $($technical.name) action=$($technical.action) speech=$($technical.speech_chars) chars" } else { "no call with intent=technical" })
+
+    $noise = Get-OptionalProperty -InputObject $activity -Name "noise"
+    $counter = { param($Name) if ($null -ne $noise) { [int](Get-OptionalProperty -InputObject $noise -Name $Name) } else { -1 } }
+    $reported = ($null -ne $noise -and [bool](Get-OptionalProperty -InputObject $noise -Name "reported"))
+    Write-Host ("  interruption policy: speech_detected={0} potential_barge_in={1} accepted={2} rejected_background={3} explicit_stop={4} false_interruption={5}" -f
+        (& $counter "speech_detected"), (& $counter "potential_barge_in"), (& $counter "accepted_owner_interruption"),
+        (& $counter "rejected_background_speech"), (& $counter "explicit_stop_command"), (& $counter "false_interruption"))
+    Add-Check "no false interruption while it spoke" ($reported -and (& $counter "false_interruption") -eq 0) `
+        $(if ($reported) { "false_interruption=$(& $counter 'false_interruption') rejected_background_speech=$(& $counter 'rejected_background_speech')" } else { "the client reported no interruption counters" })
 
     $spokenIndex = -1; $bargeIndex = -1
     for ($i = 0; $i -lt $events.Count; $i++) {

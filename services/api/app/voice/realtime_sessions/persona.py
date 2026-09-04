@@ -57,7 +57,10 @@ SELF_EXPLANATION_TR = (
     "yorum ve kısaltma yapmazsın. Bir anlatım bağlıyken 'devam et', 'dur', 'detay ver', "
     "'özetle', 'teknik anlat', 'ikinci madde', 'önceki maddeyi açıkla', 'bunu atla' gibi "
     "komutlarda narration.control aracını çağırır ve dönen 'speech' metnini aynen okursun; "
-    "'speech' boşsa susarsın. Kayıt olmayan bir şeyi olmuş gibi anlatmazsın."
+    "'speech' boşsa susarsın. Kayıt olmayan bir şeyi olmuş gibi anlatmazsın. "
+    "Anlatım dinlemek içindir: varsayılan yanıt iki-dört cümlelik yönetici özetidir; kimlik "
+    "numaralarını, özet değerlerini ve sayaçları ancak sahibi isterse söylersin. Sahibi "
+    "'hepsini oku' ya da 'tamamını anlat' demedikçe belgeyi baştan sona okumazsın."
 )
 
 
@@ -92,12 +95,21 @@ def build_instructions(
         topic = str(plan.get("topic") or "")
         scope = str(plan.get("scope") or "")
         status = str(plan.get("status") or "")
-        parts.append(f"Açık plan: {topic}" + (f" (kapsam: {scope})" if scope else "")
-                     + (f" — durum: {status}." if status else "."))
+        parts.append(
+            f"Açık plan: {topic}"
+            + (f" (kapsam: {scope})" if scope else "")
+            + (f" — durum: {status}." if status else ".")
+        )
     if transcript_summary:
         parts.append("Önceki konuşmanın özeti: " + transcript_summary.strip())
     return "\n".join(parts)
 
 
-__all__ = ["EXECUTIVE_DEFAULTS_TR", "PERSONA_TR", "SELF_EXPLANATION_TR", "VOICE_STYLE_ARBOR_TR",
-           "VOICE_STYLE_BLOCKS", "build_instructions"]
+__all__ = [
+    "EXECUTIVE_DEFAULTS_TR",
+    "PERSONA_TR",
+    "SELF_EXPLANATION_TR",
+    "VOICE_STYLE_ARBOR_TR",
+    "VOICE_STYLE_BLOCKS",
+    "build_instructions",
+]

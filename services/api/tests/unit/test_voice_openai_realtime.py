@@ -232,7 +232,7 @@ def test_session_config_audio_transcription_and_semantic_vad() -> None:
     assert audio_in["transcription"] == {"model": "gpt-4o-transcribe", "language": "tr"}
     assert audio_in["turn_detection"] == {
         "type": "semantic_vad", "eagerness": "low",
-        "create_response": True, "interrupt_response": True,
+        "create_response": True, "interrupt_response": False,
     }
     assert session["audio"]["output"]["format"] == {"type": "audio/pcm", "rate": 24000}
     assert session["audio"]["output"]["voice"] == "marin"
@@ -794,7 +794,7 @@ def test_layers_are_cumulative_each_adding_exactly_its_option() -> None:
         session_id="s", ttl_s=60, transport=TRANSPORT_WEBRTC, session_config=CONFIG,
         layers=SESSION_LAYERS).json_body
     turn = full["session"]["audio"]["input"]["turn_detection"]
-    assert turn["type"] == "semantic_vad" and turn["interrupt_response"] is True
+    assert turn["type"] == "semantic_vad" and turn["interrupt_response"] is False
 
 
 def test_unknown_layer_is_refused_before_any_io() -> None:

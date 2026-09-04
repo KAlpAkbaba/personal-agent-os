@@ -281,7 +281,9 @@ class CreateEventRequest(BaseModel):
 
 #: Bumped whenever the ledger's tables, vocabulary or routes change in a way an owner
 #: script must know about; the owner commands compare it with the deployed Cloud Core.
-LEDGER_VERSION = 1
+#: 2 (2026-09-04): narration budgets, owner-relevance ranking, normalised level intents,
+#: client-owned interruption. The owner command releases the Cloud Core once for it.
+LEDGER_VERSION = 2
 
 
 @router.get("/policy")

@@ -19,6 +19,7 @@ from app.broker.models import AuditEvent
 from app.broker.runtime import BrokerRuntime
 from app.config import Settings
 from app.ledger.models import ActivityEventRow, PendingBriefingRow
+from app.ledger.routes import LEDGER_VERSION
 from app.main import create_app
 from app.research.models import ResearchReportRow, ResearchRunRow
 from app.selfhealing.models import Incident, Release
@@ -86,7 +87,7 @@ def test_get_ledger_policy(client: TestClient) -> None:
     response = client.get("/v1/ledger/policy")
     assert response.status_code == 200
     body = response.json()
-    assert body["ledger_version"] == 1
+    assert body["ledger_version"] == LEDGER_VERSION
     assert "research.completed" in body["event_types"]
     assert "evolution.idea_created" in body["evolution_event_types"]
     assert "research" in body["subsystems"]

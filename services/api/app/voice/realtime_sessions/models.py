@@ -29,7 +29,10 @@ REALTIME_STATE_ACTIVE = "active"  # the client has reported events / tool calls
 REALTIME_STATE_CLOSED = "closed"
 REALTIME_STATE_EXPIRED = "expired"
 REALTIME_STATES = (
-    REALTIME_STATE_CREATED, REALTIME_STATE_ACTIVE, REALTIME_STATE_CLOSED, REALTIME_STATE_EXPIRED,
+    REALTIME_STATE_CREATED,
+    REALTIME_STATE_ACTIVE,
+    REALTIME_STATE_CLOSED,
+    REALTIME_STATE_EXPIRED,
 )
 
 TOOL_STATUS_RUNNING = "running"
@@ -85,9 +88,7 @@ class RealtimeToolCall(Base):
     )
     call_id: Mapped[str] = mapped_column(String(128), nullable=False)
     name: Mapped[str] = mapped_column(String(128), nullable=False)
-    arguments_json: Mapped[dict[str, Any]] = mapped_column(
-        JSONColumn, nullable=False, default=dict
-    )
+    arguments_json: Mapped[dict[str, Any]] = mapped_column(JSONColumn, nullable=False, default=dict)
     status: Mapped[str] = mapped_column(
         String(16), nullable=False, default=TOOL_STATUS_RUNNING, index=True
     )

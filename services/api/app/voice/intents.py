@@ -53,6 +53,7 @@ class Intent(StrEnum):
     TECHNICAL = "technical"  # teknik anlat / teknik olarak ne değişti
     EXPLAIN_PREVIOUS = "explain_previous"  # önceki maddeyi açıkla
     EXPLAIN = "explain"  # son yaptıklarını anlat / ne başarısız oldu / kanıtı ne ...
+    FULL = "full"  # hepsini oku / tamamını anlat / bütün detayları oku
     NONE = "none"
 
 
@@ -65,6 +66,7 @@ SCOPE_CONVERSATION = "conversation"
 PRESENTATION_SUMMARY = "summary"
 PRESENTATION_DETAIL = "detail"
 PRESENTATION_TECHNICAL = "technical"
+PRESENTATION_FULL = "full"
 
 #: Section titles of an activity briefing (app.explain) that the presentation levels map
 #: onto. A briefing is an artifact, so "özetle" / "detay ver" / "teknik anlat" are cursor
@@ -218,6 +220,23 @@ def _has_exact(tokens: tuple[str, ...], *words: str) -> str | None:
     return None
 
 
+#: "Read it all": the only phrasings that lift the narration budget (spec: full/read-all).
+_FULL_READ_PHRASES: tuple[tuple[str, ...], ...] = (
+    ("hepsini", "oku"),
+    ("hepsini", "anlat"),
+    ("tamamını", "oku"),
+    ("tamamını", "anlat"),
+    ("bütün", "detay"),
+    ("tüm", "detay"),
+    ("tümünü", "oku"),
+    ("tümünü", "anlat"),
+)
+
+
+def _full_read(tokens: tuple[str, ...]) -> bool:
+    return any(all(_has(tokens, stem) for stem in stems) for stems in _FULL_READ_PHRASES)
+
+
 def _explain_kind(tokens: tuple[str, ...]) -> str | None:
     """The kind of question about the system's own activity, or None."""
     for stems, kind in _EXPLAIN_PATTERNS:
@@ -285,8 +304,10 @@ def resolve_intent(
     #     because "araştırmayı detaylandır" with no briefing open is a request for one,
     #     while the same words with a briefing attached are a jump into its detail section.
     explain_kind = _explain_kind(tokens)
-    if explain_kind is not None and not (
-        narration is not None and explain_kind in ("research_detail", "technical")
+    if (
+        explain_kind is not None
+        and not (narration is not None and explain_kind in ("research_detail", "technical"))
+        and not _full_read(tokens)
     ):
         return ResolvedIntent(
             Intent.EXPLAIN,
@@ -302,18 +323,28 @@ def resolve_intent(
     if tok := _has(tokens, "hızlı", "hızlan"):
         return ResolvedIntent(Intent.FASTER, scope=SCOPE_NARRATION, matched=tok, **base)
 
-    # 3. presentation level
+    # 3. presentation level. Surface wording varies ("detaylandır", "ayrıntı ver", "daha
+    #    detaylı anlat"; "teknik detaya gir", "kod seviyesinde anlat"); the durable record
+    #    carries the normalised intent, never the wording. The full-read phrases outrank the
+    #    level words, and "teknik" outranks "detay" so "teknik detaya gir" is technical.
+    if _full_read(tokens):
+        return ResolvedIntent(
+            Intent.FULL, scope=_scope_for(Intent.FULL, narration), matched="full", **base
+        )
     if tok := _has(tokens, "özet", "kısaca", "kısa"):
         return ResolvedIntent(
             Intent.SUMMARIZE, scope=_scope_for(Intent.SUMMARIZE, narration), matched=tok, **base
         )
-    if tok := _has(tokens, "detay", "ayrıntı"):
+    if (tok := _has(tokens, "teknik")) or (_has(tokens, "kod") and _has(tokens, "seviye")):
+        return ResolvedIntent(
+            Intent.TECHNICAL,
+            scope=_scope_for(Intent.TECHNICAL, narration),
+            matched=tok or "kod seviyesinde",
+            **base,
+        )
+    if tok := _has(tokens, "detay", "ayrıntı", "derinle"):
         return ResolvedIntent(
             Intent.DETAIL, scope=_scope_for(Intent.DETAIL, narration), matched=tok, **base
-        )
-    if tok := _has(tokens, "teknik"):
-        return ResolvedIntent(
-            Intent.TECHNICAL, scope=_scope_for(Intent.TECHNICAL, narration), matched=tok, **base
         )
 
     # 4. skip — "burayı atla", "bunu atla", "bunu geç", "burayı geç"
@@ -440,6 +471,23 @@ def level_section_cursor(plan: NarrationPlan, level: str) -> Cursor | None:
     return None
 
 
+#: Spoken budgets per presentation level (M16 owner UX result 2026-09-04): narration is for
+#: listening, not document reading. Roughly 10-20 s for an executive answer, 30-60 s for the
+#: detail, a concise technical briefing; only "hepsini oku" lifts the budget. Chunks end at
+#: sentence boundaries and the cursor keeps the position, so "devam et" reads the next chunk.
+SPEECH_BUDGET_CHARS: dict[str, int] = {
+    PRESENTATION_SUMMARY: 420,
+    PRESENTATION_DETAIL: 900,
+    PRESENTATION_TECHNICAL: 700,
+    PRESENTATION_FULL: 6000,
+}
+
+
+def speech_budget(level: str | None) -> int:
+    default = SPEECH_BUDGET_CHARS[PRESENTATION_SUMMARY]
+    return SPEECH_BUDGET_CHARS.get(level or PRESENTATION_SUMMARY, default)
+
+
 def speech_from(
     plan: NarrationPlan, cursor: Cursor | None, *, whole_section: bool = True, max_chars: int = 6000
 ) -> str:
@@ -461,8 +509,8 @@ def speech_from(
         text = ch.text.strip()
         if not text:
             continue
-        if total + len(text) > max_chars:
-            break
+        if parts and total + len(text) > max_chars:
+            break  # the budget ends at a sentence boundary; the cursor reads on from here
         parts.append(text)
         total += len(text) + 1
     return " ".join(parts)
@@ -616,6 +664,16 @@ def apply_to_narration(
         delta = -SPEED_STEP if intent == Intent.SLOWER else SPEED_STEP
         res = _via_commands(state, ParsedCommand(Command.HIZ, speed=state.speed + delta), plan)
         return replace(res, speed=res.state.speed)
+    if intent == Intent.FULL:
+        # Read everything from the top: the caller lifts the budget (presentation == full);
+        # the cursor starts at the first content chunk.
+        start = plan.chunks[0].cursor if plan.chunks else None
+        new_state = replace(
+            state, state=State.READING, cursor=start, paragraph_anchor=start, saved_cursor=None
+        )
+        return NarrationBridgeResult(
+            state=new_state, action="read_all", presentation=PRESENTATION_FULL, cursor=start
+        )
     if intent in (Intent.SUMMARIZE, Intent.DETAIL, Intent.TECHNICAL):
         level = {
             Intent.SUMMARIZE: PRESENTATION_SUMMARY,
@@ -658,8 +716,10 @@ __all__ = [
     "FILLERS",
     "LEVEL_SECTION_TITLES",
     "PRESENTATION_DETAIL",
+    "PRESENTATION_FULL",
     "PRESENTATION_SUMMARY",
     "PRESENTATION_TECHNICAL",
+    "SPEECH_BUDGET_CHARS",
     "SCOPE_CONVERSATION",
     "SCOPE_NARRATION",
     "SPEED_STEP",
@@ -674,6 +734,7 @@ __all__ = [
     "normalize_transcript",
     "ordered_paragraph_ids",
     "resolve_intent",
+    "speech_budget",
     "speech_from",
     "turkish_casefold",
 ]

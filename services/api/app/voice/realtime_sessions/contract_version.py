@@ -9,7 +9,12 @@ Bump on every change to the accepted fields of a request body (see contract.py).
 CONTRACT_VERSION = 2
 #: Fields a version-1 server accepts on create; a client that gets 404 from the
 #: contract endpoint is talking to v1.
-LEGACY_V1_CREATE_FIELDS = ("client_kind", "transport", "language", "narration_session_id",
-                           "session_ttl_s")
+LEGACY_V1_CREATE_FIELDS = (
+    "client_kind",
+    "transport",
+    "language",
+    "narration_session_id",
+    "session_ttl_s",
+)
 
 __all__ = ["CONTRACT_VERSION", "LEGACY_V1_CREATE_FIELDS"]

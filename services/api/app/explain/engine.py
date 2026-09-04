@@ -21,9 +21,7 @@ from app.explain.classify import (
     QUERY_FAILURES,
     QUERY_MODULE_PROBLEM,
     QUERY_PROBLEMS_NOW,
-    QUERY_RESEARCH_DETAIL,
     QUERY_SUBSYSTEM_STATUS,
-    QUERY_TECHNICAL,
     QUERY_TODAY,
     QUERY_WHY_FAILED,
     ExplainQuery,
@@ -46,6 +44,56 @@ LEVEL_SECTIONS = {
 }
 
 NO_EVIDENCE_TR = "Bu konuda kayıt bulamadım."
+#: How many findings the detailed level narrates before pointing at the report.
+MAX_DETAILED_ITEMS = 5
+
+# ------------------------------------------------------------------ owner relevance
+
+RELEVANCE_TASK = "task_completion"
+RELEVANCE_CHANGE = "change"
+RELEVANCE_FAILURE = "failure"
+RELEVANCE_SECURITY = "security"
+RELEVANCE_EVOLUTION = "evolution"
+RELEVANCE_TELEMETRY = "telemetry"
+RELEVANCE_META = "meta"
+RELEVANCE_CLASSES = (
+    RELEVANCE_TASK,
+    RELEVANCE_CHANGE,
+    RELEVANCE_FAILURE,
+    RELEVANCE_SECURITY,
+    RELEVANCE_EVOLUTION,
+    RELEVANCE_TELEMETRY,
+    RELEVANCE_META,
+)
+#: Classes an executive briefing is made of. Narration and voice-session bookkeeping
+#: (``meta``) and routine telemetry are excluded unless the owner asks about that
+#: subsystem: otherwise "Son yaptıklarını anlat" would answer "az önce sana son
+#: yaptıklarımı anlattım" - the explanation eating its own tail (owner UX result,
+#: 2026-09-04).
+MEANINGFUL_CLASSES = frozenset(
+    {RELEVANCE_TASK, RELEVANCE_CHANGE, RELEVANCE_FAILURE, RELEVANCE_SECURITY, RELEVANCE_EVOLUTION}
+)
+
+
+def owner_relevance(ev: EventView) -> str:
+    """Which kind of thing this event is to the owner, from its type and subsystem."""
+    t = ev.event_type
+    if ev.subsystem in ("voice", "ledger") or t.startswith(("briefing.", "voice.", "ledger.")):
+        return RELEVANCE_META
+    if ev.severity == "critical" or ev.subsystem == "security" or t.startswith("security."):
+        return RELEVANCE_SECURITY
+    if ev.status == "failed" or t.endswith(".failed") or t.startswith("incident."):
+        return RELEVANCE_FAILURE
+    if t.startswith("evolution.") or ev.subsystem == "evolution":
+        return RELEVANCE_EVOLUTION
+    if t.startswith("deployment.") or ev.subsystem == "deployment":
+        return RELEVANCE_CHANGE
+    if t in ("research.completed", "research.qualified") or t.startswith("memory."):
+        return RELEVANCE_TASK
+    if t in ("research.quality_gate", "research.planned") or t.startswith("browser."):
+        return RELEVANCE_TELEMETRY
+    return RELEVANCE_TELEMETRY
+
 
 #: Events that annotate another event rather than being an activity of their own. The
 #: owner's qualification verdict is ABOUT the research run; "son ne yaptın" is answered
@@ -311,64 +359,69 @@ def _qualified_for(events: list[EventView], job_id: str | None) -> EventView | N
 # ------------------------------------------------------------------ research
 
 
-def _research_executive(ev: EventView, qualified: EventView | None) -> list[Statement]:
-    """The owner's target briefing, each sentence tied to the evidence that supports it."""
+def _needs_owner_action(recent: list[EventView]) -> tuple[bool, EventView | None]:
+    """Whether anything in the window still needs the owner: an open failure or a
+    security event with nothing completed after it on the same subsystem."""
+    for ev in recent:
+        if owner_relevance(ev) in (RELEVANCE_FAILURE, RELEVANCE_SECURITY):
+            later_ok = any(
+                other.subsystem == ev.subsystem
+                and other.status == "completed"
+                and other.occurred_at > ev.occurred_at
+                for other in recent
+            )
+            if not later_ok:
+                return True, ev
+    return False, None
+
+
+def _research_executive(
+    ev: EventView, qualified: EventView | None, recent: list[EventView] | None = None
+) -> list[Statement]:
+    """The owner briefing: two to four sentences - the outcome, why it matters, and
+    whether anything needs the owner - each tied to the evidence that supports it.
+    Counts and identifiers belong to the detailed and technical levels."""
     d = ev.detail or {}
     refs = (ev.ref, *ev.evidence_refs)
     out: list[Statement] = []
+    findings = _n(d.get("findings"))
+    sources = _n(d.get("sources"))
+    rejected = _n(d.get("rejected"))
     if qualified is not None:
         out.append(
             Statement(
-                "Efendim, son araştırma motoru qualification'ı başarıyla tamamlandı.",
+                "Efendim, Research Engine gerçek ortam doğrulamasını başarıyla geçti.",
                 LABEL_FACT,
                 (qualified.ref, *qualified.evidence_refs),
             )
         )
     else:
         out.append(Statement("Efendim, son araştırma görevi tamamlandı.", LABEL_FACT, refs))
-    findings = _n(d.get("findings"))
-    sources = _n(d.get("sources"))
-    publishers = _n(d.get("distinct_publishers"))
     if findings or sources:
-        if publishers and publishers == sources:
-            out.append(
-                Statement(
-                    f"{cardinal(findings).capitalize()} sonuç ve {cardinal(sources)} farklı kaynak "
-                    "ürettim.",
-                    LABEL_FACT,
-                    refs,
-                )
-            )
+        produced = (
+            f"{cardinal(sources).capitalize()} farklı kaynaktan {cardinal(findings)} sonuç üretti"
+            if sources
+            else f"{cardinal(findings).capitalize()} sonuç üretti"
+        )
+        if rejected:
+            produced += f" ve {cardinal(rejected)} uygun olmayan sayfayı eledi."
         else:
-            out.append(
-                Statement(
-                    f"{cardinal(findings).capitalize()} sonuç ve {cardinal(sources)} kaynak "
-                    "ürettim.",
-                    LABEL_FACT,
-                    refs,
-                )
-            )
-    by_reason = d.get("rejected_by_reason") or {}
-    if isinstance(by_reason, dict) and by_reason:
-        parts = [
-            f"{cardinal(_n(count))} {_REJECTION_TR_ACC.get(reason, reason)}"
-            for reason, count in by_reason.items()
-            if _n(count) > 0
-        ]
-        if parts:
-            out.append(Statement(f"{_tr_list(parts).capitalize()} eledim.", LABEL_FACT, refs))
-    if qualified is not None:
-        q = qualified.detail or {}
-        if q.get("pagentos_chrome_after") == 0:
-            out.append(Statement("Tarayıcı temiz şekilde kapandı.", LABEL_FACT, (qualified.ref,)))
+            produced += "."
+        out.append(Statement(produced, LABEL_FACT, refs))
+    needs_action, culprit = _needs_owner_action(recent or [])
+    if needs_action and culprit is not None:
         out.append(
             Statement(
-                "Research Engine artık gerçek ortamda doğrulanmış durumda.",
+                f"Müdahalenizi gerektiren bir konu var: {culprit.factual_summary}",
                 LABEL_FACT,
-                (qualified.ref,),
+                (culprit.ref,),
             )
         )
-    out.append(Statement("Bilginize.", LABEL_FACT, ()))
+    else:
+        closing = "Şu anda müdahalenizi gerektiren bir sorun yok."
+        if qualified is not None and (qualified.detail or {}).get("pagentos_chrome_after") == 0:
+            closing = "Tarayıcı temiz kapandı; şu anda müdahalenizi gerektiren bir sorun yok."
+        out.append(Statement(closing, LABEL_INFERENCE, tuple(e.ref for e in (recent or [])[:5])))
     return out
 
 
@@ -389,6 +442,8 @@ def _research_detailed(ev: EventView, report: dict[str, Any] | None) -> list[Bri
             if names:
                 statements.append(Statement(f"Kaynak: {_tr_list(names)}.", LABEL_FACT, refs))
             items.append(BriefingItem(str(f.get("title") or "Bulgu"), tuple(statements)))
+            if len(items) >= MAX_DETAILED_ITEMS:
+                break  # the rest stays in the report artifact; "hepsini oku" reads it
     if not items:
         items.append(
             BriefingItem(
@@ -418,97 +473,107 @@ def _research_detailed(ev: EventView, report: dict[str, Any] | None) -> list[Bri
 def _research_technical(
     ev: EventView, qualified: EventView | None, report: dict[str, Any] | None
 ) -> list[BriefingItem]:
+    """A concise technical briefing: versions, evidence, failures, architecture - not a
+    recital of every identifier and count. Identifiers stay in the report artifact and the
+    evidence references; a failure is the one thing that earns its details here."""
     d = ev.detail or {}
     refs = (ev.ref, *ev.evidence_refs)
+    q = (qualified.detail or {}) if qualified is not None else {}
+    qrefs = (qualified.ref, *qualified.evidence_refs) if qualified is not None else refs
     items: list[BriefingItem] = []
-    run_facts = [
-        f"Görev kimliği {_short(ev.research_job_id)}." if ev.research_job_id else "",
-        f"Keşfedilen aday {_n(d.get('discovered'))}, getirilen sayfa {_n(d.get('fetched'))}, "
-        f"kanıt {_n(d.get('evidence'))}, elenen {_n(d.get('rejected'))}.",
-        f"Sentez sağlayıcısı {_plain(d.get('synthesis_provider'))}."
-        if d.get("synthesis_provider")
-        else "",
-        f"Araştırma politikası sürümü {ev.version}." if ev.version else "",
-    ]
-    items.append(
-        BriefingItem("Çalışma", tuple(Statement(t, LABEL_FACT, refs) for t in run_facts if t))
-    )
-    if qualified is not None:
-        q = qualified.detail or {}
-        facts = [
-            f"Kurulu tarayıcı çalışanı sürümü {_plain(q.get('installed_release'))}; dağıtım "
-            f"{'yapılmadı' if not q.get('deployed') else 'yapıldı'}."
-            if q.get("installed_release")
-            else "",
-            f"Cloud Core araştırma politikası {_plain(q.get('cloud_policy_version'))}."
-            if q.get("cloud_policy_version")
-            else "",
-            f"Kaynak deposu commit {_plain(q.get('git_commit'))}." if q.get("git_commit") else "",
-            (
-                f"Kanıt dosyası {_plain(q.get('evidence_file'))} "
-                f"({_plain(q.get('digest'), max_len=80)})."
-            )
-            if q.get("evidence_file")
-            else "",
-            "PagentOS Chrome süreçleri: öncesi "
-            f"{_n(q.get('pagentos_chrome_before'))}, sonrası "
-            f"{_n(q.get('pagentos_chrome_after'))}."
-            if "pagentos_chrome_after" in q
-            else "",
-        ]
+
+    versions: list[str] = []
+    policy = ev.version or q.get("cloud_policy_version")
+    if policy:
+        versions.append(f"Research policy v{_plain(policy)} çalıştı")
+    if q.get("installed_release"):
+        versions.append(
+            f"browser worker {_plain(q.get('installed_release'))} "
+            + ("değişmedi, deployment gerekmedi" if not q.get("deployed") else "yeniden dağıtıldı")
+        )
+    if d.get("synthesis_provider"):
+        versions.append(f"sentez sağlayıcısı {_plain(d.get('synthesis_provider'))}")
+    if versions:
         items.append(
-            BriefingItem(
-                "Qualification",
-                tuple(
-                    Statement(t, LABEL_FACT, (qualified.ref, *qualified.evidence_refs))
-                    for t in facts
-                    if t
-                ),
-            )
+            BriefingItem("Sürümler", (Statement("; ".join(versions) + ".", LABEL_FACT, qrefs),))
         )
-    if report:
-        cmds = sorted(
-            {
-                str(s.get("command_id"))
-                for s in report.get("sources", [])
-                if isinstance(s, dict) and s.get("command_id")
-            }
-        )
-        if cmds:
-            items.append(
-                BriefingItem(
-                    "Cihaz komutları",
-                    (
-                        Statement(
-                            f"{len(cmds)} kaynağın her biri bir cihaz komutuyla getirildi; "
-                            f"ilk komut {_short(cmds[0])}.",
-                            LABEL_FACT,
-                            refs,
-                        ),
-                    ),
+
+    evidence_bits = [
+        f"{_n(d.get('discovered'))} aday keşfedildi, {_n(d.get('fetched'))} sayfa getirildi, "
+        f"{_n(d.get('evidence'))} kanıt kabul edildi, {_n(d.get('rejected'))} sayfa elendi."
+    ]
+    if q:
+        checks = ["kanıt kontrolleri geçti"]
+        if "pagentos_chrome_after" in q:
+            checks.append(
+                "tarayıcı temizliği geçti"
+                if _n(q.get("pagentos_chrome_after")) == 0
+                else (
+                    "tarayıcı temizliği başarısız "
+                    f"({_n(q.get('pagentos_chrome_after'))} süreç kaldı)"
                 )
             )
-    if ev.trace_id:
+        evidence_bits.append(_tr_list(checks).capitalize() + ".")
+    items.append(
+        BriefingItem("Kanıt", tuple(Statement(t, LABEL_FACT, refs) for t in evidence_bits))
+    )
+
+    error_class = d.get("error_class") or (ev.result if ev.status == "failed" else None)
+    if error_class:
         items.append(
             BriefingItem(
-                "İzleme", (Statement(f"İz kimliği {_short(ev.trace_id)}.", LABEL_FACT, refs),)
+                "Hata",
+                (Statement(f"Hata sınıfı {_plain(error_class)}.", LABEL_FACT, refs),),
             )
         )
+
+    items.append(
+        BriefingItem(
+            "Mimari",
+            (
+                Statement(
+                    "Keşif DuckDuckGo ile, sayfalar cihazdaki Chrome ile getirildi; kalite "
+                    "kapısı sentezden önce çalıştı ve rapor bir artefakt olarak saklandı.",
+                    LABEL_INFERENCE,
+                    refs,
+                ),
+            ),
+        )
+    )
     return items
 
 
 # ------------------------------------------------------------------ generic
 
 
-def _generic_executive(ev: EventView) -> list[Statement]:
-    return [
+def _generic_executive(ev: EventView, recent: list[EventView] | None = None) -> list[Statement]:
+    """Two or three sentences for any other latest activity: what it was, and whether the
+    owner is needed - the same closing rule as the research briefing."""
+    out = [
         Statement(
             f"Efendim, en son {_subsystem_tr(ev.subsystem)} tarafında: {ev.factual_summary}",
             LABEL_FACT,
             (ev.ref, *ev.evidence_refs),
-        ),
-        Statement("Bilginize.", LABEL_FACT, ()),
+        )
     ]
+    needs_action, culprit = _needs_owner_action(recent or [])
+    if needs_action and culprit is not None:
+        out.append(
+            Statement(
+                f"Müdahalenizi gerektiren bir konu var: {culprit.factual_summary}",
+                LABEL_FACT,
+                (culprit.ref,),
+            )
+        )
+    else:
+        out.append(
+            Statement(
+                "Şu anda müdahalenizi gerektiren bir sorun yok.",
+                LABEL_INFERENCE,
+                tuple(e.ref for e in (recent or [])[:5]),
+            )
+        )
+    return out
 
 
 def _event_item(ev: EventView) -> BriefingItem:
@@ -665,8 +730,13 @@ def explain(
     else:
         # last_activity / today / subsystem_status / research_detail / technical / evidence
         activities = [e for e in recent if e.event_type not in _ANNOTATION_EVENT_TYPES]
-        finished = [e for e in activities if e.status in ("completed", "failed")]
-        latest = finished[0] if finished else (activities[0] if activities else None)
+        # Owner relevance, not chronology: narration and voice bookkeeping never lead an
+        # executive briefing unless the owner asked about that subsystem.
+        asked_meta = query.subsystem in ("voice", "ledger")
+        meaningful = [e for e in activities if owner_relevance(e) in MEANINGFUL_CLASSES]
+        pool = activities if asked_meta or not meaningful else meaningful
+        finished = [e for e in pool if e.status in ("completed", "failed")]
+        latest = finished[0] if finished else (pool[0] if pool else None)
         if latest is None:
             executive.append(Statement(NO_EVIDENCE_TR, LABEL_UNCERTAINTY, ()))
         elif latest.event_type == "research.completed":
@@ -674,7 +744,7 @@ def explain(
             report = (
                 source.research_report(latest.research_job_id) if latest.research_job_id else None
             )
-            executive.extend(_research_executive(latest, qualified))
+            executive.extend(_research_executive(latest, qualified, activities))
             detailed.extend(_research_detailed(latest, report))
             technical.extend(_research_technical(latest, qualified, report))
             add_refs((latest.ref,), latest.evidence_refs)
@@ -683,15 +753,12 @@ def explain(
             if report and report.get("artifact_id"):
                 add_refs(({"kind": "artifact", "ref": str(report["artifact_id"])},))
         else:
-            executive.extend(_generic_executive(latest))
+            executive.extend(_generic_executive(latest, activities))
             detailed.append(_event_item(latest))
             technical.append(_event_item(latest))
             add_refs((latest.ref,), latest.evidence_refs)
-        if query.kind in (QUERY_TODAY, QUERY_SUBSYSTEM_STATUS) or (
-            query.kind not in (QUERY_RESEARCH_DETAIL, QUERY_TECHNICAL, QUERY_EVIDENCE)
-            and len(finished) > 1
-        ):
-            window = _window_statement(recent, query)
+        if query.kind in (QUERY_TODAY, QUERY_SUBSYSTEM_STATUS):
+            window = _window_statement(pool, query)
             if window is not None:
                 executive.insert(
                     len(executive) - 1
@@ -699,8 +766,7 @@ def explain(
                     else len(executive),
                     window,
                 )
-        others = [e for e in finished[1:11]]
-        for e in others:
+        for e in finished[1:6]:
             detailed.append(_event_item(e))
             add_refs((e.ref,))
         if query.kind == QUERY_EVIDENCE and latest is not None:
@@ -728,6 +794,8 @@ def explain(
 __all__ = [
     "LABEL_FACT",
     "LABEL_INFERENCE",
+    "MEANINGFUL_CLASSES",
+    "RELEVANCE_CLASSES",
     "LABEL_UNCERTAINTY",
     "LEVEL_SECTIONS",
     "NO_EVIDENCE_TR",
@@ -742,6 +810,7 @@ __all__ = [
     "EvidenceSource",
     "Statement",
     "explain",
+    "owner_relevance",
     "render_markdown",
     "speech_for_level",
 ]

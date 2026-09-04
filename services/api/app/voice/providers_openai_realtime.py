@@ -450,11 +450,17 @@ class OpenAIRealtimeProvider:
                 "language": language_hint,
             }
         if "turn_detection" in layers:
+            # interrupt_response is OFF: the client owns interruption (M16, owner UX
+            # result 2026-09-04). With it on, the provider cancelled its own response the
+            # moment its VAD heard ANY speech - other people in the room included - before
+            # the client could decide whether the speech was the owner's. The client now
+            # confirms an interruption (explicit stop phrase, or stable near-field speech
+            # with a plausible transcript) and cancels explicitly; "dur" stays immediate.
             session["audio"].setdefault("input", {})["turn_detection"] = {
                 "type": "semantic_vad",
                 "eagerness": self._eagerness,
                 "create_response": True,
-                "interrupt_response": True,
+                "interrupt_response": False,
             }
         if "instructions" in layers and cfg.instructions:
             session["instructions"] = cfg.instructions

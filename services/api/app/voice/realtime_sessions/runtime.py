@@ -57,8 +57,7 @@ def default_providers(settings: Settings) -> dict[str, RealtimeProvider]:
         openai = OpenAIRealtimeProvider.from_settings(settings)
         providers[openai.name] = openai
     if simulator_allowed(settings):
-        sim = SimulatedRealtimeProvider(
-            credential_ttl_s=settings.voice_realtime_credential_ttl_s)
+        sim = SimulatedRealtimeProvider(credential_ttl_s=settings.voice_realtime_credential_ttl_s)
         providers[sim.name] = sim
     return providers
 
@@ -70,11 +69,13 @@ def inactive_candidates(settings: Settings) -> dict[str, str]:
     out: dict[str, str] = {}
     if not settings.voice_openai_api_key:
         out[OPENAI_REALTIME_PROVIDER_NAME] = (
-            "provider_auth_missing (owner action: set PAGENTOS_VOICE_OPENAI_API_KEY)")
+            "provider_auth_missing (owner action: set PAGENTOS_VOICE_OPENAI_API_KEY)"
+        )
     if not simulator_allowed(settings):
         out[SIMULATOR_PROVIDER_NAME] = (
             f"disabled outside environment=dev (environment={settings.environment!r}; "
-            "PAGENTOS_VOICE_REALTIME_SIMULATOR_ENABLED=true overrides)")
+            "PAGENTOS_VOICE_REALTIME_SIMULATOR_ENABLED=true overrides)"
+        )
     return out
 
 
@@ -99,7 +100,8 @@ class RealtimeVoiceRuntime:
             build_session_factory(engine) if engine is not None else None
         )
         self._providers: dict[str, RealtimeProvider] = (
-            providers if providers is not None else default_providers(settings))
+            providers if providers is not None else default_providers(settings)
+        )
         self._inactive: dict[str, str] = inactive_candidates(settings)
         self._registry: ToolRegistry = registry or default_registry()
         if sideband is not None:
@@ -205,8 +207,10 @@ class RealtimeVoiceRuntime:
             "inactive": dict(self._inactive),
             "selection": selection,
             "tools": self._registry.names(),
-            "note": ("real adapters are key-gated; the simulator is a dev-only gate "
-                     "(PAGENTOS_VOICE_REALTIME_SIMULATOR_ENABLED overrides)"),
+            "note": (
+                "real adapters are key-gated; the simulator is a dev-only gate "
+                "(PAGENTOS_VOICE_REALTIME_SIMULATOR_ENABLED overrides)"
+            ),
         }
 
 

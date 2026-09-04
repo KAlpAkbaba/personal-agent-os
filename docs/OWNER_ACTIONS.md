@@ -269,15 +269,25 @@ Windows.
    system never types a number by hand - and the ledger then backfills everything else it
    can from the database (research runs and reports, voice sessions, releases,
    incidents). Nothing is seeded.
-3. **The session.** If the web voice shell is already running it is used; otherwise the
-   script starts it and waits until http://localhost:3000/voice answers (first compile can
-   take a minute). Open it, sign in, connect, and say, waiting for each answer:
+**Your UX verdict (2026-09-04) - good and usable, three control defects - is addressed
+(ADR-0051 addendum 3):** other people's speech no longer interrupts it (a two-lane policy:
+control phrases stop it at once, anything else must be stable, near-field owner speech with
+a real transcript before playback is cut), the default answer is two to four sentences with
+counts and ids kept for "detay" / "teknik" and everything only on "hepsini oku", the
+explanation never narrates its own previous narration, and "detaylandır" / "teknik anlat"
+are recorded as normalised intents whichever way the assistant routes them. This rerun
+performs ONE Cloud Core release (the Cloud Core changed); nothing on Windows.
 
-   1. `Son yaptıklarını anlat.` — it narrates the real research qualification from the ledger
-   2. `Araştırmayı detaylandır.` — the actual findings
-   3. `Teknik anlat.` — versions, counts, ids
-   4. `Dur.` — say it WHILE it is speaking; speech must stop at once
-   5. `Devam et.` — it resumes at the sentence it did not finish
+3. **The session - under two minutes.** If the web voice shell is already running it is
+   used; otherwise the script starts it and waits until http://localhost:3000/voice answers
+   (first compile can take a minute). Open it, sign in, connect, then:
+
+   1. `Son yaptıklarını anlat.`
+   2. Listen: a concise two-to-four sentence briefing (no ids, no hashes).
+   3. While it speaks, let another, distant voice talk in the room: it must keep speaking.
+   4. `Dur.` — say it WHILE it is speaking; speech must stop at once.
+   5. `Devam et.` — it resumes at the sentence it did not finish.
+   6. `Teknik anlat.` — a concise technical briefing: versions, evidence, checks.
 
    Then disconnect and press Enter in the console. If you connect late, the script keeps
    looking for your session for up to ten minutes; a session that existed before the run
@@ -294,8 +304,8 @@ Windows.
 ```
 
 It asks for the Owner Credential in a masked prompt, as usual. Paste `explain-1.json` and
-your verdict in a sentence: did it say what actually happened, did "dur" stop it at once,
-and did "devam et" pick up where it stopped?
+your verdict in a sentence: was the briefing short enough, did it keep speaking over the
+other voice, did "dur" stop it at once, and did "devam et" pick up where it stopped?
 
 ### 15. The first real Research run — DuckDuckGo, no deployment — **DONE (2026-09-04)**
 

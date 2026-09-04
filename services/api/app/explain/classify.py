@@ -39,7 +39,8 @@ QUERY_KINDS = (
 LEVEL_EXECUTIVE = "executive"
 LEVEL_DETAILED = "detailed"
 LEVEL_TECHNICAL = "technical"
-LEVELS = (LEVEL_EXECUTIVE, LEVEL_DETAILED, LEVEL_TECHNICAL)
+LEVEL_FULL = "full"
+LEVELS = (LEVEL_EXECUTIVE, LEVEL_DETAILED, LEVEL_TECHNICAL, LEVEL_FULL)
 
 #: Subsystem words the owner uses, mapped onto ledger subsystem names.
 _SUBSYSTEM_WORDS: tuple[tuple[str, str], ...] = (
@@ -146,7 +147,13 @@ def classify(
             kind = candidate
             break
     level = default_level
-    if kind == QUERY_TECHNICAL or _has(tokens, "teknik"):
+    if (_has(tokens, "hepsini") or _has(tokens, "tamamını") or _has(tokens, "tümünü")) and (
+        _has(tokens, "oku") or _has(tokens, "anlat")
+    ):
+        level = LEVEL_FULL
+    elif (_has(tokens, "bütün") or _has(tokens, "tüm")) and _has(tokens, "detay"):
+        level = LEVEL_FULL
+    elif kind == QUERY_TECHNICAL or _has(tokens, "teknik"):
         level = LEVEL_TECHNICAL
     elif kind == QUERY_RESEARCH_DETAIL or _has(tokens, "detay") or _has(tokens, "ayrıntı"):
         level = LEVEL_DETAILED
@@ -175,6 +182,7 @@ __all__ = [
     "LEVELS",
     "LEVEL_DETAILED",
     "LEVEL_EXECUTIVE",
+    "LEVEL_FULL",
     "LEVEL_TECHNICAL",
     "QUERY_EVIDENCE",
     "QUERY_FAILURES",
