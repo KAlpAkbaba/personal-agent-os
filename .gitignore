@@ -82,3 +82,10 @@ tfplan.binary
 
 # TypeScript incremental state (tsc --noEmit)
 *.tsbuildinfo
+
+# Owner qualification run evidence written by scripts\browser\real-browser-smoke.ps1 and
+# scripts\research\owner-research.ps1 (-OutFile). These are records of a run on the owner's
+# machine, not source: committing them would also make every qualification dirty the tree and
+# block the next Cloud Core release (2026-09-04).
+/research-*.json
+/browser-*.json

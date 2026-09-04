@@ -69,6 +69,7 @@ Set-StrictMode -Version Latest
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 . (Join-Path $repoRoot "scripts\lib\HttpJson.ps1")
 . (Join-Path $repoRoot "scripts\lib\BrowserRelease.ps1")
+. (Join-Path $repoRoot "scripts\lib\RepoState.ps1")
 
 if (-not $BaseUrl) { $BaseUrl = "http://${BrokerHost}:$ApiPort" }
 # The first real Research target. Built from character codes so this script file stays
@@ -114,6 +115,22 @@ $evidence = [ordered]@{
 # ------------------------------------------------------------------ deployment decision
 
 Write-Host "PagentOS owner research ($runId)"
+
+# Local release blockers first: a Cloud Core release ships HEAD only, so a dirty working
+# tree makes one impossible. Checked here, before the credential prompt and any other
+# work, so an impossible release is visible immediately rather than at the release call
+# (2026-09-04: the owner met that guard only after the whole preflight had run).
+$releaseBlockers = Get-ReleaseBlockers -RepoRoot $repoRoot
+if ($releaseBlockers.Blocked) {
+    Write-Host "      working tree: $(@($releaseBlockers.Changes).Count) uncommitted change(s) - a Cloud Core release would be refused:" -ForegroundColor Yellow
+    Write-ReleaseBlockers -Blockers $releaseBlockers
+    if ($CloudCoreUpdate -ne "never") {
+        Write-Host "      (this only matters if the deployed research policy turns out to be behind this checkout)" -ForegroundColor Yellow
+    }
+}
+elseif ($releaseBlockers.Checked) {
+    Write-Host "      working tree: clean (a Cloud Core release is possible if one is needed)"
+}
 if ($SkipLocalEvidence) {
     Write-Host "      release check skipped (-SkipLocalEvidence: dev chain, no installed agent)"
     $evidence.deployment = [ordered]@{ checked = $false; deployed = $false }
@@ -201,6 +218,12 @@ try {
     if ($cloudStale -and $CloudCoreUpdate -eq "never") {
         throw "the deployed Cloud Core does not know this checkout's research policy (version $policyVersion < $expectedPolicy), so a default run would not use $SearchProvider. Release it with .\scripts\cloud\release-cloud-core.ps1 or rerun without -CloudCoreUpdate never."
     }
+    if ($releaseCloud -and $releaseBlockers.Blocked) {
+        throw ("a Cloud Core release is required (deployed policy $policyVersion < $expectedPolicy) but the working tree has " +
+               "$(@($releaseBlockers.Changes).Count) uncommitted change(s), and a release ships HEAD only: " +
+               ($releaseBlockers.Changes -join "; ") +
+               ". Commit or revert them, then rerun this command. Nothing was released and no research was started.")
+    }
     if ($releaseCloud) {
         Write-Host "      the deployed Cloud Core predates this checkout's research policy: releasing it once" -ForegroundColor Yellow
         Invoke-CloudCoreRelease
@@ -214,6 +237,7 @@ try {
         Write-Host "      no Cloud Core release: the deployed policy is current"
     }
     $evidence.cloud_policy = [ordered]@{
+        working_tree_blockers = @($releaseBlockers.Changes)
         expected_version = $expectedPolicy
         deployed_version = $policyVersion
         deployed_provider = $deployedProvider

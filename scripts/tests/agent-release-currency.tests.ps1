@@ -136,6 +136,40 @@ Test-Case "the smoke asks before installing and the research script never instal
     Assert-True ($research -match 'search_provider') "the research request carries the provider policy"
 }
 
+Test-Case "release blockers: tracked changes block, untracked evidence files never do" {
+    . (Join-Path $repoRoot "scripts\lib\RepoState.ps1")
+    $clean = Get-ReleaseBlockers -RepoRoot "." -GitRunner { param($Root) @() }
+    Assert-False $clean.Blocked "a clean tree does not block"
+    Assert-True $clean.Checked "checked"
+
+    $dirty = Get-ReleaseBlockers -RepoRoot "." -GitRunner { param($Root) @(" M docs/X.md", "A  scripts/Y.ps1", "") }
+    Assert-True $dirty.Blocked "tracked changes block a release"
+    Assert-True (@($dirty.Changes).Count -eq 2) "blank porcelain lines are dropped"
+
+    # --untracked-files=no is what the release guard uses: a run evidence JSON is untracked and
+    # therefore never a blocker (2026-09-04: research-1.json must not block the next release)
+    $runner = { param($Root) @() }
+    Assert-False (Get-ReleaseBlockers -RepoRoot "." -GitRunner $runner).Blocked "untracked files are not blockers"
+
+    $broken = Get-ReleaseBlockers -RepoRoot "." -GitRunner { param($Root) throw "git missing" }
+    Assert-False $broken.Blocked "a git failure never invents a blocker"
+    Assert-False $broken.Checked "and says it could not check"
+}
+
+Test-Case "the research script checks release blockers before the credential prompt and before releasing" {
+    $research = Get-Content -LiteralPath (Join-Path $repoRoot (Join-Path "scripts" (Join-Path "research" "owner-research.ps1"))) -Raw
+    Assert-True ($research -match 'Get-ReleaseBlockers') "the research script checks blockers"
+    $blockerAt = $research.IndexOf('$releaseBlockers = Get-ReleaseBlockers')
+    $promptAt = $research.IndexOf('Read-Host -Prompt "Cloud Owner Credential')
+    # the CALL, not the function definition that precedes it
+    $releaseAt = $research.LastIndexOf('Invoke-CloudCoreRelease')
+    Assert-True ($blockerAt -gt 0 -and $promptAt -gt 0 -and $releaseAt -gt 0) "all three points exist"
+    Assert-True ($blockerAt -lt $promptAt) "blockers are checked before the credential prompt"
+    Assert-True ($research -match 'releaseCloud -and \$releaseBlockers\.Blocked') "a needed release with a dirty tree is refused"
+    $refusalAt = $research.IndexOf('$releaseCloud -and $releaseBlockers.Blocked')
+    Assert-True ($refusalAt -lt $releaseAt) "the refusal comes before the release call"
+}
+
 Remove-Item -LiteralPath $script:Sandbox -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host ""
 Write-Host "$($script:Passes) passed, $($script:Failures) failed"
