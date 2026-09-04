@@ -233,7 +233,8 @@ try {
                 action = "owner_qualification"
                 result = "PASS"
                 production_state = "deployed"
-                occurred_at = [string](Get-OptionalProperty -InputObject $doc -Name "finished_at")
+                # .NET "o" timestamps carry seven fractional digits; the API parses six.
+                occurred_at = ([string](Get-OptionalProperty -InputObject $doc -Name "finished_at") -replace '(\.\d{6})\d+', '$1')
                 research_job_id = $taskId
                 factual_summary = $summary
                 detail_json = $detail
@@ -246,7 +247,6 @@ try {
             $recorded = Post-Json "/v1/ledger/events" ($event | ConvertTo-Json -Depth 8 -Compress)
             $ingest.recorded = $true
             $ingest.event_id = [string](Get-OptionalProperty -InputObject $recorded -Name "event_id")
-            $ingest.idempotent_replay = [bool](Get-OptionalProperty -InputObject $recorded -Name "existing")
             Write-Host "      evidence: $ResearchEvidence ($digest) recorded as research.qualified for task $taskId"
         }
         else {
@@ -261,7 +261,7 @@ try {
     $backfill = Post-Json "/v1/ledger/backfill" "{}"
     $evidence.backfill = $backfill
     Write-Host "      backfill: $($backfill | ConvertTo-Json -Compress -Depth 4)"
-    $latest = Get-Json "/v1/ledger/latest"
+    $latest = Get-OptionalProperty -InputObject (Get-Json "/v1/ledger/latest") -Name "event"
     $latestType = [string](Get-OptionalProperty -InputObject $latest -Name "event_type")
     Write-Host "      ledger latest activity: $latestType - $(Get-OptionalProperty -InputObject $latest -Name 'factual_summary')"
     if (-not $latestType) { throw "the ledger has no activity at all after backfill; there is nothing real to narrate" }

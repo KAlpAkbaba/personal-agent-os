@@ -205,13 +205,18 @@ class CreateEventRequest(BaseModel):
         return value
 
 
+#: Bumped whenever the ledger's tables, vocabulary or routes change in a way an owner
+#: script must know about; the owner commands compare it with the deployed Cloud Core.
+LEDGER_VERSION = 1
+
+
 @router.get("/policy")
 async def get_ledger_policy() -> dict[str, Any]:
     """Side-effect free. An owner script (release/deploy tooling) probes this
     to decide whether a Cloud Core release is needed before it can safely
     write ``deployment.*`` evidence — mirrors ``GET /v1/research/policy``."""
     return {
-        "ledger_version": 1,
+        "ledger_version": LEDGER_VERSION,
         "event_types": sorted(EVENT_TYPES),
         "evolution_event_types": sorted(EVOLUTION_EVENT_TYPES),
         "subsystems": sorted(SUBSYSTEMS),
