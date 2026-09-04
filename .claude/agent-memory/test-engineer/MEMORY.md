@@ -7,3 +7,4 @@
 - [M12+M13 verification outcome](project_pagentos_m12_m13.md) — 69ae5b3: 10/11 claims PROVEN via mutation/adversarial probes; real audit-scrub bypass found (apiKey/api-key not caught by api_key substring match)
 - [Arbor voice + M12 noise-gate verification](project_pagentos_arbor_m12_noise.md) — a969375/f34cfd6 PROVEN via mutation probes; real coverage gap in reattach-dedup claim; forbidden-key parity independently re-executed client vs server
 - [Concurrent-agent working tree hazard](feedback_concurrent_agent_worktree.md) — git status can drift mid-session from another agent's edits; re-check before reporting, don't trust only the start snapshot
+- [ADR-0047 voice latency/echo-gate verification](project_pagentos_adr0047_voice_latency.md) — PASS 6/6 claims via mutation probes; real gap: server BREAKDOWN_FIELDS/timing_breakdown does not exist anywhere in repo
