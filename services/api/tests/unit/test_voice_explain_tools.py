@@ -485,3 +485,47 @@ def test_two_interruptions_in_a_row_each_resume_from_their_own_point(wired, monk
     )
     again = _control(client, sid, "i3", "Devam et")
     assert again["speech"].startswith("Tarayıcı temiz kapandı; şu anda müdahalenizi")
+
+
+def test_activity_carries_the_interruption_counters_the_client_reports(wired, monkeypatch) -> None:
+    """The two-lane interruption policy's own evidence (owner UX result 2026-09-04): the
+    client reports cumulative counters in a mic_metrics state event; the session activity
+    record surfaces them so the qualification can assert "it kept speaking over the other
+    voice" from rows rather than from memory."""
+    client, _identity, _runtime, _sideband, _issued, _engine = wired
+    _use_real_run_evidence(monkeypatch)
+    sid = _create(client)["session_id"]
+    _tool(client, sid, "m1", "activity.explain", question="Son yaptıklarını anlat")
+    _events(
+        client,
+        sid,
+        [
+            {
+                "kind": "state",
+                "t_ms": 12_000,
+                "turn": 3,
+                "payload": {
+                    "mic_metrics": 1,
+                    "speech_detected": 4,
+                    "potential_barge_in": 3,
+                    "accepted_owner_interruption": 1,
+                    "rejected_background_speech": 2,
+                    "explicit_stop_command": 1,
+                    "false_interruption": 0,
+                    "false_starts": 0,
+                    "gate_opens": 4,
+                },
+            }
+        ],
+    )
+    noise = client.get(f"/v1/voice/realtime/sessions/{sid}/activity").json()["noise"]
+    assert noise["reported"] is True
+    assert noise["speech_detected"] == 4
+    assert noise["potential_barge_in"] == 3
+    assert noise["accepted_owner_interruption"] == 1
+    assert noise["rejected_background_speech"] == 2
+    assert noise["explicit_stop_command"] == 1
+    assert noise["false_interruption"] == 0
+    # the same counters reach the benchmark record the owner already fetches
+    bench = client.get(f"/v1/voice/realtime/sessions/{sid}/benchmark").json()
+    assert bench["context"]["noise"]["rejected_background_speech"] == 2
