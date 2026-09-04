@@ -85,8 +85,9 @@ if (-not $PSBoundParameters.ContainsKey("RequiredSearchSchema") -and $expectedRe
     $RequiredSearchSchema = [int]$expectedRelease.Contracts["browser.search"]
 }
 $script:InstallerLog = $null
-if ($Handoff) { $SearchMode = "interactive" }
-$Handoff = ($SearchMode -eq "interactive")
+# -Handoff is the older spelling of -SearchMode interactive; parameters are never reassigned.
+$effectiveSearchMode = if ($Handoff) { "interactive" } else { $SearchMode }
+$handoffEnabled = ($effectiveSearchMode -eq "interactive")
 
 function Get-StaleWorkerAdvice {
     <#  What to tell the owner when the live worker is not this checkout's release.  #>
@@ -398,13 +399,13 @@ try {
         # Search-provider qualification: one browser.search through the provider abstraction.
         # PASS requires the recorded provider to be the requested primary with no fallback;
         # a fallback is reported honestly with its reason and FAILS this mode.
-        $interstitial = if ($Handoff) { "handoff" } else { "fallback" }
-        $searchPayload = @{ session_id = $sessionId; query = $SearchQuery; engine = "auto"; max_results = 8; mode = $SearchMode; interstitial = $interstitial }
-        Write-Host "      search mode: $SearchMode (interstitial=$interstitial)"
+        $interstitial = if ($handoffEnabled) { "handoff" } else { "fallback" }
+        $searchPayload = @{ session_id = $sessionId; query = $SearchQuery; engine = "auto"; max_results = 8; mode = $effectiveSearchMode; interstitial = $interstitial }
+        Write-Host "      search mode: $effectiveSearchMode (interstitial=$interstitial)"
         $search = Invoke-DeviceCommand -Capability "browser.search" -Payload $searchPayload
         $sr = $search.result
-        $evidence.handoff = [ordered]@{ mode = $SearchMode; occurred = $false; cleared = $false; resumed = $false; repeat_interstitial = $false; timed_out = $false; owner_decision = $null }
-        if ([string](Get-OptionalProperty -InputObject $sr -Name "state") -eq "waiting_for_owner_verification" -and $Handoff) {
+        $evidence.handoff = [ordered]@{ mode = $effectiveSearchMode; occurred = $false; cleared = $false; resumed = $false; repeat_interstitial = $false; timed_out = $false; owner_decision = $null }
+        if ([string](Get-OptionalProperty -InputObject $sr -Name "state") -eq "waiting_for_owner_verification" -and $handoffEnabled) {
             # Owner handoff (contract §3a): the page stays exactly as it is, the PagentOS Chrome
             # window was brought to the front by the worker, the owner completes it by hand,
             # and the SAME session resumes. Retry once, never loop.
