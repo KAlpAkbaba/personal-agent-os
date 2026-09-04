@@ -338,6 +338,13 @@ class SessionState:
     # pending; consumed (and cleared) by the next browser.search for this
     # session (contract §3a "resume after clearance").
     awaiting_verification_query: str | None = None
+    # Owner handoff bookkeeping (contract §3a, "retry once, never loop"): how many
+    # interstitials this session has already handed to the owner and whether one
+    # clearance has already been consumed. After one cleared verification a
+    # further interstitial is NOT handed off again; it is recorded and the
+    # provider fallback applies.
+    verification_handoffs: int = 0
+    verification_cleared_once: bool = False
 
 
 # ----------------------------------------------------------------------- #
@@ -390,6 +397,7 @@ _EXTRACT_MODES = frozenset({"text", "links", "metadata", "structured", "all"})
 _WAIT_FOR_VALUES = frozenset({"navigation", "text", "target", "load", "verification_cleared"})
 _FETCH_EVIDENCE_TAB_VALUES = frozenset({"same", "new"})
 _INTERSTITIAL_MODES = frozenset({"fallback", "handoff"})
+_SEARCH_MODES = frozenset({"interactive", "unattended"})
 #: Semantic target for Google's real search box (contract §3a): a single
 #: role=combobox on the page, resolved with ``.first`` like every other
 #: locator in this module — never CSS/XPath, never coordinates.
@@ -1535,11 +1543,24 @@ class Worker:
         state.awaiting_verification_query = None
         if awaiting_query is not None and awaiting_query == query:
             html = await page.content()
-            if (
-                detect_google_interstitial(html, page.url) is None
-                and await self._google_box_value(page) == query
-            ):
+            still_blocked = detect_google_interstitial(html, page.url)
+            if still_blocked is None and await self._google_box_value(page) == query:
+                state.verification_cleared_once = True
                 return html, "ok", None, page.url, "handoff_cleared"
+            if still_blocked is not None:
+                # The owner did not (or could not) complete the page. Google is NOT
+                # attempted again: the interstitial is recorded as this attempt's
+                # outcome and ``run_search`` moves to the next provider (unattended
+                # policy after a handoff timeout), or - in handoff mode - the same
+                # pending state is reported once more without a new navigation.
+                if interstitial_mode == "handoff" and not state.verification_cleared_once:
+                    state.awaiting_verification_query = query
+                    raise search_engines.GoogleHandoffPending(
+                        page_kind=still_blocked,
+                        verification_url=page.url,
+                        detail="handoff: owner verification still pending; not retried",
+                    )
+                return html, still_blocked, None, page.url, "handoff_timeout_fallback"
 
         if not await self._is_google_results_page(page):
             home_url = self._google_home_url(locale)
@@ -1572,7 +1593,20 @@ class Worker:
         interstitial = detect_google_interstitial(html, final_url)
 
         if interstitial is not None and interstitial_mode == "handoff":
+            if state.verification_cleared_once or state.verification_handoffs >= 1:
+                # Retry once, never loop: one verification has already been handed
+                # to the owner in this session. A further interstitial is recorded
+                # and the provider fallback applies.
+                logger.warning(
+                    "browser.google_interstitial_after_verification",
+                    session_id=state.session_id,
+                    page_kind=interstitial,
+                    handoffs=state.verification_handoffs,
+                )
+                return html, interstitial, None, final_url, "handoff_repeat_fallback"
+            state.verification_handoffs += 1
             await page.bring_to_front()
+            await asyncio.to_thread(lifecycle.bring_process_window_to_front, state.backend.main_pid)
             state.awaiting_verification_query = query
             raise search_engines.GoogleHandoffPending(
                 page_kind=interstitial, verification_url=final_url
@@ -1727,13 +1761,27 @@ class Worker:
                 "search: recency_days must be an integer or null",
                 retryable=False,
             )
-        interstitial_mode = payload.get("interstitial", "fallback")
+        # ``mode``: "interactive" (Google -> owner handoff if needed -> fallback only
+        # afterwards) or "unattended" (Google -> deterministic fallback if blocked).
+        # It is the owner-facing name of ``interstitial`` (handoff / fallback); an
+        # explicit ``interstitial`` wins when both are given.
+        mode = payload.get("mode")
+        if mode is not None and mode not in _SEARCH_MODES:
+            raise BrowserError(
+                ErrorClass.VALIDATION_ERROR,
+                f"search: mode must be one of {sorted(_SEARCH_MODES)}",
+                retryable=False,
+            )
+        interstitial_mode = payload.get(
+            "interstitial", "handoff" if mode == "interactive" else "fallback"
+        )
         if interstitial_mode not in _INTERSTITIAL_MODES:
             raise BrowserError(
                 ErrorClass.VALIDATION_ERROR,
                 f"search: interstitial must be one of {sorted(_INTERSTITIAL_MODES)}",
                 retryable=False,
             )
+        effective_mode = "interactive" if interstitial_mode == "handoff" else "unattended"
 
         locale = payload.get("locale") or self._locale
         if locale is not None and not isinstance(locale, str):
@@ -1790,8 +1838,12 @@ class Worker:
             attempts=[a.as_dict() for a in outcome.attempts],
             path=outcome.path,
             state=outcome.state,
+            mode=effective_mode,
         )
-        return outcome.as_dict()
+        result = outcome.as_dict()
+        result["mode"] = effective_mode
+        result["verification_handoffs"] = state.verification_handoffs
+        return result
 
     async def _op_fetch_evidence(
         self, state: SessionState, payload: dict[str, Any]

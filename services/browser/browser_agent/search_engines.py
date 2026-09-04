@@ -560,6 +560,10 @@ async def run_search(
 
     attempts: list[SearchAttempt] = []
     last_kind = "empty"
+    # A handoff-related path hint from a FAILED google attempt (the owner did not
+    # complete the page in time, or Google asked again after one clearance) names
+    # the route the eventual fallback outcome took (contract §3a).
+    fallback_path_hint: str | None = None
     for provider in order:
         url = build_search_url(provider, query, recency_days=recency_days, locale=locale)
         try:
@@ -601,9 +605,17 @@ async def run_search(
         path_hint = fetched[4] if len(fetched) > 4 else None
         interstitial = detect_google_interstitial(html, final_url) if provider == "google" else None
         if interstitial is not None:
-            attempts.append(
-                SearchAttempt(provider, interstitial, "interstitial detected; not answered")
-            )
+            detail = "interstitial detected; not answered"
+            if path_hint == "handoff_repeat_fallback":
+                detail = (
+                    "interstitial again after the owner's verification; "
+                    "not handed off a second time (retry once, never loop)"
+                )
+            elif path_hint == "handoff_timeout_fallback":
+                detail = "interstitial still pending after the owner handoff; not retried"
+            if path_hint and path_hint.startswith("handoff_"):
+                fallback_path_hint = path_hint
+            attempts.append(SearchAttempt(provider, interstitial, detail))
             last_kind = "captcha" if interstitial == "captcha" else "blocked"
             continue
         if page_kind in _SKIP_KINDS:
@@ -622,7 +634,7 @@ async def run_search(
             continue
         attempts.append(SearchAttempt(provider, "ok", f"{len(results)} results"))
         ranked = tuple(replace(r, rank=i + 1) for i, r in enumerate(results))
-        default_path = "google_ui" if provider == "google" else "fallback"
+        default_path = "google_ui" if provider == "google" else (fallback_path_hint or "fallback")
         return SearchOutcome(
             requested_provider=requested,
             provider=provider,
@@ -656,7 +668,7 @@ async def run_search(
         page_kind=last_kind,
         attempts=tuple(attempts),
         locale=locale,
-        path="fallback",
+        path=fallback_path_hint or "fallback",
         state="ok",
     )
 

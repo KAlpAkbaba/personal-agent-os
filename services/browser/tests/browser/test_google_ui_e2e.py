@@ -17,6 +17,7 @@ from urllib.parse import quote
 import pytest
 
 from browser_agent import search_engines
+from browser_agent.errors import BrowserError
 from browser_agent.session import BrowserSession
 from browser_agent.worker import Worker, build_arg_parser
 
@@ -314,3 +315,141 @@ async def test_interstitial_fallback_falls_back_to_duckduckgo(
         await worker._execute("browser.session_close", {"session_id": "s1"})
     finally:
         await worker._close_all_sessions()
+
+
+# --------------------------------------------------------------------------- #
+# (e) owner handoff policy (2026-09-04): search modes, retry once, never loop
+# --------------------------------------------------------------------------- #
+
+
+def _ddg_fixture(monkeypatch, site_url: str) -> None:
+    real_build_search_url = search_engines.build_search_url
+
+    def fake_build_search_url(engine, query, *, recency_days=None, locale=None):
+        if engine == "duckduckgo":
+            return f"{site_url}/duckduckgo-results.html"
+        return real_build_search_url(engine, query, recency_days=recency_days, locale=locale)
+
+    monkeypatch.setattr(search_engines, "build_search_url", fake_build_search_url)
+
+
+async def test_search_mode_unattended_is_the_deterministic_fallback(
+    handoff_worker, site_url, monkeypatch
+) -> None:
+    _ddg_fixture(monkeypatch, site_url)
+    worker = handoff_worker
+    await worker._execute("browser.session_open", _open_payload())
+    outcome = await worker._execute(
+        "browser.search",
+        {"session_id": "s1", "query": "ai agents", "engine": "auto", "mode": "unattended"},
+    )
+    assert outcome["mode"] == "unattended"
+    assert outcome["provider"] == "duckduckgo" and outcome["fallback"] is True
+    assert outcome["fallback_reason"] == "google:captcha"
+    assert outcome["verification_handoffs"] == 0
+    await worker._execute("browser.session_close", {"session_id": "s1"})
+
+
+async def test_search_mode_interactive_hands_off_and_rejects_unknown_mode(
+    handoff_worker, site_url
+) -> None:
+    worker = handoff_worker
+    await worker._execute("browser.session_open", _open_payload())
+    with pytest.raises(BrowserError):
+        await worker._execute(
+            "browser.search", {"session_id": "s1", "query": "x", "mode": "whatever"}
+        )
+    pending = await worker._execute(
+        "browser.search",
+        {"session_id": "s1", "query": "ai agents", "engine": "auto", "mode": "interactive"},
+    )
+    assert pending["state"] == "waiting_for_owner_verification"
+    assert pending["mode"] == "interactive"
+    assert pending["verification_handoffs"] == 1
+    await worker._execute("browser.session_close", {"session_id": "s1"})
+
+
+async def test_handoff_timeout_fallback_never_attempts_google_again(
+    handoff_worker, site_url, monkeypatch
+) -> None:
+    """The owner did not complete the page: a fallback-mode search on the still
+    pending query records the interstitial and goes to DuckDuckGo WITHOUT a
+    second Google navigation (path=handoff_timeout_fallback)."""
+    _ddg_fixture(monkeypatch, site_url)
+    worker = handoff_worker
+    await worker._execute("browser.session_open", _open_payload())
+    query = "ai agents"
+    pending = await worker._execute(
+        "browser.search",
+        {"session_id": "s1", "query": query, "engine": "auto", "interstitial": "handoff"},
+    )
+    assert pending["state"] == "waiting_for_owner_verification"
+    interstitial_url = pending["verification_url"]
+
+    # asking again in handoff mode while still blocked: same pending state, no new page
+    again = await worker._execute(
+        "browser.search",
+        {"session_id": "s1", "query": query, "engine": "auto", "interstitial": "handoff"},
+    )
+    assert again["state"] == "waiting_for_owner_verification"
+    assert again["verification_url"] == interstitial_url
+    assert again["verification_handoffs"] == 1
+
+    outcome = await worker._execute(
+        "browser.search",
+        {"session_id": "s1", "query": query, "engine": "auto", "interstitial": "fallback"},
+    )
+    assert outcome["provider"] == "duckduckgo"
+    assert outcome["fallback"] is True
+    assert outcome["fallback_reason"] == "google:captcha"
+    assert outcome["path"] == "handoff_timeout_fallback"
+    assert [a["outcome"] for a in outcome["attempts"]] == ["captcha", "ok"]
+    assert "not retried" in outcome["attempts"][0]["detail"]
+    await worker._execute("browser.session_close", {"session_id": "s1"})
+
+
+async def test_second_interstitial_after_clearance_is_not_handed_off_again(
+    handoff_worker, site_url, monkeypatch
+) -> None:
+    """Retry once, never loop: after one cleared verification, a further
+    interstitial in the same session is recorded and the provider fallback
+    applies (path=handoff_repeat_fallback) instead of a second handoff."""
+    _ddg_fixture(monkeypatch, site_url)
+    worker = handoff_worker
+    await worker._execute("browser.session_open", _open_payload())
+    query = "yapay zeka ajanları"
+    pending = await worker._execute(
+        "browser.search",
+        {"session_id": "s1", "query": query, "engine": "auto", "mode": "interactive"},
+    )
+    assert pending["state"] == "waiting_for_owner_verification"
+    # the owner completes the page: Google returns the results
+    await worker._execute(
+        "browser.navigate",
+        {"session_id": "s1", "url": f"{site_url}/google-results.html?q={quote(query)}"},
+    )
+    waited = await worker._execute(
+        "browser.wait", {"session_id": "s1", "for": "verification_cleared", "timeout_ms": 5_000}
+    )
+    assert waited["satisfied"] is True
+    resumed = await worker._execute(
+        "browser.search",
+        {"session_id": "s1", "query": query, "engine": "auto", "mode": "interactive"},
+    )
+    assert resumed["path"] == "handoff_cleared" and resumed["provider"] == "google"
+
+    # Google blocks the NEXT query of the same session again
+    await worker._execute(
+        "browser.navigate", {"session_id": "s1", "url": f"{site_url}/google-sorry.html"}
+    )
+    outcome = await worker._execute(
+        "browser.search",
+        {"session_id": "s1", "query": "başka bir sorgu", "engine": "auto", "mode": "interactive"},
+    )
+    assert outcome["state"] == "ok"
+    assert outcome["provider"] == "duckduckgo"
+    assert outcome["fallback"] is True and outcome["fallback_reason"] == "google:captcha"
+    assert outcome["path"] == "handoff_repeat_fallback"
+    assert outcome["verification_handoffs"] == 1
+    assert "not handed off a second time" in outcome["attempts"][0]["detail"]
+    await worker._execute("browser.session_close", {"session_id": "s1"})

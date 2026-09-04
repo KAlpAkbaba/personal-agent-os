@@ -342,3 +342,59 @@ __all__ = [
     "wait_for_pids_exit",
     "wait_for_profile_clear",
 ]
+
+
+# --------------------------------------------------------------------------- #
+# owner handoff: bring the research Chrome's window to the front (Windows)
+# --------------------------------------------------------------------------- #
+
+_SW_RESTORE = 9
+_SW_SHOW = 5
+
+
+def bring_process_window_to_front(pid: int | None) -> bool:
+    """Raise the top-level visible window owned by ``pid`` above other apps.
+
+    Playwright's ``page.bring_to_front`` activates the TAB; it does not raise
+    the Chrome window over the owner's other windows. For the owner handoff
+    (contract §3a) the window itself must come forward so the verification
+    page is visible. Best effort, Windows only, never raises: Windows may
+    refuse ``SetForegroundWindow`` from a background process, so the restore
+    + ``SwitchToThisWindow`` path is used as well. Returns True when a window
+    was found and asked to come forward.
+    """
+    if sys.platform != "win32" or not pid:  # pragma: no cover - Windows only
+        return False
+    try:
+        user32 = ctypes.windll.user32  # type: ignore[attr-defined]
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        enum_proc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+        found: list[int] = []
+
+        def _cb(hwnd: int, _lparam: int) -> bool:
+            owner_pid = ctypes.c_ulong()
+            user32.GetWindowThreadProcessId(ctypes.c_void_p(hwnd), ctypes.byref(owner_pid))
+            if owner_pid.value == pid and user32.IsWindowVisible(ctypes.c_void_p(hwnd)):
+                if user32.GetWindowTextLengthW(ctypes.c_void_p(hwnd)) > 0:
+                    found.append(hwnd)
+            return True
+
+        user32.EnumWindows(enum_proc(_cb), 0)
+        if not found:
+            return False
+        hwnd = ctypes.c_void_p(found[0])
+        if user32.IsIconic(hwnd):
+            user32.ShowWindow(hwnd, _SW_RESTORE)
+        else:
+            user32.ShowWindow(hwnd, _SW_SHOW)
+        # AllowSetForegroundWindow(ASFW_ANY) so the target may take the foreground,
+        # then ask for it twice: the API and the shell's own switcher path.
+        kernel32.GetCurrentProcessId()
+        user32.AllowSetForegroundWindow(-1)
+        user32.SetForegroundWindow(hwnd)
+        user32.SwitchToThisWindow(hwnd, True)
+        logger.info("browser.window_brought_to_front", pid=pid, hwnd=found[0])
+        return True
+    except Exception as exc:  # noqa: BLE001 - best effort
+        logger.warning("browser.window_to_front_failed", pid=pid, error=str(exc)[:200])
+        return False

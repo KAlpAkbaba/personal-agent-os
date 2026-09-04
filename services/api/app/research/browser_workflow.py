@@ -82,6 +82,18 @@ class BrowserResearchRequest:
     #: `interactive_wait_s` for the owner to clear it before falling back.
     interactive: bool = False
     interactive_wait_s: int = DEFAULT_INTERACTIVE_WAIT_S
+    #: spec §5a (2026-09-04): what an INTERACTIVE run does when the owner does not
+    #: complete Google's page within `interactive_wait_s`. "fallback" (default) =
+    #: the unattended policy, one attempt on the next provider; "fail" = stop the
+    #: run with a Turkish explanation instead of silently continuing without the
+    #: primary provider, so the owner decides (rerun interactively, or unattended).
+    #: Unattended runs never wait, so this never applies to them.
+    on_verification_timeout: str = "fallback"
+
+
+class OwnerVerificationTimeout(Exception):
+    """Interactive run with on_verification_timeout="fail": the owner did not clear
+    Google's page in time and asked not to continue on the fallback provider."""
 
 
 @workflow.defn
@@ -107,13 +119,35 @@ class BrowserResearchWorkflow:
 
         device_id = device["device_id"]
 
-        for source_class in plan["source_classes"]:
-            for i, query_text in enumerate(plan["queries"]):
-                query_id = f"{source_class}:{i}"
-                await self._discover_with_handoff(
-                    request, device_id, query_id, query_text, source_class,
-                    plan["recency"]["start"],
-                )
+        try:
+            for source_class in plan["source_classes"]:
+                for i, query_text in enumerate(plan["queries"]):
+                    query_id = f"{source_class}:{i}"
+                    await self._discover_with_handoff(
+                        request,
+                        device_id,
+                        query_id,
+                        query_text,
+                        source_class,
+                        plan["recency"]["start"],
+                    )
+        except OwnerVerificationTimeout as exc:
+            detail = str(exc)
+            for activity, args, policy in (
+                (
+                    fail_run_activity,
+                    [request.task_id, "owner_verification_timeout", detail],
+                    _STANDARD_RETRY,
+                ),
+                (close_session_activity, [request.task_id, device_id], _NO_RETRY),
+            ):
+                try:
+                    await workflow.execute_activity(
+                        activity, args=args, start_to_close_timeout=_SHORT, retry_policy=policy
+                    )
+                except ActivityError:
+                    pass
+            return self._failed(request.task_id, plan, detail, "owner_verification_timeout")
 
         targets = await workflow.execute_activity(
             fetch_targets_activity,
@@ -127,7 +161,10 @@ class BrowserResearchWorkflow:
                 await workflow.execute_activity(
                     fetch_activity,
                     args=[
-                        request.task_id, device_id, target["url"], target["query"],
+                        request.task_id,
+                        device_id,
+                        target["url"],
+                        target["query"],
                         target["source_class"],
                     ],
                     start_to_close_timeout=_FETCH_TIMEOUT,
@@ -250,13 +287,19 @@ class BrowserResearchWorkflow:
         interstitial = "handoff" if request.interactive else "fallback"
         budget_s = request.interactive_wait_s
         iteration = 0
+        clearances = 0
         while True:
             try:
                 outcome = await workflow.execute_activity(
                     discover_activity,
                     args=[
-                        request.task_id, device_id, query_id, query_text, source_class,
-                        window_start_iso, interstitial,
+                        request.task_id,
+                        device_id,
+                        query_id,
+                        query_text,
+                        source_class,
+                        window_start_iso,
+                        interstitial,
                     ],
                     start_to_close_timeout=_MEDIUM,
                     retry_policy=_STANDARD_RETRY,
@@ -265,6 +308,15 @@ class BrowserResearchWorkflow:
                 return  # one query/class failing must not fail the whole run
 
             if not request.interactive or outcome.get("status") != "waiting":
+                return
+
+            if clearances >= 1:
+                # Retry once, never loop (contract §3a): the owner already cleared one
+                # verification for this query and Google asked again. Recorded by the
+                # worker's attempt evidence; one final attempt on the fallback provider.
+                await self._fallback_after_handoff(
+                    request, device_id, query_id, query_text, source_class, window_start_iso
+                )
                 return
 
             cleared = False
@@ -287,25 +339,55 @@ class BrowserResearchWorkflow:
                     break
 
             if not cleared:
+                if request.on_verification_timeout == "fail":
+                    raise OwnerVerificationTimeout(
+                        "Google'ın doğrulama sayfası "
+                        f"{request.interactive_wait_s} saniye içinde tamamlanmadı; bu araştırma "
+                        "isteğin gereği yedek sağlayıcıya geçmeden durduruldu. Hazır olduğunuzda "
+                        "etkileşimli olarak yeniden başlatın veya gözetimsiz modda çalıştırın."
+                    )
                 # Budget spent: one last attempt on the fallback provider,
                 # then stop regardless of its outcome (the worker never hands
                 # off again under interstitial="fallback").
-                try:
-                    await workflow.execute_activity(
-                        discover_activity,
-                        args=[
-                            request.task_id, device_id, query_id, query_text, source_class,
-                            window_start_iso, "fallback",
-                        ],
-                        start_to_close_timeout=_MEDIUM,
-                        retry_policy=_STANDARD_RETRY,
-                    )
-                except ActivityError:
-                    pass
+                await self._fallback_after_handoff(
+                    request, device_id, query_id, query_text, source_class, window_start_iso
+                )
                 return
 
+            clearances += 1
             interstitial = "handoff"
-            # loop back and re-discover on the resumed page (path=handoff_cleared)
+            # loop back once and re-discover on the resumed page (path=handoff_cleared)
+
+    async def _fallback_after_handoff(
+        self,
+        request: "BrowserResearchRequest",
+        device_id: str,
+        query_id: str,
+        query_text: str,
+        source_class: str,
+        window_start_iso: str,
+    ) -> None:
+        """One attempt with interstitial="fallback" on the still-pending query: the
+        worker records the interstitial and goes to the next provider WITHOUT
+        attempting Google again (path=handoff_timeout_fallback); its outcome is
+        accepted either way."""
+        try:
+            await workflow.execute_activity(
+                discover_activity,
+                args=[
+                    request.task_id,
+                    device_id,
+                    query_id,
+                    query_text,
+                    source_class,
+                    window_start_iso,
+                    "fallback",
+                ],
+                start_to_close_timeout=_MEDIUM,
+                retry_policy=_STANDARD_RETRY,
+            )
+        except ActivityError:
+            pass
 
     def _error_detail(self, exc: ActivityError) -> str:
         cause = exc.cause

@@ -238,10 +238,27 @@ into the search box (`role=combobox`), submits it, waits for the results region
 fixed sleep — and parses the organic results (§3). `recency_days` is applied to the loaded
 results page as Google's own time filter. Every other engine keeps its results URL.
 
-Payload additions: `"interstitial": "fallback" | "handoff"` (default `fallback`). Result
-additions: `"state": "ok" | "waiting_for_owner_verification"`, `"path"`:
-`google_ui | google_url | fallback | handoff_pending | handoff_cleared | handoff_timeout_fallback`,
+Payload additions: `"mode": "interactive" | "unattended"` (owner-facing; `interactive` =
+Google → owner handoff if needed → fallback only afterwards, `unattended` = Google →
+deterministic fallback if blocked) and/or `"interstitial": "fallback" | "handoff"` (default
+`fallback`; an explicit `interstitial` wins). Result additions: `"mode"` (the effective
+mode), `"verification_handoffs"` (interstitials handed to the owner in this session so far),
+`"state": "ok" | "waiting_for_owner_verification"`, `"path"`:
+`google_ui | google_url | fallback | handoff_pending | handoff_cleared | handoff_timeout_fallback | handoff_repeat_fallback`,
 `"verification_url"` (when waiting).
+
+**Retry once, never loop (2026-09-04).** A session hands an interstitial to the owner at most
+ONCE. After a cleared verification the pending search is retried exactly once on the same
+session (`handoff_cleared`). If Google shows an interstitial again afterwards, the worker does
+not hand off a second time: the attempt is recorded (`detail` says so) and the provider
+fallback applies (`path=handoff_repeat_fallback`). A `fallback`-mode search on a query whose
+verification is still pending records the interstitial and moves to the next provider WITHOUT
+navigating to Google again (`path=handoff_timeout_fallback`). A `handoff`-mode search on the
+same pending query while the page is still blocked answers the same waiting state again
+without a new navigation. On a handoff the worker brings the Chrome TAB to the front
+(Playwright) and the Chrome WINDOW to the foreground (Win32, best effort, the research
+Chrome's own root pid only). The dedicated profile keeps Google's verification and consent
+cookies between runs, as normal Chrome behaviour permits; nothing is spoofed or solved.
 
 - `fallback` (unattended): an interstitial (`captcha` = Google's unusual-traffic page,
   `consent`, `blocked`) is recorded as the attempt's outcome and the next provider is tried

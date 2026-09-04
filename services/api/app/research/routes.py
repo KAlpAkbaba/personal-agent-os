@@ -81,11 +81,27 @@ class CreateResearchRequest(BaseModel):
     #: runner (scripts/research_smoke.py) has `--interactive`. False
     #: (default) never waits on a Google interstitial.
     interactive: bool = Field(default=False)
+    #: owner-facing spelling of the same choice (contract §3a search modes):
+    #: "interactive" = Google -> owner handoff if needed -> fallback only afterwards;
+    #: "unattended" = Google -> deterministic fallback if blocked. Wins over `interactive`.
+    mode: str | None = Field(default=None, pattern="^(interactive|unattended)$")
+    #: interactive runs only: "fallback" (default) or "fail" when the owner does not
+    #: complete Google's page within interactive_wait_s (spec §5a).
+    on_verification_timeout: str = Field(default="fallback", pattern="^(fallback|fail)$")
     interactive_wait_s: int = Field(
         default=DEFAULT_INTERACTIVE_WAIT_S,
         ge=MIN_INTERACTIVE_WAIT_S,
         le=MAX_INTERACTIVE_WAIT_S,
     )
+
+
+def _effective_interactive(body: CreateResearchRequest) -> bool:
+    if body.mode is not None:
+        return body.mode == "interactive"
+    return body.interactive
+
+
+CreateResearchRequest.effective_interactive = property(_effective_interactive)  # type: ignore[attr-defined]
 
 
 def _device_summary(view: Any) -> dict[str, Any]:
@@ -159,8 +175,9 @@ async def create_research(request: Request, body: CreateResearchRequest) -> JSON
                 recency_days=body.recency_days,
                 max_sources=body.max_sources,
                 synthesis=body.synthesis,
-                interactive=body.interactive,
+                interactive=body.effective_interactive,
                 interactive_wait_s=body.interactive_wait_s,
+                on_verification_timeout=body.on_verification_timeout,
             ),
             id=workflow_id,
             task_queue=artifacts.settings.temporal_task_queue,

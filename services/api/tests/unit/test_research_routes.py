@@ -192,6 +192,42 @@ def test_create_research_defaults_interactive_false_and_wait_600(client: TestCli
     assert request_arg.interactive_wait_s == 600
 
 
+def test_create_research_mode_alias_wins_over_interactive(client: TestClient) -> None:
+    """contract §3a search modes: `mode` is the owner-facing spelling and wins."""
+    _enroll_online_device(client)
+    fake_client = AsyncMock()
+    fake_client.start_workflow = AsyncMock(return_value=None)
+    with patch("app.research.routes.Client.connect", AsyncMock(return_value=fake_client)):
+        response = client.post(
+            "/v1/research",
+            json={"input": "konu", "interactive": True, "mode": "unattended"},
+        )
+    assert response.status_code == 202
+    request_arg = fake_client.start_workflow.call_args.args[1]
+    assert request_arg.interactive is False
+    assert request_arg.on_verification_timeout == "fallback"
+
+    with patch("app.research.routes.Client.connect", AsyncMock(return_value=fake_client)):
+        response = client.post(
+            "/v1/research",
+            json={"input": "konu", "mode": "interactive", "on_verification_timeout": "fail"},
+        )
+    assert response.status_code == 202
+    request_arg = fake_client.start_workflow.call_args.args[1]
+    assert request_arg.interactive is True
+    assert request_arg.on_verification_timeout == "fail"
+
+
+def test_create_research_rejects_unknown_mode_and_timeout_policy(client: TestClient) -> None:
+    assert client.post("/v1/research", json={"input": "konu", "mode": "stealth"}).status_code == 422
+    assert (
+        client.post(
+            "/v1/research", json={"input": "konu", "on_verification_timeout": "retry"}
+        ).status_code
+        == 422
+    )
+
+
 def test_create_research_rejects_interactive_wait_s_below_minimum(client: TestClient) -> None:
     response = client.post("/v1/research", json={"input": "konu", "interactive_wait_s": 59})
     assert response.status_code == 422

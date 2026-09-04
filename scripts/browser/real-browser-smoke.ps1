@@ -56,6 +56,12 @@ param(
     # Search mode only: interstitial=handoff (contract §3a). If Google shows a verification or
     # consent page, Chrome is brought to the front and this script WAITS for you to complete
     # it (nothing is solved or bypassed), then re-issues the same search on the same session.
+    # search mode (contract §3a): interactive = Google -> owner handoff on an interstitial
+    # (the PagentOS Chrome window comes to the front, you complete Google's page, the SAME
+    # session resumes and the pending search is retried exactly once) -> fallback only
+    # afterwards; unattended = Google -> deterministic DuckDuckGo fallback if blocked.
+    # -Handoff is the older spelling of -SearchMode interactive.
+    [ValidateSet("interactive", "unattended")][string]$SearchMode = "unattended",
     [switch]$Handoff,
     [int]$HandoffTimeoutSec = 600,
     # DEV/TEST ONLY: take an already-minted owner session token from PAGENTOS_SMOKE_TOKEN
@@ -79,6 +85,8 @@ if (-not $PSBoundParameters.ContainsKey("RequiredSearchSchema") -and $expectedRe
     $RequiredSearchSchema = [int]$expectedRelease.Contracts["browser.search"]
 }
 $script:InstallerLog = $null
+if ($Handoff) { $SearchMode = "interactive" }
+$Handoff = ($SearchMode -eq "interactive")
 
 function Get-StaleWorkerAdvice {
     <#  What to tell the owner when the live worker is not this checkout's release.  #>
@@ -391,29 +399,62 @@ try {
         # PASS requires the recorded provider to be the requested primary with no fallback;
         # a fallback is reported honestly with its reason and FAILS this mode.
         $interstitial = if ($Handoff) { "handoff" } else { "fallback" }
-        $search = Invoke-DeviceCommand -Capability "browser.search" -Payload @{ session_id = $sessionId; query = $SearchQuery; engine = "auto"; max_results = 8; interstitial = $interstitial }
+        $searchPayload = @{ session_id = $sessionId; query = $SearchQuery; engine = "auto"; max_results = 8; mode = $SearchMode; interstitial = $interstitial }
+        Write-Host "      search mode: $SearchMode (interstitial=$interstitial)"
+        $search = Invoke-DeviceCommand -Capability "browser.search" -Payload $searchPayload
         $sr = $search.result
-        $handoffRounds = 0
-        while ([string](Get-OptionalProperty -InputObject $sr -Name "state") -eq "waiting_for_owner_verification" -and $Handoff) {
-            $handoffRounds++
+        $evidence.handoff = [ordered]@{ mode = $SearchMode; occurred = $false; cleared = $false; resumed = $false; repeat_interstitial = $false; timed_out = $false; owner_decision = $null }
+        if ([string](Get-OptionalProperty -InputObject $sr -Name "state") -eq "waiting_for_owner_verification" -and $Handoff) {
+            # Owner handoff (contract §3a): the page stays exactly as it is, the PagentOS Chrome
+            # window was brought to the front by the worker, the owner completes it by hand,
+            # and the SAME session resumes. Retry once, never loop.
             $vurl = [string](Get-OptionalProperty -InputObject $sr -Name "verification_url")
+            $kind = [string](Get-OptionalProperty -InputObject $sr -Name "page_kind")
+            $evidence.handoff.occurred = $true; $evidence.handoff.page_kind = $kind; $evidence.handoff.verification_url = $vurl
             Write-Host ""
-            Write-Host "      WAITING_FOR_OWNER_VERIFICATION: Google shows a $((Get-OptionalProperty -InputObject $sr -Name 'page_kind')) page. Chrome was brought to the front." -ForegroundColor Yellow
-            Write-Host "      Complete the page by hand in that Chrome window (nothing is solved or bypassed here); this script resumes the SAME session automatically." -ForegroundColor Yellow
+            Write-Host "      WAITING_FOR_OWNER_VERIFICATION: Google shows a '$kind' page. The PagentOS Chrome window was brought to the front." -ForegroundColor Yellow
+            Write-Host "      Google manuel dogrulama istiyor: lutfen o Chrome penceresindeki sayfayi kendiniz tamamlayin (hicbir sey otomatik cozulmez veya atlanmaz)." -ForegroundColor Yellow
+            Write-Host "      Complete the page by hand in that window; this script resumes the SAME session automatically (up to $HandoffTimeoutSec s)." -ForegroundColor Yellow
             if ($vurl) { Write-Host "      page: $vurl" }
-            $evidence.handoff = [ordered]@{ rounds = $handoffRounds; page_kind = (Get-OptionalProperty -InputObject $sr -Name "page_kind"); verification_url = $vurl; cleared = $false }
             $deadline = (Get-Date).AddSeconds($HandoffTimeoutSec)
             $cleared = $false
             while ((Get-Date) -lt $deadline -and -not $cleared) {
                 $wait = Invoke-DeviceCommand -Capability "browser.wait" -Payload @{ session_id = $sessionId; for = "verification_cleared"; timeout_ms = 45000 }
                 $cleared = [bool](Get-OptionalProperty -InputObject $wait.result -Name "satisfied")
             }
-            if (-not $cleared) { throw "the verification page was not completed within $HandoffTimeoutSec s; the research session was left as it is" }
-            $evidence.handoff.cleared = $true
-            Write-Host "      verification cleared; re-issuing the same search on the same session"
-            $search = Invoke-DeviceCommand -Capability "browser.search" -Payload @{ session_id = $sessionId; query = $SearchQuery; engine = "auto"; max_results = 8; interstitial = $interstitial }
-            $sr = $search.result
-            if ($handoffRounds -ge 3) { throw "Google kept asking for verification three times; stopping honestly" }
+            if ($cleared) {
+                $evidence.handoff.cleared = $true
+                Write-Host "      verification cleared; retrying the pending Google search ONCE on the same session"
+                $search = Invoke-DeviceCommand -Capability "browser.search" -Payload $searchPayload
+                $sr = $search.result
+                $evidence.handoff.resumed = $true
+                if ([string](Get-OptionalProperty -InputObject $sr -Name "state") -eq "waiting_for_owner_verification") {
+                    # Google asked again after a completed verification: not looped, recorded.
+                    $evidence.handoff.repeat_interstitial = $true
+                    Write-Host "      Google showed another '$((Get-OptionalProperty -InputObject $sr -Name 'page_kind'))' page after your verification; not retried again (one-retry policy). Falling back per policy." -ForegroundColor Yellow
+                    $search = Invoke-DeviceCommand -Capability "browser.search" -Payload (@{} + $searchPayload + @{ interstitial = "fallback" })
+                    $sr = $search.result
+                }
+            }
+            else {
+                $evidence.handoff.timed_out = $true
+                Write-Host "      the verification page was not completed within $HandoffTimeoutSec s." -ForegroundColor Yellow
+                $answer = ""
+                try { $answer = Read-Host -Prompt "      Fall back to DuckDuckGo now for this query? [y/N]" } catch { $answer = "" }
+                if ($answer -match '^(y|yes|e|evet)$') {
+                    $evidence.handoff.owner_decision = "fallback"
+                    # interstitial=fallback on the still-pending query: the worker records the
+                    # interstitial and goes to the next provider WITHOUT attempting Google again.
+                    $search = Invoke-DeviceCommand -Capability "browser.search" -Payload (@{} + $searchPayload + @{ interstitial = "fallback" })
+                    $sr = $search.result
+                }
+                else {
+                    $evidence.handoff.owner_decision = "stop"
+                    $evidence.search = [ordered]@{ requested_provider = "google"; provider = $null; fallback = $false; fallback_reason = "owner_verification_timeout"; state = "waiting_for_owner_verification"; verification_url = $vurl }
+                    [void](Invoke-DeviceCommand -Capability "browser.session_close" -Payload @{ session_id = $sessionId })
+                    throw "owner verification was not completed within $HandoffTimeoutSec s and you chose not to fall back; the session was closed cleanly (profile cookies kept). Rerun when you are ready."
+                }
+            }
         }
         $resultSchema = Get-OptionalProperty -InputObject $sr -Name "schema_version"
         if ($null -eq $resultSchema -or [int]$resultSchema -lt $RequiredSearchSchema) {
@@ -424,7 +465,7 @@ try {
         }
         $results = @(Get-OptionalProperty -InputObject $sr -Name "results")
         $attempts = @(Get-OptionalProperty -InputObject $sr -Name "attempts")
-        Write-Host ("      state={0} path={1}" -f (Get-OptionalProperty -InputObject $sr -Name "state"), (Get-OptionalProperty -InputObject $sr -Name "path"))
+        Write-Host ("      state={0} path={1} mode={2} handoffs={3}" -f (Get-OptionalProperty -InputObject $sr -Name "state"), (Get-OptionalProperty -InputObject $sr -Name "path"), (Get-OptionalProperty -InputObject $sr -Name "mode"), (Get-OptionalProperty -InputObject $sr -Name "verification_handoffs"))
         Write-Host ("      requested_provider={0} provider={1} fallback={2} fallback_reason={3} query='{4}' result_count={5} locale={6}" -f
             (Get-OptionalProperty -InputObject $sr -Name "requested_provider"), (Get-OptionalProperty -InputObject $sr -Name "provider"),
             (Get-OptionalProperty -InputObject $sr -Name "fallback"), (Get-OptionalProperty -InputObject $sr -Name "fallback_reason"),
@@ -438,6 +479,7 @@ try {
             fallback = (Get-OptionalProperty -InputObject $sr -Name "fallback"); fallback_reason = (Get-OptionalProperty -InputObject $sr -Name "fallback_reason")
             query = (Get-OptionalProperty -InputObject $sr -Name "query"); result_count = (Get-OptionalProperty -InputObject $sr -Name "result_count")
             locale = (Get-OptionalProperty -InputObject $sr -Name "locale"); attempts = $attempts
+            state = (Get-OptionalProperty -InputObject $sr -Name "state"); path = (Get-OptionalProperty -InputObject $sr -Name "path"); mode = (Get-OptionalProperty -InputObject $sr -Name "mode")
             results = @($results | ForEach-Object { [ordered]@{ rank = $_.rank; title = $_.title; url = $_.url } })
         }
         if ($ExpectProvider -ne "any") {

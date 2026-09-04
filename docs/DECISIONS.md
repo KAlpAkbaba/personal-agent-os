@@ -2668,3 +2668,23 @@ embedded Temporal worker). Facts and decisions that were not in the design:
     companion's cwd, so the runtime import path is exercised locally and in CI. Earlier 6b.1/6b.2
     PROVEN_REAL rows stand for what they measured (a worker starts as the owner; manifest
     agreement); they did not measure which copy executed, which 6b.3/6b.4 now do.
+
+17. **Owner verification handoff: retry once, never loop; interactive vs unattended**
+    (2026-09-04, after the real Google-primary run: Google attempted through the installed
+    owner-session worker, `captcha interstitial detected; not answered`, deterministic
+    DuckDuckGo fallback with `fallback_reason=google:captcha` - recorded as PROVEN_REAL
+    for the provider path; Google success itself stays unproven). Decisions: `browser.search`
+    gains the owner-facing `mode` (`interactive` = Google → owner handoff if needed → fallback
+    only afterwards; `unattended` = Google → deterministic fallback if blocked), mirrored by
+    `POST /v1/research` `mode`. A session hands an interstitial to the owner at most once;
+    after a cleared verification the pending search is retried exactly once on the SAME
+    `session_uid`/Chrome pid/research job; a further interstitial is recorded and the fallback
+    applies (`handoff_repeat_fallback`); a fallback-mode search on a still-pending query never
+    navigates to Google again (`handoff_timeout_fallback`). On a handoff the worker raises the
+    Chrome tab and, on Windows, the Chrome window itself (its own root pid only). Google's
+    verification/consent cookies persist in the dedicated profile as normal Chrome behaviour
+    permits (no clearing, no spoofing). Timeout policy: the owner smoke asks in the terminal
+    whether to fall back; the workflow offers `on_verification_timeout` `fallback` (default) or
+    `fail` (stop with `owner_verification_timeout` so the owner decides); a synchronous in-run
+    owner prompt (signal + web) is deferred. Nothing solves, bypasses, masks or retries a
+    CAPTCHA; all lifecycle, audit, security and cleanup guarantees stay as proven.

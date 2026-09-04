@@ -244,18 +244,27 @@ async def test_browser_research_workflow_interactive_handoff_cleared_reaches_rea
                 search_waited_for.add(query)
                 return CommandSucceeded(
                     {
-                        "schema_version": 2, "requested_provider": "google", "provider": None,
-                        "state": "waiting_for_owner_verification", "path": "handoff_pending",
+                        "schema_version": 2,
+                        "requested_provider": "google",
+                        "provider": None,
+                        "state": "waiting_for_owner_verification",
+                        "path": "handoff_pending",
                         "page_kind": "captcha",
                         "verification_url": "https://www.google.com/sorry/index",
-                        "results": [], "result_count": 0,
+                        "results": [],
+                        "result_count": 0,
                     }
                 )
             return CommandSucceeded(
                 {
-                    "schema_version": 2, "requested_provider": "google", "provider": "google",
-                    "fallback": False, "fallback_reason": None, "state": "ok",
-                    "path": "handoff_cleared", "result_count": 2,
+                    "schema_version": 2,
+                    "requested_provider": "google",
+                    "provider": "google",
+                    "fallback": False,
+                    "fallback_reason": None,
+                    "state": "ok",
+                    "path": "handoff_cleared",
+                    "result_count": 2,
                     "results": [
                         {
                             "url": f"https://news.example.com/{query}/1",
@@ -283,8 +292,12 @@ async def test_browser_research_workflow_interactive_handoff_cleared_reaches_rea
     broker_runtime = BrokerRuntime(settings)
     with broker_runtime.session() as db:
         device = broker_service.enroll_device(
-            db, name="interactive-pc", platform="windows", public_key_spki_b64=_spki(),
-            capabilities=["browser.chrome"], trace_id=None,
+            db,
+            name="interactive-pc",
+            platform="windows",
+            public_key_spki_b64=_spki(),
+            capabilities=["browser.chrome"],
+            trace_id=None,
         )
     broker_runtime.connections[device.id] = DeviceConnection(
         device_id=device.id, session_id=uuid.uuid4(), websocket=object()
@@ -302,8 +315,13 @@ async def test_browser_research_workflow_interactive_handoff_cleared_reaches_rea
             result = await client.execute_workflow(
                 BrowserResearchWorkflow.run,
                 BrowserResearchRequest(
-                    task_id=str(task_id), topic=TOPIC, target_device=None, max_sources=6,
-                    synthesis="deterministic", interactive=True, interactive_wait_s=120,
+                    task_id=str(task_id),
+                    topic=TOPIC,
+                    target_device=None,
+                    max_sources=6,
+                    synthesis="deterministic",
+                    interactive=True,
+                    interactive_wait_s=120,
                 ),
                 id=f"research-browser-{task_id}",
                 task_queue=task_queue,
@@ -327,6 +345,227 @@ async def test_browser_research_workflow_interactive_handoff_cleared_reaches_rea
         assert report_row.report_json["schema_version"] == 1
 
 
+async def test_browser_research_workflow_second_interstitial_after_clearance_falls_back_once(
+    settings: Settings, _no_network_discovery: None, monkeypatch
+) -> None:
+    """Retry once, never loop (contract §3a / spec §5a, 2026-09-04): the owner clears
+    the first interstitial, the same search is re-issued once, Google asks AGAIN,
+    and the workflow does not start a second wait — it takes exactly one
+    fallback attempt for that query and the run still reaches ready."""
+    handoff_searches: list[str] = []
+    fallback_searches: list[str] = []
+    waits = 0
+
+    def factory(*, capability: str, payload: dict[str, Any], **_kwargs) -> Any:
+        nonlocal waits
+        if capability == "browser.wait":
+            waits += 1
+            return CommandSucceeded(
+                {"satisfied": True, "url": "https://www.google.com/search?q=x", "elapsed_ms": 500}
+            )
+        if capability == "browser.search":
+            query = payload["query"]
+            if payload.get("interstitial") == "handoff":
+                handoff_searches.append(query)
+                # every handoff-mode attempt is blocked: first -> wait, second -> must not wait
+                return CommandSucceeded(
+                    {
+                        "schema_version": 2,
+                        "requested_provider": "google",
+                        "provider": None,
+                        "state": "waiting_for_owner_verification",
+                        "path": "handoff_pending",
+                        "page_kind": "captcha",
+                        "verification_url": "https://www.google.com/sorry/index",
+                        "results": [],
+                        "result_count": 0,
+                    }
+                )
+            fallback_searches.append(query)
+            return CommandSucceeded(
+                {
+                    "schema_version": 2,
+                    "requested_provider": "google",
+                    "provider": "duckduckgo",
+                    "fallback": True,
+                    "fallback_reason": "google:captcha",
+                    "state": "ok",
+                    "path": "handoff_repeat_fallback",
+                    "result_count": 1,
+                    "results": [
+                        {
+                            "url": f"https://news.example.com/{query}/1",
+                            "title": f"{query} haberi 1",
+                        },
+                    ],
+                }
+            )
+        return _fake_command_factory(capability=capability, payload=payload)
+
+    fake_client = FakeDeviceCommandClient(factory=factory)
+    monkeypatch.setattr(browser_activities, "_command_client", lambda: fake_client)
+    from app.artifacts import service as artifact_service
+
+    af_factory, _store = build_artifact_context(settings)
+    with af_factory() as session:
+        task = artifact_service.create_task(session, intent=TOPIC)
+        task_id = task.id
+    broker_runtime = BrokerRuntime(settings)
+    with broker_runtime.session() as db:
+        device = broker_service.enroll_device(
+            db,
+            name="interactive-repeat-pc",
+            platform="windows",
+            public_key_spki_b64=_spki(),
+            capabilities=["browser.chrome"],
+            trace_id=None,
+        )
+    broker_runtime.connections[device.id] = DeviceConnection(
+        device_id=device.id, session_id=uuid.uuid4(), websocket=object()
+    )
+    register_broker_runtime(broker_runtime)
+    try:
+        with af_factory() as session:
+            runs_service.update_run(session, task_id, device_id=device.id)
+        client = await Client.connect(
+            settings.temporal_address, namespace=settings.temporal_namespace
+        )
+        task_queue = f"pagentos-m13-interactive-repeat-{uuid.uuid4().hex[:8]}"
+        async with build_worker(client, task_queue):
+            result = await client.execute_workflow(
+                BrowserResearchWorkflow.run,
+                BrowserResearchRequest(
+                    task_id=str(task_id),
+                    topic=TOPIC,
+                    target_device=None,
+                    max_sources=6,
+                    synthesis="deterministic",
+                    interactive=True,
+                    interactive_wait_s=120,
+                ),
+                id=f"research-browser-{task_id}",
+                task_queue=task_queue,
+            )
+    finally:
+        register_broker_runtime(None)
+    assert result["stage"] == "ready"
+    # per query: handoff, (wait), handoff again, then exactly one fallback - never a 3rd handoff
+    from collections import Counter
+
+    # the plan issues each query once per source class; per (class, query): handoff,
+    # one wait, handoff again, then exactly one fallback - never a third handoff
+    per_query = Counter(handoff_searches)
+    per_query_fallback = Counter(fallback_searches)
+    assert per_query, "no handoff-mode search was issued"
+    for query, handoffs in per_query.items():
+        assert handoffs == 2 * per_query_fallback[query], (
+            query,
+            handoffs,
+            per_query_fallback[query],
+        )
+    assert waits == sum(per_query_fallback.values())
+
+
+async def test_browser_research_workflow_verification_timeout_fail_policy_stops_the_run(
+    settings: Settings, _no_network_discovery: None, monkeypatch
+) -> None:
+    """on_verification_timeout="fail": the owner never clears the page and asked not
+    to continue without the primary provider -> the run fails with
+    owner_verification_timeout (Turkish detail), no fallback search is issued."""
+    fallback_searches = 0
+
+    def factory(*, capability: str, payload: dict[str, Any], **_kwargs) -> Any:
+        nonlocal fallback_searches
+        if capability == "browser.wait":
+            return CommandSucceeded({"satisfied": False, "url": None, "elapsed_ms": 30000})
+        if capability == "browser.search":
+            if payload.get("interstitial") == "handoff":
+                return CommandSucceeded(
+                    {
+                        "schema_version": 2,
+                        "requested_provider": "google",
+                        "provider": None,
+                        "state": "waiting_for_owner_verification",
+                        "path": "handoff_pending",
+                        "page_kind": "captcha",
+                        "verification_url": "https://www.google.com/sorry/index",
+                        "results": [],
+                        "result_count": 0,
+                    }
+                )
+            fallback_searches += 1
+            return CommandSucceeded(
+                {
+                    "schema_version": 2,
+                    "requested_provider": "google",
+                    "provider": "duckduckgo",
+                    "fallback": True,
+                    "fallback_reason": "google:captcha",
+                    "state": "ok",
+                    "path": "handoff_timeout_fallback",
+                    "result_count": 0,
+                    "results": [],
+                }
+            )
+        return _fake_command_factory(capability=capability, payload=payload)
+
+    fake_client = FakeDeviceCommandClient(factory=factory)
+    monkeypatch.setattr(browser_activities, "_command_client", lambda: fake_client)
+    from app.artifacts import service as artifact_service
+
+    af_factory, _store = build_artifact_context(settings)
+    with af_factory() as session:
+        task = artifact_service.create_task(session, intent=TOPIC)
+        task_id = task.id
+    broker_runtime = BrokerRuntime(settings)
+    with broker_runtime.session() as db:
+        device = broker_service.enroll_device(
+            db,
+            name="interactive-fail-pc",
+            platform="windows",
+            public_key_spki_b64=_spki(),
+            capabilities=["browser.chrome"],
+            trace_id=None,
+        )
+    broker_runtime.connections[device.id] = DeviceConnection(
+        device_id=device.id, session_id=uuid.uuid4(), websocket=object()
+    )
+    register_broker_runtime(broker_runtime)
+    try:
+        with af_factory() as session:
+            runs_service.update_run(session, task_id, device_id=device.id)
+        client = await Client.connect(
+            settings.temporal_address, namespace=settings.temporal_namespace
+        )
+        task_queue = f"pagentos-m13-interactive-fail-{uuid.uuid4().hex[:8]}"
+        async with build_worker(client, task_queue):
+            result = await client.execute_workflow(
+                BrowserResearchWorkflow.run,
+                BrowserResearchRequest(
+                    task_id=str(task_id),
+                    topic=TOPIC,
+                    target_device=None,
+                    max_sources=6,
+                    synthesis="deterministic",
+                    interactive=True,
+                    interactive_wait_s=60,
+                    on_verification_timeout="fail",
+                ),
+                id=f"research-browser-{task_id}",
+                task_queue=task_queue,
+            )
+    finally:
+        register_broker_runtime(None)
+    assert result["stage"] == "failed"
+    assert result["error"]["error_class"] == "owner_verification_timeout"
+    assert "doğrulama" in result["error"]["detail"]
+    assert fallback_searches == 0
+    runtime = ArtifactRuntime(settings)
+    with runtime.session() as session:
+        run = runs_service.get_run(session, task_id)
+        assert run.stage == "failed"
+
+
 async def test_browser_research_workflow_interactive_handoff_timeout_falls_back(
     settings: Settings, _no_network_discovery: None, monkeypatch
 ) -> None:
@@ -341,19 +580,28 @@ async def test_browser_research_workflow_interactive_handoff_timeout_falls_back(
             if payload.get("interstitial") == "handoff":
                 return CommandSucceeded(
                     {
-                        "schema_version": 2, "requested_provider": "google", "provider": None,
-                        "state": "waiting_for_owner_verification", "path": "handoff_pending",
+                        "schema_version": 2,
+                        "requested_provider": "google",
+                        "provider": None,
+                        "state": "waiting_for_owner_verification",
+                        "path": "handoff_pending",
                         "page_kind": "captcha",
                         "verification_url": "https://www.google.com/sorry/index",
-                        "results": [], "result_count": 0,
+                        "results": [],
+                        "result_count": 0,
                     }
                 )
             query = payload["query"]
             return CommandSucceeded(
                 {
-                    "schema_version": 2, "requested_provider": "google", "provider": "duckduckgo",
-                    "fallback": True, "fallback_reason": "google:captcha", "state": "ok",
-                    "path": "handoff_timeout_fallback", "result_count": 2,
+                    "schema_version": 2,
+                    "requested_provider": "google",
+                    "provider": "duckduckgo",
+                    "fallback": True,
+                    "fallback_reason": "google:captcha",
+                    "state": "ok",
+                    "path": "handoff_timeout_fallback",
+                    "result_count": 2,
                     "results": [
                         {
                             "url": f"https://news.example.com/{query}/1",
@@ -381,8 +629,12 @@ async def test_browser_research_workflow_interactive_handoff_timeout_falls_back(
     broker_runtime = BrokerRuntime(settings)
     with broker_runtime.session() as db:
         device = broker_service.enroll_device(
-            db, name="interactive-timeout-pc", platform="windows", public_key_spki_b64=_spki(),
-            capabilities=["browser.chrome"], trace_id=None,
+            db,
+            name="interactive-timeout-pc",
+            platform="windows",
+            public_key_spki_b64=_spki(),
+            capabilities=["browser.chrome"],
+            trace_id=None,
         )
     broker_runtime.connections[device.id] = DeviceConnection(
         device_id=device.id, session_id=uuid.uuid4(), websocket=object()
@@ -403,8 +655,13 @@ async def test_browser_research_workflow_interactive_handoff_timeout_falls_back(
             result = await client.execute_workflow(
                 BrowserResearchWorkflow.run,
                 BrowserResearchRequest(
-                    task_id=str(task_id), topic=TOPIC, target_device=None, max_sources=6,
-                    synthesis="deterministic", interactive=True, interactive_wait_s=60,
+                    task_id=str(task_id),
+                    topic=TOPIC,
+                    target_device=None,
+                    max_sources=6,
+                    synthesis="deterministic",
+                    interactive=True,
+                    interactive_wait_s=60,
                 ),
                 id=f"research-browser-{task_id}",
                 task_queue=task_queue,
@@ -447,8 +704,12 @@ async def test_browser_research_workflow_survives_restart_mid_fetch(
     broker_runtime = BrokerRuntime(settings)
     with broker_runtime.session() as db:
         device = broker_service.enroll_device(
-            db, name="restart-pc", platform="windows", public_key_spki_b64=_spki(),
-            capabilities=["browser.chrome"], trace_id=None,
+            db,
+            name="restart-pc",
+            platform="windows",
+            public_key_spki_b64=_spki(),
+            capabilities=["browser.chrome"],
+            trace_id=None,
         )
     broker_runtime.connections[device.id] = DeviceConnection(
         device_id=device.id, session_id=uuid.uuid4(), websocket=object()
@@ -489,17 +750,18 @@ async def test_browser_research_workflow_survives_restart_mid_fetch(
         handle = await client.start_workflow(
             BrowserResearchWorkflow.run,
             BrowserResearchRequest(
-                task_id=str(task_id), topic=TOPIC, target_device=None,
-                max_sources=6, synthesis="deterministic",
+                task_id=str(task_id),
+                topic=TOPIC,
+                target_device=None,
+                max_sources=6,
+                synthesis="deterministic",
             ),
             id=f"research-browser-{task_id}",
             task_queue=task_queue,
         )
         # Wait for worker1 to actually reach the blocked fetch (not just a
         # fixed sleep) so the restart happens genuinely mid-activity.
-        await asyncio.get_running_loop().run_in_executor(
-            None, first_fetch_dispatched.wait, 30
-        )
+        await asyncio.get_running_loop().run_in_executor(None, first_fetch_dispatched.wait, 30)
         assert first_fetch_dispatched.is_set(), "worker1 never reached the first fetch"
 
         # Hard kill: cancel worker1's poll/dispatch loop directly rather than

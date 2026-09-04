@@ -178,6 +178,21 @@ when the job finishes.
 - **Boundaries unchanged**: risk policy READ+NAVIGATE, installed-worker proof, command/trace
   correlation, idempotency keys per step and attempt, forbidden-key scan, destination policy.
 
+**Search modes and the timeout policy (2026-09-04).** `POST /v1/research` accepts
+`mode: "interactive" | "unattended"` (the owner-facing spelling of `interactive`; `mode` wins
+when both are given) and `on_verification_timeout: "fallback" | "fail"` (interactive runs
+only). The workflow hands each query's interstitial to the owner at most once: after a cleared
+verification the same search is re-issued exactly once (`handoff_cleared`); if the device
+reports `waiting_for_owner_verification` again for that query, no second wait starts and one
+fallback attempt (`interstitial=fallback`, `path=handoff_timeout_fallback` or
+`handoff_repeat_fallback`) closes the query. When the owner does not clear the page within
+`interactive_wait_s`: `fallback` (default) takes that one fallback attempt and continues;
+`fail` stops the run with `error_class=owner_verification_timeout` and a Turkish explanation,
+so the owner decides (rerun interactively, or unattended) instead of the run silently
+continuing without the primary provider. A synchronous "ask the owner now" decision inside
+the durable workflow (a Temporal signal + web prompt) is deliberately deferred; the
+`fail` policy is the explicit-decision path today.
+
 ## 6. Synthesis providers
 
 `SynthesisProvider.synthesize(plan, evidence) -> ResearchReport`:

@@ -240,7 +240,46 @@ Expected last line: `REAL BROWSER SMOKE: PASS`, preceded by `live worker proven:
 If it stops with `deployment/version mismatch` or `INSTALL FAILED`, paste the message, the
 install log it names and the output of `.\scripts\verify-device-service.ps1`; do not rerun.
 
-### 12. Google-primary search through the installed worker — **this is the current action**
+### 14. Google search with owner verification handoff — **this is the current action**
+
+Unblocks: `docs/QUALIFICATION.md` 9.15 and, when Google answers, 9.12; the larger research
+run (item 10 step C) follows.
+
+The provider path is proven (item 12, 9.14). What is left is Google answering, and from this
+address Google shows its verification page to automated Chrome. The handoff makes that your
+decision, not a blocker: the page stays exactly as Google served it, the PagentOS Chrome
+window comes to the front, the script says so (Turkish and English), you complete the page by
+hand in that window, and the SAME session resumes automatically and retries the pending
+search exactly once. Nothing is solved, bypassed or retried in a loop: if Google asks again
+after your verification, the run records that and falls back once; if you do not complete
+the page within 10 minutes, the script asks whether to fall back now (y) or stop cleanly (N,
+session closed, profile cookies kept). Google's verification/consent cookies stay in the
+dedicated PagentOS profile, so later runs may not ask again.
+
+The command updates the installed agent first (worker source changed: search modes and the
+one-retry policy; one UAC prompt, the installer proves the live worker before anything
+else), proves the live worker again before any browser operation, then runs the interactive
+search:
+
+```powershell
+.\scripts\browser\real-browser-smoke.ps1 -UpdateAgentFirst -Mode search -SearchMode interactive -OutFile browser-search-handoff-1.json
+```
+
+Expected when Google answers after your verification: `state=ok path=handoff_cleared
+mode=interactive handoffs=1`, `requested_provider=google provider=google fallback=False`,
+result lines, `REAL BROWSER SMOKE: PASS`. If Google answered without asking (cookies from an
+earlier verification), `path=google_ui handoffs=0` is also a PASS. Paste the final lines and
+`browser-search-handoff-1.json` whatever the outcome.
+
+### 12. Google-primary search through the installed worker — **DONE (2026-09-04, provider path PROVEN_REAL; Google success not observed)**
+
+Result: worker 0.3.0, schema 2, `requested_provider=google`, Google attempted in the installed
+owner-session worker, `captcha interstitial detected; not answered`, `provider=duckduckgo
+fallback=True fallback_reason=google:captcha`, DuckDuckGo organic results. Recorded as
+QUALIFICATION 9.14 `PROVEN_REAL`; 9.12 (Google organic results) stays open and is item 14's
+question. Do not rerun this mode.
+
+#### (record) what item 12 asked for
 
 Unblocks: `docs/QUALIFICATION.md` 9.12; the larger research run (item 10 step C) waits for it.
 
