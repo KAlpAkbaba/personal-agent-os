@@ -25,6 +25,7 @@ from app.broker.models import AuditEvent
 from app.config import Settings
 from app.identity.root import InMemoryCredentialRoot
 from app.identity.runtime import IdentityRuntime
+from app.ledger.models import ActivityEventRow, PendingBriefingRow
 from app.main import create_app
 from app.narration.models import NarrationSession, PronunciationEntry
 from app.voice.models import VoiceProfile
@@ -62,7 +63,8 @@ def wired():
         table.create(engine)
     for table in (RealtimeSessionRow.__table__, RealtimeToolCall.__table__,
                   AuditEvent.__table__, VoiceProfile.__table__, NarrationSession.__table__,
-                  PronunciationEntry.__table__, Artifact.__table__, ArtifactVersion.__table__):
+                  PronunciationEntry.__table__, Artifact.__table__, ArtifactVersion.__table__,
+                  ActivityEventRow.__table__, PendingBriefingRow.__table__):
         table.create(engine)
 
     app = create_app(settings)

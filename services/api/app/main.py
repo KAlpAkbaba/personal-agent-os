@@ -26,6 +26,8 @@ from app.evolution.runtime import EvolutionRuntime
 from app.health import run_health_checks
 from app.identity.routes import router as identity_router
 from app.identity.runtime import IdentityRuntime
+from app.ledger import service as ledger_service
+from app.ledger.routes import router as ledger_router
 from app.logging import configure_logging, get_logger
 from app.memory.routes import router as memory_router
 from app.memory.runtime import MemoryRuntime
@@ -49,7 +51,6 @@ configure_logging()
 logger = get_logger("app.main")
 
 
-
 class UTF8JSONResponse(JSONResponse):
     """``application/json; charset=utf-8`` on every JSON response.
 
@@ -61,6 +62,7 @@ class UTF8JSONResponse(JSONResponse):
     """
 
     media_type = "application/json; charset=utf-8"
+
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
@@ -92,6 +94,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # this drains READY-but-unannounced tasks (app/mobile/announcer.py).
         await mobile.announcer.start()
         await embedded_worker.start()
+        # M16 track A: re-derive activity_events from canonical tables on every
+        # start (spec §1.4, safe to call twice). Never blocks startup — an older
+        # DB without the ledger tables yet, or any other backfill failure, is
+        # logged and swallowed so a broken ledger can never take Cloud Core down.
+        try:
+            with artifacts.session() as ledger_session:
+                report = await asyncio.to_thread(ledger_service.backfill, ledger_session)
+            logger.info("ledger_backfill_at_startup", created=report.total_created)
+        except Exception as exc:  # noqa: BLE001 - best-effort, never fatal
+            logger.warning(
+                "ledger_backfill_at_startup_failed", error=f"{type(exc).__name__}: {exc}"
+            )
         logger.info("broker_started")
         try:
             yield
@@ -155,6 +169,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(security_router)
     app.include_router(mobile_router)
     app.include_router(research_router)
+    app.include_router(ledger_router)
 
     @app.get("/v1/system/health")
     async def system_health() -> dict[str, Any]:
@@ -188,9 +203,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         checks["temporal_worker"] = await asyncio.to_thread(embedded_worker.health_check)
         # M13: synthesis-provider configuration posture (no I/O, no secrets).
         checks["research"] = await asyncio.to_thread(research_health, settings)
-        degraded = any(
-            check["status"] not in ("ok", "skipped") for check in checks.values()
-        )
+        degraded = any(check["status"] not in ("ok", "skipped") for check in checks.values())
         status = "degraded" if degraded else "ok"
         logger.info("health_checked", status=status, checks=checks)
         return {"status": status, "version": __version__, "checks": checks}

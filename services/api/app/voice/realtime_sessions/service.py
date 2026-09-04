@@ -22,6 +22,13 @@ from sqlalchemy.orm import Session
 
 from app.broker.audit import record_audit_event
 from app.identity.service import SessionContext
+from app.ledger import service as ledger_service
+from app.ledger.vocabulary import (
+    EVENT_TYPE_VOICE_SESSION_ATTACHED,
+    EVENT_TYPE_VOICE_SESSION_CLOSED,
+    EVENT_TYPE_VOICE_SESSION_CREATED,
+    SUBSYSTEM_VOICE,
+)
 from app.logging import get_logger
 from app.narration import service as narration_service
 from app.narration.commands import NarrationState, State
@@ -163,6 +170,52 @@ def _audit(
         trace_id=trace_id,
         metadata=scrub_metadata(metadata),
     )
+
+
+_LEDGER_EVENT_TYPE_BY_STATE = {
+    "created": EVENT_TYPE_VOICE_SESSION_CREATED,
+    "attached": EVENT_TYPE_VOICE_SESSION_ATTACHED,
+    "closed": EVENT_TYPE_VOICE_SESSION_CLOSED,
+}
+_LEDGER_SUMMARY_BY_STATE = {
+    "created": "Sesli oturum oluşturuldu.",
+    "attached": "Sesli oturum yeniden bağlandı.",
+    "closed": "Sesli oturum kapandı.",
+}
+
+
+def _ledger(
+    db: Session,
+    state: str,
+    row: RealtimeSessionRow,
+    *,
+    trace_id: str | None = None,
+    detail: dict[str, Any] | None = None,
+) -> None:
+    """Activity Ledger write for create/attach/close (M16 track A, spec §1.2
+    writer table: ``source_ref = realtime_sessions:<id>:<state>``).
+    Best-effort: a ledger failure must never fail the voice session
+    transition it is describing — that transition already committed."""
+    try:
+        ledger_service.record(
+            db,
+            ledger_service.ActivityEvent(
+                event_type=_LEDGER_EVENT_TYPE_BY_STATE[state],
+                subsystem=SUBSYSTEM_VOICE,
+                action=f"voice_session_{state}",
+                factual_summary=_LEDGER_SUMMARY_BY_STATE[state],
+                occurred_at=utcnow(),
+                trace_id=trace_id,
+                evidence_refs=[{"kind": "realtime_session", "ref": str(row.id)}],
+                detail_json=detail or {},
+                source="live",
+                source_ref=f"realtime_sessions:{row.id}:{state}",
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001 - see docstring
+        logger.warning(
+            "ledger_record_failed", session_id=str(row.id), error=f"{type(exc).__name__}: {exc}"
+        )
 
 
 # ---------------------------------------------------------------- sessions
@@ -353,6 +406,7 @@ def create_session(
         },
     )
     db.commit()
+    _ledger(db, "created", row, trace_id=trace_id, detail={"provider": row.provider})
     payload = _leg_payload(row, credential, registry=registry, config=config)
     return row, credential, payload
 
@@ -940,7 +994,7 @@ def _ledger_narration_event(
                 action=detail.get("action") or event_type,
                 occurred_at=now,
                 factual_summary="Anlatım sahibin araya girmesiyle duraklatıldı.",
-                detail=detail,
+                detail_json=detail,
                 source="live",
                 source_ref=f"voice_narration:{narration_id}:{now.isoformat()}",
                 evidence_refs=[
@@ -1045,6 +1099,7 @@ def attach(
         },
     )
     db.commit()
+    _ledger(db, "attached", row, trace_id=trace_id, detail={"same_leg": same_leg})
     payload = _leg_payload(row, credential, registry=registry, config=config)
     payload["state"] = session_state(db, row)
     payload["pending_sideband"] = pending
@@ -1078,6 +1133,7 @@ def close_session(
         )
         snapshot_benchmark_at_close(db, row)
         db.commit()
+        _ledger(db, "closed", row, trace_id=trace_id, detail={"reason": reason[:64]})
     return {"session_id": str(row.id), "state": row.state, "closed_at": _iso(row.closed_at)}
 
 

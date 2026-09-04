@@ -39,6 +39,13 @@ from app.db import build_engine, build_session_factory
 from app.devices import service as devices_service
 from app.devices.commands import DeviceCommandClient, get_broker_runtime
 from app.devices.selection import NoCapableDeviceError, select_device
+from app.ledger import briefing as ledger_briefing
+from app.ledger import service as ledger_service
+from app.ledger.vocabulary import (
+    EVENT_TYPE_RESEARCH_QUALITY_GATE,
+    STATUS_INFO,
+    SUBSYSTEM_RESEARCH,
+)
 from app.logging import get_logger, task_id_var
 from app.memory.embedding import DeterministicEmbedder
 from app.memory.service import remember_explicit
@@ -983,6 +990,35 @@ def rank_activity(
             },
             event=event,
         )
+        if rejected:
+            # Ledger write is side-effect-safe: it must never fail the ranking
+            # step itself (M16 track A).
+            try:
+                rejected_total = sum(rejected.values())
+                ledger_service.record(
+                    session,
+                    ledger_service.ActivityEvent(
+                        event_type=EVENT_TYPE_RESEARCH_QUALITY_GATE,
+                        subsystem=SUBSYSTEM_RESEARCH,
+                        action="quality_gate_rejected",
+                        status=STATUS_INFO,
+                        result=f"{rejected_total} rejected",
+                        factual_summary=f"Kalite kapısı {rejected_total} sayfayı eledi.",
+                        occurred_at=datetime.now(UTC),
+                        research_job_id=tid,
+                        evidence_refs=[{"kind": "research_run", "ref": str(tid)}],
+                        detail_json={
+                            "rejected": rejected,
+                            "rejected_examples": rejection_details[:10],
+                        },
+                        source="live",
+                        source_ref=f"research_runs:{tid}:quality_gate:attempt:{_current_attempt()}",
+                    ),
+                )
+            except Exception as exc:  # noqa: BLE001 - see comment above
+                logger.warning(
+                    "ledger_record_failed", task_id=task_id, error=f"{type(exc).__name__}: {exc}"
+                )
     return {
         "evidence": len(ranked),
         "deduplicated": len(eligible) - len(ranked),
@@ -1256,6 +1292,25 @@ def persist_artifact_activity(task_id: str, topic: str) -> dict[str, Any]:
             stage=STAGE_PERSISTING,
             event={"stage": STAGE_PERSISTING, "detail": f"artifact {artifact_id} v{version_no}"},
         )
+        # Ledger write is side-effect-safe: a failure here must never fail the
+        # (already-persisted) artifact/task transitions above (M16 track A).
+        try:
+            ledger_event = ledger_service.record(
+                session,
+                ledger_service.build_research_completed_event(
+                    task_id=tid,
+                    occurred_at=datetime.now(UTC),
+                    report_json=report_json,
+                    artifact_id=artifact_id,
+                    source="live",
+                    source_ref=f"research_runs:{tid}:ready",
+                ),
+            )
+            ledger_briefing.queue_briefing(session, ledger_event)
+        except Exception as exc:  # noqa: BLE001 - see comment above
+            logger.warning(
+                "ledger_record_failed", task_id=task_id, error=f"{type(exc).__name__}: {exc}"
+            )
     logger.info(
         "browser_research_artifact_persisted", task_id=task_id, artifact_id=str(artifact_id)
     )
@@ -1419,6 +1474,25 @@ def fail_run_activity(task_id: str, error_class: str, detail: str) -> bool:
             event={"stage": STAGE_FAILED, "detail": f"{error_class}: {detail[:300]}"},
         )
         session.commit()
+        # Ledger write is side-effect-safe: a failure here must never mask the
+        # research run's own (already-committed) terminal failure (M16 track A).
+        try:
+            ledger_event = ledger_service.record(
+                session,
+                ledger_service.build_research_failed_event(
+                    task_id=tid,
+                    occurred_at=datetime.now(UTC),
+                    error_class=error_class,
+                    error=detail,
+                    source="live",
+                    source_ref=f"research_runs:{tid}:failed",
+                ),
+            )
+            ledger_briefing.queue_briefing(session, ledger_event)
+        except Exception as exc:  # noqa: BLE001 - see comment above
+            logger.warning(
+                "ledger_record_failed", task_id=task_id, error=f"{type(exc).__name__}: {exc}"
+            )
     return True
 
 

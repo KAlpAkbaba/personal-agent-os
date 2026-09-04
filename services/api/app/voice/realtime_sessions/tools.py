@@ -321,7 +321,7 @@ def _ledger_note(
                     if event_type.endswith("paused")
                     else "Anlatım kaldığı yerden sürdü."
                 ),
-                detail=detail,
+                detail_json=detail,
                 source="live",
                 source_ref=f"voice_narration:{narration_session_id}:{ctx.now.isoformat()}",
                 evidence_refs=[
@@ -410,7 +410,7 @@ def _explained_note(ctx: ToolContext, record: Any) -> None:
                     f"Sahibe {record.level} düzeyinde etkinlik özeti anlatıldı: "
                     f"{counts['facts']} olgu, {counts['uncertainties']} belirsizlik."
                 ),
-                detail={"kind": record.briefing.query.kind, "level": record.level, **counts},
+                detail_json={"kind": record.briefing.query.kind, "level": record.level, **counts},
                 source="live",
                 source_ref=f"voice_explained:{ctx.session_id}:{record.artifact_id}",
                 evidence_refs=[

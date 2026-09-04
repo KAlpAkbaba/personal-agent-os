@@ -320,3 +320,12 @@ def test_session_activity_is_the_durable_record_of_the_script(wired, monkeypatch
     assert [i["intent"] for i in activity["intents"]] == ["stop"]
     assert activity["barge_in_count"] == 1
     assert activity["narration"]["state"] == "READING"
+
+    # and the ledger holds the explanation, the pause and the resume as evidence
+    from app.ledger import service as ledger_service
+
+    with Session(_engine) as db:
+        types = [e.event_type for e in ledger_service.query(db, subsystems=("voice",), limit=50)]
+    assert "voice.explained" in types
+    assert "voice.narration.paused" in types
+    assert "voice.narration.resumed" in types
