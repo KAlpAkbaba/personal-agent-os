@@ -18,7 +18,8 @@ from app.ledger.models import ActivityEventRow
 from app.selfhealing.models import Incident, Release
 from app.selfmodel import query
 from app.selfmodel.indexer import IndexConfig, build_index
-from app.selfmodel.query import REQUIRED_GATES, normalize_key
+from app.selfmodel.models import TRUTH_EVIDENCE, TRUTH_INSTALLED, TRUTH_RUNTIME
+from app.selfmodel.query import REQUIRED_GATES, is_stale, normalize_key
 from tests.selfmodel_support import (
     FIXTURE_MODULE,
     FIXTURE_PACKAGE,
@@ -520,3 +521,28 @@ def test_turkish_names_fold_to_the_identifier_a_developer_would_have_typed() -> 
     assert normalize_key("Diagnostic Observer") == "diagnostic_observer"
     assert normalize_key("Diagnostic Observer'da") == "diagnostic_observer"
     assert normalize_key("app/selfmodel/query.py") == "app/selfmodel/query"
+
+
+# ------------------------------------------------------------------- staleness
+
+
+def test_runtime_truth_is_reported_stale_once_it_is_old_enough() -> None:
+    """An index that has not looked in an hour must not say "it is running"."""
+    seen = datetime(2026, 9, 5, 6, 0, tzinfo=UTC)
+    assert not is_stale(TRUTH_RUNTIME, seen, now=seen + timedelta(minutes=5))
+    assert is_stale(TRUTH_RUNTIME, seen, now=seen + timedelta(hours=1))
+    # installed truth survives until the next deployment; evidence never ages
+    assert not is_stale(TRUTH_INSTALLED, seen, now=seen + timedelta(days=1))
+    assert is_stale(TRUTH_INSTALLED, seen, now=seen + timedelta(days=30))
+    assert not is_stale(TRUTH_EVIDENCE, seen, now=seen + timedelta(days=900))
+
+
+def test_a_naive_timestamp_is_treated_as_utc_rather_than_crashing() -> None:
+    """SQLite hands back naive datetimes; a staleness check must not raise on one."""
+    naive = datetime(2026, 9, 5, 6, 0)
+    assert is_stale(TRUTH_RUNTIME, naive, now=datetime(2026, 9, 5, 9, 0, tzinfo=UTC))
+
+
+def test_an_unknown_truth_kind_is_never_guessed_stale() -> None:
+    assert not is_stale("something_else", datetime(2020, 1, 1, tzinfo=UTC))
+    assert not is_stale(TRUTH_RUNTIME, None)

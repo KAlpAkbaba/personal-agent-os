@@ -35,9 +35,9 @@ import importlib.metadata
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import Any
+from typing import Any, Final
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -62,6 +62,14 @@ class TruthKind(StrEnum):
     EVIDENCE = "evidence_truth"
 
 
+#: How long an observation of each truth kind may be trusted. Absent means the kind
+#: does not age: SOURCE truth is as of the snapshot itself, EVIDENCE truth is history.
+STALE_AFTER: Final[dict[TruthKind, timedelta]] = {
+    TruthKind.RUNTIME: timedelta(minutes=15),
+    TruthKind.INSTALLED: timedelta(days=7),
+}
+
+
 def _iso(dt: datetime) -> str:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=UTC)
@@ -77,13 +85,34 @@ class Fact:
     observed_at: datetime
     confidence: float = 1.0
     evidence_refs: list[dict[str, Any]] = field(default_factory=list)
-    #: True when ``observed_at`` is old enough that the value may no longer
-    #: hold (assembly itself never sets this for a fact it just observed;
-    #: reserved for a caller that re-serves a cached snapshot).
+    #: A floor, not the answer: set when the assembler KNOWS an observation was
+    #: superseded. Age is checked on top of it by :meth:`is_stale` at read time.
     stale: bool = False
     note: str = ""
 
-    def as_dict(self) -> dict[str, Any]:
+    def is_stale(self, *, now: datetime | None = None) -> bool:
+        """True when this observation is too old to be reported as current.
+
+        Runtime truth ages fastest: a process can restart a second after it was
+        observed, so "it was running fifteen minutes ago" is not "it is running".
+        Installed truth survives until the next deployment. Evidence truth is a
+        historical record and never goes stale - what happened stays happened.
+
+        This is computed rather than stored because nothing revisits a fact when
+        time simply passes. Until 2026-09-05 the flag was only ever written as
+        False, so every answer claimed a freshness it had not checked - exactly
+        what the four truth kinds exist to prevent (independent security review).
+        """
+        if self.stale:
+            return True
+        ttl = STALE_AFTER.get(self.truth_kind)
+        if ttl is None:
+            return False
+        moment = now or datetime.now(UTC)
+        seen = self.observed_at if self.observed_at.tzinfo else self.observed_at.replace(tzinfo=UTC)
+        return (moment - seen) > ttl
+
+    def as_dict(self, *, now: datetime | None = None) -> dict[str, Any]:
         return {
             "key": self.key,
             "category": self.category,
@@ -92,7 +121,7 @@ class Fact:
             "observed_at": _iso(self.observed_at),
             "confidence": self.confidence,
             "evidence_refs": list(self.evidence_refs),
-            "stale": self.stale,
+            "stale": self.is_stale(now=now),
             "note": self.note,
         }
 

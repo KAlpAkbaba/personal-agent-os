@@ -33,6 +33,7 @@ from app.explain.classify import (
     QUERY_WHY_FAILED,
     ExplainQuery,
 )
+from app.ledger.screening import MAX_EVIDENCE_CHARS, safe_evidence_text
 from app.narration.numbers import cardinal
 
 LABEL_FACT = "known_fact"
@@ -369,6 +370,22 @@ def _subsystem_tr(name: str | None) -> str:
     return _SUBSYSTEM_TR.get(name or "", name or "sistem")
 
 
+def _said(value: Any, *, max_len: int = MAX_EVIDENCE_CHARS) -> str:
+    """Free text from a stored row, made safe to read aloud.
+
+    Lessons, opportunities, goals and procedural memories carry text that did not
+    originate in this engine: an incident's evidence blob, an exception message, a
+    captured page. The ledger's HTTP route screens what it receives, but that is one
+    ingestion path among several, and none of the others passed through it - so this
+    is screened again at the point it becomes speech, which is the only place every
+    path meets (independent security review, 2026-09-05).
+
+    It replaces rather than refuses: a poisoned row costs one sentence of the answer,
+    never the whole answer, and the evidence reference still points at the record.
+    """
+    return safe_evidence_text(value, max_len=max_len)
+
+
 def _plain(value: Any, *, max_len: int = 64) -> str:
     """A version, commit, file name or count as spoken text: one line, bounded, no
     control characters. Ledger detail values come from owner scripts and evidence files;
@@ -483,15 +500,15 @@ def _research_detailed(ev: EventView, report: dict[str, Any] | None) -> list[Bri
         for f in report.get("findings", []):
             if not isinstance(f, dict):
                 continue
-            statements = [Statement(str(f.get("summary") or "").strip(), LABEL_FACT, refs)]
-            why = str(f.get("why_it_matters") or "").strip()
+            statements = [Statement(_said(f.get("summary")), LABEL_FACT, refs)]
+            why = _said(f.get("why_it_matters"))
             if why:
                 statements.append(Statement(f"Neden önemli: {why}", LABEL_INFERENCE, refs))
             cited = [sources.get(str(eid)) for eid in (f.get("evidence_ids") or [])]
-            names = [str(s.get("publisher") or s.get("title") or "") for s in cited if s]
+            names = [_said(s.get("publisher") or s.get("title"), max_len=80) for s in cited if s]
             if names:
                 statements.append(Statement(f"Kaynak: {_tr_list(names)}.", LABEL_FACT, refs))
-            items.append(BriefingItem(str(f.get("title") or "Bulgu"), tuple(statements)))
+            items.append(BriefingItem(_said(f.get("title")) or "Bulgu", tuple(statements)))
             if len(items) >= MAX_DETAILED_ITEMS:
                 break  # the rest stays in the report artifact; "hepsini oku" reads it
     if not items:
@@ -665,16 +682,18 @@ def _goal_ref(goal: dict[str, Any]) -> dict[str, Any]:
 
 def _lesson_item(lesson: dict[str, Any]) -> BriefingItem:
     ref = _lesson_ref(lesson)
-    statements = [Statement(str(lesson.get("statement") or ""), LABEL_FACT, (ref,))]
+    statements = [Statement(_said(lesson.get("statement")), LABEL_FACT, (ref,))]
     if lesson.get("root_cause"):
-        statements.append(Statement(f"Kök neden: {lesson['root_cause']}", LABEL_FACT, (ref,)))
+        statements.append(
+            Statement(f"Kök neden: {_said(lesson['root_cause'])}", LABEL_FACT, (ref,))
+        )
     if lesson.get("resolution"):
-        statements.append(Statement(f"Çözüm: {lesson['resolution']}", LABEL_FACT, (ref,)))
+        statements.append(Statement(f"Çözüm: {_said(lesson['resolution'])}", LABEL_FACT, (ref,)))
     if str(lesson.get("status")) == "candidate":
         statements.append(
             Statement("Bu ders henüz aday; yeterince tekrarlanmadı.", LABEL_UNCERTAINTY, (ref,))
         )
-    return BriefingItem(str(lesson.get("title") or "Ders"), tuple(statements))
+    return BriefingItem(_said(lesson.get("title")) or "Ders", tuple(statements))
 
 
 def _lesson_technical(lessons: list[dict[str, Any]]) -> list[BriefingItem]:
@@ -683,7 +702,7 @@ def _lesson_technical(lessons: list[dict[str, Any]]) -> list[BriefingItem]:
         ref = _lesson_ref(lesson)
         items.append(
             BriefingItem(
-                str(lesson.get("title") or "Ders"),
+                _said(lesson.get("title")) or "Ders",
                 (
                     Statement(
                         f"Skor {_plain(lesson.get('score'))}; tekrar "
@@ -700,7 +719,7 @@ def _lesson_technical(lessons: list[dict[str, Any]]) -> list[BriefingItem]:
 
 def _opportunity_item(opportunity: dict[str, Any]) -> BriefingItem:
     ref = _opportunity_ref(opportunity)
-    statements = [Statement(str(opportunity.get("statement") or ""), LABEL_FACT, (ref,))]
+    statements = [Statement(_said(opportunity.get("statement")), LABEL_FACT, (ref,))]
     statements.append(
         Statement(
             f"Durum: {opportunity.get('status')}."
@@ -709,7 +728,7 @@ def _opportunity_item(opportunity: dict[str, Any]) -> BriefingItem:
             (ref,),
         )
     )
-    return BriefingItem(str(opportunity.get("title") or "Fırsat"), tuple(statements))
+    return BriefingItem(_said(opportunity.get("title")) or "Fırsat", tuple(statements))
 
 
 def _opportunity_technical(opportunities: list[dict[str, Any]]) -> list[BriefingItem]:
@@ -719,7 +738,7 @@ def _opportunity_technical(opportunities: list[dict[str, Any]]) -> list[Briefing
         scores = opportunity.get("scores") or {}
         items.append(
             BriefingItem(
-                str(opportunity.get("title") or "Fırsat"),
+                _said(opportunity.get("title")) or "Fırsat",
                 (
                     Statement(
                         f"Bileşik skor {_plain(scores.get('composite'))}; risk "
@@ -738,15 +757,15 @@ def _opportunity_technical(opportunities: list[dict[str, Any]]) -> list[Briefing
 def _goal_item(goal: dict[str, Any]) -> BriefingItem:
     ref = _goal_ref(goal)
     statements = [
-        Statement(str(goal.get("intent") or goal.get("title") or ""), LABEL_FACT, (ref,)),
+        Statement(_said(goal.get("intent") or goal.get("title")), LABEL_FACT, (ref,)),
         Statement(f"Durum: {goal.get('status')}.", LABEL_FACT, (ref,)),
     ]
     blockers = goal.get("blockers") or []
     if blockers:
         statements.append(
-            Statement(f"Engel: {_tr_list([str(b) for b in blockers[:3]])}.", LABEL_FACT, (ref,))
+            Statement(f"Engel: {_tr_list([_said(b) for b in blockers[:3]])}.", LABEL_FACT, (ref,))
         )
-    return BriefingItem(str(goal.get("title") or "Hedef"), tuple(statements))
+    return BriefingItem(_said(goal.get("title")) or "Hedef", tuple(statements))
 
 
 def _window_statement(events: list[EventView], query: ExplainQuery) -> Statement | None:
@@ -928,7 +947,7 @@ def explain(
                 executive.append(
                     Statement(
                         f"{cardinal(len(promoted)).capitalize()} ders çıkardım; ilki: "
-                        f"{promoted[0].get('statement')}",
+                        f"{_said(promoted[0].get('statement'))}",
                         LABEL_FACT,
                         (_lesson_ref(promoted[0]),),
                     )
@@ -1001,7 +1020,7 @@ def explain(
             for lesson in top:
                 executive.append(
                     Statement(
-                        str(lesson.get("statement") or lesson.get("title") or "").strip(),
+                        _said(lesson.get("statement") or lesson.get("title")),
                         LABEL_FACT,
                         (_lesson_ref(lesson),),
                     )
@@ -1012,10 +1031,10 @@ def explain(
             for memory in procedural[:MAX_DETAILED_ITEMS]:
                 detailed.append(
                     BriefingItem(
-                        str(memory.get("key") or "Yordam"),
+                        _said(memory.get("key")) or "Yordam",
                         (
                             Statement(
-                                str(memory.get("text") or ""),
+                                _said(memory.get("text")),
                                 LABEL_FACT,
                                 ({"kind": "memory", "ref": str(memory.get("memory_id"))},),
                             ),
@@ -1043,7 +1062,7 @@ def explain(
             )
         elif query.kind == QUERY_SHADOW_READY:
             if shadow:
-                names = _tr_list([str(o.get("title") or "") for o in shadow[:3]])
+                names = _tr_list([_said(o.get("title"), max_len=80) for o in shadow[:3]])
                 executive.append(
                     Statement(
                         f"Efendim, {cardinal(len(shadow))} yetenek hazır ve gölge durumda: "
@@ -1064,7 +1083,7 @@ def explain(
             target = (shadow or building or opportunities)[0]
             executive.append(
                 Statement(
-                    f"{target.get('title')}: {target.get('statement')}",
+                    f"{_said(target.get('title'))}: {_said(target.get('statement'))}",
                     LABEL_FACT,
                     (_opportunity_ref(target),),
                 )
@@ -1125,7 +1144,7 @@ def explain(
             if blocked:
                 executive.append(
                     Statement(
-                        f"{blocked[0].get('title')} sizin müdahalenizi bekliyor.",
+                        f"{_said(blocked[0].get('title'))} sizin müdahalenizi bekliyor.",
                         LABEL_FACT,
                         (_goal_ref(blocked[0]),),
                     )

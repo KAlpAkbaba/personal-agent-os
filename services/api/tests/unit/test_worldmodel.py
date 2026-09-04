@@ -7,7 +7,7 @@ unavailable, and the owner-gated read-only REST surface.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -25,7 +25,7 @@ from app.ledger.models import ActivityEventRow
 from app.main import create_app
 from app.selfhealing.models import Incident, Release
 from app.worldmodel.routes import router as worldmodel_router
-from app.worldmodel.state import TruthKind, assemble_snapshot
+from app.worldmodel.state import Fact, TruthKind, assemble_snapshot
 from tests.identity_support import authenticate
 
 ALL_TABLES = [
@@ -291,3 +291,52 @@ def test_get_world_uncertainties(client: TestClient) -> None:
     response = client.get("/v1/world/uncertainties")
     assert response.status_code == 200
     assert any(u["subject"] == "owner.enrolled" for u in response.json()["uncertainties"])
+
+
+# ------------------------------------------------------------------- staleness
+
+
+def test_a_runtime_fact_goes_stale_and_says_so() -> None:
+    """"It was running fifteen minutes ago" is not "it is running".
+
+    ``stale`` used to be written as False everywhere and computed nowhere, so every
+    answer claimed a freshness it had never checked (security review, 2026-09-05).
+    """
+    seen = datetime(2026, 9, 5, 6, 0, tzinfo=UTC)
+    fact = Fact(
+        key="cloud_core.running",
+        category="runtime",
+        value="0.4.0",
+        truth_kind=TruthKind.RUNTIME,
+        observed_at=seen,
+    )
+    assert not fact.is_stale(now=seen + timedelta(minutes=5))
+    assert fact.is_stale(now=seen + timedelta(hours=2))
+    assert fact.as_dict(now=seen + timedelta(hours=2))["stale"] is True
+    assert fact.as_dict(now=seen + timedelta(minutes=1))["stale"] is False
+
+
+def test_evidence_truth_never_goes_stale() -> None:
+    """What happened stays happened; a historical record is not a perishable claim."""
+    seen = datetime(2026, 1, 1, tzinfo=UTC)
+    fact = Fact(
+        key="research.qualified",
+        category="evidence",
+        value=True,
+        truth_kind=TruthKind.EVIDENCE,
+        observed_at=seen,
+    )
+    assert not fact.is_stale(now=seen + timedelta(days=900))
+
+
+def test_an_explicitly_superseded_fact_stays_stale_however_fresh() -> None:
+    seen = datetime(2026, 9, 5, 6, 0, tzinfo=UTC)
+    fact = Fact(
+        key="agent.installed",
+        category="installed",
+        value="0.3.9",
+        truth_kind=TruthKind.INSTALLED,
+        observed_at=seen,
+        stale=True,
+    )
+    assert fact.is_stale(now=seen)

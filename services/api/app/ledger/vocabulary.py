@@ -203,6 +203,20 @@ EVENT_TYPE_EVOLUTION_SHADOW_READY = "evolution.shadow_ready"
 EVENT_TYPE_EVOLUTION_OWNER_APPROVAL_REQUIRED = "evolution.owner_approval_required"
 EVENT_TYPE_EVOLUTION_DEPLOYED = "evolution.deployed"
 EVENT_TYPE_EVOLUTION_ROLLED_BACK = "evolution.rolled_back"
+#: The five lifecycle closures the first twelve constants could not name. Without
+#: them ``app.evolution.service`` had to record NOTHING for ``researching``,
+#: ``qualifying``, and for ``rejected``/``quarantined``/``superseded`` that did not
+#: come out of a failed test run — the transitions survived only in the
+#: opportunity's own detail blob, so "what happened to that candidate?" was not
+#: answerable from the ledger, and the owner's since-you-left briefing silently
+#: dropped a candidate being parked. Mislabelling them as tests_failed would have
+#: been worse than the gap; naming them honestly is the fix (audit-completeness
+#: review, 2026-09-05).
+EVENT_TYPE_EVOLUTION_RESEARCHING = "evolution.researching"
+EVENT_TYPE_EVOLUTION_QUALIFYING = "evolution.qualifying"
+EVENT_TYPE_EVOLUTION_REJECTED = "evolution.rejected"
+EVENT_TYPE_EVOLUTION_QUARANTINED = "evolution.quarantined"
+EVENT_TYPE_EVOLUTION_SUPERSEDED = "evolution.superseded"
 
 EVOLUTION_EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_EVOLUTION_IDEA_CREATED,
@@ -217,6 +231,11 @@ EVOLUTION_EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_EVOLUTION_OWNER_APPROVAL_REQUIRED,
     EVENT_TYPE_EVOLUTION_DEPLOYED,
     EVENT_TYPE_EVOLUTION_ROLLED_BACK,
+    EVENT_TYPE_EVOLUTION_RESEARCHING,
+    EVENT_TYPE_EVOLUTION_QUALIFYING,
+    EVENT_TYPE_EVOLUTION_REJECTED,
+    EVENT_TYPE_EVOLUTION_QUARANTINED,
+    EVENT_TYPE_EVOLUTION_SUPERSEDED,
 )
 
 #: deployment.<component>.(released|rolled_back) for a component not among the

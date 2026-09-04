@@ -240,6 +240,27 @@ evidence) are gates, never acceptance. No seeded or demo events exist.
 | 10.8 | Spoken answers respect the listening budgets: executive two to four sentences (~10-20 s), detailed cut at a sentence boundary (~30-60 s), technical concise; only "hepsini oku" reads everything; the cursor keeps section/item position across pause/resume | `PROVEN_REAL` | **PROVEN_REAL 2026-09-05 (owner's real session, reported by the owner):** the concise executive briefing and the detailed and technical levels were heard as intended. `activity.tool_calls[activity.explain].speech_chars ≤ 420`; `intent=technical` call `speech_chars ≤ 700`; the owner's verdict on length. Headless proxies: `test_explain_engine.py` (budgets), `test_voice_explain_tools.py` (full read, level routing). |
 | 10.9 | "Son yaptıklarını anlat" summarises owner-relevant activity - never the previous explanation or voice bookkeeping - and says whether anything needs the owner | `PROVEN_REAL` | **PROVEN_REAL 2026-09-05 (owner's real session, reported by the owner):** the briefing summarised the research qualification rather than the previous narration. The executive briefing names the research qualification while newer `voice.explained` / `voice.session.*` events exist in the ledger. Headless proxy: `test_the_explanation_itself_never_leads_the_next_explanation`. |
 
+## Stage 11 — M17 Cognitive Foundations (pre-registered 2026-09-05; nothing PROVEN_REAL yet)
+
+Everything below is `PROVEN_PROXY` at best: automated tests and dev-database runs. None of
+it has been heard by the owner in a real Turkish voice session, so none of it is
+`PROVEN_REAL`. The proxies are gates, never acceptance. The one thing this stage does NOT
+need is another long owner qualification: these rows ride along with the next ordinary
+voice session.
+
+| # | Criterion | Status | Evidence required |
+|---|---|---|---|
+| 11.1 | "Ne öğrendin?" is answered from compiled lessons with the incidents that produced them; a lesson with no evidence is never spoken as fact | `PROVEN_PROXY` | Unit: `test_experience_engine.py` (8), `test_experience_compiler.py` (11), `test_experience_routes.py` (10); the Phase-9 branch in `test_explain_engine.py`. Real: the owner hears a lesson naming a real incident. |
+| 11.2 | "Kendi üzerinde ne geliştiriyorsun?" / "Canlıya alınmayı bekleyen ne var?" answer from the opportunity backlog, and a SHADOW_READY candidate is named as ready-but-not-deployed | `PROVEN_PROXY` | Unit: `test_evolution_backlog.py` (216), `test_evolution_boundaries.py`, the evolution branches in `test_explain_engine.py`. Real: the owner hears the shadow candidate and that it awaits approval. |
+| 11.3 | The lab cannot reach production by any path: no lab-issued authority holds a production grant, `OWNER_APPROVED` needs an owner-session capability, `LIVE` needs an owner-approved release, root policies are immutable from lab code | `PROVEN_PROXY` | Unit: `test_evolution_authority.py`, `test_evolution_boundaries.py`, `test_evolution_guards.py`, plus the exhaustive illegal-transition matrix. This row is structural: it is proven by the code refusing, not by an owner watching it refuse. |
+| 11.4 | Every backlog transition writes exactly one ledger event; no status maps to nothing | `PROVEN_PROXY` | Unit: `test_every_lifecycle_status_writes_exactly_one_ledger_event`, plus the quarantine/superseded/test-failure regression tests (2026-09-05). |
+| 11.5 | The world model never reports a source-only fact as installed or runtime truth, and says "I don't know" rather than answering from a stale index | `PROVEN_PROXY` | Unit: `test_worldmodel.py` (19), `test_selfmodel_query.py` (26). Two real defects of this class were found by independent review on 2026-09-05 and fixed with regression tests. |
+| 11.6 | The self model indexes only files inside the checkout - a junction or symlink out of the tree is never read or parsed | `PROVEN_PROXY` | Unit: `test_selfmodel_indexer.py` (24), including the containment regression. |
+| 11.7 | "Diagnostic Observer'da sorun ne?" and "Bu özelliği neden geliştirdin?" are answered with module provenance, separating known fact from inference | `PROVEN_PROXY` | Unit: `test_selfmodel_routes.py` (13), `test_explain_engine.py`. Real: the owner hears the distinction stated aloud. |
+| 11.8 | Goals progress through the cognitive loop with evidence-checked success criteria; the Critic can send a step back; every state change is in the ledger | `PROVEN_PROXY` | Unit: `test_goals_service.py` (26), `test_cognitive_loop.py` (12), `test_goals_routes.py` (15). |
+| 11.9 | Every new subsystem publishes truthful UI state (ADR-0052) with no content, no transcript and no audio sample; `progress` is null where unknown | `PROVEN_PROXY` | Unit: `test_uistate.py` (11) plus the per-subsystem publisher tests. The renderer does not exist yet by decision. |
+| 11.10 | No subsystem added in M17 starts a background loop at application startup | `PROVEN_PROXY` | `app/main.py` wires routers only; asserted by inspection and by the absence of any scheduler registration. Re-check on any change to startup. |
+
 ## Stage 7 — Real voice
 
 | # | Criterion | Status |

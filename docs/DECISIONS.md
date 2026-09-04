@@ -3179,3 +3179,70 @@ later) with no further subsystem changes; every new subsystem this milestone add
 (experience, goals, cognitive core, self model, evolution) publishes through the same bus
 from the start. Deliberately deferred: the WebSocket/stream transport, any visual design,
 and the audio-reactive detail of the speaking state.
+
+## ADR-0053 — M17 Cognitive Foundations: six inspectable subsystems over durable evidence, and a lab that cannot reach production (2026-09-05)
+
+Status: Accepted
+
+Context: after M16 the system could answer *what happened?* from the Activity Ledger. The
+owner's overnight direction asked for the next layer — memory of experience, compiled
+lessons, goals with a cognitive loop, a world model, a self model, and the foundation of an
+Evolution Engine — with two hard conditions: no claim of general intelligence, and an
+Evolution Engine that can never reach production by itself. The obvious implementation (one
+large model prompt holding "memory", "goals" and "self-knowledge" in its context) fails both:
+it cannot be inspected, cannot cite its evidence, and has whatever authority the process has.
+
+Decisions:
+
+1. **Six packages, one rule: evidence first, then words.** `app/experience`,
+   `app/goals`, `app/worldmodel`, `app/selfmodel`, `app/evolution` and the M16
+   `app/explain` all read the same durable rows (`activity_events`, incidents, releases,
+   research reports). Nothing may state as fact anything it cannot point at; a derived
+   claim carries `inference` and an uncertain one carries `uncertainty`, all the way out
+   to the spoken sentence. The alternative — letting a subsystem "know" things from its
+   own prose — is what makes a self-model lie.
+2. **The four truth kinds are the world model's entire point.** `source`, `installed`,
+   `runtime` and `evidence` are separate and never averaged. A fact known only from the
+   checkout may never be reported as what is running; a stale index answers "I don't
+   know" rather than confidently answering from last week. Two defects of exactly this
+   class were found and fixed the day this shipped (a junction walk that read files
+   outside the checkout, and a component suffix match that attributed runtime truth to
+   modules the evidence never named), which is the evidence that the distinction needs
+   enforcing in code rather than in documentation.
+3. **The cognitive loop is a set of named, testable roles.** Orchestrator, Planner, Actor,
+   Critic, MemoryManager and CapabilityRouter are separate objects with separate inputs
+   and separate tests, not personas in a prompt. A goal's success criteria are checked
+   against evidence, not against the Actor's own report; the Critic can send a step back.
+4. **Lessons are compiled from incidents, and stay attributable.** The Experience Compiler
+   turns repeated real failures into a lesson with the incident refs that produced it.
+   A lesson may inform planning and opportunity scoring; it may not silently become a
+   fact about the world, and it carries its confidence with it.
+5. **The Evolution boundary is a capability, not a rule in a prompt.** The lab holds a
+   `LabAuthority` that has no production grant. `OWNER_APPROVED` is a different method
+   (`approve()`) requiring an owner-session capability rather than a different string in a
+   request body; `LIVE` additionally requires proof of an owner-approved release; the root
+   policies are immutable from lab code. The lab may research, design, build, test,
+   benchmark, review, package, reach `SHADOW_READY` and explain itself — and stop there.
+6. **Every backlog transition is auditable.** Five lifecycle statuses originally mapped to
+   no ledger event because the closed vocabulary had no honest name for them; that left a
+   candidate able to be quarantined with no durable trace. The vocabulary now reserves
+   `evolution.researching`, `evolution.qualifying`, `evolution.rejected`,
+   `evolution.quarantined` and `evolution.superseded`, and a test asserts no status maps to
+   nothing. `evolution.tests_failed` still wins where it applies, because it says why.
+7. **One migration, one shape.** `0016_cognitive_foundations` creates `goals`,
+   `goal_tasks`, `experience_lessons`, `code_modules`, `code_symbols`, `code_edges`,
+   `module_provenance` and `evolution_opportunities`, verified by upgrade → downgrade →
+   upgrade. The lifecycle enum and the database CHECK constraint assert against each other
+   at import time so they cannot drift.
+8. **Nothing runs on a timer yet.** No subsystem added here starts a background loop at
+   application startup: indexing, compilation and lab work are invoked explicitly. A
+   cognitive system that wakes up on its own is a separate decision with its own cost and
+   safety questions, and the owner's rule against runaway background loops is easier to
+   keep than to recover.
+
+Consequences: the owner can ask "ne öğrendin?", "kendi üzerinde ne geliştiriyorsun?" and
+"canlıya alınmayı bekleyen ne var?" and get evidence-backed Turkish answers at the existing
+narration levels. What is deliberately NOT claimed: general intelligence, autonomous
+deployment, or that any of this is proven beyond the tests and the real runs recorded in
+`docs/QUALIFICATION.md`. Deferred: scheduled compilation, the shadow-run execution harness
+(M18), and any production-side evolution writer.

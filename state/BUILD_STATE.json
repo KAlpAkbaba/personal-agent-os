@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "project": "personal-agent-os",
-  "current_milestone": "M16_ACTIVITY_LEDGER_SELF_EXPLANATION_VOICE_NARRATION",
-  "status": "BUILT_AND_GATED_OFFLINE; NOT PROVEN_REAL (owner action 16 pending)",
+  "current_milestone": "M17_COGNITIVE_FOUNDATIONS",
+  "status": "M17 BUILT_AND_GATED_OFFLINE (all proxies green); M16 PROVEN_REAL except rows 10.5/10.6, which need one 15-second owner command (OWNER_ACTIONS item 17)",
   "last_completed_milestone": "M15_RESEARCH_ENGINE",
-  "last_updated": "2026-09-05T02:10:00+03:00",
+  "last_updated": "2026-09-05T07:40:00+03:00",
   "qualification": {
     "matrix": "docs/QUALIFICATION.md",
     "owner_queue": "docs/OWNER_ACTIONS.md",
@@ -100,5 +100,19 @@
     "deployment": "one transactional Cloud Core release (new tables + routes); web client from the checkout; no Windows component changed",
     "owner_run_1_2026_09_04": "Product PROVEN in use (voice UI answered from the ledger; Dur/Devam et worked); harness failed on shell start/session correlation (fixed, ADR-0051 addendum 2). Owner UX verdict: good, but background speech interrupted, answers too long, level intents not recorded (fixed, ADR-0051 addendum 3: client-owned two-lane interruption with interrupt_response=false, narration budgets, owner-relevance ranking, normalised intents). Stage 10 rows 10.1-10.9 NOT_YET_PROVEN until the short owner test passes.",
     "owner_run_2_2026_09_05": "The real session PROVED the product: ledger-backed self explanation, background-speech rejection, explicit Dur, cursor persistence, Devam et resume, concise executive plus detail/technical. QUALIFICATION 10.1-10.4 and 10.7-10.9 PROVEN_REAL on the owner's report. The one failing acceptance check matched generated Turkish wording; provenance is now structural (ADR-0051 addendum 4) and owner-explain.ps1 -VerifyOnly re-checks a completed session in ~15 s. 10.5 and 10.6 OWNER_ACTION_REQUIRED (item 17)."
+  },
+  "m17_cognitive_foundations": {
+    "spec": "docs/M17_COGNITIVE_FOUNDATIONS_SPEC.md; ADR-0053; UI contract ADR-0052",
+    "migration": "alembic 0016_cognitive_foundations: goals, goal_tasks, experience_lessons, code_modules, code_symbols, code_edges, module_provenance, evolution_opportunities; verified upgrade -> downgrade -> upgrade on the dev database",
+    "experience": "app/experience: engine writes episodic/semantic memory from ledger events through the M5 memory subsystem; compiler turns repeated incidents into lessons that keep their incident refs and their confidence",
+    "goals": "app/goals: goal engine with evidence-checked success criteria, plus the cognitive loop as named testable roles (Orchestrator, Planner, Actor, Critic, MemoryManager, CapabilityRouter) - not personas in a prompt",
+    "worldmodel": "app/worldmodel: four truth kinds (source / installed / runtime / evidence) kept separate and never averaged; a source-only fact can never be reported as what is running",
+    "selfmodel": "app/selfmodel: module/symbol/edge index with per-module provenance; answers 'I don't know' rather than guessing. Three real defects found by independent review on 2026-09-05 (junction walk escaping the checkout, suffix match attributing runtime truth, Turkish diacritics deleted instead of folded) - all fixed with regression tests",
+    "evolution": "app/evolution: evidence-only opportunity backlog, lab authority holding no production grant, owner approval as a separate capability-bearing method, risk able to veto score. Ledger vocabulary extended with the five missing lifecycle events so no transition is invisible",
+    "uistate": "app/uistate (ADR-0052): 15-state vocabulary, content-free bounded metadata, replayable tail, owner-gated read-only surface. Every M17 subsystem publishes through it. The 3D renderer is deliberately not built",
+    "explain": "app/explain answers 'ne ogrendin', 'kendi uzerinde ne gelistiriyorsun', 'canliya alinmayi bekleyen ne var', 'bu ozelligi neden gelistirdin', 'test sonuclarini anlat', 'ben yokken neler oldu' from these subsystems, at the existing narration levels and budgets",
+    "background_loops": "none: app/main.py wires routers only. Indexing, compilation and lab work are invoked explicitly (ADR-0053 decision 8)",
+    "deployment": "none. Nothing was deployed for M17; no Windows component changed",
+    "qualification": "docs/QUALIFICATION.md Stage 11 (11.1-11.10), all PROVEN_PROXY. Nothing in M17 is PROVEN_REAL: the owner has not heard it yet. These rows ride along with the next ordinary voice session and need no separate long qualification"
   }
 }

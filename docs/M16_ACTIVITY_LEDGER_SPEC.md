@@ -93,11 +93,19 @@ Current: `research.planned` `research.completed` `research.failed` `research.qua
 `deployment.agent.installed` `deployment.agent.skipped` `memory.remembered`
 `ledger.backfill` `briefing.queued` `briefing.delivered`.
 
-Reserved for the Evolution Engine (constants exist now, writers come with M18):
+Reserved for the Evolution Engine (M17 writes the lab-side ones; the production-side
+writers come with M18). The last five were added on 2026-09-05: without them five backlog
+transitions - `researching`, `qualifying`, and `rejected`/`quarantined`/`superseded` outside
+a failed test run - produced no ledger event at all, so a candidate could be parked in
+quarantine and neither the ledger nor the owner's briefing would ever say so. Every backlog
+transition now writes exactly one event; `tests_failed` still wins over the generic closure
+event when the failure really came out of a test or eval run, because it says why.
 `evolution.idea_created` `evolution.module_designed` `evolution.build_started`
 `evolution.build_completed` `evolution.tests_passed` `evolution.tests_failed`
 `evolution.security_review_passed` `evolution.benchmark_completed` `evolution.shadow_ready`
-`evolution.owner_approval_required` `evolution.deployed` `evolution.rolled_back`, each with
+`evolution.owner_approval_required` `evolution.deployed` `evolution.rolled_back`
+`evolution.researching` `evolution.qualifying` `evolution.rejected` `evolution.quarantined`
+`evolution.superseded`, each with
 `related_module_id`, `version`, `production_state` and `evidence_refs` (test report, review
 record, benchmark record). The Self Model answers "Diagnostic Observer'da sorun ne?" from
 these events plus `incidents`, and says which of it is fact and which is inference.

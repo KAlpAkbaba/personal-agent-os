@@ -34,14 +34,19 @@ Ledger vocabulary
 -----------------
 
 ``app/ledger/vocabulary.py`` is a *closed* vocabulary owned by the ledger
-module, and it reserves twelve ``evolution.*`` event types. Four backlog
-statuses have no honest match among them (``researching``, ``qualifying``, and
-``rejected``/``quarantined`` when they are not the result of a failed test
-run). Rather than mislabel those events, this module records no ledger event
-for them and says so in :data:`LEDGER_EVENT_FOR_STATUS`; every transition is
-still captured in the opportunity's own ``detail_json["transitions"]`` history
-and in the UI-state stream. Closing that gap needs three new reserved event
-types in the ledger's vocabulary, which is another module's to change.
+module. It first reserved twelve ``evolution.*`` event types, and five backlog
+statuses had no honest match among them (``researching``, ``qualifying``, and
+``rejected``/``quarantined``/``superseded`` when they are not the result of a
+failed test run). Rather than mislabel those events this module recorded
+nothing for them, which left a real audit gap: a candidate could be parked in
+quarantine and the ledger — and therefore the owner's briefing — would never
+say so. The vocabulary now reserves the five missing types, and **every**
+backlog transition writes exactly one ledger event.
+
+The one place specificity beats the table is a rejection or quarantine that
+came out of a test/eval run: that is ``evolution.tests_failed``, which says
+*why*, so :meth:`_ledger_spec` consults the test-phase history first and falls
+back to the generic closure event otherwise.
 """
 
 from __future__ import annotations
@@ -90,8 +95,13 @@ from app.ledger.vocabulary import (
     EVENT_TYPE_EVOLUTION_IDEA_CREATED,
     EVENT_TYPE_EVOLUTION_MODULE_DESIGNED,
     EVENT_TYPE_EVOLUTION_OWNER_APPROVAL_REQUIRED,
+    EVENT_TYPE_EVOLUTION_QUALIFYING,
+    EVENT_TYPE_EVOLUTION_QUARANTINED,
+    EVENT_TYPE_EVOLUTION_REJECTED,
+    EVENT_TYPE_EVOLUTION_RESEARCHING,
     EVENT_TYPE_EVOLUTION_ROLLED_BACK,
     EVENT_TYPE_EVOLUTION_SHADOW_READY,
+    EVENT_TYPE_EVOLUTION_SUPERSEDED,
     EVENT_TYPE_EVOLUTION_TESTS_FAILED,
     EVENT_TYPE_EVOLUTION_TESTS_PASSED,
     PRODUCTION_STATE_APPROVAL_REQUIRED,
@@ -100,6 +110,7 @@ from app.ledger.vocabulary import (
     PRODUCTION_STATE_DESIGNED,
     PRODUCTION_STATE_IDEA,
     PRODUCTION_STATE_NA,
+    PRODUCTION_STATE_REVIEWED,
     PRODUCTION_STATE_ROLLED_BACK,
     PRODUCTION_STATE_SHADOW_READY,
     PRODUCTION_STATE_TESTED,
@@ -174,8 +185,8 @@ UI_STATE_FOR_STATUS: Final[dict[OpportunityStatus, str]] = {
 }
 
 #: (event_type, ledger status, production_state, severity) per backlog status.
-#: ``None`` means the closed ledger vocabulary has no honest match — see the
-#: module docstring.
+#: Every status maps to an event: an unrecorded transition is an audit gap, and
+#: the ledger is the only durable place the owner's briefing reads from.
 LEDGER_EVENT_FOR_STATUS: Final[dict[OpportunityStatus, tuple[str, str, str, str] | None]] = {
     OpportunityStatus.IDEA: (
         EVENT_TYPE_EVOLUTION_IDEA_CREATED,
@@ -183,7 +194,12 @@ LEDGER_EVENT_FOR_STATUS: Final[dict[OpportunityStatus, tuple[str, str, str, str]
         PRODUCTION_STATE_IDEA,
         SEVERITY_INFO,
     ),
-    OpportunityStatus.RESEARCHING: None,
+    OpportunityStatus.RESEARCHING: (
+        EVENT_TYPE_EVOLUTION_RESEARCHING,
+        STATUS_STARTED,
+        PRODUCTION_STATE_IDEA,
+        SEVERITY_INFO,
+    ),
     OpportunityStatus.DESIGN_READY: (
         EVENT_TYPE_EVOLUTION_MODULE_DESIGNED,
         STATUS_COMPLETED,
@@ -220,7 +236,14 @@ LEDGER_EVENT_FOR_STATUS: Final[dict[OpportunityStatus, tuple[str, str, str, str]
         PRODUCTION_STATE_APPROVAL_REQUIRED,
         SEVERITY_NOTICE,
     ),
-    OpportunityStatus.QUALIFYING: None,
+    # Post-approval, pre-deployment: reviewed and approved, but nothing is live
+    # yet, so the production_state must not say "deployed".
+    OpportunityStatus.QUALIFYING: (
+        EVENT_TYPE_EVOLUTION_QUALIFYING,
+        STATUS_STARTED,
+        PRODUCTION_STATE_REVIEWED,
+        SEVERITY_NOTICE,
+    ),
     OpportunityStatus.LIVE: (
         EVENT_TYPE_EVOLUTION_DEPLOYED,
         STATUS_COMPLETED,
@@ -233,10 +256,26 @@ LEDGER_EVENT_FOR_STATUS: Final[dict[OpportunityStatus, tuple[str, str, str, str]
         PRODUCTION_STATE_ROLLED_BACK,
         SEVERITY_WARNING,
     ),
-    # Only honest when the rejection came out of a test/eval run; see _ledger_spec.
-    OpportunityStatus.REJECTED: None,
-    OpportunityStatus.QUARANTINED: None,
-    OpportunityStatus.SUPERSEDED: None,
+    # The generic closures. A rejection or quarantine that came out of a test or
+    # eval run is more specific than these and wins in _ledger_spec.
+    OpportunityStatus.REJECTED: (
+        EVENT_TYPE_EVOLUTION_REJECTED,
+        STATUS_COMPLETED,
+        PRODUCTION_STATE_NA,
+        SEVERITY_INFO,
+    ),
+    OpportunityStatus.QUARANTINED: (
+        EVENT_TYPE_EVOLUTION_QUARANTINED,
+        STATUS_FAILED,
+        PRODUCTION_STATE_NA,
+        SEVERITY_WARNING,
+    ),
+    OpportunityStatus.SUPERSEDED: (
+        EVENT_TYPE_EVOLUTION_SUPERSEDED,
+        STATUS_COMPLETED,
+        PRODUCTION_STATE_NA,
+        SEVERITY_INFO,
+    ),
 }
 
 _TEST_PHASE_STATUSES = frozenset({OpportunityStatus.TESTING, OpportunityStatus.EVALUATING})
@@ -696,11 +735,9 @@ class EvolutionService:
     def _ledger_spec(
         self, opportunity: Mapping[str, Any], status: OpportunityStatus
     ) -> tuple[str, str, str, str] | None:
-        spec = LEDGER_EVENT_FOR_STATUS.get(status)
-        if spec is not None:
-            return spec
         if status in {OpportunityStatus.REJECTED, OpportunityStatus.QUARANTINED}:
-            # Honest only when the failure really came out of a test/eval run.
+            # tests_failed says WHY, so it beats the generic closure event — but
+            # only when the failure really did come out of a test/eval run.
             history = (opportunity.get("detail") or {}).get("transitions") or []
             previous = history[-1].get("from") if history else None
             if previous in {str(s) for s in _TEST_PHASE_STATUSES}:
@@ -710,7 +747,7 @@ class EvolutionService:
                     PRODUCTION_STATE_NA,
                     SEVERITY_WARNING,
                 )
-        return None
+        return LEDGER_EVENT_FOR_STATUS.get(status)
 
     def _record_ledger(
         self,

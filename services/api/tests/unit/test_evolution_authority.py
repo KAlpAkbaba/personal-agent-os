@@ -3,7 +3,7 @@
 These are the tests that have to be right. Everything else in the phase is
 features; this file is the claim that the Evolution Engine cannot deploy.
 
-Five independent properties are asserted:
+Six independent properties are asserted:
 
 1. a lab authority can never come to hold a production grant, by any route
    exposed from ``app.evolution.authority``;
@@ -13,12 +13,18 @@ Five independent properties are asserted:
 4. the root policies cannot be mutated, and their digest is pinned;
 5. no module under ``app/evolution`` imports a deployment, release-mutation or
    secret-root module — and the scanner that checks this is proven non-vacuous
-   by feeding it a file that does.
+   by feeding it a file that does;
+6. the authority TYPE itself cannot be worked around — by subclassing, by
+   ``dataclasses.replace``, by pickle, or by rebuilding the object around its
+   constructor. Property 5's scanner is blind to all of these, because none of
+   them import anything forbidden (independent security review, 2026-09-05).
 """
 
 from __future__ import annotations
 
 import dataclasses
+import pickle
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -373,3 +379,70 @@ def test_only_the_owner_session_dependency_is_reachable_from_identity() -> None:
     assert ALLOWED_IDENTITY_MODULES == {"app.identity.dependencies"}
     assert EVOLUTION_PACKAGE_DIR.name == "evolution"
     assert (EVOLUTION_PACKAGE_DIR / "authority.py").is_file()
+
+
+# ------------------------------------------------- 6. the type cannot be worked around
+
+
+def test_authority_cannot_be_subclassed() -> None:
+    """The bypass an independent review demonstrated on 2026-09-05.
+
+    ``__post_init__`` was the only thing refusing a production authority, and
+    a subclass overriding it with ``pass`` produced a fully privileged authority
+    that ``guard_production_action`` accepted. No forbidden import, no private
+    name, no owner session - so ``scan_evolution_package`` could never see it.
+    """
+    with pytest.raises(AuthorityError) as excinfo:
+
+        class Forged(Authority):  # type: ignore[misc]
+            def __post_init__(self) -> None:
+                return None
+
+    assert "final" in str(excinfo.value)
+
+
+def test_owner_capability_cannot_be_subclassed() -> None:
+    with pytest.raises(AuthorityError):
+
+        class ForgedCapability(OwnerCapability):  # type: ignore[misc]
+            def __init__(self) -> None:  # pragma: no cover - never constructed
+                return None
+
+
+def test_an_authority_rebuilt_around_its_constructor_is_refused() -> None:
+    """object.__new__ + setattr skips __post_init__ entirely; the guard still refuses."""
+    forged = object.__new__(Authority)
+    for name, value in (
+        ("subject", "lab.candidate"),
+        ("scope", Scope.PRODUCTION),
+        ("grants", frozenset(PRODUCTION_GRANTS)),
+        ("issued_at", datetime.now(UTC)),
+        ("mint", None),
+    ):
+        object.__setattr__(forged, name, value)
+
+    for action in PRODUCTION_ACTIONS:
+        with pytest.raises(AuthorityError):
+            guard_production_action(action, forged)
+
+
+def test_a_pickled_authority_cannot_be_reconstituted_with_production_scope() -> None:
+    lab = LabAuthority.issue("evolution.engine")
+    restored = pickle.loads(pickle.dumps(lab))
+    assert restored.scope is Scope.LAB
+    assert not (restored.grants & PRODUCTION_GRANTS)
+    with pytest.raises(AuthorityError):
+        guard_production_action("deploy_release", restored)
+
+
+def test_dataclasses_replace_cannot_promote_a_lab_authority() -> None:
+    lab = LabAuthority.issue("evolution.engine")
+    with pytest.raises(AuthorityError):
+        dataclasses.replace(lab, scope=Scope.PRODUCTION, grants=frozenset(PRODUCTION_GRANTS))
+
+
+def test_a_genuine_production_authority_still_works() -> None:
+    """The lock must not be so tight that the owner cannot act."""
+    authority = ProductionAuthority.for_owner(owner_capability())
+    for action in PRODUCTION_ACTIONS:
+        guard_production_action(action, authority)

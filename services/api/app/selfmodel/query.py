@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
 from sqlalchemy import select
@@ -227,6 +227,35 @@ def _iso(value: datetime | None) -> str | None:
     return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
+#: How long an observation of each kind may be trusted before it is reported as
+#: stale. A runtime observation ages fastest: a process can restart a second after
+#: it was observed, so "it was running an hour ago" is not "it is running". An
+#: installed observation survives until the next deployment. Source truth is exactly
+#: as old as the index, and evidence truth is a historical record that never goes
+#: stale - what happened stays happened.
+#:
+#: Before 2026-09-05 ``stale`` was written as False everywhere and never computed, so
+#: every answer claimed a freshness it had not checked - the opposite of what the four
+#: truth kinds exist for (independent security review).
+STALE_AFTER: Final[dict[str, timedelta]] = {
+    TRUTH_RUNTIME: timedelta(minutes=15),
+    TRUTH_INSTALLED: timedelta(days=7),
+    TRUTH_SOURCE: timedelta(days=7),
+}
+
+
+def is_stale(
+    truth_kind: str, observed_at: datetime | None, *, now: datetime | None = None
+) -> bool:
+    """True when an observation of this kind is too old to be reported as current."""
+    ttl = STALE_AFTER.get(truth_kind)
+    if ttl is None or observed_at is None:
+        return False
+    moment = now or datetime.now(UTC)
+    seen = observed_at if observed_at.tzinfo else observed_at.replace(tzinfo=UTC)
+    return (moment - seen) > ttl
+
+
 def _truths(session: Session, module_id: str) -> dict[str, dict[str, Any]]:
     """The four truths as four separate entries. Absent means absent -- a
     missing ``runtime`` key is the answer to "is this live?", not a gap to fill
@@ -243,7 +272,10 @@ def _truths(session: Session, module_id: str) -> dict[str, dict[str, Any]]:
             "observed_at": _iso(row.observed_at),
             "evidence_refs": list(row.evidence_refs or []),
             "confidence": row.confidence,
-            "stale": bool(row.stale),
+            # The stored flag is a floor: an indexer that KNOWS an observation was
+            # superseded sets it. Age is checked on top of it at every read, because
+            # nothing revisits the row when time simply passes.
+            "stale": bool(row.stale) or is_stale(row.truth_kind, row.observed_at),
         }
     return out
 

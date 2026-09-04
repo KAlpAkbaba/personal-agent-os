@@ -589,6 +589,7 @@ def test_reserved_evolution_event_types_are_written_to_the_ledger(stack) -> None
     written = {row.event_type for row in rows}
     assert written == {
         "evolution.idea_created",
+        "evolution.researching",
         "evolution.module_designed",
         "evolution.build_started",
         "evolution.build_completed",
@@ -600,6 +601,86 @@ def test_reserved_evolution_event_types_are_written_to_the_ledger(stack) -> None
         assert row.factual_summary
         assert row.related_module_id == opportunity["opportunity_id"]
         assert row.evidence_refs  # never fabricated: the origin travels with it
+
+
+def test_every_lifecycle_status_writes_exactly_one_ledger_event() -> None:
+    """No transition may be invisible in the ledger.
+
+    Five statuses used to map to ``None`` because the closed vocabulary had no
+    honest name for them, so a candidate could be quarantined or superseded and
+    the ledger - the only durable source the owner's briefing reads - would say
+    nothing at all (audit-completeness review, 2026-09-05).
+    """
+    from app.evolution.service import LEDGER_EVENT_FOR_STATUS
+
+    unrecorded = [str(s) for s, spec in LEDGER_EVENT_FOR_STATUS.items() if spec is None]
+    assert unrecorded == [], f"these transitions would leave no ledger trace: {unrecorded}"
+    assert set(LEDGER_EVENT_FOR_STATUS) == set(OpportunityStatus)
+
+
+def test_quarantine_outside_a_test_run_is_recorded_as_quarantine(stack) -> None:
+    session_scope, service, _ = stack
+    opportunity = make_opportunity(stack)
+    drive_to(stack, opportunity["opportunity_id"], OpportunityStatus.SHADOW_READY)
+    service.advance(
+        opportunity["opportunity_id"],
+        target=OpportunityStatus.QUARANTINED,
+        actor=ActorKind.LAB,
+    )
+
+    with session_scope() as session:
+        rows = (
+            session.query(ActivityEventRow)
+            .filter(ActivityEventRow.event_type == "evolution.quarantined")
+            .all()
+        )
+    assert len(rows) == 1
+    # It did not come out of a test run, so it must NOT claim a test failure.
+    assert rows[0].status == "failed"
+    assert rows[0].production_state == "n/a"
+    assert rows[0].related_module_id == opportunity["opportunity_id"]
+
+
+def test_quarantine_out_of_a_test_run_still_says_why(stack) -> None:
+    """The more specific event wins: tests_failed says why, quarantined does not."""
+    session_scope, service, _ = stack
+    opportunity = make_opportunity(stack)
+    drive_to(stack, opportunity["opportunity_id"], OpportunityStatus.TESTING)
+    service.advance(
+        opportunity["opportunity_id"],
+        target=OpportunityStatus.QUARANTINED,
+        actor=ActorKind.LAB,
+    )
+
+    with session_scope() as session:
+        written = {
+            row.event_type
+            for row in session.query(ActivityEventRow)
+            .filter(ActivityEventRow.subsystem == "evolution")
+            .all()
+        }
+    assert "evolution.tests_failed" in written
+    assert "evolution.quarantined" not in written
+
+
+def test_a_superseded_candidate_is_recorded(stack) -> None:
+    session_scope, service, _ = stack
+    opportunity = make_opportunity(stack)
+    service.advance(
+        opportunity["opportunity_id"],
+        target=OpportunityStatus.SUPERSEDED,
+        actor=ActorKind.LAB,
+    )
+
+    with session_scope() as session:
+        rows = (
+            session.query(ActivityEventRow)
+            .filter(ActivityEventRow.event_type == "evolution.superseded")
+            .all()
+        )
+    assert len(rows) == 1
+    assert rows[0].severity == "info"
+    assert rows[0].factual_summary
 
 
 def test_shadow_ready_also_asks_the_owner(stack) -> None:

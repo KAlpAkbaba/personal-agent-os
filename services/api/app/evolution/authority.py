@@ -212,6 +212,9 @@ def _utcnow() -> datetime:
 class OwnerCapability:
     """Proof that a *verified, unscoped owner session* is behind this call.
 
+    Runtime-final: subclassing is refused, because a subclass could override
+    ``__init__`` and skip the mint check (security review, 2026-09-05).
+
     The only way to obtain one is :func:`mint_owner_capability`, whose argument
     is the ``SessionContext`` that ``require_owner_session`` returns after a
     real bearer-token verification. Lab code is constructed without a session
@@ -223,6 +226,12 @@ class OwnerCapability:
     """
 
     __slots__ = ("client_kind", "issued_at", "session_id", "_mint")
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        raise AuthorityError(
+            "OwnerCapability is final; a subclass could override the mint check",
+            subclass=cls.__name__,
+        )
 
     def __init__(self, *, mint: object, session_id: str, client_kind: str) -> None:
         if mint is not _CAPABILITY_MINT:
@@ -284,6 +293,20 @@ class Authority:
     issued_at: datetime = field(default_factory=_utcnow, compare=False)
     #: Never exported, never compared, never serialized.
     mint: object | None = field(default=None, repr=False, compare=False)
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        """Refuse subclassing outright.
+
+        ``__post_init__`` below was the ONLY thing standing between a caller and a
+        production authority, and a two-line subclass that overrode it with ``pass``
+        produced a fully privileged authority that ``guard_production_action``
+        accepted - no forbidden import, no private name, no owner session, so the
+        import scanner could never have seen it (security review, 2026-09-05).
+        """
+        raise AuthorityError(
+            "Authority is final; a subclass could override the production-mint check",
+            subclass=cls.__name__,
+        )
 
     def __post_init__(self) -> None:
         unknown = {g for g in self.grants if g not in LAB_GRANTS | PRODUCTION_GRANTS}
@@ -432,10 +455,10 @@ def current_authority() -> Authority | None:
 
 def _resolve_authority(args: tuple[Any, ...], kwargs: dict[str, Any]) -> Authority:
     candidate = kwargs.get("authority")
-    if isinstance(candidate, Authority):
+    if type(candidate) is Authority:
         return candidate
     for arg in args:
-        if isinstance(arg, Authority):
+        if type(arg) is Authority:
             return arg
         bound = getattr(arg, "authority", None)
         if isinstance(bound, Authority):
@@ -471,12 +494,47 @@ def requires(grant: Grant) -> Callable[[Callable[..., Any]], Callable[..., Any]]
     return decorate
 
 
+def assert_genuine_authority(authority: Authority, *, action: str) -> None:
+    """Refuse anything that is not an ``Authority`` this module itself minted.
+
+    Two checks, because the constructor invariant alone was not enough:
+
+    * ``type(...) is Authority`` - not ``isinstance`` - so a subclass that skipped
+      ``__post_init__`` cannot be laundered through the guard. ``__init_subclass__``
+      already refuses to create such a class; this is the second lock, so removing
+      either one alone does not reopen the door.
+    * the production mint token must be present on the object, which also refuses an
+      instance rebuilt by ``pickle``/``object.__new__`` around the constructor.
+
+    What this deliberately does NOT claim: containment against arbitrary code running
+    inside this process. Any in-process caller can reach module-private names through
+    ordinary introspection. The real boundary for untrusted candidate code is the
+    process/sandbox boundary (ADR-0053); these checks make the boundary hold against
+    ordinary code, careless refactors and the import-scanner's blind spot.
+    """
+    if type(authority) is not Authority:
+        raise AuthorityError(
+            "production action attempted with an Authority subclass or look-alike; "
+            "only an authority minted by this module is accepted",
+            action=action,
+            offered_type=type(authority).__name__,
+        )
+    if authority.scope is Scope.PRODUCTION and authority.mint is not _AUTHORITY_MINT:
+        raise AuthorityError(
+            "production authority is missing its mint; it was not created by "
+            "ProductionAuthority.issue() from a verified owner session",
+            action=action,
+            subject=authority.subject,
+        )
+
+
 def guard_production_action(action: str, authority: Authority | None) -> None:
     """The single choke point for every production action.
 
     Refuses when the action is unknown (fail closed on a typo rather than
     letting an unlisted action through), when there is no authority, when the
-    authority is lab-scoped, or when the required grant is absent.
+    authority is not genuinely minted, when it is lab-scoped, or when the
+    required grant is absent.
     """
     grant = PRODUCTION_ACTIONS.get(action)
     if grant is None:
@@ -486,6 +544,7 @@ def guard_production_action(action: str, authority: Authority | None) -> None:
         )
     if authority is None:
         raise AuthorityError("production action attempted with no authority", action=action)
+    assert_genuine_authority(authority, action=action)
     if authority.scope is not Scope.PRODUCTION:
         raise AuthorityError(
             "a lab-scoped caller may never perform a production action; the "
@@ -798,6 +857,7 @@ __all__ = [
     "RootPolicy",
     "Scope",
     "apply_policy_change",
+    "assert_genuine_authority",
     "authority_scope",
     "current_authority",
     "guard_production_action",
