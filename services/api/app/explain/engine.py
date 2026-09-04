@@ -18,11 +18,17 @@ from app.explain.classify import (
     LEVEL_EXECUTIVE,
     LEVEL_TECHNICAL,
     QUERY_EVIDENCE,
+    QUERY_EVOLUTION,
     QUERY_FAILURES,
+    QUERY_GOALS,
+    QUERY_LEARNED,
     QUERY_MODULE_PROBLEM,
     QUERY_PROBLEMS_NOW,
+    QUERY_SHADOW_READY,
     QUERY_SUBSYSTEM_STATUS,
+    QUERY_TESTS,
     QUERY_TODAY,
+    QUERY_WHY_BUILT,
     QUERY_WHY_FAILED,
     ExplainQuery,
 )
@@ -184,6 +190,24 @@ class EvidenceSource(Protocol):
     def research_report(self, task_id: str) -> dict[str, Any] | None: ...
 
     def open_incidents(self) -> list[dict[str, Any]]: ...
+
+    # --- M17 phase 9. Optional: a source that predates these subsystems (or a deployment
+    # where they are absent) simply returns nothing, and the engine says it has no record
+    # rather than inventing one.
+
+    def lessons(self, *, limit: int = 20) -> list[dict[str, Any]]:  # pragma: no cover
+        return []
+
+    def procedural_memories(self, *, limit: int = 20) -> list[dict[str, Any]]:  # pragma: no cover
+        return []
+
+    def opportunities(
+        self, *, statuses: tuple[str, ...] | None = None, limit: int = 20
+    ) -> list[dict[str, Any]]:  # pragma: no cover
+        return []
+
+    def goals(self, *, limit: int = 20) -> list[dict[str, Any]]:  # pragma: no cover
+        return []
 
 
 # ------------------------------------------------------------------ briefing model
@@ -610,6 +634,120 @@ def _event_item(ev: EventView) -> BriefingItem:
     return BriefingItem(f"{_subsystem_tr(ev.subsystem)} — {ev.event_type}", tuple(statements))
 
 
+def _call(source: Any, name: str, **kwargs: Any) -> list[dict[str, Any]]:
+    """Ask an evidence source for something it may not have.
+
+    The learning, goal and evolution subsystems arrive over several releases; an older
+    source (or a deployment without them) simply has no such method, and the engine then
+    says it has no record instead of pretending.
+    """
+    getter = getattr(source, name, None)
+    if getter is None:
+        return []
+    try:
+        return list(getter(**kwargs) or [])
+    except Exception:  # noqa: BLE001 - a missing subsystem is an absence, not a failure
+        return []
+
+
+def _lesson_ref(lesson: dict[str, Any]) -> dict[str, Any]:
+    return {"kind": "experience_lesson", "ref": str(lesson.get("lesson_id", ""))}
+
+
+def _opportunity_ref(opportunity: dict[str, Any]) -> dict[str, Any]:
+    return {"kind": "evolution_opportunity", "ref": str(opportunity.get("opportunity_id", ""))}
+
+
+def _goal_ref(goal: dict[str, Any]) -> dict[str, Any]:
+    return {"kind": "goal", "ref": str(goal.get("goal_id", ""))}
+
+
+def _lesson_item(lesson: dict[str, Any]) -> BriefingItem:
+    ref = _lesson_ref(lesson)
+    statements = [Statement(str(lesson.get("statement") or ""), LABEL_FACT, (ref,))]
+    if lesson.get("root_cause"):
+        statements.append(Statement(f"Kök neden: {lesson['root_cause']}", LABEL_FACT, (ref,)))
+    if lesson.get("resolution"):
+        statements.append(Statement(f"Çözüm: {lesson['resolution']}", LABEL_FACT, (ref,)))
+    if str(lesson.get("status")) == "candidate":
+        statements.append(
+            Statement("Bu ders henüz aday; yeterince tekrarlanmadı.", LABEL_UNCERTAINTY, (ref,))
+        )
+    return BriefingItem(str(lesson.get("title") or "Ders"), tuple(statements))
+
+
+def _lesson_technical(lessons: list[dict[str, Any]]) -> list[BriefingItem]:
+    items: list[BriefingItem] = []
+    for lesson in lessons[:MAX_DETAILED_ITEMS]:
+        ref = _lesson_ref(lesson)
+        items.append(
+            BriefingItem(
+                str(lesson.get("title") or "Ders"),
+                (
+                    Statement(
+                        f"Skor {_plain(lesson.get('score'))}; tekrar "
+                        f"{_n(lesson.get('recurrence'))}; güven "
+                        f"{_plain(lesson.get('confidence'))}; durum {lesson.get('status')}.",
+                        LABEL_FACT,
+                        (ref,),
+                    ),
+                ),
+            )
+        )
+    return items
+
+
+def _opportunity_item(opportunity: dict[str, Any]) -> BriefingItem:
+    ref = _opportunity_ref(opportunity)
+    statements = [Statement(str(opportunity.get("statement") or ""), LABEL_FACT, (ref,))]
+    statements.append(
+        Statement(
+            f"Durum: {opportunity.get('status')}."
+            + (" Canlıda değil." if str(opportunity.get("status")) != "LIVE" else ""),
+            LABEL_FACT,
+            (ref,),
+        )
+    )
+    return BriefingItem(str(opportunity.get("title") or "Fırsat"), tuple(statements))
+
+
+def _opportunity_technical(opportunities: list[dict[str, Any]]) -> list[BriefingItem]:
+    items: list[BriefingItem] = []
+    for opportunity in opportunities[:MAX_DETAILED_ITEMS]:
+        ref = _opportunity_ref(opportunity)
+        scores = opportunity.get("scores") or {}
+        items.append(
+            BriefingItem(
+                str(opportunity.get("title") or "Fırsat"),
+                (
+                    Statement(
+                        f"Bileşik skor {_plain(scores.get('composite'))}; risk "
+                        f"{_plain(scores.get('operational_risk'))}; maliyet "
+                        f"{_plain(scores.get('engineering_cost'))}; durum "
+                        f"{opportunity.get('status')}.",
+                        LABEL_FACT,
+                        (ref,),
+                    ),
+                ),
+            )
+        )
+    return items
+
+
+def _goal_item(goal: dict[str, Any]) -> BriefingItem:
+    ref = _goal_ref(goal)
+    statements = [
+        Statement(str(goal.get("intent") or goal.get("title") or ""), LABEL_FACT, (ref,)),
+        Statement(f"Durum: {goal.get('status')}.", LABEL_FACT, (ref,)),
+    ]
+    blockers = goal.get("blockers") or []
+    if blockers:
+        statements.append(
+            Statement(f"Engel: {_tr_list([str(b) for b in blockers[:3]])}.", LABEL_FACT, (ref,))
+        )
+    return BriefingItem(str(goal.get("title") or "Hedef"), tuple(statements))
+
+
 def _window_statement(events: list[EventView], query: ExplainQuery) -> Statement | None:
     if not events:
         return None
@@ -754,6 +892,186 @@ def explain(
                     )
                 )
         executive.append(Statement("Bilginize.", LABEL_FACT, ()))
+
+    elif query.kind == QUERY_LEARNED:
+        lessons = _call(source, "lessons", limit=20)
+        procedural = _call(source, "procedural_memories", limit=20)
+        if not lessons and not procedural:
+            executive.append(
+                Statement("Henüz kayda geçmiş bir ders çıkarmadım.", LABEL_UNCERTAINTY, ())
+            )
+        else:
+            promoted = [lesson for lesson in lessons if lesson.get("status") == "promoted"]
+            candidates = [lesson for lesson in lessons if lesson.get("status") == "candidate"]
+            executive.append(
+                Statement(
+                    f"Efendim, {cardinal(len(promoted) + len(procedural))} dersi kalıcı hale "
+                    f"getirdim; {cardinal(len(candidates))} aday hâlâ değerlendirmede.",
+                    LABEL_FACT,
+                    tuple(_lesson_ref(lesson) for lesson in (promoted + candidates)[:8]),
+                )
+            )
+            top = (promoted or candidates)[:2]
+            for lesson in top:
+                executive.append(
+                    Statement(
+                        str(lesson.get("statement") or lesson.get("title") or "").strip(),
+                        LABEL_FACT,
+                        (_lesson_ref(lesson),),
+                    )
+                )
+            for lesson in (promoted + candidates)[:MAX_DETAILED_ITEMS]:
+                detailed.append(_lesson_item(lesson))
+                add_refs((_lesson_ref(lesson),))
+            for memory in procedural[:MAX_DETAILED_ITEMS]:
+                detailed.append(
+                    BriefingItem(
+                        str(memory.get("key") or "Yordam"),
+                        (
+                            Statement(
+                                str(memory.get("text") or ""),
+                                LABEL_FACT,
+                                ({"kind": "memory", "ref": str(memory.get("memory_id"))},),
+                            ),
+                        ),
+                    )
+                )
+            technical.extend(_lesson_technical(lessons))
+
+    elif query.kind in (QUERY_EVOLUTION, QUERY_SHADOW_READY, QUERY_WHY_BUILT):
+        opportunities = _call(source, "opportunities", limit=20)
+        shadow = [o for o in opportunities if o.get("status") == "SHADOW_READY"]
+        building = [
+            o
+            for o in opportunities
+            if str(o.get("status"))
+            in ("RESEARCHING", "DESIGN_READY", "BUILDING", "TESTING", "EVALUATING")
+        ]
+        if not opportunities:
+            executive.append(
+                Statement(
+                    "Şu anda kendi üzerimde yürüttüğüm bir geliştirme kaydı yok.",
+                    LABEL_UNCERTAINTY,
+                    (),
+                )
+            )
+        elif query.kind == QUERY_SHADOW_READY:
+            if shadow:
+                names = _tr_list([str(o.get("title") or "") for o in shadow[:3]])
+                executive.append(
+                    Statement(
+                        f"Efendim, {cardinal(len(shadow))} yetenek hazır ve gölge durumda: "
+                        f"{names}. Hiçbiri canlı sistemde değil; onayınızı bekliyorum.",
+                        LABEL_FACT,
+                        tuple(_opportunity_ref(o) for o in shadow[:8]),
+                    )
+                )
+            else:
+                executive.append(
+                    Statement(
+                        "Şu anda canlıya alınmayı bekleyen hazır bir modül yok.",
+                        LABEL_FACT,
+                        tuple(_opportunity_ref(o) for o in opportunities[:5]),
+                    )
+                )
+        elif query.kind == QUERY_WHY_BUILT:
+            target = (shadow or building or opportunities)[0]
+            executive.append(
+                Statement(
+                    f"{target.get('title')}: {target.get('statement')}",
+                    LABEL_FACT,
+                    (_opportunity_ref(target),),
+                )
+            )
+            origin = target.get("origin") or []
+            if origin:
+                executive.append(
+                    Statement(
+                        f"Bu işi {cardinal(len(origin))} gerçek kayıt üzerine başlattım.",
+                        LABEL_FACT,
+                        tuple(dict(r) for r in origin[:5] if isinstance(r, dict)),
+                    )
+                )
+            else:
+                executive.append(
+                    Statement("Bu fikrin dayandığı kayıt elimde yok.", LABEL_UNCERTAINTY, ())
+                )
+        else:
+            executive.append(
+                Statement(
+                    f"Efendim, {cardinal(len(building))} geliştirme üzerinde çalışıyorum ve "
+                    f"{cardinal(len(shadow))} tanesi gölge durumda hazır.",
+                    LABEL_FACT,
+                    tuple(_opportunity_ref(o) for o in opportunities[:8]),
+                )
+            )
+        for opportunity in (shadow + building)[:MAX_DETAILED_ITEMS]:
+            detailed.append(_opportunity_item(opportunity))
+            add_refs((_opportunity_ref(opportunity),))
+        technical.extend(_opportunity_technical(shadow + building))
+        if shadow:
+            executive.append(
+                Statement(
+                    "Hiçbiri canlıya alınmadı; canlıya alma yetkisi bende değil.",
+                    LABEL_FACT,
+                    tuple(_opportunity_ref(o) for o in shadow[:3]),
+                )
+            )
+
+    elif query.kind == QUERY_GOALS:
+        goals = _call(source, "goals", limit=20)
+        active = [
+            g for g in goals if str(g.get("status")) in ("active", "blocked", "waiting_owner")
+        ]
+        achieved = [g for g in goals if str(g.get("status")) == "achieved"]
+        if not goals:
+            executive.append(Statement("Kayıtlı bir hedefim yok.", LABEL_UNCERTAINTY, ()))
+        else:
+            executive.append(
+                Statement(
+                    f"Efendim, {cardinal(len(active))} açık hedefim var; "
+                    f"{cardinal(len(achieved))} tanesini tamamladım.",
+                    LABEL_FACT,
+                    tuple(_goal_ref(g) for g in goals[:8]),
+                )
+            )
+            blocked = [g for g in goals if str(g.get("status")) in ("blocked", "waiting_owner")]
+            if blocked:
+                executive.append(
+                    Statement(
+                        f"{blocked[0].get('title')} sizin müdahalenizi bekliyor.",
+                        LABEL_FACT,
+                        (_goal_ref(blocked[0]),),
+                    )
+                )
+        for goal in active[:MAX_DETAILED_ITEMS]:
+            detailed.append(_goal_item(goal))
+            add_refs((_goal_ref(goal),))
+
+    elif query.kind == QUERY_TESTS:
+        test_events = [
+            e
+            for e in recent
+            if e.event_type.endswith((".tests_passed", ".tests_failed"))
+            or "test" in (e.action or "")
+        ]
+        if not test_events:
+            executive.append(
+                Statement("Kayıtlarımda test sonucu bulamadım.", LABEL_UNCERTAINTY, ())
+            )
+        else:
+            passed = [e for e in test_events if e.status == "completed"]
+            executive.append(
+                Statement(
+                    f"Efendim, son {cardinal(len(test_events))} test kaydının "
+                    f"{cardinal(len(passed))} tanesi geçti.",
+                    LABEL_FACT,
+                    tuple(e.ref for e in test_events[:8]),
+                )
+            )
+            for event in test_events[:MAX_DETAILED_ITEMS]:
+                detailed.append(_event_item(event))
+                add_refs((event.ref,))
 
     else:
         # last_activity / today / subsystem_status / research_detail / technical / evidence

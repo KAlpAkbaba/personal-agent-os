@@ -22,6 +22,13 @@ QUERY_EVIDENCE = "evidence"
 QUERY_RESEARCH_DETAIL = "research_detail"
 QUERY_TECHNICAL = "technical"
 QUERY_MODULE_PROBLEM = "module_problem"
+# M17 phase 9: the owner asks about what the system learned and what it is building.
+QUERY_LEARNED = "learned"  # ne öğrendin / son hatalardan ne öğrendin
+QUERY_EVOLUTION = "evolution"  # kendi üzerinde ne geliştiriyorsun
+QUERY_SHADOW_READY = "shadow_ready"  # hazır modüllerin neler / canlıya alınmayı bekleyen ne var
+QUERY_WHY_BUILT = "why_built"  # bu özelliği neden geliştirdin
+QUERY_TESTS = "tests"  # test sonuçlarını anlat
+QUERY_GOALS = "goals"  # neyi hedefliyorsun / hedeflerin ne durumda
 
 QUERY_KINDS = (
     QUERY_LAST_ACTIVITY,
@@ -34,6 +41,12 @@ QUERY_KINDS = (
     QUERY_RESEARCH_DETAIL,
     QUERY_TECHNICAL,
     QUERY_MODULE_PROBLEM,
+    QUERY_LEARNED,
+    QUERY_EVOLUTION,
+    QUERY_SHADOW_READY,
+    QUERY_WHY_BUILT,
+    QUERY_TESTS,
+    QUERY_GOALS,
 )
 
 LEVEL_EXECUTIVE = "executive"
@@ -62,6 +75,23 @@ _SUBSYSTEM_WORDS: tuple[tuple[str, str], ...] = (
 
 # (all of these stems present) -> kind; first match wins, so specific phrasings come first.
 _PATTERNS: tuple[tuple[tuple[str, ...], str], ...] = (
+    # --- what did you learn / what are you building (M17 phase 9) ---------------
+    (("neden", "geliştir"), QUERY_WHY_BUILT),
+    (("neden", "yaptın"), QUERY_WHY_BUILT),
+    (("hata", "öğren"), QUERY_LEARNED),
+    (("ne", "öğren"), QUERY_LEARNED),
+    (("öğren",), QUERY_LEARNED),
+    (("ders",), QUERY_LEARNED),
+    (("kendi", "geliştir"), QUERY_EVOLUTION),
+    (("üzerinde", "çalış"), QUERY_EVOLUTION),
+    (("geliştir", "misin"), QUERY_EVOLUTION),
+    (("hazır", "modül"), QUERY_SHADOW_READY),
+    (("canlı", "bekle"), QUERY_SHADOW_READY),
+    (("shadow",), QUERY_SHADOW_READY),
+    (("yayına", "bekle"), QUERY_SHADOW_READY),
+    (("test", "sonuç"), QUERY_TESTS),
+    (("test", "anlat"), QUERY_TESTS),
+    (("hedef",), QUERY_GOALS),
     (("araştırma", "detay"), QUERY_RESEARCH_DETAIL),
     (("araştırma", "ayrıntı"), QUERY_RESEARCH_DETAIL),
     (("bulgu",), QUERY_RESEARCH_DETAIL),
@@ -162,9 +192,16 @@ def classify(
         since = now.replace(hour=0, minute=0, second=0, microsecond=0)
     elif kind in (QUERY_LAST_ACTIVITY, QUERY_FAILURES, QUERY_PROBLEMS_NOW):
         since = now - timedelta(days=7)
+    elif kind in (QUERY_LEARNED, QUERY_EVOLUTION, QUERY_SHADOW_READY, QUERY_TESTS, QUERY_GOALS):
+        # what was learned and what is being built are not this week's news
+        since = now - timedelta(days=90)
     subsystem = _subsystem(tokens)
     if kind == QUERY_RESEARCH_DETAIL:
         subsystem = "research"
+    elif kind in (QUERY_EVOLUTION, QUERY_SHADOW_READY, QUERY_WHY_BUILT):
+        subsystem = "evolution"
+    elif kind == QUERY_LEARNED:
+        subsystem = None  # lessons span every subsystem
     module = _module(tokens, normalized) if kind == QUERY_MODULE_PROBLEM else None
     if kind == QUERY_MODULE_PROBLEM and module is None:
         kind = QUERY_PROBLEMS_NOW
@@ -187,6 +224,12 @@ __all__ = [
     "QUERY_EVIDENCE",
     "QUERY_FAILURES",
     "QUERY_KINDS",
+    "QUERY_LEARNED",
+    "QUERY_EVOLUTION",
+    "QUERY_SHADOW_READY",
+    "QUERY_WHY_BUILT",
+    "QUERY_TESTS",
+    "QUERY_GOALS",
     "QUERY_LAST_ACTIVITY",
     "QUERY_MODULE_PROBLEM",
     "QUERY_PROBLEMS_NOW",

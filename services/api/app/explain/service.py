@@ -51,6 +51,27 @@ logger = get_logger("app.explain.service")
 # ------------------------------------------------------------------ ledger adapter
 
 
+def row_as_dict(row: Any) -> dict[str, Any]:
+    """A subsystem row as plain data for the engine.
+
+    Rows carry their own ``as_dict`` where a subsystem defines one; otherwise the mapped
+    columns are copied. Either way the engine never holds an ORM object, so a query can
+    close its session without the briefing losing its facts.
+    """
+    if hasattr(row, "as_dict"):
+        try:
+            return dict(row.as_dict())
+        except Exception:  # noqa: BLE001
+            pass
+    if isinstance(row, dict):
+        return dict(row)
+    out: dict[str, Any] = {}
+    for column in getattr(getattr(row, "__table__", None), "columns", []):
+        value = getattr(row, column.name, None)
+        out[column.name] = str(value) if hasattr(value, "hex") else value
+    return out
+
+
 def _view(row: Any) -> EventView:
     """A ledger row as the engine's neutral view. Tolerant of column names so the
     engine never imports the ORM."""
@@ -115,6 +136,62 @@ class LedgerEvidenceSource:
         if row.artifact_id:
             report.setdefault("artifact_id", str(row.artifact_id))
         return report
+
+    # --- M17 phase 9. These subsystems arrive over several releases; a deployment
+    # without one has no such rows, and the engine then says it has no record. The
+    # imports are local and defensive for exactly that reason.
+
+    def lessons(self, *, limit: int = 20) -> list[dict[str, Any]]:
+        try:
+            from app.experience import service as experience_service
+        except ImportError:
+            return []
+        try:
+            return [row_as_dict(r) for r in experience_service.list_lessons(self._db, limit=limit)]
+        except Exception:  # noqa: BLE001 - an absent table is an absence, not a failure
+            return []
+
+    def procedural_memories(self, *, limit: int = 20) -> list[dict[str, Any]]:
+        from sqlalchemy import select
+
+        from app.memory.models import Memory
+
+        try:
+            rows = self._db.execute(
+                select(Memory)
+                .where(Memory.memory_class == "procedural", Memory.status == "active")
+                .order_by(Memory.updated_at.desc())
+                .limit(limit)
+            ).scalars()
+        except Exception:  # noqa: BLE001
+            return []
+        return [
+            {"memory_id": str(r.id), "key": r.key, "text": r.text, "confidence": r.confidence}
+            for r in rows
+        ]
+
+    def opportunities(
+        self, *, statuses: tuple[str, ...] | None = None, limit: int = 20
+    ) -> list[dict[str, Any]]:
+        try:
+            from app.evolution import service as evolution_service
+        except ImportError:
+            return []
+        try:
+            rows = evolution_service.list_opportunities(self._db, statuses=statuses, limit=limit)
+        except Exception:  # noqa: BLE001
+            return []
+        return [row_as_dict(r) for r in rows]
+
+    def goals(self, *, limit: int = 20) -> list[dict[str, Any]]:
+        try:
+            from app.goals import service as goals_service
+        except ImportError:
+            return []
+        try:
+            return [row_as_dict(r) for r in goals_service.list_goals(self._db, limit=limit)]
+        except Exception:  # noqa: BLE001
+            return []
 
     def open_incidents(self) -> list[dict[str, Any]]:
         from sqlalchemy import select
