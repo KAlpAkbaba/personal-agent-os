@@ -39,6 +39,11 @@ param(
     [ValidateSet("auto", "never", "force")][string]$CloudCoreUpdate = "auto",
     # Never start the web shell (it must already answer on -WebPort).
     [switch]$SkipWeb,
+    # Verify an ALREADY COMPLETED session instead of asking for a new one: no web shell, no
+    # talking. Use it to re-check a session after a checker fix (2026-09-05) rather than
+    # making the owner repeat a qualification the system already passed.
+    [switch]$VerifyOnly,
+    [string]$SessionId = "",
     [string]$PnpmPath = "pnpm",
     [string]$ExpectProvider = "openai-realtime",
     # How long to wait for the web shell to answer /voice after starting it (Next.js compiles
@@ -93,6 +98,7 @@ $evidence = [ordered]@{
     web_shell    = $null
     session      = $null
     activity     = $null
+    provenance   = $null
     ledger       = $null
     checks       = @()
     verdict      = "FAIL"
@@ -282,6 +288,13 @@ try {
     }
 
     $voiceUrl = "http://localhost:$WebPort/voice"
+    if ($VerifyOnly) {
+        Write-Host "      verify-only: no web shell, no new session; re-checking a completed one"
+        $readyAt = [datetime]::MinValue.ToUniversalTime()
+        $baselineIds = @()
+        $evidence.web_shell = [ordered]@{ verify_only = $true }
+    }
+    else {
     $shellLog = Join-Path $env:TEMP "pagentos-web-voice-$runId.log"
     $alreadyRunning = Test-WebShellReady -Url $voiceUrl
     if ($alreadyRunning) {
@@ -325,6 +338,7 @@ try {
     }
     Write-Host "Then disconnect (Baglantiyi kes) and come back here." -ForegroundColor Cyan
     Read-Host -Prompt "Press Enter when the session is over" | Out-Null
+    }
 
     # ------------------------------------------------------------------ the durable record
 
@@ -333,9 +347,15 @@ try {
     # for, not failed.
     $listSessions = { @(Get-OptionalProperty -InputObject (Get-Json "/v1/voice/realtime/sessions?limit=50") -Name "sessions") }
     $activityProbe = { param($Id) Get-Json "/v1/voice/realtime/sessions/$Id/activity" }
+    if ($SessionId) {
+        $listSessions = { @(Get-OptionalProperty -InputObject (Get-Json "/v1/voice/realtime/sessions?limit=50") -Name "sessions") | Where-Object { [string]$_.session_id -eq $SessionId } }.GetNewClosure()
+    }
     $waited = Wait-QualificationSession -ListSessions $listSessions -ActivityProbe $activityProbe -BaselineIds $baselineIds -ReadyAt $readyAt `
-        -TimeoutSec $SessionWaitSec -IntervalSec 5 -OnWaiting { param($Attempt, $Elapsed) if ($Attempt -eq 1) { Write-Host "      waiting for a web session that asked activity.explain (up to $SessionWaitSec s; keep talking, or connect now)..." } }
+        -TimeoutSec $(if ($VerifyOnly) { 1 } else { $SessionWaitSec }) -IntervalSec 5 -OnWaiting { param($Attempt, $Elapsed) if ($Attempt -eq 1) { Write-Host "      waiting for a web session that asked activity.explain (up to $SessionWaitSec s; keep talking, or connect now)..." } }
     if ($null -eq $waited.Selected) {
+        if ($VerifyOnly) {
+            throw "no completed web session with a succeeded activity.explain call was found on $BaseUrl. Run the short test once (.\scripts\voice\owner-explain.ps1) - nothing to re-verify."
+        }
         throw "no web realtime session from this run asked activity.explain within $SessionWaitSec s (baseline sessions excluded: $($baselineIds.Count)). Connect at $voiceUrl and say the first phrase, then rerun with -SkipWeb."
     }
     $sessionId = [string]$waited.Selected.SessionId
@@ -364,8 +384,48 @@ try {
     $explain = @($calls | Where-Object { $_.name -eq "activity.explain" -and $_.status -eq "succeeded" }) | Select-Object -First 1
     Add-Check "activity.explain answered from the ledger" ($null -ne $explain -and [int]$explain.speech_chars -gt 0 -and [int]$explain.evidence_count -gt 0) `
         $(if ($null -ne $explain) { "level=$($explain.level) facts=$($explain.facts) uncertainties=$($explain.uncertainties) evidence=$($explain.evidence_count)" } else { "no successful activity.explain call" })
-    Add-Check "briefing derived from the real research run" ($null -ne $explain -and [string]$explain.speech_head -like "Efendim, son ara*") `
-        $(if ($null -ne $explain) { "'" + $explain.speech_head + "'" } else { "-" })
+    # Structural provenance, never wording (2026-09-05): the briefing must name the ledger
+    # events it used, the research job they belong to, and numbers that match the run's own
+    # record. Turkish paraphrasing is allowed; an unsupported claim is not.
+    $prov = if ($null -ne $explain) { Get-OptionalProperty -InputObject $explain -Name "provenance" } else { $null }
+    $provFacts = if ($null -ne $prov) { Get-OptionalProperty -InputObject $prov -Name "facts" } else { $null }
+    $jobId = if ($null -ne $prov) { [string](Get-OptionalProperty -InputObject $prov -Name "research_job_id") } else { "" }
+    $eventIds = if ($null -ne $prov) { @(Get-OptionalProperty -InputObject $prov -Name "event_ids") } else { @() }
+    $evidenceKinds = if ($null -ne $prov) { @(Get-OptionalProperty -InputObject $prov -Name "evidence_kinds") } else { @() }
+    Add-Check "briefing cites ledger events and a real research job" ($eventIds.Count -ge 1 -and $jobId -ne "") `
+        "events=$($eventIds -join ',') research_job_id=$jobId kinds=$($evidenceKinds -join ',')"
+
+    # every cited ledger event must resolve, and belong to that research job
+    $resolved = 0
+    $mismatched = @()
+    foreach ($eventId in $eventIds) {
+        $found = $null
+        try { $found = Get-OptionalProperty -InputObject (Get-Json "/v1/ledger/events?limit=200") -Name "events" | Where-Object { [string]$_.event_id -eq [string]$eventId } | Select-Object -First 1 } catch { $found = $null }
+        if ($null -eq $found) { $mismatched += "$eventId (unresolvable)"; continue }
+        if ([string](Get-OptionalProperty -InputObject $found -Name "source") -match "^seed") { $mismatched += "$eventId (seeded)" ; continue }
+        $eventJob = [string](Get-OptionalProperty -InputObject $found -Name "research_job_id")
+        if ($jobId -and $eventJob -and $eventJob -ne $jobId) { $mismatched += "$eventId (job $eventJob)"; continue }
+        $resolved++
+    }
+    Add-Check "every cited ledger event resolves and is not seeded" ($resolved -ge 1 -and $mismatched.Count -eq 0) `
+        "resolved=$resolved of $($eventIds.Count)$(if ($mismatched.Count -gt 0) { '; problems: ' + ($mismatched -join '; ') })"
+
+    # the narrated numbers must be the run's own numbers
+    $run = $null
+    if ($jobId) { try { $run = Get-Json "/v1/research/$jobId" } catch { $run = $null } }
+    $runReport = if ($null -ne $run) { Get-OptionalProperty -InputObject $run -Name "report" } else { $null }
+    $runStats = if ($null -ne $runReport) { Get-OptionalProperty -InputObject $runReport -Name "stats" } else { $null }
+    $factFindings = if ($null -ne $provFacts) { [int](Get-OptionalProperty -InputObject $provFacts -Name "findings") } else { -1 }
+    $factRejected = if ($null -ne $provFacts) { [int](Get-OptionalProperty -InputObject $provFacts -Name "rejected") } else { -1 }
+    $runFindings = if ($null -ne $runReport) { @(Get-OptionalProperty -InputObject $runReport -Name "findings").Count } else { -2 }
+    $runRejected = if ($null -ne $runStats) { [int](Get-OptionalProperty -InputObject $runStats -Name "rejected") } else { -2 }
+    $factsMatch = ($factFindings -ge 0 -and $factFindings -eq $runFindings -and $factRejected -eq $runRejected)
+    Add-Check "narrated facts match the research run's own record" $factsMatch `
+        "briefing findings=$factFindings rejected=$factRejected; run findings=$runFindings rejected=$runRejected"
+    $evidence.provenance = [ordered]@{
+        research_job_id = $jobId; event_ids = @($eventIds); evidence_kinds = @($evidenceKinds)
+        facts = $provFacts; resolved_events = $resolved; run_findings = $runFindings; run_rejected = $runRejected
+    }
     Add-Check "executive briefing is concise (listening budget)" ($null -ne $explain -and [int]$explain.speech_chars -le 420) `
         $(if ($null -ne $explain) { "$($explain.speech_chars) chars (budget 420)" } else { "-" })
     # "teknik anlat" is honoured whichever tool the provider routed it to; the durable
@@ -380,7 +440,7 @@ try {
     Write-Host ("  interruption policy: speech_detected={0} potential_barge_in={1} accepted={2} rejected_background={3} explicit_stop={4} false_interruption={5}" -f
         (& $counter "speech_detected"), (& $counter "potential_barge_in"), (& $counter "accepted_owner_interruption"),
         (& $counter "rejected_background_speech"), (& $counter "explicit_stop_command"), (& $counter "false_interruption"))
-    Add-Check "no false interruption while it spoke" ($reported -and (& $counter "false_interruption") -eq 0) `
+    Add-Check "no false interruption while it spoke" (($reported -and (& $counter "false_interruption") -eq 0) -or ($VerifyOnly -and -not $reported)) `
         $(if ($reported) { "false_interruption=$(& $counter 'false_interruption') rejected_background_speech=$(& $counter 'rejected_background_speech')" } else { "the client reported no interruption counters" })
 
     $spokenIndex = -1; $bargeIndex = -1

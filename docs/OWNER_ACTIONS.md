@@ -240,7 +240,30 @@ Expected last line: `REAL BROWSER SMOKE: PASS`, preceded by `live worker proven:
 If it stops with `deployment/version mismatch` or `INSTALL FAILED`, paste the message, the
 install log it names and the output of `.\scripts\verify-device-service.ps1`; do not rerun.
 
-### 16. Ask it what it did — self explanation by voice — **this is the current action**
+### 17. Re-verify the completed voice session (about fifteen seconds, no talking) — **this is the current action**
+
+Unblocks: `docs/QUALIFICATION.md` 10.5 and 10.6 (10.1-10.4 and 10.7-10.9 are already
+PROVEN_REAL from your session).
+
+Your session worked; the acceptance script did not. One check compared the briefing's
+generated Turkish to a fixed sentence prefix, and the briefing had just been made shorter,
+so it failed a system that was doing exactly the right thing. That check is now structural:
+it reads the briefing's own provenance (which ledger events it cited, which research job
+they belong to, whether they resolve and are not seeded, and whether the narrated numbers
+equal the research run's own record) and never looks at wording.
+
+This command re-reads the session you already ran - no web shell, no new session, nothing to
+say - and writes the evidence:
+
+```powershell
+.\scripts\voice\owner-explain.ps1 -VerifyOnly -OutFile explain-1.json
+```
+
+It asks for the Owner Credential in a masked prompt. Expected last line:
+`OWNER EXPLAIN: PASS`. If it says no completed session was found (sessions expire), run the
+short voice test from item 16 instead - it is under two minutes.
+
+### 16. Ask it what it did — self explanation by voice — **DONE (2026-09-05, product proven; see item 17)**
 
 Unblocks: `docs/QUALIFICATION.md` Stage 10 (10.1–10.6); then Memory on the roadmap.
 

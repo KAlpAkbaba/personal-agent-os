@@ -4,7 +4,7 @@
   "current_milestone": "M16_ACTIVITY_LEDGER_SELF_EXPLANATION_VOICE_NARRATION",
   "status": "BUILT_AND_GATED_OFFLINE; NOT PROVEN_REAL (owner action 16 pending)",
   "last_completed_milestone": "M15_RESEARCH_ENGINE",
-  "last_updated": "2026-09-05T01:30:00+03:00",
+  "last_updated": "2026-09-05T02:10:00+03:00",
   "qualification": {
     "matrix": "docs/QUALIFICATION.md",
     "owner_queue": "docs/OWNER_ACTIONS.md",
@@ -98,6 +98,7 @@
     "web": "apps/web voice client reports spoken (final 0 at barge-in after playback stop, final 1 at completion), shows the narration cursor",
     "owner_action": "OWNER_ACTIONS item 16: scripts/voice/owner-explain.ps1 -OutFile explain-1.json (QUALIFICATION Stage 10)",
     "deployment": "one transactional Cloud Core release (new tables + routes); web client from the checkout; no Windows component changed",
-    "owner_run_1_2026_09_04": "Product PROVEN in use (voice UI answered from the ledger; Dur/Devam et worked); harness failed on shell start/session correlation (fixed, ADR-0051 addendum 2). Owner UX verdict: good, but background speech interrupted, answers too long, level intents not recorded (fixed, ADR-0051 addendum 3: client-owned two-lane interruption with interrupt_response=false, narration budgets, owner-relevance ranking, normalised intents). Stage 10 rows 10.1-10.9 NOT_YET_PROVEN until the short owner test passes."
+    "owner_run_1_2026_09_04": "Product PROVEN in use (voice UI answered from the ledger; Dur/Devam et worked); harness failed on shell start/session correlation (fixed, ADR-0051 addendum 2). Owner UX verdict: good, but background speech interrupted, answers too long, level intents not recorded (fixed, ADR-0051 addendum 3: client-owned two-lane interruption with interrupt_response=false, narration budgets, owner-relevance ranking, normalised intents). Stage 10 rows 10.1-10.9 NOT_YET_PROVEN until the short owner test passes.",
+    "owner_run_2_2026_09_05": "The real session PROVED the product: ledger-backed self explanation, background-speech rejection, explicit Dur, cursor persistence, Devam et resume, concise executive plus detail/technical. QUALIFICATION 10.1-10.4 and 10.7-10.9 PROVEN_REAL on the owner's report. The one failing acceptance check matched generated Turkish wording; provenance is now structural (ADR-0051 addendum 4) and owner-explain.ps1 -VerifyOnly re-checks a completed session in ~15 s. 10.5 and 10.6 OWNER_ACTION_REQUIRED (item 17)."
   }
 }

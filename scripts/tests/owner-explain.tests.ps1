@@ -167,6 +167,31 @@ Test-Case "7. owner-explain.ps1 gates on readiness and waits for the session (no
     Assert-True (@($bytes | Where-Object { $_ -gt 127 }).Count -eq 0) "owner-explain.ps1 must stay ASCII"
 }
 
+Test-Case "8. provenance is structural, never the generated Turkish wording" {
+    $text = [IO.File]::ReadAllText((Join-Path $repoRoot "scripts\voice\owner-explain.ps1"))
+    # 2026-09-05: the acceptance matched a sentence prefix, so a paraphrase failed a system
+    # that was working. Wording must never be a gate; structure must be.
+    Assert-True ($text -notmatch "speech_head -like") "no check may match generated wording"
+    Assert-True ($text -match "provenance") "the briefing's provenance block must be read"
+    Assert-True ($text -match "briefing cites ledger events and a real research job") "cited events + job id"
+    Assert-True ($text -match "every cited ledger event resolves and is not seeded") "events must resolve"
+    Assert-True ($text -match "narrated facts match the research run") "numbers must match the run"
+    Assert-True ($text -match "VerifyOnly") "a completed session must be re-checkable without a new one"
+}
+
+Test-Case "9. -VerifyOnly needs no shell, no wait and no owner speech" {
+    $text = [IO.File]::ReadAllText((Join-Path $repoRoot "scripts\voice\owner-explain.ps1"))
+    $marker = "if (" + [char]0x24 + "VerifyOnly) {"
+    $verifyIndex = $text.IndexOf($marker)
+    Assert-True ($verifyIndex -gt 0) "the verify-only branch must exist"
+    $elseIndex = $text.IndexOf("else {", $verifyIndex)
+    $branch = $text.Substring($verifyIndex, $elseIndex - $verifyIndex)
+    Assert-True ($branch -notmatch "Start-WebShellProcess") "no shell start in verify-only"
+    Assert-True ($branch -match "verify-only") "the branch says what it is doing"
+    Assert-True ($text.Contains("(if (" + [char]0x24 + "VerifyOnly) { 1 }")) "verify-only must not wait for a new session"
+    Assert-True ($text -match "Press Enter when the session is over") "the interactive path still waits for the owner"
+}
+
 Write-Host ""
 Write-Host "owner-explain harness: $script:Passes passed, $script:Failures failed"
 if ($script:Failures -gt 0) { exit 1 }

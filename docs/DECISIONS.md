@@ -3109,3 +3109,28 @@ Decisions:
    cursor, `intent=technical` from either tool, and `false_interruption = 0` from the
    client's counters. The Cloud Core changed (ledger policy version 2 carries the budgets
    and ranking), so the command performs one transactional release; Windows is untouched.
+
+### ADR-0051 addendum 4 — provenance is structural; wording is not evidence (2026-09-05)
+
+The owner's real session worked: the voice UI answered from the ledger with the research
+task identity, the run's counts, worker 0.4.0, the research policy and the skipped
+deployment; background speech was rejected, "Dur" stopped it, the cursor persisted and
+"Devam et" resumed. One acceptance check still failed - `briefing derived from the real
+research run` - because it matched a Turkish sentence prefix (`speech_head -like "Efendim,
+son ara*"`). The briefing had been made deliberately shorter and better worded the same
+day, so a working system failed its own gate on phrasing.
+
+Decision: **generated wording is never acceptance evidence.** A briefing now carries a
+structural `provenance` block - the ledger event ids it cited, the research job those
+events belong to, the evidence kinds (`activity_event`, `research_report`, `artifact`,
+`file`), the structured facts the sentences were built from (findings, sources, rejected,
+rejected_by_reason, verdict, installed release, deployed, policy version), the statement
+labels used and an explicit `seeded: false`. It rides the tool result into the durable
+session activity record. The owner command verifies: at least one cited ledger event and a
+real research job; every cited event resolves in the ledger, is not seeded and belongs to
+that job; and the narrated numbers equal the research run's own record. Turkish
+paraphrasing is free; an unsupported claim is not.
+
+`owner-explain.ps1 -VerifyOnly [-SessionId <id>]` re-verifies an already completed session
+- no web shell, no waiting, no talking - so a checker fix never costs the owner a repeat of
+a qualification the system already passed.

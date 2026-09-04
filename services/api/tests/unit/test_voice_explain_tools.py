@@ -26,6 +26,8 @@ from app.voice.realtime_sessions.models import RealtimeSessionRow
 from tests.unit.test_explain_engine import (
     NOW,
     REAL_REPORT,
+    REAL_STATS,
+    TASK_ID,
     MemorySource,
     _qualified,
     _research_completed,
@@ -529,3 +531,48 @@ def test_activity_carries_the_interruption_counters_the_client_reports(wired, mo
     # the same counters reach the benchmark record the owner already fetches
     bench = client.get(f"/v1/voice/realtime/sessions/{sid}/benchmark").json()
     assert bench["context"]["noise"]["rejected_background_speech"] == 2
+
+
+def test_the_briefing_carries_structural_provenance_not_wording(wired, monkeypatch) -> None:
+    """Acceptance must rest on structure, never on generated Turkish (owner note,
+    2026-09-05: the "briefing derived from the real research run" check matched a
+    sentence prefix, so a paraphrase failed a working system). The record names the
+    ledger events, the research job, the evidence kinds and the numbers the sentences
+    were built from; a checker compares those with the source record."""
+    client, _identity, _runtime, _sideband, _issued, _engine = wired
+    _use_real_run_evidence(monkeypatch)
+    sid = _create(client)["session_id"]
+    result = _tool(client, sid, "p1", "activity.explain", question="Son yaptıklarını anlat")
+
+    prov = result["provenance"]
+    assert prov["research_job_id"] == TASK_ID
+    assert prov["event_ids"] == ["ev-research-1", "ev-qualified-1"] or set(prov["event_ids"]) == {
+        "ev-research-1",
+        "ev-qualified-1",
+    }
+    assert {"activity_event", "research_report", "file", "artifact"} <= set(prov["evidence_kinds"])
+    assert prov["seeded"] is False
+    assert prov["facts"]["findings"] == 5 and prov["facts"]["sources"] == 5
+    assert prov["facts"]["rejected"] == 28
+    assert prov["facts"]["rejected_by_reason"] == REAL_STATS["rejected_by_reason"]
+    assert prov["facts"]["verdict"] == "PASS" and prov["facts"]["qualified"] is True
+    assert prov["facts"]["installed_release"] == "0.4.0" and prov["facts"]["deployed"] is False
+    assert prov["facts"]["source"].startswith("backfill:") or prov["facts"]["source"] == "live"
+    assert "known_fact" in prov["statement_labels"]
+
+    # and the same block reaches the durable activity record the qualification reads
+    activity = client.get(f"/v1/voice/realtime/sessions/{sid}/activity").json()
+    recorded = activity["tool_calls"][0]["provenance"]
+    assert recorded["research_job_id"] == TASK_ID
+    assert recorded["facts"]["findings"] == 5
+
+
+def test_provenance_of_a_briefing_with_no_evidence_claims_nothing(wired, monkeypatch) -> None:
+    client, _identity, _runtime, _sideband, _issued, _engine = wired
+    monkeypatch.setattr(explain_service, "evidence_source_factory", lambda db: MemorySource([]))
+    sid = _create(client)["session_id"]
+    result = _tool(client, sid, "p2", "activity.explain", question="Son yaptıklarını anlat")
+    prov = result["provenance"]
+    assert prov["event_ids"] == [] and prov["facts"] == {}
+    assert prov["research_job_id"] is None
+    assert prov["statement_labels"] == ["uncertainty"]

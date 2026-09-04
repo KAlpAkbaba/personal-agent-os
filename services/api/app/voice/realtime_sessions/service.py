@@ -1216,6 +1216,9 @@ def session_activity(db: Session, row: RealtimeSessionRow) -> dict[str, Any]:
                 "facts": _result_field(result, "facts"),
                 "uncertainties": _result_field(result, "uncertainties"),
                 "evidence_count": _result_field(result, "evidence_count"),
+                # structural provenance: which ledger events, which research job and which
+                # numbers the spoken sentences rest on (never the wording itself)
+                "provenance": _result_field(result, "provenance"),
                 "narration_session_id": _result_field(result, "narration_session_id"),
             }
         )

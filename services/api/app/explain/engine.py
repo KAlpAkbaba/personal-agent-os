@@ -217,10 +217,34 @@ class Briefing:
     detailed: tuple[BriefingItem, ...]
     technical: tuple[BriefingItem, ...]
     evidence_refs: tuple[dict[str, Any], ...]
+    #: The research job the briefing is about, when it is about one.
+    research_job_id: str | None = None
+    #: The structured numbers the sentences were built from (counts, versions, verdicts):
+    #: what a checker compares against the source record, instead of matching wording.
+    facts: dict[str, Any] = field(default_factory=dict)
 
     @property
     def title(self) -> str:
         return f"Etkinlik özeti — {self.generated_at.strftime('%Y-%m-%d %H:%M')} UTC"
+
+    def provenance(self) -> dict[str, Any]:
+        """What this briefing rests on, structurally (M16, owner UX result 2026-09-04).
+
+        Acceptance must not depend on generated Turkish wording: a paraphrase is allowed,
+        an unsupported claim is not. So the record names the ledger events, the research
+        job, the evidence references and the structured facts that produced the sentences -
+        and whether any of it was backfilled from canonical rows or written live.
+        """
+        events = [r for r in self.evidence_refs if r.get("kind") == "activity_event"]
+        sources = sorted({str(r.get("kind")) for r in self.evidence_refs if r.get("kind")})
+        return {
+            "event_ids": [str(r.get("ref")) for r in events],
+            "evidence_kinds": sources,
+            "research_job_id": self.research_job_id,
+            "facts": dict(self.facts),
+            "seeded": False,
+            "statement_labels": sorted({s.label for s in self.executive}),
+        }
 
     def counts(self) -> dict[str, int]:
         statements = list(self.executive)
@@ -242,6 +266,7 @@ class Briefing:
             "detailed": [i.as_dict() for i in self.detailed],
             "technical": [i.as_dict() for i in self.technical],
             "evidence_refs": list(self.evidence_refs),
+            "provenance": self.provenance(),
             **self.counts(),
         }
 
@@ -624,6 +649,9 @@ def explain(
                 if ref not in refs:
                     refs.append(ref)
 
+    research_job_id: str | None = None
+    facts: dict[str, Any] = {}
+
     if query.kind in (QUERY_FAILURES, QUERY_WHY_FAILED):
         failed = [e for e in recent if e.status == "failed"]
         if not failed:
@@ -745,6 +773,26 @@ def explain(
                 source.research_report(latest.research_job_id) if latest.research_job_id else None
             )
             executive.extend(_research_executive(latest, qualified, activities))
+            research_job_id = latest.research_job_id
+            d = latest.detail or {}
+            facts = {
+                "findings": _n(d.get("findings")),
+                "sources": _n(d.get("sources")),
+                "rejected": _n(d.get("rejected")),
+                "discovered": _n(d.get("discovered")),
+                "fetched": _n(d.get("fetched")),
+                "evidence": _n(d.get("evidence")),
+                "rejected_by_reason": dict(d.get("rejected_by_reason") or {}),
+                "event_type": latest.event_type,
+                "source": latest.source,
+                "qualified": qualified is not None,
+                "verdict": (qualified.detail or {}).get("verdict") if qualified else None,
+                "installed_release": (qualified.detail or {}).get("installed_release")
+                if qualified
+                else None,
+                "deployed": (qualified.detail or {}).get("deployed") if qualified else None,
+                "policy_version": latest.version,
+            }
             detailed.extend(_research_detailed(latest, report))
             technical.extend(_research_technical(latest, qualified, report))
             add_refs((latest.ref,), latest.evidence_refs)
@@ -788,6 +836,8 @@ def explain(
         detailed=tuple(detailed),
         technical=tuple(technical),
         evidence_refs=tuple(refs),
+        research_job_id=research_job_id,
+        facts=facts,
     )
 
 
