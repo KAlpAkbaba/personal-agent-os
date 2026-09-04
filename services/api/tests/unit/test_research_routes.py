@@ -229,8 +229,22 @@ def test_create_research_rejects_unknown_mode_and_timeout_policy(client: TestCli
 
 
 def test_create_research_rejects_interactive_wait_s_below_minimum(client: TestClient) -> None:
-    response = client.post("/v1/research", json={"input": "konu", "interactive_wait_s": 59})
+    # 30 s is the floor so an owner QUALIFICATION run need not wait ten minutes (ADR-0050
+    # item 18); production requests keep the 600 s default.
+    response = client.post("/v1/research", json={"input": "konu", "interactive_wait_s": 29})
     assert response.status_code == 422
+
+
+def test_create_research_accepts_a_short_qualification_wait(client: TestClient) -> None:
+    _enroll_online_device(client)
+    fake_client = AsyncMock()
+    fake_client.start_workflow = AsyncMock(return_value=None)
+    with patch("app.research.routes.Client.connect", AsyncMock(return_value=fake_client)):
+        response = client.post(
+            "/v1/research", json={"input": "konu", "mode": "interactive", "interactive_wait_s": 30}
+        )
+    assert response.status_code == 202
+    assert fake_client.start_workflow.call_args.args[1].interactive_wait_s == 30
 
 
 def test_create_research_rejects_interactive_wait_s_above_maximum(client: TestClient) -> None:

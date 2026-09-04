@@ -91,7 +91,7 @@ class TestExecResultRoundTrip:
             "ok": True,
             "result": {
                 "worker_version": WORKER_VERSION,
-                "contracts": {"browser.search": 2},
+                "contracts": {"browser.search": 3},
                 "browser": {
                     "channel": "chrome",
                     "available": True,
@@ -334,6 +334,6 @@ async def test_hello_and_worker_status_carry_capability_contracts(tmp_path, monk
     worker = _make_worker(tmp_path, monkeypatch)
     written = _capture_writes(monkeypatch)
     await worker._print_hello()
-    assert written[0]["contracts"] == CONTRACTS == {"browser.search": 2}
+    assert written[0]["contracts"] == CONTRACTS == {"browser.search": 3}
     status = await worker._execute("browser.worker_status", {})
-    assert status["contracts"]["browser.search"] == 2
+    assert status["contracts"]["browser.search"] == 3

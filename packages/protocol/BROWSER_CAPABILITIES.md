@@ -245,7 +245,26 @@ deterministic fallback if blocked) and/or `"interstitial": "fallback" | "handoff
 mode), `"verification_handoffs"` (interstitials handed to the owner in this session so far),
 `"state": "ok" | "waiting_for_owner_verification"`, `"path"`:
 `google_ui | google_url | fallback | handoff_pending | handoff_cleared | handoff_timeout_fallback | handoff_repeat_fallback`,
-`"verification_url"` (when waiting).
+`"verification_url"` (when waiting), and `"verification"` (schema 3, below).
+
+**Verification evidence, schema 3 (2026-09-04).** The interstitial handed to the owner is
+evidence in exactly ONE place, the result's `verification` block:
+
+```json
+{"handoffs":1,"outcome":"pending|cleared|timeout|repeat|null","interstitial":"captcha|consent|null","verification_url":"…|null"}
+```
+
+`outcome` is `null` when no interstitial was handed to the owner (an unattended fallback keeps
+its provider-level `fallback_reason=google:captcha`). While a handoff is pending the top-level
+`page_kind` is `waiting`, never the interstitial kind, and the Google attempt's `outcome` is a
+verification code, not the kind: `verification_pending`, `verification_timeout` (a
+fallback-mode search on a still-pending query) or `interstitial_after_verification` (a further
+interstitial once the owner has cleared one). The canonical fallback reasons are therefore
+`google:verification_timeout` and `google:interstitial_after_verification` for the handoff
+paths, and `google:captcha` / `google:consent` for an unattended block. Consumers must not
+copy the interstitial kind to another key: a duplicate is a contract violation, not a
+convenience (real owner incident: two layers each adding `interstitial` produced a
+duplicate-key failure that swallowed the fallback attempt).
 
 **Retry once, never loop (2026-09-04).** A session hands an interstitial to the owner at most
 ONCE. After a cleared verification the pending search is retried exactly once on the same

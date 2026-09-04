@@ -12,6 +12,7 @@ Playwright/DOM control surface against local fixtures.
 
 from __future__ import annotations
 
+import json
 from urllib.parse import quote
 
 import pytest
@@ -98,7 +99,7 @@ async def test_google_search_via_ui_types_query_and_parses_results(google_worker
     assert outcome["fallback"] is False
     assert outcome["path"] == "google_ui"
     assert outcome["state"] == "ok"
-    assert outcome["schema_version"] == 2
+    assert outcome["schema_version"] == 3
     assert outcome["result_count"] == 2
     urls = [r["url"] for r in outcome["results"]]
     assert "https://openai.com/index/agents-update" in urls
@@ -164,8 +165,15 @@ async def test_handoff_interstitial_then_clearance_then_resume(handoff_worker, s
     assert pending["path"] == "handoff_pending"
     assert pending["provider"] is None
     assert pending["results"] == []
-    assert pending["page_kind"] == "captcha"
+    assert pending["page_kind"] == "waiting"
     assert pending["verification_url"]
+    # schema 3: the interstitial kind is evidence exactly once, here
+    assert pending["verification"] == {
+        "handoffs": 1,
+        "outcome": "pending",
+        "interstitial": "captcha",
+        "verification_url": pending["verification_url"],
+    }
     # Never loops, never falls back on the first interstitial: exactly one
     # attempt, for google, nothing tried after it.
     assert [a["provider"] for a in pending["attempts"]] == ["google"]
@@ -191,6 +199,9 @@ async def test_handoff_interstitial_then_clearance_then_resume(handoff_worker, s
     assert resumed["provider"] == "google"
     assert resumed["state"] == "ok"
     assert resumed["result_count"] == 2
+    assert resumed["fallback"] is False and resumed["fallback_reason"] is None
+    assert resumed["verification"]["outcome"] == "cleared"
+    assert resumed["verification"]["interstitial"] == "captcha"
 
     await worker._execute("browser.session_close", {"session_id": "s1"})
 
@@ -347,6 +358,12 @@ async def test_search_mode_unattended_is_the_deterministic_fallback(
     assert outcome["provider"] == "duckduckgo" and outcome["fallback"] is True
     assert outcome["fallback_reason"] == "google:captcha"
     assert outcome["verification_handoffs"] == 0
+    assert outcome["verification"] == {
+        "handoffs": 0,
+        "outcome": None,
+        "interstitial": None,
+        "verification_url": None,
+    }
     await worker._execute("browser.session_close", {"session_id": "s1"})
 
 
@@ -401,10 +418,17 @@ async def test_handoff_timeout_fallback_never_attempts_google_again(
     )
     assert outcome["provider"] == "duckduckgo"
     assert outcome["fallback"] is True
-    assert outcome["fallback_reason"] == "google:captcha"
+    assert outcome["fallback_reason"] == "google:verification_timeout"
     assert outcome["path"] == "handoff_timeout_fallback"
-    assert [a["outcome"] for a in outcome["attempts"]] == ["captcha", "ok"]
+    assert [a["outcome"] for a in outcome["attempts"]] == ["verification_timeout", "ok"]
     assert "not retried" in outcome["attempts"][0]["detail"]
+    assert outcome["requested_provider"] == "google"
+    assert outcome["verification"] == {
+        "handoffs": 1,
+        "outcome": "timeout",
+        "interstitial": "captcha",
+        "verification_url": interstitial_url,
+    }
     await worker._execute("browser.session_close", {"session_id": "s1"})
 
 
@@ -448,8 +472,132 @@ async def test_second_interstitial_after_clearance_is_not_handed_off_again(
     )
     assert outcome["state"] == "ok"
     assert outcome["provider"] == "duckduckgo"
-    assert outcome["fallback"] is True and outcome["fallback_reason"] == "google:captcha"
+    assert outcome["fallback"] is True
+    assert outcome["fallback_reason"] == "google:interstitial_after_verification"
     assert outcome["path"] == "handoff_repeat_fallback"
     assert outcome["verification_handoffs"] == 1
+    assert outcome["verification"]["outcome"] == "repeat"
+    assert outcome["verification"]["interstitial"] == "captcha"
     assert "not handed off a second time" in outcome["attempts"][0]["detail"]
+    await worker._execute("browser.session_close", {"session_id": "s1"})
+
+
+# --------------------------------------------------------------------------- #
+# (f) 2026-09-04 owner incident: consent flow, owner declines, evidence shape
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture()
+async def consent_worker(tmp_path, site_url):
+    """First Google search lands on the consent fixture (google-consent.html)."""
+    worker = await _make_worker(
+        tmp_path,
+        google_base_url=f"{site_url}/google-home.html?simulate=consent",
+        name="consent-worker-data",
+    )
+    try:
+        yield worker
+    finally:
+        await worker._close_all_sessions()
+
+
+async def test_consent_interstitial_handoff_then_clearance_then_resume(
+    consent_worker, site_url
+) -> None:
+    worker = consent_worker
+    await worker._execute("browser.session_open", _open_payload())
+    query = "yapay zeka ajanları"
+    pending = await worker._execute(
+        "browser.search",
+        {"session_id": "s1", "query": query, "engine": "auto", "mode": "interactive"},
+    )
+    assert pending["state"] == "waiting_for_owner_verification"
+    assert pending["verification"]["interstitial"] == "consent"
+    assert pending["verification"]["outcome"] == "pending"
+    assert [a["outcome"] for a in pending["attempts"]] == ["verification_pending"]
+    # the owner accepts/rejects on the consent page: Google continues to the results
+    await worker._execute(
+        "browser.navigate",
+        {"session_id": "s1", "url": f"{site_url}/google-results.html?q={quote(query)}"},
+    )
+    waited = await worker._execute(
+        "browser.wait", {"session_id": "s1", "for": "verification_cleared", "timeout_ms": 5_000}
+    )
+    assert waited["satisfied"] is True
+    resumed = await worker._execute(
+        "browser.search",
+        {"session_id": "s1", "query": query, "engine": "auto", "mode": "interactive"},
+    )
+    assert resumed["path"] == "handoff_cleared" and resumed["provider"] == "google"
+    assert resumed["verification"] == {
+        "handoffs": 1,
+        "outcome": "cleared",
+        "interstitial": "consent",
+        "verification_url": pending["verification"]["verification_url"],
+    }
+    await worker._execute("browser.session_close", {"session_id": "s1"})
+
+
+async def test_consent_timeout_then_owner_fallback(consent_worker, site_url, monkeypatch) -> None:
+    _ddg_fixture(monkeypatch, site_url)
+    worker = consent_worker
+    await worker._execute("browser.session_open", _open_payload())
+    pending = await worker._execute(
+        "browser.search",
+        {"session_id": "s1", "query": "ai agents", "engine": "auto", "mode": "interactive"},
+    )
+    assert pending["verification"]["interstitial"] == "consent"
+    outcome = await worker._execute(
+        "browser.search",
+        {"session_id": "s1", "query": "ai agents", "engine": "auto", "interstitial": "fallback"},
+    )
+    assert outcome["provider"] == "duckduckgo"
+    assert outcome["fallback_reason"] == "google:verification_timeout"
+    assert outcome["verification"]["outcome"] == "timeout"
+    assert outcome["verification"]["interstitial"] == "consent"
+    await worker._execute("browser.session_close", {"session_id": "s1"})
+
+
+async def test_timeout_then_owner_declines_closes_the_session_cleanly(handoff_worker) -> None:
+    """CAPTCHA -> timeout -> the owner declines the fallback: no further search is
+    issued, session_close tears the browser down like any other session."""
+    worker = handoff_worker
+    await worker._execute("browser.session_open", _open_payload())
+    pending = await worker._execute(
+        "browser.search",
+        {"session_id": "s1", "query": "ai agents", "engine": "auto", "mode": "interactive"},
+    )
+    assert pending["state"] == "waiting_for_owner_verification"
+    waited = await worker._execute(
+        "browser.wait", {"session_id": "s1", "for": "verification_cleared", "timeout_ms": 700}
+    )
+    assert waited["satisfied"] is False
+    closed = await worker._execute("browser.session_close", {"session_id": "s1"})
+    assert closed["closed"] is True and closed["browser_pid_exited"] is True
+    assert "s1" not in worker._sessions
+
+
+async def test_search_evidence_names_the_interstitial_exactly_once(
+    handoff_worker, site_url, monkeypatch
+) -> None:
+    """Schema 3: the interstitial kind is evidence in ``verification`` only - never at the
+    top level, never as an attempt outcome on the handoff paths."""
+    _ddg_fixture(monkeypatch, site_url)
+    worker = handoff_worker
+    await worker._execute("browser.session_open", _open_payload())
+    pending = await worker._execute(
+        "browser.search",
+        {"session_id": "s1", "query": "ai agents", "engine": "auto", "mode": "interactive"},
+    )
+    fallback = await worker._execute(
+        "browser.search",
+        {"session_id": "s1", "query": "ai agents", "engine": "auto", "interstitial": "fallback"},
+    )
+    for result in (pending, fallback):
+        assert result["schema_version"] == 3
+        serialized = json.dumps(result)
+        assert serialized.count('"interstitial"') == 1
+        assert result["page_kind"] != "captcha"
+        assert "captcha" not in [a["outcome"] for a in result["attempts"]]
+        assert result["verification"]["interstitial"] == "captcha"
     await worker._execute("browser.session_close", {"session_id": "s1"})

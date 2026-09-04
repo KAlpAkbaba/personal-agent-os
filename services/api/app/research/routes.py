@@ -64,7 +64,9 @@ async def _temporal_client(request: Request) -> Client:
 
 
 #: spec §5a: interactive_wait_s bounds (60s = one browser.wait slice; 1800s = 30 minutes).
-MIN_INTERACTIVE_WAIT_S = 60
+# 30 s exists for owner QUALIFICATION runs (a 600 s wait is not a test); production
+# requests keep DEFAULT_INTERACTIVE_WAIT_S, and the owner smoke has -HandoffTimeoutSec.
+MIN_INTERACTIVE_WAIT_S = 30
 MAX_INTERACTIVE_WAIT_S = 1800
 DEFAULT_INTERACTIVE_WAIT_S = 600
 

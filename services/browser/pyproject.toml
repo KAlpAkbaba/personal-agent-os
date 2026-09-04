@@ -1,6 +1,6 @@
 [project]
 name = "pagentos-browser"
-version = "0.3.0"
+version = "0.4.0"
 description = "Personal Agent OS - semantic browser automation adapter (M2 browser agent)"
 requires-python = ">=3.12,<3.13"
 dependencies = [

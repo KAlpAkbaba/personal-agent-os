@@ -40,7 +40,7 @@ def test_worker_version_is_the_release_the_installer_expects() -> None:
     source = Path(worker.__file__).read_text(encoding="utf-8")
     assert f'\nWORKER_VERSION = "{worker.WORKER_VERSION}"\n' in source
     assert "\nCONTRACTS: dict[str, int] = {" in source
-    assert worker.WORKER_VERSION == "0.3.0"
+    assert worker.WORKER_VERSION == "0.4.0"
     pyproject = (Path(worker.__file__).parents[1] / "pyproject.toml").read_text(encoding="utf-8")
-    assert 'version = "0.3.0"' in pyproject
+    assert 'version = "0.4.0"' in pyproject
     assert "cache-keys" in pyproject and "browser_agent/**/*.py" in pyproject

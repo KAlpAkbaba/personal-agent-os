@@ -34,7 +34,7 @@ ENGINES: tuple[str, ...] = ("google", "duckduckgo", "bing", "brave")
 AUTO_ORDER: tuple[str, ...] = ("google", "duckduckgo")
 PRIMARY_PROVIDER = AUTO_ORDER[0]
 # Response schema of browser.search (2 = provider evidence fields present).
-SEARCH_SCHEMA_VERSION = 2
+SEARCH_SCHEMA_VERSION = 3
 MAX_RESULTS_CAP = 20
 
 _ENGINE_OWN_DOMAINS: dict[str, tuple[str, ...]] = {
@@ -120,6 +120,12 @@ class SearchOutcome:
     path: str = "fallback"
     state: str = "ok"
     verification_url: str | None = None
+    #: Schema 3: the single home of owner-verification evidence (contract §3a).
+    #: ``outcome``: None (no interstitial handed to the owner), "pending",
+    #: "cleared", "timeout" (fallback after the owner did not complete the page),
+    #: "repeat" (a further interstitial after one clearance; fallback applied).
+    #: ``interstitial``: the page kind that was shown (captcha/consent/blocked).
+    verification: dict[str, object] | None = None
 
     @property
     def engine(self) -> str | None:
@@ -156,6 +162,7 @@ class SearchOutcome:
             "page_kind": self.page_kind,
             "path": self.path,
             "state": self.state,
+            "verification": self.verification,
         }
         if self.verification_url is not None:
             result["verification_url"] = self.verification_url
@@ -575,8 +582,9 @@ async def run_search(
             attempts.append(
                 SearchAttempt(
                     provider,
-                    handoff.page_kind,
-                    handoff.detail or "handoff: owner verification required",
+                    "verification_pending",
+                    handoff.detail
+                    or f"handoff: {handoff.page_kind} shown; owner verification required",
                 )
             )
             return SearchOutcome(
@@ -605,17 +613,23 @@ async def run_search(
         path_hint = fetched[4] if len(fetched) > 4 else None
         interstitial = detect_google_interstitial(html, final_url) if provider == "google" else None
         if interstitial is not None:
-            detail = "interstitial detected; not answered"
+            # The interstitial KIND is evidence exactly once (the ``verification`` block the
+            # worker attaches); an attempt records the verification outcome code on the
+            # handoff paths and the kind only on the plain unattended fallback.
+            outcome_code = interstitial
+            detail = f"{interstitial} interstitial detected; not answered"
             if path_hint == "handoff_repeat_fallback":
+                outcome_code = "interstitial_after_verification"
                 detail = (
-                    "interstitial again after the owner's verification; "
+                    f"{interstitial} again after the owner's verification; "
                     "not handed off a second time (retry once, never loop)"
                 )
             elif path_hint == "handoff_timeout_fallback":
-                detail = "interstitial still pending after the owner handoff; not retried"
+                outcome_code = "verification_timeout"
+                detail = f"{interstitial} still pending after the owner handoff; not retried"
             if path_hint and path_hint.startswith("handoff_"):
                 fallback_path_hint = path_hint
-            attempts.append(SearchAttempt(provider, interstitial, detail))
+            attempts.append(SearchAttempt(provider, outcome_code, detail))
             last_kind = "captcha" if interstitial == "captcha" else "blocked"
             continue
         if page_kind in _SKIP_KINDS:

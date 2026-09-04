@@ -207,19 +207,19 @@ class TestProviderAbstraction:
 
 
 class TestSchemaVersion:
-    async def test_search_result_carries_schema_version_2(self) -> None:
+    async def test_search_result_carries_schema_version_3(self) -> None:
         from browser_agent.search_engines import SEARCH_SCHEMA_VERSION
 
         async def fetch(engine: str, url: str):
             return _read("google.html"), "ok", 200, url
 
         d = (await run_search("q", "auto", fetch=fetch)).as_dict()
-        assert SEARCH_SCHEMA_VERSION == 2 and d["schema_version"] == 2
+        assert SEARCH_SCHEMA_VERSION == 3 and d["schema_version"] == 3
 
     def test_worker_advertises_the_search_contract(self) -> None:
         from browser_agent.worker import CONTRACTS, WORKER_VERSION
 
-        assert CONTRACTS["browser.search"] == 2
+        assert CONTRACTS["browser.search"] == 3
         assert tuple(int(x) for x in WORKER_VERSION.split(".")) >= (0, 2, 0)
 
 
@@ -280,13 +280,16 @@ class TestHandoffOutcome:
         assert d["requested_provider"] == "google"
         assert d["results"] == []
         assert d["result_count"] == 0
-        assert d["page_kind"] == "captcha"
+        assert d["page_kind"] == "captcha"  # run_search's own outcome; the worker projects
         assert d["verification_url"] == "https://www.google.com/sorry/index"
+        # the one attempt records the verification state, not the interstitial kind again
+        assert [a["outcome"] for a in d["attempts"]] == ["verification_pending"]
+        assert "captcha" in d["attempts"][0]["detail"]
         # Not a fallback: nothing else was ever tried on the requested provider's behalf.
         assert d["fallback"] is False
         assert d["fallback_reason"] is None
         assert [a["provider"] for a in d["attempts"]] == ["google"]
-        assert d["schema_version"] == 2
+        assert d["schema_version"] == 3
 
     async def test_handoff_pending_explicit_google_engine(self) -> None:
         async def fetch(engine: str, url: str):

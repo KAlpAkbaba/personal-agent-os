@@ -2688,3 +2688,33 @@ embedded Temporal worker). Facts and decisions that were not in the design:
     `fail` (stop with `owner_verification_timeout` so the owner decides); a synchronous in-run
     owner prompt (signal + web) is deferred. Nothing solves, bypasses, masks or retries a
     CAPTCHA; all lifecycle, audit, security and cleanup guarantees stay as proven.
+
+18. **Verification evidence has one home; the owner's fallback decision is evidence-backed**
+    (2026-09-04, real owner run: interactive handoff worked - interstitial detected, window
+    brought forward, same session polled for 600 s - and then the smoke died with "Item has
+    already been added. Key in dictionary: 'interstitial'" when the owner chose to fall back).
+    Root cause, exactly: the smoke built the fallback payload as `$searchPayload + @{
+    interstitial = "fallback" }`; PowerShell's hashtable `+` throws on a key both operands
+    carry, and the original payload already had `interstitial = "handoff"`. The fallback
+    attempt was never issued, so the run ended with a dictionary error instead of provider
+    evidence. Nothing about Google, the browser lifecycle or the handoff itself was at fault.
+    Decisions: (a) search schema 3 - the interstitial kind lives ONLY in the result's
+    `verification` block (`handoffs`, `outcome` pending|cleared|timeout|repeat, `interstitial`,
+    `verification_url`); a pending result's top-level `page_kind` is `waiting`, and Google's
+    attempt outcome on the handoff paths is a verification code
+    (`verification_pending`/`verification_timeout`/`interstitial_after_verification`), giving
+    the canonical reasons `google:verification_timeout` and
+    `google:interstitial_after_verification`; (b) the smoke builds every payload and every
+    evidence object from fixed key lists in `scripts/lib/BrowserSmokeEvidence.ps1`
+    (`New-BrowserSearchPayload`, `New-HandoffEvidence`, `ConvertTo-SearchEvidence`) and never
+    merges hashtables; `Test-EvidenceKeysUnique` re-checks the JSON projection, and
+    `scripts/tests/browser-smoke-evidence.tests.ps1` forbids the merge pattern in the smoke
+    source; (c) after a verification timeout the owner's chosen fallback is a PASS with the
+    honest record `provider=duckduckgo, fallback=true,
+    fallback_reason=google:verification_timeout, verification.outcome=timeout`, exactly one
+    fallback attempt, on the same session, which then closes normally; declining closes the
+    session cleanly and reports `browser_pid_exited`; (d) the verification timeout is
+    configurable - `-HandoffTimeoutSec` (15..3600, default 600) and `interactive_wait_s`
+    (minimum lowered to 30 for qualification runs; production default unchanged at 600), so an
+    owner qualification never costs ten minutes. Worker release 0.4.0 carries schema 3;
+    Cloud Core still accepts schema 2 workers (their verification fields stay null).

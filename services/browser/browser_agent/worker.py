@@ -66,12 +66,12 @@ from .targets import TargetSpec, coerce_target
 
 logger = get_logger(__name__)
 
-WORKER_VERSION = "0.3.0"
+WORKER_VERSION = "0.4.0"
 # Per-capability response schema versions (BROWSER_CAPABILITIES.md §3). A consumer that
 # needs the search-provider evidence checks `contracts["browser.search"] >= 2` on the hello
 # or worker_status BEFORE searching, so an old installed worker yields a clear contract/
 # version mismatch instead of a missing-property error (owner run, 2026-09-03).
-CONTRACTS: dict[str, int] = {"browser.search": 2}
+CONTRACTS: dict[str, int] = {"browser.search": 3}
 PROTOCOL_VERSION = 1
 DEFAULT_TIMEOUT_MS = 30_000
 DEFAULT_NAV_TIMEOUT_MS = 15_000
@@ -345,6 +345,9 @@ class SessionState:
     # provider fallback applies.
     verification_handoffs: int = 0
     verification_cleared_once: bool = False
+    # The interstitial last shown to the owner (kind, url) - the single source of the
+    # ``verification`` evidence block on the search result.
+    last_interstitial: tuple[str, str] | None = None
 
 
 # ----------------------------------------------------------------------- #
@@ -1553,6 +1556,7 @@ class Worker:
                 # outcome and ``run_search`` moves to the next provider (unattended
                 # policy after a handoff timeout), or - in handoff mode - the same
                 # pending state is reported once more without a new navigation.
+                state.last_interstitial = (still_blocked, page.url)
                 if interstitial_mode == "handoff" and not state.verification_cleared_once:
                     state.awaiting_verification_query = query
                     raise search_engines.GoogleHandoffPending(
@@ -1593,6 +1597,7 @@ class Worker:
         interstitial = detect_google_interstitial(html, final_url)
 
         if interstitial is not None and interstitial_mode == "handoff":
+            state.last_interstitial = (interstitial, final_url)
             if state.verification_cleared_once or state.verification_handoffs >= 1:
                 # Retry once, never loop: one verification has already been handed
                 # to the owner in this session. A further interstitial is recorded
@@ -1605,6 +1610,7 @@ class Worker:
                 )
                 return html, interstitial, None, final_url, "handoff_repeat_fallback"
             state.verification_handoffs += 1
+            state.last_interstitial = (interstitial, final_url)
             await page.bring_to_front()
             await asyncio.to_thread(lifecycle.bring_process_window_to_front, state.backend.main_pid)
             state.awaiting_verification_query = query
@@ -1843,7 +1849,37 @@ class Worker:
         result = outcome.as_dict()
         result["mode"] = effective_mode
         result["verification_handoffs"] = state.verification_handoffs
+        result["verification"] = self._verification_block(state, outcome)
+        if outcome.state == "waiting_for_owner_verification":
+            # the final page kind of a pending outcome is "waiting"; the interstitial kind
+            # is evidence exactly once, in the verification block
+            result["page_kind"] = "waiting"
         return result
+
+    @staticmethod
+    def _verification_block(
+        state: SessionState, outcome: search_engines.SearchOutcome
+    ) -> dict[str, Any]:
+        """Schema 3 ``verification`` (contract §3a): the one place the interstitial
+        handed to the owner, and what became of it, is recorded."""
+        outcome_code: str | None = None
+        if outcome.path == "handoff_pending":
+            outcome_code = "pending"
+        elif outcome.path == "handoff_cleared":
+            outcome_code = "cleared"
+        elif outcome.path == "handoff_timeout_fallback":
+            outcome_code = "timeout"
+        elif outcome.path == "handoff_repeat_fallback":
+            outcome_code = "repeat"
+        kind, url = state.last_interstitial if state.last_interstitial else (None, None)
+        if outcome_code is None:
+            kind, url = None, None
+        return {
+            "handoffs": state.verification_handoffs,
+            "outcome": outcome_code,
+            "interstitial": kind,
+            "verification_url": url,
+        }
 
     async def _op_fetch_evidence(
         self, state: SessionState, payload: dict[str, Any]

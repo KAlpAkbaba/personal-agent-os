@@ -140,7 +140,7 @@ async def test_google_search_ui_handoff_mode_reports_shape_honestly(live_worker:
         f"result_count={outcome['result_count']}"
     )
 
-    assert outcome["schema_version"] == 2
+    assert outcome["schema_version"] == 3
     assert outcome["requested_provider"] == "google"
     assert outcome["state"] in ("ok", "waiting_for_owner_verification")
     if outcome["state"] == "waiting_for_owner_verification":

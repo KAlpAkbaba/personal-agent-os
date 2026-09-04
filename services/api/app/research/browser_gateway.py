@@ -191,8 +191,13 @@ class SearchEvidence:
     path: str | None = None
     verification_url: str | None = None
     page_kind: str | None = None
+    #: Schema 3 (contract §3a, 2026-09-04): the worker's single verification block -
+    #: {handoffs, outcome: pending|cleared|timeout|repeat|None, interstitial, verification_url}.
+    #: The interstitial kind is evidence exactly once, here; older schema-2 workers send none.
+    verification: dict[str, Any] | None = None
 
     #: The search response schema that carries provider evidence (BROWSER_CAPABILITIES §3).
+    #: Schema 3 adds the verification block; 2 is still accepted (its fields stay None).
     REQUIRED_SCHEMA_VERSION = 2
 
     @property
@@ -219,6 +224,7 @@ class SearchEvidence:
             "path": self.path,
             "verification_url": self.verification_url,
             "page_kind": self.page_kind,
+            "verification": self.verification,
         }
 
     @classmethod
@@ -228,6 +234,16 @@ class SearchEvidence:
         provider = str(result.get("provider") or "unknown")
         requested = str(result.get("requested_provider") or "unknown")
         hits = result.get("results") or []
+        verification = result.get("verification")
+        verification = dict(verification) if isinstance(verification, dict) else None
+        # Schema 3 keeps the interstitial kind ONLY in the verification block and reports
+        # page_kind="waiting" while a handoff is pending; older workers put it at the top level.
+        page_kind = str(result["page_kind"]) if result.get("page_kind") else None
+        if verification and verification.get("interstitial") and page_kind in (None, "waiting"):
+            page_kind = str(verification["interstitial"])
+        verification_url = result.get("verification_url") or (
+            verification.get("verification_url") if verification else None
+        )
         return cls(
             schema_version=schema_version,
             locale=(str(result["locale"]) if result.get("locale") else None),
@@ -242,10 +258,9 @@ class SearchEvidence:
             attempts=tuple(a for a in (result.get("attempts") or []) if isinstance(a, dict)),
             state=str(result.get("state") or "ok"),
             path=(str(result["path"]) if result.get("path") else None),
-            verification_url=(
-                str(result["verification_url"]) if result.get("verification_url") else None
-            ),
-            page_kind=(str(result["page_kind"]) if result.get("page_kind") else None),
+            verification_url=(str(verification_url) if verification_url else None),
+            page_kind=page_kind,
+            verification=verification,
         )
 
 

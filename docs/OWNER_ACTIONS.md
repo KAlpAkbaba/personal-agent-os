@@ -240,36 +240,43 @@ Expected last line: `REAL BROWSER SMOKE: PASS`, preceded by `live worker proven:
 If it stops with `deployment/version mismatch` or `INSTALL FAILED`, paste the message, the
 install log it names and the output of `.\scripts\verify-device-service.ps1`; do not rerun.
 
-### 14. Google search with owner verification handoff — **this is the current action**
+### 14. Google search with owner verification handoff — **this is the current action (45-second version)**
 
-Unblocks: `docs/QUALIFICATION.md` 9.15 and, when Google answers, 9.12; the larger research
-run (item 10 step C) follows.
+Unblocks: `docs/QUALIFICATION.md` 9.15 and, when Google answers, 9.12.
 
-The provider path is proven (item 12, 9.14). What is left is Google answering, and from this
-address Google shows its verification page to automated Chrome. The handoff makes that your
-decision, not a blocker: the page stays exactly as Google served it, the PagentOS Chrome
-window comes to the front, the script says so (Turkish and English), you complete the page by
-hand in that window, and the SAME session resumes automatically and retries the pending
-search exactly once. Nothing is solved, bypassed or retried in a loop: if Google asks again
-after your verification, the run records that and falls back once; if you do not complete
-the page within 10 minutes, the script asks whether to fall back now (y) or stop cleanly (N,
-session closed, profile cookies kept). Google's verification/consent cookies stay in the
-dedicated PagentOS profile, so later runs may not ask again.
+Your 2026-09-04 run proved the hard part: interactive mode entered, Google's interstitial was
+detected, the state became `WAITING_FOR_OWNER_VERIFICATION`, the existing PagentOS Chrome
+window came to the front, and the same session stayed alive while it was polled, with no new
+browser lifecycle. It then failed on the way to the fallback with a dictionary error, because
+two layers of the smoke each set the `interstitial` key and PowerShell refuses to merge them.
+That is fixed at the root: the interstitial is now evidence in exactly one place (the result's
+`verification` block), every payload and evidence object is built from a fixed key list, and a
+test forbids the merge pattern and any duplicate key.
 
-The command updates the installed agent first (worker source changed: search modes and the
-one-retry policy; one UAC prompt, the installer proves the live worker before anything
-else), proves the live worker again before any browser operation, then runs the interactive
-search:
+**The wait is now 45 seconds, not 600.** You do not have to solve anything. Either complete
+Google's page in that window within 45 seconds and the same session resumes and retries the
+search once, or let it expire and answer `y` when it asks about falling back. Both outcomes
+are a PASS and both are recorded honestly:
+
+- you complete it: `verification.outcome=cleared`, `path=handoff_cleared`, `provider=google`,
+  `fallback=False`, Google's organic results;
+- you let it expire and choose `y`: `verification.outcome=timeout`, `provider=duckduckgo`,
+  `fallback=True`, `fallback_reason=google:verification_timeout`, DuckDuckGo's organic
+  results, one attempt only, same session, clean close;
+- Google does not ask at all (cookies from your earlier verification are in the profile):
+  `path=google_ui`, `verification.outcome` null, `provider=google` - also a PASS.
+
+Answering `N` instead closes the session cleanly and stops; that is not a failure either, just
+an unfinished qualification.
+
+The command updates the installed agent first (worker 0.4.0 carries the new evidence schema;
+one UAC prompt, the installer proves the live worker before anything else):
 
 ```powershell
-.\scripts\browser\real-browser-smoke.ps1 -UpdateAgentFirst -Mode search -SearchMode interactive -OutFile browser-search-handoff-1.json
+.\scripts\browser\real-browser-smoke.ps1 -UpdateAgentFirst -Mode search -SearchMode interactive -HandoffTimeoutSec 45 -OutFile browser-search-handoff-2.json
 ```
 
-Expected when Google answers after your verification: `state=ok path=handoff_cleared
-mode=interactive handoffs=1`, `requested_provider=google provider=google fallback=False`,
-result lines, `REAL BROWSER SMOKE: PASS`. If Google answered without asking (cookies from an
-earlier verification), `path=google_ui handoffs=0` is also a PASS. Paste the final lines and
-`browser-search-handoff-1.json` whatever the outcome.
+Paste the final lines and `browser-search-handoff-2.json` whatever the outcome.
 
 ### 12. Google-primary search through the installed worker — **DONE (2026-09-04, provider path PROVEN_REAL; Google success not observed)**
 
