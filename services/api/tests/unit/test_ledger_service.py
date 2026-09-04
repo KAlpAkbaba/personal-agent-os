@@ -459,6 +459,43 @@ def test_backfill_creates_deployment_events_from_releases(session):
     assert {"kind": "release", "ref": str(rel_id)} in row.evidence_refs
 
 
+def test_backfill_spells_any_release_component_and_keeps_its_name(session):
+    """Found on the real dev database: a release component with hyphens and a hash
+    (``browser-agent-demo-4326f3af``) made the whole backfill raise. The component is
+    slugged into the event type, kept verbatim on ``module``, and the run continues."""
+    session.add(
+        Release(
+            id=uuid.uuid4(),
+            component="browser-agent-demo-4326f3af",
+            version="0.1.0",
+            manifest_digest="sha256:def",
+            status="rolled_back",
+            promoted_at=NOW - timedelta(hours=3),
+            rolled_back_at=NOW - timedelta(hours=2),
+        )
+    )
+    session.commit()
+
+    report = ledger_service.backfill(session, now=NOW)
+    assert report.created.get("deployment") == 2
+    types = {
+        r.event_type
+        for r in session.execute(select(ActivityEventRow)).scalars()
+        if r.subsystem == "deployment"
+    }
+    assert types == {
+        "deployment.browser_agent_demo_4326f3af.released",
+        "deployment.browser_agent_demo_4326f3af.rolled_back",
+    }
+    row = session.execute(
+        select(ActivityEventRow).where(
+            ActivityEventRow.event_type == "deployment.browser_agent_demo_4326f3af.rolled_back"
+        )
+    ).scalar_one()
+    assert row.module == "browser-agent-demo-4326f3af"
+    assert ledger_service.component_slug("Cloud Core / api") == "cloud_core_api"
+
+
 def test_backfill_creates_incident_opened(session):
     inc_id = uuid.uuid4()
     session.add(

@@ -17,12 +17,14 @@ as the generic DB session source the way ``app.research.routes`` and
 from __future__ import annotations
 
 import asyncio
+import json
+import re
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.artifacts.runtime import ArtifactRuntime
 from app.identity.dependencies import require_owner_session
@@ -44,6 +46,7 @@ from app.ledger.vocabulary import (
     validate_subsystem,
 )
 from app.logging import get_logger
+from app.research.injection import is_assistant_directed, is_injection_suspected
 from app.voice.realtime_sessions.service import is_forbidden_key
 
 logger = get_logger("app.ledger.routes")
@@ -51,6 +54,59 @@ logger = get_logger("app.ledger.routes")
 router = APIRouter(prefix="/v1/ledger", dependencies=[Depends(require_owner_session)])
 
 MAX_LIMIT = 200
+#: Serialized bound for a posted ``detail_json``: evidence counts and identifiers, not
+#: documents.
+MAX_DETAIL_BYTES = 16 * 1024
+#: Only these subsystems may post a ``critical`` event through the API. ``critical`` maps
+#: to the ``immediate`` briefing policy - spoken to the owner unasked - so an arbitrary
+#: owner-session caller must not be able to force it (security review, 2026-09-04).
+CRITICAL_POSTING_SUBSYSTEMS = frozenset({"deployment", "security", "cloud_core", "device_service"})
+
+
+#: Phrasings the shared browser marker set (packages/protocol, frozen with the installed
+#: worker) does not cover but a spoken briefing must still refuse.
+_SPOKEN_TEXT_MARKERS = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"ignore (?:all |any |the )?(?:previous|prior|earlier|above) (?:instructions|rules)",
+        r"disregard (?:all |any |the )?(?:previous|prior|earlier|above) (?:instructions|rules)",
+        r"(?:önceki|onceki|yukarıdaki|yukaridaki) talimat",
+        r"talimatlar[ıi] (?:yok say|unut|görmezden gel|gormezden gel)",
+        r"you are now",
+        r"sahibine (?:söyle|soyle) ki",
+    )
+)
+
+
+def _screened_text(value: str, *, where: str) -> str:
+    """Text that will be SPOKEN to the owner verbatim must not carry instructions.
+
+    The research pipeline already refuses assistant-directed content at its boundary; a
+    ledger event posted through the API is the same class of untrusted text once the
+    Self Explanation engine reads it aloud, so it meets the same screen.
+    """
+    if (
+        is_injection_suspected(value)
+        or is_assistant_directed(value)
+        or any(marker.search(value) for marker in _SPOKEN_TEXT_MARKERS)
+    ):
+        raise ValueError(f"{where} carries instruction-shaped text and was refused")
+    return value
+
+
+def _screen_strings(value: Any, *, where: str, depth: int = 0) -> None:
+    if depth > 8:
+        raise ValueError(f"{where} nests too deeply")
+    if isinstance(value, str):
+        _screened_text(value, where=where)
+    elif isinstance(value, dict):
+        for inner in value.values():
+            _screen_strings(inner, where=where, depth=depth + 1)
+    elif isinstance(value, list | tuple):
+        for inner in value:
+            _screen_strings(inner, where=where, depth=depth + 1)
+
+
 #: GET /summary default window when the caller does not pass ``since``.
 DEFAULT_SUMMARY_WINDOW = timedelta(days=1)
 
@@ -166,6 +222,20 @@ class CreateEventRequest(BaseModel):
         except InvalidVocabulary as exc:
             raise ValueError(str(exc)) from exc
 
+    @field_validator("factual_summary")
+    @classmethod
+    def _screened_summary(cls, value: str) -> str:
+        return _screened_text(value, where="factual_summary")
+
+    @model_validator(mode="after")
+    def _critical_only_from_trusted_subsystems(self) -> CreateEventRequest:
+        if self.severity == "critical" and self.subsystem not in CRITICAL_POSTING_SUBSYSTEMS:
+            raise ValueError(
+                "severity 'critical' may be posted only by "
+                + ", ".join(sorted(CRITICAL_POSTING_SUBSYSTEMS))
+            )
+        return self
+
     @field_validator("subsystem")
     @classmethod
     def _valid_subsystem(cls, value: str) -> str:
@@ -202,6 +272,10 @@ class CreateEventRequest(BaseModel):
     @classmethod
     def _no_forbidden_detail(cls, value: dict[str, Any]) -> dict[str, Any]:
         _no_forbidden_keys(value, where="detail_json")
+        encoded = json.dumps(value, ensure_ascii=False, default=str)
+        if len(encoded.encode("utf-8")) > MAX_DETAIL_BYTES:
+            raise ValueError(f"detail_json exceeds {MAX_DETAIL_BYTES} bytes")
+        _screen_strings(value, where="detail_json")
         return value
 
 

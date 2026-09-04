@@ -48,11 +48,38 @@ MONTHS_TR = {
 # Turkish letter names for spelling out acronyms as a *mechanical* fallback
 # (not a stored pronunciation guess): "IP" -> "i pe". Owner dict overrides.
 LETTER_NAMES_TR = {
-    "A": "a", "B": "be", "C": "ce", "Ç": "çe", "D": "de", "E": "e", "F": "fe",
-    "G": "ge", "Ğ": "yumuşak ge", "H": "he", "I": "ı", "İ": "i", "J": "je",
-    "K": "ka", "L": "le", "M": "me", "N": "ne", "O": "o", "Ö": "ö", "P": "pe",
-    "Q": "ku", "R": "re", "S": "se", "Ş": "şe", "T": "te", "U": "u", "Ü": "ü",
-    "V": "ve", "W": "çift ve", "X": "iks", "Y": "ye", "Z": "ze",
+    "A": "a",
+    "B": "be",
+    "C": "ce",
+    "Ç": "çe",
+    "D": "de",
+    "E": "e",
+    "F": "fe",
+    "G": "ge",
+    "Ğ": "yumuşak ge",
+    "H": "he",
+    "I": "ı",
+    "İ": "i",
+    "J": "je",
+    "K": "ka",
+    "L": "le",
+    "M": "me",
+    "N": "ne",
+    "O": "o",
+    "Ö": "ö",
+    "P": "pe",
+    "Q": "ku",
+    "R": "re",
+    "S": "se",
+    "Ş": "şe",
+    "T": "te",
+    "U": "u",
+    "Ü": "ü",
+    "V": "ve",
+    "W": "çift ve",
+    "X": "iks",
+    "Y": "ye",
+    "Z": "ze",
 }
 
 _TR_UPPER = "A-ZÇĞİÖŞÜ"
@@ -138,7 +165,13 @@ def _sub_date_iso(m: re.Match[str], ctx: _Ctx) -> str:
     tail = m.group("time") or ""
     date_words = f"{numbers.cardinal(day)} {MONTHS_TR[month]} {numbers.cardinal(year)}"
     if tail:
-        return f"{date_words} saat {_clock_words(tail.strip())}"
+        # An ISO stamp may separate the time with "T" and end with a zone or a fraction
+        # ("2026-09-04T18:28:21.125418Z"); none of that is spoken.
+        clock = re.sub(r"[.,]\d+", "", tail.strip().lstrip("Tt"))
+        clock = re.sub(r"(?:Z|[+-]\d{2}:?\d{2})$", "", clock).strip()
+        if not re.fullmatch(r"\d{1,2}(?::\d{2}){0,2}", clock):
+            return date_words
+        return f"{date_words} saat {_clock_words(clock)}"
     return date_words
 
 
@@ -287,7 +320,8 @@ _PIPELINE: list[tuple[str, re.Pattern[str], object]] = [
     (
         "date_iso",
         re.compile(
-            r"\b(?P<y>\d{4})-(?P<mo>\d{2})-(?P<d>\d{2})(?P<time>[ T]\d{1,2}:\d{2}(?::\d{2})?)?\b"
+            r"\b(?P<y>\d{4})-(?P<mo>\d{2})-(?P<d>\d{2})"
+            r"(?P<time>[ T]\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?\b"
         ),
         _sub_date_iso,
     ),

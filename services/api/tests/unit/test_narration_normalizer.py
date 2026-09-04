@@ -14,9 +14,7 @@ import pytest
 from app.narration.normalizer import normalize
 from app.narration.tables import narrate_table
 
-EVAL_PATH = (
-    Path(__file__).resolve().parents[4] / "evals" / "voice" / "turkish_narration.jsonl"
-)
+EVAL_PATH = Path(__file__).resolve().parents[4] / "evals" / "voice" / "turkish_narration.jsonl"
 
 # Categories the acceptance criteria explicitly require, plus the rest of §4.
 REQUIRED_CATEGORIES = {
@@ -157,3 +155,14 @@ def test_pronunciation_does_not_break_untouched_numerics() -> None:
     out = normalize("Toplam 1.250.000 lira ve %17,2 artış.", pronunciation={"API": "ey pi ay"})
     assert "bir milyon iki yüz elli bin" in out
     assert "yüzde on yedi virgül iki" in out
+
+
+def test_iso_datetime_stamps_with_t_zone_and_fraction_are_spoken_not_crashed() -> None:
+    """Found on the real dev database (M16): an ISO stamp inside a briefing
+    ("2026-09-04T18:28:21Z") reached the normaliser and "T18" was handed to int()."""
+    assert normalize("2026-09-04T18:28:21Z") == (
+        "dört Eylül iki bin yirmi altı saat on sekiz yirmi sekiz yirmi bir"
+    )
+    assert normalize("2026-09-04T18:28:21.125418Z").startswith("dört Eylül iki bin yirmi altı saat")
+    assert normalize("2026-09-04T18:28:21+03:00").endswith("saat on sekiz yirmi sekiz yirmi bir")
+    assert normalize("2026-09-04 18:05").endswith("saat on sekiz sıfır beş")

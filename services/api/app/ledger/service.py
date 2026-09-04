@@ -14,6 +14,7 @@ events, because idempotency is keyed on ``(source, source_ref)``.
 from __future__ import annotations
 
 import dataclasses
+import re
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -43,6 +44,7 @@ from app.ledger.vocabulary import (
     SUBSYSTEM_RESEARCH,
     SUBSYSTEM_SELF_MODEL,
     SUBSYSTEM_VOICE,
+    InvalidVocabulary,
     validate_event_type,
     validate_production_state,
     validate_severity,
@@ -266,8 +268,32 @@ def _bump(bucket: dict[str, int], category: str) -> None:
 def _emit(session: Session, report: BackfillReport, category: str, event: ActivityEvent) -> None:
     _bump(report.examined, category)
     existed = _find_existing(session, event.source, event.source_ref) is not None
-    record(session, event)
+    try:
+        record(session, event)
+    except InvalidVocabulary as exc:
+        # One row that cannot be described must not end the backfill of every other
+        # row; it is counted and named, never silently dropped (found on the real dev
+        # database: a release component name the vocabulary could not spell).
+        _bump(report.skipped, f"{category}:invalid")
+        logger.warning(
+            "ledger_backfill_row_skipped",
+            category=category,
+            source_ref=event.source_ref,
+            reason=str(exc),
+        )
+        return
     _bump(report.skipped if existed else report.created, category)
+
+
+def component_slug(name: str) -> str:
+    """A release component as an event-type segment: lowercase, [a-z0-9_] only.
+
+    ``browser-agent-demo-4326f3af`` becomes ``browser_agent_demo_4326f3af``; the raw
+    name stays on the event's ``module`` field, so nothing is lost and the vocabulary's
+    ``deployment.<component>.<state>`` rule holds for every component that exists.
+    """
+    slug = re.sub(r"[^a-z0-9]+", "_", (name or "").lower()).strip("_")
+    return slug or "unknown"
 
 
 def _research_completed_summary(stats: dict[str, Any], findings_n: int, sources_n: int) -> str:
@@ -525,7 +551,7 @@ def _backfill_deployment(session: Session, report: BackfillReport) -> None:
     for rel in releases:
         base_evidence = [{"kind": "release", "ref": str(rel.id)}]
         if rel.promoted_at is not None:
-            event_type = f"deployment.{rel.component}.released"
+            event_type = f"deployment.{component_slug(rel.component)}.released"
             _emit(
                 session,
                 report,
@@ -551,7 +577,7 @@ def _backfill_deployment(session: Session, report: BackfillReport) -> None:
                 ),
             )
         if rel.rolled_back_at is not None:
-            event_type = f"deployment.{rel.component}.rolled_back"
+            event_type = f"deployment.{component_slug(rel.component)}.rolled_back"
             _emit(
                 session,
                 report,
@@ -619,10 +645,18 @@ def backfill(session: Session, *, now: datetime | None = None) -> BackfillReport
     Re-runnable: a re-run against unchanged rows records nothing new."""
     now = now or utcnow()
     report = BackfillReport()
-    _backfill_research(session, report)
-    _backfill_voice(session, report)
-    _backfill_deployment(session, report)
-    _backfill_incidents(session, report)
+    for name, step in (
+        ("research", _backfill_research),
+        ("voice", _backfill_voice),
+        ("deployment", _backfill_deployment),
+        ("incidents", _backfill_incidents),
+    ):
+        try:
+            step(session, report)
+        except Exception as exc:  # noqa: BLE001 - one source must not end the others
+            session.rollback()
+            _bump(report.skipped, f"{name}:error")
+            logger.warning("ledger_backfill_source_failed", source=name, reason=type(exc).__name__)
 
     # the run itself is a live fact (spec §1.2 writer table: "ledger |
     # backfill runs | ledger.backfill"), always new — NOT counted in the

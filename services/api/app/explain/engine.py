@@ -271,6 +271,14 @@ def _subsystem_tr(name: str | None) -> str:
     return _SUBSYSTEM_TR.get(name or "", name or "sistem")
 
 
+def _plain(value: Any, *, max_len: int = 64) -> str:
+    """A version, commit, file name or count as spoken text: one line, bounded, no
+    control characters. Ledger detail values come from owner scripts and evidence files;
+    the route screens them for instructions, and this keeps them short and flat."""
+    text = " ".join(str(value if value is not None else "").split())
+    return text[:max_len]
+
+
 def _short(identifier: str | None) -> str:
     """Identifiers are spoken by their first block; the full value stays in the evidence
     references, where it can be read rather than listened to."""
@@ -285,7 +293,10 @@ def _module_key(name: str) -> str:
 
 
 def _iso(dt: datetime) -> str:
-    return dt.astimezone(UTC).isoformat().replace("+00:00", "Z")
+    """Spoken-friendly UTC time: a date, a space, hours and minutes. Never an ISO 'T'
+    stamp - that is read aloud as a word, and the narration normaliser does not
+    expect one inside prose (found on the real dev database)."""
+    return dt.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
 
 
 def _qualified_for(events: list[EventView], job_id: str | None) -> EventView | None:
@@ -414,7 +425,9 @@ def _research_technical(
         f"Görev kimliği {_short(ev.research_job_id)}." if ev.research_job_id else "",
         f"Keşfedilen aday {_n(d.get('discovered'))}, getirilen sayfa {_n(d.get('fetched'))}, "
         f"kanıt {_n(d.get('evidence'))}, elenen {_n(d.get('rejected'))}.",
-        f"Sentez sağlayıcısı {d.get('synthesis_provider')}." if d.get("synthesis_provider") else "",
+        f"Sentez sağlayıcısı {_plain(d.get('synthesis_provider'))}."
+        if d.get("synthesis_provider")
+        else "",
         f"Araştırma politikası sürümü {ev.version}." if ev.version else "",
     ]
     items.append(
@@ -423,15 +436,18 @@ def _research_technical(
     if qualified is not None:
         q = qualified.detail or {}
         facts = [
-            f"Kurulu tarayıcı çalışanı sürümü {q.get('installed_release')}; dağıtım "
+            f"Kurulu tarayıcı çalışanı sürümü {_plain(q.get('installed_release'))}; dağıtım "
             f"{'yapılmadı' if not q.get('deployed') else 'yapıldı'}."
             if q.get("installed_release")
             else "",
-            f"Cloud Core araştırma politikası {q.get('cloud_policy_version')}."
+            f"Cloud Core araştırma politikası {_plain(q.get('cloud_policy_version'))}."
             if q.get("cloud_policy_version")
             else "",
-            f"Kaynak deposu commit {q.get('git_commit')}." if q.get("git_commit") else "",
-            f"Kanıt dosyası {q.get('evidence_file')} ({q.get('digest')})."
+            f"Kaynak deposu commit {_plain(q.get('git_commit'))}." if q.get("git_commit") else "",
+            (
+                f"Kanıt dosyası {_plain(q.get('evidence_file'))} "
+                f"({_plain(q.get('digest'), max_len=80)})."
+            )
             if q.get("evidence_file")
             else "",
             "PagentOS Chrome süreçleri: öncesi "
