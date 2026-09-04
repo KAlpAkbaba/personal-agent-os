@@ -279,10 +279,28 @@ class ResearchReport:
 
 
 def assign_evidence_ids(records: list[EvidenceRecord]) -> list[EvidenceRecord]:
-    """Stable ``e1..eN`` ids in list order (the pipeline always passes
-    already-ranked evidence). A record that already carries an id keeps it —
-    idempotent across a workflow activity replay."""
-    return [replace(r, id=r.id or f"e{i + 1}") for i, r in enumerate(records)]
+    """Give every record a citation id, keeping the ones already assigned.
+
+    A record that already carries an id keeps it, so a workflow activity replay does not
+    renumber the sources a report already cites. New records take the next id NOT already
+    in use rather than their position in the list: ranking runs again when a top-up round
+    adds evidence, and positional numbering handed the newcomer at the front an id an older
+    record still held - the live run of 2026-09-04 produced two different sources both
+    answering to "[e2]", which makes every citation of it unverifiable.
+    """
+    taken = {r.id for r in records if r.id}
+    out: list[EvidenceRecord] = []
+    next_number = 1
+    for record in records:
+        if record.id:
+            out.append(record)
+            continue
+        while f"e{next_number}" in taken:
+            next_number += 1
+        new_id = f"e{next_number}"
+        taken.add(new_id)
+        out.append(replace(record, id=new_id))
+    return out
 
 
 def iter_statements(report: ResearchReport) -> Iterator[Statement]:

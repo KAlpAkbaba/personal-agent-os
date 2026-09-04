@@ -2845,3 +2845,37 @@ embedded Temporal worker). Facts and decisions that were not in the design:
     page can no longer be cited. Research policy version 4 carries the quality gate and the
     findings contract, so exactly one Cloud Core release ships it; the Windows worker is
     untouched (0.4.0 already matches, and none of this changes its contract).
+
+23. **What the live dev-chain run found once the gate was on** (2026-09-04, three real runs
+    against Chrome and the live web before asking the owner to rerun). The gate worked - and
+    the first run exposed three things a unit test could not have.
+
+    (a) **The gate refused pages that were genuinely on topic.** An official post announcing an
+    agentic model family scored 0.325 against a floor of 0.35, because its headline was a
+    product name and the whole signal sat in the body. Two causes: the domain lexicon was a
+    flat phrase list, so one Turkish word ("ajanlariyla") matched four overlapping entries
+    while an English announcement matched none, and every phrase counted the same, so a phone
+    launch mentioning "yapay zeka asistani" once scored like real coverage. The lexicon is now
+    a set of weighted CONCEPTS counted once each, with agent-specific ideas (agentic, tool
+    calling, multi-agent, orchestration) weighted above generic AI mentions. The announcement
+    now scores 0.65, the phone launch 0.33, the unrelated arXiv abstracts still 0.0.
+
+    (b) **A fixed fetch budget spent once decided the size of the report by luck.** Nine of
+    twelve fetched pages were refused, leaving exactly the minimum three findings. The
+    workflow now runs up to three bounded top-up rounds when the gate leaves it short of the
+    target: each round is sized to the shortfall, only ever fetches candidates never fetched
+    before, and stops as soon as discovery has nothing left. It is not a loop that browses
+    until it likes the answer - a run that cannot find enough usable coverage still fails.
+    With top-ups the same target produced five evidence-backed findings from five sources.
+
+    (c) **Ranking a second time gave two different sources the same citation id.**
+    `assign_evidence_ids` kept existing ids (correct: a replay must not renumber a published
+    report) but numbered new records by POSITION, so a newcomer at the front took an id an
+    older record still held. The live report carried two sources both answering to "[e2]",
+    which makes every citation of it unverifiable. New records now take the next id not in
+    use, ranking clears the ids of rows a later round dropped, and synthesis cites only rows
+    the latest ranking identified.
+
+    Result: the full dev-chain harness passes end to end against the live web, including
+    recovery after a Cloud Core restart mid-job, with five findings, five sources and
+    nineteen refusals recorded by reason.

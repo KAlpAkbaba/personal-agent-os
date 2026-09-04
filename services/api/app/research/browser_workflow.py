@@ -37,9 +37,14 @@ with workflow.unsafe.imports_passed_through():
         select_device_activity,
         synthesize_activity,
     )
+    from app.research.contracts import TARGET_REPORT_FINDINGS
     from app.research.models import STAGE_FAILED, STAGE_READY
 
 DEFAULT_MAX_SOURCES = 12
+#: How many extra fetch rounds a run may spend when the quality gate leaves it short of
+#: TARGET_REPORT_FINDINGS. Bounded on purpose: a run that cannot find enough usable coverage
+#: should say so, not keep browsing.
+MAX_TOPUP_ROUNDS = 3
 DEFAULT_SYNTHESIS = "auto"
 #: spec §5a: the owner-handoff wait budget, per waiting occurrence.
 DEFAULT_INTERACTIVE_WAIT_S = 600
@@ -162,26 +167,10 @@ class BrowserResearchWorkflow:
             retry_policy=_STANDARD_RETRY,
         )
 
-        for target in targets:
-            try:
-                await workflow.execute_activity(
-                    fetch_activity,
-                    args=[
-                        request.task_id,
-                        device_id,
-                        target["url"],
-                        target["query"],
-                        target["source_class"],
-                    ],
-                    start_to_close_timeout=_FETCH_TIMEOUT,
-                    heartbeat_timeout=timedelta(seconds=20),
-                    retry_policy=_FETCH_RETRY,
-                )
-            except ActivityError:
-                continue  # recorded as a fetch failure; one bad URL never fails the run
+        await self._fetch_all(request.task_id, device_id, targets)
 
         try:
-            await workflow.execute_activity(
+            ranked = await workflow.execute_activity(
                 rank_activity,
                 args=[
                     request.task_id,
@@ -192,6 +181,42 @@ class BrowserResearchWorkflow:
                 start_to_close_timeout=_SHORT,
                 retry_policy=_STANDARD_RETRY,
             )
+
+            # Top-up rounds when the quality gate left too little to answer with. Most
+            # fetched pages are refused in practice (2026-09-04: nine of twelve, as off topic,
+            # out of window or interstitials), so a fixed budget spent once decides the size of
+            # the report by luck. Each round is sized to the shortfall and the number of
+            # rounds is fixed, so this is never a loop that keeps fetching until it likes the
+            # answer; it stops early when discovery has nothing left, and it only ever fetches
+            # candidates that were never fetched, so nothing is duplicated on replay.
+            for _round in range(MAX_TOPUP_ROUNDS):
+                shortfall = TARGET_REPORT_FINDINGS - int(ranked.get("evidence", 0))
+                if shortfall <= 0:
+                    break
+                extra = await workflow.execute_activity(
+                    fetch_targets_activity,
+                    args=[
+                        request.task_id,
+                        min(request.max_sources, max(3, shortfall * 3)),
+                        request.topic,
+                    ],
+                    start_to_close_timeout=_SHORT,
+                    retry_policy=_STANDARD_RETRY,
+                )
+                if not extra:
+                    break  # discovery has nothing left to offer
+                await self._fetch_all(request.task_id, device_id, extra)
+                ranked = await workflow.execute_activity(
+                    rank_activity,
+                    args=[
+                        request.task_id,
+                        plan["topic"],
+                        plan["recency"]["start"],
+                        plan["recency"]["end"],
+                    ],
+                    start_to_close_timeout=_SHORT,
+                    retry_policy=_STANDARD_RETRY,
+                )
 
             report = await workflow.execute_activity(
                 synthesize_activity,
@@ -408,6 +433,26 @@ class BrowserResearchWorkflow:
         if isinstance(cause, ApplicationError) and cause.type:
             return str(cause.type)
         return "research_failed"
+
+    async def _fetch_all(self, task_id: str, device_id: str, targets: list) -> None:
+        """Fetch every target in order. One bad URL never fails the run."""
+        for target in targets:
+            try:
+                await workflow.execute_activity(
+                    fetch_activity,
+                    args=[
+                        task_id,
+                        device_id,
+                        target["url"],
+                        target["query"],
+                        target["source_class"],
+                    ],
+                    start_to_close_timeout=_FETCH_TIMEOUT,
+                    heartbeat_timeout=timedelta(seconds=20),
+                    retry_policy=_FETCH_RETRY,
+                )
+            except ActivityError:
+                continue  # recorded as a fetch failure
 
     def _failed(self, task_id: str, plan: dict, detail: str, error_class: str) -> dict:
         return {

@@ -335,3 +335,49 @@ def test_three_attributable_findings_are_accepted() -> None:
     result = parse_synthesis_response(payload)
     assert len(result.findings) == 3
     assert all(f.evidence_ids for f in result.findings)
+
+
+# --------------------------------------------------------------- gate calibration
+
+
+def test_an_announcement_whose_headline_is_a_product_name_still_counts_as_on_topic() -> None:
+    """The live run of 2026-09-04 refused a page that was genuinely about AI agents.
+
+    Its headline named a product rather than the category, so the whole signal sat in the
+    body, and the page scored just under the floor. Announcements normally read that way,
+    and refusing them starves the report for a reason that has nothing to do with the page.
+    """
+    verdict = eligibility.evaluate_candidate(
+        title="IBM Granite 4.2 released",
+        excerpt=(
+            "Granite 4.2 is a family of open models tuned for agentic workflows, tool "
+            "calling and multi-step task planning. The release notes describe reasoning "
+            "improvements, evaluation results and how to run the models locally."
+        ),
+        url="https://huggingface.co/blog/ibm-granite/granite-4-2",
+        topic=TOPIC,
+        published_at="2026-09-03T12:00:00+00:00",
+        retrieved_at=RETRIEVED_AT,
+        window_start=WINDOW_START,
+        window_end=WINDOW_END,
+    )
+    assert verdict.eligible
+    assert verdict.topic_relevance >= eligibility.MIN_TOPIC_RELEVANCE
+
+
+def test_one_passing_mention_of_an_agent_is_not_enough() -> None:
+    """The other side of that calibration: a page has to be ABOUT the subject.
+
+    Loosening the floor to admit real coverage must not admit anything that says the word
+    once, or the gate stops meaning anything.
+    """
+    score = eligibility.topic_relevance(
+        topic=TOPIC,
+        title="Yeni telefon modeli tanitildi",
+        excerpt=(
+            "Sirket bu hafta yeni telefon modelini tanitti. Kamera ve batarya "
+            "iyilestirmeleri one cikiyor; cihazda bir yapay zeka asistani da bulunuyor "
+            "ancak sunum agirlikli olarak donanim uzerine odaklandi."
+        ),
+    )
+    assert score < eligibility.MIN_TOPIC_RELEVANCE

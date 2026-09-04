@@ -207,6 +207,31 @@ def update_evidence_ranking(session: Session, task_id: uuid.UUID, records: list[
     session.commit()
 
 
+def clear_stale_evidence_ids(session: Session, task_id: uuid.UUID, keep_urls: set[str]) -> None:
+    """Drop the citation id from every evidence row the latest ranking did not keep.
+
+    Ranking can run more than once for a job (a top-up round after the quality gate leaves
+    too little), and it renumbers e1..eN over whatever it keeps. A row kept by an earlier
+    round but not by the latest one would otherwise hold a stale id that a different source
+    now also carries - two sources answering to "[e2]", so a finding's citation no longer
+    identifies anything. The row itself is untouched; only the id, rank and score go.
+    """
+    rows = session.execute(
+        select(ResearchEvidenceRow).where(ResearchEvidenceRow.task_id == task_id)
+    ).scalars()
+    for row in rows:
+        if row.url in keep_urls:
+            continue
+        payload = dict(row.evidence_json or {})
+        if not payload.get("id"):
+            continue
+        payload["id"] = ""
+        payload["rank"] = 0
+        payload["score"] = 0.0
+        row.evidence_json = payload
+    session.commit()
+
+
 def record_evidence_gate(
     session: Session, task_id: uuid.UUID, verdicts: dict[str, dict[str, Any]]
 ) -> None:

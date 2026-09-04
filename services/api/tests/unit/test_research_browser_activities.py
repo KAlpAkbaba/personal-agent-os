@@ -691,6 +691,23 @@ _USABLE_STORIES = (
         "oranlarini, insan onayi gereken adimlari ve arac entegrasyonlarinin maliyetini "
         "olcuyor; en yaygin kullanim alani musteri destegi olarak one cikiyor.",
     ),
+    (
+        "https://guvenlik.example.com/agent-security",
+        "Yapay zeka ajanlari icin guvenlik degerlendirmesi paylasildi",
+        "official",
+        "Degerlendirme, yapay zeka ajanlarinin yetki sinirlarini, arac cagrilarinin "
+        "denetlenmesini ve istem enjeksiyonuna karsi alinan onlemleri ele aliyor. Ekipler, "
+        "insan onayi gerektiren adimlarin acikca tanimlanmasini ve ajan kararlarinin "
+        "kaydedilmesini oneriyor.",
+    ),
+    (
+        "https://yatirim.example.com/agent-startup-round",
+        "Ajan tabanli otomasyon girisimi yeni yatirim aldi",
+        "news",
+        "Girisim, yapay zeka ajanlarinin kurumsal is akislarini uctan uca yurutmesini "
+        "hedefliyor. Sirket, kaynagin urun ekibi ile arac entegrasyonlarina ayrilacagini "
+        "ve otonom gorev planlamasi yeteneklerinin genisletilecegini belirtiyor.",
+    ),
 )
 
 
@@ -1449,7 +1466,7 @@ def _incident_evidence(now: datetime) -> list[dict]:
             "excerpt": excerpt,
             "source_class": source_class,
         }
-        for url, title, source_class, excerpt in _USABLE_STORIES
+        for url, title, source_class, excerpt in _USABLE_STORIES[:3]
     ]
     records = [
         {
@@ -1614,3 +1631,59 @@ def test_incident_20260904_all_bad_evidence_fails_instead_of_publishing(
         "insufficient_valid_evidence",
         "insufficient_valid_findings",
     }
+
+
+def test_re_ranking_after_a_top_up_round_never_leaves_two_sources_with_one_id(
+    db_url, task_id: str
+) -> None:
+    """Observed on the live dev-chain run of 2026-09-04, after top-up rounds were added.
+
+    Ranking renumbers e1..eN over whatever it keeps, and it runs again when the quality gate
+    leaves the run short. A page kept by the first round but not by the second held its old
+    id while a different page was given the same one, so the report carried two sources
+    answering to "[e2]" and a finding's citation no longer identified anything.
+    """
+    _seed_evidence(db_url, task_id, _usable_evidence(3))
+    first = _rank_ok(task_id)
+    assert first["evidence"] == 3
+
+    # The top-up round: more pages arrive and ranking runs again over the larger set.
+    _seed_evidence(db_url, task_id, _usable_evidence(5)[3:])
+    second = _rank_ok(task_id)
+    assert second["evidence"] == 5
+
+    from sqlalchemy import create_engine as _ce
+    from sqlalchemy.orm import sessionmaker
+
+    engine = _ce(db_url)
+    with sessionmaker(bind=engine, expire_on_commit=False)() as session:
+        rows = runs_service.list_evidence(session, uuid.UUID(task_id))
+        ids = [r.evidence_json.get("id") for r in rows if r.evidence_json.get("id")]
+    engine.dispose()
+    assert len(ids) == len(set(ids)), f"duplicate citation ids: {ids}"
+
+
+def test_a_page_dropped_by_the_latest_ranking_is_not_cited(db_url, task_id: str) -> None:
+    """The other half: an id that was cleared must not come back as a source.
+
+    A row the newest ranking did not keep has no citation id, and synthesis must leave it
+    out rather than emit a source nothing can point at.
+    """
+    _seed_evidence(db_url, task_id, _usable_evidence(4))
+    _rank_ok(task_id)
+
+    from sqlalchemy import create_engine as _ce
+    from sqlalchemy.orm import sessionmaker
+
+    engine = _ce(db_url)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    with factory() as session:
+        rows = runs_service.list_evidence(session, uuid.UUID(task_id))
+        keep = {r.url for r in rows[1:]}
+        runs_service.clear_stale_evidence_ids(session, uuid.UUID(task_id), keep)
+        dropped_url = rows[0].url
+    engine.dispose()
+
+    report = ba.synthesize_activity(task_id, TOPIC, _window_ok(), "deterministic")
+    assert dropped_url not in [s["url"] for s in report["sources"]]
+    assert all(s["id"] for s in report["sources"])

@@ -287,32 +287,41 @@ def classify_page_validity(
 # that pure token-overlap with the topic string alone would miss entirely --
 # that gap is exactly how an unrelated arXiv math paper and a genuine AI-agent
 # story could otherwise land at similar low scores.
-_AI_AGENT_LEXICON_RAW: tuple[str, ...] = (
-    "yapay zeka",
-    "yapay zekâ",
-    "ajan",
-    "ajanlar",
-    "ajanlari",
-    "ajanlariyla",
-    "agentic",
-    "ai agent",
-    "ai agents",
-    "llm agent",
-    "llm agents",
-    "autonomous agent",
-    "autonomous agents",
-    "tool use",
-    "tool calling",
-    "mcp",
-    "model context protocol",
-    "copilot",
-    "assistant",
-    "chatbot",
-    "multi-agent",
-    "multi agent",
-    "orchestrator",
+#: The domain signal, as CONCEPTS rather than a flat phrase list.
+#:
+#: A flat list double-counts: "ajanlariyla" contains "ajan", "ajanlar" and "ajanlari", and
+#: "yapay zeka" and "yapay zekâ" fold to the same string, so one Turkish word could score as
+#: four independent hits while an English announcement scored none. Grouping the spellings of
+#: one idea and counting each idea once makes the score mean what its name says.
+#:
+#: Weight separates "this is about agents" from "this mentions AI". A phone launch that says
+#: "yapay zeka asistani" once is not coverage of AI agents; a model card that says "agentic",
+#: "tool calling" and "task planning" is, even when its headline is only a product name.
+_AGENT_CONCEPTS: tuple[tuple[str, float, tuple[str, ...]], ...] = (
+    ("agent", 1.0, ("ajan", "agent")),
+    ("agentic", 1.0, ("agentic", "ajansal")),
+    ("autonomous", 1.0, ("autonomous agent", "otonom ajan", "otonom")),
+    ("tool_use", 1.0, ("tool use", "tool calling", "arac kullanimi", "arac cagirma")),
+    ("mcp", 1.0, ("mcp", "model context protocol")),
+    ("multi_agent", 1.0, ("multi-agent", "multi agent", "cok ajanli")),
+    (
+        "orchestration",
+        1.0,
+        ("orchestrator", "orkestrasyon", "task planning", "gorev planlamasi", "planlayici"),
+    ),
+    ("assistant", 0.5, ("copilot", "assistant", "asistan", "chatbot", "sohbet botu")),
+    ("generic_ai", 0.5, ("yapay zeka", "artificial intelligence", "large language model")),
 )
-_AI_AGENT_LEXICON: tuple[str, ...] = tuple(_fold(term) for term in _AI_AGENT_LEXICON_RAW)
+
+
+def _concept_weight(text_folded: str) -> float:
+    """Total weight of the DISTINCT domain concepts present in this text."""
+    total = 0.0
+    for _name, weight, patterns in _AGENT_CONCEPTS:
+        if any(_fold(pattern) in text_folded for pattern in patterns):
+            total += weight
+    return total
+
 
 # Generic English/Turkish stop-words excluded from topic-token overlap so
 # that shared function words (e.g. "the", "ile", "ve") don't inflate the
@@ -371,8 +380,8 @@ def topic_relevance(
 
     Combines two signals:
 
-    1. Lexicon hits -- how many distinct built-in AI-agent lexicon phrases
-       (Turkish + English, see :data:`_AI_AGENT_LEXICON`) appear in the
+    1. Domain concepts -- how many distinct built-in AI-agent concepts
+       (Turkish + English, see :data:`_AGENT_CONCEPTS`) appear in the
        title+excerpt. This is what correctly separates "OpenAI, Agent
        Builder'ı duyurdu" (multiple hits: "ajan"/"agent") from "Catalan's
        constant is irrational" or a cosmology halo-profile abstract (zero
@@ -391,7 +400,7 @@ def topic_relevance(
     token_overlap_score``, each independently capped at 1.0 before blending,
     and the AI-agent lexicon is always included in scoring (not just when
     the topic literally says "AI agents") because in this project the
-    lexicon IS the owner's standing research domain, not one topic among
+    domain IS the owner's standing research subject, not one topic among
     many -- callers researching a different domain would need a different
     scorer, not a parameter to this one.
     """
@@ -402,13 +411,19 @@ def topic_relevance(
     excerpt_folded = _fold(excerpt)
     combined = f"{title_folded} {excerpt_folded}"
 
-    lexicon_hits_title = sum(1 for term in _AI_AGENT_LEXICON if term in title_folded)
-    lexicon_hits_body = sum(1 for term in _AI_AGENT_LEXICON if term in excerpt_folded)
+    lexicon_hits_title = _concept_weight(title_folded)
+    lexicon_hits_body = _concept_weight(excerpt_folded)
     # Distinct-term credit, weighted so a title hit is worth more, capped so
     # a handful of hits already saturates the signal (a story doesn't need
     # to repeat "agent" ten times to be confidently about agents).
     lexicon_raw = (2 * lexicon_hits_title) + lexicon_hits_body
-    lexicon_score = min(1.0, lexicon_raw / 4.0)
+    # Saturates at three weighted points: two DISTINCT domain terms in the body is already a
+    # confident signal, while a single passing mention is not. Calibrated against the live run
+    # of 2026-09-04, where an official post announcing an agentic model family scored 0.325 -
+    # below the floor - purely because its headline was a product name ("IBM Granite 4.2")
+    # rather than the category. Announcements normally read that way, so a body-only signal
+    # has to be able to carry a page on its own.
+    lexicon_score = min(1.0, lexicon_raw / 3.0)
 
     topic_tokens = {tok for tok in _tokens(topic) if tok not in _STOPWORDS and len(tok) > 2}
     if topic_tokens:

@@ -788,7 +788,7 @@ def _gate_rejections(rows: list[Any]) -> dict[str, int]:
 
 
 def _load_evidence_with_quarantine(
-    rows: list[Any], *, stage: str
+    rows: list[Any], *, stage: str, require_id: bool = False
 ) -> tuple[list[EvidenceRecord], QuarantineLedger]:
     """Rebuild stored evidence rows, quarantining any that break their field contract.
 
@@ -803,6 +803,10 @@ def _load_evidence_with_quarantine(
         payload = row.evidence_json if isinstance(row.evidence_json, dict) else {}
         url = str(payload.get("url") or getattr(row, "url", "") or "unknown")
         if not _gate_admits(payload):
+            continue
+        # After ranking, a row without a citation id is one the latest ranking did not keep;
+        # citing it would produce a source nothing can point at.
+        if require_id and not str(payload.get("id") or "").strip():
             continue
         try:
             records.append(EvidenceRecord.from_dict(payload, stage=stage))
@@ -940,6 +944,7 @@ def rank_activity(
             dedup_and_rank(eligible, topic=topic, window_start=window_start, window_end=window_end)
         )
         runs_service.update_evidence_ranking(session, tid, ranked)
+        runs_service.clear_stale_evidence_ids(session, tid, {r.url for r in ranked})
         # The verdict is written onto the rows themselves so the later synthesis activity
         # cannot read a refused page back out of the store and cite it.
         runs_service.record_evidence_gate(
@@ -1076,7 +1081,9 @@ def synthesize_activity(
         rows = runs_service.list_evidence(session, tid)
         candidate_count = len(runs_service.list_candidates(session, tid))
         rejected_by_reason = _gate_rejections(rows)
-        ranked, quarantine = _load_evidence_with_quarantine(rows, stage=STAGE_SYNTHESIZING)
+        ranked, quarantine = _load_evidence_with_quarantine(
+            rows, stage=STAGE_SYNTHESIZING, require_id=True
+        )
         try:
             _require_enough_evidence(ranked, quarantine, stage=STAGE_SYNTHESIZING)
         except InsufficientValidEvidence as exc:
