@@ -303,6 +303,14 @@ if (-not $Fast) {
     Assert-ExitCode "agent audit tests"
   }
 
+  Invoke-Step "Owner explain harness (PS5.1)" {
+    # 2026-09-04: the M16 harness started the web shell without waiting and then required a
+    # session newer than its own start time; these pin readiness gating and correlation.
+    $script = Join-Path $repoRoot "scripts\tests\owner-explain.tests.ps1"
+    & (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -NoProfile -File $script
+    Assert-ExitCode "owner explain harness tests"
+  }
+
   Invoke-Step "Cloud secret shipping (PS5.1)" {
     # The owner's provider-credential path: DPAPI store -> Tailscale SSH stdin -> /opt/pagentos/.env.
     # Proven with a real native fake ssh (5.1 native-argument quoting byte for byte, value

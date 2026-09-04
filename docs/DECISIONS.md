@@ -3016,3 +3016,37 @@ parses the time tail (T, fraction, zone) and the engine renders times spoken-fri
 Over the workflow tests' own research run the engine said "Efendim, son araştırma görevi
 tamamlandı. Beş sonuç ve beş kaynak ürettim. Dört tekrar eden olayı eledim…" and did not
 claim a qualification, because none was recorded - the behaviour the design requires.
+
+### ADR-0051 addendum 2 — the first owner run: product worked, harness did not (2026-09-04)
+
+Owner observation: `owner-explain.ps1` released the Cloud Core correctly, then started the
+web voice shell with a fire-and-forget process, slept eight seconds and went on to wait for
+a realtime session; the shell never answered on localhost:3000, so no session could exist,
+and the harness failed with "no NEW realtime session since this script started". The owner
+then started the shell by hand, connected, and the real voice UI answered evidence-backed
+explanations from the ledger (task identity, discovered/fetched/evidence/rejected counts,
+worker 0.4.0, research policy, deployment skipped). Recorded as a qualification-harness
+defect, not a product one. Also observed: saying "Dur" after the assistant had finished
+surfaced the provider's "Cancellation failed: no active response found" as an error.
+
+Decisions: (1) `scripts/lib/VoiceShell.ps1` makes the two orchestration decisions pure and
+testable - `Wait-WebShellReady` polls an HTTP probe of `/voice` with a bounded budget, and
+`Select-QualificationSession` picks the session this run owns: not in the baseline taken
+before the run (an older session never qualifies, however recent), from a web client,
+started once the shell was ready, carrying a succeeded `activity.explain` call, newest
+first; `Wait-QualificationSession` keeps asking within a budget so a late connection is
+a wait, not a failure. (2) The harness checks whether the shell already answers before
+starting one, starts it through the same `start-web-voice.ps1` the owner uses (output
+captured to a log), and does not proceed until `/voice` answers; `-SkipWeb` means "it must
+already be running". (3) A `critical`-free re-run performs no Cloud Core release: the
+ledger policy version is current, and the Windows components are untouched. (4) "Dur" is
+idempotent end to end: server side the narration machine's DUR always wins and never
+errors (a second "dur" on a paused narration is paused again, with nothing to say);
+client side a barge-in sends `response.cancel` only while a provider response is active,
+stops local playback either way, and a provider "no active response" cancel error is
+classified benign (counted, never a user-facing error). "Devam et" after a real
+interruption resumes at the first unfinished sentence; after a completed section it goes
+on to the next one. Regression coverage: `scripts/tests/owner-explain.tests.ps1` (shell
+absent, already running, delayed connection, stale session, newest-wins, probe failure
+isolation, harness wiring), `tests/unit/test_voice_explain_tools.py` (Dur idempotence,
+Devam after completion, two interruptions), and the web client's `dur.test.ts`.

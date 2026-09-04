@@ -250,17 +250,28 @@ command does the preparation and the verification; you do the talking.
 
 What it does, in order:
 
+**Your first run (2026-09-04) proved the product and broke the harness.** The Cloud Core
+release went through, the web shell never came up from the script, and the script failed
+waiting for a session; when you started the shell by hand, the voice UI answered from the
+ledger exactly as designed. The harness is fixed (ADR-0051 addendum 2): it now checks
+whether the shell already answers, starts it the same way you do and waits until `/voice`
+really responds, and after Enter it waits for YOUR session - new since the run began, from
+the web shell, with an `activity.explain` call - rather than comparing timestamps. Saying
+"Dur" after the answer has finished is now a quiet no-op instead of an error. This rerun
+performs NO Cloud Core release (the ledger is already deployed) and touches nothing on
+Windows.
+
 1. **Preflight.** Working-tree release blockers, the Cloud Core's realtime provider, and
-   the Cloud Core's ledger policy. The deployed Cloud Core has no activity ledger yet, so
-   this run performs ONE transactional Cloud Core release (build, migrate, recreate the
-   api container only, health, rollback on failure). Nothing on Windows is touched.
+   the Cloud Core's ledger policy. The ledger is already deployed, so no release happens
+   unless the source changed. Nothing on Windows is touched.
 2. **Evidence.** Your real research run (`research-1.json`, verdict PASS) is recorded in
    the ledger as `research.qualified` with the file's SHA-256 as its reference - the
    system never types a number by hand - and the ledger then backfills everything else it
    can from the database (research runs and reports, voice sessions, releases,
    incidents). Nothing is seeded.
-3. **The session.** The web voice shell starts as usual. Open http://localhost:3000/voice,
-   sign in, connect, and say, waiting for each answer:
+3. **The session.** If the web voice shell is already running it is used; otherwise the
+   script starts it and waits until http://localhost:3000/voice answers (first compile can
+   take a minute). Open it, sign in, connect, and say, waiting for each answer:
 
    1. `Son yaptıklarını anlat.` — it narrates the real research qualification from the ledger
    2. `Araştırmayı detaylandır.` — the actual findings
@@ -268,8 +279,10 @@ What it does, in order:
    4. `Dur.` — say it WHILE it is speaking; speech must stop at once
    5. `Devam et.` — it resumes at the sentence it did not finish
 
-   Then disconnect and press Enter in the console.
-4. **Verification.** The newest session's durable activity record (tool calls, intents,
+   Then disconnect and press Enter in the console. If you connect late, the script keeps
+   looking for your session for up to ten minutes; a session that existed before the run
+   never counts.
+4. **Verification.** Your session's durable activity record (tool calls, intents,
    client events - ids and kinds, never a transcript) is fetched and every step is
    checked: the briefing came from the ledger and cites evidence, detail and technical
    were read, `dur` produced a `spoken` report followed by a barge-in with an aligned

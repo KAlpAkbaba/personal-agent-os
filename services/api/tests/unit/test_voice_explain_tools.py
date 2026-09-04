@@ -329,3 +329,114 @@ def test_session_activity_is_the_durable_record_of_the_script(wired, monkeypatch
     assert "voice.explained" in types
     assert "voice.narration.paused" in types
     assert "voice.narration.resumed" in types
+
+
+# ---------------------------------------- "Dur" is idempotent; "Devam et" resumes
+
+
+def test_dur_when_nothing_is_being_read_is_a_quiet_state_change(wired, monkeypatch) -> None:
+    """Owner observation 2026-09-04: "Dur" after speech had already finished must not become
+    an error. Server side, the narration machine's DUR always wins and never errors: a
+    second "dur" on a paused narration is paused again, with nothing to say."""
+    client, _identity, _runtime, _sideband, _issued, _engine = wired
+    _use_real_run_evidence(monkeypatch)
+    sid = _create(client)["session_id"]
+    _tool(client, sid, "d1", "activity.explain", question="Son yaptıklarını anlat")
+    first = _control(client, sid, "d2", "Dur")
+    assert first["narration"]["action"] == "paused" and first["speech"] == ""
+    second = _control(client, sid, "d3", "Dur")
+    assert second["narration"]["action"] == "paused" and second["narration"]["ok"] is True
+    assert second["speech"] == ""
+    # an intent-only resolution (no narration attached) is just as quiet
+    fresh = _create(client)["session_id"]
+    r = client.post(
+        f"/v1/voice/realtime/sessions/{fresh}/events",
+        json={"events": [{"kind": "utterance", "t_ms": 5, "turn": 1, "text": "dur"}]},
+    )
+    assert r.status_code == 200 and r.json()["resolved_intents"][0]["intent"] == "stop"
+
+
+def test_dur_after_speech_completed_then_devam_continues_with_the_next_section(
+    wired, monkeypatch
+) -> None:
+    """The response finished (spoken final=1, the whole section read) and only then the
+    owner says "dur": the cursor is already past the section; "devam et" goes on to the
+    next section rather than repeating what was heard."""
+    client, _identity, _runtime, _sideband, _issued, _engine = wired
+    _use_real_run_evidence(monkeypatch)
+    sid = _create(client)["session_id"]
+    result = _tool(client, sid, "c1", "activity.explain", question="Son yaptıklarını anlat")
+    whole = result["speech"]
+    _events(
+        client,
+        sid,
+        [
+            {
+                "kind": "spoken",
+                "t_ms": 9000,
+                "turn": 1,
+                "text": whole,
+                "payload": {"final": 1, "response_seq": 1, "chars": len(whole)},
+            },
+            {"kind": "utterance", "t_ms": 9500, "turn": 2, "text": "dur"},
+        ],
+    )
+    stopped = _control(client, sid, "c2", "Dur")
+    assert stopped["narration"]["action"] == "paused" and stopped["speech"] == ""
+    resumed = _control(client, sid, "c3", "Devam et")
+    assert resumed["narration"]["narration_state"] == "READING"
+    assert not resumed["speech"].startswith("Efendim")
+    assert resumed["speech"].startswith("Yapay zekâ ajanları ve ajan temelli yapay zekâ.")
+
+
+def test_two_interruptions_in_a_row_each_resume_from_their_own_point(wired, monkeypatch) -> None:
+    client, _identity, _runtime, _sideband, _issued, _engine = wired
+    _use_real_run_evidence(monkeypatch)
+    sid = _create(client)["session_id"]
+    _tool(client, sid, "i1", "activity.explain", question="Son yaptıklarını anlat")
+    first_cut = "Efendim, son araştırma motoru qualification'ı başarıyla tamamlandı. Beş"
+    _events(
+        client,
+        sid,
+        [
+            {
+                "kind": "spoken",
+                "t_ms": 1000,
+                "turn": 1,
+                "text": first_cut,
+                "payload": {"final": 0, "response_seq": 1, "chars": len(first_cut)},
+            },
+            {
+                "kind": "barge_in_start",
+                "t_ms": 1001,
+                "turn": 2,
+                "payload": {"playback_stopped_ms": 50},
+            },
+            {"kind": "playback_stopped", "t_ms": 1051, "turn": 2, "payload": {}},
+        ],
+    )
+    resumed = _control(client, sid, "i2", "Devam et")
+    assert resumed["speech"].startswith("Beş sonuç ve beş farklı kaynak ürettim.")
+    second_cut = "Beş sonuç ve beş farklı kaynak ürettim. Dokuz konu dışı sayfayı, on bir ara"
+    _events(
+        client,
+        sid,
+        [
+            {
+                "kind": "spoken",
+                "t_ms": 3000,
+                "turn": 3,
+                "text": second_cut,
+                "payload": {"final": 0, "response_seq": 2, "chars": len(second_cut)},
+            },
+            {
+                "kind": "barge_in_start",
+                "t_ms": 3001,
+                "turn": 4,
+                "payload": {"playback_stopped_ms": 50},
+            },
+            {"kind": "playback_stopped", "t_ms": 3051, "turn": 4, "payload": {}},
+        ],
+    )
+    again = _control(client, sid, "i3", "Devam et")
+    assert again["speech"].startswith("Dokuz konu dışı sayfayı, on bir ara doğrulama")

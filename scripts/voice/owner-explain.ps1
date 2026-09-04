@@ -37,10 +37,14 @@ param(
     [string]$OutFile = "",
     # auto: release the Cloud Core only when it has no ledger yet; never: refuse; force: always.
     [ValidateSet("auto", "never", "force")][string]$CloudCoreUpdate = "auto",
-    # The web shell is already running (started by hand): do not start another.
+    # Never start the web shell (it must already answer on -WebPort).
     [switch]$SkipWeb,
     [string]$PnpmPath = "pnpm",
-    [string]$ExpectProvider = "openai-realtime"
+    [string]$ExpectProvider = "openai-realtime",
+    # How long to wait for the web shell to answer /voice after starting it (Next.js compiles
+    # the page on first request), and for the owner's session to appear after Enter.
+    [ValidateRange(10, 900)][int]$WebReadyTimeoutSec = 180,
+    [ValidateRange(30, 3600)][int]$SessionWaitSec = 600
 )
 
 $ErrorActionPreference = "Stop"
@@ -49,6 +53,7 @@ Set-StrictMode -Version Latest
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 . (Join-Path $repoRoot "scripts\lib\HttpJson.ps1")
 . (Join-Path $repoRoot "scripts\lib\RepoState.ps1")
+. (Join-Path $repoRoot "scripts\lib\VoiceShell.ps1")
 
 if (-not $BaseUrl) { $BaseUrl = "http://${BrokerHost}:$ApiPort" }
 $BaseUrl = $BaseUrl.TrimEnd('/')
@@ -84,6 +89,7 @@ $evidence = [ordered]@{
     cloud_policy = $null
     ingest       = $null
     backfill     = $null
+    web_shell    = $null
     session      = $null
     activity     = $null
     ledger       = $null
@@ -268,20 +274,41 @@ try {
 
     # ------------------------------------------------------------------ the voice session
 
-    if (-not $SkipWeb) {
-        $env:PAGENTOS_API_UPSTREAM = $BaseUrl
-        $env:NEXT_PUBLIC_API_BASE = "/api"
-        $env:PORT = "$WebPort"
-        $webDir = Join-Path $repoRoot "apps\web"
-        Write-Host "      starting the web shell in the background: http://localhost:$WebPort/voice"
-        $webProcess = Start-Process -FilePath $PnpmPath -ArgumentList @("dev", "--port", "$WebPort") -WorkingDirectory $webDir -PassThru -WindowStyle Minimized
-        Start-Sleep -Seconds 8
+    # Sessions that exist BEFORE this run can never be this run's session, however recent.
+    $baselineIds = @()
+    foreach ($s in @(Get-OptionalProperty -InputObject (Get-Json "/v1/voice/realtime/sessions?limit=50") -Name "sessions")) {
+        $baselineIds += [string]$s.session_id
     }
-    $sessionsBefore = @(Get-OptionalProperty -InputObject (Get-Json "/v1/voice/realtime/sessions?limit=1") -Name "sessions")
-    $beforeId = if ($sessionsBefore.Count -gt 0) { [string]$sessionsBefore[0].session_id } else { "" }
+
+    $voiceUrl = "http://localhost:$WebPort/voice"
+    $shellLog = Join-Path $env:TEMP "pagentos-web-voice-$runId.log"
+    $alreadyRunning = Test-WebShellReady -Url $voiceUrl
+    if ($alreadyRunning) {
+        Write-Host "      web shell: already answering at $voiceUrl (not starting another)"
+    }
+    elseif ($SkipWeb) {
+        throw "-SkipWeb given but nothing answers at $voiceUrl; start it (.\scripts\voice\start-web-voice.ps1) or drop -SkipWeb"
+    }
+    else {
+        Write-Host "      web shell: not running; starting it (log: $shellLog)"
+        $webProcess = Start-WebShellProcess -RepoRoot $repoRoot -Upstream $BaseUrl -WebPort $WebPort -LogPath $shellLog -PnpmPath $PnpmPath
+    }
+    $ready = Wait-WebShellReady -Url $voiceUrl -TimeoutSec $WebReadyTimeoutSec -IntervalSec 2
+    if (-not $ready.Ready) {
+        $tail = ""
+        if (Test-Path $shellLog) { $tail = ((Get-Content -LiteralPath $shellLog -Tail 15) -join "`n") }
+        throw "the web shell did not answer at $voiceUrl within $WebReadyTimeoutSec s (probes: $($ready.Attempts)). Start it by hand with .\scripts\voice\start-web-voice.ps1 and rerun with -SkipWeb. Last log lines:`n$tail"
+    }
+    $readyAt = (Get-Date).ToUniversalTime()
+    Write-Host ("      web shell: ready after {0:n1} s ({1} probe(s))" -f $ready.ElapsedSec, $ready.Attempts)
+    $evidence.web_shell = [ordered]@{
+        url = $voiceUrl; already_running = [bool]$alreadyRunning; started_here = ($null -ne $webProcess)
+        ready_after_sec = [math]::Round($ready.ElapsedSec, 1); probes = $ready.Attempts; ready_at = $readyAt.ToString("o")
+        baseline_sessions = $baselineIds.Count
+    }
 
     Write-Host ""
-    Write-Host "Open http://localhost:$WebPort/voice, sign in, connect (Baglan), then say, waiting for each answer:" -ForegroundColor Cyan
+    Write-Host "Open $voiceUrl, sign in, connect (Baglan), then say, waiting for each answer:" -ForegroundColor Cyan
     $n = 0
     foreach ($phrase in $phrases) {
         $n++
@@ -299,12 +326,26 @@ try {
 
     # ------------------------------------------------------------------ the durable record
 
-    $sessions = @(Get-OptionalProperty -InputObject (Get-Json "/v1/voice/realtime/sessions?limit=5") -Name "sessions")
-    if ($sessions.Count -eq 0) { throw "no realtime session was recorded" }
-    $sessionId = [string]$sessions[0].session_id
-    if ($sessionId -eq $beforeId) { throw "no NEW realtime session since this script started (newest is still $sessionId)" }
+    # The session this run owns: new since the baseline, from the web shell, started once the
+    # shell was ready, and carrying a succeeded activity.explain. A late connection is waited
+    # for, not failed.
+    $listSessions = { @(Get-OptionalProperty -InputObject (Get-Json "/v1/voice/realtime/sessions?limit=50") -Name "sessions") }
+    $activityProbe = { param($Id) Get-Json "/v1/voice/realtime/sessions/$Id/activity" }
+    $waited = Wait-QualificationSession -ListSessions $listSessions -ActivityProbe $activityProbe -BaselineIds $baselineIds -ReadyAt $readyAt `
+        -TimeoutSec $SessionWaitSec -IntervalSec 5 -OnWaiting { param($Attempt, $Elapsed) if ($Attempt -eq 1) { Write-Host "      waiting for a web session that asked activity.explain (up to $SessionWaitSec s; keep talking, or connect now)..." } }
+    if ($null -eq $waited.Selected) {
+        throw "no web realtime session from this run asked activity.explain within $SessionWaitSec s (baseline sessions excluded: $($baselineIds.Count)). Connect at $voiceUrl and say the first phrase, then rerun with -SkipWeb."
+    }
+    $sessionId = [string]$waited.Selected.SessionId
+    $activity = $waited.Selected.Activity
+    # give a session the owner is still closing a moment to close
     $state = Get-Json "/v1/voice/realtime/sessions/$sessionId"
-    $activity = Get-Json "/v1/voice/realtime/sessions/$sessionId/activity"
+    $closeDeadline = (Get-Date).AddSeconds(60)
+    while (([string](Get-OptionalProperty -InputObject $state -Name "state")) -notin @("closed", "expired") -and (Get-Date) -lt $closeDeadline) {
+        Start-Sleep -Seconds 5
+        $state = Get-Json "/v1/voice/realtime/sessions/$sessionId"
+        $activity = Get-Json "/v1/voice/realtime/sessions/$sessionId/activity"
+    }
     $evidence.session = $state
     $evidence.activity = $activity
     $voiceLedger = Get-Json "/v1/ledger/events?subsystem=voice&limit=50"
@@ -359,6 +400,12 @@ finally {
     }
     if ($null -ne $webProcess) {
         try { Stop-Process -Id $webProcess.Id -Force -ErrorAction SilentlyContinue } catch { }
+        # pnpm dev spawns node children that outlive the starter's PowerShell
+        try {
+            Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
+                Where-Object { $_.ParentProcessId -eq $webProcess.Id -or $_.CommandLine -like "*next*dev*--port $WebPort*" } |
+                ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+        } catch { }
     }
     if ($mintedId) {
         try { Invoke-JsonUtf8 -Method POST -Uri "$BaseUrl/v1/identity/sessions/$mintedId/revoke" -Headers $headers -Body "{}" | Out-Null } catch { }
