@@ -1,6 +1,6 @@
 [project]
 name = "pagentos-browser"
-version = "0.1.0"
+version = "0.3.0"
 description = "Personal Agent OS - semantic browser automation adapter (M2 browser agent)"
 requires-python = ">=3.12,<3.13"
 dependencies = [
@@ -15,6 +15,13 @@ dev = [
     "pytest>=8.2",
     "pytest-asyncio>=0.23",
 ]
+
+[tool.uv]
+# The installer builds this package into a non-editable venv from a staging path that
+# is the same on every release. uv's default cache key for a local project is the mtime
+# of pyproject.toml, so a code-only release reused a stale cached wheel (2026-09-04,
+# ADR-0050 item 16). Source changes must invalidate the build.
+cache-keys = [{ file = "pyproject.toml" }, { file = "uv.lock" }, { file = "browser_agent/**/*.py" }]
 
 [build-system]
 requires = ["hatchling"]

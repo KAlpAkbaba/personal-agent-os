@@ -206,10 +206,40 @@ function Initialize-OwnerSession {
   $script:ownerHeaders = @{ Authorization = "Bearer $($sess.token)" }
 }
 
+# The companion in this harness runs a PACKAGED worker: services\browser copied into the run
+# directory and installed non-editable with the installer's own uv arguments, exactly as the
+# owner's machine gets it. The repo's editable .venv would hide a stale site-packages copy
+# (2026-09-04, ADR-0050 item 16: INSTALL VERIFIED with a 0.1.0 worker still running).
+$packagedBrowserRoot = Join-Path $dataDir "packaged-browser"
+
 function Get-WorkerPython {
-  $py = Join-Path $browserRoot ".venv\Scripts\python.exe"
-  if (-not (Test-Path $py)) { throw "browser worker venv missing: $py (run '<uv> sync' in services\browser)" }
+  $py = Join-Path $packagedBrowserRoot ".venv\Scripts\python.exe"
+  if (-not (Test-Path $py)) { throw "packaged browser worker venv missing: $py (the build step creates it)" }
   return $py
+}
+
+function New-PackagedBrowserWorker {
+  . (Join-Path $repoRoot "scripts\lib\NativeProcess.ps1")
+  . (Join-Path $repoRoot "scripts\lib\BrowserProvision.ps1")
+  . (Join-Path $repoRoot "scripts\lib\BrowserRelease.ps1")
+  if (Test-Path $packagedBrowserRoot) { Remove-Item -LiteralPath $packagedBrowserRoot -Recurse -Force }
+  $copied = Copy-BrowserPackageTree -Source $browserRoot -Destination $packagedBrowserRoot
+  Write-Host "  packaged worker: copied $copied files -> $packagedBrowserRoot"
+  $saved = $env:UV_PROJECT_ENVIRONMENT; $env:UV_PROJECT_ENVIRONMENT = $null
+  try {
+    $sync = Invoke-NativeProcess -FilePath $uv -Arguments (Get-BrowserWorkerSyncArguments) -WorkingDirectory $packagedBrowserRoot -TimeoutSeconds 900
+    if ($sync.ExitCode -ne 0) { throw "uv $((Get-BrowserWorkerSyncArguments) -join ' ') failed (exit $($sync.ExitCode)): $($sync.StdErr)" }
+  }
+  finally { if ($null -ne $saved) { $env:UV_PROJECT_ENVIRONMENT = $saved } }
+  $expected = Get-ExpectedWorkerRelease -BrowserSource $packagedBrowserRoot
+  # Self-check from a NEUTRAL cwd (the companion's data dir), never from the browser tree.
+  $check = Invoke-BrowserWorkerSelfCheck -Python (Get-WorkerPython) -Channel "chrome" -DataDir $browserDataDir -TimeoutSeconds 180
+  if (-not $check.Ok) { throw "packaged worker self-check failed (exit $($check.ExitCode)): $($check.StdErr)" }
+  $proof = Assert-WorkerHelloMatchesRelease -Hello $check.Hello -Expected $expected -BrowserRoot $packagedBrowserRoot -Label "packaged worker"
+  $diff = @(Compare-BrowserPackageCopies -Source (Join-Path $packagedBrowserRoot "browser_agent") -Installed (Get-SitePackagesBrowserAgentDir -BrowserRoot $packagedBrowserRoot))
+  if (@($diff).Count -gt 0) { throw "packaged site-packages copy differs from source: $($diff -join '; ')" }
+  Write-Host "  packaged worker proven: release $($proof.Version), module $($proof.ModuleFile), package $($proof.PackageSha256.Substring(0,12))"
+  return $proof
 }
 
 function Start-AgentService {
@@ -247,9 +277,11 @@ function Start-Companion {
   $psi.EnvironmentVariables["PAGENTOS_AGENT_BrowserDataDir"] = $browserDataDir
   $psi.EnvironmentVariables["PAGENTOS_AGENT_BrowserChannel"] = "chrome"
   $psi.EnvironmentVariables["PAGENTOS_AGENT_BrowserVisible"] = "true"
+  $psi.EnvironmentVariables["PAGENTOS_AGENT_BrowserWorkerEager"] = "true"
   $psi.EnvironmentVariables["PYTHONIOENCODING"] = "utf-8"
   $psi.EnvironmentVariables["DOTNET_ROOT"] = $env:DOTNET_ROOT
-  $psi.WorkingDirectory = $browserRoot
+  # Like the installed companion: the worker's cwd is its data directory, never a source tree.
+  $psi.WorkingDirectory = $browserDataDir
   $script:procs["companion"] = [System.Diagnostics.Process]::Start($psi)
 }
 
@@ -363,13 +395,8 @@ Invoke-Step "Build Windows agent + browser worker self-check" {
     try { & $uv sync --frozen; if ($LASTEXITCODE -ne 0) { throw "uv sync (browser) failed" } }
     finally { Pop-Location }
   }
-  $py = Get-WorkerPython
-  Push-Location $browserRoot
-  try {
-    $hello = & $py -m browser_agent.worker --self-check --channel chrome --data-dir $browserDataDir 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "worker self-check failed: $hello" }
-    Write-Host "  worker hello: $(($hello | Select-Object -Last 1).ToString().Substring(0, [Math]::Min(160, ($hello | Select-Object -Last 1).ToString().Length)))"
-  } finally { Pop-Location }
+  New-Item -ItemType Directory -Force -Path $browserDataDir | Out-Null
+  $script:packagedProof = New-PackagedBrowserWorker
 }
 
 Invoke-Step "Start Cloud Core (embedded worker)" {
@@ -431,7 +458,7 @@ Invoke-Step "Owner browser smoke script against the dev chain (example.com, sear
   $env:PAGENTOS_SMOKE_TOKEN = ([string]$script:ownerHeaders["Authorization"]) -replace '^Bearer\s+', ''
   try {
     & $powershell5 -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot "scripts\browser\real-browser-smoke.ps1") `
-      -BaseUrl $baseUrl -Device $script:deviceId -SessionTokenFromEnv -SkipLocalEvidence `
+      -BaseUrl $baseUrl -Device $script:deviceId -SessionTokenFromEnv -SkipLocalEvidence -BrowserRoot $packagedBrowserRoot `
       -OutFile (Join-Path $OutDir "browser-smoke.json")
     if ($LASTEXITCODE -ne 0) { throw "real-browser-smoke.ps1 exited $LASTEXITCODE" }
   }
@@ -445,7 +472,7 @@ Invoke-Step "Owner search-provider smoke against the dev chain (Google primary, 
   $env:PAGENTOS_SMOKE_TOKEN = ([string]$script:ownerHeaders["Authorization"]) -replace '^Bearer\s+', ''
   try {
     & $powershell5 -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot "scripts\browser\real-browser-smoke.ps1") `
-      -BaseUrl $baseUrl -Device $script:deviceId -SessionTokenFromEnv -SkipLocalEvidence -Mode search -ExpectProvider any `
+      -BaseUrl $baseUrl -Device $script:deviceId -SessionTokenFromEnv -SkipLocalEvidence -BrowserRoot $packagedBrowserRoot -Mode search -ExpectProvider any `
       -OutFile (Join-Path $OutDir "search-smoke.json")
     if ($LASTEXITCODE -ne 0) { throw "real-browser-smoke.ps1 -Mode search exited $LASTEXITCODE" }
   }

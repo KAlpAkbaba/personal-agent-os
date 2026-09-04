@@ -258,7 +258,7 @@ public static extern uint GetShortPathNameW(string longPath, System.Text.StringB
         Assert-Equal -Expected "true" -Actual $settings.BrowserVisible -Because "headful by default: the owner sees the window"
         Assert-True -Condition (($settings.Keys -join ",") -notmatch "staging") -Because "never a staging path"
         $json = $settings | ConvertTo-Json -Depth 4
-        Assert-True -Condition ($json -match '"BrowserWorkerEager":\s*"false"') -Because "lazy start by default"
+        Assert-True -Condition ($json -match '"BrowserWorkerEager":\s*"true"') -Because "eager start: the installer proves WHICH worker is live right after the swap (2026-09-04)"
     }
 
     Test-Case "the installer declares -SkipBrowser, -BrowserChannel and -UvPath and stages browser as a component" {
@@ -268,7 +268,9 @@ public static extern uint GetShortPathNameW(string longPath, System.Text.StringB
         Assert-True -Condition ($installer -match '\[string\]\$UvPath') -Because "-UvPath"
         Assert-True -Condition ($installer -match 'lib\\BrowserProvision\.ps1') -Because "dot-sources the provisioning library"
         Assert-True -Condition ($installer -match '@\("service", "companion", "browser"\)') -Because "browser is a recoverable component"
-        Assert-True -Condition ($installer -match '"sync", "--frozen", "--no-dev", "--no-editable"') -Because "frozen, no dev deps, no editable .pth"
+        Assert-True -Condition ($installer -match 'Invoke-NativeProcess -FilePath \$uv -Arguments \(Get-BrowserWorkerSyncArguments\)') -Because "uv argv comes from the release library (frozen, no dev deps, no editable .pth, always rebuilt)"
+        Assert-True -Condition ($installer -match 'lib\\BrowserRelease\.ps1') -Because "dot-sources the release library"
+        Assert-True -Condition ($installer -notmatch 'Invoke-BrowserWorkerSelfCheck[^\r\n]*-WorkingDirectory') -Because "self-checks never run with the browser tree as cwd (2026-09-04)"
         Assert-True -Condition ($installer -match 'Invoke-AgentDeployment -Root \$InstallRoot -Components \$components -NonExecutableComponents @\("browser"\)') -Because "deployed through the journaled engine as a non-executable component"
         Assert-True -Condition ($installer -match 'BrowserEnabled\s+=\s+\$BrowserEnabled') -Because "the service is told"
         Assert-True -Condition ($installer -match 'C:\\Users' -eq $false) -Because "no user-profile path is hardcoded"

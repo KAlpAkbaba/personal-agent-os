@@ -65,6 +65,16 @@ public sealed record BrowserWorkerHello
     /// </summary>
     public string? LifecycleFault { get; init; }
 
+    /// <summary>
+    /// Absolute path of the worker.py the worker is executing (hello.module.file), or null for a
+    /// worker older than 0.3.0. The installer/verifier compare it with the installed venv: it is
+    /// how a stale site-packages copy or a shadowing source directory becomes visible.
+    /// </summary>
+    public string? ModuleFile { get; init; }
+
+    /// <summary>hello.module.package_sha256 (digest of the executing package), or null.</summary>
+    public string? PackageSha256 { get; init; }
+
     /// <summary>Throws <see cref="FormatException"/> when the object is not a usable hello.</summary>
     public static BrowserWorkerHello Parse(JsonObject message)
     {
@@ -96,6 +106,8 @@ public sealed record BrowserWorkerHello
             BrowserAvailable = browser?["available"] is JsonValue av && av.TryGetValue<bool>(out var available) && available,
             BrowserVersion = browser?["version"]?.GetValue<string>(),
             LifecycleFault = message["lifecycle_fault"] is JsonObject fault ? fault.ToJsonString() : null,
+            ModuleFile = message["module"] is JsonObject module ? module["file"]?.GetValue<string>() : null,
+            PackageSha256 = message["module"] is JsonObject module2 ? module2["package_sha256"]?.GetValue<string>() : null,
         };
     }
 }

@@ -2628,3 +2628,43 @@ embedded Temporal worker). Facts and decisions that were not in the design:
     process attach to an existing Chrome is deliberately NOT supported: it would need an
     open CDP debug port on the research browser; the "one controlled recovery attempt" is
     reap-then-single-launch, and the launch lock guarantees the reaped process was an orphan.
+
+16. **Deployment truthfulness: INSTALL VERIFIED must prove the LIVE worker is the staged
+    release** (2026-09-04, real owner result: `-UpdateAgentFirst` installer exit 0, "INSTALL
+    VERIFIED", and the live worker still 0.1.0 with `browser.search` schema 0). Proven chain,
+    from real evidence on the owner's machine and a local reproduction: repo HEAD, staged tree
+    and installed source tree `<root>\browser\browser_agent` were byte-identical and new; the
+    venv's NON-EDITABLE copy `<root>\browser\.venv\Lib\site-packages\browser_agent` was old
+    (0.1.0, no `lifecycle.py`/`launch_guard.py`, dist-info `pagentos_browser-0.1.0` built from
+    `.staging/browser`). Two causes: (a) uv rebuilt the project from its build cache - the
+    staging path is the same on every release and uv's cache key for a local project is the
+    mtime of `pyproject.toml`, which code-only releases never touch, so `uv sync --frozen
+    --no-dev --no-editable` reused the wheel built on 2026-09-03 11:30 (reproduced: same path,
+    source-only change, plain sync -> stale copy; `--reinstall-package pagentos-browser` ->
+    fresh copy); (b) the installer's self-check ran `python -m browser_agent.worker` with the
+    BROWSER TREE as working directory, so `sys.path[0]` shadowed site-packages with the fresh
+    source and the check reported 0.2.0, while the companion starts the worker with its data
+    directory as cwd and imported the stale copy. Exit code 0 was therefore truthful about the
+    file swap and false about the running code. Decisions: the worker's hello and
+    `browser.worker_status` carry a `module` block (executing `worker.py` path and sha256,
+    whole-package digest, cwd; `browser_agent/release.py`); the source declares its release
+    (`WORKER_VERSION` 0.3.0, package version 0.3.0, `[tool.uv] cache-keys` on
+    `browser_agent/**/*.py`); the installer builds with `--reinstall-package
+    pagentos-browser`, runs every self-check from a neutral cwd exactly like the companion,
+    and asserts version, contracts, worker hash, package digest and module-inside-venv against
+    the staged source (`scripts/lib/BrowserRelease.ps1`), plus a file-by-file comparison of
+    site-packages with the source; the companion starts the worker eagerly and audits its
+    module origin, and the engine's health check refuses to commit unless the audit row after
+    the swap names a live pid running `<root>\browser\.venv\Scripts\python.exe` with the
+    installed data dir, created after the deployment, reporting the staged release from the
+    installed venv, with every pre-swap worker pid gone (the runtime stop now kills every
+    `-m browser_agent.worker` process, including the base-interpreter child outside the
+    install root); failure rolls back and prints INSTALL FAILED. The verifier gains 6b.3
+    (executing release == installed source, site-packages byte-identical) and 6b.4 (the
+    companion's live worker is that release). The owner smoke proves the live worker against
+    the checkout's release before any Chrome operation and, after `-UpdateAgentFirst`,
+    reports `deployment/version mismatch` with the install log instead of asking for a rerun.
+    The dev-chain harness now runs a PACKAGED (non-editable, reinstalled) worker with the
+    companion's cwd, so the runtime import path is exercised locally and in CI. Earlier 6b.1/6b.2
+    PROVEN_REAL rows stand for what they measured (a worker starts as the owner; manifest
+    agreement); they did not measure which copy executed, which 6b.3/6b.4 now do.

@@ -50,6 +50,9 @@ param(
     [switch]$UpdateAgentFirst,
     # browser.search response schema this script consumes (BROWSER_CAPABILITIES.md §3).
     [int]$RequiredSearchSchema = 2,
+    # The tree whose venv the live worker must execute from (the installed agent by default;
+    # the dev-chain harness passes its packaged worker root).
+    [string]$BrowserRoot = (Join-Path $env:ProgramFiles "PagentOS\agent\browser"),
     # Search mode only: interstitial=handoff (contract §3a). If Google shows a verification or
     # consent page, Chrome is brought to the front and this script WAITS for you to complete
     # it (nothing is solved or bypassed), then re-issues the same search on the same session.
@@ -67,6 +70,25 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot "..\lib\NativeProcess.ps1")
+. (Join-Path $PSScriptRoot "..\lib\BrowserRelease.ps1")
+
+# The release this checkout carries: the live worker must be exactly this, proven BEFORE any
+# Chrome operation. -RequiredSearchSchema defaults to the contract of that release.
+$expectedRelease = Get-ExpectedWorkerRelease -BrowserSource (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "services\browser")
+if (-not $PSBoundParameters.ContainsKey("RequiredSearchSchema") -and $expectedRelease.Contracts.ContainsKey("browser.search")) {
+    $RequiredSearchSchema = [int]$expectedRelease.Contracts["browser.search"]
+}
+$script:InstallerLog = $null
+
+function Get-StaleWorkerAdvice {
+    <#  What to tell the owner when the live worker is not this checkout's release.  #>
+    param([Parameter(Mandatory = $true)][string]$Observed)
+    if ($UpdateAgentFirst) {
+        $log = if ($script:InstallerLog) { $script:InstallerLog } else { "the newest log under $env:ProgramData\PagentOS\install-logs" }
+        return "deployment/version mismatch: -UpdateAgentFirst already ran the installer (it reported success) but the live worker is still $Observed; expected release $($expectedRelease.Version) (worker.py $($expectedRelease.WorkerSha256.Substring(0,12))). This is a deployment truthfulness defect, not a browser failure. Do NOT rerun this command; paste this message, the install evidence from $log and the output of .\scripts\verify-device-service.ps1."
+    }
+    return "contract/version mismatch: the live worker is $Observed; this checkout expects release $($expectedRelease.Version). Rerun with -UpdateAgentFirst (one UAC prompt) to update it through the journaled installer, which now proves the live worker before reporting success."
+}
 . (Join-Path $PSScriptRoot "..\lib\HttpJson.ps1")
 
 if (-not $BaseUrl) { $BaseUrl = "http://${BrokerHost}:$ApiPort" }
@@ -114,10 +136,11 @@ if ($UpdateAgentFirst) {
     Write-Host "updating the installed agent first (elevated installer, journaled deployment; one UAC prompt)..."
     $proc = Start-Process -FilePath (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -Verb RunAs -Wait -PassThru `
         -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$installer`"")
+    $script:InstallerLog = (Get-ChildItem (Join-Path $env:ProgramData "PagentOS\install-logs") -Filter "install-*.log" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 1 | ForEach-Object { $_.FullName })
     if ($proc.ExitCode -ne 0) {
-        throw "the installer exited $($proc.ExitCode); see the newest log under $env:ProgramData\PagentOS\install-logs before rerunning"
+        throw "the installer exited $($proc.ExitCode) (INSTALL FAILED); see $script:InstallerLog before doing anything else"
     }
-    Write-Host "installer finished (exit 0); waiting for the device to reconnect to the Cloud Core..."
+    Write-Host "installer finished (exit 0; log $script:InstallerLog); waiting for the device to reconnect to the Cloud Core..."
 }
 
 $evidence = [ordered]@{
@@ -219,10 +242,25 @@ try {
     $contracts = Get-OptionalProperty -InputObject $status.result -Name "contracts"
     $searchSchema = 0
     if ($null -ne $contracts) { $v = Get-OptionalProperty -InputObject $contracts -Name "browser.search"; if ($null -ne $v) { $searchSchema = [int]$v } }
+    $module = Get-OptionalProperty -InputObject $status.result -Name "module"
+    $moduleFile = if ($null -ne $module) { [string](Get-OptionalProperty -InputObject $module -Name "file") } else { "" }
     Write-Host "      worker $($status.result.worker_version), browser channel=$($browser.channel) version=$($browser.version) available=$($browser.available), browser.search schema=$searchSchema"
-    $evidence.worker = [ordered]@{ worker_version = [string]$status.result.worker_version; search_schema = $searchSchema; browser_version = [string]$browser.version }
+    Write-Host "      module $(if ($moduleFile) { $moduleFile } else { '(none reported: worker older than 0.3.0)' })"
+    $evidence.worker = [ordered]@{ worker_version = [string]$status.result.worker_version; search_schema = $searchSchema; browser_version = [string]$browser.version; module = $module; expected_version = $expectedRelease.Version; expected_worker_sha256 = $expectedRelease.WorkerSha256 }
+    # The live worker must be THIS checkout's release, from the installed venv, before any
+    # Chrome operation is requested. Read only; no browser is touched by worker_status.
+    try {
+        $liveProof = Assert-WorkerHelloMatchesRelease -Hello $status.result -Expected $expectedRelease -BrowserRoot $BrowserRoot -Label "live worker"
+        Write-Host "      live worker proven: release $($liveProof.Version), module inside the installed venv, package digest $($liveProof.PackageSha256.Substring(0,12)) == checkout"
+        $evidence.worker.proven = $true
+    }
+    catch {
+        $evidence.worker.proven = $false
+        $evidence.worker.mismatch = $_.Exception.Message
+        throw (Get-StaleWorkerAdvice -Observed "worker $($status.result.worker_version) ($($_.Exception.Message))")
+    }
     if ($Mode -eq "search" -and $searchSchema -lt $RequiredSearchSchema) {
-        throw "contract/version mismatch: the installed worker ($($status.result.worker_version)) answers browser.search with schema $searchSchema; this qualification needs schema $RequiredSearchSchema (provider evidence). The installed tree predates the search-provider change - rerun with -UpdateAgentFirst (one UAC prompt) to update it through the journaled installer."
+        throw (Get-StaleWorkerAdvice -Observed "worker $($status.result.worker_version) answering browser.search with schema $searchSchema (needs $RequiredSearchSchema)")
     }
 
     $opened = Invoke-DeviceCommand -Capability "browser.session_open" -Payload @{
@@ -245,7 +283,7 @@ try {
             return @(Get-Process -Id $Pids -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 }).Count
         }
         $lc = Get-OptionalProperty -InputObject $opened.result -Name "lifecycle"
-        if ($null -eq $lc) { throw "contract/version mismatch: session_open returned no 'lifecycle' identity; the installed worker predates the lifecycle guards - rerun with -UpdateAgentFirst" }
+        if ($null -eq $lc) { throw (Get-StaleWorkerAdvice -Observed "a worker whose session_open returns no 'lifecycle' identity") }
         $sessionUid = [string]$lc.session_uid; $browserPid = [int]$lc.browser_pid
         Write-Host "      identity: session_uid=$sessionUid browser_pid=$browserPid tab_count=$($lc.tab_count) max_tabs=$($lc.max_tabs) max_windows=$($lc.max_windows) reused=$($lc.reused)"
         # ADR-0050 item 15 guards: the installed worker must be the one with the OS-level launch
@@ -255,7 +293,7 @@ try {
         $launchKind = Get-OptionalProperty -InputObject $lc -Name "launch_kind"
         $launchLock = Get-OptionalProperty -InputObject $lc -Name "launch_lock"
         $jobAssigned = Get-OptionalProperty -InputObject $lc -Name "job_object_assigned"
-        if ($null -eq $workerPid -or $null -eq $launchKind -or $null -eq $jobAssigned) { throw "contract/version mismatch: session_open lifecycle lacks worker_pid/launch_kind/job_object_assigned; the installed worker predates the launch guards (ADR-0050 item 15) - rerun with -UpdateAgentFirst" }
+        if ($null -eq $workerPid -or $null -eq $launchKind -or $null -eq $jobAssigned) { throw (Get-StaleWorkerAdvice -Observed "a worker whose session_open lifecycle lacks worker_pid/launch_kind/job_object_assigned") }
         Write-Host "      guards: worker_pid=$workerPid launch_kind=$launchKind launch_lock=$launchLock job_object_assigned=$jobAssigned"
         if (-not $SkipLocalEvidence) {
             if ($jobAssigned -ne $true) { throw "the worker could not place its Chrome in a kill-on-close job object (job_object_assigned=$jobAssigned)" }
@@ -372,7 +410,7 @@ try {
         }
         $resultSchema = Get-OptionalProperty -InputObject $sr -Name "schema_version"
         if ($null -eq $resultSchema -or [int]$resultSchema -lt $RequiredSearchSchema) {
-            throw "contract/version mismatch: browser.search answered with schema '$resultSchema' (needs $RequiredSearchSchema); the worker that executed it predates the provider abstraction - rerun with -UpdateAgentFirst"
+            throw (Get-StaleWorkerAdvice -Observed "a worker answering browser.search with schema '$resultSchema' (needs $RequiredSearchSchema)")
         }
         foreach ($field in @("requested_provider", "provider", "fallback", "query", "result_count", "attempts", "locale")) {
             if (-not (Test-ObjectProperty -InputObject $sr -Name $field)) { throw "provider evidence field '$field' missing from the schema-$resultSchema search result" }

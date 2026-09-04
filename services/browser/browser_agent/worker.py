@@ -44,7 +44,7 @@ from urllib.parse import urlencode, urlsplit
 from playwright.async_api import Frame, Page
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
-from . import launch_guard, lifecycle, policy, search_engines
+from . import launch_guard, lifecycle, policy, release, search_engines
 from .backends import ManagedBackend
 from .destination import require_public_destination
 from .detect import BrowserInfo, detect_browser
@@ -66,7 +66,7 @@ from .targets import TargetSpec, coerce_target
 
 logger = get_logger(__name__)
 
-WORKER_VERSION = "0.2.0"
+WORKER_VERSION = "0.3.0"
 # Per-capability response schema versions (BROWSER_CAPABILITIES.md §3). A consumer that
 # needs the search-provider evidence checks `contracts["browser.search"] >= 2` on the hello
 # or worker_status BEFORE searching, so an old installed worker yields a clear contract/
@@ -486,6 +486,9 @@ class Worker:
                 "capabilities": list(policy.CAPABILITIES),
                 "browser": self._browser_info.as_dict(),
                 "lifecycle_fault": self._breaker.current_fault(),
+                # Which copy of this package is executing (release.py): the
+                # verifier compares it with the release it staged.
+                "module": release.module_info(),
             }
         )
 
@@ -1077,6 +1080,7 @@ class Worker:
         return {
             "worker_version": WORKER_VERSION,
             "contracts": dict(CONTRACTS),
+            "module": release.module_info(),
             "browser": browser_dict,
             "sessions": sessions_info,
             "uptime_s": round(now - self._start_time, 1),

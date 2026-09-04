@@ -295,7 +295,10 @@ function New-CompanionBrowserSettings {
         BrowserChannel       = $Channel
         BrowserVisible       = $(if ($Visible) { "true" } else { "false" })
         BrowserIdleTimeoutS  = "600"
-        BrowserWorkerEager   = "false"
+        # Eager: the companion starts the worker as soon as it is up, so the installer's
+        # health check (and the verifier) can prove WHICH worker is live right after the
+        # swap. A running idle worker launches no browser (detection never does).
+        BrowserWorkerEager   = "true"
     }
 }
 

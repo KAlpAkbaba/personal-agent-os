@@ -82,6 +82,7 @@ $agentRoot = Join-Path $repoRoot "devices\windows-agent"
 . (Join-Path $PSScriptRoot "lib\ServiceInstall.ps1")
 . (Join-Path $PSScriptRoot "lib\InstallAcl.ps1")
 . (Join-Path $PSScriptRoot "lib\BrowserProvision.ps1")
+. (Join-Path $PSScriptRoot "lib\BrowserRelease.ps1")
 # The journaled deployment engine (stop -> swap -> start -> health -> commit, rollback
 # otherwise), its production runtime handlers, and the post-install evidence. The inline
 # swap this replaced renamed live directories under running processes; NTFS refused, and
@@ -243,8 +244,12 @@ function Invoke-BrowserWorkerStaging {
         $env:UV_PYTHON_PREFERENCE = "managed"
         $env:UV_LINK_MODE = "copy"
         $env:UV_PROJECT_ENVIRONMENT = $null
-        Write-Host "creating the worker environment: uv sync --frozen --no-dev --no-editable (python under $($env:UV_PYTHON_INSTALL_DIR))"
-        $sync = Invoke-NativeProcess -FilePath $uv -Arguments @("sync", "--frozen", "--no-dev", "--no-editable") `
+        # --reinstall-package: uv's build cache for a local project is keyed on the mtime of
+        # pyproject.toml, and the staging path is the same on every release, so a code-only
+        # release was served a STALE cached wheel (2026-09-04, ADR-0050 item 16). The package
+        # is always rebuilt from the staged source.
+        Write-Host "creating the worker environment: uv $((Get-BrowserWorkerSyncArguments) -join ' ') (python under $($env:UV_PYTHON_INSTALL_DIR))"
+        $sync = Invoke-NativeProcess -FilePath $uv -Arguments (Get-BrowserWorkerSyncArguments) `
             -WorkingDirectory $staged -TimeoutSeconds 1800
         Assert-NativeSuccess -Result $sync -Activity "uv sync (browser worker environment)"
     }
@@ -273,7 +278,10 @@ function Invoke-BrowserWorkerStaging {
     $probeData = Join-Path $env:TEMP "pagentos-browser-selfcheck-$([guid]::NewGuid().ToString('N'))"
     try {
         Write-Host "self-check: python -m browser_agent.worker --self-check --channel $Channel"
-        $check = Invoke-BrowserWorkerSelfCheck -Python $python -Channel $Channel -DataDir $probeData -WorkingDirectory $staged
+        # The self-check runs the way the companion runs the worker: from the DATA directory,
+        # never from the browser tree. With the tree as cwd, Python imports the source copy on
+        # sys.path[0] and the check passes even when the venv's installed copy is stale.
+        $check = Invoke-BrowserWorkerSelfCheck -Python $python -Channel $Channel -DataDir $probeData
     }
     finally {
         Remove-Item -LiteralPath $probeData -Recurse -Force -ErrorAction SilentlyContinue
@@ -292,10 +300,22 @@ function Invoke-BrowserWorkerStaging {
     }
     Write-Host "self-check ok: worker $($check.Hello.worker_version), $(@($check.Capabilities).Count) capabilities, browser $($check.Hello.browser.channel) $($check.Hello.browser.version)"
 
+    # The worker that answered must be THE staged release, executing from the staged venv:
+    # version, contracts, worker.py hash and whole-package digest all agree with the staged
+    # source, and the installed site-packages copy is byte-identical to it.
+    $expected = Get-ExpectedWorkerRelease -BrowserSource $staged
+    $proof = Assert-WorkerHelloMatchesRelease -Hello $check.Hello -Expected $expected -BrowserRoot $staged -Label "staged worker"
+    $copyDifferences = @(Compare-BrowserPackageCopies -Source (Join-Path $staged "browser_agent") -Installed (Get-SitePackagesBrowserAgentDir -BrowserRoot $staged))
+    if (@($copyDifferences).Count -gt 0) {
+        throw "the staged venv's installed package differs from the staged source: $($copyDifferences -join '; ')"
+    }
+    Write-Host "staged release proven: worker $($proof.Version), package digest $($proof.PackageSha256.Substring(0,12)), module $($proof.ModuleFile)"
+
     return [pscustomobject]@{
         StagedPath   = $staged
         Hello        = $check.Hello
         Capabilities = @($check.Capabilities)
+        Release      = $expected
     }
 }
 
@@ -509,6 +529,12 @@ if ($browserStaging) { $components += "browser" }
 # Evidence, part 2: the staged bytes right before the swap (configuration written, nothing moved).
 $stagedHashes = if ($SkipBuild) { Get-ArtifactHashes -Root $InstallRoot } else { Get-ArtifactHashes -Root (Join-Path $InstallRoot ".staging") }
 
+$deployStartedAt = Get-Date
+$script:LiveWorkerProof = $null
+# Every process running the worker module before the swap (the venv trampoline AND the base
+# interpreter it launches); after the swap none of them may be alive.
+$preWorkerPids = @(Select-BrowserWorkerProcess -Processes @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue) | ForEach-Object { [int]$_.ProcessId })
+if (@($preWorkerPids).Count -gt 0) { Write-Host "browser worker processes before the swap: $($preWorkerPids -join ', ')" }
 $stopRuntime = { Stop-AgentRuntime -ServiceName $ServiceName -InstallRoot $InstallRoot }
 $startRuntime = {
     # An unenrolled agent exits immediately by design; starting it would turn a correct
@@ -537,6 +563,26 @@ $testHealth = {
         Write-Warning "health: running images are not the installed binaries (service: $($images.Service); companion: $($images.Companion))"
         return $false
     }
+    if ($browserStaging) {
+        # Deployment truthfulness (2026-09-04): the process the companion actually started
+        # after the swap must report the staged release from the installed venv, its pid
+        # must be newer than this deployment, and every pre-swap worker pid must be gone.
+        # Anything else rolls the deployment back.
+        $auditPath = Join-Path $companionDataDir "audit\companion-audit.jsonl"
+        $liveAudit = Wait-LiveBrowserWorkerAudit -AuditPath $auditPath -Since $deployStartedAt -TimeoutSeconds 90
+        if ($null -eq $liveAudit) {
+            Write-Warning "health: the companion recorded no browser_worker_started after $($deployStartedAt.ToString('o')) within 90 s ($auditPath)"
+            return $false
+        }
+        $liveProblems = @(Test-LiveBrowserWorker -Audit $liveAudit -Expected $browserStaging.Release -BrowserRoot $browserDir `
+            -BrowserDataDir $browserDataDir -DeployStartedAt $deployStartedAt -PreviousPids $preWorkerPids)
+        if (@($liveProblems).Count -gt 0) {
+            Write-Warning "health: the live browser worker is not the staged release: $($liveProblems -join '; ')"
+            return $false
+        }
+        $script:LiveWorkerProof = $liveAudit
+        Write-Host "live browser worker proven: pid $($liveAudit.Pid), worker $($liveAudit.WorkerVersion), module $($liveAudit.Module), started $($liveAudit.Ts.ToString('o'))"
+    }
     return $true
 }
 $applyAcl = {
@@ -561,7 +607,7 @@ if ($browserStaging) {
     $probeData = Join-Path $env:TEMP "pagentos-browser-postinstall-$([guid]::NewGuid().ToString('N'))"
     try {
         $live = Invoke-BrowserWorkerSelfCheck -Python (Get-BrowserWorkerPython -BrowserRoot $browserDir) -Channel $BrowserChannel `
-            -DataDir $probeData -WorkingDirectory $browserDir
+            -DataDir $probeData
     }
     finally {
         Remove-Item -LiteralPath $probeData -Recurse -Force -ErrorAction SilentlyContinue
@@ -569,7 +615,16 @@ if ($browserStaging) {
     if (-not $live.Ok) {
         throw "the Browser Worker passed its self-check in staging but not from $browserDir (exit $($live.ExitCode)). Rerun the installer; if it repeats, report stderr:`n$($live.StdErr)"
     }
-    Write-Host "browser worker starts from the installed tree: $($live.Hello.worker_version), $(@($live.Capabilities).Count) capabilities"
+    $installedRelease = Get-ExpectedWorkerRelease -BrowserSource $browserDir
+    if ($installedRelease.PackageSha256 -ne $browserStaging.Release.PackageSha256) {
+        throw "the installed browser source tree ($($installedRelease.PackageSha256.Substring(0,12))) is not the staged one ($($browserStaging.Release.PackageSha256.Substring(0,12)))"
+    }
+    $installedProof = Assert-WorkerHelloMatchesRelease -Hello $live.Hello -Expected $installedRelease -BrowserRoot $browserDir -Label "installed worker"
+    $installedDifferences = @(Compare-BrowserPackageCopies -Source (Join-Path $browserDir "browser_agent") -Installed (Get-SitePackagesBrowserAgentDir -BrowserRoot $browserDir))
+    if (@($installedDifferences).Count -gt 0) {
+        throw "the installed venv's package differs from the installed source: $($installedDifferences -join '; ')"
+    }
+    Write-Host "browser worker starts from the installed tree: $($live.Hello.worker_version), $(@($live.Capabilities).Count) capabilities, module $($installedProof.ModuleFile)"
 }
 
 if ($EnrollmentToken) {
@@ -630,6 +685,22 @@ if ($browserStaging) {
     $liveCompanionConfig = [System.IO.File]::ReadAllText((Join-Path $companionDir "appsettings.json")) | ConvertFrom-Json
     $workerPath = if ($liveCompanionConfig.PSObject.Properties.Name -contains "BrowserWorkerCommand") { [string]$liveCompanionConfig.BrowserWorkerCommand } else { "MISSING from companion appsettings" }
 }
+$browserReleaseEvidence = @()
+if ($browserStaging) {
+    $expectedRel = $browserStaging.Release
+    $installedSite = Get-SitePackagesBrowserAgentDir -BrowserRoot $browserDir
+    $contractText = ($expectedRel.Contracts.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ','
+    $browserReleaseEvidence += "expected (staged source)      worker $($expectedRel.Version) contracts $contractText worker.py $($expectedRel.WorkerSha256) package $($expectedRel.PackageSha256)"
+    $browserReleaseEvidence += "installed source tree         package $((Get-BrowserPackageDigest -PackageDir (Join-Path $browserDir 'browser_agent')))"
+    $browserReleaseEvidence += "installed venv site-packages  package $(if (Test-Path -LiteralPath $installedSite) { Get-BrowserPackageDigest -PackageDir $installedSite } else { 'MISSING' })"
+    if ($script:LiveWorkerProof) {
+        $browserReleaseEvidence += "live worker                   pid $($script:LiveWorkerProof.Pid) worker $($script:LiveWorkerProof.WorkerVersion) module $($script:LiveWorkerProof.Module) started $($script:LiveWorkerProof.Ts.ToString('o'))"
+    }
+    else {
+        $browserReleaseEvidence += "live worker                   not started (device not enrolled yet; the verifier proves it once enrolled)"
+    }
+    $browserReleaseEvidence += "pre-swap worker pids          $(if (@($preWorkerPids).Count -gt 0) { ($preWorkerPids -join ', ') + ' (all gone)' } else { 'none' })"
+}
 $journalDoc = Read-DeployJournal -Root $InstallRoot
 $journalSummary = if ($journalDoc) { "$($journalDoc.version) phase=$($journalDoc.phase)" } else { "none" }
 $capabilitySummary = if ($manifest.Ok) {
@@ -647,6 +718,7 @@ Write-InstallEvidence -Evidence ([pscustomobject]@{
     RegisteredCompanion = $registered.Companion
     RunningCompanion    = $running.Companion
     BrowserWorker       = $workerPath
+    BrowserRelease      = @($browserReleaseEvidence)
     CapabilitySummary   = $capabilitySummary
     Journal             = $journalSummary
     LogPath             = $script:InstallLog
@@ -665,5 +737,13 @@ if ($enrolled) {
     if ($running.Companion -ne $companionExe) { throw "the companion process is not running the installed binary: $($running.Companion)" }
 }
 Write-Host ""
-Write-Host "INSTALL VERIFIED: the live tree is the staged build, the service and the companion point at it$(if ($enrolled) { ' and run from it' }), and the installed service supports M13." -ForegroundColor Green
+if ($browserStaging -and $enrolled -and -not $script:LiveWorkerProof) {
+    throw "the live browser worker was never proven after the swap (no health proof recorded); refusing to report success"
+}
+$verifiedLine = "INSTALL VERIFIED: the live tree is the staged build, the service and the companion point at it$(if ($enrolled) { ' and run from it' }), and the installed service supports M13"
+if ($browserStaging) {
+    $verifiedLine += if ($script:LiveWorkerProof) { "; the live browser worker (pid $($script:LiveWorkerProof.Pid)) runs release $($script:LiveWorkerProof.WorkerVersion) from the installed venv." } else { "; the browser worker release is proven from the installed venv (live worker follows enrollment)." }
+}
+else { $verifiedLine += "." }
+Write-Host $verifiedLine -ForegroundColor Green
 try { Stop-Transcript | Out-Null } catch { }

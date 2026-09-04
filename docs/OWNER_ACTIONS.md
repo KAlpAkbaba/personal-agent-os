@@ -194,42 +194,47 @@ Expect a Chrome window to appear briefly on this PC. Paste the final lines (each
 status, `command_id`, `trace`) and `browser-smoke-1.json` (ids, timings, the example.com
 title/text and process images — no secret).
 
-### 13. Browser lifecycle: one visible Chrome window, several operations, clean exit — **ready after the deploy**
+### 13. Browser lifecycle: update, PROVE the live worker, then one visible Chrome window — **ready**
 
-Unblocks: `docs/QUALIFICATION.md` 9.13; item 12 resumes after it. Both of your reports were
-reproduced and root-caused from real evidence (ADR-0050 items 14 and 15, QUALIFICATION 9.13):
+Unblocks: `docs/QUALIFICATION.md` 6b.3, 6b.4, 9.13; item 12 resumes after it.
 
-- **The persistent launcher was browser detection.** To read the browser version the worker
-  ran `chrome.exe --version`. On Windows that starts the full browser: a window that outlives
-  the caller, and with your Chrome already running a new window in *your* Chrome. It ran on
-  every worker start, every installer/verify self-check, every companion restart and every
-  test fixture. The "Chrome for Testing" windows you saw after the command had exited were
-  this same function called by the browser test suite running on this machine. Detection now
-  reads the executable's version resource and never starts any browser; the test suite is
-  forced headless outside `live`, reaps its own Chromium, and was re-run under a desktop
-  window monitor: 0 visible Chrome for Testing windows, 0 processes left.
-- **The cascade mechanism**: a second launch on the dedicated profile while a PagentOS Chrome
-  still held it opened one more window in that Chrome; killed workers left such a Chrome
-  behind. The worker now owns exactly one research browser, takes an OS-level launch lock per
-  profile, reaps only PagentOS-profile Chrome, refuses a second launch with
-  `browser_lifecycle_violation`, trips a durable circuit breaker on repeated recovery
-  launches, and holds its Chrome in a Windows Job Object so the tree dies with the worker.
-  The DeviceService and the Session Companion were checked and restored after your
-  containment (service running, companion restarted through its logon task, IPC pipe present).
+**Your 2026-09-04 result was a deployment truthfulness defect, now root-caused from real
+evidence (ADR-0050 item 16).** The installer had really replaced the source tree under
+`C:\Program Files\PagentOS\agent\browser`, but the worker never runs that tree: it runs the
+copy that uv installs into the tree's venv, and uv had rebuilt that copy from a stale cached
+wheel (its cache key is the modification time of `pyproject.toml`, which code-only releases
+never change, and the staging path is the same every time). The installer's self-check did
+not notice because it ran with the browser tree as working directory, which made Python
+import the fresh source instead of the venv copy; the companion starts the worker from its
+data directory and got the stale copy. So "INSTALL VERIFIED" was true about files and false
+about running code.
 
-The command updates the installed agent first (one UAC prompt; the self-check no longer opens
-anything) and then runs the short lifecycle test: one Chrome window opens, twelve operations
-run in that same session (navigate, inspect, extract, a second tab opened and closed,
-back/forward, a fetch in a temporary tab, worker status), each line showing
-`session_uid_same=True` `browser_pid_same=True` `processes=1` `windows=1`, and the session
-closes leaving zero PagentOS-profile Chrome processes:
+What changed: the worker now reports which file it executes and a digest of its whole
+package; the source declares its release (0.3.0); the installer always rebuilds the package,
+runs every self-check exactly the way the companion runs the worker, compares the venv copy
+with the source file by file, and after the swap waits for the companion to start the worker
+and checks the live process (pid newer than the deployment, executable inside the installed
+venv, reported release equal to the staged source, every pre-swap worker pid gone). Any
+disagreement rolls the deployment back and prints `INSTALL FAILED`. The smoke script proves
+the live worker against this checkout's release before it asks for any Chrome operation, and
+if that fails after an update it says `deployment/version mismatch` and tells you what to
+paste; it never asks you to rerun the same command.
+
+Locally verified before asking you: the stale build was reproduced from the same staging
+path and refused by the new checks; the fixed build passed; the dev-chain harness now runs a
+packaged worker the same way and passed end to end; CI is green.
+
+One command. It updates the agent (one UAC prompt), proves the live worker (release, module
+origin, package digest) before any browser operation, then opens one Chrome window, runs
+twelve operations in that same session and exits leaving zero PagentOS Chrome:
 
 ```powershell
 .\scripts\browser\real-browser-smoke.ps1 -UpdateAgentFirst -Mode lifecycle -OutFile browser-lifecycle-1.json
 ```
 
-Paste the final lines and the JSON. Expected: `REAL BROWSER SMOKE: PASS`. If any extra Chrome
-window appears at any point, stop and paste what you saw; do not rerun.
+Expected last line: `REAL BROWSER SMOKE: PASS`, preceded by `live worker proven: release 0.3.0`.
+If it stops with `deployment/version mismatch` or `INSTALL FAILED`, paste the message, the
+install log it names and the output of `.\scripts\verify-device-service.ps1`; do not rerun.
 
 ### 12. Google-primary search through the installed worker — **PAUSED (lifecycle regression, see item 13)**
 

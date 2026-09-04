@@ -173,8 +173,9 @@ Cloud Core --command--> Device Service (Session 0) --pipe exec_request--> Sessio
   staging/publish swap as the binaries, runs `uv sync --frozen --no-dev --no-editable`
   there (uv resolved like `preflight.ps1`; interpreter under `<InstallRoot>\python`),
   proves the venv is relocatable, requires `python -m browser_agent.worker --self-check
-  --channel chrome` to exit 0 in staging (Chrome/package missing → readable failure, previous
-  tree intact), writes the companion `BrowserWorker*` settings (data under
+  --channel chrome` to exit 0 in staging from a NEUTRAL working directory and to report the
+  staged release from the staged venv (version, contracts, worker hash, package digest,
+  `module.file` inside `.venv`; ADR-0050 item 16), writes the companion `BrowserWorker*` settings (data under
   `%ProgramData%\PagentOS\companion\browser`, granted to the owner SID explicitly) and the
   service `BrowserEnabled=true`, then re-runs the self-check from the hardened tree.
   `scripts/verify-device-service.ps1` repeats the self-check unelevated as the owner

@@ -83,6 +83,8 @@ class TestExecResultRoundTrip:
         await _drain(worker)
         assert len(written) == 1
         result = written[0]
+        module = result["result"].pop("module")
+        assert module["file"].endswith("worker.py") and len(module["package_sha256"]) == 64
         assert result == {
             "type": "result",
             "request_id": "r1",

@@ -220,6 +220,11 @@ function Write-InstallEvidence {
     Write-Host "service executable path         $($Evidence.ServiceExe) (SCM: $($Evidence.RegisteredService); running: $($Evidence.RunningService))"
     Write-Host "companion executable path       $($Evidence.CompanionExe) (task: $($Evidence.RegisteredCompanion); running: $($Evidence.RunningCompanion))"
     Write-Host "browser worker path             $($Evidence.BrowserWorker)"
+    if ($Evidence.PSObject.Properties.Name -contains "BrowserRelease") {
+        foreach ($line in @($Evidence.BrowserRelease)) {
+            if ($line) { Write-Host "browser release                 $line" }
+        }
+    }
     Write-Host "installed capability manifest   $($Evidence.CapabilitySummary)"
     Write-Host "deployment journal              $($Evidence.Journal)"
     Write-Host "install log                     $($Evidence.LogPath)"

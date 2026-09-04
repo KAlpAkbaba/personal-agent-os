@@ -27,6 +27,7 @@ $ErrorActionPreference = "Continue"
 . (Join-Path $PSScriptRoot "lib\NativeProcess.ps1")
 . (Join-Path $PSScriptRoot "lib\InstallAcl.ps1")
 . (Join-Path $PSScriptRoot "lib\BrowserProvision.ps1")
+. (Join-Path $PSScriptRoot "lib\BrowserRelease.ps1")
 
 $results = New-Object System.Collections.ArrayList
 
@@ -291,7 +292,7 @@ else {
             $browserInfo = "$($workerCheck.Hello.browser.channel) $($workerCheck.Hello.browser.version) available=$($workerCheck.Hello.browser.available)"
         }
         Add-Result "6b.1" "Browser worker starts as the owner from the installed tree" "PROVEN_REAL" `
-            "self-check exit 0 as $([Security.Principal.WindowsIdentity]::GetCurrent().Name): worker $($workerCheck.Hello.worker_version), browser $browserInfo, $(@($workerCheck.Capabilities).Count) capabilities"
+            "self-check exit 0 as $([Security.Principal.WindowsIdentity]::GetCurrent().Name) from a neutral working directory: worker $($workerCheck.Hello.worker_version), browser $browserInfo, $(@($workerCheck.Capabilities).Count) capabilities"
     }
     else {
         $stderrTail = ""
@@ -343,6 +344,54 @@ else {
     else {
         Add-Result "6b.2" "Advertised capability manifest agrees with the worker" "NOT_YET_PROVEN" "the service advertises the browser family but the worker self-check did not pass; $listing"
     }
+}
+
+# --- 6b.3 / 6b.4 the release that is actually executing (deployment truthfulness, 2026-09-04)
+# 6b.1 proves a worker starts; it does not prove WHICH copy of the package it runs. The venv
+# holds a non-editable copy under site-packages that can be stale while the source tree next
+# to it is new, and a cwd inside the browser tree hides that. So: the self-check's hello
+# (run from a neutral cwd) must name a module inside the installed venv, carry the installed
+# source's version, contracts and package digest, and the site-packages copy must be
+# byte-identical to the installed source; and the worker the companion is running right now
+# (its audit row + live process) must be that release from that venv.
+$browserRootInstalled = Join-Path $InstallRoot "browser"
+if ($workerCommand -and $workerCheck -and $workerCheck.Ok -and (Test-Path -LiteralPath (Join-Path $browserRootInstalled "browser_agent\worker.py"))) {
+    try {
+        $installedRelease = Get-ExpectedWorkerRelease -BrowserSource $browserRootInstalled
+        $proof = Assert-WorkerHelloMatchesRelease -Hello $workerCheck.Hello -Expected $installedRelease -BrowserRoot $browserRootInstalled -Label "installed worker"
+        $copyDiff = @(Compare-BrowserPackageCopies -Source (Join-Path $browserRootInstalled "browser_agent") -Installed (Get-SitePackagesBrowserAgentDir -BrowserRoot $browserRootInstalled))
+        if (@($copyDiff).Count -gt 0) { throw "site-packages copy differs from the installed source: $($copyDiff -join '; ')" }
+        Add-Result "6b.3" "The worker executes the installed release from the installed venv" "PROVEN_REAL" `
+            "worker $($proof.Version), module $($proof.ModuleFile), package digest $($proof.PackageSha256.Substring(0,12)) == installed source; site-packages copy byte-identical"
+    }
+    catch {
+        Add-Result "6b.3" "The worker executes the installed release from the installed venv" "NOT_YET_PROVEN" $_.Exception.Message
+    }
+
+    $auditPath = Join-Path $env:ProgramData "PagentOS\companion\audit\companion-audit.jsonl"
+    $liveRow = Get-LatestWorkerStartAudit -AuditPath $auditPath
+    if ($null -eq $liveRow) {
+        Add-Result "6b.4" "The companion's live worker is that release" "NOT_YET_PROVEN" "no browser_worker_started row in $auditPath (companion not started, or predates the audit)"
+    }
+    else {
+        $liveProblems = @()
+        try {
+            $installedRelease = Get-ExpectedWorkerRelease -BrowserSource $browserRootInstalled
+            $liveProblems = @(Test-LiveBrowserWorker -Audit $liveRow -Expected $installedRelease -BrowserRoot $browserRootInstalled `
+                -BrowserDataDir (Join-Path $env:ProgramData "PagentOS\companion\browser") -DeployStartedAt ([datetime]::MinValue))
+        }
+        catch { $liveProblems = @($_.Exception.Message) }
+        if (@($liveProblems).Count -eq 0) {
+            Add-Result "6b.4" "The companion's live worker is that release" "PROVEN_REAL" "pid $($liveRow.Pid) started $($liveRow.Ts.ToString('o')): worker $($liveRow.WorkerVersion), module $($liveRow.Module)"
+        }
+        else {
+            Add-Result "6b.4" "The companion's live worker is that release" "NOT_YET_PROVEN" "newest worker row (pid $($liveRow.Pid), $($liveRow.Ts.ToString('o'))): $($liveProblems -join '; ')"
+        }
+    }
+}
+elseif ($workerCommand) {
+    Add-Result "6b.3" "The worker executes the installed release from the installed venv" "NOT_YET_PROVEN" "the self-check did not pass, or $browserRootInstalled has no worker source"
+    Add-Result "6b.4" "The companion's live worker is that release" "NOT_YET_PROVEN" "depends on 6b.3"
 }
 
 # ------------------------------------------------------------------------ report

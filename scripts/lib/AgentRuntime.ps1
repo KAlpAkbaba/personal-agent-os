@@ -26,6 +26,7 @@
 #>
 
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot "BrowserRelease.ps1")
 
 function Get-DefaultBrowserProfileDir {
     <#
@@ -180,6 +181,20 @@ function Stop-AgentRuntime {
             }
             [void](Wait-ProcessGone -ProcessIds @($others | ForEach-Object { [int]$_.ProcessId }) -TimeoutSeconds 15)
         }
+    }
+
+    # The Browser Worker is two processes: the venv's python.exe (under the install root, a
+    # trampoline) and the real interpreter it launches, which runs from the base Python
+    # OUTSIDE the install root with the same `-m browser_agent.worker` command line. Killing
+    # the companion never reaches either (2026-09-04: an old worker survived the swap and kept
+    # answering commands). Stop every process running the worker module, then wait.
+    $workers = @(Select-BrowserWorkerProcess -Processes @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue))
+    if (@($workers).Count -gt 0) {
+        foreach ($p in $workers) {
+            Write-Host "stopping browser worker $($p.Name) (pid $($p.ProcessId)) still running -m browser_agent.worker"
+            Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+        [void](Wait-ProcessGone -ProcessIds @($workers | ForEach-Object { [int]$_.ProcessId }) -TimeoutSeconds 15)
     }
 
     if (-not [string]::IsNullOrWhiteSpace($BrowserProfileDir)) {
