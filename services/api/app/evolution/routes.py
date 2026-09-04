@@ -8,6 +8,22 @@
 - GET  /gaps/{id}/audit         the nine auditability answers for one evolution
 - GET  /skill-versions          candidate/registered/rejected skill versions
 
+Evolution backlog (the Evolution Engine's own work queue):
+
+- GET  /opportunities           the scored backlog, best composite first
+- POST /opportunities           create one FROM EVIDENCE (refuses without any)
+- POST /opportunities/{id}/advance   one lifecycle transition
+- POST /opportunities/{id}/approve   the human authority gate
+- GET  /shadow-ready            what is built, tested and waiting on the owner
+- GET  /policy                  lifecycle, weights, grants, root policies
+
+The approve route is the only way into ``OWNER_APPROVED``, and it works by
+minting an ``OwnerCapability`` from the *verified* session object that
+``require_owner_session`` returns — not from a field in the request body. The
+production-side transitions (``qualifying``/``live``/``rolled_back``) mint a
+``ProductionAuthority`` from that same capability. Engine-internal callers hold
+a lab authority, never a session, so neither path is reachable from them.
+
 Auth posture: the SAME as the rest of the API — no per-route authentication
 today, inherited from the standing single-owner loopback posture and the M6
 security addendum's hard gate ("these endpoints must be owner-authenticated
@@ -28,10 +44,18 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.evolution.audit import build_audit
+from app.evolution.authority import (
+    Grant,
+    ProductionAuthority,
+    mint_owner_capability,
+)
+from app.evolution.backlog import ActorKind, OpportunityStatus
 from app.evolution.errors import EvolutionError, EvolutionErrorClass
 from app.evolution.gaps import CapabilityRequest
 from app.evolution.pipeline import EvolutionPipeline
 from app.evolution.runtime import EvolutionRuntime
+from app.evolution.scoring import SCORE_FIELDS
+from app.evolution.service import PRODUCTION_SIDE_STATUSES, EvolutionService
 from app.identity.dependencies import require_owner_session
 from app.logging import get_logger, trace_id_var
 
@@ -235,6 +259,187 @@ async def list_skill_versions(
         limit=limit,
     )
     return {"skill_versions": versions}
+
+
+# ------------------------------------------------------------- opportunities
+
+MAX_TITLE = 200
+MAX_STATEMENT = 8000
+
+
+def _service(request: Request) -> EvolutionService:
+    return _runtime(request).evolution_service
+
+
+class EvidenceRefBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: str = Field(max_length=32)
+    ref: str = Field(max_length=256)
+    note: str | None = Field(default=None, max_length=256)
+
+
+class ScoresBody(BaseModel):
+    """The six declared scoring inputs. All required, all in [0, 1]."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    owner_relevance: float = Field(ge=0.0, le=1.0)
+    expected_utility: float = Field(ge=0.0, le=1.0)
+    recurrence: float = Field(ge=0.0, le=1.0)
+    confidence: float = Field(ge=0.0, le=1.0)
+    engineering_cost: float = Field(ge=0.0, le=1.0)
+    operational_risk: float = Field(ge=0.0, le=1.0)
+
+
+class CreateOpportunityBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=MAX_TITLE)
+    statement: str = Field(min_length=1, max_length=MAX_STATEMENT)
+    #: Never optional and never empty: an opportunity exists because something
+    #: happened, and the something is named here.
+    evidence_refs: list[EvidenceRefBody] = Field(min_length=1, max_length=32)
+    scores: ScoresBody
+    source: str = Field(max_length=32)
+    source_ref: str = Field(max_length=256)
+    detail: dict[str, Any] | None = None
+
+
+class AdvanceBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    target: str = Field(max_length=24)
+    actor: str = Field(max_length=16)
+    reason: str | None = Field(default=None, max_length=512)
+    workspace_ref: str | None = Field(default=None, max_length=512)
+    candidate_ref: str | None = Field(default=None, max_length=512)
+
+
+class ApproveBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    note: str | None = Field(default=None, max_length=512)
+
+
+@router.get("/opportunities")
+async def list_opportunities(
+    request: Request,
+    status: str | None = Query(default=None, max_length=24),
+    limit: int = Query(default=100, ge=1, le=500),
+) -> dict[str, Any]:
+    service = _service(request)
+    opportunities = await _call(service.list_opportunities, status=status, limit=limit)
+    return {"opportunities": opportunities}
+
+
+@router.post("/opportunities")
+async def create_opportunity(
+    request: Request, body: CreateOpportunityBody, response: Response
+) -> dict[str, Any]:
+    service = _service(request)
+    opportunity = await _call(
+        service.create_from_evidence,
+        title=body.title,
+        statement=body.statement,
+        evidence_refs=[ref.model_dump(mode="json") for ref in body.evidence_refs],
+        scores=body.scores.model_dump(mode="json"),
+        source=body.source,
+        source_ref=body.source_ref,
+        detail=body.detail,
+    )
+    logger.info(
+        "evolution_opportunity_created",
+        opportunity_id=opportunity["opportunity_id"],
+        source=opportunity["source"],
+    )
+    response.status_code = 201
+    return opportunity
+
+
+@router.get("/opportunities/{opportunity_id}")
+async def get_opportunity(request: Request, opportunity_id: uuid.UUID) -> dict[str, Any]:
+    return await _call(_service(request).get, opportunity_id)
+
+
+@router.post("/opportunities/{opportunity_id}/advance")
+async def advance_opportunity(
+    request: Request,
+    opportunity_id: uuid.UUID,
+    body: AdvanceBody,
+    session=Depends(require_owner_session),  # noqa: B008 - FastAPI dependency
+) -> dict[str, Any]:
+    """One lifecycle transition.
+
+    ``owner_approved`` is refused here on purpose — it has its own endpoint.
+    Production-side targets mint a production authority from THIS request's
+    verified owner session; there is no body field that can substitute for it.
+    """
+    service = _service(request)
+    production_authority = None
+    try:
+        target = OpportunityStatus(body.target)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error_class": str(EvolutionErrorClass.VALIDATION_ERROR),
+                "message": "unknown target status",
+                "expected": [str(s) for s in OpportunityStatus],
+            },
+        ) from exc
+    if target in PRODUCTION_SIDE_STATUSES:
+        capability = mint_owner_capability(session)
+        production_authority = ProductionAuthority.for_owner(
+            capability, {Grant.DEPLOY, Grant.WRITE_PRODUCTION_DB}
+        )
+    return await _call(
+        service.advance,
+        opportunity_id,
+        target=body.target,
+        actor=body.actor,
+        reason=body.reason,
+        workspace_ref=body.workspace_ref,
+        candidate_ref=body.candidate_ref,
+        production_authority=production_authority,
+    )
+
+
+@router.post("/opportunities/{opportunity_id}/approve")
+async def approve_opportunity(
+    request: Request,
+    opportunity_id: uuid.UUID,
+    body: ApproveBody,
+    session=Depends(require_owner_session),  # noqa: B008 - FastAPI dependency
+) -> dict[str, Any]:
+    """The human authority gate.
+
+    The capability is derived from the session object the authentication
+    dependency produced, so "the owner approved this" means a bearer token was
+    verified in this request — not that a caller sent ``actor: owner``.
+    """
+    service = _service(request)
+    capability = mint_owner_capability(session)
+    approved = await _call(service.approve, opportunity_id, capability, note=body.note)
+    logger.info("evolution_opportunity_approved", opportunity_id=str(opportunity_id))
+    return approved
+
+
+@router.get("/shadow-ready")
+async def shadow_ready(
+    request: Request, limit: int = Query(default=100, ge=1, le=500)
+) -> dict[str, Any]:
+    """Built, tested, benchmarked, reviewed — and deployed nowhere."""
+    return await _call(_service(request).pending_owner_actions, limit=limit)
+
+
+@router.get("/policy")
+async def evolution_policy(request: Request) -> dict[str, Any]:
+    """The engine's declared contract, including what it may never do."""
+    policy = await _call(_service(request).policy)
+    policy["scoring"]["inputs"] = list(SCORE_FIELDS)
+    policy["actors"] = [str(a) for a in ActorKind]
+    return policy
 
 
 __all__ = ["router"]

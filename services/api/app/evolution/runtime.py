@@ -37,6 +37,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import Settings
 from app.db import build_engine, build_session_factory
+from app.evolution.authority import ROOT_POLICY_DIGEST, Scope
 from app.evolution.authorization import (
     AuthorizationProvider,
     NullAuthorizationProvider,
@@ -49,6 +50,7 @@ from app.evolution.registry import CapabilityRegistry
 from app.evolution.resources import ResourceBudget
 from app.evolution.review import IndependentSkillReviewer
 from app.evolution.sandbox import SandboxPolicy
+from app.evolution.service import EvolutionService
 from app.evolution.skills import (
     ClaudeSkillGenerator,
     DeterministicSkillGenerator,
@@ -71,6 +73,7 @@ class EvolutionRuntime:
         )
         self._registry: CapabilityRegistry | None = None
         self._gaps: GapService | None = None
+        self._evolution_service: EvolutionService | None = None
 
         self.skills_root = Path(
             os.environ.get(
@@ -126,6 +129,24 @@ class EvolutionRuntime:
         if self._gaps is None:
             self._gaps = GapService(self.session)
         return self._gaps
+
+    @property
+    def evolution_service(self) -> EvolutionService:
+        """The backlog service, running LAB-SCOPED.
+
+        Constructed with the default ``LabAuthority``, so nothing reachable
+        from ``app.state.evolution`` holds a production grant. Production
+        authority is minted per request from a verified owner session in
+        ``app/evolution/routes.py`` and never stored here.
+
+        ``release_evidence`` is left at the null provider: this build has no
+        wired source of owner-approved release records, and the fail-safe
+        direction is that ``LIVE`` stays unreachable until the integrator
+        injects a real one.
+        """
+        if self._evolution_service is None:
+            self._evolution_service = EvolutionService(self.session)
+        return self._evolution_service
 
     @property
     def detector(self) -> GapDetector:
@@ -220,6 +241,11 @@ class EvolutionRuntime:
             "sandbox_isolated_from_core": True,
             "component_catalog": len(self.catalog.components),
             "resource_budget": self.budget.to_dict(),
+            # The production boundary, visible in the health surface: the
+            # engine runs lab-scoped and holds zero production grants.
+            "engine_authority_scope": str(Scope.LAB),
+            "production_grants_held": 0,
+            "root_policy_digest": ROOT_POLICY_DIGEST,
         }
 
 
