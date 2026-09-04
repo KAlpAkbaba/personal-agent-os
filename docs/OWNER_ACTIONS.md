@@ -263,6 +263,12 @@ It asks for the Owner Credential in a masked prompt. Expected last line:
 `OWNER EXPLAIN: PASS`. If it says no completed session was found (sessions expire), run the
 short voice test from item 16 instead - it is under two minutes.
 
+This is still the only thing needed from you. The Cognitive Foundations built overnight
+(memory of experience, lessons, goals, the world and self models, the Evolution lab) add
+new questions you can ask by voice - "Ne öğrendin?", "Kendi üzerinde ne geliştiriyorsun?",
+"Canlıya alınmayı bekleyen ne var?" - but none of them need a qualification session of
+their own. They ride along with the next ordinary voice session you happen to have.
+
 ### 16. Ask it what it did — self explanation by voice — **DONE (2026-09-05, product proven; see item 17)**
 
 Unblocks: `docs/QUALIFICATION.md` Stage 10 (10.1–10.6); then Memory on the roadmap.
