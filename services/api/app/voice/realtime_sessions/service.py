@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -50,6 +51,7 @@ from app.voice.realtime_sessions.models import (
 from app.voice.realtime_sessions.persona import build_instructions
 from app.voice.realtime_sessions.sideband import (
     SB_LEG_CLOSED,
+    SB_NARRATION_CURSOR,
     SB_TOOL_COMPLETED,
     SidebandPusher,
     sideband_frame,
@@ -74,7 +76,7 @@ ACTION_SIDEBAND_QUEUED = "voice_sideband_queued"
 ACTION_SIDEBAND_PUSHED = "voice_sideband_pushed"
 
 #: client-reported event kinds accepted by POST .../events
-STATE_EVENT_KINDS = ("utterance", "summary", "intent", "state", "error")
+STATE_EVENT_KINDS = ("utterance", "summary", "intent", "state", "error", "spoken")
 CLIENT_EVENT_KINDS = TIMING_EVENT_KINDS + STATE_EVENT_KINDS
 
 MAX_PENDING_SIDEBAND = 50
@@ -600,6 +602,7 @@ def record_client_events(
     owner: SessionContext,
     events: list[dict[str, Any]],
     trace_id: str | None = None,
+    sideband: SidebandPusher | None = None,
 ) -> dict[str, Any]:
     """Spec §4 step 5: timing events (benchmark) and state transitions (audit).
 
@@ -614,6 +617,7 @@ def record_client_events(
     resolved: list[dict[str, Any]] = []
     narration_state = None
     accepted = 0
+    sideband_payloads: list[tuple[str, dict[str, Any]]] = []
     for ev in events:
         kind = str(ev.get("kind"))
         if kind not in CLIENT_EVENT_KINDS:
@@ -640,7 +644,16 @@ def record_client_events(
             _audit(db, ACTION_INTENT_RESOLVED, row, trace_id=trace_id, metadata=meta)
             accepted += 1
             continue
-        if kind == "summary":
+        if kind == "spoken":
+            # The assistant transcript spoken so far (M16 spec §3.2). Used once to place
+            # the narration cursor, then dropped: the text itself is never audited.
+            text = str(ev.get("text") or "")
+            final = int(payload.get("final") or 0) == 1
+            aligned = _align_narration(db, row, ctx, sideband_payloads, text, final=final,
+                                       now=now)
+            meta.update({"chars": len(text), "final": int(final), **aligned})
+            payload = {k: v for k, v in payload.items() if k != "text"}
+        elif kind == "summary":
             row.transcript_summary = str(ev.get("text") or "")[:MAX_SUMMARY_CHARS]
             meta["chars"] = len(row.transcript_summary)
         elif kind == "state":
@@ -659,6 +672,13 @@ def record_client_events(
         meta["payload"] = payload
         _audit(db, ACTION_CLIENT_EVENT, row, trace_id=trace_id, metadata=meta)
         accepted += 1
+    for event, sb_payload in sideband_payloads:
+        if sideband is not None:
+            _deliver(db, row, ctx, sideband, event, sb_payload, trace_id=trace_id)
+        else:  # no push path: the frame rides this response's pending_sideband
+            queued = list(ctx.get("pending_sideband") or [])
+            queued.append(sideband_frame(row.id, event, sb_payload))
+            ctx["pending_sideband"] = queued[-MAX_PENDING_SIDEBAND:]
     pending = list(ctx.get("pending_sideband") or [])
     ctx["pending_sideband"] = []
     _set_context(row, ctx)
@@ -666,6 +686,86 @@ def record_client_events(
     db.commit()
     return {"accepted": accepted, "resolved_intents": resolved, "pending_sideband": pending,
             "state": session_state(db, row)}
+
+
+def _align_narration(
+    db: Session,
+    row: RealtimeSessionRow,
+    ctx: dict[str, Any],
+    pushes: list[tuple[str, dict[str, Any]]],
+    spoken: str,
+    *,
+    final: bool,
+    now: datetime,
+) -> dict[str, Any]:
+    """Place the attached narration's cursor where the speech actually stopped.
+
+    A ``spoken`` event at barge-in (``final`` false) pauses the narration at the first
+    sentence that was NOT fully spoken; at response completion (``final`` true) the
+    cursor moves past what was read. Without an attached narration there is nothing to
+    place and the event is only counted.
+    """
+    if row.narration_session_id is None:
+        return {"aligned": 0}
+    nrow = narration_service.get_session(db, row.narration_session_id)
+    if nrow is None:
+        return {"aligned": 0}
+    from app.artifacts import service as artifact_service
+    from app.narration.align import align
+    from app.narration.engine import build_plan
+    from app.narration.routes import _pack_state, _unpack_state
+
+    version = artifact_service.get_version(db, nrow.artifact_id, nrow.artifact_version)
+    if version is None:
+        version = artifact_service.get_current_version(db, nrow.artifact_id)
+    body_md = version.canonical_body if version else ""
+    plan = build_plan(body_md, artifact_id=str(nrow.artifact_id), version=nrow.artifact_version,
+                      pronunciation=narration_service.pronunciation_map(db))
+    state = _unpack_state(nrow)
+    result = align(plan, state.cursor, spoken)
+    if final:
+        new_state = replace(state, cursor=result.cursor or state.cursor,
+                            state=State.PAUSED if result.complete else state.state)
+        action = "spoken_complete" if result.complete else "spoken_progress"
+    else:
+        new_state = replace(state, cursor=result.cursor or state.cursor, state=State.PAUSED)
+        action = "paused"
+    narration_service.update_cursor(db, nrow.id, cursor=_pack_state(new_state),
+                                    state=new_state.state.value, device_id=row.device_id)
+    cursor_payload = {
+        "narration_session_id": str(nrow.id),
+        "cursor": new_state.cursor.as_dict() if new_state.cursor else None,
+        "state": new_state.state.value, "speed": new_state.speed, "action": action,
+        "spoken_chunks": result.spoken_chunks,
+    }
+    pushes.append((SB_NARRATION_CURSOR, cursor_payload))
+    if not final:
+        _ledger_narration_event(db, row, nrow.id, now, "voice.narration.paused",
+                                {"action": action, "cursor": cursor_payload["cursor"],
+                                 "spoken_chunks": result.spoken_chunks})
+    return {"aligned": 1, "spoken_chunks": result.spoken_chunks,
+            "complete": int(result.complete), "action": action}
+
+
+def _ledger_narration_event(db: Session, row: RealtimeSessionRow, narration_id: uuid.UUID,
+                            now: datetime, event_type: str, detail: dict[str, Any]) -> None:
+    try:
+        from app.ledger import service as ledger_service
+        from app.ledger.service import ActivityEvent
+    except ImportError:
+        return
+    try:
+        ledger_service.record(db, ActivityEvent(
+            event_type=event_type, subsystem="voice", status="completed", severity="info",
+            action=detail.get("action") or event_type, occurred_at=now,
+            factual_summary="Anlatım sahibin araya girmesiyle duraklatıldı.",
+            detail=detail, source="live",
+            source_ref=f"voice_narration:{narration_id}:{now.isoformat()}",
+            evidence_refs=[{"kind": "narration_session", "ref": str(narration_id)},
+                           {"kind": "realtime_session", "ref": str(row.id)}],
+        ))
+    except Exception:  # noqa: BLE001 - evidence, not a dependency
+        logger.warning("voice_ledger_note_failed", event_type=event_type)
 
 
 # ---------------------------------------------------------------- continuity

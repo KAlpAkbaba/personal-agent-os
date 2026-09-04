@@ -112,7 +112,8 @@ def test_create_selects_by_capability_and_returns_the_contract(wired) -> None:
     assert data["transport"] == TRANSPORT_SIMULATED
     assert data["state"] == "created"
     assert {t["name"] for t in data["tools"]} == {
-        "clock.now", "voice.intent", "narration.control", "research.start", "plan.redirect"}
+        "clock.now", "voice.intent", "narration.control", "research.start", "plan.redirect",
+        "activity.explain"}
     research = next(t for t in data["tools"] if t["name"] == "research.start")
     assert research["long_running"] is True and research["preamble"] == RESEARCH_PREAMBLE_TR
     assert "Türkçe" in data["instructions"] and "yönetici özeti" in data["instructions"]

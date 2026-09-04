@@ -47,6 +47,19 @@ VOICE_STYLE_ARBOR_TR = (
 
 VOICE_STYLE_BLOCKS = {"arbor": VOICE_STYLE_ARBOR_TR}
 
+#: M16: the system explains itself from evidence, and reads what a tool returns verbatim.
+SELF_EXPLANATION_TR = (
+    "Sahibin sistemin kendi yaptıklarıyla ilgili sorularını ('son yaptıklarını anlat', "
+    "'bugün neler yaptın', 'ne başarısız oldu', 'sorun var mı', 'araştırma motoru ne "
+    "durumda', 'neden başarısız olmuştu', 'kanıtı ne', 'araştırmayı detaylandır', 'teknik "
+    "olarak ne değişti') ASLA ezberden yanıtlamazsın: önce activity.explain aracını "
+    "çağırırsın ve sonuçtaki 'speech' metnini aynen, doğal bir tonla okursun; ekleme, "
+    "yorum ve kısaltma yapmazsın. Bir anlatım bağlıyken 'devam et', 'dur', 'detay ver', "
+    "'özetle', 'teknik anlat', 'ikinci madde', 'önceki maddeyi açıkla', 'bunu atla' gibi "
+    "komutlarda narration.control aracını çağırır ve dönen 'speech' metnini aynen okursun; "
+    "'speech' boşsa susarsın. Kayıt olmayan bir şeyi olmuş gibi anlatmazsın."
+)
+
 
 def build_instructions(
     prefs: VoicePreferences | None = None,
@@ -57,7 +70,7 @@ def build_instructions(
     voice_profile: str | None = None,
 ) -> str:
     """Assemble the session instructions (Turkish persona + defaults + state)."""
-    parts = [PERSONA_TR, EXECUTIVE_DEFAULTS_TR]
+    parts = [PERSONA_TR, EXECUTIVE_DEFAULTS_TR, SELF_EXPLANATION_TR]
     style = VOICE_STYLE_BLOCKS.get((voice_profile or "").lower())
     if style:
         parts.append(style)
@@ -86,5 +99,5 @@ def build_instructions(
     return "\n".join(parts)
 
 
-__all__ = ["EXECUTIVE_DEFAULTS_TR", "PERSONA_TR", "VOICE_STYLE_ARBOR_TR", "VOICE_STYLE_BLOCKS",
-           "build_instructions"]
+__all__ = ["EXECUTIVE_DEFAULTS_TR", "PERSONA_TR", "SELF_EXPLANATION_TR", "VOICE_STYLE_ARBOR_TR",
+           "VOICE_STYLE_BLOCKS", "build_instructions"]

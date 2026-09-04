@@ -378,6 +378,7 @@ async def report_events(
         with runtime.session() as db:
             return service.record_client_events(
                 db, _load(db, session_id), owner=owner, events=events, trace_id=trace_id,
+                sideband=runtime.sideband,
             )
 
     try:
