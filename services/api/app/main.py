@@ -42,6 +42,7 @@ from app.security.routes import router as security_router
 from app.security.runtime import SecurityRuntime
 from app.selfhealing.routes import router as selfhealing_router
 from app.selfhealing.runtime import SelfHealingRuntime
+from app.uistate.routes import router as ui_state_router
 from app.voice.realtime_sessions.routes import router as voice_realtime_router
 from app.voice.realtime_sessions.runtime import RealtimeVoiceRuntime
 from app.voice.routes import router as voice_router
@@ -169,6 +170,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(security_router)
     app.include_router(mobile_router)
     app.include_router(research_router)
+    app.include_router(ui_state_router)
     app.include_router(ledger_router)
 
     @app.get("/v1/system/health")

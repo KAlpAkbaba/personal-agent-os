@@ -3134,3 +3134,48 @@ paraphrasing is free; an unsupported claim is not.
 `owner-explain.ps1 -VerifyOnly [-SessionId <id>]` re-verifies an already completed session
 - no web shell, no waiting, no talking - so a checker fix never costs the owner a repeat of
 a qualification the system already passed.
+
+## ADR-0052 — The Holographic Core is an event contract, not a renderer (2026-09-05)
+
+Status: Accepted (owner direction, 2026-09-05: reserve the architecture now, do not build
+the 3D renderer tonight)
+
+Context: the owner wants a future 3D "Agent Core" — a living visual centre that breathes
+when idle, contracts while listening, expands while thinking, orbits sources during
+research, converges during memory work, shows a construction layer during evolution and a
+completed node at SHADOW_READY. The risk in building such a thing later is that it grows
+tendrils into every subsystem, or worse, animates on timers that have nothing to do with
+what the system is actually doing.
+
+Decisions:
+
+1. **The contract is the product; the renderer is a client.** `app/uistate` defines a
+   fixed state vocabulary (`agent.idle|listening|thinking|speaking|researching|
+   memory_retrieval|tool_running|waiting_owner|goal_completed|error`,
+   `evolution.researching|designing|building|testing|shadow_ready`), a bounded event
+   (intensity, progress, severity, status, task/goal/module/session identity, a short
+   label, numeric metadata) and an owner-gated read surface `GET /v1/ui/state` with a
+   replayable tail. A renderer learns states, never internals; subsystems may be rewritten
+   freely as long as they keep publishing the vocabulary.
+2. **Truthful by construction.** A state is published because a subsystem entered it. The
+   voice control plane publishes from the client's OWN reported timing events
+   (`mic_speech_start` → listening, `end_of_turn` → thinking, `first_audio` → speaking,
+   `barge_in_start` → listening, `network_lost` → error); research publishes while it
+   ranks. `progress` is `null` when the publisher does not know it, so a renderer cannot
+   draw a bar for work of unknown length. There is no write endpoint: a client cannot
+   claim a state it is not in.
+3. **Content-free.** Metadata carries numbers, bools and short tokens under keys that pass
+   the same forbidden-key rule the voice and ledger surfaces use; anything normalising to
+   text/transcript/audio/secret/content is dropped at the boundary. Voice contributes a
+   bounded 0..1 energy derived from levels the client already reports — never a sample,
+   never a transcript. Nothing here is durable: the Activity Ledger records what happened;
+   this is only what is happening now.
+4. **Never in the way.** Publishing is non-blocking, bounded and swallows its own errors:
+   a broken renderer, a hostile metadata value or a full tail can never slow or fail the
+   work being described.
+
+Consequences: the renderer can be built later as a pure consumer (poll now, subscribe
+later) with no further subsystem changes; every new subsystem this milestone adds
+(experience, goals, cognitive core, self model, evolution) publishes through the same bus
+from the start. Deliberately deferred: the WebSocket/stream transport, any visual design,
+and the audio-reactive detail of the speaking state.

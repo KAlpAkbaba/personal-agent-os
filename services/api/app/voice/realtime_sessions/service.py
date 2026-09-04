@@ -32,6 +32,8 @@ from app.ledger.vocabulary import (
 from app.logging import get_logger
 from app.narration import service as narration_service
 from app.narration.commands import NarrationState, State
+from app.uistate import UiState
+from app.uistate import publish as publish_ui
 from app.voice import service as voice_service
 from app.voice.errors import VoiceError, VoiceErrorClass
 from app.voice.intents import ResolvedIntent, resolve_intent
@@ -837,6 +839,19 @@ def record_client_events(
             _audit(db, ACTION_INTENT_RESOLVED, row, trace_id=trace_id, metadata=meta)
             accepted += 1
             continue
+        if kind in _UI_STATE_BY_EVENT:
+            # The future Holographic Core draws what is actually happening (ADR-0052): the
+            # client's own timing events are the truest signal we have, and they carry no
+            # content. Bounded energy only - never a sample, never a transcript.
+            ui_state, intensity = _UI_STATE_BY_EVENT[kind]
+            publish_ui(
+                ui_state,
+                subsystem="voice",
+                intensity=_ui_energy(payload, intensity),
+                session_id=str(row.id),
+                status=str(ctx.get("fsm_state") or "") or None,
+                metadata={"turn": turn},
+            )
         if kind == "spoken":
             # The assistant transcript spoken so far (M16 spec §3.2). Used once to place
             # the narration cursor, then dropped: the text itself is never audited.
@@ -882,6 +897,39 @@ def record_client_events(
         "pending_sideband": pending,
         "state": session_state(db, row),
     }
+
+
+#: Which client event means which owner-visible state, and how loud it looks by default.
+#: `mic_speech_start` = the owner started talking; `first_audio` = the assistant is
+#: speaking; `end_of_turn` = it is thinking between the two; `barge_in_start` = the owner
+#: cut in; `response_done` = back to listening.
+_UI_STATE_BY_EVENT: dict[str, tuple[UiState, float]] = {
+    "mic_speech_start": (UiState.LISTENING, 0.5),
+    "uplink_first_packet": (UiState.LISTENING, 0.6),
+    "end_of_turn": (UiState.THINKING, 0.7),
+    "first_audio": (UiState.SPEAKING, 0.6),
+    "barge_in_start": (UiState.LISTENING, 0.9),
+    "response_done": (UiState.LISTENING, 0.3),
+    "network_lost": (UiState.ERROR, 0.8),
+}
+
+
+def _ui_energy(payload: dict[str, Any], default: float) -> float:
+    """A bounded 0..1 animation signal from what the client already reports.
+
+    The client's noise/level numbers are decibel-ish margins above its calibrated floor;
+    a renderer only needs "how strong is this". Anything unusable falls back to the
+    state's default intensity. No audio, ever.
+    """
+    for key in ("level_db", "margin_db", "rms_db"):
+        value = payload.get(key)
+        if isinstance(value, int | float):
+            return max(0.0, min(1.0, (float(value) + 60.0) / 60.0))
+    for key in ("energy", "intensity"):
+        value = payload.get(key)
+        if isinstance(value, int | float):
+            return max(0.0, min(1.0, float(value)))
+    return default
 
 
 def _align_narration(

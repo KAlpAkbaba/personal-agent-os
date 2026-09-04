@@ -1,0 +1,217 @@
+# ruff: noqa: F811 - the shared `wired` fixture is imported and named as a parameter
+"""The UI-state contract (ADR-0052): truthful, decoupled, content-free, bounded.
+
+These are the rules a future Holographic Core renderer will depend on. They are tested
+here rather than in the renderer because the contract is the product, not the animation.
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+
+import pytest
+
+from app.uistate import UI_STATES, UiState, UiStateEvent, ui_state_contract
+from app.uistate.publisher import (
+    TAIL_SIZE,
+    UiStatePublisher,
+    is_forbidden_metadata_key,
+    publish,
+    set_publisher,
+)
+from tests.unit.test_voice_realtime_sessions import wired  # noqa: F401
+
+
+@pytest.fixture()
+def bus() -> UiStatePublisher:
+    publisher = UiStatePublisher(tail_size=8)
+    set_publisher(publisher)
+    yield publisher
+    set_publisher(UiStatePublisher())
+
+
+def test_the_vocabulary_is_the_one_the_owner_specified() -> None:
+    assert set(UI_STATES) == {
+        "agent.idle",
+        "agent.listening",
+        "agent.thinking",
+        "agent.speaking",
+        "agent.researching",
+        "agent.memory_retrieval",
+        "agent.tool_running",
+        "agent.waiting_owner",
+        "agent.goal_completed",
+        "agent.error",
+        "evolution.researching",
+        "evolution.designing",
+        "evolution.building",
+        "evolution.testing",
+        "evolution.shadow_ready",
+    }
+    contract = ui_state_contract()
+    assert contract["contract_version"] == 1
+    assert "audio" in contract["metadata_rules"]["forbidden"]
+
+
+def test_an_event_carries_state_identity_and_bounded_numbers(bus: UiStatePublisher) -> None:
+    event = publish(
+        UiState.RESEARCHING,
+        subsystem="research",
+        intensity=0.7,
+        progress=0.5,
+        task_id="task-1",
+        label="yapay zeka ajanları",
+        metadata={"fetched": 12, "kept": 5},
+    )
+    assert event is not None
+    payload = event.as_dict()
+    assert payload["state"] == "agent.researching"
+    assert payload["subsystem"] == "research"
+    assert payload["intensity"] == 0.7 and payload["progress"] == 0.5
+    assert payload["task_id"] == "task-1"
+    assert payload["metadata"] == {"fetched": 12, "kept": 5}
+    assert payload["at"].endswith("Z")
+    assert payload["sequence"] == 1
+
+
+def test_content_never_reaches_the_renderer(bus: UiStatePublisher) -> None:
+    """A UI event describes state. Transcripts, audio, page text and secrets are refused
+    at the boundary, not trusted to callers."""
+    event = publish(
+        UiState.SPEAKING,
+        subsystem="voice",
+        metadata={
+            "transcript": "Efendim, son araştırma…",
+            "audio_level": 0.4,
+            "api_key": "sk-live-xxx",
+            "page_content": "…",
+            "excerpt": "…",
+            "turn": 3,
+            "nested": {"still": "content"},
+        },
+    )
+    assert event is not None
+    assert event.metadata == {"turn": 3}
+    for key in ("transcript", "audio_level", "api_key", "page_content", "excerpt", "nested"):
+        assert key not in event.metadata
+    assert is_forbidden_metadata_key("assistantTranscript")
+    assert is_forbidden_metadata_key("API_KEY")
+    assert not is_forbidden_metadata_key("turn")
+
+
+def test_out_of_range_numbers_are_clamped_and_unknown_progress_stays_unknown(
+    bus: UiStatePublisher,
+) -> None:
+    event = publish(UiState.THINKING, subsystem="cognitive", intensity=4.2)
+    assert event is not None and event.as_dict()["intensity"] == 1.0
+    # progress the publisher does not know must not become a fake bar
+    assert event.as_dict()["progress"] is None
+
+
+def test_an_unknown_subsystem_is_refused_rather_than_drawn(bus: UiStatePublisher) -> None:
+    assert publish(UiState.IDLE, subsystem="marketing") is None
+    assert bus.current() is None
+
+
+def test_the_tail_is_bounded_and_replayable_for_a_late_client(bus: UiStatePublisher) -> None:
+    for n in range(12):
+        publish(UiState.TOOL_RUNNING, subsystem="goal", metadata={"n": n})
+    assert len(bus.tail()) == 8  # the fixture's bound
+    current = bus.current()
+    assert current is not None and current.sequence == 12
+    after = bus.tail(after_sequence=current.sequence - 3)
+    assert [e.sequence for e in after] == [10, 11, 12]
+    assert TAIL_SIZE >= 8
+
+
+def test_a_broken_subscriber_never_breaks_the_work_it_describes(bus: UiStatePublisher) -> None:
+    seen: list[str] = []
+    bus.subscribe(lambda event: seen.append(event.state.value))
+
+    def explode(_event: UiStateEvent) -> None:
+        raise RuntimeError("the renderer fell over")
+
+    bus.subscribe(explode)
+    bus.subscribe(lambda event: seen.append("second:" + event.state.value))
+    assert publish(UiState.GOAL_COMPLETED, subsystem="goal", goal_id="g1") is not None
+    assert seen == ["agent.goal_completed", "second:agent.goal_completed"]
+
+
+def test_publishing_is_never_able_to_raise_into_the_caller(bus: UiStatePublisher) -> None:
+    class Hostile:
+        def __eq__(self, other: object) -> bool:  # pragma: no cover - defensive
+            raise RuntimeError("no")
+
+        def __hash__(self) -> int:  # pragma: no cover
+            raise RuntimeError("no")
+
+    assert publish(UiState.IDLE, subsystem="system", metadata={"weird": Hostile()}) is not None
+
+
+def test_severity_and_timestamps_are_normalised(bus: UiStatePublisher) -> None:
+    event = publish(
+        UiState.ERROR,
+        subsystem="research",
+        severity="catastrophic",  # not in the vocabulary
+        status="failed",
+    )
+    assert event is not None and event.severity == "info"
+    naive = UiStateEvent(state=UiState.IDLE, subsystem="system", at=datetime.now(UTC))
+    assert naive.as_dict()["at"].endswith("Z")
+
+
+# ------------------------------------------------- the subsystems actually publish
+
+
+def test_voice_client_events_publish_truthful_states(wired, monkeypatch) -> None:
+    """Wiring test: the states a renderer would draw come from what the client really
+    reported, not from a timer. Imported here (rather than in the voice suite) because
+    it is the CONTRACT that must hold, whatever the voice internals become."""
+    from tests.unit.test_voice_explain_tools import _create, _events
+
+    publisher = UiStatePublisher(tail_size=32)
+    set_publisher(publisher)
+    try:
+        client = wired[0]
+        sid = _create(client)["session_id"]
+        _events(
+            client,
+            sid,
+            [
+                {"kind": "mic_speech_start", "t_ms": 100, "turn": 1, "payload": {}},
+                {"kind": "end_of_turn", "t_ms": 900, "turn": 1, "payload": {}},
+                {"kind": "first_audio", "t_ms": 1400, "turn": 1, "payload": {}},
+                {"kind": "response_done", "t_ms": 5000, "turn": 1, "payload": {}},
+            ],
+        )
+        states = [e.state.value for e in publisher.tail()]
+        assert states == [
+            "agent.listening",
+            "agent.thinking",
+            "agent.speaking",
+            "agent.listening",
+        ]
+        assert all(e.subsystem == "voice" and e.session_id == sid for e in publisher.tail())
+        assert all(e.metadata.get("turn") == 1 for e in publisher.tail())
+        # bounded energy, never a sample
+        assert all(0.0 <= (e.intensity or 0.0) <= 1.0 for e in publisher.tail())
+    finally:
+        set_publisher(UiStatePublisher())
+
+
+def test_the_ui_read_surface_is_owner_gated_and_replayable(wired) -> None:
+    client = wired[0]
+    publisher = UiStatePublisher(tail_size=32)
+    set_publisher(publisher)
+    try:
+        publish(UiState.RESEARCHING, subsystem="research", task_id="t9", progress=0.4)
+        body = client.get("/v1/ui/state").json()
+        assert body["current"]["state"] == "agent.researching"
+        assert body["current"]["progress"] == 0.4
+        assert body["sequence"] == 1
+        assert client.get("/v1/ui/state/contract").json()["contract_version"] == 1
+        publish(UiState.IDLE, subsystem="system")
+        after = client.get("/v1/ui/state", params={"after_sequence": 1}).json()
+        assert [e["state"] for e in after["events"]] == ["agent.idle"]
+    finally:
+        set_publisher(UiStatePublisher())

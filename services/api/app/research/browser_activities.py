@@ -91,6 +91,8 @@ from app.research.report import (
     run_provenance_gate,
 )
 from app.research.synthesis import resolve_synthesis_provider
+from app.uistate import UiState
+from app.uistate import publish as publish_ui
 
 logger = get_logger("app.research.browser_activities")
 
@@ -946,6 +948,15 @@ def rank_activity(
             window_end=window_end_iso,
             stage=STAGE_RANKING,
             published_hints=published_hints,
+        )
+        publish_ui(
+            UiState.RESEARCHING,
+            subsystem="research",
+            intensity=0.7,
+            task_id=task_id,
+            status=STAGE_RANKING,
+            label=topic[:64],
+            metadata={"candidates": len(records), "kept": len(eligible)},
         )
         ranked = assign_evidence_ids(
             dedup_and_rank(eligible, topic=topic, window_start=window_start, window_end=window_end)
