@@ -14,6 +14,15 @@ Semantics baked in (EVOLUTION_ENGINE_SPEC §2/§10, ADR-0025):
   candidate keeps its row (with a reason) and never touches production;
 - `capability_gaps` stores the gap-detection decision trail, which is what
   makes "composition was attempted first" auditable evidence, not a claim.
+
+`evolution_opportunities` (added later, for the Evolution Engine backlog) has
+NO migration in this branch on purpose — the integrator owns the alembic
+revision, so this module is the schema source until that lands. The table
+creates from metadata, which is all the SQLite unit tests need. Its lifecycle
+and the legal transitions between its statuses live in
+`app/evolution/backlog.py`; the column list here deliberately keeps the six
+scoring inputs as real columns rather than JSON so the backlog can be ordered
+and filtered in SQL.
 """
 
 import uuid
@@ -24,7 +33,9 @@ from sqlalchemy import (
     JSON,
     CheckConstraint,
     DateTime,
+    Float,
     ForeignKey,
+    Index,
     String,
     Text,
     UniqueConstraint,
@@ -151,12 +162,97 @@ class CapabilityGap(Base):
     )
 
 
+#: The Evolution Engine backlog lifecycle, in order. The legal transitions
+#: between them (and which of them only an owner action may enter) are declared
+#: once, in `app/evolution/backlog.py`; this tuple exists so the database
+#: refuses an unknown status even if a caller bypasses the service layer.
+OPPORTUNITY_STATUSES = (
+    "idea",
+    "researching",
+    "design_ready",
+    "building",
+    "testing",
+    "evaluating",
+    "shadow_ready",
+    "owner_approved",
+    "qualifying",
+    "live",
+    "rejected",
+    "superseded",
+    "quarantined",
+    "rolled_back",
+)
+
+
+class EvolutionOpportunity(Base):
+    """One thing the system believes it could become better at.
+
+    Created only from evidence (ledger events, incidents, experience lessons) —
+    never from an unprompted idea — and advanced only along the legal
+    transitions in `app/evolution/backlog.py`. `approved_by`/`approved_at` are
+    the durable record of the single human authority gate: they are set by an
+    owner action and by nothing else.
+    """
+
+    __tablename__ = "evolution_opportunities"
+
+    opportunity_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    statement: Mapped[str] = mapped_column(Text, nullable=False)
+    #: The evidence that produced this opportunity:
+    #: [{"kind": "ledger_event"|"incident"|"lesson", "ref": "<id>", ...}, ...].
+    #: Never empty — an opportunity with no origin is refused at creation.
+    origin_json: Mapped[list[Any]] = mapped_column(JSONColumn, nullable=False, default=list)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="idea", index=True)
+
+    owner_relevance: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    expected_utility: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    recurrence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    engineering_cost: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    operational_risk: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    composite: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, index=True)
+
+    #: Isolated lab workspace holding the candidate's source (never product source).
+    workspace_ref: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    #: The packaged candidate this opportunity produced, if it got that far.
+    candidate_ref: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    #: Set ONLY by an owner action carrying an owner-session capability.
+    approved_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    #: Idempotency: "incident", "ledger_event", "lesson", "owner" ...
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    #: The identifier within `source`; unique with it, so the same incident
+    #: cannot spawn two competing opportunities.
+    source_ref: Mapped[str] = mapped_column(String(256), nullable=False)
+    #: Transition history, scoring rationale, refusal reasons, release refs.
+    detail_json: Mapped[dict[str, Any]] = mapped_column(JSONColumn, nullable=False, default=dict)
+
+    __table_args__ = (
+        CheckConstraint(
+            _in_list("status", OPPORTUNITY_STATUSES), name="ck_evolution_opportunities_status"
+        ),
+        UniqueConstraint("source", "source_ref", name="uq_evolution_opportunities_source_ref"),
+        Index("ix_evolution_opportunities_status_composite", "status", "composite"),
+    )
+
+
 __all__ = [
     "CAPABILITY_STATUSES",
     "GAP_RESOLUTIONS",
     "GAP_STATUSES",
+    "OPPORTUNITY_STATUSES",
     "SKILL_VERSION_STATUSES",
     "Capability",
     "CapabilityGap",
+    "EvolutionOpportunity",
     "SkillVersion",
 ]
