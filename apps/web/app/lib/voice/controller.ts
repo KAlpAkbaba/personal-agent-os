@@ -10,7 +10,13 @@
  *    stop latency. The order is fixed; a test pins it. ADR-0047 §2: a
  *    confident onset during playback mutes locally BEFORE the turn is
  *    confirmed (reversible), and every barge-in payload carries its split
- *    (detect / stop command / gain-to-zero) as numbers.
+ *    (detect / stop command / gain-to-zero) as numbers. The provider cancel
+ *    goes out only while a provider response is ACTIVE (`provider_cancel: 1`);
+ *    owner speech over audio that is merely draining after `response_done`
+ *    stops local playback and reports, but cancels nothing (`provider_cancel:
+ *    0`) — the provider has nothing to cancel and would answer with an error.
+ *    Should such a "no active response" cancel error still arrive, it is
+ *    benign: counted, reported as `error_class: cancel_noop`, never shown.
  * 2. End-of-turn with the Turkish hesitation guard: the provider's
  *    `speech_stopped` opens a hold whose length depends on the transcript
  *    tail; speech inside the hold is a continuation, not a new turn, and a
@@ -109,6 +115,8 @@ export type MicMetrics = {
   env: number | null;
   /** measured residual of the assistant's playback in the microphone; null until measured */
   echo_residual_db: number | null;
+  /** provider "no active response" answers to a cancel — benign, never an error state */
+  cancel_noop_errors: number;
 };
 
 /** The last measured decomposition of each latency (ADR-0047), for the diagnostics view. */
@@ -124,6 +132,8 @@ export type LatencyDetail = {
     early_mute: number;
     audible: number;
     anomaly: number;
+    /** 1 when a provider response was active and cancelled; 0 when only draining audio was stopped */
+    provider_cancel: number;
   };
   first_audio?: { basis: number; response_created_ms?: number; first_delta_ms?: number; playback_ms?: number };
 };
@@ -310,7 +320,30 @@ const EMPTY_MIC_METRICS: MicMetrics = {
   noise_floor_db: null,
   env: null,
   echo_residual_db: null,
+  cancel_noop_errors: 0,
 };
+
+const EMPTY_COUNTERS = {
+  false_starts: 0,
+  false_barge_ins: 0,
+  false_turns: 0,
+  confirmed_turns: 0,
+  early_mutes: 0,
+  early_mute_reverts: 0,
+  cancel_noop_errors: 0,
+};
+
+/**
+ * A provider error that only says "there was nothing to cancel" is not a
+ * fault: the response had already completed (or been cancelled) by the time
+ * the cancel reached it. Matched on the code or the message so the wire
+ * dialect needs no special case; anything else is a real provider error.
+ */
+export function classifyProviderError(code: string | undefined, message: string): "cancel_noop" | null {
+  if (code === "response_cancel_not_active") return "cancel_noop";
+  if (/no active response/i.test(message)) return "cancel_noop";
+  return null;
+}
 
 export class VoiceSessionController {
   private readonly deps: ControllerDeps;
@@ -343,7 +376,7 @@ export class VoiceSessionController {
   private prematureResponse = false;
   // noise qualification (ADR-0044 §7, ADR-0047)
   private localGraceTimer: unknown = null;
-  private metrics = { false_starts: 0, false_barge_ins: 0, false_turns: 0, confirmed_turns: 0, early_mutes: 0, early_mute_reverts: 0 };
+  private metrics = { ...EMPTY_COUNTERS };
   /** the open turn awaiting its transcript verdict: judged when the next turn starts / at close */
   private turnJudgement: { turn: number; providerConfirmed: boolean; hadTranscript: boolean } | null = null;
   private lastCalibration: SpeechDetectorCalibration | null = null;
@@ -498,7 +531,7 @@ export class VoiceSessionController {
     }
     this.closing = false;
     this.t0 = this.deps.now();
-    this.metrics = { false_starts: 0, false_barge_ins: 0, false_turns: 0, confirmed_turns: 0, early_mutes: 0, early_mute_reverts: 0 };
+    this.metrics = { ...EMPTY_COUNTERS };
     this.turnJudgement = null;
     this.lastCalibration = null;
     this.uplink = null;
@@ -779,7 +812,21 @@ export class VoiceSessionController {
       case "tool_call":
         void this.relayToolCall(event.callId, event.name, event.arguments, event.at);
         return;
-      case "error":
+      case "error": {
+        if (classifyProviderError(event.code, event.message) === "cancel_noop") {
+          // Benign: the cancel found nothing to cancel. Never an error state,
+          // never shown; counted and reported so the benchmark can see it.
+          this.metrics.cancel_noop_errors += 1;
+          this.log("provider.cancel_noop");
+          this.refreshMicMetrics();
+          this.reporter?.report({
+            kind: "error",
+            t_ms: event.at,
+            turn: this.snapshot.turn,
+            payload: { error_class: "cancel_noop", cancel_noop_errors: this.metrics.cancel_noop_errors },
+          });
+          return;
+        }
         this.patch({ lastError: event.message });
         this.reporter?.report({
           kind: "error",
@@ -787,6 +834,7 @@ export class VoiceSessionController {
           payload: { error_class: event.code ?? "provider_error" },
         });
         return;
+      }
       case "disconnected":
         this.onNetworkLost(event.reason, event.at);
         return;
@@ -1020,15 +1068,24 @@ export class VoiceSessionController {
     this.bargedResponse = true;
     const decisionAt = this.now();
     const audible = this.responseAudible;
+    // Only an ACTIVE provider response can be cancelled. After `response_done`
+    // the audio may still be draining locally: that is stopped here too, but
+    // the provider has nothing to cancel and answers a cancel with an error.
+    const providerCancel = this.responseActive;
     const early = this.earlyMute;
     this.earlyMute = null;
     // 1. stop local playback FIRST — the latency-critical action (an early
     //    mute already silenced it; the stop is then bookkeeping)
     const stop = this.deps.playback.stop();
-    // 2. cancel the provider's in-flight response
-    this.transport?.cancelResponse();
-    const cancelSentAt = this.now();
-    this.log("transport.cancel");
+    // 2. cancel the provider's in-flight response (when there is one)
+    let cancelSentAt: number | null = null;
+    if (providerCancel) {
+      this.transport?.cancelResponse();
+      cancelSentAt = this.now();
+      this.log("transport.cancel");
+    } else {
+      this.log("transport.cancel_skipped");
+    }
     // 3. report with the client-measured latency, decomposed
     const stopAt = early ? early.at : stop.at - this.t0;
     const gainZeroAt = early ? early.gainZeroAt : stop.gainZeroAt === null ? null : stop.gainZeroAt - this.t0;
@@ -1042,12 +1099,13 @@ export class VoiceSessionController {
       playback_stopped_ms: stopMs,
       detect_ms: detail ? msOrOmit(detail.decidedAt - detail.candidateAt) : undefined,
       pre_roll_ms: detail ? msOrOmit(detail.preRollMs) : undefined,
-      stop_command_ms: msOrOmit(cancelSentAt - decisionAt),
+      stop_command_ms: cancelSentAt === null ? undefined : msOrOmit(cancelSentAt - decisionAt),
       gain_zero_ms: gainZeroAt === null ? undefined : msOrOmit(gainZeroAt - gainDecisionAt),
       output_latency_ms: msOrOmit(early ? early.outputLatencyMs : stop.outputLatencyMs),
       early_mute: early ? 1 : 0,
       audible: audible ? 1 : 0,
       anomaly,
+      provider_cancel: providerCancel ? 1 : 0,
       source: SOURCE_CODE[source],
       ...numbersOnly(extra),
     });
@@ -1076,6 +1134,7 @@ export class VoiceSessionController {
           early_mute: breakdown.early_mute,
           audible: breakdown.audible,
           anomaly,
+          provider_cancel: breakdown.provider_cancel,
         },
       },
     });
@@ -1186,6 +1245,7 @@ export class VoiceSessionController {
       confirmed_turns: this.metrics.confirmed_turns,
       early_mutes: this.metrics.early_mutes,
       early_mute_reverts: this.metrics.early_mute_reverts,
+      cancel_noop_errors: this.metrics.cancel_noop_errors,
       noise_floor_db: this.lastCalibration?.noise_floor_db ?? null,
       env: this.lastCalibration?.env_class ?? null,
     };
@@ -1213,6 +1273,7 @@ export class VoiceSessionController {
         confirmed_turns: this.metrics.confirmed_turns,
         early_mutes: this.metrics.early_mutes,
         early_mute_reverts: this.metrics.early_mute_reverts,
+        cancel_noop_errors: this.metrics.cancel_noop_errors,
         ...extra,
       }),
     });
