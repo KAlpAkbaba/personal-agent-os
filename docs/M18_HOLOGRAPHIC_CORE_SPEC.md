@@ -36,7 +36,7 @@ Five deliverables, in dependency order:
 | 1 | `app/uistate` (contract v2) | the state vocabulary the Core renders — **done** |
 | 2 | `app/presence` | evidence-backed presence/wake states, fusion, greeting policy |
 | 3 | `app/routines` | durable trigger → conditions → actions, alarms, media, display |
-| 4 | `apps/web` Core | the living 3D Core, Minimal and Cockpit modes, Active Eye client |
+| 4 | `apps/web` Core | the living 3D Core, Minimal and Cockpit modes, Active Eye client — renderer detail in `docs/M18_CORE_RENDERER.md` |
 | 5 | `app/evolution` release path | the ADR-0055 lifecycle, risk tiers, preflight, rollback |
 
 ## 1. Presence and the wake model

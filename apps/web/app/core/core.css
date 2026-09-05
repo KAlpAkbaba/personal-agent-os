@@ -1,0 +1,456 @@
+/*
+ * Holographic Core styling (M18).
+ *
+ * The palette is the only thing that changes with state, and it changes because
+ * the state changed — the same rule the geometry follows. There is deliberately
+ * no "attention" animation, no strobe keyframe and no infinite spinner in this
+ * file: if a future edit wants one, it has to add it here in the open rather
+ * than find one lying around.
+ */
+
+.core-page {
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* --------------------------------------------------------- minimal mode */
+
+.core-minimal {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1.5rem;
+  padding: 2rem 1.5rem;
+  text-align: center;
+}
+
+.core-stage {
+  width: min(60vh, 480px);
+  height: min(60vh, 480px);
+  position: relative;
+}
+
+.core-stage canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+/* ------------------------------------------------------------- readout */
+
+.core-readout {
+  max-width: 34rem;
+}
+
+.core-headline {
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin: 0 0 0.15rem;
+  letter-spacing: 0.01em;
+}
+
+.core-readout.compact .core-headline {
+  font-size: 1.15rem;
+}
+
+.core-sub {
+  margin: 0 0 0.4rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.core-detail {
+  margin: 0.35rem 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.core-label {
+  margin: 0.4rem 0 0;
+  font-size: 0.95rem;
+}
+
+.core-status {
+  margin: 0.3rem 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.core-status code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78rem;
+}
+
+.core-count {
+  margin: 0.4rem 0 0;
+  font-size: 0.85rem;
+}
+
+.core-no-progress {
+  margin: 0.4rem 0 0;
+  font-style: italic;
+}
+
+.core-readout.sev-notice .core-headline {
+  color: var(--accent);
+}
+.core-readout.sev-warning .core-headline {
+  color: var(--warn);
+}
+.core-readout.sev-critical .core-headline {
+  color: var(--fail);
+}
+
+/* A progress bar exists only where real progress was reported. */
+.core-progress {
+  position: relative;
+  height: 6px;
+  border-radius: 999px;
+  background: #232734;
+  margin: 0.7rem 0 0.2rem;
+  overflow: hidden;
+}
+
+.core-progress-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--accent);
+  border-radius: 999px;
+}
+
+.core-progress-text {
+  position: absolute;
+  right: 0;
+  top: 10px;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+/* ------------------------------------------------------------- 2D core */
+
+.core-2d {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.core-svg {
+  width: 100%;
+  height: 100%;
+  opacity: var(--core-opacity, 1);
+  overflow: visible;
+}
+
+.core-body {
+  fill: color-mix(in srgb, var(--core-color) 16%, transparent);
+  stroke: var(--core-color);
+  stroke-width: 1.5;
+  transform-origin: center;
+}
+
+.core-body.breathing {
+  animation: core-breathe var(--breath-dur, 6s) ease-in-out infinite;
+}
+
+@keyframes core-breathe {
+  0%,
+  100% {
+    transform: scale(calc(1 - var(--breath-amp, 0)));
+  }
+  50% {
+    transform: scale(calc(1 + var(--breath-amp, 0)));
+  }
+}
+
+.core-pulse {
+  fill: none;
+  stroke: var(--core-color);
+  stroke-width: 1;
+  opacity: 0.55;
+}
+
+.core-agitation {
+  fill: none;
+  stroke: var(--fail);
+  stroke-width: 1;
+  stroke-dasharray: 3 7;
+  opacity: 0.7;
+}
+
+.core-restraint {
+  fill: none;
+  stroke: var(--core-color);
+  stroke-width: 1;
+  stroke-dasharray: 2 12;
+  opacity: 0.5;
+}
+
+.core-lattice line {
+  stroke: var(--core-color);
+  stroke-width: 0.7;
+  opacity: 0.4;
+}
+
+.core-inward line {
+  stroke: var(--core-color);
+  stroke-width: 1;
+  opacity: 0.6;
+}
+
+.core-convergence {
+  fill: none;
+  stroke: var(--core-color);
+  stroke-width: 1;
+  stroke-dasharray: 4 6;
+  opacity: 0.6;
+}
+
+.core-sources circle {
+  fill: var(--core-color);
+  opacity: 0.85;
+}
+
+.core-construction circle {
+  fill: none;
+  stroke: var(--core-color);
+  stroke-width: 1;
+  opacity: 0.6;
+}
+
+.core-satellite circle {
+  fill: color-mix(in srgb, var(--ok) 40%, transparent);
+  stroke: var(--ok);
+  stroke-width: 1.5;
+}
+
+.core-satellite-halo {
+  fill: none;
+  opacity: 0.45;
+}
+
+.core-fallback-reason {
+  margin-top: 0.75rem;
+  text-align: center;
+}
+
+/* ------------------------------------------------------------ palettes */
+
+.palette-calm {
+  --core-color: #6d7f96;
+}
+.palette-inward {
+  --core-color: #6fc3d6;
+}
+.palette-active {
+  --core-color: #5aa7e8;
+}
+.palette-voice {
+  --core-color: #8f7fe8;
+}
+.palette-discovery {
+  --core-color: #56c2a4;
+}
+.palette-recall {
+  --core-color: #7fb3d5;
+}
+.palette-work {
+  --core-color: #e8b339;
+}
+.palette-held {
+  --core-color: #b08a4f;
+}
+.palette-achieved {
+  --core-color: #34c98e;
+}
+.palette-fault {
+  --core-color: #e5655a;
+}
+.palette-lab {
+  --core-color: #9a86c9;
+}
+.palette-ready {
+  --core-color: #34c98e;
+}
+.palette-unknown {
+  --core-color: #58607a;
+}
+
+/* --------------------------------------------------------- chrome / bar */
+
+.core-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid #232734;
+  background: rgba(23, 26, 33, 0.7);
+  font-size: 0.8rem;
+}
+
+.core-bar .spacer {
+  flex: 1;
+}
+
+.core-bar a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.core-chip {
+  border: 1px solid #232734;
+  background: #0f1115;
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 0.2rem 0.7rem;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.core-chip[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.core-connection {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.core-connection[data-connection="unreachable"],
+.core-connection[data-connection="unauthorized"],
+.core-connection[data-connection="contract_mismatch"] {
+  color: var(--warn);
+}
+
+/* ------------------------------------------------------------- cockpit */
+
+.cockpit {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(320px, 30rem) 1fr;
+  gap: 1.25rem;
+  padding: 1.25rem;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .cockpit {
+    grid-template-columns: 1fr;
+  }
+}
+
+.cockpit-core {
+  position: sticky;
+  top: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+}
+
+.cockpit-core .core-stage {
+  width: min(42vh, 340px);
+  height: min(42vh, 340px);
+}
+
+.cockpit-panels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+  gap: 1rem;
+  align-content: start;
+}
+
+.cockpit-panels .panel {
+  margin: 0;
+  padding: 0.9rem 1.1rem;
+}
+
+.panel-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin: 0 0 0.6rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.panel-count {
+  font-size: 0.9rem;
+  color: var(--text);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.panel ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.panel li {
+  padding: 0.35rem 0;
+  border-bottom: 1px solid #232734;
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
+.panel li:last-child {
+  border-bottom: none;
+}
+
+.panel-empty {
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-style: italic;
+  margin: 0;
+}
+
+.panel-unknown {
+  color: var(--warn);
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+.event-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.event-when {
+  color: var(--muted);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.attention {
+  border-color: var(--warn);
+}
+
+/* ---------------------------------------------------- reduced motion */
+
+/*
+ * Motion stops; information does not. Nothing below hides a fact — the state,
+ * the counts, the progress and the geometry all remain, only the animation is
+ * removed. A reader who cannot tolerate movement gets the same truth.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .core-body.breathing {
+    animation: none;
+  }
+}
