@@ -143,6 +143,7 @@ public class IpcWiringTests
             Microsoft.Extensions.Logging.Abstractions.NullLogger<CompanionPipeServer>.Instance,
             audit);
         await server.StartAsync(CancellationToken.None);
+        await IpcTestSupport.WaitUntilListeningAsync(server, pipeName);
         try
         {
             await using var client = new NamedPipeClientStream(
@@ -198,6 +199,7 @@ public class IpcWiringTests
             Microsoft.Extensions.Logging.Abstractions.NullLogger<CompanionPipeServer>.Instance,
             audit);
         await server.StartAsync(CancellationToken.None);
+        await IpcTestSupport.WaitUntilListeningAsync(server, pipeName);
         try
         {
             await using var client = new NamedPipeClientStream(
@@ -270,6 +272,8 @@ public class IpcWiringTests
         await server.StartAsync(CancellationToken.None);
         try
         {
+            // This one already waits for its own readiness signal below (LastPipeSddl is
+            // set at creation), and it never connects a client, so it needs no pipe-name wait.
             var deadline = DateTime.UtcNow.AddSeconds(15);
             while (server.LastPipeSddl is null)
             {

@@ -70,6 +70,58 @@ public static class IpcTestSupport
     public static CompanionAdmissionPolicy SelfPolicy(string? imagePath = null, int? sessionId = null)
         => new(CurrentSid(), imagePath, sessionId);
 
+    /// <summary>
+    /// Start the server AND wait until the pipe is really listening.
+    ///
+    /// "StartAsync returned" is not "the pipe exists". CompanionPipeServer.ExecuteAsync
+    /// creates the first instance before its first await, so normally it is - but if
+    /// CreateServerStream throws, the loop logs, waits five seconds and only THEN awaits,
+    /// so StartAsync returns with nothing listening and every client burns its full
+    /// connect timeout before failing with a bare TimeoutException that names no cause.
+    /// That is what happened in CI on 2026-09-05.
+    ///
+    /// This is the same assumption that cost the owner a qualification run (ADR-0051
+    /// addendum 2: the harness assumed a started shell was a ready shell). Wait for the
+    /// observable fact instead, and if it never arrives, say WHY - ListenFailures
+    /// distinguishes "the pipe could not be created" from "the test was too quick".
+    /// </summary>
+    public static async Task<CompanionPipeServer> NewListeningServerAsync(
+        string pipeName,
+        CompanionAdmissionPolicy? policy = null,
+        IPipePeerInspector? inspector = null,
+        int readyTimeoutMs = 10000)
+    {
+        var server = NewServer(pipeName, policy, inspector);
+        await server.StartAsync(CancellationToken.None);
+        await WaitUntilListeningAsync(server, pipeName, readyTimeoutMs);
+        return server;
+    }
+
+    /// <summary>Block until the named pipe exists, or throw saying why it does not.</summary>
+    public static async Task WaitUntilListeningAsync(
+        CompanionPipeServer server, string pipeName, int timeoutMs = 10000)
+    {
+        var path = $@"\\.\pipe\{pipeName}";
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        while (DateTime.UtcNow < deadline)
+        {
+            // Directory enumeration, not File.Exists: opening the path would CONSUME the
+            // listening instance and disrupt admission (see CompanionPipeServer.LastPipeSddl).
+            if (Directory.GetFiles(@"\\.\pipe\").Any(
+                    p => p.EndsWith(pipeName, StringComparison.OrdinalIgnoreCase)))
+            {
+                return;
+            }
+
+            await Task.Delay(25);
+        }
+
+        throw new TimeoutException(
+            $"pipe {path} never started listening within {timeoutMs} ms " +
+            $"(ListenFailures={server.ListenFailures}). A non-zero ListenFailures means the " +
+            "pipe could not be created at all, not that the test raced ahead of it.");
+    }
+
     public static CompanionPipeServer NewServer(
         string pipeName,
         CompanionAdmissionPolicy? policy = null,

@@ -52,6 +52,7 @@ public class IpcSecurityTests
         var hostile = IpcTestSupport.SelfPeer() with { Sid = "S-1-5-21-99-99-99-1001" };
         var server = IpcTestSupport.NewServer(pipeName, IpcTestSupport.SelfPolicy(), new FixedPeerInspector(hostile));
         await server.StartAsync(CancellationToken.None);
+        await IpcTestSupport.WaitUntilListeningAsync(server, pipeName);
         try
         {
             await using var client = new NamedPipeClientStream(
@@ -154,6 +155,7 @@ public class IpcSecurityTests
 
         var server = IpcTestSupport.NewServer(pipeName);
         await server.StartAsync(CancellationToken.None);
+        await IpcTestSupport.WaitUntilListeningAsync(server, pipeName);
         try
         {
             // The service must have FAILED to listen. Asserting the failure directly, rather
@@ -193,6 +195,7 @@ public class IpcSecurityTests
         var pipeName = IpcTestSupport.NewPipeName();
         var server = IpcTestSupport.NewServer(pipeName);
         await server.StartAsync(CancellationToken.None);
+        await IpcTestSupport.WaitUntilListeningAsync(server, pipeName);
         using var companionCts = new CancellationTokenSource();
         var companionTask = Task.Run(() => NewCompanion(
             pipeName,
@@ -414,6 +417,7 @@ public class IpcSecurityTests
         var pipeName = IpcTestSupport.NewPipeName();
         var server = IpcTestSupport.NewServer(pipeName);
         await server.StartAsync(CancellationToken.None);
+        await IpcTestSupport.WaitUntilListeningAsync(server, pipeName);
         try
         {
             await using var client = new NamedPipeClientStream(
@@ -456,6 +460,7 @@ public class IpcSecurityTests
         var pipeName = IpcTestSupport.NewPipeName();
         var server = IpcTestSupport.NewServer(pipeName);
         await server.StartAsync(CancellationToken.None);
+        await IpcTestSupport.WaitUntilListeningAsync(server, pipeName);
         try
         {
             await using var client = new NamedPipeClientStream(
