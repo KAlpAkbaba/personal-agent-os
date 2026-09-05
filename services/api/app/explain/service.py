@@ -284,6 +284,26 @@ class LedgerEvidenceSource:
                 "lab_grants": sorted(str(g) for g in LAB_GRANTS),
                 "production_grants": sorted(str(g) for g in PRODUCTION_GRANTS),
                 "lab_holds_any_production_grant": bool(LAB_GRANTS & PRODUCTION_GRANTS),
+                # The two halves of the rule, kept apart because they are different claims
+                # and the answer must make both (owner authority policy, 2026-09-05):
+                #
+                #   autonomous promotion  - never, by construction. The lab holds no
+                #                           production grant and cannot mint one.
+                #   owner-authorised release - permitted. An explicit command from the
+                #                           AUTHENTICATED owner mints a production
+                #                           authority, and the release then runs the same
+                #                           transactional path any release runs.
+                #
+                # "I can never deploy" would be the wrong answer: it is not the policy, and
+                # it would tell the owner they cannot ask for something they can ask for.
+                "autonomous_promotion_permitted": False,
+                "owner_authorised_release_permitted": True,
+                "owner_authorisation_requires": [
+                    "authenticated_owner_session",
+                    "explicit_production_command",
+                    "candidate_shadow_ready",
+                ],
+                "asking_is_not_authorising": True,
             }
         except Exception:  # noqa: BLE001
             return None

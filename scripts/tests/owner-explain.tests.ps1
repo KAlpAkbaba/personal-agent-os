@@ -351,6 +351,77 @@ Test-Case "VerifyOnly no longer uses a sentinel baseline" {
     Assert-True ($text -match "VerifyMaxAgeHours") "and it is an explicit, bounded parameter"
 }
 
+# ------------------------------------------------ provenance state (owner M17 run, 2026-09-05)
+#
+# The harness itself crashed AFTER every real voice check had completed:
+#
+#     The variable '$prov' cannot be retrieved because it has not been set.
+#
+# $prov was assigned only inside the M16 branch and read afterwards in the shared failure
+# summary, so an M17 run reached that summary with the variable never set. A qualification
+# harness must never turn an otherwise valid result into an opaque runtime exception, so
+# every provenance variable is declared before the mode branch and every path assigns.
+#
+# These tests read the SOURCE, because the failure is a control-flow property: no arrangement
+# of session data can prove that a variable is always defined, only that it was this time.
+
+Write-Host ""
+Write-Host "provenance state is defined on every path"
+
+$explainSource = [IO.File]::ReadAllText((Join-Path $repoRoot "scripts\voice\owner-explain.ps1"))
+
+Test-Case "every provenance variable is declared before the mode branch" {
+    $declIndex = $explainSource.IndexOf('$prov = $null')
+    Assert-True ($declIndex -gt 0) "provenance state must be declared unconditionally"
+    foreach ($name in '$provFacts = $null', '$jobId = ""', '$eventIds = @()', '$evidenceKinds = @()', '$provenanceChecked = $false') {
+        Assert-True ($explainSource.Contains($name)) "missing unconditional declaration: $name"
+    }
+    # ...and the declaration must come BEFORE the first read in the failure summary
+    $readIndex = $explainSource.IndexOf('if ($provenanceChecked -and $null -eq $prov)')
+    Assert-True ($readIndex -gt 0) "the failure summary must gate on whether provenance was checked"
+    Assert-True ($declIndex -lt $readIndex) "the declaration must precede the read"
+}
+
+Test-Case "the M16-only provenance block is the only thing that sets provenanceChecked" {
+    $count = ([regex]::Matches($explainSource, [regex]::Escape('$provenanceChecked = $true'))).Count
+    Assert-Equal 1 $count "exactly one branch performs the provenance check"
+}
+
+Test-Case "StrictMode is still on - the bug was not fixed by turning it off" {
+    Assert-True ($explainSource -match 'Set-StrictMode -Version Latest') "StrictMode must stay enabled"
+    Assert-True (-not ($explainSource -match 'Set-StrictMode -Off')) "StrictMode must never be disabled to hide an unset variable"
+}
+
+Test-Case "the M17 path does not read M16 provenance state" {
+    # The M17 block must not depend on $prov at all: its provenance is per-subsystem.
+    $m17Start = $explainSource.IndexOf('$expected = @(')
+    $m17End = $explainSource.IndexOf('# Everything from here to the narration checks is M16 acceptance')
+    Assert-True ($m17Start -gt 0 -and $m17End -gt $m17Start) "the M17 block must be locatable"
+    $m17 = $explainSource.Substring($m17Start, $m17End - $m17Start)
+    Assert-True (-not $m17.Contains('$prov')) "the M17 checks must not reference M16 provenance state"
+
+}
+
+Test-Case "the M17 block checks all six cognitive kinds and no M16 controls" {
+    $m17Start = $explainSource.IndexOf('$expected = @(')
+    $m17End = $explainSource.IndexOf('# Everything from here to the narration checks is M16 acceptance')
+    $m17 = $explainSource.Substring($m17Start, $m17End - $m17Start)
+    foreach ($kind in "learned", "goals", "world_state", "self_code", "evolution", "can_deploy") {
+        Assert-True ($m17.Contains($kind)) "M17 must assert the $kind path"
+    }
+    foreach ($m16 in "teknik anlat", "false_interruption", "narration.paused") {
+        Assert-True (-not $m17.Contains($m16)) "M17 must not inherit the M16 control '$m16'"
+    }
+}
+
+Test-Case "a failed subsystem invocation is reported as failed, not as never asked" {
+    Assert-True ($explainSource.Contains("the question reached the tool and the tool FAILED")) `
+        "a crashed tool call must be distinguished from an unrouted question"
+    Assert-True ($explainSource.Contains("NEVER ASKED OR NEVER ROUTED")) `
+        "an unrouted question must be named as such"
+}
+
+
 Write-Host ""
 Write-Host "owner-explain harness: $script:Passes passed, $script:Failures failed"
 if ($script:Failures -gt 0) { exit 1 }

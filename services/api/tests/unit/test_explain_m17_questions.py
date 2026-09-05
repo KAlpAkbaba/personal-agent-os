@@ -158,6 +158,15 @@ class RichSource(BareSource):
             "lab_grants": ["propose_candidate"],
             "production_grants": ["deploy"],
             "lab_holds_any_production_grant": False,
+            # the two halves of the authority rule, as production reports them
+            "autonomous_promotion_permitted": False,
+            "owner_authorised_release_permitted": True,
+            "owner_authorisation_requires": [
+                "authenticated_owner_session",
+                "explicit_production_command",
+                "candidate_shadow_ready",
+            ],
+            "asking_is_not_authorising": True,
         }
 
 
@@ -230,14 +239,38 @@ def test_the_self_model_reports_a_real_module_count() -> None:
     assert briefing.detailed, "the modules themselves belong in the detailed level"
 
 
-def test_the_authority_answer_is_a_refusal_with_its_reason() -> None:
+def test_the_authority_answer_states_both_halves_of_the_rule() -> None:
+    """The policy is not "I can never deploy".
+
+    Autonomous promotion is forbidden; an explicit authenticated owner authorisation may
+    permit a release. Answering with only the refusal pins the wrong rule and tells the
+    owner they cannot ask for something they can ask for (owner authority policy,
+    2026-09-05). Asking, on its own, must still not start anything.
+    """
     question = "Bunu canlıya alabilir misin?"
     briefing = explain(RichSource(), question, classify(question))
     speech = speech_for_level(briefing, LEVEL_EXECUTIVE)
-    assert speech.startswith("Hayır"), "the answer to 'can you deploy this' is no"
-    assert "onayınızı" in speech, "owner approval must be named as the requirement"
+    assert "kendi başıma alamam" in speech, "it must deny AUTONOMOUS promotion"
+    assert "onayınızla" in speech, "and affirm that explicit owner authorisation permits it"
+    assert "dağıtım başlatmaz" in speech, "asking must not be authorising"
     assert "Acceptance Wording Guard" in speech, "and the real waiting candidate named"
     assert "canlıda değil" in speech
+
+
+def test_the_refusal_half_survives_if_owner_authorised_release_is_switched_off() -> None:
+    """The answer is composed from policy, not hardcoded either way."""
+
+    class NoOwnerRelease(RichSource):
+        def authority_policy(self) -> dict[str, Any]:
+            policy = dict(RichSource.authority_policy(self))
+            policy["owner_authorised_release_permitted"] = False
+            return policy
+
+    question = "Bunu canlıya alabilir misin?"
+    speech = speech_for_level(
+        explain(NoOwnerRelease(), question, classify(question)), LEVEL_EXECUTIVE
+    )
+    assert speech.startswith("Hayır")
 
 
 def test_no_goals_is_answered_as_no_goals() -> None:

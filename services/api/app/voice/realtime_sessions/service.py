@@ -834,6 +834,12 @@ def record_client_events(
                     "target_index": intent.target_index,
                     "chars": len(text),
                     "fillers_removed": intent.fillers_removed,
+                    # WHAT the owner asked, normalised - never the words themselves. Without
+                    # it the durable record could not distinguish "the owner never asked
+                    # that question" from "the owner asked and the model failed to route
+                    # it", and the second is what actually happened to the world model on
+                    # 2026-09-05 (owner M17 run).
+                    "query_kind": intent.query_kind,
                 }
             )
             _audit(db, ACTION_INTENT_RESOLVED, row, trace_id=trace_id, metadata=meta)
@@ -1303,6 +1309,7 @@ def session_activity(db: Session, row: RealtimeSessionRow) -> dict[str, Any]:
                     "intent": meta.get("intent"),
                     "scope": meta.get("scope"),
                     "chars": meta.get("chars"),
+                    "query_kind": meta.get("query_kind"),
                 }
             )
         else:

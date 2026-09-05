@@ -517,7 +517,9 @@ def default_registry() -> ToolRegistry:
                 "modüllerin neler, canlıya alınmayı bekleyen ne var, bu özelliği neden "
                 "geliştirdin, test sonuçlarını anlat, hedeflerin ne durumda, şu anda hangi "
                 "hedeflerin var, kendi sisteminde şu anda ne görüyorsun, kendi kodun "
-                "hakkında ne biliyorsun, hangi modüllerin var. "
+                "hakkında ne biliyorsun, hangi modüllerin var, kendi sisteminde şu anda ne "
+                "görüyorsun, şu an kendinde ne görüyorsun, kendi durumunu anlat, sistemin "
+                "şu anda ne durumda. "
                 # The authority questions are named explicitly because they do not READ like
                 # questions about the system - "bunu canliya alabilir misin?" reads like a
                 # request for permission, and on 2026-09-05 the model answered it from its

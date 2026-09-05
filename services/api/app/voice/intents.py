@@ -80,24 +80,10 @@ LEVEL_SECTION_TITLES: dict[str, tuple[str, ...]] = {
 #: Questions about the system's own activity (spec §2). Each entry: the tokens that must
 #: ALL be present (as stems), and the query kind they resolve to. Order matters: the
 #: first match wins, so the more specific phrasings come first.
-_EXPLAIN_PATTERNS: tuple[tuple[tuple[str, ...], str], ...] = (
-    (("araştırma", "detay"), "research_detail"),
-    (("araştırma", "ayrıntı"), "research_detail"),
-    (("neden", "başarısız"), "why_failed"),
-    (("ne", "başarısız"), "failures"),
-    (("başarısız", "oldu"), "failures"),
-    (("kanıt",), "evidence"),
-    (("sorun", "var"), "problems_now"),
-    (("araştırma", "durum"), "subsystem_status"),
-    (("teknik", "değiş"), "technical"),
-    (("bugün", "yaptı"), "today"),
-    (("bugün", "neler"), "today"),
-    (("son", "yaptık"), "last_activity"),
-    (("son", "ne", "yaptı"), "last_activity"),
-    (("neler", "yaptı"), "last_activity"),
-    (("ne", "yaptı"), "last_activity"),
-    (("yaptıkları", "anlat"), "last_activity"),
-)
+#: REMOVED 2026-09-05. This was a second Turkish pattern table, duplicating
+#: app/explain/classify.py's. They drifted, and the drift cost an owner qualification run:
+#: the classifier knew the M17 question kinds and this list did not. _explain_kind now
+#: delegates, so there is one table and it cannot disagree with itself.
 
 SPEED_STEP = 0.25
 
@@ -237,12 +223,71 @@ def _full_read(tokens: tuple[str, ...]) -> bool:
     return any(all(_has(tokens, stem) for stem in stems) for stems in _FULL_READ_PHRASES)
 
 
-def _explain_kind(tokens: tuple[str, ...]) -> str | None:
-    """The kind of question about the system's own activity, or None."""
-    for stems, kind in _EXPLAIN_PATTERNS:
-        if all(_has(tokens, stem) for stem in stems):
-            return kind
-    return None
+#: Kinds the intent resolver refuses on a single common word, and the stems that
+#: corroborate them.
+#:
+#: The classifier and this resolver answer different questions, and that difference is the
+#: whole reason this table exists. The classifier is deliberately liberal: by the time it
+#: runs, the utterance is already known to BE a question about the system, so matching
+#: "teknik" or "bugün" alone is correct there. This resolver decides whether an utterance
+#: was a question at all, from raw speech that may be about the weather - so "bugün hava
+#: güzel" must not become a briefing request, and a bare "teknik anlat" is a move through
+#: an open briefing rather than a new one. The duplicate table this replaced encoded these
+#: distinctions accidentally, by being narrower; they are stated deliberately now
+#: (2026-09-05).
+_INTENT_CORROBORATION: dict[str, tuple[str, ...]] = {
+    "today": ("yaptı", "yapti", "neler", "oldu"),
+    "technical": ("değiş", "degis"),
+    "research_detail": ("araştırma", "arastirma", "bulgu"),
+    # "durumu anlat" and "durum raporunu oku" must not become a cognitive query on one
+    # common noun; a subsystem has to be named.
+    "subsystem_status": (
+        "araştırma",
+        "arastirma",
+        "research",
+        "tarayıcı",
+        "tarayici",
+        "chrome",
+        "ses",
+        "voice",
+        "dağıtım",
+        "dagitim",
+        "release",
+        "hafıza",
+        "hafiza",
+        "bellek",
+        "sistem",
+        "cihaz",
+        "sunucu",
+    ),
+}
+
+
+def _explain_kind(tokens: tuple[str, ...], text: str = "") -> str | None:
+    """The kind of question about the system's own activity, or None.
+
+    Delegates to ``app.explain.classify``, which is the ONE Turkish normalisation table.
+    This module used to keep a second one, and the two drifted: the classifier learned the
+    M17 kinds and this list never did, so the server watched the owner ask "Kendi
+    sisteminde şu anda ne görüyorsun?" and recorded intent=none with no query kind at all
+    (owner M17 run, 2026-09-05). Two tables that must agree will not.
+
+    The import is local because ``classify`` imports THIS module for
+    ``normalize_transcript``; a module-level import would be circular.
+
+    ``matched`` matters: ``classify`` answers every input, defaulting to last-activity.
+    That default is a reasonable answer to a question and a bad reason to decide something
+    WAS a question, so only a real pattern match counts here.
+    """
+    from app.explain.classify import classify
+
+    query = classify(text or " ".join(tokens))
+    if not query.matched:
+        return None
+    required = _INTENT_CORROBORATION.get(query.kind)
+    if required is not None and not any(_has(tokens, stem) for stem in required):
+        return None
+    return query.kind
 
 
 def _stop_match(text: str, tokens: tuple[str, ...]) -> str | None:
@@ -303,7 +348,7 @@ def resolve_intent(
     # 1b. questions about the system's own activity resolve BEFORE presentation words,
     #     because "araştırmayı detaylandır" with no briefing open is a request for one,
     #     while the same words with a briefing attached are a jump into its detail section.
-    explain_kind = _explain_kind(tokens)
+    explain_kind = _explain_kind(tokens, normalized)
     if (
         explain_kind is not None
         and not (narration is not None and explain_kind in ("research_detail", "technical"))

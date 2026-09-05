@@ -95,11 +95,22 @@ _PATTERNS: tuple[tuple[tuple[str, ...], str], ...] = (
     (("canlı", "alır", "mısın"), QUERY_CAN_DEPLOY),
     (("dağıtabilir", "misin"), QUERY_CAN_DEPLOY),
     # --- what do you see in yourself: the world model ----------------------------
+    # Broadened after the owner's second M17 run, where "Kendi sisteminde şu anda ne
+    # görüyorsun?" produced no answer at all. The phrasings below are the ones the owner
+    # actually uses, plus their diacritic-free spellings, because an ASR that drops them
+    # must reach the same subsystem.
     (("kendi", "sistem"), QUERY_WORLD_STATE),
     (("sistemin", "görüyorsun"), QUERY_WORLD_STATE),
     (("ne", "görüyorsun"), QUERY_WORLD_STATE),
     (("ne", "goruyorsun"), QUERY_WORLD_STATE),
+    (("görüyorsun",), QUERY_WORLD_STATE),
+    (("goruyorsun",), QUERY_WORLD_STATE),
+    (("kendinde", "ne"), QUERY_WORLD_STATE),
+    (("kendi", "durum"), QUERY_WORLD_STATE),
+    (("kendini", "anlat"), QUERY_WORLD_STATE),
+    (("durumunu", "anlat"), QUERY_WORLD_STATE),
     (("sistem", "durum"), QUERY_WORLD_STATE),
+    (("sisteminde",), QUERY_WORLD_STATE),
     # --- what do you know about your own code: the self model --------------------
     (("kendi", "kod"), QUERY_SELF_CODE),
     (("kod", "biliyor"), QUERY_SELF_CODE),
@@ -169,6 +180,10 @@ class ExplainQuery:
     subsystem: str | None
     module: str | None
     normalized: str
+    #: True when a pattern really matched. False means ``kind`` is the LAST_ACTIVITY
+    #: default, which is a fine answer for a question and a terrible basis for deciding
+    #: that an utterance was a question at all - the intent resolver needs the difference.
+    matched: bool = False
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -219,9 +234,11 @@ def classify(
     normalized, tokens, _dropped = normalize_transcript(question)
     now = now or datetime.now(UTC)
     kind = QUERY_LAST_ACTIVITY
+    matched = False
     for stems, candidate in _PATTERNS:
         if all(_has(tokens, stem) for stem in stems):
             kind = candidate
+            matched = True
             break
     level = default_level
     if (_has(tokens, "hepsini") or _has(tokens, "tamamını") or _has(tokens, "tümünü")) and (
@@ -263,6 +280,7 @@ def classify(
         subsystem=subsystem,
         module=module,
         normalized=normalized,
+        matched=matched,
     )
 
 

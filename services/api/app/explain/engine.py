@@ -1494,22 +1494,55 @@ def explain(
                 )
             )
             add_refs(tuple(_opportunity_ref(o) for o in shadow[:3]))
-            executive.append(Statement("Hayır efendim, canlıya kendim alamam.", LABEL_FACT, (ref,)))
-            executive.append(
-                Statement(
-                    "Geliştirme motorum laboratuvar yetkisiyle çalışır ve hiçbir üretim "
-                    "yetkisi taşımaz; öneririm, hazırlarım, gölgede çalıştırırım.",
-                    LABEL_FACT,
-                    (ref,),
+            # Both halves of the rule, in the order that answers the question asked. "No,
+            # I can never deploy" was the old answer and it was WRONG: the policy forbids
+            # autonomous promotion, not owner-authorised release, and telling the owner
+            # they cannot ask for something they can ask for is its own kind of untruth
+            # (owner authority policy, 2026-09-05).
+            if policy.get("owner_authorised_release_permitted"):
+                executive.append(
+                    Statement(
+                        "Evet efendim, sizin açık onayınızla alabilirim; kendi başıma alamam.",
+                        LABEL_FACT,
+                        (ref,),
+                    )
                 )
-            )
-            executive.append(
-                Statement(
-                    "Canlıya alma sizin onayınızı ve yeterlilik testini gerektirir.",
-                    LABEL_FACT,
-                    (ref,),
+                executive.append(
+                    Statement(
+                        "Geliştirme motorum laboratuvar yetkisiyle çalışır ve hiçbir üretim "
+                        "yetkisi taşımaz; kendiliğinden canlıya çıkaramam.",
+                        LABEL_FACT,
+                        (ref,),
+                    )
                 )
-            )
+                executive.append(
+                    Statement(
+                        "Siz açıkça 'canlıya al' derseniz, kimliği doğrulanmış onayınıza "
+                        "bağlı olarak gerekli kontrolleri ve yeterlilik sürecini uygular, "
+                        "sonra sürümü yayına alırım.",
+                        LABEL_FACT,
+                        (ref,),
+                    )
+                )
+                if policy.get("asking_is_not_authorising"):
+                    executive.append(
+                        Statement(
+                            "Bu soru tek başına bir dağıtım başlatmaz.",
+                            LABEL_FACT,
+                            (ref,),
+                        )
+                    )
+            else:
+                executive.append(
+                    Statement("Hayır efendim, canlıya kendim alamam.", LABEL_FACT, (ref,))
+                )
+                executive.append(
+                    Statement(
+                        "Canlıya alma sizin onayınızı ve yeterlilik testini gerektirir.",
+                        LABEL_FACT,
+                        (ref,),
+                    )
+                )
             if policy.get("lab_holds_any_production_grant"):
                 executive.append(
                     Statement(
