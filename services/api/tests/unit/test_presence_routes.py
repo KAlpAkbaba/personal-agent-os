@@ -22,7 +22,7 @@ from app.ledger.vocabulary import EVENT_TYPE_EYE_DISABLED, EVENT_TYPE_PRESENCE_S
 from app.main import create_app
 from app.presence.engine import PresenceFusionEngine, get_engine, set_engine
 from app.uistate.publisher import UiStatePublisher, get_publisher, set_publisher
-from tests.identity_support import authenticate
+from tests.identity_support import authenticate, install_identity
 
 ALL_TABLES = [ActivityEventRow.__table__]
 
@@ -78,6 +78,10 @@ def artifacts_runtime(engine) -> ArtifactRuntime:
 def app_and_client(artifacts_runtime):
     settings = Settings(_env_file=None)
     app = create_app(settings)
+    # Replace create_app()'s real-database identity runtime BEFORE any request: an
+    # unauthenticated call audits its refusal, and that audit must land in SQLite, not
+    # dial the compose Postgres (tests/unit/conftest.py).
+    install_identity(app, settings=settings)
     app.state.artifacts = artifacts_runtime
     return app, TestClient(app)
 

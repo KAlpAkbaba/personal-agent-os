@@ -19,7 +19,7 @@ from app.goals.routes import GOALS_VERSION
 from app.goals.routes import router as goals_router
 from app.ledger.models import ActivityEventRow
 from app.main import create_app
-from tests.identity_support import authenticate
+from tests.identity_support import authenticate, install_identity
 
 ALL_TABLES = [
     Goal.__table__,
@@ -53,6 +53,10 @@ def artifacts_runtime(engine) -> ArtifactRuntime:
 def app_and_client(artifacts_runtime):
     settings = Settings(_env_file=None)
     app = create_app(settings)
+    # Replace create_app()'s real-database identity runtime BEFORE any request: an
+    # unauthenticated call audits its refusal, and that audit must land in SQLite, not
+    # dial the compose Postgres (tests/unit/conftest.py).
+    install_identity(app, settings=settings)
     app.state.artifacts = artifacts_runtime
     # Not yet wired into app/main.py (integrator's job per task instructions);
     # included here at test time only, exactly like production wiring will.

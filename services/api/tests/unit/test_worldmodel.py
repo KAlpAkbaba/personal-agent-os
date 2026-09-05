@@ -26,7 +26,7 @@ from app.main import create_app
 from app.selfhealing.models import Incident, Release
 from app.worldmodel.routes import router as worldmodel_router
 from app.worldmodel.state import Fact, TruthKind, assemble_snapshot
-from tests.identity_support import authenticate
+from tests.identity_support import authenticate, install_identity
 
 ALL_TABLES = [
     Task.__table__,
@@ -229,6 +229,10 @@ def engine():
 def app_and_client(engine):
     settings = Settings(_env_file=None)
     app = create_app(settings)
+    # Replace create_app()'s real-database identity runtime BEFORE any request: an
+    # unauthenticated call audits its refusal, and that audit must land in SQLite, not
+    # dial the compose Postgres (tests/unit/conftest.py).
+    install_identity(app, settings=settings)
 
     artifacts = ArtifactRuntime(settings)
     artifacts._engine = engine

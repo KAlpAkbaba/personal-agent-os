@@ -23,7 +23,7 @@ from app.ledger.routes import LEDGER_VERSION
 from app.main import create_app
 from app.research.models import ResearchReportRow, ResearchRunRow
 from app.selfhealing.models import Incident, Release
-from tests.identity_support import authenticate
+from tests.identity_support import authenticate, install_identity
 
 # POST /v1/ledger/backfill reads research_runs/research_reports/audit_events/
 # releases/incidents (spec §1.4), so the injected engine needs all of them —
@@ -56,6 +56,10 @@ def engine():
 def app_and_client(engine):
     settings = Settings(_env_file=None)
     app = create_app(settings)
+    # Replace create_app()'s real-database identity runtime BEFORE any request: an
+    # unauthenticated call audits its refusal, and that audit must land in SQLite, not
+    # dial the compose Postgres (tests/unit/conftest.py).
+    install_identity(app, settings=settings)
 
     broker = BrokerRuntime(settings)
     broker._engine = engine

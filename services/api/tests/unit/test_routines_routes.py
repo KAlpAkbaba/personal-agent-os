@@ -21,7 +21,7 @@ from app.main import create_app
 from app.routines.models import Routine, RoutineFiring
 from app.routines.routes import ROUTINES_VERSION
 from app.uistate.publisher import UiStatePublisher, set_publisher
-from tests.identity_support import authenticate
+from tests.identity_support import authenticate, install_identity
 
 ALL_TABLES = [Routine.__table__, RoutineFiring.__table__, ActivityEventRow.__table__]
 
@@ -57,6 +57,10 @@ def artifacts_runtime(engine) -> ArtifactRuntime:
 def app_and_client(artifacts_runtime):
     settings = Settings(_env_file=None)
     app = create_app(settings)
+    # Replace create_app()'s real-database identity runtime BEFORE any request: an
+    # unauthenticated call audits its refusal, and that audit must land in SQLite, not
+    # dial the compose Postgres (tests/unit/conftest.py).
+    install_identity(app, settings=settings)
     app.state.artifacts = artifacts_runtime
     return app, TestClient(app)
 
