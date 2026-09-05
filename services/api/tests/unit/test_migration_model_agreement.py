@@ -88,3 +88,23 @@ def test_the_timestamp_default_migration_covers_the_columns_that_failed() -> Non
                   "evolution_opportunities"):
         assert f'"{table}"' in text, f"{table} must be repaired too"
     assert "now()" in text
+
+
+def test_every_revision_id_fits_the_alembic_version_column() -> None:
+    """``alembic_version.version_num`` is VARCHAR(32).
+
+    A longer id does not fail loudly at authoring time: every DDL statement in the
+    migration applies, and then the bookkeeping UPDATE truncates and the whole transaction
+    rolls back - so the migration looks like it did nothing, having done everything
+    (2026-09-05, revision id of 33 characters).
+    """
+    pattern = re.compile(r'^revision:?\s*(?::\s*str\s*)?=\s*"([^"]+)"', re.MULTILINE)
+    checked = 0
+    for path in sorted(VERSIONS.glob("*.py")):
+        for revision_id in pattern.findall(path.read_text(encoding="utf-8")):
+            checked += 1
+            assert len(revision_id) <= 32, (
+                f"{path.name}: revision id {revision_id!r} is {len(revision_id)} chars; "
+                "alembic_version.version_num holds 32"
+            )
+    assert checked > 0, "no revision ids were found - the pattern stopped matching"

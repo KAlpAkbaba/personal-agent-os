@@ -18,7 +18,12 @@ lesson (2026-09-05).
 Adding a server default is safe to re-run and safe to roll back: it changes no existing row
 and no column type, only what happens when a value is omitted.
 
-Revision ID: 0017_cognitive_timestamp_defaults
+The revision id is short on purpose. ``alembic_version.version_num`` is VARCHAR(32), and
+the first spelling of this id was 33 characters: every DDL statement applied, then the
+version bookkeeping UPDATE failed and the whole transaction rolled back, so the migration
+appeared to do nothing at all while reporting an error about string truncation.
+
+Revision ID: 0017_cognitive_ts_defaults
 Revises: 0016_cognitive_foundations
 """
 
@@ -27,7 +32,7 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0017_cognitive_timestamp_defaults"
+revision: str = "0017_cognitive_ts_defaults"
 down_revision: str | None = "0016_cognitive_foundations"
 branch_labels = None
 depends_on = None
