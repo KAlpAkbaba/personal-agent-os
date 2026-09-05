@@ -218,15 +218,20 @@ public class IpcWiringTests
                 Seq = 1,
             }));
 
-            var deadline = DateTime.UtcNow.AddSeconds(15);
+            // Each wait gets its OWN deadline. They used to share one: a slow admission on a
+            // loaded runner consumed the whole 15 s, the audit poll got whatever was left,
+            // and the test failed on a "sub-string not found" that was really a stopwatch
+            // running out (2026-09-05). Two sequential waits, two budgets.
+            var admitBy = DateTime.UtcNow.AddSeconds(15);
             while (!server.CompanionConnected)
             {
-                Assert.True(DateTime.UtcNow < deadline, "the companion was never admitted");
+                Assert.True(DateTime.UtcNow < admitBy, "the companion was never admitted");
                 await Task.Delay(20);
             }
 
             string content = string.Empty;
-            while (DateTime.UtcNow < deadline)
+            var auditBy = DateTime.UtcNow.AddSeconds(15);
+            while (DateTime.UtcNow < auditBy)
             {
                 content = File.Exists(auditPath) ? File.ReadAllText(auditPath) : string.Empty;
                 if (content.Contains("ipc_companion_admitted", StringComparison.Ordinal))
