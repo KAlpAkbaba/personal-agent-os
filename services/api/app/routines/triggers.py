@@ -43,11 +43,20 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 PRESENCE_EVENT_OWNER_RETURNED = "owner.returned"
 PRESENCE_EVENT_OWNER_AWAKE = "owner.awake"
 PRESENCE_EVENT_OWNER_LIKELY_ASLEEP = "owner.likely_asleep"
+#: The spec's trigger list ends with "presence changes", and these two are the ones an
+#: owner reaches for first - "when I leave, pause the music", "when I am here again, tell
+#: me what happened". They were left out while the presence track was still being written;
+#: app/presence publishes both, and a trigger vocabulary narrower than the published
+#: vocabulary is a gap, not a safety property.
+PRESENCE_EVENT_OWNER_PRESENT = "owner.present"
+PRESENCE_EVENT_OWNER_AWAY = "owner.away"
 
 PRESENCE_TRIGGER_EVENTS: tuple[str, ...] = (
     PRESENCE_EVENT_OWNER_RETURNED,
     PRESENCE_EVENT_OWNER_AWAKE,
     PRESENCE_EVENT_OWNER_LIKELY_ASLEEP,
+    PRESENCE_EVENT_OWNER_PRESENT,
+    PRESENCE_EVENT_OWNER_AWAY,
 )
 
 #: A once-only occurrence key for an "at" trigger — there is exactly one moment to resolve.
@@ -223,6 +232,8 @@ __all__ = [
     "ONCE_OCCURRENCE_KEY",
     "PRESENCE_EVENT_OWNER_AWAKE",
     "PRESENCE_EVENT_OWNER_LIKELY_ASLEEP",
+    "PRESENCE_EVENT_OWNER_AWAY",
+    "PRESENCE_EVENT_OWNER_PRESENT",
     "PRESENCE_EVENT_OWNER_RETURNED",
     "PRESENCE_TRIGGER_EVENTS",
     "InvalidTrigger",
