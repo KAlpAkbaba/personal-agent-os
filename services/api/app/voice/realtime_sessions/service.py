@@ -36,7 +36,7 @@ from app.uistate import UiState
 from app.uistate import publish as publish_ui
 from app.voice import service as voice_service
 from app.voice.errors import VoiceError, VoiceErrorClass
-from app.voice.intents import ResolvedIntent, resolve_intent
+from app.voice.intents import Intent, ResolvedIntent, resolve_intent
 from app.voice.providers import EphemeralCredential, RealtimeProvider, RealtimeSessionConfig
 from app.voice.realtime import RealtimeState
 from app.voice.realtime_bench import (
@@ -827,6 +827,41 @@ def record_client_events(
             resolved.append(
                 {"t_ms": t_ms, "turn": turn, **intent.to_dict(), "normalized_text": None}
             )
+            if intent.intent == Intent.EYE_DISABLE:
+                # M18 spec §2: "Gözünü kapat", "Kamerayı kapat" and "Beni izleme"
+                # stop perception immediately. This is deterministic — it does not
+                # wait for the realtime provider to decide to call a tool — because
+                # a privacy-critical disable must not depend on a model's judgment
+                # call. app.presence.eye.disable_eye is itself idempotent, durable
+                # (ledger row) and observable (eye.disabled UI-state event); a
+                # repeated phrase just repeats the same real owner action.
+                from app.presence.eye import disable_eye
+
+                try:
+                    disable_eye(db, reason=f"voice:{intent.matched}")
+                    meta["eye_disable"] = "applied"
+                except Exception as exc:  # noqa: BLE001
+                    # The failure is caught so one broken write cannot lose the
+                    # owner's transcript - but it is NOT swallowed. The owner just
+                    # said "stop watching me" and it did not happen; a debug line
+                    # nobody reads is the wrong place for that. It goes on the
+                    # audit record, and onto the UI-state bus as an error, so the
+                    # Core can say the camera did not close.
+                    logger.error(
+                        "voice_eye_disable_failed",
+                        matched=intent.matched,
+                        reason=type(exc).__name__,
+                    )
+                    meta["eye_disable"] = "failed"
+                    meta["eye_disable_error"] = type(exc).__name__
+                    publish_ui(
+                        UiState.ERROR,
+                        subsystem="presence",
+                        severity="critical",
+                        status="eye_disable_failed",
+                        session_id=str(row.id),
+                        label="kamera kapatılamadı",
+                    )
             meta.update(
                 {
                     "intent": intent.intent.value,

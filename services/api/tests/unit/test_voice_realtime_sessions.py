@@ -343,6 +343,97 @@ def test_events_feed_the_benchmark_and_resolve_intents_server_side(wired) -> Non
     assert report["target_check"]["tool_preamble_ms"]["met"] is None
 
 
+def test_eye_disable_phrase_stops_perception_deterministically(wired) -> None:
+    """M18 spec §2: "Gözünü kapat" / "Kamerayı kapat" / "Beni izleme" stop the
+    Active Eye immediately, durably (a ledger row) and observably (a UI-state
+    event) — without depending on the realtime provider choosing to call a
+    tool. This exercises the SAME code path a real device's utterance event
+    would take (``record_client_events``), against the real
+    ``app.presence.eye`` module (not a mock), so a regression here would be a
+    regression a real "gözünü kapat" would actually hit.
+    """
+    from app.ledger.vocabulary import EVENT_TYPE_EYE_DISABLED, SUBSYSTEM_PRESENCE
+    from app.presence.eye import is_eye_enabled
+
+    client, _, runtime, _, _, _ = wired
+    sid = _create(client)["session_id"]
+
+    with runtime.session() as db:
+        assert is_eye_enabled(db) is True  # default: on until told otherwise
+
+    response = client.post(f"/v1/voice/realtime/sessions/{sid}/events", json={"events": [
+        {"kind": "utterance", "t_ms": 100, "turn": 1, "text": "gözünü kapat"},
+    ]})
+    assert response.status_code == 200, response.text
+    intents = response.json()["resolved_intents"]
+    assert intents[0]["intent"] == "eye_disable"
+
+    with runtime.session() as db:
+        assert is_eye_enabled(db) is False
+        from app.ledger import service as ledger_service
+
+        rows = ledger_service.query(
+            db, subsystems=[SUBSYSTEM_PRESENCE], event_types=[EVENT_TYPE_EYE_DISABLED]
+        )
+        assert len(rows) == 1
+        assert rows[0].detail_json.get("reason") == "voice:gözünü kapat"
+
+    # Every one of the spec's three phrasings resolves the same way, and a
+    # second phrase does not fail just because the eye is already off.
+    for phrase in ("kamerayı kapat", "beni izleme"):
+        again = client.post(f"/v1/voice/realtime/sessions/{sid}/events", json={"events": [
+            {"kind": "utterance", "t_ms": 200, "turn": 2, "text": phrase},
+        ]})
+        assert again.status_code == 200, again.text
+        assert again.json()["resolved_intents"][0]["intent"] == "eye_disable"
+    with runtime.session() as db:
+        assert is_eye_enabled(db) is False
+
+
+def test_a_failed_eye_disable_is_loud_not_swallowed(wired, monkeypatch) -> None:
+    """The owner said "stop watching me" and it did not happen.
+
+    The write is caught so one broken row cannot lose the owner's transcript, but a
+    debug line nobody reads is the wrong place for a privacy control that failed.
+    It has to reach the audit record and the UI-state bus, so the Core can say the
+    camera did not close.
+    """
+    from app.uistate.publisher import UiStatePublisher, get_publisher, set_publisher
+
+    client, _, runtime, _, _, _ = wired
+    sid = _create(client)["session_id"]
+
+    def exploding_disable(db, **kwargs):
+        raise RuntimeError("ledger unavailable")
+
+    monkeypatch.setattr("app.presence.eye.disable_eye", exploding_disable)
+    previous = get_publisher()
+    bus = UiStatePublisher()
+    set_publisher(bus)
+    try:
+        response = client.post(
+            f"/v1/voice/realtime/sessions/{sid}/events",
+            json={
+                "events": [
+                    {"kind": "utterance", "t_ms": 100, "turn": 1, "text": "gözünü kapat"}
+                ]
+            },
+        )
+    finally:
+        set_publisher(previous)
+
+    # The utterance is still recorded - losing the transcript would be a second harm.
+    assert response.status_code == 200, response.text
+    assert response.json()["resolved_intents"][0]["intent"] == "eye_disable"
+
+    # But the failure is visible, at critical severity, on the presence channel.
+    errors = [e for e in bus.tail() if e.state.value == "agent.error"]
+    assert errors, "a failed camera disable must reach the UI-state bus"
+    assert errors[-1].subsystem == "presence"
+    assert errors[-1].severity == "critical"
+    assert errors[-1].status == "eye_disable_failed"
+
+
 def test_events_reject_audio_unknown_kinds_and_oversize(wired) -> None:
     client, *_ = wired
     sid = _create(client)["session_id"]

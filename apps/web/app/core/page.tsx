@@ -24,6 +24,7 @@ import { visualFor } from "../lib/uistate/visual";
 import AmbientBand from "./AmbientBand";
 import CoreBar from "./CoreBar";
 import CoreView from "./CoreView";
+import EyeControl from "./EyeControl";
 import StateReadout from "./StateReadout";
 import { useCorePreferences } from "./usePreferences";
 import "./core.css";
@@ -56,6 +57,9 @@ function MinimalCore() {
         <CoreView intent={intent} tier={tier} force2d={force2d} />
         <StateReadout intent={intent} />
         <AmbientBand eye={eye} presence={presence} release={release} />
+        <section className="ambient-band" aria-label="Göz kontrolü">
+          <EyeControl eye={eye} />
+        </section>
       </main>
     </div>
   );

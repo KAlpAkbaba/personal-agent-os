@@ -178,9 +178,12 @@ Two rules with a history behind them:
 
 ## 9. Open items
 
-* The device-side local-perception client does not exist yet. Everything above describes the
-  Cloud Core boundary it will call; the client's own handling of frames (ephemeral by
-  construction, never written to disk) has to be proven in that code when it is written.
+* ~~The device-side local-perception client does not exist yet.~~ Built: `apps/web/app/lib/eye/`
+  (ADR-0058). The frame-never-escapes property is a closure boundary in `perception.ts`
+  (only `BrowserFrameSource.capture()` ever touches raw pixels, and its return value is
+  reduced to numbers before it can leave the function that called it), and disable-immediacy
+  is proven in `apps/web/tests/eye/perception.test.ts`, including the reentrant mid-tick
+  race and an already-in-flight observation POST.
 * Display-off has its own separate qualification, deliberately not folded into the main M18
   owner run, because a wrong inference there interrupts unrelated owner work.
 * Owner voice identification is not built. When it is, §2's rule is the acceptance criterion.
