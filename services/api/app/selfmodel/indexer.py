@@ -227,6 +227,33 @@ COMPONENT_MODULE_HINTS: Final[dict[str, tuple[str, ...]]] = {
 }
 
 
+#: The layout a DEPLOYED Cloud Core has: the image ships the ``services/api`` subtree only,
+#: so there is no ``services/`` and no ``docs/`` to walk. Without this the indexer scanned
+#: nothing in production and the self model answered "I have not indexed my own code" while
+#: running from that very code (M17 deployment, 2026-09-05). A self model that can only
+#: describe a developer checkout is not describing the thing that is running.
+DEPLOYED_TREES: Final[tuple[TreeSpec, ...]] = (
+    TreeSpec(
+        root="app",
+        kind=MODULE_KIND_MODULE,
+        language="python",
+        suffixes=(".py",),
+        parse=True,
+        dotted_root="app",
+    ),
+)
+
+
+def detect_layout(root: Path) -> str:
+    """``"repo"`` for a developer checkout, ``"deployed"`` for a shipped image, else
+    ``"unknown"`` - and an unknown layout indexes nothing rather than guessing."""
+    if (root / "services").is_dir() and (root / "docs").is_dir():
+        return "repo"
+    if (root / "app").is_dir() and (root / "app" / "__init__.py").is_file():
+        return "deployed"
+    return "unknown"
+
+
 @dataclass(frozen=True, slots=True)
 class IndexConfig:
     repo_root: Path
@@ -256,6 +283,11 @@ def default_repo_root(start: Path | None = None) -> Path:
     here = (start or Path(__file__)).resolve()
     for candidate in here.parents:
         if (candidate / "services").is_dir() and (candidate / "docs").is_dir():
+            return candidate
+    # No checkout above us: this is a deployed image, whose root is the directory that
+    # holds the ``app`` package (``/srv/pagentos``), not its grandparent.
+    for candidate in here.parents:
+        if (candidate / "app" / "__init__.py").is_file():
             return candidate
     return here.parents[3] if len(here.parents) > 3 else here.parent
 
@@ -1514,14 +1546,27 @@ def build_index(
     config: IndexConfig | None = None,
     progress: IndexProgress | None = None,
 ) -> IndexReport:
-    """Index the checkout into ``session``. The one entry point callers need."""
-    cfg = config or IndexConfig(repo_root=repo_root or default_repo_root())
+    """Index the checkout into ``session``. The one entry point callers need.
+
+    The tree specs follow the LAYOUT that is actually there. A developer checkout gets
+    ``DEFAULT_TREES``; a deployed image, which ships only the ``services/api`` subtree,
+    gets ``DEPLOYED_TREES`` - otherwise every spec misses and the index is silently empty.
+    An explicitly supplied ``config.trees`` is always honoured.
+    """
+    if config is not None:
+        cfg = config
+    else:
+        root = repo_root or default_repo_root()
+        trees = DEPLOYED_TREES if detect_layout(root) == "deployed" else DEFAULT_TREES
+        cfg = IndexConfig(repo_root=root, trees=trees)
     return Indexer(cfg, progress=progress).run(session)
 
 
 __all__ = [
     "DEFAULT_DOC_GLOBS",
     "DEFAULT_TREES",
+    "DEPLOYED_TREES",
+    "detect_layout",
     "GATE_EVENT_TYPES",
     "MAX_FILE_BYTES",
     "MAX_MODULES",
