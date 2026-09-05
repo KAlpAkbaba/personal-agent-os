@@ -713,12 +713,16 @@ class OpportunityBacklog:
         release_ref: str | None = None,
         approval: tuple[str, datetime] | None = None,
         release_lookup: Callable[[dict[str, Any]], str | None] | None = None,
+        extra_detail: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Validate and persist one transition inside a single session.
 
         ``release_lookup`` is called with the *current* opportunity so the LIVE
         check consults release evidence for this specific opportunity rather
-        than a globally cached answer.
+        than a globally cached answer. ``extra_detail`` is merged into the
+        opportunity's ``detail`` blob (never into the transition-history
+        entry) — used to carry a computed risk assessment or an execution
+        report alongside the status change that produced it.
         """
         with self._session_factory() as session:
             row = self._row(session, opportunity_id)
@@ -763,6 +767,8 @@ class OpportunityBacklog:
                 detail["release_ref"] = resolved_release[:256]
             history.append(entry)
             detail["transitions"] = history[-100:]
+            if extra_detail:
+                detail.update(dict(extra_detail))
             row.detail_json = detail
 
             session.commit()
@@ -776,6 +782,40 @@ class OpportunityBacklog:
             actor=str(actor),
         )
         return result
+
+    def merge_detail(
+        self,
+        opportunity_id: uuid.UUID | str,
+        fields: Mapping[str, Any],
+        *,
+        allowed_statuses: Iterable[OpportunityStatus] | None = None,
+    ) -> dict[str, Any]:
+        """Merge ``fields`` into ``detail_json`` without changing the status.
+
+        Used to attach metadata computed ABOUT a candidate — its derived risk
+        assessment, a preflight report — to the opportunity row it describes,
+        at a point where no lifecycle transition is happening. Refuses when the
+        opportunity's current status is not in ``allowed_statuses`` (when
+        given): declaring a candidate's own footprint is only meaningful while
+        the candidate is still the lab's to describe, not after the owner has
+        already looked at a wall it no longer matches.
+        """
+        with self._session_factory() as session:
+            row = self._row(session, opportunity_id)
+            current = coerce_status(row.status)
+            if allowed_statuses is not None and current not in set(allowed_statuses):
+                raise _lifecycle_violation(
+                    f"cannot annotate an opportunity in {current}",
+                    current=str(current),
+                    allowed=sorted(str(s) for s in allowed_statuses),
+                )
+            detail = dict(row.detail_json or {})
+            detail.update(dict(fields))
+            row.detail_json = detail
+            row.updated_at = _utcnow()
+            session.commit()
+            session.refresh(row)
+            return opportunity_dict(row)
 
     def pending_owner(self, *, limit: int = 100) -> list[dict[str, Any]]:
         return self.list(statuses=[str(s) for s in PENDING_OWNER_STATUSES], limit=limit)

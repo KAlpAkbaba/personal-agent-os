@@ -72,6 +72,7 @@ from app.evolution.authority import (
 from app.evolution.backlog import (
     EVIDENCE_KINDS,
     LAB_FORBIDDEN_STATUSES,
+    LAB_STATUSES,
     LEGAL_TRANSITIONS,
     OPPORTUNITY_SOURCES,
     OWNER_ONLY_STATUSES,
@@ -88,6 +89,7 @@ from app.evolution.backlog import (
     transition_table,
 )
 from app.evolution.errors import EvolutionError, EvolutionErrorClass
+from app.evolution.risk import SECOND_CONFIRMATION_FLOOR, RiskTier, derive_risk_tier
 from app.evolution.scoring import SCORE_FIELDS, score_from_mapping, weights
 from app.ledger.service import ActivityEvent
 from app.ledger.service import record as record_activity
@@ -423,6 +425,11 @@ class UiStateBridge:
             logger.warning("uistate_unknown_state", ui_state=key)
             return False
         status = str(payload.get("status") or "")
+        metadata: dict[str, Any] = {"composite": payload.get("composite")}
+        if payload.get("risk_tier") is not None:
+            # `apps/web` reads this key verbatim as `metadata.risk_tier`;
+            # never rename it (M18 spec §5).
+            metadata["risk_tier"] = payload["risk_tier"]
         try:
             event = uistate_publish(
                 state,
@@ -433,7 +440,7 @@ class UiStateBridge:
                 module_id=str(payload.get("opportunity_id") or "") or None,
                 severity=(SEVERITY_NOTICE if key == "evolution.shadow_ready" else SEVERITY_INFO),
                 progress=payload.get("progress"),
-                metadata={"composite": payload.get("composite")},
+                metadata=metadata,
             )
         except Exception:  # noqa: BLE001 - a UI failure never breaks the engine
             logger.warning("uistate_publish_failed", ui_state=key)
@@ -648,6 +655,22 @@ class EvolutionService:
         Lab-side targets consume a lab grant. Production-side targets consume a
         production action guard and ignore the engine's own authority entirely.
         ``OWNER_APPROVED`` is not reachable from here at all.
+
+        The production-side check considers where the opportunity is COMING
+        FROM as well as where it is going. ``QUARANTINED`` and ``REJECTED``
+        are ordinary lab-reachable targets from the lab side of the wall (a
+        candidate can be quarantined mid-BUILDING with no owner involved at
+        all) — but both are *also* legal targets from ``QUALIFYING`` and
+        ``ROLLING_BACK`` (an in-flight release can be parked/abandoned), and
+        neither target is itself classified as production-side, so a naive
+        "check only the target" guard lets a LAB actor divert an opportunity
+        that is mid-deployment or mid-rollback into ``quarantined`` with only
+        its own default ``propose_candidate`` grant — no production authority
+        at all (found while building the M18 release executor; the lifecycle
+        table alone does not prevent it, only this check does). Once an
+        opportunity is on the production side of the wall, leaving it to
+        ANYWHERE requires production authority, regardless of the target's own
+        classification.
         """
         wanted = coerce_status(target, field_name="target")
         who = coerce_actor(actor)
@@ -663,14 +686,21 @@ class EvolutionService:
                 target=str(wanted),
             )
 
-        if wanted in PRODUCTION_SIDE_STATUSES:
+        current_status = coerce_status(self.backlog.get(opportunity_id)["status"])
+        leaves_production_side = current_status in PRODUCTION_SIDE_STATUSES
+
+        if wanted in PRODUCTION_SIDE_STATUSES or leaves_production_side:
             if who is ActorKind.LAB:
                 raise AuthorityError(
                     "a lab actor may not drive a production-side transition",
                     target=str(wanted),
+                    current=str(current_status),
                     actor=str(who),
                 )
-            guard_production_action(PRODUCTION_ACTION_FOR_STATUS[wanted], production_authority)
+            action = PRODUCTION_ACTION_FOR_STATUS.get(wanted) or PRODUCTION_ACTION_FOR_STATUS.get(
+                current_status
+            )
+            guard_production_action(action, production_authority)
         else:
             grant = REQUIRED_GRANT_FOR_STATUS[wanted]
             assert grant is not None  # every lab-side status maps to a grant
@@ -717,6 +747,119 @@ class EvolutionService:
         )
         self._audit(updated, OpportunityStatus.OWNER_APPROVED, ActorKind.OWNER, reason=note)
         logger.info("opportunity_owner_approved", opportunity_id=updated["opportunity_id"])
+        return updated
+
+    # ------------------------------------------------- risk tier (M18 §5)
+
+    def record_release_footprint(
+        self,
+        opportunity_id: uuid.UUID | str,
+        *,
+        changed_paths: list[str],
+    ) -> dict[str, Any]:
+        """Attach the candidate's DERIVED risk tier to its own opportunity row.
+
+        Lab-scoped (the engine knows what its own candidate touches; this is
+        no more privileged than ``READ_SOURCE``). Refuses once the candidate
+        has already crossed the wall: the footprint a risk tier is computed
+        from must be the one the owner actually reviews, not one that can be
+        edited out from under an approval that already happened.
+
+        The tier itself is never accepted as an argument — only the path list
+        is, and :func:`derive_risk_tier` computes the tier from it. There is
+        no way to call this method and assert a tier by hand.
+        """
+        self.authority.require(Grant.MARK_SHADOW_READY, action="record_release_footprint")
+        assessment = derive_risk_tier(changed_paths)
+        updated = self.backlog.merge_detail(
+            opportunity_id,
+            {
+                "changed_paths": list(changed_paths),
+                "risk_assessment": assessment.to_dict(),
+                "risk_tier": int(assessment.tier),
+            },
+            allowed_statuses=(
+                *LAB_STATUSES,
+                OpportunityStatus.OWNER_APPROVAL_REQUIRED,
+            ),
+        )
+        logger.info(
+            "release_footprint_recorded",
+            opportunity_id=updated["opportunity_id"],
+            risk_tier=int(assessment.tier),
+            paths=len(changed_paths),
+        )
+        return updated
+
+    def authorize(
+        self,
+        opportunity_id: uuid.UUID | str,
+        capability: OwnerCapability,
+        *,
+        confirm_high_risk: bool = False,
+        note: str | None = None,
+    ) -> dict[str, Any]:
+        """The owner action that completes the explicit chain into production.
+
+        ``OWNER_APPROVAL_REQUIRED -> OWNER_AUTHORIZED`` (ADR-0055 §5, M18 spec
+        §5). Like :meth:`approve`, this is a SEPARATE method rather than a
+        status a caller can name through :meth:`advance`, and it requires a
+        real :class:`OwnerCapability` — the same non-forgeable proof of a
+        verified owner session.
+
+        Tier 3 and above need a SECOND explicit confirmation: the first call
+        (``confirm_high_risk=False``, the default) refuses and reports the
+        tier and the reasons a human would need to decide; only a second,
+        deliberate call with ``confirm_high_risk=True`` proceeds. Tiers 1-2
+        proceed on the first call. The tier consulted is the one already
+        recorded by :meth:`record_release_footprint` — this method never
+        accepts a tier from its caller, so nothing here can be talked down.
+        """
+        if not isinstance(capability, OwnerCapability):
+            raise AuthorityError(
+                "owner authorisation requires a verified owner session capability",
+                reason="not_an_owner_capability",
+            )
+        opportunity = self.backlog.get(opportunity_id)
+        risk_tier = (opportunity.get("detail") or {}).get("risk_tier")
+        if risk_tier is None:
+            raise EvolutionError(
+                EvolutionErrorClass.LIFECYCLE_VIOLATION,
+                "this candidate's risk tier was never derived; call "
+                "record_release_footprint before asking the owner to authorise it",
+                details={"opportunity_id": str(opportunity_id)},
+            )
+        tier = RiskTier(int(risk_tier))
+        if tier >= SECOND_CONFIRMATION_FLOOR and not confirm_high_risk:
+            reasons = (opportunity.get("detail") or {}).get("risk_assessment", {}).get(
+                "reasons", []
+            )
+            raise AuthorityError(
+                f"seviye {int(tier)} ({tier.name.lower()}) bir sürüm için ikinci, açık "
+                "bir sahip onayı gerekiyor; bu çağrı confirm_high_risk=True ile "
+                "tekrarlanmalı",
+                reason="second_confirmation_required",
+                risk_tier=int(tier),
+                risk_reasons=list(reasons),
+            )
+        approved_by = f"owner_session:{capability.session_id}"[:64]
+        updated = self.backlog.apply_transition(
+            opportunity_id,
+            target=OpportunityStatus.OWNER_AUTHORIZED,
+            actor=ActorKind.OWNER,
+            reason=note,
+            approval=(approved_by, capability.issued_at),
+            release_lookup=self.release_evidence.approved_release,
+            extra_detail={"second_confirmation_given": bool(confirm_high_risk)}
+            if tier >= SECOND_CONFIRMATION_FLOOR
+            else None,
+        )
+        self._audit(updated, OpportunityStatus.OWNER_AUTHORIZED, ActorKind.OWNER, reason=note)
+        logger.info(
+            "opportunity_owner_authorized",
+            opportunity_id=updated["opportunity_id"],
+            risk_tier=int(tier),
+        )
         return updated
 
     # ------------------------------------------------------------- read side
@@ -808,15 +951,20 @@ class EvolutionService:
         self._record_ledger(opportunity, status, actor, reason=reason)
         ui_state = UI_STATE_FOR_STATUS.get(status)
         if ui_state is not None:
-            self.ui.publish(
-                ui_state,
-                {
-                    "opportunity_id": opportunity["opportunity_id"],
-                    "status": str(status),
-                    "composite": opportunity["scores"]["composite"],
-                    "progress": _LAB_PROGRESS.get(status),
-                },
-            )
+            payload: dict[str, Any] = {
+                "opportunity_id": opportunity["opportunity_id"],
+                "status": str(status),
+                "composite": opportunity["scores"]["composite"],
+                "progress": _LAB_PROGRESS.get(status),
+            }
+            # Once a candidate's footprint has been assessed, every release-path
+            # UI state carries its tier — the owner should see the risk level
+            # throughout the release, not only at the moment it was computed.
+            # `apps/web` reads this key as `metadata.risk_tier` (do not rename).
+            risk_tier = (opportunity.get("detail") or {}).get("risk_tier")
+            if risk_tier is not None:
+                payload["risk_tier"] = int(risk_tier)
+            self.ui.publish(ui_state, payload)
 
     def _ledger_spec(
         self, opportunity: Mapping[str, Any], status: OpportunityStatus
