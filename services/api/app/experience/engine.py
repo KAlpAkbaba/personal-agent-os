@@ -58,6 +58,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.experience.signals import publish_progress
 from app.ledger import service as ledger_service
 from app.ledger.models import ActivityEventRow
 from app.ledger.vocabulary import (
@@ -134,27 +135,6 @@ class IngestReport:
             "semantic_refused_secret": self.semantic_refused_secret,
             "errors": list(self.errors),
         }
-
-
-def _publish_uistate(*, phase: str, **metadata: Any) -> None:
-    """Best-effort progress signal for ``app.uistate`` (UiState.MEMORY_RETRIEVAL).
-
-    ``app.uistate`` does not exist in this worktree at the time this package
-    was written (checked: no ``app/uistate`` module anywhere in the repo) —
-    see the commit body for the full note. This import is therefore
-    deliberately soft: once the UI-state contract lands, this call starts
-    publishing with no other code change needed; until then, ingest/compile
-    must not fail or even log noisily just because the contract isn't there
-    yet. NEVER pass memory/lesson content here — ids and counts only.
-    """
-    try:
-        from app.uistate import UiState, publish  # type: ignore[import-not-found]
-    except ImportError:
-        return
-    try:
-        publish(UiState.MEMORY_RETRIEVAL, subsystem="experience", phase=phase, **metadata)
-    except Exception:  # noqa: BLE001 - progress signalling must never break ingest/compile
-        logger.debug("experience_uistate_publish_failed", phase=phase)
 
 
 def _existing_by_key(session: Session, memory_class: str, key: str) -> Memory | None:
@@ -371,7 +351,7 @@ def ingest(
     now = now or utcnow()
     embedder = embedder or DeterministicEmbedder()
     report = IngestReport()
-    _publish_uistate(phase="ingest_started", since=since.isoformat() if since else None)
+    publish_progress(phase="ingest_started", since=since.isoformat() if since else None)
 
     rows = ledger_service.query(session, since=since, limit=limit)
     # ledger.query is newest-first; process oldest-first so occurred_at order
@@ -398,7 +378,7 @@ def ingest(
         report.errors.append(f"semantic: {type(exc).__name__}")
         logger.warning("experience_engine_semantic_failed", reason=type(exc).__name__)
 
-    _publish_uistate(phase="ingest_completed", **report.as_dict())
+    publish_progress(phase="ingest_completed", **report.as_dict())
     return report
 
 

@@ -49,6 +49,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.experience.models import STATUS_CANDIDATE, STATUS_PROMOTED, ExperienceLessonRow
+from app.experience.signals import publish_progress
 from app.ledger import service as ledger_service
 from app.ledger.models import ActivityEventRow
 from app.ledger.vocabulary import STATUS_COMPLETED, STATUS_FAILED
@@ -672,19 +673,6 @@ def _auto_write_memory(
     return str(result.memory_id)
 
 
-def _publish_uistate(*, phase: str, **metadata: Any) -> None:
-    """See app.experience.engine._publish_uistate — identical soft-import
-    rationale (app.uistate does not exist in this worktree yet)."""
-    try:
-        from app.uistate import UiState, publish  # type: ignore[import-not-found]
-    except ImportError:
-        return
-    try:
-        publish(UiState.MEMORY_RETRIEVAL, subsystem="experience", phase=phase, **metadata)
-    except Exception:  # noqa: BLE001 - progress signalling must never break compile
-        logger.debug("experience_compiler_uistate_publish_failed", phase=phase)
-
-
 def _process(
     session: Session,
     embedder: Embedder,
@@ -721,7 +709,7 @@ def compile_lessons(
     now = now or utcnow()
     embedder = embedder or DeterministicEmbedder()
     since = now - lookback
-    _publish_uistate(phase="compile_started")
+    publish_progress(phase="compile_started")
 
     candidates: list[LessonCandidate] = []
 
@@ -760,7 +748,7 @@ def compile_lessons(
             _process(session, embedder, candidate, candidates)
 
     session.commit()
-    _publish_uistate(phase="compile_completed", lessons=len(candidates))
+    publish_progress(phase="compile_completed", lessons=len(candidates))
     return candidates
 
 
