@@ -3433,3 +3433,65 @@ QUALIFYING → LIVE`, and no `DEPLOYING`/`VERIFYING`/`ROLLING_BACK` states exist
 them is M18 work, and half-building a production deployment state machine would be worse
 than not starting it. The Acceptance Wording Guard stays `SHADOW_READY` and is not deployed
 by the qualification.
+
+## ADR-0058 — M18 release executor: risk tiers, preflight, and two boundary decisions (2026-09-06)
+
+Status: Accepted
+
+Context: building the executing workflow ADR-0055 §5 specified but did not build — risk
+tiers 1–5, preflight, post-deployment verification, automatic rollback — required two
+decisions the spec's prose does not resolve on its own, plus surfaced one real gap in the
+existing production-authority kernel.
+
+Decisions:
+
+1. **Risk tier is derived from touched paths, by a rule table, and stored once — never
+   accepted as an argument.** `app/evolution/risk.py`'s `derive_risk_tier()` is a pure
+   function of a candidate's changed-path list; the overall tier is the MAXIMUM tier any
+   touched path matches. `EvolutionService.record_release_footprint()` is the only writer of
+   `detail.risk_tier` on an opportunity, and it is lab-scoped (the engine may describe its
+   own candidate) but refuses once the candidate has left the lab side of the wall.
+   `EvolutionService.authorize()` — the new, separate owner action for
+   `OWNER_APPROVAL_REQUIRED → OWNER_AUTHORIZED` — reads that stored tier back; it has no
+   `risk_tier` parameter at all, so nothing can talk a release down to a lower tier by
+   varying an argument. Tier 3+ requires a second, explicit `authorize(..., confirm_high_risk=True)`
+   call; the first call refuses and reports the tier and reasons.
+2. **A component's first-ever deployment cannot pass preflight.** The spec's
+   `rollback_point_exists` precondition is read literally: with no previous `active` release
+   recorded for a component, there is nothing to roll back to, so preflight refuses. This
+   means the executor built here cannot bootstrap a brand-new component's first release —
+   only re-releases of an already-live component. That is a real, known limitation, not a
+   special case quietly designed away: reversed here only by recording an explicit ADR,
+   consistent with "asking the owner" being reserved for irreversible conflicts, and this one
+   is neither irreversible nor a genuine two-interpretation conflict. Bootstrapping a
+   component's first release (e.g. by accepting a documented manual rollback plan in place of
+   a `releases` row) is deliberately left for later, scoped work.
+3. **`EvolutionService.advance()` now checks where a transition leaves FROM, not only where
+   it goes TO.** Building the executor's failure path (a failed rollback should honestly land
+   on `QUARANTINED`, not a false `ROLLED_BACK`) surfaced a real boundary gap: `QUARANTINED`
+   and `REJECTED` are ordinary lab-reachable targets earlier in the lifecycle (a candidate can
+   be quarantined mid-`BUILDING` with no owner involved), and neither is classified as
+   `PRODUCTION_SIDE_STATUSES` — but both are ALSO legal targets from `QUALIFYING` and
+   `ROLLING_BACK`, which ARE production-side. Because `advance()` only checked the target's
+   classification, a **lab actor could call `advance(target=QUARANTINED, actor=LAB)` (or
+   `REJECTED` from `QUALIFYING`) on an opportunity that was mid-deployment or mid-rollback,
+   using nothing but its own default `propose_candidate` grant** — no production authority
+   at all. Confirmed against the real service (not just the transition table) before fixing
+   it. The fix: a transition now requires production authority whenever EITHER the target OR
+   the CURRENT status is production-side, with the production action resolved from whichever
+   of the two the action-table actually names. Regression tests pin both directions: the gap
+   is closed, and the ordinary lab-side use of `quarantined`/`rejected` still works
+   unchanged. See `EvolutionService.advance()` and
+   `tests/unit/test_evolution_authorize.py::test_a_lab_actor_cannot_divert_a_live_rollback_to_quarantined`.
+
+What is built: `app/evolution/risk.py` (risk tiers), `EvolutionService.record_release_footprint`
+and `.authorize` (the tier-gated owner action), and a new `app/release` package —
+`preflight.py` (ten checks, refuse rather than warn), `backend.py` (the
+`DeploymentBackend` seam and `FakeDeploymentBackend`), `execution.py` (`ReleaseExecutor`:
+`QUALIFYING → preflight → DEPLOYING → VERIFYING → LIVE`, with every failure path — including
+a preflight refusal — ending in `FAILED → ROLLING_BACK → {ROLLED_BACK, QUARANTINED}`).
+`app/release` is deliberately outside `app/evolution` (root policy `deployment_authority`:
+deployment lives outside the engine); it mints no authority of its own and is exactly as
+authorised as the `Authority` object its caller hands it. No real deployment backend exists
+yet and none was run against the real Hetzner Cloud Core — everything above is proven against
+fakes only.
