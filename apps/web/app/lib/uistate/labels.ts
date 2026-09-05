@@ -121,6 +121,7 @@ export const SUBSYSTEM_LABEL: Record<string, string> = {
   deployment: "Dağıtım",
   ledger: "Defter",
   system: "Sistem",
+  presence: "Varlık",
 };
 
 export function subsystemLabel(subsystem: string): string {

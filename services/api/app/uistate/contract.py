@@ -23,7 +23,11 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
-CONTRACT_VERSION = 2  # M18 added the room and the release path
+#: v2 added the room (``eye.*``, ``owner.*``), routines and the owner-authorised
+#: release path, plus the ``presence`` subsystem. A v1 renderer keeps working - it
+#: simply never sees the new states - and ``GET /v1/ui/state/contract`` reports the
+#: true version so a client can tell the two vocabularies apart.
+CONTRACT_VERSION = 2
 
 #: Metadata value bounds. Numbers are floats in [0, 1] except where noted; strings are
 #: short machine tokens, never prose.
@@ -51,7 +55,6 @@ class UiState(StrEnum):
     EVOLUTION_BUILDING = "evolution.building"
     EVOLUTION_TESTING = "evolution.testing"
     EVOLUTION_SHADOW_READY = "evolution.shadow_ready"
-
     # --- M18. The Core stops being a picture of the assistant's own activity and starts
     # being a picture of the ROOM as well: whether the camera is perceiving, whether the
     # owner is there, and what the system is about to do on their behalf. Every one of
@@ -62,6 +65,9 @@ class UiState(StrEnum):
 
     #: Presence is PROBABILISTIC and every one of these carries a confidence. The renderer
     #: must be able to show "likely" without the model claiming certainty it does not have.
+    #: Published on a sustained TRANSITION, never per observation: the fusion engine in
+    #: app/presence/engine.py has already collapsed raw observations into a held state,
+    #: and a renderer redrawing on every camera frame would be showing noise, not truth.
     OWNER_PRESENT = "owner.present"
     OWNER_AWAY = "owner.away"
     OWNER_RETURNED = "owner.returned"
@@ -100,6 +106,7 @@ SUBSYSTEMS: tuple[str, ...] = (
     "deployment",
     "ledger",
     "system",
+    "presence",
 )
 
 SEVERITIES: tuple[str, ...] = ("info", "notice", "warning", "critical")

@@ -3447,6 +3447,10 @@ fifteen `agent.*`/`evolution.*` states — there are no `eye.*`, `owner.*`, `rou
 `alarm.*` or `release.*` states in this repository. The renderer was built against what the
 API actually serves, and treats anything else as an explicitly unknown state.
 
+> That last paragraph was true of the branch this was written on and is no longer true of
+> main, which published v2 the same day. Addendum 2 records the reconciliation; the sentence
+> is left as written because it is the reason the renderer has an unknown-state path at all.
+
 Decisions:
 
 1. **Silence is four different facts, and they are drawn as four different things.**
@@ -3570,3 +3574,51 @@ Two more decisions worth recording:
    unreadable rather than falling to "off". Presence is rendered with the engine's own
    confidence or with "güven bildirilmedi" - never with a substituted number - and the band
    states on every render that perception is not authentication (M18 spec §2).
+## M18 Presence Engine + Active Eye intake: implementation notes (2026-09-05)
+
+Status: Accepted (reversible implementation choices, recorded per CLAUDE.md "Asking the
+owner")
+
+Context: building `app/presence` (M18_HOLOGRAPHIC_CORE_SPEC.md §1, §2) surfaced three
+places where the spec's own integration requirements met existing M17/ADR-0052 code that
+did not yet have the shape the spec assumed, or where a genuinely reversible design choice
+had to be made without an obvious single right answer.
+
+Decisions:
+
+1. **The UI-state contract did not yet have `owner.*`/`eye.*` states.** ADR-0052's
+   vocabulary (`app/uistate/contract.py`) was v1 and only knew `agent.*`/`evolution.*`.
+   Rather than treat "these already exist in the contract" as true, `CONTRACT_VERSION` was
+   bumped to 2, six `owner.*` states plus `eye.active`/`eye.disabled` were added, and a
+   `"presence"` subsystem was added to `SUBSYSTEMS` — additive only, so a renderer that
+   still speaks v1 is unaffected; `GET /v1/ui/state/contract` reports the true version.
+2. **No new table, no new migration.** The Active Eye's enable/disabled state is durable
+   via two ledger event types (`eye.enabled`/`eye.disabled`, `app.ledger.vocabulary`) read
+   back by `app.presence.eye.is_eye_enabled` (always freshest-row-wins, never cached) rather
+   than a dedicated boolean column — the ledger already is the durable record of what
+   happened (ADR-0052 §3), and the current PRESENCE STATE itself stays in-process/ephemeral
+   like `app.uistate.publisher`'s current event, with only MEANINGFUL transitions written to
+   the ledger (`presence.state_changed`, spec §5's "do not overcollect"). `alembic heads`
+   confirmed a single head (`0017_cognitive_ts_defaults`) before and after this change.
+3. **`app/worldmodel/state.py` and `app/worldmodel/routes.py` were touched, narrowly.** The
+   task instructions said not to touch "anything M17," and the World Model is an M17
+   package — but the same M18 spec explicitly requires presence to feed
+   `owner.presence`/`owner.awake_state`/`owner.activity_level`/`owner.last_seen`/
+   `device.camera_state` into it. Read as in tension rather than contradictory: the
+   restriction is against scope-creep into the OTHER M17 subsystems (goals, evolution,
+   experience, self-model, explain), not against the one integration point this milestone's
+   own spec names. The change is additive and minimal: one new `_collect_presence` section
+   function following the existing optional-injected-runtime pattern
+   (`_collect_devices`/`broker_runtime`), one new optional `presence_runtime` parameter on
+   `assemble_snapshot`, one new `stale: bool = False` parameter on `_Collector.fact` (so a
+   caller with its own, more specific TTL — `PresenceAssertion.is_stale` — can pass that
+   floor through rather than being re-derived from the World Model's generic 15-minute
+   `RUNTIME_TRUTH` default), and the corresponding `_presence_runtime` accessor in
+   `worldmodel/routes.py`. Nothing else in either file changed.
+
+Consequences: a future renderer or routine can read presence off `GET /v1/ui/state`,
+`GET /v1/presence/state` or `GET /v1/world` and get the same underlying assertion, each at
+the right level of detail. Deferred, and explicitly not built by this change (M18's own
+dependency order): `app/routines`' actual trigger wiring (`owner.returned`,
+`owner.likely_asleep`, `owner.awake` → conditions → actions) and the Active Eye's
+device-side local-perception client — this change is the Cloud Core boundary they will call.

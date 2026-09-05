@@ -180,6 +180,7 @@ class _Collector:
         confidence: float = 1.0,
         evidence_refs: list[dict[str, Any]] | None = None,
         note: str = "",
+        stale: bool = False,
     ) -> None:
         self.facts.append(
             Fact(
@@ -191,6 +192,15 @@ class _Collector:
                 confidence=confidence,
                 evidence_refs=list(evidence_refs or []),
                 note=note,
+                # A caller-computed floor (module docstring: assembly never
+                # upgrades a fact past what its own source supports, and a
+                # caller that ALREADY knows an observation was superseded by
+                # its own domain's TTL — e.g. app.presence.states
+                # .PresenceAssertion.is_stale, which is source-specific and
+                # can be stricter than this module's generic per-truth-kind
+                # STALE_AFTER — may say so directly; Fact.is_stale still
+                # re-checks age on top of it).
+                stale=stale,
             )
         )
 
@@ -261,6 +271,91 @@ def _collect_devices(c: _Collector, session: Session, broker_runtime: Any | None
             TruthKind.RUNTIME,
             evidence_refs=[{"kind": "device", "ref": str(row.id)}],
         )
+
+
+def _collect_presence(c: _Collector, session: Session, presence_runtime: Any | None) -> None:
+    """M18 Presence Engine facts: ``owner.presence``, ``owner.awake_state``,
+    ``owner.activity_level``, ``owner.last_seen`` and ``device.camera_state``
+    (M18_HOLOGRAPHIC_CORE_SPEC.md §1, §2 — named exactly as that spec's
+    integration section requires).
+
+    ``presence_runtime`` is optional and injected the same way
+    ``broker_runtime`` is above: this module stays read-only and must never
+    import a live in-process singleton at module scope (module docstring).
+    When absent, presence facts are simply not reported here rather than a
+    silent RUNTIME-truth guess — the same discipline `_collect_dependencies`
+    applies when no health probe was supplied.
+
+    Presence is RUNTIME_TRUTH (a live inference, not a stored row) except
+    ``device.camera_state``, which is EVIDENCE_TRUTH: an explicit
+    enable/disable is a durable, owner-caused fact
+    (``app.presence.eye.is_eye_enabled`` reads the Activity Ledger), never a
+    live probe. Staleness for the RUNTIME facts is computed by presence's OWN
+    policy (``PresenceAssertion.is_stale``, which uses the TTL of the actual
+    signals behind it, not this module's generic 15-minute RUNTIME default)
+    and passed through explicitly — ``Fact.stale`` is a floor a caller may
+    set, and this is exactly the case that floor exists for.
+    """
+    from app.presence.eye import is_eye_enabled
+
+    c.fact(
+        "device.camera_state",
+        "presence",
+        "enabled" if is_eye_enabled(session) else "disabled",
+        TruthKind.EVIDENCE,
+        note="from the most recent eye.enabled/eye.disabled ledger event, or the default",
+    )
+
+    if presence_runtime is None:
+        c.uncertain("presence", "owner.presence", "no_live_presence_runtime_supplied")
+        return
+
+    assertion = presence_runtime.current()
+    if assertion is None:
+        c.uncertain("presence", "owner.presence", "no_observations_yet")
+        return
+
+    stale = assertion.is_stale(now=c.now)
+    last_seen_sources = [s for s in assertion.signals if s.person_present]
+    last_seen_at = max((s.observed_at for s in last_seen_sources), default=assertion.observed_at)
+
+    c.fact(
+        "owner.presence",
+        "presence",
+        assertion.state.value,
+        TruthKind.RUNTIME,
+        observed_at=assertion.observed_at,
+        confidence=assertion.confidence,
+        stale=stale,
+        note=assertion.reason,
+    )
+    c.fact(
+        "owner.awake_state",
+        "presence",
+        next((s.awake_state for s in reversed(assertion.signals)), "uncertain"),
+        TruthKind.RUNTIME,
+        observed_at=assertion.observed_at,
+        confidence=assertion.confidence,
+        stale=stale,
+    )
+    c.fact(
+        "owner.activity_level",
+        "presence",
+        next((s.activity_level for s in reversed(assertion.signals)), "none"),
+        TruthKind.RUNTIME,
+        observed_at=assertion.observed_at,
+        confidence=assertion.confidence,
+        stale=stale,
+    )
+    c.fact(
+        "owner.last_seen",
+        "presence",
+        _iso(last_seen_at),
+        TruthKind.RUNTIME,
+        observed_at=assertion.observed_at,
+        confidence=assertion.confidence,
+        stale=stale,
+    )
 
 
 def _collect_capabilities(c: _Collector) -> None:
@@ -424,6 +519,7 @@ def assemble_snapshot(
     *,
     settings: Settings | None = None,
     broker_runtime: Any | None = None,
+    presence_runtime: Any | None = None,
     health_results: dict[str, Any] | None = None,
     now: datetime | None = None,
 ) -> WorldSnapshot:
@@ -435,6 +531,7 @@ def assemble_snapshot(
 
     c.section("owner", lambda: _collect_owner(c, session))
     c.section("devices", lambda: _collect_devices(c, session, broker_runtime))
+    c.section("presence", lambda: _collect_presence(c, session, presence_runtime))
     c.section("capabilities", lambda: _collect_capabilities(c))
     c.section("tasks", lambda: _collect_tasks(c, session))
     c.section("goals", lambda: _collect_goals(c, session))

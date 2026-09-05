@@ -97,6 +97,7 @@ export const SUBSYSTEMS = [
   "deployment",
   "ledger",
   "system",
+  "presence",
 ] as const;
 
 export type Subsystem = (typeof SUBSYSTEMS)[number];
@@ -119,9 +120,10 @@ export type MetadataValue = number | boolean | string;
  * One event exactly as `UiStateEvent.as_dict()` serialises it.
  *
  * `intensity` is the publisher's declared "how much is going on" in 0..1 — for
- * voice it is derived from levels the client already reported, for research it
- * is a fixed per-stage figure. It is NOT an audio sample and must never be
- * described to the owner as one.
+ * voice it is derived from levels the client already reported. It is NOT an audio
+ * sample and must never be described to the owner as one, and it is NOT a
+ * confidence: presence publishes its confidence as its own metadata figure,
+ * because certainty and activity are different quantities.
  *
  * `progress` is `null` whenever the publisher does not know it, and a renderer
  * must not draw a bar for work of unknown length (ADR-0052 §2).
