@@ -41,6 +41,8 @@ SUBSYSTEM_GOAL = "goal"
 SUBSYSTEM_SELF_MODEL = "self_model"
 SUBSYSTEM_EVOLUTION = "evolution"
 SUBSYSTEM_LEDGER = "ledger"
+#: M18 Routine Engine (app.routines).
+SUBSYSTEM_ROUTINE = "routine"
 
 SUBSYSTEMS: Final[tuple[str, ...]] = (
     SUBSYSTEM_RESEARCH,
@@ -55,6 +57,7 @@ SUBSYSTEMS: Final[tuple[str, ...]] = (
     SUBSYSTEM_SELF_MODEL,
     SUBSYSTEM_EVOLUTION,
     SUBSYSTEM_LEDGER,
+    SUBSYSTEM_ROUTINE,
 )
 
 # ------------------------------------------------------------------ statuses
@@ -156,6 +159,16 @@ EVENT_TYPE_GOAL_STEP_EXECUTED = "goal.step_executed"
 EVENT_TYPE_GOAL_ESCALATED = "goal.escalated"
 EVENT_TYPE_GOAL_ERROR = "goal.error"
 
+#: M18 Routine Engine (app.routines.service). Every backlog-style state change a routine
+#: goes through — created, armed, triggering, executing, skipped, cancelled — writes exactly
+#: one of these (task brief: "no transition may be invisible").
+EVENT_TYPE_ROUTINE_CREATED = "routine.created"
+EVENT_TYPE_ROUTINE_ARMED = "routine.armed"
+EVENT_TYPE_ROUTINE_TRIGGERED = "routine.triggered"
+EVENT_TYPE_ROUTINE_EXECUTED = "routine.executed"
+EVENT_TYPE_ROUTINE_SKIPPED = "routine.skipped"
+EVENT_TYPE_ROUTINE_CANCELLED = "routine.cancelled"
+
 EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_RESEARCH_PLANNED,
     EVENT_TYPE_RESEARCH_COMPLETED,
@@ -186,6 +199,12 @@ EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_GOAL_STEP_EXECUTED,
     EVENT_TYPE_GOAL_ESCALATED,
     EVENT_TYPE_GOAL_ERROR,
+    EVENT_TYPE_ROUTINE_CREATED,
+    EVENT_TYPE_ROUTINE_ARMED,
+    EVENT_TYPE_ROUTINE_TRIGGERED,
+    EVENT_TYPE_ROUTINE_EXECUTED,
+    EVENT_TYPE_ROUTINE_SKIPPED,
+    EVENT_TYPE_ROUTINE_CANCELLED,
 )
 
 #: Reserved for the Evolution Engine (M18): constants exist now, writers come

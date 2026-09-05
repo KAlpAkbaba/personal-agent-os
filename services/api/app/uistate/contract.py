@@ -23,7 +23,12 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
-CONTRACT_VERSION = 1
+#: Bumped to 2 by M18's Routine Engine: three new states (ROUTINE_ARMED, ROUTINE_TRIGGERED,
+#: ALARM_TRIGGERED) and the "routine" subsystem. A renderer built against v1 still receives
+#: every v1 state unchanged — this is an addition, not a redefinition — but a caller that
+#: enumerates the vocabulary itself should re-read app.uistate.contract.ui_state_contract()
+#: rather than caching it (docs/DECISIONS.md, ADR-0052 addendum, 2026-09-05).
+CONTRACT_VERSION = 2
 
 #: Metadata value bounds. Numbers are floats in [0, 1] except where noted; strings are
 #: short machine tokens, never prose.
@@ -51,6 +56,10 @@ class UiState(StrEnum):
     EVOLUTION_BUILDING = "evolution.building"
     EVOLUTION_TESTING = "evolution.testing"
     EVOLUTION_SHADOW_READY = "evolution.shadow_ready"
+    # --- the routine engine (M18, CONTRACT_VERSION 2) ----------------------
+    ROUTINE_ARMED = "routine.armed"  # a routine was created/re-armed and is now watched
+    ROUTINE_TRIGGERED = "routine.triggered"  # a routine's trigger fired and its conditions passed
+    ALARM_TRIGGERED = "alarm.triggered"  # a fired routine carries an alarm action specifically
 
 
 UI_STATES: tuple[str, ...] = tuple(s.value for s in UiState)
@@ -69,6 +78,7 @@ SUBSYSTEMS: tuple[str, ...] = (
     "deployment",
     "ledger",
     "system",
+    "routine",
 )
 
 SEVERITIES: tuple[str, ...] = ("info", "notice", "warning", "critical")

@@ -16,6 +16,7 @@ import app.identity.models  # noqa: F401 - register identity tables on Base.meta
 import app.memory.models  # noqa: F401 - register memory tables on Base.metadata
 import app.mobile.models  # noqa: F401 - register push_registrations on Base.metadata
 import app.narration.models  # noqa: F401 - register narration tables on Base.metadata
+import app.routines.models  # noqa: F401 - register M18 routine tables on Base.metadata
 import app.security.models  # noqa: F401 - register security tables on Base.metadata
 import app.selfhealing.models  # noqa: F401 - register self-healing tables on Base.metadata
 import app.voice.models  # noqa: F401 - register voice tables on Base.metadata

@@ -30,12 +30,17 @@ from sqlalchemy import inspect as sa_inspect
 from app.evolution.models import EvolutionOpportunity
 from app.experience.models import ExperienceLessonRow
 from app.goals.models import Goal, GoalTask
+from app.routines.models import Routine, RoutineFiring
 from app.selfmodel.models import CodeModule
 
 VERSIONS = Path(__file__).resolve().parents[2] / "alembic" / "versions"
 
 #: The M17 tables and the classes that map them.
 M17_MODELS = [Goal, GoalTask, ExperienceLessonRow, CodeModule, EvolutionOpportunity]
+
+#: The M18 Routine Engine tables — same "migration and model must agree" discipline,
+#: checked by the same generic test (parametrized below) rather than a copy of it.
+M18_MODELS = [Routine, RoutineFiring]
 
 
 def _migration_text() -> str:
@@ -52,7 +57,7 @@ def _columns_expecting_a_database_default(model: type) -> list[str]:
     return out
 
 
-@pytest.mark.parametrize("model", M17_MODELS, ids=lambda m: m.__tablename__)
+@pytest.mark.parametrize("model", M17_MODELS + M18_MODELS, ids=lambda m: m.__tablename__)
 def test_every_server_default_the_model_declares_exists_in_a_migration(model: type) -> None:
     """A NOT NULL column with a model-side server_default must be given one in the DDL.
 
