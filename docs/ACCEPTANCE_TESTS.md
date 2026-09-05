@@ -331,6 +331,72 @@ Real gates (owner machine, `docs/QUALIFICATION.md` Stage 9): the chain above end
 the report shown in the web `/research` surface and in the artifact inbox; the memory entry
 present; the owner's verdict that the summary is concise and the findings matter.
 
+## M18 Holographic Core, Active Eye, ambient presence
+
+Real-only acceptance. Unit tests do not qualify this milestone and never will: everything
+here is a claim about the owner's actual room, their actual camera and their actual
+production system, and a fixture cannot be wrong about any of those. `PROVEN_REAL` requires
+one short real owner run.
+
+### Deterministic gates (offline, every CI run)
+
+- **the Core shows only what was published.** Every state in the contract produces its own
+  visual and no other state's; a state the build does not know is drawn as explicitly
+  unknown, never as a default animation; every motion channel is zero unless an event set
+  it; and no progress bar is drawn for work whose length nobody reported;
+- **silence is drawn as four different facts:** reported-idle, never-told, a claim that aged
+  out, and unreachable. None of them is a calm breathing core;
+- **channels do not displace one another.** A published `owner.likely_asleep` does not blank
+  a core that is genuinely thinking, and a deployment in flight does not become the agent's
+  own activity;
+- **an expired observation degrades to unknown, never to "still present"** — on both sides
+  of the wire, and the publisher's own `ttl_s` beats the client's default;
+- **the camera indicator never claims "off" without evidence.** `untold`, `disabled` and
+  "a state this build cannot read" are three different renderings;
+- **presence is rendered with the engine's confidence or with "güven bildirilmedi"** — never
+  with a substituted number, and `likely` is worded as likely in Turkish too;
+- **the perception boundary refuses, and refuses by shape.** An eighth field, a key that
+  normalises to contain `image`/`frame`/`base64`, or a base64-shaped value under a
+  legitimate key is rejected — not redacted — and never reaches the ledger;
+- **perception grants nothing.** A confidently established presence state does not turn an
+  unauthenticated client into an authorised one on any presence route;
+- **a brief movement at 03:00 does not produce a morning greeting**, and each of the four
+  gates that refuse it is independently testable;
+- **evaluating a greeting does not deliver one.** Asking twice still says yes; only a
+  recorded delivery starts the cooldown, and a refusal cannot be recorded as a delivery;
+- **a routine asks the Presence Engine, not its caller.** A stale assertion is unknown
+  rather than a boolean, and the firing record names where the fact came from;
+- **no routine fires without something asking.** There is no background timer, and every
+  transition writes exactly one ledger event;
+- **Evolution cannot promote itself.** A lab-authority caller cannot reach any
+  production-side status, and Evolution-generated code cannot construct an owner capability;
+- **the Core has no write path.** No button, no form, no input in the release band, and no
+  write endpoint in the UI-state surface;
+- **the migration chain has exactly one head**, no duplicate revision ids, and no
+  `down_revision` pointing at nothing;
+- **no browser is launched by any test**, and no camera fixture contains real imagery.
+
+### Real gates (owner machine, one run)
+
+- the Core renders on the owner's own machine and shows genuine state: listening, thinking
+  and speaking transitions that correspond to what actually happened;
+- research, memory and evolution state appear on the Core while those subsystems really run;
+- the real camera can be enabled, and the indicator is truthful about it;
+- a real presence transition is detected from the owner actually leaving and returning;
+- disabling the Active Eye actually stops perception — the machine's own camera light goes
+  out, and the Cloud Core stops accepting camera-sourced observations;
+- **no raw camera archive is created**: after the run, nothing on disk or in the database
+  holds an image, a frame or anything derived from one beyond the seven structured fields;
+- a routine can be created and a short test alarm fires;
+- an owner-selected media action executes, playing the item the owner named;
+- the Activity Ledger records all of it;
+- a real SHADOW_READY candidate is visible in the Core, and asking
+  `Bunu canlıya alabilir misin?` explains the authority model and **deploys nothing**;
+- production authority stays owner-controlled: the system does not deploy, and says why.
+
+Display-off is a **separate** qualification, run on its own, because a wrong inference there
+interrupts unrelated owner work. It is not part of the main M18 run.
+
 ## M19 Multi-device / roaming owner qualification
 
 Real-only acceptance on at least two owner-authorised physical computers (PC-A, PC-B) and
