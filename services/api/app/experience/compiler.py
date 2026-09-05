@@ -384,9 +384,9 @@ def _build_incident_lesson(incident: Incident) -> LessonCandidate | None:
     else:
         title = f"{incident.component} tarafında tekrarlayan arıza"
         statement = (
-            f"{incident.component} failures shaped like this incident were followed by "
-            "a resolution; the specific mechanism is not yet well enough understood to "
-            "generalize beyond 'investigate before assuming this recurs the same way'."
+            f"{incident.component} tarafında bu şekildeki arızalar bir çözümle "
+            "sonuçlandı; mekanizmayı genelleyecek kadar iyi anlamış değilim, o yüzden "
+            "tekrarlarsa aynı sebebi varsaymadan incelemek gerekir."
         )
         # Keys only. The blob can carry a captured page, an exception message or a
         # credential, and this text is read aloud (security review, 2026-09-05).
@@ -528,10 +528,9 @@ def _build_ledger_lesson(
     else:
         title = f"{row.subsystem} tarafında tekrarlayan arıza"
         statement = (
-            f"{row.subsystem} runs failing with '{row.result or row.status}' were later "
-            "followed by a successful run; the specific mechanism is not yet well enough "
-            "understood to generalize beyond 'investigate before assuming this recurs the "
-            "same way'."
+            f"{row.subsystem} tarafında '{row.result or row.status}' ile düşen koşuları "
+            "sonradan başarılı bir koşu izledi; mekanizmayı genelleyecek kadar iyi anlamış "
+            "değilim, tekrarlarsa aynı sebebi varsaymadan incelemek gerekir."
         )
         root_cause = "Olay ayrinti alanlari: " + _key_list(row.detail_json)
         scope = row.subsystem
