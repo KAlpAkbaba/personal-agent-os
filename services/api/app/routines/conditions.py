@@ -29,6 +29,11 @@ CONDITION_KIND_QUIET_HOURS = "quiet_hours"
 CONDITION_KIND_DISPLAY_STATE = "display_state"
 CONDITION_KIND_ACTIVE_TASK = "active_task"
 CONDITION_KIND_POLICY_PERMISSION = "policy_permission"
+#: "is a greeting warranted right now?", answered by the Presence Engine's own
+#: four-gate policy rather than reimplemented here. A morning briefing is then a
+#: routine like any other: trigger owner.awake, condition greeting_allowed, action
+#: voice_briefing - and the "is this actually a morning" reasoning stays in one place.
+CONDITION_KIND_GREETING_ALLOWED = "greeting_allowed"
 
 CONDITION_KINDS: tuple[str, ...] = (
     CONDITION_KIND_OWNER_PRESENT,
@@ -36,6 +41,7 @@ CONDITION_KINDS: tuple[str, ...] = (
     CONDITION_KIND_DISPLAY_STATE,
     CONDITION_KIND_ACTIVE_TASK,
     CONDITION_KIND_POLICY_PERMISSION,
+    CONDITION_KIND_GREETING_ALLOWED,
 )
 
 
@@ -59,6 +65,12 @@ class RoutineConditionContext:
     #: whether the owner currently has some other active task/goal running.
     active_task_present: bool | None = None
     policy_permissions: dict[str, bool] = dataclasses.field(default_factory=dict)
+    #: Whether the Presence Engine's greeting policy currently says to greet, and the
+    #: gate it named. None means it was not consulted - which fails closed, because a
+    #: greeting sent on an unconsulted policy is exactly the 03:00 case the policy exists
+    #: to prevent.
+    greeting_allowed: bool | None = None
+    greeting_reason: str = "not_evaluated"
 
 
 def validate_condition(raw: dict[str, Any]) -> dict[str, Any]:
@@ -137,12 +149,33 @@ def _eval_policy_permission(
     return False, f"policy_permission_denied:{policy}"
 
 
+def _eval_greeting_allowed(
+    detail: dict[str, Any], context: RoutineConditionContext
+) -> tuple[bool, str]:
+    """Defer to app.presence.greeting via the context, and carry its reason through.
+
+    The reason is the point: "why not now?" is answerable straight off the firing record
+    (cooldown_active, implausible_time, wake_not_sustained, ...) without re-deriving
+    anything, and the owner can be told the same word.
+    """
+    required = bool(detail.get("required", True))
+    if context.greeting_allowed is None:
+        return False, f"greeting_not_evaluated ({context.greeting_reason})"
+    if context.greeting_allowed == required:
+        return True, f"greeting_allowed={context.greeting_allowed} ({context.greeting_reason})"
+    return False, (
+        f"greeting_allowed={context.greeting_allowed}, required={required} "
+        f"({context.greeting_reason})"
+    )
+
+
 _EVALUATORS = {
     CONDITION_KIND_OWNER_PRESENT: _eval_owner_present,
     CONDITION_KIND_QUIET_HOURS: _eval_quiet_hours,
     CONDITION_KIND_DISPLAY_STATE: _eval_display_state,
     CONDITION_KIND_ACTIVE_TASK: _eval_active_task,
     CONDITION_KIND_POLICY_PERMISSION: _eval_policy_permission,
+    CONDITION_KIND_GREETING_ALLOWED: _eval_greeting_allowed,
 }
 
 
@@ -176,6 +209,7 @@ __all__ = [
     "CONDITION_KIND_ACTIVE_TASK",
     "CONDITION_KIND_DISPLAY_STATE",
     "CONDITION_KIND_OWNER_PRESENT",
+    "CONDITION_KIND_GREETING_ALLOWED",
     "CONDITION_KIND_POLICY_PERMISSION",
     "CONDITION_KIND_QUIET_HOURS",
     "InvalidCondition",

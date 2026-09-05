@@ -32,7 +32,11 @@ from app.routines import service as routines_service
 from app.routines.actions import ACTION_KINDS, InvalidActionDescriptor
 from app.routines.conditions import CONDITION_KINDS, InvalidCondition, RoutineConditionContext
 from app.routines.models import ROUTINE_STATUSES, TRIGGER_KINDS, Routine, RoutineFiring
-from app.routines.presence_link import SOURCE_CALLER, resolve_owner_present
+from app.routines.presence_link import (
+    SOURCE_CALLER,
+    resolve_greeting_allowed,
+    resolve_owner_present,
+)
 from app.routines.state import IllegalRoutineTransition
 from app.routines.triggers import PRESENCE_TRIGGER_EVENTS, InvalidTrigger
 
@@ -157,7 +161,9 @@ class ConditionContextIn(BaseModel):
     active_task_present: bool | None = None
     policy_permissions: dict[str, bool] = Field(default_factory=dict)
 
-    def to_context(self) -> RoutineConditionContext:
+    def to_context(
+        self, *, greeting_allowed: bool | None = None, greeting_reason: str = "not_evaluated"
+    ) -> RoutineConditionContext:
         """Build the evaluation context, resolving presence from the engine that knows it.
 
         A caller may still assert ``owner_present`` - some genuinely know something the
@@ -176,6 +182,8 @@ class ConditionContextIn(BaseModel):
             display_state=self.display_state,
             active_task_present=self.active_task_present,
             policy_permissions=dict(self.policy_permissions),
+            greeting_allowed=greeting_allowed,
+            greeting_reason=greeting_reason,
         )
 
 
@@ -297,10 +305,18 @@ async def list_firings(request: Request, routine_id: uuid.UUID, limit: int = 100
 async def evaluate_due(request: Request, body: EvaluateDueRequest | None = None) -> dict[str, Any]:
     """The explicit "due now" entry point (task brief: never a background timer)."""
     artifacts = _artifacts(request)
-    context = body.context.to_context() if body and body.context else None
+    context_in = body.context if body and body.context else ConditionContextIn()
 
     def run() -> routines_service.EvaluateDueResult:
         with artifacts.session() as session:
+            # The greeting policy needs the ledger (its cooldown is read from the
+            # delivery record), so it is resolved here rather than in `to_context`.
+            # Evaluating it has no side effect - deliberately: this endpoint is called
+            # on every tick, including the ticks where nothing fires.
+            greeting_allowed, greeting_reason = resolve_greeting_allowed(session)
+            context = context_in.to_context(
+                greeting_allowed=greeting_allowed, greeting_reason=greeting_reason
+            )
             return routines_service.evaluate_due(session, context=context)
 
     result = await asyncio.to_thread(run)

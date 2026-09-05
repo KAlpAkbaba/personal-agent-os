@@ -146,3 +146,37 @@ def test_an_unknown_presence_does_not_fire_a_presence_gated_routine() -> None:
     assert not passed
     assert "owner_presence_unknown" in results[0]["reason"]
     assert SOURCE_STALE in results[0]["reason"]
+
+
+# ------------------------------------------------- the greeting as a condition
+
+def test_greeting_condition_defers_to_the_presence_policy_and_carries_its_reason() -> None:
+    """A morning briefing is a routine like any other; "is this a morning" is not
+    reimplemented here, and the gate that refused is readable off the firing record."""
+    conditions = [{"kind": "greeting_allowed", "detail": {"required": True}}]
+
+    passed, results = evaluate_conditions(
+        conditions,
+        RoutineConditionContext(
+            greeting_allowed=True, greeting_reason="sustained_wake_after_rest"
+        ),
+    )
+    assert passed
+    assert "sustained_wake_after_rest" in results[0]["reason"]
+
+    passed, results = evaluate_conditions(
+        conditions,
+        RoutineConditionContext(greeting_allowed=False, greeting_reason="cooldown_active"),
+    )
+    assert not passed
+    assert "cooldown_active" in results[0]["reason"]
+
+
+def test_an_unconsulted_greeting_policy_fails_closed() -> None:
+    """A greeting sent without consulting the policy is exactly the 03:00 case."""
+    passed, results = evaluate_conditions(
+        [{"kind": "greeting_allowed", "detail": {"required": True}}],
+        RoutineConditionContext(),
+    )
+    assert not passed
+    assert "greeting_not_evaluated" in results[0]["reason"]

@@ -28,6 +28,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Final
 
+from sqlalchemy.orm import Session
+
+from app.presence import service as presence_service
 from app.presence.engine import get_engine
 from app.presence.states import PresenceState
 
@@ -65,11 +68,25 @@ def resolve_owner_present(*, now: datetime | None = None) -> tuple[bool | None, 
     return state not in _AWAY_STATES, SOURCE_PRESENCE_ENGINE
 
 
+def resolve_greeting_allowed(session: Session, *, now: datetime | None = None) -> tuple[bool, str]:
+    """``(allowed, reason)`` from the Presence Engine's own greeting policy.
+
+    Evaluation only - it does not record a delivery and so does not start the cooldown.
+    That matters here more than anywhere: a condition is evaluated on every
+    ``POST /v1/routines/evaluate``, including the calls where a later condition fails and
+    nothing is ever narrated. A side effect there would burn the morning greeting on a
+    routine that never fired.
+    """
+    decision = presence_service.evaluate_greeting_now(session, now=now)
+    return decision.should_greet, decision.reason
+
+
 __all__ = [
     "SOURCE_CALLER",
     "SOURCE_NEVER_OBSERVED",
     "SOURCE_PRESENCE_ENGINE",
     "SOURCE_STALE",
     "SOURCE_UNKNOWN",
+    "resolve_greeting_allowed",
     "resolve_owner_present",
 ]
