@@ -14,6 +14,13 @@ function New-NativeFakeSsh {
         line) to argv.txt, appends every call to calls.txt (separated by ---), records
         stdin verbatim to stdin.txt, prints $env:FAKE_SSH_STDOUT when set, and exits with
         $env:FAKE_SSH_EXIT (default 0). Returns the exe path.
+
+        The stdin read is BOUNDED. On 2026-09-02 a debug run of the release driver left
+        this stub alive for sixty-three hours: release-cloud-core.ps1 invoked it as scp.exe
+        with stdin redirected but never closed, so Console.In.ReadToEnd() waited for an EOF
+        that could not arrive, and the whole task tree hung behind it. A test double that
+        can outlive its own run is an orphan generator, which the standing rule forbids.
+        Override the cap with $env:FAKE_SSH_STDIN_TIMEOUT_MS.
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)][string]$Directory)
@@ -22,15 +29,35 @@ function New-NativeFakeSsh {
     $source = @'
 using System;
 using System.IO;
+using System.Threading;
 public static class FakeSsh
 {
+    // Read redirected stdin, but never wait forever for an EOF the caller may never send.
+    // The reader runs on a background thread so it cannot hold the process open either:
+    // if the cap expires we record what arrived and exit anyway.
+    static string ReadStdinBounded()
+    {
+        if (!Console.IsInputRedirected) { return ""; }
+        int capMs = 10000;
+        string raw = Environment.GetEnvironmentVariable("FAKE_SSH_STDIN_TIMEOUT_MS");
+        if (!string.IsNullOrEmpty(raw)) { int.TryParse(raw, out capMs); }
+        string captured = "";
+        Thread reader = new Thread(delegate() {
+            try { captured = Console.In.ReadToEnd(); } catch (Exception) { }
+        });
+        reader.IsBackground = true;
+        reader.Start();
+        reader.Join(capMs);
+        return captured;
+    }
+
     public static int Main(string[] args)
     {
         string dir = AppDomain.CurrentDomain.BaseDirectory;
         string joined = string.Join("\n", args);
         File.WriteAllText(Path.Combine(dir, "argv.txt"), joined);
         File.AppendAllText(Path.Combine(dir, "calls.txt"), joined + "\n---\n");
-        File.WriteAllText(Path.Combine(dir, "stdin.txt"), Console.IsInputRedirected ? Console.In.ReadToEnd() : "");
+        File.WriteAllText(Path.Combine(dir, "stdin.txt"), ReadStdinBounded());
         string stdout = Environment.GetEnvironmentVariable("FAKE_SSH_STDOUT");
         if (!string.IsNullOrEmpty(stdout)) { Console.Out.WriteLine(stdout); }
         // The same binary serves as scp.exe and ssh.exe; each has its own exit knob so a

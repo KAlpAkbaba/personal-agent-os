@@ -4,7 +4,7 @@
   "current_milestone": "M17_COGNITIVE_FOUNDATIONS",
   "status": "M17 BUILT_AND_GATED_OFFLINE (all proxies green); M16 PROVEN_REAL except rows 10.5/10.6, which need one 15-second owner command (OWNER_ACTIONS item 17)",
   "last_completed_milestone": "M15_RESEARCH_ENGINE",
-  "last_updated": "2026-09-05T08:20:00+03:00",
+  "last_updated": "2026-09-05T12:58:00+03:00",
   "qualification": {
     "matrix": "docs/QUALIFICATION.md",
     "owner_queue": "docs/OWNER_ACTIONS.md",
@@ -51,7 +51,7 @@
     "scope": "M13 all tracks + review fixes + live-run fixes",
     "ci": "GREEN 2026-09-03 on bebed8f (7/7) after two runner-only fixes: 8.3 short TEMP path in package staging, and a timing-based ordering test rewritten to elapsed-time proof"
   },
-  "notes": "M12 voice: implementation and evidence frozen pending the owner's evening K66 rerun (item 9). M13: design (ADR-0050) built in four parallel tracks, merged, reviewed and fixed the same day; the local real chain passes with real Chrome and the live Internet; real acceptance needs the cloud release and one agent update (item 10). M19 multi-device recorded (ADR-0049), not started.",
+  "notes": "M12 voice: implementation and evidence frozen pending the owner's evening K66 rerun (item 9). M13: design (ADR-0050) built in four parallel tracks, merged, reviewed and fixed the same day; the local real chain passes with real Chrome and the live Internet; real acceptance needs the cloud release and one agent update (item 10). M19 multi-device recorded (ADR-0049), not started. | 2026-09-05: a debug run from 2026-09-02 was found still alive after 63 hours. Root cause: the checked-in test double scripts/tests/lib/CloudFakes.ps1 read stdin with Console.In.ReadToEnd(); release-cloud-core.ps1 invoked it as scp.exe with stdin redirected but never closed, so the read waited for an EOF that could not arrive and the whole task tree hung behind it. The fake's stdin read is now bounded (10s, FAKE_SSH_STDIN_TIMEOUT_MS) on a background thread. Nothing reached production - ssh/scp were compiled fakes. OPEN, not fixed: scripts/cloud/release-cloud-core.ps1 puts no timeout on its own scp/ssh invocations, so a real network stall would hang a real release the same way; changing that proven path needs its own qualification.",
   "m12_realtime_voice": {
     "status": "FOUNDATION_COMPLETE_OFFLINE_GATED; NOTHING PROVEN_REAL",
     "decisions": "ADR-0034 (architecture), ADR-0036 (A+E), ADR-0037 (C), ADR-0038 (B), ADR-0039 (C2 integration), ADR-0040 (D), ADR-0041 (credential path)",
