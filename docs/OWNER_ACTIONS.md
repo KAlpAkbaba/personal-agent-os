@@ -251,7 +251,7 @@ So this is deliberately NOT six tests. The one thing that verification cannot pr
 you can reach these subsystems by *speaking*, and that is all this asks.
 
 ```powershell
-.\scriptsoice\owner-explain.ps1 -M17 -OutFile explain-m17.json
+.\scripts\voice\owner-explain.ps1 -M17 -OutFile explain-m17.json
 ```
 
 It starts the voice shell and prints the six questions. Ask them in order, listen, then
