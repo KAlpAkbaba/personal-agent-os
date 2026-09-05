@@ -3,7 +3,7 @@
 The milestone spec is `docs/M18_HOLOGRAPHIC_CORE_SPEC.md`; this document is the
 renderer half of it, written by the agent that built `apps/web/app/core`.
 
-Status: **implemented for the states the contract actually carries** (2026-09-05)
+Status: **implemented, reconciled to contract v2** (2026-09-05)
 
 Governing document: `docs/DECISIONS.md` ADR-0052. Where this document and ADR-0052
 disagree, ADR-0052 wins.
@@ -51,6 +51,34 @@ we stopped being told anything.
 Steady states (`agent.idle`, `agent.waiting_owner`, `agent.error`,
 `evolution.shadow_ready`) never expire. `agent.goal_completed` is a *moment*: prominent
 for 20 s, then history.
+
+## 2a. Channels (contract v2)
+
+v2 put four kinds of statement on one bus, and they must not displace one another:
+
+| Channel | States | Drawn as |
+| --- | --- | --- |
+| `agent` | `agent.*` | the core body |
+| `lab` | `evolution.*` | the core body, as satellites/construction |
+| `ambient` | `eye.*`, `owner.*` | the band beside the core |
+| `release` | `release.*`, `routine.*`, `alarm.triggered` | the band beside the core |
+
+The core body reads `coreClaim` — the newest **agent/lab** event — not the API's `current`.
+Publishing `owner.likely_asleep` while research runs must not blank a working core: the
+owner going to bed is not the assistant stopping. The eye and the owner are read by prefix
+rather than by channel, because a presence update says nothing about the camera.
+
+Two new state kinds go with them. An `observation` (presence) lives five minutes by default
+and an `operation` (a release stage) fifteen, because twelve seconds is the wrong answer in
+both directions — but both still expire, and a decayed presence becomes **unknown**, never
+"still present". A publisher's own `ttl_s` beats every default.
+
+The camera cell carries the one rule the rest of the UI does not: `untold` is not
+`disabled`. An indicator that reads as "off" when nobody has said anything would be a
+privacy assurance nobody gave, so the two are separate statuses with separate wording, and
+an unreadable `eye.*` state is flagged as unreadable. Presence is always shown with the
+engine's confidence, or with "güven bildirilmedi" — never with a substituted number — and
+the band states on every render that perception is not authentication.
 
 ## 3. State → visual
 

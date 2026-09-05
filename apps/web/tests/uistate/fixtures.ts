@@ -9,7 +9,11 @@
  * renderer pass its tests while failing against the real bus.
  */
 
-import type { UiStateEvent, UiStateResponse } from "../../app/lib/uistate/contract";
+import {
+  KNOWN_CONTRACT_VERSION,
+  type UiStateEvent,
+  type UiStateResponse,
+} from "../../app/lib/uistate/contract";
 
 /** A fixed instant, so every age assertion is exact. */
 export const T0 = Date.parse("2026-09-05T20:00:00.000Z");
@@ -50,7 +54,9 @@ export function response(
 ): UiStateResponse {
   const current = events.length ? events[events.length - 1] : null;
   return {
-    contract_version: 1,
+    // Follows the client's own version so a contract bump cannot leave every
+    // fixture silently exercising the mismatch path instead of the real one.
+    contract_version: KNOWN_CONTRACT_VERSION,
     current,
     events,
     sequence: current?.sequence ?? 0,
@@ -189,4 +195,92 @@ export const MEMORY_RETRIEVAL = (progress: number | null = null) =>
     subsystem: "experience",
     progress,
     status: "compile_started",
+  });
+
+// -------------------------------------------------------- v2: the room
+
+/**
+ * Local perception running. `camera` is a short device token and nothing else:
+ * no frame, no thumbnail, no identity — the perception layer emits structured
+ * observations only (M18 spec §2).
+ */
+export const EYE_ACTIVE = () =>
+  event({
+    state: "eye.active",
+    subsystem: "system",
+    status: "active",
+    metadata: { camera: "cam-0" },
+  });
+
+export const EYE_DISABLED = (reason = "owner_command") =>
+  event({
+    state: "eye.disabled",
+    subsystem: "system",
+    status: "disabled",
+    metadata: { reason },
+  });
+
+/**
+ * A presence inference. `confidence` is the engine's own figure and every
+ * fixture carries one, because a presence state without a confidence is the
+ * exception this client has to render specially rather than the normal case.
+ */
+export const OWNER_PRESENT = (confidence = 0.91) =>
+  event({
+    state: "owner.present",
+    subsystem: "system",
+    status: "present",
+    metadata: { confidence, signals: 3 },
+  });
+
+export const OWNER_LIKELY_ASLEEP = (confidence = 0.86) =>
+  event({
+    state: "owner.likely_asleep",
+    subsystem: "system",
+    status: "likely_asleep",
+    metadata: { confidence, signals: 4, ttl_s: 1800 },
+  });
+
+export const OWNER_AWAY = (confidence = 0.74) =>
+  event({
+    state: "owner.away",
+    subsystem: "system",
+    status: "away",
+    metadata: { confidence, signals: 2 },
+  });
+
+/** A presence state the engine published with no confidence at all. */
+export const OWNER_PRESENT_NO_CONFIDENCE = () =>
+  event({ state: "owner.present", subsystem: "system", status: "present" });
+
+export const ROUTINE_ARMED = () =>
+  event({
+    state: "routine.armed",
+    subsystem: "system",
+    status: "armed",
+    label: "Sabah brifingi",
+  });
+
+export const ALARM_TRIGGERED = () =>
+  event({ state: "alarm.triggered", subsystem: "system", status: "triggered" });
+
+/** The owner-authorised release path, mid-deployment (ADR-0055). */
+export const RELEASE_DEPLOYING = () =>
+  event({
+    state: "release.deploying",
+    subsystem: "deployment",
+    status: "deploying",
+    module_id: "opp-1",
+    progress: 0.4,
+    metadata: { risk_tier: 2 },
+  });
+
+export const RELEASE_APPROVAL_REQUIRED = () =>
+  event({
+    state: "release.owner_approval_required",
+    subsystem: "evolution",
+    status: "owner_approval_required",
+    module_id: "opp-1",
+    severity: "notice",
+    metadata: { risk_tier: 3 },
   });

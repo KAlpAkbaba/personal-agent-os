@@ -177,7 +177,7 @@ describe("claims expire", () => {
     expect(stateKind("agent.thinking")).toBe("transient");
     // An unknown state is assumed transient: the safer of the two, because it
     // stops being claimed rather than being asserted forever.
-    expect(stateKind("eye.watching")).toBe("transient");
+    expect(stateKind("agent.daydreaming")).toBe("transient");
   });
 
   it("liveEventFor only answers while the evidence is fresh", () => {

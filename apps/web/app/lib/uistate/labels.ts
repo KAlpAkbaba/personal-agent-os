@@ -8,6 +8,7 @@
  * separate here and everywhere downstream.
  */
 
+import type { EyeStatus, PresenceKind, ReleaseStage } from "./ambient";
 import type { KnownUiState } from "./contract";
 import type { CoreVisualKind } from "./visual";
 
@@ -81,6 +82,26 @@ export const STATE_LABEL: Record<KnownUiState, string> = {
   "evolution.building": "Lab: inşa ediyor",
   "evolution.testing": "Lab: test ediyor",
   "evolution.shadow_ready": "Lab: gölge hazır",
+  "eye.active": "Göz açık",
+  "eye.disabled": "Göz kapalı",
+  // "likely" is in the state name because the engine is not sure. The Turkish
+  // says so too: dropping "büyük olasılıkla" would turn an inference into a fact.
+  "owner.present": "Sahip burada",
+  "owner.away": "Sahip yok",
+  "owner.returned": "Sahip döndü",
+  "owner.resting": "Sahip dinleniyor",
+  "owner.likely_asleep": "Sahip büyük olasılıkla uyuyor",
+  "owner.awake": "Sahip uyanık",
+  "routine.armed": "Rutin kuruldu",
+  "routine.triggered": "Rutin çalıştı",
+  "alarm.triggered": "Alarm çaldı",
+  "release.owner_approval_required": "Sahip onayı gerekiyor",
+  "release.owner_authorized": "Sahip yetkilendirdi",
+  "release.qualifying": "Yeterlilik kontrolü",
+  "release.deploying": "Kuruluyor",
+  "release.verifying": "Doğrulanıyor",
+  "release.live": "Canlı",
+  "release.rollback": "Geri alınıyor",
 };
 
 export function stateLabel(state: string): string {
@@ -129,4 +150,61 @@ export function formatAge(ms: number | null): string {
 /** Percent for display, only ever called with a real progress figure. */
 export function formatProgress(progress: number): string {
   return `%${Math.round(progress * 100)}`;
+}
+
+// ------------------------------------------------------------ v2: the room
+
+/**
+ * The eye's three states, and why "untold" is not "off".
+ *
+ * A camera indicator that shows "kapalı" when nobody has said anything is the
+ * one failure mode a privacy indicator may never have: it would tell the owner
+ * they are not being watched on no evidence at all.
+ */
+export const EYE_LABEL: Record<EyeStatus, string> = {
+  active: "Göz açık",
+  disabled: "Göz kapalı",
+  untold: "Kamera durumu bildirilmedi",
+};
+
+export const EYE_DETAIL: Record<EyeStatus, string> = {
+  active: "Yerel algı çalışıyor. Görüntü buluta gönderilmiyor ve kaydedilmiyor.",
+  disabled: "Algı durduruldu.",
+  untold: "Kameranın açık mı kapalı mı olduğu bildirilmedi. Bu 'kapalı' demek değil.",
+};
+
+export const PRESENCE_LABEL: Record<PresenceKind, string> = {
+  present: "Sahip burada",
+  away: "Sahip yok",
+  returned: "Sahip döndü",
+  resting: "Sahip dinleniyor",
+  likely_asleep: "Sahip büyük olasılıkla uyuyor",
+  awake: "Sahip uyanık",
+  unknown: "Sahip durumu bilinmiyor",
+};
+
+export const RELEASE_LABEL: Record<ReleaseStage, string> = {
+  owner_approval_required: "Sahip onayı bekleniyor",
+  owner_authorized: "Sahip yetkilendirdi",
+  qualifying: "Yeterlilik kontrolü",
+  deploying: "Kuruluyor",
+  verifying: "Doğrulanıyor",
+  live: "Canlı",
+  rollback: "Geri alınıyor",
+  routine_armed: "Rutin kuruldu",
+  routine_triggered: "Rutin çalıştı",
+  alarm_triggered: "Alarm çaldı",
+  none: "Süren bir yayın yok",
+};
+
+/**
+ * Confidence, stated as the engine stated it.
+ *
+ * Never rounded to "kesin", never omitted when present, and when the publisher
+ * sent none the answer is that it sent none — the M18 spec's example is exactly
+ * this: `LIKELY_ASLEEP confidence=0.86`, not `OWNER_IS_ASLEEP`.
+ */
+export function formatConfidence(confidence: number | null): string {
+  if (confidence === null) return "güven bildirilmedi";
+  return `güven %${Math.round(confidence * 100)}`;
 }

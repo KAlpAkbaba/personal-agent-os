@@ -15,7 +15,7 @@
  */
 
 /** Contract version this client was written against (`CONTRACT_VERSION` in contract.py). */
-export const KNOWN_CONTRACT_VERSION = 1;
+export const KNOWN_CONTRACT_VERSION = 2;
 
 /** Bounds copied from the publisher, used to refuse over-long labels defensively. */
 export const MAX_LABEL_CHARS = 64;
@@ -52,6 +52,27 @@ export const UI_STATES = [
   "evolution.building",
   "evolution.testing",
   "evolution.shadow_ready",
+  // v2 — the room. Local perception, and whether the owner is there.
+  "eye.active",
+  "eye.disabled",
+  "owner.present",
+  "owner.away",
+  "owner.returned",
+  "owner.resting",
+  "owner.likely_asleep",
+  "owner.awake",
+  // v2 — acting on time rather than on request.
+  "routine.armed",
+  "routine.triggered",
+  "alarm.triggered",
+  // v2 — the owner-authorised release path (ADR-0055), made watchable.
+  "release.owner_approval_required",
+  "release.owner_authorized",
+  "release.qualifying",
+  "release.deploying",
+  "release.verifying",
+  "release.live",
+  "release.rollback",
 ] as const;
 
 export type KnownUiState = (typeof UI_STATES)[number];
@@ -166,8 +187,18 @@ export type UiStateContract = {
  *               we were not told the work stopped, only that we stopped hearing.
  * - `moment`  — a thing that happened at an instant (a goal completing). Shown
  *               prominently for `MOMENT_TTL_MS`, then treated as last-known.
+ * - `observation` — v2. A statement about the *room* from local perception: the
+ *               owner was present, was likely asleep. These decay, and the
+ *               decay is the honest part — a camera observation from forty
+ *               minutes ago is not evidence about now, so it expires to
+ *               unknown rather than to "still present" (M18 spec §1).
+ * - `operation` — v2. A stage of a long, watched operation (a release
+ *               qualifying, deploying, verifying). Minutes are normal here, so
+ *               a 12-second transient TTL would report a healthy deployment as
+ *               lost; but it still expires, because a `deploying` from
+ *               yesterday is not a deployment happening now.
  */
-export type StateKind = "steady" | "transient" | "moment";
+export type StateKind = "steady" | "transient" | "moment" | "observation" | "operation";
 
 const STATE_KINDS: Record<KnownUiState, StateKind> = {
   "agent.idle": "steady",
@@ -185,6 +216,28 @@ const STATE_KINDS: Record<KnownUiState, StateKind> = {
   "evolution.building": "transient",
   "evolution.testing": "transient",
   "evolution.shadow_ready": "steady",
+  // The eye is either running or it is not; that holds until something changes it.
+  "eye.active": "steady",
+  "eye.disabled": "steady",
+  // Presence decays. Every one of these is an inference from evidence with an age.
+  "owner.present": "observation",
+  "owner.away": "observation",
+  "owner.returned": "moment",
+  "owner.resting": "observation",
+  "owner.likely_asleep": "observation",
+  "owner.awake": "observation",
+  // An armed routine stays armed; firing is an instant.
+  "routine.armed": "steady",
+  "routine.triggered": "moment",
+  "alarm.triggered": "moment",
+  // The release path: waiting-on-owner and terminal stages hold, work stages decay.
+  "release.owner_approval_required": "steady",
+  "release.owner_authorized": "steady",
+  "release.qualifying": "operation",
+  "release.deploying": "operation",
+  "release.verifying": "operation",
+  "release.live": "steady",
+  "release.rollback": "steady",
 };
 
 /**
@@ -201,20 +254,79 @@ export const TRANSIENT_TTL_MS = 12_000;
 /** How long `agent.goal_completed` stays a headline before becoming history. */
 export const MOMENT_TTL_MS = 20_000;
 
+/**
+ * Default lifetime of a perception observation, when the publisher did not say.
+ *
+ * Deliberately the client's *conservative* guess and nothing more: the presence
+ * engine owns the real staleness policy, and when it publishes `ttl_s` that
+ * figure wins (see `stateTtlMs`). Five minutes is short enough that an owner who
+ * left the room is not still drawn as present, and long enough that a presence
+ * state which is only republished on change does not flicker to unknown.
+ */
+export const OBSERVATION_TTL_MS = 300_000;
+
+/** Default lifetime of a release stage. Deployments take minutes, not seconds. */
+export const OPERATION_TTL_MS = 900_000;
+
 export function stateKind(state: string): StateKind {
   return isKnownState(state) ? STATE_KINDS[state] : "transient";
 }
 
-/** How long this state may be claimed as current, in ms; `Infinity` for steady. */
-export function stateTtlMs(state: string): number {
-  const kind = stateKind(state);
-  if (kind === "steady") return Number.POSITIVE_INFINITY;
-  return kind === "moment" ? MOMENT_TTL_MS : TRANSIENT_TTL_MS;
+const DEFAULT_TTL_MS: Record<StateKind, number> = {
+  steady: Number.POSITIVE_INFINITY,
+  transient: TRANSIENT_TTL_MS,
+  moment: MOMENT_TTL_MS,
+  observation: OBSERVATION_TTL_MS,
+  operation: OPERATION_TTL_MS,
+};
+
+/**
+ * How long this state may be claimed as current, in ms; `Infinity` for steady.
+ *
+ * `event` is optional so callers that only have a token still get the default.
+ * When the publisher sent `ttl_s`, it is preferred over every default here: the
+ * subsystem that made the observation knows how long it is good for, and the
+ * client guessing over the top of that would be the renderer inventing truth.
+ */
+export function stateTtlMs(state: string, event?: UiStateEvent | null): number {
+  const declared = event ? metaNumber(event, "ttl_s") : null;
+  if (declared !== null && declared > 0) return declared * 1000;
+  return DEFAULT_TTL_MS[stateKind(state)];
+}
+
+/**
+ * Which conversation a state belongs to.
+ *
+ * v2 put four different kinds of statement on one bus, and they must not
+ * displace one another. `owner.likely_asleep` is a fact about the room; it is
+ * not the agent going quiet, and publishing it must never blank a core that is
+ * genuinely thinking. So the core body draws the `agent`/`lab` channels, and
+ * ambient and release are drawn as their own bands with their own ages.
+ */
+export type StateChannel = "agent" | "lab" | "ambient" | "release";
+
+export function stateChannel(state: string): StateChannel {
+  if (state.startsWith("evolution.")) return "lab";
+  if (state.startsWith("eye.") || state.startsWith("owner.")) return "ambient";
+  if (state.startsWith("release.") || state.startsWith("routine.") || state === "alarm.triggered")
+    return "release";
+  return "agent";
+}
+
+/** States that drive the core body itself. */
+export function isCoreChannel(state: string): boolean {
+  const channel = stateChannel(state);
+  return channel === "agent" || channel === "lab";
 }
 
 /** States published by the evolution lab. Never mixed with the agent's own. */
 export function isEvolutionState(state: string): boolean {
   return state.startsWith("evolution.");
+}
+
+/** Presence inferences. Every one of these is probabilistic and carries a confidence. */
+export function isPresenceState(state: string): boolean {
+  return state.startsWith("owner.");
 }
 
 // ------------------------------------------------------------------ parsing

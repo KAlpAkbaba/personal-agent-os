@@ -239,9 +239,9 @@ describe("the readout says which kind of silence it is", () => {
   });
 
   it("an unknown state is named, not guessed", () => {
-    const html = readout(() => event({ state: "eye.watching", subsystem: "system" }));
+    const html = readout(() => event({ state: "agent.daydreaming", subsystem: "system" }));
     expect(html).toContain('data-core-kind="unknown_state"');
-    expect(html).toContain('data-core-state="eye.watching"');
+    expect(html).toContain('data-core-state="agent.daydreaming"');
     expect(html).toContain("Sözleşme güncellenmiş olabilir.");
   });
 });

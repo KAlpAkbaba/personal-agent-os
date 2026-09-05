@@ -12,7 +12,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { UI_STATES, type KnownUiState } from "../../app/lib/uistate/contract";
+import { UI_STATES, isCoreChannel } from "../../app/lib/uistate/contract";
 import {
   type CoreVisualKind,
   ERROR_AGITATION,
@@ -46,8 +46,18 @@ function visualAfter(state: string, extra: Parameters<typeof event>[0] | null = 
   return visualFor(truth, T0);
 }
 
-/** Which visual kind each contract state must produce, and nothing else. */
-const EXPECTED_KIND: Record<KnownUiState, CoreVisualKind> = {
+/**
+ * Which visual kind each CORE-CHANNEL state must produce, and nothing else.
+ *
+ * Contract v2 added the room (`eye.*`, `owner.*`) and the release path, which
+ * are deliberately not core visuals: the owner going to bed is not the agent
+ * changing what it is doing, so those states are drawn beside the core instead
+ * (see `coreClaim`). They are asserted separately, and the coverage check below
+ * is against the core channel rather than the whole contract.
+ */
+const CORE_STATES = UI_STATES.filter(isCoreChannel);
+
+const EXPECTED_KIND: Record<string, CoreVisualKind> = {
   "agent.idle": "idle",
   "agent.listening": "listening",
   "agent.thinking": "thinking",
@@ -66,21 +76,42 @@ const EXPECTED_KIND: Record<KnownUiState, CoreVisualKind> = {
 };
 
 describe("a visual state is entered only by its own event", () => {
-  it("covers every state in the contract", () => {
-    // If the API grows a state, this fails until the table above is updated —
-    // which is the point: a new state must be a deliberate visual decision.
-    expect(Object.keys(EXPECTED_KIND).toSorted()).toEqual([...UI_STATES].toSorted());
+  it("covers every core-channel state in the contract", () => {
+    // If the API grows a core state, this fails until the table above is
+    // updated — which is the point: a new state must be a deliberate visual
+    // decision, never a default animation.
+    expect(Object.keys(EXPECTED_KIND).toSorted()).toEqual([...CORE_STATES].toSorted());
   });
 
-  for (const state of UI_STATES) {
+  for (const state of CORE_STATES) {
     it(`${state} produces ${EXPECTED_KIND[state]} and no other state does`, () => {
       const expected = EXPECTED_KIND[state];
       expect(visualAfter(state).kind).toBe(expected);
 
-      for (const other of UI_STATES) {
+      for (const other of CORE_STATES) {
         if (EXPECTED_KIND[other] === expected) continue;
         expect(visualAfter(other).kind).not.toBe(expected);
       }
+    });
+  }
+
+  const NON_CORE = UI_STATES.filter((state) => !isCoreChannel(state));
+
+  it("has non-core states, or the channel split is not being exercised", () => {
+    expect(NON_CORE.length).toBeGreaterThan(0);
+  });
+
+  for (const state of NON_CORE) {
+    it(`${state} tells the core body nothing`, () => {
+      // "Untold" is the correct core reading here: something was published, but
+      // nothing was said about what the agent is doing. Drawing idle would be a
+      // claim; drawing this state's own visual would put the room where the
+      // agent belongs.
+      const intent = visualAfter(state);
+      expect(intent.kind).toBe("untold");
+      expect(intent.breathAmplitude).toBe(0);
+      expect(intent.topology).toBe(0);
+      expect(intent.pulse).toBe(0);
     });
   }
 });
@@ -354,12 +385,12 @@ describe("states this build does not know", () => {
     resetSequence();
     const truth = applyResponse(
       emptyTruth(),
-      response([event({ state: "eye.watching", subsystem: "system" })]),
+      response([event({ state: "agent.daydreaming", subsystem: "system" })]),
       T0,
     );
     const intent = visualFor(truth, T0);
     expect(intent.kind).toBe("unknown_state");
-    expect(intent.state).toBe("eye.watching");
+    expect(intent.state).toBe("agent.daydreaming");
     expect(intent.breathAmplitude).toBe(0);
     expect(intent.topology).toBe(0);
     expect(intent.pulse).toBe(0);

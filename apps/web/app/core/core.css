@@ -454,3 +454,70 @@
     animation: none;
   }
 }
+
+/* ----------------------------------------------------- v2: ambient band */
+
+/*
+ * The room and the release path, drawn beside the Core and never as it.
+ *
+ * The eye cell is a privacy indicator, so it is the only thing in this file
+ * with a permanent colour rule: active is unmistakable, and "untold" is
+ * deliberately NOT the same colour as "disabled" — an indicator that looks like
+ * "off" when nobody has said anything would be an assurance nobody gave.
+ */
+.ambient-band {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  justify-content: center;
+  width: min(100%, 60rem);
+  margin: 0 auto;
+}
+
+.ambient-cell {
+  flex: 1 1 15rem;
+  min-width: 14rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid #232734;
+  border-radius: 10px;
+  text-align: left;
+  font-size: 0.8rem;
+}
+
+.ambient-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.ambient-cell[data-eye-status="active"] {
+  border-color: var(--accent);
+}
+
+.ambient-cell[data-eye-status="active"] .ambient-title::before {
+  content: "● ";
+  color: var(--accent);
+}
+
+.ambient-cell[data-eye-status="untold"] {
+  border-style: dashed;
+}
+
+/* A decayed presence is drawn as the unknown it is, not as a dimmer version
+   of the state it used to be. */
+.ambient-cell[data-presence="unknown"] .ambient-title {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.ambient-cell[data-release-stage="owner_approval_required"] {
+  border-color: var(--accent);
+}
+
+.ambient-cell[data-release-stage="deploying"],
+.ambient-cell[data-release-stage="verifying"],
+.ambient-cell[data-release-stage="rollback"] {
+  border-color: var(--warn);
+}

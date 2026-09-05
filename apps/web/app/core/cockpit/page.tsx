@@ -18,8 +18,11 @@ import { useMemo } from "react";
 
 import OwnerGate from "../../components/OwnerGate";
 import { useCockpitData } from "../../lib/cockpit/useCockpitData";
+import { eyeView, presenceView, releaseView } from "../../lib/uistate/ambient";
+import { eyeClaim, presenceClaim, releaseClaim } from "../../lib/uistate/truth";
 import { useCoreState } from "../../lib/uistate/useCoreState";
 import { visualFor } from "../../lib/uistate/visual";
+import AmbientBand from "../AmbientBand";
 import CoreBar from "../CoreBar";
 import CoreView from "../CoreView";
 import StateReadout from "../StateReadout";
@@ -46,6 +49,9 @@ function Cockpit() {
   const { tier, setTier, force2d, setForce2d } = useCorePreferences();
 
   const intent = useMemo(() => visualFor(truth, now), [truth, now]);
+  const eye = useMemo(() => eyeView(eyeClaim(truth, now)), [truth, now]);
+  const presence = useMemo(() => presenceView(presenceClaim(truth, now)), [truth, now]);
+  const release = useMemo(() => releaseView(releaseClaim(truth, now)), [truth, now]);
 
   return (
     <div className="core-page">
@@ -66,6 +72,7 @@ function Cockpit() {
         <div className="cockpit-core">
           <CoreView intent={intent} tier={tier} force2d={force2d} />
           <StateReadout intent={intent} />
+          <AmbientBand eye={eye} presence={presence} release={release} />
         </div>
 
         <div className="cockpit-panels">

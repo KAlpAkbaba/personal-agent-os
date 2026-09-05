@@ -3519,3 +3519,54 @@ Found by writing a client against the real call sites, not by reading the contra
 
 Neither is fixed here. Both are one-line-ish changes in `services/api`, which this work was
 told not to touch, and both would need their own tests.
+
+**Resolution of (1), 2026-09-05.** Fixed on main. The two private wrapper copies were
+replaced by one `app/experience/signals.py`, which has no `except` of its own: the publisher
+already guarantees "never raises" for runtime failure, so anything thrown at that call site
+is a wrong call and must fail a test rather than silence a subsystem. Lists are reduced to
+their length before publishing, because the publisher drops content-shaped values and
+`IngestReport.errors` was therefore vanishing entirely. Tests read the stamped event back
+off a real publisher rather than asserting a mock was called - a mock would have passed
+against the broken code too.
+
+(2) stands. `intensity=0.7` at the ranking stage is a declared figure, not a measurement,
+and the renderer still treats it as one.
+
+### ADR-0056 addendum 2 - the channel split, and contract v2
+
+Status: Accepted (2026-09-05)
+
+The renderer was built against contract v1 while main published v2, which added twenty-two
+states: the camera (`eye.*`), the owner's presence (`owner.*`), routines and alarms, and the
+owner-authorised release path (`release.*`). Reconciling them exposed a modelling error that
+v1 had hidden: **the bus carries four different kinds of statement, and `current` is only
+the newest of them.**
+
+`agent.thinking` is what the assistant is doing. `owner.likely_asleep` is a fact about the
+room. `release.deploying` is an operation being watched. Under v1 every state was the first
+kind, so "the API's current event" and "what the core should draw" were the same question.
+Under v2 they are not: publishing that the owner went to bed would have blanked a core that
+was genuinely thinking, and the owner would have watched their assistant appear to stop work
+because they yawned.
+
+So states carry a **channel** (`agent`, `lab`, `ambient`, `release`). The core body draws
+agent/lab via `coreClaim`; ambient and release are drawn beside it, each with its own age.
+The eye and the owner are further separated by prefix, because a presence update says nothing
+about the camera and must not be able to blank a privacy indicator.
+
+Two more decisions worth recording:
+
+1. **Two new state kinds, because twelve seconds is the wrong TTL twice over.** A presence
+   observation is not stale after twelve seconds (`observation`, five minutes), and a
+   deployment that takes four minutes is not lost (`operation`, fifteen). Both still expire:
+   the M18 spec's rule is that an old observation degrades to UNKNOWN, never to "still
+   present". When a publisher sends `ttl_s` it wins over every default here - the subsystem
+   that made the observation knows how long it is good for, and the client guessing over the
+   top of that would be the renderer inventing truth.
+
+2. **The camera indicator may not say "off" without evidence.** `untold` and `disabled` are
+   different sentences and only one is a privacy assurance, so they are separate statuses
+   with separate wording, and an `eye.*` state this build cannot read is flagged as
+   unreadable rather than falling to "off". Presence is rendered with the engine's own
+   confidence or with "güven bildirilmedi" - never with a substituted number - and the band
+   states on every render that perception is not authentication (M18 spec §2).

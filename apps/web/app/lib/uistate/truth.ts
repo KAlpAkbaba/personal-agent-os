@@ -18,10 +18,13 @@
 
 import {
   type Severity,
+  type StateChannel,
   type UiStateEvent,
   type UiStateResponse,
   ageMs,
+  isCoreChannel,
   isSeverity,
+  stateChannel,
   stateTtlMs,
 } from "./contract";
 
@@ -166,11 +169,90 @@ export type Claim = {
 };
 
 export function currentClaim(truth: CoreTruth, now: number): Claim {
-  const event = truth.current;
+  return claimFor(truth.current, now);
+}
+
+function claimFor(event: UiStateEvent | null, now: number): Claim {
   if (!event) return { event: null, ageMs: null, expired: false };
   const age = ageMs(event, now);
   if (age === null) return { event, ageMs: null, expired: false };
-  return { event, ageMs: age, expired: age > stateTtlMs(event.state) };
+  return { event, ageMs: age, expired: age > stateTtlMs(event.state, event) };
+}
+
+/** The newest event the client holds whose state token satisfies `predicate`. */
+export function newestWhere(
+  truth: CoreTruth,
+  predicate: (state: string) => boolean,
+): UiStateEvent | null {
+  let best: UiStateEvent | null = null;
+  for (const event of Object.values(truth.latestByState)) {
+    if (!predicate(event.state)) continue;
+    if (!best || event.sequence >= best.sequence) best = event;
+  }
+  return best;
+}
+
+/** The newest event the client holds on `channel`, expired or not. */
+export function newestOn(truth: CoreTruth, channel: StateChannel): UiStateEvent | null {
+  return newestWhere(truth, (state) => stateChannel(state) === channel);
+}
+
+/**
+ * The still-claimable event for one *sub*-channel, addressed by state prefix.
+ *
+ * The ambient channel carries two independent facts — whether the camera is
+ * perceiving and whether the owner is there — and they must not overwrite each
+ * other. A published `owner.present` says nothing about the camera, so reading
+ * the eye's status from "the newest ambient event" would let a presence update
+ * silently blank the privacy indicator.
+ */
+export function prefixClaim(truth: CoreTruth, prefix: string, now: number): Claim {
+  return claimFor(
+    newestWhere(truth, (state) => state.startsWith(prefix)),
+    now,
+  );
+}
+
+/** Whether local perception is running, from `eye.*` alone. */
+export function eyeClaim(truth: CoreTruth, now: number): Claim {
+  return prefixClaim(truth, "eye.", now);
+}
+
+/** Where the owner is, from `owner.*` alone. */
+export function presenceClaim(truth: CoreTruth, now: number): Claim {
+  return prefixClaim(truth, "owner.", now);
+}
+
+/** The release path and the routines that drive it. */
+export function releaseClaim(truth: CoreTruth, now: number): Claim {
+  return channelClaim(truth, "release", now);
+}
+
+/**
+ * What the core body may claim right now.
+ *
+ * Contract v2 put the room (`eye.*`, `owner.*`) and the release path on the same
+ * bus as the agent's own activity, so the API's `current` is no longer the same
+ * question as "what is the agent doing". A published `owner.likely_asleep` must
+ * not blank a core that is genuinely thinking — the owner going to bed is not the
+ * assistant stopping work — so the body reads the newest agent/lab event and the
+ * other channels are drawn beside it, each with its own age.
+ */
+export function coreClaim(truth: CoreTruth, now: number): Claim {
+  const current = truth.current;
+  if (current && isCoreChannel(current.state)) return claimFor(current, now);
+  const agent = newestOn(truth, "agent");
+  const lab = newestOn(truth, "lab");
+  const newest = !agent ? lab : !lab ? agent : lab.sequence > agent.sequence ? lab : agent;
+  // No agent/lab event at all is not the same as no event at all: the client has
+  // been told something, just nothing about what the agent is doing. `null` here
+  // renders as "untold", which is exactly that statement.
+  return claimFor(newest, now);
+}
+
+/** The still-claimable event on `channel`, or `null` once it has decayed. */
+export function channelClaim(truth: CoreTruth, channel: StateChannel, now: number): Claim {
+  return claimFor(newestOn(truth, channel), now);
 }
 
 /**
@@ -188,7 +270,7 @@ export function liveEventFor(
   if (!event) return null;
   const age = ageMs(event, now);
   if (age === null) return event;
-  return age > stateTtlMs(state) ? null : event;
+  return age > stateTtlMs(state, event) ? null : event;
 }
 
 /** Highest severity among events still live, for the cockpit's health line. */
@@ -197,7 +279,7 @@ export function liveSeverity(truth: CoreTruth, now: number): Severity {
   let worst: Severity = "info";
   for (const event of Object.values(truth.latestByState)) {
     const age = ageMs(event, now);
-    if (age !== null && age > stateTtlMs(event.state)) continue;
+    if (age !== null && age > stateTtlMs(event.state, event)) continue;
     if (!isSeverity(event.severity)) continue;
     if (order.indexOf(event.severity) > order.indexOf(worst)) worst = event.severity;
   }

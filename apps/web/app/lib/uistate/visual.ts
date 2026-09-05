@@ -29,7 +29,7 @@ import {
   isKnownState,
   metaNumber,
 } from "./contract";
-import { type Claim, type CoreTruth, currentClaim } from "./truth";
+import { type Claim, type CoreTruth, coreClaim } from "./truth";
 
 export type CoreVisualKind =
   /** No poll has succeeded yet. */
@@ -387,9 +387,11 @@ function forLiveState(event: UiStateEvent, claim: Claim): VisualIntent {
       };
 
     default:
-      // Unreachable while `isKnownState` gates this function, but a new state
-      // added to the contract must land somewhere honest rather than here by
-      // accident, so it degrades to the explicit unknown presentation.
+      // Reached only by a contract state this table has not been taught. Both
+      // gates upstream (`isKnownState`, and `coreClaim`'s agent/lab filter)
+      // normally keep it empty; a state added to the contract and forgotten
+      // here must still land somewhere honest, so it degrades to the explicit
+      // unknown presentation rather than to a default animation.
       return { ...base("unknown_state", "unknown"), dim: 0.4 };
   }
 }
@@ -409,7 +411,11 @@ export function visualFor(truth: CoreTruth, now: number): VisualIntent {
     return { ...blank("connecting", "unknown"), dim: 0.5 };
   }
 
-  const claim = currentClaim(truth, now);
+  // The core body draws the AGENT/LAB channel, not the API's `current`. Contract
+  // v2 shares the bus with the room and the release path, and an `owner.away`
+  // published while research runs must not blank a core that is genuinely
+  // working (see `coreClaim`). Those channels are drawn beside the core instead.
+  const claim = coreClaim(truth, now);
 
   if (truth.connection.kind === "unreachable") {
     // Keep the shape of what was last known, but visibly faded and with every

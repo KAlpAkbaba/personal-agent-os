@@ -17,8 +17,11 @@
 import { useMemo } from "react";
 
 import OwnerGate from "../components/OwnerGate";
+import { eyeView, presenceView, releaseView } from "../lib/uistate/ambient";
+import { eyeClaim, presenceClaim, releaseClaim } from "../lib/uistate/truth";
 import { useCoreState } from "../lib/uistate/useCoreState";
 import { visualFor } from "../lib/uistate/visual";
+import AmbientBand from "./AmbientBand";
 import CoreBar from "./CoreBar";
 import CoreView from "./CoreView";
 import StateReadout from "./StateReadout";
@@ -32,6 +35,11 @@ function MinimalCore() {
   // Recomputed whenever the truth or the clock moves — and only then. The
   // intent is a pure function of both, so there is no hidden animation state.
   const intent = useMemo(() => visualFor(truth, now), [truth, now]);
+  // Contract v2's other channels, each read from its own claim so none of them
+  // can overwrite another (see `prefixClaim`).
+  const eye = useMemo(() => eyeView(eyeClaim(truth, now)), [truth, now]);
+  const presence = useMemo(() => presenceView(presenceClaim(truth, now)), [truth, now]);
+  const release = useMemo(() => releaseView(releaseClaim(truth, now)), [truth, now]);
 
   return (
     <div className="core-page">
@@ -47,6 +55,7 @@ function MinimalCore() {
       <main className="core-minimal">
         <CoreView intent={intent} tier={tier} force2d={force2d} />
         <StateReadout intent={intent} />
+        <AmbientBand eye={eye} presence={presence} release={release} />
       </main>
     </div>
   );
