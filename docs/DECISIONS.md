@@ -3433,3 +3433,89 @@ QUALIFYING → LIVE`, and no `DEPLOYING`/`VERIFYING`/`ROLLING_BACK` states exist
 them is M18 work, and half-building a production deployment state machine would be worse
 than not starting it. The Acceptance Wording Guard stays `SHADOW_READY` and is not deployed
 by the qualification.
+
+## ADR-0056 — The Holographic Core renderer: silence is not calm (2026-09-05)
+
+Status: Accepted
+
+Context: ADR-0052 reserved the architecture and deliberately did not build the renderer.
+This is the renderer, built in `apps/web` as the pure consumer ADR-0052 described, with no
+further subsystem changes. Two things about the starting state are worth recording because
+the brief assumed otherwise: `docs/M18_HOLOGRAPHIC_CORE_SPEC.md` did not exist (it does
+now, written from ADR-0052 and the contract module), and the contract is **v1** with the
+fifteen `agent.*`/`evolution.*` states — there are no `eye.*`, `owner.*`, `routine.*`,
+`alarm.*` or `release.*` states in this repository. The renderer was built against what the
+API actually serves, and treats anything else as an explicitly unknown state.
+
+Decisions:
+
+1. **Silence is four different facts, and they are drawn as four different things.**
+   The hardest honesty problem was not "what does thinking look like" but "what does
+   nothing look like". `agent.idle` (reported calm), `untold` (polls succeed, the bus has
+   never published), `last_known` (a claim aged out), `unreachable` and `unauthorized` are
+   separate visual kinds with separate Turkish wording. Collapsing any of them into a calm
+   breathing core would be the most common lie the Core could tell, because silence is the
+   most common thing it will ever have to render.
+2. **A transient state expires; it does not become idle.** The bus publishes entries into
+   states and never exits, so an old `agent.thinking` is evidence that it *was* thinking.
+   After 12 s the client stops claiming it and shows the shape, still and faded, with its
+   age. Falling back to idle would invent the one fact nobody published: that the work
+   stopped. Steady states (`idle`, `waiting_owner`, `error`, `shadow_ready`) never expire;
+   `goal_completed` is a moment with a 20 s headline.
+3. **Every moving channel is zero unless an event set it.** `VisualIntent` has no default
+   wobble anywhere: no reported intensity means no pulse, no reported count means no
+   particles, no reported progress means no bar. There is exactly one use of elapsed time
+   in the 3D scene, multiplied by an amplitude that is zero for every state that did not
+   report motion. The exhaustive test walks every contract state and asserts both that it
+   produces its own visual and that no other state does; it fails if the API grows a state
+   and the visual table is not updated, so a new state must be a deliberate visual choice.
+4. **Counts are capped for the GPU, never for the reader.** A tier bounds drawn
+   satellites; the readout always states the true number and how many were drawn. A
+   performance cap that quietly understated how much evidence exists would be the same
+   class of defect as the animation problems this ADR exists to prevent.
+5. **The 2D fallback is a fallback in fidelity, not in truth.** Same `VisualIntent`, same
+   readout component, every fact preserved. It is pure SVG animated by CSS only, which is
+   also why it — not the 3D scene — carries the rendering tests: it renders identically
+   under `react-dom/server`, so the full assertion runs in Node.
+6. **No browser in the test suite, on purpose.** No Playwright, no vitest browser mode.
+   `services/browser/tests/test_test_isolation_guards.py` exists because browser tests once
+   flooded the owner's desktop; the discipline is inherited here by not opening the door at
+   all rather than by guarding it again.
+7. **Read-only, with no write path.** The cockpit reads eleven GET surfaces and mutates
+   nothing; approving a goal or a SHADOW_READY candidate stays an owner action on the
+   surface that owns it. `app/lib/uistate/client.ts` has no publish helper, because the
+   absence of a write endpoint is what makes ADR-0052 §2 enforceable.
+8. **Panels distinguish empty from unknown.** Four outcomes — not asked, failed, genuinely
+   empty, loaded — with four different sentences. A failed request never renders as an
+   empty list, because "there are no goals" and "I could not find out whether there are
+   goals" are different claims.
+
+Dependencies added, pinned exact: `three` 0.185.1, `@react-three/fiber` 9.7.0,
+`@types/three` 0.185.4. No `drei`; the scene uses plain three primitives.
+
+Consequences: `/core` and `/core/cockpit` render from real state today for voice,
+research, goals, evolution and the self-model indexer. Two publisher defects were found by
+building the consumer and are recorded in the addendum below rather than fixed here, since
+this work was scoped out of `services/api`.
+
+### ADR-0056 addendum 1 — two publishers that never publish
+
+Found by writing a client against the real call sites, not by reading the contract.
+
+1. **`app/experience` cannot publish at all.** `engine.py:155` and `compiler.py:683` both
+   call `publish(UiState.MEMORY_RETRIEVAL, subsystem="experience", phase=phase, **metadata)`,
+   but `uistate.publish()` takes no `phase` and no `**metadata` — it takes a `metadata`
+   dict. Every call raises `TypeError`, which the surrounding
+   `except Exception: logger.debug(...)` swallows silently. The consequence is that
+   `agent.memory_retrieval` is never published by experience ingest or lesson compilation,
+   so the Core's memory-convergence visual has no live producer today. The soft-import
+   comment in those functions says `app.uistate` did not exist when they were written; the
+   import now succeeds and the *call* is what fails, which is why this survived the merge.
+2. **Research publishes only at the ranking stage.** `browser_activities.py:952` is the one
+   `publish_ui` call, with a constant `intensity=0.7`. Discovery and fetching therefore
+   never light the Core, and the intensity is not a measurement. The renderer treats
+   `intensity` as the publisher's declared figure and never describes it to the owner as
+   an audio or effort measurement.
+
+Neither is fixed here. Both are one-line-ish changes in `services/api`, which this work was
+told not to touch, and both would need their own tests.

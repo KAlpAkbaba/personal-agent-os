@@ -71,6 +71,14 @@ export default function Home() {
         <Link href="/voice" style={{ color: "var(--accent)" }}>
           Sesli Asistan →
         </Link>
+        {" · "}
+        <Link href="/core" style={{ color: "var(--accent)" }}>
+          Ajan Çekirdeği →
+        </Link>
+        {" · "}
+        <Link href="/core/cockpit" style={{ color: "var(--accent)" }}>
+          Kokpit →
+        </Link>
       </p>
 
       <div className="panel">
