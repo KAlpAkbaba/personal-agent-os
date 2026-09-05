@@ -389,6 +389,40 @@ what `owner-explain.ps1 -M17` is for, and it is the only thing it is for.
 
 Not deployed and not approved: the Acceptance Wording Guard remains `SHADOW_READY`.
 
+## Stage 12 — M18 Holographic Core, Active Eye, ambient presence (pre-registered 2026-09-06; nothing PROVEN_REAL yet)
+
+Everything below is `PROVEN_PROXY` at best. This stage is unusual in how far proxy is from
+real: every claim here is about the owner's actual room, their actual camera and their
+actual production system, and a fixture cannot be wrong about any of those. A green test
+suite means the code is honest about what it was told; it says nothing about whether the
+camera saw anyone.
+
+Two rows are deliberately structural — proven by code refusing rather than by the owner
+watching it refuse — and are marked as such.
+
+| # | Criterion | Status | Evidence required |
+|---|---|---|---|
+| 12.1 | The Core renders on the owner's machine and shows genuine state: listening, thinking and speaking transitions correspond to what actually happened | `PROVEN_PROXY` | Web: `tests/uistate/visual.test.ts`, `render.test.tsx` — every contract state produces its own visual and no other state's. Real: the owner watches the Core during a real voice turn. |
+| 12.2 | Silence is drawn as four different facts — reported-idle, never-told, a claim that aged out, unreachable — and none is a calm breathing core | `PROVEN_PROXY` | Web: the silence block in `visual.test.ts`. Real: the owner sees the difference when Cloud Core is briefly unreachable. |
+| 12.3 | Channels do not displace one another: `owner.likely_asleep` does not blank a thinking core, and a deployment in flight is not drawn as the agent's own work | `PROVEN_PROXY` | Web: `tests/uistate/ambient.test.ts`. Structural. |
+| 12.4 | Research, memory and evolution state actually appear on the Core while those subsystems run | `PROVEN_PROXY` | API: `test_experience_uistate_signal.py`, `test_research_uistate.py` — the stamped event is read back off a real publisher. Two subsystems could not publish at all before 2026-09-05 and nothing noticed, because both failures were silent. Real: the owner sees memory and research light the Core during a real run. |
+| 12.5 | The real camera can be enabled and the indicator is truthful; `untold`, `disabled` and "a state this build cannot read" are three different renderings | `PROVEN_PROXY` | Web: `tests/uistate/ambient-render.test.tsx`. Real: the owner enables the camera and sees the indicator agree with the machine's own camera light. |
+| 12.6 | A real presence transition is detected from the owner actually leaving and returning | `PROVEN_PROXY` | API: `test_presence_engine.py` (fusion, sustained evidence, conflicting signals). Real: only the owner leaving the room can prove this. |
+| 12.7 | Disabling the Active Eye stops perception immediately — the camera light goes out and camera-sourced observations are refused | `PROVEN_PROXY` | API: `test_presence_routines_wiring.py::test_the_eye_disable_path_stops_camera_observations_immediately`. Real: the owner says `Gözünü kapat` and watches the light. |
+| 12.8 | No raw camera archive is created: nothing on disk or in the database holds an image, a frame, or anything derived from one beyond the seven structured fields | `PROVEN_PROXY` | API: `test_presence_observations.py` — refusal by key shape and independently by value shape, and a route-level test that a refused observation never reaches the ledger. Real: an inspection of the machine and the database after the run. |
+| 12.9 | Perception is never authentication: no presence observation grants, influences or substitutes for an owner session | `PROVEN_PROXY` | API: `test_presence_never_grants_or_influences_authority` — a confidently established presence state, then an unauthenticated client still refused on every presence route. **Structural**: proven by the code refusing. |
+| 12.10 | Presence is stated as an inference with its confidence, never as a fact; a stale observation degrades to unknown rather than to "still present" | `PROVEN_PROXY` | API: `test_presence_states.py`, `test_routines_presence_link.py`. Web: `ambient.test.ts` (the publisher's own `ttl_s` beats the client default). |
+| 12.11 | A brief movement at 03:00 does not produce a morning greeting, and evaluating a greeting does not deliver one | `PROVEN_PROXY` | API: `test_presence_greeting.py` (both gates independently), `test_presence_greeting_delivery.py` (asking twice still says yes; only a recorded delivery starts the cooldown). Real: the owner wakes up and is greeted once. |
+| 12.12 | A routine can be created and a short test alarm fires; the wake volume ramps and never jumps to full | `NOT_YET_PROVEN` | The dispatcher is not built at the time of writing; `NoopDispatcher` is the only implementation, so a routine currently decides and records and nothing happens. |
+| 12.13 | An owner-selected media action executes and plays the item the owner named | `NOT_YET_PROVEN` | Same: no dispatcher. The action descriptor preserves the owner's exact url/title (`test_routines_actions.py`), which is a different claim from having played it. |
+| 12.14 | A routine asks the Presence Engine rather than its caller, and an unknown presence skips it with a reason naming why | `PROVEN_PROXY` | API: `test_routines_presence_link.py`, `test_presence_routines_wiring.py`. |
+| 12.15 | No routine fires without something asking: there is no background timer, and every transition writes exactly one ledger event | `PROVEN_PROXY` | API: `test_routines_service.py`. **Structural.** |
+| 12.16 | The Activity Ledger records the whole run: presence transitions, eye enable/disable, routine firings | `PROVEN_PROXY` | API: the per-subsystem route and service tests. Real: the owner asks what happened and hears it. |
+| 12.17 | A real SHADOW_READY candidate is visible in the Core, and `Bunu canlıya alabilir misin?` explains the authority model and deploys nothing | `PROVEN_PROXY` | M17 proved the spoken half (Stage 11, `PROVEN_REAL`). The Core half is `ambient-render.test.tsx`: the release band renders no button, form or input. Real: the owner sees the candidate and asks the question. |
+| 12.18 | Evolution cannot promote itself, and owner authorisation cannot be minted by Evolution-generated code | `PROVEN_PROXY` | API: `test_evolution_authority.py`, `test_evolution_boundaries.py`. **Structural**, and carried forward from Stage 11.12 — the critical finding of the 2026-09-05 security review. |
+| 12.19 | Display power automation turns a monitor off and never shuts down, reboots, hibernates or suspends the machine | `NOT_YET_PROVEN` | Not built. **This row has its own separate qualification** and is deliberately excluded from the main M18 run: a wrong inference here interrupts unrelated owner work, which is not something to discover during a run that is also testing nine other things. |
+| 12.20 | No test launches a browser, and no camera fixture contains real owner imagery | `PROVEN_PROXY` | `services/browser/tests/test_test_isolation_guards.py` exists because the browser risk was once realised on this owner's desktop. The Core's own suite is `react-dom/server` only, by decision. |
+
 ## Stage 7 — Real voice
 
 | # | Criterion | Status |
