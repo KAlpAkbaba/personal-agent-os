@@ -139,8 +139,23 @@ The full argument is ADR-0055; the security-relevant summary:
 
 * **Evolution has no autonomous production authority, and cannot mint one.** The authority
   kernel's tokens are module-private, the classes are runtime-final via `__init_subclass__`,
-  and `assert_genuine_authority` requires an exact type *and* its mint. This was reproduced as
-  a live subclass bypass once and fixed; the six regression tests exist because of it.
+  and `assert_genuine_authority` requires an exact type *and* its mint.
+
+  **Two bypasses have been found here, and both were found by someone building against the
+  kernel rather than reading it.** The first (2026-09-05) was a live subclass forge. The
+  second (2026-09-06) was subtler and is worth stating in full, because the shape of it will
+  recur: `EvolutionService.advance()` classified a transition by its *target* alone.
+  `QUARANTINED` and `REJECTED` are ordinary lab-reachable targets early in the lifecycle — a
+  candidate can be quarantined mid-BUILDING with no owner involved — but they are also legal
+  from `QUALIFYING` and `ROLLING_BACK`, and neither target is itself production-side. So a
+  lab actor could divert an opportunity that was mid-deployment into `quarantined` using only
+  its default `propose_candidate` grant. The lifecycle table does not prevent that; only the
+  authority check does. Now: once an opportunity is on the production side of the wall,
+  leaving it *to anywhere* requires production authority.
+
+  The lesson is about where to look. Both defects lived in the gap between a table that is
+  correct and a guard that reads only half of it, and neither was visible from the guard's own
+  tests. A third is a reasonable expectation rather than a surprise.
 * **Owner authorisation is a separate privileged capability**, bound to the authenticated
   owner session — not to a voice, not to a presence, not to anything Evolution-generated code
   can construct.
