@@ -169,11 +169,27 @@ def test_duplicate_command_creation_same_idempotency_key(client: TestClient) -> 
         assert frame["type"] == "command"
         assert frame["command"]["command_id"] == command_id
 
-        # No second delivery for the deduplicated creation: the next frame the
-        # broker sends must be the heartbeat ack, not another command.
+        # The deduplicated creation must not produce a SECOND COMMAND - that is what
+        # this test is named for. It must not assert a second DELIVERY never happens:
+        # the documented contract is at-least-once delivery with agent-side idempotency
+        # (packages/protocol/DEVICE_PROTOCOL.md, ADR in docs/DECISIONS.md), and the
+        # broker's connect-time _redeliver_pending scan can legitimately race a command
+        # created moments after the handshake and re-send it. Asserting "the next frame
+        # is the ack" pinned an ordering the protocol never promised, and CI duly caught
+        # the broker keeping its actual promise (2026-09-05).
         ws.send_json({"type": "heartbeat", "seq": 7})
-        next_frame = ws.receive_json()
+        delivered_ids = {command_id}
+        for _ in range(10):
+            next_frame = ws.receive_json()
+            if next_frame.get("type") == "command":
+                delivered_ids.add(next_frame["command"]["command_id"])
+                continue
+            break
         assert next_frame == {"type": "heartbeat_ack", "seq": 7}
+        assert delivered_ids == {command_id}, (
+            "the second POST with the same idempotency key created a new command; "
+            "re-delivering the SAME command is allowed, inventing another is not"
+        )
 
         ws.send_json(
             {
