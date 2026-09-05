@@ -240,7 +240,21 @@ Expected last line: `REAL BROWSER SMOKE: PASS`, preceded by `live worker proven:
 If it stops with `deployment/version mismatch` or `INSTALL FAILED`, paste the message, the
 install log it names and the output of `.\scripts\verify-device-service.ps1`; do not rerun.
 
-### 18. One conversation that qualifies all of M17 - **this is the current action**
+### 18. One conversation that qualifies all of M17 - **this is the current action (2nd attempt)**
+
+The first attempt on 2026-09-05 failed, and it was worth failing: five of your six questions
+were answered correctly, one crashed, and one never reached the tool at all. Four of the
+five findings were defects in the CHECKER rather than the product - most importantly the
+durable record was not saving which subsystem answered, so four reached subsystems were
+reported as unreached.
+
+All of that is fixed and re-proven without you: every one of the six now routes correctly
+against the live production database, cites its own subsystem's records, and the harness
+itself was run end to end against a real production session and passed every check.
+
+The one thing that still cannot be proven without you is that the SPOKEN questions reach the
+tool - especially the authority one, which the model previously answered from its own head
+instead of from policy.
 
 Unblocks: `docs/QUALIFICATION.md` Stage 11. Under two minutes, six questions, no setup.
 
