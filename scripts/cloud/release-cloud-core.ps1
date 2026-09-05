@@ -37,6 +37,11 @@ param(
     [string]$HealthUrl = "",
     [string]$SshPath = (Join-Path $env:SystemRoot "System32\OpenSSH\ssh.exe"),
     [string]$ScpPath = (Join-Path $env:SystemRoot "System32\OpenSSH\scp.exe"),
+    # Bounded remote calls (2026-09-06): a connect that cannot complete fails in 20 s, and a
+    # session whose peer stops answering is dropped after ~60 s of silence, instead of holding
+    # the owner's terminal forever. The host-side transaction itself is unaffected - it runs
+    # under nohup-less bash on the host and either finishes or rolls back on its own.
+    [int]$SshConnectTimeoutSec = 20,
     [string]$GitPath = "git",
     [string]$RepoRoot = "",
     [switch]$Preflight,
@@ -132,7 +137,7 @@ try {
     # path; -Force repeats the release anyway.
     $alreadyReleased = $false
     if (-not $Preflight) {
-        $markerLines = @($null | & $SshPath -n -o StrictHostKeyChecking=accept-new -o BatchMode=yes $target "cat '$HostBase/app/RELEASE' 2>/dev/null || true")
+        $markerLines = @($null | & $SshPath -n -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=$SshConnectTimeoutSec -o ServerAliveInterval=15 -o ServerAliveCountMax=4 $target "cat '$HostBase/app/RELEASE' 2>/dev/null || true")
         $marker = if ($markerLines.Count -gt 0) { ([string]$markerLines[0]).Trim() } else { "" }
         if ($marker -eq $sha) { $alreadyReleased = $true }
         if ($VerifyOnly -and -not $alreadyReleased) {
@@ -154,7 +159,7 @@ try {
     try {
         # Nothing here needs stdin; hand the child a closed one so it can never block on
         # an inherited pipe (ssh gets -n for the same reason).
-        $null | & $ScpPath -o StrictHostKeyChecking=accept-new -o BatchMode=yes -q $localTar "${target}:$remoteTar"
+        $null | & $ScpPath -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=$SshConnectTimeoutSec -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -q $localTar "${target}:$remoteTar"
         if ($LASTEXITCODE -ne 0) { throw "scp failed with exit $LASTEXITCODE; nothing changed on the host" }
         Write-Host "uploaded to ${target}:$remoteTar"
     }
@@ -162,7 +167,7 @@ try {
         Remove-Item -LiteralPath $localTar -Force -ErrorAction SilentlyContinue
     }
 
-    $null | & $SshPath -n -o StrictHostKeyChecking=accept-new -o BatchMode=yes $target (ConvertTo-NativeCallArgument -Value $remote) |
+    $null | & $SshPath -n -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=$SshConnectTimeoutSec -o ServerAliveInterval=15 -o ServerAliveCountMax=4 $target (ConvertTo-NativeCallArgument -Value $remote) |
         ForEach-Object { if ($_ -inotmatch 'bearer|sk-[A-Za-z0-9]') { Write-Host "  host: $_" } }
     $exit = $LASTEXITCODE
     if ($exit -ne 0) {
@@ -177,7 +182,7 @@ try {
     }  # end of the release branch
 
     if (-not $SkipVerify) {
-        $releaseLines = @($null | & $SshPath -n -o BatchMode=yes $target "cat '$HostBase/app/RELEASE'")
+        $releaseLines = @($null | & $SshPath -n -o BatchMode=yes -o ConnectTimeout=$SshConnectTimeoutSec -o ServerAliveInterval=15 -o ServerAliveCountMax=4 $target "cat '$HostBase/app/RELEASE'")
         $releasedSha = if ($releaseLines.Count -gt 0) { ([string]$releaseLines[0]).Trim() } else { "" }
         if ($LASTEXITCODE -ne 0 -or (-not $releasedSha) -or $releasedSha -ne $sha) {
             throw "post-release check: $HostBase/app/RELEASE is '$releasedSha', expected $sha"
