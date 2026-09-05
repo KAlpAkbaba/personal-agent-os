@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "project": "personal-agent-os",
-  "current_milestone": "M17_COGNITIVE_FOUNDATIONS",
-  "status": "M16 PROVEN_REAL and closed. M17 deployed (Cloud Core e8bb5b7); five of six voice paths proven by the owner, the sixth (world model) fixed and re-proven structurally plus through the harness end to end. One owner voice run remains to close M17.",
-  "last_completed_milestone": "M16_ACTIVITY_LEDGER_SELF_EXPLANATION_VOICE_NARRATION",
-  "last_updated": "2026-09-05T22:30:00+03:00",
+  "current_milestone": "M18_HOLOGRAPHIC_CORE_ACTIVE_EYE_AMBIENT_PRESENCE",
+  "status": "M17 PROVEN_REAL and closed on the owner's real voice qualification (OWNER EXPLAIN: PASS, all six cognitive paths). M18 started: Holographic Core UI, Active Eye, ambient presence, routines/alarms, owner-authorised deployment.",
+  "last_completed_milestone": "M17_COGNITIVE_FOUNDATIONS",
+  "last_updated": "2026-09-05T23:00:00+03:00",
   "qualification": {
     "matrix": "docs/QUALIFICATION.md",
     "owner_queue": "docs/OWNER_ACTIONS.md",
@@ -37,7 +37,7 @@
     "owner_run_2026_09_03": "Cloud Core release succeeded (0012/0013, health). Agent update FAILED silently: installer's inline swap refused by NTFS under running processes (same as the 2026-09-01 incident); fixed by wiring the installer through the journaled deployment engine with real runtime handlers, transcript, evidence block and fail-loud M13 assertion. 6b.1/6b.2 remain NOT_YET_PROVEN until the owner's rerun. UPDATE 18:xx: after the engine-based installer the owner's verify-device-service.ps1 reports 6b.1 and 6b.2 PROVEN_REAL (worker as the owner from the installed tree, Chrome available, 24 ops + browser.chrome agree). Next: item 11, real browser smoke through the owner path (scripts/browser/real-browser-smoke.ps1). Owner smoke (real-browser-smoke.ps1) PASSED on the real chain -> 9.2 PROVEN_REAL.",
     "search_provider": "Google primary, DuckDuckGo fallback (owner decision 2026-09-03 evening): provider abstraction in services/browser/browser_agent/search_engines.py with evidence fields (requested_provider/provider/fallback/fallback_reason/query/result_count/attempts), Google organic parser, interstitial/consent detection (never answered), locale hl/gl from payload/--locale/user locale; Cloud Core records the evidence in research run events and discovered_by=browser_search:<provider>. Live from this address on 2026-09-03: Google served its 'unusual traffic' interstitial (network-level, after a day of probe traffic) -> fallback duckduckgo recorded; owner qualification item 12 pending (9.12). Owner's first search-mode run hit a STALE installed worker (11:32 build; installer last ran 19:10, provider commit 19:52): no provider evidence, missing-property error - not a Google outcome. Fix: worker 0.2.0 with contracts {browser.search: 2} on hello/status, schema_version on results, Cloud Core SearchEvidence.contract_ok + CONTRACT MISMATCH event, smoke refuses a lower contract and -UpdateAgentFirst runs the journaled installer before qualifying."
   },
-  "owner_actions_pending": "one: .\\scripts\\voice\\owner-explain.ps1 -M17 -OutFile explain-m17.json",
+  "owner_actions_pending": "none",
   "quality_gate": {
     "status": "PASS - full gate on the merged M13 tree (282ec79): every step PASS incl. API unit 1935 + integration, PS5.1 suites (installer-browser 16, installer-invocation 32), browser 246 unit + 57 e2e, Windows agent 272 + 135, web build",
     "last_run": "2026-09-03",
@@ -108,7 +108,7 @@
     "explain": "app/explain answers 'ne ogrendin', 'kendi uzerinde ne gelistiriyorsun', 'canliya alinmayi bekleyen ne var', 'bu ozelligi neden gelistirdin', 'test sonuclarini anlat', 'ben yokken neler oldu' from these subsystems, at the existing narration levels and budgets",
     "background_loops": "none: app/main.py wires routers only. Indexing, compilation and lab work are invoked explicitly (ADR-0053 decision 8)",
     "deployment": "none. Nothing was deployed for M17; no Windows component changed",
-    "qualification": "docs/QUALIFICATION.md Stage 11 (11.1-11.10), all PROVEN_PROXY. Nothing in M17 is PROVEN_REAL: the owner has not heard it yet. These rows ride along with the next ordinary voice session and need no separate long qualification",
+    "qualification": "PROVEN_REAL 2026-09-05 on the owner's real voice session: OWNER EXPLAIN: PASS. Proven: Memory + Experience, Goal Engine, World Model, Self Model / Code Intelligence, Evolution Engine foundation, production-authority knowledge and boundary, and voice access to all of them. Closed; do not reopen without a genuine regression.",
     "shadow_candidate": "Acceptance Wording Guard at services/api/lab/candidates/acceptance_wording_guard: built from two real incidents, driven to SHADOW_READY through the real EvolutionService, wired to nothing, deployed nowhere. Awaiting owner approval that will not be sought tonight. 0 high findings when run against this repository; 67 medium, all in test files, untriaged - the candidate stays advisory",
     "security_review": "Independent review 2026-09-05 found three defects, all reproduced then fixed: a critical production-authority bypass by ordinary subclassing, an injection screen that covered only one HTTP route while incidents and compiled lessons reached speech unscreened, and a 'stale' field that was documented but never computed. Open and recorded in ADR-0053 addendum 1: in-process containment is NOT claimed, the 67 wording findings are untriaged, the Experience Compiler has no pattern for this defect class, and two low-severity items remain",
     "tests": "2838 unit, 103 integration, ruff clean",

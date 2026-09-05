@@ -297,6 +297,24 @@ voice session.
 | 11.12 | An in-process caller cannot forge production authority by subclassing, `dataclasses.replace`, pickle, or rebuilding the object around its constructor | `PROVEN_PROXY` | The critical finding of the 2026-09-05 security review, reproduced and then closed. `test_evolution_authority.py`: subclass refused, forged instance refused for every production action, pickle round-trip cannot promote, and a genuine owner authority still works. In-process containment against arbitrary code is explicitly NOT claimed (ADR-0053 addendum 1). |
 | 11.10 | No subsystem added in M17 starts a background loop at application startup | `PROVEN_PROXY` | `app/main.py` wires routers only; asserted by inspection and by the absence of any scheduler registration. Re-check on any change to startup. |
 
+### Stage 11 CLOSED — M17 is PROVEN_REAL (2026-09-05)
+
+The owner's third M17 voice run passed: `OWNER EXPLAIN: PASS`, all six cognitive paths
+reached by voice and answered from real durable data. `PROVEN_REAL` and closed for:
+
+* Memory + Experience Compiler
+* Goal Engine (answering "no active goals", which is the true state)
+* World Model (four truth kinds, uncertainty and staleness stated)
+* Self Model / Code Intelligence
+* Evolution Engine foundation
+* production-authority knowledge and boundary
+* voice access to all of the above
+
+Not to be reopened without a genuine regression. It took three attempts, and the first two
+failed on the CHECKER rather than the product — the record of that is below, because the
+defect class it exposed (acceptance depending on metadata the system never wrote down) is
+the same one this milestone was built to remove.
+
 ### Stage 11 after the owner's first M17 voice run (2026-09-05) — FAILED, and why
 
 The run is worth recording in full, because four of its five findings were defects in the
