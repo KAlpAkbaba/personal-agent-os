@@ -361,7 +361,8 @@ public static class Program
         builder.Services.AddSingleton<ICapabilityExecutor>(provider =>
             new InteractiveCapabilityExecutor(
                 provider.GetRequiredService<CompanionPipeServer>(),
-                browserEnabled: options.BrowserEnabled));
+                browserEnabled: options.BrowserEnabled,
+                displayPowerEnabled: options.DisplayPowerEnabled));
         builder.Services.AddSingleton(provider => new CommandDispatcher(
             provider.GetRequiredService<IdempotencyStore>(),
             provider.GetRequiredService<ICapabilityExecutor>(),
@@ -372,7 +373,9 @@ public static class Program
             {
                 BrokerWsUrl = new Uri(options.BrokerWsUrl),
                 DeviceId = state.DeviceId,
-                // M13: the browser family is advertised only when this service routes it.
+                // A family is advertised only when this service routes it: the browser family
+                // behind BrowserEnabled (M13), desktop.display_off behind DisplayPowerEnabled
+                // (M18). The alarm pair and the desktop open_* pair are unconditional.
                 Capabilities = options.AdvertisedCapabilities,
                 BackoffBaseSeconds = options.BackoffBaseSeconds,
                 BackoffMaxSeconds = options.BackoffMaxSeconds,

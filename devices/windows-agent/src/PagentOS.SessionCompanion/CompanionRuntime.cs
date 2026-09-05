@@ -41,7 +41,9 @@ public sealed class CompanionRuntime(
     ServiceAdmissionPolicy? servicePolicy = null,
     IPipeOwnerInspector? ownerInspector = null,
     ISidebandForwardSink? sidebandSink = null,
-    BrowserWorkerHost? browserWorker = null)
+    BrowserWorkerHost? browserWorker = null,
+    AlarmController? alarm = null,
+    DisplayPowerController? displayPower = null)
 {
     private const int ConnectTimeoutMs = 2000;
 
@@ -103,12 +105,15 @@ public sealed class CompanionRuntime(
     private readonly Dictionary<IpcRefusal, int> _refusals = new();
 
     /// <summary>
-    /// The capabilities this companion announces in its hello: the desktop family always,
-    /// the browser family only when a worker is configured (M13). Advertising a name is a
-    /// promise to answer it with something other than a hang.
+    /// The capabilities this companion announces in its hello: the desktop names and the M18
+    /// alarm pair always, the browser family only when a worker is configured (M13), and
+    /// <c>desktop.display_off</c> only when display power was enabled out loud (M18).
+    /// Advertising a name is a promise to answer it with something other than a hang.
     /// </summary>
     public IReadOnlyList<string> AdvertisedCapabilities
-        => AgentCapabilities.Compose(browserWorker?.IsConfigured == true);
+        => AgentCapabilities.Compose(
+            browserWorker?.IsConfigured == true,
+            displayPower?.Enabled == true);
 
     /// <summary>
     /// The default is the PRODUCTION posture: only a pipe owned by an account that can host
@@ -466,6 +471,24 @@ public sealed class CompanionRuntime(
         }
     }
 
+    /// <summary>
+    /// A companion built without an <see cref="AlarmController"/> answers the alarm names the
+    /// way a companion without a browser worker answers browser names: this device cannot do
+    /// that. It is never a hang and never a silent success.
+    /// </summary>
+    private AlarmController RequireAlarm()
+        => alarm ?? throw new CapabilityException(
+            ErrorClasses.CapabilityMissing,
+            "no alarm output is configured on this companion, so no wake alarm can sound",
+            retryable: false);
+
+    private DisplayPowerController RequireDisplayPower()
+        => displayPower ?? throw new CapabilityException(
+            ErrorClasses.CapabilityMissing,
+            "display power is not configured on this companion "
+            + "(PAGENTOS_AGENT_DisplayPowerEnabled=true, after the owner qualification for display-off)",
+            retryable: false);
+
     private ExecResponse Execute(ExecRequest request)
     {
         try
@@ -488,6 +511,32 @@ public sealed class CompanionRuntime(
                         request.Capability,
                         result["opened"]?.GetValue<bool>(),
                         result["path"]?.GetValue<string>());
+                    break;
+
+                // M18. Both of these are interactive-session by construction: the alarm opens
+                // a render endpoint in the owner's session and the display broadcast only
+                // reaches windows in it. Neither is reachable from the Session-0 service, and
+                // an unconfigured companion answers capability_missing rather than hanging.
+                case AgentCapabilities.DesktopAlarmStart:
+                    result = RequireAlarm().Start(request.Payload);
+                    logger.LogInformation(
+                        "executed {Capability}: alarm_id={AlarmId}",
+                        request.Capability,
+                        result["alarm_id"]?.GetValue<string>());
+                    break;
+
+                case AgentCapabilities.DesktopAlarmStop:
+                    result = RequireAlarm().Stop(request.Payload);
+                    logger.LogInformation(
+                        "executed {Capability}: stopped={Stopped} was_ringing={WasRinging}",
+                        request.Capability,
+                        result["stopped"]?.GetValue<bool>(),
+                        result["was_ringing"]?.GetValue<bool>());
+                    break;
+
+                case AgentCapabilities.DesktopDisplayOff:
+                    result = RequireDisplayPower().TurnOff(request.Payload);
+                    logger.LogInformation("executed {Capability}", request.Capability);
                     break;
 
                 default:

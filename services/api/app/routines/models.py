@@ -1,6 +1,7 @@
 """Routine Engine ORM rows (M18).
 
-Canonical schema: ``alembic/versions/20260905_0018_routines.py``. Same discipline as
+Canonical schema: ``alembic/versions/20260905_0019_routines.py`` +
+``alembic/versions/20260906_0020_routine_dispatch.py``. Same discipline as
 ``app.goals.models`` / ``app.selfhealing.models``: portable column types (generic ``Uuid``,
 ``JSON`` with a ``JSONB`` variant) so the service layer unit-tests on SQLite, plus
 ``CheckConstraint``s spelling out the closed vocabularies (``app.selfhealing.models``,
@@ -24,6 +25,17 @@ specifically so a routine "must not double-fire" (task brief) is a database cons
 same idempotency shape as ``app.ledger.models.ActivityEventRow`` on ``(source, source_ref)``.
 It also carries ``conditions_result`` so a skip is never a silent drop: the reason a routine
 did not fire is a durable, queryable fact, not just a ledger sentence.
+
+``dispatch_results``/``dispatch_status`` (ADR-0060) give the same durability to EXECUTION:
+before them, a failed or refused dispatch lived only in the ``routine.executed`` ledger
+event's ``detail_json`` — readable, but not queryable, and not exposed on the firing itself.
+Each ``dispatch_results`` entry is ``{"kind", "status", "ok", "reason", "detail"}`` — one per
+action in ``actions_snapshot``, same order. ``dispatch_status`` is the AGGREGATE across all of
+them for this firing (``succeeded`` | ``partial`` | ``failed`` | ``refused`` | ``none``,
+computed by ``app.routines.service._aggregate_dispatch_status``) — nullable because a
+``skipped`` firing never dispatches anything at all, which is a different fact from
+"dispatched zero actions successfully" (``none``, e.g. an action-less routine that still
+triggered).
 """
 
 from __future__ import annotations
@@ -89,6 +101,26 @@ FIRING_STATUS_SKIPPED = "skipped"
 
 FIRING_STATUSES: tuple[str, ...] = (FIRING_STATUS_TRIGGERED, FIRING_STATUS_SKIPPED)
 
+#: RoutineFiring.dispatch_status closed vocabulary (ADR-0060). Wider than
+#: app.routines.actions.DISPATCH_STATUSES (succeeded|failed|refused) because this is the
+#: AGGREGATE across every action dispatched for one firing, not one action's own verdict —
+#: "partial" (a mix, at least one success alongside a non-success) and "none" (a triggered
+#: firing with zero actions to dispatch — a legitimate, explicit configuration, same as an
+#: empty conditions list) have no equivalent at the single-action level.
+DISPATCH_STATUS_SUCCEEDED = "succeeded"
+DISPATCH_STATUS_PARTIAL = "partial"
+DISPATCH_STATUS_FAILED = "failed"
+DISPATCH_STATUS_REFUSED = "refused"
+DISPATCH_STATUS_NONE = "none"
+
+FIRING_DISPATCH_STATUSES: tuple[str, ...] = (
+    DISPATCH_STATUS_SUCCEEDED,
+    DISPATCH_STATUS_PARTIAL,
+    DISPATCH_STATUS_FAILED,
+    DISPATCH_STATUS_REFUSED,
+    DISPATCH_STATUS_NONE,
+)
+
 
 class Routine(Base):
     __tablename__ = "routines"
@@ -144,6 +176,10 @@ class RoutineFiring(Base):
     __tablename__ = "routine_firings"
     __table_args__ = (
         CheckConstraint(_in_list("status", FIRING_STATUSES), name="ck_routine_firings_status"),
+        CheckConstraint(
+            _in_list("dispatch_status", FIRING_DISPATCH_STATUSES),
+            name="ck_routine_firings_dispatch_status",
+        ),
         UniqueConstraint(
             "routine_id", "occurrence_key", name="uq_routine_firings_routine_occurrence"
         ),
@@ -169,6 +205,15 @@ class RoutineFiring(Base):
     #: never executed here. Empty when status is "skipped".
     actions_snapshot: Mapped[list[Any]] = mapped_column(JSONColumn, nullable=False, default=list)
     skip_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    #: [{"kind", "status", "ok", "reason", "detail"}, ...] — one per action_snapshot entry,
+    #: same order (ADR-0060). A dispatch failure/refusal is visible here, not just in the
+    #: ledger: this column is what "did that alarm actually ring?" answers directly, without
+    #: re-reading a ledger event's detail_json. Empty when status is "skipped".
+    dispatch_results: Mapped[list[Any]] = mapped_column(JSONColumn, nullable=False, default=list)
+    #: the AGGREGATE across dispatch_results (see FIRING_DISPATCH_STATUSES above). NULL for
+    #: a "skipped" firing — dispatch never ran at all, which is a different fact from having
+    #: dispatched and found nothing to do.
+    dispatch_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
     #: when this occurrence was decided (the evaluate_due caller's `now`), not when the
     #: row was written — same distinction as ActivityEventRow.occurred_at vs recorded_at.
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -178,6 +223,12 @@ class RoutineFiring(Base):
 
 
 __all__ = [
+    "DISPATCH_STATUS_FAILED",
+    "DISPATCH_STATUS_NONE",
+    "DISPATCH_STATUS_PARTIAL",
+    "DISPATCH_STATUS_REFUSED",
+    "DISPATCH_STATUS_SUCCEEDED",
+    "FIRING_DISPATCH_STATUSES",
     "FIRING_STATUSES",
     "FIRING_STATUS_SKIPPED",
     "FIRING_STATUS_TRIGGERED",

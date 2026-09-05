@@ -11,6 +11,18 @@ twice over — ``RoutineFiring`` has a database uniqueness constraint on
 ``(routine_id, occurrence_key)``, and this module checks for an existing firing before doing
 any conditions/actions work at all, so a second call for the same occurrence is a cheap
 no-op rather than a second ledger event or a second dispatch.
+
+ADR-0060 (M18 dispatch): ``evaluate_due`` now resolves a REAL dispatcher by default
+(``app.routines.dispatch.get_routine_dispatcher()``, falling back to ``NoopDispatcher`` only
+when nothing is registered — every unit test in this package, since none of them wire the
+registry), and a failed or refused action becomes visible in three places, not one: the
+firing's own ``dispatch_results``/``dispatch_status`` columns, a dedicated
+``routine.action_failed``/``routine.action_refused`` ledger event per action (never only a
+field inside ``routine.executed``'s ``detail_json``), and a ``UiState.ERROR`` publish. The
+greeting cooldown (``app.presence.service.record_greeting_delivered``, reached here through
+the one seam, ``app.routines.presence_link``) starts only when a ``greeting_allowed``
+condition passed AND the firing's own ``voice_briefing`` action actually succeeded — never on
+a refusal, a failure, or a routine that never asked to greet at all.
 """
 
 from __future__ import annotations
@@ -26,6 +38,8 @@ from sqlalchemy.orm import Session
 
 from app.ledger import service as ledger_service
 from app.ledger.vocabulary import (
+    EVENT_TYPE_ROUTINE_ACTION_FAILED,
+    EVENT_TYPE_ROUTINE_ACTION_REFUSED,
     EVENT_TYPE_ROUTINE_ARMED,
     EVENT_TYPE_ROUTINE_CANCELLED,
     EVENT_TYPE_ROUTINE_CREATED,
@@ -36,15 +50,35 @@ from app.ledger.vocabulary import (
 )
 from app.logging import get_logger
 from app.routines import conditions as conditions_mod
+from app.routines import presence_link
 from app.routines import triggers as triggers_mod
 from app.routines.actions import (
     ACTION_KIND_ALARM,
+    ACTION_KIND_VOICE_BRIEFING,
+    DISPATCH_STATUS_REFUSED,
+    DISPATCH_STATUS_SUCCEEDED,
     DispatchOutcome,
     NoopDispatcher,
     RoutineDispatcher,
     validate_action,
 )
-from app.routines.conditions import RoutineConditionContext
+from app.routines.conditions import CONDITION_KIND_GREETING_ALLOWED, RoutineConditionContext
+from app.routines.dispatch import get_routine_dispatcher
+from app.routines.models import (
+    DISPATCH_STATUS_FAILED as FIRING_DISPATCH_FAILED,
+)
+from app.routines.models import (
+    DISPATCH_STATUS_NONE as FIRING_DISPATCH_NONE,
+)
+from app.routines.models import (
+    DISPATCH_STATUS_PARTIAL as FIRING_DISPATCH_PARTIAL,
+)
+from app.routines.models import (
+    DISPATCH_STATUS_REFUSED as FIRING_DISPATCH_REFUSED,
+)
+from app.routines.models import (
+    DISPATCH_STATUS_SUCCEEDED as FIRING_DISPATCH_SUCCEEDED,
+)
 from app.routines.models import (
     FIRING_STATUS_SKIPPED,
     FIRING_STATUS_TRIGGERED,
@@ -109,16 +143,28 @@ def _record_ledger(
         )
 
 
-def _publish_ui_state(state: UiState, *, routine: Routine, **kwargs: Any) -> None:
+def _publish_ui_state(
+    state: UiState,
+    *,
+    routine: Routine,
+    severity: str = "info",
+    status: str | None = None,
+    **kwargs: Any,
+) -> None:
     """Never fails the caller — a UI signal must not fail real work (same rule
     ``app.uistate.publisher.publish`` already enforces internally; this wrapper just
-    supplies the routine identity consistently)."""
+    supplies the routine identity consistently). ``severity``/``status`` default to the
+    plain-info shape every pre-existing caller relies on, so this extension (ADR-0060, for
+    the ``UiState.ERROR`` publish below) changes nothing about ``routine.armed`` /
+    ``routine.triggered`` / ``alarm.triggered``."""
     from app.uistate.publisher import publish
 
     publish(
         state,
         subsystem=SUBSYSTEM_ROUTINE,
         label=routine.name,
+        severity=severity,
+        status=status,
         metadata={"routine_id": str(routine.routine_id), **kwargs},
     )
 
@@ -336,6 +382,42 @@ def _resolve_one_shot(session: Session, routine: Routine) -> None:
     session.commit()
 
 
+def _aggregate_dispatch_status(dispatch_results: list[dict[str, Any]]) -> str:
+    """The AGGREGATE across every action dispatched for one firing
+    (``app.routines.models.FIRING_DISPATCH_STATUSES``) — distinct from each entry's own
+    ``status`` (``app.routines.actions.DISPATCH_STATUSES``).
+
+    ``none``: nothing to dispatch (a triggered firing with an empty actions list — a
+    legitimate, explicit configuration, same as an empty conditions list always passing).
+    ``succeeded``: every action succeeded. ``refused``: every action was refused outright —
+    nothing was even attempted. ``failed``: nothing succeeded, but at least one action
+    actually failed running (a real failure is a louder signal than a policy refusal, so a
+    mix of failed+refused with no successes reports as ``failed``, not ``refused``).
+    ``partial``: at least one action succeeded alongside at least one that did not.
+    """
+    if not dispatch_results:
+        return FIRING_DISPATCH_NONE
+    statuses = {r["status"] for r in dispatch_results}
+    if statuses == {DISPATCH_STATUS_SUCCEEDED}:
+        return FIRING_DISPATCH_SUCCEEDED
+    if DISPATCH_STATUS_SUCCEEDED in statuses:
+        return FIRING_DISPATCH_PARTIAL
+    if statuses == {DISPATCH_STATUS_REFUSED}:
+        return FIRING_DISPATCH_REFUSED
+    return FIRING_DISPATCH_FAILED
+
+
+_EXECUTED_SUMMARY_BY_DISPATCH_STATUS: dict[str, str] = {
+    FIRING_DISPATCH_SUCCEEDED: "Rutin çalıştırıldı: {name}",
+    FIRING_DISPATCH_NONE: "Rutin çalıştırıldı: {name}",
+    FIRING_DISPATCH_PARTIAL: (
+        "Rutin kısmen çalıştırıldı: {name} (bazı eylemler başarısız oldu veya reddedildi)"
+    ),
+    FIRING_DISPATCH_FAILED: "Rutin eylemleri başarısız oldu: {name}",
+    FIRING_DISPATCH_REFUSED: "Rutin eylemleri reddedildi: {name}",
+}
+
+
 def evaluate_due(
     session: Session,
     *,
@@ -344,10 +426,16 @@ def evaluate_due(
     dispatcher: RoutineDispatcher | None = None,
 ) -> EvaluateDueResult:
     """The explicit "due now" entry point (task brief). Nothing calls this on a timer —
-    a caller (an owner command, a future scheduler, a test) decides when to ask."""
+    a caller (an owner command, a future scheduler, a test) decides when to ask.
+
+    ``dispatcher`` falls back to the process-wide registry
+    (``app.routines.dispatch.get_routine_dispatcher()``) and finally to ``NoopDispatcher``
+    when nothing is registered — every unit test in this file, since none of them wire the
+    registry, and any process that starts without a real one wired (ADR-0060).
+    """
     now = now or utcnow()
     context = context or RoutineConditionContext()
-    dispatcher = dispatcher or NoopDispatcher()
+    dispatcher = dispatcher or get_routine_dispatcher() or NoopDispatcher()
 
     armed = list_routines(session, status=ROUTINE_STATUS_ARMED, limit=500)
     outcomes: list[FiringOutcome] = []
@@ -439,32 +527,119 @@ def evaluate_due(
         )
         _publish_ui_state(UiState.ROUTINE_TRIGGERED, routine=routine, occurrence_key=occurrence_key)
         if any(a.get("kind") == ACTION_KIND_ALARM for a in actions_snapshot):
+            # Published BEFORE dispatch — a pre-existing choice this change does not
+            # revisit, so today the Core shows "alarm triggered" the instant the trigger and
+            # conditions resolved, even if the alarm command itself later fails or is
+            # refused. The UiState.ERROR publish below (ADR-0060) is what makes that honest:
+            # a failed/refused alarm dispatch now ALSO publishes a critical-severity error,
+            # so "triggered" is no longer the last word the Core says about it.
             _publish_ui_state(
                 UiState.ALARM_TRIGGERED, routine=routine, occurrence_key=occurrence_key
             )
 
         dispatch_results: list[dict[str, Any]] = []
         for action in actions_snapshot:
+            kind = action.get("kind")
             try:
                 outcome = dispatcher.dispatch(
                     routine_id=routine.routine_id, firing_id=firing.firing_id, action=action
                 )
             except Exception as exc:  # noqa: BLE001 - a broken dispatcher must not break evaluation
-                outcome = DispatchOutcome(
-                    ok=False, detail={"error": f"{type(exc).__name__}: {exc}"}
+                outcome = DispatchOutcome.failed(
+                    f"dispatcher_exception:{type(exc).__name__}",
+                    {"error": f"{type(exc).__name__}: {exc}"},
                 )
             dispatch_results.append(
-                {"kind": action.get("kind"), "ok": outcome.ok, "detail": outcome.detail}
+                {
+                    "kind": kind,
+                    "status": outcome.status,
+                    "ok": outcome.ok,
+                    "reason": outcome.reason,
+                    "detail": outcome.detail,
+                }
             )
+            if outcome.status != DISPATCH_STATUS_SUCCEEDED:
+                refused = outcome.status == DISPATCH_STATUS_REFUSED
+                _record_ledger(
+                    session,
+                    event_type=(
+                        EVENT_TYPE_ROUTINE_ACTION_REFUSED
+                        if refused
+                        else EVENT_TYPE_ROUTINE_ACTION_FAILED
+                    ),
+                    routine=routine,
+                    action="routine_action_refused" if refused else "routine_action_failed",
+                    factual_summary=(
+                        f"Rutin eylemi reddedildi: {routine.name} ({kind})"
+                        if refused
+                        else f"Rutin eylemi başarısız oldu: {routine.name} ({kind})"
+                    ),
+                    source_ref=(
+                        f"routines:{routine.routine_id}:action:{occurrence_key}:{kind}"
+                    ),
+                    detail={"kind": kind, "reason": outcome.reason, "detail": outcome.detail},
+                )
+                _publish_ui_state(
+                    UiState.ERROR,
+                    routine=routine,
+                    # A wake-up that did not fire is worse than a briefing that did not
+                    # (task brief) — an alarm's own dispatch failure/refusal is critical,
+                    # every other action kind's is a warning.
+                    severity="critical" if kind == ACTION_KIND_ALARM else "warning",
+                    status="action_refused" if refused else "action_failed",
+                    kind=str(kind)[:32],
+                    reason=str(outcome.reason)[:64],
+                )
+
+        dispatch_status = _aggregate_dispatch_status(dispatch_results)
+        firing.dispatch_results = dispatch_results
+        firing.dispatch_status = dispatch_status
+        session.commit()
+
+        # The greeting cooldown starts AFTER dispatch, and only when a greeting_allowed
+        # condition actually passed AND the voice_briefing action in THIS firing actually
+        # succeeded (app.routines.presence_link is the one seam to app.presence — module
+        # docstring, ADR-0060). Every other case — the condition absent, the condition
+        # failed, no voice_briefing action, or the briefing failing/being refused — must
+        # NOT start it: starting a cooldown for a greeting nobody heard would suppress the
+        # real one for the whole window.
+        extra_executed_detail: dict[str, Any] = {}
+        greeting_condition = next(
+            (c for c in conditions_result if c.get("kind") == CONDITION_KIND_GREETING_ALLOWED),
+            None,
+        )
+        greeting_passed = bool(greeting_condition and greeting_condition.get("passed"))
+        briefing_outcome = next(
+            (r for r in dispatch_results if r.get("kind") == ACTION_KIND_VOICE_BRIEFING), None
+        )
+        briefing_succeeded = bool(
+            briefing_outcome and briefing_outcome.get("status") == DISPATCH_STATUS_SUCCEEDED
+        )
+        if greeting_passed and briefing_succeeded:
+            decision = context.greeting_decision
+            if decision is None:
+                logger.warning(
+                    "routine_greeting_cooldown_not_started_no_decision",
+                    routine_id=str(routine.routine_id),
+                )
+                extra_executed_detail["greeting_cooldown_not_started"] = "no_decision"
+            else:
+                presence_link.record_greeting_delivered(session, decision, now=now)
 
         _record_ledger(
             session,
             event_type=EVENT_TYPE_ROUTINE_EXECUTED,
             routine=routine,
             action="routine_executed",
-            factual_summary=f"Rutin çalıştırıldı: {routine.name}",
+            factual_summary=_EXECUTED_SUMMARY_BY_DISPATCH_STATUS[dispatch_status].format(
+                name=routine.name
+            ),
             source_ref=f"routines:{routine.routine_id}:executed:{occurrence_key}",
-            detail={"dispatch_results": dispatch_results},
+            detail={
+                "dispatch_results": dispatch_results,
+                "dispatch_status": dispatch_status,
+                **extra_executed_detail,
+            },
         )
         _resolve_one_shot(session, routine)
         outcomes.append(

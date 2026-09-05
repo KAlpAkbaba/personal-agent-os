@@ -205,6 +205,33 @@ public static class Program
             logger.LogInformation("browser worker: not configured (PAGENTOS_AGENT_BrowserWorkerCommand is empty); browser.* capabilities are not advertised");
         }
 
+        // M18 (DEVICE_PROTOCOL.md §6c): the wake alarm. It renders its own chime on its own
+        // shared-mode stream in THIS session and never touches the machine's master volume;
+        // the ramp is enforced by WakeRamp, independently of whatever Cloud Core validated.
+        // With no render endpoint present the capability answers dependency_unavailable —
+        // true about right now, and retryable — rather than pretending to have rung.
+        var alarm = OperatingSystem.IsWindows()
+            ? BuildAlarmController(configuration, loggerFactory.CreateLogger("Alarm"), audit)
+            : null;
+
+        // M18 (§6d): display-off. OFF unless asked for out loud, because display-off has its
+        // own owner qualification and a wrong sleep inference that blanks the screen
+        // interrupts unrelated owner work. Not enabled => not advertised, and refused twice
+        // over (here and in the Device Service) if something sends it anyway.
+        var displayPowerEnabled = ParseFlag(configuration["DisplayPowerEnabled"]);
+        var displayPower = OperatingSystem.IsWindows()
+            ? new DisplayPowerController(
+                new Win32DisplayPower(),
+                loggerFactory.CreateLogger("DisplayPower"),
+                displayPowerEnabled,
+                audit)
+            : null;
+        logger.LogInformation(
+            displayPowerEnabled
+                ? "display power: ENABLED - desktop.display_off is advertised and will turn the display off"
+                : "display power: disabled (PAGENTOS_AGENT_DisplayPowerEnabled=true enables it); "
+                  + "desktop.display_off is not advertised");
+
         var runtime = new CompanionRuntime(
             pipeName,
             new AppLauncher(allowlist),
@@ -213,7 +240,9 @@ public static class Program
             backoff: null,
             servicePolicy: servicePolicy,
             sidebandSink: sidebandSource,
-            browserWorker: browserHost);
+            browserWorker: browserHost,
+            alarm: alarm,
+            displayPower: displayPower);
         logger.LogInformation("capabilities advertised to the device service: {Capabilities}", string.Join(",", runtime.AdvertisedCapabilities));
 
         if (browserHost is not null && browserOptions.Eager)
@@ -252,9 +281,73 @@ public static class Program
                 // "shutdown" on stdin, a bounded wait, then the process tree — Chrome included.
                 await browserHost.StopAsync().ConfigureAwait(false);
             }
+
+            // A ringing alarm must not outlive the process that started it: there would be no
+            // way left to stop it except killing the audio session.
+            alarm?.Dispose();
         }
 
         return 0;
+    }
+
+    /// <summary>"true"/"1"/"yes" (any case) are true; absent, blank and anything else are false.</summary>
+    public static bool ParseFlag(string? raw)
+    {
+        var value = raw?.Trim();
+        return string.Equals(value, "true", StringComparison.OrdinalIgnoreCase)
+               || string.Equals(value, "1", StringComparison.Ordinal)
+               || string.Equals(value, "yes", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// The alarm's render endpoint: the configured <c>AlarmRenderDevice</c>, else
+    /// <c>VoiceRenderDevice</c> (the owner already chose a speaker for the assistant's voice),
+    /// else the session's default render endpoint. Resolved lazily on every
+    /// <c>desktop.alarm_start</c>, not once at startup — a headset plugged in after the
+    /// companion started should be usable by the next alarm.
+    /// </summary>
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private static AlarmController BuildAlarmController(IConfiguration configuration, ILogger logger, AuditLog audit)
+    {
+        var configured = configuration["AlarmRenderDevice"];
+        if (string.IsNullOrWhiteSpace(configured))
+        {
+            configured = configuration["VoiceRenderDevice"];
+        }
+
+        var catalog = new PagentOS.Companion.Audio.Wasapi.WasapiDeviceCatalog();
+        var factory = new PagentOS.Companion.Audio.Wasapi.WasapiDeviceFactory(catalog, logger);
+
+        return new AlarmController(
+            factory,
+            () => ResolveRenderDevice(catalog, configured),
+            logger,
+            audit: audit);
+    }
+
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private static string? ResolveRenderDevice(
+        PagentOS.Companion.Audio.Audio.IAudioDeviceCatalog catalog,
+        string? configured)
+    {
+        var devices = catalog.List(PagentOS.Companion.Audio.Audio.AudioDirection.Render);
+        if (devices.Count == 0)
+        {
+            return null;
+        }
+
+        if (!string.IsNullOrWhiteSpace(configured))
+        {
+            var match = devices.FirstOrDefault(d =>
+                string.Equals(d.Id, configured, StringComparison.OrdinalIgnoreCase)
+                || d.Name.Contains(configured, StringComparison.OrdinalIgnoreCase));
+            if (match is not null)
+            {
+                return match.Id;
+            }
+        }
+
+        return (devices.FirstOrDefault(d => d.IsDefault) ?? devices[0]).Id;
     }
 
     private static async Task RunVoiceAsync(

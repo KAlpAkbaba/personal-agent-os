@@ -20,7 +20,8 @@ from app.broker.routes import router as broker_router
 from app.broker.runtime import BrokerRuntime
 from app.broker.ws import router as broker_ws_router
 from app.config import Settings, get_settings
-from app.devices.commands import register_broker_runtime
+from app.db import build_engine, build_session_factory
+from app.devices.commands import DeviceCommandClient, register_broker_runtime
 from app.evolution.routes import router as evolution_router
 from app.evolution.runtime import EvolutionRuntime
 from app.experience.routes import router as experience_router
@@ -41,6 +42,13 @@ from app.presence.routes import router as presence_router
 from app.research.embedded_worker import EmbeddedWorkerRuntime
 from app.research.health import research_health
 from app.research.routes import router as research_router
+from app.routines.dispatch import (
+    ActionDispatcher,
+    BrokerDeviceAction,
+    RealtimeSayBriefing,
+    register_routine_dispatcher,
+)
+from app.routines.models import Routine
 from app.routines.routes import router as routines_router
 from app.security.routes import router as security_router
 from app.security.runtime import SecurityRuntime
@@ -91,10 +99,43 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Temporal worker in-process too (PAGENTOS_WORKER_MODE=embedded).
     embedded_worker = EmbeddedWorkerRuntime(settings)
 
+    def _routine_label(routine_id: Any) -> str | None:
+        """Best-effort alarm label lookup (ADR-0060) — never raises: a routine name is a
+        nicety on the alarm payload, not a precondition for ringing it."""
+        try:
+            with artifacts.session() as session:
+                routine = session.get(Routine, routine_id)
+                return routine.name if routine is not None else None
+        except Exception:  # noqa: BLE001 - a label lookup must never break dispatch
+            return None
+
+    def _build_routine_dispatcher() -> ActionDispatcher:
+        # A dedicated engine/session factory (mirrors app.research.browser_activities'
+        # own `_session_factory()`): app.devices.commands.DeviceCommandClient wants a
+        # plain `sessionmaker`, not ArtifactRuntime's context-manager `.session()`.
+        dispatch_engine = build_engine(settings.database_url)
+        dispatch_session_factory = build_session_factory(dispatch_engine)
+        return ActionDispatcher(
+            briefing=RealtimeSayBriefing(
+                session_factory=dispatch_session_factory, sideband=voice_realtime.sideband
+            ),
+            device_action=BrokerDeviceAction(
+                session_factory=dispatch_session_factory,
+                command_client=DeviceCommandClient(dispatch_session_factory),
+            ),
+            routine_label=_routine_label,
+        )
+
+    routine_dispatcher = _build_routine_dispatcher()
+
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await broker.start()
         register_broker_runtime(broker)
+        # M18 (ADR-0060): the real RoutineDispatcher, alongside the broker runtime it
+        # depends on. app.routines.service falls back to NoopDispatcher when nothing is
+        # registered, so every unit test (none of which run this lifespan) is unaffected.
+        register_routine_dispatcher(routine_dispatcher)
         await artifacts.start()
         # M9: the artifact-ready announcer runs HERE, in the process that holds
         # the push registrations. The Temporal worker only makes a task READY;
@@ -119,6 +160,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             await embedded_worker.stop()
             await mobile.announcer.stop()
+            register_routine_dispatcher(None)
             register_broker_runtime(None)
             await broker.stop()
             logger.info("broker_stopped")

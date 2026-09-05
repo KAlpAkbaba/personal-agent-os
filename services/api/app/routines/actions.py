@@ -6,6 +6,7 @@ verbatim (``RoutineFiring.actions_snapshot``) and hands each one to a
 ``RoutineDispatcher``, a ``Protocol`` a real executor implements later, once one exists.
 ``NoopDispatcher`` is the deterministic do-nothing implementation this package and its
 tests use in the meantime — it never plays audio, opens a browser tab or touches a display.
+The real implementation is ``app.routines.dispatch.ActionDispatcher`` (ADR-0060).
 
 Five closed kinds:
 
@@ -150,14 +151,66 @@ def validate_action(raw: dict[str, Any]) -> dict[str, Any]:
 # ------------------------------------------------------------------ execution seam
 
 
+#: DispatchOutcome.status closed vocabulary (M18 dispatch task brief). Distinct from
+#: RoutineFiring.dispatch_status (app.routines.models), which is the AGGREGATE across
+#: every action in one firing (adds "partial" and "none") — this is the per-action verdict.
+DISPATCH_STATUS_SUCCEEDED = "succeeded"
+DISPATCH_STATUS_FAILED = "failed"
+DISPATCH_STATUS_REFUSED = "refused"
+
+DISPATCH_STATUSES: tuple[str, ...] = (
+    DISPATCH_STATUS_SUCCEEDED,
+    DISPATCH_STATUS_FAILED,
+    DISPATCH_STATUS_REFUSED,
+)
+
+
 @dataclass(frozen=True, slots=True)
 class DispatchOutcome:
     """What a dispatcher reports back for one action. Never raises past the caller —
     ``app.routines.service`` treats a dispatcher exception as ``ok=False`` and keeps going,
-    the same "never a hard dependency" discipline as ``app.goals.service``'s ledger calls."""
+    the same "never a hard dependency" discipline as ``app.goals.service``'s ledger calls.
+
+    ``status`` is derived from ``ok`` in ``__post_init__`` when the caller does not supply
+    one, so ``NoopDispatcher`` and every existing ``DispatchOutcome(ok=..., detail=...)``
+    call site (this module, every existing test) keeps constructing a valid instance
+    unchanged. New callers should prefer the :meth:`succeeded`/:meth:`failed`/
+    :meth:`refused` constructors, which set ``ok`` and ``status`` consistently by
+    construction instead of relying on the derivation.
+    """
 
     ok: bool
     detail: dict[str, Any] = field(default_factory=dict)
+    #: closed set: succeeded | failed | refused (see DISPATCH_STATUSES above).
+    status: str = ""
+    #: short machine-readable reason token; empty for a plain, unremarkable success.
+    reason: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.status:
+            object.__setattr__(
+                self, "status", DISPATCH_STATUS_SUCCEEDED if self.ok else DISPATCH_STATUS_FAILED
+            )
+        if self.status not in DISPATCH_STATUSES:
+            raise ValueError(
+                f"unknown dispatch status: {self.status!r}; must be one of {DISPATCH_STATUSES}"
+            )
+
+    @classmethod
+    def succeeded(cls, detail: dict[str, Any] | None = None) -> DispatchOutcome:
+        return cls(ok=True, detail=dict(detail or {}), status=DISPATCH_STATUS_SUCCEEDED)
+
+    @classmethod
+    def failed(cls, reason: str, detail: dict[str, Any] | None = None) -> DispatchOutcome:
+        return cls(
+            ok=False, detail=dict(detail or {}), status=DISPATCH_STATUS_FAILED, reason=reason
+        )
+
+    @classmethod
+    def refused(cls, reason: str, detail: dict[str, Any] | None = None) -> DispatchOutcome:
+        return cls(
+            ok=False, detail=dict(detail or {}), status=DISPATCH_STATUS_REFUSED, reason=reason
+        )
 
 
 class RoutineDispatcher(Protocol):
@@ -190,6 +243,10 @@ __all__ = [
     "DEFAULT_WAKE_VOLUME_END",
     "DEFAULT_WAKE_VOLUME_RAMP_SECONDS",
     "DEFAULT_WAKE_VOLUME_START",
+    "DISPATCH_STATUSES",
+    "DISPATCH_STATUS_FAILED",
+    "DISPATCH_STATUS_REFUSED",
+    "DISPATCH_STATUS_SUCCEEDED",
     "DispatchOutcome",
     "InvalidActionDescriptor",
     "MAX_WAKE_VOLUME_START",

@@ -10,7 +10,12 @@ namespace PagentOS.DeviceService;
 ///
 /// Two families ride the same pipe (DEVICE_PROTOCOL.md §6, §6a, §6b):
 /// <list type="bullet">
-/// <item><c>desktop.*</c> — always routed; per-command cap 60 s (M1 behaviour, unchanged).</item>
+/// <item><c>desktop.*</c> — the M1/M3 open_* pair and the M18 alarm pair are always routed;
+/// <c>desktop.display_off</c> is routed only when <c>DisplayPowerEnabled</c> is configured,
+/// and is otherwise <c>capability_missing</c> before the companion is consulted, exactly like
+/// a browser name on a device with no worker. Per-command cap 60 s (M1 behaviour, unchanged):
+/// <c>alarm_start</c> arms a ramp and returns, it does not hold the pipe while the alarm
+/// rings.</item>
 /// <item><c>browser.*</c> — routed only when <c>BrowserEnabled</c> is configured AND the name
 /// is one of the contract's operations (BROWSER_CAPABILITIES.md §1); anything else in the
 /// namespace is refused here with <c>capability_missing</c> before the companion is
@@ -24,7 +29,8 @@ namespace PagentOS.DeviceService;
 public sealed class InteractiveCapabilityExecutor(
     ICompanionCapabilityTransport pipeServer,
     TimeProvider? timeProvider = null,
-    bool browserEnabled = false) : ICapabilityExecutor
+    bool browserEnabled = false,
+    bool displayPowerEnabled = false) : ICapabilityExecutor
 {
     private static readonly TimeSpan MinTimeout = TimeSpan.FromSeconds(1);
 
@@ -35,6 +41,14 @@ public sealed class InteractiveCapabilityExecutor(
 
     /// <summary>Whether <c>browser.*</c> commands are routed at all (service option <c>BrowserEnabled</c>).</summary>
     public bool BrowserEnabled { get; } = browserEnabled;
+
+    /// <summary>
+    /// Whether <c>desktop.display_off</c> is routed at all (service option
+    /// <c>DisplayPowerEnabled</c>, default false). Off is the M18 v1 posture: display-off has
+    /// its own owner qualification and until it has run, a device answers as one that does not
+    /// have the capability.
+    /// </summary>
+    public bool DisplayPowerEnabled { get; } = displayPowerEnabled;
 
     /// <summary>Per-family cap on the time one command may hold the companion.</summary>
     public static TimeSpan TimeoutCapFor(string capability)
@@ -78,7 +92,21 @@ public sealed class InteractiveCapabilityExecutor(
                     retryable: false);
             }
         }
-        else if (!AgentCapabilities.IsDesktop(command.Capability))
+        else if (AgentCapabilities.IsDisplayPower(command.Capability))
+        {
+            if (!DisplayPowerEnabled)
+            {
+                // The device does not advertise this name either (AgentCapabilities.Compose),
+                // so Cloud Core would normally never send it. Refusing it here as well means
+                // a command aimed straight at the device — a stale one, a hand-made one —
+                // still cannot blank the owner's screen before the qualification has run.
+                throw new CapabilityException(
+                    ErrorClasses.CapabilityMissing,
+                    $"capability '{command.Capability}' is not enabled on this device (DisplayPowerEnabled=false)",
+                    retryable: false);
+            }
+        }
+        else if (!AgentCapabilities.IsInteractive(command.Capability))
         {
             throw new CapabilityException(
                 ErrorClasses.CapabilityMissing,

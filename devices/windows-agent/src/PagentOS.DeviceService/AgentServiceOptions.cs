@@ -61,8 +61,19 @@ public sealed record AgentServiceOptions
     /// </summary>
     public bool BrowserEnabled { get; init; }
 
+    /// <summary>
+    /// M18 (DEVICE_PROTOCOL.md §6d): advertise and route <c>desktop.display_off</c>. Off by
+    /// default and expected to stay off until display-off has passed its own owner
+    /// qualification — a wrong sleep inference that blanks the screen interrupts unrelated
+    /// owner work, which is why this milestone excluded it from the main acceptance rather
+    /// than shipping it behind an inference. Cloud Core refuses to reach it from a routine
+    /// independently of this flag.
+    /// </summary>
+    public bool DisplayPowerEnabled { get; init; }
+
     /// <summary>The capability manifest this service advertises at enrollment and in every WS hello.</summary>
-    public IReadOnlyList<string> AdvertisedCapabilities => Agent.Core.Protocol.AgentCapabilities.Compose(BrowserEnabled);
+    public IReadOnlyList<string> AdvertisedCapabilities
+        => Agent.Core.Protocol.AgentCapabilities.Compose(BrowserEnabled, DisplayPowerEnabled);
 
     public double BackoffBaseSeconds { get; init; } = 1.0;
 
@@ -129,6 +140,7 @@ public sealed record AgentServiceOptions
             CompanionSessionId = companionSessionId,
             HeartbeatIntervalOverrideS = heartbeatOverride,
             BrowserEnabled = ParseBool(configuration["BrowserEnabled"]),
+            DisplayPowerEnabled = ParseBool(configuration["DisplayPowerEnabled"]),
             BackoffBaseSeconds = configuration.GetValue("BackoffBaseSeconds", 1.0),
             BackoffMaxSeconds = configuration.GetValue("BackoffMaxSeconds", 60.0),
         };

@@ -21,6 +21,16 @@ client's assertion about a room the client cannot see. Now:
 present, and it is the quiet-hours condition and the greeting policy — not this function —
 that decide whether it is acceptable to act. Collapsing the two would silently make every
 presence-gated routine also a wakefulness-gated one.
+
+The greeting cooldown (ADR-0060). ``resolve_greeting_decision``/``greeting_verdict`` split
+what used to be one call (``resolve_greeting_allowed``) into "evaluate the policy" and "read
+the verdict off what it returned", because ``app.routines.service`` needs the WHOLE decision
+object, not just its two summary fields: only the caller that actually narrated a briefing is
+allowed to start the cooldown, via ``record_greeting_delivered``, and it needs the original
+``GreetingDecision`` to do that (``app.presence.service.record_greeting_delivered`` refuses a
+decision that never said to greet). ``resolve_greeting_allowed`` stays exactly as it was for
+every existing caller — it is now implemented on top of the pair below, so the policy is
+still evaluated in exactly one place.
 """
 
 from __future__ import annotations
@@ -30,9 +40,13 @@ from typing import Final
 
 from sqlalchemy.orm import Session
 
+from app.logging import get_logger
 from app.presence import service as presence_service
 from app.presence.engine import get_engine
+from app.presence.greeting import GreetingDecision
 from app.presence.states import PresenceState
+
+logger = get_logger("app.routines.presence_link")
 
 #: Where the ``owner_present`` value in a condition context came from. Recorded so a
 #: routine that fired on real perception is distinguishable from one that fired on a
@@ -68,17 +82,54 @@ def resolve_owner_present(*, now: datetime | None = None) -> tuple[bool | None, 
     return state not in _AWAY_STATES, SOURCE_PRESENCE_ENGINE
 
 
+def resolve_greeting_decision(session: Session, *, now: datetime | None = None) -> GreetingDecision:
+    """The Presence Engine's greeting policy, evaluated whole (ADR-0060).
+
+    Pure — evaluating it has no side effect, deliberately: ``POST /v1/routines/evaluate``
+    calls this on every tick, including the ticks where a later condition fails and nothing
+    is ever narrated. A side effect here would burn the morning greeting on a routine that
+    never fired. ``app.routines.service`` is the only caller allowed to turn a
+    ``should_greet`` verdict into a started cooldown, via :func:`record_greeting_delivered`,
+    and only after a briefing was actually delivered.
+    """
+    return presence_service.evaluate_greeting_now(session, now=now)
+
+
+def greeting_verdict(decision: GreetingDecision) -> tuple[bool, str]:
+    """``(allowed, reason)`` — the shape ``RoutineConditionContext`` wants, unpacked from
+    the decision object so a caller that only needs the boolean need not know its shape."""
+    return decision.should_greet, decision.reason
+
+
 def resolve_greeting_allowed(session: Session, *, now: datetime | None = None) -> tuple[bool, str]:
     """``(allowed, reason)`` from the Presence Engine's own greeting policy.
 
-    Evaluation only - it does not record a delivery and so does not start the cooldown.
-    That matters here more than anywhere: a condition is evaluated on every
-    ``POST /v1/routines/evaluate``, including the calls where a later condition fails and
-    nothing is ever narrated. A side effect there would burn the morning greeting on a
-    routine that never fired.
+    Kept for every existing caller: implemented on top of :func:`resolve_greeting_decision`
+    / :func:`greeting_verdict` so the policy is evaluated in exactly one place, not two.
     """
-    decision = presence_service.evaluate_greeting_now(session, now=now)
-    return decision.should_greet, decision.reason
+    return greeting_verdict(resolve_greeting_decision(session, now=now))
+
+
+def record_greeting_delivered(
+    session: Session, decision: GreetingDecision, *, now: datetime | None = None
+) -> bool:
+    """Start the greeting cooldown — AFTER, and only after, a briefing was actually
+    narrated (ADR-0060). Returns whether the cooldown actually started.
+
+    ``app.presence.service.record_greeting_delivered`` raises on a decision that never said
+    to greet (a cooldown started by a refusal would silence the next real greeting). A
+    caller reaching this function with such a decision has already checked ``should_greet``
+    itself in every path this package builds, so this is defence in depth, not the primary
+    guard: log and report ``False`` rather than let a caller's logic error surface as an
+    unrelated 500 from deep inside routine evaluation.
+    """
+    if not decision.should_greet:
+        logger.warning(
+            "record_greeting_delivered_called_with_refused_decision", reason=decision.reason
+        )
+        return False
+    presence_service.record_greeting_delivered(session, decision, now=now)
+    return True
 
 
 __all__ = [
@@ -87,6 +138,9 @@ __all__ = [
     "SOURCE_PRESENCE_ENGINE",
     "SOURCE_STALE",
     "SOURCE_UNKNOWN",
+    "greeting_verdict",
+    "record_greeting_delivered",
     "resolve_greeting_allowed",
+    "resolve_greeting_decision",
     "resolve_owner_present",
 ]
