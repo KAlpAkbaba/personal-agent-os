@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.selfmodel.indexer import COMPONENT_MODULE_HINTS, has_table
@@ -852,12 +852,21 @@ def list_modules(
     ]
 
 
+def count_modules(session: Session, *, kind: str | None = None) -> int:
+    """How many modules the index holds. Spoken as a number, so it must be the real one."""
+    stmt = select(func.count()).select_from(CodeModule)
+    if kind:
+        stmt = stmt.where(CodeModule.kind == kind)
+    return int(session.scalar(stmt) or 0)
+
+
 __all__ = [
     "MAX_CANDIDATES",
     "OPEN_INCIDENT_STATUSES",
     "REQUIRED_GATES",
     "TEST_FAILURE_EVENT_TYPES",
     "Answer",
+    "count_modules",
     "Resolution",
     "last_test_failure",
     "list_modules",

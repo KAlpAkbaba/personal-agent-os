@@ -130,27 +130,25 @@ RECURRENCE_SATURATION = 5
 #: how far back compile_lessons looks for failures/incidents by default.
 DEFAULT_LOOKBACK = timedelta(days=365)
 
+# These statements are READ ALOUD to a Turkish-speaking owner. Turkish is first-class in
+# this product, especially in voice (CLAUDE.md), and until 2026-09-05 they were authored in
+# English - so the M17 rehearsal answered a Turkish question with an English paragraph.
 _RESEARCH_EVIDENCE_LEAK_STATEMENT = (
-    "Interstitial/consent/captcha pages must not become research evidence: "
-    "page validity has to be judged BEFORE ranking, and that verdict must "
-    "persist onto the evidence row so a later synthesis pass cannot read the "
-    "rejected page back in."
+    "Ara doğrulama, çerez ve robot kontrolü sayfaları araştırma kanıtı olamaz. "
+    "Sayfanın geçerliliği sıralamadan ÖNCE kararlaştırılmalı ve bu karar kanıt "
+    "satırına yazılmalı; yoksa sonraki sentez elenen sayfayı geri okur."
 )
 _DEPLOYMENT_PROVENANCE_STATEMENT = (
-    "Runtime identity/provenance must be independently verified after every "
-    "install: a clean repo/staged-tree check does not prove which build the "
-    "LIVE process is actually executing — the running worker/service must "
-    "assert its own module path and digest, and the verifier must compare "
-    "that against the staged release, not the source tree."
+    "Her kurulumdan sonra çalışan sürümün kimliği ayrıca doğrulanmalı. Deponun "
+    "temiz olması, canlı sürecin hangi yapıyı çalıştırdığını kanıtlamaz: çalışan "
+    "servis kendi modül yolunu ve özetini bildirmeli, doğrulayıcı da bunu kaynak "
+    "ağacıyla değil, kurulan sürümle karşılaştırmalı."
 )
 
 _ACCEPTANCE_WORDING_STATEMENT = (
-    "An acceptance check must assert on the STRUCTURE a sentence was built from, "
-    "never on the sentence: the cited event ids, the job or session they belong to, "
-    "whether they resolve, and the numbers themselves. Generated natural language is "
-    "free to improve, and it does - twice a working system was failed by a check that "
-    "matched a Turkish sentence prefix, and each failure cost the owner a whole "
-    "qualification run. Paraphrasing must stay free; an unsupported claim must not."
+    "Kabul kontrolü, cümlenin kendisine değil, cümlenin kurulduğu YAPIYA bakmalı: "
+    "alıntılanan olay kimlikleri, ait oldukları iş ve sayıların kendisi. Çalışan bir "
+    "sistem iki kez sırf cümle öneki değişti diye başarısız sayıldı."
 )
 
 # ------------------------------------------------------------- scoring weights
@@ -363,7 +361,7 @@ def _build_incident_lesson(incident: Incident) -> LessonCandidate | None:
 
     if pattern == PATTERN_RESEARCH_EVIDENCE_LEAK:
         reason = extra.get("reason", "interstitial")
-        title = "Non-content pages must not become research evidence"
+        title = "İçerik olmayan sayfalar araştırma kanıtı olamaz"
         statement = _RESEARCH_EVIDENCE_LEAK_STATEMENT
         root_cause = (
             f"Pages classified as '{reason}' were ranked and cited as evidence before "
@@ -371,12 +369,12 @@ def _build_incident_lesson(incident: Incident) -> LessonCandidate | None:
         )
         scope = "research"
     elif pattern == PATTERN_ACCEPTANCE_WORDING:
-        title = "Acceptance evidence must be structural, not a paraphrase"
+        title = "Kabul kanıtı yapısal olmalı, ifade değil"
         statement = _ACCEPTANCE_WORDING_STATEMENT
         root_cause = _acceptance_root_cause(extra.get("failed_check"), incident.component)
         scope = "qualification"
     elif pattern == PATTERN_DEPLOYMENT_PROVENANCE:
-        title = "Runtime provenance must be independently verified"
+        title = "Çalışan sürümün kimliği ayrıca doğrulanmalı"
         statement = _DEPLOYMENT_PROVENANCE_STATEMENT
         root_cause = (
             f"{incident.component} reported repo/staged state '{extra.get('repo_state')}' "
@@ -384,7 +382,7 @@ def _build_incident_lesson(incident: Incident) -> LessonCandidate | None:
         )
         scope = "deployment"
     else:
-        title = f"Recurring {incident.component} incident"
+        title = f"{incident.component} tarafında tekrarlayan arıza"
         statement = (
             f"{incident.component} failures shaped like this incident were followed by "
             "a resolution; the specific mechanism is not yet well enough understood to "
@@ -392,7 +390,7 @@ def _build_incident_lesson(incident: Incident) -> LessonCandidate | None:
         )
         # Keys only. The blob can carry a captured page, an exception message or a
         # credential, and this text is read aloud (security review, 2026-09-05).
-        root_cause = "Incident evidence keys: " + _key_list(incident.evidence_json)
+        root_cause = "Kanit alanlari: " + _key_list(incident.evidence_json)
         scope = incident.component or "global"
 
     return LessonCandidate(
@@ -515,7 +513,7 @@ def _build_ledger_lesson(
 
     if pattern == PATTERN_RESEARCH_EVIDENCE_LEAK:
         reason = extra.get("reason", "interstitial")
-        title = "Non-content pages must not become research evidence"
+        title = "İçerik olmayan sayfalar araştırma kanıtı olamaz"
         statement = _RESEARCH_EVIDENCE_LEAK_STATEMENT
         root_cause = (
             f"Pages classified as '{reason}' were ranked/cited as evidence before an "
@@ -523,19 +521,19 @@ def _build_ledger_lesson(
         )
         scope = "research"
     elif pattern == PATTERN_ACCEPTANCE_WORDING:
-        title = "Acceptance evidence must be structural, not a paraphrase"
+        title = "Kabul kanıtı yapısal olmalı, ifade değil"
         statement = _ACCEPTANCE_WORDING_STATEMENT
         root_cause = _acceptance_root_cause(extra.get("failed_check"), row.module or row.subsystem)
         scope = "qualification"
     else:
-        title = f"Recurring {row.subsystem} failure ({row.event_type})"
+        title = f"{row.subsystem} tarafında tekrarlayan arıza"
         statement = (
             f"{row.subsystem} runs failing with '{row.result or row.status}' were later "
             "followed by a successful run; the specific mechanism is not yet well enough "
             "understood to generalize beyond 'investigate before assuming this recurs the "
             "same way'."
         )
-        root_cause = "Event detail keys: " + _key_list(row.detail_json)
+        root_cause = "Olay ayrinti alanlari: " + _key_list(row.detail_json)
         scope = row.subsystem
 
     return LessonCandidate(

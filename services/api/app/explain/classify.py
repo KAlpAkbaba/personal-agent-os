@@ -30,6 +30,9 @@ QUERY_WHY_BUILT = "why_built"  # bu özelliği neden geliştirdin
 QUERY_TESTS = "tests"  # test sonuçlarını anlat
 QUERY_GOALS = "goals"  # neyi hedefliyorsun / hedeflerin ne durumda
 QUERY_SINCE_YOU_LEFT = "since_you_left"  # siz yokken / yokluğumda ne oldu
+QUERY_WORLD_STATE = "world_state"  # kendi sisteminde şu anda ne görüyorsun
+QUERY_SELF_CODE = "self_code"  # kendi kodun hakkında ne biliyorsun
+QUERY_CAN_DEPLOY = "can_deploy"  # bunu canlıya alabilir misin
 
 QUERY_KINDS = (
     QUERY_LAST_ACTIVITY,
@@ -49,6 +52,9 @@ QUERY_KINDS = (
     QUERY_TESTS,
     QUERY_GOALS,
     QUERY_SINCE_YOU_LEFT,
+    QUERY_WORLD_STATE,
+    QUERY_SELF_CODE,
+    QUERY_CAN_DEPLOY,
 )
 
 LEVEL_EXECUTIVE = "executive"
@@ -77,6 +83,37 @@ _SUBSYSTEM_WORDS: tuple[tuple[str, str], ...] = (
 
 # (all of these stems present) -> kind; first match wins, so specific phrasings come first.
 _PATTERNS: tuple[tuple[tuple[str, ...], str], ...] = (
+    # --- may you put it live? the authority boundary, asked as a question --------
+    # First, and deliberately: "canlıya alabilir misin" must never fall through to a
+    # status answer. The honest answer is about who may deploy, not about what exists.
+    (("canlı", "alabilir"), QUERY_CAN_DEPLOY),
+    (("canliya", "alabilir"), QUERY_CAN_DEPLOY),
+    (("yayına", "alabilir"), QUERY_CAN_DEPLOY),
+    (("yayina", "alabilir"), QUERY_CAN_DEPLOY),
+    (("kendin", "dağıt"), QUERY_CAN_DEPLOY),
+    (("kendin", "dagit"), QUERY_CAN_DEPLOY),
+    (("canlı", "alır", "mısın"), QUERY_CAN_DEPLOY),
+    (("dağıtabilir", "misin"), QUERY_CAN_DEPLOY),
+    # --- what do you see in yourself: the world model ----------------------------
+    (("kendi", "sistem"), QUERY_WORLD_STATE),
+    (("sistemin", "görüyorsun"), QUERY_WORLD_STATE),
+    (("ne", "görüyorsun"), QUERY_WORLD_STATE),
+    (("ne", "goruyorsun"), QUERY_WORLD_STATE),
+    (("sistem", "durum"), QUERY_WORLD_STATE),
+    # --- what do you know about your own code: the self model --------------------
+    (("kendi", "kod"), QUERY_SELF_CODE),
+    (("kod", "biliyor"), QUERY_SELF_CODE),
+    (("kodun", "hakkında"), QUERY_SELF_CODE),
+    (("kodun", "hakkinda"), QUERY_SELF_CODE),
+    (("hangi", "modül"), QUERY_SELF_CODE),
+    (("hangi", "modul"), QUERY_SELF_CODE),
+    # --- what did you build ON YOURSELF: evolution, not a general night summary ---
+    # These precede the absence rules on purpose: "gece kendi üzerinde ne geliştirdin"
+    # is a question about the Evolution Engine, and answering it with a generic "while
+    # you were away" briefing would bury the one thing that was asked for.
+    (("kendi", "üzerinde"), QUERY_EVOLUTION),
+    (("kendi", "uzerinde"), QUERY_EVOLUTION),
+    (("kendini", "geliştir"), QUERY_EVOLUTION),
     # --- the returning owner: one briefing for a whole absence ------------------
     (("yokken",), QUERY_SINCE_YOU_LEFT),
     (("yokluğum",), QUERY_SINCE_YOU_LEFT),
@@ -88,6 +125,9 @@ _PATTERNS: tuple[tuple[tuple[str, ...], str], ...] = (
     (("hata", "öğren"), QUERY_LEARNED),
     (("ne", "öğren"), QUERY_LEARNED),
     (("öğren",), QUERY_LEARNED),
+    (("hata", "ogren"), QUERY_LEARNED),
+    (("ne", "ogren"), QUERY_LEARNED),
+    (("ogren",), QUERY_LEARNED),
     (("ders",), QUERY_LEARNED),
     (("kendi", "geliştir"), QUERY_EVOLUTION),
     (("üzerinde", "çalış"), QUERY_EVOLUTION),

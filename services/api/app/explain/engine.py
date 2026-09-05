@@ -17,6 +17,7 @@ from app.explain.classify import (
     LEVEL_DETAILED,
     LEVEL_EXECUTIVE,
     LEVEL_TECHNICAL,
+    QUERY_CAN_DEPLOY,
     QUERY_EVIDENCE,
     QUERY_EVOLUTION,
     QUERY_FAILURES,
@@ -24,6 +25,7 @@ from app.explain.classify import (
     QUERY_LEARNED,
     QUERY_MODULE_PROBLEM,
     QUERY_PROBLEMS_NOW,
+    QUERY_SELF_CODE,
     QUERY_SHADOW_READY,
     QUERY_SINCE_YOU_LEFT,
     QUERY_SUBSYSTEM_STATUS,
@@ -31,6 +33,7 @@ from app.explain.classify import (
     QUERY_TODAY,
     QUERY_WHY_BUILT,
     QUERY_WHY_FAILED,
+    QUERY_WORLD_STATE,
     ExplainQuery,
 )
 from app.ledger.screening import MAX_EVIDENCE_CHARS, safe_evidence_text
@@ -370,6 +373,56 @@ def _subsystem_tr(name: str | None) -> str:
     return _SUBSYSTEM_TR.get(name or "", name or "sistem")
 
 
+#: The four truth kinds, in the order a person would want to hear them: what the code says,
+#: what is installed, what is actually running, what the record proves.
+TRUTH_ORDER: tuple[str, ...] = (
+    "source_truth",
+    "installed_truth",
+    "runtime_truth",
+    "evidence_truth",
+)
+
+_TRUTH_KIND_TR: dict[str, str] = {
+    "source_truth": "Kaynak kodda",
+    "installed_truth": "Kurulu olan",
+    "runtime_truth": "Şu an çalışan",
+    "evidence_truth": "Kayıtla kanıtlı",
+}
+
+
+def _opp_status(opportunity: dict[str, Any]) -> str:
+    """An opportunity's status, case-folded.
+
+    ``OpportunityStatus`` values are lowercase (``shadow_ready``), and the engine compared
+    them against uppercase literals. Every comparison was therefore false: "gece kendi
+    uzerinde ne gelistirdin" answered "sifir gelistirme" while a real SHADOW_READY
+    candidate sat one query away - and the sibling branch that passed a lowercase filter to
+    the database found it in the same run (M17 rehearsal, 2026-09-05).
+    """
+    return str(opportunity.get("status") or "").strip().lower()
+
+
+#: In-flight lab statuses, lowercase, as the database stores them.
+_LAB_IN_FLIGHT = ("researching", "design_ready", "building", "testing", "evaluating")
+STATUS_SHADOW_READY = "shadow_ready"
+STATUS_LIVE = "live"
+
+
+def _production_action_names(policy: dict[str, Any]) -> list[str]:
+    """The first few production action names, as strings, for one spoken sentence."""
+    return [str(a) for a in (policy.get("production_actions") or [])][:4]
+
+
+def _truth_kind_phrase(by_kind: dict[str, int]) -> str:
+    """ "iki kaynak, bir çalışan" - only the kinds that actually have observations."""
+    parts = [
+        f"{cardinal(by_kind[kind])} {_TRUTH_KIND_TR.get(kind, kind).lower()}"
+        for kind in TRUTH_ORDER
+        if by_kind.get(kind)
+    ]
+    return _tr_list(parts) if parts else "hiçbiri"
+
+
 def _said(value: Any, *, max_len: int = MAX_EVIDENCE_CHARS) -> str:
     """Free text from a stored row, made safe to read aloud.
 
@@ -668,6 +721,24 @@ def _call(source: Any, name: str, **kwargs: Any) -> list[dict[str, Any]]:
         return []
 
 
+def _call_obj(source: Any, name: str, **kwargs: Any) -> dict[str, Any] | None:
+    """The dict-shaped sibling of :func:`_call`.
+
+    The world model and the authority policy answer with ONE object, not a list, and
+    `list(a_dict)` would quietly yield its keys - an answer made of field names. Absence
+    is None here, and the caller turns None into "I cannot read that", never into an
+    empty-but-confident answer.
+    """
+    getter = getattr(source, name, None)
+    if getter is None:
+        return None
+    try:
+        result = getter(**kwargs)
+    except Exception:  # noqa: BLE001 - a missing subsystem is an absence, not a failure
+        return None
+    return result if isinstance(result, dict) else None
+
+
 def _lesson_ref(lesson: dict[str, Any]) -> dict[str, Any]:
     return {"kind": "experience_lesson", "ref": str(lesson.get("lesson_id", ""))}
 
@@ -723,7 +794,7 @@ def _opportunity_item(opportunity: dict[str, Any]) -> BriefingItem:
     statements.append(
         Statement(
             f"Durum: {opportunity.get('status')}."
-            + (" Canlıda değil." if str(opportunity.get("status")) != "LIVE" else ""),
+            + (" Canlıda değil." if _opp_status(opportunity) != STATUS_LIVE else ""),
             LABEL_FACT,
             (ref,),
         )
@@ -928,7 +999,9 @@ def explain(
         lessons = _call(source, "lessons", limit=20)
         promoted = [lesson for lesson in lessons if lesson.get("status") == "promoted"]
         shadow = [
-            o for o in _call(source, "opportunities", limit=20) if o.get("status") == "SHADOW_READY"
+            o
+            for o in _call(source, "opportunities", limit=20)
+            if _opp_status(o) == STATUS_SHADOW_READY
         ]
         needs_action, culprit = _needs_owner_action(activities)
         if not activities and not lessons and not shadow:
@@ -1008,15 +1081,40 @@ def explain(
         else:
             promoted = [lesson for lesson in lessons if lesson.get("status") == "promoted"]
             candidates = [lesson for lesson in lessons if lesson.get("status") == "candidate"]
+            # "sıfır dersi kalıcı hale getirdim" is technically true and reads as a
+            # non-answer. Say the shape that actually holds.
+            kept = len(promoted) + len(procedural)
+            if kept:
+                headline = (
+                    f"Efendim, {cardinal(kept)} dersi kalıcı hale getirdim; "
+                    f"{cardinal(len(candidates))} aday hâlâ değerlendirmede."
+                )
+            else:
+                headline = (
+                    f"Efendim, {cardinal(len(candidates))} ders adayım var; "
+                    "henüz hiçbirini kalıcı hale getirmedim."
+                )
             executive.append(
                 Statement(
-                    f"Efendim, {cardinal(len(promoted) + len(procedural))} dersi kalıcı hale "
-                    f"getirdim; {cardinal(len(candidates))} aday hâlâ değerlendirmede.",
+                    headline,
                     LABEL_FACT,
                     tuple(_lesson_ref(lesson) for lesson in (promoted + candidates)[:8]),
                 )
             )
-            top = (promoted or candidates)[:2]
+            # One lesson per DISTINCT statement: two incidents of the same defect class
+            # compile to two rows carrying identical text, and reading it twice in a row
+            # sounds like a stutter rather than like knowing two things. The rest stay in
+            # the detailed level, where the owner can ask for them.
+            top: list[dict[str, Any]] = []
+            seen_statements: set[str] = set()
+            for lesson in promoted or candidates:
+                text = _said(lesson.get("statement") or lesson.get("title"))
+                if not text or text in seen_statements:
+                    continue
+                seen_statements.add(text)
+                top.append(lesson)
+                if len(top) >= 2:
+                    break
             for lesson in top:
                 executive.append(
                     Statement(
@@ -1045,13 +1143,8 @@ def explain(
 
     elif query.kind in (QUERY_EVOLUTION, QUERY_SHADOW_READY, QUERY_WHY_BUILT):
         opportunities = _call(source, "opportunities", limit=20)
-        shadow = [o for o in opportunities if o.get("status") == "SHADOW_READY"]
-        building = [
-            o
-            for o in opportunities
-            if str(o.get("status"))
-            in ("RESEARCHING", "DESIGN_READY", "BUILDING", "TESTING", "EVALUATING")
-        ]
+        shadow = [o for o in opportunities if _opp_status(o) == STATUS_SHADOW_READY]
+        building = [o for o in opportunities if _opp_status(o) in _LAB_IN_FLIGHT]
         if not opportunities:
             executive.append(
                 Statement(
@@ -1104,8 +1197,13 @@ def explain(
         else:
             executive.append(
                 Statement(
-                    f"Efendim, {cardinal(len(building))} geliştirme üzerinde çalışıyorum ve "
-                    f"{cardinal(len(shadow))} tanesi gölge durumda hazır.",
+                    (
+                        f"Efendim, {cardinal(len(building))} geliştirme üzerinde çalışıyorum "
+                        f"ve {cardinal(len(shadow))} tanesi gölge durumda hazır."
+                        if building
+                        else f"Efendim, {cardinal(len(shadow))} yeteneği bitirdim ve gölge "
+                        "durumda hazır bekliyor; şu an elimde süren bir geliştirme yok."
+                    ),
                     LABEL_FACT,
                     tuple(_opportunity_ref(o) for o in opportunities[:8]),
                 )
@@ -1152,6 +1250,215 @@ def explain(
         for goal in active[:MAX_DETAILED_ITEMS]:
             detailed.append(_goal_item(goal))
             add_refs((_goal_ref(goal),))
+
+    elif query.kind == QUERY_WORLD_STATE:
+        # "Kendi sisteminde şu anda ne görüyorsun?" - the four truth kinds, kept apart.
+        # The whole point of the world model is that source truth is not runtime truth, so
+        # the answer says WHICH KIND each fact is, and says out loud what it does not know.
+        snapshot = _call_obj(source, "world_state")
+        if not snapshot:
+            executive.append(Statement("Dünya modelim şu anda okunamıyor.", LABEL_UNCERTAINTY, ()))
+        else:
+            facts = [f for f in (snapshot.get("facts") or []) if isinstance(f, dict)]
+            uncertainties = [
+                u for u in (snapshot.get("uncertainties") or []) if isinstance(u, dict)
+            ]
+            by_kind: dict[str, int] = {}
+            for fact in facts:
+                by_kind[str(fact.get("truth_kind"))] = (
+                    by_kind.get(str(fact.get("truth_kind")), 0) + 1
+                )
+            stale = [f for f in facts if bool(f.get("stale"))]
+            executive.append(
+                Statement(
+                    f"Efendim, şu an {cardinal(len(facts))} doğrulanmış gözlemim var: "
+                    f"{_truth_kind_phrase(by_kind)}.",
+                    LABEL_FACT,
+                    ({"kind": "world_snapshot", "ref": str(snapshot.get("observed_at") or "now")},),
+                )
+            )
+            if uncertainties:
+                executive.append(
+                    Statement(
+                        f"{cardinal(len(uncertainties))} konuda emin değilim; tahmin etmiyorum.",
+                        LABEL_UNCERTAINTY,
+                        (),
+                    )
+                )
+            if stale:
+                executive.append(
+                    Statement(
+                        f"{cardinal(len(stale))} gözlem bayatlamış olabilir; "
+                        "onları güncel diye sunmuyorum.",
+                        LABEL_UNCERTAINTY,
+                        (),
+                    )
+                )
+            for kind_name in TRUTH_ORDER:
+                rows = [f for f in facts if str(f.get("truth_kind")) == kind_name]
+                if not rows:
+                    continue
+                statements = []
+                for fact in rows[:4]:
+                    label = LABEL_FACT if not fact.get("stale") else LABEL_UNCERTAINTY
+                    statements.append(
+                        Statement(
+                            f"{_said(fact.get('key'), max_len=60)}: {_plain(fact.get('value'))}"
+                            + (" (bayat)" if fact.get("stale") else ""),
+                            label,
+                            ({"kind": "world_fact", "ref": str(fact.get("key"))},),
+                        )
+                    )
+                detailed.append(
+                    BriefingItem(_TRUTH_KIND_TR.get(kind_name, kind_name), tuple(statements))
+                )
+            for unc in uncertainties[:MAX_DETAILED_ITEMS]:
+                technical.append(
+                    BriefingItem(
+                        _said(unc.get("subject"), max_len=60) or "Bilinmeyen",
+                        (
+                            Statement(
+                                f"Neden bilinmiyor: {_said(unc.get('reason'), max_len=120)}.",
+                                LABEL_UNCERTAINTY,
+                                ({"kind": "world_uncertainty", "ref": str(unc.get("subject"))},),
+                            ),
+                        ),
+                    )
+                )
+
+    elif query.kind == QUERY_SELF_CODE:
+        # "Kendi kodun hakkında ne biliyorsun?" - from the index, never from memory of
+        # having written it. An empty index is answered as an empty index.
+        overview = _call_obj(source, "code_overview", limit=8)
+        modules = (overview or {}).get("modules") or []
+        total = int((overview or {}).get("module_count") or 0)
+        if not overview or total == 0:
+            executive.append(
+                Statement(
+                    "Kendi kodumun dizinini henüz çıkarmadım; bu yüzden modüllerim hakkında "
+                    "bir şey iddia etmiyorum.",
+                    LABEL_UNCERTAINTY,
+                    (),
+                )
+            )
+        else:
+            areas = sorted({str(m.get("owner_area") or "") for m in modules if m.get("owner_area")})
+            executive.append(
+                Statement(
+                    f"Efendim, kendi kodumdan {cardinal(total)} modül tanıyorum"
+                    + (f"; başlıca alanlar {_tr_list(areas[:3])}." if areas else "."),
+                    LABEL_FACT,
+                    ({"kind": "code_index", "ref": "code_modules"},),
+                )
+            )
+            for module in modules[:MAX_DETAILED_ITEMS]:
+                ref = {"kind": "code_module", "ref": str(module.get("module_id"))}
+                statements = [
+                    Statement(
+                        f"{_said(module.get('module_id'), max_len=80)}: "
+                        f"{_said(module.get('purpose'), max_len=160) or 'amacı kayıtlı değil'}.",
+                        LABEL_FACT,
+                        (ref,),
+                    ),
+                    Statement(
+                        f"Üretim durumu {_plain(module.get('production_state'))}.",
+                        LABEL_FACT,
+                        (ref,),
+                    ),
+                ]
+                adrs = [str(a) for a in (module.get("adr_refs") or [])][:3]
+                if adrs:
+                    statements.append(Statement(f"Kararlar: {_tr_list(adrs)}.", LABEL_FACT, (ref,)))
+                detailed.append(
+                    BriefingItem(
+                        _said(module.get("module_id"), max_len=80) or "Modül", tuple(statements)
+                    )
+                )
+
+    elif query.kind == QUERY_CAN_DEPLOY:
+        # "Bunu canlıya alabilir misin?" - the answer is the boundary itself, read from the
+        # authority module rather than described from memory, so the spoken rule and the
+        # enforced rule cannot drift apart.
+        policy = _call_obj(source, "authority_policy")
+        shadow = _call(source, "opportunities", statuses=("shadow_ready",), limit=5)
+        if not policy:
+            executive.append(
+                Statement(
+                    "Yetki sınırını şu anda okuyamıyorum; okuyamadığım bir sınıra "
+                    "dayanarak canlıya alma sözü vermem.",
+                    LABEL_UNCERTAINTY,
+                    (),
+                )
+            )
+        else:
+            ref = {"kind": "authority_policy", "ref": "app.evolution.authority"}
+            executive.append(Statement("Hayır efendim, canlıya kendim alamam.", LABEL_FACT, (ref,)))
+            executive.append(
+                Statement(
+                    "Geliştirme motorum laboratuvar yetkisiyle çalışır ve hiçbir üretim "
+                    "yetkisi taşımaz; öneririm, hazırlarım, gölgede çalıştırırım.",
+                    LABEL_FACT,
+                    (ref,),
+                )
+            )
+            executive.append(
+                Statement(
+                    "Canlıya alma sizin onayınızı ve yeterlilik testini gerektirir.",
+                    LABEL_FACT,
+                    (ref,),
+                )
+            )
+            if policy.get("lab_holds_any_production_grant"):
+                executive.append(
+                    Statement(
+                        "Dikkat: laboratuvar yetkisi bir üretim izni taşıyor görünüyor; "
+                        "bu bir hata olurdu.",
+                        LABEL_UNCERTAINTY,
+                        (ref,),
+                    )
+                )
+            if shadow:
+                names = _tr_list([_said(o.get("title"), max_len=60) for o in shadow[:2]])
+                executive.append(
+                    Statement(
+                        f"Bekleyen aday: {names}; gölgeye hazır, canlıda değil.",
+                        LABEL_FACT,
+                        tuple(_opportunity_ref(o) for o in shadow[:2]),
+                    )
+                )
+            detailed.append(
+                BriefingItem(
+                    "Yetki sınırı",
+                    (
+                        Statement(
+                            "Üretim eylemleri: "
+                            f"{_tr_list(_production_action_names(policy))}. "
+                            "Hiçbiri laboratuvar yetkisiyle yapılamaz.",
+                            LABEL_FACT,
+                            (ref,),
+                        ),
+                        Statement(
+                            f"Değiştirilemez kök politikalar: "
+                            f"{cardinal(len(policy.get('root_policies') or []))} adet.",
+                            LABEL_FACT,
+                            (ref,),
+                        ),
+                    ),
+                )
+            )
+            for item in (policy.get("root_policies") or [])[:MAX_DETAILED_ITEMS]:
+                technical.append(
+                    BriefingItem(
+                        _said(item.get("title"), max_len=70) or "Politika",
+                        (
+                            Statement(
+                                _said(item.get("statement"), max_len=200),
+                                LABEL_FACT,
+                                ({"kind": "root_policy", "ref": str(item.get("policy_id"))},),
+                            ),
+                        ),
+                    )
+                )
 
     elif query.kind == QUERY_TESTS:
         test_events = [

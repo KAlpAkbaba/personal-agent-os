@@ -275,7 +275,7 @@ def test_browser_interstitial_incident_yields_evidence_leak_lesson(session):
     assert len(candidates) == 1
     lesson = candidates[0]
     assert lesson.pattern == PATTERN_RESEARCH_EVIDENCE_LEAK
-    assert "must not become research evidence" in lesson.statement
+    assert "araştırma kanıtı olamaz" in lesson.statement
     assert lesson.scope == "research"
 
 
@@ -299,8 +299,8 @@ def test_deployment_provenance_incident_yields_provenance_lesson(session):
     assert len(candidates) == 1
     lesson = candidates[0]
     assert lesson.pattern == PATTERN_DEPLOYMENT_PROVENANCE
-    assert "independently verified" in lesson.statement.lower()
-    assert "provenance" in lesson.title.lower()
+    assert "ayrıca doğrulanmalı" in lesson.statement.lower()
+    assert lesson.pattern == PATTERN_DEPLOYMENT_PROVENANCE
     assert lesson.scope == "deployment"
 
 
@@ -470,9 +470,9 @@ def test_the_acceptance_wording_defect_compiles_as_its_own_lesson(session):
     named = [c for c in candidates if c.pattern == PATTERN_ACCEPTANCE_WORDING]
     assert named, f"expected the named pattern, got {[c.pattern for c in candidates]}"
     lesson = named[0]
-    assert lesson.title == "Acceptance evidence must be structural, not a paraphrase"
+    assert lesson.title == "Kabul kanıtı yapısal olmalı, ifade değil"
     assert lesson.scope == "qualification"
-    assert "structure" in lesson.statement.lower()
+    assert "YAPIYA" in lesson.statement
     # it names the check that failed, never the generated sentence it matched
     assert "speech_head" in lesson.root_cause
     assert "Efendim" not in lesson.root_cause

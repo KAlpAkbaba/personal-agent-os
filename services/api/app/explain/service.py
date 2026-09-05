@@ -142,14 +142,24 @@ class LedgerEvidenceSource:
     # imports are local and defensive for exactly that reason.
 
     def lessons(self, *, limit: int = 20) -> list[dict[str, Any]]:
+        """Compiled lessons, highest-scoring first.
+
+        Queried from the model, not through a service helper: an earlier version called
+        ``app.experience.service.list_lessons``, which has never existed. The call raised,
+        the defensive handler swallowed it, and the owner was told "henüz kayda geçmiş bir
+        ders çıkarmadım" while the table held two compiled lessons. A wiring bug that
+        impersonates an honest absence is worse than a crash (M17 rehearsal, 2026-09-05).
+        """
+        from sqlalchemy import select
+
         try:
-            from app.experience import service as experience_service
+            from app.experience.models import ExperienceLessonRow
         except ImportError:
             return []
-        try:
-            return [row_as_dict(r) for r in experience_service.list_lessons(self._db, limit=limit)]
-        except Exception:  # noqa: BLE001 - an absent table is an absence, not a failure
-            return []
+        return self._rows(
+            select(ExperienceLessonRow).order_by(ExperienceLessonRow.score.desc()).limit(limit),
+            what="lessons",
+        )
 
     def procedural_memories(self, *, limit: int = 20) -> list[dict[str, Any]]:
         from sqlalchemy import select
@@ -173,25 +183,110 @@ class LedgerEvidenceSource:
     def opportunities(
         self, *, statuses: tuple[str, ...] | None = None, limit: int = 20
     ) -> list[dict[str, Any]]:
+        """Evolution opportunities, newest first.
+
+        Same correction as :meth:`lessons`: the previous call went to
+        ``evolution_service.list_opportunities(session, statuses=...)``, which is a METHOD
+        on ``EvolutionService`` taking a singular ``status``. It raised on every call, so
+        "gece kendi üzerinde ne geliştirdin?" answered "no record" while a real
+        SHADOW_READY candidate sat in the table.
+        """
+        from sqlalchemy import select
+
         try:
-            from app.evolution import service as evolution_service
+            from app.evolution.models import EvolutionOpportunity
         except ImportError:
             return []
+        stmt = select(EvolutionOpportunity)
+        if statuses:
+            stmt = stmt.where(EvolutionOpportunity.status.in_(list(statuses)))
+        stmt = stmt.order_by(EvolutionOpportunity.created_at.desc()).limit(limit)
+        return self._rows(stmt, what="opportunities")
+
+    def _rows(self, stmt: Any, *, what: str) -> list[dict[str, Any]]:
+        """Run a read and turn rows into plain dicts, distinguishing the two silences.
+
+        A MISSING TABLE is an absence: this build, or this deployment, does not have that
+        subsystem yet, and the engine should say it has no record. Anything else is a bug
+        in this file, and it is logged loudly instead of being dressed up as an absence -
+        which is exactly how two broken accessors survived until the M17 rehearsal.
+        """
+        from sqlalchemy.exc import OperationalError, ProgrammingError
+
         try:
-            rows = evolution_service.list_opportunities(self._db, statuses=statuses, limit=limit)
-        except Exception:  # noqa: BLE001
+            return [row_as_dict(r) for r in self._db.scalars(stmt).all()]
+        except (OperationalError, ProgrammingError):
+            return []  # the table is not there yet; a genuine "I have no record"
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "explain_evidence_source_failed", what=what, error=f"{type(exc).__name__}: {exc}"
+            )
             return []
-        return [row_as_dict(r) for r in rows]
 
     def goals(self, *, limit: int = 20) -> list[dict[str, Any]]:
+        from sqlalchemy import select
+
         try:
-            from app.goals import service as goals_service
+            from app.goals.models import Goal
         except ImportError:
             return []
+        return self._rows(select(Goal).order_by(Goal.created_at.desc()).limit(limit), what="goals")
+
+    # The three M17 surfaces the owner asks about by voice. Each is defensive in the same
+    # way as the four above: a subsystem that is absent from this build, or a table that a
+    # migration has not created yet, yields "I don't know" rather than an exception — and
+    # the engine says "I don't know" out loud rather than inventing an answer.
+
+    def world_state(self) -> dict[str, Any] | None:
+        """The four-truths snapshot, or None when the world model is unavailable."""
         try:
-            return [row_as_dict(r) for r in goals_service.list_goals(self._db, limit=limit)]
+            from app.worldmodel.state import assemble_snapshot
+        except ImportError:
+            return None
+        try:
+            return assemble_snapshot(self._db).as_dict()
         except Exception:  # noqa: BLE001
-            return []
+            return None
+
+    def code_overview(self, *, limit: int = 8) -> dict[str, Any] | None:
+        """What the self model knows about this system's own code, or None."""
+        try:
+            from app.selfmodel import query as selfmodel_query
+        except ImportError:
+            return None
+        try:
+            modules = selfmodel_query.list_modules(self._db, kind=None, limit=limit)
+            total = selfmodel_query.count_modules(self._db)
+        except Exception:  # noqa: BLE001
+            return None
+        return {"modules": modules, "module_count": total}
+
+    def authority_policy(self) -> dict[str, Any] | None:
+        """The production-authority boundary as the code itself defines it.
+
+        Read from the module, not from prose: the answer to "can you put this live?"
+        must be the same object the guard consults, or the spoken answer and the
+        enforced rule could drift apart.
+        """
+        try:
+            from app.evolution.authority import (
+                LAB_GRANTS,
+                PRODUCTION_ACTIONS,
+                PRODUCTION_GRANTS,
+                root_policies,
+            )
+        except ImportError:
+            return None
+        try:
+            return {
+                "root_policies": [dict(p) for p in root_policies()],
+                "production_actions": sorted(PRODUCTION_ACTIONS),
+                "lab_grants": sorted(str(g) for g in LAB_GRANTS),
+                "production_grants": sorted(str(g) for g in PRODUCTION_GRANTS),
+                "lab_holds_any_production_grant": bool(LAB_GRANTS & PRODUCTION_GRANTS),
+            }
+        except Exception:  # noqa: BLE001
+            return None
 
     def open_incidents(self) -> list[dict[str, Any]]:
         from sqlalchemy import select

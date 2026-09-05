@@ -227,7 +227,7 @@ def test_compile_route_lists_candidate_lesson(engine, client: TestClient) -> Non
     assert body["count"] == 1
     lesson = body["lessons"][0]
     assert lesson["status"] == STATUS_CANDIDATE
-    assert "must not become research evidence" in lesson["statement"]
+    assert "araştırma kanıtı olamaz" in lesson["statement"]
 
     listing = client.get("/v1/experience/lessons", params={"status": "candidate"})
     assert listing.status_code == 200

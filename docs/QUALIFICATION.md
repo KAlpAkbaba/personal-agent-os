@@ -242,6 +242,21 @@ evidence) are gates, never acceptance. No seeded or demo events exist.
 
 ### Stage 10 status after the 2026-09-05 `-VerifyOnly` run
 
+**Owner decision, 2026-09-05:** accept the direct real-session evidence and close these as
+`PROVEN_REAL`: Activity Ledger, Self Explanation, Voice Narration, concise executive
+narration, detail/technical narration, background-human-speech rejection, explicit `Dur`,
+narration cursor persistence, semantic `Devam et`. Each rests on its own durable evidence,
+not on the provenance re-check.
+
+The structural-provenance re-check MECHANISM is recorded separately as
+`NOT_YET_PROVEN / DEFERRED`, because the only completed owner session predates the
+deployed provenance block. That is a gap in the verifier's own coverage and is explicitly
+NOT a failure of the capabilities it verifies. No production release is to be performed to
+exercise it. When a future legitimate Cloud Core change requires a normal release, the
+already-committed provenance implementation ships with it, and the next ORDINARY real
+Voice/Self Explanation session after that release closes the mechanism with no dedicated
+qualification.
+
 All ten rows are `PROVEN_REAL`. 10.1-10.4 and 10.7-10.9 were closed on the owner's real
 session; 10.5 and 10.6 were closed by re-reading that same completed session, with no new
 voice session and nothing spoken.
