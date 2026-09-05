@@ -353,7 +353,16 @@ public sealed class BrowserDispatchTests : IDisposable
             Assert.NotNull(result);
             Assert.Equal(BrowserCapabilities.FetchEvidence, result!["capability"]!.GetValue<string>());
             var seen = result["timeout_ms_seen"]!.GetValue<int>();
-            Assert.InRange(seen, 120_000 - 500 - 5_000, 120_000 - 500);
+            // The UPPER bound is the invariant and stays exact: the worker must never be
+            // told it has more time than the service is prepared to wait, or the service
+            // gives up first and the worker keeps going.
+            //
+            // The lower bound is only a smell test for "the budget was reset or ignored".
+            // At 5 s of slack it was measuring the CI runner's load instead: a lazy worker
+            // start that took 5.86 s on a busy runner failed a correct system by 358 ms
+            // (2026-09-05). 30 s still catches a budget that was halved, restarted from the
+            // full cap, or dropped altogether, which is the class of bug meant here.
+            Assert.InRange(seen, 120_000 - 500 - 30_000, 120_000 - 500);
 
             // Typed errors cross the pipe intact.
             var typed = await Assert.ThrowsAsync<CapabilityException>(() => executor.ExecuteAsync(
