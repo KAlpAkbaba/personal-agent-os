@@ -343,6 +343,53 @@ def test_events_feed_the_benchmark_and_resolve_intents_server_side(wired) -> Non
     assert report["target_check"]["tool_preamble_ms"]["met"] is None
 
 
+def test_eye_disable_phrase_stops_perception_deterministically(wired) -> None:
+    """M18 spec §2: "Gözünü kapat" / "Kamerayı kapat" / "Beni izleme" stop the
+    Active Eye immediately, durably (a ledger row) and observably (a UI-state
+    event) — without depending on the realtime provider choosing to call a
+    tool. This exercises the SAME code path a real device's utterance event
+    would take (``record_client_events``), against the real
+    ``app.presence.eye`` module (not a mock), so a regression here would be a
+    regression a real "gözünü kapat" would actually hit.
+    """
+    from app.ledger.vocabulary import EVENT_TYPE_EYE_DISABLED, SUBSYSTEM_PRESENCE
+    from app.presence.eye import is_eye_enabled
+
+    client, _, runtime, _, _, _ = wired
+    sid = _create(client)["session_id"]
+
+    with runtime.session() as db:
+        assert is_eye_enabled(db) is True  # default: on until told otherwise
+
+    response = client.post(f"/v1/voice/realtime/sessions/{sid}/events", json={"events": [
+        {"kind": "utterance", "t_ms": 100, "turn": 1, "text": "gözünü kapat"},
+    ]})
+    assert response.status_code == 200, response.text
+    intents = response.json()["resolved_intents"]
+    assert intents[0]["intent"] == "eye_disable"
+
+    with runtime.session() as db:
+        assert is_eye_enabled(db) is False
+        from app.ledger import service as ledger_service
+
+        rows = ledger_service.query(
+            db, subsystems=[SUBSYSTEM_PRESENCE], event_types=[EVENT_TYPE_EYE_DISABLED]
+        )
+        assert len(rows) == 1
+        assert rows[0].detail_json.get("reason") == "voice:gözünü kapat"
+
+    # Every one of the spec's three phrasings resolves the same way, and a
+    # second phrase does not fail just because the eye is already off.
+    for phrase in ("kamerayı kapat", "beni izleme"):
+        again = client.post(f"/v1/voice/realtime/sessions/{sid}/events", json={"events": [
+            {"kind": "utterance", "t_ms": 200, "turn": 2, "text": phrase},
+        ]})
+        assert again.status_code == 200, again.text
+        assert again.json()["resolved_intents"][0]["intent"] == "eye_disable"
+    with runtime.session() as db:
+        assert is_eye_enabled(db) is False
+
+
 def test_events_reject_audio_unknown_kinds_and_oversize(wired) -> None:
     client, *_ = wired
     sid = _create(client)["session_id"]

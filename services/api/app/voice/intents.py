@@ -35,6 +35,9 @@ from app.voice.realtime import STOP_WORDS, RealtimeState
 
 
 class Intent(StrEnum):
+    # M18 (docs/M18_HOLOGRAPHIC_CORE_SPEC.md §2): the privacy-critical Active Eye
+    # stop phrases. Listed first because it is checked first — see resolve_intent.
+    EYE_DISABLE = "eye_disable"  # gözünü kapat / kamerayı kapat / beni izleme
     STOP = "stop"  # dur / kes / sus / yeter / durdur / duraklat / bekle
     RESUME = "resume"  # devam / kaldığın yerden / sürdür
     REPEAT = "repeat"  # tekrar (oku) / yeniden oku / bir daha
@@ -290,6 +293,41 @@ def _explain_kind(tokens: tuple[str, ...], text: str = "") -> str | None:
     return query.kind
 
 
+#: Exact inflected forms, not stems — "göz" as a startswith-stem would also match
+#: "gözlük" (glasses) and "gözlem" (observation), unrelated words that happen to
+#: share the root. A privacy-critical trigger is worth the extra explicit forms
+#: rather than a prefix match that fires on the wrong noun.
+_EYE_WORD_FORMS: Final[tuple[str, ...]] = ("göz", "gözü", "gözünü", "gözler", "gözlerini")
+_CAMERA_WORD_FORMS: Final[tuple[str, ...]] = (
+    "kamera",
+    "kamerayı",
+    "kameramı",
+    "kamerasını",
+    "kameraları",
+)
+
+
+def _eye_disable_match(tokens: tuple[str, ...]) -> str | None:
+    """``Gözünü kapat`` / ``Kamerayı kapat`` / ``Beni izleme`` (M18 spec §2).
+
+    Uses the SAME token/stem primitives (``_has_exact``) as every other intent
+    in this file — there is deliberately no second Turkish pattern table for
+    this. The task brief is explicit about why: a second table already
+    drifted from this one twice (see ``_explain_kind``'s docstring), and the
+    Active Eye's disable phrases are exactly the kind of privacy-critical
+    command that must never live somewhere it could silently fall out of
+    sync. Exact forms, not ``_has`` stems, on purpose (see the word-form
+    comments above).
+    """
+    if _has_exact(tokens, *_EYE_WORD_FORMS) and _has_exact(tokens, "kapat"):
+        return "gözünü kapat"
+    if _has_exact(tokens, *_CAMERA_WORD_FORMS) and _has_exact(tokens, "kapat"):
+        return "kamerayı kapat"
+    if _has_exact(tokens, "beni") and _has_exact(tokens, "izleme"):
+        return "beni izleme"
+    return None
+
+
 def _stop_match(text: str, tokens: tuple[str, ...]) -> str | None:
     for phrase in _MULTI_STOP_PHRASES:
         if re.search(rf"(?<!\S){re.escape(phrase)}(?!\S)", text):
@@ -337,6 +375,14 @@ def resolve_intent(
     }
     if not tokens:
         return ResolvedIntent(Intent.NONE, **{**base, "confidence": 0.0})
+
+    # 0. Active Eye privacy stop (M18 spec §2) — checked before even STOP. A camera
+    #    disable phrase must never be shadowed by anything this resolver learns
+    #    later, in any state, including mid-narration or mid-tool-call.
+    if eye_matched := _eye_disable_match(tokens):
+        return ResolvedIntent(
+            Intent.EYE_DISABLE, scope=SCOPE_CONVERSATION, matched=eye_matched, **base
+        )
 
     # 1. stop — top priority in any state, including TOOL_RUNNING progress.
     stop = _stop_match(normalized, tokens)

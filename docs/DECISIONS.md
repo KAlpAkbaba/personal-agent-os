@@ -3711,3 +3711,93 @@ Consequences: `docs/DECISIONS.md` (this entry) is the closest thing to
 `docs/M18_HOLOGRAPHIC_CORE_SPEC.md` §3/§4/§7 that exists right now. If that spec file is
 written later, whoever writes it should diff it against this ADR rather than assume a clean
 slate — the schema, vocabulary and contract version bump above are already live.
+
+## ADR-0058 — M18 Active Eye: the device-side local-perception client (2026-09-06)
+
+The Cloud Core boundary (`app/presence/observations.py`, `app/presence/eye.py`,
+`M18_THREAT_MODEL.md` §1–§3) already existed and was already proven: a closed seven-field
+schema, refuse-not-redact screening, and a disable path that is durable, immediate and
+observable. What did not exist was the thing that calls it — a browser client that opens a
+camera, and the guarantee that the frame it reads never becomes anything more than those
+seven numbers. This ADR is that client, in `apps/web/app/lib/eye/` and `apps/web/app/core/`.
+
+1. **The frame-never-escapes guarantee is a closure boundary, not a comment.**
+   `BrowserFrameSource` (`perception.ts`) is the only class in the client that ever calls
+   `getImageData`; its `capture()` return value is consumed exactly once, synchronously, by
+   `computeGridLuminance` (`signal.ts`), which reduces it to a 12×9 (108-number) luminance
+   grid before the pixel buffer goes out of scope. Every function downstream of that point —
+   `motionEnergyBetween`, `derivePresence`, `deriveAwakeState`, `deriveObservation` — takes
+   and returns plain numbers or the seven-field `EyeObservation`, never anything
+   frame-shaped. There is no method anywhere in `FrameSource`, `PerceptionSession`, or
+   `useActivePerception` that returns pixel data, a canvas, a video element or a
+   `MediaStream`'s frames to a caller; a reviewer can grep the module for `ImageData`,
+   `getImageData` or `Uint8ClampedArray` and every hit stays inside `BrowserFrameSource`.
+   Even the one frame-shaped value that DOES persist across ticks — the previous luminance
+   grid, needed for frame-differencing — is deliberately downsampled to 108 numbers
+   specifically so it could not be reassembled into a recognisable image even if the closure
+   boundary were somehow broken.
+
+2. **Derivation is honest, weight by weight, and says so in code, not prose.**
+   `activity_level` buckets a measured motion-energy value at three named, commented
+   thresholds (`NOISE_FLOOR`, `LOW_ACTIVITY_MAX`, `MEDIUM_ACTIVITY_MAX`). `posture` is
+   always `"unknown"` — a constant function, not a heuristic — because motion energy and
+   luminance say nothing about body pose and this client does no face/body detection of any
+   kind, exactly the spec's own worked example. `presence_confidence` is
+   `evidenceQuality × sampleConfidence`: a multiplicative gate, not an additive one, because
+   an early version of this formula (caught by its own test, see `signal.test.ts`'s "no
+   evidence at all" case) let a single clean-looking reading round up to 0.75 confidence
+   with zero samples collected — an additive weight small enough not to dominate the other
+   terms cannot guarantee "confidence must be low when the evidence is weak"; multiplying by
+   a sample-count gate can. Absence confidence is separately capped
+   (`ABSENCE_CONFIDENCE_CAP = 0.75`) because a motion sensor has no positive evidence of an
+   empty room — stillness looks identical to a present-but-motionless owner.
+
+3. **Disable is proven, not asserted, against the tightest race the language allows.**
+   `PerceptionSession#stop()` bumps a generation counter and calls `frameSource.stop()`
+   synchronously (the camera light goes out before `stop()` returns), then relies on the
+   fact that everything in `#tick()` between capturing a frame and the pre-post check is
+   synchronous — there is no `await` in between, so JavaScript has no point at which
+   `stop()` could interleave. `perception.test.ts` proves this by making `capture()` itself
+   call `session.stop()` reentrantly (the tightest race constructible) and asserting the
+   sample is never posted, plus separate tests for the one place a race genuinely exists —
+   an ALREADY in-flight network POST — proving `stop()` aborts it via `AbortController` and
+   schedules no further tick regardless of how that POST resolves.
+
+4. **Durable-first ordering, both ways, each defended by a different mechanism.** Enabling
+   locally opens the camera before calling `POST /v1/presence/eye/enable`, so the Cloud Core
+   is never told perception is running when it is not. Disabling calls
+   `POST /v1/presence/eye/disable` before `PerceptionSession#stop()`, so a sample already
+   captured before the local stop takes effect is refused server-side
+   (`is_eye_enabled` is read fresh from the database on every camera-sourced observation,
+   per `app/presence/service.py`) the moment the flag flips — the client-side abort is a
+   latency improvement, the server-side fresh-read is the actual backstop.
+
+5. **The Turkish voice commands are ONE new `Intent`, not a second table.** `Gözünü kapat`,
+   `Kamerayı kapat` and `Beni izleme` are matched in `services/api/app/voice/intents.py`'s
+   existing `resolve_intent` — the same `normalize_transcript`/`_has`/`_has_exact` primitives
+   every other intent in that file uses, checked before even `STOP` — rather than a new
+   pattern-matching file. `record_client_events`
+   (`app/voice/realtime_sessions/service.py`) calls `app.presence.eye.disable_eye`
+   DETERMINISTICALLY the moment `Intent.EYE_DISABLE` resolves from a live utterance, rather
+   than waiting for the realtime provider to decide to call a tool — a privacy-critical
+   disable must not depend on a model's judgement call. `EyeControl.tsx` closes the loop on
+   the device side: it watches the same `eye.*` UI-state claim `AmbientBand` already reads,
+   and reacts to a `disabled` transition (however it was triggered — this device's own
+   button, another device, or voice) by calling the local-only stop path, `stopLocalOnly()` —
+   no redundant `disableEye()` call, since the Cloud Core is already told.
+
+6. **The control is its own component, never merged into `AmbientBand`.** `AmbientBand`'s
+   own tests assert it renders no `<button>`, no `<form>`, no `<input>` at all — that is
+   contract v2's read-only half, and this feature must not compromise it. `EyeControl.tsx`
+   (hook wiring) and `EyeControlView.tsx` (pure markup, tested with `react-dom/server`
+   exactly like `AmbientBand`) are new, separate files, following the same
+   owner-action-lives-on-its-own-surface rule the cockpit panels already use for goals and
+   SHADOW_READY candidates.
+
+Consequences: `services/api/app/presence/eye.py` and `observations.py` are unchanged — this
+milestone's device-side half calls that boundary rather than altering it, per the task's own
+scoping. `services/api/app/uistate/contract.py` and `app/ledger/vocabulary.py` are likewise
+untouched; nothing in this change needed a new UI-state token or ledger event type. The one
+open item from `M18_THREAT_MODEL.md` §9 ("the device-side local-perception client does not
+exist yet... the client's own handling of frames has to be proven in that code when it is
+written") is what this ADR closes — `perception.test.ts` and `signal.test.ts` are that proof.

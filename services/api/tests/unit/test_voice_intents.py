@@ -151,6 +151,50 @@ def test_stop_words_of_the_m4_fsm_are_all_stop_intents() -> None:
         assert resolve_intent(word).intent == Intent.STOP
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "gözünü kapat",
+        "Gözünü kapat",
+        "lütfen gözünü kapat",
+        "kamerayı kapat",
+        "Kamerayı kapat",
+        "kamerayı hemen kapat",
+        "beni izleme",
+        "Beni izleme",
+    ],
+)
+def test_eye_disable_phrases_resolve(text: str) -> None:
+    resolved = resolve_intent(text)
+    assert resolved.intent == Intent.EYE_DISABLE, resolved
+
+
+def test_eye_disable_has_top_priority_and_is_not_a_stop_substring_trap() -> None:
+    # "kapat" shares no vocabulary with STOP_WORDS, but the eye-disable check runs
+    # BEFORE stop matching regardless, so a phrase combining both never falls to
+    # the wrong intent.
+    assert resolve_intent("dur, gözünü kapat").intent == Intent.EYE_DISABLE
+    assert resolve_intent("gözünü kapat, tekrar oku").intent == Intent.EYE_DISABLE
+    for state in RealtimeState:
+        if state == RealtimeState.CLOSED:
+            continue
+        assert resolve_intent("gözünü kapat", session_state=state).intent == Intent.EYE_DISABLE
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "gözlüğümü kapat",  # not "göz" as a standalone stem — different word, unrelated privacy risk
+        "kapıyı kapat",  # "kapat" without "göz"/"kamera" must not disable the eye
+        "kamerayı aç",  # opposite verb
+        "beni izle",  # the affirmative, not the imperative negative "izleme"
+    ],
+)
+def test_eye_disable_does_not_fire_on_unrelated_or_opposite_phrases(text: str) -> None:
+    resolved = resolve_intent(text)
+    assert resolved.intent != Intent.EYE_DISABLE, resolved
+
+
 def test_stop_has_top_priority_over_everything_else() -> None:
     assert resolve_intent("dur, ikinci maddeyi tekrar oku").intent == Intent.STOP
     assert resolve_intent("biraz daha yavaş dur").intent == Intent.STOP

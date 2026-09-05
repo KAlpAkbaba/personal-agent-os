@@ -36,7 +36,7 @@ from app.uistate import UiState
 from app.uistate import publish as publish_ui
 from app.voice import service as voice_service
 from app.voice.errors import VoiceError, VoiceErrorClass
-from app.voice.intents import ResolvedIntent, resolve_intent
+from app.voice.intents import Intent, ResolvedIntent, resolve_intent
 from app.voice.providers import EphemeralCredential, RealtimeProvider, RealtimeSessionConfig
 from app.voice.realtime import RealtimeState
 from app.voice.realtime_bench import (
@@ -827,6 +827,20 @@ def record_client_events(
             resolved.append(
                 {"t_ms": t_ms, "turn": turn, **intent.to_dict(), "normalized_text": None}
             )
+            if intent.intent == Intent.EYE_DISABLE:
+                # M18 spec §2: "Gözünü kapat", "Kamerayı kapat" and "Beni izleme"
+                # stop perception immediately. This is deterministic — it does not
+                # wait for the realtime provider to decide to call a tool — because
+                # a privacy-critical disable must not depend on a model's judgment
+                # call. app.presence.eye.disable_eye is itself idempotent, durable
+                # (ledger row) and observable (eye.disabled UI-state event); a
+                # repeated phrase just repeats the same real owner action.
+                from app.presence.eye import disable_eye
+
+                try:
+                    disable_eye(db, reason=f"voice:{intent.matched}")
+                except Exception:  # noqa: BLE001 - never fail utterance recording
+                    logger.warning("voice_eye_disable_failed", matched=intent.matched)
             meta.update(
                 {
                     "intent": intent.intent.value,
