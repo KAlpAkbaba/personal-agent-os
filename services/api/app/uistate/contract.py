@@ -24,9 +24,10 @@ from enum import StrEnum
 from typing import Any
 
 #: v2 added the room (``eye.*``, ``owner.*``), routines and the owner-authorised
-#: release path, plus the ``presence`` subsystem. A v1 renderer keeps working - it
-#: simply never sees the new states - and ``GET /v1/ui/state/contract`` reports the
-#: true version so a client can tell the two vocabularies apart.
+#: release path, plus the ``presence`` and ``routine`` subsystems. A v1 renderer
+#: keeps working - it simply never sees the new states - and
+#: ``GET /v1/ui/state/contract`` reports the true version, so a caller that
+#: enumerates the vocabulary should re-read it rather than cache it.
 CONTRACT_VERSION = 2
 
 #: Metadata value bounds. Numbers are floats in [0, 1] except where noted; strings are
@@ -75,6 +76,9 @@ class UiState(StrEnum):
     OWNER_LIKELY_ASLEEP = "owner.likely_asleep"
     OWNER_AWAKE = "owner.awake"
 
+    #: A routine is armed when it exists and is being watched; triggered when its
+    #: trigger fired AND its conditions passed. An alarm is called out separately
+    #: because it is the one action the owner experiences as an interruption.
     ROUTINE_ARMED = "routine.armed"
     ROUTINE_TRIGGERED = "routine.triggered"
     ALARM_TRIGGERED = "alarm.triggered"
@@ -107,6 +111,7 @@ SUBSYSTEMS: tuple[str, ...] = (
     "ledger",
     "system",
     "presence",
+    "routine",
 )
 
 SEVERITIES: tuple[str, ...] = ("info", "notice", "warning", "critical")

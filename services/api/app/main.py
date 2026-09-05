@@ -41,6 +41,7 @@ from app.presence.routes import router as presence_router
 from app.research.embedded_worker import EmbeddedWorkerRuntime
 from app.research.health import research_health
 from app.research.routes import router as research_router
+from app.routines.routes import router as routines_router
 from app.security.routes import router as security_router
 from app.security.runtime import SecurityRuntime
 from app.selfhealing.routes import router as selfhealing_router
@@ -183,6 +184,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(selfmodel_router)
     app.include_router(ledger_router)
     app.include_router(presence_router)
+    # M18: durable TRIGGER -> CONDITIONS -> ACTIONS routines; evaluation is an explicit
+    # call only (POST /v1/routines/evaluate), never a background timer at startup.
+    app.include_router(routines_router)
 
     @app.get("/v1/system/health")
     async def system_health() -> dict[str, Any]:

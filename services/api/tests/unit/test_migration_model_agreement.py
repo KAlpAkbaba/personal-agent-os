@@ -30,12 +30,17 @@ from sqlalchemy import inspect as sa_inspect
 from app.evolution.models import EvolutionOpportunity
 from app.experience.models import ExperienceLessonRow
 from app.goals.models import Goal, GoalTask
+from app.routines.models import Routine, RoutineFiring
 from app.selfmodel.models import CodeModule
 
 VERSIONS = Path(__file__).resolve().parents[2] / "alembic" / "versions"
 
 #: The M17 tables and the classes that map them.
 M17_MODELS = [Goal, GoalTask, ExperienceLessonRow, CodeModule, EvolutionOpportunity]
+
+#: The M18 Routine Engine tables — same "migration and model must agree" discipline,
+#: checked by the same generic test (parametrized below) rather than a copy of it.
+M18_MODELS = [Routine, RoutineFiring]
 
 
 def _migration_text() -> str:
@@ -52,7 +57,7 @@ def _columns_expecting_a_database_default(model: type) -> list[str]:
     return out
 
 
-@pytest.mark.parametrize("model", M17_MODELS, ids=lambda m: m.__tablename__)
+@pytest.mark.parametrize("model", M17_MODELS + M18_MODELS, ids=lambda m: m.__tablename__)
 def test_every_server_default_the_model_declares_exists_in_a_migration(model: type) -> None:
     """A NOT NULL column with a model-side server_default must be given one in the DDL.
 
@@ -108,3 +113,40 @@ def test_every_revision_id_fits_the_alembic_version_column() -> None:
                 "alembic_version.version_num holds 32"
             )
     assert checked > 0, "no revision ids were found - the pattern stopped matching"
+
+
+def test_the_migration_chain_has_exactly_one_head() -> None:
+    """Two heads is an upgrade that silently applies only one branch.
+
+    It happens whenever two branches add a migration without seeing each other, and it
+    is invisible in review: both files are individually correct, both name the same
+    parent, and ``alembic upgrade head`` then refuses (or, worse, a tool picks one).
+    Two M18 branches did exactly this on 2026-09-05 - the release lifecycle and the
+    routine engine both chained onto 0017 - which is why this test exists.
+    """
+    revision_pattern = re.compile(r'^revision:?\s*(?::\s*str\s*)?=\s*"([^"]+)"', re.MULTILINE)
+    down_pattern = re.compile(
+        r"^down_revision:?[^=\n]*=\s*(?:\"([^\"]+)\"|None)", re.MULTILINE
+    )
+
+    revisions: set[str] = set()
+    parents: set[str] = set()
+    for path in sorted(VERSIONS.glob("*.py")):
+        text = path.read_text(encoding="utf-8")
+        found = revision_pattern.findall(text)
+        assert len(found) == 1, f"{path.name}: expected exactly one revision id, got {found}"
+        revision = found[0]
+        assert revision not in revisions, f"{path.name}: revision id {revision!r} is not unique"
+        revisions.add(revision)
+        for parent in down_pattern.findall(text):
+            if parent:
+                parents.add(parent)
+
+    unknown = parents - revisions
+    assert not unknown, f"down_revision points at migrations that do not exist: {sorted(unknown)}"
+
+    heads = revisions - parents
+    assert len(heads) == 1, (
+        f"the migration chain has {len(heads)} heads ({sorted(heads)}); "
+        "re-chain the newer one onto the other so `upgrade head` applies everything"
+    )

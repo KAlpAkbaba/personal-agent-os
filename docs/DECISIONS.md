@@ -3622,3 +3622,92 @@ the right level of detail. Deferred, and explicitly not built by this change (M1
 dependency order): `app/routines`' actual trigger wiring (`owner.returned`,
 `owner.likely_asleep`, `owner.awake` → conditions → actions) and the Active Eye's
 device-side local-perception client — this change is the Cloud Core boundary they will call.
+## ADR-0057 — M18 Routine Engine: trigger, conditions, actions (2026-09-05)
+
+Status: Accepted
+
+> Renumbered from 0056 on merge: two branches, unable to see each other, both
+> claimed that number. The renderer's ADR-0057 kept it. The context below is also
+> corrected by events - `docs/M18_HOLOGRAPHIC_CORE_SPEC.md` exists on main and did
+> when this was written; it was simply not on this branch. The reasoning stands,
+> and the spec agrees with it.
+
+Context: the task brief for the Routine Engine (durable TRIGGER -> CONDITIONS -> ACTIONS)
+instructed reading `docs/M18_HOLOGRAPHIC_CORE_SPEC.md` sections 3/4/7. That file does not
+exist anywhere in this repository's history, on any branch. `state/BUILD_STATE.json` does
+confirm the milestone is real (`M18_HOLOGRAPHIC_CORE_ACTIVE_EYE_AMBIENT_PRESENCE`, "routines/
+alarms" named in its `status`), and `docs/DECISIONS.md` ADR-0052/ADR-0053 describe the
+Holographic Core's event contract and the M17 foundations it builds on — but no document
+carries the routine engine's own §3/§4/§7 design. Rather than invent product decisions
+silently, this ADR records the ones made and why, per CLAUDE.md "Asking the owner": every
+choice below is reversible and consistent with the constitution, so none of it was worth
+interrupting the owner for; a genuine spec document, if one surfaces later, should reconcile
+against this ADR rather than the other way around.
+
+Decisions:
+
+1. **The model is a plain durable row, not a running process.** `app.routines.models.Routine`
+   holds a trigger, a list of condition descriptors and a list of action descriptors as
+   JSON; `app.routines.service.evaluate_due` is the ONLY thing that ever decides whether it
+   fires, and it is an explicit function call — there is no background timer anywhere in
+   this package, matching the M17 rule that a cognitive system scheduling its own wakeups is
+   a separate decision (ADR-0053 §8) this milestone does not make.
+2. **Idempotent firing is a database constraint, not caller discipline.**
+   `RoutineFiring` carries a unique `(routine_id, occurrence_key)` — an "at" trigger's key is
+   the constant `"once"`, a "schedule" trigger's key is the local calendar date in the
+   trigger's own timezone, and a "presence" trigger's key is the source `app.uistate` event's
+   own `event_id`. A second `evaluate_due` call for an already-resolved occurrence is a
+   cheap no-op at the database level even if two callers race.
+3. **DST safety is structural, not a documented caveat.** A schedule trigger's due-check
+   always converts the caller's `now` through `zoneinfo.ZoneInfo(trigger_timezone)` and
+   compares wall-clock fields — never a cached UTC offset. The owner is in Europe/Istanbul,
+   which currently observes no DST, so this only matters for other zones an integration
+   might use; the mechanism is correct regardless, proven by
+   `tests/unit/test_routines_triggers.py`'s Europe/Berlin spring-forward cases (a
+   fixed-offset implementation would fire an hour off on one side of the transition without
+   ever raising).
+4. **Presence triggers depend on three event-name strings, not on `app/presence`.** That
+   package is being written in parallel and does not exist in this checkout. Rather than
+   block on it or guess its shape, `app.routines.triggers.PRESENCE_TRIGGER_EVENTS`
+   (`owner.returned`, `owner.awake`, `owner.likely_asleep`) are plain string constants
+   compared against whatever `state` value appears on `app.uistate.publisher`'s tail — not
+   against `app.uistate.contract.UiState` enum membership, and not against anything
+   `app/presence` exports. Whatever shape the presence track eventually publishes, as long
+   as one event's `state` string-compares equal to one of these three names, a
+   presence-triggered routine sees it. This is the narrowest seam that satisfies "depend
+   only on the event names... NOT on app/presence internals" from the task brief.
+5. **The Routine Engine's own outputs DO extend the UiState contract, because this package
+   owns them.** `app.uistate.contract.CONTRACT_VERSION` moves 1 -> 2, adding
+   `UiState.ROUTINE_ARMED`, `UiState.ROUTINE_TRIGGERED` and `UiState.ALARM_TRIGGERED` and a
+   `"routine"` subsystem. This is additive (existing v1 states are unchanged) and is the
+   opposite case from decision 4: presence is consumed from a track this package does not
+   own, so its vocabulary is left alone; `routine.*`/`alarm.triggered` are published BY this
+   package, so they belong in the shared contract like every other subsystem's states.
+6. **Conditions fail closed on "unknown," always with a reason.** Every field of
+   `app.routines.conditions.RoutineConditionContext` defaults to `None`/empty, meaning
+   "no subsystem has told this evaluation what the real state is yet" — none of the five
+   condition kinds (owner present, quiet hours, display state, active task, policy
+   permission) treats unknown as a pass. A skipped firing always carries a non-empty reason
+   in both `RoutineFiring.skip_reason` and the `routine.skipped` ledger event's
+   `detail_json`, per the task brief's "never silently dropped."
+7. **Execution is out of process by construction.** `app.routines.actions.RoutineDispatcher`
+   is a `Protocol`; `NoopDispatcher` (used here and by every test) always reports
+   `dispatched: False`. This package validates and snapshots WHAT should happen
+   (`RoutineFiring.actions_snapshot`) and records the dispatch outcome the injected
+   dispatcher reports — it never imports `app.voice`, `app.narration`, `app.devices` or a
+   browser/media client to perform one.
+8. **A media action's owner-chosen url/title is never rewritten.**
+   `app.routines.actions.validate_media_playback` requires a non-empty `url` (refusing a
+   routine that would choose content on the owner's behalf) and otherwise copies the detail
+   dict verbatim — no trimming, casing, or normalization — proven end to end by
+   `tests/unit/test_routines_service.py::test_media_action_preserves_the_owners_requested_item_end_to_end`.
+9. **An alarm action must configure a ramp, not a level.** `validate_alarm` refuses a wake
+   volume whose `start` is already at or above `MAX_WAKE_VOLUME_START` (0.5) or whose
+   `start > end` — a routine cannot describe "jump straight to maximum" even by omission,
+   because the default ramp (0.05 -> 0.8 over 60s) is what a caller gets without specifying
+   one.
+
+Consequences: `docs/DECISIONS.md` (this entry) is the closest thing to
+`docs/M18_HOLOGRAPHIC_CORE_SPEC.md` §3/§4/§7 that exists right now. If that spec file is
+written later, whoever writes it should diff it against this ADR rather than assume a clean
+slate — the schema, vocabulary and contract version bump above are already live.

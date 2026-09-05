@@ -43,6 +43,8 @@ SUBSYSTEM_EVOLUTION = "evolution"
 SUBSYSTEM_LEDGER = "ledger"
 #: M18 Presence Engine + Active Eye (M18_HOLOGRAPHIC_CORE_SPEC.md §1, §2).
 SUBSYSTEM_PRESENCE = "presence"
+#: M18 Routine Engine (app.routines).
+SUBSYSTEM_ROUTINE = "routine"
 
 SUBSYSTEMS: Final[tuple[str, ...]] = (
     SUBSYSTEM_RESEARCH,
@@ -58,6 +60,7 @@ SUBSYSTEMS: Final[tuple[str, ...]] = (
     SUBSYSTEM_EVOLUTION,
     SUBSYSTEM_LEDGER,
     SUBSYSTEM_PRESENCE,
+    SUBSYSTEM_ROUTINE,
 )
 
 # ------------------------------------------------------------------ statuses
@@ -174,6 +177,15 @@ EVENT_TYPE_PRESENCE_GREETING_DELIVERED = "presence.greeting_delivered"
 #: an owner action, always explicit, never inferred from observations.
 EVENT_TYPE_EYE_ENABLED = "eye.enabled"
 EVENT_TYPE_EYE_DISABLED = "eye.disabled"
+#: M18 Routine Engine (app.routines.service). Every backlog-style state change a routine
+#: goes through — created, armed, triggering, executing, skipped, cancelled — writes exactly
+#: one of these (task brief: "no transition may be invisible").
+EVENT_TYPE_ROUTINE_CREATED = "routine.created"
+EVENT_TYPE_ROUTINE_ARMED = "routine.armed"
+EVENT_TYPE_ROUTINE_TRIGGERED = "routine.triggered"
+EVENT_TYPE_ROUTINE_EXECUTED = "routine.executed"
+EVENT_TYPE_ROUTINE_SKIPPED = "routine.skipped"
+EVENT_TYPE_ROUTINE_CANCELLED = "routine.cancelled"
 
 EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_RESEARCH_PLANNED,
@@ -209,6 +221,12 @@ EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_PRESENCE_GREETING_DELIVERED,
     EVENT_TYPE_EYE_ENABLED,
     EVENT_TYPE_EYE_DISABLED,
+    EVENT_TYPE_ROUTINE_CREATED,
+    EVENT_TYPE_ROUTINE_ARMED,
+    EVENT_TYPE_ROUTINE_TRIGGERED,
+    EVENT_TYPE_ROUTINE_EXECUTED,
+    EVENT_TYPE_ROUTINE_SKIPPED,
+    EVENT_TYPE_ROUTINE_CANCELLED,
 )
 
 #: Reserved for the Evolution Engine (M18): constants exist now, writers come
