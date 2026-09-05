@@ -297,6 +297,54 @@ voice session.
 | 11.12 | An in-process caller cannot forge production authority by subclassing, `dataclasses.replace`, pickle, or rebuilding the object around its constructor | `PROVEN_PROXY` | The critical finding of the 2026-09-05 security review, reproduced and then closed. `test_evolution_authority.py`: subclass refused, forged instance refused for every production action, pickle round-trip cannot promote, and a genuine owner authority still works. In-process containment against arbitrary code is explicitly NOT claimed (ADR-0053 addendum 1). |
 | 11.10 | No subsystem added in M17 starts a background loop at application startup | `PROVEN_PROXY` | `app/main.py` wires routers only; asserted by inspection and by the absence of any scheduler registration. Re-check on any change to startup. |
 
+### Stage 11 after the owner's first M17 voice run (2026-09-05) — FAILED, and why
+
+The run is worth recording in full, because four of its five findings were defects in the
+CHECKER rather than in the product.
+
+Real session `0b186069` (closed cleanly, 5 tool calls, 102 client events):
+
+| Question | what really happened |
+|---|---|
+| ne öğrendin | answered from 4 real lessons, 19 facts, 4 uncertainties |
+| hangi hedeflerin var | "Kayıtlı bir hedefim yok." — correct, no goal exists |
+| ne görüyorsun | **`activity.explain` FAILED**, `error_class=internal_bug` |
+| kendi kodun | answered, 222 real modules |
+| gece ne geliştirdin | answered, the real SHADOW_READY candidate |
+| canlıya alabilir misin | **no tool call was made at all** |
+
+Yet the harness reported memory, goals, the self model and evolution as "not reached by
+voice". Four separate causes, now fixed:
+
+1. **Routing metadata, not routing.** Every call recorded `query_kind=""`, because the
+   field was read from the narration intent resolver — which resolves controls like "dur"
+   and returns `None` for a question. The engine knew the kind all along and never wrote it
+   down. Briefings now carry a `cognition()` record (query_kind, the subsystem that
+   answered, counts, evidence kinds, entity ids) and the durable row reads it from there.
+   Nothing infers a subsystem from generated Turkish.
+2. **The World Model crash was real**, and was ours: the branch shadowed the briefing's
+   `facts` accumulator (a dict) with a local list, so `provenance()` called `dict(<list>)`
+   during persistence. `Briefing` now refuses a non-mapping `facts` where it is built.
+3. **The sixth question never reached the tool.** "Bunu canlıya alabilir misin?" reads as a
+   request for permission, and the model answered it conversationally. Whether this system
+   may deploy is a fact about policy and never the model's to assert; the tool contract and
+   persona now name authority questions explicitly and forbid answering from belief.
+4. **The harness inherited M16 acceptance** — research-job provenance, the listening
+   budget, `teknik anlat`, the interruption counters, `dur`, `devam et` — and failed M17 for
+   the absence of steps nobody performed. M17 now asserts only its own six capabilities,
+   names exactly which question produced no answer, and distinguishes "never routed" from
+   "routed and the tool failed".
+
+**Structural re-verification against the live production database (Cloud Core `b6b64ef`):
+ALL SIX PASS.** Each routes to the intended kind, is recorded against the intended
+subsystem, survives persistence, carries facts or an explicit uncertainty, and cites its
+OWN subsystem's records — `world_fact`/`world_snapshot`, `code_module`/`code_index`,
+`evolution_opportunity`, `authority_policy`/`root_policy`. No cognitive answer is required
+to cite a research job; research provenance belongs to research answers.
+
+`goals` cites nothing and carries one uncertainty. That is the honest shape of an empty
+subsystem, and it is a PASS.
+
 ### Stage 11 status after the 2026-09-05 production bring-up
 
 M17 is DEPLOYED (Cloud Core `871d9c3`, migrations 0016 and 0017) and every one of the
