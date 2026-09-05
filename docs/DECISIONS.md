@@ -3383,3 +3383,53 @@ the "never printed outside the reveal mode" property. Deliberately not changed:
 `scripts\rotate-owner-credential.ps1`, which remains correct for a local dev root; it now
 has a sibling for the deployed case rather than a mode flag, because the two differ in
 authorization, transport and post-steps.
+
+## ADR-0055 — Owner-authorised deployment: the lab may never promote itself, the owner may authorise a release (2026-09-05)
+
+Status: Accepted (owner authority policy update, 2026-09-05)
+
+Context: M17 shipped answering "Bunu canlıya alabilir misin?" with "Hayır efendim, canlıya
+kendim alamam." That is not the policy. The owner's rule has two halves, and stating only
+the first is its own kind of untruth: it tells the owner they cannot ask for something they
+can ask for, and it would justify never building the release path they want.
+
+Decisions:
+
+1. **Two claims, not one.** Autonomous promotion of the engine's own candidate is forbidden
+   by construction — the lab holds no production grant and cannot mint one (ADR-0053 §5,
+   and the runtime-final `Authority` of ADR-0053 addendum 1). An explicit, authenticated
+   owner authorisation MAY permit a release, which then runs the ordinary transactional
+   deployment path. The spoken answer states both, and says that asking is not authorising.
+2. **The answer is composed from policy, never hardcoded.** `authority_policy()` reports
+   `autonomous_promotion_permitted`, `owner_authorised_release_permitted`,
+   `owner_authorisation_requires` and `asking_is_not_authorising`; the engine renders those.
+   A test flips the flag and watches the refusal come back, so neither half is a fixed
+   sentence.
+3. **Asking is not authorising.** "Bunu canlıya alabilir misin?" is a question and must
+   start nothing. Only an explicit imperative — "canlıya al", "production'a çıkar", "bu
+   sürümü yayınla" — may CREATE an owner deployment authorisation request, and a
+   risk-sensitive release requires a second explicit confirmation before any mutation.
+4. **Voice identity is not root authorisation.** The authorisation binds to the
+   authenticated owner session and the existing production-authority mechanism. It is a
+   separate privileged capability and must not be mintable or bypassable by
+   Evolution-generated code — the boundary of ADR-0053 §5 is unchanged by this ADR.
+5. **The intended lifecycle**, for the workflow that executes it:
+   `SHADOW_READY → OWNER_APPROVAL_REQUIRED → OWNER_AUTHORIZED → QUALIFYING → DEPLOYING →
+   VERIFYING → LIVE`, with `DEPLOYING|VERIFYING → FAILED → ROLLING_BACK → previous LIVE
+   restored`. Preconditions before mutation: candidate is SHADOW_READY, the version/diff is
+   known, tests and evaluations passed, security review acceptable, the repository input is
+   clean and committed, migration impact known, a rollback point exists, and the component
+   genuinely requires deployment. After: health check, runtime/source provenance
+   verification, the required qualification, an Activity Ledger event, and `LIVE` only after
+   verification succeeds — otherwise automatic rollback to the last proven release and a
+   report to the owner.
+
+**What is implemented now, and what is not.** Decisions 1–4 are implemented and proven: the
+answer states both halves from policy, and the M17 acceptance asserts both — that it will
+not promote its own candidate autonomously, and that it knows an authenticated explicit
+owner authorisation can permit a release. Decision 5's STATE MACHINE and executing workflow
+are specified here and **not built**: the lifecycle still ends at `OWNER_APPROVED →
+QUALIFYING → LIVE`, and no `DEPLOYING`/`VERIFYING`/`ROLLING_BACK` states exist yet. Building
+them is M18 work, and half-building a production deployment state machine would be worse
+than not starting it. The Acceptance Wording Guard stays `SHADOW_READY` and is not deployed
+by the qualification.
