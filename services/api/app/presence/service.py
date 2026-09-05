@@ -140,6 +140,21 @@ def ingest_observation(
     return observation, assertion, changed
 
 
+def last_greeted_at(session: Session) -> datetime | None:
+    """When a greeting was last actually DELIVERED, from the ledger.
+
+    The cooldown is accounted from delivery, so this reads the delivery record and
+    nothing else. It survives a process restart because the ledger does.
+    """
+    rows = ledger_service.query(
+        session,
+        subsystems=[SUBSYSTEM_PRESENCE],
+        event_types=[EVENT_TYPE_PRESENCE_GREETING_DELIVERED],
+        limit=1,
+    )
+    return rows[0].occurred_at if rows else None
+
+
 def evaluate_greeting_now(
     session: Session,
     *,
@@ -147,45 +162,56 @@ def evaluate_greeting_now(
     policy: GreetingPolicy = DEFAULT_GREETING_POLICY,
     now: datetime | None = None,
 ) -> GreetingDecision:
-    """Evaluate the greeting policy against the engine's real episode
-    history and the ledger's own cooldown record, and durably record a
-    delivered greeting so the cooldown holds across process restarts.
+    """Evaluate the greeting policy against the engine's real episode history and the
+    ledger's own cooldown record. **Pure**: it decides, and changes nothing.
 
-    This does not itself speak or notify the owner — narrating a greeting is
-    ``app.routines``'/``app.voice``'s job (M18 item 3, not built by this
-    change). This is the decision the routine engine's trigger will call.
+    It used to record ``presence.greeting_delivered`` whenever the decision came out
+    true - while its own docstring said it does not speak or notify the owner. Both
+    could not be so. An evaluation that marks a greeting as delivered starts the
+    cooldown for a greeting nobody heard, and then suppresses the real one for the
+    whole window; worse, the ledger would carry a delivery that never happened.
+
+    Deciding and delivering are now separate calls. Whoever actually narrates the
+    greeting calls :func:`record_greeting_delivered` afterwards, and only then.
     """
     moment = now or datetime.now(UTC)
     eng = engine or get_engine()
-    last_rows = ledger_service.query(
-        session,
-        subsystems=[SUBSYSTEM_PRESENCE],
-        event_types=[EVENT_TYPE_PRESENCE_GREETING_DELIVERED],
-        limit=1,
+    return evaluate_greeting(
+        eng.episodes(), now=moment, last_greeted_at=last_greeted_at(session), policy=policy
     )
-    last_greeted_at = last_rows[0].occurred_at if last_rows else None
 
-    decision = evaluate_greeting(
-        eng.episodes(), now=moment, last_greeted_at=last_greeted_at, policy=policy
-    )
-    if decision.should_greet:
-        try:
-            ledger_service.record(
-                session,
-                ledger_service.ActivityEvent(
-                    event_type=EVENT_TYPE_PRESENCE_GREETING_DELIVERED,
-                    subsystem=SUBSYSTEM_PRESENCE,
-                    action="greeting_delivered",
-                    factual_summary="greeting conditions met: sustained wake after sustained rest",
-                    source="presence_engine",
-                    source_ref=f"presence-greeting:{moment.isoformat()}",
-                    occurred_at=moment,
-                    detail_json=decision.as_dict(),
-                ),
-            )
-        except Exception:  # noqa: BLE001 - ledger is evidence, never a hard dependency
-            logger.warning("presence_greeting_ledger_note_failed")
-    return decision
+
+def record_greeting_delivered(
+    session: Session, decision: GreetingDecision, *, now: datetime | None = None
+) -> None:
+    """Record that a greeting was DELIVERED - which starts the cooldown.
+
+    Called by whatever actually narrated it, after it narrated it. Refuses a decision
+    that did not say to greet, because a cooldown started by a refusal would silence
+    the next real greeting.
+    """
+    if not decision.should_greet:
+        raise ValueError(
+            "record_greeting_delivered called with a decision that refused to greet: "
+            f"{decision.reason!r}"
+        )
+    moment = now or datetime.now(UTC)
+    try:
+        ledger_service.record(
+            session,
+            ledger_service.ActivityEvent(
+                event_type=EVENT_TYPE_PRESENCE_GREETING_DELIVERED,
+                subsystem=SUBSYSTEM_PRESENCE,
+                action="greeting_delivered",
+                factual_summary="greeting delivered after sustained wake following sustained rest",
+                source="presence_engine",
+                source_ref=f"presence-greeting:{moment.isoformat()}",
+                occurred_at=moment,
+                detail_json=decision.as_dict(),
+            ),
+        )
+    except Exception:  # noqa: BLE001 - ledger is evidence, never a hard dependency
+        logger.warning("presence_greeting_ledger_note_failed")
 
 
 __all__ = [

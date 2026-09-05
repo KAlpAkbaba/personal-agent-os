@@ -6,6 +6,7 @@
 - POST /v1/presence/eye/enable       resume perception (owner action)
 - POST /v1/presence/eye/disable      stop perception immediately (owner action)
 - POST /v1/presence/greeting/evaluate  the greeting decision, given real history
+- POST /v1/presence/greeting/delivered a greeting was narrated; start the cooldown
 
 Owner-gated like every other surface (research, artifacts, memory, ledger,
 goals, world model). This is deliberate even for camera-sourced observations
@@ -149,11 +150,40 @@ async def post_eye_disable(
 
 @router.post("/greeting/evaluate")
 async def post_evaluate_greeting(request: Request) -> dict[str, Any]:
+    """The decision only. Evaluating does not start the cooldown, because evaluating
+    is not greeting - see app.presence.service.evaluate_greeting_now."""
     artifacts = _artifacts(request)
 
     def run() -> dict[str, Any]:
         with artifacts.session() as session:
             decision = presence_service.evaluate_greeting_now(session)
+            return decision.as_dict()
+
+    return await asyncio.to_thread(run)
+
+
+@router.post("/greeting/delivered")
+async def post_greeting_delivered(request: Request) -> dict[str, Any]:
+    """Report that a greeting was actually narrated, which starts the cooldown.
+
+    Separate from the evaluation on purpose: only the thing that spoke knows whether
+    the owner heard anything, and a cooldown begun by an evaluation would suppress the
+    real greeting for the whole window.
+    """
+    artifacts = _artifacts(request)
+
+    def run() -> dict[str, Any]:
+        with artifacts.session() as session:
+            decision = presence_service.evaluate_greeting_now(session)
+            if not decision.should_greet:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error": "greeting_not_currently_warranted",
+                        "reason": decision.reason,
+                    },
+                )
+            presence_service.record_greeting_delivered(session, decision)
             return decision.as_dict()
 
     return await asyncio.to_thread(run)
