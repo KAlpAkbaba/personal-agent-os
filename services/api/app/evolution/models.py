@@ -83,12 +83,8 @@ class Capability(Base):
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     capability_id: Mapped[str] = mapped_column(String(128), nullable=False)
     version: Mapped[str] = mapped_column(String(32), nullable=False, default="0.0.0")
-    status: Mapped[str] = mapped_column(
-        String(16), nullable=False, default="proposed", index=True
-    )
-    manifest_json: Mapped[dict[str, Any]] = mapped_column(
-        JSONColumn, nullable=False, default=dict
-    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="proposed", index=True)
+    manifest_json: Mapped[dict[str, Any]] = mapped_column(JSONColumn, nullable=False, default=dict)
     current_skill_version_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
@@ -127,9 +123,7 @@ class SkillVersion(Base):
         CheckConstraint(
             _in_list("status", SKILL_VERSION_STATUSES), name="ck_skill_versions_status"
         ),
-        UniqueConstraint(
-            "capability_id", "version", name="uq_skill_versions_capability_version"
-        ),
+        UniqueConstraint("capability_id", "version", name="uq_skill_versions_capability_version"),
     )
 
 
@@ -212,7 +206,16 @@ class EvolutionOpportunity(Base):
     #: [{"kind": "ledger_event"|"incident"|"lesson", "ref": "<id>", ...}, ...].
     #: Never empty — an opportunity with no origin is refused at creation.
     origin_json: Mapped[list[Any]] = mapped_column(JSONColumn, nullable=False, default=list)
-    status: Mapped[str] = mapped_column(String(24), nullable=False, default="idea", index=True)
+    status: Mapped[str] = mapped_column(
+        # 32, because "owner_approval_required" is 23 characters and this column was 24 in
+        # the migration while the model said something else again. A status that does not
+        # fit is not a typo the metadata-built SQLite of the unit suite will ever show you
+        # (M18 release lifecycle, 2026-09-05).
+        String(32),
+        nullable=False,
+        default="idea",
+        index=True,
+    )
 
     owner_relevance: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     expected_utility: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
