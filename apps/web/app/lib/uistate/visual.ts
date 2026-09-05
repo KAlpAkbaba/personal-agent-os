@@ -29,7 +29,8 @@ import {
   isKnownState,
   metaNumber,
 } from "./contract";
-import { type Claim, type CoreTruth, coreClaim } from "./truth";
+import { type ReleaseStage, releaseView } from "./ambient";
+import { type Claim, type CoreTruth, coreClaim, releaseClaim } from "./truth";
 
 export type CoreVisualKind =
   /** No poll has succeeded yet. */
@@ -143,6 +144,28 @@ export type VisualIntent = {
   /** The lab's composite score when it published one. */
   composite: number | null;
 
+  // ------------------------------------------------------------- release
+  /**
+   * The owner-authorised release path, drawn on its own orbit (M18 spec §15).
+   *
+   * This is a SEPARATE channel from everything above: a deployment in flight
+   * is not the agent's own activity, and an idle core with a release
+   * deploying must show both. `"none"` draws nothing. Routine and alarm
+   * stages stay on the ambient band - they are not release geometry.
+   */
+  releaseStage: ReleaseStage;
+  /** True while a production mutation is genuinely in flight. */
+  releaseInFlight: boolean;
+  /** True while the owner is the thing being waited on. */
+  releaseAwaitingOwner: boolean;
+  /**
+   * Real progress in 0..1, or `null`. The orbit is drawn whenever a release
+   * stage is current; it FILLS only against a published progress figure. A
+   * release of unknown length gets a ring that says so, never a bar that
+   * pretends to know.
+   */
+  releaseProgress: number | null;
+
   palette: PaletteToken;
 };
 
@@ -178,7 +201,44 @@ function blank(kind: CoreVisualKind, palette: PaletteToken): VisualIntent {
     constructionLayer: 0,
     satelliteComplete: false,
     composite: null,
+    releaseStage: "none",
+    releaseInFlight: false,
+    releaseAwaitingOwner: false,
+    releaseProgress: null,
     palette,
+  };
+}
+
+/** Only the seven release.* stages are geometry; routines and alarms are not. */
+const RELEASE_GEOMETRY_STAGES: ReadonlySet<ReleaseStage> = new Set<ReleaseStage>([
+  "owner_approval_required",
+  "owner_authorized",
+  "qualifying",
+  "deploying",
+  "verifying",
+  "live",
+  "rollback",
+]);
+
+/** The release channel's contribution to the intent, read from its own claim. */
+function releaseFields(truth: CoreTruth, now: number): Pick<
+  VisualIntent,
+  "releaseStage" | "releaseInFlight" | "releaseAwaitingOwner" | "releaseProgress"
+> {
+  const view = releaseView(releaseClaim(truth, now));
+  if (!RELEASE_GEOMETRY_STAGES.has(view.stage)) {
+    return {
+      releaseStage: "none",
+      releaseInFlight: false,
+      releaseAwaitingOwner: false,
+      releaseProgress: null,
+    };
+  }
+  return {
+    releaseStage: view.stage,
+    releaseInFlight: view.inFlight,
+    releaseAwaitingOwner: view.awaitingOwner,
+    releaseProgress: view.progress,
   };
 }
 
@@ -405,8 +465,16 @@ function forLiveState(event: UiStateEvent, claim: Claim): VisualIntent {
  */
 export function visualFor(truth: CoreTruth, now: number): VisualIntent {
   if (truth.connection.kind === "unauthorized") {
+    // Nothing known, so nothing drawn - on either channel.
     return { ...blank("unauthorized", "unknown"), dim: 0.7 };
   }
+  // The release orbit is independent of what the core body is doing: an idle
+  // core with a deployment in flight shows both, and neither hides the other.
+  return { ...coreVisual(truth, now), ...releaseFields(truth, now) };
+}
+
+/** The core body alone: agent and lab channels, as before contract v2. */
+function coreVisual(truth: CoreTruth, now: number): VisualIntent {
   if (truth.connection.kind === "connecting" && truth.polls === 0) {
     return { ...blank("connecting", "unknown"), dim: 0.5 };
   }
@@ -469,6 +537,30 @@ export function visualFor(truth: CoreTruth, now: number): VisualIntent {
   }
 
   return forLiveState(claim.event, claim);
+}
+
+/** True when a release stage is drawn on the orbit. */
+export function hasReleaseOrbit(intent: VisualIntent): boolean {
+  return intent.releaseStage !== "none";
+}
+
+/** Palette for the release orbit: waiting, working, arrived, or reversing. */
+export function releasePalette(stage: ReleaseStage): PaletteToken {
+  switch (stage) {
+    case "owner_approval_required":
+    case "owner_authorized":
+      return "held";
+    case "qualifying":
+    case "deploying":
+    case "verifying":
+      return "work";
+    case "live":
+      return "achieved";
+    case "rollback":
+      return "fault";
+    default:
+      return "unknown";
+  }
 }
 
 /** True when the intent describes observed, current activity. */

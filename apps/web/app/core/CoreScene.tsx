@@ -26,7 +26,7 @@ import { useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
 
 import { type QualityTier, TIER_BUDGETS, drawableCount } from "../lib/uistate/quality";
-import type { PaletteToken, VisualIntent } from "../lib/uistate/visual";
+import { type PaletteToken, type VisualIntent, releasePalette } from "../lib/uistate/visual";
 
 /** Same values as the CSS palettes, so 2D and 3D agree on what a state looks like. */
 const PALETTE: Record<PaletteToken, string> = {
@@ -332,6 +332,32 @@ export default function CoreScene({ intent, tier, still }: CoreSceneProps) {
               <meshBasicMaterial color={color} transparent opacity={0.65} />
             </mesh>
           ))}
+        </group>
+      )}
+
+      {/* The release orbit (M18 spec §15), on the satellite's own radius: a
+          full faint ring says a stage is current; the bright arc is real
+          progress and nothing else. No progress, no arc. */}
+      {intent.releaseStage !== "none" && (
+        <group rotation={[Math.PI / 2, 0, 0]}>
+          <mesh>
+            <torusGeometry args={[1.7, 0.008, 6, 96]} />
+            <meshBasicMaterial
+              color={PALETTE[releasePalette(intent.releaseStage)]}
+              transparent
+              opacity={intent.releaseProgress == null ? 0.35 : 0.2}
+            />
+          </mesh>
+          {intent.releaseProgress != null && intent.releaseProgress > 0 && (
+            <mesh rotation={[0, 0, Math.PI / 2]}>
+              <torusGeometry args={[1.7, 0.02, 8, 96, Math.PI * 2 * intent.releaseProgress]} />
+              <meshBasicMaterial
+                color={PALETTE[releasePalette(intent.releaseStage)]}
+                transparent
+                opacity={0.9}
+              />
+            </mesh>
+          )}
         </group>
       )}
 

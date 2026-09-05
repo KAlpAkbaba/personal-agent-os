@@ -20,7 +20,7 @@
  *   the markup and cannot drift back into motion by CSS default.
  */
 
-import type { VisualIntent } from "../lib/uistate/visual";
+import { type VisualIntent, releasePalette } from "../lib/uistate/visual";
 import { drawableCount, type QualityTier, TIER_BUDGETS } from "../lib/uistate/quality";
 
 const VIEW = 320;
@@ -212,6 +212,39 @@ export default function CoreFallback2D({
                 strokeDasharray="6 10"
               />
             ))}
+          </g>
+        )}
+
+        {/* The release orbit (M18 spec §15): drawn whenever a release stage is
+            current; it FILLS only against real progress. An unknown-length
+            release is a dashed ring, never a bar that pretends to know. */}
+        {intent.releaseStage !== "none" && (
+          <g
+            className={`core-release palette-${releasePalette(intent.releaseStage)}`}
+            data-release-stage={intent.releaseStage}
+            data-release-in-flight={intent.releaseInFlight ? "yes" : "no"}
+            data-release-progress={
+              intent.releaseProgress == null ? "unknown" : round(intent.releaseProgress * 100)
+            }
+          >
+            <circle
+              className="core-release-track"
+              cx={CENTER}
+              cy={CENTER}
+              r={round(radius + 34)}
+              strokeDasharray={intent.releaseProgress == null ? "3 7" : undefined}
+            />
+            {intent.releaseProgress != null && (
+              <circle
+                className="core-release-fill"
+                cx={CENTER}
+                cy={CENTER}
+                r={round(radius + 34)}
+                pathLength={100}
+                strokeDasharray={`${round(intent.releaseProgress * 100)} 100`}
+                transform={`rotate(-90 ${CENTER} ${CENTER})`}
+              />
+            )}
           </g>
         )}
 

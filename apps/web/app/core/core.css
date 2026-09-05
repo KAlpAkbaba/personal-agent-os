@@ -521,3 +521,29 @@
 .ambient-cell[data-release-stage="rollback"] {
   border-color: var(--warn);
 }
+
+/* ---------------------------------------------------- release orbit (§15) */
+
+/* Drawn on the satellite's radius. The track says a stage is current; the
+   fill is real progress and nothing else. */
+.core-release-track {
+  fill: none;
+  stroke: var(--core-color);
+  stroke-width: 1.5;
+  opacity: 0.45;
+}
+
+.core-release-fill {
+  fill: none;
+  stroke: var(--core-color);
+  stroke-width: 3;
+  stroke-linecap: round;
+  opacity: 0.95;
+}
+
+.palette-held {
+  --core-color: #c9a55a;
+}
+.palette-work {
+  --core-color: #5aa7e8;
+}
