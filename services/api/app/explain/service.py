@@ -343,6 +343,10 @@ class BriefingRecord:
             "cursor": self.cursor.as_dict() if self.cursor else None,
             "query": self.briefing.query.as_dict(),
             "provenance": self.briefing.provenance(),
+            # The routing record travels with the answer, so the durable tool-call row can
+            # say WHICH cognitive path served the question instead of leaving a checker to
+            # guess it from the Turkish (owner M17 run, 2026-09-05).
+            "cognition": self.briefing.cognition(),
             "evidence_count": counts["evidence"],
             "facts": counts["facts"],
             "inferences": counts["inferences"],

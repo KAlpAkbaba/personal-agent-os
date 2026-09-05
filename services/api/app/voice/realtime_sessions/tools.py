@@ -509,13 +509,25 @@ def default_registry() -> ToolRegistry:
         ToolSpec(
             name="activity.explain",
             description=(
-                "Sahibin sistemin kendisiyle ilgili sorusunu KAYITLI KANITTAN yanıtlar: "
-                "son ne yaptın, bugün neler yaptın, ne başarısız oldu, sorun var mı, "
-                "araştırma motoru ne durumda, kanıtı ne, araştırmayı detaylandır, teknik "
-                "olarak ne değişti, ne öğrendin, son hatalardan ne öğrendin, kendi üzerinde "
-                "ne geliştiriyorsun, hazır modüllerin neler, canlıya alınmayı bekleyen ne "
-                "var, bu özelliği neden geliştirdin, test sonuçlarını anlat, hedeflerin ne "
-                "durumda. Sonuçtaki 'speech' metnini aynen oku; ekleme yapma."
+                "Sahibin sistemin kendisiyle ilgili HER sorusunu KAYITLI KANITTAN "
+                "yanıtlar: son ne yaptın, bugün neler yaptın, ne başarısız oldu, sorun var "
+                "mı, araştırma motoru ne durumda, kanıtı ne, araştırmayı detaylandır, "
+                "teknik olarak ne değişti, ne öğrendin, son hatalardan ne öğrendin, kendi "
+                "üzerinde ne geliştiriyorsun, gece kendi üzerinde ne geliştirdin, hazır "
+                "modüllerin neler, canlıya alınmayı bekleyen ne var, bu özelliği neden "
+                "geliştirdin, test sonuçlarını anlat, hedeflerin ne durumda, şu anda hangi "
+                "hedeflerin var, kendi sisteminde şu anda ne görüyorsun, kendi kodun "
+                "hakkında ne biliyorsun, hangi modüllerin var. "
+                # The authority questions are named explicitly because they do not READ like
+                # questions about the system - "bunu canliya alabilir misin?" reads like a
+                # request for permission, and on 2026-09-05 the model answered it from its
+                # own belief instead of calling this tool, so no can_deploy answer was
+                # recorded at all. Whether this system may deploy something is a fact about
+                # policy, and it is never the model's to assert.
+                "AYRICA: bunu canlıya alabilir misin, yayına alabilir misin, kendin "
+                "dağıtabilir misin, onay gerekiyor mu - yetki ve dağıtım sınırıyla ilgili "
+                "her soru da bu araçla yanıtlanır; kendi bilginle cevaplama. "
+                "Sonuçtaki 'speech' metnini aynen oku; ekleme yapma."
             ),
             parameters={
                 "type": "object",

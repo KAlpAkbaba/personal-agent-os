@@ -1253,7 +1253,18 @@ def session_activity(db: Session, row: RealtimeSessionRow) -> dict[str, Any]:
                 "error_class": call.error_class,
                 "level": _result_field(result, "level"),
                 "intent": _result_field(result, "intent", "intent"),
-                "query_kind": _result_field(result, "intent", "query_kind"),
+                # The cognition block first: it is written by the engine that dispatched
+                # the question. The narration intent's query_kind is the fallback and is
+                # None for a question (it resolves narration CONTROLS), which is why the
+                # owner's M17 run recorded five correct answers with an empty query_kind
+                # and the harness declared four subsystems unreached (2026-09-05).
+                "query_kind": (
+                    _result_field(result, "cognition", "query_kind")
+                    or _result_field(result, "intent", "query_kind")
+                ),
+                "subsystem": _result_field(result, "cognition", "subsystem"),
+                "entity_ids": _result_field(result, "cognition", "entity_ids"),
+                "evidence_kinds": _result_field(result, "cognition", "evidence_kinds"),
                 "action": _result_field(result, "narration", "action"),
                 "narration_state": _result_field(result, "narration", "narration_state"),
                 "cursor": (

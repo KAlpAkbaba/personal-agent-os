@@ -280,3 +280,73 @@ def test_a_broken_read_is_logged_rather_than_reported_as_absence() -> None:
     assert "logger.warning" in source, (
         "anything else is a bug in this file and must not masquerade as an honest absence"
     )
+
+
+# ------------------------------------------- the persistence path, which is what crashed
+
+
+@pytest.mark.parametrize(("question", "_kind"), QUESTIONS)
+def test_every_answer_survives_being_persisted(question: str, _kind: str) -> None:
+    """``as_dict()`` is what the voice tool stores, and it is where the failure happened.
+
+    The world-model branch shadowed the briefing's ``facts`` accumulator with a local list,
+    so ``provenance()`` called ``dict(<list of 9-key dicts>)`` and raised a ValueError about
+    a "dictionary update sequence". The owner heard "activity.explain failed" with error
+    class ``internal_bug``. Nothing caught it because these tests only ever called
+    ``speech_for_level`` - they exercised the sentence and never the record (2026-09-05).
+    """
+    for source in (BareSource(), RichSource()):
+        briefing = explain(source, question, classify(question))
+        record = briefing.as_dict()  # must not raise
+        assert isinstance(record["provenance"]["facts"], dict)
+        assert record["cognition"]["query_kind"] == briefing.query.kind
+
+
+def test_a_branch_that_shadows_the_facts_accumulator_is_refused_at_construction() -> None:
+    """The guard fails where the briefing is BUILT, not deep inside persistence."""
+    from datetime import UTC, datetime
+
+    from app.explain.engine import Briefing
+
+    with pytest.raises(TypeError, match="shadowed"):
+        Briefing(
+            question="q",
+            query=classify("Son yaptıklarını anlat"),
+            generated_at=datetime.now(UTC),
+            executive=(),
+            detailed=(),
+            technical=(),
+            evidence_refs=(),
+            facts=[{"a": 1}],  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize(("question", "expected"), QUESTIONS)
+def test_the_routing_record_names_the_subsystem_that_answered(question: str, expected: str) -> None:
+    """Routing is recorded by the engine that dispatched it, never inferred from Turkish."""
+    from app.explain.engine import SUBSYSTEM_FOR_QUERY
+
+    briefing = explain(RichSource(), question, classify(question))
+    cognition = briefing.cognition()
+    assert cognition["query_kind"] == expected
+    assert cognition["subsystem"] == SUBSYSTEM_FOR_QUERY[expected]
+    assert set(cognition) >= {
+        "query_kind",
+        "subsystem",
+        "facts",
+        "uncertainties",
+        "evidence_count",
+        "evidence_kinds",
+        "entity_ids",
+        "research_job_id",
+    }
+
+
+def test_a_cognitive_answer_is_not_required_to_cite_a_research_job() -> None:
+    """Research provenance belongs to research answers. Requiring it everywhere would be
+    demanding provenance from the wrong subsystem (owner direction, 2026-09-05)."""
+    for question in ("Kendi kodun hakkında ne biliyorsun?", "Bunu canlıya alabilir misin?"):
+        cognition = explain(RichSource(), question, classify(question)).cognition()
+        assert cognition["research_job_id"] is None
+        # ...but it must still say what it DID rest on
+        assert cognition["facts"] >= 1 or cognition["uncertainties"] >= 1

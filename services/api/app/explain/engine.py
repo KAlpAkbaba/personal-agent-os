@@ -147,6 +147,36 @@ _SUBSYSTEM_TR = {
 }
 
 
+#: Which subsystem answers each question kind. This is the ROUTING RECORD: the durable
+#: answer to "which cognitive path served this question", written by the engine that
+#: dispatched it rather than guessed later by reading the generated Turkish. A harness that
+#: has to infer the subsystem from prose is not checking routing, it is checking wording -
+#: which is the defect class this whole milestone was built around (owner M17 run,
+#: 2026-09-05).
+SUBSYSTEM_FOR_QUERY: dict[str, str] = {
+    QUERY_LEARNED: "memory+experience",
+    QUERY_GOALS: "goals",
+    QUERY_WORLD_STATE: "worldmodel",
+    QUERY_SELF_CODE: "selfmodel",
+    QUERY_EVOLUTION: "evolution",
+    QUERY_SHADOW_READY: "evolution",
+    QUERY_WHY_BUILT: "evolution",
+    QUERY_CAN_DEPLOY: "authority",
+    QUERY_TESTS: "ledger",
+    QUERY_SINCE_YOU_LEFT: "ledger",
+}
+
+#: The six the M17 combined qualification asks about, in the order it asks them.
+M17_QUERY_KINDS: tuple[str, ...] = (
+    QUERY_LEARNED,
+    QUERY_GOALS,
+    QUERY_WORLD_STATE,
+    QUERY_SELF_CODE,
+    QUERY_EVOLUTION,
+    QUERY_CAN_DEPLOY,
+)
+
+
 # ------------------------------------------------------------------ evidence views
 
 
@@ -252,6 +282,22 @@ class Briefing:
     #: what a checker compares against the source record, instead of matching wording.
     facts: dict[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        """Refuse a malformed briefing where it is BUILT, not where it is serialized.
+
+        The world-model branch shadowed this accumulator with a local list of world facts,
+        so a list reached ``facts``. Nothing complained until ``provenance()`` called
+        ``dict(self.facts)`` during persistence, deep inside the voice tool, and the owner
+        heard "activity.explain failed" with an error class of ``internal_bug`` - a
+        ValueError about a "dictionary update sequence" naming neither the field nor the
+        branch. A composed briefing is cheap to check and expensive to debug (2026-09-05).
+        """
+        if not isinstance(self.facts, dict):
+            raise TypeError(
+                "Briefing.facts must be a mapping of structured values, not "
+                f"{type(self.facts).__name__}; a branch has shadowed the accumulator"
+            )
+
     @property
     def title(self) -> str:
         return f"Etkinlik özeti — {self.generated_at.strftime('%Y-%m-%d %H:%M')} UTC"
@@ -275,6 +321,38 @@ class Briefing:
             "statement_labels": sorted({s.label for s in self.executive}),
         }
 
+    def cognition(self) -> dict[str, Any]:
+        """The routing record: which cognitive path served this question, and on what.
+
+        Deliberately NOT derived from the spoken sentences. A checker asking "did the world
+        model answer?" reads ``subsystem`` here; it does not search Turkish prose for the
+        word for "truth". ``entity_ids`` are the actual records this answer used - lesson
+        ids, goal ids, module ids, opportunity ids, policy ids - so an answer can be traced
+        back to the rows behind it whichever subsystem produced it.
+
+        ``research_job_id`` appears only when the answer really came from a research run.
+        Requiring every cognitive answer to cite one would be requiring provenance from the
+        wrong subsystem (owner direction, 2026-09-05).
+        """
+        by_kind: dict[str, list[str]] = {}
+        for ref in self.evidence_refs:
+            kind = str(ref.get("kind") or "")
+            ident = str(ref.get("ref") or "")
+            if kind and ident:
+                by_kind.setdefault(kind, []).append(ident)
+        counts = self.counts()
+        return {
+            "query_kind": self.query.kind,
+            "subsystem": SUBSYSTEM_FOR_QUERY.get(self.query.kind, "ledger"),
+            "facts": counts["facts"],
+            "inferences": counts["inferences"],
+            "uncertainties": counts["uncertainties"],
+            "evidence_count": counts["evidence"],
+            "evidence_kinds": sorted(by_kind),
+            "entity_ids": {kind: ids[:8] for kind, ids in sorted(by_kind.items())},
+            "research_job_id": self.research_job_id,
+        }
+
     def counts(self) -> dict[str, int]:
         statements = list(self.executive)
         for item in (*self.detailed, *self.technical):
@@ -296,6 +374,7 @@ class Briefing:
             "technical": [i.as_dict() for i in self.technical],
             "evidence_refs": list(self.evidence_refs),
             "provenance": self.provenance(),
+            "cognition": self.cognition(),
             **self.counts(),
         }
 
@@ -1259,19 +1338,19 @@ def explain(
         if not snapshot:
             executive.append(Statement("Dünya modelim şu anda okunamıyor.", LABEL_UNCERTAINTY, ()))
         else:
-            facts = [f for f in (snapshot.get("facts") or []) if isinstance(f, dict)]
+            world_facts = [f for f in (snapshot.get("facts") or []) if isinstance(f, dict)]
             uncertainties = [
                 u for u in (snapshot.get("uncertainties") or []) if isinstance(u, dict)
             ]
             by_kind: dict[str, int] = {}
-            for fact in facts:
+            for fact in world_facts:
                 by_kind[str(fact.get("truth_kind"))] = (
                     by_kind.get(str(fact.get("truth_kind")), 0) + 1
                 )
-            stale = [f for f in facts if bool(f.get("stale"))]
+            stale = [f for f in world_facts if bool(f.get("stale"))]
             executive.append(
                 Statement(
-                    f"Efendim, şu an {cardinal(len(facts))} doğrulanmış gözlemim var: "
+                    f"Efendim, şu an {cardinal(len(world_facts))} doğrulanmış gözlemim var: "
                     f"{_truth_kind_phrase(by_kind)}.",
                     LABEL_FACT,
                     ({"kind": "world_snapshot", "ref": str(snapshot.get("observed_at") or "now")},),
@@ -1295,7 +1374,7 @@ def explain(
                     )
                 )
             for kind_name in TRUTH_ORDER:
-                rows = [f for f in facts if str(f.get("truth_kind")) == kind_name]
+                rows = [f for f in world_facts if str(f.get("truth_kind")) == kind_name]
                 if not rows:
                     continue
                 statements = []
