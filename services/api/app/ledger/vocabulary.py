@@ -186,6 +186,13 @@ EVENT_TYPE_ROUTINE_TRIGGERED = "routine.triggered"
 EVENT_TYPE_ROUTINE_EXECUTED = "routine.executed"
 EVENT_TYPE_ROUTINE_SKIPPED = "routine.skipped"
 EVENT_TYPE_ROUTINE_CANCELLED = "routine.cancelled"
+#: M18 dispatch visibility (ADR-0060, app.routines.dispatch). A failed or refused action
+#: gets its OWN ledger row - never only a field buried inside routine.executed's
+#: detail_json - because "which action, and why" must be answerable without reading
+#: JSON blobs the vocabulary itself does not enumerate (module docstring's own rule,
+#: applied to this package the same way it was already applied to every other one).
+EVENT_TYPE_ROUTINE_ACTION_FAILED = "routine.action_failed"
+EVENT_TYPE_ROUTINE_ACTION_REFUSED = "routine.action_refused"
 
 EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_RESEARCH_PLANNED,
@@ -227,6 +234,8 @@ EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_ROUTINE_EXECUTED,
     EVENT_TYPE_ROUTINE_SKIPPED,
     EVENT_TYPE_ROUTINE_CANCELLED,
+    EVENT_TYPE_ROUTINE_ACTION_FAILED,
+    EVENT_TYPE_ROUTINE_ACTION_REFUSED,
 )
 
 #: Reserved for the Evolution Engine (M18): constants exist now, writers come

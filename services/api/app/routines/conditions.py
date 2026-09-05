@@ -71,6 +71,13 @@ class RoutineConditionContext:
     #: to prevent.
     greeting_allowed: bool | None = None
     greeting_reason: str = "not_evaluated"
+    #: The full app.presence.greeting.GreetingDecision behind `greeting_allowed`/
+    #: `greeting_reason` above, carried opaquely (ADR-0060) so app.routines.service can
+    #: start the greeting cooldown AFTER a briefing actually narrates, via
+    #: app.routines.presence_link.record_greeting_delivered, without this module — or any
+    #: evaluator below — ever importing app.presence or inspecting the decision's shape.
+    #: Typed ``Any`` on purpose: this package does not depend on app.presence's types.
+    greeting_decision: Any = None
 
 
 def validate_condition(raw: dict[str, Any]) -> dict[str, Any]:

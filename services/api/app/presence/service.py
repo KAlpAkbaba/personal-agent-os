@@ -216,6 +216,14 @@ def record_greeting_delivered(
 
 __all__ = [
     "EyeDisabledError",
+    # `record_greeting_delivered` and `last_greeted_at` were missing here even though both
+    # are public API other modules call directly (app.routines.presence_link calls the
+    # former; this module's own docstring for evaluate_greeting_now describes the pairing
+    # with the latter) — found while auditing this module for M18 routine dispatch
+    # (ADR-0060). A `from app.presence.service import *` would not have re-exported either
+    # one, silently.
     "evaluate_greeting_now",
     "ingest_observation",
+    "last_greeted_at",
+    "record_greeting_delivered",
 ]

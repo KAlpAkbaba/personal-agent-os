@@ -29,35 +29,95 @@ public static class AckStatus
 
 /// <summary>
 /// The capability manifest this device advertises (enrollment, WS <c>hello</c>, companion
-/// hello). Two families: <c>desktop.*</c> is always present; <c>browser.*</c>
-/// (BROWSER_CAPABILITIES.md §1, M13) is present only when a Browser Worker is configured —
-/// service side <c>BrowserEnabled=true</c>, companion side <c>BrowserWorkerCommand</c> set.
-/// <see cref="Compose"/> is the one place the two are joined, so a manifest can never
-/// advertise browser names on a device that has nothing to execute them.
+/// hello). Four groups, each with its own rule about when it appears:
+/// <list type="bullet">
+/// <item><c>desktop.open_*</c> — always present (M1/M3 behaviour, unchanged).</item>
+/// <item><c>desktop.alarm_*</c> — always present (M18). The companion can always answer them:
+/// with no render endpoint it says <c>dependency_unavailable</c>, which is a true statement
+/// about right now, not a missing capability.</item>
+/// <item><c>desktop.display_off</c> — present only when the companion was started with
+/// <c>DisplayPowerEnabled</c>. Display-off has its own owner qualification
+/// (M18_HOLOGRAPHIC_CORE_SPEC.md §7), and until it has run this device must look to Cloud
+/// Core like a device that cannot blank a screen, because that is what it is.</item>
+/// <item><c>browser.*</c> (BROWSER_CAPABILITIES.md §1, M13) — present only when a Browser
+/// Worker is configured: service side <c>BrowserEnabled=true</c>, companion side
+/// <c>BrowserWorkerCommand</c> set.</item>
+/// </list>
+/// <see cref="Compose"/> is the one place they are joined, so a manifest can never advertise
+/// a name the device has nothing to execute.
 /// </summary>
 public static class AgentCapabilities
 {
     public const string DesktopOpenApplication = "desktop.open_application";
     public const string DesktopOpenArtifact = "desktop.open_artifact";
 
+    /// <summary>M18: start the wake alarm — a volume RAMP, never a level (DEVICE_PROTOCOL.md §6c).</summary>
+    public const string DesktopAlarmStart = "desktop.alarm_start";
+
+    /// <summary>M18: stop a ringing alarm. An alarm that cannot be stopped is not an alarm.</summary>
+    public const string DesktopAlarmStop = "desktop.alarm_stop";
+
+    /// <summary>M18: turn the display off — the ONLY machine-state action, and only off (§6d).</summary>
+    public const string DesktopDisplayOff = "desktop.display_off";
+
     /// <summary>The desktop family — what every device advertises (M1/M3 behaviour, unchanged).</summary>
     public static readonly IReadOnlyList<string> Desktop = [DesktopOpenApplication, DesktopOpenArtifact];
 
+    /// <summary>The alarm pair (M18). Always advertised; see the class docstring for why.</summary>
+    public static readonly IReadOnlyList<string> Alarm = [DesktopAlarmStart, DesktopAlarmStop];
+
+    /// <summary>Display power (M18). Advertised only behind <c>DisplayPowerEnabled</c>.</summary>
+    public static readonly IReadOnlyList<string> DisplayPower = [DesktopDisplayOff];
+
     /// <summary>
-    /// The baseline manifest: identical to <see cref="Desktop"/>. Kept under its historical
-    /// name so the M1/M3 callers (and their byte-for-byte hello/enrollment expectations)
-    /// are untouched; browser names are only ever added through <see cref="Compose"/>.
+    /// The M1/M3 baseline manifest: identical to <see cref="Desktop"/>. Kept under its
+    /// historical name so those callers (and their byte-for-byte hello/enrollment
+    /// expectations) are untouched; every later family is added through
+    /// <see cref="Compose"/> only.
     /// </summary>
     public static readonly IReadOnlyList<string> All = Desktop;
 
     /// <summary>The browser family (family marker + every per-operation name).</summary>
     public static IReadOnlyList<string> Browser => BrowserCapabilities.All;
 
-    /// <summary>Desktop names, plus the browser family when — and only when — it is configured.</summary>
-    public static IReadOnlyList<string> Compose(bool browserEnabled)
-        => browserEnabled ? [.. Desktop, .. BrowserCapabilities.All] : Desktop;
+    /// <summary>
+    /// The manifest this device actually advertises: the desktop names and the alarm pair
+    /// always, display power and the browser family only when each is configured. Order is
+    /// stable (desktop, alarm, display, browser) so a manifest diff between two versions
+    /// reads as an addition rather than a reshuffle.
+    /// </summary>
+    public static IReadOnlyList<string> Compose(bool browserEnabled, bool displayPowerEnabled = false)
+    {
+        var names = new List<string>(Desktop.Count + Alarm.Count + DisplayPower.Count + BrowserCapabilities.All.Count);
+        names.AddRange(Desktop);
+        names.AddRange(Alarm);
+        if (displayPowerEnabled)
+        {
+            names.AddRange(DisplayPower);
+        }
+
+        if (browserEnabled)
+        {
+            names.AddRange(BrowserCapabilities.All);
+        }
+
+        return names;
+    }
 
     public static bool IsDesktop(string capability) => Desktop.Contains(capability, StringComparer.Ordinal);
+
+    public static bool IsAlarm(string capability) => Alarm.Contains(capability, StringComparer.Ordinal);
+
+    public static bool IsDisplayPower(string capability) => DisplayPower.Contains(capability, StringComparer.Ordinal);
+
+    /// <summary>
+    /// Every name the Session Companion executes in the owner's interactive session. The
+    /// Device Service routes exactly this set over the pipe and refuses everything else
+    /// outside the browser family, so a new interactive name is reachable only by being
+    /// added here — never by being spelled <c>desktop.</c>-something.
+    /// </summary>
+    public static bool IsInteractive(string capability)
+        => IsDesktop(capability) || IsAlarm(capability) || IsDisplayPower(capability);
 
     public static bool IsBrowser(string capability) => BrowserCapabilities.IsFamilyMember(capability);
 }

@@ -46,7 +46,13 @@ public sealed class BrowserDispatchTests : IDisposable
     {
         Assert.Equal(new[] { "desktop.open_application", "desktop.open_artifact" }, AgentCapabilities.Desktop);
         Assert.Equal(AgentCapabilities.Desktop, AgentCapabilities.All);
-        Assert.Equal(AgentCapabilities.Desktop, AgentCapabilities.Compose(browserEnabled: false));
+
+        // M18 added the alarm pair to what a device advertises; `Desktop` and `All` still mean
+        // exactly the M1/M3 pair, so the byte-for-byte hello/enrollment expectations that use
+        // them are untouched and the growth is visible here rather than inherited silently.
+        Assert.Equal(
+            new[] { "desktop.open_application", "desktop.open_artifact", "desktop.alarm_start", "desktop.alarm_stop" },
+            AgentCapabilities.Compose(browserEnabled: false));
     }
 
     [Fact]
@@ -54,9 +60,10 @@ public sealed class BrowserDispatchTests : IDisposable
     {
         var composed = AgentCapabilities.Compose(browserEnabled: true);
 
-        Assert.Equal(AgentCapabilities.Desktop.Count + 1 + 24, composed.Count);
+        Assert.Equal(AgentCapabilities.Desktop.Count + AgentCapabilities.Alarm.Count + 1 + 24, composed.Count);
         Assert.Equal(AgentCapabilities.Desktop, composed.Take(2));
-        Assert.Equal(BrowserCapabilities.Family, composed[2]);
+        Assert.Equal(AgentCapabilities.Alarm, composed.Skip(2).Take(2));
+        Assert.Equal(BrowserCapabilities.Family, composed[4]);
         Assert.Equal(24, BrowserCapabilities.Operations.Count);
         Assert.Equal(composed.Count, composed.Distinct(StringComparer.Ordinal).Count());
         Assert.All(composed, name => Assert.Matches(CapabilityName, name));
@@ -306,8 +313,10 @@ public sealed class BrowserDispatchTests : IDisposable
         {
             await WaitForCompanionAsync(server);
 
-            Assert.Equal(AgentCapabilities.Desktop, companion.AdvertisedCapabilities);
-            Assert.Equal(AgentCapabilities.Desktop, server.CompanionCapabilities);
+            Assert.Equal(AgentCapabilities.Compose(browserEnabled: false), companion.AdvertisedCapabilities);
+            Assert.Equal(AgentCapabilities.Compose(browserEnabled: false), server.CompanionCapabilities);
+            Assert.DoesNotContain(BrowserCapabilities.Family, companion.AdvertisedCapabilities);
+            Assert.DoesNotContain(AgentCapabilities.DesktopDisplayOff, companion.AdvertisedCapabilities);
 
             var ex = await Assert.ThrowsAsync<CapabilityException>(() => server.ExecuteCapabilityAsync(
                 BrowserCapabilities.Navigate, new JsonObject { ["session_id"] = "t" }, TimeSpan.FromSeconds(10), CancellationToken.None));

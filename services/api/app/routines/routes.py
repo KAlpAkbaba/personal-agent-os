@@ -34,7 +34,8 @@ from app.routines.conditions import CONDITION_KINDS, InvalidCondition, RoutineCo
 from app.routines.models import ROUTINE_STATUSES, TRIGGER_KINDS, Routine, RoutineFiring
 from app.routines.presence_link import (
     SOURCE_CALLER,
-    resolve_greeting_allowed,
+    greeting_verdict,
+    resolve_greeting_decision,
     resolve_owner_present,
 )
 from app.routines.state import IllegalRoutineTransition
@@ -90,6 +91,10 @@ def _firing_dict(firing: RoutineFiring) -> dict[str, Any]:
         "conditions_result": firing.conditions_result,
         "actions_snapshot": firing.actions_snapshot,
         "skip_reason": firing.skip_reason,
+        # ADR-0060: a failed/refused action must be visible from the firing itself, not
+        # only from the ledger's routine.action_failed/routine.action_refused events.
+        "dispatch_results": firing.dispatch_results,
+        "dispatch_status": firing.dispatch_status,
         "occurred_at": _iso(firing.occurred_at),
         "created_at": _iso(firing.created_at),
     }
@@ -162,7 +167,11 @@ class ConditionContextIn(BaseModel):
     policy_permissions: dict[str, bool] = Field(default_factory=dict)
 
     def to_context(
-        self, *, greeting_allowed: bool | None = None, greeting_reason: str = "not_evaluated"
+        self,
+        *,
+        greeting_allowed: bool | None = None,
+        greeting_reason: str = "not_evaluated",
+        greeting_decision: Any = None,
     ) -> RoutineConditionContext:
         """Build the evaluation context, resolving presence from the engine that knows it.
 
@@ -170,6 +179,11 @@ class ConditionContextIn(BaseModel):
         camera does not - but the assertion is labelled as theirs. When they say nothing,
         the Presence Engine answers, and "stale" resolves to unknown rather than to a
         boolean (app.routines.presence_link).
+
+        ``greeting_decision`` carries the WHOLE ``app.presence.greeting.GreetingDecision``
+        opaquely (ADR-0060), so ``app.routines.service`` can start the greeting cooldown
+        after a briefing actually narrates without this module — or ``app.routines.conditions``
+        — ever importing ``app.presence`` itself.
         """
         if self.owner_present is None:
             owner_present, source = resolve_owner_present()
@@ -184,6 +198,7 @@ class ConditionContextIn(BaseModel):
             policy_permissions=dict(self.policy_permissions),
             greeting_allowed=greeting_allowed,
             greeting_reason=greeting_reason,
+            greeting_decision=greeting_decision,
         )
 
 
@@ -312,10 +327,17 @@ async def evaluate_due(request: Request, body: EvaluateDueRequest | None = None)
             # The greeting policy needs the ledger (its cooldown is read from the
             # delivery record), so it is resolved here rather than in `to_context`.
             # Evaluating it has no side effect - deliberately: this endpoint is called
-            # on every tick, including the ticks where nothing fires.
-            greeting_allowed, greeting_reason = resolve_greeting_allowed(session)
+            # on every tick, including the ticks where nothing fires. The WHOLE decision
+            # travels into the context (not just its two summary fields) so
+            # app.routines.service can start the cooldown itself, after dispatch, only if
+            # a voice_briefing actually narrated (ADR-0060) — resolving it a second time
+            # there would re-read the ledger against a `now` that has since moved on.
+            decision = resolve_greeting_decision(session)
+            greeting_allowed, greeting_reason = greeting_verdict(decision)
             context = context_in.to_context(
-                greeting_allowed=greeting_allowed, greeting_reason=greeting_reason
+                greeting_allowed=greeting_allowed,
+                greeting_reason=greeting_reason,
+                greeting_decision=decision,
             )
             return routines_service.evaluate_due(session, context=context)
 

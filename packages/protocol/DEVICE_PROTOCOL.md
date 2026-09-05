@@ -175,6 +175,46 @@ Configuration (all `PAGENTOS_AGENT_`-prefixed, nothing machine-specific): servic
 `<BrowserDataDir>\profile`), `BrowserChannel` (default `chrome`), `BrowserVisible` (default
 true), `BrowserIdleTimeoutS` (default 600), `BrowserWorkerEager` (default false).
 
+## 6c. Capability pair: `desktop.alarm_start` / `desktop.alarm_stop` (M18)
+
+The wake alarm. **Interactive-session capabilities, executed by the Session Companion**: they open a shared-mode render endpoint in the owner's session, which the Session-0 Device Service cannot do and never attempts. The service routes them over the companion pipe like `desktop.open_*`, under the same 60 s per-command cap — `alarm_start` arms a ramp and returns, it does not hold the pipe while the alarm rings.
+
+Both names are advertised **unconditionally**. A companion with no render endpoint answers `dependency_unavailable` (retryable) — a true statement about right now, not a claim that the device cannot ring — and a companion built without an alarm controller answers `capability_missing`. Neither ever hangs.
+
+`desktop.alarm_start`
+
+Payload: `{"alarm_id":"<id>"?, "label":"<short text>"?, "wake_volume":{"start":<0..1>,"end":<0..1>,"ramp_seconds":<int>}?, "max_duration_s":<int>?}`
+Result: `{"started":true,"alarm_id":"…","start_volume":<f>,"end_volume":<f>,"ramp_seconds":<i>,"max_duration_s":<i>,"end_volume_clamped":<bool>,"ramp_seconds_clamped":<bool>,"replaced_alarm_id":"…"|null}`
+
+`desktop.alarm_stop`
+
+Payload: `{"alarm_id":"<id>"?}` — omit it to stop whatever is ringing.
+Result: `{"stopped":<bool>,"alarm_id":"…"|null,"was_ringing":<bool>}`
+
+Rules, all enforced on the device regardless of what Cloud Core validated (a routine row written before a validator existed must not ring at full volume today):
+
+- **A wake volume is a RAMP, never a level.** `start` defaults to 0.05, `end` to 0.8, `ramp_seconds` to 60. A `start` at or above **0.5** is refused with `validation_error` — a caller asking to begin at 0.9 is not asking for a ramp, and quietly lowering it would hide a malformed request. `start > end` is refused for the same reason.
+- **There is a ceiling, and clamps are reported.** An `end` above **0.85** is clamped to it and `end_volume_clamped` says so; a `ramp_seconds` below 5 (or above 3600) is clamped into range and `ramp_seconds_clamped` says so. Clamping rather than refusing here keeps the alarm ringing at a safe level instead of not ringing at all, and the result carries the number it will actually reach.
+- **The level scales the companion's own generated samples.** Nothing in this capability touches the Windows master volume or the endpoint's volume: an alarm that raised the system mixer would leave the machine loud after it stopped, and would do it to every other application at once.
+- **It always stops.** Three ways: `desktop.alarm_stop`, the alarm's own `max_duration_s` (default 300 s, clamped to 10–1800 s, checked continuously), and companion shutdown. No ringing alarm outlives the companion process.
+- **`alarm_stop` is idempotent.** Stopping an alarm that already stopped is a success with `was_ringing:false`. A stop naming a *different* alarm than the one ringing does nothing and reports `stopped:false`, so a stale retry cannot silence the alarm that replaced it.
+- **One alarm at a time.** A second `alarm_start` stops the first and names it in `replaced_alarm_id` rather than layering two ramps on one endpoint.
+
+Configuration (companion, `PAGENTOS_AGENT_`-prefixed): `AlarmRenderDevice` (id or name substring; falls back to `VoiceRenderDevice`, then the session's default render endpoint, resolved per alarm so a headset plugged in after startup is usable).
+
+## 6d. Capability: `desktop.display_off` (M18)
+
+Turns the owner's display off, and nothing else. **Interactive-session capability, executed by the Session Companion** — a `WM_SYSCOMMAND` / `SC_MONITORPOWER` broadcast from Session 0 reaches no window the owner can see. Sent with `SendMessageTimeout` (2 s, `SMTO_ABORTIFHUNG`), because a single hung top-level window would otherwise block the companion forever; a timed-out broadcast is reported as `dependency_unavailable`, never as success.
+
+Payload: `{"reason":"<short token>"?}`
+Result: `{"display_off":true,"method":"wm_syscommand_monitorpower"}`
+
+- **Off is the only operation.** M18 v1 does not shut down, reboot, hibernate, suspend or log off on any inference (`docs/M18_HOLOGRAPHIC_CORE_SPEC.md` §4, `docs/M18_THREAT_MODEL.md` §5). Turning a display off is undone by moving the mouse; suspending a machine that is mid-research is not, and the background work would stop with it. A test reads the implementation source and fails if a shutdown/suspend API name appears in it, so the capability cannot quietly grow a second meaning.
+- **Two independent gates, and neither knows about the other.** On the device, the name is advertised and routed only when `DisplayPowerEnabled` is set (default false) — service and companion each refuse it otherwise with `capability_missing`, so a command aimed straight at the device still cannot blank the screen. In Cloud Core, a routine's `display_action` is refused before it ever becomes a command, until display-off has passed its own owner qualification (`docs/M18_HOLOGRAPHIC_CORE_SPEC.md` §7). A single flag flipped by accident is therefore not enough to interrupt unrelated owner work.
+- A device with the flag off does not advertise the name, so Cloud Core's capability selection reports `no_capable_device` rather than reaching a device that lied about what it can do.
+
+Configuration: `PAGENTOS_AGENT_DisplayPowerEnabled` on both the Device Service (routing + advertisement) and the Session Companion (execution + advertisement).
+
 ## 7. Audit
 
 Broker persists an `audit_events` row for: enrollment, session start/end, command created, delivered, each ack transition, cancel, expiry. Events carry `trace_id`, `device_id`, `command_id`, never secrets or payload bodies larger than 4 KB.
@@ -195,5 +235,5 @@ Since M9 every endpoint below requires `Authorization: Bearer <owner-session-tok
 ## 9. Windows agent process architecture
 
 - **Device Service** (background; Windows Service-capable, Session 0): owns the keypair, the WS connection, idempotency store, local audit log, and machine-level capabilities. Never touches the interactive desktop.
-- **Session Companion** (runs in the owner's interactive session): executes interactive capabilities (UI, `desktop.open_application`), connects to the Device Service over an authenticated local named pipe. If no companion is connected, interactive commands fail fast with `dependency_unavailable` (`retryable: true`).
+- **Session Companion** (runs in the owner's interactive session): executes every interactive capability — `desktop.open_application`, `desktop.open_artifact`, the `browser.*` family, and since M18 `desktop.alarm_start` / `desktop.alarm_stop` (audio in the owner's session) and `desktop.display_off` (a broadcast that only reaches the owner's windows) — and connects to the Device Service over an authenticated local named pipe. If no companion is connected, interactive commands fail fast with `dependency_unavailable` (`retryable: true`).
 - In development both run as console processes; installing the service (requires UAC) is an owner action recorded in `OWNER_ACTIONS_MINIMAL.md`.
