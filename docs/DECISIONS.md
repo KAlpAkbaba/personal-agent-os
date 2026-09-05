@@ -3299,3 +3299,28 @@ unchanged.
   only in this document.
 - *Two low-severity items not addressed*: the self-model index takes no cross-process
   lock, and a security gate accepts `status="info"` as a pass.
+
+### ADR-0053 addendum 2 — the Experience Compiler learns the defect class that cost two owner runs (2026-09-05)
+
+Phase 8 reported honestly that it could not close this: the compiler had no pattern for
+"acceptance depends on generated wording", so both real incidents compiled as the generic
+"Recurring voice failure (incident.opened)" lesson. The claim "the lesson is already
+compiled" was therefore not true on the evidence - the lesson existed only in this
+document, which is exactly the gap between knowing something and the system knowing it.
+
+`PATTERN_ACCEPTANCE_WORDING` now exists on both compiler paths (incident and ledger
+event), with the same generalizability prior as the other named patterns.
+
+It is recognised from a **declared** class (`detail_json["defect_class"]`), not inferred
+from prose. That is the honest way round: the writer of the event states the class, and
+the compiler only decides whether the chain is complete enough to compile. A hostile or
+mistaken declaration can mislabel a lesson, but it cannot inject text - every statement
+the compiler emits is authored in the compiler, never taken from the row. A test asserts
+that an ordinary voice failure without the declaration still compiles as generic, so the
+pattern cannot quietly widen into "any voice failure".
+
+Two related fixes in the same pass, both from the security review: the generic branches
+embedded `repr(evidence_json)` / `repr(detail_json)` in the lesson's root cause, and that
+text is read aloud. They now record the blob's KEYS only. An evidence blob can carry a
+captured page, an exception message or a credential; its shape is informative, its
+content is not ours to speak.

@@ -73,7 +73,17 @@ _RESOLVED_STATUSES = frozenset({"fixed", "recovered", "closed"})
 
 PATTERN_RESEARCH_EVIDENCE_LEAK = "research_evidence_leak"
 PATTERN_DEPLOYMENT_PROVENANCE = "deployment_runtime_provenance"
+PATTERN_ACCEPTANCE_WORDING = "acceptance_depends_on_generated_wording"
 PATTERN_GENERIC = "generic"
+
+#: The declared-class key an event or incident may carry in its detail/evidence blob.
+#: This pattern is recognised from a DECLARATION rather than inferred from prose,
+#: which is the honest way round: the writer of the event states the class, and the
+#: compiler only decides whether the chain is complete enough to compile. A hostile
+#: declaration can therefore mislabel a lesson, but it cannot inject text - every
+#: statement below is authored here, never taken from the row (security review,
+#: 2026-09-05).
+DEFECT_CLASS_KEY = "defect_class"
 
 #: subsystems/components this compiler treats as "research pipeline" evidence
 #: (docs/DECISIONS.md #22: the 2026-09-04 interstitial-as-evidence incident).
@@ -109,6 +119,7 @@ _DEFAULT_OWNER_RELEVANCE = 0.5
 _GENERALIZABILITY_PRIOR = {
     PATTERN_RESEARCH_EVIDENCE_LEAK: 0.85,
     PATTERN_DEPLOYMENT_PROVENANCE: 0.85,
+    PATTERN_ACCEPTANCE_WORDING: 0.85,
     PATTERN_GENERIC: 0.35,
 }
 
@@ -131,6 +142,15 @@ _DEPLOYMENT_PROVENANCE_STATEMENT = (
     "LIVE process is actually executing — the running worker/service must "
     "assert its own module path and digest, and the verifier must compare "
     "that against the staged release, not the source tree."
+)
+
+_ACCEPTANCE_WORDING_STATEMENT = (
+    "An acceptance check must assert on the STRUCTURE a sentence was built from, "
+    "never on the sentence: the cited event ids, the job or session they belong to, "
+    "whether they resolve, and the numbers themselves. Generated natural language is "
+    "free to improve, and it does - twice a working system was failed by a check that "
+    "matched a Turkish sentence prefix, and each failure cost the owner a whole "
+    "qualification run. Paraphrasing must stay free; an unsupported claim must not."
 )
 
 # ------------------------------------------------------------- scoring weights
@@ -291,6 +311,10 @@ class LessonCandidate:
 def _classify_incident(incident: Incident) -> tuple[str, dict[str, Any]]:
     evidence = incident.evidence_json or {}
 
+    declared = evidence.get(DEFECT_CLASS_KEY)
+    if declared == PATTERN_ACCEPTANCE_WORDING:
+        return PATTERN_ACCEPTANCE_WORDING, {"failed_check": evidence.get("failed_check")}
+
     if incident.component in _RESEARCH_COMPONENTS:
         rejected = evidence.get("rejected_by_reason") or evidence.get("rejected") or {}
         reason = evidence.get("dominant_rejection_reason") or _dominant_reason(
@@ -346,6 +370,11 @@ def _build_incident_lesson(incident: Incident) -> LessonCandidate | None:
             "an eligibility/page-validity check ran against them."
         )
         scope = "research"
+    elif pattern == PATTERN_ACCEPTANCE_WORDING:
+        title = "Acceptance evidence must be structural, not a paraphrase"
+        statement = _ACCEPTANCE_WORDING_STATEMENT
+        root_cause = _acceptance_root_cause(extra.get("failed_check"), incident.component)
+        scope = "qualification"
     elif pattern == PATTERN_DEPLOYMENT_PROVENANCE:
         title = "Runtime provenance must be independently verified"
         statement = _DEPLOYMENT_PROVENANCE_STATEMENT
@@ -361,7 +390,9 @@ def _build_incident_lesson(incident: Incident) -> LessonCandidate | None:
             "a resolution; the specific mechanism is not yet well enough understood to "
             "generalize beyond 'investigate before assuming this recurs the same way'."
         )
-        root_cause = f"Incident evidence: {incident.evidence_json!r}"[:2000]
+        # Keys only. The blob can carry a captured page, an exception message or a
+        # credential, and this text is read aloud (security review, 2026-09-05).
+        root_cause = "Incident evidence keys: " + _key_list(incident.evidence_json)
         scope = incident.component or "global"
 
     return LessonCandidate(
@@ -380,6 +411,29 @@ def _build_incident_lesson(incident: Incident) -> LessonCandidate | None:
         risk_overgeneralization=risk,
         source_ref=f"incident:{incident.id}:{pattern}",
         detail={"component": incident.component, "incident_status": incident.status, **extra},
+    )
+
+
+def _key_list(blob: Any, *, limit: int = 12) -> str:
+    """The SHAPE of an evidence blob, never its content."""
+    if not isinstance(blob, dict) or not blob:
+        return "none recorded"
+    keys = sorted(str(k)[:40] for k in blob)[:limit]
+    return ", ".join(keys) or "none recorded"
+
+
+def _acceptance_root_cause(failed_check: Any, where: str | None) -> str:
+    """Names the check that failed, bounded - never the generated sentence itself."""
+    subject = (str(where) if where else "a qualification harness").strip()[:120]
+    if failed_check:
+        return (
+            f"{subject} gated acceptance on generated natural language "
+            f"({str(failed_check).strip()[:120]}), so improving the wording failed a "
+            "system that was behaving correctly."
+        )
+    return (
+        f"{subject} gated acceptance on generated natural language, so improving the "
+        "wording failed a system that was behaving correctly."
     )
 
 
@@ -408,6 +462,10 @@ def _find_resolution_event(session: Session, row: ActivityEventRow) -> ActivityE
 
 
 def _classify_ledger_failure(session: Session, row: ActivityEventRow) -> tuple[str, dict[str, Any]]:
+    detail = row.detail_json or {}
+    if detail.get(DEFECT_CLASS_KEY) == PATTERN_ACCEPTANCE_WORDING:
+        return PATTERN_ACCEPTANCE_WORDING, {"failed_check": detail.get("failed_check")}
+
     if row.subsystem in _RESEARCH_COMPONENTS and row.research_job_id is not None:
         companions = ledger_service.query(session, research_job_id=row.research_job_id, limit=50)
         for companion in companions:
@@ -464,6 +522,11 @@ def _build_ledger_lesson(
             f"eligibility check ran; the run then failed with '{row.result or row.status}'."
         )
         scope = "research"
+    elif pattern == PATTERN_ACCEPTANCE_WORDING:
+        title = "Acceptance evidence must be structural, not a paraphrase"
+        statement = _ACCEPTANCE_WORDING_STATEMENT
+        root_cause = _acceptance_root_cause(extra.get("failed_check"), row.module or row.subsystem)
+        scope = "qualification"
     else:
         title = f"Recurring {row.subsystem} failure ({row.event_type})"
         statement = (
@@ -472,7 +535,7 @@ def _build_ledger_lesson(
             "understood to generalize beyond 'investigate before assuming this recurs the "
             "same way'."
         )
-        root_cause = f"Event detail: {row.detail_json!r}"[:2000]
+        root_cause = "Event detail keys: " + _key_list(row.detail_json)
         scope = row.subsystem
 
     return LessonCandidate(
@@ -707,6 +770,7 @@ def compile_lessons(
 __all__ = [
     "AUTO_PROMOTE_SCORE_THRESHOLD",
     "DEFAULT_LOOKBACK",
+    "PATTERN_ACCEPTANCE_WORDING",
     "PATTERN_DEPLOYMENT_PROVENANCE",
     "PATTERN_GENERIC",
     "PATTERN_RESEARCH_EVIDENCE_LEAK",

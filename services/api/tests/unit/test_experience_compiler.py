@@ -28,6 +28,7 @@ from sqlalchemy.pool import StaticPool
 from app.experience import compiler as experience_compiler
 from app.experience.compiler import (
     AUTO_PROMOTE_SCORE_THRESHOLD,
+    PATTERN_ACCEPTANCE_WORDING,
     PATTERN_DEPLOYMENT_PROVENANCE,
     PATTERN_GENERIC,
     PATTERN_RESEARCH_EVIDENCE_LEAK,
@@ -42,6 +43,7 @@ from app.experience.models import (
 )
 from app.ledger import service as ledger_service
 from app.ledger.models import ActivityEventRow
+from app.ledger.service import ActivityEvent
 from app.memory.embedding import DeterministicEmbedder
 from app.memory.models import (
     Entity,
@@ -397,3 +399,120 @@ def test_recompile_is_stable_and_does_not_duplicate_rows(session):
     experience_compiler.compile_lessons(session, embedder=EMBEDDER, now=NOW)
 
     assert len(_lessons(session)) == 1
+
+
+# ------------------------------------- the defect class that cost two owner runs
+
+
+def _wording_failure(session, *, occurred_at, source_ref, detail=None):
+    """The shape the two REAL incidents had in the Phase 8 lifecycle run."""
+    return ledger_service.record(
+        session,
+        ActivityEvent(
+            event_type="incident.opened",
+            subsystem="voice",
+            action="qualification.wording_gate_failed",
+            factual_summary=(
+                "Calisan bir sistem, brifing daha kisa ifade edildigi icin cumle "
+                "onekini esleyen kabul kontrolunde basarisiz oldu."
+            ),
+            status="failed",
+            severity="warning",
+            production_state="n/a",
+            module="scripts/voice/owner-explain.ps1",
+            occurred_at=occurred_at,
+            source="backfill",
+            source_ref=source_ref,
+            detail_json=(
+                {
+                    "adr": "ADR-0051 addendum 4",
+                    "defect_class": "acceptance_depends_on_generated_wording",
+                    "failed_check": "speech_head -like <turkish sentence prefix>",
+                    "cost": "one owner qualification run",
+                }
+                if detail is None
+                else detail
+            ),
+        ),
+    )
+
+
+def _voice_recovered(session, *, occurred_at, source_ref):
+    return ledger_service.record(
+        session,
+        ActivityEvent(
+            event_type="voice.explained",
+            subsystem="voice",
+            action="qualification.verify_only_passed",
+            factual_summary="Oturum yapisal provenance uzerinden yeniden dogrulandi.",
+            status="completed",
+            severity="info",
+            production_state="n/a",
+            occurred_at=occurred_at,
+            source="backfill",
+            source_ref=source_ref,
+        ),
+    )
+
+
+def test_the_acceptance_wording_defect_compiles_as_its_own_lesson(session):
+    """Before this pattern existed, both real incidents compiled as the GENERIC
+    "Recurring voice failure (incident.opened)" lesson - so the system could not
+    answer "ne ogrendin?" about the defect class that cost the owner two
+    qualification runs. The lesson lived only in docs/DECISIONS.md."""
+    _wording_failure(session, occurred_at=NOW - timedelta(days=1), source_ref="adr2")
+    _wording_failure(session, occurred_at=NOW - timedelta(hours=4), source_ref="adr4")
+    _voice_recovered(session, occurred_at=NOW - timedelta(hours=1), source_ref="adr4:verify")
+    session.commit()
+
+    candidates = experience_compiler.compile_lessons(session, embedder=EMBEDDER, now=NOW)
+
+    named = [c for c in candidates if c.pattern == PATTERN_ACCEPTANCE_WORDING]
+    assert named, f"expected the named pattern, got {[c.pattern for c in candidates]}"
+    lesson = named[0]
+    assert lesson.title == "Acceptance evidence must be structural, not a paraphrase"
+    assert lesson.scope == "qualification"
+    assert "structure" in lesson.statement.lower()
+    # it names the check that failed, never the generated sentence it matched
+    assert "speech_head" in lesson.root_cause
+    assert "Efendim" not in lesson.root_cause
+    assert not any(c.pattern == PATTERN_GENERIC for c in candidates), (
+        "the specific pattern must win over the generic fallback"
+    )
+
+
+def test_an_undeclared_voice_failure_is_not_swept_into_the_pattern(session):
+    """It is recognised from a DECLARED class, so an ordinary voice failure that
+    happens to look similar must still compile as generic."""
+    _wording_failure(
+        session,
+        occurred_at=NOW - timedelta(days=1),
+        source_ref="plain",
+        detail={"note": "unrelated"},
+    )
+    _voice_recovered(session, occurred_at=NOW - timedelta(hours=1), source_ref="plain:ok")
+    session.commit()
+
+    candidates = experience_compiler.compile_lessons(session, embedder=EMBEDDER, now=NOW)
+
+    assert candidates and all(c.pattern == PATTERN_GENERIC for c in candidates)
+
+
+def test_a_generic_lesson_never_reads_an_evidence_blob_aloud(session):
+    """The generic branch embedded repr(detail_json) in the root cause, and that text
+    is spoken verbatim. Only the SHAPE survives now (security review, 2026-09-05)."""
+    literal = "AKIA" + "ABCDEFGHIJKLMNOP"
+    _wording_failure(
+        session,
+        occurred_at=NOW - timedelta(days=1),
+        source_ref="blob",
+        detail={"note": f"token {literal} leaked here", "other": 1},
+    )
+    _voice_recovered(session, occurred_at=NOW - timedelta(hours=1), source_ref="blob:ok")
+    session.commit()
+
+    candidates = experience_compiler.compile_lessons(session, embedder=EMBEDDER, now=NOW)
+
+    root_causes = " ".join(c.root_cause for c in candidates)
+    assert literal not in root_causes
+    assert "note" in root_causes and "other" in root_causes  # keys survive, values do not
