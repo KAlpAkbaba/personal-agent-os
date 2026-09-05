@@ -3324,3 +3324,62 @@ embedded `repr(evidence_json)` / `repr(detail_json)` in the lesson's root cause,
 text is read aloud. They now record the blob's KEYS only. An evidence blob can carry a
 captured page, an exception message or a credential; its shape is informative, its
 content is not ours to speak.
+
+## ADR-0054 — Rotating the owner credential of a DEPLOYED Cloud Core (2026-09-05)
+
+Status: Accepted
+
+Context: the owner lost the Cloud Owner Credential. `app.identity.recover --rotate` is the
+only supported reissue path — deliberately not an API operation, because a "forgot my
+credential" endpoint is by construction an unauthenticated way to mint owner authority
+(`/v1/identity/bootstrap` returns 409 "use the host recovery path" once a credential
+exists). Its authorization is filesystem access to the identity root.
+
+The existing `scripts\rotate-owner-credential.ps1` runs that tool LOCALLY, in
+`services\api`, where the identity root resolves to `services/api/var/identity` — the DEV
+root. When the live Cloud Core is the deployed host, that script rotates a root the API
+never reads: verification against the remote core then fails, and its `finally` clears the
+replacement. The rotation has committed and the new credential is gone.
+
+Decisions:
+
+1. **Deployed rotation runs inside the deployed container**, over Tailscale SSH:
+   `docker exec pagentos-prod-api /srv/pagentos/.venv/bin/python -m app.identity.recover
+   --rotate --json`, against the durable identity root (ADR-0027). The venv interpreter is
+   named explicitly; the image's bare `python` has no site-packages and dies on `import
+   structlog` before it can reach the root. `scripts/cloud/rotate-cloud-owner-credential.ps1`
+   is that path.
+2. **The replacement is captured before anything that can fail.** It is written to the local
+   DPAPI store as the FIRST action after parsing, then verified. This is not theoretical: on
+   2026-09-05 the first real run of this script rotated production successfully and then
+   threw on the very next statement, because it called `icacls` by bare name and a spawned
+   non-interactive PowerShell here does not inherit a usable PATH. The `finally` cleared the
+   credential. A 256-bit secret that now guarded production had been generated, shown to
+   nobody, and lost; the owner had to rotate again. Every line between "the secret exists"
+   and "the secret is durably captured" is a line that can lose it, so there are none.
+3. **Hardening the store is best effort, never fatal.** DPAPI already makes the bytes
+   useless to another account; failing to also strip ACL inheritance warns and continues.
+4. **The rotation path never prints the credential.** It goes to the DPAPI store and nowhere
+   else, so an agent can perform the rotation without the plaintext entering a transcript,
+   a log, or a captured tool result. Revealing it is a separate, explicitly requested mode
+   (`-ShowStoredCredential`) that refuses to run under PowerShell transcription. That
+   separation is what makes "at most one owner action" possible here.
+5. **A read-only diagnostic must not require a healthy API.** `-StatusOnly` proves the whole
+   remote path — SSH, `docker exec`, the interpreter, the single-JSON contract — and reports
+   what a rotation would do, while the Cloud Core is down. Requiring health to *look* was a
+   defect the tests found: a diagnostic that refuses to run precisely when things are broken
+   is one you cannot use. Health remains REQUIRED to rotate.
+6. **What is proven, and what is not.** The script asserts `rotations` advanced by exactly
+   one, `created_at` is unchanged and the root path is unchanged — a rotation, not a second
+   owner — and each is a hard stop, not a warning. It performs a real owner-auth exchange
+   with the new credential, and a negative control proving a non-matching credential is
+   refused 401, so a success means the hash matched rather than the endpoint accepting
+   anything credential-shaped. When the old credential was LOST it cannot be presented, and
+   the script says the check was skipped rather than reporting a pass it did not perform.
+
+Consequences: `scripts/tests/cloud-owner-rotation.tests.ps1` (26 assertions, fake ssh, no
+network) pins the capture ordering, the absolute `icacls` path, the identity invariants and
+the "never printed outside the reveal mode" property. Deliberately not changed:
+`scripts\rotate-owner-credential.ps1`, which remains correct for a local dev root; it now
+has a sibling for the deployed case rather than a mode flag, because the two differ in
+authorization, transport and post-steps.
