@@ -179,11 +179,19 @@ Two rules with a history behind them:
 ## 9. Open items
 
 * ~~The device-side local-perception client does not exist yet.~~ Built: `apps/web/app/lib/eye/`
-  (ADR-0058). The frame-never-escapes property is a closure boundary in `perception.ts`
-  (only `BrowserFrameSource.capture()` ever touches raw pixels, and its return value is
-  reduced to numbers before it can leave the function that called it), and disable-immediacy
+  (ADR-0058). The frame-never-escapes property is **structural**, not a convention the
+  caller has to keep: `FrameSource.sample(reduce)` takes the reducer in and returns only a
+  108-number luminance grid, so the pixel buffer is a local inside one synchronous block and
+  there is no signature anywhere in the client through which a frame can leave its source.
+  (It began as `capture()` returning `{data, width, height}`, which was safe as written but
+  made the guarantee depend on every future caller behaving; the docstring claimed more than
+  the code enforced, and in this file of all files that gap had to close.) Disable-immediacy
   is proven in `apps/web/tests/eye/perception.test.ts`, including the reentrant mid-tick
   race and an already-in-flight observation POST.
+* A camera disable that FAILS is now visible: it lands on the audit record and publishes a
+  critical `agent.error` on the presence channel, so the Core can say the camera did not
+  close. It used to be a debug log, which is the wrong place for a privacy control that did
+  not take effect.
 * Display-off has its own separate qualification, deliberately not folded into the main M18
   owner run, because a wrong inference there interrupts unrelated owner work.
 * Owner voice identification is not built. When it is, §2's rule is the acceptance criterion.
