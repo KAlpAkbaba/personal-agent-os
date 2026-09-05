@@ -32,6 +32,7 @@ from app.routines import service as routines_service
 from app.routines.actions import ACTION_KINDS, InvalidActionDescriptor
 from app.routines.conditions import CONDITION_KINDS, InvalidCondition, RoutineConditionContext
 from app.routines.models import ROUTINE_STATUSES, TRIGGER_KINDS, Routine, RoutineFiring
+from app.routines.presence_link import SOURCE_CALLER, resolve_owner_present
 from app.routines.state import IllegalRoutineTransition
 from app.routines.triggers import PRESENCE_TRIGGER_EVENTS, InvalidTrigger
 
@@ -157,8 +158,20 @@ class ConditionContextIn(BaseModel):
     policy_permissions: dict[str, bool] = Field(default_factory=dict)
 
     def to_context(self) -> RoutineConditionContext:
+        """Build the evaluation context, resolving presence from the engine that knows it.
+
+        A caller may still assert ``owner_present`` - some genuinely know something the
+        camera does not - but the assertion is labelled as theirs. When they say nothing,
+        the Presence Engine answers, and "stale" resolves to unknown rather than to a
+        boolean (app.routines.presence_link).
+        """
+        if self.owner_present is None:
+            owner_present, source = resolve_owner_present()
+        else:
+            owner_present, source = self.owner_present, SOURCE_CALLER
         return RoutineConditionContext(
-            owner_present=self.owner_present,
+            owner_present=owner_present,
+            owner_present_source=source,
             quiet_hours_active=self.quiet_hours_active,
             display_state=self.display_state,
             active_task_present=self.active_task_present,

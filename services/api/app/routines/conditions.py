@@ -50,6 +50,10 @@ class RoutineConditionContext:
     fails every condition it declares, which is the safe direction (module docstring)."""
 
     owner_present: bool | None = None
+    #: Where ``owner_present`` came from - see app.routines.presence_link. A condition that
+    #: passed on a caller's assertion about a room the caller cannot see must be
+    #: distinguishable, afterwards, from one that passed on real perception.
+    owner_present_source: str = "unknown"
     quiet_hours_active: bool | None = None
     display_state: str | None = None
     #: whether the owner currently has some other active task/goal running.
@@ -76,11 +80,15 @@ def _eval_owner_present(
     detail: dict[str, Any], context: RoutineConditionContext
 ) -> tuple[bool, str]:
     required = bool(detail.get("required", True))
+    source = context.owner_present_source or "unknown"
     if context.owner_present is None:
-        return False, "owner_presence_unknown"
+        # "We do not know" is not "the owner is away". The source says WHY it is unknown -
+        # never observed, or observed and aged out - which is the difference between a
+        # camera that was never enabled and one that stopped reporting.
+        return False, f"owner_presence_unknown ({source})"
     if context.owner_present == required:
-        return True, "owner_present_matched"
-    return False, f"owner_present={context.owner_present}, required={required}"
+        return True, f"owner_present_matched ({source})"
+    return False, f"owner_present={context.owner_present}, required={required} ({source})"
 
 
 def _eval_quiet_hours(detail: dict[str, Any], context: RoutineConditionContext) -> tuple[bool, str]:

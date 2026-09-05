@@ -34,7 +34,11 @@ def test_validate_condition_normalizes_missing_detail() -> None:
 def test_owner_present_fails_closed_when_unknown() -> None:
     passed, reason = evaluate_condition("owner_present", {}, RoutineConditionContext())
     assert passed is False
-    assert reason == "owner_presence_unknown"
+    # The reason also names WHY it is unknown (never observed / stale / a caller's claim),
+    # because a routine's skip record should distinguish a camera that was never enabled
+    # from one that stopped reporting - see app.routines.presence_link.
+    assert reason.startswith("owner_presence_unknown")
+    assert "unknown" in reason
 
 
 def test_owner_present_passes_when_matching() -> None:
