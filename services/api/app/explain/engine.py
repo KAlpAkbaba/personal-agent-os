@@ -1339,6 +1339,17 @@ def explain(
             executive.append(Statement("Dünya modelim şu anda okunamıyor.", LABEL_UNCERTAINTY, ()))
         else:
             world_facts = [f for f in (snapshot.get("facts") or []) if isinstance(f, dict)]
+            # Register what this answer rests on. Attaching a ref to a Statement is not the
+            # same as citing it: only add_refs puts it in the briefing's evidence, which is
+            # what provenance and the routing record read. Three branches attached refs and
+            # cited nothing, so the M17 production check found empty evidence behind true
+            # sentences (2026-09-05).
+            add_refs(
+                ({"kind": "world_snapshot", "ref": str(snapshot.get("observed_at") or "now")},)
+            )
+            add_refs(
+                tuple({"kind": "world_fact", "ref": str(f.get("key"))} for f in world_facts[:12])
+            )
             uncertainties = [
                 u for u in (snapshot.get("uncertainties") or []) if isinstance(u, dict)
             ]
@@ -1422,6 +1433,10 @@ def explain(
             )
         else:
             areas = sorted({str(m.get("owner_area") or "") for m in modules if m.get("owner_area")})
+            add_refs(({"kind": "code_index", "ref": "code_modules"},))
+            add_refs(
+                tuple({"kind": "code_module", "ref": str(m.get("module_id"))} for m in modules)
+            )
             executive.append(
                 Statement(
                     f"Efendim, kendi kodumdan {cardinal(total)} modül tanıyorum"
@@ -1471,6 +1486,14 @@ def explain(
             )
         else:
             ref = {"kind": "authority_policy", "ref": "app.evolution.authority"}
+            add_refs((ref,))
+            add_refs(
+                tuple(
+                    {"kind": "root_policy", "ref": str(item.get("policy_id"))}
+                    for item in (policy.get("root_policies") or [])[:8]
+                )
+            )
+            add_refs(tuple(_opportunity_ref(o) for o in shadow[:3]))
             executive.append(Statement("Hayır efendim, canlıya kendim alamam.", LABEL_FACT, (ref,)))
             executive.append(
                 Statement(
