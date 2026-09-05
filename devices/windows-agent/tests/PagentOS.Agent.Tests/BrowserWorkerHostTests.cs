@@ -484,6 +484,12 @@ public sealed class BrowserWorkerHostTests : IDisposable
     public async Task A_result_carrying_a_forbidden_key_at_any_depth_is_refused_with_security_scope_error(string key)
     {
         await using var host = NewHost();
+        // Start the worker BEFORE the measured request. The lazy start comes off the top
+        // of the request budget by design (see the navigate test), so on a loaded CI runner
+        // the FIRST case of a theory could spend its whole ten seconds starting and be
+        // answered - correctly - as a timeout, failing a test that is about forbidden keys
+        // and not about start latency. Start latency has its own test (2026-09-05).
+        await host.StartAsync(CancellationToken.None);
 
         var ex = await Assert.ThrowsAsync<CapabilityException>(() => Exec(
             host, BrowserCapabilities.Extract, Payload("forbidden", ("key", key))));
@@ -499,6 +505,12 @@ public sealed class BrowserWorkerHostTests : IDisposable
     public async Task A_forbidden_key_inside_nested_arrays_of_objects_is_still_refused(string key)
     {
         await using var host = NewHost();
+        // Start the worker BEFORE the measured request. The lazy start comes off the top
+        // of the request budget by design (see the navigate test), so on a loaded CI runner
+        // the FIRST case of a theory could spend its whole ten seconds starting and be
+        // answered - correctly - as a timeout, failing a test that is about forbidden keys
+        // and not about start latency. Start latency has its own test (2026-09-05).
+        await host.StartAsync(CancellationToken.None);
 
         var ex = await Assert.ThrowsAsync<CapabilityException>(() => Exec(
             host, BrowserCapabilities.Extract, Payload("forbidden_nested", ("key", key))));
@@ -518,6 +530,12 @@ public sealed class BrowserWorkerHostTests : IDisposable
     public async Task The_contracts_own_result_vocabulary_passes_the_forbidden_key_scan(string key)
     {
         await using var host = NewHost();
+        // Start the worker BEFORE the measured request. The lazy start comes off the top
+        // of the request budget by design (see the navigate test), so on a loaded CI runner
+        // the FIRST case of a theory could spend its whole ten seconds starting and be
+        // answered - correctly - as a timeout, failing a test that is about forbidden keys
+        // and not about start latency. Start latency has its own test (2026-09-05).
+        await host.StartAsync(CancellationToken.None);
 
         var result = await Exec(host, BrowserCapabilities.Extract, Payload("forbidden", ("key", key)));
 
