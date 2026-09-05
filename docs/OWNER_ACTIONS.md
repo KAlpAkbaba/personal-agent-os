@@ -811,6 +811,15 @@ make.
 
 ---
 
+## Blocking CI only (not M18)
+
+- **GitHub Actions cannot start any job** (2026-09-06, run 33997191892): *"The job was not
+  started because recent account payments have failed or your spending limit needs to be
+  increased."* Every job refused in two seconds; the workflow file is unchanged since the
+  last green run (`e5b3346`). Fix under GitHub → Settings → Billing & plans, then
+  `gh run rerun 33997191892`. Until then CI is not a gate; the local gates on the same
+  commits are green (API 3401 unit tests, web 420, PowerShell 71 scripts, Windows agent).
+
 ## Deferred, not blocking
 
 - Moving the Docker disk image off `C:` (that drive is nearly full). Recommended, not urgent.
