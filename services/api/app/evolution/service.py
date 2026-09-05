@@ -831,8 +831,8 @@ class EvolutionService:
             )
         tier = RiskTier(int(risk_tier))
         if tier >= SECOND_CONFIRMATION_FLOOR and not confirm_high_risk:
-            reasons = (opportunity.get("detail") or {}).get("risk_assessment", {}).get(
-                "reasons", []
+            reasons = (
+                (opportunity.get("detail") or {}).get("risk_assessment", {}).get("reasons", [])
             )
             raise AuthorityError(
                 f"seviye {int(tier)} ({tier.name.lower()}) bir sürüm için ikinci, açık "
@@ -883,16 +883,49 @@ class EvolutionService:
         wait here. Everything in ``awaiting_approval`` is complete, tested and
         explainable — and none of it is running in production.
         """
-        awaiting = self.backlog.pending_owner(limit=limit)
+        awaiting = [self._with_risk(row) for row in self.backlog.pending_owner(limit=limit)]
         return {
             "awaiting_approval": awaiting,
             "count": len(awaiting),
             "action": "POST /v1/evolution/opportunities/{opportunity_id}/approve",
             "note": (
-                "Nothing here is deployed. Owner approval is the only transition "
-                "out of shadow_ready, and no system or lab actor can perform it."
+                "Nothing here is deployed. Every transition out of shadow_ready needs an "
+                "authenticated owner capability, and no system or lab actor can perform "
+                "one; a release at risk tier "
+                f"{int(SECOND_CONFIRMATION_FLOOR)} or above needs a second, explicit "
+                "confirmation on top of that."
             ),
+            "second_confirmation_floor": int(SECOND_CONFIRMATION_FLOOR),
             "evolution_version": EVOLUTION_VERSION,
+        }
+
+    @staticmethod
+    def _with_risk(row: dict[str, Any]) -> dict[str, Any]:
+        """Surface the risk tier alongside the candidate.
+
+        The tier is the single most decision-relevant fact for an owner deciding whether
+        to authorise a release, and it was buried in ``detail`` where no reader would find
+        it. ``None`` when it has never been derived - which is itself the answer, and the
+        Approval Center says so rather than guessing a tier.
+        """
+        detail = row.get("detail") or {}
+        raw = detail.get("risk_tier")
+        if raw is None:
+            return {
+                **row,
+                "risk_tier": None,
+                "risk_tier_label": None,
+                "requires_second_confirmation": None,
+                "risk_reasons": [],
+            }
+        tier = RiskTier(int(raw))
+        assessment = detail.get("risk_assessment") or {}
+        return {
+            **row,
+            "risk_tier": int(tier),
+            "risk_tier_label": tier.name.lower(),
+            "requires_second_confirmation": tier >= SECOND_CONFIRMATION_FLOOR,
+            "risk_reasons": list(assessment.get("reasons") or []),
         }
 
     def policy(self) -> dict[str, Any]:

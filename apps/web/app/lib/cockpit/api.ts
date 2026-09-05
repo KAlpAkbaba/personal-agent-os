@@ -103,6 +103,15 @@ export type Opportunity = {
   candidate_ref: string | null;
   approved_at: string | null;
   updated_at: string | null;
+  /**
+   * Risk tier 1..5, derived server-side from what the change actually touches,
+   * or `null` when it was never derived. `null` is a real answer ("not
+   * assessed") and is rendered as one — never as a guessed tier.
+   */
+  risk_tier?: number | null;
+  risk_tier_label?: string | null;
+  requires_second_confirmation?: boolean | null;
+  risk_reasons?: string[];
 };
 
 export const fetchOpportunities = () =>
@@ -110,7 +119,13 @@ export const fetchOpportunities = () =>
     arrayAt<Opportunity>(raw, "opportunities"),
   );
 
-export type ShadowReady = { awaiting_approval: Opportunity[]; count: number; note: string };
+export type ShadowReady = {
+  awaiting_approval: Opportunity[];
+  count: number;
+  note: string;
+  /** The tier at and above which the server demands a second confirmation. */
+  second_confirmation_floor: number | null;
+};
 
 export const fetchShadowReady = () =>
   load<ShadowReady>("/v1/evolution/shadow-ready?limit=50", (raw) => {
@@ -119,6 +134,8 @@ export const fetchShadowReady = () =>
       awaiting_approval: arrayAt<Opportunity>(raw, "awaiting_approval"),
       count: typeof o.count === "number" ? o.count : 0,
       note: typeof o.note === "string" ? o.note : "",
+      second_confirmation_floor:
+        typeof o.second_confirmation_floor === "number" ? o.second_confirmation_floor : null,
     };
   });
 

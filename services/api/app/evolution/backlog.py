@@ -229,9 +229,7 @@ LEGAL_TRANSITIONS: Final[dict[OpportunityStatus, frozenset[OpportunityStatus]]] 
     ),
     #: A deployment in flight can only finish, or fail. It can never jump to LIVE: LIVE is
     #: something VERIFYING concludes, not something DEPLOYING announces.
-    OpportunityStatus.DEPLOYING: frozenset(
-        {OpportunityStatus.VERIFYING, OpportunityStatus.FAILED}
-    ),
+    OpportunityStatus.DEPLOYING: frozenset({OpportunityStatus.VERIFYING, OpportunityStatus.FAILED}),
     OpportunityStatus.VERIFYING: frozenset({OpportunityStatus.LIVE, OpportunityStatus.FAILED}),
     #: The only way out of a failed release is backwards. Not to LIVE, not to a retry that
     #: silently reuses the half-applied state.
@@ -305,7 +303,17 @@ LAB_STATUSES: Final[tuple[OpportunityStatus, ...]] = (
 )
 
 #: What the owner is waiting on.
-PENDING_OWNER_STATUSES: Final[tuple[OpportunityStatus, ...]] = (OpportunityStatus.SHADOW_READY,)
+#: Everything that is genuinely waiting on the owner and on nothing else.
+#:
+#: OWNER_APPROVAL_REQUIRED was added to the lifecycle in M18 and means precisely this,
+#: but was not listed here - so a candidate that had asked for the owner explicitly was
+#: the one thing the Approval Center could not see. SHADOW_READY stays: a candidate that
+#: has passed its gates is waiting on the owner whether or not anything has formally
+#: asked yet.
+PENDING_OWNER_STATUSES: Final[tuple[OpportunityStatus, ...]] = (
+    OpportunityStatus.SHADOW_READY,
+    OpportunityStatus.OWNER_APPROVAL_REQUIRED,
+)
 
 # --------------------------------------------------------------- evidence
 

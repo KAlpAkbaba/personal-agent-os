@@ -242,13 +242,46 @@ export function EvolutionPanel({ state }: { state: CockpitData["opportunities"] 
   );
 }
 
+/** Turkish for the lifecycle statuses the Approval Center can show. */
+const APPROVAL_STATUS_TR: Record<string, string> = {
+  shadow_ready: "gölge hazır",
+  owner_approval_required: "sahip onayı istendi",
+};
+
+/**
+ * The risk tier, stated as the server derived it.
+ *
+ * `null` means the tier was never derived, and that is said in words. A panel
+ * that filled in "seviye 1" for an unassessed candidate would be telling the
+ * owner a release is safe on no evidence at all — the one thing the Approval
+ * Center must never do.
+ */
+function riskLine(item: Opportunity, floor: number | null): string {
+  if (item.risk_tier == null) return "risk kademesi belirlenmedi";
+  const base = `risk kademesi ${item.risk_tier}`;
+  if (item.requires_second_confirmation) return `${base} · ikinci onay gerekir`;
+  if (floor != null && item.risk_tier >= floor) return `${base} · ikinci onay gerekir`;
+  return base;
+}
+
+/**
+ * The Approval Center (M18 spec §16): everything the Evolution Engine has
+ * finished and the owner has not yet answered, with the one fact that decides
+ * the answer — how risky it is — beside each one.
+ *
+ * Read-only, on purpose and permanently. The Core has no write path (ADR-0052,
+ * ADR-0053 §5): approving and authorising are owner actions on the surface that
+ * owns them, and a panel that could perform one would be a second authority
+ * surface to keep honest. This one can only show, and says where the real
+ * action lives.
+ */
 export function ShadowReadyPanel({ state }: { state: CockpitData["shadowReady"] }) {
   return (
     <Panel<ShadowReady>
       id="shadow-ready"
-      title="Gölge hazır"
+      title="Onay merkezi"
       state={state}
-      empty="Onay bekleyen aday yok."
+      empty="Sahip onayı bekleyen aday yok."
       isEmpty={(value) => value.awaiting_approval.length === 0}
       badge={(value) => `${value.awaiting_approval.length}`}
       attention={(value) => value.awaiting_approval.length > 0}
@@ -257,19 +290,44 @@ export function ShadowReadyPanel({ state }: { state: CockpitData["shadowReady"] 
         <>
           <ul>
             {value.awaiting_approval.map((item) => (
-              <li key={item.opportunity_id} data-shadow-ready={item.opportunity_id}>
+              <li
+                key={item.opportunity_id}
+                data-shadow-ready={item.opportunity_id}
+                data-approval-status={item.status}
+                data-risk-tier={item.risk_tier ?? "unknown"}
+                data-second-confirmation={
+                  item.requires_second_confirmation == null
+                    ? "unknown"
+                    : item.requires_second_confirmation
+                      ? "yes"
+                      : "no"
+                }
+              >
                 <div className="event-row">
                   <span>{item.title}</span>
+                  <span className="event-when">
+                    {APPROVAL_STATUS_TR[item.status] ?? item.status}
+                  </span>
+                </div>
+                <div className="event-row muted">
+                  <span>{riskLine(item, value.second_confirmation_floor)}</span>
                   <span className="event-when">
                     {item.scores?.composite != null ? item.scores.composite.toFixed(2) : ""}
                   </span>
                 </div>
+                {item.risk_reasons && item.risk_reasons.length > 0 && (
+                  <div className="muted" data-risk-reasons>
+                    {item.risk_reasons.slice(0, 3).join(" · ")}
+                  </div>
+                )}
               </li>
             ))}
           </ul>
-          {/* Said in words, every time: passing the gates is not being live. */}
+          {/* Said in words, every time: passing the gates is not being live, and
+              this panel cannot make it so. */}
           <p className="muted" style={{ marginTop: "0.5rem" }}>
-            Kapılarını geçti, canlıya alınmadı. Onay ayrı bir sahip işlemidir.
+            Kapılarını geçti, canlıya alınmadı. Onay ve yetkilendirme bu ekranda değil,
+            doğrulanmış sahip oturumunda yapılır.
           </p>
         </>
       )}
