@@ -37,6 +37,7 @@ from app.middleware import TraceIdMiddleware
 from app.mobile.routes import router as mobile_router
 from app.mobile.runtime import MobileRuntime
 from app.narration.routes import router as narration_router
+from app.presence.routes import router as presence_router
 from app.research.embedded_worker import EmbeddedWorkerRuntime
 from app.research.health import research_health
 from app.research.routes import router as research_router
@@ -181,6 +182,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(world_router)
     app.include_router(selfmodel_router)
     app.include_router(ledger_router)
+    app.include_router(presence_router)
 
     @app.get("/v1/system/health")
     async def system_health() -> dict[str, Any]:

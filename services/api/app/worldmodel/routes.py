@@ -32,14 +32,33 @@ def _broker_runtime(request: Request) -> Any | None:
     return getattr(request.app.state, "broker", None)
 
 
+def _presence_runtime(request: Request) -> Any | None:
+    # Same optional-injection shape as `_broker_runtime`: the process-wide
+    # presence engine (app.presence.engine.get_engine()) is the default so
+    # production wiring needs nothing extra, but a test may install its own
+    # via app.state.presence_engine (app.worldmodel.state module docstring:
+    # this module must stay read-only and never import a live singleton at
+    # module scope itself).
+    injected = getattr(request.app.state, "presence_engine", None)
+    if injected is not None:
+        return injected
+    from app.presence.engine import get_engine
+
+    return get_engine()
+
+
 async def _build_snapshot(request: Request) -> WorldSnapshot:
     artifacts = _artifacts(request)
     broker_runtime = _broker_runtime(request)
+    presence_runtime = _presence_runtime(request)
 
     def build() -> WorldSnapshot:
         with artifacts.session() as session:
             return assemble_snapshot(
-                session, settings=artifacts.settings, broker_runtime=broker_runtime
+                session,
+                settings=artifacts.settings,
+                broker_runtime=broker_runtime,
+                presence_runtime=presence_runtime,
             )
 
     return await asyncio.to_thread(build)

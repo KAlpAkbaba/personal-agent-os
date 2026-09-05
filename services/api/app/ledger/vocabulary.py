@@ -41,6 +41,8 @@ SUBSYSTEM_GOAL = "goal"
 SUBSYSTEM_SELF_MODEL = "self_model"
 SUBSYSTEM_EVOLUTION = "evolution"
 SUBSYSTEM_LEDGER = "ledger"
+#: M18 Presence Engine + Active Eye (M18_HOLOGRAPHIC_CORE_SPEC.md §1, §2).
+SUBSYSTEM_PRESENCE = "presence"
 
 SUBSYSTEMS: Final[tuple[str, ...]] = (
     SUBSYSTEM_RESEARCH,
@@ -55,6 +57,7 @@ SUBSYSTEMS: Final[tuple[str, ...]] = (
     SUBSYSTEM_SELF_MODEL,
     SUBSYSTEM_EVOLUTION,
     SUBSYSTEM_LEDGER,
+    SUBSYSTEM_PRESENCE,
 )
 
 # ------------------------------------------------------------------ statuses
@@ -156,6 +159,22 @@ EVENT_TYPE_GOAL_STEP_EXECUTED = "goal.step_executed"
 EVENT_TYPE_GOAL_ESCALATED = "goal.escalated"
 EVENT_TYPE_GOAL_ERROR = "goal.error"
 
+#: M18 Presence Engine + Active Eye (M18_HOLOGRAPHIC_CORE_SPEC.md §1, §2, §5).
+#: Only MEANINGFUL transitions get a ledger row — every raw observation does
+#: NOT (spec §5: "not every observation - do not overcollect"); the fusion
+#: engine (app.presence.engine.PresenceFusionEngine.add_observation) is the
+#: only writer, and only when its own state actually changed.
+EVENT_TYPE_PRESENCE_STATE_CHANGED = "presence.state_changed"
+#: Recorded when app.presence.greeting.evaluate_greeting returns True and the
+#: decision is acted on — the greeting's OWN cooldown accounting, not a
+#: record of the voice narration itself (that is app.routines/app.voice's
+#: concern, M18 item 3, not built by this change).
+EVENT_TYPE_PRESENCE_GREETING_DELIVERED = "presence.greeting_delivered"
+#: The Active Eye disable path (spec §2, §6) must be durable and observable;
+#: an owner action, always explicit, never inferred from observations.
+EVENT_TYPE_EYE_ENABLED = "eye.enabled"
+EVENT_TYPE_EYE_DISABLED = "eye.disabled"
+
 EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_RESEARCH_PLANNED,
     EVENT_TYPE_RESEARCH_COMPLETED,
@@ -186,6 +205,10 @@ EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_GOAL_STEP_EXECUTED,
     EVENT_TYPE_GOAL_ESCALATED,
     EVENT_TYPE_GOAL_ERROR,
+    EVENT_TYPE_PRESENCE_STATE_CHANGED,
+    EVENT_TYPE_PRESENCE_GREETING_DELIVERED,
+    EVENT_TYPE_EYE_ENABLED,
+    EVENT_TYPE_EYE_DISABLED,
 )
 
 #: Reserved for the Evolution Engine (M18): constants exist now, writers come

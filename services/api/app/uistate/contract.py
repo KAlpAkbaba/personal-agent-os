@@ -23,7 +23,12 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
-CONTRACT_VERSION = 1
+#: Bumped to 2 by the M18 Presence Engine: the vocabulary grew (owner.*,
+#: eye.*) and a new subsystem ("presence") was added. A renderer that only
+#: knows v1 states still works unmodified — it simply never sees the new
+#: ones — but ``GET /v1/ui/state/contract`` reports the true version so a
+#: renderer can tell the two vocabularies apart if it ever needs to.
+CONTRACT_VERSION = 2
 
 #: Metadata value bounds. Numbers are floats in [0, 1] except where noted; strings are
 #: short machine tokens, never prose.
@@ -51,6 +56,23 @@ class UiState(StrEnum):
     EVOLUTION_BUILDING = "evolution.building"
     EVOLUTION_TESTING = "evolution.testing"
     EVOLUTION_SHADOW_READY = "evolution.shadow_ready"
+    # --- presence and the Active Eye (M18_HOLOGRAPHIC_CORE_SPEC.md §1, §2) --
+    # Published only on a meaningful presence transition (never per
+    # observation — app.presence.engine.PresenceFusionEngine already
+    # collapses raw observations into sustained state; a renderer would
+    # otherwise be told to redraw on every camera frame). Never a claim of
+    # certainty: `intensity`/`status` on the event carry the assertion's
+    # confidence, exactly as ADR-0052 requires for every other state here.
+    OWNER_PRESENT = "owner.present"
+    OWNER_AWAY = "owner.away"
+    OWNER_RETURNED = "owner.returned"
+    OWNER_AWAKE = "owner.awake"
+    OWNER_RESTING = "owner.resting"
+    OWNER_LIKELY_ASLEEP = "owner.likely_asleep"
+    # Perception on/off is itself owner-visible state (spec §2: "Camera
+    # activity is obvious"; spec §6: the disable path must be observable).
+    EYE_ACTIVE = "eye.active"
+    EYE_DISABLED = "eye.disabled"
 
 
 UI_STATES: tuple[str, ...] = tuple(s.value for s in UiState)
@@ -69,6 +91,7 @@ SUBSYSTEMS: tuple[str, ...] = (
     "deployment",
     "ledger",
     "system",
+    "presence",
 )
 
 SEVERITIES: tuple[str, ...] = ("info", "notice", "warning", "critical")
