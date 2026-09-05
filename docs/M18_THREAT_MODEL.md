@@ -193,6 +193,15 @@ Two rules with a history behind them:
 
 ## 9. Open items
 
+* ~~The routine action dispatcher does not exist.~~ Built (ADR-0060): `app/routines/dispatch.py`
+  routes each action kind to the subsystem that owns it; a failed or refused action gets its
+  own ledger event and a `UiState.ERROR`, critical for an alarm. The wake alarm is a ramp on
+  both sides of the wire — refused at or above 0.5 start, clamped at 0.85 and reported, the
+  generated samples clamped independently, never the Windows master volume, and it always
+  stops. Display-off is built on the companion and unreachable twice over: advertised and
+  routed only behind `PAGENTOS_AGENT_DisplayPowerEnabled` (default false), and refused by
+  Cloud Core behind `DISPLAY_ACTION_QUALIFIED = False`. Neither gate knows about the other.
+
 * ~~The device-side local-perception client does not exist yet.~~ Built: `apps/web/app/lib/eye/`
   (ADR-0058). The frame-never-escapes property is **structural**, not a convention the
   caller has to keep: `FrameSource.sample(reduce)` takes the reducer in and returns only a

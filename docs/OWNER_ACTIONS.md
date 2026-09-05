@@ -21,23 +21,62 @@ Status vocabulary matches `docs/QUALIFICATION.md`: `PROVEN_REAL`, `PROVEN_PROXY`
 
 ## Now
 
-Two independent actions are ready; do them in whichever order suits the evening:
+**Item 19 — M18 in one command.** Everything before it is built, merged and proven on fakes;
+this is the only thing that cannot be proven without you: your real camera, your real room,
+and a real alarm through the real chain. Under five minutes.
 
-- **Item 10 — M13 Real Browser + Research**: release the Cloud Core, update the Windows agent
-  once (UAC), then run the first real research from the web page. Everything before it is
-  built, reviewed and proven on the local real chain (real Chrome, live Internet).
-- **Item 9 — K66 voice re-qualification** (unchanged from this morning).
-
-**Item 8 below: the combined voice-character + noise qualification session.** Your first
-real session (item 7) said: generally good, keep the architecture, target voice Arbor, and
-one real defect — the K66 microphone lets room noise drive turns. The response is on
-`main` (ADR-0043/0044): the Arbor profile through the closest supported voice, a layered
-microphone pipeline with calibration, a local speech gate and per-device profiles, owner
-modes with `Otomatik` default. It is qualified as one session, voice and noise together,
-because aggressive input processing can change conversational timing. No DSP tuning is
-asked of you; the system converges from its measurements plus your verdicts.
+Item 9 (K66 re-qualification) stays open and optional; it is not on M18's path.
 
 ---
+
+### 19. The Core, the camera, one quiet alarm — **this is the current action**
+
+Unblocks: `docs/QUALIFICATION.md` Stage 12 rows 12.1, 12.5–12.8, 12.12, 12.16, 12.17 (the
+Core renders real state; the camera indicator is truthful; a real presence transition; the
+eye actually stops; no raw camera archive; a real alarm that ramps and stops itself; the
+ledger records all of it; nothing is deployed by asking).
+
+**What you are checking.** M18 gave PagentOS a body it can be seen thinking in (`/core`), a
+camera whose only output is seven structured fields, a presence model that says
+`likely_asleep confidence=0.86` rather than a fact, and routines that act on time. Every part
+is built, merged and proven against fakes; two things need your machine: the camera sees your
+room, and the alarm rings on your speaker.
+
+**Two things happen automatically inside the command, and you should know they will:**
+
+- the deployed Cloud Core predates M18 (it has no `/v1/routines`), so the command releases it
+  once — the same transactional release as items 10 and 13: build, migrate (0017–0020),
+  recreate the api container only, health check, rollback on failure;
+- the installed Windows agent predates the alarm capability. The command checks this FIRST
+  and, if so, stops with `OWNER M18: NEEDS_AGENT_INSTALL` and prints the one install command
+  (one UAC prompt). It never installs anything itself. Run that, then rerun the command.
+
+**One command:**
+
+```powershell
+.\scripts\core\owner-m18.ps1 -OutFile m18-1.json
+```
+
+It will: probe and (once) release the Cloud Core; check the agent; start the web shell and
+wait for `/core`; then ask you to sign in at `http://localhost:3000/core`, enable the camera,
+stay in view ~30 s, leave the room for ~1 minute, come back, and say **`Gözünü kapat`** (or
+click the disable control). It watches the Presence Engine meanwhile and continues on its
+own. Then it arms a one-shot routine: ~45 s later a *quiet* alarm ramps from 5% to 40% over
+10 s, rings for 15 s and stops by itself — the ramp is enforced on the device, and nothing
+touches your master volume. Two yes/no questions at the end (did you hear it ramp and stop;
+did the Core show the camera state, your presence and the candidate awaiting approval).
+
+Expected last line: `OWNER M18: PASS`, and `m18-1.json` beside the repo — paste its `checks`
+block back here. If any check fails, paste the whole file; it names the failing assertion.
+
+**What it deliberately does not do:** turn your display off (built, gated twice, its own
+later qualification — a wrong inference there interrupts unrelated work), deploy the
+SHADOW_READY candidate (it asserts the candidate set is unchanged after the run), or store a
+single camera frame anywhere (it reads the ledger back and fails if any presence row carries
+anything but the structured summary).
+
+Speaker-verification samples (VoiceIdentity) come later and will be their own step.
+
 
 ## Queue
 
@@ -240,7 +279,11 @@ Expected last line: `REAL BROWSER SMOKE: PASS`, preceded by `live worker proven:
 If it stops with `deployment/version mismatch` or `INSTALL FAILED`, paste the message, the
 install log it names and the output of `.\scripts\verify-device-service.ps1`; do not rerun.
 
-### 18. One conversation that qualifies all of M17 - **this is the current action (2nd attempt)**
+### 18. One conversation that qualifies all of M17 - **DONE (2026-09-05, 2nd attempt: OWNER EXPLAIN: PASS, all six cognitive paths)**
+
+Result: Stage 11 is `PROVEN_REAL` and M17 is closed. Do not rerun.
+
+#### (record) what item 18 asked for
 
 The first attempt on 2026-09-05 failed, and it was worth failing: five of your six questions
 were answered correctly, one crashed, and one never reached the tool at all. Four of the

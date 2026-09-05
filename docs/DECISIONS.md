@@ -3866,3 +3866,62 @@ deployment lives outside the engine); it mints no authority of its own and is ex
 authorised as the `Authority` object its caller hands it. No real deployment backend exists
 yet and none was run against the real Hetzner Cloud Core — everything above is proven against
 fakes only.
+
+## ADR-0060 — M18 routine dispatch: a routine that decides must also act, visibly (2026-09-06)
+
+Status: Accepted
+
+Context: after ADR-0057 a routine could be created, become due, pass its conditions, write a
+`RoutineFiring` and a `routine.executed` ledger row — and then nothing happened. The only
+`RoutineDispatcher` was `NoopDispatcher`, and there was no device capability an alarm could
+have reached anyway. Worse, the wiring was such that a real dispatcher could have been written
+and still never called: `evaluate_due` defaulted to `NoopDispatcher()` and the HTTP route never
+passed one. That is the "built, tested, never wired" class this project has hit before, and it
+was found by the agent building the dispatcher rather than by any test.
+
+This ADR was written on merge. The branch that did the work cited an "ADR-0058" it never
+wrote, and 0058 on main is the Active Eye client; its citations were re-pointed here.
+
+Decisions:
+
+1. **One real dispatcher, two ports.** `app/routines/dispatch.py::ActionDispatcher` routes each
+   of the five action kinds to the subsystem that owns it through `BriefingPort` (narrate over
+   the live realtime companion) and `DeviceActionPort` (one device command over the proven
+   broker path — the same `select_device` → `DeviceCommandClient` path research uses). Every
+   test fakes the two ports; nothing in the suite plays audio, opens a browser or touches a
+   display. The dispatcher is registered from `app.main`'s lifespan, and `evaluate_due` reads
+   the registry, falling back to `NoopDispatcher` only when nothing is registered.
+2. **A failed or refused action is visible in three places.** The firing's own
+   `dispatch_results`/`dispatch_status` columns (migration `0020_routine_dispatch`), a dedicated
+   `routine.action_failed` / `routine.action_refused` ledger event per action — never only a
+   field inside `routine.executed`'s JSON — and a `UiState.ERROR` publish, critical for an
+   alarm and warning for everything else. A wake-up that did not fire is worse than a briefing
+   that did not.
+3. **The greeting cooldown starts after delivery, and only then.** `voice_briefing`'s success
+   is the sideband push's own return value — not "a session existed", not "the text was
+   queued". The cooldown (`record_greeting_delivered`, through the one seam
+   `app/routines/presence_link.py`) starts only when a `greeting_allowed` condition passed AND
+   the firing's briefing action actually succeeded. The whole `GreetingDecision` travels in the
+   condition context, opaquely, so `app/routines` still never imports `app/presence` outside
+   the seam.
+4. **The alarm is a ramp on both sides of the wire.** Cloud Core refuses a malformed wake
+   volume at creation and again at dispatch; the companion's `WakeRamp` refuses a start at or
+   above 0.5, clamps an end above 0.85 and reports the clamp, and `WakeTone` clamps the
+   generated samples to the ceiling independently — the two would have to fail together. The
+   level scales the companion's own samples and never the Windows master volume. It always
+   stops: `desktop.alarm_stop`, its own `max_duration_s` (10–1800 s), or companion shutdown.
+5. **Display-off is built and unreachable, twice.** `desktop.display_off` exists on the
+   companion (a `WM_SYSCOMMAND`/`SC_MONITORPOWER` broadcast via `SendMessageTimeout`, the only
+   operation, and a test reads the source to assert no shutdown/suspend/hibernate/logoff API
+   appears). It is advertised and routed only behind `DisplayPowerEnabled` (default false),
+   refused by service and companion otherwise; and Cloud Core refuses a routine's
+   `display_action` behind `DISPLAY_ACTION_QUALIFIED = False` until display-off has passed its
+   own separate owner qualification. Neither gate knows about the other. Media actions play
+   the exact URL the owner named through the browser family; no CAPTCHA or anti-bot handling
+   exists anywhere in the dispatcher.
+
+Consequences: `desktop.alarm_start`/`desktop.alarm_stop` are advertised unconditionally by
+the Windows agent (a companion with no render endpoint answers `dependency_unavailable`,
+retryable), so the installed agent must be updated before Stage 12.12 (a real alarm) can be
+attempted — carried by the next needed install, not a forced redeploy. `voice_briefing`,
+`media_playback` and `browser_action` execute end to end against what is already installed.
