@@ -96,9 +96,20 @@ class OpportunityStatus(StrEnum):
     TESTING = "testing"
     EVALUATING = "evaluating"
     SHADOW_READY = "shadow_ready"
+    #: The engine has finished and is ASKING. It may enter this itself - saying "I need you"
+    #: is not an act of production authority - and it may go no further alone.
+    OWNER_APPROVAL_REQUIRED = "owner_approval_required"
+    #: Legacy spelling of OWNER_AUTHORIZED. Rows carry it; it means the same thing.
     OWNER_APPROVED = "owner_approved"
+    #: The authenticated owner said yes. Only an owner actor may enter it.
+    OWNER_AUTHORIZED = "owner_authorized"
     QUALIFYING = "qualifying"
+    DEPLOYING = "deploying"
+    VERIFYING = "verifying"
     LIVE = "live"
+    #: Deployment or verification failed. The only way out is rollback.
+    FAILED = "failed"
+    ROLLING_BACK = "rolling_back"
     REJECTED = "rejected"
     SUPERSEDED = "superseded"
     QUARANTINED = "quarantined"
@@ -173,10 +184,21 @@ LEGAL_TRANSITIONS: Final[dict[OpportunityStatus, frozenset[OpportunityStatus]]] 
             OpportunityStatus.QUARANTINED,
         }
     ),
-    # The wall. The only way forward is an owner action.
+    # The wall. Asking is allowed; crossing is not.
     OpportunityStatus.SHADOW_READY: frozenset(
         {
+            OpportunityStatus.OWNER_APPROVAL_REQUIRED,
             OpportunityStatus.OWNER_APPROVED,
+            OpportunityStatus.REJECTED,
+            OpportunityStatus.QUARANTINED,
+            OpportunityStatus.SUPERSEDED,
+        }
+    ),
+    #: Waiting on the human. The engine may enter this state itself - "I am finished and I
+    #: need you" is not an act of production authority - and it may go no further alone.
+    OpportunityStatus.OWNER_APPROVAL_REQUIRED: frozenset(
+        {
+            OpportunityStatus.OWNER_AUTHORIZED,
             OpportunityStatus.REJECTED,
             OpportunityStatus.QUARANTINED,
             OpportunityStatus.SUPERSEDED,
@@ -189,13 +211,33 @@ LEGAL_TRANSITIONS: Final[dict[OpportunityStatus, frozenset[OpportunityStatus]]] 
             OpportunityStatus.QUARANTINED,
         }
     ),
+    OpportunityStatus.OWNER_AUTHORIZED: frozenset(
+        {
+            OpportunityStatus.QUALIFYING,
+            OpportunityStatus.REJECTED,
+            OpportunityStatus.QUARANTINED,
+        }
+    ),
     OpportunityStatus.QUALIFYING: frozenset(
         {
-            OpportunityStatus.LIVE,
+            OpportunityStatus.DEPLOYING,
+            OpportunityStatus.FAILED,
             OpportunityStatus.ROLLED_BACK,
             OpportunityStatus.QUARANTINED,
             OpportunityStatus.REJECTED,
         }
+    ),
+    #: A deployment in flight can only finish, or fail. It can never jump to LIVE: LIVE is
+    #: something VERIFYING concludes, not something DEPLOYING announces.
+    OpportunityStatus.DEPLOYING: frozenset(
+        {OpportunityStatus.VERIFYING, OpportunityStatus.FAILED}
+    ),
+    OpportunityStatus.VERIFYING: frozenset({OpportunityStatus.LIVE, OpportunityStatus.FAILED}),
+    #: The only way out of a failed release is backwards. Not to LIVE, not to a retry that
+    #: silently reuses the half-applied state.
+    OpportunityStatus.FAILED: frozenset({OpportunityStatus.ROLLING_BACK}),
+    OpportunityStatus.ROLLING_BACK: frozenset(
+        {OpportunityStatus.ROLLED_BACK, OpportunityStatus.QUARANTINED}
     ),
     OpportunityStatus.LIVE: frozenset(
         {OpportunityStatus.ROLLED_BACK, OpportunityStatus.SUPERSEDED}
@@ -222,7 +264,7 @@ assert set(LEGAL_TRANSITIONS) == set(OpportunityStatus), (
 
 #: Statuses only an owner action may enter.
 OWNER_ONLY_STATUSES: Final[frozenset[OpportunityStatus]] = frozenset(
-    {OpportunityStatus.OWNER_APPROVED}
+    {OpportunityStatus.OWNER_APPROVED, OpportunityStatus.OWNER_AUTHORIZED}
 )
 
 #: Statuses the lab actor may never enter — everything past the approval wall.
@@ -231,14 +273,20 @@ OWNER_ONLY_STATUSES: Final[frozenset[OpportunityStatus]] = frozenset(
 LAB_FORBIDDEN_STATUSES: Final[frozenset[OpportunityStatus]] = frozenset(
     {
         OpportunityStatus.OWNER_APPROVED,
+        OpportunityStatus.OWNER_AUTHORIZED,
         OpportunityStatus.QUALIFYING,
+        OpportunityStatus.DEPLOYING,
+        OpportunityStatus.VERIFYING,
         OpportunityStatus.LIVE,
+        OpportunityStatus.ROLLING_BACK,
         OpportunityStatus.ROLLED_BACK,
     }
 )
 
 #: Statuses requiring proof that an owner-approved release exists.
-RELEASE_REQUIRED_STATUSES: Final[frozenset[OpportunityStatus]] = frozenset({OpportunityStatus.LIVE})
+RELEASE_REQUIRED_STATUSES: Final[frozenset[OpportunityStatus]] = frozenset(
+    {OpportunityStatus.DEPLOYING, OpportunityStatus.LIVE}
+)
 
 #: Nothing leaves these.
 TERMINAL_STATUSES: Final[frozenset[OpportunityStatus]] = frozenset(

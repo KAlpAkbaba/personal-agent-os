@@ -217,6 +217,14 @@ EVENT_TYPE_EVOLUTION_QUALIFYING = "evolution.qualifying"
 EVENT_TYPE_EVOLUTION_REJECTED = "evolution.rejected"
 EVENT_TYPE_EVOLUTION_QUARANTINED = "evolution.quarantined"
 EVENT_TYPE_EVOLUTION_SUPERSEDED = "evolution.superseded"
+#: The owner-authorised release path (ADR-0055 §5, M18). A deployment the owner authorised
+#: must be reconstructable from the ledger alone - including the failures, because a release
+#: that failed and rolled back is exactly the kind of thing a later reader needs to find.
+EVENT_TYPE_EVOLUTION_OWNER_AUTHORIZED = "evolution.owner_authorized"
+EVENT_TYPE_EVOLUTION_DEPLOYING = "evolution.deploying"
+EVENT_TYPE_EVOLUTION_VERIFYING = "evolution.verifying"
+EVENT_TYPE_EVOLUTION_FAILED = "evolution.failed"
+EVENT_TYPE_EVOLUTION_ROLLING_BACK = "evolution.rolling_back"
 
 EVOLUTION_EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_EVOLUTION_IDEA_CREATED,
@@ -236,6 +244,11 @@ EVOLUTION_EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_EVOLUTION_REJECTED,
     EVENT_TYPE_EVOLUTION_QUARANTINED,
     EVENT_TYPE_EVOLUTION_SUPERSEDED,
+    EVENT_TYPE_EVOLUTION_OWNER_AUTHORIZED,
+    EVENT_TYPE_EVOLUTION_DEPLOYING,
+    EVENT_TYPE_EVOLUTION_VERIFYING,
+    EVENT_TYPE_EVOLUTION_FAILED,
+    EVENT_TYPE_EVOLUTION_ROLLING_BACK,
 )
 
 #: deployment.<component>.(released|rolled_back) for a component not among the

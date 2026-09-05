@@ -23,7 +23,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
-CONTRACT_VERSION = 1
+CONTRACT_VERSION = 2  # M18 added the room and the release path
 
 #: Metadata value bounds. Numbers are floats in [0, 1] except where noted; strings are
 #: short machine tokens, never prose.
@@ -51,6 +51,37 @@ class UiState(StrEnum):
     EVOLUTION_BUILDING = "evolution.building"
     EVOLUTION_TESTING = "evolution.testing"
     EVOLUTION_SHADOW_READY = "evolution.shadow_ready"
+
+    # --- M18. The Core stops being a picture of the assistant's own activity and starts
+    # being a picture of the ROOM as well: whether the camera is perceiving, whether the
+    # owner is there, and what the system is about to do on their behalf. Every one of
+    # these is published because something entered the state, never to make the renderer
+    # look busy (ADR-0052 §2 still holds).
+    EYE_ACTIVE = "eye.active"  # local perception is running
+    EYE_DISABLED = "eye.disabled"  # the owner turned it off, or it never started
+
+    #: Presence is PROBABILISTIC and every one of these carries a confidence. The renderer
+    #: must be able to show "likely" without the model claiming certainty it does not have.
+    OWNER_PRESENT = "owner.present"
+    OWNER_AWAY = "owner.away"
+    OWNER_RETURNED = "owner.returned"
+    OWNER_RESTING = "owner.resting"
+    OWNER_LIKELY_ASLEEP = "owner.likely_asleep"
+    OWNER_AWAKE = "owner.awake"
+
+    ROUTINE_ARMED = "routine.armed"
+    ROUTINE_TRIGGERED = "routine.triggered"
+    ALARM_TRIGGERED = "alarm.triggered"
+
+    #: The owner-authorised release path (ADR-0055). These exist so a deployment is
+    #: WATCHABLE - and so a failure visibly becomes a rollback instead of a false success.
+    RELEASE_OWNER_APPROVAL_REQUIRED = "release.owner_approval_required"
+    RELEASE_OWNER_AUTHORIZED = "release.owner_authorized"
+    RELEASE_QUALIFYING = "release.qualifying"
+    RELEASE_DEPLOYING = "release.deploying"
+    RELEASE_VERIFYING = "release.verifying"
+    RELEASE_LIVE = "release.live"
+    RELEASE_ROLLBACK = "release.rollback"
 
 
 UI_STATES: tuple[str, ...] = tuple(s.value for s in UiState)

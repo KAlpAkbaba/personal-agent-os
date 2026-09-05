@@ -453,7 +453,7 @@ def test_policy_publishes_the_whole_contract(client: TestClient) -> None:
     assert policy["evolution_version"] == EVOLUTION_VERSION == 1
 
     lifecycle = policy["lifecycle"]
-    assert lifecycle["statuses"][:10] == [
+    assert lifecycle["statuses"][:13] == [
         "idea",
         "researching",
         "design_ready",
@@ -461,24 +461,38 @@ def test_policy_publishes_the_whole_contract(client: TestClient) -> None:
         "testing",
         "evaluating",
         "shadow_ready",
+        # the owner-authorised release path (ADR-0055 §5)
+        "owner_approval_required",
         "owner_approved",
+        "owner_authorized",
         "qualifying",
-        "live",
+        "deploying",
+        "verifying",
     ]
+    assert set(lifecycle["statuses"]) >= {"live", "failed", "rolling_back"}
     assert set(lifecycle["statuses"]) >= {
         "rejected",
         "superseded",
         "quarantined",
         "rolled_back",
     }
-    assert lifecycle["owner_only_targets"] == ["owner_approved"]
-    assert lifecycle["release_required_targets"] == ["live"]
+        # ADR-0055 §5: the release path added states, and every one of them is on the
+    # far side of the wall. The lab may ask for the owner and go no further.
+    assert set(lifecycle["owner_only_targets"]) == {"owner_approved", "owner_authorized"}
+    assert set(lifecycle["release_required_targets"]) == {"deploying", "live"}
     assert set(lifecycle["lab_forbidden_targets"]) == {
         "owner_approved",
+        "owner_authorized",
         "qualifying",
+        "deploying",
+        "verifying",
         "live",
+        "rolling_back",
         "rolled_back",
     }
+    assert "owner_approval_required" not in lifecycle["lab_forbidden_targets"], (
+        "saying 'I am finished and I need you' is not an act of production authority"
+    )
     assert lifecycle["transitions"]["live"] == ["rolled_back", "superseded"]
 
     assert policy["scoring"]["inputs"] == [

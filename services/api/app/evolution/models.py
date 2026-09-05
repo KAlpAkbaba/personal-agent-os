@@ -174,9 +174,18 @@ OPPORTUNITY_STATUSES = (
     "testing",
     "evaluating",
     "shadow_ready",
+    # The owner-authorised release path (ADR-0055 §5, realised in M18). "owner_approved"
+    # is kept because rows carry it and it means exactly what "owner_authorized" now means;
+    # new work uses the explicit chain.
+    "owner_approval_required",
     "owner_approved",
+    "owner_authorized",
     "qualifying",
+    "deploying",
+    "verifying",
     "live",
+    "failed",
+    "rolling_back",
     "rejected",
     "superseded",
     "quarantined",

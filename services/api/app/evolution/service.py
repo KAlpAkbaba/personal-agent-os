@@ -71,8 +71,11 @@ from app.evolution.authority import (
 )
 from app.evolution.backlog import (
     EVIDENCE_KINDS,
+    LAB_FORBIDDEN_STATUSES,
     LEGAL_TRANSITIONS,
     OPPORTUNITY_SOURCES,
+    OWNER_ONLY_STATUSES,
+    RELEASE_REQUIRED_STATUSES,
     ActorKind,
     EvidenceRef,
     NullReleaseEvidenceProvider,
@@ -92,18 +95,23 @@ from app.ledger.vocabulary import (
     EVENT_TYPE_EVOLUTION_BUILD_COMPLETED,
     EVENT_TYPE_EVOLUTION_BUILD_STARTED,
     EVENT_TYPE_EVOLUTION_DEPLOYED,
+    EVENT_TYPE_EVOLUTION_DEPLOYING,
+    EVENT_TYPE_EVOLUTION_FAILED,
     EVENT_TYPE_EVOLUTION_IDEA_CREATED,
     EVENT_TYPE_EVOLUTION_MODULE_DESIGNED,
     EVENT_TYPE_EVOLUTION_OWNER_APPROVAL_REQUIRED,
+    EVENT_TYPE_EVOLUTION_OWNER_AUTHORIZED,
     EVENT_TYPE_EVOLUTION_QUALIFYING,
     EVENT_TYPE_EVOLUTION_QUARANTINED,
     EVENT_TYPE_EVOLUTION_REJECTED,
     EVENT_TYPE_EVOLUTION_RESEARCHING,
     EVENT_TYPE_EVOLUTION_ROLLED_BACK,
+    EVENT_TYPE_EVOLUTION_ROLLING_BACK,
     EVENT_TYPE_EVOLUTION_SHADOW_READY,
     EVENT_TYPE_EVOLUTION_SUPERSEDED,
     EVENT_TYPE_EVOLUTION_TESTS_FAILED,
     EVENT_TYPE_EVOLUTION_TESTS_PASSED,
+    EVENT_TYPE_EVOLUTION_VERIFYING,
     PRODUCTION_STATE_APPROVAL_REQUIRED,
     PRODUCTION_STATE_BUILT,
     PRODUCTION_STATE_DEPLOYED,
@@ -142,7 +150,10 @@ ENGINE_SUBJECT: Final[str] = "evolution.engine"
 PRODUCTION_SIDE_STATUSES: Final[frozenset[OpportunityStatus]] = frozenset(
     {
         OpportunityStatus.QUALIFYING,
+        OpportunityStatus.DEPLOYING,
+        OpportunityStatus.VERIFYING,
         OpportunityStatus.LIVE,
+        OpportunityStatus.ROLLING_BACK,
         OpportunityStatus.ROLLED_BACK,
     }
 )
@@ -157,19 +168,33 @@ REQUIRED_GRANT_FOR_STATUS: Final[dict[OpportunityStatus, Grant | None]] = {
     OpportunityStatus.TESTING: Grant.RUN_LAB_TESTS,
     OpportunityStatus.EVALUATING: Grant.BENCHMARK_CANDIDATE,
     OpportunityStatus.SHADOW_READY: Grant.MARK_SHADOW_READY,
+    # Asking for the owner is not an act of production authority: the engine is allowed to
+    # say "I am finished and I need you", and allowed to do nothing further (ADR-0055 §1).
+    OpportunityStatus.OWNER_APPROVAL_REQUIRED: Grant.MARK_SHADOW_READY,
     OpportunityStatus.REJECTED: Grant.PROPOSE_CANDIDATE,
     OpportunityStatus.SUPERSEDED: Grant.PROPOSE_CANDIDATE,
     OpportunityStatus.QUARANTINED: Grant.PROPOSE_CANDIDATE,
     OpportunityStatus.OWNER_APPROVED: None,
+    OpportunityStatus.OWNER_AUTHORIZED: None,
     OpportunityStatus.QUALIFYING: None,
+    OpportunityStatus.DEPLOYING: None,
+    OpportunityStatus.VERIFYING: None,
     OpportunityStatus.LIVE: None,
+    OpportunityStatus.FAILED: None,
+    OpportunityStatus.ROLLING_BACK: None,
     OpportunityStatus.ROLLED_BACK: None,
 }
 
 #: The production action name each production-side status is guarded by.
 PRODUCTION_ACTION_FOR_STATUS: Final[dict[OpportunityStatus, str]] = {
     OpportunityStatus.QUALIFYING: "write_production_database",
+    # The mutation itself is guarded at DEPLOYING, where it actually happens - not at LIVE,
+    # which is a conclusion drawn after verification succeeds.
+    OpportunityStatus.DEPLOYING: "deploy_release",
+    OpportunityStatus.VERIFYING: "write_production_database",
     OpportunityStatus.LIVE: "deploy_release",
+    OpportunityStatus.FAILED: "rollback_production",
+    OpportunityStatus.ROLLING_BACK: "rollback_production",
     OpportunityStatus.ROLLED_BACK: "rollback_production",
 }
 
@@ -182,6 +207,18 @@ UI_STATE_FOR_STATUS: Final[dict[OpportunityStatus, str]] = {
     OpportunityStatus.TESTING: "evolution.testing",
     OpportunityStatus.EVALUATING: "evolution.testing",
     OpportunityStatus.SHADOW_READY: "evolution.shadow_ready",
+    # The release path, so an owner-authorised deployment is WATCHABLE and a failure
+    # visibly becomes a rollback instead of a silent stop (M18 spec §15).
+    OpportunityStatus.OWNER_APPROVAL_REQUIRED: "release.owner_approval_required",
+    OpportunityStatus.OWNER_APPROVED: "release.owner_authorized",
+    OpportunityStatus.OWNER_AUTHORIZED: "release.owner_authorized",
+    OpportunityStatus.QUALIFYING: "release.qualifying",
+    OpportunityStatus.DEPLOYING: "release.deploying",
+    OpportunityStatus.VERIFYING: "release.verifying",
+    OpportunityStatus.LIVE: "release.live",
+    OpportunityStatus.FAILED: "release.rollback",
+    OpportunityStatus.ROLLING_BACK: "release.rollback",
+    OpportunityStatus.ROLLED_BACK: "release.rollback",
 }
 
 #: (event_type, ledger status, production_state, severity) per backlog status.
@@ -238,11 +275,47 @@ LEDGER_EVENT_FOR_STATUS: Final[dict[OpportunityStatus, tuple[str, str, str, str]
     ),
     # Post-approval, pre-deployment: reviewed and approved, but nothing is live
     # yet, so the production_state must not say "deployed".
+    OpportunityStatus.OWNER_APPROVAL_REQUIRED: (
+        EVENT_TYPE_EVOLUTION_OWNER_APPROVAL_REQUIRED,
+        STATUS_PENDING,
+        PRODUCTION_STATE_APPROVAL_REQUIRED,
+        SEVERITY_NOTICE,
+    ),
+    OpportunityStatus.OWNER_AUTHORIZED: (
+        EVENT_TYPE_EVOLUTION_OWNER_AUTHORIZED,
+        STATUS_COMPLETED,
+        PRODUCTION_STATE_REVIEWED,
+        SEVERITY_NOTICE,
+    ),
     OpportunityStatus.QUALIFYING: (
         EVENT_TYPE_EVOLUTION_QUALIFYING,
         STATUS_STARTED,
         PRODUCTION_STATE_REVIEWED,
         SEVERITY_NOTICE,
+    ),
+    OpportunityStatus.DEPLOYING: (
+        EVENT_TYPE_EVOLUTION_DEPLOYING,
+        STATUS_STARTED,
+        PRODUCTION_STATE_REVIEWED,
+        SEVERITY_NOTICE,
+    ),
+    OpportunityStatus.VERIFYING: (
+        EVENT_TYPE_EVOLUTION_VERIFYING,
+        STATUS_STARTED,
+        PRODUCTION_STATE_DEPLOYED,
+        SEVERITY_NOTICE,
+    ),
+    OpportunityStatus.FAILED: (
+        EVENT_TYPE_EVOLUTION_FAILED,
+        STATUS_FAILED,
+        PRODUCTION_STATE_DEPLOYED,
+        SEVERITY_WARNING,
+    ),
+    OpportunityStatus.ROLLING_BACK: (
+        EVENT_TYPE_EVOLUTION_ROLLING_BACK,
+        STATUS_STARTED,
+        PRODUCTION_STATE_ROLLED_BACK,
+        SEVERITY_WARNING,
     ),
     OpportunityStatus.LIVE: (
         EVENT_TYPE_EVOLUTION_DEPLOYED,
@@ -295,6 +368,13 @@ _STATUS_TR: Final[dict[OpportunityStatus, str]] = {
     OpportunityStatus.SUPERSEDED: "yerini yenisi aldı",
     OpportunityStatus.QUARANTINED: "karantinada",
     OpportunityStatus.ROLLED_BACK: "geri alındı",
+    # the owner-authorised release path (ADR-0055 §5)
+    OpportunityStatus.OWNER_APPROVAL_REQUIRED: "sahip onayı bekleniyor",
+    OpportunityStatus.OWNER_AUTHORIZED: "sahip yetkilendirdi",
+    OpportunityStatus.DEPLOYING: "yayına alınıyor",
+    OpportunityStatus.VERIFYING: "doğrulanıyor",
+    OpportunityStatus.FAILED: "başarısız",
+    OpportunityStatus.ROLLING_BACK: "geri alınıyor",
 }
 
 
@@ -572,7 +652,10 @@ class EvolutionService:
         wanted = coerce_status(target, field_name="target")
         who = coerce_actor(actor)
 
-        if wanted is OpportunityStatus.OWNER_APPROVED:
+        # Both spellings of the owner gate. Reachable only through approve(), which takes
+        # an OwnerCapability - so no caller reaches owner authorisation by varying a string
+        # in a request body, whichever name they use (ADR-0053 §5, ADR-0055 §4).
+        if wanted in OWNER_ONLY_STATUSES:
             raise AuthorityError(
                 "owner approval is not a status change; it is an owner action. "
                 "Use POST /v1/evolution/opportunities/{id}/approve, which "
@@ -676,10 +759,13 @@ class EvolutionService:
             "lifecycle": {
                 "statuses": [str(s) for s in OpportunityStatus],
                 "transitions": transition_table(),
-                "owner_only_targets": [str(OpportunityStatus.OWNER_APPROVED)],
-                "lab_forbidden_targets": sorted(str(s) for s in PRODUCTION_SIDE_STATUSES)
-                + [str(OpportunityStatus.OWNER_APPROVED)],
-                "release_required_targets": [str(OpportunityStatus.LIVE)],
+                # Derived from the constants the GUARDS consult, never re-listed here. A
+                # published policy that is a second hand-maintained copy of the rule will
+                # drift from the rule, and the copy is what the owner reads (the duplicate
+                # Turkish pattern table cost a qualification run the same way, 2026-09-05).
+                "owner_only_targets": sorted(str(s) for s in OWNER_ONLY_STATUSES),
+                "lab_forbidden_targets": sorted(str(s) for s in LAB_FORBIDDEN_STATUSES),
+                "release_required_targets": sorted(str(s) for s in RELEASE_REQUIRED_STATUSES),
                 "terminal_statuses": sorted(
                     str(s) for s, targets in LEGAL_TRANSITIONS.items() if not targets
                 ),
@@ -830,7 +916,7 @@ class EvolutionService:
             factual_summary=summary
             or (
                 f"Evrim fırsatı '{opportunity['title']}' "
-                f"{_STATUS_TR[status]} durumuna geçti ({actor})."
+                f"{_STATUS_TR.get(status, status)} durumuna geçti ({actor})."
             ),
             source="live",
             source_ref=source_ref[:256],

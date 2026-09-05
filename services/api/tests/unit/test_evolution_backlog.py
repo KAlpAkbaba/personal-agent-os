@@ -183,12 +183,16 @@ def test_every_status_has_a_row_and_the_table_is_serialisable() -> None:
     assert table[str(OpportunityStatus.SUPERSEDED)] == []
     assert table[str(OpportunityStatus.SHADOW_READY)] == sorted(
         [
+            str(OpportunityStatus.OWNER_APPROVAL_REQUIRED),
             str(OpportunityStatus.OWNER_APPROVED),
             str(OpportunityStatus.REJECTED),
             str(OpportunityStatus.QUARANTINED),
             str(OpportunityStatus.SUPERSEDED),
         ]
     )
+    # A failed release can only go backwards: not to LIVE, not to a silent retry.
+    assert table[str(OpportunityStatus.FAILED)] == [str(OpportunityStatus.ROLLING_BACK)]
+    assert str(OpportunityStatus.LIVE) not in table[str(OpportunityStatus.DEPLOYING)]
 
 
 @pytest.mark.parametrize(
@@ -197,7 +201,15 @@ def test_every_status_has_a_row_and_the_table_is_serialisable() -> None:
         (current, target)
         for current, targets in LEGAL_TRANSITIONS.items()
         for target in targets
-        if target is not OpportunityStatus.OWNER_APPROVED and target is not OpportunityStatus.LIVE
+        if target
+        not in (
+            OpportunityStatus.OWNER_APPROVED,
+            OpportunityStatus.OWNER_AUTHORIZED,
+            OpportunityStatus.LIVE,
+            # DEPLOYING is the mutation, so like LIVE it needs proof of an owner-approved
+            # release and cannot be asserted from the table alone.
+            OpportunityStatus.DEPLOYING,
+        )
     ],
 )
 def test_every_legal_transition_is_accepted_for_the_owner(
@@ -369,6 +381,15 @@ def test_live_is_reachable_once_an_owner_approved_release_exists(stack) -> None:
         actor=ActorKind.SYSTEM,
         production_authority=production,
     )
+    # LIVE is now something VERIFYING concludes, not something a deployment announces
+    # (ADR-0055 §5). The intermediate states exist so a failure visibly becomes a rollback.
+    for step in (OpportunityStatus.DEPLOYING, OpportunityStatus.VERIFYING):
+        service.advance(
+            opportunity_id,
+            target=step,
+            actor=ActorKind.SYSTEM,
+            production_authority=production,
+        )
     live = service.advance(
         opportunity_id,
         target=OpportunityStatus.LIVE,
@@ -750,3 +771,101 @@ def test_an_unknown_opportunity_is_not_found(stack) -> None:
     assert excinfo.value.error_class == EvolutionErrorClass.NOT_FOUND
     with pytest.raises(EvolutionError):
         service.get("not-a-uuid")
+
+
+# ------------------------------------------- the owner-authorised release path (ADR-0055)
+
+
+def test_the_engine_may_ask_for_the_owner_but_go_no_further(stack) -> None:
+    """"I am finished and I need you" is not an act of production authority.
+
+    The engine may enter OWNER_APPROVAL_REQUIRED itself - that is the whole point of the
+    state - and every state past it is closed to a lab actor.
+    """
+    _session_scope, service, _ui = stack
+    opportunity = make_opportunity(stack)
+    oid = opportunity["opportunity_id"]
+    drive_to(stack, oid, OpportunityStatus.SHADOW_READY)
+
+    asked = service.advance(
+        oid, target=OpportunityStatus.OWNER_APPROVAL_REQUIRED, actor=ActorKind.LAB
+    )
+    assert asked["status"] == str(OpportunityStatus.OWNER_APPROVAL_REQUIRED)
+
+    for forbidden in (
+        OpportunityStatus.OWNER_AUTHORIZED,
+        OpportunityStatus.QUALIFYING,
+        OpportunityStatus.DEPLOYING,
+        OpportunityStatus.VERIFYING,
+        OpportunityStatus.LIVE,
+    ):
+        with pytest.raises(EvolutionError):
+            service.advance(oid, target=forbidden, actor=ActorKind.LAB)
+
+
+def test_a_deployment_cannot_announce_itself_live(stack) -> None:
+    """LIVE is a conclusion VERIFYING draws, never something DEPLOYING declares.
+
+    Without the intermediate state a failed deployment has nowhere honest to go, and the
+    tempting shortcut is to report success and move on.
+    """
+    assert OpportunityStatus.LIVE not in LEGAL_TRANSITIONS[OpportunityStatus.DEPLOYING]
+    assert LEGAL_TRANSITIONS[OpportunityStatus.DEPLOYING] == frozenset(
+        {OpportunityStatus.VERIFYING, OpportunityStatus.FAILED}
+    )
+    assert LEGAL_TRANSITIONS[OpportunityStatus.VERIFYING] == frozenset(
+        {OpportunityStatus.LIVE, OpportunityStatus.FAILED}
+    )
+
+
+def test_a_failed_release_can_only_go_backwards(stack) -> None:
+    """No retry that silently reuses half-applied state, and no path to LIVE."""
+    assert LEGAL_TRANSITIONS[OpportunityStatus.FAILED] == frozenset(
+        {OpportunityStatus.ROLLING_BACK}
+    )
+    assert OpportunityStatus.LIVE not in LEGAL_TRANSITIONS[OpportunityStatus.FAILED]
+    assert OpportunityStatus.ROLLED_BACK in LEGAL_TRANSITIONS[OpportunityStatus.ROLLING_BACK]
+
+
+def test_the_whole_release_path_is_recorded_in_the_ledger(stack) -> None:
+    """A deployment the owner authorised must be reconstructable from the ledger alone."""
+    session_scope, service, _ui = stack
+    opportunity = make_opportunity(stack)
+    oid = opportunity["opportunity_id"]
+    drive_to(stack, oid, OpportunityStatus.SHADOW_READY)
+    service.advance(oid, target=OpportunityStatus.OWNER_APPROVAL_REQUIRED, actor=ActorKind.LAB)
+
+    with session_scope() as session:
+        written = {
+            row.event_type
+            for row in session.query(ActivityEventRow)
+            .filter(ActivityEventRow.subsystem == "evolution")
+            .all()
+        }
+    assert "evolution.owner_approval_required" in written
+
+    # ...and no status in the new path is invisible
+    from app.evolution.service import LEDGER_EVENT_FOR_STATUS
+
+    for status in (
+        OpportunityStatus.OWNER_APPROVAL_REQUIRED,
+        OpportunityStatus.OWNER_AUTHORIZED,
+        OpportunityStatus.DEPLOYING,
+        OpportunityStatus.VERIFYING,
+        OpportunityStatus.FAILED,
+        OpportunityStatus.ROLLING_BACK,
+    ):
+        assert LEDGER_EVENT_FOR_STATUS.get(status) is not None, status
+
+
+def test_the_published_policy_is_derived_from_the_guards_not_retyped() -> None:
+    """A published policy that is a second hand-maintained copy of the rule will drift from
+    the rule, and the copy is what the owner reads."""
+    import inspect
+
+    from app.evolution import service as evolution_service
+
+    source = inspect.getsource(evolution_service)
+    assert "sorted(str(s) for s in OWNER_ONLY_STATUSES)" in source
+    assert "sorted(str(s) for s in LAB_FORBIDDEN_STATUSES)" in source
+    assert "sorted(str(s) for s in RELEASE_REQUIRED_STATUSES)" in source

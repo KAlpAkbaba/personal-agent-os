@@ -47,9 +47,28 @@ def test_the_vocabulary_is_the_one_the_owner_specified() -> None:
         "evolution.building",
         "evolution.testing",
         "evolution.shadow_ready",
+        # M18: the room, and the owner-authorised release path
+        "eye.active",
+        "eye.disabled",
+        "owner.present",
+        "owner.away",
+        "owner.returned",
+        "owner.resting",
+        "owner.likely_asleep",
+        "owner.awake",
+        "routine.armed",
+        "routine.triggered",
+        "alarm.triggered",
+        "release.owner_approval_required",
+        "release.owner_authorized",
+        "release.qualifying",
+        "release.deploying",
+        "release.verifying",
+        "release.live",
+        "release.rollback",
     }
     contract = ui_state_contract()
-    assert contract["contract_version"] == 1
+    assert contract["contract_version"] == 2
     assert "audio" in contract["metadata_rules"]["forbidden"]
 
 
@@ -209,7 +228,7 @@ def test_the_ui_read_surface_is_owner_gated_and_replayable(wired) -> None:
         assert body["current"]["state"] == "agent.researching"
         assert body["current"]["progress"] == 0.4
         assert body["sequence"] == 1
-        assert client.get("/v1/ui/state/contract").json()["contract_version"] == 1
+        assert client.get("/v1/ui/state/contract").json()["contract_version"] == 2
         publish(UiState.IDLE, subsystem="system")
         after = client.get("/v1/ui/state", params={"after_sequence": 1}).json()
         assert [e["state"] for e in after["events"]] == ["agent.idle"]
