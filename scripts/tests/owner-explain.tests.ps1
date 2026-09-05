@@ -192,6 +192,165 @@ Test-Case "9. -VerifyOnly needs no shell, no wait and no owner speech" {
     Assert-True ($text -match "Press Enter when the session is over") "the interactive path still waits for the owner"
 }
 
+# ------------------------------------------------------- timestamp selection (2026-09-05)
+#
+# The -VerifyOnly run failed before it looked at a single session: the caller passed
+# DateTime.MinValue as a sentinel for "there is no shell-readiness baseline", and the
+# selector expressed its one-second tolerance by MUTATING that floor with AddSeconds(-1).
+# The beginning of time has nothing below it, so the harness died with
+# ArgumentOutOfRangeException while the product it was checking was working perfectly.
+#
+# Absence is now absence ($null), the window is a separate explicit floor, and the
+# comparison is made on the DIFFERENCE of two DateTimeOffsets, which cannot overflow.
+
+Write-Host ""
+Write-Host "timestamp selection"
+
+$explainProbe = { param($Id) New-Activity -Id $Id }
+$completed = New-Session -Id "completed-1" -StartedAt "2026-09-04T20:56:28.352803Z" -State "closed"
+$stale = New-Session -Id "stale-1" -StartedAt "2026-09-02T19:51:39.187548Z" -State "closed"
+
+Test-Case "no baseline: a completed session is selected without any readiness moment" {
+    $selected = Select-QualificationSession -Sessions @($completed) -BaselineIds @() `
+        -ActivityProbe $explainProbe -ReadyAt $null -NotBefore $null
+    Assert-True ($null -ne $selected) "a null ReadyAt must not throw and must not exclude"
+    Assert-Equal "completed-1" $selected.SessionId "the completed session"
+}
+
+Test-Case "no baseline: the former crash cannot recur even with a MinValue-shaped floor" {
+    # Someone may still hand the old sentinel in. It must be answered, not thrown at.
+    $selected = Select-QualificationSession -Sessions @($completed) -BaselineIds @() `
+        -ActivityProbe $explainProbe -ReadyAt ([DateTimeOffset]::MinValue) -NotBefore $null
+    Assert-True ($null -ne $selected) "the minimum representable floor must include everything, not overflow"
+}
+
+Test-Case "minimum timestamp: a session at the start of the calendar is handled, not fatal" {
+    $ancient = New-Session -Id "ancient" -StartedAt "0001-01-01T00:00:00.0000000Z" -State "closed"
+    $selected = Select-QualificationSession -Sessions @($ancient) -BaselineIds @() `
+        -ActivityProbe $explainProbe -ReadyAt $null -NotBefore $null
+    Assert-Equal "ancient" $selected.SessionId "with no floor it qualifies"
+    $bounded = Select-QualificationSession -Sessions @($ancient) -BaselineIds @() `
+        -ActivityProbe $explainProbe -ReadyAt $null -NotBefore ([DateTimeOffset]::UtcNow.AddHours(-48))
+    Assert-True ($null -eq $bounded) "and the window excludes it deterministically"
+}
+
+Test-Case "maximum timestamp: comparing at the far end of the calendar cannot overflow" {
+    $future = New-Session -Id "future" -StartedAt "9999-12-31T23:59:59.9999999Z" -State "active"
+    $selected = Select-QualificationSession -Sessions @($future) -BaselineIds @() `
+        -ActivityProbe $explainProbe -ReadyAt ([DateTimeOffset]::MaxValue) -NotBefore $null
+    Assert-True ($null -ne $selected) "max instant against max floor must answer, not throw"
+}
+
+Test-Case "timezone offsets: the same instant written three ways selects identically" {
+    # 2026-09-04T20:56:28Z is the same moment as 23:56:28+03:00 and 13:56:28-07:00.
+    foreach ($written in @("2026-09-04T20:56:28.352803Z",
+                           "2026-09-04T23:56:28.352803+03:00",
+                           "2026-09-04T13:56:28.352803-07:00")) {
+        $s = New-Session -Id "tz" -StartedAt $written -State "closed"
+        $sel = Select-QualificationSession -Sessions @($s) -BaselineIds @() -ActivityProbe $explainProbe `
+            -ReadyAt ([DateTimeOffset]::Parse("2026-09-04T20:00:00Z")) -NotBefore $null
+        Assert-True ($null -ne $sel) "offset form [$written] must be accepted"
+        $rejected = Select-QualificationSession -Sessions @($s) -BaselineIds @() -ActivityProbe $explainProbe `
+            -ReadyAt ([DateTimeOffset]::Parse("2026-09-05T00:00:00Z")) -NotBefore $null
+        Assert-True ($null -eq $rejected) "and the same instant is before a later floor, whatever its spelling"
+    }
+}
+
+Test-Case "a naive timestamp is read as UTC, not as the harness's local time" {
+    $naive = New-Session -Id "naive" -StartedAt "2026-09-04T20:56:28.352803" -State "closed"
+    $sel = Select-QualificationSession -Sessions @($naive) -BaselineIds @() -ActivityProbe $explainProbe `
+        -ReadyAt ([DateTimeOffset]::Parse("2026-09-04T20:30:00Z")) -NotBefore $null
+    Assert-True ($null -ne $sel) "a missing offset must not shift the instant by the harness's own timezone"
+}
+
+Test-Case "stale unrelated session: rejected by the window even though it is a web session" {
+    $selected = Select-QualificationSession -Sessions @($stale) -BaselineIds @() `
+        -ActivityProbe $explainProbe -ReadyAt $null -NotBefore ([DateTimeOffset]::UtcNow.AddHours(-48))
+    Assert-True ($null -eq $selected) "an old session must never pass as this qualification"
+}
+
+Test-Case "multiple candidates: the newest qualifying session wins" {
+    $older = New-Session -Id "older" -StartedAt "2026-09-04T19:00:29.494506Z" -State "closed"
+    $middle = New-Session -Id "middle" -StartedAt "2026-09-04T19:37:12.168482Z" -State "closed"
+    $selected = Select-QualificationSession -Sessions @($older, $completed, $middle) -BaselineIds @() `
+        -ActivityProbe $explainProbe -ReadyAt $null -NotBefore ([DateTimeOffset]::Parse("2026-09-04T00:00:00Z"))
+    Assert-Equal "completed-1" $selected.SessionId "newest first"
+}
+
+Test-Case "multiple candidates: a newer session with no explain call yields to one that has it" {
+    $newestSilent = New-Session -Id "newest-silent" -StartedAt "2026-09-04T23:00:00Z" -State "closed"
+    $probe = { param($Id) if ($Id -eq "newest-silent") { New-Activity -Id $Id -Explained $false } else { New-Activity -Id $Id } }
+    $selected = Select-QualificationSession -Sessions @($newestSilent, $completed) -BaselineIds @() `
+        -ActivityProbe $probe -ReadyAt $null -NotBefore ([DateTimeOffset]::Parse("2026-09-04T00:00:00Z"))
+    Assert-Equal "completed-1" $selected.SessionId "a session with no succeeded activity.explain never qualifies"
+}
+
+Test-Case "malformed timestamps: rejected deterministically, and never fatal" {
+    foreach ($bad in @("", "not-a-date", "2026-13-45T99:99:99Z", "0", "2026-09-04T20:56:28+99:00")) {
+        $s = New-Session -Id "bad" -StartedAt $bad -State "closed"
+        $selected = Select-QualificationSession -Sessions @($s, $completed) -BaselineIds @() `
+            -ActivityProbe $explainProbe -ReadyAt $null -NotBefore ([DateTimeOffset]::Parse("2026-09-04T00:00:00Z"))
+        Assert-Equal "completed-1" $selected.SessionId "a malformed started_at [$bad] must skip that session only"
+    }
+    $onlyBad = Select-QualificationSession -Sessions @((New-Session -Id "bad" -StartedAt "rubbish")) -BaselineIds @() `
+        -ActivityProbe $explainProbe -ReadyAt $null -NotBefore $null
+    Assert-True ($null -eq $onlyBad) "and when it is the only candidate the answer is nothing, not a crash"
+}
+
+Test-Case "the baseline still excludes unconditionally, however recent" {
+    $selected = Select-QualificationSession -Sessions @($completed) -BaselineIds @("completed-1") `
+        -ActivityProbe $explainProbe -ReadyAt $null -NotBefore $null
+    Assert-True ($null -eq $selected) "a session that existed before the run can never be this run's"
+}
+
+Test-Case "the tolerance is bounded and cannot move a floor off the calendar" {
+    Assert-True (Test-InstantAtOrAfter -Instant ([DateTimeOffset]::MinValue) -Floor ([DateTimeOffset]::MinValue) -ToleranceSec 1) "min vs min with slack"
+    Assert-True (Test-InstantAtOrAfter -Instant ([DateTimeOffset]::MaxValue) -Floor ([DateTimeOffset]::MaxValue) -ToleranceSec 1) "max vs max with slack"
+    Assert-True (-not (Test-InstantAtOrAfter -Instant ([DateTimeOffset]::MinValue) -Floor ([DateTimeOffset]::MaxValue) -ToleranceSec 1)) "the widest possible gap still answers, and answers no"
+    $floor = [DateTimeOffset]::Parse("2026-09-04T20:00:00Z")
+    Assert-True (Test-InstantAtOrAfter -Instant $floor.AddSeconds(-1) -Floor $floor -ToleranceSec 1) "one second early is within a one-second tolerance"
+    Assert-True (-not (Test-InstantAtOrAfter -Instant $floor.AddSeconds(-2) -Floor $floor -ToleranceSec 1)) "two seconds early is not"
+}
+
+Test-Case "an empty array is never assigned out of an if-expression" {
+    # $x = if (...) { ... } else { @() } yields $null, because PowerShell unrolls an empty
+    # array out of an expression - and the next .Count then dies under StrictMode. That is
+    # what turned "this session has no provenance block" into a crash that hid every
+    # remaining check on 2026-09-05. Assert the shape is gone from the harness.
+    $path = Join-Path $repoRoot "scripts\voice\owner-explain.ps1"
+    $code = (Get-Content -LiteralPath $path | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
+    Assert-True (-not ($code -match '=\s*if\s*\(.*\)\s*\{[^}]*\}\s*else\s*\{\s*@\(\)\s*\}')) `
+        "no assignment may take an empty array from an else branch"
+
+    # and prove the hazard is real, so this test cannot be dismissed as superstition
+    $viaExpression = if ($false) { @(1) } else { @() }
+    Assert-True ($null -eq $viaExpression) "the hazard is real: an if-expression yielding @() assigns null"
+    $assignedFirst = @()
+    if ($false) { $assignedFirst = @(1) }
+    Assert-Equal 0 $assignedFirst.Count "assign-then-fill keeps it an array"
+}
+
+Test-Case "a session with no provenance block is reported, not crashed on" {
+    # The three provenance checks fail together and say why; nothing throws while getting
+    # there, so the behavioural checks after them still run and still report.
+    $path = Join-Path $repoRoot "scripts\voice\owner-explain.ps1"
+    $text = [IO.File]::ReadAllText($path)
+    Assert-True ($text -match "no provenance block on this tool-call record") "the absence is named explicitly"
+    Assert-True ($text -match "cannot be verified FROM THIS SESSION") "and scoped to the session, not to the product"
+    Assert-True ($text -match "provenance_not_recorded_by_the_build_that_ran_this_session") "the evidence file records the diagnosis"
+}
+
+Test-Case "VerifyOnly no longer uses a sentinel baseline" {
+    $path = Join-Path $repoRoot "scripts\voice\owner-explain.ps1"
+    $text = [IO.File]::ReadAllText($path)
+    # Comment lines are stripped first: the comment that EXPLAINS the sentinel bug is worth
+    # keeping, and an assertion that forbids naming a defect would delete its own history.
+    $code = (Get-Content -LiteralPath $path | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
+    Assert-True (-not ($code -match "MinValue")) "no DateTime.MinValue sentinel may remain in the harness code"
+    Assert-True ($text -match "NotBefore") "the window floor is passed explicitly"
+    Assert-True ($text -match "VerifyMaxAgeHours") "and it is an explicit, bounded parameter"
+}
+
 Write-Host ""
 Write-Host "owner-explain harness: $script:Passes passed, $script:Failures failed"
 if ($script:Failures -gt 0) { exit 1 }

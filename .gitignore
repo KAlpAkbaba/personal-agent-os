@@ -89,3 +89,4 @@ tfplan.binary
 # block the next Cloud Core release (2026-09-04).
 /research-*.json
 /browser-*.json
+/explain-*.json

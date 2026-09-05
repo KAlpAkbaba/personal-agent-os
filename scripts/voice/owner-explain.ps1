@@ -49,7 +49,12 @@ param(
     # How long to wait for the web shell to answer /voice after starting it (Next.js compiles
     # the page on first request), and for the owner's session to appear after Enter.
     [ValidateRange(10, 900)][int]$WebReadyTimeoutSec = 180,
-    [ValidateRange(30, 3600)][int]$SessionWaitSec = 600
+    [ValidateRange(30, 3600)][int]$SessionWaitSec = 600,
+    # -VerifyOnly only: how far back a completed session may have started and still count as
+    # the owner's qualification. Bounded on purpose - with no web shell there is no readiness
+    # moment to compare against, and "no floor at all" would let a months-old unrelated
+    # session qualify. Wide enough that a session from last night still verifies today.
+    [ValidateRange(1, 720)][int]$VerifyMaxAgeHours = 48
 )
 
 $ErrorActionPreference = "Stop"
@@ -59,6 +64,7 @@ $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 . (Join-Path $repoRoot "scripts\lib\HttpJson.ps1")
 . (Join-Path $repoRoot "scripts\lib\RepoState.ps1")
 . (Join-Path $repoRoot "scripts\lib\VoiceShell.ps1")
+. (Join-Path $repoRoot "scripts\lib\SecretStore.ps1")
 
 if (-not $BaseUrl) { $BaseUrl = "http://${BrokerHost}:$ApiPort" }
 $BaseUrl = $BaseUrl.TrimEnd('/')
@@ -120,7 +126,10 @@ elseif ($releaseBlockers.Checked) {
 $health = Invoke-JsonUtf8 -Uri "$BaseUrl/v1/system/health" -TimeoutSec 20
 $checks = Get-OptionalProperty -InputObject $health -Name "checks"
 $rt = if ($null -ne $checks) { Get-OptionalProperty -InputObject $checks -Name "voice_realtime" } else { $null }
-$providers = if ($null -ne $rt) { @(Get-OptionalProperty -InputObject $rt -Name "providers") } else { @() }
+# Same shape as the provenance bug below: an empty array unrolls out of an if-expression and
+# arrives as $null, so assign first and fill second.
+$providers = @()
+if ($null -ne $rt) { $providers = @(Get-OptionalProperty -InputObject $rt -Name "providers") }
 if ($providers -notcontains $ExpectProvider) {
     throw "Cloud Core at $BaseUrl does not list realtime provider '$ExpectProvider' (providers: $($providers -join ', ')); nothing started"
 }
@@ -143,11 +152,23 @@ function Invoke-CloudCoreRelease {
 
 # ------------------------------------------------------------------ owner session
 
-$secure = Read-Host -Prompt "Cloud Owner Credential (input is hidden; exchanged for one session, then dropped)" -AsSecureString
-if ($secure.Length -eq 0) { throw "empty credential; nothing done" }
-$bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
-try { $credential = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
-finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+# The local DPAPI store first, the masked prompt second. The store is owner-only and
+# machine-bound (scripts\secret-store.ps1), it holds the SAME credential the prompt would
+# receive, and reading it is what lets -VerifyOnly re-check durable evidence without a human
+# in the loop - which is the whole point of a verification that must not require another
+# voice session. The value is never printed, only exchanged for one session and dropped.
+$credential = $null
+try { $credential = Get-StoredSecretValue -Name "PAGENTOS_OWNER_CREDENTIAL" } catch { $credential = $null }
+if ($credential) {
+    Write-Host "      using the stored Cloud Owner Credential (DPAPI, this account only)"
+}
+else {
+    $secure = Read-Host -Prompt "Cloud Owner Credential (input is hidden; exchanged for one session, then dropped)" -AsSecureString
+    if ($secure.Length -eq 0) { throw "empty credential; nothing done. Store it once with .\scripts\secret-store.ps1 -Set PAGENTOS_OWNER_CREDENTIAL to stop being asked." }
+    $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+    try { $credential = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
+    finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+}
 try {
     $body = @{ owner_credential = $credential; client_kind = "cli"; label = $runId } | ConvertTo-Json -Compress
     $issued = Invoke-JsonUtf8 -Method POST -Uri "$BaseUrl/v1/identity/sessions" -Body $body
@@ -290,9 +311,23 @@ try {
     $voiceUrl = "http://localhost:$WebPort/voice"
     if ($VerifyOnly) {
         Write-Host "      verify-only: no web shell, no new session; re-checking a completed one"
-        $readyAt = [datetime]::MinValue.ToUniversalTime()
+        # No shell was started, so there IS no readiness moment - say so with $null rather
+        # than with a sentinel. DateTime.MinValue used to stand in here, and the selector's
+        # one-second tolerance then tried to subtract a second from the beginning of time
+        # (2026-09-05, ArgumentOutOfRangeException before a single session was examined).
+        #
+        # "No readiness floor" must not become "any session ever", so the window is an
+        # explicit absolute floor instead: recent enough to be this owner's completed
+        # qualification, old enough that they need not repeat it.
+        $readyAt = $null
+        $notBefore = [DateTimeOffset]::UtcNow.AddHours(-1 * [math]::Abs($VerifyMaxAgeHours))
         $baselineIds = @()
-        $evidence.web_shell = [ordered]@{ verify_only = $true }
+        Write-Host ("      considering sessions started after {0:yyyy-MM-dd HH:mm} UTC ({1} h window)" -f $notBefore.UtcDateTime, [math]::Abs($VerifyMaxAgeHours))
+        $evidence.web_shell = [ordered]@{
+            verify_only = $true
+            not_before = $notBefore.ToString("o")
+            window_hours = [math]::Abs($VerifyMaxAgeHours)
+        }
     }
     else {
     $shellLog = Join-Path $env:TEMP "pagentos-web-voice-$runId.log"
@@ -313,7 +348,8 @@ try {
         if (Test-Path $shellLog) { $tail = ((Get-Content -LiteralPath $shellLog -Tail 15) -join "`n") }
         throw "the web shell did not answer at $voiceUrl within $WebReadyTimeoutSec s (probes: $($ready.Attempts)). Start it by hand with .\scripts\voice\start-web-voice.ps1 and rerun with -SkipWeb. Last log lines:`n$tail"
     }
-    $readyAt = (Get-Date).ToUniversalTime()
+    $readyAt = [DateTimeOffset]::UtcNow
+    $notBefore = $null
     Write-Host ("      web shell: ready after {0:n1} s ({1} probe(s))" -f $ready.ElapsedSec, $ready.Attempts)
     $evidence.web_shell = [ordered]@{
         url = $voiceUrl; already_running = [bool]$alreadyRunning; started_here = ($null -ne $webProcess)
@@ -350,7 +386,8 @@ try {
     if ($SessionId) {
         $listSessions = { @(Get-OptionalProperty -InputObject (Get-Json "/v1/voice/realtime/sessions?limit=50") -Name "sessions") | Where-Object { [string]$_.session_id -eq $SessionId } }.GetNewClosure()
     }
-    $waited = Wait-QualificationSession -ListSessions $listSessions -ActivityProbe $activityProbe -BaselineIds $baselineIds -ReadyAt $readyAt `
+    $waited = Wait-QualificationSession -ListSessions $listSessions -ActivityProbe $activityProbe -BaselineIds $baselineIds `
+        -ReadyAt $readyAt -NotBefore $notBefore `
         -TimeoutSec $(if ($VerifyOnly) { 1 } else { $SessionWaitSec }) -IntervalSec 5 -OnWaiting { param($Attempt, $Elapsed) if ($Attempt -eq 1) { Write-Host "      waiting for a web session that asked activity.explain (up to $SessionWaitSec s; keep talking, or connect now)..." } }
     if ($null -eq $waited.Selected) {
         if ($VerifyOnly) {
@@ -390,10 +427,27 @@ try {
     $prov = if ($null -ne $explain) { Get-OptionalProperty -InputObject $explain -Name "provenance" } else { $null }
     $provFacts = if ($null -ne $prov) { Get-OptionalProperty -InputObject $prov -Name "facts" } else { $null }
     $jobId = if ($null -ne $prov) { [string](Get-OptionalProperty -InputObject $prov -Name "research_job_id") } else { "" }
-    $eventIds = if ($null -ne $prov) { @(Get-OptionalProperty -InputObject $prov -Name "event_ids") } else { @() }
-    $evidenceKinds = if ($null -ne $prov) { @(Get-OptionalProperty -InputObject $prov -Name "evidence_kinds") } else { @() }
-    Add-Check "briefing cites ledger events and a real research job" ($eventIds.Count -ge 1 -and $jobId -ne "") `
+    # Assign, then fill. `$x = if (...) { ... } else { @() }` looks equivalent and is not:
+    # PowerShell unrolls an empty array out of an expression, so the else branch yields
+    # $null and the very next `.Count` dies under StrictMode. That is what turned "this
+    # session has no provenance block" into a crash that hid every remaining check
+    # (2026-09-05).
+    $eventIds = @()
+    $evidenceKinds = @()
+    if ($null -ne $prov) {
+        $eventIds = @(Get-OptionalProperty -InputObject $prov -Name "event_ids")
+        $evidenceKinds = @(Get-OptionalProperty -InputObject $prov -Name "evidence_kinds")
+    }
+    # A session recorded BEFORE the provenance recorder existed cannot prove provenance. That
+    # is a gap in the evidence, not a fault in the product, and the two must not be reported
+    # as the same thing.
+    $provDetail = if ($null -eq $prov) {
+        "no provenance block on this tool-call record: the session was recorded by a build that did not yet emit one, so structural provenance cannot be verified FROM THIS SESSION"
+    }
+    else {
         "events=$($eventIds -join ',') research_job_id=$jobId kinds=$($evidenceKinds -join ',')"
+    }
+    Add-Check "briefing cites ledger events and a real research job" ($eventIds.Count -ge 1 -and $jobId -ne "") $provDetail
 
     # every cited ledger event must resolve, and belong to that research job
     $resolved = 0
@@ -462,7 +516,27 @@ try {
     Add-Check "session closed cleanly" ($closed -in @("closed", "expired")) "state=$closed"
 
     $failed = @($evidence.checks | Where-Object { -not $_.ok })
-    if ($failed.Count -gt 0) { throw "$($failed.Count) check(s) failed; see above" }
+    if ($failed.Count -gt 0) {
+        # Say WHY, once, when every failure has the same cause. A session recorded before the
+        # provenance recorder existed fails the three provenance checks and nothing else, and
+        # reporting that as "3 checks failed" invites the reader to suspect the product -
+        # which on 2026-09-05 was demonstrably working in the same run's own evidence.
+        if ($null -eq $prov) {
+            $provenanceChecks = @("briefing cites ledger events and a real research job",
+                                  "every cited ledger event resolves and is not seeded",
+                                  "narrated facts match the research run's own record")
+            $others = @($failed | Where-Object { $provenanceChecks -notcontains $_.name })
+            if ($others.Count -eq 0) {
+                Write-Host ""
+                Write-Host "All $($failed.Count) failures are the same one fact: this session carries no provenance" -ForegroundColor Yellow
+                Write-Host "block, because the build that recorded it did not emit one. Every behavioural check" -ForegroundColor Yellow
+                Write-Host "in this run PASSED. Structural provenance can only be verified on a session recorded" -ForegroundColor Yellow
+                Write-Host "by a build that emits it; no amount of re-checking THIS session will produce one." -ForegroundColor Yellow
+                $evidence.diagnosis = "provenance_not_recorded_by_the_build_that_ran_this_session"
+            }
+        }
+        throw "$($failed.Count) check(s) failed; see above"
+    }
     $evidence.verdict = "PASS"
 }
 finally {
