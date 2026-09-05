@@ -509,6 +509,16 @@ def discover_activity(
             progress={"discovered": total, "verification_url": None},
             event={"stage": STAGE_DISCOVERING, "detail": f"{query_id}: +{inserted} candidates"},
         )
+    # Discovery is the longest silent stretch of a run. Until 2026-09-05 the only
+    # research event on the bus was the ranking one, so the Core showed nothing at
+    # all while a real job spent minutes finding sources (ADR-0056 addendum 1 #2).
+    publish_ui(
+        UiState.RESEARCHING,
+        subsystem="research",
+        task_id=task_id,
+        status=STAGE_DISCOVERING,
+        metadata={"candidates": total, "added": inserted},
+    )
     return {"status": "done", "candidates": inserted, "path": path, "verification_url": None}
 
 
@@ -661,6 +671,17 @@ def fetch_targets_activity(task_id: str, max_sources: int, topic: str = "") -> l
             targets.append(c)
             if len(targets) >= max_sources:
                 break
+    publish_ui(
+        UiState.RESEARCHING,
+        subsystem="research",
+        task_id=task_id,
+        status=STAGE_FETCHING,
+        label=topic[:64] or None,
+        # `targets` is what will actually be fetched and `candidates` what was found:
+        # both are counted here, so neither is a guess. There is no progress figure
+        # yet - nothing has been fetched - and the renderer draws no bar without one.
+        metadata={"targets": len(targets), "candidates": len(candidates)},
+    )
     return [
         {"url": c.url, "query": c.query_id, "source_class": _class_for_query(c.query_id)}
         for c in targets
@@ -952,7 +973,9 @@ def rank_activity(
         publish_ui(
             UiState.RESEARCHING,
             subsystem="research",
-            intensity=0.7,
+            # No `intensity`: 0.7 was a constant, not a measurement, and the contract
+            # says intensity is "how much is going on". An unmeasured channel is sent
+            # as absent so the renderer draws it as absent (ADR-0052 rule 4).
             task_id=task_id,
             status=STAGE_RANKING,
             label=topic[:64],
@@ -1147,6 +1170,18 @@ def synthesize_activity(
         ranked.sort(key=lambda r: (r.rank or 9999, r.url))
         evidence_by_id = {e.id: e for e in ranked}
         primary_only = [e for e in ranked if not e.syndicated_of]
+
+        # Synthesis is the second long silent stretch. The job stays in the
+        # RESEARCHING state rather than flipping to THINKING: it is one job, and
+        # the evidence the Core is drawing is the evidence being synthesised.
+        publish_ui(
+            UiState.RESEARCHING,
+            subsystem="research",
+            task_id=task_id,
+            status=STAGE_SYNTHESIZING,
+            label=topic[:64] or None,
+            metadata={"kept": len(ranked), "primary": len(primary_only)},
+        )
 
         provider = resolve_synthesis_provider(synthesis_name, settings)
         try:
