@@ -24,7 +24,42 @@ def test_a_real_database_connection_is_refused_instantly_and_names_itself() -> N
     started = time.perf_counter()
     with pytest.raises(UnitTestReachedRealDatabase, match="host=127.0.0.1"):
         psycopg.Connection.connect("host=127.0.0.1 port=15432 dbname=pagentos user=pagentos")
+    with pytest.raises(UnitTestReachedRealDatabase):
+        psycopg.connect("host=127.0.0.1 port=15432 dbname=pagentos user=pagentos")
     assert time.perf_counter() - started < 0.5, "the guard must not dial anything"
+
+
+def test_the_guard_covers_the_path_sqlalchemy_actually_takes() -> None:
+    """The one that matters. SQLAlchemy calls the MODULE's ``connect``; the first guard
+    patched only the class and every engine sailed straight past it."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.exc import DBAPIError
+
+    engine = create_engine("postgresql+psycopg://pagentos:x@127.0.0.1:15432/pagentos")
+    started = time.perf_counter()
+    with pytest.raises((UnitTestReachedRealDatabase, DBAPIError)) as caught:
+        engine.connect()
+    assert "unit test tried to connect to a real database" in str(caught.value)
+    assert time.perf_counter() - started < 0.5, "an engine.connect() must not dial anything"
+    engine.dispose()
+
+
+def test_the_app_lifespan_does_not_dial_the_real_database() -> None:
+    """The exact shape of the second stall: `with TestClient(app)` runs the lifespan - the
+    broker's orphan cleanup and sweeper, the artifact bucket check, the announcer sweep and
+    the ledger backfill - every one of them best-effort and silent on a dead database."""
+    settings = Settings(_env_file=None)
+    app = create_app(settings)
+    started = time.perf_counter()
+    with TestClient(app) as client:
+        response = client.get("/v1/system/health")
+    elapsed = time.perf_counter() - started
+    assert response.status_code == 200
+    # The real dependency checks run here (nothing is mocked), so the answer is honestly
+    # "degraded" - and it must arrive fast: every dial is refused at the client boundary,
+    # never waited out.
+    assert response.json()["checks"]["db"]["status"] == "fail"
+    assert elapsed < 8.0, f"the lifespan + health took {elapsed:.1f}s; something is dialling"
 
 
 def test_an_unauthenticated_request_is_refused_in_milliseconds() -> None:
