@@ -576,3 +576,41 @@ def test_provenance_of_a_briefing_with_no_evidence_claims_nothing(wired, monkeyp
     assert prov["event_ids"] == [] and prov["facts"] == {}
     assert prov["research_job_id"] is None
     assert prov["statement_labels"] == ["uncertainty"]
+
+
+def test_the_durable_row_records_which_subsystem_answered(wired, monkeypatch) -> None:
+    """The defect behind the owner's failed M17 run, pinned.
+
+    Every tool call in that session recorded ``query_kind=""`` because the field was read
+    from the NARRATION intent resolver, which resolves controls like "dur" and returns None
+    for a question. Five correct cognitive answers were therefore reported by the harness as
+    four subsystems "not reached by voice" - a metadata failure wearing the costume of a
+    routing failure (2026-09-05).
+
+    The routing record is written by the engine that dispatched the question, so the durable
+    row can say which cognitive path served it without anyone reading Turkish prose.
+    """
+    client, _identity, _runtime, _sideband, _issued, _engine = wired
+    _use_real_run_evidence(monkeypatch)
+    sid = _create(client)["session_id"]
+    _tool(client, sid, "q1", "activity.explain", question="Son yaptıklarını anlat")
+    _tool(client, sid, "q2", "activity.explain", question="Şu anda hangi hedeflerin var?")
+    _tool(client, sid, "q3", "activity.explain", question="Bunu canlıya alabilir misin?")
+
+    activity = client.get(f"/v1/voice/realtime/sessions/{sid}/activity").json()
+    calls = [c for c in activity["tool_calls"] if c["name"] == "activity.explain"]
+    kinds = [c.get("query_kind") for c in calls]
+    assert "" not in kinds and None not in kinds, f"query_kind was not persisted: {kinds}"
+    assert "goals" in kinds, kinds
+    assert "can_deploy" in kinds, kinds
+
+    by_kind = {c["query_kind"]: c for c in calls}
+    assert by_kind["goals"]["subsystem"] == "goals"
+    assert by_kind["can_deploy"]["subsystem"] == "authority"
+    # The row carries the routing fields themselves, which is what the harness reads. The
+    # evidence behind the authority answer is asserted against PRODUCTION rather than here:
+    # this fixture substitutes a stub evidence source with no authority_policy, so there is
+    # genuinely nothing for that branch to cite, and an assertion to the contrary would be
+    # testing the fixture.
+    for call in calls:
+        assert "subsystem" in call and "evidence_kinds" in call and "entity_ids" in call
