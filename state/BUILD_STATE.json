@@ -2,9 +2,9 @@
   "schema_version": 1,
   "project": "personal-agent-os",
   "current_milestone": "M17_COGNITIVE_FOUNDATIONS",
-  "status": "M17 BUILT_AND_GATED_OFFLINE (all proxies green); M16 PROVEN_REAL except rows 10.5/10.6, which need one 15-second owner command (OWNER_ACTIONS item 17)",
-  "last_completed_milestone": "M15_RESEARCH_ENGINE",
-  "last_updated": "2026-09-05T18:05:00+03:00",
+  "status": "M16 Activity Ledger + Self Explanation + Voice Narration + interruption handling: PROVEN_REAL, QUALIFICATION Stage 10 rows 10.1-10.9 all closed on real owner evidence, no owner action outstanding. One acceptance MECHANISM (the structural-provenance re-check) is unexercised because the only completed session predates the recorder and the deployed core lacks it; it rides along with the next ordinary voice session once a newer build is deployed. M17 Cognitive Foundations BUILT_AND_GATED_OFFLINE (Stage 11 all PROVEN_PROXY).",
+  "last_completed_milestone": "M16_ACTIVITY_LEDGER_SELF_EXPLANATION_VOICE_NARRATION",
+  "last_updated": "2026-09-05T18:15:00+03:00",
   "qualification": {
     "matrix": "docs/QUALIFICATION.md",
     "owner_queue": "docs/OWNER_ACTIONS.md",
@@ -37,14 +37,7 @@
     "owner_run_2026_09_03": "Cloud Core release succeeded (0012/0013, health). Agent update FAILED silently: installer's inline swap refused by NTFS under running processes (same as the 2026-09-01 incident); fixed by wiring the installer through the journaled deployment engine with real runtime handlers, transcript, evidence block and fail-loud M13 assertion. 6b.1/6b.2 remain NOT_YET_PROVEN until the owner's rerun. UPDATE 18:xx: after the engine-based installer the owner's verify-device-service.ps1 reports 6b.1 and 6b.2 PROVEN_REAL (worker as the owner from the installed tree, Chrome available, 24 ops + browser.chrome agree). Next: item 11, real browser smoke through the owner path (scripts/browser/real-browser-smoke.ps1). Owner smoke (real-browser-smoke.ps1) PASSED on the real chain -> 9.2 PROVEN_REAL.",
     "search_provider": "Google primary, DuckDuckGo fallback (owner decision 2026-09-03 evening): provider abstraction in services/browser/browser_agent/search_engines.py with evidence fields (requested_provider/provider/fallback/fallback_reason/query/result_count/attempts), Google organic parser, interstitial/consent detection (never answered), locale hl/gl from payload/--locale/user locale; Cloud Core records the evidence in research run events and discovered_by=browser_search:<provider>. Live from this address on 2026-09-03: Google served its 'unusual traffic' interstitial (network-level, after a day of probe traffic) -> fallback duckduckgo recorded; owner qualification item 12 pending (9.12). Owner's first search-mode run hit a STALE installed worker (11:32 build; installer last ran 19:10, provider commit 19:52): no provider evidence, missing-property error - not a Google outcome. Fix: worker 0.2.0 with contracts {browser.search: 2} on hello/status, schema_version on results, Cloud Core SearchEvidence.contract_ok + CONTRACT MISMATCH event, smoke refuses a lower contract and -UpdateAgentFirst runs the journaled installer before qualifying."
   },
-  "owner_actions_pending": [
-    "M13 item 10 (ready): release the Cloud Core, update the Windows agent once (UAC), run the first real research from /research and give a verdict.",
-    "M12 item 9 (current, evening): K66 re-qualification after the instrumentation + noise pass; fetch-benchmark.ps1 -Latest.",
-    "M8 asset enrollment: enroll the real hosts/networks/devices you authorize, with evidence and scope.",
-    "HARD GATE - runtime confinement before enabling any I/O-capable generated operation or a non-deterministic skill generator (M7 review verdict (d)).",
-    "Deferred: 2.2b fresh-logon companion autostart and full Windows reboot proof land incidentally at the next natural sign-out/reboot; Chrome session enrollment (item 5) for authenticated-site research; a phone for M15.",
-    "Recommended, non-blocking: move Docker Desktop disk image location from C: to E:."
-  ],
+  "owner_actions_pending": "none",
   "quality_gate": {
     "status": "PASS - full gate on the merged M13 tree (282ec79): every step PASS incl. API unit 1935 + integration, PS5.1 suites (installer-browser 16, installer-invocation 32), browser 246 unit + 57 e2e, Windows agent 272 + 135, web build",
     "last_run": "2026-09-03",

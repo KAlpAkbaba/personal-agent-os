@@ -240,7 +240,7 @@ Expected last line: `REAL BROWSER SMOKE: PASS`, preceded by `live worker proven:
 If it stops with `deployment/version mismatch` or `INSTALL FAILED`, paste the message, the
 install log it names and the output of `.\scripts\verify-device-service.ps1`; do not rerun.
 
-### 17. Re-verify the completed voice session (about fifteen seconds, no talking) — **this is the current action**
+### 17. Re-verify the completed voice session - **DONE (2026-09-05, run automatically; nothing was needed from you)**
 
 Unblocks: `docs/QUALIFICATION.md` 10.5 and 10.6 (10.1-10.4 and 10.7-10.9 are already
 PROVEN_REAL from your session).
