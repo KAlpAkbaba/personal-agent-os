@@ -124,6 +124,21 @@ exists because the owner connected it, and the only thing the Core takes from it
 listening is the local gate's bounded level. The readout names which source (bus or the
 local session) produced the visual on every render.
 
+**Lifecycle versus energy (ADR-0066, 2026-09-07).** The RMS decides only the pulse's
+amplitude; it never decides the state. `speaking` is the controller's SEMANTIC speech
+lifecycle: it begins at the first audible playback and ends when the final audio belonging
+to that response has actually completed — the provider's `audio_stopped` for that response,
+else analyser silence for `PLAYBACK_RELEASE_MS` (400 ms) after generation ended, bounded by
+`PLAYBACK_DRAIN_MAX_MS` (8 s) — or at once on a barge-in, "dur" or a cancel. The provider's
+`response.done` is the end of *generation*, not of playback; over WebRTC the media track
+still holds what was generated but not yet played, and the controller stays `speaking`
+(snapshot `speech.phase = "draining"`) until that audio is gone. A natural pause inside an
+answer therefore draws a calm Core — `speaking` with `pulse` 0 — and never a listening one;
+the voice cell words the drain as "üretim bitti, kalan ses çalıyor". Nothing here invents
+speech after playback finished: a response that never became audible ends at
+`response_done`, and every audible response ends in exactly one `audio_done` event whose
+`basis` says how the end was judged.
+
 ### Local voice overlay (ADR-0061)
 
 | Controller state | Visual | Scalar source |

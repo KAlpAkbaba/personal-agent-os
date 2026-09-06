@@ -17,6 +17,7 @@ import {
   SUPPRESSION_LABEL,
   VOICE_LABEL,
   VOICE_STATE_LABEL,
+  speechPhaseNote,
 } from "../lib/voice/labels";
 import {
   type AgcPreference,
@@ -352,8 +353,9 @@ function VoiceConsole() {
         <div className="panel">
           <div className="status-row">
             <strong>Durum</strong>
-            <span className={`badge ${snapshot.state === "error" ? "fail" : live ? "ok" : "unknown"}`}>
+            <span className={`badge ${snapshot.state === "error" ? "fail" : live ? "ok" : "unknown"}`} data-speech-phase={snapshot.speech.phase}>
               {STATE_LABEL[snapshot.state]}
+              {speechPhaseNote(snapshot) ? ` · ${speechPhaseNote(snapshot)}` : ""}
             </span>
           </div>
           <div className="status-row">

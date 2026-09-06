@@ -197,7 +197,11 @@ describe("dur after the response already completed", () => {
     // The provider is done generating while the local audio is still playing.
     t.scheduler.advance(100);
     t.transport.emit({ type: "response_done", at: 1400 });
-    expect(t.controller.getSnapshot().state).toBe("listening");
+    // ADR-0066: the response is done generating but its audio is still
+    // playing, so the state is still `speaking` (phase `draining`) — and the
+    // provider still has nothing to cancel.
+    expect(t.controller.getSnapshot().state).toBe("speaking");
+    expect(t.controller.getSnapshot().speech.phase).toBe("draining");
     expect(t.playback.playing).toBe(true); // draining
 
     t.scheduler.advance(100); // now = 1500

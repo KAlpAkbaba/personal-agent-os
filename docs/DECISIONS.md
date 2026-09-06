@@ -3977,6 +3977,11 @@ Decisions:
    silenced the path (stop-first, ADR-0040), and an unmeasurable envelope draws no pulse and
    is worded "Çıkış seviyesi ölçülemedi" rather than drawn as silence. The Core itself has
    no Web Audio code — it reads one number from the store.
+   *Addendum (2026-09-07, ADR-0066):* the envelope is a measurement of amplitude and
+   nothing more. It does not decide when `speaking` ends — the controller's speech
+   lifecycle does (first audible playback → the final audio of that response actually
+   completed, or an interruption), and `response_done` alone does not end it. A pause
+   inside an answer is `speaking` with a pulse of 0, never `listening`.
 4. **The Core's voice control states facts and offers one action.** `VoiceControl` /
    `VoiceControlView` is an `ambient-cell`: connected / connecting / disconnected, the
    controller state, the selected microphone and speaker by name, the noise mode from the
@@ -4347,3 +4352,69 @@ position, phase or tilt; any motion for `untold`, `connecting`, `unauthorized`,
 `low` or as a claim anywhere; any strobe. The first thing the owner should notice on a real
 run is that the Core is still when the system is quiet and that this reads as calm rather
 than as broken — the whole reason the structure was allowed to become this rich.
+
+## ADR-0066 — Speaking is a lifecycle; energy is a measurement (2026-09-07)
+
+Status: Accepted
+
+Context: M18.2 DEFECT 1, owner-observed on a real realtime session over WebRTC: the Core
+left SPEAKING in the middle of a sentence and drew `listening` while the assistant was
+still audibly talking. The mechanism was in the client, not in the analyser. The
+controller moved `speaking` to `listening` on the provider's `response.done`, and over
+WebRTC that event marks the end of GENERATION — the media track still holds whatever was
+generated but not yet played, often a sentence or more, and the provider only sends
+`output_audio_buffer.stopped` when playback actually ends. The wire dialect already turned
+that into `audio_stopped`; the controller only used it to clear a flag. The playback RMS,
+which some suspected, never decided the state — it drove the pulse and nothing else, which
+is exactly what ADR-0061 §3 intended and what this ADR keeps.
+
+Decisions:
+
+1. **`speaking` is the semantic speech lifecycle of one response, tracked per response.**
+   `VoiceSessionController` keeps a `SpeechLifecycle` — `responseId` (from the events),
+   `phase` (`idle` → `generating` at `response_started` → `audible` at the first observed
+   audio → `draining` when generation ends while audio is still playing → `done`),
+   `firstAudioAt`, `generationDoneAt`, `playbackDoneAt` and the `basis` on which the end was
+   judged — and exposes it on the snapshot as `speech`. The `state` vocabulary is
+   unchanged: `speaking` stays `speaking` through `draining`; the voice cell and `/voice`
+   word the phase ("üretim bitti, kalan ses çalıyor") so the owner can see the difference
+   between a generation that is over and speech that is over.
+2. **`response_done` ends generation, never speech by itself.** If the provider's buffer is
+   still playing (`responseAudible`), the state stays `speaking` in phase `draining` and
+   two bounds are armed; it leaves `speaking` only on (a) the provider's `audio_stopped`
+   for THAT response — an `audio_stopped` carrying another response's id is stale and is
+   ignored; (b) analyser silence for `PLAYBACK_RELEASE_MS` (400 ms) counted from the later
+   of generation end and the last measured output energy; (c) `PLAYBACK_DRAIN_MAX_MS`
+   (8 s) after generation end, whatever the analyser says; or (d) an interruption. The
+   analyser is polled every `PLAYBACK_POLL_MS` (50 ms) while draining, energy above
+   `PLAYBACK_ENERGY_LEVEL` (0.02 of full scale) counts as audio, and a path this client
+   silenced itself (an early mute, a potential barge-in) is not silence — the lane's own
+   verdict or the cap decides. A `tool_running` continuation keeps its behaviour: the
+   state goes to `tool_running` at `response_done` and the drain still closes truthfully
+   underneath it. A provider `audio_stopped` that precedes `response_done` is remembered
+   and the response ends at `response_done`, at the stop's time.
+3. **Interruption ends it now.** A barge-in (either lane), an explicit "dur", a
+   `response_cancelled`, a new `response_started` over a draining one, a lost leg and a
+   disconnect all close the lifecycle immediately with `basis` `interrupted` (or
+   `superseded` for the takeover, whose real end is unknown from here); no timer and no
+   later provider event may end a response twice.
+4. **Nothing invents speech after playback finished, and no end is lost.** A response that
+   never became audible ends at `response_done` with no audio event at all. Every response
+   that had audio ends in exactly one new client timing event, `audio_done` (`t_ms`, `turn`,
+   payload `response_id`, `basis: provider | silence | cap | interrupted | superseded`,
+   plus `drain_ms` and `audible_ms` as numbers), reported through the same fire-and-forget
+   reporter as every other timing kind. The server is gaining the kind in parallel; until
+   then `service.py` skips unknown kinds inside an accepted batch, and the client's
+   contract list carries `audio_done` so the reporter cannot throw on it.
+5. **The overlay is unchanged in kind and pinned in test.** `applyVoiceOverlay` draws
+   `speaking` with `outputLevel` 0 as a calm speaking Core — breath and scale kept, pulse
+   0 — and `voice-overlay.test.ts` now asserts that a pause differs from `interrupted` and
+   that resuming changes only the amplitude channels.
+
+Consequences: `pnpm --filter @pagentos/web test` grows from 660 to 678 tests
+(`tests/voice/speech-lifecycle.test.ts` covers (a)–(h) of the defect brief with
+`FakeTransport` + `FakePlayback`, no browser); four existing tests that asserted
+`listening` at `response_done` over draining audio now assert `speaking`/`draining` and end
+the response through the provider's stop. `docs/M18_CORE_RENDERER.md` §3 and ADR-0061 §3
+carry the rule. Owner re-run pending: the expected observation is that the Core stays in
+`speaking` — calmer through pauses — until the last word, and drops on "dur" as before.

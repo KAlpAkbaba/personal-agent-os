@@ -18,7 +18,7 @@
  */
 
 import { type GatedDetectorSnapshot, listAudioDevices } from "./audio";
-import type { ControllerSnapshot, VoiceUiState } from "./controller";
+import { type ControllerSnapshot, EMPTY_SPEECH, type VoiceUiState } from "./controller";
 import type { AppliedInputSettings, AudioDevice } from "./ports";
 import type { EnvironmentMode } from "./calibration";
 import {
@@ -121,6 +121,7 @@ function idleController(): ControllerSnapshot {
     toolsRunning: [],
     sidebandLog: [],
     narrationCursor: null,
+    speech: EMPTY_SPEECH,
     hesitation: { held: 0, resumed_within_hold: 0 },
     online: true,
     eventsAccepted: 0,
