@@ -55,6 +55,8 @@ from app.security.runtime import SecurityRuntime
 from app.selfhealing.routes import router as selfhealing_router
 from app.selfhealing.runtime import SelfHealingRuntime
 from app.selfmodel.routes import router as selfmodel_router
+from app.uistate import UiState
+from app.uistate import publish as publish_ui_state
 from app.uistate.routes import router as ui_state_router
 from app.voice.realtime_sessions.routes import router as voice_realtime_router
 from app.voice.realtime_sessions.runtime import RealtimeVoiceRuntime
@@ -155,6 +157,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "ledger_backfill_at_startup_failed", error=f"{type(exc).__name__}: {exc}"
             )
         logger.info("broker_started")
+        # The bus's first word after a (re)start is a truthful idle, not silence: the
+        # owner's M18 eye run (2026-09-06) read an EMPTY current state right after a
+        # release, which the harness could not tell from "nothing ever happened". An
+        # idle stamped by the system with a startup timestamp is a real fact; it is
+        # never a voice state (no realtime session exists yet) and the first live
+        # session's event replaces it.
+        publish_ui_state(
+            UiState.IDLE,
+            subsystem="system",
+            intensity=0.0,
+            status="startup",
+            label="api_started",
+            metadata={"reason": "api_started"},
+        )
         try:
             yield
         finally:
