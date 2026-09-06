@@ -167,7 +167,7 @@ function Get-InputIdle {
 }
 
 function Get-LedgerRows {
-    $doc = Get-JsonOrNull ("/v1/ledger/events?since=" + [uri]::EscapeDataString($runStartIso) + "&limit=300")
+    $doc = Get-JsonOrNull ("/v1/ledger/events?since=" + [uri]::EscapeDataString($runStartIso) + "&limit=200")
     return , (Get-ArrayProperty -InputObject $doc -Name "events")
 }
 

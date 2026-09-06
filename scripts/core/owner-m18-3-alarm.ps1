@@ -161,7 +161,7 @@ function Get-DeviceStatus {
 
 function Get-LedgerRows {
     <#  Every ledger row since the run started (all types; filtered client-side).  #>
-    $doc = Get-JsonOrNull ("/v1/ledger/events?since=" + [uri]::EscapeDataString($runStartIso) + "&limit=300")
+    $doc = Get-JsonOrNull ("/v1/ledger/events?since=" + [uri]::EscapeDataString($runStartIso) + "&limit=200")
     return , (Get-ArrayProperty -InputObject $doc -Name "events")
 }
 
