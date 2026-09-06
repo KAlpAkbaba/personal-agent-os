@@ -68,6 +68,7 @@ def runtimes(statuses, holdoffs):
 def _fresh_publisher():
     set_publisher(UiStatePublisher())
     ambient_service.cancel_display_test()
+    ambient_service.reset_presence_watermark()
     yield
     set_publisher(UiStatePublisher())
     ambient_service.cancel_display_test()
@@ -437,6 +438,36 @@ def test_wake_on_return_only_acts_when_the_display_is_actually_off(
     assert step is not None
     assert device.count("desktop.display_wake") == 1
     assert device.payload_for("desktop.display_wake")["reason"] == "owner_returned"
+
+
+def test_the_tick_wakes_a_dark_display_when_the_owner_returns(
+    session, sequence, device, runtimes
+):
+    """Spec §3.9's ``wake_on_return``, through the TICK rather than by calling the helper.
+
+    Read from the presence BUS rather than from the current assertion, because
+    ``owner.returned`` is a transition and the assertion that follows it is ``present`` —
+    by the time a tick reads the state, the moment of return is gone.
+    """
+    from app.uistate.publisher import publish
+
+    ambient_service.reset_presence_watermark()
+    runtimes.statuses.record(DEVICE, _status(display={"state": DISPLAY_OFF}), now=NOW)
+    ambient_service.tick(session, sequence=sequence, runtimes=runtimes, now=NOW)
+    assert device.count("desktop.display_wake") == 0  # nothing returned yet
+
+    publish(UiState.OWNER_RETURNED, subsystem="presence")
+    ambient_service.tick(
+        session, sequence=sequence, runtimes=runtimes, now=NOW + timedelta(seconds=10)
+    )
+    assert device.count("desktop.display_wake") == 1
+
+    # ...and the same event is not acted on twice: the watermark advanced past it.
+    ambient_service.tick(
+        session, sequence=sequence, runtimes=runtimes, now=NOW + timedelta(seconds=20)
+    )
+    assert device.count("desktop.display_wake") == 1
+    ambient_service.reset_presence_watermark()
 
 
 def test_wake_on_return_is_skipped_when_the_owner_turned_it_off(

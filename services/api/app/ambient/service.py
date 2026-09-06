@@ -312,6 +312,13 @@ def tick(
             terminal_status=step.receipt.terminal_status,
         )
 
+    # The owner came back to a dark screen (spec §3.9's ``wake_on_return``). Checked before
+    # the decision, and from the presence BUS rather than from the current assertion,
+    # because ``owner.returned`` is a transition and the assertion that follows it is
+    # ``present`` — by the time a tick reads the state, the moment of return is gone.
+    if _owner_returned_since(moment):
+        wake_on_return(session, sequence=sequence, runtimes=live, now=moment)
+
     inputs = collect_inputs(session, runtimes=live, now=moment)
     decision = decide(inputs, policy, moment)
     if not decision.acts or sequence is None:
@@ -332,6 +339,45 @@ def tick(
         receipt_capability=step.receipt_capability,
         terminal_status=step.receipt.terminal_status,
     )
+
+
+#: Watermark into ``app.uistate.publisher``'s own monotonic sequence, so an
+#: ``owner.returned`` event is acted on ONCE — the same technique
+#: ``app.routines.models.Routine.last_presence_sequence`` uses for a presence trigger, in
+#: memory here because the consequence (waking a display that is already awake) is
+#: harmless and the watermark is worth less than a table.
+_last_presence_sequence = 0
+
+
+def _owner_returned_since(now: datetime) -> bool:
+    """True when ``owner.returned`` was published since the last tick looked.
+
+    Never raises: a UI bus that cannot be read must not stop the ambient tick, and the
+    consequence of missing a return is a screen that stays dark until the owner touches
+    the keyboard — which wakes it anyway, on the device, without us.
+    """
+    global _last_presence_sequence
+    try:
+        from app.uistate.publisher import get_publisher
+
+        events = get_publisher().tail(limit=100, after_sequence=_last_presence_sequence)
+    except Exception as exc:  # noqa: BLE001 - see docstring
+        logger.warning("ambient_presence_tail_failed", error=type(exc).__name__)
+        return False
+    returned = False
+    for event in events:
+        if event.sequence > _last_presence_sequence:
+            _last_presence_sequence = event.sequence
+        if getattr(event.state, "value", event.state) == UiState.OWNER_RETURNED.value:
+            returned = True
+    del now  # the bus's own sequence is the ordering; wall-clock time is not needed
+    return returned
+
+
+def reset_presence_watermark() -> None:
+    """Tests only: forget which bus events this process has already seen."""
+    global _last_presence_sequence
+    _last_presence_sequence = 0
 
 
 def _publish_display_intent(step: Any, *, reason: str) -> None:
@@ -492,6 +538,7 @@ __all__ = [
     "note_alarm_wake",
     "note_display_refusal",
     "pending_display_test",
+    "reset_presence_watermark",
     "schedule_display_test",
     "set_policy",
     "tick",
