@@ -106,6 +106,24 @@ RESEARCH_RESULT_TR = (
 )
 
 
+#: docs/DECISIONS.md ADR-0075: after a research finishes, a question ABOUT it is answered
+#: from its report - it is never a reason to crawl again. The server enforces this (a
+#: research.start on a follow-up turn is refused before any handler runs), so the model is
+#: told plainly, once, rather than being trusted with it.
+RESEARCH_FOLLOWUP_TR = (
+    "Bir araştırma tamamlandıktan sonra o araştırmayla ilgili her soruyu "
+    "('teknik anlat', 'hangi sayfalar elendi', 'araştırma sırasında ne sorun oldu', "
+    "'kaynakları söyle', 'birinci bulguyu detaylandır', 'neden önemli') "
+    "activity.explain aracıyla, TAMAMLANMIŞ raporun üzerinden yanıtlarsın ve dönen "
+    "'speech' metnini aynen okursun. Bunlar için research.start ÇAĞIRMAZSIN. "
+    "research.start yalnızca yeni bir konu için ya da sahibin açıkça 'yeniden araştır', "
+    "'tekrar araştır', 'araştırmayı yeniden yap' demesi üzerine çağrılır. "
+    "Aksi hâlde sunucu araştırmayı başlatmaz, reddeder; boşuna denemezsin. "
+    "Sahibi hangi araştırmayı kastettiği belirsizse araç tek bir kısa soru döner; "
+    "o soruyu aynen sorar, kendin bir araştırma seçmezsin."
+)
+
+
 #: docs/M18_ACTION_CONTRACT.md §6 (ADR-0063): current state comes from state.now, the past
 #: from activity.explain, and a command to the eye or to production is ALWAYS a tool call
 #: whose 'speech' is read verbatim. The banned phrases are named, from the one place they
@@ -151,6 +169,7 @@ def build_instructions(
         SELF_EXPLANATION_TR,
         ACTION_GROUNDING_TR,
         RESEARCH_RESULT_TR,
+        RESEARCH_FOLLOWUP_TR,
     ]
     style = VOICE_STYLE_BLOCKS.get((voice_profile or "").lower())
     if style:
@@ -187,6 +206,7 @@ __all__ = [
     "ACTION_GROUNDING_TR",
     "EXECUTIVE_DEFAULTS_TR",
     "PERSONA_TR",
+    "RESEARCH_FOLLOWUP_TR",
     "RESEARCH_RESULT_TR",
     "SELF_EXPLANATION_TR",
     "VOICE_STYLE_ARBOR_TR",

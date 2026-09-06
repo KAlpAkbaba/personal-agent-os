@@ -30,6 +30,7 @@ from app.narration.engine import PARAGRAPH_LIST
 from app.state.now import SCOPES
 from app.voice.errors import VoiceError, VoiceErrorClass
 from app.voice.intents import (
+    RESEARCH_CLASSES_BOUND_TO_A_RUN,
     Intent,
     apply_to_narration,
     resolve_intent,
@@ -62,6 +63,21 @@ RESEARCH_START_WORKFLOW_FAILED_TR = "Araştırmayı başlatamadım; arka plan se
 #: naming style of app.actions.receipt's ERROR_* constants).
 ERROR_NO_CAPABLE_DEVICE = "no_capable_device"
 ERROR_RESEARCH_WORKFLOW_START_FAILED = "research_workflow_start_failed"
+
+#: docs/DECISIONS.md ADR-0075. The owner asked "Teknik anlat." after a completed
+#: research and the model called activity.explain AND research.start - a second crawl
+#: nobody asked for. The honest refusal, in the same shape as plan.redirect's
+#: (ADR-0067 amendment): the tool CALL succeeds, and what it returns says plainly that
+#: no research was started and what is being answered instead.
+REASON_RESEARCH_FOLLOWUP_TURN = "research_followup_turn"
+RESEARCH_FOLLOWUP_REFUSED_TR = (
+    "Yeni bir araştırma başlatmadım efendim; son araştırmanın sonuçlarını anlatıyorum."
+)
+
+#: The tools that can cause a crawl. The guard is keyed on this set rather than on one
+#: tool name so a future crawl-starting tool inherits the refusal by being added here,
+#: and so the model's CHOICE of tool cannot route around it.
+CRAWL_STARTING_TOOLS: frozenset[str] = frozenset({"research.start"})
 
 
 @dataclass
@@ -325,6 +341,83 @@ def research_start(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
     }
 
 
+#: How long a resolved utterance still speaks for the turn a tool call belongs to. A
+#: provider round trip is seconds; ten minutes is generous and bounded, so a follow-up
+#: turn from an hour ago can never block a research the owner asks for now.
+RESEARCH_TURN_TTL_S = 600.0
+
+
+def research_followup_refusal(
+    db: Session,
+    *,
+    tool_name: str,
+    last_utterance: dict[str, Any] | None,
+    plan: dict[str, Any] | None = None,
+    last_research: dict[str, Any] | None = None,
+    now: datetime | None = None,
+    ttl_s: float = RESEARCH_TURN_TTL_S,
+) -> dict[str, Any] | None:
+    """The refusal payload for a crawl asked for on a research FOLLOW-UP turn, or None.
+
+    docs/DECISIONS.md ADR-0075. This runs in the server's own tool relay
+    (``service.handle_tool_call``), BEFORE any handler, so it does not depend on the
+    model choosing the right tool - which is exactly what failed in the owner's run.
+    It is keyed on the last utterance the ONE router resolved for this session (the
+    same record the ``voice_intent_resolved`` audit row is written from), never on
+    re-reading the Turkish here: there is no second phrase table.
+
+    Refuses only when all three hold:
+
+    * the tool would start a crawl (:data:`CRAWL_STARTING_TOOLS`);
+    * the latest resolved utterance of this session is a
+      ``research_technical_explanation`` or ``research_followup`` and is recent enough
+      to be this turn (an intervening "yeniden araştır" overwrites the record, so a
+      retry is never shadowed by an older follow-up);
+    * a COMPLETED research is actually bound, so there is something to answer from.
+
+    A crawl with nothing to answer from is not refused: refusing then would leave the
+    owner with neither a research nor an explanation.
+    """
+    if tool_name not in CRAWL_STARTING_TOOLS:
+        return None
+    record = dict(last_utterance or {})
+    klass = record.get("research_class")
+    if klass not in RESEARCH_CLASSES_BOUND_TO_A_RUN:
+        return None
+    now = now or datetime.now(UTC)
+    at = _parsed_at(record.get("at"))
+    if at is not None and (now - at).total_seconds() > ttl_s:
+        return None
+
+    from app.explain.research_context import bind_completed_research
+
+    binding = bind_completed_research(db, last_research=last_research, plan=plan, now=now)
+    if binding.context is None:
+        return None
+    return {
+        "status": "refused",
+        "reason": REASON_RESEARCH_FOLLOWUP_TURN,
+        "research_class": klass,
+        "research_job_id": binding.research_job_id,
+        "research_artifact_id": binding.artifact_id,
+        "binding_basis": binding.basis,
+        "utterance_t_ms": record.get("t_ms"),
+        "utterance_turn": record.get("turn"),
+        "message": RESEARCH_FOLLOWUP_REFUSED_TR,
+        "speech": RESEARCH_FOLLOWUP_REFUSED_TR,
+    }
+
+
+def _parsed_at(raw: Any) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+
 def plan_redirect(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
     instruction = _require_str(arguments, "instruction", max_len=500)
     plan = ctx.context.get("plan")
@@ -540,6 +633,7 @@ def activity_explain(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, A
             "activity.explain needs the ledger; no database on this session",
         )
     from app.explain.classify import LIVE_STATE_KINDS, QUERY_EYE_STATE
+    from app.explain.research_context import bind_completed_research, has_completed_research
     from app.explain.service import explain_to_briefing
     from app.voice.realtime_sessions.models import RealtimeSessionRow
 
@@ -547,7 +641,17 @@ def activity_explain(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, A
     # attached are moves through that briefing, not a new one: the provider may route them
     # here, so they are honoured the same way narration.control does, and the durable
     # record carries the normalised intent rather than the wording.
-    resolved = resolve_intent(question, session_state=ctx.fsm_state)
+    #
+    # ADR-0075: the router also decides, from the SAME utterance, whether this is a
+    # question about a research that has already finished. That is what binds the answer
+    # to a job instead of leaving it to whatever is latest - and what the guard in
+    # ``service.handle_tool_call`` reads to refuse a second crawl on this turn.
+    resolved = resolve_intent(
+        question,
+        session_state=ctx.fsm_state,
+        has_completed_research=has_completed_research(ctx.db, now=ctx.now),
+    )
+    briefing_ctx = dict(ctx.context.get("briefing") or {})
     if ctx.context.get("narration_session_id") and resolved.intent in (
         Intent.DETAIL,
         Intent.TECHNICAL,
@@ -559,7 +663,35 @@ def activity_explain(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, A
             **moved,
             "level": _level_for(ctx.context.get("presentation")),
             "routed": "narration",
+            # The briefing being moved through is already bound to a run; say which,
+            # so every answer about a research carries the same identity.
+            "research_job_id": briefing_ctx.get("research_job_id"),
+            "research_artifact_id": briefing_ctx.get("research_artifact_id"),
         }
+
+    binding = None
+    if resolved.research_class in RESEARCH_CLASSES_BOUND_TO_A_RUN:
+        binding = bind_completed_research(
+            ctx.db,
+            last_research=ctx.context.get("last_research"),
+            plan=ctx.context.get("plan"),
+            now=ctx.now,
+        )
+        if binding.ambiguous:
+            # Two plausible completed researches and nothing linking either one to this
+            # conversation: ONE short question, no guess, and emphatically no crawl
+            # (ADR-0075). Recorded on the tool call like any other answer.
+            ctx.context["last_intent"] = resolved.intent.value
+            return {
+                "status": "needs_clarification",
+                "reason": "ambiguous_research_context",
+                "speech": binding.clarifying_question(),
+                "intent": resolved.to_dict(),
+                "level": "executive",
+                "narration_session_id": None,
+                "routed": "research_context",
+                **binding.as_dict(),
+            }
 
     # CURRENT STATE is not the ledger's to answer (docs/M18_ACTION_CONTRACT.md §3): a
     # world_state / eye_state question goes to the same live composer state.now uses, so
@@ -588,7 +720,12 @@ def activity_explain(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, A
         }
 
     record = explain_to_briefing(
-        ctx.db, question, level=level, now=ctx.now, device_id=ctx.device_id
+        ctx.db,
+        question,
+        level=level,
+        now=ctx.now,
+        device_id=ctx.device_id,
+        research_job_id=binding.research_job_id if binding is not None else None,
     )
     row = ctx.db.get(RealtimeSessionRow, ctx.session_id)
     if row is not None and record.narration_session_id is not None:
@@ -606,6 +743,10 @@ def activity_explain(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, A
         "artifact_id": str(record.artifact_id),
         "kind": record.briefing.query.kind,
         "level": record.level,
+        # ADR-0075: the completed research this briefing was built from travels with the
+        # session, so a later cursor move through the same briefing names the same run.
+        "research_job_id": record.briefing.research_job_id,
+        "research_artifact_id": record.briefing.research_artifact_id,
     }
     ctx.push(
         SB_NARRATION_CURSOR,
@@ -620,7 +761,10 @@ def activity_explain(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, A
         },
     )
     _explained_note(ctx, record)
-    return {**record.as_dict(), "intent": resolved.to_dict()}
+    out: dict[str, Any] = {**record.as_dict(), "intent": resolved.to_dict()}
+    if binding is not None:
+        out["research_binding"] = binding.as_dict()
+    return out
 
 
 def _level_for(presentation: Any) -> str:
@@ -864,13 +1008,17 @@ def default_registry() -> ToolRegistry:
 
 
 __all__ = [
+    "CRAWL_STARTING_TOOLS",
     "ERROR_NO_CAPABLE_DEVICE",
     "ERROR_RESEARCH_WORKFLOW_START_FAILED",
     "PLAN_REDIRECT_REFUSED_TR",
+    "REASON_RESEARCH_FOLLOWUP_TURN",
+    "RESEARCH_FOLLOWUP_REFUSED_TR",
     "RESEARCH_PREAMBLE_TR",
     "RESEARCH_START_DB_MISSING_TR",
     "RESEARCH_START_NO_DEVICE_TR",
     "RESEARCH_START_WORKFLOW_FAILED_TR",
+    "RESEARCH_TURN_TTL_S",
     "ToolContext",
     "ToolHandler",
     "ToolRegistry",
@@ -878,5 +1026,6 @@ __all__ = [
     "activity_explain",
     "default_registry",
     "plan_redirect",
+    "research_followup_refusal",
     "research_start",
 ]

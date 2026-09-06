@@ -65,7 +65,11 @@ from app.voice.realtime_sessions.sideband import (
     SidebandPusher,
     sideband_frame,
 )
-from app.voice.realtime_sessions.tools import ToolContext, ToolRegistry
+from app.voice.realtime_sessions.tools import (
+    ToolContext,
+    ToolRegistry,
+    research_followup_refusal,
+)
 
 logger = get_logger("app.voice.realtime_sessions.service")
 
@@ -83,6 +87,10 @@ ACTION_CLIENT_EVENT = "voice_client_event"
 ACTION_INTENT_RESOLVED = "voice_intent_resolved"
 ACTION_SIDEBAND_QUEUED = "voice_sideband_queued"
 ACTION_SIDEBAND_PUSHED = "voice_sideband_pushed"
+#: docs/DECISIONS.md ADR-0075: a crawl asked for on a research FOLLOW-UP turn, refused
+#: by the server before any handler ran. Audited under its own action so "did the guard
+#: fire, and which run did it bind to?" is answerable from durable rows alone.
+ACTION_RESEARCH_START_REFUSED = "voice_research_start_refused"
 
 #: client-reported event kinds accepted by POST .../events
 STATE_EVENT_KINDS = ("utterance", "summary", "intent", "state", "error", "spoken")
@@ -466,6 +474,11 @@ def session_state(db: Session, row: RealtimeSessionRow) -> dict[str, Any]:
         "narration": narration,
         "presentation": ctx.get("presentation"),
         "last_intent": ctx.get("last_intent"),
+        # ADR-0075: the research this session started and saw finish, and the last
+        # utterance the router resolved - the two facts the follow-up guard is keyed on,
+        # readable by a harness without going through the audit rows.
+        "last_research": ctx.get("last_research"),
+        "last_utterance": ctx.get("last_utterance"),
         "fsm_state": ctx.get("fsm_state"),
         "barge_in_count": int(ctx.get("barge_in_count", 0)),
         "voice": ctx.get("voice"),
@@ -646,6 +659,43 @@ def handle_tool_call(
     )
     started = utcnow()
     preamble: str | None = None
+    # docs/DECISIONS.md ADR-0075. BEFORE any handler runs: a crawl asked for on a turn
+    # the ONE router classified as a research follow-up is refused here, in the relay
+    # every tool call passes through, so the model's choice of tool cannot route around
+    # it. The refusal is a SUCCEEDED call whose result says plainly that nothing was
+    # started and which run is being answered from instead - the same honest shape
+    # plan.redirect's refusal has (ADR-0067 amendment).
+    refusal = research_followup_refusal(
+        db,
+        tool_name=name,
+        last_utterance=(row.context_json or {}).get("last_utterance"),
+        plan=(row.context_json or {}).get("plan"),
+        last_research=(row.context_json or {}).get("last_research"),
+        now=now,
+    )
+    if refusal is not None and spec is not None:
+        call.status = TOOL_STATUS_SUCCEEDED
+        call.result_json = refusal
+        call.completed_at = utcnow()
+        call.long_running = False
+        _audit(
+            db,
+            ACTION_RESEARCH_START_REFUSED,
+            row,
+            trace_id=trace_id,
+            metadata={
+                "call_id": call_id,
+                "name": name,
+                "reason": refusal["reason"],
+                "research_class": refusal["research_class"],
+                "research_job_id": refusal["research_job_id"],
+                "research_artifact_id": refusal["research_artifact_id"],
+                "binding_basis": refusal["binding_basis"],
+            },
+        )
+        _touch(row, now)
+        db.commit()
+        return _tool_row_payload(call)
     if spec is None:
         call.status = TOOL_STATUS_FAILED
         call.error_class = VoiceErrorClass.CAPABILITY_MISSING.value
@@ -712,6 +762,43 @@ def handle_tool_call(
     return _tool_row_payload(call, preamble=preamble)
 
 
+#: The tool whose completion establishes "the research THIS conversation is about"
+#: (docs/DECISIONS.md ADR-0075).
+RESEARCH_START_TOOL_NAME = "research.start"
+
+
+def _record_research_linkage(
+    ctx: dict[str, Any],
+    call: RealtimeToolCall,
+    running_result: dict[str, Any],
+    now: datetime,
+) -> None:
+    """Remember, durably, which research this session started and saw finish.
+
+    ADR-0075: a follow-up ("teknik anlat") in the same conversation is about THIS run,
+    not about whatever finished most recently somewhere else. The linkage is written at
+    the moment the call completes, from the ``task_id`` the RUNNING result already
+    carried (ADR-0067 amendment) - never inferred later from timing or from the topic
+    text. A failed research writes nothing: there is no completed run to answer from.
+    """
+    if call.name != RESEARCH_START_TOOL_NAME or call.status != TOOL_STATUS_SUCCEEDED:
+        return
+    terminal = dict(call.result_json or {})
+    task_id = str(running_result.get("task_id") or terminal.get("task_id") or "")
+    if not task_id:
+        return
+    plan = dict(ctx.get("plan") or {})
+    ctx["last_research"] = {
+        "research_job_id": task_id,
+        "call_id": call.call_id,
+        "topic": str(running_result.get("topic") or plan.get("topic") or "")[:500],
+        "completed_at": now.isoformat().replace("+00:00", "Z"),
+    }
+    if plan and str(plan.get("task_id") or "") == task_id:
+        plan["research_job_id"] = task_id
+        ctx["plan"] = plan
+
+
 def complete_tool_call(
     db: Session,
     row: RealtimeSessionRow,
@@ -746,6 +833,7 @@ def complete_tool_call(
             f"tool call {call_id!r} is already {call.status}",
             details={"status": call.status},
         )
+    running_result = dict(call.result_json or {})
     if error:
         call.status = TOOL_STATUS_FAILED
         call.error_class = str(error.get("error_class") or VoiceErrorClass.DEPENDENCY_UNAVAILABLE)
@@ -760,6 +848,7 @@ def complete_tool_call(
         plan = dict(plan)
         plan["status"] = "completed" if call.status == TOOL_STATUS_SUCCEEDED else "failed"
         ctx["plan"] = plan
+    _record_research_linkage(ctx, call, running_result, now)
     payload = {
         "call_id": call.call_id,
         "name": call.name,
@@ -853,6 +942,10 @@ def complete_tool_call_system(
     call = get_tool_call(db, row.id, call_id)
     if call is None or call.status != TOOL_STATUS_RUNNING:
         return None
+    # The RUNNING result is about to be replaced by the terminal one; the research
+    # linkage (ADR-0067 amendment: research.start records its real ``task_id`` here)
+    # lives on it, and ADR-0075 needs it AFTER the replacement.
+    running_result = dict(call.result_json or {})
     if error:
         call.status = TOOL_STATUS_FAILED
         call.error_class = str(error.get("error_class") or VoiceErrorClass.DEPENDENCY_UNAVAILABLE)
@@ -874,6 +967,7 @@ def complete_tool_call_system(
         plan = dict(plan)
         plan["status"] = "completed" if call.status == TOOL_STATUS_SUCCEEDED else "failed"
         ctx["plan"] = plan
+    _record_research_linkage(ctx, call, running_result, now)
     payload = {
         "call_id": call.call_id,
         "name": call.name,
@@ -949,6 +1043,10 @@ def record_client_events(
     ctx = dict(row.context_json or {})
     resolved: list[dict[str, Any]] = []
     narration_state = None
+    #: Whether a COMPLETED research exists to answer a follow-up from (ADR-0075).
+    #: Established ONCE per request, lazily, and only when an utterance actually needs
+    #: it: it is a durable read, and most client events are not utterances at all.
+    research_context_known: bool | None = None
     accepted = 0
     sideband_payloads: list[tuple[str, dict[str, Any]]] = []
     for ev in events:
@@ -964,12 +1062,34 @@ def record_client_events(
                 narration_state = _narration_state_for(db, row)
             text = str(ev.get("text") or payload.get("utterance") or "")
             fsm = ctx.get("fsm_state")
+            if research_context_known is None:
+                from app.explain.research_context import has_completed_research
+
+                try:
+                    research_context_known = has_completed_research(db, now=now)
+                except Exception:  # noqa: BLE001 - a deployment without the research tables
+                    research_context_known = False
             intent: ResolvedIntent = resolve_intent(
                 text,
                 session_state=RealtimeState(fsm) if fsm else None,
                 narration=narration_state,
+                has_completed_research=research_context_known,
             )
             ctx["last_intent"] = intent.intent.value
+            # ADR-0075: the LATEST resolved utterance of this session, kept on the
+            # session row so a tool call arriving moments later can be keyed to the turn
+            # it belongs to. Overwritten every utterance on purpose - an intervening
+            # "yeniden araştır" must not be shadowed by an older follow-up, and the
+            # guard therefore never has to reason about ordering beyond "the last one".
+            ctx["last_utterance"] = {
+                "at": now.isoformat().replace("+00:00", "Z"),
+                "t_ms": t_ms,
+                "turn": turn,
+                "intent": intent.intent.value,
+                "klass": intent.klass,
+                "query_kind": intent.query_kind,
+                "research_class": intent.research_class,
+            }
             resolved.append(
                 {"t_ms": t_ms, "turn": turn, **intent.to_dict(), "normalized_text": None}
             )
@@ -1000,6 +1120,10 @@ def record_client_events(
                     # (contract §2), so the record says what CLASS of thing was asked.
                     "klass": intent.klass,
                     "capability": intent.capability,
+                    # Which of the four RESEARCH interaction classes this turn is
+                    # (ADR-0075), so the durable audit row says whether the server was
+                    # entitled to start a crawl on it - decided by the ONE router.
+                    "research_class": intent.research_class,
                 }
             )
             _audit(db, ACTION_INTENT_RESOLVED, row, trace_id=trace_id, metadata=meta)
@@ -1557,6 +1681,7 @@ def session_activity(db: Session, row: RealtimeSessionRow) -> dict[str, Any]:
                     "query_kind": meta.get("query_kind"),
                     "klass": meta.get("klass"),
                     "capability": meta.get("capability"),
+                    "research_class": meta.get("research_class"),
                 }
             )
         else:
