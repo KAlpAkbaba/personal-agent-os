@@ -124,6 +124,19 @@ Test-Case "the fourth trap: an EMPTY array through an if-expression is null, and
     $kept = @($rows)
     Assert-Equal 2 $kept.Count "assigned first, @(variable) keeps the rows"
 }
+Test-Case "the fifth trap: inside @( ... ) the comma binds tighter than +, so a concatenation splits into elements - one of them a bare [char]" {
+    # 2026-09-06, owner-m18-2.ps1: `@("a", "sayfay" + $i, "b")` had SIX elements, and the
+    # [char] element crashed `.ToLowerInvariant()` after the whole run had otherwise passed.
+    $i = [char]0x0131
+    $split = @("a", "sayfay" + $i, "b")
+    Assert-Equal 4 $split.Count "four elements, not three"
+    if (-not ($split[2] -is [char])) { throw "expected the [char] to be a bare element (PowerShell 5.1 semantics changed?)" }
+    $whole = "sayfay" + $i
+    $safe = @("a", $whole, "b")
+    Assert-Equal 3 $safe.Count "built before the literal: three strings"
+    $paren = @("a", ("sayfay" + $i), "b")
+    Assert-Equal 3 $paren.Count "or parenthesised: three strings"
+}
 Test-Case "a scalar-in-a-collection helper output filtered to nothing is an empty array, not null" {
     $rows = Get-RowsLike -Doc $docOne
     $none = @($rows | Where-Object { $_.event_type -eq "never" })

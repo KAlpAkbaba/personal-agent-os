@@ -64,7 +64,11 @@ $u_uml = [char]0x00FC; $c_ced = [char]0x00E7; $g_br = [char]0x011F; $i_dot = [ch
 $phraseLong = "Bana PagentOS'un ne oldu" + $g_br + "unu be" + $s_ced + " c" + $u_uml + "mleyle anlat."
 $phraseResearch = "Son " + $u_uml + $c_ced + " g" + $u_uml + "ndeki yapay zek" + [char]0x00E2 + " ajan geli" + $s_ced + "melerini ara" + $s_ced + "t" + $i_dot + "r."
 $phraseTechnical = "Teknik anlat."
-$bannedInResult = @("elendi", "eledi", "interstitial", "dedup", " aday", "sayfay" + $i_dot, "sayfa ele")
+# Built BEFORE the array literal: inside @( ... ) the comma binds tighter than +, so
+# `"sayfay" + $i_dot, "sayfa ele"` became three elements, one of them a bare [char] with no
+# ToLowerInvariant - the crash of the owner's M18.2 run (harness-symbols.tests.ps1 guards it).
+$wordPagesTr = "sayfay" + $i_dot
+$bannedInResult = @("elendi", "eledi", "interstitial", "dedup", " aday", $wordPagesTr, "sayfa ele")
 
 $evidence = [ordered]@{ run_id = $runId; started_at = $startedAt.ToString("o"); cloud = $BaseUrl; web_shell = $null; session = $null; speaking = @(); research = $null; technical = $null; checks = @(); verdict = "FAIL" }
 
@@ -120,33 +124,11 @@ function Invoke-CloudCoreRelease {
     if ($LASTEXITCODE -ne 0) { throw "the Cloud Core release exited $LASTEXITCODE; nothing was qualified" }
 }
 
-function Get-SpeakingTurns {
-    <#  Turns with a first_audio and, when present, their audio_done (basis, audible_ms), from the session's own events.  #>
-    param($Events)
-    $turns = @{}
-    foreach ($e in (ConvertTo-Array -Value $Events)) {
-        $kind = [string](Get-OptionalProperty -InputObject $e -Name "kind")
-        if ($kind -notin @("first_audio", "audio_done", "response_done")) { continue }
-        $turn = [int](Get-OptionalProperty -InputObject $e -Name "turn")
-        if (-not $turns.ContainsKey($turn)) { $turns[$turn] = [ordered]@{ turn = $turn; first_audio_ms = $null; response_done_ms = $null; audio_done_ms = $null; basis = ""; audible_ms = $null } }
-        $t = [double](Get-OptionalProperty -InputObject $e -Name "t_ms")
-        $p = Get-OptionalProperty -InputObject $e -Name "payload"
-        switch ($kind) {
-            "first_audio"   { if ($null -eq $turns[$turn].first_audio_ms) { $turns[$turn].first_audio_ms = $t } }
-            "response_done" { $turns[$turn].response_done_ms = $t }
-            "audio_done"    { $turns[$turn].audio_done_ms = $t; $turns[$turn].basis = $(if ($null -ne $p) { [string](Get-OptionalProperty -InputObject $p -Name "basis") } else { "" }); $turns[$turn].audible_ms = $(if ($null -ne $p) { Get-OptionalProperty -InputObject $p -Name "audible_ms" } else { $null }) }
-        }
-    }
-    $out = @()
-    foreach ($k in ($turns.Keys | Sort-Object)) { $out += $turns[$k] }
-    return , $out
-}
-
 function Test-ResultSpeechClean {
-    param([string]$Text)
-    $lower = $Text.ToLowerInvariant()
-    foreach ($w in $bannedInResult) { if ($lower.Contains($w.ToLowerInvariant())) { return $false } }
-    if ($lower -match "\d+\s*sayfa") { return $false }
+    <#  No crawler words, no page counts, in the spoken head (strings coerced by the library helper).  #>
+    param([AllowNull()]$Text)
+    if (Test-TextContainsAny -Text $Text -Words $bannedInResult) { return $false }
+    if (([string]$Text).ToLowerInvariant() -match "\d+\s*sayfa") { return $false }
     return $true
 }
 
@@ -227,14 +209,14 @@ try {
         if ($sessionId) { $activity = Get-JsonOrNull "/v1/voice/realtime/sessions/$sessionId/activity" }
         $events = Get-ArrayProperty -InputObject $activity -Name "client_events"
         $calls = Get-ArrayProperty -InputObject $activity -Name "tool_calls"
-        $speakingTurns = Get-SpeakingTurns -Events $events
+        $speakingTurns = Get-SpeechTurns -Events $events
         $completed = @($speakingTurns | Where-Object { $null -ne $_.first_audio_ms -and $null -ne $_.audio_done_ms })
         $researchCalls = @($calls | Where-Object { [string](Get-OptionalProperty -InputObject $_ -Name "name") -eq "research.start" })
         $researchDone = @($researchCalls | Where-Object { [string](Get-OptionalProperty -InputObject $_ -Name "status") -in @("succeeded", "failed") })
         $technicalCalls = @($calls | Where-Object { [string](Get-OptionalProperty -InputObject $_ -Name "name") -eq "activity.explain" -and [string](Get-OptionalProperty -InputObject $_ -Name "status") -eq "succeeded" -and ([string](Get-OptionalProperty -InputObject $_ -Name "level") -in @("technical", "full") -or [string](Get-OptionalProperty -InputObject $_ -Name "query_kind") -in @("technical", "research_problems", "rejected_pages", "research_detail")) })
         switch ($phase) {
             "await_speaking" {
-                if ($completed.Count -ge 1) { $phase = "await_research"; $phaseStarted = $now; Write-Host ("      A recorded: turn {0} first_audio {1} s -> audio_done {2} s (basis {3}, audible {4} ms)" -f $completed[0].turn, [math]::Round($completed[0].first_audio_ms / 1000, 1), [math]::Round($completed[0].audio_done_ms / 1000, 1), $completed[0].basis, $completed[0].audible_ms) -ForegroundColor Green }
+                if ($completed.Count -ge 1) { $phase = "await_research"; $phaseStarted = $now; Write-Host ("      A recorded: first_audio {0} s -> response_done {1} s -> audio_done {2} s (audible {3} ms; playback ended SPEAKING: {4})" -f [math]::Round($completed[0].first_audio_ms / 1000, 1), $(if ($null -ne $completed[0].response_done_ms) { [math]::Round($completed[0].response_done_ms / 1000, 1) } else { "?" }), [math]::Round($completed[0].audio_done_ms / 1000, 1), $completed[0].audible_ms, $completed[0].ended_after_generation) -ForegroundColor Green }
                 elseif ($inPhase -ge $SpeakWaitSec) { $stopReason = "no completed spoken turn (first_audio -> audio_done) within $SpeakWaitSec s; turns seen: $($speakingTurns.Count)" }
             }
             "await_research" {
@@ -253,7 +235,7 @@ try {
             $lastTurn = if ($speakingTurns.Count) { $speakingTurns[$speakingTurns.Count - 1] } else { $null }
             $summary = Get-SessionRouterSummary -Activity $activity
             Write-Host ("      [{0,4:N0} s] {1}   session: {2}" -f $elapsed, $phase, $(if ($sessionId) { $sessionId } else { "none yet" })) -ForegroundColor DarkGray
-            Write-Host ("               last spoken turn: {0}" -f $(if ($null -ne $lastTurn) { "turn {0} first_audio={1} response_done={2} audio_done={3} basis={4}" -f $lastTurn.turn, $lastTurn.first_audio_ms, $lastTurn.response_done_ms, $lastTurn.audio_done_ms, $lastTurn.basis } else { "none" })) -ForegroundColor DarkGray
+            Write-Host ("               last spoken turn: {0}" -f $(if ($null -ne $lastTurn) { "first_audio={0} response_done={1} audio_done={2} audible_ms={3}" -f $lastTurn.first_audio_ms, $lastTurn.response_done_ms, $lastTurn.audio_done_ms, $lastTurn.audible_ms } else { "none" })) -ForegroundColor DarkGray
             Write-Host ("               router events: {0}" -f $summary.ToolCalls) -ForegroundColor DarkGray
             $lastSig = $sig; $lastPrint = $now
         }
@@ -269,8 +251,11 @@ try {
     $long = @($completed | Where-Object { $null -ne $_.audible_ms -and [double]$_.audible_ms -ge 6000 })
     Add-Check -Name "speaking.lifecycle_recorded" -Ok ($completed.Count -ge 1) -Detail $(if ($completed.Count) { "$($completed.Count) turn(s) with first_audio -> audio_done; bases: " + (($completed | ForEach-Object { $_.basis }) -join ",") } else { "no turn reached audio_done: $stopReason" })
     Add-Check -Name "speaking.held_through_a_long_answer" -Ok ($long.Count -ge 1) -Detail $(if ($long.Count) { "a turn audible for $([math]::Round([double]$long[0].audible_ms / 1000, 1)) s ended by $($long[0].basis)" } else { "no turn audible for 6 s or more (the answer was short or interrupted): " + (($completed | ForEach-Object { "{0} ms/{1}" -f $_.audible_ms, $_.basis }) -join ", ") })
-    $providerEnded = @($completed | Where-Object { $_.basis -eq "provider" -or $_.basis -eq "silence" })
-    Add-Check -Name "speaking.ended_at_last_audio" -Ok ($providerEnded.Count -ge 1) -Detail $(if ($providerEnded.Count) { "ended by the provider's output_audio_buffer.stopped or the silence release, not at response_done" } else { "no turn ended by provider/silence (bases: " + (($completed | ForEach-Object { $_.basis }) -join ",") + ")" })
+    # The product rule, read off timestamps: audio_done LATER than response_done means playback
+    # completion ended SPEAKING, not the provider's response.done (the owner's real record:
+    # first_audio 13.1 s -> response_done 20.3 s -> audio_done 26.3 s on the first answer).
+    $playbackEnded = @($completed | Where-Object { $_.ended_after_generation })
+    Add-Check -Name "speaking.ended_at_last_audio" -Ok ($playbackEnded.Count -ge 1) -Detail $(if ($playbackEnded.Count) { "$($playbackEnded.Count) turn(s) ended by playback completion after response_done (e.g. +" + [math]::Round(([double]$playbackEnded[0].audio_done_ms - [double]$playbackEnded[0].response_done_ms) / 1000, 1) + " s)" } else { "no turn's audio_done came after its response_done (" + (($completed | ForEach-Object { "{0}/{1}" -f $_.response_done_ms, $_.audio_done_ms }) -join ", ") + ")" })
     $rc = $researchCall
     $rStatus = if ($null -ne $rc) { [string](Get-OptionalProperty -InputObject $rc -Name "status") } else { "" }
     $rHead = if ($null -ne $rc) { [string](Get-OptionalProperty -InputObject $rc -Name "speech_head") } else { "" }

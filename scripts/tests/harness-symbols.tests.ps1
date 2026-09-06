@@ -101,6 +101,28 @@ function Get-ClosureSites {
     return , $sites
 }
 
+function Get-ArrayLiteralConcatenations {
+    <#
+        Elements of an @( ... ) literal that are a `+` expression. Inside a literal the comma
+        binds tighter than +, so `@("a", "x" + $c, "b")` is not three elements but the
+        concatenation of two arrays - and a [char] operand becomes a bare element with no
+        string methods (the owner's M18.2 harness crash). Build the string first, or
+        parenthesise.
+    #>
+    param($Ast)
+    # The parser does not put the + INSIDE the literal: `@("a", "x" + $c, "b")` parses as
+    # `("a", "x") + ($c, "b")` - a Plus whose operand is itself an array literal, sitting
+    # directly under the @( ). That shape is the trap.
+    $sites = @()
+    foreach ($bin in $Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.BinaryExpressionAst] }, $true)) {
+        if ($bin.Operator -ne "Plus") { continue }
+        $leftIsList = $bin.Left -is [System.Management.Automation.Language.ArrayLiteralAst]
+        $rightIsList = $bin.Right -is [System.Management.Automation.Language.ArrayLiteralAst]
+        if ($leftIsList -or $rightIsList) { $sites += "line $($bin.Extent.StartLineNumber)" }
+    }
+    return , $sites
+}
+
 function Get-UnresolvedCommands {
     <#
         Names the script invokes that neither it nor its libraries define and PowerShell does
@@ -150,6 +172,21 @@ foreach ($rel in $harnesses + $libraries) {
         $sites = Get-ClosureSites -Ast (Get-ScriptAst -Path $path)
         if ($sites.Count -gt 0) { throw "GetNewClosure at $($sites -join ', ') - a closure cannot see dot-sourced functions" }
     }
+    Test-Case "$rel has no + expression as an element of an array literal" {
+        $sites = Get-ArrayLiteralConcatenations -Ast (Get-ScriptAst -Path $path)
+        if ($sites.Count -gt 0) { throw "a + inside @( ... ) at $($sites -join ', ') - the comma binds tighter; build the string first or parenthesise" }
+    }
+}
+
+Test-Case "the guard catches the M18.2 shape: a concatenation as an array-literal element" {
+    $tmp = Join-Path $env:TEMP ("harness-array-probe-" + [guid]::NewGuid().ToString("N") + ".ps1")
+    try {
+        $body = '$c = [char]0x0131' + "`r`n" + '$bad = @("a", "x" + $c, "b")' + "`r`n" + '$ok = @("a", ("x" + $c), "b")' + "`r`n"
+        [System.IO.File]::WriteAllText($tmp, $body)
+        $sites = Get-ArrayLiteralConcatenations -Ast (Get-ScriptAst -Path $tmp)
+        if ($sites.Count -ne 1) { throw "expected exactly one site (the unparenthesised one), got $($sites.Count)" }
+    }
+    finally { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
 }
 
 Test-Case "the guard itself catches the 2026-09-06 shape: a call to a function no library declares" {

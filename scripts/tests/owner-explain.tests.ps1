@@ -666,6 +666,46 @@ Test-Case "19c. identity beats time: a row carrying a receipt's action_id is exp
     Assert-Equal 1 $r.Count "unknown action id, outside every window"
     Assert-True ($r[0] -like "*action_id call_Z matches no receipt*") "the reason names the id: $($r[0])"
 }
+Test-Case "20. Test-TextContainsAny coerces every shape: string, one character, scalar, array, empty, null" {
+    Assert-True (Test-TextContainsAny -Text "Kamera KAPANDI efendim" -Words @("kapandi")) "string, case-insensitive"
+    $dotless = [char]0x0131
+    Assert-True (Test-TextContainsAny -Text ("sayfay" + $dotless + " eledim") -Words $dotless) "a single [char] word does not crash and matches"
+    Assert-True (Test-TextContainsAny -Text "abc" -Words "b") "a scalar string"
+    Assert-True (Test-TextContainsAny -Text "x 42 y" -Words 42) "a scalar number is coerced"
+    Assert-True (Test-TextContainsAny -Text "elendi" -Words @("zzz", [char]0x0131, "elendi")) "an array mixing shapes"
+    Assert-True (-not (Test-TextContainsAny -Text "" -Words @("a"))) "empty text: false"
+    Assert-True (-not (Test-TextContainsAny -Text $null -Words @("a"))) "null text: false"
+    Assert-True (-not (Test-TextContainsAny -Text "abc" -Words @())) "empty words: false"
+    Assert-True (-not (Test-TextContainsAny -Text "abc" -Words $null)) "null words: false"
+    $list = ConvertTo-TextList -Value @("a", [char]0x0131, 7, $null, "")
+    Assert-Equal 3 $list.Count "three non-empty strings out of five inputs (null and empty dropped)"
+    foreach ($s in $list) { if (-not ($s -is [string])) { throw "every element is a string" } }
+}
+Test-Case "21. Get-SpeechTurns pairs first_audio / response_done / audio_done BY ORDER (the record carries no turn or payload) and measures from t_ms" {
+    # The owner's real record, 2026-09-06 session a4455670, first answer: audible 13.1 s,
+    # playback ended 6.0 s after the provider's response.done.
+    $events = @(
+        [pscustomobject]@{ kind = "mic_speech_start"; t_ms = 9000 },
+        [pscustomobject]@{ kind = "first_audio"; t_ms = 13137 },
+        [pscustomobject]@{ kind = "response_done"; t_ms = 20296 },
+        [pscustomobject]@{ kind = "audio_done"; t_ms = 26282 },
+        [pscustomobject]@{ kind = "first_audio"; t_ms = 54405 },
+        [pscustomobject]@{ kind = "response_done"; t_ms = 56039 },
+        [pscustomobject]@{ kind = "audio_done"; t_ms = 56546; payload = [pscustomobject]@{ basis = "provider" } },
+        [pscustomobject]@{ kind = "first_audio"; t_ms = 393917 }
+    )
+    $turns = Get-SpeechTurns -Events $events
+    Assert-Equal 3 $turns.Count "two completed turns and one still open"
+    Assert-Equal 13145 $turns[0].audible_ms "audible = audio_done - first_audio"
+    Assert-True $turns[0].ended_after_generation "playback ended after response_done"
+    Assert-Equal "" $turns[0].basis "no payload: basis unknown, not invented"
+    Assert-Equal "provider" $turns[1].basis "payload basis when present"
+    Assert-Equal 2141 $turns[1].audible_ms "second turn"
+    Assert-True ($null -eq $turns[2].audio_done_ms) "the open turn has no end"
+    $one = Get-SpeechTurns -Events @([pscustomobject]@{ kind = "first_audio"; t_ms = 1 })
+    Assert-Equal 1 $one.Count "one turn is a list of one"
+    Assert-Equal 0 (Get-SpeechTurns -Events $null).Count "no events"
+}
 Test-Case "15. Get-SessionRouterSummary: none / one / many, through the array traps" {
     $none = Get-SessionRouterSummary -Activity ([pscustomobject]@{ session_id = "x" })
     Assert-Equal "none" $none.ToolCalls "no calls"

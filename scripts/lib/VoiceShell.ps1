@@ -359,6 +359,71 @@ function Get-SessionRouterSummary {
     }
 }
 
+function ConvertTo-TextList {
+    <#
+        Every input as a [string], whatever shape it arrived in: a string, ONE character (a
+        [char] has no ToLowerInvariant - the owner's M18.2 run crashed on exactly that), any
+        scalar, an array of any of those, $null (-> empty). Empty strings are dropped.
+    #>
+    param([AllowNull()]$Value)
+    $out = @()
+    foreach ($item in (ConvertTo-Array -Value $Value)) {
+        if ($null -eq $item) { continue }
+        $s = [string]$item
+        if ($s.Length -gt 0) { $out += $s }
+    }
+    return , $out
+}
+
+function Test-TextContainsAny {
+    <#  True when Text contains any of Words, case-insensitively (invariant), after both are coerced to strings.  #>
+    param([AllowNull()]$Text, [AllowNull()]$Words)
+    $haystack = ([string]$Text).ToLowerInvariant()
+    if ($haystack.Length -eq 0) { return $false }
+    foreach ($w in (ConvertTo-TextList -Value $Words)) {
+        if ($haystack.Contains($w.ToLowerInvariant())) { return $true }
+    }
+    return $false
+}
+
+function Get-SpeechTurns {
+    <#
+        Spoken turns from a session's client_events, paired BY ORDER: each first_audio opens a
+        turn; the next response_done and audio_done close it. The stored rows carry kind and
+        t_ms reliably; turn and payload are not relied on (the owner's real record of
+        2026-09-06 had neither on these rows). AudibleMs is audio_done - first_audio;
+        EndedAfterGeneration is audio_done later than response_done - i.e. playback, not the
+        provider's response.done, ended SPEAKING (the M18.2 product rule).
+    #>
+    param([AllowNull()]$Events)
+    $turns = @()
+    $current = $null
+    foreach ($e in (ConvertTo-Array -Value $Events)) {
+        $kind = [string](Get-OptionalProperty -InputObject $e -Name "kind")
+        if ($kind -notin @("first_audio", "response_done", "audio_done")) { continue }
+        $t = [double](Get-OptionalProperty -InputObject $e -Name "t_ms")
+        $p = Get-OptionalProperty -InputObject $e -Name "payload"
+        switch ($kind) {
+            "first_audio" {
+                if ($null -ne $current) { $turns += $current }
+                $current = [ordered]@{ first_audio_ms = $t; response_done_ms = $null; audio_done_ms = $null; basis = ""; audible_ms = $null; ended_after_generation = $false }
+            }
+            "response_done" { if ($null -ne $current -and $null -eq $current.response_done_ms) { $current.response_done_ms = $t } }
+            "audio_done" {
+                if ($null -eq $current) { continue }
+                $current.audio_done_ms = $t
+                $current.basis = $(if ($null -ne $p) { [string](Get-OptionalProperty -InputObject $p -Name "basis") } else { "" })
+                $current.audible_ms = [math]::Round($t - $current.first_audio_ms)
+                $current.ended_after_generation = ($null -ne $current.response_done_ms -and $t -gt $current.response_done_ms)
+                $turns += $current
+                $current = $null
+            }
+        }
+    }
+    if ($null -ne $current) { $turns += $current }
+    return , $turns
+}
+
 function Test-SpokenAfterToolDone {
     <#
         "" when the session's first_audio of the same turn came AT OR AFTER the tool_done
