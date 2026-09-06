@@ -157,6 +157,41 @@ def test_plan_activity_respects_recency_days_override(task_id: str) -> None:
     assert plan["recency"]["amount"] == 7
 
 
+def test_plan_activity_stores_the_resolved_policy_for_the_requested_mode(task_id: str) -> None:
+    from app.research.policy import MODE_STANDARD
+
+    plan = ba.plan_activity(task_id, "konu", None, 12, MODE_STANDARD)
+    assert plan["mode"] == MODE_STANDARD
+    assert plan["policy"]["mode"] == MODE_STANDARD
+    assert plan["policy"]["hard_budget_s"] > 120.0  # STANDARD's own, not QUICK's
+
+
+def test_plan_activity_defaults_to_quick_when_no_mode_is_given(task_id: str) -> None:
+    from app.research.policy import MODE_QUICK
+
+    plan = ba.plan_activity(task_id, "konu", None, 12)
+    assert plan["mode"] == MODE_QUICK
+    assert plan["policy"]["mode"] == MODE_QUICK
+
+
+def test_plan_activity_caller_max_sources_narrows_the_modes_own_ceiling(task_id: str) -> None:
+    """A caller's explicit, smaller max_sources still bounds the run even under a
+    mode whose own ceiling is larger - naming a mode never lets a run exceed a
+    budget the caller explicitly asked for."""
+    plan = ba.plan_activity(task_id, "konu", None, 6)  # QUICK's own ceiling is 10
+    assert plan["policy"]["max_sources"] == 6
+    assert plan["policy"]["wave_size"] <= 6
+
+
+def test_plan_activity_modes_own_ceiling_applies_when_caller_asks_for_more(
+    task_id: str,
+) -> None:
+    from app.research.policy import MODE_QUICK, POLICIES
+
+    plan = ba.plan_activity(task_id, "konu", None, 30)  # above QUICK's own ceiling of 10
+    assert plan["policy"]["max_sources"] == POLICIES[MODE_QUICK].max_sources
+
+
 # ------------------------------------------------------------- select_device
 
 
@@ -406,6 +441,63 @@ def test_discover_activity_unattended_never_asks_for_interstitial_handoff(
     assert seen_payloads[0]["interstitial"] == "fallback"
 
 
+def test_search_snippets_never_become_persisted_candidate_data(
+    monkeypatch, db_url, task_id: str
+) -> None:
+    """M18.2 owner rule 4: search snippets may be used for ranking only, never as
+    evidence for a final factual claim. A DuckDuckGo/Google result snippet is
+    real text ("OpenAI's new agent platform lets developers...") that never went
+    through the device's real page fetch/extraction - citing it as if it were
+    fetched evidence would be exactly the un-fetched-claim problem the whole M13
+    browser-fetch design exists to avoid. Structural guarantee, not just this one
+    payload: DiscoveredCandidate/EvidenceRecord have no field a snippet could
+    even be written into."""
+    import dataclasses
+
+    from app.research.discovery import DiscoveredCandidate
+    from app.research.evidence import EvidenceRecord
+
+    assert "snippet" not in {f.name for f in dataclasses.fields(DiscoveredCandidate)}
+    assert "snippet" not in {f.name for f in dataclasses.fields(EvidenceRecord)}
+
+    def factory(*, capability, payload, **_kwargs):
+        if capability == "browser.session_open":
+            return CommandSucceeded({"created": True})
+        if capability == "browser.search":
+            return CommandSucceeded(
+                {
+                    "schema_version": 2,
+                    "requested_provider": "duckduckgo",
+                    "provider": "duckduckgo",
+                    "fallback": False,
+                    "state": "ok",
+                    "results": [
+                        {
+                            "url": "https://a.example.com/story",
+                            "title": "A",
+                            "snippet": "This snippet text must never reach evidence or a citation.",
+                        }
+                    ],
+                    "result_count": 1,
+                }
+            )
+        raise AssertionError(capability)  # pragma: no cover
+
+    fake = FakeDeviceCommandClient(factory=factory)
+    monkeypatch.setattr(ba, "_command_client", lambda: fake)
+    ba.discover_activity(task_id, str(uuid.uuid4()), "news:0", "ai agents", "news", NOW.isoformat())
+
+    from sqlalchemy import create_engine as _ce
+    from sqlalchemy.orm import sessionmaker
+
+    engine = _ce(db_url)
+    with sessionmaker(bind=engine, expire_on_commit=False)() as session:
+        rows = runs_service.list_candidates(session, uuid.UUID(task_id))
+        assert len(rows) == 1
+        assert not hasattr(rows[0], "snippet")
+    engine.dispose()
+
+
 def test_discover_activity_dedups_identical_query_before_searching(
     monkeypatch, db_url, task_id: str
 ) -> None:
@@ -566,6 +658,93 @@ def test_fetch_activity_flags_hostile_excerpt_as_injection_suspected(
         rows = runs_service.list_evidence(session, uuid.UUID(task_id))
         assert rows[0].injection_suspected is True
     engine.dispose()
+
+
+# ------------------------------------------------- challenge / cooldown (ADR-0068)
+
+
+def test_a_challenged_page_is_abandoned_in_one_attempt_with_its_reason_recorded(
+    monkeypatch, db_url, task_id: str
+) -> None:
+    """M18.2 owner rule 3: never bypass a CAPTCHA/challenge, detect it immediately,
+    and never retry that URL. The page is still a SUCCESSFUL fetch (ADR-0050's
+    "website error != browser error") - fetch_activity never raises for it - but
+    it is marked with its challenge reason and the domain's first strike is
+    recorded, not yet cooled (that needs a second one)."""
+    fake = FakeDeviceCommandClient(
+        default_outcome=CommandSucceeded(
+            {
+                "url": "https://challenged.example.com/a",
+                "title": "Bir dakika lütfen...",
+                "excerpt": "dogrulaniyor",
+                "fetched_at": NOW.isoformat(),
+                "extraction_method": "dom_text",
+            }
+        )
+    )
+    monkeypatch.setattr(ba, "_command_client", lambda: fake)
+    outcome = ba.fetch_activity(
+        task_id, str(uuid.uuid4()), "https://challenged.example.com/a", "q", "news"
+    )
+    assert outcome == "fetched"  # a challenge page is data, never an exception
+
+    # Exactly one browser.fetch_evidence dispatch: a confirmed challenge is never retried.
+    fetch_calls = [c for c in fake.calls if c.capability == "browser.fetch_evidence"]
+    assert len(fetch_calls) == 1
+
+    from sqlalchemy import create_engine as _ce
+    from sqlalchemy.orm import sessionmaker
+
+    engine = _ce(db_url)
+    with sessionmaker(bind=engine, expire_on_commit=False)() as session:
+        rows = runs_service.list_evidence(session, uuid.UUID(task_id))
+        assert rows[0].evidence_json["challenge_reason"] == "interstitial"
+        run = runs_service.get_run(session, uuid.UUID(task_id))
+        assert run.progress_json["challenge_counts"]["challenged.example.com"] == 1
+        assert run.progress_json["cooled_domains"] == []
+        assert run.progress_json["challenged_pages"] == 1
+    engine.dispose()
+
+
+def test_a_domain_challenged_twice_is_cooled_and_remaining_urls_are_skipped(
+    monkeypatch, db_url, task_id: str
+) -> None:
+    """The SECOND challenge on one domain in a run cools it: every other candidate
+    from that domain is skipped WITHOUT a device fetch/navigation for the rest of
+    the run - five URLs from the same blocked site must not each spend the budget."""
+    challenge_page = {
+        "title": "Bir dakika lütfen...",
+        "excerpt": "dogrulaniyor",
+        "fetched_at": NOW.isoformat(),
+        "extraction_method": "dom_text",
+    }
+
+    def factory(*, capability, payload, **_kwargs):
+        return CommandSucceeded({"url": payload.get("url", ""), **challenge_page})
+
+    fake = FakeDeviceCommandClient(factory=factory)
+    monkeypatch.setattr(ba, "_command_client", lambda: fake)
+
+    ba.fetch_activity(task_id, str(uuid.uuid4()), "https://challenged.example.com/a", "q", "news")
+    ba.fetch_activity(task_id, str(uuid.uuid4()), "https://challenged.example.com/b", "q", "news")
+
+    from sqlalchemy import create_engine as _ce
+    from sqlalchemy.orm import sessionmaker
+
+    engine = _ce(db_url)
+    with sessionmaker(bind=engine, expire_on_commit=False)() as session:
+        run = runs_service.get_run(session, uuid.UUID(task_id))
+        assert run.progress_json["challenge_counts"]["challenged.example.com"] == 2
+        assert run.progress_json["cooled_domains"] == ["challenged.example.com"]
+    engine.dispose()
+
+    _insert_candidate(db_url, task_id, url="https://challenged.example.com/c")
+    fetch_calls_before = len(fake.calls)
+    targets = ba.fetch_targets_activity(task_id, 10)
+    assert all(t["url"] != "https://challenged.example.com/c" for t in targets)
+    # Skipped WITHOUT navigation: fetch_targets_activity never dispatches a device
+    # command at all, so nothing was even attempted for the cooled candidate.
+    assert len(fake.calls) == fetch_calls_before
 
 
 # --------------------------------------------------------- await_verification
@@ -813,6 +992,81 @@ def test_synthesize_activity_produces_provenance_complete_report(db_url, task_id
     for f in report["findings"]:
         if f["label"] == "source_fact":
             assert f["evidence_ids"]
+
+
+def test_synthesize_activity_stats_carry_mode_budget_elapsed_waves_and_challenges(
+    db_url, task_id: str
+) -> None:
+    """M18.2 (ADR-0068, owner rule 8): diagnostics must be able to say which mode
+    ran, its budget, how long it actually took, how many waves it spent, and the
+    challenge policy's own counters - all workflow-level facts nothing else has,
+    threaded in via `run_stats`/the run's own progress (never fabricated when the
+    caller passes none, per the existing `run_stats=None` default)."""
+    _seed_evidence(db_url, task_id, _usable_evidence())
+    _rank_ok(task_id)
+
+    from sqlalchemy import create_engine as _ce
+    from sqlalchemy.orm import sessionmaker
+
+    engine = _ce(db_url)
+    with sessionmaker(bind=engine, expire_on_commit=False)() as session:
+        runs_service.update_run(
+            session,
+            uuid.UUID(task_id),
+            progress={"challenged_pages": 4, "cooled_domains": ["blocked.example.com"]},
+        )
+    engine.dispose()
+
+    report = ba.synthesize_activity(
+        task_id,
+        TOPIC,
+        _window_ok(),
+        "deterministic",
+        {"mode": "standard", "budget_s": 210.0, "elapsed_s": 143.2, "waves": 3},
+    )
+    stats = report["stats"]
+    assert stats["mode"] == "standard"
+    assert stats["budget_s"] == 210.0
+    assert stats["elapsed_s"] == 143.2
+    assert stats["waves"] == 3
+    assert stats["challenged_pages"] == 4
+    assert stats["cooled_domains"] == 1
+
+
+def test_synthesize_activity_findings_are_capped_at_the_modes_final_findings_max(
+    db_url, task_id: str
+) -> None:
+    """M18.2 owner rule 2: QUICK's report ceiling is 5 findings. Six distinct,
+    on-topic, in-window evidence items give the deterministic provider enough to
+    produce 6 findings (below its own MAX_FINDINGS=7 ceiling) so QUICK's tighter
+    cap is the thing actually doing the truncating in this test, not the
+    provider's own floor."""
+    from app.research.policy import POLICIES
+
+    records = _usable_evidence(5) + [
+        {
+            "url": "https://research.example.com/agent-benchmark",
+            "title": "Yapay zeka ajanlari icin yeni bir performans olcumu yayinlandi",
+            "excerpt": (
+                "Yeni yayinlanan olcum, yapay zeka ajanlarinin cok adimli gorevlerdeki "
+                "basari oranini, arac cagirma dogrulugunu ve insan mudahalesi gerektiren "
+                "durumlari karsilastiriyor. Arastirmacilar, sonuclarin acik kaynak olarak "
+                "paylasilacagini ve diger ekiplerin kendi ajanlarini bu olcume gore "
+                "degerlendirebilecegini belirtiyor."
+            ),
+            "fetched_at": NOW.isoformat(),
+            "published_at": (NOW - timedelta(hours=6)).isoformat(),
+            "extraction_method": "dom_text",
+            "source_class": "academic",
+        }
+    ]
+    assert len({r["title"] for r in records}) == 6  # six genuinely distinct stories
+    _seed_evidence(db_url, task_id, records)
+    rank_result = _rank_ok(task_id)
+    assert rank_result["evidence"] == 6
+
+    report = ba.synthesize_activity(task_id, TOPIC, _window_ok(), "deterministic")
+    assert len(report["findings"]) == POLICIES["quick"].final_findings_max
 
 
 # ------------------------------------------------------------------ persist

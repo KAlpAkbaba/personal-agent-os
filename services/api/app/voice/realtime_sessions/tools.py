@@ -211,6 +211,7 @@ def research_start(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
     from app.research import service as research_service
     from app.research.dates import default_window, parse_recency_window
     from app.research.plan import DEFAULT_RECENCY_DAYS
+    from app.research.policy import derive_mode_from_utterance
 
     # "son üç gündeki ..." -> 3 (app.research.dates, the same Turkish relative-date
     # parser the REST plan stage uses); an int day count is the only shape the
@@ -221,6 +222,14 @@ def research_start(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
         ctx.now, days=DEFAULT_RECENCY_DAYS
     )
     recency_days = window.amount if window.unit == "day" else None
+
+    # M18.2 (ADR-0068, owner rule 1): "never silently choose DEEP" — the mode comes
+    # from the owner's own words only. research.start's schema has no separate
+    # "utterance" argument (only topic/scope), so both are read together: the
+    # owner's explicit "kapsamlı/derinlemesine/detaylı araştır" or "geniş/
+    # karşılaştırmalı" most often lands in one of the two once the model extracts a
+    # topic — never guessed at, never chosen because the run happens to look big.
+    mode = derive_mode_from_utterance(f"{topic} {scope}")
 
     started = research_service.start_browser_research(
         ctx.db,
@@ -254,6 +263,7 @@ def research_start(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
         "workflow_id": started.workflow_id,
         "recency_days": recency_days or DEFAULT_RECENCY_DAYS,
         "device": started.device,
+        "mode": mode,
     }
     ctx.context["plan"] = plan
 
@@ -278,6 +288,7 @@ def research_start(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
                 max_sources=max_sources,
                 synthesis=synthesis,
                 search_provider=search_provider,
+                mode=mode,
             )
         except Exception:  # noqa: BLE001 - reported as a failed tool call, never raised here
             logger.exception("voice_research_workflow_start_failed", task_id=str(task_id))
@@ -310,6 +321,7 @@ def research_start(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
         "task_id": str(started.task_id),
         "workflow_id": workflow_id,
         "device": started.device,
+        "mode": mode,
     }
 
 

@@ -231,6 +231,15 @@ class ReportStats:
     #: Diagnostics-only (app.research.result.ResearchDiagnostics): the executive
     #: narration never mentions this number (M18.2 DEFECT 2, ADR-0067).
     quarantined: int = 0
+    #: M18.2 fast-path fields (ADR-0068), diagnostics-only like everything above:
+    #: which speed mode this run used, its hard budget, how long it actually took,
+    #: how many fetch waves it spent, and the challenge policy's own counters.
+    mode: str = ""
+    budget_s: float = 0.0
+    elapsed_s: float = 0.0
+    waves: int = 0
+    challenged_pages: int = 0
+    cooled_domains: int = 0
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -246,6 +255,12 @@ class ReportStats:
             "rejected": self.rejected,
             "rejected_by_reason": dict(self.rejected_by_reason),
             "quarantined": self.quarantined,
+            "mode": self.mode,
+            "budget_s": self.budget_s,
+            "elapsed_s": self.elapsed_s,
+            "waves": self.waves,
+            "challenged_pages": self.challenged_pages,
+            "cooled_domains": self.cooled_domains,
         }
 
 

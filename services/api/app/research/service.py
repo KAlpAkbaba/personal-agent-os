@@ -172,6 +172,7 @@ async def start_browser_research_workflow(
     interactive_wait_s: int = DEFAULT_INTERACTIVE_WAIT_S,
     on_verification_timeout: str = "fallback",
     search_provider: str | None = None,
+    mode: str = "quick",
 ) -> None:
     """The asynchronous half: start the durable Temporal workflow and persist its id
     on the task. ``WorkflowAlreadyStartedError`` is swallowed (idempotent retry of the
@@ -193,6 +194,7 @@ async def start_browser_research_workflow(
                 interactive_wait_s=interactive_wait_s,
                 on_verification_timeout=on_verification_timeout,
                 search_provider=search_provider or "duckduckgo",
+                mode=mode,
             ),
             id=workflow_id,
             task_queue=artifacts.settings.temporal_task_queue,

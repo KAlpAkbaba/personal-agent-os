@@ -50,6 +50,7 @@ from app.logging import get_logger, task_id_var
 from app.memory.embedding import DeterministicEmbedder
 from app.memory.service import remember_explicit
 from app.memory.types import MemoryClass
+from app.research import challenge as challenge_policy
 from app.research import discovery, eligibility, runs_service, sources
 from app.research.browser_gateway import BrowserDispatchError, DeviceBrowserGateway
 from app.research.contracts import (
@@ -78,6 +79,7 @@ from app.research.models import (
     STAGE_WAITING_FOR_OWNER_VERIFICATION,
 )
 from app.research.plan import build_plan
+from app.research.policy import ResearchPolicy, resolve_policy
 from app.research.report import (
     DetailSection,
     Finding,
@@ -99,6 +101,32 @@ logger = get_logger("app.research.browser_activities")
 RETRYABLE_ERROR_CLASSES = frozenset(
     {"dependency_unavailable", "timeout", "ui_state_changed", "provider_rate_limited"}
 )
+
+# M18.2 (ADR-0068, owner rule 7): the UI-state bus carries coarse, fixed Turkish
+# labels only — never crawler vocabulary ("captcha=7 rejected=28"), never the raw
+# topic text either (that belongs to the owner's own request, not to a status
+# label a renderer draws for anyone glancing at the screen). Exactly four labels,
+# one per pipeline stage that is visibly slow; every other stage publishes no
+# label at all (a stage that is instant needs no coarse phrase to justify).
+LABEL_DISCOVERING_TR = "Kaynaklar aranıyor"
+LABEL_RANKING_TR = "Bulgular doğrulanıyor"
+LABEL_SYNTHESIZING_TR = "Sonuç hazırlanıyor"
+
+
+def _label_fetching_tr(fetched_so_far: int) -> str:
+    return f"{fetched_so_far} güvenilir kaynak incelendi"
+
+
+def _run_policy(session, tid: uuid.UUID) -> ResearchPolicy:
+    """The policy THIS run started with (stored once by plan_activity), or the
+    QUICK default when the run predates this field / carries none — never a
+    reason to fail an activity that would otherwise succeed."""
+    run = runs_service.get_run(session, tid)
+    plan = (run.plan_json if run is not None else None) or {}
+    policy_dict = plan.get("policy")
+    if isinstance(policy_dict, dict):
+        return ResearchPolicy.from_dict(policy_dict)
+    return resolve_policy(None)
 
 
 def _session_factory():
@@ -215,7 +243,11 @@ def _report_from_json(report_json: dict[str, Any]) -> ResearchReport:
 
 @activity.defn(name="browser_research_plan")
 def plan_activity(
-    task_id: str, topic: str, recency_days: int | None, max_sources: int
+    task_id: str,
+    topic: str,
+    recency_days: int | None,
+    max_sources: int,
+    mode: str = "quick",
 ) -> dict[str, Any]:
     task_id_var.set(task_id)
     tid = uuid.UUID(task_id)
@@ -231,6 +263,29 @@ def plan_activity(
             max_sources_per_query=max(1, max_sources // 4 or 1),
         )
         plan_dict = plan.as_dict()
+        # M18.2 (ADR-0068): the resolved policy is written into the plan ONCE, here,
+        # so every later activity (fetch_targets/fetch/synthesize) reads the SAME
+        # policy a run started with from this stored plan_json, rather than
+        # re-resolving it from a `mode` argument that a replay could be called
+        # with differently, or that older activities simply don't accept.
+        #
+        # The caller's own `max_sources` (the REST/voice request's explicit budget,
+        # still validated/capped at MAX_SOURCES_CEILING by the route) and the mode's
+        # own ceiling both apply — whichever is SMALLER wins, so naming a mode never
+        # lets a run exceed a budget the caller explicitly asked for, and the mode's
+        # own ceiling still holds when the caller passed nothing narrower. wave_size
+        # is clamped the same way so a very small requested budget (e.g. max_sources=1)
+        # never asks fetch_targets_activity for more than the run may ever use.
+        resolved_policy = resolve_policy(mode)
+        effective_max_sources = min(resolved_policy.max_sources, max(1, max_sources))
+        if effective_max_sources != resolved_policy.max_sources:
+            resolved_policy = dataclasses.replace(
+                resolved_policy,
+                max_sources=effective_max_sources,
+                wave_size=min(resolved_policy.wave_size, effective_max_sources),
+            )
+        plan_dict["mode"] = mode
+        plan_dict["policy"] = resolved_policy.as_dict()
         _transition_task(session, tid, TASK_STATUS_PLANNED)
         runs_service.update_run(
             session,
@@ -517,6 +572,7 @@ def discover_activity(
         subsystem="research",
         task_id=task_id,
         status=STAGE_DISCOVERING,
+        label=LABEL_DISCOVERING_TR,
         metadata={"candidates": total, "added": inserted},
     )
     return {"status": "done", "candidates": inserted, "path": path, "verification_url": None}
@@ -556,7 +612,9 @@ def _looks_like_listing(url: str) -> bool:
     return query.startswith("q=") or "&q=" in query or "search=" in query
 
 
-def _prefetch_preference(candidate: Any, topic: str) -> tuple[int, float]:
+def _prefetch_preference(
+    candidate: Any, topic: str, *, challenged_domains: frozenset[str] = frozenset()
+) -> tuple[int, int, float]:
     """How promising a candidate looks BEFORE it is fetched, from what discovery stored.
 
     Only the URL and the provider's date hint exist at this point (no title, no body), so this
@@ -565,7 +623,15 @@ def _prefetch_preference(candidate: Any, topic: str) -> tuple[int, float]:
     later reject (a ten-day-old model card, two unrelated arXiv papers), leaving nothing to
     synthesize from. Ordering by URL topicality and a within-window date hint spends the same
     budget on candidates that can actually answer the question.
+
+    ``challenged_domains`` (M18.2 owner rule 5: "a domain already challenged ranks
+    last") sorts a candidate whose host already produced one challenge this run
+    behind every candidate whose host has not — still attempted (cooldown, not
+    exclusion, needs a SECOND challenge, app.research.challenge), just last in
+    line within its own source-class bucket.
     """
+    from app.research.challenge import domain_of
+
     hint = (getattr(candidate, "published_hint", "") or "").lower()
     recent_hint = any(
         marker in hint
@@ -589,16 +655,29 @@ def _prefetch_preference(candidate: Any, topic: str) -> tuple[int, float]:
     relevance = eligibility.topic_relevance(
         topic=topic, title="", excerpt="", url=str(getattr(candidate, "url", ""))
     )
-    return (0 if recent_hint else 1, -relevance)
+    candidate_domain = domain_of(str(getattr(candidate, "url", "")))
+    already_challenged = 1 if candidate_domain in challenged_domains else 0
+    return (already_challenged, 0 if recent_hint else 1, -relevance)
 
 
-def select_fetch_order(candidates: list, max_sources: int, topic: str = "") -> list:
+def select_fetch_order(
+    candidates: list,
+    max_sources: int,
+    topic: str = "",
+    *,
+    challenged_domains: frozenset[str] = frozenset(),
+) -> list:
     """Order the pending candidates so the fetch budget covers every source class.
 
     Primary sources first (official > technical > academic > news > community), a
     per-class quota so one engine's early results cannot crowd out feeds, Hacker News
-    and arXiv, listing/search pages deferred to the very end, and discovery order kept
-    within a class (deterministic; the same rows always yield the same order).
+    and arXiv, listing/search pages deferred to the very end, discovery order kept
+    within a class (deterministic; the same rows always yield the same order), and a
+    domain that already challenged once this run (``challenged_domains``, M18.2 owner
+    rule 5) sorted last within its class rather than excluded outright — cooldown
+    (excluding it entirely) is a separate, harder decision the caller applies once a
+    SECOND challenge confirms the site itself, not just one page
+    (app.research.challenge.DOMAIN_COOLDOWN_THRESHOLD).
     """
     by_class: dict[str, list] = {}
     deferred: list = []
@@ -607,9 +686,11 @@ def select_fetch_order(candidates: list, max_sources: int, topic: str = "") -> l
             deferred.append(c)
             continue
         by_class.setdefault(_class_for_query(c.query_id), []).append(c)
-    if topic:
+    if topic or challenged_domains:
         for bucket in by_class.values():
-            bucket.sort(key=lambda c: _prefetch_preference(c, topic))
+            bucket.sort(
+                key=lambda c: _prefetch_preference(c, topic, challenged_domains=challenged_domains)
+            )
     classes = sorted(by_class, key=lambda k: (_CLASS_PRIORITY.get(k, 9), k))
     ordered: list = []
     if classes and max_sources > 0:
@@ -632,22 +713,60 @@ def select_fetch_order(candidates: list, max_sources: int, topic: str = "") -> l
 @activity.defn(name="browser_research_fetch_targets")
 def fetch_targets_activity(task_id: str, max_sources: int, topic: str = "") -> list[dict[str, str]]:
     """Candidate URLs not yet fetched, oldest-discovered first, capped at
-    ``max_sources`` (the owner's budget for this run).
+    ``max_sources`` — the size of the CURRENT wave the workflow asked for
+    (owner rule 6: fetch waves, never the whole candidate list up front).
 
     Destination policy (finding HIGH-2) is enforced HERE too, not only in
     ``DeviceBrowserGateway.fetch_url`` — a candidate that fails it never
     becomes a fetch target at all, so it never costs a Temporal activity or a
     device command, and it is never retried (there is nothing to retry: the
-    URL itself is refused, not a transient dispatch failure)."""
+    URL itself is refused, not a transient dispatch failure).
+
+    M18.2 (ADR-0068, owner rules 2-5): a domain already COOLED (two challenges
+    this run, app.research.challenge) is skipped without navigation entirely;
+    the full pending pool is trimmed to the run's ``candidate_urls_max`` on
+    cheap pre-fetch signals before any per-class ordering ("quick ranking
+    before any expensive navigation"); and a per-domain page quota keeps one
+    site from consuming the whole wave even when it has not been challenged.
+    """
     task_id_var.set(task_id)
     tid = uuid.UUID(task_id)
     factory = _session_factory()
     with factory() as session:
+        policy = _run_policy(session, tid)
+        run = runs_service.get_run(session, tid)
+        progress = (run.progress_json if run is not None else None) or {}
+        cooled = frozenset(str(d) for d in (progress.get("cooled_domains") or []))
+        challenged_once = frozenset(
+            d
+            for d, count in (progress.get("challenge_counts") or {}).items()
+            if 0 < int(count) < challenge_policy.DOMAIN_COOLDOWN_THRESHOLD
+        )
+
         candidates = runs_service.list_candidates(session, tid)
-        already = {r.url for r in runs_service.list_evidence(session, tid)}
+        evidence_rows = runs_service.list_evidence(session, tid)
+        already = {r.url for r in evidence_rows}
+        domain_counts: dict[str, int] = {}
+        for r in evidence_rows:
+            d = challenge_policy.domain_of(r.url)
+            domain_counts[d] = domain_counts.get(d, 0) + 1
+
         pending = [c for c in candidates if c.url not in already]
-        pending = select_fetch_order(pending, max_sources, topic)
+        cooled_skipped = [c for c in pending if challenge_policy.domain_of(c.url) in cooled]
+        pending = [c for c in pending if challenge_policy.domain_of(c.url) not in cooled]
+
+        if policy.candidate_urls_max > 0 and len(pending) > policy.candidate_urls_max:
+            pending = sorted(
+                pending,
+                key=lambda c: _prefetch_preference(c, topic, challenged_domains=challenged_once),
+            )[: policy.candidate_urls_max]
+
+        pending = select_fetch_order(
+            pending, max_sources, topic, challenged_domains=challenged_once
+        )
+
         targets = []
+        quota_skipped = 0
         for c in pending:
             try:
                 validate_fetch_target(c.url)
@@ -668,15 +787,48 @@ def fetch_targets_activity(task_id: str, max_sources: int, topic: str = "") -> l
                     },
                 )
                 continue
+            domain = challenge_policy.domain_of(c.url)
+            if (
+                policy.per_domain_max_pages > 0
+                and domain_counts.get(domain, 0) >= policy.per_domain_max_pages
+            ):
+                quota_skipped += 1
+                continue
+            domain_counts[domain] = domain_counts.get(domain, 0) + 1
             targets.append(c)
             if len(targets) >= max_sources:
                 break
+
+        if cooled_skipped:
+            runs_service.update_run(
+                session,
+                tid,
+                stage=STAGE_FETCHING,
+                event={
+                    "stage": STAGE_FETCHING,
+                    "detail": f"{len(cooled_skipped)} candidate(s) skipped: domain cooled",
+                },
+            )
+        if quota_skipped:
+            runs_service.update_run(
+                session,
+                tid,
+                stage=STAGE_FETCHING,
+                event={
+                    "stage": STAGE_FETCHING,
+                    "detail": f"{quota_skipped} candidate(s) skipped: per-domain quota",
+                },
+            )
     publish_ui(
         UiState.RESEARCHING,
         subsystem="research",
         task_id=task_id,
         status=STAGE_FETCHING,
-        label=topic[:64] or None,
+        # No coarse label here (owner rule 7): nothing has actually been fetched yet
+        # at this point in the stage, so "N güvenilir kaynak incelendi" (the fetching
+        # stage's own label) is published incrementally by fetch_activity instead, as
+        # each source actually completes.
+        label=None,
         # `targets` is what will actually be fetched and `candidates` what was found:
         # both are counted here, so neither is a guess. There is no progress figure
         # yet - nothing has been fetched - and the renderer draws no bar without one.
@@ -700,13 +852,31 @@ def _class_for_query(query_id: str) -> str:
 def fetch_activity(task_id: str, device_id: str, url: str, query: str, source_class: str) -> str:
     """Returns ``"fetched" | "duplicate"``; a website-level failure
     (``page_kind != ok``) is still a successful command and recorded as
-    evidence — only a browser/transport error raises."""
+    evidence — only a browser/transport error raises.
+
+    M18.2 (ADR-0068, owner rule 3): the moment the fetch returns, the page is
+    classified with the SAME text-based check the quality gate uses
+    (``eligibility.classify_page_validity``) so a CAPTCHA/consent/interstitial/
+    login page is recognised immediately, never solved or bypassed, and its
+    domain's challenge count is updated right here — the second challenge on a
+    domain cools it for the rest of the run (``app.research.challenge``), which
+    is what keeps five URLs from the same blocked site from each costing a
+    fetch. The device's own per-page wait (``per_page_timeout_s``) comes from
+    the run's policy (owner rule 2), read once from the stored plan.
+    """
     task_id_var.set(task_id)
     tid = uuid.UUID(task_id)
     attempt = _current_attempt()
 
+    factory = _session_factory()
+    with factory() as session:
+        policy = _run_policy(session, tid)
+
     gateway = DeviceBrowserGateway(
-        _command_client(), device_id=uuid.UUID(device_id), task_id=task_id
+        _command_client(),
+        device_id=uuid.UUID(device_id),
+        task_id=task_id,
+        timeout_s=policy.per_page_timeout_s,
     )
     try:
         # tab="new" (spec §5a): fetch in a separate tab so the job's persistent
@@ -732,24 +902,62 @@ def fetch_activity(task_id: str, device_id: str, url: str, query: str, source_cl
     if not record.injection_suspected and is_injection_suspected(record.excerpt):
         record = dataclasses.replace(record, injection_suspected=True)
 
+    page_validity = eligibility.classify_page_validity(
+        title=record.title, excerpt=record.excerpt, http_status=record.http_status, url=url
+    )
+    challenged = challenge_policy.is_challenge(page_validity, record.page_kind)
+    evidence_json = record.as_dict()
+    if challenged:
+        # Marked on the row itself (never a reason to mutate the captured page):
+        # the same discipline app.research.runs_service.record_evidence_gate
+        # already follows for the later, ranking-stage quality-gate verdict.
+        evidence_json["challenge_reason"] = page_validity
+
     factory = _session_factory()
     with factory() as session:
         _row, created = runs_service.upsert_evidence(
             session,
             tid,
             url,
-            evidence_json=record.as_dict(),
+            evidence_json=evidence_json,
             device_id=uuid.UUID(device_id),
             command_id=uuid.UUID(record.command_id) if record.command_id else None,
             injection_suspected=record.injection_suspected,
         )
         fetch_done = len(runs_service.list_evidence(session, tid))
+        progress_update: dict[str, Any] = {"fetch_done": fetch_done}
+        event_detail = f"fetched {url}"
+        if created and challenged:
+            run = runs_service.get_run(session, tid)
+            domain = challenge_policy.domain_of(url)
+            update = challenge_policy.record_challenge(
+                run.progress_json if run is not None else None, domain
+            )
+            progress_update.update(
+                {
+                    "challenge_counts": update.challenge_counts,
+                    "cooled_domains": update.cooled_domains,
+                    "challenged_pages": update.challenged_pages,
+                }
+            )
+            event_detail = f"challenge detected ({page_validity}) on {domain}"
+            if update.newly_cooled:
+                event_detail += " - domain cooled, remaining candidates skipped"
         runs_service.update_run(
             session,
             tid,
             stage=STAGE_FETCHING,
-            progress={"fetch_done": fetch_done},
-            event={"stage": STAGE_FETCHING, "detail": f"fetched {url}"},
+            progress=progress_update,
+            event={"stage": STAGE_FETCHING, "detail": event_detail},
+        )
+    if created:
+        publish_ui(
+            UiState.RESEARCHING,
+            subsystem="research",
+            task_id=task_id,
+            status=STAGE_FETCHING,
+            label=_label_fetching_tr(fetch_done),
+            metadata={"fetched": fetch_done},
         )
     return "fetched" if created else "duplicate"
 
@@ -978,7 +1186,7 @@ def rank_activity(
             # as absent so the renderer draws it as absent (ADR-0052 rule 4).
             task_id=task_id,
             status=STAGE_RANKING,
-            label=topic[:64],
+            label=LABEL_RANKING_TR,
             metadata={"candidates": len(records), "kept": len(eligible)},
         )
         ranked = assign_evidence_ids(
@@ -1140,14 +1348,27 @@ def _synthesize_with_fallback(
 
 @activity.defn(name="browser_research_synthesize")
 def synthesize_activity(
-    task_id: str, topic: str, window_json: dict[str, Any], synthesis_name: str
+    task_id: str,
+    topic: str,
+    window_json: dict[str, Any],
+    synthesis_name: str,
+    run_stats: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """``run_stats`` (M18.2, ADR-0068) is the workflow's own wave-loop telemetry —
+    ``{"mode", "budget_s", "elapsed_s", "waves"}`` — passed in because it is
+    workflow-local state nothing has persisted; ``None`` (every existing caller)
+    means a run that predates the fast-path policy, reported as the QUICK
+    default with zeroed timings rather than failing the activity."""
     task_id_var.set(task_id)
     tid = uuid.UUID(task_id)
     settings = get_settings()
+    stats_in = run_stats or {}
 
     factory = _session_factory()
     with factory() as session:
+        policy = _run_policy(session, tid)
+        run = runs_service.get_run(session, tid)
+        progress = (run.progress_json if run is not None else None) or {}
         rows = runs_service.list_evidence(session, tid)
         candidate_count = len(runs_service.list_candidates(session, tid))
         rejected_by_reason = _gate_rejections(rows)
@@ -1179,7 +1400,7 @@ def synthesize_activity(
             subsystem="research",
             task_id=task_id,
             status=STAGE_SYNTHESIZING,
-            label=topic[:64] or None,
+            label=LABEL_SYNTHESIZING_TR,
             metadata={"kept": len(ranked), "primary": len(primary_only)},
         )
 
@@ -1209,6 +1430,16 @@ def synthesize_activity(
             + list(synthesis_attempts)
         )
 
+        # M18.2 owner rule 2 ("final findings <= 5" for QUICK, higher for broader
+        # modes): the per-mode ceiling applies to the FINISHED, contract-valid
+        # findings list — after _synthesize_with_fallback already guaranteed the
+        # MIN_REPORT_FINDINGS floor, never before it, so a mode's ceiling can never
+        # be the reason a run fails its findings floor.
+        if len(result.findings) > policy.final_findings_max:
+            result = dataclasses.replace(
+                result, findings=result.findings[: policy.final_findings_max]
+            )
+
         stats = ReportStats(
             queries=0,
             discovered=candidate_count,
@@ -1224,6 +1455,16 @@ def synthesize_activity(
             # how much of the run's own output was self-rejected, without the
             # executive narration ever seeing this number (M18.2 DEFECT 2, ADR-0067).
             quarantined=len(synthesis_quarantine),
+            # M18.2 fast-path diagnostics (ADR-0068): mode/budget/elapsed/waves come
+            # from the workflow's own wave loop (nothing else has them); challenged/
+            # cooled come from the run's own progress, accumulated by fetch_activity
+            # across the whole run, not only this activity's own evidence rows.
+            mode=str(stats_in.get("mode") or policy.mode),
+            budget_s=float(stats_in.get("budget_s") or policy.hard_budget_s),
+            elapsed_s=float(stats_in.get("elapsed_s") or 0.0),
+            waves=int(stats_in.get("waves") or 0),
+            challenged_pages=int(progress.get("challenged_pages") or 0),
+            cooled_domains=len(progress.get("cooled_domains") or []),
         )
         if synthesis_quarantine:
             logger.info(

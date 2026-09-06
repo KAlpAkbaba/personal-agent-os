@@ -244,6 +244,35 @@ def test_diagnostics_reads_the_report_stats_never_fabricating() -> None:
     assert diag.provider_errors == ()
 
 
+def test_diagnostics_carries_the_fast_path_fields(monkeypatch) -> None:
+    """M18.2 (ADR-0068): mode, budget, elapsed time, wave count and the
+    challenge/cooldown counters are TECHNICAL-only telemetry, exactly like every
+    other field ResearchDiagnostics carries - never spoken by spoken_result."""
+    report = _real_report()
+    report["stats"].update(
+        {
+            "mode": "quick",
+            "budget_s": 120.0,
+            "elapsed_s": 87.5,
+            "waves": 2,
+            "challenged_pages": 3,
+            "cooled_domains": 1,
+        }
+    )
+    diag = ResearchDiagnostics.from_report_json(report)
+    assert diag.mode == "quick"
+    assert diag.budget_s == 120.0
+    assert diag.elapsed_s == 87.5
+    assert diag.waves == 2
+    assert diag.challenged_pages == 3
+    assert diag.cooled_domains == 1
+
+    result = ResearchResult.from_report_json(report)
+    spoken = spoken_result(result)
+    for banned in ("quick", "120", "87.5", "challenged", "cooled"):
+        assert banned not in spoken.lower()
+
+
 def test_diagnostics_of_a_missing_report_is_all_zero_not_fabricated() -> None:
     diag = ResearchDiagnostics.from_report_json(None)
     assert diag.discovered_count == 0
@@ -254,6 +283,12 @@ def test_diagnostics_of_a_missing_report_is_all_zero_not_fabricated() -> None:
     assert diag.refused_pages == 0
     assert diag.dedup_stats == {"deduplicated": 0}
     assert diag.synthesis_provider == ""
+    assert diag.mode == ""
+    assert diag.budget_s == 0.0
+    assert diag.elapsed_s == 0.0
+    assert diag.waves == 0
+    assert diag.challenged_pages == 0
+    assert diag.cooled_domains == 0
 
 
 # ------------------------------------------------------------------ tool terminal payload
