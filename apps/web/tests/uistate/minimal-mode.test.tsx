@@ -398,6 +398,16 @@ describe("fullscreen is the owner's gesture, structurally", () => {
     expect(css).toContain("--core-ground: #06050a");
   });
 
+  it("keeps the eye's reconcile seam now that EyeControl is not on this page", () => {
+    // Minimal mode dropped the full eye cell for the control cluster, and the
+    // cell was where `stopLocalIfStale` lived. Without it, "gözünü kapat" said
+    // on another device would leave this one's camera running while the Cloud
+    // Core believed it was off — the one regression this rewrite could make
+    // that the owner would care about most.
+    expect(page).toContain("stopLocalIfStale({ status: eyeStatus");
+    expect(page).toContain("useActivePerception");
+  });
+
   it("keeps the strip out of the fade, so the privacy cell never dims", () => {
     expect(page).toContain('className="core-strip"');
     // The strip carries no opacity of its own: only the cluster fades.

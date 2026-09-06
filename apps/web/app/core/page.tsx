@@ -26,7 +26,7 @@
  * observation, never published as bus events.
  */
 
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 
 import OwnerGate from "../components/OwnerGate";
 import { alarmView, displayView, eyeView, presenceView, releaseView } from "../lib/uistate/ambient";
@@ -77,6 +77,20 @@ function MinimalCore() {
   const release = useMemo(() => releaseView(releaseClaim(truth, now)), [truth, now]);
   const display = useMemo(() => displayView(displayClaim(truth, now)), [truth, now]);
   const alarm = useMemo(() => alarmView(alarmClaim(truth, now)), [truth, now]);
+
+  // The eye's reconcile seam, kept exactly as `EyeControl` holds it in the
+  // cockpit: "gözünü kapat" spoken elsewhere, another device's owner action,
+  // or the endpoint's own idempotent default all reach this the same way, and
+  // this device's camera has no honest reason to keep running. The store
+  // decides (`shouldStopLocalPerception`) from the bus view WITH its date, so
+  // an old `eye.disabled` can never cancel a newer enable. Minimal mode no
+  // longer renders `EyeControl`, so the seam lives here instead — losing it
+  // would leave a camera running that the Cloud Core believes is off.
+  const { status: eyeStatus, ageMs: eyeAgeMs, expired: eyeExpired } = eye;
+  const { stopLocalIfStale } = perception;
+  useEffect(() => {
+    stopLocalIfStale({ status: eyeStatus, ageMs: eyeAgeMs, expired: eyeExpired });
+  }, [eyeStatus, eyeAgeMs, eyeExpired, stopLocalIfStale]);
 
   const voiceState = voice.controller.state;
   const voiceLive = isLiveState(voiceState);

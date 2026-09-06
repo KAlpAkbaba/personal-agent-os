@@ -4,7 +4,10 @@ The milestone spec is `docs/M18_HOLOGRAPHIC_CORE_SPEC.md`; this document is the
 renderer half of it, written by the agent that built `apps/web/app/core`.
 
 Status: **implemented, reconciled to contract v2** (2026-09-05); **M18.1 visual language**
-applied (2026-09-07, ADR-0065, `docs/M18_1_CORE_VISUAL_LANGUAGE.md`).
+applied (2026-09-07, ADR-0065, `docs/M18_1_CORE_VISUAL_LANGUAGE.md`); **M18.3 Living
+Core** applied (2026-09-07, ADR-0070, `docs/M18_3_LIVING_CORE_VISUAL_IDENTITY.md`), which
+supersedes the shapes, the palette, the tier table in §5 and the Minimal-mode layout below
+and adds contract v3'''s `alarm.*` wake surge and `display.*` band.
 
 Governing document: `docs/DECISIONS.md` ADR-0052. Where this document and ADR-0052
 disagree, ADR-0052 wins.
