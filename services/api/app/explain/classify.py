@@ -22,6 +22,12 @@ QUERY_EVIDENCE = "evidence"
 QUERY_RESEARCH_DETAIL = "research_detail"
 QUERY_TECHNICAL = "technical"
 QUERY_MODULE_PROBLEM = "module_problem"
+# M18.2 DEFECT 2 (ADR-0067): explicit diagnostic questions about the research
+# PIPELINE itself, answered from app.research.result.ResearchDiagnostics at the
+# technical level — never folded into the executive/last-activity answer, which
+# speaks findings only.
+QUERY_RESEARCH_PROBLEMS = "research_problems"  # araştırma sırasında ne sorun oldu
+QUERY_REJECTED_PAGES = "rejected_pages"  # hangi sayfalar elendi
 # M17 phase 9: the owner asks about what the system learned and what it is building.
 QUERY_LEARNED = "learned"  # ne öğrendin / son hatalardan ne öğrendin
 QUERY_EVOLUTION = "evolution"  # kendi üzerinde ne geliştiriyorsun
@@ -52,6 +58,8 @@ QUERY_KINDS = (
     QUERY_RESEARCH_DETAIL,
     QUERY_TECHNICAL,
     QUERY_MODULE_PROBLEM,
+    QUERY_RESEARCH_PROBLEMS,
+    QUERY_REJECTED_PAGES,
     QUERY_LEARNED,
     QUERY_EVOLUTION,
     QUERY_SHADOW_READY,
@@ -180,6 +188,16 @@ _PATTERNS: tuple[tuple[tuple[str, ...], str], ...] = (
     (("araştırma", "detay"), QUERY_RESEARCH_DETAIL),
     (("araştırma", "ayrıntı"), QUERY_RESEARCH_DETAIL),
     (("bulgu",), QUERY_RESEARCH_DETAIL),
+    # --- research PIPELINE diagnostics, explicitly asked for (M18.2 DEFECT 2) -----
+    # Ahead of the generic "sorun"/"hangi" patterns below on purpose: "araştırma
+    # sırasında ne sorun oldu" would otherwise match (("sorun", "ne"),
+    # QUERY_MODULE_PROBLEM) and be read as a question about a named module.
+    (("araştırma", "sorun"), QUERY_RESEARCH_PROBLEMS),
+    (("arastirma", "sorun"), QUERY_RESEARCH_PROBLEMS),
+    (("hangi", "sayfa"), QUERY_REJECTED_PAGES),
+    (("hangi", "sayfalar"), QUERY_REJECTED_PAGES),
+    (("sayfa", "elendi"), QUERY_REJECTED_PAGES),
+    (("sayfalar", "elendi"), QUERY_REJECTED_PAGES),
     (("neden", "başarısız"), QUERY_WHY_FAILED),
     (("ne", "başarısız"), QUERY_FAILURES),
     (("başarısız", "oldu"), QUERY_FAILURES),
@@ -274,7 +292,12 @@ def classify(
         level = LEVEL_FULL
     elif (_has(tokens, "bütün") or _has(tokens, "tüm")) and _has(tokens, "detay"):
         level = LEVEL_FULL
-    elif kind == QUERY_TECHNICAL or _has(tokens, "teknik"):
+    elif kind in (QUERY_TECHNICAL, QUERY_RESEARCH_PROBLEMS, QUERY_REJECTED_PAGES) or _has(
+        tokens, "teknik"
+    ):
+        # The pipeline's own diagnostics (M18.2 DEFECT 2) are technical-level content
+        # by definition: forcing the level here means the owner never has to also say
+        # "teknik" to get ResearchDiagnostics instead of the executive findings answer.
         level = LEVEL_TECHNICAL
     elif kind == QUERY_RESEARCH_DETAIL or _has(tokens, "detay") or _has(tokens, "ayrıntı"):
         level = LEVEL_DETAILED
@@ -291,7 +314,7 @@ def classify(
         # what was learned and what is being built are not this week's news
         since = now - timedelta(days=90)
     subsystem = _subsystem(tokens)
-    if kind == QUERY_RESEARCH_DETAIL:
+    if kind in (QUERY_RESEARCH_DETAIL, QUERY_RESEARCH_PROBLEMS, QUERY_REJECTED_PAGES):
         subsystem = "research"
     elif kind in (QUERY_EVOLUTION, QUERY_SHADOW_READY, QUERY_WHY_BUILT):
         subsystem = "evolution"
@@ -332,6 +355,8 @@ __all__ = [
     "QUERY_LAST_ACTIVITY",
     "QUERY_MODULE_PROBLEM",
     "QUERY_PROBLEMS_NOW",
+    "QUERY_RESEARCH_PROBLEMS",
+    "QUERY_REJECTED_PAGES",
     "QUERY_RESEARCH_DETAIL",
     "QUERY_SUBSYSTEM_STATUS",
     "QUERY_TECHNICAL",

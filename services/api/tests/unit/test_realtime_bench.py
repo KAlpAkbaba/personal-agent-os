@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 
 from app.voice.realtime_bench import (
+    EV_AUDIO_DONE,
     EV_AUDIO_FRAME,
     EV_BARGE_IN_START,
     EV_END_OF_TURN,
@@ -25,6 +26,7 @@ from app.voice.realtime_bench import (
     METRICS,
     SOURCE_CLIENT,
     SOURCE_SIMULATOR,
+    TIMING_EVENT_KINDS,
     BenchTargets,
     TimingEvent,
     build_report,
@@ -150,6 +152,24 @@ def test_summary_statistics() -> None:
                              "mean": None}
     s = summarize([50, 10, 30, 20, 40])
     assert s == {"n": 5, "min": 10, "p50": 30, "p95": 50, "max": 50, "mean": 30.0}
+
+
+def test_audio_done_kind_is_accepted_and_carries_its_payload() -> None:
+    """ADR-0067 item 5: the web client's playback-completion mark is stored like
+    every other timing event kind, with no metric pair required yet."""
+    assert EV_AUDIO_DONE in TIMING_EVENT_KINDS
+    rows = [
+        {
+            "kind": EV_AUDIO_DONE,
+            "t_ms": 2000,
+            "turn": 1,
+            "payload": {"response_id": "resp_1", "basis": 1},
+        },
+        {"kind": "bogus", "t_ms": 1},
+    ]
+    events = events_from_client_reports(rows)
+    assert [e.kind for e in events] == [EV_AUDIO_DONE]
+    assert events[0].payload == {"response_id": "resp_1", "basis": 1}
 
 
 def test_targets_carry_a_basis_for_every_metric() -> None:

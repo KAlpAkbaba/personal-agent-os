@@ -1219,6 +1219,11 @@ def synthesize_activity(
             truncated_fields=result.truncated_fields,
             rejected=sum(rejected_by_reason.values()),
             rejected_by_reason=rejected_by_reason,
+            # Diagnostics-only (app.research.result.ResearchDiagnostics): every item
+            # quarantined at either stage, so a technical/diagnostic question can say
+            # how much of the run's own output was self-rejected, without the
+            # executive narration ever seeing this number (M18.2 DEFECT 2, ADR-0067).
+            quarantined=len(synthesis_quarantine),
         )
         if synthesis_quarantine:
             logger.info(

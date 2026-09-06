@@ -774,6 +774,118 @@ def complete_tool_call(
     return {**payload, "delivered": delivered}
 
 
+def find_running_tool_call_by_task_id(
+    db: Session, *, name: str, task_id: str
+) -> tuple[RealtimeSessionRow, RealtimeToolCall] | None:
+    """The RUNNING call of ``name`` whose own 'running' result recorded this durable
+    backend job's id (M18.2 DEFECT 2, ADR-0067) — e.g. a ``research.start`` call whose
+    handler started a Temporal research run and stored ``task_id`` on its own
+    ``result_json`` so the run's terminal step (or a sweeper watching its durable rows,
+    such as ``app.voice.realtime_sessions.research_announcer.ResearchToolCallAnnouncer``)
+    can find its way back to the session and call id to complete.
+
+    At most one match is expected on a single-owner system, but every RUNNING call of
+    this name is checked rather than assuming it — a stale duplicate must never
+    silently win over the real one. Returns ``None`` when nothing matches (the call
+    never recorded a task_id, its session has since vanished, or nothing is running at
+    all) — never raises: a lookup miss is an ordinary, expected outcome here.
+    """
+    rows = db.execute(
+        select(RealtimeToolCall).where(
+            RealtimeToolCall.name == name, RealtimeToolCall.status == TOOL_STATUS_RUNNING
+        )
+    ).scalars()
+    for call in rows:
+        if str((call.result_json or {}).get("task_id") or "") == task_id:
+            session_row = db.get(RealtimeSessionRow, call.session_id)
+            if session_row is not None:
+                return session_row, call
+    return None
+
+
+def complete_tool_call_system(
+    db: Session,
+    row: RealtimeSessionRow,
+    *,
+    call_id: str,
+    result: dict[str, Any] | None,
+    error: dict[str, Any] | None,
+    sideband: SidebandPusher,
+    trace_id: str | None = None,
+) -> dict[str, Any] | None:
+    """A durable backend job (never an owner HTTP request) completes a long-running
+    tool call it did not originate as a live media leg — e.g. the research pipeline's
+    terminal step finishing the ``research.start`` call that started it.
+
+    Deliberately skips ``require_leg``: there is no owner bearer to check here, and
+    ``complete_tool_call``'s own docstring is explicit that a worker/pipeline "must
+    arrive through its own, non-owner credential — never through this path". This
+    function IS that separate, non-owner path — same durable outcome, same
+    ``tool_completed`` sideband shape, no owner-session identity involved.
+
+    Also tolerates a session that is no longer live: a research run can easily outlive
+    the realtime session that started it (the owner may have hung up minutes ago). The
+    outcome is still recorded durably either way; the sideband push (and therefore the
+    live conversation update) only happens when the session is still live enough to
+    have somewhere to deliver it. Returns ``None`` — logged, never raised — when the
+    call is missing or already resolved: the caller is a background sweeper/activity
+    and must not fail its own run over a voice session detail.
+    """
+    now = utcnow()
+    call = get_tool_call(db, row.id, call_id)
+    if call is None or call.status != TOOL_STATUS_RUNNING:
+        return None
+    if error:
+        call.status = TOOL_STATUS_FAILED
+        call.error_class = str(error.get("error_class") or VoiceErrorClass.DEPENDENCY_UNAVAILABLE)
+        call.result_json = {"message": str(error.get("message") or "")[:2000]}
+    else:
+        call.status = TOOL_STATUS_SUCCEEDED
+        call.result_json = dict(result or {})
+    call.completed_at = now
+    ctx = dict(row.context_json or {})
+    plan = ctx.get("plan")
+    if plan and str(plan.get("plan_id")) == (str(row.plan_id) if row.plan_id else None):
+        plan = dict(plan)
+        plan["status"] = "completed" if call.status == TOOL_STATUS_SUCCEEDED else "failed"
+        ctx["plan"] = plan
+    payload = {
+        "call_id": call.call_id,
+        "name": call.name,
+        "status": call.status,
+        "result": call.result_json if call.status == TOOL_STATUS_SUCCEEDED else None,
+        "error": (
+            {"error_class": call.error_class, **(call.result_json or {})}
+            if call.status == TOOL_STATUS_FAILED
+            else None
+        ),
+    }
+    delivered = False
+    still_live = row.state not in (REALTIME_STATE_CLOSED, REALTIME_STATE_EXPIRED)
+    if still_live:
+        delivered = _deliver(db, row, ctx, sideband, SB_TOOL_COMPLETED, payload, trace_id=trace_id)
+    _set_context(row, ctx)
+    row.updated_at = now
+    _audit(
+        db,
+        ACTION_TOOL_COMPLETED,
+        row,
+        trace_id=trace_id,
+        metadata={
+            "call_id": call_id,
+            "name": call.name,
+            "status": call.status,
+            "delivered": delivered,
+            "error_class": call.error_class,
+            "running_ms": int((now - _aware(call.created_at, now)).total_seconds() * 1000),
+            "system": True,
+            "session_live": still_live,
+        },
+    )
+    db.commit()
+    return {**payload, "delivered": delivered}
+
+
 # ------------------------------------------------------------ client events
 
 
@@ -1326,7 +1438,13 @@ def session_activity(db: Session, row: RealtimeSessionRow) -> dict[str, Any]:
     tool_calls: list[dict[str, Any]] = []
     for call in calls:
         result = call.result_json or {}
-        speech = str(_result_field(result, "speech") or "")
+        # "speech" is what most tool results carry (narration.control, activity.explain,
+        # state.now, ...); a completed research.start carries "spoken_result" instead
+        # (M18.2 DEFECT 2, ADR-0067) - the record must show what was actually said
+        # either way, from durable rows alone.
+        speech = str(
+            _result_field(result, "speech") or _result_field(result, "spoken_result") or ""
+        )
         tool_calls.append(
             {
                 "call_id": call.call_id,
@@ -1667,8 +1785,10 @@ __all__ = [
     "client_timing_rows",
     "close_session",
     "complete_tool_call",
+    "complete_tool_call_system",
     "create_session",
     "drain_pending_sideband",
+    "find_running_tool_call_by_task_id",
     "get_session",
     "get_tool_call",
     "handle_tool_call",

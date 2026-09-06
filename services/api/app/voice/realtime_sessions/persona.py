@@ -80,6 +80,23 @@ SELF_EXPLANATION_TR = (
 )
 
 
+#: M18.2 DEFECT 2 (ADR-0067): a research.start call's terminal result (delivered over
+#: the sideband as tool_completed, or seen as the tool call's own result once
+#: completed) always carries a 'spoken_result' field built from the findings, never
+#: from the pipeline's counts. This is the ONE sentence the persona reads unasked;
+#: everything else in that result (executive_summary, findings, source_summary,
+#: diagnostics) exists for the record and for follow-up questions, never for the
+#: first answer.
+RESEARCH_RESULT_TR = (
+    "Bir araştırma sonucu geldiğinde (research.start tamamlandığında), sonuçtaki "
+    "'spoken_result' metnini aynen, ekleme yapmadan okursun. Sayıları, kaç sayfa "
+    "elendiğini, kaç aday bulunduğunu ya da hangi sitelerin tarandığını sahibi açıkça "
+    "sormadıkça söylemezsin. 'Teknik anlat', 'hangi sayfalar elendi' ya da 'araştırma "
+    "sırasında ne sorun oldu' denirse activity.explain aracını çağırır ve dönen "
+    "'speech' metnini aynen okursun."
+)
+
+
 #: docs/M18_ACTION_CONTRACT.md §6 (ADR-0063): current state comes from state.now, the past
 #: from activity.explain, and a command to the eye or to production is ALWAYS a tool call
 #: whose 'speech' is read verbatim. The banned phrases are named, from the one place they
@@ -119,7 +136,13 @@ def build_instructions(
     voice_profile: str | None = None,
 ) -> str:
     """Assemble the session instructions (Turkish persona + defaults + state)."""
-    parts = [PERSONA_TR, EXECUTIVE_DEFAULTS_TR, SELF_EXPLANATION_TR, ACTION_GROUNDING_TR]
+    parts = [
+        PERSONA_TR,
+        EXECUTIVE_DEFAULTS_TR,
+        SELF_EXPLANATION_TR,
+        ACTION_GROUNDING_TR,
+        RESEARCH_RESULT_TR,
+    ]
     style = VOICE_STYLE_BLOCKS.get((voice_profile or "").lower())
     if style:
         parts.append(style)
@@ -155,6 +178,7 @@ __all__ = [
     "ACTION_GROUNDING_TR",
     "EXECUTIVE_DEFAULTS_TR",
     "PERSONA_TR",
+    "RESEARCH_RESULT_TR",
     "SELF_EXPLANATION_TR",
     "VOICE_STYLE_ARBOR_TR",
     "VOICE_STYLE_BLOCKS",

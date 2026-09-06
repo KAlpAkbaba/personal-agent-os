@@ -4418,3 +4418,130 @@ Consequences: `pnpm --filter @pagentos/web test` grows from 660 to 678 tests
 the response through the provider's stop. `docs/M18_CORE_RENDERER.md` §3 and ADR-0061 §3
 carry the rule. Owner re-run pending: the expected observation is that the Core stays in
 `speaking` — calmer through pauses — until the last word, and drops on "dur" as before.
+
+## ADR-0067 — Research speaks its findings; the pipeline speaks only when asked (2026-09-07)
+
+Status: Accepted
+
+Context: M18.2 DEFECT 2. After a research run, the assistant's spoken answer narrated
+pipeline diagnostics ("242 aday keşfedildi, 28 sayfa elendi, 11 interstitial, 6 tekrar")
+instead of what was found. Tracing the actual completion path (`research.start` ->
+discovery -> fetch -> evidence -> rank -> synthesis -> durable report row -> what reaches
+the Voice session -> narration) rather than guessing at it found THREE separate facts, not
+one:
+
+1. **`research.start` (`app.voice.realtime_sessions.tools.research_start`) never
+   triggers the real M13 pipeline.** It fabricates a local `plan` dict (a random
+   `plan_id`, the topic/scope echoed back) inside the session's own `context_json` and
+   returns `{"status": "running", ...}`; the Temporal `BrowserResearchWorkflow` that
+   actually discovers, fetches, ranks and synthesizes a report
+   (`app.research.browser_workflow`/`browser_activities`) is started only through the
+   separate REST route `POST /v1/research` (`app.research.routes.create_research`),
+   which nothing in the voice tool calls. A voice-initiated "araştır" and the durable
+   report a later "sonuçları anlat" finds are, today, two unrelated things linked only by
+   the owner's own memory of having asked.
+2. **Nothing ever completes the `research.start` tool call.** `service.complete_tool_call`
+   exists and is reachable only through the owner-authenticated HTTP route
+   `POST .../tool-calls/{id}/complete` — by design, per its own docstring: a worker/
+   pipeline "must arrive through its own, non-owner credential — never through this
+   path." No caller anywhere (Temporal activity, sweeper, announcer) exists that reaches
+   that path for a research run, so a `research.start` call sits `TOOL_STATUS_RUNNING`
+   in `realtime_tool_calls` forever; the provider is never told the tool call so much as
+   finished, so the model can never be truthfully "answering the research.start call" —
+   there is no sideband `tool_completed`, ever, for this tool, in production today.
+3. **The actual narrated defect: `app.explain.engine._research_executive` built its
+   outcome sentence from the ledger event's own counts.** When the owner later asks
+   anything that resolves to "last thing that happened" (`son yaptıklarını anlat`, and
+   also `araştırma detaylandır` / `teknik anlat`, all of which route through the SAME
+   `research.completed`-latest branch of `explain()`), the EXECUTIVE level always read
+   `ev.detail` — `{**ReportStats, findings, sources}`, written verbatim by
+   `app.ledger.service.build_research_completed_event` — and built: `"{sources} farklı
+   kaynaktan {findings} sonuç üretti ve {rejected} uygun olmayan sayfayı eledi."` This is
+   the sentence the owner actually heard. It is not the model improvising over the
+   ledger's raw rows (`activity.explain`'s persona instruction to read `speech` verbatim
+   was honoured exactly) — it is the ENGINE handing the model diagnostics as if they were
+   the answer. Item 3 is the one this milestone item fixes; items 1 and 2 are real gaps
+   this ADR records and partially closes (the completion mechanism, see decision 3) but
+   does not fully wire end to end — see Consequences.
+
+Decisions:
+
+1. **`app.research.result` is the one place a research OUTCOME and a research
+   DIAGNOSTIC are different types.** `ResearchResult` (`topic`, `executive_summary`,
+   `findings: [{finding, why_it_matters, sources}]`, `why_it_matters`, `sources:
+   [{title, url_host, ref}]`) is built by `from_report_json` ONLY from the validated,
+   provenance-gated report (`ResearchReportRow.report_json`) — never from a count, never
+   fabricated. `ResearchDiagnostics` (`discovered_count`, `fetched_count`,
+   `rejected_pages`, `rejected_by_reason`, `refused_pages`, `quarantined_pages`,
+   `dedup_stats`, `fetch_failed_count`, `synthesis_provider`, `provider_errors`,
+   `timings`) is built by `from_report_json` from the SAME report's `stats` block —
+   `ReportStats` gained one field, `quarantined` (every contract-violation-quarantined
+   item at either the evidence or the synthesis stage), so a diagnostic question can say
+   how much of the pipeline's own output was self-rejected. `spoken_result(result)`
+   deterministically renders the owner-facing Turkish narration — a conclusion, up to
+   three findings ("Birincisi, İDDİA. Bu önemli çünkü AÇIKLAMA."), then an offer to say
+   more — and is asserted, directly, to never contain "elendi", "eledi", "interstitial",
+   "tekrar", "dedup", "aday" or a digit immediately followed by "sayfa". A run that failed
+   its quality gate (`InsufficientValidFindings` / `InsufficientValidEvidence`) renders
+   through `ResearchResult.insufficient_evidence(reason=...)` instead: honest and
+   concise, never a recital of the failure log.
+2. **The completion mechanism this milestone item required is built, even though nothing
+   in production triggers it yet (decision above, gap 1).** `service.
+   complete_tool_call_system` is the non-owner sibling `complete_tool_call`'s own
+   docstring calls for: same durable outcome, same `tool_completed` sideband shape, no
+   owner-session identity, and it tolerates a session that has since closed (a research
+   run can easily outlive it). `app.voice.realtime_sessions.research_announcer.
+   ResearchToolCallAnnouncer` is the trigger, in the SAME cross-process shape as
+   `app.mobile.announcer.ArtifactReadyAnnouncer` and for the identical reason stated in
+   that module's own docstring: the Temporal worker holds no sideband/device-WebSocket
+   registrations (it is a different process from the API's `BrokerRuntime`), so it
+   cannot deliver anything itself — it can only make `ResearchRunRow`/`ResearchReportRow`
+   terminal. This sweeper, running in the API process where the live connections
+   actually are, watches for a RUNNING `research.start` call whose own `result_json`
+   names a `task_id`, and once that run is terminal, calls `complete_tool_call_system`
+   with `app.research.result.build_tool_terminal_payload` (or
+   `build_insufficient_terminal_payload`) — the owner-facing schema `{spoken_result,
+   executive_summary, findings, source_summary, diagnostics}`. It is wired into
+   `app.main.create_app`'s lifespan exactly like `mobile.announcer`. What is NOT done:
+   nothing in `research_start()` sets that `task_id` yet, because doing so honestly
+   requires closing gap 1 above (starting the real Temporal workflow from a synchronous
+   tool handler, including device selection) — a separate, larger change flagged for a
+   follow-up session rather than attempted half-integrated here. The announcer and
+   `complete_tool_call_system` are fully exercised by their own tests against a
+   fabricated linkage, independent of whether anything sets it yet.
+3. **The EXECUTIVE level consumes `ResearchResult`; counts move to TECHNICAL and to
+   explicit questions.** `_research_executive` now builds `ResearchResult.
+   from_report_json(report)` and speaks `spoken_result(...)`; when a qualification
+   sentence already addressed the owner, the "Efendim, " address is trimmed from the
+   result sentence rather than repeated. `_research_detailed`'s "Elenen sayfalar" bullet
+   moved to `_research_technical`, which now also reports `quarantined_pages` /
+   `refused_pages` when either is nonzero — this is what "Ayrıntı" already got closer to
+   right; it should never also have carried a rejection tally. Two query kinds are new,
+   `research_problems` ("araştırma sırasında ne sorun oldu?") and `rejected_pages`
+   ("hangi sayfalar elendi?"), both forced to `LEVEL_TECHNICAL` and routed to
+   `subsystem="research"` — ahead of the generic "sorun"/"hangi" patterns in
+   `app.explain.classify`, so a research diagnostic question is never misread as a named
+   module's problem. A `research.failed` event, reached as "the last thing that
+   happened", now answers through `ResearchResult.insufficient_evidence` instead of the
+   generic activity fallback.
+4. **UI state during research was verified, not changed.** `app.research.
+   browser_activities` already publishes `UiState.RESEARCHING` through discovery, fetch
+   and rank with real counts (`test_research_uistate.py`), and synthesis deliberately
+   stays `RESEARCHING` rather than switching to `THINKING` — the code's own comment: "it
+   is one job, and the evidence the Core is drawing is the evidence being synthesised."
+   No stage publishes nothing and no stage publishes an invented number; nothing needed
+   fixing here.
+5. **`audio_done` joins `TIMING_EVENT_KINDS`.** The web client's playback-completion mark
+   (`response_id`, `basis`) is now stored exactly like every other client timing event
+   (`app.voice.realtime_bench`); no metric pair is defined for it yet.
+
+Consequences: `services/api` gains `app/research/result.py` and
+`app/voice/realtime_sessions/research_announcer.py`; `ReportStats` gains `quarantined`;
+`_research_executive`/`_research_detailed`/`_research_technical` and `classify()` change
+shape; `session_activity`'s `speech_head` now falls back to a result's `spoken_result`
+when it carries no `speech` key. `docs/DECISIONS.md` (this entry) records gaps 1 and 2 from
+the Context above as open: `research.start` still does not start a real research run, and
+the announcer this ADR builds has nothing to announce until it does. Closing that gap —
+a synchronous tool handler starting `BrowserResearchWorkflow` and recording its `task_id`
+on the call's own `result_json` — is the natural next M18.2 item, not attempted here to
+keep this change bounded and fully tested end to end on the half that could be.
