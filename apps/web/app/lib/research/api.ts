@@ -10,8 +10,17 @@
  * a Turkish `detail` ready for display.
  */
 
+import { type Loaded, load } from "../cockpit/api";
 import { apiFetch } from "../session";
 import { describeErrorDetail } from "../voice/api";
+import {
+  FOCUS_NOT_COMPLETED,
+  FOCUS_UNSUPPORTED,
+  type FocusEntry,
+  type FocusState,
+  parseFocusEntry,
+  parseFocusState,
+} from "./focus";
 import {
   BROWSER_CAPABILITY,
   type DeviceInfo,
@@ -194,6 +203,84 @@ export async function cancelResearch(taskId: string): Promise<void> {
     method: "POST",
   });
   if (!response.ok) throw await toApiError(response);
+}
+
+// --------------------------------------------------------------------- focus
+
+/**
+ * Read the conversational focus.
+ *
+ * Uses the cockpit's `load`, and therefore its four outcomes, because this is
+ * the same question with the same four answers: not asked yet, the focus,
+ * "this server has no focus route" (404) and "could not find out". Collapsing
+ * the last two would either invent a feature or invent a failure.
+ */
+export function getResearchFocus(): Promise<Loaded<FocusState>> {
+  return load<FocusState>("/v1/research/focus", parseFocusState);
+}
+
+export type SetFocusOutcome =
+  /** 200: the task is now the conversational focus. */
+  | { kind: "ok"; focus: FocusEntry | null }
+  /** 409 `not_completed`: there is no completed report to talk about. */
+  | { kind: "not_completed"; detail: string }
+  /** 404: this Cloud Core has no focus routes at all. */
+  | { kind: "absent"; detail: string }
+  | { kind: "failed"; detail: string };
+
+/**
+ * `POST /v1/research/{task_id}/focus` — "this report is what we are talking
+ * about". Selection is by task id; the topic never enters this call.
+ *
+ * Never throws for an answer the API is entitled to give; a lost session still
+ * raises `UnauthorizedError` from `apiFetch`, which OwnerGate handles.
+ */
+export async function setResearchFocus(taskId: string): Promise<SetFocusOutcome> {
+  const response = await apiFetch(`/v1/research/${encodeURIComponent(taskId)}/focus`, {
+    method: "POST",
+  });
+  if (response.status === 404) return { kind: "absent", detail: FOCUS_UNSUPPORTED };
+  if (response.status === 409) {
+    const err = await toApiError(response);
+    // The API's own sentence wins when it sent one; ours is the fallback.
+    const own = err.detail.trim();
+    const useOwn = own && !own.startsWith("API hatası") && own !== "not_completed";
+    return { kind: "not_completed", detail: useOwn ? own : FOCUS_NOT_COMPLETED };
+  }
+  if (!response.ok) return { kind: "failed", detail: explainError(await toApiError(response)) };
+  let payload: unknown = null;
+  try {
+    payload = await response.json();
+  } catch {
+    payload = null;
+  }
+  const body = (payload ?? {}) as Record<string, unknown>;
+  return { kind: "ok", focus: parseFocusEntry(body.focus ?? body) };
+}
+
+export type FocusSelection = {
+  /** The refreshed focus, when there is one to store; `null` leaves it alone. */
+  focus: Loaded<FocusState> | null;
+  /** A Turkish sentence to show inline beside the list, or `null`. */
+  notice: string | null;
+};
+
+/**
+ * The owner's selection, end to end: set the focus, then read back what the
+ * focus now is. Both surfaces (the research page and the cockpit panel) call
+ * this, so "opening a report" means the same thing on either one.
+ *
+ * A 404 is folded into the focus state as `absent` rather than into `notice`:
+ * the missing feature is said once, where the focus belongs, not raised as an
+ * error the owner could act on.
+ */
+export async function selectResearchFocus(taskId: string): Promise<FocusSelection> {
+  const outcome = await setResearchFocus(taskId);
+  if (outcome.kind === "ok") return { focus: await getResearchFocus(), notice: null };
+  if (outcome.kind === "absent") {
+    return { focus: { kind: "absent", detail: FOCUS_UNSUPPORTED }, notice: null };
+  }
+  return { focus: null, notice: outcome.detail };
 }
 
 /** The raw report body, as text, for "Rapor JSON'unu kopyala". */

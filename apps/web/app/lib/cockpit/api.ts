@@ -16,6 +16,7 @@
  * same class of lie as animating work that is not happening.
  */
 
+import { type FocusState, parseFocusState } from "../research/focus";
 import { UnauthorizedError, apiFetch } from "../session";
 
 export type Loaded<T> =
@@ -83,10 +84,25 @@ export type ResearchTask = {
   created_at: string | null;
   ready_at: string | null;
   artifact_id: string | null;
+  // M18.2 identity metadata. Optional because it is optional on the wire; a
+  // field an older Cloud Core does not report is left out of the row's
+  // identity line rather than filled in with a plausible value.
+  mode?: string | null;
+  source_count?: number | null;
+  completed_at?: string | null;
+  is_focus?: boolean | null;
 };
 
 export const fetchResearchTasks = () =>
   load<ResearchTask[]>("/v1/research", (raw) => arrayAt<ResearchTask>(raw, "tasks"));
+
+/**
+ * The conversational focus (M18.2): which completed report "Bunu anlat."
+ * refers to. A Cloud Core without the route answers `absent`, which the panel
+ * says in as many words rather than drawing as "no focus".
+ */
+export const fetchResearchFocus = () =>
+  load<FocusState>("/v1/research/focus", parseFocusState);
 
 // ------------------------------------------------------------------ goals
 
