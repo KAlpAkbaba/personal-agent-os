@@ -405,7 +405,18 @@ one short real owner run.
   `world_state` question returns the same speech; no bookkeeping words in the answer;
 - **the eye is a state machine on the client:** DISABLED / ENABLING / ACTIVE / DISABLING /
   ERROR; idempotent commands; a second enable joins the in-flight one; exactly one camera
-  open per real transition; disabling invalidates the presence assertion (`eye_disabled`).
+  open per real transition; disabling invalidates the presence assertion (`eye_disabled`);
+- **the provider's tool spelling is normalised once, on the client:** `eye__disable` runs
+  the local action for `eye.disable` and is relayed under its vendor name; pinned with the
+  vendor spelling, because the fifth owner attempt failed exactly there;
+- **one mutation path for the eye:** an utterance resolved to `EYE_DISABLE` is audited and
+  never executed; the eye is still enabled afterwards; only a tool call writes the flag;
+- **a receipt names its session and what the browser saw:** `session_id`, `observed_at`,
+  the media track's own `readyState` and the action trace; a camera that closed but whose
+  record could not be verified is spoken as `kapandı ancak işlem kaydını doğrulayamadım`,
+  never as `kapatamadım`; each browser failure class has its own sentence;
+- **the health manifest carries the action-contract version**, and the owner harness
+  releases once when the deployed value is older than its checkout's.
 
 ### Real gates (owner machine, one run, from `/core` alone — `scripts/core/owner-m18.ps1`)
 
