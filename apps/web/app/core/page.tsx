@@ -65,16 +65,24 @@ function MinimalCore() {
         onForce2d={setForce2d}
         onRefresh={refresh}
       />
-      <main className="core-minimal">
-        <CoreView intent={intent} tier={tier} force2d={force2d} />
-        <StateReadout intent={intent} />
-        <section className="ambient-band" aria-label="Ses oturumu">
-          <VoiceControl />
-        </section>
-        <AmbientBand eye={eye} presence={presence} release={release} />
-        <section className="ambient-band" aria-label="Göz kontrolü">
-          <EyeControl eye={eye} />
-        </section>
+      {/* M18.1: the Core owns the viewport; the readout sits over its lower
+          edge; the cells recede into one quiet row (see core.css). */}
+      <main className="core-minimal" data-core-mode="minimal">
+        <div className="core-minimal-stage">
+          <CoreView intent={intent} tier={tier} force2d={force2d} />
+          <div className="core-minimal-readout">
+            <StateReadout intent={intent} />
+          </div>
+        </div>
+        <div className="core-minimal-ambient">
+          <section className="ambient-band" aria-label="Ses oturumu">
+            <VoiceControl />
+          </section>
+          <AmbientBand eye={eye} presence={presence} release={release} />
+          <section className="ambient-band" aria-label="Göz kontrolü">
+            <EyeControl eye={eye} />
+          </section>
+        </div>
       </main>
     </div>
   );

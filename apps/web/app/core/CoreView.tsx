@@ -56,8 +56,10 @@ export default function CoreView({ intent, tier, force2d = false }: CoreViewProp
     [tier, capability],
   );
 
-  // Hidden tabs draw nothing; reduced motion draws a still frame. Both keep the
-  // readout exactly as it is.
+  // Hidden tabs draw nothing and run nothing; reduced motion draws a still
+  // frame per intent change. Both keep the readout exactly as it is. The 2D
+  // view has one notion of stillness (its CSS animation is on or off); the 3D
+  // view is told the two apart so a hidden tab can skip the frame entirely.
   const still = hidden || reducedMotion;
 
   if (capability === undefined) {
@@ -80,7 +82,7 @@ export default function CoreView({ intent, tier, force2d = false }: CoreViewProp
       {use2d ? (
         <CoreFallback2D intent={intent} tier={effectiveTier} still={still} reason={reason} />
       ) : (
-        <CoreCanvas intent={intent} tier={effectiveTier} still={still} />
+        <CoreCanvas intent={intent} tier={effectiveTier} still={reducedMotion} hidden={hidden} />
       )}
     </div>
   );

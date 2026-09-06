@@ -1,31 +1,57 @@
 "use client";
 
 /**
- * The 3D Core.
+ * The 3D Core (M18.1, ADR-0065): a layered, bounded, measured structure.
  *
- * Every animated quantity in this file traces to a field of `VisualIntent`,
- * which traces to an event a subsystem published. There is exactly one use of
- * elapsed time — the breathing/pulse phase — and it is multiplied by an
- * amplitude that is zero unless a state reported one. Set every intent channel
- * to zero and this scene renders a still sphere, which is the correct picture
- * of a system that has told us nothing.
+ * From the inside out: a translucent nucleus; concentric internal rings on
+ * tilted planes (the topology layers); the connection paths across the
+ * interior; two translucent structural shells; and, beyond them, the things
+ * that exist only when a subsystem said so — the evidence constellation, the
+ * parked capability nodes, the eye's aperture, the lab's construction layers,
+ * the release orbit. Two bounded particle populations move through it: one
+ * pulled inward while the system listens or recalls, one travelling the paths
+ * while it thinks or works.
  *
- * Performance rules, because the renderer must never be on the critical path of
- * cognition (CLAUDE.md):
+ * Every animated quantity traces to a field of `VisualIntent`, which traces to
+ * an event a subsystem published or a level the audio path measured. The frame
+ * arithmetic is not here: it is `stepScene` in `lib/uistate/scene.ts`, a pure
+ * reducer tested in Node. This file only copies its numbers onto three.js
+ * objects. Set every intent channel to zero and the reducer settles to a still
+ * structure, which is the correct picture of a system that has told us nothing.
  *
- * - geometry is allocated once per tier and reused; nothing is created in the
- *   frame loop;
- * - the frame loop is throttled to the tier's fps and skipped entirely when the
- *   tab is hidden or motion is reduced;
- * - counts from the API are capped by the tier before they reach the GPU, while
- *   the readout keeps reporting the true number.
+ * Performance rules, because the renderer must never be on the critical path
+ * of cognition (CLAUDE.md):
+ *
+ * - geometry is allocated once per tier and reused; the frame body allocates
+ *   nothing (a structural test reads this file to make sure);
+ * - the frame loop is throttled to the tier's fps, skipped under reduced
+ *   motion, and does no work at all in a hidden tab;
+ * - particles are instanced, counts from the API are capped by the tier before
+ *   they reach the GPU, and the readout keeps reporting the true number.
  */
 
 import { useEffect, useMemo, useRef } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
 
-import { type QualityTier, TIER_BUDGETS, drawableCount } from "../lib/uistate/quality";
+import {
+  MAX_CAPABILITY_NODES,
+  type QualityTier,
+  TIER_BUDGETS,
+  drawableCount,
+} from "../lib/uistate/quality";
+import {
+  CAPABILITY_RADIUS,
+  CONSTELLATION_RADIUS,
+  FIELD_RADIUS,
+  INWARD_END,
+  INWARD_START,
+  chordEndpoints,
+  constellationPoint,
+  createSceneState,
+  fibonacciSphere,
+  stepScene,
+} from "../lib/uistate/scene";
 import { type PaletteToken, type VisualIntent, releasePalette } from "../lib/uistate/visual";
 
 /** Same values as the CSS palettes, so 2D and 3D agree on what a state looks like. */
@@ -45,244 +71,476 @@ const PALETTE: Record<PaletteToken, string> = {
   unknown: "#58607a",
 };
 
-const BASE_RADIUS = 1;
+const NUCLEUS_RADIUS = 0.62;
+/** The internal rings, innermost first. */
+const RING_RADII = [0.84, 1.0, 1.16];
+/** Each ring sits on its own tilted plane so the set reads as a volume. */
+const RING_TILTS: Array<[number, number, number]> = [
+  [Math.PI / 2, 0, 0],
+  [Math.PI / 2 - 0.55, 0.35, 0],
+  [Math.PI / 2 + 0.4, -0.6, 0.2],
+];
+/** The structural shells, innermost first. */
+const SHELL_RADII = [1.3, 1.52];
+const LATTICE_RADIUS = 1.22;
+const EYE_RADIUS = 1.64;
+const HELD_RADIUS = 1.28;
+const ERROR_RADIUS = 1.12;
+
+// Scratch objects for the frame. Allocated once at module load, never inside
+// the frame: the structural test in tests/uistate/scene.test.ts forbids `new`
+// between the frame body's start and the render.
+const scratchMatrix = new THREE.Matrix4();
+const scratchPosition = new THREE.Vector3();
+const scratchQuaternion = new THREE.Quaternion();
+const scratchScale = new THREE.Vector3(1, 1, 1);
+const scratchPoint = { x: 0, y: 0, z: 0 };
 
 export type CoreSceneProps = {
   intent: VisualIntent;
   tier: QualityTier;
-  /** Freeze the frame loop entirely (hidden tab, reduced motion). */
+  /** Freeze motion (reduced motion): the structure snaps to its targets and holds. */
   still: boolean;
+  /** The tab is hidden: no frame runs and nothing is invalidated. */
+  hidden: boolean;
 };
 
-/**
- * Critically-damped approach, frame-rate independent.
- *
- * Smoothing is legitimate — a state change should not teleport — but it must
- * only ever move *towards* the reported value and settle on it. It can never
- * overshoot into motion nobody reported.
- */
-function approach(current: number, target: number, dt: number, rate = 6): number {
-  return current + (target - current) * (1 - Math.exp(-rate * dt));
+type Opaque = { opacity: number };
+
+function opacityOf(object: THREE.Object3D | null): Opaque | null {
+  if (!object) return null;
+  return (object as unknown as { material: Opaque }).material ?? null;
 }
 
-export default function CoreScene({ intent, tier, still }: CoreSceneProps) {
+export default function CoreScene({ intent, tier, still, hidden }: CoreSceneProps) {
   const budget = TIER_BUDGETS[tier];
   const { invalidate } = useThree();
 
-  const coreRef = useRef<THREE.Mesh>(null);
+  const nucleusRef = useRef<THREE.Mesh>(null);
   const wireRef = useRef<THREE.LineSegments>(null);
-  const pulseRef = useRef<THREE.Mesh>(null);
+  const ringRefs = useRef<Array<THREE.Mesh | null>>([]);
+  const shellRefs = useRef<Array<THREE.LineSegments | null>>([]);
   const latticeRef = useRef<THREE.LineSegments>(null);
-  const inwardRef = useRef<THREE.Points>(null);
-  const sourcesRef = useRef<THREE.InstancedMesh>(null);
-  const satelliteRef = useRef<THREE.Group>(null);
+  const inwardRef = useRef<THREE.InstancedMesh>(null);
+  const travellersRef = useRef<THREE.InstancedMesh>(null);
+  const pulseRef = useRef<THREE.Mesh>(null);
+  const constellationGroupRef = useRef<THREE.Group>(null);
+  const constellationRef = useRef<THREE.InstancedMesh>(null);
+  const fieldGroupRef = useRef<THREE.Group>(null);
+  const fieldRef = useRef<THREE.InstancedMesh>(null);
+  const spokesRef = useRef<THREE.LineSegments>(null);
+  const capabilityRef = useRef<THREE.InstancedMesh>(null);
+  const haloRef = useRef<THREE.Mesh>(null);
+  const eyeRef = useRef<THREE.Mesh>(null);
+  const heldRef = useRef<THREE.LineLoop>(null);
+  const errorRef = useRef<THREE.Mesh>(null);
+  const convergenceRef = useRef<THREE.Mesh>(null);
   const constructionRef = useRef<THREE.Group>(null);
 
-  // Smoothed values, kept out of React state so they never cause a re-render.
-  const smooth = useRef({ scale: 1, opacity: 1, topology: 0, pulse: 0, inward: 0 });
   const lastFrame = useRef(0);
-  const clock = useRef(0);
-
   const color = useMemo(() => new THREE.Color(PALETTE[intent.palette]), [intent.palette]);
+
+  // --------------------------------------------------------- frame state
+
+  /** The reducer's state: one allocation per particle budget, mutated in place. */
+  const scene = useMemo(() => createSceneState(budget.maxParticles), [budget.maxParticles]);
+  const inwardCount = scene.inwardCount;
+  const travellerCount = budget.maxParticles - scene.inwardCount;
 
   // --------------------------------------------------------- geometry
 
-  const coreGeometry = useMemo(
-    () => new THREE.IcosahedronGeometry(BASE_RADIUS, budget.detail),
+  const nucleusGeometry = useMemo(
+    () => new THREE.IcosahedronGeometry(NUCLEUS_RADIUS, budget.detail),
     [budget.detail],
   );
   const wireGeometry = useMemo(
-    () => new THREE.WireframeGeometry(new THREE.IcosahedronGeometry(BASE_RADIUS * 1.01, 1)),
+    () => new THREE.WireframeGeometry(new THREE.IcosahedronGeometry(NUCLEUS_RADIUS * 1.02, 1)),
     [],
+  );
+  const ringGeometries = useMemo(
+    () => RING_RADII.slice(0, budget.rings).map((r) => new THREE.TorusGeometry(r, 0.008, 6, 128)),
+    [budget.rings],
+  );
+  const shellGeometries = useMemo(
+    () =>
+      SHELL_RADII.slice(0, budget.shells).map(
+        (r, i) => new THREE.WireframeGeometry(new THREE.IcosahedronGeometry(r, i === 0 ? 2 : 1)),
+      ),
+    [budget.shells],
   );
 
   /**
-   * The thinking lattice: chords across the interior. Built once per tier and
-   * per topology bucket, never per frame. Positions are deterministic (a fixed
-   * golden-angle spiral), so the same topology always draws the same figure —
-   * a lattice that reshuffled every render would read as activity.
+   * The connection paths: chords across the interior. Built once per tier,
+   * never per frame. Positions are deterministic (a fixed golden-angle
+   * spiral), so the same topology always draws the same figure — a lattice
+   * that reshuffled every render would read as activity.
    */
+  const chords = useMemo(
+    () => chordEndpoints(budget.latticeSegments, new Float32Array(budget.latticeSegments * 6)),
+    [budget.latticeSegments],
+  );
   const latticeGeometry = useMemo(() => {
-    const segments = budget.latticeSegments;
     const geometry = new THREE.BufferGeometry();
-    if (segments === 0) return geometry;
-    const points: number[] = [];
-    const golden = Math.PI * (3 - Math.sqrt(5));
-    for (let i = 0; i < segments; i += 1) {
-      const y = 1 - (i / Math.max(1, segments - 1)) * 2;
-      const r = Math.sqrt(Math.max(0, 1 - y * y));
-      const theta = golden * i;
-      points.push(Math.cos(theta) * r, y, Math.sin(theta) * r);
-      const j = (i + Math.floor(segments / 3)) % segments;
-      const y2 = 1 - (j / Math.max(1, segments - 1)) * 2;
-      const r2 = Math.sqrt(Math.max(0, 1 - y2 * y2));
-      const theta2 = golden * j;
-      points.push(Math.cos(theta2) * r2, y2, Math.sin(theta2) * r2);
+    if (budget.latticeSegments > 0) {
+      geometry.setAttribute("position", new THREE.BufferAttribute(chords, 3));
     }
-    geometry.setAttribute("position", new THREE.Float32BufferAttribute(points, 3));
     return geometry;
-  }, [budget.latticeSegments]);
+  }, [chords, budget.latticeSegments]);
 
-  /** Listening: points on a shell that travel inward. */
-  const inwardGeometry = useMemo(() => {
-    const count = Math.min(96, budget.maxSatellites * 2);
-    const geometry = new THREE.BufferGeometry();
-    const positions = new Float32Array(count * 3);
-    const golden = Math.PI * (3 - Math.sqrt(5));
-    for (let i = 0; i < count; i += 1) {
-      const y = 1 - (i / Math.max(1, count - 1)) * 2;
-      const r = Math.sqrt(Math.max(0, 1 - y * y));
-      const theta = golden * i;
-      positions[i * 3] = Math.cos(theta) * r;
-      positions[i * 3 + 1] = y;
-      positions[i * 3 + 2] = Math.sin(theta) * r;
+  /** The inward population's fixed directions: a spiral over the sphere. */
+  const inwardDirections = useMemo(
+    () => fibonacciSphere(inwardCount, new Float32Array(inwardCount * 3)),
+    [inwardCount],
+  );
+
+  const particleGeometry = useMemo(() => new THREE.SphereGeometry(0.028, 6, 5), []);
+  const nodeGeometry = useMemo(() => new THREE.IcosahedronGeometry(0.05, 1), []);
+  const fieldGeometry = useMemo(() => new THREE.SphereGeometry(0.02, 5, 4), []);
+  const capabilityGeometry = useMemo(() => new THREE.IcosahedronGeometry(0.11, 1), []);
+  const unitTorus = useMemo(() => new THREE.TorusGeometry(1, 0.006, 6, 128), []);
+
+  /** The held boundary: a dashed loop, its dash distances computed once. */
+  const heldGeometry = useMemo(() => {
+    const points = new Float32Array(96 * 3);
+    for (let i = 0; i < 96; i += 1) {
+      const a = (i / 96) * Math.PI * 2;
+      points[i * 3] = Math.cos(a) * HELD_RADIUS;
+      points[i * 3 + 1] = 0;
+      points[i * 3 + 2] = Math.sin(a) * HELD_RADIUS;
     }
-    geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.BufferAttribute(points, 3));
+    return geometry;
+  }, []);
+  useEffect(() => {
+    heldRef.current?.computeLineDistances();
+  }, [heldGeometry]);
+
+  /**
+   * Spokes from each constellation node towards the outer shell. The buffer
+   * is owned by the geometry and written through its attribute when the count
+   * changes, so nothing outside three.js holds a reference to mutate.
+   */
+  const spokeGeometry = useMemo(() => {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute(
+      "position",
+      new THREE.BufferAttribute(new Float32Array(budget.maxSatellites * 6), 3),
+    );
     return geometry;
   }, [budget.maxSatellites]);
-
-  const sourceGeometry = useMemo(() => new THREE.SphereGeometry(0.045, 8, 8), []);
 
   // Three.js objects are not garbage collected by React; dispose them by hand
   // when the tier changes or the scene unmounts, or a tier toggle leaks a
   // buffer per switch.
-  useEffect(() => () => coreGeometry.dispose(), [coreGeometry]);
+  useEffect(() => () => nucleusGeometry.dispose(), [nucleusGeometry]);
   useEffect(() => () => wireGeometry.dispose(), [wireGeometry]);
+  useEffect(() => () => ringGeometries.forEach((g) => g.dispose()), [ringGeometries]);
+  useEffect(() => () => shellGeometries.forEach((g) => g.dispose()), [shellGeometries]);
   useEffect(() => () => latticeGeometry.dispose(), [latticeGeometry]);
-  useEffect(() => () => inwardGeometry.dispose(), [inwardGeometry]);
-  useEffect(() => () => sourceGeometry.dispose(), [sourceGeometry]);
+  useEffect(() => () => particleGeometry.dispose(), [particleGeometry]);
+  useEffect(() => () => nodeGeometry.dispose(), [nodeGeometry]);
+  useEffect(() => () => fieldGeometry.dispose(), [fieldGeometry]);
+  useEffect(() => () => capabilityGeometry.dispose(), [capabilityGeometry]);
+  useEffect(() => () => unitTorus.dispose(), [unitTorus]);
+  useEffect(() => () => heldGeometry.dispose(), [heldGeometry]);
+  useEffect(() => () => spokeGeometry.dispose(), [spokeGeometry]);
 
-  // ------------------------------------------------------ source nodes
+  // ------------------------------------------------ counted things
 
-  const drawnSources = intent.sourceNodesKnown
-    ? drawableCount(intent.sourceNodes, tier)
-    : 0;
+  const drawnConstellation = drawableCount(intent.constellationNodes, tier);
+  const drawnField = drawableCount(intent.fieldNodes, tier);
+  const drawnCapabilities = Math.min(MAX_CAPABILITY_NODES, Math.max(0, Math.floor(intent.capabilityNodes)));
 
-  /** Fixed positions for the evidence nodes: one ring, evenly spaced. */
-  const sourcePositions = useMemo(() => {
-    const out: THREE.Vector3[] = [];
-    for (let i = 0; i < drawnSources; i += 1) {
-      const angle = (i / Math.max(1, drawnSources)) * Math.PI * 2;
-      const tilt = Math.sin(angle * 3) * 0.18;
-      out.push(
-        new THREE.Vector3(Math.cos(angle) * 1.6, tilt, Math.sin(angle) * 1.6),
-      );
-    }
-    return out;
-  }, [drawnSources]);
-
+  /**
+   * Place the constellation, the field and the capability nodes. Once per
+   * count change, not per frame: the groups rotate as wholes, so the matrices
+   * themselves hold still. `invalidate` only when the tab can see it.
+   */
   useEffect(() => {
-    const mesh = sourcesRef.current;
-    if (!mesh) return;
-    const matrix = new THREE.Matrix4();
-    sourcePositions.forEach((p, i) => {
-      matrix.setPosition(p);
-      mesh.setMatrixAt(i, matrix);
-    });
-    mesh.count = sourcePositions.length;
-    mesh.instanceMatrix.needsUpdate = true;
-    invalidate();
-  }, [sourcePositions, invalidate]);
+    const nodes = constellationRef.current;
+    const spokes = spokesRef.current;
+    const spokeAttribute = spokes
+      ? (spokes.geometry.getAttribute("position") as THREE.BufferAttribute)
+      : null;
+    const spokeBuffer = spokeAttribute ? (spokeAttribute.array as Float32Array) : null;
+    if (nodes) {
+      for (let i = 0; i < drawnConstellation; i += 1) {
+        constellationPoint(i, drawnConstellation, CONSTELLATION_RADIUS, 0, scratchPoint);
+        scratchMatrix.setPosition(scratchPoint.x, scratchPoint.y, scratchPoint.z);
+        nodes.setMatrixAt(i, scratchMatrix);
+        if (spokeBuffer && i * 6 + 5 < spokeBuffer.length) {
+          const o = i * 6;
+          spokeBuffer[o] = scratchPoint.x;
+          spokeBuffer[o + 1] = scratchPoint.y;
+          spokeBuffer[o + 2] = scratchPoint.z;
+          // The spoke reaches from the node a short way towards the shell.
+          spokeBuffer[o + 3] = scratchPoint.x * 0.86;
+          spokeBuffer[o + 4] = scratchPoint.y * 0.86;
+          spokeBuffer[o + 5] = scratchPoint.z * 0.86;
+        }
+      }
+      nodes.count = drawnConstellation;
+      nodes.instanceMatrix.needsUpdate = true;
+    }
+    if (spokes && spokeAttribute) {
+      spokes.geometry.setDrawRange(0, drawnConstellation * 2);
+      spokeAttribute.needsUpdate = true;
+    }
+    const field = fieldRef.current;
+    if (field) {
+      for (let i = 0; i < drawnField; i += 1) {
+        constellationPoint(i, drawnField, FIELD_RADIUS, 0.37, scratchPoint);
+        scratchMatrix.setPosition(scratchPoint.x, scratchPoint.y * 1.6, scratchPoint.z);
+        field.setMatrixAt(i, scratchMatrix);
+      }
+      field.count = drawnField;
+      field.instanceMatrix.needsUpdate = true;
+    }
+    const capabilities = capabilityRef.current;
+    if (capabilities) {
+      for (let i = 0; i < drawnCapabilities; i += 1) {
+        // Parked, evenly spaced, the first one at the satellite's station.
+        const a = (i / MAX_CAPABILITY_NODES) * Math.PI * 2;
+        scratchMatrix.setPosition(Math.cos(a) * CAPABILITY_RADIUS, 0, Math.sin(a) * CAPABILITY_RADIUS);
+        capabilities.setMatrixAt(i, scratchMatrix);
+      }
+      capabilities.count = drawnCapabilities;
+      capabilities.instanceMatrix.needsUpdate = true;
+    }
+    if (!hidden) invalidate();
+  }, [drawnConstellation, drawnField, drawnCapabilities, hidden, invalidate]);
 
-  // -------------------------------------------------------- frame loop
+  // -------------------------------------------------------- frame body
 
-  useFrame(() => {
-    // A still scene does no work at all. `useFrame` still fires under
-    // `frameloop="always"`, so the guard lives here as well as on the Canvas.
-    if (still) return;
+  /**
+   * Apply one reducer step to the objects. Called by the frame loop while the
+   * tab is visible and motion is allowed, and once — with a settling `dt` —
+   * when motion is reduced, so the structure shows the intent without moving.
+   */
+  const applyFrame = (dt: number, pointerX: number, pointerY: number, camera: THREE.Camera) => {
+    const s = stepScene(scene, intent, dt, pointerX, pointerY);
+    const breathScale = s.scale * (1 + s.breath);
 
-    const now = performance.now();
-    if (now - lastFrame.current < 1000 / budget.fps) return;
-    const dt = Math.min(0.1, (now - lastFrame.current) / 1000);
-    lastFrame.current = now;
-    clock.current += dt;
-
-    const s = smooth.current;
-    s.scale = approach(s.scale, intent.scale, dt);
-    s.opacity = approach(s.opacity, 1 - intent.dim * 0.75, dt);
-    s.topology = approach(s.topology, intent.topology, dt);
-    s.pulse = approach(s.pulse, intent.pulse, dt);
-    s.inward = approach(s.inward, intent.inwardFlow, dt);
-
-    // The one use of elapsed time. `breathAmplitude` is 0 for every state that
-    // did not report motion, so this term vanishes rather than idling.
-    const breath =
-      intent.breathAmplitude > 0
-        ? Math.sin(clock.current * intent.breathHz * Math.PI * 2) * intent.breathAmplitude
-        : 0;
-
-    const core = coreRef.current;
-    if (core) {
-      const scale = s.scale * (1 + breath);
-      core.scale.setScalar(scale);
-      const material = core.material as THREE.MeshBasicMaterial;
-      material.opacity = 0.16 * s.opacity;
-      material.color.copy(color);
-      // Rotation is tied to reported topology, not to the clock: a core with
-      // nothing to think about does not spin.
-      core.rotation.y += dt * 0.25 * s.topology;
+    const nucleus = nucleusRef.current;
+    if (nucleus) {
+      nucleus.scale.setScalar(breathScale);
+      const material = opacityOf(nucleus);
+      if (material) material.opacity = (0.1 + 0.22 * s.glow) * s.opacity;
+      nucleus.rotation.y = s.ringAngle * 0.5;
     }
 
     const wire = wireRef.current;
     if (wire) {
-      wire.scale.setScalar(s.scale * (1 + breath));
-      const material = wire.material as THREE.LineBasicMaterial;
-      material.opacity = 0.5 * s.opacity;
-      material.color.copy(color);
-      wire.rotation.y += dt * 0.25 * s.topology;
+      wire.scale.setScalar(breathScale);
+      const material = opacityOf(wire);
+      if (material) material.opacity = (0.3 + 0.4 * s.glow) * s.opacity;
+      wire.rotation.y = s.ringAngle * 0.5;
+    }
+
+    // The rings: each turns about its own tilted axis at the reported spin,
+    // and the set contracts while energy is drawn inward.
+    const ringScale = s.scale * (1 - 0.22 * s.inward) * (1 + s.breath * 0.5);
+    const rings = ringRefs.current;
+    for (let i = 0; i < rings.length; i += 1) {
+      const ring = rings[i];
+      if (!ring) continue;
+      ring.scale.setScalar(ringScale);
+      ring.rotation.z = s.ringAngle * (i % 2 === 0 ? 1 : -0.7) + i * 0.4;
+      const material = opacityOf(ring);
+      if (material) material.opacity = (0.28 + 0.45 * s.glow) * s.opacity;
+    }
+
+    // The shells stand off by the reported spread and counter-rotate slowly.
+    const shells = shellRefs.current;
+    for (let i = 0; i < shells.length; i += 1) {
+      const shell = shells[i];
+      if (!shell) continue;
+      shell.scale.setScalar(s.scale * (1 + s.shellSpread * (0.16 + i * 0.1)) * (1 + s.breath * 0.3));
+      shell.rotation.y = s.shellAngle * (i === 0 ? 1 : -0.6);
+      shell.rotation.x = s.shellAngle * 0.3;
+      const material = opacityOf(shell);
+      if (material) material.opacity = (0.05 + 0.13 * s.glow) * (1 - i * 0.35) * s.opacity;
     }
 
     const lattice = latticeRef.current;
     if (lattice) {
       lattice.visible = s.topology > 0.01;
-      lattice.scale.setScalar(s.scale * 0.82);
-      (lattice.material as THREE.LineBasicMaterial).opacity = 0.45 * s.topology * s.opacity;
-      (lattice.material as THREE.LineBasicMaterial).color.copy(color);
-      lattice.rotation.y -= dt * 0.4 * s.topology;
-      lattice.rotation.x += dt * 0.15 * s.topology;
+      lattice.scale.setScalar(s.scale * LATTICE_RADIUS);
+      lattice.rotation.y = s.latticeAngle;
+      lattice.rotation.x = s.latticeAngle * 0.35;
+      const material = opacityOf(lattice);
+      if (material) material.opacity = 0.42 * s.topology * s.opacity;
     }
 
+    // The inward population: each particle travels its fixed direction from
+    // the shell to the nucleus, at the inward flow's rate.
     const inward = inwardRef.current;
     if (inward) {
       inward.visible = s.inward > 0.01;
-      // Energy travelling in: the shell contracts towards the core, its depth
-      // set by the reported inward flow.
-      const travel = 1.9 - s.inward * 0.7 - breath * 0.5;
-      inward.scale.setScalar(travel * s.scale);
-      (inward.material as THREE.PointsMaterial).opacity = 0.8 * s.inward * s.opacity;
-      (inward.material as THREE.PointsMaterial).color.copy(color);
-      inward.rotation.y += dt * 0.2 * s.inward;
+      if (inward.visible) {
+        const phases = s.phases;
+        const directions = inwardDirections;
+        for (let i = 0; i < inwardCount; i += 1) {
+          const radius = (INWARD_START - phases[i] * (INWARD_START - INWARD_END)) * s.scale;
+          scratchPosition.set(directions[i * 3] * radius, directions[i * 3 + 1] * radius, directions[i * 3 + 2] * radius);
+          const size = 0.55 + 0.45 * (1 - phases[i]);
+          scratchMatrix.compose(scratchPosition, scratchQuaternion, scratchScale.set(size, size, size));
+          inward.setMatrixAt(i, scratchMatrix);
+        }
+        inward.instanceMatrix.needsUpdate = true;
+        const material = opacityOf(inward);
+        if (material) material.opacity = (0.5 + 0.5 * s.ownerVoice) * s.inward * s.opacity;
+      }
+    }
+
+    // The path population: each particle travels a chord, at the flow rate.
+    const travellers = travellersRef.current;
+    if (travellers) {
+      travellers.visible = s.flowRate > 0.01 && budget.latticeSegments > 0;
+      if (travellers.visible) {
+        const phases = s.phases;
+        const segments = budget.latticeSegments;
+        for (let i = 0; i < travellerCount; i += 1) {
+          const t = phases[inwardCount + i];
+          const c = (i % segments) * 6;
+          scratchPosition.set(
+            (chords[c] + (chords[c + 3] - chords[c]) * t) * LATTICE_RADIUS * s.scale,
+            (chords[c + 1] + (chords[c + 4] - chords[c + 1]) * t) * LATTICE_RADIUS * s.scale,
+            (chords[c + 2] + (chords[c + 5] - chords[c + 2]) * t) * LATTICE_RADIUS * s.scale,
+          );
+          scratchMatrix.compose(scratchPosition, scratchQuaternion, scratchScale.set(0.8, 0.8, 0.8));
+          travellers.setMatrixAt(i, scratchMatrix);
+        }
+        travellers.instanceMatrix.needsUpdate = true;
+        travellers.rotation.y = s.latticeAngle;
+        travellers.rotation.x = s.latticeAngle * 0.35;
+        const material = opacityOf(travellers);
+        if (material) material.opacity = 0.85 * s.flowRate * s.opacity;
+      }
     }
 
     const pulse = pulseRef.current;
     if (pulse) {
       pulse.visible = s.pulse > 0.01;
-      // Amplitude is the reported energy; the carrier only shapes it. No
-      // energy reported means no visible ring at all.
-      const carrier = 0.5 + 0.5 * Math.sin(clock.current * 2.2 * Math.PI);
-      pulse.scale.setScalar(s.scale * (1.25 + s.pulse * 0.5 * carrier));
-      (pulse.material as THREE.MeshBasicMaterial).opacity = 0.5 * s.pulse * s.opacity;
-      (pulse.material as THREE.MeshBasicMaterial).color.copy(color);
+      // Amplitude is the measured energy; the carrier only shapes it. No
+      // energy reported means no visible shell at all.
+      pulse.scale.setScalar(s.scale * (1.28 + s.pulse * 0.45 * s.carrier));
+      const material = opacityOf(pulse);
+      if (material) material.opacity = 0.45 * s.pulse * s.opacity;
+    }
+
+    // The constellation and its field drift as wholes, at the published or
+    // resting figure. Their nodes do not move relative to one another.
+    const constellation = constellationGroupRef.current;
+    if (constellation) {
+      constellation.visible = drawnConstellation > 0;
+      constellation.rotation.y = s.constellationAngle;
+    }
+    const nodes = constellationRef.current;
+    if (nodes) {
+      const material = opacityOf(nodes);
+      if (material) material.opacity = 0.9 * s.opacity;
+    }
+    const spokes = spokesRef.current;
+    if (spokes) {
+      const material = opacityOf(spokes);
+      if (material) material.opacity = 0.35 * s.opacity;
+    }
+    const field = fieldGroupRef.current;
+    if (field) {
+      field.visible = drawnField > 0;
+      field.rotation.y = -s.constellationAngle * 0.5;
+    }
+
+    // Parked things hold station: nothing here rotates.
+    const capabilities = capabilityRef.current;
+    if (capabilities) capabilities.visible = drawnCapabilities > 0;
+    const halo = haloRef.current;
+    if (halo) halo.visible = intent.satelliteComplete;
+
+    const eye = eyeRef.current;
+    if (eye) {
+      eye.visible = intent.eyeActive > 0;
+      const material = opacityOf(eye);
+      if (material) material.opacity = 0.55 * s.opacity;
+    }
+
+    const held = heldRef.current;
+    if (held) {
+      held.visible = s.restraint > 0.01;
+      held.scale.setScalar(s.scale);
+      const material = opacityOf(held);
+      if (material) material.opacity = 0.6 * s.restraint * s.opacity;
+    }
+
+    // Error: one bounded, slow offset. The reducer capped it; this only draws it.
+    const error = errorRef.current;
+    if (error) {
+      error.visible = s.agitation > 0.01;
+      error.scale.setScalar(ERROR_RADIUS * s.scale);
+      error.position.x = s.agitationOffset;
+      const material = opacityOf(error);
+      if (material) material.opacity = 0.7 * s.agitation * s.opacity;
+    }
+
+    // Memory: the convergence ring, drawn only against real progress, closes
+    // in by exactly that progress.
+    const convergence = convergenceRef.current;
+    if (convergence) {
+      convergence.visible = intent.convergenceKnown;
+      convergence.scale.setScalar((1.45 - intent.convergence * 0.9) * s.scale);
+      const material = opacityOf(convergence);
+      if (material) material.opacity = 0.6 * s.opacity;
     }
 
     const construction = constructionRef.current;
     if (construction) {
-      construction.rotation.z += dt * 0.12 * (intent.constructionLayer > 0 ? 1 : 0);
+      construction.rotation.z = s.ringAngle * 0.3;
     }
 
-    const satellite = satelliteRef.current;
-    if (satellite) {
-      // A finished candidate holds station. It does not orbit: nothing about it
-      // is in motion, and drawing movement would suggest work still happening.
-      satellite.visible = intent.satelliteComplete;
+    // The camera leans towards the pointer; a way of seeing the layers, not a
+    // claim about the system.
+    if (budget.parallax) {
+      camera.position.x = s.parallaxX;
+      camera.position.y = s.parallaxY;
+      camera.lookAt(0, 0, 0);
     }
+  };
+
+  useFrame((root) => {
+    // A hidden tab does no work at all; reduced motion is handled by the
+    // settling effect below. `useFrame` still fires under `frameloop="always"`,
+    // so the guard lives here as well as on the Canvas.
+    if (hidden || still) return;
+    const now = performance.now();
+    if (now - lastFrame.current < 1000 / budget.fps) return;
+    const dt = Math.min(0.1, (now - lastFrame.current) / 1000);
+    lastFrame.current = now;
+    applyFrame(dt, budget.parallax ? root.pointer.x : 0, budget.parallax ? root.pointer.y : 0, root.camera);
   });
+
+  // Reduced motion: when the intent changes, settle the structure on its new
+  // targets in one long step and draw that frame. Nothing moves; the shape,
+  // the counts and the glow are all still shown. `applyFrame` is rebuilt
+  // every render, so the latest one is reached through a ref and the effect
+  // keys on the intent it closes over.
+  const camera = useThree((root) => root.camera);
+  const settle = useRef(applyFrame);
+  useEffect(() => {
+    settle.current = applyFrame;
+  });
+  useEffect(() => {
+    if (!still || hidden) return;
+    settle.current(10, 0, 0, camera);
+    invalidate();
+  }, [still, hidden, intent, camera, invalidate]);
 
   // ------------------------------------------------------------ render
 
   return (
     <group>
-      <mesh ref={coreRef} geometry={coreGeometry}>
+      <mesh ref={nucleusRef} geometry={nucleusGeometry}>
         <meshBasicMaterial color={color} transparent opacity={0.16} depthWrite={false} />
       </mesh>
 
@@ -290,19 +548,66 @@ export default function CoreScene({ intent, tier, still }: CoreSceneProps) {
         <lineBasicMaterial color={color} transparent opacity={0.5} />
       </lineSegments>
 
+      {/* The internal rings: the topology layers. */}
+      {ringGeometries.map((geometry, i) => (
+        <mesh
+          key={`ring-${i}`}
+          ref={(el) => {
+            ringRefs.current[i] = el;
+          }}
+          geometry={geometry}
+          rotation={RING_TILTS[i]}
+        >
+          <meshBasicMaterial color={color} transparent opacity={0.4} depthWrite={false} />
+        </mesh>
+      ))}
+
+      {/* The translucent structural shells. */}
+      {shellGeometries.map((geometry, i) => (
+        <lineSegments
+          key={`shell-${i}`}
+          ref={(el) => {
+            shellRefs.current[i] = el;
+          }}
+          geometry={geometry}
+        >
+          <lineBasicMaterial color={color} transparent opacity={0.08} depthWrite={false} />
+        </lineSegments>
+      ))}
+
+      {/* The connection paths: drawn at the reported topology. */}
       {budget.latticeSegments > 0 && (
         <lineSegments ref={latticeRef} geometry={latticeGeometry} visible={false}>
-          <lineBasicMaterial color={color} transparent opacity={0} />
+          <lineBasicMaterial color={color} transparent opacity={0} depthWrite={false} />
         </lineSegments>
       )}
 
-      <points ref={inwardRef} geometry={inwardGeometry} visible={false}>
-        <pointsMaterial color={color} size={0.035} transparent opacity={0} sizeAttenuation />
-      </points>
+      {/* The two bounded particle populations. Instanced; culling is off
+          because the base geometry's bounds sit at the origin. */}
+      {inwardCount > 0 && (
+        <instancedMesh
+          ref={inwardRef}
+          args={[particleGeometry, undefined, inwardCount]}
+          frustumCulled={false}
+          visible={false}
+        >
+          <meshBasicMaterial color={color} transparent opacity={0} depthWrite={false} />
+        </instancedMesh>
+      )}
+      {travellerCount > 0 && budget.latticeSegments > 0 && (
+        <instancedMesh
+          ref={travellersRef}
+          args={[particleGeometry, undefined, travellerCount]}
+          frustumCulled={false}
+          visible={false}
+        >
+          <meshBasicMaterial color={color} transparent opacity={0} depthWrite={false} />
+        </instancedMesh>
+      )}
 
       {budget.glow && (
         <mesh ref={pulseRef} visible={false}>
-          <sphereGeometry args={[BASE_RADIUS, 24, 16]} />
+          <sphereGeometry args={[1, 24, 16]} />
           <meshBasicMaterial
             color={color}
             transparent
@@ -313,15 +618,71 @@ export default function CoreScene({ intent, tier, still }: CoreSceneProps) {
         </mesh>
       )}
 
-      {/* Research evidence: exactly the nodes the publisher counted, capped. */}
-      {drawnSources > 0 && (
+      {/* Research: the evidence constellation — the count the publisher sent,
+          capped by the tier, or the fixed motif — with a spoke per node; and
+          the wider field it was kept from, when both were counted. */}
+      <group ref={constellationGroupRef} visible={false}>
         <instancedMesh
-          ref={sourcesRef}
-          args={[sourceGeometry, undefined, Math.max(1, drawnSources)]}
+          ref={constellationRef}
+          args={[nodeGeometry, undefined, Math.max(1, budget.maxSatellites)]}
+          frustumCulled={false}
         >
           <meshBasicMaterial color={color} transparent opacity={0.9} />
         </instancedMesh>
-      )}
+        <lineSegments ref={spokesRef} geometry={spokeGeometry}>
+          <lineBasicMaterial color={color} transparent opacity={0.35} depthWrite={false} />
+        </lineSegments>
+      </group>
+      <group ref={fieldGroupRef} visible={false}>
+        <instancedMesh
+          ref={fieldRef}
+          args={[fieldGeometry, undefined, Math.max(1, budget.maxSatellites)]}
+          frustumCulled={false}
+        >
+          <meshBasicMaterial color={color} transparent opacity={0.35} depthWrite={false} />
+        </instancedMesh>
+      </group>
+
+      {/* SHADOW_READY: parked capability nodes, the first at the satellite's
+          station under its halo. Nothing here moves. */}
+      <instancedMesh
+        ref={capabilityRef}
+        args={[capabilityGeometry, undefined, MAX_CAPABILITY_NODES]}
+        frustumCulled={false}
+        visible={false}
+      >
+        <meshBasicMaterial color={PALETTE.ready} transparent opacity={0.85} />
+      </instancedMesh>
+      <mesh ref={haloRef} position={[CAPABILITY_RADIUS, 0, 0]} visible={false}>
+        <sphereGeometry args={[0.26, 16, 12]} />
+        <meshBasicMaterial
+          color={PALETTE.ready}
+          transparent
+          opacity={0.18}
+          side={THREE.BackSide}
+          depthWrite={false}
+        />
+      </mesh>
+
+      {/* The eye's aperture: one thin tilted ring while eye.active is current. */}
+      <mesh ref={eyeRef} geometry={unitTorus} scale={EYE_RADIUS} rotation={[Math.PI / 2 + 0.9, 0.3, 0]} visible={false}>
+        <meshBasicMaterial color={PALETTE.active} transparent opacity={0.55} depthWrite={false} />
+      </mesh>
+
+      {/* Waiting on the owner: a held, dashed boundary. */}
+      <lineLoop ref={heldRef} geometry={heldGeometry} visible={false}>
+        <lineDashedMaterial color={color} transparent opacity={0} dashSize={0.06} gapSize={0.14} />
+      </lineLoop>
+
+      {/* Error: one offset ring. Bounded, slow — never a strobe. */}
+      <mesh ref={errorRef} geometry={unitTorus} rotation={[Math.PI / 2, 0, 0]} visible={false}>
+        <meshBasicMaterial color={PALETTE.fault} transparent opacity={0} depthWrite={false} />
+      </mesh>
+
+      {/* Memory: the convergence ring, only against real progress. */}
+      <mesh ref={convergenceRef} geometry={unitTorus} rotation={[Math.PI / 2 - 0.3, 0.2, 0]} visible={false}>
+        <meshBasicMaterial color={color} transparent opacity={0} depthWrite={false} />
+      </mesh>
 
       {/* Evolution: one ring per construction layer actually reached. */}
       {intent.constructionLayer > 0 && (
@@ -360,24 +721,6 @@ export default function CoreScene({ intent, tier, still }: CoreSceneProps) {
           )}
         </group>
       )}
-
-      {/* SHADOW_READY: a completed, parked satellite. */}
-      <group ref={satelliteRef} position={[1.7, 0, 0]} visible={intent.satelliteComplete}>
-        <mesh>
-          <icosahedronGeometry args={[0.16, 1]} />
-          <meshBasicMaterial color={PALETTE.ready} transparent opacity={0.85} />
-        </mesh>
-        <mesh>
-          <sphereGeometry args={[0.26, 16, 12]} />
-          <meshBasicMaterial
-            color={PALETTE.ready}
-            transparent
-            opacity={0.18}
-            side={THREE.BackSide}
-            depthWrite={false}
-          />
-        </mesh>
-      </group>
     </group>
   );
 }

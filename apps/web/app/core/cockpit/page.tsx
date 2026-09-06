@@ -25,6 +25,7 @@ import { visualFor } from "../../lib/uistate/visual";
 import { voiceOverlayFrom } from "../../lib/uistate/voice-overlay";
 import { useVoiceLevels, useVoiceSession } from "../../lib/voice/useVoiceSession";
 import AmbientBand from "../AmbientBand";
+import ChannelReadout from "../ChannelReadout";
 import CoreBar from "../CoreBar";
 import CoreView from "../CoreView";
 import EyeControl from "../EyeControl";
@@ -77,10 +78,13 @@ function Cockpit() {
         }}
       />
 
-      <div className="cockpit">
+      <div className="cockpit" data-core-mode="cockpit">
         <div className="cockpit-core">
           <CoreView intent={intent} tier={tier} force2d={force2d} />
           <StateReadout intent={intent} />
+          {/* M18.1: the cockpit is the detailed mode - it also prints the
+              channels the geometry was drawn from. */}
+          <ChannelReadout intent={intent} />
           <section className="ambient-band" aria-label="Ses oturumu">
             <VoiceControl />
           </section>

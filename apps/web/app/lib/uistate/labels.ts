@@ -96,6 +96,55 @@ export function kindDetail(kind: CoreVisualKind, source: VisualSource): string {
   return (source === "voice" ? VOICE_KIND_DETAIL[kind] : undefined) ?? KIND_DETAIL[kind];
 }
 
+// ------------------------------------------------------ M18.1: the structure
+
+/**
+ * Said beside a research core that drew the fixed constellation motif. The
+ * geometry is a representation of "research is running"; the sentence keeps
+ * it from being read as a count.
+ */
+export const CONSTELLATION_MOTIF_NOTE = "Çizilen takımyıldız sabit bir temsildir, sayım değildir.";
+
+/** The capability nodes' line: counted by the lab, or the one candidate the event is about. */
+export function capabilityNodesLine(count: number, counted: boolean): string {
+  if (!counted) return "Bir aday çevrede park edildi; laboratuvar sayı bildirmedi.";
+  return `${count} hazır aday çevrede park edildi.`;
+}
+
+/**
+ * The numeric channels (ADR-0065), named for the cockpit's telemetry. Every
+ * entry is a number on `VisualIntent` and nothing else; the cockpit prints
+ * them as they are so the owner can see what the geometry was drawn from.
+ */
+export const CHANNEL_LABEL: Record<
+  | "energy"
+  | "glow"
+  | "shellSpread"
+  | "ringSpin"
+  | "flowRate"
+  | "inwardFlow"
+  | "topology"
+  | "pulse"
+  | "ownerVoice"
+  | "constellationDrift"
+  | "restraint"
+  | "agitation",
+  string
+> = {
+  energy: "Enerji",
+  glow: "Işıma",
+  shellSpread: "Kabuk açıklığı",
+  ringSpin: "Halka dönüşü",
+  flowRate: "Yol akışı",
+  inwardFlow: "İçe akış",
+  topology: "Topoloji",
+  pulse: "Nabız",
+  ownerVoice: "Sahibin sesi",
+  constellationDrift: "Takımyıldız sürüklenmesi",
+  restraint: "Kısıtlama",
+  agitation: "Sarsıntı",
+};
+
 /** Raw contract token → Turkish. Used where the exact state matters. */
 export const STATE_LABEL: Record<KnownUiState, string> = {
   "agent.idle": "Boşta",
