@@ -41,6 +41,15 @@ export type EyeObservation = {
   source: typeof OBSERVATION_SOURCE;
 };
 
+/**
+ * Why the LOCAL eye capability failed, in the closed vocabulary the Cloud
+ * Core's action receipt speaks (M18_ACTION_CONTRACT.md §5.1, §5.2). The
+ * server maps each to one spoken sentence; nothing outside this set may be
+ * relayed, so `EyeStore` maps every camera failure onto one of these four.
+ */
+export const EYE_ERROR_CLASSES = ["permission_denied", "device_unavailable", "timeout", "capability_missing"] as const;
+export type EyeErrorClass = (typeof EYE_ERROR_CLASSES)[number];
+
 /** The browser's own answer to "may this page use the camera". */
 export type CameraPermission =
   /** The owner has granted it; `getUserMedia` should not prompt again. */

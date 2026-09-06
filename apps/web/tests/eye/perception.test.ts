@@ -116,6 +116,27 @@ describe("the sampling loop", () => {
     session.stop();
   });
 
+  it("an option passed as an explicit undefined still gets the default: the loop samples every 5 s, not every 0 ms", async () => {
+    // What `useActivePerception()` used to hand the session when called with
+    // no options: the key present, the value undefined. With the defaults
+    // spread BEFORE the options, `setTimeout(fn, undefined)` ran the loop as
+    // fast as the POST round trip allowed on the owner's real camera.
+    const postObservation = vi.fn(async () => ({ status: "posted" as const }));
+    const session = new PerceptionSession({
+      frameSource: new FakeFrameSource(),
+      postObservation,
+      sampleIntervalMs: undefined,
+      now: undefined,
+    });
+    await startAndFlush(session);
+    expect(postObservation).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(postObservation).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(postObservation).toHaveBeenCalledTimes(2);
+    session.stop();
+  });
+
   it("posts exactly the seven-field EyeObservation shape derived from the frame", async () => {
     const { session, postObservation } = buildSession();
     await startAndFlush(session);

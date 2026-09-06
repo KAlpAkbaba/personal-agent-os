@@ -11,11 +11,13 @@
  * owns it (the cockpit panels follow the same rule for goals and SHADOW_READY
  * candidates), so the Active Eye's start/stop control lives here instead.
  *
- * This file owns `useActivePerception` — the camera, the network, React
- * state — and nothing else; every pixel on screen is `EyeControlView`, a pure
- * component tested directly. The split mirrors `CoreView`/`CoreFallback2D` in
- * this same directory: capability/runtime concerns in one file, rendering in
- * another.
+ * This file binds `useActivePerception` — a subscription to the tab's one
+ * `EyeStore`, which owns the camera and the network — and nothing else; every
+ * pixel on screen is `EyeControlView`, a pure component tested directly. The
+ * split mirrors `CoreView`/`CoreFallback2D` in this same directory:
+ * capability/runtime concerns in one file, rendering in another. Mounting or
+ * unmounting this component never opens or releases a camera (ADR-0061-style
+ * one-owner-per-tab; M18_ACTION_CONTRACT.md §7.1).
  */
 
 import { useEffect } from "react";

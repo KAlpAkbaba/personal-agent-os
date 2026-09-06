@@ -13,7 +13,20 @@
  * wording rather than borrowing the other file's.
  */
 
-import type { ActivityLevel, AwakeState, CameraPermission, Posture } from "./types";
+import type { ActivityLevel, AwakeState, CameraPermission, EyeErrorClass, Posture } from "./types";
+
+/**
+ * What the owner reads on the Core when THIS device's camera could not be
+ * opened, by the same closed error class the Cloud Core's receipt speaks
+ * (M18_ACTION_CONTRACT.md §5.2). The spoken sentence is the server's; this is
+ * the on-screen one.
+ */
+export const LOCAL_EYE_ERROR_TEXT: Record<EyeErrorClass, string> = {
+  permission_denied: "Tarayıcı kamera izni vermedi.",
+  device_unavailable: "Kamera bulunamadı ya da başka bir uygulama kullanıyor.",
+  timeout: "Kamera zamanında açılmadı.",
+  capability_missing: "Bu tarayıcıda kamera erişimi yok.",
+};
 
 export const ACTIVITY_LEVEL_LABEL: Record<ActivityLevel, string> = {
   none: "hareket yok",

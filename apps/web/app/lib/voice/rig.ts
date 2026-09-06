@@ -36,11 +36,14 @@ import { PassthroughDenoiser } from "./denoiser";
 import { FakeTransport } from "./fake";
 import type {
   AppliedInputSettings,
+  LocalActionPort,
   Microphone,
   NetworkMonitor,
   Playback,
   SpeechDetector,
 } from "./ports";
+import { eyeLocalActions } from "../eye/local-actions";
+import { getEyeStore } from "../eye/store";
 import {
   type DeviceIdentity,
   LocalStorageProfileStore,
@@ -137,6 +140,11 @@ export type VoiceRigParts = {
   /** Builds a transport for a resolved descriptor; the rig counts and observes it. */
   transportFor: (descriptor: TransportDescriptor) => RealtimeTransport;
   now: () => number;
+  /**
+   * M18_ACTION_CONTRACT.md §7.2: the capabilities that run on THIS device
+   * before a tool call is relayed (the eye). Absent = the client has none.
+   */
+  localActions?: LocalActionPort;
 };
 
 export type VoiceRigBuilder = (profile: ProfileHolder) => VoiceRigParts;
@@ -234,6 +242,10 @@ export function browserRigParts(options: BrowserRigOptions): VoiceRigBuilder {
         throw new TransportConfigError(`tarayıcı ${descriptor.kind} taşıyıcısını açamaz`);
       },
       now: () => performance.now(),
+      // The camera lives in this browser: `eye.enable` / `eye.disable` run
+      // against the tab's one `EyeStore` (reason `voice:<utterance>`) before
+      // the call is relayed with what was observed.
+      localActions: eyeLocalActions(getEyeStore),
     };
   };
 }
@@ -385,6 +397,7 @@ export function createVoiceRig(build: VoiceRigBuilder): VoiceRig {
     localSpeech: parts.detector,
     network: parts.network,
     now: parts.now,
+    localActions: parts.localActions,
     // ADR-0047 §4: the AGC A/B result travels with the read-back, as numbers.
     inputEvidence: () => {
       const bench = profile.current?.agcBenchmark;

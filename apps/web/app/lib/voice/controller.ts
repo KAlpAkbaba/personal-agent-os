@@ -67,6 +67,7 @@ import {
   strongerLevel,
 } from "./interruption";
 import type {
+  LocalActionPort,
   Microphone,
   NetworkMonitor,
   OnsetLevel,
@@ -303,6 +304,13 @@ export type ControllerDeps = {
    * report. Numbers only; anything else is dropped.
    */
   inputEvidence?: () => Record<string, unknown>;
+  /**
+   * M18_ACTION_CONTRACT.md §5.1, §7.2: capabilities that live on THIS device
+   * (the camera). Asked first for every tool call; when it answers, the
+   * relayed `arguments` carry `observed_after` so the Cloud Core's receipt
+   * is built from the real terminal state.
+   */
+  localActions?: LocalActionPort;
   /** Ordered operation log — tests pin ordering with it. */
   log?: (op: string) => void;
 };
@@ -1864,9 +1872,13 @@ export class VoiceSessionController {
     this.log(`tool.relay:${callId}`);
     this.patch({ toolsRunning: [...this.snapshot.toolsRunning, name] });
     this.setState("tool_running", "TOOL_RUNNING");
+    // M18_ACTION_CONTRACT.md §5.1: this device's own capability runs FIRST;
+    // what it observed rides along so the receipt is verified, not assumed.
+    const observed = await this.runLocalAction(callId, name, args);
+    const relayed = observed ? { ...args, observed_after: observed } : args;
     let response: ToolCallResponse;
     try {
-      response = await this.relayWithReattach(callId, name, args);
+      response = await this.relayWithReattach(callId, name, relayed);
     } catch (error) {
       this.patch({ toolsRunning: this.snapshot.toolsRunning.filter((n) => n !== name) });
       this.reporter.report({ kind: "tool_done", turn: this.snapshot.turn, payload: { call_id: callId, name, status: "failed" } });
@@ -1903,6 +1915,30 @@ export class VoiceSessionController {
     );
     this.log(`tool.submit:${callId}`);
     if (this.longRunning.size === 0) this.setState("listening", "LISTENING");
+  }
+
+  /**
+   * The local half of a tool call, when this client has one for it. `null`
+   * when the port has nothing to do for this tool (the relay is unchanged)
+   * and — defensively — when the port throws: the call is then relayed
+   * without `observed_after`, which the server reads as a missing local
+   * capability rather than as success.
+   */
+  private async runLocalAction(
+    callId: string,
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<Record<string, unknown> | null> {
+    const port = this.deps.localActions;
+    if (!port) return null;
+    try {
+      const observed = await port.run(name, args);
+      if (observed) this.log(`tool.local:${callId}`);
+      return observed;
+    } catch (error) {
+      this.log(`tool.local_error:${callId}:${describe(error)}`);
+      return null;
+    }
   }
 
   private async relayWithReattach(
