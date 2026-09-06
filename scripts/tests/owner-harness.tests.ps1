@@ -66,6 +66,38 @@ Test-Case "the fix: direct assignment keeps the array, so the same read is safe"
     Assert-Equal 1 $x.Count "count"
 }
 
+# owner-m18.ps1 v2 wraps Get-ArrayProperty in its own helpers (Get-LedgerSince,
+# Get-WebSessionsSinceBaseline) that `return , (...)`. The same three shapes, through that
+# extra layer, read the way the harness reads them: assigned first, counted second.
+function Get-RowsLike {
+    param($Doc)
+    return , (Get-ArrayProperty -InputObject $Doc -Name "events")
+}
+$docNone = [pscustomobject]@{ events = @() }
+$docOne = [pscustomobject]@{ events = @([pscustomobject]@{ event_type = "eye.disabled"; detail_json = [pscustomobject]@{ reason = "voice:gozunu kapat" } }) }
+$docTwo = [pscustomobject]@{ events = @([pscustomobject]@{ event_type = "a" }, [pscustomobject]@{ event_type = "b" }) }
+
+Test-Case "a wrapping helper that returns , (Get-ArrayProperty ...) keeps zero rows countable" {
+    $rows = Get-RowsLike -Doc $docNone
+    Assert-Equal 0 $rows.Count "count"
+}
+Test-Case "a wrapping helper keeps ONE row an array (the eye.disabled-by-voice case)" {
+    $rows = Get-RowsLike -Doc $docOne
+    if (-not ($rows -is [array])) { throw "expected an array" }
+    Assert-Equal 1 $rows.Count "count"
+    $viaVoice = @($rows | Where-Object { ([string]$_.detail_json.reason).StartsWith("voice:") })
+    Assert-Equal 1 $viaVoice.Count "filtered"
+}
+Test-Case "a wrapping helper keeps two rows" {
+    $rows = Get-RowsLike -Doc $docTwo
+    Assert-Equal 2 $rows.Count "count"
+}
+Test-Case "a scalar-in-a-collection helper output filtered to nothing is an empty array, not null" {
+    $rows = Get-RowsLike -Doc $docOne
+    $none = @($rows | Where-Object { $_.event_type -eq "never" })
+    Assert-Equal 0 $none.Count "count"
+}
+
 Write-Host ""
 Write-Host "owner-harness tests: $script:Passes passed, $script:Failures failed"
 if ($script:Failures -gt 0) { exit 1 }
