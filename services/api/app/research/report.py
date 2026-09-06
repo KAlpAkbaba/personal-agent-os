@@ -225,6 +225,12 @@ class ReportStats:
     #: interstitial, duplicate_event, insufficient_content). The report shows them so a
     #: thin answer can be told apart from a thin web.
     rejected_by_reason: dict[str, int] = field(default_factory=dict)
+    #: Evidence/synthesis-output items quarantined for breaking their field contract
+    #: (app.research.contracts.ContractViolation) at any stage — never silently
+    #: dropped, never a reason to fail a run whose result is otherwise defensible.
+    #: Diagnostics-only (app.research.result.ResearchDiagnostics): the executive
+    #: narration never mentions this number (M18.2 DEFECT 2, ADR-0067).
+    quarantined: int = 0
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -239,6 +245,7 @@ class ReportStats:
             "truncated_fields": self.truncated_fields,
             "rejected": self.rejected,
             "rejected_by_reason": dict(self.rejected_by_reason),
+            "quarantined": self.quarantined,
         }
 
 

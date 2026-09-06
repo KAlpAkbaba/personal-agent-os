@@ -26,6 +26,8 @@ from app.explain.classify import (
     QUERY_LEARNED,
     QUERY_MODULE_PROBLEM,
     QUERY_PROBLEMS_NOW,
+    QUERY_REJECTED_PAGES,
+    QUERY_RESEARCH_PROBLEMS,
     QUERY_SELF_CODE,
     QUERY_SHADOW_READY,
     QUERY_SINCE_YOU_LEFT,
@@ -39,6 +41,13 @@ from app.explain.classify import (
 )
 from app.ledger.screening import MAX_EVIDENCE_CHARS, safe_evidence_text
 from app.narration.numbers import cardinal
+from app.research.result import (
+    REASON_INSUFFICIENT_EVIDENCE,
+    REASON_INSUFFICIENT_FINDINGS,
+    ResearchDiagnostics,
+    ResearchResult,
+    spoken_result,
+)
 
 LABEL_FACT = "known_fact"
 LABEL_INFERENCE = "inference"
@@ -166,6 +175,8 @@ SUBSYSTEM_FOR_QUERY: dict[str, str] = {
     QUERY_CAN_DEPLOY: "authority",
     QUERY_TESTS: "ledger",
     QUERY_SINCE_YOU_LEFT: "ledger",
+    QUERY_RESEARCH_PROBLEMS: "research",
+    QUERY_REJECTED_PAGES: "research",
 }
 
 #: The six the M17 combined qualification asks about, in the order it asks them.
@@ -577,17 +588,25 @@ def _needs_owner_action(recent: list[EventView]) -> tuple[bool, EventView | None
 
 
 def _research_executive(
-    ev: EventView, qualified: EventView | None, recent: list[EventView] | None = None
+    ev: EventView,
+    qualified: EventView | None,
+    recent: list[EventView] | None = None,
+    report: dict[str, Any] | None = None,
 ) -> list[Statement]:
-    """The owner briefing: two to four sentences - the outcome, why it matters, and
-    whether anything needs the owner - each tied to the evidence that supports it.
-    Counts and identifiers belong to the detailed and technical levels."""
-    d = ev.detail or {}
+    """The owner briefing: two to four sentences - the RESULT of the research, why it
+    matters, and whether anything needs the owner - each tied to the evidence that
+    supports it.
+
+    M18.2 DEFECT 2 (ADR-0067): this used to build its outcome sentence from
+    ``ev.detail`` — the pipeline's own counts ("N farklı kaynaktan M sonuç üretti ve K
+    uygun olmayan sayfayı eledi") — so the owner heard diagnostics instead of what was
+    found. It now consumes :class:`app.research.result.ResearchResult`, built ONLY
+    from the validated report's findings; counts and eliminated-page tallies moved to
+    ``_research_technical`` and to the explicit diagnostic query kinds
+    (``QUERY_RESEARCH_PROBLEMS`` / ``QUERY_REJECTED_PAGES``).
+    """
     refs = (ev.ref, *ev.evidence_refs)
     out: list[Statement] = []
-    findings = _n(d.get("findings"))
-    sources = _n(d.get("sources"))
-    rejected = _n(d.get("rejected"))
     if qualified is not None:
         out.append(
             Statement(
@@ -596,19 +615,16 @@ def _research_executive(
                 (qualified.ref, *qualified.evidence_refs),
             )
         )
-    else:
-        out.append(Statement("Efendim, son araştırma görevi tamamlandı.", LABEL_FACT, refs))
-    if findings or sources:
-        produced = (
-            f"{cardinal(sources).capitalize()} farklı kaynaktan {cardinal(findings)} sonuç üretti"
-            if sources
-            else f"{cardinal(findings).capitalize()} sonuç üretti"
-        )
-        if rejected:
-            produced += f" ve {cardinal(rejected)} uygun olmayan sayfayı eledi."
-        else:
-            produced += "."
-        out.append(Statement(produced, LABEL_FACT, refs))
+    d = ev.detail or {}
+    topic = str((report or {}).get("topic") or d.get("topic") or "")
+    result = ResearchResult.from_report_json(report, topic=topic)
+    text = spoken_result(result)
+    if qualified is not None and text.startswith("Efendim, "):
+        # The qualification sentence above already addressed the owner; avoid saying
+        # "Efendim" twice in the same two-sentence breath.
+        text = text[len("Efendim, ") :]
+        text = text[:1].upper() + text[1:]
+    out.append(Statement(text, LABEL_FACT if not result.insufficient else LABEL_UNCERTAINTY, refs))
     needs_action, culprit = _needs_owner_action(recent or [])
     if needs_action and culprit is not None:
         out.append(
@@ -627,6 +643,11 @@ def _research_executive(
 
 
 def _research_detailed(ev: EventView, report: dict[str, Any] | None) -> list[BriefingItem]:
+    """The findings, one item each. M18.2 DEFECT 2 (ADR-0067): the pipeline's own
+    "Elenen sayfalar" (eliminated-pages) tally used to be appended here too — a
+    detailed answer about what was FOUND is not the place for how many pages were
+    rejected finding it. That tally now lives only in ``_research_technical`` and in
+    the explicit ``QUERY_REJECTED_PAGES`` question."""
     items: list[BriefingItem] = []
     refs = (ev.ref, *ev.evidence_refs)
     if report:
@@ -652,22 +673,6 @@ def _research_detailed(ev: EventView, report: dict[str, Any] | None) -> list[Bri
                 (Statement("Bulguların ayrıntısı bu kayıtta yok.", LABEL_UNCERTAINTY, refs),),
             )
         )
-    d = ev.detail or {}
-    by_reason = d.get("rejected_by_reason") or {}
-    if isinstance(by_reason, dict) and by_reason:
-        parts = [f"{_REJECTION_TR.get(r, r)}: {_n(c)}" for r, c in by_reason.items()]
-        items.append(
-            BriefingItem(
-                "Elenen sayfalar",
-                (
-                    Statement(
-                        f"Toplam {_n(d.get('rejected'))} sayfa elendi; {_tr_list(parts)}.",
-                        LABEL_FACT,
-                        refs,
-                    ),
-                ),
-            )
-        )
     return items
 
 
@@ -682,6 +687,11 @@ def _research_technical(
     q = (qualified.detail or {}) if qualified is not None else {}
     qrefs = (qualified.ref, *qualified.evidence_refs) if qualified is not None else refs
     items: list[BriefingItem] = []
+    # The ledger event's own detail IS the pipeline's stats, flattened onto it
+    # (app.ledger.service.build_research_completed_event); re-wrapping it under
+    # "stats" lets this reuse the one ResearchDiagnostics constructor rather than
+    # re-deriving the same numbers by hand a second time.
+    diag = ResearchDiagnostics.from_report_json({"stats": d, **d})
 
     versions: list[str] = []
     policy = ev.version or q.get("cloud_policy_version")
@@ -700,8 +710,8 @@ def _research_technical(
         )
 
     evidence_bits = [
-        f"{_n(d.get('discovered'))} aday keşfedildi, {_n(d.get('fetched'))} sayfa getirildi, "
-        f"{_n(d.get('evidence'))} kanıt kabul edildi, {_n(d.get('rejected'))} sayfa elendi."
+        f"{diag.discovered_count} aday keşfedildi, {diag.fetched_count} sayfa getirildi, "
+        f"{_n(d.get('evidence'))} kanıt kabul edildi, {diag.rejected_pages} sayfa elendi."
     ]
     if q:
         checks = ["kanıt kontrolleri geçti"]
@@ -718,6 +728,42 @@ def _research_technical(
     items.append(
         BriefingItem("Kanıt", tuple(Statement(t, LABEL_FACT, refs) for t in evidence_bits))
     )
+
+    # The pipeline's own diagnostics (app.research.result.ResearchDiagnostics): which
+    # pages were eliminated and why, and how much of the run's own output was
+    # self-rejected. Moved here from the DETAILED level (M18.2 DEFECT 2, ADR-0067) -
+    # this is exactly what "hangi sayfalar elendi?" / "araştırma sırasında ne sorun
+    # oldu?" ask for, and never what the executive summary volunteers.
+    if diag.rejected_by_reason:
+        parts = [f"{_REJECTION_TR.get(r, r)}: {c}" for r, c in diag.rejected_by_reason.items()]
+        items.append(
+            BriefingItem(
+                "Elenen sayfalar",
+                (
+                    Statement(
+                        f"Toplam {diag.rejected_pages} sayfa elendi; {_tr_list(parts)}.",
+                        LABEL_FACT,
+                        refs,
+                    ),
+                ),
+            )
+        )
+    if diag.quarantined_pages or diag.refused_pages:
+        gate_bits: list[str] = []
+        if diag.quarantined_pages:
+            gate_bits.append(
+                f"{cardinal(diag.quarantined_pages)} öğe kalite kapısında karantinaya alındı"
+            )
+        if diag.refused_pages:
+            gate_bits.append(
+                f"{cardinal(diag.refused_pages)} ifade şüpheli içerik nedeniyle reddedildi"
+            )
+        items.append(
+            BriefingItem(
+                "Kalite kapısı",
+                (Statement(_tr_list(gate_bits).capitalize() + ".", LABEL_FACT, refs),),
+            )
+        )
 
     error_class = d.get("error_class") or (ev.result if ev.status == "failed" else None)
     if error_class:
@@ -1644,7 +1690,7 @@ def explain(
             report = (
                 source.research_report(latest.research_job_id) if latest.research_job_id else None
             )
-            executive.extend(_research_executive(latest, qualified, activities))
+            executive.extend(_research_executive(latest, qualified, activities, report))
             research_job_id = latest.research_job_id
             d = latest.detail or {}
             facts = {
@@ -1672,6 +1718,51 @@ def explain(
                 add_refs((qualified.ref,), qualified.evidence_refs)
             if report and report.get("artifact_id"):
                 add_refs(({"kind": "artifact", "ref": str(report["artifact_id"])},))
+        elif latest.event_type == "research.failed":
+            # M18.2 DEFECT 2 / spec item 1: a failed quality gate is said so, concisely
+            # and truthfully, never dressed up as a finding and never read from the
+            # failure log itself.
+            d = latest.detail or {}
+            error_class = str(d.get("error_class") or "").upper()
+            reason = (
+                REASON_INSUFFICIENT_FINDINGS
+                if "FINDING" in error_class
+                else REASON_INSUFFICIENT_EVIDENCE
+                if "EVIDENCE" in error_class
+                else None
+            )
+            failure_result = ResearchResult.insufficient_evidence(reason=reason)
+            executive.append(
+                Statement(
+                    spoken_result(failure_result),
+                    LABEL_UNCERTAINTY,
+                    (latest.ref, *latest.evidence_refs),
+                )
+            )
+            # Same closing rule every other executive branch here follows (an open
+            # failure with nothing resolved since IS still something the owner needs
+            # to hear about) — this branch only changes what the OUTCOME sentence says,
+            # never whether an unresolved failure is surfaced.
+            needs_action, culprit = _needs_owner_action(activities)
+            if needs_action and culprit is not None:
+                executive.append(
+                    Statement(
+                        f"Müdahalenizi gerektiren bir konu var: {culprit.factual_summary}",
+                        LABEL_FACT,
+                        (culprit.ref,),
+                    )
+                )
+            else:
+                executive.append(
+                    Statement(
+                        "Şu anda müdahalenizi gerektiren bir sorun yok.",
+                        LABEL_INFERENCE,
+                        tuple(e.ref for e in activities[:5]),
+                    )
+                )
+            detailed.append(_event_item(latest))
+            technical.append(_event_item(latest))
+            add_refs((latest.ref,), latest.evidence_refs)
         else:
             executive.extend(_generic_executive(latest, activities))
             detailed.append(_event_item(latest))

@@ -59,6 +59,7 @@ from app.state.routes import router as state_router
 from app.uistate import UiState
 from app.uistate import publish as publish_ui_state
 from app.uistate.routes import router as ui_state_router
+from app.voice.realtime_sessions.research_announcer import ResearchToolCallAnnouncer
 from app.voice.realtime_sessions.routes import router as voice_realtime_router
 from app.voice.realtime_sessions.runtime import RealtimeVoiceRuntime
 from app.voice.routes import router as voice_router
@@ -101,6 +102,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # delivery (app.devices.commands); embedded_worker optionally runs the
     # Temporal worker in-process too (PAGENTOS_WORKER_MODE=embedded).
     embedded_worker = EmbeddedWorkerRuntime(settings)
+    # M18.2 DEFECT 2 / ADR-0067: the research Temporal worker holds no sideband
+    # registrations (same reason mobile.announcer runs here, not in the worker) — this
+    # sweeper watches ResearchRunRow/ResearchReportRow for a run started by a
+    # research.start tool call and completes that call once the run is terminal, so
+    # the model receives spoken_result instead of the conversation stalling forever.
+    research_tool_call_announcer = ResearchToolCallAnnouncer(
+        voice_realtime.session, voice_realtime.sideband
+    )
 
     def _routine_label(routine_id: Any) -> str | None:
         """Best-effort alarm label lookup (ADR-0060) — never raises: a routine name is a
@@ -144,6 +153,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # the push registrations. The Temporal worker only makes a task READY;
         # this drains READY-but-unannounced tasks (app/mobile/announcer.py).
         await mobile.announcer.start()
+        await research_tool_call_announcer.start()
         await embedded_worker.start()
         # M16 track A: re-derive activity_events from canonical tables on every
         # start (spec §1.4, safe to call twice). Never blocks startup — an older
@@ -176,6 +186,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             yield
         finally:
             await embedded_worker.stop()
+            await research_tool_call_announcer.stop()
             await mobile.announcer.stop()
             register_routine_dispatcher(None)
             register_broker_runtime(None)

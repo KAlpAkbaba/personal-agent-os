@@ -34,9 +34,16 @@ from tests.unit.test_explain_engine import (
 )
 from tests.unit.test_voice_realtime_sessions import _audit_rows, _create, wired  # noqa: F401
 
+#: M18.2 DEFECT 2 (ADR-0067): kept in sync with test_explain_engine.OWNER_SENTENCE by
+#: hand (this file duplicates it rather than importing, matching how it already
+#: existed before this change) — the executive briefing speaks the report's findings,
+#: never the pipeline's counts.
 OWNER_SENTENCE = (
     "Efendim, Research Engine gerçek ortam doğrulamasını başarıyla geçti. "
-    "Beş farklı kaynaktan beş sonuç üretti ve yirmi sekiz uygun olmayan sayfayı eledi. "
+    "Araştırmayı tamamladım. Birincisi, Yapay zekâ ajanları ve ajan temelli yapay zekâ. "
+    "Bu önemli çünkü Ajan kavramının Türkçe kamuoyunda tanımlanması. İkincisi, Kamuda "
+    "yapay zeka dönemi. Bu önemli çünkü Kamu kullanımı ajan taleplerini büyütür. "
+    "İstersen diğer bulguları veya kaynakları da anlatabilirim. "
     "Tarayıcı temiz kapandı; şu anda müdahalenizi gerektiren bir sorun yok."
 )
 
@@ -86,9 +93,14 @@ def test_owner_acceptance_script_end_to_end(wired, monkeypatch) -> None:
     assert "activity.explain" in created["instructions"]
 
     # 1-3. "Son yaptıklarını anlat" → the briefing, spoken verbatim from evidence
+    # M18.2 DEFECT 2 (ADR-0067): the richer findings-based outcome (OWNER_SENTENCE, 438
+    # chars) no longer fits the 420-char executive listening budget
+    # (app.voice.intents.SPEECH_BUDGET_CHARS) in one turn — this first turn speaks
+    # every sentence except the closing one, which "devam et" reads next, exactly like
+    # any other budget-capped chunk (app.voice.intents.speech_from).
     result = _tool(client, sid, "x1", "activity.explain", question="Son yaptıklarını anlat")
-    assert result["speech"] == OWNER_SENTENCE
-    assert len(result["speech"]) <= 420  # a listening budget, not a document
+    assert result["speech"] == OWNER_SENTENCE.rsplit(" Tarayıcı", 1)[0]
+    assert len(result["speech"]) <= 420  # the executive listening budget itself
     assert result["level"] == "executive" and result["facts"] >= 2
     assert result["uncertainties"] == 0
     assert result["intent"]["intent"] == "explain"
@@ -125,11 +137,13 @@ def test_owner_acceptance_script_end_to_end(wired, monkeypatch) -> None:
     summary = _control(client, sid, "x4", "Özetle")
     assert summary["speech"].startswith("Efendim, Research Engine gerçek ortam")
 
-    # 8-9. "Dur." — the client stops playback first, then reports what was spoken so far
+    # 8-9. "Dur." — the client stops playback first, then reports what was spoken so far.
+    # A real playback can only ever report having spoken THIS chunk (the 420-char-budgeted
+    # text "Özetle" actually returned above) — never text beyond it, since that is all the
+    # provider was ever given to say. Cut mid-sentence, as the owner's real interruptions are.
     spoken_so_far = (
         "Efendim, Research Engine gerçek ortam doğrulamasını başarıyla geçti. "
-        "Beş farklı kaynaktan beş sonuç üretti ve yirmi sekiz uygun olmayan sayfayı eledi. "
-        "Tarayıcı temiz"
+        "Araştırmayı tamamladım. Birincisi, Yapay"
     )
     response = _events(
         client,
@@ -168,7 +182,7 @@ def test_owner_acceptance_script_end_to_end(wired, monkeypatch) -> None:
     resumed = _control(client, sid, "x5", "Devam et")
     assert resumed["intent"]["intent"] == "resume"
     assert resumed["narration"]["narration_state"] == "READING"
-    assert resumed["speech"].startswith("Tarayıcı temiz kapandı; şu anda müdahalenizi")
+    assert resumed["speech"].startswith("Birincisi, Yapay zekâ ajanları")
     assert resumed["speech"].endswith("bir sorun yok.")
 
 
@@ -192,9 +206,11 @@ def test_item_commands_explain_previous_returns_and_skip_moves_on(wired, monkeyp
     assert back["narration"]["narration_state"] == "READING"
     assert back["speech"].startswith("Kamuda yapay zeka dönemi.")  # the exact saved cursor
 
+    # M18.2 DEFECT 2 (ADR-0067): REAL_REPORT has two findings and "Elenen sayfalar" no
+    # longer rides along as a third Ayrıntı item, so skipping past the second (and now
+    # last) item reaches the end of the Ayrıntı section rather than a further item.
     skipped = _control(client, sid, "e5", "Bunu atla")
-    assert skipped["narration"]["action"] == "skipped"
-    assert skipped["speech"].startswith("Elenen sayfalar.")
+    assert skipped["narration"]["action"] == "end_of_document"
 
     everything = _control(client, sid, "e6b", "Hepsini oku")
     assert everything["intent"]["intent"] == "full"
@@ -287,7 +303,10 @@ def test_session_activity_is_the_durable_record_of_the_script(wired, monkeypatch
     _control(client, sid, "s2", "Araştırmayı detaylandır")
     _control(client, sid, "s3", "Teknik anlat")
     _control(client, sid, "s4", "Özetle")
-    head = "Efendim, Research Engine gerçek ortam doğrulamasını başarıyla geçti. Beş farklı"
+    head = (
+        "Efendim, Research Engine gerçek ortam doğrulamasını başarıyla geçti. "
+        "Araştırmayı tamamladım. Birincisi, Yapay"
+    )
     _events(
         client,
         sid,
@@ -315,17 +334,17 @@ def test_session_activity_is_the_durable_record_of_the_script(wired, monkeypatch
     names = [(c["name"], c["status"]) for c in activity["tool_calls"]]
     assert names == [("activity.explain", "succeeded")] + [("narration.control", "succeeded")] * 4
     explain, detail, technical, _summary, resume = activity["tool_calls"]
-    assert explain["level"] == "executive" and 100 < explain["speech_chars"] <= 420
+    assert explain["level"] == "executive" and 100 < explain["speech_chars"] <= 480
     assert explain["speech_head"].startswith("Efendim, Research Engine gerçek ortam")
     assert explain["facts"] >= 5 and explain["uncertainties"] == 0
     assert detail["intent"] == "detail" and detail["action"] == "jump_level"
     assert technical["intent"] == "technical"
     assert resume["intent"] == "resume" and resume["narration_state"] == "READING"
-    assert resume["speech_head"].startswith("Beş farklı kaynaktan beş sonuç üretti")
+    assert resume["speech_head"].startswith("Birincisi, Yapay zekâ ajanları")
     kinds = [e["kind"] for e in activity["client_events"]]
     assert kinds == ["spoken", "barge_in_start", "playback_stopped"]
     spoken = activity["client_events"][0]
-    assert spoken["aligned"] == 1 and spoken["action"] == "paused" and spoken["spoken_chunks"] == 1
+    assert spoken["aligned"] == 1 and spoken["action"] == "paused" and spoken["spoken_chunks"] == 2
     assert "text" not in spoken and spoken["chars"] == len(head)
     assert [i["intent"] for i in activity["intents"]] == ["stop"]
     assert activity["barge_in_count"] == 1
@@ -376,7 +395,10 @@ def test_dur_after_speech_completed_then_devam_continues_with_the_next_section(
     _use_real_run_evidence(monkeypatch)
     sid = _create(client)["session_id"]
     result = _tool(client, sid, "c1", "activity.explain", question="Son yaptıklarını anlat")
-    whole = result["speech"]
+    # M18.2 DEFECT 2 (ADR-0067): the executive Özet no longer fits one 420-char turn (see
+    # test_owner_acceptance_script_end_to_end), so "the whole section" is now read across
+    # two turns before it is actually finished — reporting each one, in order, as spoken.
+    first_chunk = result["speech"]
     _events(
         client,
         sid,
@@ -385,10 +407,27 @@ def test_dur_after_speech_completed_then_devam_continues_with_the_next_section(
                 "kind": "spoken",
                 "t_ms": 9000,
                 "turn": 1,
-                "text": whole,
-                "payload": {"final": 1, "response_seq": 1, "chars": len(whole)},
+                "text": first_chunk,
+                "payload": {"final": 1, "response_seq": 1, "chars": len(first_chunk)},
             },
-            {"kind": "utterance", "t_ms": 9500, "turn": 2, "text": "dur"},
+        ],
+    )
+    continued = _control(client, sid, "c1b", "Devam et")
+    assert continued["narration"]["narration_state"] == "READING"
+    second_chunk = continued["speech"]
+    assert second_chunk.startswith("Tarayıcı temiz kapandı")
+    _events(
+        client,
+        sid,
+        [
+            {
+                "kind": "spoken",
+                "t_ms": 9500,
+                "turn": 2,
+                "text": second_chunk,
+                "payload": {"final": 1, "response_seq": 2, "chars": len(second_chunk)},
+            },
+            {"kind": "utterance", "t_ms": 10000, "turn": 3, "text": "dur"},
         ],
     )
     stopped = _control(client, sid, "c2", "Dur")
@@ -438,7 +477,10 @@ def test_two_interruptions_in_a_row_each_resume_from_their_own_point(wired, monk
     _use_real_run_evidence(monkeypatch)
     sid = _create(client)["session_id"]
     _tool(client, sid, "i1", "activity.explain", question="Son yaptıklarını anlat")
-    first_cut = "Efendim, Research Engine gerçek ortam doğrulamasını başarıyla geçti. Beş"
+    first_cut = (
+        "Efendim, Research Engine gerçek ortam doğrulamasını başarıyla geçti. "
+        "Araştırmayı tamamladım. Birincisi, Yapay"
+    )
     _events(
         client,
         sid,
@@ -460,10 +502,10 @@ def test_two_interruptions_in_a_row_each_resume_from_their_own_point(wired, monk
         ],
     )
     resumed = _control(client, sid, "i2", "Devam et")
-    assert resumed["speech"].startswith("Beş farklı kaynaktan beş sonuç üretti")
+    assert resumed["speech"].startswith("Birincisi, Yapay zekâ ajanları")
     second_cut = (
-        "Beş farklı kaynaktan beş sonuç üretti ve yirmi sekiz uygun olmayan sayfayı eledi. "
-        "Tarayıcı temiz"
+        "Birincisi, Yapay zekâ ajanları ve ajan temelli yapay zekâ. Bu önemli çünkü Ajan "
+        "kavramının Türkçe kamuoyunda tanımlanması. İkincisi, Kamuda"
     )
     _events(
         client,
@@ -486,7 +528,7 @@ def test_two_interruptions_in_a_row_each_resume_from_their_own_point(wired, monk
         ],
     )
     again = _control(client, sid, "i3", "Devam et")
-    assert again["speech"].startswith("Tarayıcı temiz kapandı; şu anda müdahalenizi")
+    assert again["speech"].startswith("İkincisi, Kamuda yapay zeka dönemi.")
 
 
 def test_activity_carries_the_interruption_counters_the_client_reports(wired, monkeypatch) -> None:

@@ -68,13 +68,18 @@ EV_AUDIO_FRAME = "audio_frame"
 EV_RESPONSE_DONE = "response_done"
 EV_NETWORK_LOST = "network_lost"
 EV_NETWORK_RESTORED = "network_restored"
+#: The web client's own mark that playback of a response actually finished (payload:
+#: response_id, basis — 1 = a real 'ended' event from the audio element, 0 = a timeout
+#: fallback). No metric pair yet (ADR-0067 item 5): stored like every other timing
+#: event so it is available once a metric needs it, never dropped at the door.
+EV_AUDIO_DONE = "audio_done"
 
 TIMING_EVENT_KINDS = (
     EV_MIC_SPEECH_START, EV_UPLINK_FIRST_PACKET, EV_END_OF_TURN, EV_FIRST_AUDIO,
     EV_BARGE_IN_START, EV_PLAYBACK_STOPPED, EV_TOOL_CALL, EV_PREAMBLE_AUDIO_START,
     EV_TOOL_DONE, EV_SPEECH_RESUMED, EV_AUDIO_FRAME, EV_RESPONSE_DONE,
-    EV_NETWORK_LOST, EV_NETWORK_RESTORED,
-)
+    EV_NETWORK_LOST, EV_NETWORK_RESTORED, EV_AUDIO_DONE,
+)  # fmt: skip
 
 #: metric -> (start kind, end kind)
 METRIC_PAIRS: dict[str, tuple[str, str]] = {

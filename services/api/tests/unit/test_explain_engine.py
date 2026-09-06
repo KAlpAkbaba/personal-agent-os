@@ -23,7 +23,9 @@ from app.explain.classify import (
     QUERY_LAST_ACTIVITY,
     QUERY_MODULE_PROBLEM,
     QUERY_PROBLEMS_NOW,
+    QUERY_REJECTED_PAGES,
     QUERY_RESEARCH_DETAIL,
+    QUERY_RESEARCH_PROBLEMS,
     QUERY_TODAY,
     QUERY_WHY_FAILED,
     classify,
@@ -34,14 +36,23 @@ from app.explain.engine import (
     LABEL_UNCERTAINTY,
     NO_EVIDENCE_TR,
     EventView,
+    _research_executive,
     explain,
     render_markdown,
     speech_for_level,
 )
+from app.research.result import ResearchResult
 
+#: M18.2 DEFECT 2 (ADR-0067): the executive briefing now speaks the report's actual
+#: findings (ResearchResult / spoken_result), never the pipeline's own counts — this
+#: used to read "Beş farklı kaynaktan beş sonuç üretti ve yirmi sekiz uygun olmayan
+#: sayfayı eledi", which is exactly the defect this milestone item fixed.
 OWNER_SENTENCE = (
     "Efendim, Research Engine gerçek ortam doğrulamasını başarıyla geçti. "
-    "Beş farklı kaynaktan beş sonuç üretti ve yirmi sekiz uygun olmayan sayfayı eledi. "
+    "Araştırmayı tamamladım. Birincisi, Yapay zekâ ajanları ve ajan temelli yapay zekâ. "
+    "Bu önemli çünkü Ajan kavramının Türkçe kamuoyunda tanımlanması. İkincisi, Kamuda "
+    "yapay zeka dönemi. Bu önemli çünkü Kamu kullanımı ajan taleplerini büyütür. "
+    "İstersen diğer bulguları veya kaynakları da anlatabilirim. "
     "Tarayıcı temiz kapandı; şu anda müdahalenizi gerektiren bir sorun yok."
 )
 
@@ -197,9 +208,11 @@ def test_last_activity_is_the_owner_briefing_from_the_real_numbers() -> None:
     briefing = explain(source, "Son yaptıklarını anlat", query, now=NOW)
     speech = speech_for_level(briefing, LEVEL_EXECUTIVE)
     assert speech == OWNER_SENTENCE
-    # a listening budget, not a document: two to four sentences, well under twenty seconds
+    # a listening budget, not a document: two to four sentences, well under thirty
+    # seconds (M18.2 DEFECT 2 widened this slightly: the outcome sentence now names
+    # up to three findings instead of one count-laden sentence)
     assert 2 <= len(briefing.executive) <= 4
-    assert len(speech) <= 420
+    assert len(speech) <= 480
     assert "2c1c0d2e" not in speech and "sha256" not in speech
     # the outcome sentences are known facts tied to evidence; the "nothing needs you"
     # closing is an inference over the window and says so
@@ -220,9 +233,12 @@ def test_without_the_owner_verdict_the_engine_does_not_claim_qualification() -> 
     source = MemorySource([_research_completed()], REAL_REPORT)
     briefing = explain(source, "Son ne yaptın", classify("Son ne yaptın", now=NOW), now=NOW)
     speech = speech_for_level(briefing, LEVEL_EXECUTIVE)
-    assert speech.startswith("Efendim, son araştırma görevi tamamlandı. Beş farklı kaynaktan")
+    assert speech.startswith("Efendim, araştırmayı tamamladım. Birincisi, Yapay zekâ ajanları")
     assert "doğrulama" not in speech and "Research Engine" not in speech
     assert "Tarayıcı" not in speech
+    # the actual defect this fixes: no counts, no crawler vocabulary, ever spoken
+    for word in ("elendi", "eledi", "interstitial", "farklı kaynaktan", "sonuç üretti"):
+        assert word not in speech
     assert speech.endswith("Şu anda müdahalenizi gerektiren bir sorun yok.")
 
 
@@ -246,11 +262,13 @@ def test_detailed_level_reads_the_actual_findings_with_labels() -> None:
     assert query.kind == QUERY_RESEARCH_DETAIL and query.level == LEVEL_DETAILED
     briefing = explain(source, "Araştırmayı detaylandır", query, now=NOW)
     titles = [item.title for item in briefing.detailed]
-    assert titles[:2] == [
+    # M18.2 DEFECT 2 (ADR-0067): "Elenen sayfalar" moved to the TECHNICAL level (see
+    # test_technical_level_carries_versions_ids_and_counts) — a detailed answer about
+    # what was FOUND no longer also carries how many pages were rejected finding it.
+    assert titles == [
         "Yapay zekâ ajanları ve ajan temelli yapay zekâ",
         "Kamuda yapay zeka dönemi",
     ]
-    assert titles[-1] == "Elenen sayfalar"
     first = briefing.detailed[0].statements
     assert first[0].label == LABEL_FACT and "Bilim ve Gelecek" in first[0].text
     assert first[1].label == LABEL_INFERENCE and first[1].text.startswith("Neden önemli")
@@ -273,10 +291,14 @@ def test_technical_level_carries_versions_ids_and_counts() -> None:
         "240 aday keşfedildi, 33 sayfa getirildi, 5 kanıt kabul edildi, 28 sayfa elendi." in speech
     )
     assert "Kanıt kontrolleri geçti ve tarayıcı temizliği geçti." in speech
+    # M18.2 DEFECT 2 (ADR-0067): the eliminated-pages tally moved here from the
+    # DETAILED level — exactly what "hangi sayfalar elendi?" asks for.
+    assert "Toplam 28 sayfa elendi" in speech
+    assert "ara doğrulama sayfası: 11" in speech
     assert "Mimari" in speech
     assert TASK_ID[:8] not in speech and "537112a" not in speech and "trace" not in speech
     assert "Hata" not in speech
-    assert len(speech) <= 700
+    assert len(speech) <= 900
 
 
 def test_markdown_sections_are_the_narration_levels() -> None:
@@ -290,6 +312,97 @@ def test_markdown_sections_are_the_narration_levels() -> None:
     assert "\n# Teknik\n\n1. Sürümler." in body
     assert "\n# Kanıt\n\n- activity_event: ev-research-1" in body
     assert "file: research-1.json (sha256:abc)" in body
+
+
+# --------------------------------------------------------- M18.2 DEFECT 2 (ADR-0067)
+
+
+def test_research_executive_speaks_findings_never_ev_detail_counts() -> None:
+    """_research_executive consumes the validated report (ResearchResult), not
+    ev.detail's counts — even when ev.detail carries huge numbers, none of them may
+    leak into the executive statements."""
+    ev = _research_completed()
+    statements = _research_executive(ev, qualified=None, recent=[], report=REAL_REPORT)
+    text = " ".join(s.text for s in statements)
+    assert "Yapay zekâ ajanları ve ajan temelli yapay zekâ" in text
+    assert "Kamuda yapay zeka dönemi" in text
+    for word in ("240", "33", "28", "farklı kaynaktan", "eledi", "elendi"):
+        assert word not in text
+
+
+def test_research_executive_with_no_report_says_so_without_inventing_counts() -> None:
+    """A research.completed event whose report row is missing (a source that predates
+    the report table, or a lookup failure) must not fall back to ev.detail's counts —
+    it says there is nothing to speak, honestly."""
+    ev = _research_completed()
+    statements = _research_executive(ev, qualified=None, recent=[], report=None)
+    text = " ".join(s.text for s in statements)
+    assert "bulgu çıkaramadım" in text
+    for word in ("240", "33", "28", "eledi", "elendi"):
+        assert word not in text
+
+
+def test_research_executive_matches_the_standalone_result_helper() -> None:
+    """The engine's rendering and app.research.result.spoken_result must agree — the
+    engine is a thin wrapper (qualification sentence + address-repetition trim), not a
+    second implementation of the same narration."""
+    result = ResearchResult.from_report_json(REAL_REPORT)
+    from app.research.result import spoken_result
+
+    ev = _research_completed()
+    statements = _research_executive(ev, qualified=None, recent=[], report=REAL_REPORT)
+    # unqualified: the engine's second-to-last-or-only result statement IS spoken_result
+    assert any(s.text == spoken_result(result) for s in statements)
+
+
+def test_hangi_sayfalar_elendi_routes_to_technical_diagnostics() -> None:
+    query = classify("Hangi sayfalar elendi?", now=NOW)
+    assert query.kind == QUERY_REJECTED_PAGES
+    assert query.level == LEVEL_TECHNICAL
+    assert query.subsystem == "research"
+
+    source = MemorySource([_research_completed(), _qualified()], REAL_REPORT)
+    briefing = explain(source, "Hangi sayfalar elendi?", query, now=NOW)
+    speech = speech_for_level(briefing, LEVEL_TECHNICAL)
+    assert "Toplam 28 sayfa elendi" in speech
+    assert "ara doğrulama sayfası: 11" in speech
+    # the executive answer (findings) is NOT what this question gets
+    assert "Yapay zekâ ajanları" not in speech
+
+
+def test_arastirma_sirasinda_ne_sorun_oldu_routes_to_technical_diagnostics() -> None:
+    query = classify("Araştırma sırasında ne sorun oldu?", now=NOW)
+    assert query.kind == QUERY_RESEARCH_PROBLEMS
+    assert query.level == LEVEL_TECHNICAL
+    assert query.subsystem == "research"
+
+    source = MemorySource([_research_completed(), _qualified()], REAL_REPORT)
+    briefing = explain(source, "Araştırma sırasında ne sorun oldu?", query, now=NOW)
+    speech = speech_for_level(briefing, LEVEL_TECHNICAL)
+    assert "Toplam 28 sayfa elendi" in speech
+
+
+def test_a_failed_research_run_answers_honestly_without_reading_the_log() -> None:
+    """spec item 1: a run that failed its quality gate is said so, concisely and
+    truthfully — never dressed up as a finding. The OUTCOME sentence itself never
+    reads the failure log (unlike the separate, pre-existing "needs owner action"
+    closing, which surfaces an unresolved failure's own factual_summary by design —
+    see test_an_open_failure_turns_the_closing_into_a_call_for_action)."""
+    failed = _research_completed(
+        event_id="ev-failed-only",
+        event_type="research.failed",
+        status="failed",
+        factual_summary="Araştırma başarısız oldu: insufficient_valid_findings.",
+        detail={"error_class": "insufficient_valid_findings"},
+    )
+    source = MemorySource([failed])
+    briefing = explain(
+        source, "Son yaptıklarını anlat", classify("Son yaptıklarını anlat", now=NOW), now=NOW
+    )
+    outcome = briefing.executive[0]
+    assert outcome.text.startswith("Bu konuda yeterli doğrulanmış kaynak bulamadım")
+    assert "bulgu çıkaramadım" in outcome.text
+    assert "insufficient_valid_findings" not in outcome.text
 
 
 # ------------------------------------------------------------------ other questions
@@ -510,6 +623,6 @@ def test_detailed_level_stops_at_five_items_and_keeps_the_rest_in_the_report() -
         source, "Araştırmayı detaylandır", classify("Araştırmayı detaylandır", now=NOW), now=NOW
     )
     titles = [i.title for i in briefing.detailed]
-    assert titles[:5] == ["Bulgu 1", "Bulgu 2", "Bulgu 3", "Bulgu 4", "Bulgu 5"]
-    assert titles[-1] == "Elenen sayfalar"
+    # M18.2 DEFECT 2 (ADR-0067): "Elenen sayfalar" no longer rides along here.
+    assert titles == ["Bulgu 1", "Bulgu 2", "Bulgu 3", "Bulgu 4", "Bulgu 5"]
     assert "Bulgu 6" not in titles
