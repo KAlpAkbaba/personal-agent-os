@@ -441,9 +441,15 @@ try {
     $cleanRows = @($rows | Where-Object { [string](Get-OptionalProperty -InputObject $_ -Name "event_type") -eq "alarm.cleaned_up" })
     $statusAfter = Get-DeviceStatus -DeviceId $deviceId
     $evidence.device_status_after = $statusAfter
-    $armedAfter = @(ConvertTo-Array -Value (Get-OptionalProperty -InputObject $statusAfter -Name "armed_alarms"))
+    # The device reports armed_alarms as a COUNT (DEVICE_PROTOCOL.md 6g); an older shape was a list.
+    $armedRaw = Get-OptionalProperty -InputObject $statusAfter -Name "armed_alarms"
+    $armedCount = 0
+    if ($null -ne $armedRaw) {
+        if ($armedRaw -is [array]) { $armedCount = $armedRaw.Count }
+        else { try { $armedCount = [int]$armedRaw } catch { $armedCount = 1 } }
+    }
     $ringingAfter = if ($null -ne $statusAfter) { [bool](Get-OptionalProperty -InputObject $statusAfter -Name "alarm_ringing") } else { $false }
-    Add-Check -Name "alarm.cleaned_up" -Ok ($terminalStates -contains $state -and $cleanRows.Count -ge 1 -and $armedAfter.Count -eq 0 -and -not $ringingAfter) -Detail "state $state; alarm.cleaned_up rows: $($cleanRows.Count); device armed alarms after: $($armedAfter.Count); ringing after: $ringingAfter"
+    Add-Check -Name "alarm.cleaned_up" -Ok ($terminalStates -contains $state -and $cleanRows.Count -ge 1 -and $armedCount -eq 0 -and -not $ringingAfter) -Detail "state $state; alarm.cleaned_up rows: $($cleanRows.Count); device armed alarms after: $armedCount; ringing after: $ringingAfter"
     $failed = @($evidence.checks | Where-Object { -not $_.ok })
     if ($failed.Count -eq 0) { $evidence.verdict = "PASS"; $exitCode = 0 } else { $evidence.verdict = "FAIL"; $exitCode = 2 }
  } while ($false)
