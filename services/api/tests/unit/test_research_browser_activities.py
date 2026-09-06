@@ -1069,6 +1069,81 @@ def test_synthesize_activity_findings_are_capped_at_the_modes_final_findings_max
     assert len(report["findings"]) == POLICIES["quick"].final_findings_max
 
 
+# ------------------------------------------------- the thin result (ADR-0074)
+
+
+def test_two_verified_sources_produce_a_thin_report_instead_of_a_failure(
+    db_url, task_id: str
+) -> None:
+    """Run afee23c9 (2026-09-06): two sources verified, three required, the run failed
+    and the owner heard nothing. Two sources is a thin answer, not no answer."""
+    _seed_evidence(db_url, task_id, _usable_evidence(2))
+    ranked = _rank_ok(task_id)
+    assert ranked["evidence"] == 2
+
+    report = ba.synthesize_activity(task_id, TOPIC, _window_ok(), "deterministic")
+
+    assert report["thin"] is True
+    assert report["stats"]["thin"] is True
+    assert report["stats"]["thin_reasons"] == ["evidence_thin"]
+    assert len(report["findings"]) == 2
+    # The provenance gate is NOT weakened: every finding still cites real evidence.
+    for finding in report["findings"]:
+        assert finding["evidence_ids"]
+        assert all(eid in {s["id"] for s in report["sources"]} for eid in finding["evidence_ids"])
+    assert "yalnızca 2 kaynak doğrulanabildi" in report["executive_summary"]
+    assert report["uncertainty"]
+
+
+def test_a_thin_run_names_its_cooled_domains_in_the_uncertainty(db_url, task_id: str) -> None:
+    _seed_evidence(db_url, task_id, _usable_evidence(1))
+    _rank_ok(task_id)
+
+    from sqlalchemy import create_engine as _ce
+    from sqlalchemy.orm import sessionmaker
+
+    engine = _ce(db_url)
+    with sessionmaker(bind=engine, expire_on_commit=False)() as session:
+        runs_service.update_run(
+            session,
+            uuid.UUID(task_id),
+            progress={"challenged_pages": 2, "cooled_domains": ["blocked.example.com"]},
+        )
+    engine.dispose()
+
+    report = ba.synthesize_activity(task_id, TOPIC, _window_ok(), "deterministic")
+    assert report["stats"]["thin_reasons"] == ["evidence_thin", "cooled_domains"]
+    said = " ".join(s["text"] for s in report["uncertainty"])
+    assert "doğrulama duvarı" in said
+    # Never the domain name itself: the owner-facing text names the KIND of problem.
+    assert "blocked.example.com" not in said
+
+
+def test_a_thin_run_still_speaks_and_offers_a_broader_run(db_url, task_id: str) -> None:
+    """End to end from the activity's own report to what the owner would hear."""
+    from app.research.result import BROADER_RUN_OFFER_TR, build_tool_terminal_payload
+
+    _seed_evidence(db_url, task_id, _usable_evidence(2))
+    _rank_ok(task_id)
+    report = ba.synthesize_activity(task_id, TOPIC, _window_ok(), "deterministic")
+
+    payload = build_tool_terminal_payload(report, topic=TOPIC)
+    assert payload["thin"] is True
+    assert "sınırlı" in payload["spoken_result"]
+    assert payload["spoken_result"].endswith(BROADER_RUN_OFFER_TR)
+    for word in ("elendi", "eledi", "interstitial", "dedup", "aday"):
+        assert word not in payload["spoken_result"].lower()
+
+
+def test_a_full_report_is_never_marked_thin(db_url, task_id: str) -> None:
+    _seed_evidence(db_url, task_id, _usable_evidence(3))
+    _rank_ok(task_id)
+    report = ba.synthesize_activity(task_id, TOPIC, _window_ok(), "deterministic")
+    assert report["thin"] is False
+    assert report["stats"]["thin_reasons"] == []
+    assert len(report["findings"]) >= 3
+
+
 # ------------------------------------------------------------------ persist
 
 
@@ -1650,6 +1725,144 @@ def test_fail_run_activity_records_a_visible_terminal_state(task_id: str) -> Non
     assert ba.fail_run_activity(task_id, "research_failed", "again") is False
 
 
+# ------------------------------------------- shortlist refill (ADR-0074 decision 1)
+
+
+def _candidate(url: str, *, query_id: str = "news:0", hint: str | None = None):
+    from app.research.discovery import DiscoveredCandidate
+
+    return DiscoveredCandidate(
+        url=url,
+        title="yapay zeka ajanlari haberi",
+        publisher="p",
+        discovered_by="browser_search",
+        query_id=query_id,
+        published_hint=hint,
+    )
+
+
+def test_shortlist_refills_from_other_domains_when_one_domain_dominates() -> None:
+    """ADR-0074 decision 1, run afee23c9 (2026-09-06): the old shortlist was the top 25
+    of ONE preference sort, so a domain that looked best filled it — and every slot it
+    took was then thrown away by the per-domain quota, leaving the run with far fewer
+    fetchable pages than the ~100 candidates discovery had already found.
+
+    Here one domain looks strictly better (a recent date hint outranks everything) AND
+    has already spent its 2-page allowance. It must occupy NO shortlist slot at all.
+    """
+    dominant = [
+        _candidate(f"https://dominant.example.com/{i}", hint="2 saat once") for i in range(30)
+    ]
+    others = [
+        _candidate(f"https://other{i % 10}.example.com/{i}") for i in range(30)
+    ]
+
+    shortlist = ba.build_fetch_shortlist(
+        dominant + others,
+        limit=25,
+        per_domain_max=2,
+        domain_counts={"dominant.example.com": 2},  # allowance already spent
+        topic=TOPIC,
+    )
+
+    assert all("dominant.example.com" not in c.url for c in shortlist)
+    assert len(shortlist) == 20  # 10 other domains x their 2-page allowance
+    # And it is genuinely spread: no domain took more than its per-domain allowance.
+    hosts = [c.url.split("/")[2] for c in shortlist]
+    assert max(hosts.count(h) for h in set(hosts)) <= 2
+
+
+def test_shortlist_keeps_no_domain_over_its_allowance_or_its_share() -> None:
+    """The soft share cap: even with allowance to spare, one domain may not take the
+    shortlist before other domains are represented."""
+    crowd = [_candidate(f"https://crowd.example.com/{i}", hint="1 saat once") for i in range(50)]
+    rest = [_candidate(f"https://rest{i}.example.com/a") for i in range(4)]
+
+    shortlist = ba.build_fetch_shortlist(
+        crowd + rest, limit=10, per_domain_max=0, domain_counts=None, topic=TOPIC
+    )
+
+    hosts = [c.url.split("/")[2] for c in shortlist]
+    assert hosts.count("crowd.example.com") <= 4  # SHORTLIST_DOMAIN_SHARE of 10
+    assert len(set(hosts)) == 5  # every other domain got its turn
+
+
+def test_shortlist_is_deterministic() -> None:
+    pool = [_candidate(f"https://d{i % 7}.example.com/{i}") for i in range(40)]
+    first = ba.build_fetch_shortlist(pool, limit=12, per_domain_max=2, topic=TOPIC)
+    second = ba.build_fetch_shortlist(pool, limit=12, per_domain_max=2, topic=TOPIC)
+    assert [c.url for c in first] == [c.url for c in second]
+
+
+def test_fetch_targets_refills_a_wave_a_quota_spent_domain_would_have_emptied(
+    db_url, task_id: str
+) -> None:
+    """The activity-level shape of run afee23c9: ~100 candidates, most of them from the
+    one domain that has already spent its per-domain allowance. The wave must come back
+    FULL, from other domains, instead of coming back empty."""
+    for i in range(60):
+        _insert_candidate(db_url, task_id, url=f"https://dominant.example.com/story-{i}")
+    for i in range(40):
+        _insert_candidate(db_url, task_id, url=f"https://other{i % 8}.example.com/story-{i}")
+    # Two pages from the dominant domain are already fetched: its allowance (QUICK's
+    # per_domain_max_pages = 2) is spent, so none of its 60 candidates is fetchable.
+    _seed_evidence(
+        db_url,
+        task_id,
+        [
+            {
+                "url": f"https://dominant.example.com/story-{i}",
+                "title": "t",
+                "excerpt": "x",
+                "fetched_at": NOW.isoformat(),
+                "extraction_method": "dom_text",
+                "source_class": "news",
+            }
+            for i in range(2)
+        ],
+    )
+
+    targets = ba.fetch_targets_activity(task_id, 4, TOPIC)
+
+    assert len(targets) == 4
+    assert all("dominant.example.com" not in t["url"] for t in targets)
+
+
+def test_fetch_targets_refills_a_wave_a_cooled_domain_would_have_emptied(
+    monkeypatch, db_url, task_id: str
+) -> None:
+    """The same shape with the OTHER skip reason: the dominant domain was cooled by two
+    challenges. Its remaining candidates are never navigated to (the ADR-0068
+    guarantee, unchanged) and the slots they would have taken are refilled."""
+    challenge_page = {
+        "title": "Bir dakika lütfen...",
+        "excerpt": "dogrulaniyor",
+        "fetched_at": NOW.isoformat(),
+        "extraction_method": "dom_text",
+    }
+
+    def factory(*, capability, payload, **_kwargs):
+        return CommandSucceeded({"url": payload.get("url", ""), **challenge_page})
+
+    fake = FakeDeviceCommandClient(factory=factory)
+    monkeypatch.setattr(ba, "_command_client", lambda: fake)
+    ba.fetch_activity(task_id, str(uuid.uuid4()), "https://cooled.example.com/a", "q", "news")
+    ba.fetch_activity(task_id, str(uuid.uuid4()), "https://cooled.example.com/b", "q", "news")
+
+    for i in range(60):
+        _insert_candidate(db_url, task_id, url=f"https://cooled.example.com/story-{i}")
+    for i in range(40):
+        _insert_candidate(db_url, task_id, url=f"https://other{i % 8}.example.com/story-{i}")
+
+    calls_before = len(fake.calls)
+    targets = ba.fetch_targets_activity(task_id, 4, TOPIC)
+
+    assert len(targets) == 4
+    assert all("cooled.example.com" not in t["url"] for t in targets)
+    # Never even attempted: a cooled domain costs no device command at all.
+    assert len(fake.calls) == calls_before
+
+
 # ------------------------------------------------------------ fetch order
 
 
@@ -1869,11 +2082,14 @@ def test_incident_20260904_all_bad_evidence_fails_instead_of_publishing(
     """With only unusable pages, the run must fail loudly rather than reach ready.
 
     Publishing a fluent summary over nothing is the exact failure this gate exists to
-    prevent, so the absence of a report here is the assertion.
+    prevent, so the absence of a report here is the assertion. ADR-0074's thin result
+    does NOT touch this: thinness needs at least one real, gated page — the last
+    record of the incident set (a genuine mirror of the OpenAI story) is excluded
+    here precisely so that nothing survives the gate.
     """
     from temporalio.exceptions import ApplicationError
 
-    _seed_evidence(db_url, task_id, _incident_evidence(NOW)[3:])
+    _seed_evidence(db_url, task_id, _incident_evidence(NOW)[3:-1])
     window_start = (NOW - timedelta(days=3)).isoformat()
     topic = "yapay zeka ajanlari"
 

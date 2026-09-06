@@ -38,7 +38,9 @@ with workflow.unsafe.imports_passed_through():
         select_device_activity,
         synthesize_activity,
     )
+    from app.research.contracts import MIN_REPORT_FINDINGS
     from app.research.models import STAGE_FAILED, STAGE_READY
+    from app.research.plan import diversify_queries
     from app.research.policy import MODE_QUICK, ResearchPolicy, decide_next_wave
 
 DEFAULT_MAX_SOURCES = 12
@@ -121,6 +123,14 @@ class OwnerVerificationTimeout(Exception):
 class BrowserResearchWorkflow:
     @workflow.run
     async def run(self, request: BrowserResearchRequest) -> dict:
+        # ADR-0074: the hard budget is the OWNER's budget, so the clock starts when
+        # the run does — before planning and discovery, not (as before) only when the
+        # first fetch wave begins. The old start point made `elapsed_s` under-report
+        # by the whole discovery stage, so a "120 s" QUICK run could spend 120 s of
+        # fetching on top of however long discovery had already taken, and the number
+        # the owner saw in diagnostics was not the time the run took.
+        # workflow.now() is Temporal's deterministic clock (never datetime.now()).
+        run_start = workflow.now()
         plan = await workflow.execute_activity(
             plan_activity,
             args=[
@@ -158,7 +168,13 @@ class BrowserResearchWorkflow:
         # class) — official/technical/academic discovery stays cheap either way (an
         # API call, never a browser), but capping them too keeps the candidate pool
         # itself small enough for the wave loop below to matter.
-        discovery_queries = plan["queries"][: policy.discovery_queries_max]
+        # ADR-0074 decision 4: WHICH queries, not just how many. The expansion's own
+        # first entries are Turkish near-duplicates of each other ("X", "X haberleri"),
+        # so a QUICK run's cap of 2 used to buy one language's view of one engine's
+        # coverage; diversify_queries picks the two most DIFFERENT phrasings instead
+        # (typically the owner's Turkish and the English core query), which is what
+        # gives the domain-diverse shortlist below something diverse to draw on.
+        discovery_queries = list(diversify_queries(plan["queries"], policy.discovery_queries_max))
 
         try:
             for source_class in plan["source_classes"]:
@@ -199,7 +215,14 @@ class BrowserResearchWorkflow:
         # every wave after that is a deliberate, bounded decision
         # (app.research.policy.decide_next_wave — pure and unit-tested on its own)
         # weighing evidence-so-far against the mode's wave/time/source budgets.
-        run_start = workflow.now()
+        #
+        # ADR-0074: `max_waves` is a FLOOR of attempts and the hard budget is the
+        # ceiling — the loop keeps going while the budget has room for another wave
+        # and there is anything fetchable left. `fetchable_remaining` is what a wave
+        # itself reports: a wave that comes back with fewer targets than it asked for
+        # has exhausted the shortlist (cooled domains, spent quotas, destination
+        # policy), which is a different fact from "the budget is gone" and stops the
+        # loop on its own reason.
         targets = await workflow.execute_activity(
             fetch_targets_activity,
             args=[request.task_id, policy.wave_size, request.topic],
@@ -210,6 +233,12 @@ class BrowserResearchWorkflow:
         await self._fetch_all(request.task_id, device_id, targets, policy)
         sources_fetched = len(targets)
         waves_used = 1
+        # A wave that returns fewer targets than it asked for has drained the
+        # shortlist; 0 is then the honest "nothing fetchable left". None means the
+        # question is still open, which is never itself a reason to stop.
+        fetchable_remaining: int | None = (
+            0 if len(targets) < policy.wave_size else None
+        )
 
         try:
             ranked = await workflow.execute_activity(
@@ -233,6 +262,11 @@ class BrowserResearchWorkflow:
                     waves_used=waves_used,
                     elapsed_s=elapsed_s,
                     sources_fetched=sources_fetched,
+                    fetchable_remaining=fetchable_remaining,
+                    # A run that could already publish a FULL report spends only the
+                    # soft budget looking for one more finding; the whole hard budget
+                    # belongs to a run that would otherwise have nothing to say.
+                    publishable=evidence_count >= MIN_REPORT_FINDINGS,
                 )
                 if not decision.should_fetch:
                     break
@@ -244,6 +278,8 @@ class BrowserResearchWorkflow:
                 )
                 if not extra:
                     break  # discovery has nothing left to offer
+                if len(extra) < decision.fetch_count:
+                    fetchable_remaining = 0
                 await self._fetch_all(request.task_id, device_id, extra, policy)
                 sources_fetched += len(extra)
                 waves_used += 1

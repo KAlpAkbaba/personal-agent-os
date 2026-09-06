@@ -17,9 +17,11 @@ from app.research.policy import (
     MODE_STANDARD,
     POLICIES,
     REASON_BUDGET_EXHAUSTED,
+    REASON_CONTINUE,
     REASON_ENOUGH_EVIDENCE,
     REASON_MAX_SOURCES_REACHED,
     REASON_MAX_WAVES,
+    REASON_NO_CANDIDATES,
     ResearchPolicy,
     decide_next_wave,
     derive_mode_from_utterance,
@@ -158,29 +160,49 @@ def test_not_enough_evidence_continues_to_wave_two() -> None:
 def test_a_quick_run_respects_its_hard_deadline() -> None:
     """Owner rule 1: a QUICK run's HARD budget is 120s. A fake clock (elapsed_s
     passed in directly, never a real sleep) proves the wave loop stops fetching
-    the instant that budget is spent, regardless of how little evidence exists."""
+    once that budget can no longer fit another wave, regardless of how little
+    evidence exists.
+
+    ADR-0074 makes this check STRICTER, not looser: the loop stops when
+    ``elapsed + wave_expected_s`` would reach the budget, so it never starts work
+    it cannot finish inside 120 s (it used to start a wave at 119.9 s)."""
     policy = POLICIES[MODE_QUICK]
     decision = decide_next_wave(
         policy=policy,
         evidence_count=0,
         waves_used=1,
-        elapsed_s=policy.hard_budget_s,  # exactly at the deadline
+        elapsed_s=policy.hard_budget_s,  # past the deadline
         sources_fetched=1,
     )
     assert decision.should_fetch is False
     assert decision.reason == REASON_BUDGET_EXHAUSTED
 
+    # A wave whose worst case would cross the deadline is not started either.
+    at_the_edge = decide_next_wave(
+        policy=policy,
+        evidence_count=0,
+        waves_used=1,
+        elapsed_s=policy.hard_budget_s - policy.wave_expected_s,
+        sources_fetched=1,
+    )
+    assert at_the_edge.should_fetch is False
+    assert at_the_edge.reason == REASON_BUDGET_EXHAUSTED
+
     just_under = decide_next_wave(
         policy=policy,
         evidence_count=0,
         waves_used=1,
-        elapsed_s=policy.hard_budget_s - 0.01,
+        elapsed_s=policy.hard_budget_s - policy.wave_expected_s - 0.01,
         sources_fetched=1,
     )
     assert just_under.should_fetch is True
 
 
-def test_max_waves_stops_even_with_time_and_evidence_left_to_try() -> None:
+def test_max_waves_is_a_floor_of_attempts_not_a_ceiling() -> None:
+    """ADR-0074, the defect of 2026-09-06: two QUICK runs stopped at ``max_waves``
+    with 40-80 s of their own 120 s budget unspent and too little evidence to
+    answer. A wave count is no longer a reason to stop while the budget has room
+    and there is something fetchable left."""
     policy = POLICIES[MODE_QUICK]
     decision = decide_next_wave(
         policy=policy,
@@ -189,21 +211,66 @@ def test_max_waves_stops_even_with_time_and_evidence_left_to_try() -> None:
         elapsed_s=1.0,
         sources_fetched=1,
     )
-    assert decision.should_fetch is False
-    assert decision.reason == REASON_MAX_WAVES
+    assert decision.should_fetch is True
+    assert decision.reason == "continue"
+
+    # ... and it is still bounded: a pathological run cannot loop forever even with
+    # a frozen clock, because it can never spend more waves than it has pages.
+    absurd = decide_next_wave(
+        policy=policy,
+        evidence_count=0,
+        waves_used=policy.fetch_ceiling,
+        elapsed_s=1.0,
+        sources_fetched=1,
+    )
+    assert absurd.should_fetch is False
+    assert absurd.reason == REASON_MAX_WAVES
 
 
-def test_max_sources_ceiling_stops_the_loop() -> None:
+def test_nothing_fetchable_left_stops_the_loop_on_its_own_reason() -> None:
+    """Running out of WEB is a different fact from running out of TIME: every
+    remaining candidate is on a cooled domain, over a per-domain quota, already
+    fetched or refused by destination policy."""
     policy = POLICIES[MODE_QUICK]
     decision = decide_next_wave(
         policy=policy,
         evidence_count=0,
         waves_used=1,
         elapsed_s=1.0,
-        sources_fetched=policy.max_sources,
+        sources_fetched=policy.wave_size,
+        fetchable_remaining=0,
+    )
+    assert decision.should_fetch is False
+    assert decision.reason == REASON_NO_CANDIDATES
+
+
+def test_fetch_ceiling_stops_the_loop() -> None:
+    policy = POLICIES[MODE_QUICK]
+    decision = decide_next_wave(
+        policy=policy,
+        evidence_count=0,
+        waves_used=1,
+        elapsed_s=1.0,
+        sources_fetched=policy.fetch_ceiling,
     )
     assert decision.should_fetch is False
     assert decision.reason == REASON_MAX_SOURCES_REACHED
+
+
+def test_max_sources_alone_no_longer_ends_a_run_with_budget_to_spare() -> None:
+    """The exact shape of run afee23c9 (2026-09-06): ``max_sources`` pages fetched,
+    two pieces of evidence, ~40 s of the hard budget still unspent. It must keep
+    going."""
+    policy = POLICIES[MODE_QUICK]
+    decision = decide_next_wave(
+        policy=policy,
+        evidence_count=2,
+        waves_used=3,
+        elapsed_s=81.0,
+        sources_fetched=policy.max_sources,
+    )
+    assert decision.should_fetch is True
+    assert decision.fetch_count > 0
 
 
 def test_next_wave_size_is_capped_by_remaining_source_budget() -> None:
@@ -213,7 +280,130 @@ def test_next_wave_size_is_capped_by_remaining_source_budget() -> None:
         evidence_count=0,
         waves_used=1,
         elapsed_s=1.0,
-        sources_fetched=policy.max_sources - 1,  # only one source left in the budget
+        sources_fetched=policy.fetch_ceiling - 1,  # only one source left in the budget
     )
     assert decision.should_fetch is True
     assert decision.fetch_count == 1
+
+
+def test_next_wave_never_asks_for_more_than_is_fetchable() -> None:
+    policy = POLICIES[MODE_QUICK]
+    decision = decide_next_wave(
+        policy=policy,
+        evidence_count=0,
+        waves_used=1,
+        elapsed_s=1.0,
+        sources_fetched=policy.wave_size,
+        fetchable_remaining=2,
+    )
+    assert decision.should_fetch is True
+    assert decision.fetch_count == 2
+
+
+def _run_the_loop(policy, *, start_s: float, evidence_count: int) -> tuple[int, float, int, str]:
+    """The workflow's own wave loop, driven by a FAKE clock (a float this function
+    advances by one wave's worst case per iteration — never a real sleep, never
+    wall-clock time), with an unlimited fetchable pool. Returns
+    (waves, elapsed, fetched, stop reason)."""
+    clock = start_s
+    waves = 1
+    fetched = policy.wave_size
+    reason = REASON_CONTINUE
+    while True:
+        decision = decide_next_wave(
+            policy=policy,
+            evidence_count=evidence_count,
+            waves_used=waves,
+            elapsed_s=clock,
+            sources_fetched=fetched,
+        )
+        reason = decision.reason
+        if not decision.should_fetch:
+            return waves, clock, fetched, reason
+        clock += policy.wave_expected_s
+        fetched += decision.fetch_count
+        waves += 1
+
+
+def test_the_loop_spends_the_budget_it_has_instead_of_stopping_at_three_waves() -> None:
+    """Run d914e44f's shape: one piece of evidence after wave 1, ~58 s of a 120 s
+    budget used. The loop must keep going well past ``max_waves``, and must still
+    terminate inside the budget."""
+    policy = POLICIES[MODE_QUICK]
+    waves, elapsed, fetched, reason = _run_the_loop(policy, start_s=12.0, evidence_count=1)
+    assert waves > policy.max_waves
+    assert elapsed <= policy.hard_budget_s
+    assert fetched > policy.max_sources
+    assert fetched <= policy.fetch_ceiling
+    assert reason in {REASON_BUDGET_EXHAUSTED, REASON_MAX_SOURCES_REACHED}
+
+
+def test_the_loop_stops_at_the_hard_budget_and_never_crosses_it() -> None:
+    """A run that starts its fetching late (discovery was slow) gets the waves the
+    remaining budget can pay for, and not one more."""
+    policy = POLICIES[MODE_QUICK]
+    for start in (0.0, 30.0, 95.0, 111.0, 130.0):
+        _waves, elapsed, _fetched, _reason = _run_the_loop(
+            policy, start_s=start, evidence_count=0
+        )
+        assert elapsed <= max(start, policy.hard_budget_s)
+        if start < policy.hard_budget_s:
+            assert elapsed <= policy.hard_budget_s
+
+
+def test_every_mode_terminates_and_respects_its_own_budget() -> None:
+    for policy in POLICIES.values():
+        waves, elapsed, fetched, reason = _run_the_loop(policy, start_s=0.0, evidence_count=0)
+        assert reason != REASON_CONTINUE
+        assert elapsed <= policy.hard_budget_s
+        assert fetched <= policy.fetch_ceiling
+        assert waves >= 1
+
+
+def test_enough_evidence_still_wins_over_every_other_bound() -> None:
+    """The early stop is checked first and is unchanged by ADR-0074: a run that has
+    what it needs stops, budget or no budget."""
+    policy = POLICIES[MODE_QUICK]
+    waves, _elapsed, _fetched, reason = _run_the_loop(
+        policy, start_s=0.0, evidence_count=policy.target_findings
+    )
+    assert waves == 1
+    assert reason == REASON_ENOUGH_EVIDENCE
+
+
+def test_a_publishable_run_is_bounded_by_the_SOFT_budget_a_starved_one_by_the_hard() -> None:
+    """ADR-0074: extra time belongs to a run that would otherwise have no answer. A
+    run that could already publish a full report keeps looking for one more finding
+    only until ``target_budget_s``; a run still short of one gets ``hard_budget_s``."""
+    policy = POLICIES[MODE_QUICK]
+    late = policy.target_budget_s - policy.wave_expected_s
+
+    publishable = decide_next_wave(
+        policy=policy,
+        evidence_count=policy.target_findings - 1,
+        waves_used=2,
+        elapsed_s=late,
+        sources_fetched=8,
+        publishable=True,
+    )
+    assert publishable.should_fetch is False
+    assert publishable.reason == REASON_BUDGET_EXHAUSTED
+
+    starved = decide_next_wave(
+        policy=policy,
+        evidence_count=1,
+        waves_used=2,
+        elapsed_s=late,
+        sources_fetched=8,
+        publishable=False,
+    )
+    assert starved.should_fetch is True
+
+
+def test_wave_expected_cost_never_exceeds_the_budget_it_is_measured_against() -> None:
+    """Structural: a mode whose single wave costs more than its whole SOFT budget
+    could never fetch anything at all once it had a publishable answer."""
+    for policy in POLICIES.values():
+        assert 0 < policy.wave_expected_s < policy.target_budget_s
+        assert policy.target_budget_s <= policy.hard_budget_s
+        assert policy.fetch_ceiling >= policy.max_sources

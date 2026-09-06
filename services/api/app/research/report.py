@@ -240,6 +240,12 @@ class ReportStats:
     waves: int = 0
     challenged_pages: int = 0
     cooled_domains: int = 0
+    #: ADR-0074: this run produced a defensible but THIN answer (at least one finding,
+    #: fewer than app.research.contracts.MIN_REPORT_FINDINGS) and says so in its own
+    #: executive summary. ``thin_reasons`` names why in the diagnostics vocabulary
+    #: (app.research.synthesis.THIN_REASON_*), never in the words the owner hears.
+    thin: bool = False
+    thin_reasons: tuple[str, ...] = field(default_factory=tuple)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -261,6 +267,8 @@ class ReportStats:
             "waves": self.waves,
             "challenged_pages": self.challenged_pages,
             "cooled_domains": self.cooled_domains,
+            "thin": self.thin,
+            "thin_reasons": list(self.thin_reasons),
         }
 
 
@@ -279,6 +287,11 @@ class ResearchReport:
     uncertainty: tuple[Statement, ...] = field(default_factory=tuple)
     sources: tuple[SourceItem, ...] = field(default_factory=tuple)
     stats: ReportStats = field(default_factory=ReportStats)
+    #: ADR-0074: a READY report that carries fewer than ``MIN_REPORT_FINDINGS``
+    #: findings and says so. Top-level (not only in ``stats``) because the explain
+    #: engine, the voice terminal payload and the harness all branch on it, and
+    #: none of them should have to read the diagnostics block to learn it.
+    thin: bool = False
     schema_version: int = SCHEMA_VERSION
 
     def as_dict(self) -> dict[str, Any]:
@@ -297,6 +310,7 @@ class ResearchReport:
             "uncertainty": [s.as_dict() for s in self.uncertainty],
             "sources": [s.as_dict() for s in self.sources],
             "stats": self.stats.as_dict(),
+            "thin": self.thin,
         }
 
 

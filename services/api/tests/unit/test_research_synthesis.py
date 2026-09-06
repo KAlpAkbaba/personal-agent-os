@@ -15,6 +15,9 @@ from app.research.evidence import (
 )
 from app.research.report import MIN_FINDINGS, assign_evidence_ids
 from app.research.synthesis import (
+    THIN_REASON_COOLED_DOMAINS,
+    THIN_REASON_EVIDENCE,
+    THIN_REASON_UNDATED_PAGES,
     AnthropicSynthesisProvider,
     DeterministicSynthesisProvider,
     OpenAISynthesisProvider,
@@ -22,6 +25,7 @@ from app.research.synthesis import (
     build_prompt,
     parse_synthesis_response,
     resolve_synthesis_provider,
+    synthesize_thin,
 )
 
 NOW = datetime(2026, 9, 2, tzinfo=UTC)
@@ -542,3 +546,70 @@ def test_optional_statement_fields_have_canonical_defaults() -> None:
     result = parse_synthesis_response(payload)
     assert result.why_it_matters[0].evidence_ids == ()
     assert result.quarantined == ()
+
+
+# --------------------------------------------------------------------------- #
+# the THIN result (ADR-0074 decision 3)
+# --------------------------------------------------------------------------- #
+
+
+def test_thin_synthesis_says_how_little_it_stands_on() -> None:
+    """The owner's run afee23c9 (2026-09-06) verified two sources and was reported as
+    a total failure. Two sources is a thin answer, not no answer — and the report has
+    to SAY it is thin, in the owner's own language, rather than let the summary read
+    like a full one."""
+    result, reasons = synthesize_thin(
+        TOPIC, _ranked(2), recency_label=RECENCY_LABEL, mode="quick"
+    )
+    assert "yalnızca 2 kaynak doğrulanabildi" in result.executive_summary
+    assert "sınırlı" in result.executive_summary
+    assert reasons == (THIN_REASON_EVIDENCE,)
+    # Real findings, one per verified source, each still citing its own evidence.
+    assert len(result.findings) == 2
+    for finding in result.findings:
+        assert finding.label == STATEMENT_LABEL_SOURCE_FACT
+        assert finding.evidence_ids
+    assert result.uncertainty
+    assert all(s.label == STATEMENT_LABEL_UNCERTAINTY for s in result.uncertainty)
+
+
+def test_thin_synthesis_names_the_reasons_it_was_thin() -> None:
+    result, reasons = synthesize_thin(
+        TOPIC,
+        _ranked(1),
+        recency_label=RECENCY_LABEL,
+        mode="quick",
+        cooled_domains=1,
+        rejected_by_reason={"date_uncertain": 3, "off_topic": 2},
+    )
+    assert reasons == (
+        THIN_REASON_EVIDENCE,
+        THIN_REASON_COOLED_DOMAINS,
+        THIN_REASON_UNDATED_PAGES,
+    )
+    said = " ".join(s.text for s in result.uncertainty)
+    assert "doğrulama duvarı" in said  # the cooled domains, in plain Turkish
+    assert "yayın tarihi" in said  # the undated pages
+    # Reason CODES are diagnostics vocabulary; they never appear in what is written
+    # for the owner.
+    for code in reasons:
+        assert code not in said
+        assert code not in result.executive_summary
+
+
+def test_thin_synthesis_is_deterministic_and_refuses_zero_evidence() -> None:
+    from app.research.contracts import InsufficientValidFindings
+
+    first = synthesize_thin(TOPIC, _ranked(2), recency_label=RECENCY_LABEL)
+    second = synthesize_thin(TOPIC, _ranked(2), recency_label=RECENCY_LABEL)
+    assert first == second
+    with pytest.raises(InsufficientValidFindings):
+        synthesize_thin(TOPIC, [], recency_label=RECENCY_LABEL)
+
+
+def test_a_broader_mode_does_not_call_its_budget_short() -> None:
+    result, _reasons = synthesize_thin(
+        TOPIC, _ranked(2), recency_label=RECENCY_LABEL, mode="deep"
+    )
+    assert "Kısa araştırma bütçesinde" not in result.executive_summary
+    assert "yalnızca 2 kaynak doğrulanabildi" in result.executive_summary

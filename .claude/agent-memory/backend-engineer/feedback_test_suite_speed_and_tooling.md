@@ -29,7 +29,15 @@ inside an `asyncio.wait_for`) does not actually respect that timeout when the ta
 reachable, so the whole check hangs well past `health_check_timeout_s`. This reproduced
 identically across three separate invocations and is unrelated to whatever else changed in
 the same session — don't burn time assuming a real regression before ruling this out by
-running the file in isolation.
+running the file in isolation. *Update 2026-09-06:* in a fresh worktree venv it passed in
+4.25 s (9 tests) when run alone, so the hang is environmental (whether a stale Postgres/
+Redis/MinIO container is half-up), not a property of the file. Still run it alone and last.
+
+**The FULL `tests/unit` suite (3656 tests) runs in ~2m20s in a warm worktree venv** when
+invoked as one `pytest tests/unit -q` call. That is cheaper than several targeted multi-file
+runs, so for a change that touches a shared contract (a report/payload schema, a vocabulary
+set), one full-suite run at the end is the efficient way to find the frozen "the exact key
+set is X" assertions in unrelated suites.
 
 **How to apply:** when told to "run pytest," pick targeted files that exercise the actual
 change plus any file with its own pinned/frozen assertions the change could affect (e.g. a

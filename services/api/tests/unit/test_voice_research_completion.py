@@ -226,8 +226,12 @@ def test_complete_tool_call_system_delivers_spoken_result_verbatim(wired) -> Non
             "executive_summary",
             "findings",
             "source_summary",
+            # ADR-0074: whether this answer rests on fewer sources than a full
+            # report needs. False here — this fixture is a full report.
+            "thin",
             "diagnostics",
         }
+        assert call.result_json["thin"] is False
         assert call.result_json["speech"] == call.result_json["spoken_result"]
         assert "elendi" not in call.result_json["spoken_result"]
         assert "100" not in call.result_json["spoken_result"]
