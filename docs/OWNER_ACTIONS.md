@@ -75,34 +75,49 @@ already listens on the port. **Production is not redeployed by this run** (the t
 already there); the one runtime change since (a truthful `agent.idle` at startup) waits for
 a later release.
 
-**One command:**
+**Your third run (2026-09-06 evening) found the two real defects, and they are fixed.**
+The record of session 3eb6fee7 shows every eye tool call reaching the Cloud Core with no
+`observed_after`: the provider delivers tool names as `eye__disable` (dots are not allowed),
+and the browser compared that against `eye.disable`, so its local action never ran, the
+server recorded `capability_missing` and said "işlem doğrulanmadı". What actually closed
+your camera at 13:57:33 was the old utterance safety net, 7 ms after the tool call — a
+second, unreceipted mutation path. Both are gone: the browser normalises the name in one
+place (pinned with the vendor spelling), and the safety net no longer mutates anything (an
+utterance is resolved and audited, never executed). `Gözünü aç` never reached the browser at
+all for the same reason. Also fixed: the harness could not see your session because you
+connected voice before it took its baseline; it now correlates by the session id the Core
+itself publishes on the bus. Receipts now carry the session id, the media track's own
+readiness and the browser's action trace; a camera that closed but whose record could not
+be verified is said as exactly that (`Kamera kapandı ancak işlem kaydını doğrulayamadım.`),
+never as "kapatamadım"; and each browser failure has its own sentence (permission, no
+camera, camera busy, stream failed, track ended, loop failed).
+
+**One command (this run releases the Cloud Core once, about five minutes — the deployed
+contract is v1, this needs v2):**
 
 ```powershell
-.\scripts\core\owner-m18-eye.ps1 -OutFile m18-eye-2.json
+.\scripts\core\owner-m18-eye.ps1 -OutFile m18-eye-3.json
 ```
 
-It checks the deployed tools (no release this time), refuses to start if port 3000 is
-already taken (it names the process; stop it or pass `-SkipWeb`), starts the web shell,
-waits for `/core`, closes the eye durably if it was open, and prints six lines. While it waits it
-prints, every 15 s, the current web session, the router events seen, the last query/action
-kind, the eye receipts and the Core's latest state — and it stops with the exact missing
-evidence if no session connects within 3 minutes or a session makes no router call within
-2.5 minutes. It asks for Enter only once there is a session to close. Sign in at `/core`,
-connect voice **there**, then:
+It refuses to start if port 3000 is already taken (it names the process; stop it or pass
+`-SkipWeb`), starts the web shell, waits for `/core`, closes the eye durably if it was open
+(printed, attributed), and prints three lines. Sign in at `/core`, connect voice **there**,
+then say:
 
-1. say **`Kendi sisteminde şu anda ne görüyorsun?`**
-2. say **`Gözünü aç.`** (or press `Gözü aç`); wait for the eye cell to show the camera on
-3. say **`Gözünü kapat.`** — it must answer `Gözümü kapattım efendim.`
-4. say **`Gözünü aç.`** — it must answer `Gözümü açtım efendim.`
-5. say **`Gözünü kapat.`** once more, so the eye ends closed
-6. disconnect voice on the Core, then press Enter in the terminal
+1. **`Gözünü aç.`** — it must answer `Gözümü açtım efendim.`
+2. **`Gözünü kapat.`** — it must answer `Gözümü kapattım efendim.`
+3. **`Gözünü aç.`** — it must answer `Gözümü açtım efendim.`
 
-The script reads the eye state back from the runtime after every step, reads the session's
-tool calls and receipts, checks the confirmation was spoken after the terminal ACK, and ends
-with `OWNER M18 EYE: PASS`. Paste the `checks` block from `m18-eye-2.json` back here, or the
-whole file if anything fails (a fail-fast stop also writes it, with the reason). If the browser refuses the camera on step 4, the assistant must
-say exactly that (`Kamerayı açamadım; tarayıcı kamera izni vermedi.`) — that is a correct
-answer, and the file will show it.
+Nothing to press. The script finishes by itself the moment the third receipt is verified,
+then closes the eye durably (printed, attributed) so no camera is left running. While it
+runs it prints, on every change, the Core Voice session, the last routed action and its
+action id, the browser's eye state and media track, the receipt with its sentence, the
+live-state answer and the runtime read-back. It stops with the exact missing evidence if no
+session is correlated within 2 minutes or a step is not verified within 2 minutes of the
+previous one. Paste the `checks` block from `m18-eye-3.json` back here, or the whole file if
+anything fails. If the browser refuses the camera, the assistant must say exactly that
+(`Kamerayı açamadım; tarayıcı kamera izni vermedi.`) — a correct answer, and the file will
+show the browser's own trace.
 
 **Item 19 — the long M18 run, from `/core` alone.** Waits for item 20. Everything before it
 is built, merged and proven on fakes; it is the only thing that cannot be proven without you:

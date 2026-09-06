@@ -433,6 +433,26 @@ watching it refuse — and are marked as such.
 | 12.28 | Current-state questions are answered from live state, result-first: `Kendi sisteminde şu anda ne görüyorsun?` → runtime + World Model facts each with source / observed_at / age / confidence / stale; stale is said as stale; 1–3 sentences; no bookkeeping narration | `NOT_YET_PROVEN` | API: `test_voice_state_tool.py` (facts carry provenance; stale spoken; eye scope sentences; `activity.explain` with a `world_state` question returns the same `speech` as `state.now`; no "kayıt"). Real: `state.live_path_reached`, `state.spoken_result_first`, `state.facts_carry_provenance`. The owner's second attempt: "kayıtlara bakmalıyım…". |
 | 12.29 | One router, three classes: QUERY / ACTION / CONTROL from `resolve_intent` alone; `Canlıya al.` is an ACTION that is refused with the authority sentence and recorded; `Bunu canlıya alabilir misin?` stays a QUERY; no second Turkish table anywhere | `NOT_YET_PROVEN` | API: `test_voice_intents.py` (the nine owner utterances → klass / intent / query_kind / capability), `test_voice_eye_tools.py` (`release.promote` refused, `action.receipt` recorded). **Structural**: the web client has no phrase table (grep-asserted in review). |
 
+**Fifth real attempt, 2026-09-06 evening — `owner-m18-eye.ps1` third run (session
+3eb6fee7), diagnosed from the production record:** `state.now` answered result-first
+("Cloud Core sağlıklı, ses bağlı, göz kapalı. Bir modül canlıya alınmayı bekliyor"). Every
+eye tool call reached the Cloud Core with NO `observed_after` → `capability_missing`,
+`failed`, "işlem doğrulanmadı": the provider delivers `eye__disable` (vendor spelling), the
+browser compared it against `eye.disable`, so its local action never ran. The camera that
+closed at 13:57:33 was closed by the OLD utterance safety net (`eye.disabled`,
+`voice:gözünü kapat`, 7 ms after the tool call) — a hidden second mutation path; `Gözünü
+aç` never reached the browser; the harness said "current web session: none yet" because the
+session predated its baseline (clock skew 0.6 s, not time). Fixes: `tool-names.ts`
+normalises the vendor spelling before the local action (pinned with `eye__enable` /
+`eye__disable`); the safety net no longer mutates (resolved and audited only); receipts
+carry `session_id`, `observed_at`, the media track's `readyState` and the browser's
+`action_trace`; nine browser error classes each with its own sentence; "kapandı ancak işlem
+kaydını doğrulayamadım" when the physical action succeeded and the record could not be
+verified; `GET /v1/state/now`; the harness correlates by the session id the Core publishes
+on the bus (`Get-BusVoiceSessionIds` / `AcceptIds`), watches the three receipts
+(`Get-EyeReceiptSteps`), proves no unreceipted voice mutation (`Test-HiddenEyeMutation`),
+and gates on the deployed contract VERSION (`action_contract_version`), releasing once.
+
 **Fourth real attempt, 2026-09-06 later afternoon — `owner-m18-eye.ps1` second run:** proven
 real by the owner: clean working tree, transactional Cloud Core release succeeded,
 production advertises `eye.enable` / `eye.disable` / `state.now`, `/core` reachable, the
