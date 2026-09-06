@@ -205,6 +205,25 @@ export interface SpeechDetector {
   onsetLevel?(): OnsetLevel | null;
 }
 
+/**
+ * A capability that lives on THIS device and must run before a tool call is
+ * relayed (M18_ACTION_CONTRACT.md §5.1, §7.2). The Cloud Core owns the
+ * durable side of an action, but a camera can only be opened or released
+ * where it is, so for those tools the controller asks this port first and
+ * relays what it observed as `arguments.observed_after` — the server then
+ * builds a receipt from the real terminal state rather than from an
+ * assumption. Only the web rig has one; a client without it relays plain
+ * arguments and the server treats the local capability as missing.
+ *
+ * `run` answers `null` for a tool it has nothing local to do for (the relay
+ * is then unchanged), otherwise the `observed_after` object to merge in. It
+ * must resolve within its own bound and must not reject: a local failure is
+ * an observation (`local.state = "ERROR"`), not an exception.
+ */
+export interface LocalActionPort {
+  run(name: string, args: Record<string, unknown>): Promise<Record<string, unknown> | null>;
+}
+
 export interface NetworkMonitor {
   readonly online: boolean;
   onChange(sink: (online: boolean) => void): Unsubscribe;

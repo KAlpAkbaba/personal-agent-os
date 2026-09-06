@@ -23,9 +23,9 @@
  * bound for the outside world is whatever `onObservation`/`onStatusChange`
  * receive, and both receive `EyeObservation` — the seven-field type — or a
  * `PerceptionStatus` that carries the same. There is no method anywhere in
- * `FrameSource`, `PerceptionSession`, or `useActivePerception` that returns
- * pixel data, a canvas, a video element, or a `MediaStream`'s frames to a
- * caller. That is the mechanism, not a comment on top of one: grep this
+ * `FrameSource`, `PerceptionSession`, `EyeStore` (`store.ts`) or
+ * `useActivePerception` that returns pixel data, a canvas, a video element,
+ * or a `MediaStream`'s frames to a caller. That is the mechanism, not a comment on top of one: grep this
  * module for `ImageData`, `getImageData`, `Uint8ClampedArray`, `toDataURL` or
  * `captureStream` and every hit is inside `BrowserFrameSource`, and none of
  * them is returned by anything the class exposes publicly.
@@ -256,11 +256,17 @@ export class PerceptionSession {
   };
 
   constructor(options: PerceptionOptions = {}) {
+    // The defaults come AFTER the spread: an option passed as an explicit
+    // `undefined` (which is what `{ sampleIntervalMs: opts.sampleIntervalMs }`
+    // produces when the caller had none) must still get the default. With
+    // the spread last, `sampleIntervalMs: undefined` reached `setTimeout` as a
+    // 0 ms delay and the camera loop sampled as fast as the POST round trip
+    // allowed instead of every five seconds.
     this.#opts = {
+      ...options,
       sampleIntervalMs: options.sampleIntervalMs ?? DEFAULT_SAMPLE_INTERVAL_MS,
       samplesForFullConfidence: options.samplesForFullConfidence ?? DEFAULT_SAMPLES_FOR_FULL_CONFIDENCE,
       now: options.now ?? Date.now,
-      ...options,
     };
     this.#frameSource = options.frameSource ?? new BrowserFrameSource();
     this.#post = options.postObservation ?? postObservation;

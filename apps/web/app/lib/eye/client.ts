@@ -83,10 +83,12 @@ async function postEyeAction(path: string, reason: string): Promise<void> {
 export const enableEye = (reason = "") => postEyeAction("/v1/presence/eye/enable", reason);
 
 /**
- * Owner action: stop perception immediately, durably. Callers in this app
- * pair this with `PerceptionSession#stop()` and call this FIRST — see
- * `useActivePerception.ts` — so that even a sample already in flight when the
- * local stop happens is refused server-side the moment this resolves.
+ * Owner action: stop perception immediately, durably. The one caller in this
+ * app, `EyeStore.disable` (`store.ts`), pairs this with
+ * `PerceptionSession#stop()` and calls this FIRST, so that even a sample
+ * already in flight when the local stop happens is refused server-side the
+ * moment this resolves. The reason passes through verbatim: `owner_stop`
+ * from the button, `voice:<utterance>` from the voice tool.
  */
 export const disableEye = (reason = "") => postEyeAction("/v1/presence/eye/disable", reason);
 
