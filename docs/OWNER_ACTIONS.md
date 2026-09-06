@@ -32,6 +32,40 @@ is implemented and merged (ADR-0065); item 22 is your look at it, when you like.
 
 ---
 
+### 23. Speaking continuity and research findings — **M18.2, ready once the Cloud Core carries contract v4 (the command releases it once)**
+
+Two defects you observed are fixed at their mechanisms. SPEAKING ended early because the
+voice controller left the state on the provider's `response.done`, which on WebRTC marks
+the end of generation while the audio buffer keeps playing; the provider's own
+`output_audio_buffer.stopped` is the true end of playback and now ends the state (with a
+silence release and a cap as fallbacks, and an immediate end on `Dur` or barge-in). The
+pulse is the playback RMS; a pause is a calmer Core that stays SPEAKING. Research spoke
+crawler counts because the explain engine's executive sentence was built from the run's
+statistics; worse, a spoken `Araştır` never started the real pipeline at all — the tool
+returned "running" and sat there. Now `research.start` starts the same real run as the
+REST route, the run's durable report is turned into a deterministic `spoken_result`
+(a conclusion, up to three findings each with why it matters, an offer), the announcer
+completes the tool call with it, and the diagnostics are spoken only on `Teknik anlat.`,
+`Hangi sayfalar elendi?` or `Araştırma sırasında ne sorun oldu?`.
+
+```powershell
+.\scripts\core\owner-m18-2.ps1 -OutFile m18-2-1.json
+```
+
+It releases the Cloud Core once if it predates contract v4, starts the web shell, and
+prints three lines. Sign in at `/core`, connect voice there, then say:
+
+- **A.** `Bana PagentOS'un ne olduğunu beş cümleyle anlat.` — watch the Core stay in
+  SPEAKING through the pauses and end at the last word.
+- **B.** `Son üç gündeki yapay zekâ ajan gelişmelerini araştır.` — a real run, a few
+  minutes: the Core researches, then presents findings, not statistics.
+- **C.** `Teknik anlat.` — only now the eliminated pages and the problems.
+
+It finishes by itself after C, from the session's own record: the turn's `first_audio` and
+`audio_done` (with the playback basis and the audible duration), the research call's
+terminal result and spoken head (checked to contain no crawler words), and the technical
+follow-up after it. Paste the `checks` block from `m18-2-1.json` back here.
+
 ### 22. Look at the new Core — **optional, when you like (M18.1)**
 
 The Core on `/core` is now a layered structure — nucleus, concentric rings, rotating
