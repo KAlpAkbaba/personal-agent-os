@@ -27,6 +27,7 @@ from app.artifacts.runtime import ArtifactRuntime
 from app.broker.runtime import BrokerRuntime
 from app.identity.dependencies import require_owner_session
 from app.logging import get_logger, trace_id_var
+from app.research import focus as research_focus
 from app.research import runs_service
 from app.research import service as research_service
 from app.research.browser_gateway import SearchEvidence
@@ -256,12 +257,82 @@ async def get_research_policy(request: Request) -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------- focus
+#
+# docs/DECISIONS.md ADR-0076. Declared BEFORE ``GET /{task_id}``: "focus" is not a UUID,
+# and a path parameter typed as one would answer 422 rather than falling through.
+
+
+@router.get("/focus")
+async def get_research_focus(request: Request) -> dict[str, Any]:
+    """Which research the owner is pointing at, and what else is within reach.
+
+    The web track builds against exactly this shape. It is a READ: it never moves the
+    focus, never expires the clarification early, and starts nothing.
+    """
+    artifacts = _artifacts(request)
+
+    def load() -> dict[str, Any]:
+        with artifacts.session() as session:
+            now = datetime.now(UTC)
+            current = research_focus.current_focus(session)
+            previous = research_focus.previous_focus(session)
+            stack = research_focus.focus_stack(session)
+            pending = research_focus.peek_pending_clarification(session, now=now)
+            return {
+                "current": current.as_dict() if current else None,
+                "previous": previous.as_dict() if previous else None,
+                "stack": [entry.as_dict() for entry in stack],
+                "pending_clarification": pending,
+            }
+
+    return await asyncio.to_thread(load)
+
+
+@router.post("/{task_id}/focus")
+async def set_research_focus(request: Request, task_id: uuid.UUID) -> dict[str, Any]:
+    """The owner selected a research in the UI. That IS the focus.
+
+    A click is the least ambiguous reference there is, so it outranks every inference —
+    and because the focus is durable and owner-level, the next voice session's "bunu
+    anlat" means this one even though that session has never heard of it. Refused with
+    409 when the run has no READY report: pointing at a research that has not finished
+    would make every follow-up a question.
+    """
+    artifacts = _artifacts(request)
+
+    def apply() -> tuple[int, dict[str, Any]]:
+        with artifacts.session() as session:
+            if runs_service.get_run(session, task_id) is None:
+                return 404, {"detail": "unknown research task"}
+            if not research_focus.is_completed(session, task_id):
+                return 409, {"error": "not_completed"}
+            entry = research_focus.set_focus(
+                session, task_id, source=research_focus.FOCUS_OWNER_SELECTED_IN_UI
+            )
+            if entry is None:  # pragma: no cover - only on a genuine DB fault
+                return 409, {"error": "not_completed"}
+            session.commit()
+            return 200, {"focus": entry.as_dict()}
+
+    status, payload = await asyncio.to_thread(apply)
+    if status == 404:
+        raise HTTPException(status_code=404, detail=payload["detail"])
+    if status == 409:
+        return JSONResponse(status_code=409, content=payload)
+    logger.info("research_focus_set", task_id=str(task_id), source="owner_selected_in_ui")
+    return payload
+
+
 @router.get("")
 async def list_research(request: Request) -> dict[str, Any]:
     artifacts = _artifacts(request)
 
     def load() -> list[dict[str, Any]]:
         with artifacts.session() as session:
+            # ADR-0076: which row is the focus, established ONCE for the whole list.
+            current = research_focus.current_focus(session)
+            focus_job_id = current.research_job_id if current else None
             tasks = artifact_service.list_tasks(session, limit=500)
             out = []
             for task in tasks:
@@ -269,6 +340,11 @@ async def list_research(request: Request) -> dict[str, Any]:
                 if run is None:
                     continue  # not a research task
                 report_row = runs_service.get_report(session, task.id)
+                report_json = dict(getattr(report_row, "report_json", None) or {})
+                stats = report_json.get("stats")
+                stats = stats if isinstance(stats, dict) else {}
+                plan_json = dict(run.plan_json or {})
+                sources = report_json.get("sources") or ()
                 out.append(
                     {
                         "task_id": str(task.id),
@@ -278,6 +354,15 @@ async def list_research(request: Request) -> dict[str, Any]:
                         "device": str(run.device_id) if run.device_id else None,
                         "created_at": _iso(task.created_at),
                         "ready_at": _iso(task.ready_at),
+                        # ADR-0076: the three fields a list row needs to be SELECTABLE -
+                        # the owner picks a research by what it was and when it finished,
+                        # never by a task id - plus which one is currently in focus.
+                        "completed_at": _iso(task.ready_at),
+                        "mode": str(stats.get("mode") or plan_json.get("mode") or "") or None,
+                        "source_count": (
+                            len(sources) if isinstance(sources, (list, tuple)) else 0
+                        ),
+                        "is_focus": str(task.id) == focus_job_id,
                         "artifact_id": str(report_row.artifact_id)
                         if report_row and report_row.artifact_id
                         else None,

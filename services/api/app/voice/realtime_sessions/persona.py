@@ -123,6 +123,26 @@ RESEARCH_FOLLOWUP_TR = (
     "o soruyu aynen sorar, kendin bir araştırma seçmezsin."
 )
 
+#: docs/DECISIONS.md ADR-0076. The three follow-up tools, and the one rule that makes
+#: them safe: WHICH research is not the model's to decide. The server keeps a durable
+#: focus that survives a reconnect and a page reload, so "bunu anlat" on a brand-new
+#: session means the research the owner was just talking about — the model neither knows
+#: nor needs to know which that is, and must not pass a title or an id.
+RESEARCH_FOCUS_TR = (
+    "Tamamlanmış bir araştırmayla ilgili sorular research.explain, research.sources ve "
+    "research.finding_detail araçlarıyla yanıtlanır: 'bunu anlat', 'bu araştırmayı "
+    "anlat', 'teknik anlat', 'az önceki araştırmayı anlat', 'bir önceki araştırmayı "
+    "anlat', 'ikinci araştırmayı anlat', 'kaynakları söyle', 'birinci bulguyu "
+    "detaylandır'. HANGİ araştırmanın kastedildiğini SUNUCU çözer; araçlara başlık ya da "
+    "kimlik göndermezsin, kendin bir araştırma seçmezsin, sahibine hangisi olduğunu sen "
+    "sormazsın. Sonuç belirsizse araç tek bir kısa soru döner; onu aynen sorarsın. "
+    "research.start yalnızca YENİ bir konu için ya da sahibin açıkça 'yeniden araştır', "
+    "'tekrar araştır', 'araştırmayı yeniden yap' demesi üzerine çağrılır. "
+    "Yanıtı hemen verirsin: 'kayıtlarımı kontrol edeceğim', 'hangi kayda bakmam "
+    "gerektiğini bulmaya çalışıyorum' gibi cümleler kurmazsın; nereden bildiğini "
+    "anlatmazsın, dönen 'speech' metnini aynen okursun."
+)
+
 
 #: docs/M18_ACTION_CONTRACT.md §6 (ADR-0063): current state comes from state.now, the past
 #: from activity.explain, and a command to the eye or to production is ALWAYS a tool call
@@ -208,6 +228,7 @@ def build_instructions(
         ALARM_DISPLAY_GROUNDING_TR,
         RESEARCH_RESULT_TR,
         RESEARCH_FOLLOWUP_TR,
+        RESEARCH_FOCUS_TR,
     ]
     style = VOICE_STYLE_BLOCKS.get((voice_profile or "").lower())
     if style:
@@ -245,6 +266,7 @@ __all__ = [
     "ALARM_DISPLAY_GROUNDING_TR",
     "EXECUTIVE_DEFAULTS_TR",
     "PERSONA_TR",
+    "RESEARCH_FOCUS_TR",
     "RESEARCH_FOLLOWUP_TR",
     "RESEARCH_RESULT_TR",
     "SELF_EXPLANATION_TR",

@@ -253,6 +253,11 @@ class ResolvedIntent:
     #: One of :data:`RESEARCH_CLASSES` when this utterance is about research at all
     #: (ADR-0075). ``None`` means "nothing to do with research" - never "safe to crawl".
     research_class: str | None = None
+    #: WHICH research the utterance points at (ADR-0076), as words alone can tell:
+    #: current | previous | ordinal | topic | none. ``selection`` is never decided here -
+    #: it means "an answer to the question the server just asked", and only the resolver
+    #: knows whether such a question is open.
+    reference: ResearchReference | None = None
     #: query | action | control (contract §2); derived from the intent unless given.
     klass: str = ""
     #: The canonical capability an ACTION targets ("eye.disable"); None for the rest.
@@ -277,7 +282,13 @@ class ResolvedIntent:
             "matched": self.matched,
             "query_kind": self.query_kind,
             "research_class": self.research_class,
+            "research_reference": self.research_reference,
         }
+
+    @property
+    def research_reference(self) -> str:
+        """The reference KIND, for the durable audit row (ADR-0076)."""
+        return self.reference.kind if self.reference is not None else RESEARCH_REFERENCE_NONE
 
 
 # ------------------------------------------------------------- normalisation
@@ -711,6 +722,31 @@ def classify_research_interaction(
     "teknik anlat" is an ordinary technical explanation of the last activity and has
     nothing to bind to.
     """
+    shape = classify_research_shape(tokens, query_kind=query_kind)
+    if shape in RESEARCH_CLASSES_MAY_CRAWL:
+        return shape
+    if not has_completed_research:
+        return None
+    return shape
+
+
+def classify_research_shape(
+    tokens: tuple[str, ...], *, query_kind: str | None = None
+) -> str | None:
+    """The research interaction class of an utterance, WITHOUT any durable context.
+
+    docs/DECISIONS.md ADR-0076. :func:`classify_research_interaction` answers "which class
+    is this turn, given that a completed research exists?" — and answers None for
+    "Teknik anlat." when none does, because ADR-0075 had nothing for such a turn to bind
+    to. That None is what let the guard fall through: on the owner's 2026-09-06 record a
+    deictic follow-up with no completed research reachable became a CRAWL.
+
+    This function answers the question that has no such precondition: what SHAPE is the
+    utterance? "Teknik anlat." is a technical-explanation shape whether or not a research
+    exists — the difference is whether the answer is a report or a question, never whether
+    it is a crawl. It is the same table, read without the context gate; there is still one
+    Turkish vocabulary here and no second one anywhere.
+    """
     research_word = _has(tokens, *_RESEARCH_STEMS)
     rerun_word = _has_exact(tokens, *_RERUN_WORDS)
     imperative = _has_exact(tokens, *_RESEARCH_IMPERATIVES)
@@ -723,8 +759,6 @@ def classify_research_interaction(
     # 2. NEW - the research imperative, or "araştırma yap/başlat", with no "again".
     if imperative or (research_word and run_verb):
         return RESEARCH_CLASS_NEW
-    if not has_completed_research:
-        return None
     # 3. TECHNICAL EXPLANATION - the pipeline's own diagnostics.
     if query_kind in ("rejected_pages", "research_problems"):
         return RESEARCH_CLASS_TECHNICAL_EXPLANATION
@@ -760,6 +794,398 @@ def research_class_for(text: str, *, has_completed_research: bool) -> str | None
         has_completed_research=has_completed_research,
         query_kind=_explain_kind(tokens, _normalized),
     )
+
+
+# --------------------------------------------------- which research is meant
+
+#: docs/DECISIONS.md ADR-0076. WHICH research an utterance points at, as a shape the
+#: server can resolve deterministically. Six answers, and they are not intents: an
+#: utterance already has one. They live HERE, in the one router, for the reason ADR-0075
+#: gave when it refused a second Turkish table — two tables that must agree will not.
+RESEARCH_REFERENCE_CURRENT = "current"
+RESEARCH_REFERENCE_PREVIOUS = "previous"
+RESEARCH_REFERENCE_ORDINAL = "ordinal"
+RESEARCH_REFERENCE_TOPIC = "topic"
+#: Only a resolver can decide this one: it means "an answer to the question the server
+#: just asked", and whether such a question is open is durable state, not vocabulary.
+RESEARCH_REFERENCE_SELECTION = "selection"
+RESEARCH_REFERENCE_NONE = "none"
+
+RESEARCH_REFERENCES: Final[tuple[str, ...]] = (
+    RESEARCH_REFERENCE_CURRENT,
+    RESEARCH_REFERENCE_PREVIOUS,
+    RESEARCH_REFERENCE_ORDINAL,
+    RESEARCH_REFERENCE_TOPIC,
+    RESEARCH_REFERENCE_SELECTION,
+    RESEARCH_REFERENCE_NONE,
+)
+
+#: "bir önceki", "bundan önceki", "öncekini". A stem, because the suffix carries the case.
+_PREVIOUS_STEMS: Final[tuple[str, ...]] = ("öncek", "oncek")
+#: ... except right after these, where "önceki" means the MOST RECENT one, not the one
+#: before it: "az önceki araştırma" is the research that just finished.
+_RECENCY_QUALIFIERS: Final[tuple[str, ...]] = ("az", "biraz", "demin", "deminki", "hemen")
+
+#: The deictic pronouns a follow-up actually uses. Exact forms: "bu"/"bunu"/"bunun" are
+#: the whole word, and a stem would swallow "bugün", "bunlar", "onay".
+_DEICTIC_WORDS: Final[tuple[str, ...]] = (
+    "bu",
+    "bunu",
+    "bunun",
+    "bunda",
+    "bundaki",
+    "buradaki",
+    "şu",
+    "şunu",
+    "şunun",
+    "o",
+    "onu",
+    "onun",
+    "ondaki",
+)
+
+#: "son araştırma", "en son", "sonuncusu": the most recent one. Also the phrase a
+#: clarification answer uses to pick the newer candidate.
+_LATEST_WORDS: Final[tuple[str, ...]] = ("son", "sonuncu", "sonuncusu", "sonuncuyu", "en")
+
+#: Nouns that make an ordinal about something INSIDE a research rather than about which
+#: research: "birinci bulguyu detaylandır" is a follow-up on finding 1, not a reference to
+#: research 1. Keeping these out is the difference between answering and mis-selecting.
+_INNER_ITEM_NOUNS: Final[tuple[str, ...]] = (
+    "bulgu",
+    "madde",
+    "paragraf",
+    "nokta",
+    "başlı",
+    "basli",
+    "bölüm",
+    "bolum",
+    "kaynak",
+    "sayfa",
+    "adım",
+    "adim",
+)
+
+_DAY_TODAY: Final[tuple[str, ...]] = ("bugün", "bugun", "bugünkü", "bugunku")
+_DAY_YESTERDAY: Final[tuple[str, ...]] = ("dün", "dun", "dünkü", "dunku")
+
+#: A clock time as the owner says it, read from the RAW utterance: the tr-TR normaliser
+#: turns numerals into words, so "20:19'daki" has to be seen before normalisation.
+_CLOCK_RE = re.compile(r"(?<![\d:])([01]?\d|2[0-3])[:.]([0-5]\d)(?![\d:])")
+
+#: Words that are grammar, not topic. A topic phrase is what is LEFT after these — the
+#: content words a report's own topic must contain for "OpenAI araştırmasını anlat" to
+#: name a run. Everything here is either this module's own command vocabulary or a
+#: Turkish function word; nothing here is a subject anyone researches.
+_NON_TOPIC_WORDS: Final[frozenset[str]] = frozenset(
+    {
+        *_DEICTIC_WORDS,
+        *_LATEST_WORDS,
+        *_DAY_TODAY,
+        *_DAY_YESTERDAY,
+        *_RECENCY_QUALIFIERS,
+        *_RERUN_WORDS,
+        *_RUN_VERB_FORMS,
+        *_RESEARCH_TELLING_VERBS,
+        *_RESEARCH_PROBLEM_WORDS,
+        *_ORDINALS,
+        "anlatsana",
+        "söyler",
+        "soyler",
+        "misin",
+        "mısın",
+        "musun",
+        "müsün",
+        "lütfen",
+        "lutfen",
+        "efendim",
+        "bana",
+        "bir",
+        "ile",
+        "ilgili",
+        "hakkında",
+        "hakkinda",
+        "dair",
+        "için",
+        "icin",
+        "hangi",
+        "hangisi",
+        "hangisini",
+        "ne",
+        "neydi",
+        "neler",
+        "nedir",
+        "neden",
+        "nasıl",
+        "nasil",
+        "kim",
+        "kaç",
+        "kac",
+        "var",
+        "yok",
+        "mı",
+        "mi",
+        "mu",
+        "mü",
+        "da",
+        "de",
+        "ki",
+        "teknik",
+        "detay",
+        "detaylandır",
+        "detaylandir",
+        "ayrıntı",
+        "ayrinti",
+        "ayrıntılı",
+        "ayrintili",
+        "özet",
+        "ozet",
+        "özetle",
+        "ozetle",
+        "kısaca",
+        "kisaca",
+        "tamamını",
+        "tamamini",
+        "hepsini",
+        "önemli",
+        "onemli",
+        "seviye",
+        "seviyesinde",
+        "düzey",
+        "duzey",
+        "elendi",
+        "elenen",
+        "durum",
+        "durumu",
+        "sonuç",
+        "sonuc",
+        "sonuçları",
+        "sonuclari",
+        "sonuçlarını",
+        "sonuclarini",
+    }
+)
+
+#: "ilk" is three letters, so the generic ordinal-prefix rule below cannot reach its
+#: suffixed forms; and they are exactly the words an owner answers a clarification with.
+_FIRST_WORDS: Final[tuple[str, ...]] = ("ilk", "ilki", "ilkini", "ilkinden", "ilkiydi")
+
+#: The building blocks of a spoken Turkish number. Never a research topic on their own,
+#: and the tr-TR normaliser turns "20:19" into some of them before this ever sees it.
+_NUMBER_WORDS: Final[frozenset[str]] = frozenset(
+    {
+        "sıfır",
+        "bir",
+        "iki",
+        "üç",
+        "dört",
+        "beş",
+        "altı",
+        "yedi",
+        "sekiz",
+        "dokuz",
+        "on",
+        "yirmi",
+        "otuz",
+        "kırk",
+        "elli",
+        "altmış",
+        "yetmiş",
+        "seksen",
+        "doksan",
+        "yüz",
+        "bin",
+    }
+)
+
+_MAX_CONTENT_WORDS = 6
+_MAX_CONTENT_WORD_CHARS = 32
+
+
+@dataclass(frozen=True, slots=True)
+class ResearchReference:
+    """WHICH research an utterance points at, as far as words alone can say.
+
+    Deliberately small and JSON-round-trippable: this — not the transcript — is what the
+    session record keeps of a turn, so a tool call arriving moments later (with no
+    utterance of its own in its arguments) can be resolved against the same reference the
+    router read. ``content_words`` is the topic index, bounded and lower-cased; nothing
+    here reconstructs what the owner said.
+    """
+
+    kind: str = RESEARCH_REFERENCE_NONE
+    #: 1-based, for ``kind == "ordinal"``: 1 is the current focus.
+    ordinal: int | None = None
+    content_words: tuple[str, ...] = ()
+    #: "HH:MM" exactly as spoken, from the raw utterance ("20:19'daki").
+    clock: str | None = None
+    #: "today" | "yesterday" | None.
+    day: str | None = None
+    #: Whether the utterance said "the last one" ("en son", "sonuncusu"), which a
+    #: clarification answer uses to pick the most recent candidate.
+    latest: bool = False
+    matched: str = ""
+
+    @property
+    def points_at_a_run(self) -> bool:
+        """Whether this utterance refers to a research that already exists.
+
+        The guard's question (ADR-0076 decision 5): a turn that points at a run is never
+        a reason to start one, even when there is no run to point at.
+        """
+        return self.kind in (
+            RESEARCH_REFERENCE_CURRENT,
+            RESEARCH_REFERENCE_PREVIOUS,
+            RESEARCH_REFERENCE_ORDINAL,
+            RESEARCH_REFERENCE_TOPIC,
+        )
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "kind": self.kind,
+            "ordinal": self.ordinal,
+            "content_words": list(self.content_words),
+            "clock": self.clock,
+            "day": self.day,
+            "latest": self.latest,
+            "matched": self.matched,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any] | None) -> ResearchReference:
+        data = raw or {}
+        kind = str(data.get("kind") or RESEARCH_REFERENCE_NONE)
+        if kind not in RESEARCH_REFERENCES:
+            kind = RESEARCH_REFERENCE_NONE
+        ordinal = data.get("ordinal")
+        words = tuple(
+            str(w)[:_MAX_CONTENT_WORD_CHARS]
+            for w in (data.get("content_words") or ())
+            if str(w).strip()
+        )[:_MAX_CONTENT_WORDS]
+        return cls(
+            kind=kind,
+            ordinal=int(ordinal) if isinstance(ordinal, int) else None,
+            content_words=words,
+            clock=(str(data["clock"]) if data.get("clock") else None),
+            day=(str(data["day"]) if data.get("day") else None),
+            latest=bool(data.get("latest")),
+            matched=str(data.get("matched") or "")[:64],
+        )
+
+
+def _content_words(tokens: tuple[str, ...]) -> tuple[str, ...]:
+    """The words that could name a TOPIC: everything that is not this module's own
+    vocabulary, a Turkish function word, or a number the normaliser produced.
+
+    Bounded and lower-cased on purpose: this is the only part of an utterance that is
+    kept on the session record, and it is an index for matching a report's topic - not a
+    transcript.
+    """
+    out: list[str] = []
+    for tok in tokens:
+        if tok in _NON_TOPIC_WORDS or tok in _NUMBER_WORDS or tok in _FIRST_WORDS:
+            continue
+        if len(tok) < 3 or any(ch.isdigit() for ch in tok):
+            continue
+        if any(tok.startswith(word) for word in _ORDINALS):
+            continue
+        if _has((tok,), *_RESEARCH_STEMS) or _has((tok,), *_PREVIOUS_STEMS):
+            continue
+        if _has((tok,), *_RESEARCH_FOLLOWUP_STEMS) or _has((tok,), *_INNER_ITEM_NOUNS):
+            continue
+        if tok not in out:
+            out.append(tok[:_MAX_CONTENT_WORD_CHARS])
+        if len(out) >= _MAX_CONTENT_WORDS:
+            break
+    return tuple(out)
+
+
+def _previous_match(tokens: tuple[str, ...]) -> str | None:
+    """"bir önceki" / "bundan önceki" / "öncekini" — but not "az önceki"."""
+    for n, tok in enumerate(tokens):
+        if not (tok.startswith("öncek") or tok.startswith("oncek")):
+            continue
+        if n and tokens[n - 1] in _RECENCY_QUALIFIERS:
+            return None  # "az önceki" is the most recent one, not the one before it
+        return tok
+    return None
+
+
+def _ordinal_match(tokens: tuple[str, ...]) -> tuple[int, str] | None:
+    if _has(tokens, *_INNER_ITEM_NOUNS):
+        return None  # "birinci bulguyu" is about a finding, not about which research
+    for tok in tokens:
+        if tok in _FIRST_WORDS:
+            return 1, tok
+        if tok in _ORDINALS:
+            return _ORDINALS[tok], tok
+        # "ikincisi", "üçüncüsü": the same word answering a question.
+        for word, idx in _ORDINALS.items():
+            if len(word) > 3 and tok.startswith(word):
+                return idx, tok
+    return None
+
+
+def classify_research_reference(
+    tokens: tuple[str, ...], *, utterance: str | None = None
+) -> ResearchReference:
+    """WHICH research this utterance points at — deterministic, pure, no database.
+
+    Order, and why (ADR-0076): "bir önceki" is checked before the deictics because
+    "bundan önceki" contains one; an ordinal before the deictics because "bu ikinci
+    araştırma" means the second; the deictics before a topic phrase because "bu OpenAI
+    araştırması" is still "this one". A topic phrase is what is left when no pointer was
+    used at all and content words remain.
+    """
+    clock: str | None = None
+    if utterance:
+        found = _CLOCK_RE.search(utterance)
+        if found:
+            clock = f"{int(found.group(1)):02d}:{found.group(2)}"
+    day: str | None = None
+    if _has_exact(tokens, *_DAY_TODAY):
+        day = "today"
+    elif _has_exact(tokens, *_DAY_YESTERDAY):
+        day = "yesterday"
+    latest = bool(
+        _has_exact(tokens, "sonuncu", "sonuncusu", "sonuncuyu")
+        or (_has_exact(tokens, "son") and not _has(tokens, *_INNER_ITEM_NOUNS))
+    )
+    words = _content_words(tokens)
+
+    def _ref(kind: str, *, ordinal: int | None = None, matched: str = "") -> ResearchReference:
+        return ResearchReference(
+            kind=kind,
+            ordinal=ordinal,
+            content_words=words,
+            clock=clock,
+            day=day,
+            latest=latest,
+            matched=matched,
+        )
+
+    previous = _previous_match(tokens)
+    if previous:
+        return _ref(RESEARCH_REFERENCE_PREVIOUS, matched=previous)
+    ordinal = _ordinal_match(tokens)
+    if ordinal is not None:
+        return _ref(RESEARCH_REFERENCE_ORDINAL, ordinal=ordinal[0], matched=ordinal[1])
+    deictic = _has_exact(tokens, *_DEICTIC_WORDS)
+    if deictic:
+        return _ref(RESEARCH_REFERENCE_CURRENT, matched=deictic)
+    if latest or _has_exact(tokens, *_RECENCY_QUALIFIERS):
+        return _ref(RESEARCH_REFERENCE_CURRENT, matched="son")
+    if words:
+        return _ref(RESEARCH_REFERENCE_TOPIC, matched=words[0])
+    return _ref(RESEARCH_REFERENCE_NONE)
+
+
+def research_reference_for(text: str) -> ResearchReference:
+    """:func:`classify_research_reference` from raw speech (normalises first, and reads
+    the clock time off the RAW text before the normaliser turns digits into words)."""
+    _normalized, tokens, _dropped = normalize_transcript(text)
+    return classify_research_reference(tokens, utterance=text)
 
 
 def _stop_match(text: str, tokens: tuple[str, ...]) -> str | None:
@@ -825,6 +1251,9 @@ def resolve_intent(
     base["research_class"] = classify_research_interaction(
         tokens, has_completed_research=has_completed_research, query_kind=explain_kind
     )
+    # ADR-0076: and WHICH research it points at. Decided from the same tokens, in the
+    # same pass, so the class and the reference can never describe different utterances.
+    base["reference"] = classify_research_reference(tokens, utterance=text)
 
     # 0. Active Eye privacy stop (M18 spec §2) — checked before even STOP. A camera
     #    disable phrase must never be shadowed by anything this resolver learns
@@ -1308,6 +1737,14 @@ __all__ = [
     "RESEARCH_CLASS_NEW",
     "RESEARCH_CLASS_RETRY",
     "RESEARCH_CLASS_TECHNICAL_EXPLANATION",
+    "RESEARCH_REFERENCES",
+    "RESEARCH_REFERENCE_CURRENT",
+    "RESEARCH_REFERENCE_NONE",
+    "RESEARCH_REFERENCE_ORDINAL",
+    "RESEARCH_REFERENCE_PREVIOUS",
+    "RESEARCH_REFERENCE_SELECTION",
+    "RESEARCH_REFERENCE_TOPIC",
+    "ResearchReference",
     "SPEECH_BUDGET_CHARS",
     "SCOPE_CONVERSATION",
     "SCOPE_NARRATION",
@@ -1324,7 +1761,10 @@ __all__ = [
     "level_section_cursor",
     "normalize_transcript",
     "ordered_paragraph_ids",
+    "classify_research_reference",
+    "classify_research_shape",
     "research_class_for",
+    "research_reference_for",
     "resolve_intent",
     "speech_budget",
     "speech_from",

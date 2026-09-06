@@ -36,7 +36,7 @@ from app.uistate import UiState
 from app.uistate import publish as publish_ui
 from app.voice import service as voice_service
 from app.voice.errors import VoiceError, VoiceErrorClass
-from app.voice.intents import ResolvedIntent, resolve_intent
+from app.voice.intents import ResolvedIntent, classify_research_shape, resolve_intent
 from app.voice.providers import EphemeralCredential, RealtimeProvider, RealtimeSessionConfig
 from app.voice.realtime import RealtimeState
 from app.voice.realtime_bench import (
@@ -800,6 +800,38 @@ def _record_research_linkage(
         ctx["plan"] = plan
 
 
+def _focus_on_spoken_result(
+    db: Session,
+    row: RealtimeSessionRow,
+    call: RealtimeToolCall,
+    running_result: dict[str, Any],
+    now: datetime,
+) -> None:
+    """The research whose result was just SPOKEN becomes the one in focus (ADR-0076).
+
+    A completion already focuses a run when its row goes READY
+    (``app.research.focus.note_research_ready``). This is the second moment, and the one
+    the owner actually experiences: the announcer hands the terminal payload to the
+    session and the assistant reads it out. Whatever else has finished since, the research
+    the owner just HEARD is the one "bunu anlat" means - so the entry is appended even
+    when the job is already current, because recency is the whole ordering.
+    """
+    if call.name != RESEARCH_START_TOOL_NAME or call.status != TOOL_STATUS_SUCCEEDED:
+        return
+    terminal = dict(call.result_json or {})
+    task_id = str(running_result.get("task_id") or terminal.get("task_id") or "")
+    if not task_id:
+        return
+    from app.research import focus as focus_module
+    from app.research.models import FOCUS_RESULT_JUST_SPOKEN
+
+    if not focus_module.is_completed(db, task_id):
+        return  # a failed or insufficient run is nothing to point at
+    focus_module.set_focus(
+        db, task_id, source=FOCUS_RESULT_JUST_SPOKEN, session_id=row.id, now=now
+    )
+
+
 def complete_tool_call(
     db: Session,
     row: RealtimeSessionRow,
@@ -850,6 +882,7 @@ def complete_tool_call(
         plan["status"] = "completed" if call.status == TOOL_STATUS_SUCCEEDED else "failed"
         ctx["plan"] = plan
     _record_research_linkage(ctx, call, running_result, now)
+    _focus_on_spoken_result(db, row, call, running_result, now)
     payload = {
         "call_id": call.call_id,
         "name": call.name,
@@ -969,6 +1002,7 @@ def complete_tool_call_system(
         plan["status"] = "completed" if call.status == TOOL_STATUS_SUCCEEDED else "failed"
         ctx["plan"] = plan
     _record_research_linkage(ctx, call, running_result, now)
+    _focus_on_spoken_result(db, row, call, running_result, now)
     payload = {
         "call_id": call.call_id,
         "name": call.name,
@@ -1090,6 +1124,19 @@ def record_client_events(
                 "klass": intent.klass,
                 "query_kind": intent.query_kind,
                 "research_class": intent.research_class,
+                # ADR-0076. The research SHAPE, decided without the "does a completed
+                # research exist?" precondition (that precondition is what let a deictic
+                # follow-up on an empty history become a crawl), and WHICH research the
+                # utterance pointed at, as a bounded projection: a kind, an ordinal, a
+                # clock time, and at most six content words. A tool call arriving moments
+                # later carries no utterance of its own, and this - never a transcript -
+                # is what it resolves against.
+                "research_shape": classify_research_shape(
+                    intent.tokens, query_kind=intent.query_kind
+                ),
+                "reference": (
+                    intent.reference.as_dict() if intent.reference is not None else None
+                ),
             }
             resolved.append(
                 {"t_ms": t_ms, "turn": turn, **intent.to_dict(), "normalized_text": None}
@@ -1125,6 +1172,10 @@ def record_client_events(
                     # (ADR-0075), so the durable audit row says whether the server was
                     # entitled to start a crawl on it - decided by the ONE router.
                     "research_class": intent.research_class,
+                    # ...and WHICH research it pointed at (ADR-0076): current | previous |
+                    # ordinal | topic | selection | none. The owner harness reads it off
+                    # session_activity's intents, beside the class.
+                    "research_reference": intent.research_reference,
                 }
             )
             _audit(db, ACTION_INTENT_RESOLVED, row, trace_id=trace_id, metadata=meta)
@@ -1655,6 +1706,19 @@ def session_activity(db: Session, row: RealtimeSessionRow) -> dict[str, Any]:
                 # numbers the spoken sentences rest on (never the wording itself)
                 "provenance": _result_field(result, "provenance"),
                 "narration_session_id": _result_field(result, "narration_session_id"),
+                # ADR-0076: the research IDENTITY of a research-bound call, at the TOP
+                # level of the entry, because that is the assertion an owner
+                # qualification makes - "the explanation named THIS job" - and it must be
+                # readable from durable rows without opening the result blob. Every
+                # research path writes them: the three follow-up tools, activity.explain,
+                # and research.start's own refusal.
+                "research_job_id": _result_field(result, "research_job_id"),
+                "research_artifact_id": _result_field(result, "research_artifact_id"),
+                "resolution_reason": (
+                    _result_field(result, "resolution_reason")
+                    or _result_field(result, "research_binding", "resolution_reason")
+                ),
+                "focus_source": _result_field(result, "focus_source"),
             }
         )
     audits = db.execute(
@@ -1683,6 +1747,7 @@ def session_activity(db: Session, row: RealtimeSessionRow) -> dict[str, Any]:
                     "klass": meta.get("klass"),
                     "capability": meta.get("capability"),
                     "research_class": meta.get("research_class"),
+                    "research_reference": meta.get("research_reference"),
                 }
             )
         else:
