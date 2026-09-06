@@ -8,7 +8,7 @@
  * separate here and everywhere downstream.
  */
 
-import type { EyeStatus, PresenceKind, ReleaseStage } from "./ambient";
+import type { AlarmStage, DisplayState, EyeStatus, PresenceKind, ReleaseStage } from "./ambient";
 import type { KnownUiState } from "./contract";
 import type { CoreVisualKind, VisualSource } from "./visual";
 
@@ -182,6 +182,19 @@ export const STATE_LABEL: Record<KnownUiState, string> = {
   "release.verifying": "Doğrulanıyor",
   "release.live": "Canlı",
   "release.rollback": "Geri alınıyor",
+  // v3 — the wake alarm. "Kuruldu" is a standing arrangement; "çalıyor" is a
+  // noise in the room right now. They are never worded the same way.
+  "alarm.armed": "Alarm kuruldu",
+  "alarm.firing": "Alarm tetiklendi",
+  "alarm.playing": "Alarm çalıyor",
+  "alarm.greeting": "Alarm seslendiriyor",
+  "alarm.snoozed": "Alarm ertelendi",
+  "alarm.stopped": "Alarm durduruldu",
+  "alarm.completed": "Alarm tamamlandı",
+  "alarm.failed": "Alarm çalamadı",
+  // v3 — display power. Never "uyku": nothing in this milestone suspends a machine.
+  "display.on": "Ekranlar açık",
+  "display.off": "Ekranlar kapalı",
 };
 
 export function stateLabel(state: string): string {
@@ -288,4 +301,66 @@ export const RELEASE_LABEL: Record<ReleaseStage, string> = {
 export function formatConfidence(confidence: number | null): string {
   if (confidence === null) return "güven bildirilmedi";
   return `güven %${Math.round(confidence * 100)}`;
+}
+
+// ------------------------------------------------------- v3: display & alarm
+
+/**
+ * The screens, in three states and never in two.
+ *
+ * `untold` is not `off`, for the same reason the camera's is not: an indicator
+ * that reads as "the screens are off" because nobody said anything would be a
+ * statement about the owner's room that nothing supports.
+ */
+export const DISPLAY_LABEL: Record<DisplayState, string> = {
+  on: "Ekranlar açık",
+  off: "Ekranlar kapalı",
+  untold: "Ekran durumu bildirilmedi",
+};
+
+export const DISPLAY_DETAIL: Record<DisplayState, string> = {
+  on: "Ekranlara güç veriliyor.",
+  // The one sentence this cell exists to make impossible to misread.
+  off: "Yalnızca ekran gücü kapalı. Bilgisayar uyutulmadı, kilitlenmedi, kapatılmadı.",
+  untold: "Ekranların açık mı kapalı mı olduğu bildirilmedi. Bu 'kapalı' demek değil.",
+};
+
+export const ALARM_LABEL: Record<AlarmStage, string> = {
+  armed: "Alarm kuruldu",
+  firing: "Alarm tetiklendi",
+  playing: "Alarm çalıyor",
+  greeting: "Alarm seslendiriyor",
+  snoozed: "Alarm ertelendi",
+  stopped: "Alarm durduruldu",
+  completed: "Alarm tamamlandı",
+  failed: "Alarm çalamadı",
+  none: "Bildirilen bir alarm yok",
+};
+
+export const ALARM_DETAIL: Record<AlarmStage, string> = {
+  armed: "Cihaz bu alarm için hazır. Henüz çalmıyor.",
+  firing: "Alarm dizisi başladı.",
+  playing: "Ses çalıyor.",
+  greeting: "Karşılama cümlesi seslendiriliyor.",
+  snoozed: "Ertelendi; yeni saat için tekrar kuruldu.",
+  stopped: "Sahip durdurdu.",
+  completed: "Süresi doldu ve kapandı.",
+  failed: "Her iki ses yolu da başarısız oldu.",
+  none: "Şu anda kurulu ya da çalan bir alarm bildirilmedi.",
+};
+
+/** The ramp level, as the publisher sent it — or the fact that it did not. */
+export function formatAlarmLevel(level: number | null): string {
+  if (level === null) return "ses seviyesi bildirilmedi";
+  return `ses seviyesi %${Math.round(level * 100)}`;
+}
+
+/**
+ * What the server's contract version means for what the owner will see.
+ *
+ * A v2 Cloud Core simply never publishes the alarm or display states, and the
+ * absence of an alarm row would otherwise read as "no alarm is set".
+ */
+export function contractLagNote(serverVersion: number, knownVersion: number): string {
+  return `Sunucu durum sözleşmesi v${serverVersion}; bu arayüz v${knownVersion}. Alarm ve ekran durumları bu sunucudan henüz yayınlanmıyor — yok demek değil.`;
 }

@@ -22,7 +22,9 @@ import {
   type UiStateEvent,
   type UiStateResponse,
   ageMs,
+  isAlarmLifecycleState,
   isCoreChannel,
+  isReleaseBandState,
   isSeverity,
   stateChannel,
   stateTtlMs,
@@ -57,6 +59,16 @@ export type CoreTruth = {
   latestBySubsystem: Record<string, UiStateEvent>;
   /** Completed polls. Zero means "we have not asked yet", which is not "idle". */
   polls: number;
+  /**
+   * The contract version the server actually answered with, or `null` before
+   * the first successful poll.
+   *
+   * Kept because a v2 server and a v3 build differ in what the owner may
+   * expect to see — the alarm and display states simply never arrive — and the
+   * honest thing is to say so rather than to let their absence read as "no
+   * alarm is set" (M18.3 §7; `contractCompatibility`).
+   */
+  contractVersion: number | null;
 };
 
 export function emptyTruth(): CoreTruth {
@@ -68,6 +80,7 @@ export function emptyTruth(): CoreTruth {
     latestByState: {},
     latestBySubsystem: {},
     polls: 0,
+    contractVersion: null,
   };
 }
 
@@ -123,6 +136,7 @@ export function applyResponse(
     latestByState,
     latestBySubsystem,
     polls: truth.polls + 1,
+    contractVersion: response.contract_version,
   };
 }
 
@@ -223,9 +237,33 @@ export function presenceClaim(truth: CoreTruth, now: number): Claim {
   return prefixClaim(truth, "owner.", now);
 }
 
-/** The release path and the routines that drive it. */
+/**
+ * The release path and the routines that drive it.
+ *
+ * Read by vocabulary rather than by channel: v3 put the wake alarm's lifecycle
+ * on the same band, and "the newest event on the release channel" would let an
+ * `alarm.playing` blank a deployment that is genuinely in flight — the same
+ * class of mistake `prefixClaim` exists to prevent for the eye.
+ */
 export function releaseClaim(truth: CoreTruth, now: number): Claim {
-  return channelClaim(truth, "release", now);
+  return claimFor(newestWhere(truth, isReleaseBandState), now);
+}
+
+/**
+ * The wake alarm's own claim: the newest v3 lifecycle state, and nothing else.
+ *
+ * Deliberately not a prefix claim over `alarm.`: v2's `alarm.triggered` means
+ * "a routine fired" and belongs to the release band, and an unknown `alarm.*`
+ * token from a newer server must not be drawn as a ringing alarm on the
+ * strength of a word this build cannot read.
+ */
+export function alarmClaim(truth: CoreTruth, now: number): Claim {
+  return claimFor(newestWhere(truth, isAlarmLifecycleState), now);
+}
+
+/** Whether the owner's screens are lit, from `display.*` alone. */
+export function displayClaim(truth: CoreTruth, now: number): Claim {
+  return prefixClaim(truth, "display.", now);
 }
 
 /**

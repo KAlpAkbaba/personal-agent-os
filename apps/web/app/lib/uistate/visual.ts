@@ -29,8 +29,22 @@ import {
   isKnownState,
   metaNumber,
 } from "./contract";
-import { type ReleaseStage, eyeView, releaseView } from "./ambient";
-import { type Claim, type CoreTruth, coreClaim, eyeClaim, releaseClaim } from "./truth";
+import {
+  type AlarmStage,
+  type ReleaseStage,
+  alarmIsSounding,
+  alarmView,
+  eyeView,
+  releaseView,
+} from "./ambient";
+import {
+  type Claim,
+  type CoreTruth,
+  alarmClaim,
+  coreClaim,
+  eyeClaim,
+  releaseClaim,
+} from "./truth";
 import type { VoiceUiState } from "../voice/controller";
 
 export type CoreVisualKind =
@@ -264,6 +278,31 @@ export type VisualIntent = {
    */
   releaseProgress: number | null;
 
+  // ---------------------------------------------------- v3: the wake surge
+  /**
+   * The wake alarm's own channel (M18.3 §7), drawn as a surge through the
+   * structure — never as the core body.
+   *
+   * An alarm ringing is a fact about the room and the routine engine, not a
+   * statement that the assistant is thinking or speaking: a Core that is
+   * genuinely working must keep showing that work while the alarm sounds, and
+   * a Core that is idle must not be dressed up as busy because a song is
+   * playing. So this is a separate channel, like the release orbit, and
+   * `"none"` draws nothing at all.
+   */
+  wakeStage: AlarmStage;
+  /**
+   * How strongly the surge is drawn, 0..1. A per-stage constant (an encoding
+   * of the published state) that the publisher's declared ramp level may
+   * raise. Zero for `armed`, for every terminal stage and for `none`: an
+   * alarm that is set for the morning is a line on the strip, not a light.
+   */
+  wakeSurge: number;
+  /** The declared ramp level while sounding, or `null` when none was sent. */
+  wakeLevel: number | null;
+  /** True only when the publisher actually sent a level. */
+  wakeLevelKnown: boolean;
+
   palette: PaletteToken;
 };
 
@@ -336,7 +375,53 @@ function blank(kind: CoreVisualKind, palette: PaletteToken): VisualIntent {
     releaseInFlight: false,
     releaseAwaitingOwner: false,
     releaseProgress: null,
+    wakeStage: "none",
+    wakeSurge: 0,
+    wakeLevel: null,
+    wakeLevelKnown: false,
     palette,
+  };
+}
+
+/**
+ * The surge each alarm stage draws, before the declared level raises it.
+ *
+ * Only the three sounding stages light anything: `armed` is a plan, and
+ * `snoozed`/`stopped`/`completed`/`failed` are the surge releasing. A failed
+ * alarm is loud in words (severity `error` on the strip) and silent in
+ * geometry, because failure is not activity.
+ */
+const WAKE_SURGE: Record<AlarmStage, number> = {
+  armed: 0,
+  firing: 0.65,
+  playing: 0.45,
+  greeting: 0.8,
+  snoozed: 0,
+  stopped: 0,
+  completed: 0,
+  failed: 0,
+  none: 0,
+};
+
+/** How much of a declared ramp level reaches the surge while playing. */
+const WAKE_LEVEL_GAIN = 0.55;
+
+/** The wake channel's contribution to the intent, read from its own claim. */
+function wakeFields(truth: CoreTruth, now: number): Pick<
+  VisualIntent,
+  "wakeStage" | "wakeSurge" | "wakeLevel" | "wakeLevelKnown"
+> {
+  const view = alarmView(alarmClaim(truth, now));
+  const base = WAKE_SURGE[view.stage];
+  const level = alarmIsSounding(view) ? view.level : null;
+  return {
+    wakeStage: view.stage,
+    // The level only ever raises a stage that is already sounding, and is
+    // capped: a publisher sending 1.0 brightens the surge, it does not invent
+    // one for a stage that draws nothing.
+    wakeSurge: base > 0 && level !== null ? Math.min(1, base + WAKE_LEVEL_GAIN * level) : base,
+    wakeLevel: level,
+    wakeLevelKnown: level !== null,
   };
 }
 
@@ -713,6 +798,7 @@ export function visualFor(truth: CoreTruth, now: number, voice: VoiceOverlay | n
   const bus = {
     ...coreVisual(truth, now),
     ...releaseFields(truth, now),
+    ...wakeFields(truth, now),
     eyeActive: eyeActiveOf(truth, now),
   };
   return voice ? applyVoiceOverlay(bus, voice) : bus;
@@ -802,6 +888,12 @@ export function applyVoiceOverlay(bus: VisualIntent, voice: VoiceOverlay): Visua
     releaseProgress: bus.releaseProgress,
     // So is the eye: a fact about the room, not about this turn.
     eyeActive: bus.eyeActive,
+    // And so is the alarm. A wake surge under a live voice session is two true
+    // things at once, and the owner is shown both (M18.3 §7).
+    wakeStage: bus.wakeStage,
+    wakeSurge: bus.wakeSurge,
+    wakeLevel: bus.wakeLevel,
+    wakeLevelKnown: bus.wakeLevelKnown,
   });
 
   switch (voice.state) {
@@ -985,6 +1077,17 @@ function coreVisual(truth: CoreTruth, now: number): VisualIntent {
 /** True when a release stage is drawn on the orbit. */
 export function hasReleaseOrbit(intent: VisualIntent): boolean {
   return intent.releaseStage !== "none";
+}
+
+/**
+ * True when the wake surge is drawn through the structure.
+ *
+ * Note what this is NOT: a claim that the Core is doing anything. An idle Core
+ * with an alarm playing surges and stays idle; a thinking Core with an alarm
+ * playing surges and stays thinking.
+ */
+export function hasWakeSurge(intent: VisualIntent): boolean {
+  return intent.wakeSurge > 0;
 }
 
 /** Palette for the release orbit: waiting, working, arrived, or reversing. */
