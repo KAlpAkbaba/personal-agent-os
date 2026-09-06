@@ -23,7 +23,12 @@ import type { ActivityLevel, AwakeState, CameraPermission, EyeErrorClass, Postur
  */
 export const LOCAL_EYE_ERROR_TEXT: Record<EyeErrorClass, string> = {
   permission_denied: "Tarayıcı kamera izni vermedi.",
-  device_unavailable: "Kamera bulunamadı ya da başka bir uygulama kullanıyor.",
+  device_not_found: "Kamera bulunamadı.",
+  device_busy: "Kamera başka bir uygulama tarafından kullanılıyor ya da okunamıyor.",
+  get_user_media_failed: "Tarayıcı kamerayı açamadı.",
+  stream_created_but_track_ended: "Kamera açıldı ama görüntü akışı hemen kesildi.",
+  perception_start_failed: "Kamera açıldı ama algı döngüsü başlatılamadı.",
+  state_transition_failed: "Göz istenen duruma geçirilemedi.",
   timeout: "Kamera zamanında açılmadı.",
   capability_missing: "Bu tarayıcıda kamera erişimi yok.",
 };

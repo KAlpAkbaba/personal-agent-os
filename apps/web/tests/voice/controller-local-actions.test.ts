@@ -244,7 +244,18 @@ describe("end to end: a provider function call opens and closes THIS device's ca
     expect(durable).toEqual([{ kind: "enable", reason: "voice:Gözünü aç." }]);
     expect((t.relays()[0].body as { arguments: unknown }).arguments).toEqual({
       utterance: "Gözünü aç.",
-      observed_after: { local: { state: "ACTIVE", running: true, camera_label: "Integrated Webcam", error_class: null, observed_at: AT, changed: true } },
+      observed_after: {
+        local: {
+          state: "ACTIVE",
+          running: true,
+          camera_label: "Integrated Webcam",
+          error_class: null,
+          observed_at: AT,
+          changed: true,
+          media_track_ready_state: null, // the fake FrameSource holds no MediaStreamTrack
+          action_trace: ["request:enable", "getUserMedia:called", "loop:started", "durable:enable", "state:ENABLING->ACTIVE"],
+        },
+      },
     });
 
     // Already on: the second enable is idempotent locally and still relayed with the truth.
@@ -264,8 +275,50 @@ describe("end to end: a provider function call opens and closes THIS device's ca
     expect(durable[1]).toEqual({ kind: "disable", reason: "voice:Gözünü kapat." });
     expect((t.relays()[2].body as { arguments: unknown }).arguments).toEqual({
       utterance: "Gözünü kapat.",
-      observed_after: { local: { state: "DISABLED", running: false, camera_label: null, error_class: null, observed_at: AT, changed: true } },
+      observed_after: {
+        local: {
+          state: "DISABLED",
+          running: false,
+          camera_label: null,
+          error_class: null,
+          observed_at: AT,
+          changed: true,
+          media_track_ready_state: null,
+          action_trace: ["request:disable", "durable:disable", "loop:stopped", "state:DISABLING->DISABLED"],
+        },
+      },
     });
+    expect(eyeInstances.snapshot()).toEqual({ sessions: 1, cameraOpens: 1, loopsStarted: 1 });
+    store.dispose();
+  });
+
+  it("the VENDOR spelling (eye__enable / eye__disable, as OpenAI Realtime delivers it) opens and closes the camera all the same", async () => {
+    // The owner's run of 2026-09-06 (session 3eb6fee7): every eye call reached the
+    // port as `eye__enable` / `eye__disable`, matched nothing, and the Cloud Core
+    // recorded capability_missing. The port must see the Cloud Core spelling; the
+    // relay must keep the vendor spelling the server's registry maps back.
+    eyeInstances.reset();
+    const camera = new Camera();
+    const { store, durable } = eyeStore(camera);
+    const t = await setup({}, eyeLocalActions(() => store));
+
+    t.transport.emit({ type: "tool_call", at: 10, callId: "call-v-on", name: "eye__enable", arguments: { utterance: "Kamerayı aç." } });
+    await tick();
+    expect(store.getSnapshot().state).toBe("ACTIVE");
+    expect(camera.starts).toBe(1);
+    expect(durable).toEqual([{ kind: "enable", reason: "voice:Kamerayı aç." }]);
+    const on = t.relays()[0].body as { name: string; arguments: { observed_after: { local: { state: string } } } };
+    expect(on.name).toBe("eye__enable"); // relayed verbatim
+    expect(on.arguments.observed_after.local.state).toBe("ACTIVE");
+
+    t.transport.emit({ type: "tool_call", at: 20, callId: "call-v-off", name: "eye__disable", arguments: { utterance: "Gözünü kapat." } });
+    await tick();
+    expect(store.getSnapshot().state).toBe("DISABLED");
+    expect(camera.open).toBe(false);
+    expect(durable[1]).toEqual({ kind: "disable", reason: "voice:Gözünü kapat." });
+    const off = t.relays()[1].body as { name: string; arguments: { observed_after: { local: { state: string; changed: boolean } } } };
+    expect(off.name).toBe("eye__disable");
+    expect(off.arguments.observed_after.local).toMatchObject({ state: "DISABLED", running: false, changed: true });
     expect(eyeInstances.snapshot()).toEqual({ sessions: 1, cameraOpens: 1, loopsStarted: 1 });
     store.dispose();
   });
@@ -283,17 +336,112 @@ describe("end to end: a provider function call opens and closes THIS device's ca
       utterance: "Beni tekrar izle.",
       // `changed: true` - the store did move (DISABLED -> ERROR); the server ignores it on
       // ERROR and answers `failed` with the permission sentence regardless.
-      observed_after: { local: { state: "ERROR", running: false, camera_label: null, error_class: "permission_denied", observed_at: AT, changed: true } },
+      observed_after: {
+        local: {
+          state: "ERROR",
+          running: false,
+          camera_label: null,
+          error_class: "permission_denied",
+          observed_at: AT,
+          changed: true,
+          media_track_ready_state: null,
+          action_trace: ["request:enable", "getUserMedia:called", "getUserMedia:NotAllowedError", "state:ENABLING->ERROR"],
+        },
+      },
     });
     store.dispose();
   });
 });
 
+// ------------------------------------------------- the vendor spelling, pinned
+
+describe("the provider's spelling of a tool name reaches the local port as the Cloud Core's", () => {
+  const OBSERVED = {
+    local: { state: "DISABLED", running: false, camera_label: null, error_class: null, observed_at: AT, changed: true },
+  };
+
+  it("eye__disable: the port is asked for eye.disable, the local action runs, observed_after is relayed under the vendor name", async () => {
+    const seen: string[] = [];
+    const port: LocalActionPort = {
+      run: async (name) => {
+        seen.push(name);
+        return name === "eye.disable" ? OBSERVED : null;
+      },
+    };
+    const receipt = { ...DISABLE_RECEIPT, action_id: "call-vd" };
+    const t = await setup({ toolResponses: { eye__disable: { result: receipt } } }, port);
+    t.transport.emit({ type: "tool_call", at: 10, callId: "call-vd", name: "eye__disable", arguments: { utterance: "Gözünü kapat." } });
+    await tick();
+    expect(seen).toEqual(["eye.disable"]);
+    expect(t.log).toContain("tool.local:call-vd");
+    expect(t.relays()[0].body).toEqual({
+      call_id: "call-vd",
+      name: "eye__disable", // the relay keeps the vendor spelling; the server's registry maps it back
+      arguments: { utterance: "Gözünü kapat.", observed_after: OBSERVED },
+    });
+    expect(t.transport.sent).toEqual([`submit:call-vd:${JSON.stringify(receipt)}`]);
+  });
+
+  it("eye__enable: likewise, and a port that only knows the Cloud Core spelling is enough", async () => {
+    const seen: string[] = [];
+    const port: LocalActionPort = {
+      run: async (name) => {
+        seen.push(name);
+        if (name === "eye.enable") return { local: { ...OBSERVED.local, state: "ACTIVE", running: true, camera_label: "cam" } };
+        return null;
+      },
+    };
+    const t = await setup({}, port);
+    t.transport.emit({ type: "tool_call", at: 10, callId: "call-ve", name: "eye__enable", arguments: { utterance: "Gözünü aç." } });
+    await tick();
+    expect(seen).toEqual(["eye.enable"]);
+    const body = t.relays()[0].body as { name: string; arguments: { observed_after?: { local: { state: string } } } };
+    expect(body.name).toBe("eye__enable");
+    expect(body.arguments.observed_after?.local.state).toBe("ACTIVE");
+  });
+
+  it("state__now has nothing local and is relayed under its vendor name without observed_after", async () => {
+    const seen: string[] = [];
+    const port: LocalActionPort = {
+      run: async (name) => {
+        seen.push(name);
+        return null;
+      },
+    };
+    const t = await setup({}, port);
+    t.transport.emit({ type: "tool_call", at: 10, callId: "call-sn", name: "state__now", arguments: { question: "Kamera açık mı?" } });
+    await tick();
+    expect(seen).toEqual(["state.now"]);
+    expect(t.relays()[0].body).toEqual({ call_id: "call-sn", name: "state__now", arguments: { question: "Kamera açık mı?" } });
+  });
+});
+
 describe("the shapes", () => {
-  it("observed_after is exactly {local: {state, running, camera_label, error_class, observed_at, changed}} — the server honours `changed` only when its read-back agrees", () => {
+  it("observed_after is exactly {local: {state, running, camera_label, error_class, observed_at, changed, media_track_ready_state, action_trace}} — the server honours `changed` only when its read-back agrees", () => {
+    const trace = ["request:enable", "already:ACTIVE"];
     expect(
-      observedAfter({ state: "ACTIVE", running: true, camera_label: "cam", error_class: null, observed_at: AT, changed: false }),
-    ).toEqual({ local: { state: "ACTIVE", running: true, camera_label: "cam", error_class: null, observed_at: AT, changed: false } });
+      observedAfter({
+        state: "ACTIVE",
+        running: true,
+        camera_label: "cam",
+        error_class: null,
+        observed_at: AT,
+        changed: false,
+        media_track_ready_state: "live",
+        action_trace: trace,
+      }),
+    ).toEqual({
+      local: {
+        state: "ACTIVE",
+        running: true,
+        camera_label: "cam",
+        error_class: null,
+        observed_at: AT,
+        changed: false,
+        media_track_ready_state: "live",
+        action_trace: trace,
+      },
+    });
   });
 
   it("the durable reason is voice:<utterance>, trimmed and bounded to the server's 200 characters", () => {

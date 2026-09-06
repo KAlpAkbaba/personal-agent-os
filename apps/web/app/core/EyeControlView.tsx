@@ -23,9 +23,18 @@ export type EyeControlViewProps = {
   busy: boolean;
   /** An error surfaced by the last owner action (start/stop), if any. */
   error: string | null;
+  /**
+   * The stages the store went through for the last enable/disable (or the one
+   * in flight), oldest first — `EyeStore`'s `lastActionTrace`. Empty before
+   * any action; absent for callers that have no store (the same markup).
+   */
+  lastActionTrace?: string[];
   onStart: () => void;
   onStop: () => void;
 };
+
+/** How the trace's stages are joined on one muted line. */
+export const TRACE_SEPARATOR = " › ";
 
 export default function EyeControlView({
   eye,
@@ -33,6 +42,7 @@ export default function EyeControlView({
   permission,
   busy,
   error,
+  lastActionTrace = [],
   onStart,
   onStop,
 }: EyeControlViewProps) {
@@ -90,6 +100,16 @@ export default function EyeControlView({
       {(error || status.lastError) && (
         <span className="muted" data-eye-local-error="yes">
           {error ?? status.lastError}
+        </span>
+      )}
+
+      {/* Where the last action got to, stage by stage, so "Kamerayı açamadım"
+          is never the whole story: the owner reads which step stopped it. Text
+          only — step names and the camera's label, exactly what the store relays
+          to the Cloud Core as `observed_after.local.action_trace`. */}
+      {lastActionTrace.length > 0 && (
+        <span className="muted" data-eye-trace={lastActionTrace.length}>
+          {lastActionTrace.join(TRACE_SEPARATOR)}
         </span>
       )}
     </div>

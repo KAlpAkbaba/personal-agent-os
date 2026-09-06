@@ -136,9 +136,32 @@ flag is set by the server handler ONLY when the client's `observed_after.local.s
 
 ```json
 {"local": {"state": "ACTIVE|DISABLED|ERROR", "running": true, "camera_label": "…" | null,
-           "error_class": "permission_denied|device_unavailable|timeout|capability_missing" | null,
-           "observed_at": "<iso>"}}
+           "error_class": "<EyeErrorClass>" | null,
+           "observed_at": "<iso>", "changed": true,
+           "media_track_ready_state": "live|ended" | null,
+           "action_trace": ["request:enable", "getUserMedia:called", "permission:granted",
+                            "device:Integrated Webcam", "stream:1 track live", "loop:started",
+                            "state:ENABLING->ACTIVE"]}}
 ```
+
+`error_class` is a closed set (`apps/web/app/lib/eye/types.ts`, owner requirement 2026-09-06 —
+structured, never generic): `permission_denied` (NotAllowedError/SecurityError),
+`device_not_found` (NotFoundError/OverconstrainedError), `device_busy`
+(NotReadableError/AbortError), `get_user_media_failed` (any other `getUserMedia` rejection),
+`stream_created_but_track_ended` (`getUserMedia` resolved but the video track was not `live`),
+`perception_start_failed` (the stream opened, the loop's start threw), `state_transition_failed`
+(the store could not reach the requested state for any other reason), `timeout`,
+`capability_missing`. `media_track_ready_state` is the video track's own `readyState` right after
+the action (`null` when the device holds no track); `action_trace` is the bounded (≤ 12), ordered
+list of stages the store went through for THIS action — text only: stage names, the camera label,
+an error's name. Never a frame, a pixel count or an identifier.
+
+The provider delivers function names in its own spelling (`eye__disable`: no dot allowed,
+`app/voice/providers.py::vendor_tool_name`); the client relays that spelling verbatim and the
+server's registry maps it back. The client normalises the name to the Cloud Core spelling
+(`apps/web/app/lib/voice/tool-names.ts::cloudToolName`) ONLY for its local port — the owner's
+2026-09-06 run (session 3eb6fee7) reached the port as `eye__disable`, matched nothing, and every
+eye command was recorded `capability_missing`.
 
 If the client has no eye capability at all (a non-web client), it relays without
 `observed_after`; the server treats that as `local.state = "ERROR", error_class =
@@ -166,8 +189,10 @@ capability_missing` and never sets the durable flag on enable.
   - enable verified: `Gözümü açtım efendim.`
   - enable already: `Gözüm zaten açık efendim.`
   - enable failed permission_denied: `Kamerayı açamadım; tarayıcı kamera izni vermedi.`
-  - enable failed device_unavailable: `Kamerayı açamadım; kamera bulunamadı ya da meşgul.`
-  - enable failed timeout / capability_missing / unverified: `Kamerayı açamadım; işlem doğrulanmadı.`
+  - enable failed device_not_found: `Kamerayı açamadım; kamera bulunamadı.`
+  - enable failed device_busy: `Kamerayı açamadım; kamera meşgul.`
+  - enable failed get_user_media_failed / stream_created_but_track_ended / perception_start_failed /
+    state_transition_failed / timeout / capability_missing / unverified: `Kamerayı açamadım; işlem doğrulanmadı.`
 
 ### 5.3 The deterministic safety net stays (disable only)
 

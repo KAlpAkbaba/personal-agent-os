@@ -35,6 +35,8 @@ export type ActivePerceptionHandle = {
   busy: boolean;
   /** Owner-facing text for the last thing that went wrong, or `null`. */
   error: string | null;
+  /** The stages of the last (or in-flight) enable/disable, for the eye cell's trace line. */
+  lastActionTrace: string[];
   start: () => Promise<void>;
   stop: () => Promise<void>;
   /**
@@ -64,6 +66,7 @@ export function useActivePerception(store: EyeStore = getEyeStore()): ActivePerc
     permission: eye.permission,
     busy: eye.busy,
     error: eye.error,
+    lastActionTrace: eye.lastActionTrace,
     start,
     stop,
     stopLocalOnly,

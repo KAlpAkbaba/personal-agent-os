@@ -45,10 +45,38 @@ export type EyeObservation = {
  * Why the LOCAL eye capability failed, in the closed vocabulary the Cloud
  * Core's action receipt speaks (M18_ACTION_CONTRACT.md §5.1, §5.2). The
  * server maps each to one spoken sentence; nothing outside this set may be
- * relayed, so `EyeStore` maps every camera failure onto one of these four.
+ * relayed, so `EyeStore` maps every failure onto exactly one of these —
+ * structured, never a generic "could not open" (owner requirement,
+ * 2026-09-06). Each names WHERE the action stopped:
+ *
+ * - `permission_denied` — `getUserMedia` refused: NotAllowedError / SecurityError;
+ * - `device_not_found` — no such camera: NotFoundError / OverconstrainedError;
+ * - `device_busy` — the camera exists but could not be read: NotReadableError / AbortError;
+ * - `get_user_media_failed` — any other `getUserMedia` rejection;
+ * - `stream_created_but_track_ended` — `getUserMedia` resolved, but the video
+ *   track's `readyState` was not `"live"` (the track is stopped, nothing durable);
+ * - `perception_start_failed` — the stream opened, but the sampling loop's
+ *   start threw afterwards;
+ * - `state_transition_failed` — the store could not reach the requested state
+ *   for any other reason (an unexpected throw in the transition itself);
+ * - `timeout` — the local bound (`LOCAL_EYE_TIMEOUT_MS`) elapsed first;
+ * - `capability_missing` — this client has no camera API at all.
  */
-export const EYE_ERROR_CLASSES = ["permission_denied", "device_unavailable", "timeout", "capability_missing"] as const;
+export const EYE_ERROR_CLASSES = [
+  "permission_denied",
+  "device_not_found",
+  "device_busy",
+  "get_user_media_failed",
+  "stream_created_but_track_ended",
+  "perception_start_failed",
+  "state_transition_failed",
+  "timeout",
+  "capability_missing",
+] as const;
 export type EyeErrorClass = (typeof EYE_ERROR_CLASSES)[number];
+
+/** A `MediaStreamTrack.readyState`, or `null` when this device holds no video track. */
+export type MediaTrackReadyState = "live" | "ended";
 
 /** The browser's own answer to "may this page use the camera". */
 export type CameraPermission =

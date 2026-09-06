@@ -86,6 +86,7 @@ import {
   validateCreateBody,
 } from "./session-contract";
 import { msOrOmit, UplinkProbe } from "./timing";
+import { cloudToolName } from "./tool-names";
 import {
   type RealtimeTransport,
   type TransportDescriptor,
@@ -1923,6 +1924,14 @@ export class VoiceSessionController {
    * and — defensively — when the port throws: the call is then relayed
    * without `observed_after`, which the server reads as a missing local
    * capability rather than as success.
+   *
+   * `name` arrives in the PROVIDER's spelling (`eye__disable`: the vendor
+   * allows no dot in a function name, see `tool-names.ts`) and is relayed to
+   * the Cloud Core in that same spelling, untouched. The port, though, speaks
+   * the Cloud Core's names (`eye.disable`), so THIS is the one place the name
+   * is normalised — the owner's 2026-09-06 run reached the port as
+   * `eye__disable`, matched nothing, and every eye command was recorded as
+   * `capability_missing` while the camera sat idle.
    */
   private async runLocalAction(
     callId: string,
@@ -1932,7 +1941,7 @@ export class VoiceSessionController {
     const port = this.deps.localActions;
     if (!port) return null;
     try {
-      const observed = await port.run(name, args);
+      const observed = await port.run(cloudToolName(name), args);
       if (observed) this.log(`tool.local:${callId}`);
       return observed;
     } catch (error) {
