@@ -256,6 +256,10 @@ describe("§2 barge-in split and the reversible early mute", () => {
     t.transport.emit({ type: "response_done", at: 600 });
     expect(t.playback.muted).toBe(false); // the gain is back at 1 NOW, not at the next arm()
     expect(t.playback.unmutes).toEqual([600]);
+    // ADR-0066: generation done, audio draining; the provider's stop ends it.
+    expect(t.controller.getSnapshot().state).toBe("speaking");
+    expect(t.controller.getSnapshot().speech.phase).toBe("draining");
+    t.transport.emit({ type: "audio_stopped", at: 600 });
     expect(t.controller.getSnapshot().state).toBe("listening");
     expect(t.controller.getSnapshot().micMetrics).toMatchObject({ early_mutes: 1, early_mute_reverts: 1 });
     expect(t.transport.sent).toEqual([]);
@@ -462,6 +466,8 @@ describe("payload contract", () => {
     tool_done: ["call_id", "name", "status"],
     preamble_audio_start: ["call_id"],
     speech_resumed: ["call_id"],
+    /** ADR-0066: which response finished and how the end was judged; the durations are numbers. */
+    audio_done: ["response_id", "basis"],
     network_lost: ["reason"],
     network_restored: [],
   };

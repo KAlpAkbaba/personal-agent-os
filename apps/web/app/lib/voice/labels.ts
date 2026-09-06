@@ -8,7 +8,7 @@
  * cursor is — never the transcript, which stays on `/voice`.
  */
 
-import { type ControllerSnapshot, type VoiceUiState, describeNarrationCursor } from "./controller";
+import { type ControllerSnapshot, type SpeechPhase, type VoiceUiState, describeNarrationCursor } from "./controller";
 import type { EnvironmentClass, EnvironmentMode } from "./calibration";
 import type { MicrophoneProfile, VoiceChoice } from "./profile";
 
@@ -24,6 +24,25 @@ export const VOICE_STATE_LABEL: Record<VoiceUiState, string> = {
   closed: "Kapalı",
   error: "Hata",
 };
+
+/**
+ * ADR-0066: the speech lifecycle phase, worded for the readouts. Only the
+ * phases that add something to "Konuşuyor" have words; `draining` is the one
+ * the owner should be able to see — generation is over, the audio is not.
+ */
+export const SPEECH_PHASE_LABEL: Record<SpeechPhase, string> = {
+  idle: "",
+  generating: "yanıt üretiliyor, ses henüz yok",
+  audible: "ses çalıyor",
+  draining: "üretim bitti, kalan ses çalıyor",
+  done: "",
+};
+
+/** The phase note next to the state label while speaking; null otherwise. */
+export function speechPhaseNote(snapshot: Pick<ControllerSnapshot, "state" | "speech">): string | null {
+  if (snapshot.state !== "speaking") return null;
+  return SPEECH_PHASE_LABEL[snapshot.speech.phase] || null;
+}
 
 export const MODE_LABEL: Record<EnvironmentMode, string> = {
   auto: "Otomatik",

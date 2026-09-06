@@ -333,9 +333,13 @@ describe("B. conversational barge-in lane", () => {
       expect(isForbiddenKey(key), key).toBe(false);
       expect(typeof value, key).toBe("number");
     }
-    // The assistant simply goes on; its completion is a normal one.
+    // The assistant simply goes on; its completion is a normal one: generation
+    // ends, the buffered audio drains (ADR-0066), the provider's stop ends it.
     t.scheduler.advance(300);
     t.transport.emit({ type: "response_done", at: 2000 });
+    expect(t.controller.getSnapshot().state).toBe("speaking");
+    expect(t.controller.getSnapshot().speech.phase).toBe("draining");
+    t.transport.emit({ type: "audio_stopped", at: 2100 });
     expect(t.controller.getSnapshot().state).toBe("listening");
   });
 

@@ -14,7 +14,7 @@ import StateReadout from "../../app/core/StateReadout";
 import VoiceControlView from "../../app/core/VoiceControlView";
 import { type VoiceOverlay, visualFor } from "../../app/lib/uistate/visual";
 import { applyResponse, emptyTruth } from "../../app/lib/uistate/truth";
-import type { VoiceUiState } from "../../app/lib/voice/controller";
+import { EMPTY_SPEECH, type VoiceUiState } from "../../app/lib/voice/controller";
 import { type VoiceStore, type VoiceStoreSnapshot } from "../../app/lib/voice/store";
 import { AGENT_IDLE, T0, resetSequence, response } from "./fixtures";
 
@@ -69,6 +69,7 @@ function snapshot(state: VoiceUiState, overrides: Partial<VoiceStoreSnapshot> = 
       toolsRunning: [],
       sidebandLog: [],
       narrationCursor: null,
+      speech: EMPTY_SPEECH,
       hesitation: { held: 0, resumed_within_hold: 0 },
       online: true,
       eventsAccepted: 0,
@@ -169,6 +170,23 @@ describe("the voice cell states facts and offers one control", () => {
 
   it("never shows the transcript", () => {
     expect(cell("speaking")).not.toContain("Bu bir transkript");
+  });
+
+  it("speaking while draining says generation is over and the rest is still playing (ADR-0066)", () => {
+    const voice = snapshot("speaking");
+    voice.controller = {
+      ...voice.controller,
+      speech: { ...EMPTY_SPEECH, responseId: "r1", phase: "draining", firstAudioAt: 1300, generationDoneAt: 1800 },
+    };
+    const html = renderToStaticMarkup(
+      <VoiceControlView voice={voice} onConnect={vi.fn()} onDisconnect={vi.fn()} onReconnect={vi.fn()} />,
+    );
+    expect(html).toContain('data-speech-phase="draining"');
+    expect(html).toContain("Konuşuyor");
+    expect(html).toContain("üretim bitti, kalan ses çalıyor");
+    // The note belongs to speaking only; listening carries no phase words.
+    expect(cell("listening")).not.toContain("kalan ses çalıyor");
+    expect(cell("listening")).toContain('data-speech-phase="idle"');
   });
 
   it("before the rig exists (server render) it says the session is not set up yet, and offers nothing enabled", () => {

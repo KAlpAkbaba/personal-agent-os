@@ -14,7 +14,7 @@
 
 import Link from "next/link";
 
-import { MODE_LABEL, VOICE_STATE_LABEL } from "../lib/voice/labels";
+import { MODE_LABEL, VOICE_STATE_LABEL, speechPhaseNote } from "../lib/voice/labels";
 import {
   type VoiceStoreSnapshot,
   isBusyState,
@@ -44,6 +44,7 @@ export default function VoiceControlView({ voice, onConnect, onDisconnect, onRec
       className="ambient-cell voice-cell"
       data-voice-connection={connection}
       data-voice-state={state}
+      data-speech-phase={controller.speech.phase}
       data-voice-ready={voice.ready ? "yes" : "no"}
       data-voice-simulated={voice.simulated ? "yes" : "no"}
     >
@@ -51,6 +52,8 @@ export default function VoiceControlView({ voice, onConnect, onDisconnect, onRec
         {live ? "Ses bağlı" : busy ? "Ses bağlanıyor" : "Ses bağlı değil"}
         {" · "}
         {VOICE_STATE_LABEL[state]}
+        {/* ADR-0066: the lifecycle, not the energy — "draining" is speaking with the generation over. */}
+        {speechPhaseNote(controller) && <span className="muted" data-speech-note>{` (${speechPhaseNote(controller)})`}</span>}
       </span>
 
       {!voice.ready ? (

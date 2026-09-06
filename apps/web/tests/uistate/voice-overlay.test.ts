@@ -103,6 +103,24 @@ describe("measurements, not rhythms", () => {
     expect(out.intensity).toBe(0);
   });
 
+  it("a pause inside an answer is a calm speaking Core, not a state change (ADR-0066: energy is amplitude, the lifecycle is the state)", () => {
+    const pause = applyVoiceOverlay(idleBus(), overlay({ state: "speaking", outputLevel: 0 }));
+    expect(pause.kind).toBe("speaking");
+    expect(pause.voiceState).toBe("speaking");
+    expect(pause.pulse).toBe(0);
+    expect(pause.energy).toBe(0);
+    // Calm, not held: the speaking body keeps its breath and scale, unlike `interrupted`.
+    const held = applyVoiceOverlay(idleBus(), overlay({ state: "interrupted", outputLevel: 0 }));
+    expect(pause.breathAmplitude).toBeGreaterThan(0);
+    expect(held.breathAmplitude).toBe(0);
+    expect(pause.scale).toBeGreaterThan(held.scale);
+    // And when the speech resumes, only the amplitude changes.
+    const resumed = applyVoiceOverlay(idleBus(), overlay({ state: "speaking", outputLevel: 0.6 }));
+    expect(resumed.kind).toBe("speaking");
+    expect(resumed.pulse).toBe(0.6);
+    expect({ ...resumed, pulse: 0, energy: 0, intensity: 0, glow: 0 }).toEqual({ ...pause, glow: 0 });
+  });
+
   it("speaking with an unmeasurable path draws no pulse and keeps intensity null so the readout can say so", () => {
     const out = applyVoiceOverlay(idleBus(), overlay({ state: "speaking", outputLevel: null }));
     expect(out.pulse).toBe(0);

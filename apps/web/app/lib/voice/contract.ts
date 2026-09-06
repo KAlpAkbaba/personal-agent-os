@@ -125,6 +125,13 @@ export const TIMING_EVENT_KINDS = [
   "speech_resumed",
   "audio_frame",
   "response_done",
+  /**
+   * ADR-0066: the assistant's audio for one response actually finished
+   * (payload `response_id`, `basis`: provider | silence | cap | interrupted |
+   * superseded, plus `drain_ms` / `audible_ms` numbers). Fire-and-forget like
+   * every timing kind; a server that does not know it yet skips it.
+   */
+  "audio_done",
   "network_lost",
   "network_restored",
 ] as const;

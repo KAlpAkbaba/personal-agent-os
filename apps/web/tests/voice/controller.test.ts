@@ -224,6 +224,11 @@ describe("VoiceSessionController", () => {
     t.transport.emit({ type: "response_text", at: 1800, text: "on.", final: false });
     expect(t.controller.getSnapshot().assistantText).toBe("Saat on.");
     t.transport.emit({ type: "response_done", at: 2500 });
+    // ADR-0066: generation is over, the track's buffer is not — still speaking, draining.
+    expect(t.controller.getSnapshot().state).toBe("speaking");
+    expect(t.controller.getSnapshot().speech.phase).toBe("draining");
+    t.scheduler.advance(100);
+    t.transport.emit({ type: "audio_stopped", at: 2600 });
     expect(t.controller.getSnapshot().state).toBe("listening");
     await t.controller.flushEvents();
     expect(t.core.kinds()).toEqual([
@@ -237,6 +242,7 @@ describe("VoiceSessionController", () => {
       "first_audio",
       "spoken", // M16 §3.2: the completed response's transcript, before response_done
       "response_done",
+      "audio_done", // ADR-0066: playback actually finished (the provider's stop)
       "state",
     ]);
     expect(t.core.events[3].payload).toMatchObject({ mic_metrics: 1, unmatched: 1, provider_first: 1 });

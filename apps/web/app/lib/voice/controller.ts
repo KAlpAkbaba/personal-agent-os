@@ -268,6 +268,8 @@ export type ControllerSnapshot = {
   sidebandLog: string[];
   /** M16 §3.2: the last `narration_cursor` sideband frame; null until one arrives. */
   narrationCursor: NarrationCursorView | null;
+  /** ADR-0066: the current (or last) response's speech lifecycle, apart from the output energy. */
+  speech: SpeechLifecycle;
   hesitation: { held: number; resumed_within_hold: number; last?: string };
   online: boolean;
   eventsAccepted: number;
@@ -363,6 +365,58 @@ type PendingInterruption = TurnOnset & {
 
 /** `barge_in_start.lane`: how the assistant was stopped. */
 export const LANE_CODE = { hesitation_resume: 0, explicit_stop: 1, conversational: 2 } as const;
+
+/**
+ * ADR-0066: the SEMANTIC speech lifecycle of one assistant response, kept
+ * apart from the instantaneous output energy. `speaking` (the UI state) runs
+ * from the first audible playback until the final audio belonging to that
+ * response has actually completed; RMS only sets the pulse's amplitude.
+ *
+ * - `generating`: `response_started` seen, nothing audible yet
+ * - `audible`: first audio observed (local analyser or the provider's mark)
+ * - `draining`: generation is complete (`response_done`) but audio is still
+ *   playing out of the media track's buffer — the state stays `speaking`
+ * - `done`: playback actually ended (the provider's `audio_stopped` for this
+ *   response, the silence release, the drain cap, or an interruption)
+ */
+export type SpeechPhase = "idle" | "generating" | "audible" | "draining" | "done";
+
+/** Why playback was judged finished (`audio_done.basis`). */
+export type AudioDoneBasis = "provider" | "silence" | "cap" | "interrupted" | "superseded";
+
+export type SpeechLifecycle = {
+  /** the provider's response id, when the wire dialect carries one */
+  responseId: string | null;
+  phase: SpeechPhase;
+  /** session-clock ms; null until observed */
+  firstAudioAt: number | null;
+  generationDoneAt: number | null;
+  playbackDoneAt: number | null;
+  /** how the last completed playback was judged finished; null until `done` */
+  basis: AudioDoneBasis | null;
+};
+
+export const EMPTY_SPEECH: SpeechLifecycle = {
+  responseId: null,
+  phase: "idle",
+  firstAudioAt: null,
+  generationDoneAt: null,
+  playbackDoneAt: null,
+  basis: null,
+};
+
+/**
+ * ADR-0066 fallback bounds for a drain the provider never closes: analyser
+ * silence for `PLAYBACK_RELEASE_MS` after `response_done` (and after the last
+ * measured energy) ends `speaking`; `PLAYBACK_DRAIN_MAX_MS` after
+ * `response_done` ends it regardless. The analyser is read every
+ * `PLAYBACK_POLL_MS` while draining; energy above `PLAYBACK_ENERGY_LEVEL`
+ * (the bounded 0..1 `outputLevel`) counts as audio still playing.
+ */
+export const PLAYBACK_RELEASE_MS = 400;
+export const PLAYBACK_DRAIN_MAX_MS = 8000;
+export const PLAYBACK_POLL_MS = 50;
+export const PLAYBACK_ENERGY_LEVEL = 0.02;
 
 const SIDEBAND_LOG_MAX = 20;
 const REQUEST_LOG_MAX = 20;
@@ -487,6 +541,14 @@ export class VoiceSessionController {
   private responseTurn = 0;
   /** a `spoken` event went out for the current response (a cut or a completion, never both) */
   private spokenReported = false;
+  // ADR-0066: the speech lifecycle, per response (mirrored on the snapshot as `speech`)
+  private speech: SpeechLifecycle = EMPTY_SPEECH;
+  /** the provider's `audio_stopped` for the current response arrived before its `response_done` */
+  private providerStoppedAt: number | null = null;
+  /** last moment the output path measurably carried energy (analyser activity or level) */
+  private lastOutputEnergyAt: number | null = null;
+  private drainPollTimer: unknown = null;
+  private drainCapTimer: unknown = null;
 
   // tools
   private relayed = new Map<string, Promise<void>>();
@@ -530,6 +592,7 @@ export class VoiceSessionController {
       toolsRunning: [],
       sidebandLog: [],
       narrationCursor: null,
+      speech: EMPTY_SPEECH,
       hesitation: { held: 0, resumed_within_hold: 0 },
       online: deps.network.online,
       eventsAccepted: 0,
@@ -642,7 +705,9 @@ export class VoiceSessionController {
       micMetrics: { ...EMPTY_MIC_METRICS },
       latency: {},
       latencyDetail: {},
+      speech: EMPTY_SPEECH,
     });
+    this.speech = EMPTY_SPEECH;
     // ADR-0045: honour the contract version of the server we are talking to.
     const contract = await this.probeContract();
     if (!contract) {
@@ -808,6 +873,9 @@ export class VoiceSessionController {
     this.clearPlaybackConfirmTimer();
     this.dropPending();
     this.clearFalseInterruptionWatch();
+    // ADR-0066: a response still playing at close is cut by the close, and
+    // its `audio_done` goes out with the final batch, before CLOSED.
+    this.finishPlayback(this.now(), "interrupted", false);
     if (this.reporter) {
       this.settleUplink({ session_end: 1 });
       this.judgeOpenTurn();
@@ -834,6 +902,8 @@ export class VoiceSessionController {
     this.dropPending();
     this.clearFalseInterruptionWatch();
     this.deps.playback.stop();
+    // The leg is gone: whatever was still playing was cut with it (ADR-0066).
+    this.finishPlayback(this.now(), "interrupted", false);
     this.transport?.close(reason);
     this.transport = null;
     this.responseActive = false;
@@ -887,16 +957,16 @@ export class VoiceSessionController {
         this.onOwnerTranscript(event.text, event.final, event.at);
         return;
       case "response_started":
-        this.onResponseStarted(event.at);
+        this.onResponseStarted(event.at, event.responseId);
         return;
       case "response_text":
         this.onResponseText(event.text, event.final);
         return;
       case "audio_started":
-        this.onProviderAudioStarted(event.at);
+        this.onProviderAudioStarted(event.at, event.responseId);
         return;
       case "audio_stopped":
-        this.responseAudible = false;
+        this.onProviderAudioStopped(event.at, event.responseId);
         return;
       case "response_done":
         this.onResponseDone(event.at);
@@ -909,7 +979,11 @@ export class VoiceSessionController {
         // The response is gone: a potential barge-in has nothing left to decide.
         this.dropPending();
         this.revertEarlyMute(event.at);
-        if (this.snapshot.state === "interrupted") this.setState("listening", "LISTENING");
+        // ADR-0066: a cancelled response is not speaking, whoever cancelled it.
+        this.finishPlayback(event.at, "interrupted", false);
+        if (this.snapshot.state === "interrupted" || this.snapshot.state === "speaking") {
+          this.setState("listening", "LISTENING");
+        }
         return;
       case "tool_call":
         void this.relayToolCall(event.callId, event.name, event.arguments, event.at);
@@ -1236,6 +1310,9 @@ export class VoiceSessionController {
     this.responseAudible = false;
     this.awaitingFirstAudio = false;
     this.clearPlaybackConfirmTimer();
+    // ADR-0066: the interruption ends the speech lifecycle at the stop, now —
+    // never at a later provider event and never on a timer.
+    this.finishPlayback(stopAt, "interrupted", false);
     this.patch({
       latency: { ...this.snapshot.latency, barge_in_to_stop_ms: { value: stopMs, at } },
       latencyDetail: {
@@ -1688,7 +1765,12 @@ export class VoiceSessionController {
 
   // ---------------------------------------------------- assistant speech
 
-  private onResponseStarted(at: number): void {
+  private onResponseStarted(at: number, responseId?: string): void {
+    // ADR-0066: a response that starts while the previous one is still
+    // draining takes the lifecycle over. The old audio's real end is unknown
+    // from here on, and the record says so (`basis: superseded`) rather than
+    // borrowing a later `audio_stopped` that may belong to either.
+    this.finishPlayback(at, "superseded", false);
     this.responseActive = true;
     // The turn this response belongs to. `spoken` describes what the ASSISTANT said, so
     // it is reported against this turn even when the owner's transcript (the fast control
@@ -1698,6 +1780,8 @@ export class VoiceSessionController {
     this.awaitingFirstAudio = true;
     this.responseStartedAt = at;
     this.audioStartedAt = null;
+    this.providerStoppedAt = null;
+    this.lastOutputEnergyAt = null;
     this.clearPlaybackConfirmTimer();
     this.bargedResponse = false;
     // A new response: whatever was pending against the old one is moot, and a
@@ -1710,8 +1794,23 @@ export class VoiceSessionController {
     this.spokenReported = false;
     this.prematureResponse = this.guard.isHolding;
     this.deps.playback.arm();
+    this.setSpeech({
+      responseId: responseId ?? null,
+      phase: "generating",
+      firstAudioAt: null,
+      generationDoneAt: null,
+      playbackDoneAt: null,
+      basis: null,
+    });
     this.log(`response.started@${Math.round(at)}`);
     if (this.snapshot.state !== "tool_running") this.setState("speaking", "ASSISTANT_SPEAKING");
+  }
+
+  /** ADR-0066: does a provider event carrying `responseId` belong to the current response? */
+  private isCurrentResponse(responseId: string | undefined): boolean {
+    // Either side without an id (a dialect that carries none) is taken as
+    // the current response; two ids that disagree are a stale event.
+    return responseId === undefined || this.speech.responseId === null || responseId === this.speech.responseId;
   }
 
   /**
@@ -1720,10 +1819,18 @@ export class VoiceSessionController {
    * first AUDIBLE sample is what the local analyser reports; if it never does
    * inside `playbackConfirmMs`, the provider's mark is used with `basis: 0`.
    */
-  private onProviderAudioStarted(at: number): void {
-    if (!this.awaitingFirstAudio) return;
+  private onProviderAudioStarted(at: number, responseId?: string): void {
+    if (!this.isCurrentResponse(responseId)) {
+      this.log("audio.started.stale");
+      return;
+    }
+    if (this.speech.phase === "done" || this.speech.phase === "idle") return;
+    // The provider's buffer is playing (again): the lifecycle may not close on
+    // a stop that came before this start.
     this.responseAudible = true;
+    this.providerStoppedAt = null;
     if (this.audioStartedAt === null) this.audioStartedAt = at;
+    if (!this.awaitingFirstAudio) return;
     this.clearPlaybackConfirmTimer();
     this.playbackConfirmTimer = this.scheduler.setTimeout(() => {
       this.playbackConfirmTimer = null;
@@ -1731,8 +1838,28 @@ export class VoiceSessionController {
     }, this.deps.playbackConfirmMs ?? DEFAULT_PLAYBACK_CONFIRM_MS);
   }
 
+  /**
+   * The provider says its audio for a response finished playing (WebRTC
+   * `output_audio_buffer.stopped`). ADR-0066: this — for THIS response — is
+   * the authoritative end of playback. Before `response_done` it is remembered
+   * (generation may still add audio); after it, it closes the drain.
+   */
+  private onProviderAudioStopped(at: number, responseId?: string): void {
+    if (!this.isCurrentResponse(responseId)) {
+      this.log("audio.stopped.stale");
+      return;
+    }
+    this.responseAudible = false;
+    if (this.speech.phase === "draining") {
+      this.finishPlayback(at, "provider", true);
+    } else if (this.speech.phase === "audible" || this.speech.phase === "generating") {
+      this.providerStoppedAt = at;
+    }
+  }
+
   /** Local: the first audible energy after `arm()`. */
   private onAudioActivity(at: number): void {
+    this.lastOutputEnergyAt = at;
     if (!this.awaitingFirstAudio) return;
     this.reportFirstAudio(at, 1);
   }
@@ -1742,6 +1869,8 @@ export class VoiceSessionController {
     this.awaitingFirstAudio = false;
     this.clearPlaybackConfirmTimer();
     this.responseAudible = true;
+    if (this.lastOutputEnergyAt === null || this.lastOutputEnergyAt < at) this.lastOutputEnergyAt = at;
+    if (this.speech.phase === "generating") this.setSpeech({ ...this.speech, phase: "audible", firstAudioAt: at });
     const turn = this.snapshot.turn;
     const responseCreated =
       this.lastEotAt !== null && this.responseStartedAt !== null && this.responseStartedAt >= this.lastEotAt
@@ -1836,9 +1965,110 @@ export class VoiceSessionController {
     // one reports its whole transcript (once, and only when there is one).
     if (!this.bargedResponse) this.reportSpoken(1, at);
     this.reporter?.report({ kind: "response_done", t_ms: at, turn: this.snapshot.turn });
+    // ADR-0066: `response_done` is the end of GENERATION. Over WebRTC the
+    // media track still holds whatever was generated but not yet played, so
+    // the speech lifecycle — and the `speaking` state — end only when that
+    // audio has actually finished: the provider's `audio_stopped` for this
+    // response, analyser silence after generation, the drain cap, or an
+    // interruption. Nothing here invents speech: a response whose audio never
+    // started, or already stopped, ends now.
+    if (this.speech.phase === "generating" || this.speech.phase === "audible") {
+      if (this.responseAudible) {
+        this.setSpeech({ ...this.speech, phase: "draining", generationDoneAt: at });
+        this.log(`playback.draining@${Math.round(at)}`);
+        this.armDrainTimers(at);
+      } else if (this.audioStartedAt !== null || this.speech.firstAudioAt !== null) {
+        // Audio was heard and the provider already closed its buffer.
+        this.setSpeech({ ...this.speech, generationDoneAt: at });
+        this.finishPlayback(this.providerStoppedAt ?? at, "provider", false);
+      } else {
+        // No audio at all (a tool-only or text-only response): nothing to drain.
+        this.setSpeech({ ...this.speech, phase: "done", generationDoneAt: at, playbackDoneAt: at });
+      }
+    }
     if (this.longRunning.size > 0) {
       this.setState("tool_running", "TOOL_RUNNING");
-    } else if (this.snapshot.state === "speaking") {
+    } else if (this.snapshot.state === "speaking" && this.speech.phase !== "draining") {
+      this.setState("listening", "LISTENING");
+    }
+  }
+
+  // ------------------------------------------------ playback lifecycle (ADR-0066)
+
+  private setSpeech(speech: SpeechLifecycle): void {
+    this.speech = speech;
+    this.patch({ speech });
+  }
+
+  /**
+   * While draining: the analyser is read every `PLAYBACK_POLL_MS`; silence
+   * for `PLAYBACK_RELEASE_MS` after both `response_done` and the last measured
+   * energy ends playback (`basis: silence`); `PLAYBACK_DRAIN_MAX_MS` after
+   * `response_done` ends it whatever the analyser says (`basis: cap`). A path
+   * this client silenced itself (an early mute, a potential barge-in) is not
+   * silence — the audio is still flowing under the mute — so the release
+   * waits, and the cap or the lane's own verdict decides.
+   */
+  private armDrainTimers(generationDoneAt: number): void {
+    this.clearDrainTimers();
+    this.drainCapTimer = this.scheduler.setTimeout(() => {
+      this.drainCapTimer = null;
+      this.finishPlayback(this.now(), "cap", true);
+    }, PLAYBACK_DRAIN_MAX_MS);
+    const poll = (): void => {
+      this.drainPollTimer = null;
+      if (this.speech.phase !== "draining") return;
+      const now = this.now();
+      const level = this.deps.playback.outputLevel?.() ?? null;
+      if (level !== null && level > PLAYBACK_ENERGY_LEVEL) this.lastOutputEnergyAt = now;
+      const silencedLocally = this.earlyMute !== null || this.pending !== null;
+      const quietSince = Math.max(generationDoneAt, this.lastOutputEnergyAt ?? generationDoneAt);
+      if (!silencedLocally && now - quietSince >= PLAYBACK_RELEASE_MS) {
+        this.finishPlayback(now, "silence", true);
+        return;
+      }
+      this.drainPollTimer = this.scheduler.setTimeout(poll, PLAYBACK_POLL_MS);
+    };
+    this.drainPollTimer = this.scheduler.setTimeout(poll, PLAYBACK_POLL_MS);
+  }
+
+  private clearDrainTimers(): void {
+    if (this.drainPollTimer !== null) {
+      this.scheduler.clearTimeout(this.drainPollTimer);
+      this.drainPollTimer = null;
+    }
+    if (this.drainCapTimer !== null) {
+      this.scheduler.clearTimeout(this.drainCapTimer);
+      this.drainCapTimer = null;
+    }
+  }
+
+  /**
+   * The one end of the speech lifecycle. Idempotent per response: the first
+   * caller's `basis` is the record. Reports `audio_done` once, and only when
+   * audio had actually started for the response (a response that never
+   * became audible has no playback to finish). `settle` says whether a
+   * `speaking` state may become `listening` here — false for an interruption
+   * (the barge-in path sets `interrupted` itself) and for a takeover.
+   */
+  private finishPlayback(at: number, basis: AudioDoneBasis, settle: boolean): void {
+    const speech = this.speech;
+    if (speech.phase === "idle" || speech.phase === "done") return;
+    this.clearDrainTimers();
+    this.responseAudible = false;
+    const audioHeard = this.audioStartedAt !== null || speech.firstAudioAt !== null;
+    this.setSpeech({ ...speech, phase: "done", playbackDoneAt: at, basis: audioHeard ? basis : null });
+    this.log(`playback.done:${basis}@${Math.round(at)}`);
+    if (audioHeard && this.reporter) {
+      const payload: Record<string, unknown> = {
+        basis,
+        drain_ms: speech.generationDoneAt === null ? undefined : msOrOmit(at - speech.generationDoneAt),
+        audible_ms: speech.firstAudioAt === null ? undefined : msOrOmit(at - speech.firstAudioAt),
+      };
+      if (speech.responseId !== null) payload.response_id = speech.responseId;
+      this.reporter.report({ kind: "audio_done", t_ms: at, turn: this.responseTurn, payload });
+    }
+    if (settle && this.snapshot.state === "speaking" && this.longRunning.size === 0) {
       this.setState("listening", "LISTENING");
     }
   }
