@@ -128,6 +128,7 @@ function Get-UnresolvedCommands {
 $harnesses = @(
     "scripts\core\owner-m18-eye.ps1",
     "scripts\core\owner-m18-presence.ps1",
+    "scripts\core\owner-m18-2.ps1",
     "scripts\core\owner-m18.ps1",
     "scripts\core\reconcile-m18.ps1",
     "scripts\voice\owner-explain.ps1"
