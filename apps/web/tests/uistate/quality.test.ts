@@ -45,21 +45,43 @@ describe("tiers", () => {
     expect(low.shells).toBe(0);
     expect(low.maxParticles).toBe(0);
     expect(low.parallax).toBe(false);
+    // M18.3: the Living Core's own layers are budgeted the same way, and `low`
+    // keeps exactly one orbital layer so the structure stays the same machine.
+    expect(high.orbitals).toBeGreaterThan(balanced.orbitals);
+    expect(balanced.orbitals).toBeGreaterThan(low.orbitals);
+    expect(low.orbitals).toBe(1);
+    expect(high.circuitSegments).toBeGreaterThan(balanced.circuitSegments);
+    expect(high.fragments).toBeGreaterThan(balanced.fragments);
+    expect(high.outerFieldPoints).toBeGreaterThan(balanced.outerFieldPoints);
+    // Dropped whole, not shrunk: the three per-instance layers cost nothing at all.
+    expect(low.circuitSegments).toBe(0);
+    expect(low.fragments).toBe(0);
+    expect(low.outerFieldPoints).toBe(0);
   });
 
   it("declares a scene budget a test can hold the scene to", () => {
-    // These are the declared ceilings (M18.1 design note §5). Changing a tier's
-    // budget means changing this table on purpose.
-    expect(sceneBudgetFor("high")).toEqual({ drawables: 26, instances: 296, maxParticles: 160 });
-    expect(sceneBudgetFor("balanced")).toEqual({ drawables: 24, instances: 152, maxParticles: 80 });
-    expect(sceneBudgetFor("low")).toEqual({ drawables: 18, instances: 32, maxParticles: 0 });
+    // These are the declared ceilings (M18.3 identity note §5, superseding the
+    // M18.1 figures now that the Living Core mounts nine layers). Changing a
+    // tier's budget means changing this table on purpose.
+    expect(sceneBudgetFor("high")).toEqual({ drawables: 36, instances: 398, maxParticles: 160 });
+    expect(sceneBudgetFor("balanced")).toEqual({ drawables: 33, instances: 206, maxParticles: 80 });
+    expect(sceneBudgetFor("low")).toEqual({ drawables: 22, instances: 32, maxParticles: 0 });
     for (const tier of QUALITY_TIERS) {
       const budget = sceneBudgetFor(tier);
+      const b = TIER_BUDGETS[tier];
       expect(budget.instances).toBe(
-        budget.maxParticles + TIER_BUDGETS[tier].maxSatellites * 2 + MAX_CAPABILITY_NODES,
+        budget.maxParticles +
+          b.maxSatellites * 2 +
+          MAX_CAPABILITY_NODES +
+          b.outerFieldPoints +
+          b.fragments,
       );
     }
     expect(sceneBudgetFor("high").drawables).toBeGreaterThan(sceneBudgetFor("low").drawables);
+    // The tiers stay strictly ordered in what they may mount, which is the
+    // property that makes `low` a real answer for a weak machine.
+    expect(sceneBudgetFor("high").instances).toBeGreaterThan(sceneBudgetFor("balanced").instances);
+    expect(sceneBudgetFor("balanced").instances).toBeGreaterThan(sceneBudgetFor("low").instances);
   });
 
   it("caps a reported count without changing what was reported", () => {

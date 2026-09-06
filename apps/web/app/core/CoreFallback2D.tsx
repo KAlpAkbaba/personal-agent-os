@@ -4,11 +4,11 @@
  * This is a *fallback in fidelity, not in truth*: it shows every fact the 3D
  * view shows, from the same `VisualIntent`, and the readout beside it is
  * literally the same component. An owner on a machine with no WebGL is not
- * given a lesser account of what the system is doing — and, since M18.1, not
- * a lesser identity either: the same layered structure (nucleus, internal
- * rings, structural shells, connection paths, constellation, capability
- * nodes, aperture) is drawn here in static SVG at the same proportions as the
- * 3D scene, from the same constants.
+ * given a lesser account of what the system is doing — and, since M18.3, not
+ * a lesser identity either: the same gold/amber layered machine (outer field,
+ * containment and topology shells, orbital layers, circuit layer, transport,
+ * processor fragments, energy chamber, nucleus) is drawn here in static SVG at
+ * the same proportions as the 3D scene, from the same constants.
  *
  * Implementation notes that matter:
  *
@@ -34,10 +34,15 @@ import {
 } from "../lib/uistate/quality";
 import {
   CAPABILITY_RADIUS,
+  CHAMBER_RADIUS,
+  CIRCUIT_RADIUS,
   CONSTELLATION_RADIUS,
   FIELD_RADIUS,
   INWARD_END,
   INWARD_START,
+  ORBITAL_RADII,
+  OUTER_FIELD_RADIUS,
+  WAKE_RADIUS,
 } from "../lib/uistate/scene";
 
 const VIEW = 320;
@@ -55,6 +60,7 @@ const EYE_WORLD = 1.64;
 const HELD_WORLD = 1.28;
 const ERROR_WORLD = 1.12;
 const RELEASE_WORLD = 1.7;
+const FRAGMENT_WORLD = 1.42;
 
 export type CoreFallback2DProps = {
   intent: VisualIntent;
@@ -113,6 +119,21 @@ export default function CoreFallback2D({
     round(world(r) * (1 + intent.shellSpread * (0.16 + i * 0.1))),
   );
 
+  // M18.3: the orbital layers, the outer field, the circuit traces and the
+  // processor fragments — the structure that makes this a machine rather than
+  // a ball. Structure is always drawn; only its brightness answers the glow,
+  // and only its rotation answers a reported spin.
+  const orbitals = ORBITAL_RADII.slice(0, budget.orbitals).map((r, i) => ({
+    rx: round(world(r) * (1 + intent.shellSpread * 0.06)),
+    ry: round(world(r) * (1 + intent.shellSpread * 0.06) * (i === 0 ? 0.34 : i === 1 ? 0.58 : 0.24)),
+    tilt: i * 61 - 24,
+  }));
+  const outerPoints = ring(Math.min(24, budget.outerFieldPoints), world(OUTER_FIELD_RADIUS), 0.11);
+  const circuitCount = Math.min(20, Math.round(budget.circuitSegments / 3));
+  const circuit = ring(circuitCount, world(CIRCUIT_RADIUS) * 0.72, 0.23);
+  const circuitOuter = ring(circuitCount, world(CIRCUIT_RADIUS), 0.23);
+  const fragments = ring(budget.fragments, world(FRAGMENT_WORLD), 0.41);
+
   // The connection paths: chords across the interior, count bounded by the
   // tier. `low` has zero lattice segments, so the tier genuinely does less
   // work rather than doing the same work with smaller numbers.
@@ -128,6 +149,11 @@ export default function CoreFallback2D({
   const tickEnd = round(tickStart - intent.inwardFlow * (tickStart - world(INWARD_END)) * 0.7);
   const ticks = ring(tickCount, tickStart);
 
+  // Particle transport: dots travelling the paths, drawn only at a reported
+  // flow. The 3D view animates them; here their presence is the statement.
+  const transportCount = intent.flowRate > 0 ? Math.min(12, Math.round(intent.flowRate * 12)) : 0;
+  const transport = ring(transportCount, world(LATTICE_WORLD) * 0.78, 0.19);
+
   const style: React.CSSProperties & Record<string, string | number> = {
     "--breath-amp": intent.breathAmplitude,
     "--breath-dur": intent.breathHz > 0 ? `${round(1 / intent.breathHz)}s` : "0s",
@@ -136,6 +162,10 @@ export default function CoreFallback2D({
     // One turn per (1 / ringSpin) * 7 s: the idle drift is a slow minute-scale
     // turn, full thinking a few seconds. Zero spin emits no animation at all.
     "--ring-dur": intent.ringSpin > 0 ? `${round(7 / intent.ringSpin)}s` : "0s",
+    // The orbital layers turn against the rings and at their own rate; the
+    // surge is the wake channel and nothing else.
+    "--orbit-dur": intent.ringSpin > 0 ? `${round(11 / intent.ringSpin)}s` : "0s",
+    "--core-surge": round(intent.wakeSurge),
   };
 
   return (
@@ -158,14 +188,56 @@ export default function CoreFallback2D({
         data-shell-spread={round(intent.shellSpread)}
         data-ring-spin={round(intent.ringSpin)}
         data-flow-rate={round(intent.flowRate)}
+        data-wake-stage={intent.wakeStage}
+        data-wake-surge={round(intent.wakeSurge)}
       >
-        {/* The structural shells: translucent, standing off by the spread. */}
+        {/* The outer field: the widest, faintest layer of the machine. */}
+        {outerPoints.length > 0 && (
+          <g className="core-outer" data-outer-points={outerPoints.length}>
+            {outerPoints.map((p, i) => (
+              <circle key={`outer-${i}`} cx={round(p.x)} cy={round(p.y)} r={1.4} />
+            ))}
+          </g>
+        )}
+
+        {/* The structural shells: [0] topology, [1] containment. */}
         {shellRadii.length > 0 && (
           <g className="core-shells" data-shells={shellRadii.length}>
             {shellRadii.map((r, i) => (
               <circle key={`shell-${i}`} cx={CENTER} cy={CENTER} r={r} strokeDasharray={i === 0 ? undefined : "2 5"} />
             ))}
           </g>
+        )}
+
+        {/* The independent orbital layers, each on its own plane. */}
+        <g
+          className={`core-orbitals ${spinning ? "orbiting" : ""}`}
+          data-orbitals={orbitals.length}
+          data-orbiting={spinning ? "yes" : "no"}
+        >
+          {orbitals.map((o, i) => (
+            <ellipse
+              key={`orbital-${i}`}
+              cx={CENTER}
+              cy={CENTER}
+              rx={o.rx}
+              ry={o.ry}
+              transform={`rotate(${o.tilt} ${CENTER} ${CENTER})`}
+            />
+          ))}
+        </g>
+
+        {/* The wake surge (M18.3 §7): the alarm's own ring, drawn only while
+            an alarm is actually sounding, and never as the Core's own state. */}
+        {intent.wakeSurge > 0 && (
+          <ellipse
+            className="core-wake"
+            cx={CENTER}
+            cy={CENTER}
+            rx={world(WAKE_RADIUS)}
+            ry={round(world(WAKE_RADIUS) * 0.82)}
+            data-wake-ring={intent.wakeStage}
+          />
         )}
 
         {/* Speaking: an outer pulse ring, sized by the reported energy only. */}
@@ -214,6 +286,49 @@ export default function CoreFallback2D({
           />
         )}
 
+        {/* The processor structures: floating fragments at fixed stations. */}
+        {fragments.length > 0 && (
+          <g className="core-fragments" data-fragments={fragments.length}>
+            {fragments.map((p, i) => (
+              <rect
+                key={`fragment-${i}`}
+                x={round(p.x - 3 - (i % 3))}
+                y={round(p.y - 2 - (i % 2))}
+                width={round(6 + (i % 3) * 2)}
+                height={round(4 + (i % 2) * 3)}
+                transform={`rotate(${round((p.angle * 180) / Math.PI)} ${round(p.x)} ${round(p.y)})`}
+              />
+            ))}
+          </g>
+        )}
+
+        {/* The data / circuit layer: procedural traces that step outward and
+            run along. Structure, so always present; its brightness is the
+            glow and its traffic is the flow. */}
+        {circuitCount > 0 && (
+          <g className="core-circuit" data-circuit-traces={circuitCount}>
+            {circuit.map((p, i) => {
+              const outer = circuitOuter[i];
+              const along = circuitOuter[(i + 1) % circuitOuter.length];
+              return (
+                <path
+                  key={`trace-${i}`}
+                  d={`M ${round(p.x)} ${round(p.y)} L ${round(outer.x)} ${round(outer.y)} L ${round((outer.x + along.x) / 2)} ${round((outer.y + along.y) / 2)}`}
+                />
+              );
+            })}
+          </g>
+        )}
+
+        {/* The energy chamber: the vessel the nucleus sits in. */}
+        <circle
+          className="core-chamber"
+          cx={CENTER}
+          cy={CENTER}
+          r={world(CHAMBER_RADIUS)}
+          data-chamber="yes"
+        />
+
         {/* The internal rings: the topology layers, each on its own tilt,
             turning at the reported spin. */}
         <g
@@ -233,7 +348,17 @@ export default function CoreFallback2D({
           ))}
         </g>
 
-        {/* The core itself: the nucleus, breathing only when told to. */}
+        {/* The core itself: the nucleus, breathing only when told to, with its
+            one restrained halo — the whole of the "bloom". */}
+        {budget.glow && (
+          <circle
+            className="core-nucleus-halo"
+            cx={CENTER}
+            cy={CENTER}
+            r={round(radius * 1.55)}
+            data-halo="yes"
+          />
+        )}
         <circle
           className={`core-body ${animate ? "breathing" : ""}`}
           cx={CENTER}
@@ -259,6 +384,15 @@ export default function CoreFallback2D({
                 />
               );
             })}
+          </g>
+        )}
+
+        {/* Particle transport: bounded, and present only at a reported flow. */}
+        {transportCount > 0 && (
+          <g className="core-transport" data-transport={transportCount}>
+            {transport.map((p, i) => (
+              <circle key={`transport-${i}`} cx={round(p.x)} cy={round(p.y)} r={2.2} />
+            ))}
           </g>
         )}
 

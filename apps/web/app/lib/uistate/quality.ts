@@ -60,6 +60,16 @@ export type TierBudget = {
   maxParticles: number;
   /** Whether the camera answers the pointer with a slight parallax. */
   parallax: boolean;
+
+  // ------------------------------------- M18.3: the Living Core's own layers
+  /** Independent orbital layers, innermost first. `low` keeps one. */
+  orbitals: number;
+  /** Procedural circuit traces in the data layer. Zero drops the layer whole. */
+  circuitSegments: number;
+  /** Floating processor fragments (instanced). Zero drops them whole. */
+  fragments: number;
+  /** Points in the outer field (instanced). Zero drops it whole. */
+  outerFieldPoints: number;
 };
 
 export const TIER_BUDGETS: Record<QualityTier, TierBudget> = {
@@ -74,6 +84,10 @@ export const TIER_BUDGETS: Record<QualityTier, TierBudget> = {
     shells: 2,
     maxParticles: 160,
     parallax: true,
+    orbitals: 3,
+    circuitSegments: 64,
+    fragments: 12,
+    outerFieldPoints: 90,
   },
   balanced: {
     fps: 30,
@@ -86,6 +100,10 @@ export const TIER_BUDGETS: Record<QualityTier, TierBudget> = {
     shells: 1,
     maxParticles: 80,
     parallax: true,
+    orbitals: 2,
+    circuitSegments: 32,
+    fragments: 6,
+    outerFieldPoints: 48,
   },
   low: {
     fps: 20,
@@ -98,6 +116,13 @@ export const TIER_BUDGETS: Record<QualityTier, TierBudget> = {
     shells: 0,
     maxParticles: 0,
     parallax: false,
+    // `low` keeps one orbital layer for the same reason it keeps one ring: the
+    // structure has to stay recognisably the same machine. Everything that
+    // costs per-frame instancing is dropped whole.
+    orbitals: 1,
+    circuitSegments: 0,
+    fragments: 0,
+    outerFieldPoints: 0,
   },
 };
 
@@ -129,10 +154,20 @@ const CONSTRUCTION_LAYERS = 4;
 export function sceneBudgetFor(tier: QualityTier): SceneBudget {
   const b = TIER_BUDGETS[tier];
   const drawables =
-    1 + // nucleus
+    // ---- M18.3: the Living Core's layers, outermost first
+    (b.outerFieldPoints > 0 ? 1 : 0) + // outer field (instanced)
+    b.shells + // containment and topology shells
+    b.orbitals + // independent orbital layers
+    (b.circuitSegments > 0 ? 1 : 0) + // data / circuit layer
+    (b.fragments > 0 ? 1 : 0) + // processor structures (instanced)
+    1 + // energy chamber
+    1 + // the wake surge's ring
+    (b.glow ? 1 : 0) + // the nucleus halo (the whole of the "bloom")
+    // ---- M18 / M18.1: what was there before, unchanged in kind
+    1 + // nucleus (warm white)
+    1 + // nucleus skin (gold)
     1 + // nucleus wire
     b.rings +
-    b.shells +
     (b.latticeSegments > 0 ? 1 : 0) + // connection paths
     (b.maxParticles > 0 ? 2 : 0) + // inward flow, path travellers
     (b.glow ? 1 : 0) + // pulse shell
@@ -147,7 +182,12 @@ export function sceneBudgetFor(tier: QualityTier): SceneBudget {
     CONSTRUCTION_LAYERS +
     2 + // release orbit: track and progress arc
     1; // the parked satellite's halo (its body is the first capability node)
-  const instances = b.maxParticles + b.maxSatellites * 2 + MAX_CAPABILITY_NODES;
+  const instances =
+    b.maxParticles +
+    b.maxSatellites * 2 +
+    MAX_CAPABILITY_NODES +
+    b.outerFieldPoints +
+    b.fragments;
   return { drawables, instances, maxParticles: b.maxParticles };
 }
 

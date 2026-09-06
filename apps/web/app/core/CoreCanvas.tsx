@@ -14,6 +14,7 @@ import { Canvas } from "@react-three/fiber";
 
 import type { QualityTier } from "../lib/uistate/quality";
 import { TIER_BUDGETS } from "../lib/uistate/quality";
+import { CAMERA_DISTANCE, CAMERA_FOV_DEG } from "../lib/uistate/scene";
 import type { VisualIntent } from "../lib/uistate/visual";
 import CoreScene from "./CoreScene";
 
@@ -35,10 +36,13 @@ export default function CoreCanvas({ intent, tier, still, hidden }: CoreCanvasPr
       // hidden), rather than spinning a loop that early-returns.
       frameloop={still || hidden ? "demand" : "always"}
       dpr={[1, budget.maxPixelRatio]}
-      // Framed so the widest thing the scene can draw - the evidence field at
-      // radius 2.0 - stays inside the frustum: tan(fov/2) * z = 0.3839 * 5.6 =
-      // 2.15 world units of half-extent.
-      camera={{ position: [0, 0, 5.6], fov: 42 }}
+      // Framed so the widest thing the scene can draw - the outer field at
+      // radius 2.18 (M18.3) - stays inside the frustum, and so that the Core's
+      // principal structure fills `CORE_FILL` of the stage. Both figures are
+      // derived from these two numbers in `lib/uistate/scene.ts`, and
+      // `stageSizeFor` sizes the stage from them: change the framing here and
+      // the layout follows rather than the coverage claim quietly going stale.
+      camera={{ position: [0, 0, CAMERA_DISTANCE], fov: CAMERA_FOV_DEG }}
       gl={{
         antialias: tier === "high",
         // The Core is ambient and often left open; a low-power context asks
