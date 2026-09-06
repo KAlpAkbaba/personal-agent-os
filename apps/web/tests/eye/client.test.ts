@@ -7,7 +7,7 @@ vi.mock("../../app/lib/session", () => ({
   UnauthorizedError: class UnauthorizedError extends Error {},
 }));
 
-import { EyeApiError, disableEye, enableEye, explainEyeError, postObservation } from "../../app/lib/eye/client";
+import { EYE_IDENTITY_MAX_CHARS, EyeApiError, disableEye, enableEye, explainEyeError, postObservation } from "../../app/lib/eye/client";
 import type { EyeObservation } from "../../app/lib/eye/types";
 import { UnauthorizedError } from "../../app/lib/session";
 
@@ -98,6 +98,32 @@ describe("enableEye / disableEye", () => {
   it("throws a typed error on failure", async () => {
     apiFetch.mockResolvedValueOnce(json(403, { detail: "yasak" }));
     await expect(disableEye()).rejects.toBeInstanceOf(EyeApiError);
+  });
+
+  const body = (call: number) => JSON.parse((apiFetch.mock.calls[call][1] as RequestInit).body as string);
+
+  it("sends the action's identity (action_id, session_id) alongside the reason when BOTH are non-empty", async () => {
+    apiFetch.mockResolvedValue(json(200, { eye_enabled: true }));
+    await enableEye("voice:Gözünü aç.", { action_id: "call_7f2", session_id: "11111111-2222-4333-8444-555555555555" });
+    expect(body(0)).toEqual({ reason: "voice:Gözünü aç.", action_id: "call_7f2", session_id: "11111111-2222-4333-8444-555555555555" });
+    await disableEye("voice:Gözünü kapat.", { action_id: "call_7f3", session_id: "11111111-2222-4333-8444-555555555555" });
+    expect(apiFetch.mock.calls[1][0]).toBe("/v1/presence/eye/disable");
+    expect(body(1)).toEqual({ reason: "voice:Gözünü kapat.", action_id: "call_7f3", session_id: "11111111-2222-4333-8444-555555555555" });
+  });
+
+  it("sends NO identity key at all when either half is missing, empty, non-string or over the server's 64 characters (extra=forbid must never 422 a real action)", async () => {
+    apiFetch.mockResolvedValue(json(200, { eye_enabled: true }));
+    await enableEye("owner_start", { action_id: "call_7f2" });
+    await enableEye("owner_start", { action_id: "call_7f2", session_id: "" });
+    await enableEye("owner_start", { action_id: null, session_id: "sess" });
+    await enableEye("owner_start", { action_id: "a".repeat(EYE_IDENTITY_MAX_CHARS + 1), session_id: "sess" });
+    await enableEye("owner_start", {});
+    await disableEye("", { action_id: "call_7f2" });
+    for (let i = 0; i < 5; i += 1) expect(body(i)).toEqual({ reason: "owner_start" });
+    expect(body(5)).toEqual({});
+    // And exactly at the bound is still sent.
+    await enableEye("owner_start", { action_id: "a".repeat(EYE_IDENTITY_MAX_CHARS), session_id: "s".repeat(EYE_IDENTITY_MAX_CHARS) });
+    expect(Object.keys(body(6)).toSorted()).toEqual(["action_id", "reason", "session_id"]);
   });
 });
 

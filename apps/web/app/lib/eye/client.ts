@@ -70,17 +70,53 @@ export async function postObservation(
   return { status: "posted" };
 }
 
-async function postEyeAction(path: string, reason: string): Promise<void> {
+/**
+ * Which action a durable eye call belongs to: the voice tool's `call_id` and
+ * the realtime session it came through, so the ledger row the server writes
+ * can be joined to the receipt of the very command that caused it
+ * (M18_ACTION_CONTRACT.md §5.5). Both optional: the owner's button has neither.
+ */
+export type EyeActionIdentity = {
+  action_id?: string | null;
+  session_id?: string | null;
+};
+
+/** The server's bound on `action_id` / `session_id` (`EyeActionRequest`, `max_length=64`). */
+export const EYE_IDENTITY_MAX_CHARS = 64;
+
+/**
+ * The identity fields to send, or nothing. Sent ONLY when both are non-empty
+ * strings within the server's bound: the request model refuses unknown keys
+ * (`extra="forbid"`), so a half-filled or over-long identity would turn a
+ * durable call that would have succeeded into a 422 — and an eye that is on
+ * without the Cloud Core knowing. Without identity the body is exactly what
+ * it was before (`{reason}` or `{}`).
+ */
+function identityFields(identity: EyeActionIdentity | undefined): { action_id: string; session_id: string } | null {
+  const actionId = identity?.action_id;
+  const sessionId = identity?.session_id;
+  if (typeof actionId !== "string" || typeof sessionId !== "string") return null;
+  if (actionId.length === 0 || sessionId.length === 0) return null;
+  if (actionId.length > EYE_IDENTITY_MAX_CHARS || sessionId.length > EYE_IDENTITY_MAX_CHARS) return null;
+  return { action_id: actionId, session_id: sessionId };
+}
+
+async function postEyeAction(path: string, reason: string, identity?: EyeActionIdentity): Promise<void> {
+  const body: Record<string, string> = {};
+  if (reason) body.reason = reason;
+  const fields = identityFields(identity);
+  if (fields) Object.assign(body, fields);
   const response = await apiFetch(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(reason ? { reason } : {}),
+    body: JSON.stringify(body),
   });
   if (!response.ok) throw new EyeApiError(response.status, await readDetail(response));
 }
 
 /** Owner action: resume perception server-side (spec §2's enable path). */
-export const enableEye = (reason = "") => postEyeAction("/v1/presence/eye/enable", reason);
+export const enableEye = (reason = "", identity?: EyeActionIdentity) =>
+  postEyeAction("/v1/presence/eye/enable", reason, identity);
 
 /**
  * Owner action: stop perception immediately, durably. The one caller in this
@@ -90,7 +126,8 @@ export const enableEye = (reason = "") => postEyeAction("/v1/presence/eye/enable
  * moment this resolves. The reason passes through verbatim: `owner_stop`
  * from the button, `voice:<utterance>` from the voice tool.
  */
-export const disableEye = (reason = "") => postEyeAction("/v1/presence/eye/disable", reason);
+export const disableEye = (reason = "", identity?: EyeActionIdentity) =>
+  postEyeAction("/v1/presence/eye/disable", reason, identity);
 
 /** Owner-facing text for anything thrown above. */
 export function explainEyeError(err: unknown): string {

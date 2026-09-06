@@ -16,7 +16,8 @@
 
 import { describe, expect, it } from "vitest";
 
-import { eyeLocalActions, observedAfter, voiceReason } from "../../app/lib/eye/local-actions";
+import type { EyeActionIdentity } from "../../app/lib/eye/client";
+import { actionIdentity, eyeLocalActions, observedAfter, voiceReason } from "../../app/lib/eye/local-actions";
 import type { FrameReducer, FrameSource } from "../../app/lib/eye/perception";
 import { EyeStore, eyeInstances } from "../../app/lib/eye/store";
 import { VoiceSessionApi } from "../../app/lib/voice/api";
@@ -75,6 +76,9 @@ async function setup(options: FakeCloudCoreOptions, localActions?: LocalActionPo
 
 const AT = "2026-09-06T12:00:00.000Z";
 
+/** The realtime session `FakeCloudCore` creates; the controller hands it to the port as `session_id`. */
+const SESSION = "11111111-2222-4333-8444-555555555555";
+
 /** What the Cloud Core answers for a verified disable (§5.5 receipt, with `speech`). */
 const DISABLE_RECEIPT = {
   action_id: "call-1",
@@ -103,9 +107,11 @@ describe("the controller asks the local port first, then relays what it observed
     t.transport.emit({ type: "tool_call", at: 10, callId: "call-1", name: "eye.disable", arguments: { utterance: "Gözünü kapat." } });
     await tick();
 
-    expect(seen).toEqual({ name: "eye.disable", args: { utterance: "Gözünü kapat." } });
+    // The port sees the provider's arguments PLUS the action's identity (call id, realtime session)…
+    expect(seen).toEqual({ name: "eye.disable", args: { utterance: "Gözünü kapat.", call_id: "call-1", session_id: SESSION } });
     expect(relaysWhenLocalRan).toBe(0); // local first, relay after
     expect(t.relays()).toHaveLength(1);
+    // …while the RELAYED arguments are the provider's own, unchanged (no call_id/session_id leaks into them).
     expect(t.relays()[0].body).toEqual({
       call_id: "call-1",
       name: "eye.disable",
@@ -210,7 +216,7 @@ class Camera implements FrameSource {
 }
 
 function eyeStore(camera: Camera) {
-  const durable: Array<{ kind: string; reason: string }> = [];
+  const durable: Array<{ kind: string; reason: string; identity: EyeActionIdentity | undefined }> = [];
   const store = new EyeStore({
     build: () => ({
       frameSource: camera,
@@ -219,11 +225,11 @@ function eyeStore(camera: Camera) {
       now: () => Date.parse(AT),
     }),
     durable: {
-      enable: async (reason) => {
-        durable.push({ kind: "enable", reason });
+      enable: async (reason, identity) => {
+        durable.push({ kind: "enable", reason, identity });
       },
-      disable: async (reason) => {
-        durable.push({ kind: "disable", reason });
+      disable: async (reason, identity) => {
+        durable.push({ kind: "disable", reason, identity });
       },
     },
   });
@@ -241,7 +247,8 @@ describe("end to end: a provider function call opens and closes THIS device's ca
     await tick();
     expect(store.getSnapshot().state).toBe("ACTIVE");
     expect(camera.starts).toBe(1);
-    expect(durable).toEqual([{ kind: "enable", reason: "voice:Gözünü aç." }]);
+    // The durable call carries the action's identity: the ledger row names the same command as the receipt.
+    expect(durable).toEqual([{ kind: "enable", reason: "voice:Gözünü aç.", identity: { action_id: "call-on", session_id: SESSION } }]);
     expect((t.relays()[0].body as { arguments: unknown }).arguments).toEqual({
       utterance: "Gözünü aç.",
       observed_after: {
@@ -253,7 +260,7 @@ describe("end to end: a provider function call opens and closes THIS device's ca
           observed_at: AT,
           changed: true,
           media_track_ready_state: null, // the fake FrameSource holds no MediaStreamTrack
-          action_trace: ["request:enable", "getUserMedia:called", "loop:started", "durable:enable", "state:ENABLING->ACTIVE"],
+          action_trace: ["gen:1", "request:enable", "action:call-on", "getUserMedia:called", "loop:started", "durable:enable", "state:ENABLING->ACTIVE"],
         },
       },
     });
@@ -272,7 +279,7 @@ describe("end to end: a provider function call opens and closes THIS device's ca
     expect(store.getSnapshot().state).toBe("DISABLED");
     expect(camera.stops).toBe(1);
     expect(camera.open).toBe(false);
-    expect(durable[1]).toEqual({ kind: "disable", reason: "voice:Gözünü kapat." });
+    expect(durable[1]).toEqual({ kind: "disable", reason: "voice:Gözünü kapat.", identity: { action_id: "call-off", session_id: SESSION } });
     expect((t.relays()[2].body as { arguments: unknown }).arguments).toEqual({
       utterance: "Gözünü kapat.",
       observed_after: {
@@ -284,7 +291,7 @@ describe("end to end: a provider function call opens and closes THIS device's ca
           observed_at: AT,
           changed: true,
           media_track_ready_state: null,
-          action_trace: ["request:disable", "durable:disable", "loop:stopped", "state:DISABLING->DISABLED"],
+          action_trace: ["gen:2", "request:disable", "action:call-off", "durable:disable", "loop:stopped", "state:DISABLING->DISABLED"],
         },
       },
     });
@@ -306,7 +313,7 @@ describe("end to end: a provider function call opens and closes THIS device's ca
     await tick();
     expect(store.getSnapshot().state).toBe("ACTIVE");
     expect(camera.starts).toBe(1);
-    expect(durable).toEqual([{ kind: "enable", reason: "voice:Kamerayı aç." }]);
+    expect(durable).toEqual([{ kind: "enable", reason: "voice:Kamerayı aç.", identity: { action_id: "call-v-on", session_id: SESSION } }]);
     const on = t.relays()[0].body as { name: string; arguments: { observed_after: { local: { state: string } } } };
     expect(on.name).toBe("eye__enable"); // relayed verbatim
     expect(on.arguments.observed_after.local.state).toBe("ACTIVE");
@@ -315,7 +322,7 @@ describe("end to end: a provider function call opens and closes THIS device's ca
     await tick();
     expect(store.getSnapshot().state).toBe("DISABLED");
     expect(camera.open).toBe(false);
-    expect(durable[1]).toEqual({ kind: "disable", reason: "voice:Gözünü kapat." });
+    expect(durable[1]).toEqual({ kind: "disable", reason: "voice:Gözünü kapat.", identity: { action_id: "call-v-off", session_id: SESSION } });
     const off = t.relays()[1].body as { name: string; arguments: { observed_after: { local: { state: string; changed: boolean } } } };
     expect(off.name).toBe("eye__disable");
     expect(off.arguments.observed_after.local).toMatchObject({ state: "DISABLED", running: false, changed: true });
@@ -345,11 +352,19 @@ describe("end to end: a provider function call opens and closes THIS device's ca
           observed_at: AT,
           changed: true,
           media_track_ready_state: null,
-          action_trace: ["request:enable", "getUserMedia:called", "getUserMedia:NotAllowedError", "state:ENABLING->ERROR"],
+          action_trace: ["gen:1", "request:enable", "action:call-on", "getUserMedia:called", "getUserMedia:NotAllowedError", "state:ENABLING->ERROR"],
         },
       },
     });
     store.dispose();
+  });
+});
+
+describe("the action's identity", () => {
+  it("is read from the args the controller adds (call_id, session_id); anything else is null, so client.ts sends the body it always did", () => {
+    expect(actionIdentity({ utterance: "Gözünü aç.", call_id: "call-1", session_id: SESSION })).toEqual({ action_id: "call-1", session_id: SESSION });
+    expect(actionIdentity({ utterance: "Gözünü aç." })).toEqual({ action_id: null, session_id: null });
+    expect(actionIdentity({ call_id: 7, session_id: null })).toEqual({ action_id: null, session_id: null });
   });
 });
 

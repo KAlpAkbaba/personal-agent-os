@@ -22,7 +22,6 @@
 
 import { useEffect } from "react";
 
-import { shouldStopLocalPerception } from "../lib/eye/reconcile";
 import { useActivePerception } from "../lib/eye/useActivePerception";
 import type { EyeView } from "../lib/uistate/ambient";
 import EyeControlView from "./EyeControlView";
@@ -33,7 +32,7 @@ export type EyeControlProps = {
 };
 
 export default function EyeControl({ eye }: EyeControlProps) {
-  const { status, permission, busy, error, lastActionTrace, start, stop, stopLocalOnly } = useActivePerception();
+  const { status, permission, busy, error, lastActionTrace, start, stop, stopLocalIfStale } = useActivePerception();
 
   // "Gözünü kapat" spoken elsewhere, another device's owner action, or the
   // eye endpoint's own idempotent default all reach this the same way: the
@@ -42,10 +41,21 @@ export default function EyeControl({ eye }: EyeControlProps) {
   // reach the same conclusion on its own next tick anyway (a 409 stops it);
   // this only makes the local camera light go out sooner, bounded by how
   // often the page polls `/v1/ui/state` rather than by the sampling interval.
-  const eyeStatus = eye.status;
+  //
+  // What is offered is the bus view WITH its date (`ageMs`, `expired`), and
+  // the store decides (`shouldStopLocalPerception`): the page's picture can
+  // be OLDER than the store's own newest transition — polling lags the
+  // owner's next command — and an old `eye.disabled` must never cancel a
+  // newer enable. That is exactly what happened on 2026-09-06 (session
+  // 9df439af) when this effect also re-ran on `status.running` and obeyed
+  // the previous command's `eye.disabled` the moment the new loop started.
+  // The effect therefore re-runs on the bus view alone; the store's own
+  // state changes are not a reason to re-ask a question the bus already
+  // answered.
+  const { status: eyeStatus, ageMs: eyeAgeMs, expired: eyeExpired } = eye;
   useEffect(() => {
-    if (shouldStopLocalPerception({ status: eyeStatus }, status.running)) stopLocalOnly();
-  }, [eyeStatus, status.running, stopLocalOnly]);
+    stopLocalIfStale({ status: eyeStatus, ageMs: eyeAgeMs, expired: eyeExpired });
+  }, [eyeStatus, eyeAgeMs, eyeExpired, stopLocalIfStale]);
 
   return (
     <EyeControlView

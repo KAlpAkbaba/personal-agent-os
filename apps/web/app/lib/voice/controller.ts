@@ -1932,6 +1932,12 @@ export class VoiceSessionController {
    * is normalised — the owner's 2026-09-06 run reached the port as
    * `eye__disable`, matched nothing, and every eye command was recorded as
    * `capability_missing` while the camera sat idle.
+   *
+   * The port also receives the action's identity — `call_id` (the provider's
+   * tool call id, which the Cloud Core uses as the receipt's `action_id`) and
+   * `session_id` (this realtime session) — so the device's own durable call
+   * and its trace name the same command the receipt will. Only the port sees
+   * these: the RELAYED `arguments` are the provider's own, unchanged.
    */
   private async runLocalAction(
     callId: string,
@@ -1941,7 +1947,7 @@ export class VoiceSessionController {
     const port = this.deps.localActions;
     if (!port) return null;
     try {
-      const observed = await port.run(cloudToolName(name), args);
+      const observed = await port.run(cloudToolName(name), { ...args, call_id: callId, session_id: this.sessionId });
       if (observed) this.log(`tool.local:${callId}`);
       return observed;
     } catch (error) {

@@ -18,7 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BrowserFrameSource } from "../../app/lib/eye/perception";
 import { EyeStore, eyeInstances } from "../../app/lib/eye/store";
 
-type FakeTrack = { kind: "video"; label: string; readyState: "live" | "ended"; stops: number; stop(): void };
+type FakeTrack = { kind: "video"; id: string; label: string; readyState: "live" | "ended"; stops: number; stop(): void };
 type FakeStream = { tracks: FakeTrack[]; getTracks(): FakeTrack[]; getVideoTracks(): FakeTrack[] };
 
 class FakeCamera {
@@ -29,13 +29,16 @@ class FakeCamera {
   manual = false;
   /** The next stream's track is already `ended` when getUserMedia resolves (device yanked mid-prompt). */
   endedOnCreate = false;
-  private pending: Array<(s: FakeStream) => void> = [];
+  /** Each open prompt, oldest first, bound to the stream IT will hand over. */
+  private pending: Array<() => void> = [];
 
   getUserMedia = async (_constraints: MediaStreamConstraints): Promise<FakeStream> => {
     this.calls += 1;
     if (this.failWith) throw this.failWith;
     const track: FakeTrack = {
       kind: "video",
+      // Shaped like a browser's: a long random token per stream; the trace shows its first 8 characters.
+      id: `${String(this.calls).padStart(8, "0")}-4c1e-4a6b-9f00-${String(this.calls).padStart(12, "0")}`,
       label: `Fake cam ${this.calls}`,
       readyState: this.endedOnCreate ? "ended" : "live",
       stops: 0,
@@ -46,13 +49,13 @@ class FakeCamera {
     };
     const stream: FakeStream = { tracks: [track], getTracks: () => [track], getVideoTracks: () => [track] };
     this.streams.push(stream);
-    if (this.manual) return new Promise<FakeStream>((resolve) => this.pending.push(resolve));
+    if (this.manual) return new Promise<FakeStream>((resolve) => this.pending.push(() => resolve(stream)));
     return stream;
   };
 
+  /** The owner answers the OLDEST open prompt; it hands over its own stream. */
   grant(): void {
-    const resolve = this.pending.shift();
-    if (resolve) resolve(this.streams[this.streams.length - 1]);
+    this.pending.shift()?.();
   }
 
   get liveTracks(): number {
@@ -135,10 +138,12 @@ describe("the real camera source through the one EyeStore", () => {
       changed: true,
       media_track_ready_state: "live", // read off the MediaStreamTrack itself, right after the action
       action_trace: [
+        "gen:1",
         "request:enable",
         "getUserMedia:called",
         "permission:granted",
         "device:Fake cam 1",
+        "track:00000001", // the MediaStreamTrack.id's first 8 characters: THIS stream
         "stream:1 track live",
         "loop:started",
         "durable:enable",
@@ -158,7 +163,7 @@ describe("the real camera source through the one EyeStore", () => {
       camera_label: null,
       changed: true,
       media_track_ready_state: "ended", // the light is off: the track was stopped, not forgotten
-      action_trace: ["request:disable", "durable:disable", "loop:stopped", "stream:ended", "state:DISABLING->DISABLED"],
+      action_trace: ["gen:2", "request:disable", "durable:disable", "loop:stopped", "stream:ended", "track:00000001", "state:DISABLING->DISABLED"],
     });
     expect(store.getSnapshot().state).toBe("DISABLED");
     expect(store.getSnapshot().status.running).toBe(false);
@@ -179,6 +184,10 @@ describe("the real camera source through the one EyeStore", () => {
     expect(camera.streams[1].tracks[0].readyState).toBe("live");
     expect(camera.streams[1].tracks[0]).not.toBe(camera.streams[0].tracks[0]);
     expect(again.action_trace).toContain("device:Fake cam 2");
+    // The trace itself proves the re-enable opened a NEW stream: a different track id than the first, and than the stop's.
+    expect(again.action_trace).toContain("track:00000002");
+    expect(again.action_trace).not.toContain("track:00000001");
+    expect(again.action_trace[0]).toBe("gen:3");
     expect(eyeInstances.snapshot()).toEqual({ sessions: 1, cameraOpens: 2, loopsStarted: 2 });
 
     await store.disable("owner_stop");
@@ -199,10 +208,12 @@ describe("the real camera source through the one EyeStore", () => {
       media_track_ready_state: "ended",
     });
     expect(on.action_trace).toEqual([
+      "gen:1",
       "request:enable",
       "getUserMedia:called",
       "permission:granted",
       "device:Fake cam 1",
+      "track:00000001",
       "stream:track ended",
       "state:ENABLING->ERROR",
     ]);
@@ -263,7 +274,7 @@ describe("the real camera source through the one EyeStore", () => {
     const { store, durable } = harness();
     const on = await store.enable("voice:gözünü aç");
     expect(on).toMatchObject({ state: "ERROR", running: false, error_class: "permission_denied", media_track_ready_state: null });
-    expect(on.action_trace).toEqual(["request:enable", "getUserMedia:called", "getUserMedia:NotAllowedError", "state:ENABLING->ERROR"]);
+    expect(on.action_trace).toEqual(["gen:1", "request:enable", "getUserMedia:called", "getUserMedia:NotAllowedError", "state:ENABLING->ERROR"]);
     expect(store.getSnapshot().state).toBe("ERROR");
     expect(camera.calls).toBe(1);
     expect(camera.liveTracks).toBe(0);
@@ -284,11 +295,48 @@ describe("the real camera source through the one EyeStore", () => {
     expect(store.getSnapshot().state).toBe("ENABLING");
     const off = await store.disable("b");
     expect(off.state).toBe("DISABLED");
+    expect(off.action_trace).toEqual(["gen:2", "request:disable", "durable:disable", "loop:stopped", "state:DISABLING->DISABLED"]);
     camera.grant(); // the browser grants after the owner already said stop
     await opening;
     await new Promise((r) => setTimeout(r, 30));
     expect(store.getSnapshot().state).toBe("DISABLED");
-    expect(camera.liveTracks).toBe(0); // released by the session's generation check: no orphan
+    expect(camera.liveTracks).toBe(0); // released by the source's own open-sequence check: no orphan
+    expect(camera.streams[0].tracks[0].stops).toBe(1);
+    // The late camera's stages land on the CURRENT trace as generation 1's `ignored`, never as stages of their own.
+    expect(store.getSnapshot().lastActionTrace).toEqual([...off.action_trace, "ignored:gen1"]);
+    expect(store.getSnapshot().generation).toBe(2);
+    store.dispose();
+  });
+
+  it("a prompt granted AFTER the next enable already opened its own stream releases only its own: the newer camera stays live and the store stays ACTIVE", async () => {
+    camera.manual = true;
+    const { store } = harness();
+    const first = store.enable("a");
+    await Promise.resolve();
+    expect(store.getSnapshot().state).toBe("ENABLING");
+    const off = await store.disable("b"); // supersedes the first enable; its prompt is still open
+    expect(off.state).toBe("DISABLED");
+    expect((await first).action_trace).toEqual(["gen:1", "request:enable", "getUserMedia:called", "superseded:disable"]);
+
+    const second = store.enable("c"); // a second getUserMedia, a second prompt
+    await Promise.resolve();
+    expect(camera.calls).toBe(2);
+    camera.grant(); // the FIRST prompt is answered now, out of order…
+    await new Promise((r) => setTimeout(r, 0));
+    expect(camera.streams[0].tracks[0].readyState).toBe("ended"); // …and its stream is released by the source, untouched otherwise
+    expect(store.getSnapshot().state).toBe("ENABLING");
+    camera.grant(); // then the second
+    const on = await second;
+    expect(on).toMatchObject({ state: "ACTIVE", running: true, camera_label: "Fake cam 2", media_track_ready_state: "live" });
+    expect(on.action_trace).toContain("track:00000002");
+    expect(on.action_trace).toContain("ignored:gen1");
+    expect(camera.liveTracks).toBe(1);
+    expect(camera.streams[1].tracks[0].readyState).toBe("live");
+    await new Promise((r) => setTimeout(r, 30));
+    expect(store.getSnapshot().state).toBe("ACTIVE");
+    expect(store.getSnapshot().status.running).toBe(true);
+    expect(camera.liveTracks).toBe(1);
+    expect(eyeInstances.snapshot()).toEqual({ sessions: 1, cameraOpens: 2, loopsStarted: 1 });
     store.dispose();
   });
 });

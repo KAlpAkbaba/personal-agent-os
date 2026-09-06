@@ -147,6 +147,23 @@ export interface FrameSource {
    * no track was ever opened. Optional: a synthetic source has no track.
    */
   trackReadyState?(): MediaTrackReadyState | null;
+  /**
+   * A short handle for that same track (`MediaStreamTrack.id`'s first
+   * `TRACK_ID_CHARS` characters), so an action trace can show that a
+   * re-enable opened a NEW stream rather than reused the stopped one. A
+   * track id is a per-stream random token the browser mints, never imagery
+   * and never a device identifier. Optional: a synthetic source has none.
+   */
+  trackShortId?(): string | null;
+}
+
+/** How much of a `MediaStreamTrack.id` the trace shows. */
+export const TRACK_ID_CHARS = 8;
+
+/** `track.id`'s first `TRACK_ID_CHARS` characters, or `null` for no track / no id. */
+export function shortTrackId(track: { id?: unknown } | null): string | null {
+  if (!track || typeof track.id !== "string" || track.id.length === 0) return null;
+  return track.id.slice(0, TRACK_ID_CHARS);
 }
 
 /**
@@ -160,28 +177,48 @@ export interface FrameSource {
  * (the previous stream, if any, is released first), and a stream whose track
  * is not live on arrival is stopped on the spot and reported as such rather
  * than kept around as a camera that "opened".
+ *
+ * ## An open that is superseded releases what IT opened, and nothing else
+ *
+ * `getUserMedia` cannot be cancelled: a prompt the owner answers late resolves
+ * long after a `stop()` — or after a NEWER `start()` — has run. Every open
+ * takes a sequence number; `stop()` and a later `start()` advance it. When a
+ * stale open resolves it stops the tracks of the stream it was handed and
+ * returns without touching any field, so the stream a newer open installed
+ * (and the track it answers `trackReadyState()` for) is never overwritten
+ * or stopped by an older one. Before this guard, an enable superseded during
+ * its prompt could, on resolving, replace the live stream of the NEXT enable
+ * with its own and then have it stopped — one live orphan track, one loop
+ * sampling nothing.
  */
 export class BrowserFrameSource implements FrameSource {
   #stream: MediaStream | null = null;
   #video: HTMLVideoElement | null = null;
   #canvas: HTMLCanvasElement | null = null;
   #ctx: CanvasRenderingContext2D | null = null;
-  /** The last video track opened, kept only to answer `trackReadyState()` after a stop. */
+  /** The last video track opened, kept only to answer `trackReadyState()` / `trackShortId()` after a stop. */
   #lastTrack: MediaStreamTrack | null = null;
+  /** Advanced by every `start()` and `stop()`; an open whose number is no longer current is stale. */
+  #openSeq = 0;
 
   async start(deviceId?: string, report: StageReport = () => {}): Promise<void> {
     this.stop();
+    this.#openSeq += 1;
+    const seq = this.#openSeq;
     const constraints: MediaStreamConstraints = {
       video: deviceId ? { deviceId: { exact: deviceId } } : true,
       audio: false,
     };
     const stream = await navigator.mediaDevices.getUserMedia(constraints);
+    if (this.#release(seq, stream, report)) return;
     // Resolved: the permission question is answered. What came back is checked
     // before it is trusted — a stream is only a camera if its track is live.
     report("permission:granted");
     const track = stream.getVideoTracks()[0] ?? null;
     this.#lastTrack = track;
     if (track?.label) report(`device:${track.label}`);
+    const shortId = shortTrackId(track);
+    if (shortId) report(`track:${shortId}`);
     this.#assertLive(stream, track, report);
     const video = document.createElement("video");
     video.muted = true;
@@ -197,6 +234,12 @@ export class BrowserFrameSource implements FrameSource {
       }
       video.addEventListener("loadedmetadata", () => resolve(), { once: true });
     });
+    if (this.#release(seq, stream, report)) {
+      video.srcObject = null;
+      // Only this open's own track is forgotten; a newer open's stays answerable.
+      if (this.#lastTrack === track) this.#lastTrack = null;
+      return;
+    }
     // The track can end while the element loads (device yanked); check again
     // before this counts as an open camera.
     this.#assertLive(stream, track, null);
@@ -207,6 +250,19 @@ export class BrowserFrameSource implements FrameSource {
     this.#canvas.width = video.videoWidth || 320;
     this.#canvas.height = video.videoHeight || 240;
     this.#ctx = this.#canvas.getContext("2d", { willReadFrequently: true });
+  }
+
+  /**
+   * True — with the stream's tracks stopped — when the open numbered `seq` was
+   * overtaken by a `stop()` or a later `start()` while it waited. The stale
+   * open then owns nothing: its caller (`PerceptionSession.start`) sees the
+   * generation mismatch and reports nothing further.
+   */
+  #release(seq: number, stream: MediaStream, report: StageReport): boolean {
+    if (seq === this.#openSeq) return false;
+    stream.getTracks().forEach((t) => t.stop());
+    report("stream:stale release");
+    return true;
   }
 
   /** Stop and throw unless the stream's video track is `"live"`; never leaves a track behind. */
@@ -220,6 +276,10 @@ export class BrowserFrameSource implements FrameSource {
 
   trackReadyState(): MediaTrackReadyState | null {
     return this.#lastTrack ? this.#lastTrack.readyState : null;
+  }
+
+  trackShortId(): string | null {
+    return shortTrackId(this.#lastTrack);
   }
 
   sample(reduce: FrameReducer): Float32Array | null {
@@ -236,6 +296,7 @@ export class BrowserFrameSource implements FrameSource {
   }
 
   stop(): void {
+    this.#openSeq += 1; // any open still waiting on its prompt is now stale
     this.#stream?.getTracks().forEach((track) => track.stop());
     this.#stream = null;
     if (this.#video) {
@@ -377,9 +438,14 @@ export class PerceptionSession {
 
     await this.#frameSource.start(this.#opts.deviceId, report);
     if (this.#stopped || generation !== this.#generation) {
-      // stop() ran while the camera was opening: close what we just opened
-      // and report nothing — never leave a track running behind a "stopped" status.
-      this.#frameSource.stop();
+      // This open was overtaken while the camera was opening, and reports
+      // nothing. If the session is STOPPED, close what was just opened —
+      // never leave a track running behind a "stopped" status. If instead a
+      // NEWER start() owns the source now (stop, then start again, before
+      // this prompt was answered), the source is that start's to keep: the
+      // frame source releases its own stale stream (`BrowserFrameSource`),
+      // and stopping it here would turn off the newer camera.
+      if (this.#stopped) this.#frameSource.stop();
       return;
     }
     try {
@@ -406,6 +472,11 @@ export class PerceptionSession {
   /** The frame source's track state, for the store's read-back; `null` for a source without tracks. */
   trackReadyState(): MediaTrackReadyState | null {
     return this.#frameSource.trackReadyState?.() ?? null;
+  }
+
+  /** The frame source's short track handle, for the store's trace; `null` for a source without tracks. */
+  trackShortId(): string | null {
+    return this.#frameSource.trackShortId?.() ?? null;
   }
 
   /**
