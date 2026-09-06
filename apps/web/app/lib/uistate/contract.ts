@@ -15,7 +15,35 @@
  */
 
 /** Contract version this client was written against (`CONTRACT_VERSION` in contract.py). */
-export const KNOWN_CONTRACT_VERSION = 2;
+export const KNOWN_CONTRACT_VERSION = 3;
+
+/**
+ * The oldest server contract this build can still read honestly.
+ *
+ * v3 is purely ADDITIVE over v2 (M18.3 §7): the event shape is unchanged and
+ * the only difference is ten new state tokens. A v2 server therefore serves a
+ * strict subset of what this build knows, and refusing to draw anything at all
+ * because the alarm states have not shipped yet would be a worse lie than
+ * saying so in one line. A server NEWER than this build is a different matter —
+ * we do not know its vocabulary, so it stays a mismatch.
+ */
+export const MIN_SUPPORTED_CONTRACT_VERSION = 2;
+
+export type ContractCompatibility =
+  /** The server speaks exactly this build's contract. */
+  | "current"
+  /** Older, but a subset we can read; the new states simply never arrive. */
+  | "older_supported"
+  /** Too old, or newer than this build. Nothing is drawn from it. */
+  | "unsupported";
+
+export function contractCompatibility(version: number): ContractCompatibility {
+  if (version === KNOWN_CONTRACT_VERSION) return "current";
+  if (version >= MIN_SUPPORTED_CONTRACT_VERSION && version < KNOWN_CONTRACT_VERSION) {
+    return "older_supported";
+  }
+  return "unsupported";
+}
 
 /** Bounds copied from the publisher, used to refuse over-long labels defensively. */
 export const MAX_LABEL_CHARS = 64;
@@ -73,9 +101,72 @@ export const UI_STATES = [
   "release.verifying",
   "release.live",
   "release.rollback",
+  // v3 (M18.3 §7) — the durable wake alarm's own lifecycle. Its own channel:
+  // an alarm ringing is not the assistant thinking, and it must never displace
+  // a core that is genuinely working.
+  "alarm.armed",
+  "alarm.firing",
+  "alarm.playing",
+  "alarm.greeting",
+  "alarm.snoozed",
+  "alarm.stopped",
+  "alarm.completed",
+  "alarm.failed",
+  // v3 — display power, an ambient fact about the room's screens. Drawn on the
+  // ambient strip and NEVER on the Core: a dark monitor says nothing about
+  // what the agent is doing.
+  "display.on",
+  "display.off",
 ] as const;
 
 export type KnownUiState = (typeof UI_STATES)[number];
+
+/**
+ * The wake alarm's lifecycle states (v3), in the order the dispatcher enters
+ * them. `alarm.triggered` is deliberately NOT here: it is v2's release-band
+ * moment ("a routine fired") and keeps its old meaning and its old place.
+ */
+export const ALARM_STATES = [
+  "alarm.armed",
+  "alarm.firing",
+  "alarm.playing",
+  "alarm.greeting",
+  "alarm.snoozed",
+  "alarm.stopped",
+  "alarm.completed",
+  "alarm.failed",
+] as const;
+
+export type AlarmUiState = (typeof ALARM_STATES)[number];
+
+const ALARM_STATE_SET: ReadonlySet<string> = new Set(ALARM_STATES);
+
+/** True for a v3 wake-alarm lifecycle state this build knows how to draw. */
+export function isAlarmLifecycleState(state: string): state is AlarmUiState {
+  return ALARM_STATE_SET.has(state);
+}
+
+export const DISPLAY_STATES = ["display.on", "display.off"] as const;
+
+export type DisplayUiState = (typeof DISPLAY_STATES)[number];
+
+/** True for a `display.*` state. Ambient band only, by construction. */
+export function isDisplayState(state: string): boolean {
+  return state.startsWith("display.");
+}
+
+/**
+ * States that belong to the release band's own vocabulary.
+ *
+ * `releaseClaim` reads exactly these rather than "the newest event on the
+ * release channel", because v3 put the alarm lifecycle on the same channel and
+ * an alarm ringing must not blank a deployment that is genuinely in flight.
+ */
+export function isReleaseBandState(state: string): boolean {
+  return (
+    state.startsWith("release.") || state.startsWith("routine.") || state === "alarm.triggered"
+  );
+}
 
 const KNOWN_STATES: ReadonlySet<string> = new Set(UI_STATES);
 
@@ -98,6 +189,10 @@ export const SUBSYSTEMS = [
   "ledger",
   "system",
   "presence",
+  // v3: the routine engine publishes the alarm lifecycle, and the ambient
+  // policy engine publishes display power.
+  "routine",
+  "ambient",
 ] as const;
 
 export type Subsystem = (typeof SUBSYSTEMS)[number];
@@ -240,6 +335,44 @@ const STATE_KINDS: Record<KnownUiState, StateKind> = {
   "release.verifying": "operation",
   "release.live": "steady",
   "release.rollback": "steady",
+  // v3. An armed alarm is a standing arrangement; the ringing states are a
+  // watched operation; the terminal states are moments. All of them are bounded
+  // by `STATE_TTL_MS` below, because "armed" from three days ago is not an
+  // alarm that is armed now.
+  "alarm.armed": "steady",
+  "alarm.firing": "operation",
+  "alarm.playing": "operation",
+  "alarm.greeting": "operation",
+  "alarm.snoozed": "moment",
+  "alarm.stopped": "moment",
+  "alarm.completed": "moment",
+  "alarm.failed": "moment",
+  // The display is on or off until something changes it.
+  "display.on": "steady",
+  "display.off": "steady",
+};
+
+/**
+ * Per-state lifetimes for v3, in ms, exactly as `docs/M18_3_LIVING_CORE_WAKE_ALARM_SPEC.md`
+ * §7 states them.
+ *
+ * They exist because these states do not fit the five kinds: an armed alarm is
+ * steady in nature but must not be claimed for ever (a twelve-hour-old "armed"
+ * is the horizon of one night), and the ringing states last minutes rather than
+ * the twelve seconds a transient gets. The publisher's own `ttl_s` still beats
+ * every figure here.
+ */
+const STATE_TTL_MS: Partial<Record<KnownUiState, number>> = {
+  "alarm.armed": 12 * 60 * 60_000,
+  "alarm.firing": 120_000,
+  "alarm.playing": 20 * 60_000,
+  "alarm.greeting": 60_000,
+  "alarm.snoozed": 5 * 60_000,
+  "alarm.stopped": 5 * 60_000,
+  "alarm.completed": 5 * 60_000,
+  "alarm.failed": 5 * 60_000,
+  "display.on": 24 * 60 * 60_000,
+  "display.off": 24 * 60 * 60_000,
 };
 
 /**
@@ -293,6 +426,8 @@ const DEFAULT_TTL_MS: Record<StateKind, number> = {
 export function stateTtlMs(state: string, event?: UiStateEvent | null): number {
   const declared = event ? metaNumber(event, "ttl_s") : null;
   if (declared !== null && declared > 0) return declared * 1000;
+  const perState = isKnownState(state) ? STATE_TTL_MS[state] : undefined;
+  if (perState !== undefined) return perState;
   return DEFAULT_TTL_MS[stateKind(state)];
 }
 
@@ -309,8 +444,14 @@ export type StateChannel = "agent" | "lab" | "ambient" | "release";
 
 export function stateChannel(state: string): StateChannel {
   if (state.startsWith("evolution.")) return "lab";
-  if (state.startsWith("eye.") || state.startsWith("owner.")) return "ambient";
-  if (state.startsWith("release.") || state.startsWith("routine.") || state === "alarm.triggered")
+  // v3 adds `display.*` to the room: whether the screens are lit is a fact
+  // about the owner's desk, never about the agent's activity.
+  if (state.startsWith("eye.") || state.startsWith("owner.") || state.startsWith("display."))
+    return "ambient";
+  // v3's alarm lifecycle joins v2's `alarm.triggered` off the core body. The
+  // band splits them again by vocabulary (`isReleaseBandState`), so a ringing
+  // alarm cannot blank a deployment.
+  if (state.startsWith("release.") || state.startsWith("routine.") || state.startsWith("alarm."))
     return "release";
   return "agent";
 }

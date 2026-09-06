@@ -17,6 +17,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
+  type AmbientPolicy,
+  type DeviceStatus,
   type Goal,
   type Health,
   type LedgerEvent,
@@ -27,7 +29,11 @@ import {
   type PendingBriefing,
   type ResearchTask,
   type ShadowReady,
+  type WakeAlarm,
   type World,
+  fetchAlarms,
+  fetchAmbientPolicy,
+  fetchDeviceStatus,
   fetchGoals,
   fetchHealth,
   fetchLedgerEvents,
@@ -53,6 +59,11 @@ export type CockpitData = {
   memory: Loaded<MemoryAuditEvent[]>;
   lessons: Loaded<Lesson[]>;
   health: Loaded<Health>;
+  // M18.3. Their routes land on another track; until then they answer
+  // "absent", which the panels render as "henüz yok" rather than as empty.
+  alarms: Loaded<WakeAlarm[]>;
+  ambientPolicy: Loaded<AmbientPolicy>;
+  devices: Loaded<DeviceStatus[]>;
 };
 
 const INITIAL: CockpitData = {
@@ -66,6 +77,9 @@ const INITIAL: CockpitData = {
   memory: { kind: "loading" },
   lessons: { kind: "loading" },
   health: { kind: "loading" },
+  alarms: { kind: "loading" },
+  ambientPolicy: { kind: "loading" },
+  devices: { kind: "loading" },
 };
 
 export function useCockpitData(enabled = true): { data: CockpitData; refresh: () => void } {
@@ -88,6 +102,9 @@ export function useCockpitData(enabled = true): { data: CockpitData; refresh: ()
         memory,
         lessons,
         health,
+        alarms,
+        ambientPolicy,
+        devices,
       ] = await Promise.all([
         fetchResearchTasks(),
         fetchGoals(),
@@ -99,6 +116,9 @@ export function useCockpitData(enabled = true): { data: CockpitData; refresh: ()
         fetchMemoryAudit(),
         fetchLessons(),
         fetchHealth(),
+        fetchAlarms(),
+        fetchAmbientPolicy(),
+        fetchDeviceStatus(),
       ]);
       if (stopped.current) return;
       setData({
@@ -112,6 +132,9 @@ export function useCockpitData(enabled = true): { data: CockpitData; refresh: ()
         memory,
         lessons,
         health,
+        alarms,
+        ambientPolicy,
+        devices,
       });
     } finally {
       inFlight.current = false;

@@ -4907,6 +4907,121 @@ owner turns it on. Four tracks implement the spec in parallel (ADR-0070 web, ADR
 cloud, ADR-0072 Windows, ADR-0073 browser); the integrator owns the harnesses, Stage 14 of
 `docs/QUALIFICATION.md` and the owner queue.
 
+## ADR-0070 — The Living Core: a full-viewport gold/amber cognitive machine, still drawn only from what is true (2026-09-07)
+
+Status: Accepted
+
+Context: M18.1 (ADR-0065) gave the Core a layered visual language, and the owner's verdict
+on the running result was that it is still not the thing: *"the existing small wireframe
+sphere is no longer acceptable as the primary owner experience. /core must become a
+full-viewport living visual presence."* The brief that followed is the most concrete
+visual direction this project has had — luminous gold/amber, a warm nucleus, concentric
+rotating structures, independent orbital rings, translucent volumetric shells, internal
+connection paths, procedural circuitry, bounded particle transport, floating structural
+fragments, depth and parallax, restrained bloom, dense internal structure; "a living
+artificial cognitive machine", not "a simple animated sphere" — and it arrives with the
+same trap ADR-0052, ADR-0056 and ADR-0065 exist to refuse. Every one of those words can be
+satisfied by a shader that runs on a clock, and a Core that moves on a clock teaches the
+owner, within a day, that its motion means nothing. In parallel, M18.3's contract v3
+(`docs/M18_3_LIVING_CORE_WAKE_ALARM_SPEC.md` §7) adds eight `alarm.*` states and two
+`display.*` states that must be drawn without the alarm becoming a second, louder way for
+the Core to look busy.
+
+So the design problem was stated the same way it was in ADR-0065, one level up: what is the
+richest, densest machine that can move **only** on evidence, and what does it look like
+when it fills a screen rather than a card. `docs/M18_3_LIVING_CORE_VISUAL_IDENTITY.md`
+holds the palette, the nine layers, the channel table, the budgets and the overlay rules.
+
+Decisions:
+
+1. **Nine layers, gold, and every one of them still at zero unless a channel says
+   otherwise.** Outermost first: outer field (2.18), containment shell (1.52), topology
+   shell (1.30), three independent orbital layers (1.30/1.62/1.98), a procedural circuit
+   layer (1.20), the two bounded particle populations, floating processor fragments (1.42),
+   the energy chamber (0.92) and a nucleus (0.62) that is warm white at its body and gold
+   at its skin. Structure is always mounted — a machine does not assemble itself when work
+   arrives — but its **brightness** is `glow` and its **motion** is the reported channels,
+   so an untold Core is a complete, dark, motionless machine rather than an empty stage.
+   The orbitals turn at three incommensurate rates and two directions (`ORBITAL_RATES`
+   +0.52, −0.31, +0.19), all multiplied by the same `ringSpin`: they never beat together,
+   and they stop together.
+2. **Depth is geometry, and the bloom is two shells.** Nine radii, five planes,
+   counter-rotation and the existing pointer lean are what make the structure read as a
+   volume. The "restrained glow" is one additive back-face shell around the nucleus plus
+   the existing pulse shell (and one blurred disc in the 2D path). **No post-processing
+   package, and no dependency was added for this milestone at all** — a bloom pass would
+   have been the easy way to buy the look and would have put a second renderer between the
+   owner and the evidence.
+3. **The wake surge is its own channel, and it does not borrow the thinking channel.**
+   `alarm.*` sets `wakeStage`/`wakeSurge` and nothing else: it never sets `kind`, never
+   touches a core motion channel, and a thinking Core with an alarm playing draws both. The
+   surge exists only while the alarm is actually sounding (firing 0.65, playing 0.45,
+   greeting 0.80, raised by a published ramp level); `armed` and every terminal stage are
+   zero, so a failure is loud in words and silent in geometry. The spec's own sketch said
+   "rings accelerate"; they do not, deliberately — ring speed is the thinking channel, and
+   spending it on an alarm would teach the owner that it means nothing. `display.*` has no
+   field on `VisualIntent` at all: it is a cell on the ambient strip and a test asserts the
+   absence.
+4. **The claims are read by vocabulary, not by channel.** v3 put the alarm lifecycle on the
+   release band, so `releaseClaim` now reads the release path's own state tokens rather
+   than "the newest event on the release channel" — otherwise a ringing alarm would blank a
+   deployment genuinely in flight. v2's `alarm.triggered` keeps its old meaning ("a routine
+   fired") rather than being retconned into the new lifecycle, and an `alarm.*` token this
+   build cannot read is not drawn as a ringing alarm.
+5. **A v2 server is read, not refused.** `KNOWN_CONTRACT_VERSION` is 3 and
+   `MIN_SUPPORTED_CONTRACT_VERSION` is 2: v3 only added states, so an older Cloud Core
+   serves a subset we can read and is drawn normally, with one line under the connection
+   dot saying which states it will never publish. Refusing to draw anything would have been
+   a worse lie than the lag, and an empty alarm cell without that line would read as "no
+   alarm is set". A server NEWER than this build stays a hard mismatch: we do not know its
+   vocabulary.
+6. **The stage is the viewport, and the coverage is arithmetic.** `/core` is fixed to the
+   viewport (`position: fixed; inset: 0`) and near-black (`#06050a`), so there is no page
+   scroll at all rather than a scroll with nowhere to go. `stageSizeFor(w, h)` sizes
+   the stage so the Core covers 60–80 % of the usable viewport at every aspect ratio
+   (portrait 0.74, square 0.78, landscape 0.72, ultrawide 0.66 of the short side, clamped
+   into the band), and the `CORE_FILL` it works from is **derived from the camera** rather
+   than typed beside it, so a change to the framing moves the layout instead of quietly
+   falsifying the claim. `tests/uistate/stage.test.ts` checks the band across sixteen real
+   viewports from a 360-wide phone to 32:9.
+7. **The cluster fades; the strip does not.** The six controls (voice, eye, tier, 2D,
+   fullscreen, cockpit) recede to 25 % after four idle seconds and return on any pointer,
+   key or focus event, via a pure reducer (`controlFadeReducer`) rather than a timer buried
+   in a component. Fading is not hiding: the buttons keep their labels, their ARIA state and
+   their place in the tab order at every opacity. The ambient strip is deliberately excluded
+   from the fade, because a parent's opacity cannot be undone by a child and a faded privacy
+   assurance is not one.
+8. **Fullscreen is a gesture, and the PWA does not cache.** `requestFullscreen` is called
+   from exactly one callback bound to one button and from no effect anywhere (a structural
+   test reads the source); the same button offers the labelled exit and names Esc. The
+   manifest is `standalone` with `start_url: "/core"` and dark colours, and has **no**
+   `display_override: ["fullscreen"]` and **no service worker** — a cached shell that
+   rendered yesterday's state would be the most expensive lie in the product.
+9. **A route that does not exist yet is a fourth outcome.** The cockpit's new Alarmlar and
+   Ekran/Ortam panels read `/v1/alarms` and `/v1/ambient/policy`, which Track C is still
+   building, so `Loaded<T>` gains `absent` and a 404 renders "Henüz yok." with the path.
+   "There are no alarms", "I could not find out" and "this server has no alarms yet" are
+   three different sentences, and the panel says which one it is. A device that sent no
+   heartbeat `status` is drawn as unreported, never as a screen presumed on.
+
+Consequences: `pnpm --filter @pagentos/web test` grows from 678 to 775 tests, all Node +
+`react-dom/server`; no browser, no Playwright; `tsc --noEmit` and `oxlint` clean. The scene
+budget is re-derived and re-pinned (high 36 drawables / 398 instances, balanced 33 / 206,
+low 22 / 32), and `low` drops the outer field, the circuitry and the fragments whole while
+keeping one ring and one orbital layer so the machine stays the same machine. Minimal mode
+no longer renders `EyeControl`, so the eye's reconcile seam (`stopLocalIfStale`) moved onto
+the page itself and is pinned by a test — losing it would have left a camera running that
+the Cloud Core believed was off, which is the one regression this rewrite could have made
+that the owner would care about most. Because no browser is launched in this environment
+the WebGL scene has still never been seen here; the 2D path is rendered to
+`apps/web/preview/*.svg` and a single page so the integrator can hand the owner a picture
+before qualification A, and scale, depth and light remain something only a real browser can
+judge. What was refused: a post-processing bloom pass, any new dependency, a service
+worker, an automatic or manifest-driven fullscreen, ring acceleration from an alarm, any
+`display.*` on the Core, a fading privacy cell, an empty list for a route that does not
+exist, and every form of motion that a published event or a real measurement did not
+produce.
+
 ## ADR-0072 — The companion refuses to darken a screen the owner just touched, arms its own fallback alarm, and reports what it sees on the heartbeat (2026-09-07)
 
 M18 gave the device a wake alarm and one machine-state action (`desktop.display_off`), both

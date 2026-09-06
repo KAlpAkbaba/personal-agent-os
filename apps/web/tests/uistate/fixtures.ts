@@ -264,6 +264,69 @@ export const ROUTINE_ARMED = () =>
 export const ALARM_TRIGGERED = () =>
   event({ state: "alarm.triggered", subsystem: "system", status: "triggered" });
 
+// ------------------------------------------------ v3: the wake alarm (M18.3)
+
+/**
+ * The wake alarm's lifecycle as `app/alarms` publishes it: subsystem
+ * `routine`, one event per transition, the label as the owner would read it.
+ * The ramp level rides on `intensity` while the alarm is actually sounding
+ * (spec §7), and is absent everywhere else.
+ */
+export const ALARM_ARMED = (label = "Alarm 07:30") =>
+  event({ state: "alarm.armed", subsystem: "routine", status: "armed", label });
+
+export const ALARM_FIRING = () =>
+  event({ state: "alarm.firing", subsystem: "routine", status: "firing", label: "Alarm 07:30" });
+
+export const ALARM_PLAYING = (intensity: number | null = 0.45) =>
+  event({
+    state: "alarm.playing",
+    subsystem: "routine",
+    status: "playing",
+    label: "Alarm 07:30",
+    intensity,
+    metadata: { media_kind: "youtube" },
+  });
+
+export const ALARM_GREETING = () =>
+  event({
+    state: "alarm.greeting",
+    subsystem: "routine",
+    status: "greeting",
+    label: "Alarm 07:30",
+    intensity: 0.15,
+  });
+
+export const ALARM_STOPPED = () =>
+  event({ state: "alarm.stopped", subsystem: "routine", status: "stopped" });
+
+export const ALARM_FAILED = () =>
+  event({
+    state: "alarm.failed",
+    subsystem: "routine",
+    status: "failed",
+    severity: "critical",
+    metadata: { error_class: "media_unavailable" },
+  });
+
+/** A test alarm, flagged as one by the publisher. */
+export const ALARM_TEST_PLAYING = () =>
+  event({
+    state: "alarm.playing",
+    subsystem: "routine",
+    status: "playing",
+    label: "Test alarmı",
+    intensity: 0.3,
+    metadata: { is_test: true },
+  });
+
+/** Display power, published by the ambient policy engine. Never machine state. */
+export const DISPLAY_ON = () =>
+  event({ state: "display.on", subsystem: "ambient", status: "on", metadata: { reason: "owner_input" } });
+
+export const DISPLAY_OFF = () =>
+  event({ state: "display.off", subsystem: "ambient", status: "off", metadata: { reason: "owner_away" } });
+
 /** The owner-authorised release path, mid-deployment (ADR-0055). */
 export const RELEASE_DEPLOYING = () =>
   event({

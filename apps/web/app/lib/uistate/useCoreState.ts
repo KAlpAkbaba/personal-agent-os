@@ -22,7 +22,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { UnauthorizedError } from "../session";
-import { KNOWN_CONTRACT_VERSION } from "./contract";
+import { contractCompatibility } from "./contract";
 import { explainUiStateError, fetchUiState } from "./client";
 import {
   type CoreTruth,
@@ -73,10 +73,15 @@ export function useCoreState(options: { enabled?: boolean } = {}): CoreStateHand
     try {
       const response = await fetchUiState(sequence.current);
       if (stopped.current) return;
-      if (response.contract_version !== KNOWN_CONTRACT_VERSION) {
+      if (contractCompatibility(response.contract_version) === "unsupported") {
         // Draw nothing new rather than guess at a vocabulary we do not know.
         // Unknown individual states are handled gracefully downstream; a whole
         // version bump is a different, louder thing.
+        //
+        // An OLDER but supported server (v2 while this build is v3) is not this
+        // case: v3 only added states, so a v2 stream is a subset we can read.
+        // It is drawn normally and `truth.contractVersion` carries the lag so
+        // the strip can say which states will never arrive (M18.3 §7).
         failures.current = 0;
         setError(null);
         setTruth((t) => applyContractMismatch(t, response.contract_version));

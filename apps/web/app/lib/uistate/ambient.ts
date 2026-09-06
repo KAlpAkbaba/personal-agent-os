@@ -23,7 +23,7 @@
  * authorise or advance a deployment; the Core has no write path at all.
  */
 
-import { type UiStateEvent, metaNumber, metaToken } from "./contract";
+import { type Severity, type UiStateEvent, isSeverity, metaNumber, metaToken } from "./contract";
 import type { Claim } from "./truth";
 
 // ------------------------------------------------------------------ the eye
@@ -200,5 +200,127 @@ export const RELEASE_AUTHORITY_NOTE =
   "Bu ekran yalnızca gösterir. Üretime alma yetkisi doğrulanmış sahip oturumundadır.";
 
 export function eventIsAmbient(event: UiStateEvent): boolean {
-  return event.state.startsWith("eye.") || event.state.startsWith("owner.");
+  return (
+    event.state.startsWith("eye.") ||
+    event.state.startsWith("owner.") ||
+    event.state.startsWith("display.")
+  );
+}
+
+// ------------------------------------------------- v3: the display (M18.3 §7)
+
+export type DisplayState =
+  /** `display.on` is current. */
+  | "on"
+  /** `display.off` is current: the screens were powered down, not the machine. */
+  | "off"
+  /** Nothing has been published about the screens. Not the same as "off". */
+  | "untold";
+
+export type DisplayView = {
+  state: DisplayState;
+  ageMs: number | null;
+  expired: boolean;
+  /** A `display.*` state this build cannot read. Falls to `untold`, and says so. */
+  unknownState: boolean;
+  /** Why the publisher said the screens changed, when it said. Never inferred. */
+  reason: string | null;
+};
+
+export function displayView(claim: Claim): DisplayView {
+  const event = claim.event;
+  const token = event?.state;
+  const state: DisplayState =
+    token === "display.on" ? "on" : token === "display.off" ? "off" : "untold";
+  return {
+    state,
+    ageMs: claim.ageMs,
+    expired: claim.expired,
+    unknownState: Boolean(token?.startsWith("display.")) && state === "untold",
+    reason: metaToken(event, "reason"),
+  };
+}
+
+/** The display is never drawn on the Core. Stated here so the rule has a home. */
+export const DISPLAY_IS_AMBIENT_ONLY =
+  "Ekran gücü ortam bilgisidir; çekirdeğin ne yaptığını anlatmaz.";
+
+// --------------------------------------------- v3: the wake alarm (M18.3 §7)
+
+export type AlarmStage =
+  | "armed"
+  | "firing"
+  | "playing"
+  | "greeting"
+  | "snoozed"
+  | "stopped"
+  | "completed"
+  | "failed"
+  /** No wake-alarm lifecycle state is current. */
+  | "none";
+
+export type AlarmView = {
+  stage: AlarmStage;
+  /** The publisher's short label ("Alarm 07:30"). Never prose, never invented. */
+  label: string | null;
+  /**
+   * The ramp level the publisher declared while playing, 0..1, or `null`.
+   *
+   * `null` is a real answer: the alarm is sounding but nobody said how loud.
+   * The surge is then drawn at its per-stage constant and the readout says the
+   * level was not reported — it is never substituted with a plausible figure.
+   */
+  level: number | null;
+  /** True when the alarm was created as a test (`is_test`), as published. */
+  isTest: boolean;
+  severity: Severity;
+  ageMs: number | null;
+  expired: boolean;
+};
+
+const ALARM_STAGE: Record<string, AlarmStage> = {
+  "alarm.armed": "armed",
+  "alarm.firing": "firing",
+  "alarm.playing": "playing",
+  "alarm.greeting": "greeting",
+  "alarm.snoozed": "snoozed",
+  "alarm.stopped": "stopped",
+  "alarm.completed": "completed",
+  "alarm.failed": "failed",
+};
+
+/** The stages during which an alarm is actually making a noise in the room. */
+const ALARM_SOUNDING: ReadonlySet<AlarmStage> = new Set<AlarmStage>([
+  "firing",
+  "playing",
+  "greeting",
+]);
+
+export function alarmView(claim: Claim): AlarmView {
+  const event = claim.event;
+  const stage = event ? (ALARM_STAGE[event.state] ?? "none") : "none";
+  // An expired alarm claim is not a quiet alarm: it is an alarm we have stopped
+  // being told about. The stage drops to `none` (nothing is drawn) and the
+  // strip words the age, exactly as a decayed presence does.
+  const effective: AlarmStage = claim.expired ? "none" : stage;
+  return {
+    stage: effective,
+    label: event?.label ?? null,
+    level: effective === "none" ? null : (event?.intensity ?? null),
+    isTest: metaFlag(event, "is_test"),
+    severity: isSeverity(event?.severity) ? event.severity : "info",
+    ageMs: claim.ageMs,
+    expired: claim.expired,
+  };
+}
+
+/** True while the alarm is sounding: the only time the Core shows a surge. */
+export function alarmIsSounding(view: AlarmView): boolean {
+  return ALARM_SOUNDING.has(view.stage);
+}
+
+/** A boolean the publisher actually sent. Absent is `false`, never assumed true. */
+function metaFlag(event: UiStateEvent | null | undefined, key: string): boolean {
+  if (!event) return false;
+  return event.metadata[key] === true;
 }

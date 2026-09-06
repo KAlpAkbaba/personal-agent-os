@@ -8,6 +8,23 @@
  * than find one lying around.
  */
 
+/*
+ * M18.3: the Living Core's fixed colours. The state palettes below move within
+ * this family; these two never move, because they are the identity itself.
+ */
+:root {
+  /* the nucleus: warm white at its centre... */
+  --core-warm-white: #fff1d0;
+  /* ...gold at its skin. */
+  --core-gold: #ffc86a;
+  /* the energy the machine runs on */
+  --core-amber: #f0a53a;
+  /* the one ember: a fault, and nothing else */
+  --core-ember: #e0623c;
+  /* the near-black ground the Core stands in */
+  --core-ground: #06050a;
+}
+
 .core-page {
   max-width: none;
   margin: 0;
@@ -20,87 +37,183 @@
 /* --------------------------------------------------------- minimal mode */
 
 /*
- * M18.1: the Core owns the viewport. The stage is sized by the shorter side
- * of the window so the whole structure - field included - is on screen; the
- * readout sits over its lower edge; the voice cell, the room and the eye
- * control recede into one quiet row that comes forward on hover or focus.
- * Nothing recedes so far that it stops being readable: the eye cell is a
- * privacy indicator and keeps its full contrast.
+ * M18.3: the stage IS the viewport.
+ *
+ * Fixed rather than merely tall, so there is no page scroll at all on /core -
+ * not "scroll that never has anything to scroll to", none. The ground is
+ * near-black; nothing competes with the Core; every control is an overlay.
+ * The stage's pixel size comes from `stageSizeFor` once the window has been
+ * measured; the `min()` below is only what is drawn before that first
+ * measurement, and is written to land in the same place.
  */
-.core-minimal {
-  flex: 1;
+.core-shell {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  background: var(--core-ground);
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 0.75rem;
-  padding: 0.5rem 1rem 1rem;
-  text-align: center;
-  min-height: 0;
 }
 
-.core-minimal-stage {
+.core-shell-stage {
   position: relative;
-  width: min(86vh, 96vw, 1100px);
-  height: min(86vh, 96vw, 1100px);
+  width: min(78vh, 90vw);
+  height: min(78vh, 90vw);
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
-.core-minimal-stage .core-stage {
+.core-shell-stage .core-stage {
   width: 100%;
   height: 100%;
 }
 
-.core-minimal-readout {
+/* The connection dot: top centre, small, and never fading - it is the only
+   thing on screen that can tell a calm Core from a lost one. */
+.core-connection-dot {
   position: absolute;
+  top: 1rem;
   left: 50%;
-  bottom: 2%;
   transform: translateX(-50%);
-  max-width: min(34rem, 92%);
-  pointer-events: none;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  justify-content: center;
+  max-width: min(40rem, 92vw);
+  font-size: 0.72rem;
+  color: var(--muted);
+  text-align: center;
 }
 
-.core-minimal-readout .core-readout {
+.core-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--core-gold);
+  opacity: 0.75;
+}
+
+.core-connection-dot[data-connection="unreachable"] .core-dot,
+.core-connection-dot[data-connection="contract_mismatch"] .core-dot,
+.core-connection-dot[data-connection="unauthorized"] .core-dot {
+  background: var(--core-ember);
+  opacity: 1;
+}
+
+.core-connection-lag {
+  flex-basis: 100%;
+  font-size: 0.7rem;
+}
+
+/* The control cluster: top right, receding to a quarter after four idle
+   seconds. Fading is not hiding - it stays in the DOM, in the tab order and
+   in the accessibility tree, and any focus or movement brings it back. */
+.core-controls {
+  position: absolute;
+  top: 0.9rem;
+  right: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  max-width: min(38rem, 70vw);
+  transition: opacity 400ms ease;
+}
+
+.core-controls-group {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.core-controls-link {
+  color: var(--core-gold);
+  text-decoration: none;
+  font-size: 0.75rem;
+  padding: 0.2rem 0.4rem;
+}
+
+/* Focus is always visible, at any opacity. */
+.core-controls :is(button, a):focus-visible {
+  outline: 2px solid var(--core-gold);
+  outline-offset: 2px;
+}
+
+/* The caption: one short semantic line over the Core's lower edge. */
+.core-caption {
+  position: absolute;
+  left: 50%;
+  bottom: 6.2rem;
+  transform: translateX(-50%);
+  max-width: min(34rem, 92vw);
+  pointer-events: none;
+  text-align: center;
+}
+
+.core-caption .core-readout {
   pointer-events: auto;
-  padding: 0.6rem 1rem;
+  padding: 0.45rem 0.9rem;
   border-radius: 12px;
-  background: color-mix(in srgb, var(--bg, #0f1115) 55%, transparent);
+  background: color-mix(in srgb, var(--core-ground) 62%, transparent);
   backdrop-filter: blur(6px);
 }
 
-.core-minimal-readout .core-headline {
-  font-size: 1.3rem;
+.core-caption .core-headline {
+  font-size: 1.15rem;
 }
 
-.core-minimal-readout .core-detail {
-  font-size: 0.8rem;
+/* The ambient strip: presence, the camera, the screens, the alarm, releases. */
+.core-strip {
+  position: absolute;
+  left: 50%;
+  bottom: 0.6rem;
+  transform: translateX(-50%);
+  width: min(74rem, 96vw);
+  transition: opacity 400ms ease;
 }
 
-.core-minimal-ambient {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  width: min(100%, 60rem);
-  opacity: 0.62;
-  transform: scale(0.96);
-  transform-origin: top center;
-  transition:
-    opacity 240ms ease,
-    transform 240ms ease;
+.core-strip .ambient-band {
+  gap: 0.4rem;
 }
 
-.core-minimal-ambient:hover,
-.core-minimal-ambient:focus-within {
+.core-strip .ambient-cell {
+  flex: 1 1 10rem;
+  min-width: 9rem;
+  gap: 0.05rem;
+  padding: 0.4rem 0.55rem;
+  font-size: 0.7rem;
+  background: color-mix(in srgb, var(--core-ground) 70%, transparent);
+  backdrop-filter: blur(4px);
+  max-height: 5.6rem;
+  overflow: hidden;
+}
+
+.core-strip .ambient-title {
+  font-size: 0.78rem;
+}
+
+/*
+ * The strip does not fade with the control cluster.
+ *
+ * A parent's opacity cannot be undone by a child, so a strip that faded would
+ * take the camera cell down with it - and a faded privacy assurance is not
+ * one. The cluster is controls and may recede; the strip is facts and stays.
+ */
+.core-strip .ambient-cell[data-eye-status] {
   opacity: 1;
-  transform: none;
 }
 
-/* The camera indicator never recedes: it is the one cell that is a privacy
-   assurance, and a faded assurance is not one. */
-.core-minimal-ambient .ambient-cell[data-eye-status="active"] {
-  opacity: 1;
+@media (max-width: 720px) {
+  .core-caption {
+    bottom: 9.5rem;
+  }
+  .core-strip .ambient-cell {
+    flex-basis: 8rem;
+    min-width: 7.5rem;
+  }
 }
 
 .core-stage {
@@ -224,14 +337,23 @@
   overflow: visible;
 }
 
+/*
+ * The nucleus: warm white filling towards gold as the light rises, with a gold
+ * skin. Its brightness is the `glow` channel and the wake surge, and nothing
+ * else - zero glow, no light.
+ */
 .core-body {
-  fill: color-mix(in srgb, var(--core-color) calc(10% + var(--core-glow, 0) * 22%), transparent);
-  stroke: var(--core-color);
-  stroke-width: 1.5;
+  fill: color-mix(
+    in srgb,
+    var(--core-warm-white) calc(14% + var(--core-glow, 0) * 34% + var(--core-surge, 0) * 20%),
+    transparent
+  );
+  stroke: var(--core-gold);
+  stroke-width: 1.6;
   transform-origin: center;
-  /* The glow is the `glow` channel and nothing else: a per-state base plus
-     half the measured or declared energy. Zero glow, no light. */
-  filter: drop-shadow(0 0 calc(var(--core-glow, 0) * 16px) var(--core-color));
+  filter: drop-shadow(
+    0 0 calc(var(--core-glow, 0) * 18px + var(--core-surge, 0) * 10px) var(--core-gold)
+  );
 }
 
 .core-body.breathing {
@@ -246,6 +368,93 @@
   stroke: var(--core-color);
   stroke-width: 0.8;
   opacity: calc(0.12 + var(--core-glow, 0) * 0.2);
+}
+
+/* --------------------------------------- M18.3: the Living Core's layers */
+
+/*
+ * The nucleus is warm white at its centre and gold at its skin; the halo is
+ * the whole of the "bloom", one soft radial and no post-processing.
+ */
+.core-nucleus-halo {
+  fill: color-mix(in srgb, var(--core-gold) 22%, transparent);
+  stroke: none;
+  opacity: calc(0.06 + var(--core-glow, 0) * 0.5 + var(--core-surge, 0) * 0.35);
+  filter: blur(6px);
+}
+
+/* The outer field: the widest, faintest layer. Points, never a fog. */
+.core-outer circle {
+  fill: var(--core-color);
+  opacity: calc(0.1 + var(--core-glow, 0) * 0.35);
+}
+
+/* The independent orbital layers. They turn only at a reported spin, and at
+   their own rate - slower than the internal rings, and the other way round. */
+.core-orbitals ellipse {
+  fill: none;
+  stroke: var(--core-color);
+  stroke-width: 0.9;
+  opacity: calc(0.16 + var(--core-glow, 0) * 0.45 + var(--core-surge, 0) * 0.3);
+}
+
+.core-orbitals {
+  transform-origin: center;
+  transform-box: view-box;
+}
+
+.core-orbitals.orbiting {
+  animation: core-counter-turn var(--orbit-dur, 90s) linear infinite;
+}
+
+@keyframes core-counter-turn {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(-360deg);
+  }
+}
+
+/* The data / circuit layer: board traces, not a web. */
+.core-circuit path {
+  fill: none;
+  stroke: var(--core-color);
+  stroke-width: 0.7;
+  stroke-linejoin: miter;
+  opacity: calc(0.14 + var(--core-glow, 0) * 0.4);
+}
+
+/* The processor structures: parked fragments, still by construction. */
+.core-fragments rect {
+  fill: color-mix(in srgb, var(--core-color) 30%, transparent);
+  stroke: var(--core-color);
+  stroke-width: 0.6;
+  opacity: calc(0.3 + var(--core-glow, 0) * 0.5);
+}
+
+/* The energy chamber: the vessel the nucleus sits in. */
+.core-chamber {
+  fill: none;
+  stroke: var(--core-gold, #ffc86a);
+  stroke-width: 0.8;
+  stroke-dasharray: 1 4;
+  opacity: calc(0.18 + var(--core-glow, 0) * 0.4);
+}
+
+/* Particle transport along the paths: bounded, and only at a reported flow. */
+.core-transport circle {
+  fill: var(--core-color);
+  opacity: calc(0.35 + var(--core-glow, 0) * 0.5);
+}
+
+/* The wake surge (M18.3 §7): the alarm's own ring. Amber, outside the
+   structure, and never the colour of a state the Core is in. */
+.core-wake {
+  fill: none;
+  stroke: #f0a53a;
+  stroke-width: 2;
+  opacity: calc(0.35 + var(--core-surge, 0) * 0.6);
 }
 
 /* The internal rings: the topology layers, turning only at a reported spin.
@@ -305,8 +514,8 @@
 
 /* SHADOW_READY capability nodes: parked, still. */
 .core-capabilities circle {
-  fill: color-mix(in srgb, var(--ok) 55%, transparent);
-  stroke: var(--ok);
+  fill: color-mix(in srgb, var(--core-gold) 45%, transparent);
+  stroke: var(--core-gold);
   stroke-width: 1;
 }
 
@@ -329,7 +538,7 @@
 
 .core-agitation {
   fill: none;
-  stroke: var(--fail);
+  stroke: var(--core-ember);
   stroke-width: 1;
   stroke-dasharray: 3 7;
   opacity: 0.7;
@@ -376,8 +585,8 @@
 }
 
 .core-satellite circle {
-  fill: color-mix(in srgb, var(--ok) 40%, transparent);
-  stroke: var(--ok);
+  fill: color-mix(in srgb, var(--core-warm-white) 30%, transparent);
+  stroke: var(--core-gold);
   stroke-width: 1.5;
 }
 
@@ -393,44 +602,53 @@
 
 /* ------------------------------------------------------------ palettes */
 
+/*
+ * M18.3: the Living Core's identity is gold and amber, and the state changes
+ * where in that family the light sits rather than changing hue family
+ * entirely. Two colours stay outside it on purpose: the ember of a fault, and
+ * the cool blue of the eye's aperture — the camera indicator must never be
+ * mistakable for the Core's own light.
+ *
+ * `unknown` is a desaturated warm grey. Silence does not glow.
+ */
 .palette-calm {
-  --core-color: #6d7f96;
+  --core-color: #c9a05a;
 }
 .palette-inward {
-  --core-color: #6fc3d6;
+  --core-color: #ffcf7a;
 }
 .palette-active {
-  --core-color: #5aa7e8;
+  --core-color: #ffb347;
 }
 .palette-voice {
-  --core-color: #8f7fe8;
+  --core-color: #ffd98a;
 }
 .palette-discovery {
-  --core-color: #56c2a4;
+  --core-color: #f2c14e;
 }
 .palette-recall {
-  --core-color: #7fb3d5;
+  --core-color: #e0b070;
 }
 .palette-work {
-  --core-color: #e8b339;
+  --core-color: #f0a53a;
 }
 .palette-held {
-  --core-color: #b08a4f;
+  --core-color: #b98a4a;
 }
 .palette-achieved {
-  --core-color: #34c98e;
+  --core-color: #ffe6a8;
 }
 .palette-fault {
-  --core-color: #e5655a;
+  --core-color: #e0623c;
 }
 .palette-lab {
-  --core-color: #9a86c9;
+  --core-color: #d9a15c;
 }
 .palette-ready {
-  --core-color: #34c98e;
+  --core-color: #ffd27a;
 }
 .palette-unknown {
-  --core-color: #58607a;
+  --core-color: #6b6250;
 }
 
 /* --------------------------------------------------------- chrome / bar */
@@ -656,7 +874,8 @@
  */
 @media (prefers-reduced-motion: reduce) {
   .core-body.breathing,
-  .core-rings.spinning {
+  .core-rings.spinning,
+  .core-orbitals.orbiting {
     animation: none;
   }
 }

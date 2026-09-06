@@ -29,6 +29,22 @@ import type { VisualIntent } from "./visual";
 export const RING_RATE = 0.9;
 /** The shells counter-rotate, slower. */
 export const SHELL_RATE = 0.35;
+/**
+ * The independent orbital layers: one rate each, and the sign is the
+ * direction (M18.3). They are deliberately incommensurate — no two of them
+ * ever line up on a beat — because a structure whose layers pulse together
+ * reads as one animation rather than as a machine with parts.
+ *
+ * Every one of them is still multiplied by `ringSpin`, so a Core that was told
+ * nothing does not turn at all.
+ */
+export const ORBITAL_RATES = [0.52, -0.31, 0.19] as const;
+/** The circuit layer's data pulse travels at this many circuits per second. */
+export const CIRCUIT_RATE = 0.4;
+/** The floating processor fragments drift at this fraction of the ring rate. */
+export const FRAGMENT_RATE = 0.14;
+/** The wake surge's own carrier: slow, and only ever scaled by the surge itself. */
+export const WAKE_CARRIER_HZ = 0.6;
 /** The connection paths turn against the rings, faster, at full topology. */
 export const LATTICE_RATE = 0.6;
 /** The evidence constellation drifts at most this fast, at `constellationDrift = 1`. */
@@ -73,12 +89,22 @@ export type SceneState = {
   constellationDrift: number;
   restraint: number;
   agitation: number;
+  /** The wake alarm's surge, smoothed. Its own channel; never the core body's. */
+  wake: number;
 
   // accumulations, driven by the smoothed channels
   ringAngle: number;
   shellAngle: number;
   latticeAngle: number;
   constellationAngle: number;
+  /** One angle per orbital layer, each at its own rate and direction. */
+  orbitAngles: Float32Array;
+  /** The circuit layer's travelling data pulse, 0..1. */
+  circuitPhase: number;
+  /** The processor fragments' slow drift about the vertical. */
+  fragmentAngle: number;
+  /** The wake surge's carrier, 0..1; zero whenever the surge is. */
+  wakeCarrier: number;
 
   // rhythms: breath and the pulse carrier, both zero unless their amplitude is
   breath: number;
@@ -119,10 +145,15 @@ export function createSceneState(maxParticles: number): SceneState {
     constellationDrift: 0,
     restraint: 0,
     agitation: 0,
+    wake: 0,
     ringAngle: 0,
     shellAngle: 0,
     latticeAngle: 0,
     constellationAngle: 0,
+    orbitAngles: new Float32Array(ORBITAL_RATES.length),
+    circuitPhase: 0,
+    fragmentAngle: 0,
+    wakeCarrier: 0,
     breath: 0,
     carrier: 0,
     agitationOffset: 0,
@@ -168,19 +199,38 @@ export function stepScene(
   s.constellationDrift = approach(s.constellationDrift, intent.constellationDrift, dt);
   s.restraint = approach(s.restraint, intent.restraint, dt);
   s.agitation = approach(s.agitation, intent.agitation, dt);
+  // The wake surge rises fast and falls with the rest: an alarm starting is an
+  // event, and a Core that eased into it over a second would be describing the
+  // ramp rather than the moment it began.
+  s.wake = approach(s.wake, intent.wakeSurge, dt, APPROACH_RATE * 1.5);
 
   // Rotation is tied to the reported spin, not to the clock: a core with
-  // nothing to do does not turn. The three layers turn at different rates and
-  // in different senses, which is what gives the structure its depth.
+  // nothing to do does not turn. The layers turn at different rates and in
+  // different senses, which is what gives the structure its depth.
   s.ringAngle = (s.ringAngle + dt * RING_RATE * s.ringSpin) % TWO_PI;
   s.shellAngle = (s.shellAngle - dt * SHELL_RATE * s.ringSpin) % TWO_PI;
   s.latticeAngle = (s.latticeAngle - dt * LATTICE_RATE * s.topology) % TWO_PI;
   s.constellationAngle = (s.constellationAngle + dt * CONSTELLATION_RATE * s.constellationDrift) % TWO_PI;
 
+  // The orbital layers: one rate and one direction each, all of them scaled by
+  // the same reported spin, so they stop together when the reporting stops.
+  const orbits = s.orbitAngles;
+  for (let i = 0; i < orbits.length; i += 1) {
+    orbits[i] = (orbits[i] + dt * ORBITAL_RATES[i] * s.ringSpin) % TWO_PI;
+  }
+  // The circuit layer carries a data pulse only while something is flowing,
+  // and the fragments hold station unless the structure itself is turning.
+  s.circuitPhase = (s.circuitPhase + dt * CIRCUIT_RATE * s.flowRate) % 1;
+  s.fragmentAngle = (s.fragmentAngle + dt * FRAGMENT_RATE * s.ringSpin) % TWO_PI;
+
   // The rhythms. The clock advances only while something rhythmic was reported,
   // so a still core does not accumulate a phase it will later jump to.
-  const rhythmic = intent.breathAmplitude > 0 || s.pulse > 0.001 || s.agitation > 0.001;
+  const rhythmic =
+    intent.breathAmplitude > 0 || s.pulse > 0.001 || s.agitation > 0.001 || s.wake > 0.001;
   if (rhythmic) s.clock += dt;
+  // The surge's carrier shapes it; its amplitude is the surge, which is the
+  // published stage (and the published ramp level). Zero surge, no carrier.
+  s.wakeCarrier = s.wake > 0.001 ? 0.5 + 0.5 * Math.sin(s.clock * WAKE_CARRIER_HZ * TWO_PI) : 0;
   s.breath =
     intent.breathAmplitude > 0
       ? Math.sin(s.clock * intent.breathHz * TWO_PI) * intent.breathAmplitude
@@ -230,6 +280,7 @@ export function sceneIsStill(state: SceneState, intent: VisualIntent, epsilon = 
     state.constellationDrift < epsilon &&
     state.pulse < epsilon &&
     state.agitation < epsilon &&
+    state.wake < epsilon &&
     intent.breathAmplitude === 0
   );
 }
@@ -292,6 +343,105 @@ export const INWARD_END = 0.32;
 export const CONSTELLATION_RADIUS = 1.78;
 export const FIELD_RADIUS = 2.0;
 export const CAPABILITY_RADIUS = 1.7;
+
+// ------------------------------------------ M18.3: the Living Core's layers
+
+/**
+ * The layers, outermost first, as world radii (M18.3 §9). The 2D fallback
+ * draws the same proportions from these same numbers, so the two views cannot
+ * drift apart.
+ *
+ * Nothing here is a channel: these are where things ARE, not whether they
+ * move. Every one of them is still until a channel says otherwise.
+ */
+/** The outer field: the faintest boundary, a sparse deterministic point cloud. */
+export const OUTER_FIELD_RADIUS = 2.18;
+/** The independent orbital layers, innermost first. */
+export const ORBITAL_RADII = [1.3, 1.62, 1.98] as const;
+/** The wake surge's ring: outside the shells, inside the outer field. */
+export const WAKE_RADIUS = 1.86;
+/** The processor structures: floating fragments, parked at fixed stations. */
+export const FRAGMENT_RADIUS = 1.42;
+/** The data / circuit layer: procedural traces on a shallow band. */
+export const CIRCUIT_RADIUS = 1.2;
+/** The energy chamber: the translucent vessel the nucleus sits in. */
+export const CHAMBER_RADIUS = 0.92;
+
+/**
+ * The camera, stated here rather than in the canvas, because the coverage
+ * arithmetic in `layout.ts` depends on it: how much of the viewport the Core
+ * fills is a function of the frustum and of how far the structure reaches.
+ */
+export const CAMERA_DISTANCE = 6.0;
+export const CAMERA_FOV_DEG = 42;
+
+/** Half the world extent visible at the camera's distance. */
+export const VIEW_HALF_EXTENT =
+  Math.tan((CAMERA_FOV_DEG / 2) * (Math.PI / 180)) * CAMERA_DISTANCE;
+
+/** The radius of the Core's principal structure: its outermost orbital layer. */
+export const CORE_SPAN_RADIUS = ORBITAL_RADII[ORBITAL_RADII.length - 1];
+
+/**
+ * The fraction of the (square) stage the Core's principal structure spans.
+ *
+ * Derived from the camera rather than typed, so a change to the framing moves
+ * the layout with it instead of quietly making the coverage claim false.
+ */
+export const CORE_FILL = CORE_SPAN_RADIUS / VIEW_HALF_EXTENT;
+
+/**
+ * The procedural circuit layer: `segments` traces, each a three-point path
+ * that steps outward, runs along an arc and steps back — the geometry of a
+ * board trace rather than of a spider's web. Three points (xyz each) per
+ * trace, written into `out`.
+ *
+ * Deterministic in the index, like everything else here: a circuit that
+ * redrew itself would read as data moving through it.
+ */
+export function circuitTraces(segments: number, out: Float32Array): Float32Array {
+  if (segments <= 0) return out;
+  const golden = Math.PI * (3 - Math.sqrt(5));
+  for (let i = 0; i < segments; i += 1) {
+    const a = golden * i;
+    // A shallow band rather than a sphere: the circuitry reads as a plane seen
+    // at an angle, which is what makes the depth of the shells visible.
+    const y = Math.sin(a * 1.7) * 0.34;
+    const inner = 0.62 + 0.1 * ((i * 7) % 5) / 5;
+    const outer = 0.9 + 0.1 * ((i * 11) % 7) / 7;
+    const sweep = 0.18 + 0.22 * ((i * 13) % 4) / 4;
+    const o = i * 9;
+    out[o] = Math.cos(a) * inner;
+    out[o + 1] = y * inner;
+    out[o + 2] = Math.sin(a) * inner;
+    out[o + 3] = Math.cos(a) * outer;
+    out[o + 4] = y * outer;
+    out[o + 5] = Math.sin(a) * outer;
+    out[o + 6] = Math.cos(a + sweep) * outer;
+    out[o + 7] = y * outer;
+    out[o + 8] = Math.sin(a + sweep) * outer;
+  }
+  return out;
+}
+
+/**
+ * One processor fragment's station: a fixed point on a tilted band, with a
+ * fixed size and tilt per index. They are parked structures, not orbits.
+ */
+export function fragmentStation(
+  index: number,
+  count: number,
+  out: { x: number; y: number; z: number; size: number; tilt: number },
+): void {
+  const angle = (index / Math.max(1, count)) * TWO_PI;
+  const lift = Math.sin(angle * 2 + index) * 0.42;
+  const radius = FRAGMENT_RADIUS * (0.86 + 0.14 * ((index * 5) % 3) / 3);
+  out.x = Math.cos(angle) * radius;
+  out.y = lift;
+  out.z = Math.sin(angle) * radius;
+  out.size = 0.055 + 0.055 * ((index * 3) % 4) / 4;
+  out.tilt = angle * 0.5 + index * 0.31;
+}
 
 /**
  * A constellation node's position on its ring: evenly spaced, with a fixed

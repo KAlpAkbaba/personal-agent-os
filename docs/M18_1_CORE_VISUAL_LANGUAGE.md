@@ -1,6 +1,10 @@
 # M18.1 — The Core's visual language: layered, bounded, measured
 
-Status: **implemented** (2026-09-07). Governing decision: ADR-0065 in `docs/DECISIONS.md`.
+Status: **implemented** (2026-09-07), then **extended by M18.3** (ADR-0070,
+`docs/M18_3_LIVING_CORE_VISUAL_IDENTITY.md`): the structure below is still drawn, inside
+a nine-layer gold/amber machine that owns the viewport. Where the two documents disagree
+on a radius, a colour or a budget, M18.3 wins. Governing decision: ADR-0065 in
+`docs/DECISIONS.md`.
 The renderer it extends is `docs/M18_CORE_RENDERER.md`; its rule — *the Core draws only
 what was published or measured* — is not relaxed anywhere in this document.
 

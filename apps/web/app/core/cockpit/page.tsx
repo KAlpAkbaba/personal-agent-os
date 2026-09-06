@@ -18,8 +18,14 @@ import { useMemo } from "react";
 
 import OwnerGate from "../../components/OwnerGate";
 import { useCockpitData } from "../../lib/cockpit/useCockpitData";
-import { eyeView, presenceView, releaseView } from "../../lib/uistate/ambient";
-import { eyeClaim, presenceClaim, releaseClaim } from "../../lib/uistate/truth";
+import { alarmView, displayView, eyeView, presenceView, releaseView } from "../../lib/uistate/ambient";
+import {
+  alarmClaim,
+  displayClaim,
+  eyeClaim,
+  presenceClaim,
+  releaseClaim,
+} from "../../lib/uistate/truth";
 import { useCoreState } from "../../lib/uistate/useCoreState";
 import { visualFor } from "../../lib/uistate/visual";
 import { voiceOverlayFrom } from "../../lib/uistate/voice-overlay";
@@ -33,6 +39,8 @@ import StateReadout from "../StateReadout";
 import VoiceControl from "../VoiceControl";
 import { useCorePreferences } from "../usePreferences";
 import {
+  AlarmsPanel,
+  AmbientPanel,
   EvolutionPanel,
   GoalsPanel,
   HealthPanel,
@@ -62,6 +70,8 @@ function Cockpit() {
   const eye = useMemo(() => eyeView(eyeClaim(truth, now)), [truth, now]);
   const presence = useMemo(() => presenceView(presenceClaim(truth, now)), [truth, now]);
   const release = useMemo(() => releaseView(releaseClaim(truth, now)), [truth, now]);
+  const display = useMemo(() => displayView(displayClaim(truth, now)), [truth, now]);
+  const alarm = useMemo(() => alarmView(alarmClaim(truth, now)), [truth, now]);
 
   return (
     <div className="core-page">
@@ -88,7 +98,13 @@ function Cockpit() {
           <section className="ambient-band" aria-label="Ses oturumu">
             <VoiceControl />
           </section>
-          <AmbientBand eye={eye} presence={presence} release={release} />
+          <AmbientBand
+            eye={eye}
+            presence={presence}
+            release={release}
+            display={display}
+            alarm={alarm}
+          />
           <section className="ambient-band" aria-label="Göz kontrolü">
             <EyeControl eye={eye} />
           </section>
@@ -104,6 +120,10 @@ function Cockpit() {
             now={now}
           />
           <RunningToolsPanel truth={truth} now={now} />
+          {/* M18.3: what is set to wake the owner, and what the screens are
+              doing. Both are read-only here; the renderer owns no policy. */}
+          <AlarmsPanel state={data.alarms} now={now} />
+          <AmbientPanel policy={data.ambientPolicy} devices={data.devices} />
           <ShadowReadyPanel state={data.shadowReady} />
           <GoalsPanel state={data.goals} now={now} />
           <ResearchPanel state={data.research} now={now} />

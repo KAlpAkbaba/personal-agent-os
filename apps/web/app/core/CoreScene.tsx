@@ -1,23 +1,27 @@
 "use client";
 
 /**
- * The 3D Core (M18.1, ADR-0065): a layered, bounded, measured structure.
+ * The Living Core (M18.3, ADR-0070): a dense gold/amber cognitive machine.
  *
- * From the inside out: a translucent nucleus; concentric internal rings on
- * tilted planes (the topology layers); the connection paths across the
- * interior; two translucent structural shells; and, beyond them, the things
- * that exist only when a subsystem said so — the evidence constellation, the
- * parked capability nodes, the eye's aperture, the lab's construction layers,
- * the release orbit. Two bounded particle populations move through it: one
- * pulled inward while the system listens or recalls, one travelling the paths
- * while it thinks or works.
+ * Nine layers, outermost first — outer field, containment shell, topology
+ * shell, orbital layers, data/circuit layer, particle transport, processor
+ * structures, energy chamber, central nucleus — plus the things that exist
+ * only when a subsystem said so: the evidence constellation, the parked
+ * capability nodes, the eye's aperture, the lab's construction layers, the
+ * release orbit and the wake surge.
  *
- * Every animated quantity traces to a field of `VisualIntent`, which traces to
- * an event a subsystem published or a level the audio path measured. The frame
- * arithmetic is not here: it is `stepScene` in `lib/uistate/scene.ts`, a pure
- * reducer tested in Node. This file only copies its numbers onto three.js
- * objects. Set every intent channel to zero and the reducer settles to a still
- * structure, which is the correct picture of a system that has told us nothing.
+ * The rule that makes it original rather than a copy of a film interface is
+ * unchanged from M18.1 (ADR-0065) and is the reason the structure is allowed
+ * to be this rich: **every animated quantity traces to a field of
+ * `VisualIntent`, which traces to an event a subsystem published or a level
+ * the audio path measured.** Set every channel to zero and the reducer settles
+ * to a still structure — which is the correct picture of a system that has
+ * told us nothing. Depth here is real geometry (nine radii, tilted planes,
+ * counter-rotation, parallax), never a fog that suggests activity.
+ *
+ * The frame arithmetic is not here: it is `stepScene` in `lib/uistate/scene.ts`,
+ * a pure reducer tested in Node. This file only copies its numbers onto
+ * three.js objects.
  *
  * Performance rules, because the renderer must never be on the critical path
  * of cognition (CLAUDE.md):
@@ -26,8 +30,11 @@
  *   nothing (a structural test reads this file to make sure);
  * - the frame loop is throttled to the tier's fps, skipped under reduced
  *   motion, and does no work at all in a hidden tab;
- * - particles are instanced, counts from the API are capped by the tier before
- *   they reach the GPU, and the readout keeps reporting the true number.
+ * - particles, fragments and the outer field are instanced; the paths and the
+ *   circuitry are merged line geometry; the "bloom" is two additive shells and
+ *   no post-processing library;
+ * - counts from the API are capped by the tier before they reach the GPU, and
+ *   the readout keeps reporting the true number.
  */
 
 import { useEffect, useMemo, useRef } from "react";
@@ -42,34 +49,56 @@ import {
 } from "../lib/uistate/quality";
 import {
   CAPABILITY_RADIUS,
+  CHAMBER_RADIUS,
+  CIRCUIT_RADIUS,
   CONSTELLATION_RADIUS,
   FIELD_RADIUS,
   INWARD_END,
   INWARD_START,
+  ORBITAL_RADII,
+  OUTER_FIELD_RADIUS,
+  WAKE_RADIUS,
   chordEndpoints,
+  circuitTraces,
   constellationPoint,
   createSceneState,
   fibonacciSphere,
+  fragmentStation,
   stepScene,
 } from "../lib/uistate/scene";
 import { type PaletteToken, type VisualIntent, releasePalette } from "../lib/uistate/visual";
 
-/** Same values as the CSS palettes, so 2D and 3D agree on what a state looks like. */
+/**
+ * The Living Core's palette: warm white through gold to amber, one ember for
+ * failure, and exactly one cool colour in the whole scene — the eye's
+ * aperture, which stays cool precisely so that "the camera is on" can never be
+ * mistaken for the Core's own light.
+ *
+ * Same values as the CSS palettes, so 2D and 3D agree on what a state looks
+ * like. `unknown` is deliberately a desaturated warm grey rather than a gold:
+ * silence must not glow.
+ */
 const PALETTE: Record<PaletteToken, string> = {
-  calm: "#6d7f96",
-  inward: "#6fc3d6",
-  active: "#5aa7e8",
-  voice: "#8f7fe8",
-  discovery: "#56c2a4",
-  recall: "#7fb3d5",
-  work: "#e8b339",
-  held: "#b08a4f",
-  achieved: "#34c98e",
-  fault: "#e5655a",
-  lab: "#9a86c9",
-  ready: "#34c98e",
-  unknown: "#58607a",
+  calm: "#c9a05a",
+  inward: "#ffcf7a",
+  active: "#ffb347",
+  voice: "#ffd98a",
+  discovery: "#f2c14e",
+  recall: "#e0b070",
+  work: "#f0a53a",
+  held: "#b98a4a",
+  achieved: "#ffe6a8",
+  fault: "#e0623c",
+  lab: "#d9a15c",
+  ready: "#ffd27a",
+  unknown: "#6b6250",
 };
+
+/** The nucleus itself: warm white at the centre, gold at its surface. */
+const NUCLEUS_CORE_COLOR = "#fff1d0";
+const NUCLEUS_SKIN_COLOR = "#ffc86a";
+/** The one cool colour in the scene (privacy, ADR-0056 §2a). */
+const EYE_COLOR = "#5aa7e8";
 
 const NUCLEUS_RADIUS = 0.62;
 /** The internal rings, innermost first. */
@@ -80,8 +109,14 @@ const RING_TILTS: Array<[number, number, number]> = [
   [Math.PI / 2 - 0.55, 0.35, 0],
   [Math.PI / 2 + 0.4, -0.6, 0.2],
 ];
-/** The structural shells, innermost first. */
+/** The structural shells: [0] the topology shell, [1] the containment shell. */
 const SHELL_RADII = [1.3, 1.52];
+/** The orbital layers' planes: each one is genuinely a different plane. */
+const ORBITAL_TILTS: Array<[number, number, number]> = [
+  [Math.PI / 2 - 0.22, 0.18, 0],
+  [Math.PI / 2 + 0.62, -0.34, 0.15],
+  [Math.PI / 2 - 0.78, 0.52, -0.2],
+];
 const LATTICE_RADIUS = 1.22;
 const EYE_RADIUS = 1.64;
 const HELD_RADIUS = 1.28;
@@ -95,6 +130,8 @@ const scratchPosition = new THREE.Vector3();
 const scratchQuaternion = new THREE.Quaternion();
 const scratchScale = new THREE.Vector3(1, 1, 1);
 const scratchPoint = { x: 0, y: 0, z: 0 };
+const scratchStation = { x: 0, y: 0, z: 0, size: 0, tilt: 0 };
+const scratchEuler = new THREE.Euler();
 
 export type CoreSceneProps = {
   intent: VisualIntent;
@@ -117,9 +154,17 @@ export default function CoreScene({ intent, tier, still, hidden }: CoreSceneProp
   const { invalidate } = useThree();
 
   const nucleusRef = useRef<THREE.Mesh>(null);
+  const nucleusSkinRef = useRef<THREE.Mesh>(null);
   const wireRef = useRef<THREE.LineSegments>(null);
+  const haloRef = useRef<THREE.Mesh>(null);
+  const chamberRef = useRef<THREE.LineSegments>(null);
   const ringRefs = useRef<Array<THREE.Mesh | null>>([]);
   const shellRefs = useRef<Array<THREE.LineSegments | null>>([]);
+  const orbitalRefs = useRef<Array<THREE.Mesh | null>>([]);
+  const circuitRef = useRef<THREE.LineSegments>(null);
+  const fragmentsRef = useRef<THREE.InstancedMesh>(null);
+  const outerFieldRef = useRef<THREE.InstancedMesh>(null);
+  const wakeRef = useRef<THREE.Mesh>(null);
   const latticeRef = useRef<THREE.LineSegments>(null);
   const inwardRef = useRef<THREE.InstancedMesh>(null);
   const travellersRef = useRef<THREE.InstancedMesh>(null);
@@ -130,7 +175,7 @@ export default function CoreScene({ intent, tier, still, hidden }: CoreSceneProp
   const fieldRef = useRef<THREE.InstancedMesh>(null);
   const spokesRef = useRef<THREE.LineSegments>(null);
   const capabilityRef = useRef<THREE.InstancedMesh>(null);
-  const haloRef = useRef<THREE.Mesh>(null);
+  const satelliteHaloRef = useRef<THREE.Mesh>(null);
   const eyeRef = useRef<THREE.Mesh>(null);
   const heldRef = useRef<THREE.LineLoop>(null);
   const errorRef = useRef<THREE.Mesh>(null);
@@ -153,8 +198,17 @@ export default function CoreScene({ intent, tier, still, hidden }: CoreSceneProp
     () => new THREE.IcosahedronGeometry(NUCLEUS_RADIUS, budget.detail),
     [budget.detail],
   );
+  const skinGeometry = useMemo(
+    () => new THREE.IcosahedronGeometry(NUCLEUS_RADIUS * 1.14, Math.max(1, budget.detail - 1)),
+    [budget.detail],
+  );
   const wireGeometry = useMemo(
     () => new THREE.WireframeGeometry(new THREE.IcosahedronGeometry(NUCLEUS_RADIUS * 1.02, 1)),
+    [],
+  );
+  /** The energy chamber: the vessel the nucleus sits in. Present at every tier. */
+  const chamberGeometry = useMemo(
+    () => new THREE.WireframeGeometry(new THREE.IcosahedronGeometry(CHAMBER_RADIUS, 2)),
     [],
   );
   const ringGeometries = useMemo(
@@ -167,6 +221,18 @@ export default function CoreScene({ intent, tier, still, hidden }: CoreSceneProp
         (r, i) => new THREE.WireframeGeometry(new THREE.IcosahedronGeometry(r, i === 0 ? 2 : 1)),
       ),
     [budget.shells],
+  );
+  /**
+   * The orbital layers. Each is a thin torus on its own plane, and each turns
+   * at its own rate and in its own direction (`ORBITAL_RATES`) — which is what
+   * stops the structure reading as one rotating object.
+   */
+  const orbitalGeometries = useMemo(
+    () =>
+      ORBITAL_RADII.slice(0, budget.orbitals).map(
+        (r, i) => new THREE.TorusGeometry(r, i === 1 ? 0.005 : 0.007, 6, 160),
+      ),
+    [budget.orbitals],
   );
 
   /**
@@ -187,17 +253,51 @@ export default function CoreScene({ intent, tier, still, hidden }: CoreSceneProp
     return geometry;
   }, [chords, budget.latticeSegments]);
 
+  /**
+   * The data / circuit layer: procedural board traces, merged into ONE line
+   * geometry so the whole layer is a single draw call. Each trace is two
+   * segments (out, then along), which is why the buffer is four points per
+   * trace rather than the three the generator writes.
+   */
+  const circuitGeometry = useMemo(() => {
+    const geometry = new THREE.BufferGeometry();
+    const segments = budget.circuitSegments;
+    if (segments > 0) {
+      const traces = circuitTraces(segments, new Float32Array(segments * 9));
+      const merged = new Float32Array(segments * 12);
+      for (let i = 0; i < segments; i += 1) {
+        const from = i * 9;
+        const to = i * 12;
+        for (let k = 0; k < 3; k += 1) merged[to + k] = traces[from + k];
+        for (let k = 0; k < 3; k += 1) merged[to + 3 + k] = traces[from + 3 + k];
+        for (let k = 0; k < 3; k += 1) merged[to + 6 + k] = traces[from + 3 + k];
+        for (let k = 0; k < 3; k += 1) merged[to + 9 + k] = traces[from + 6 + k];
+      }
+      geometry.setAttribute("position", new THREE.BufferAttribute(merged, 3));
+    }
+    return geometry;
+  }, [budget.circuitSegments]);
+
   /** The inward population's fixed directions: a spiral over the sphere. */
   const inwardDirections = useMemo(
     () => fibonacciSphere(inwardCount, new Float32Array(inwardCount * 3)),
     [inwardCount],
   );
+  /** The outer field's fixed directions: the same spiral, far out and faint. */
+  const outerDirections = useMemo(
+    () => fibonacciSphere(budget.outerFieldPoints, new Float32Array(budget.outerFieldPoints * 3)),
+    [budget.outerFieldPoints],
+  );
 
   const particleGeometry = useMemo(() => new THREE.SphereGeometry(0.028, 6, 5), []);
   const nodeGeometry = useMemo(() => new THREE.IcosahedronGeometry(0.05, 1), []);
   const fieldGeometry = useMemo(() => new THREE.SphereGeometry(0.02, 5, 4), []);
+  const outerGeometry = useMemo(() => new THREE.SphereGeometry(0.016, 4, 3), []);
+  const fragmentGeometry = useMemo(() => new THREE.OctahedronGeometry(1, 0), []);
   const capabilityGeometry = useMemo(() => new THREE.IcosahedronGeometry(0.11, 1), []);
   const unitTorus = useMemo(() => new THREE.TorusGeometry(1, 0.006, 6, 128), []);
+  /** The wake surge's ring: thicker, so it reads through the whole structure. */
+  const wakeGeometry = useMemo(() => new THREE.TorusGeometry(WAKE_RADIUS, 0.016, 8, 128), []);
 
   /** The held boundary: a dashed loop, its dash distances computed once. */
   const heldGeometry = useMemo(() => {
@@ -234,15 +334,22 @@ export default function CoreScene({ intent, tier, still, hidden }: CoreSceneProp
   // when the tier changes or the scene unmounts, or a tier toggle leaks a
   // buffer per switch.
   useEffect(() => () => nucleusGeometry.dispose(), [nucleusGeometry]);
+  useEffect(() => () => skinGeometry.dispose(), [skinGeometry]);
   useEffect(() => () => wireGeometry.dispose(), [wireGeometry]);
+  useEffect(() => () => chamberGeometry.dispose(), [chamberGeometry]);
   useEffect(() => () => ringGeometries.forEach((g) => g.dispose()), [ringGeometries]);
   useEffect(() => () => shellGeometries.forEach((g) => g.dispose()), [shellGeometries]);
+  useEffect(() => () => orbitalGeometries.forEach((g) => g.dispose()), [orbitalGeometries]);
   useEffect(() => () => latticeGeometry.dispose(), [latticeGeometry]);
+  useEffect(() => () => circuitGeometry.dispose(), [circuitGeometry]);
   useEffect(() => () => particleGeometry.dispose(), [particleGeometry]);
   useEffect(() => () => nodeGeometry.dispose(), [nodeGeometry]);
   useEffect(() => () => fieldGeometry.dispose(), [fieldGeometry]);
+  useEffect(() => () => outerGeometry.dispose(), [outerGeometry]);
+  useEffect(() => () => fragmentGeometry.dispose(), [fragmentGeometry]);
   useEffect(() => () => capabilityGeometry.dispose(), [capabilityGeometry]);
   useEffect(() => () => unitTorus.dispose(), [unitTorus]);
+  useEffect(() => () => wakeGeometry.dispose(), [wakeGeometry]);
   useEffect(() => () => heldGeometry.dispose(), [heldGeometry]);
   useEffect(() => () => spokeGeometry.dispose(), [spokeGeometry]);
 
@@ -311,6 +418,45 @@ export default function CoreScene({ intent, tier, still, hidden }: CoreSceneProp
     if (!hidden) invalidate();
   }, [drawnConstellation, drawnField, drawnCapabilities, hidden, invalidate]);
 
+  /**
+   * The structural layers that never move relative to themselves: the outer
+   * field's points and the processor fragments' stations. Placed once per
+   * tier, because a structure that re-placed itself would read as activity.
+   */
+  useEffect(() => {
+    const outer = outerFieldRef.current;
+    if (outer) {
+      for (let i = 0; i < budget.outerFieldPoints; i += 1) {
+        const x = outerDirections[i * 3] * OUTER_FIELD_RADIUS;
+        const y = outerDirections[i * 3 + 1] * OUTER_FIELD_RADIUS;
+        const z = outerDirections[i * 3 + 2] * OUTER_FIELD_RADIUS;
+        scratchMatrix.setPosition(x, y, z);
+        outer.setMatrixAt(i, scratchMatrix);
+      }
+      outer.count = budget.outerFieldPoints;
+      outer.instanceMatrix.needsUpdate = true;
+    }
+    const fragments = fragmentsRef.current;
+    if (fragments) {
+      for (let i = 0; i < budget.fragments; i += 1) {
+        fragmentStation(i, budget.fragments, scratchStation);
+        scratchPosition.set(scratchStation.x, scratchStation.y, scratchStation.z);
+        scratchEuler.set(scratchStation.tilt, scratchStation.tilt * 1.7, scratchStation.tilt * 0.6);
+        scratchQuaternion.setFromEuler(scratchEuler);
+        scratchScale.set(scratchStation.size, scratchStation.size * 1.6, scratchStation.size);
+        scratchMatrix.compose(scratchPosition, scratchQuaternion, scratchScale);
+        fragments.setMatrixAt(i, scratchMatrix);
+      }
+      fragments.count = budget.fragments;
+      fragments.instanceMatrix.needsUpdate = true;
+      // The scratch quaternion is shared with the frame body, which composes
+      // unrotated matrices; hand it back the way it found it.
+      scratchQuaternion.identity();
+      scratchScale.set(1, 1, 1);
+    }
+    if (!hidden) invalidate();
+  }, [budget.outerFieldPoints, budget.fragments, outerDirections, hidden, invalidate]);
+
   // -------------------------------------------------------- frame body
 
   /**
@@ -321,21 +467,56 @@ export default function CoreScene({ intent, tier, still, hidden }: CoreSceneProp
   const applyFrame = (dt: number, pointerX: number, pointerY: number, camera: THREE.Camera) => {
     const s = stepScene(scene, intent, dt, pointerX, pointerY);
     const breathScale = s.scale * (1 + s.breath);
+    // The wake surge is its own light. It brightens the nucleus and lights its
+    // own ring; it deliberately does NOT drive `ringSpin`, because ring speed
+    // is the thinking channel and an alarm is not the Core thinking.
+    const surge = s.wake * (0.55 + 0.45 * s.wakeCarrier);
 
     const nucleus = nucleusRef.current;
     if (nucleus) {
       nucleus.scale.setScalar(breathScale);
       const material = opacityOf(nucleus);
-      if (material) material.opacity = (0.1 + 0.22 * s.glow) * s.opacity;
+      if (material) material.opacity = (0.4 + 0.45 * s.glow + 0.3 * surge) * s.opacity;
       nucleus.rotation.y = s.ringAngle * 0.5;
+    }
+
+    // The nucleus' gold skin, just off the warm-white body: the two together
+    // are what make the centre read as hot rather than as a lit ball.
+    const skin = nucleusSkinRef.current;
+    if (skin) {
+      skin.scale.setScalar(breathScale * (1 + 0.05 * s.pulse));
+      const material = opacityOf(skin);
+      if (material) material.opacity = (0.12 + 0.3 * s.glow + 0.25 * surge) * s.opacity;
+      skin.rotation.y = -s.ringAngle * 0.32;
+      skin.rotation.x = s.ringAngle * 0.14;
     }
 
     const wire = wireRef.current;
     if (wire) {
       wire.scale.setScalar(breathScale);
       const material = opacityOf(wire);
-      if (material) material.opacity = (0.3 + 0.4 * s.glow) * s.opacity;
+      if (material) material.opacity = (0.22 + 0.4 * s.glow) * s.opacity;
       wire.rotation.y = s.ringAngle * 0.5;
+    }
+
+    // The restrained bloom: one additive shell around the nucleus, scaled by
+    // the breath and by whatever real energy there is. No post-processing.
+    const halo = haloRef.current;
+    if (halo) {
+      halo.scale.setScalar(breathScale * (1.5 + 0.5 * s.glow + 0.4 * s.pulse + 0.5 * surge));
+      const material = opacityOf(halo);
+      if (material) material.opacity = (0.03 + 0.16 * s.glow + 0.18 * surge) * s.opacity;
+    }
+
+    // The energy chamber: the vessel around the nucleus. It breathes with it
+    // and counter-rotates against the rings.
+    const chamber = chamberRef.current;
+    if (chamber) {
+      chamber.scale.setScalar(s.scale * (1 + s.breath * 0.6));
+      chamber.rotation.y = -s.ringAngle * 0.6;
+      chamber.rotation.z = s.ringAngle * 0.22;
+      const material = opacityOf(chamber);
+      if (material) material.opacity = (0.06 + 0.22 * s.glow) * s.opacity;
     }
 
     // The rings: each turns about its own tilted axis at the reported spin,
@@ -360,7 +541,61 @@ export default function CoreScene({ intent, tier, still, hidden }: CoreSceneProp
       shell.rotation.y = s.shellAngle * (i === 0 ? 1 : -0.6);
       shell.rotation.x = s.shellAngle * 0.3;
       const material = opacityOf(shell);
-      if (material) material.opacity = (0.05 + 0.13 * s.glow) * (1 - i * 0.35) * s.opacity;
+      if (material) material.opacity = (0.05 + 0.15 * s.glow) * (1 - i * 0.3) * s.opacity;
+    }
+
+    // The orbital layers: independent rates, independent directions, one
+    // shared driver. The surge lights them without speeding them up.
+    const orbitals = orbitalRefs.current;
+    for (let i = 0; i < orbitals.length; i += 1) {
+      const orbital = orbitals[i];
+      if (!orbital) continue;
+      orbital.rotation.z = s.orbitAngles[i];
+      orbital.rotation.x = ORBITAL_TILTS[i][0] + s.orbitAngles[i] * 0.12;
+      orbital.scale.setScalar(s.scale * (1 + s.shellSpread * 0.06));
+      const material = opacityOf(orbital);
+      if (material) material.opacity = (0.1 + 0.34 * s.glow + 0.3 * surge) * s.opacity;
+    }
+
+    // The data / circuit layer. It is structure, so it is always mounted; it
+    // brightens with the light and carries a pulse only while something flows.
+    const circuit = circuitRef.current;
+    if (circuit) {
+      circuit.scale.setScalar(s.scale * CIRCUIT_RADIUS);
+      circuit.rotation.y = s.latticeAngle * 0.5 + s.circuitPhase * 0.6;
+      circuit.rotation.x = 0.42;
+      const material = opacityOf(circuit);
+      if (material) material.opacity = (0.05 + 0.22 * s.glow + 0.3 * s.flowRate) * s.opacity;
+    }
+
+    // The processor structures: parked fragments that drift with the whole
+    // machine and hold their stations relative to one another.
+    const fragments = fragmentsRef.current;
+    if (fragments) {
+      fragments.rotation.y = s.fragmentAngle;
+      fragments.rotation.z = s.fragmentAngle * 0.25;
+      fragments.scale.setScalar(s.scale);
+      const material = opacityOf(fragments);
+      if (material) material.opacity = (0.16 + 0.5 * s.glow) * s.opacity;
+    }
+
+    // The outer field: the faintest boundary. It drifts against the orbitals.
+    const outer = outerFieldRef.current;
+    if (outer) {
+      outer.rotation.y = -s.shellAngle * 0.4;
+      outer.rotation.x = s.shellAngle * 0.12;
+      const material = opacityOf(outer);
+      if (material) material.opacity = (0.04 + 0.2 * s.glow) * s.opacity;
+    }
+
+    // The wake surge's own ring: visible only while an alarm is sounding.
+    const wake = wakeRef.current;
+    if (wake) {
+      wake.visible = s.wake > 0.01;
+      wake.scale.setScalar(s.scale * (1 + 0.06 * s.wakeCarrier));
+      wake.rotation.z = s.ringAngle * 0.2;
+      const material = opacityOf(wake);
+      if (material) material.opacity = 0.85 * surge * s.opacity;
     }
 
     const lattice = latticeRef.current;
@@ -456,8 +691,8 @@ export default function CoreScene({ intent, tier, still, hidden }: CoreSceneProp
     // Parked things hold station: nothing here rotates.
     const capabilities = capabilityRef.current;
     if (capabilities) capabilities.visible = drawnCapabilities > 0;
-    const halo = haloRef.current;
-    if (halo) halo.visible = intent.satelliteComplete;
+    const satellite = satelliteHaloRef.current;
+    if (satellite) satellite.visible = intent.satelliteComplete;
 
     const eye = eyeRef.current;
     if (eye) {
@@ -540,12 +775,71 @@ export default function CoreScene({ intent, tier, still, hidden }: CoreSceneProp
 
   return (
     <group>
-      <mesh ref={nucleusRef} geometry={nucleusGeometry}>
-        <meshBasicMaterial color={color} transparent opacity={0.16} depthWrite={false} />
+      {/* The outer field: the widest, faintest layer. Instanced; culling off
+          because the base geometry's bounds sit at the origin. */}
+      {budget.outerFieldPoints > 0 && (
+        <instancedMesh
+          ref={outerFieldRef}
+          args={[outerGeometry, undefined, budget.outerFieldPoints]}
+          frustumCulled={false}
+        >
+          <meshBasicMaterial color={color} transparent opacity={0.08} depthWrite={false} />
+        </instancedMesh>
+      )}
+
+      {/* The translucent structural shells: [0] topology, [1] containment. */}
+      {shellGeometries.map((geometry, i) => (
+        <lineSegments
+          key={`shell-${i}`}
+          ref={(el) => {
+            shellRefs.current[i] = el;
+          }}
+          geometry={geometry}
+        >
+          <lineBasicMaterial color={color} transparent opacity={0.08} depthWrite={false} />
+        </lineSegments>
+      ))}
+
+      {/* The independent orbital layers. */}
+      {orbitalGeometries.map((geometry, i) => (
+        <mesh
+          key={`orbital-${i}`}
+          ref={(el) => {
+            orbitalRefs.current[i] = el;
+          }}
+          geometry={geometry}
+          rotation={ORBITAL_TILTS[i]}
+        >
+          <meshBasicMaterial color={color} transparent opacity={0.25} depthWrite={false} />
+        </mesh>
+      ))}
+
+      {/* The data / circuit layer: one merged line geometry, one draw call. */}
+      {budget.circuitSegments > 0 && (
+        <lineSegments ref={circuitRef} geometry={circuitGeometry}>
+          <lineBasicMaterial color={color} transparent opacity={0.12} depthWrite={false} />
+        </lineSegments>
+      )}
+
+      {/* The processor structures: floating fragments at fixed stations. */}
+      {budget.fragments > 0 && (
+        <instancedMesh
+          ref={fragmentsRef}
+          args={[fragmentGeometry, undefined, budget.fragments]}
+          frustumCulled={false}
+        >
+          <meshBasicMaterial color={color} transparent opacity={0.3} depthWrite={false} />
+        </instancedMesh>
+      )}
+
+      {/* The wake surge (M18.3 §7): an alarm's own ring, and nothing else's. */}
+      <mesh ref={wakeRef} geometry={wakeGeometry} rotation={[Math.PI / 2 - 0.35, 0, 0]} visible={false}>
+        <meshBasicMaterial color={PALETTE.work} transparent opacity={0} depthWrite={false} />
       </mesh>
 
-      <lineSegments ref={wireRef} geometry={wireGeometry}>
-        <lineBasicMaterial color={color} transparent opacity={0.5} />
+      {/* The energy chamber: the vessel the nucleus sits in. */}
+      <lineSegments ref={chamberRef} geometry={chamberGeometry}>
+        <lineBasicMaterial color={NUCLEUS_SKIN_COLOR} transparent opacity={0.1} depthWrite={false} />
       </lineSegments>
 
       {/* The internal rings: the topology layers. */}
@@ -562,18 +856,36 @@ export default function CoreScene({ intent, tier, still, hidden }: CoreSceneProp
         </mesh>
       ))}
 
-      {/* The translucent structural shells. */}
-      {shellGeometries.map((geometry, i) => (
-        <lineSegments
-          key={`shell-${i}`}
-          ref={(el) => {
-            shellRefs.current[i] = el;
-          }}
-          geometry={geometry}
-        >
-          <lineBasicMaterial color={color} transparent opacity={0.08} depthWrite={false} />
-        </lineSegments>
-      ))}
+      {/* The nucleus: warm white body, gold skin, wire, and one additive halo
+          that is the whole of the "bloom" — no post-processing anywhere. */}
+      <mesh ref={nucleusRef} geometry={nucleusGeometry}>
+        <meshBasicMaterial color={NUCLEUS_CORE_COLOR} transparent opacity={0.4} depthWrite={false} />
+      </mesh>
+      <mesh ref={nucleusSkinRef} geometry={skinGeometry}>
+        <meshBasicMaterial
+          color={NUCLEUS_SKIN_COLOR}
+          transparent
+          opacity={0.16}
+          side={THREE.BackSide}
+          depthWrite={false}
+        />
+      </mesh>
+      <lineSegments ref={wireRef} geometry={wireGeometry}>
+        <lineBasicMaterial color={NUCLEUS_SKIN_COLOR} transparent opacity={0.4} depthWrite={false} />
+      </lineSegments>
+      {budget.glow && (
+        <mesh ref={haloRef}>
+          <sphereGeometry args={[NUCLEUS_RADIUS, 20, 14]} />
+          <meshBasicMaterial
+            color={NUCLEUS_SKIN_COLOR}
+            transparent
+            opacity={0.08}
+            blending={THREE.AdditiveBlending}
+            side={THREE.BackSide}
+            depthWrite={false}
+          />
+        </mesh>
+      )}
 
       {/* The connection paths: drawn at the reported topology. */}
       {budget.latticeSegments > 0 && (
@@ -653,7 +965,7 @@ export default function CoreScene({ intent, tier, still, hidden }: CoreSceneProp
       >
         <meshBasicMaterial color={PALETTE.ready} transparent opacity={0.85} />
       </instancedMesh>
-      <mesh ref={haloRef} position={[CAPABILITY_RADIUS, 0, 0]} visible={false}>
+      <mesh ref={satelliteHaloRef} position={[CAPABILITY_RADIUS, 0, 0]} visible={false}>
         <sphereGeometry args={[0.26, 16, 12]} />
         <meshBasicMaterial
           color={PALETTE.ready}
@@ -664,9 +976,10 @@ export default function CoreScene({ intent, tier, still, hidden }: CoreSceneProp
         />
       </mesh>
 
-      {/* The eye's aperture: one thin tilted ring while eye.active is current. */}
+      {/* The eye's aperture: one thin tilted ring while eye.active is current,
+          and the one cool colour in the scene. */}
       <mesh ref={eyeRef} geometry={unitTorus} scale={EYE_RADIUS} rotation={[Math.PI / 2 + 0.9, 0.3, 0]} visible={false}>
-        <meshBasicMaterial color={PALETTE.active} transparent opacity={0.55} depthWrite={false} />
+        <meshBasicMaterial color={EYE_COLOR} transparent opacity={0.55} depthWrite={false} />
       </mesh>
 
       {/* Waiting on the owner: a held, dashed boundary. */}

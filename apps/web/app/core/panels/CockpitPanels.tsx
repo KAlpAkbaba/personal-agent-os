@@ -18,6 +18,8 @@ import {
   type CockpitData,
 } from "../../lib/cockpit/useCockpitData";
 import {
+  ALARM_STATE_LABEL,
+  type AmbientPolicy,
   GOAL_STATUS_LABEL,
   type Goal,
   type Health,
@@ -29,6 +31,7 @@ import {
   type ResearchTask,
   type ShadowReady,
   TRUTH_KIND_LABEL,
+  type WakeAlarm,
   type World,
   isHealthy,
 } from "../../lib/cockpit/api";
@@ -538,5 +541,172 @@ export function StateStreamPanel({ truth, now }: { truth: CoreTruth; now: number
         </ul>
       )}
     </section>
+  );
+}
+
+// ------------------------------------------------- M18.3: alarms and ambient
+
+/**
+ * The wake alarms (spec §3).
+ *
+ * Read-only, like every panel here: an alarm is created, snoozed or cancelled
+ * by voice or by the API that owns it. This lists what exists and what state
+ * each one is in, and — when the route is not on this Cloud Core yet — says
+ * exactly that rather than an empty list that would read as "no alarms".
+ */
+export function AlarmsPanel({ state, now }: { state: CockpitData["alarms"]; now: number }) {
+  return (
+    <Panel<WakeAlarm[]>
+      id="alarms"
+      title="Alarmlar"
+      state={state}
+      empty="Kurulu alarm yok."
+      isEmpty={(alarms) => alarms.length === 0}
+      badge={(alarms) => `${alarms.length}`}
+      attention={(alarms) => alarms.some((a) => a.state === "FAILED")}
+    >
+      {(alarms) => (
+        <ul>
+          {alarms.slice(0, 10).map((alarm) => (
+            <li key={alarm.id} data-alarm-id={alarm.id} data-alarm-state={alarm.state}>
+              <div className="event-row">
+                <span>
+                  {alarm.local_time ?? "saat bildirilmedi"}
+                  {alarm.is_test && (
+                    <span className="muted" data-alarm-test="yes">
+                      {" · test"}
+                    </span>
+                  )}
+                </span>
+                <span className="event-when">{ALARM_STATE_LABEL[alarm.state] ?? alarm.state}</span>
+              </div>
+              <span className="muted">
+                {alarm.recurrence?.weekdays?.length
+                  ? `haftanın ${alarm.recurrence.weekdays.length} günü`
+                  : "tek seferlik"}
+                {alarm.media_title
+                  ? ` · ${alarm.media_title}`
+                  : alarm.media_kind
+                    ? ` · ${alarm.media_kind}`
+                    : " · ses kaynağı bildirilmedi"}
+                {alarm.scheduled_for && ` · ${when(alarm.scheduled_for, now)}`}
+              </span>
+              {alarm.terminal_reason && (
+                <span className="muted" data-alarm-reason>
+                  {alarm.terminal_reason}
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </Panel>
+  );
+}
+
+/**
+ * The screens and the ambient policy (spec §3.9, §5.3).
+ *
+ * Two facts side by side: what the owner's policy says may happen, and what
+ * the devices actually reported. **Nothing here decides physical policy** —
+ * the renderer has no write path, and display power is decided by Cloud Core
+ * and executed on the device.
+ */
+export function AmbientPanel({
+  policy,
+  devices,
+}: {
+  policy: CockpitData["ambientPolicy"];
+  devices: CockpitData["devices"];
+}) {
+  return (
+    <Panel<AmbientPolicy>
+      id="ambient"
+      title="Ekran / Ortam"
+      state={policy}
+      empty="Ortam politikası bildirilmedi."
+      isEmpty={(p) => p.auto_off_enabled === null}
+      badge={(p) => (p.auto_off_enabled ? "otomatik açık" : "otomatik kapalı")}
+    >
+      {(p) => (
+        <ul>
+          <li
+            data-ambient-auto-off={
+              p.auto_off_enabled === null ? "unknown" : String(p.auto_off_enabled)
+            }
+          >
+            <div className="event-row">
+              <span>Otomatik ekran kapatma</span>
+              <span className="event-when">{p.auto_off_enabled ? "açık" : "kapalı"}</span>
+            </div>
+            <span className="muted">
+              {p.off_when_away ? "yokken kapat" : "yokken kapatma"}
+              {" · "}
+              {p.off_when_asleep ? "uyurken kapat" : "uyurken kapatma"}
+              {" · "}
+              {p.wake_on_return ? "dönünce aç" : "dönünce açma"}
+            </span>
+          </li>
+          <li data-ambient-thresholds>
+            <span className="muted">
+              {p.away_after_s === null ? "yokluk eşiği bildirilmedi" : `yokluk ${p.away_after_s} sn`}
+              {" · "}
+              {p.asleep_after_s === null ? "uyku eşiği bildirilmedi" : `uyku ${p.asleep_after_s} sn`}
+              {" · "}
+              {p.input_holdoff_s === null
+                ? "giriş beklemesi bildirilmedi"
+                : `giriş beklemesi ${p.input_holdoff_s} sn`}
+            </span>
+          </li>
+          <li data-ambient-devices={devices.kind}>
+            <DeviceDisplayRows devices={devices} />
+          </li>
+          <li data-ambient-note>
+            <span className="muted">
+              Ekran gücü makine durumu değildir: hiçbir yol bilgisayarı uyutmaz, kilitlemez veya
+              kapatmaz.
+            </span>
+          </li>
+        </ul>
+      )}
+    </Panel>
+  );
+}
+
+/** The devices' own account of their screens, or the reason there is none. */
+function DeviceDisplayRows({ devices }: { devices: CockpitData["devices"] }) {
+  if (devices.kind === "loading") return <span className="muted">cihazlar yükleniyor…</span>;
+  if (devices.kind === "failed") {
+    return <span className="muted">Cihaz durumu alınamadı: {devices.error}</span>;
+  }
+  if (devices.kind === "absent") {
+    return <span className="muted">Henüz yok. {devices.detail}</span>;
+  }
+  if (devices.value.length === 0) return <span className="muted">Kayıtlı cihaz yok.</span>;
+  return (
+    <>
+      {devices.value.slice(0, 4).map((device) => (
+        <span
+          key={device.device_id}
+          className="muted"
+          data-device={device.device_id}
+          data-device-display={device.display_state ?? "untold"}
+        >
+          {device.label ?? device.device_id}
+          {": "}
+          {device.statusKnown
+            ? `${
+                device.display_state === "on"
+                  ? "ekran açık"
+                  : device.display_state === "off"
+                    ? "ekran kapalı"
+                    : "ekran durumu bildirilmedi"
+              }${
+                device.input_idle_s === null ? "" : ` · ${Math.round(device.input_idle_s)} sn boşta`
+              }${device.alarm_ringing ? " · alarm çalıyor" : ""}`
+            : "cihaz durumu bildirilmedi (eşlik eden süreç yok veya bu sürüm göndermiyor)"}
+        </span>
+      ))}
+    </>
   );
 }
