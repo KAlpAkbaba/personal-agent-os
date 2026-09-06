@@ -59,6 +59,8 @@ from app.research.models import (
     STAGE_READY,
     ResearchCandidateRow,
     ResearchEvidenceRow,
+    ResearchFocusRow,
+    ResearchOwnerStateRow,
     ResearchReportRow,
     ResearchRunRow,
 )
@@ -155,6 +157,9 @@ RESEARCH_TABLES = (
     ResearchCandidateRow.__table__,
     ResearchEvidenceRow.__table__,
     ResearchReportRow.__table__,
+    # ADR-0076: the durable focus and the one open clarification.
+    ResearchFocusRow.__table__,
+    ResearchOwnerStateRow.__table__,
 )
 
 
@@ -494,41 +499,51 @@ def test_a_new_topic_after_a_completed_research_still_crawls(wired) -> None:
 # ------------------------------------------------------------------ ambiguity
 
 
-def test_two_completed_researches_with_no_link_ask_one_question_and_never_crawl(
-    wired,
-) -> None:
-    """Two plausible runs, nothing tying either to this conversation: ONE short Turkish
-    question, no guess - and still no crawl."""
+def test_two_completed_researches_bind_to_the_one_the_owner_last_heard(wired) -> None:
+    """ADR-0075 asked a question here; ADR-0076 answers it, and that is the point.
+
+    Two completed runs and a FRESH session used to be ambiguous: nothing in the server
+    could say which one the owner meant, so it asked - and in the owner's real run it
+    asked six times, because nothing could hear the answer either. The durable focus is
+    the missing half: the research whose result was last announced is the one "Teknik
+    anlat." is about, in a session that has never heard of it. Still no crawl, and still
+    no guess: the focus is a durable row that says why it is the focus.
+    """
     client, runtime, sideband, broker, artifacts = wired
     _enroll_online_device(broker)
     _complete_a_research(client, runtime, artifacts, topic=FIXTURE_TOPIC)
-    _complete_a_research(client, runtime, artifacts, topic="Yerel modellerin son durumu")
+    second_task_id, second_artifact_id = _complete_a_research(
+        client, runtime, artifacts, topic="Yerel modellerin son durumu"
+    )
     tasks_before = _research_task_ids(runtime)
 
-    sid = _create(client)  # a fresh session: neither run is linked to it
+    sid = _create(client)  # a fresh session: neither run was started here
     _say(client, sid, "Teknik anlat.")
 
     refused = _tool(client, sid, "c-start", "research.start", {"topic": "Teknik anlat."})
     assert refused["result"]["status"] == "refused"
-    assert refused["result"]["ambiguous"] is True
-    assert refused["result"]["research_job_id"] is None
-    assert refused["result"]["speech"].endswith("Hangisini anlatayım?")
+    assert refused["result"]["ambiguous"] is False
+    assert refused["result"]["research_job_id"] == second_task_id
+    assert refused["result"]["speech"] == RESEARCH_FOLLOWUP_REFUSED_TR
     assert _research_task_ids(runtime) == tasks_before
 
     answer = _tool(client, sid, "c-explain", "activity.explain", {"question": "Teknik anlat."})[
         "result"
     ]
-    assert answer["status"] == "needs_clarification"
-    assert answer["ambiguous"] is True
-    assert len(answer["candidates"]) == 2
-    assert answer["speech"].endswith("Hangisini anlatayım?")
-    assert answer["research_job_id"] is None
+    assert answer["research_job_id"] == second_task_id
+    assert answer["research_artifact_id"] == second_artifact_id
+    assert answer["resolution_reason"] == "current_focus"
+    assert answer["speech"]
     assert _research_task_ids(runtime) == tasks_before
 
 
 def test_the_session_that_started_the_research_binds_to_its_own_run(wired) -> None:
-    """Ambiguity is only ambiguity when nothing links a run to the conversation. The
-    session that started one and saw it finish is bound to THAT run."""
+    """The session that started a research and saw it finish is bound to THAT run.
+
+    Under ADR-0075 the binding basis was literally "session" - a linkage that died with
+    the session. Under ADR-0076 the same run wins for a better reason: hearing its result
+    announced put it in focus, durably, and the focus outlives the session that made it.
+    """
     client, runtime, sideband, broker, artifacts = wired
     _enroll_online_device(broker)
     _complete_a_research(client, runtime, artifacts, topic="Yerel modellerin son durumu")
@@ -568,4 +583,5 @@ def test_the_session_that_started_the_research_binds_to_its_own_run(wired) -> No
     _say(client, sid, "Teknik anlat.", turn=2, t_ms=9000)
     refused = _tool(client, sid, "c-start", "research.start", {"topic": "Teknik anlat."})
     assert refused["result"]["research_job_id"] == str(own_task_id)
-    assert refused["result"]["binding_basis"] == "session"
+    assert refused["result"]["binding_basis"] == "current_focus"
+    assert refused["result"]["focus_source"] == "result_just_spoken"

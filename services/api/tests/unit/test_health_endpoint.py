@@ -183,7 +183,14 @@ def test_health_serves_the_realtime_contract_version() -> None:
     # device-refusal receipt shape, and one receipt per physical step of the wake sequence.
     # 7 = M18.2 follow-up (ADR-0075): research.start's refused terminal shape on a follow-up
     # turn, and the explanation naming the job and artifact it read.
-    assert doc["checks"]["voice_realtime"]["action_contract_version"] == 7
+    # 8 = M18.2 architectural fix (ADR-0076): the durable research focus, the three
+    # follow-up tools that take no title and no job id from the model, and a refusal for
+    # ANY turn that points at a run - including when there is no research to point at.
+    assert doc["checks"]["voice_realtime"]["action_contract_version"] == 8
+    # The follow-up family rides the same manifest the owner harness reads.
+    assert {"research.explain", "research.sources", "research.finding_detail"} <= set(
+        doc["checks"]["voice_realtime"]["tools"]
+    )
     # M18.3 spec §3.8: the ten new tools ride the same manifest an owner harness reads.
     tools = set(doc["checks"]["voice_realtime"]["tools"])
     assert {"alarm.create", "alarm.stop", "display.off", "ambient.test_display"} <= tools

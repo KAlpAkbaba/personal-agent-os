@@ -317,7 +317,7 @@ async def set_research_focus(request: Request, task_id: uuid.UUID) -> dict[str, 
 
     status, payload = await asyncio.to_thread(apply)
     if status == 404:
-        raise HTTPException(status_code=404, detail=payload["detail"])
+        raise HTTPException(status_code=404, detail=payload.get("detail"))
     if status == 409:
         return JSONResponse(status_code=409, content=payload)
     logger.info("research_focus_set", task_id=str(task_id), source="owner_selected_in_ui")

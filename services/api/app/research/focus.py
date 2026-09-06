@@ -115,12 +115,17 @@ class FocusEntry:
 
     @classmethod
     def from_candidate(cls, raw: dict[str, Any]) -> FocusEntry:
+        # Every read is a .get(): this row was written by an earlier release of this
+        # very module and must be readable by a later one (tests/unit/
+        # test_research_contracts.py audits the whole package for bare-key reads).
+        artifact_id = raw.get("artifact_id")
+        mode = raw.get("mode")
         return cls(
             research_job_id=str(raw.get("research_job_id") or ""),
-            artifact_id=(str(raw["artifact_id"]) if raw.get("artifact_id") else None),
+            artifact_id=str(artifact_id) if artifact_id else None,
             topic=str(raw.get("topic") or ""),
             completed_at=_parse(raw.get("completed_at")),
-            mode=(str(raw["mode"]) if raw.get("mode") else None),
+            mode=str(mode) if mode else None,
             source_count=int(raw.get("source_count") or 0),
         )
 
