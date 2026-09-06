@@ -28,6 +28,7 @@ param(
     [string]$OutFile = "",
     [string]$MusicUrl = "",
     [string]$MusicTitle = "",
+    [switch]$SkipProfilePrep,
     [switch]$SkipWeb,
     [string]$PnpmPath = "pnpm",
     [ValidateSet("auto", "never", "force")][string]$CloudCoreUpdate = "auto",
@@ -185,6 +186,29 @@ function Get-RunAlarm {
 
 function Get-AlarmState { param($Alarm) return ([string](Get-OptionalProperty -InputObject $Alarm -Name "state")).ToLowerInvariant() }
 
+function Invoke-DeviceCommand {
+    <#
+        One device command over the owner API (POST .../commands, then poll the row to its
+        terminal status). Returns the terminal document {command_id, status, result, error};
+        a command that does not settle within WaitSec is returned as it stands (status pending
+        or running) - the caller decides what that means, nothing here throws for it.
+    #>
+    param([string]$DeviceId, [string]$Capability, [hashtable]$Payload, [int]$TimeoutSec = 60, [int]$WaitSec = 90)
+    $body = @{ capability = $Capability; payload = $Payload; idempotency_key = ("m18-3-" + [guid]::NewGuid().ToString("N")); timeout_s = $TimeoutSec } | ConvertTo-Json -Depth 8 -Compress
+    $created = Send-Json -Method "POST" -Path "$routeDevices/$DeviceId/commands" -Body $body
+    $commandId = [string](Get-OptionalProperty -InputObject $created -Name "command_id")
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($WaitSec)
+    $doc = $created
+    while ([DateTimeOffset]::UtcNow -lt $deadline) {
+        Start-Sleep -Seconds 2
+        $doc = Get-JsonOrNull "$routeDevices/$DeviceId/commands/$commandId"
+        if ($null -eq $doc) { continue }
+        $status = [string](Get-OptionalProperty -InputObject $doc -Name "status")
+        if ($status -in @("succeeded", "failed", "expired", "cancelled")) { break }
+    }
+    return $doc
+}
+
 $installCommand = "Start-Process powershell -Verb RunAs -Wait -ArgumentList '-NoProfile -ExecutionPolicy Bypass -NoExit -File `"" + (Join-Path $repoRoot "scripts\install-device-service.ps1") + "`" -DisplayPower'"
 
 $webProcess = $null
@@ -235,6 +259,34 @@ try {
     Add-Check -Name "device.capabilities_current" -Ok ($null -ne $device -and $missing.Count -eq 0) -Detail $(if ($null -eq $device) { "no online device" } elseif ($missing.Count) { "still missing: " + ($missing -join ", ") } else { "device $deviceId advertises the M18.3 capabilities" })
     if ($null -eq $device -or $missing.Count -gt 0) { break }
     Add-Check -Name "device.media_capable" -Ok $mediaCapable -Detail $(if ($mediaCapable) { "$mediaDeviceCap advertised: the YouTube path is available" } else { "$mediaDeviceCap not advertised (browser worker not provisioned?): the alarm will ring the tone, truthfully - row 14.7 cannot pass on this device" })
+
+    # ------------------------------------------------------------------ the alarm profile, once
+    # The worker's alarm profile starts empty, so YouTube's first visit lands on a consent page
+    # the worker will never click (ADR-0073). The owner accepts it ONCE, by hand, in that
+    # profile's own persistent window - opened here through the real device path so the
+    # window is the same one the alarm will use. Nothing is bypassed; nothing is automated.
+    $prep = [ordered]@{ done = $false; media_present = $null; title = $null }
+    if ($MusicUrl -and $mediaCapable -and -not $SkipProfilePrep) {
+        $prepSession = "alarm-prep-" + $runId
+        $opened = Invoke-DeviceCommand -DeviceId $deviceId -Capability "browser.session_open" -TimeoutSec 60 -WaitSec 90 -Payload @{ session_id = $prepSession; profile = "alarm"; session_kind = "media"; channel = "chrome"; policy = @{ allowed_risk_classes = @("READ", "NAVIGATE"); visible = $true } }
+        $openStatus = [string](Get-OptionalProperty -InputObject $opened -Name "status")
+        if ($openStatus -eq "succeeded") {
+            $null = Invoke-DeviceCommand -DeviceId $deviceId -Capability "browser.navigate" -TimeoutSec 90 -WaitSec 120 -Payload @{ session_id = $prepSession; url = $MusicUrl }
+            Write-Host ""
+            Write-Host "A Chrome window with the ALARM profile opened at your music. If a consent page shows, accept it once BY HAND" -ForegroundColor Cyan
+            Write-Host "(only this profile keeps it). When the video page is showing, press Enter here." -ForegroundColor Cyan
+            $null = Read-Host
+            $status = Invoke-DeviceCommand -DeviceId $deviceId -Capability "browser.media_status" -TimeoutSec 30 -WaitSec 60 -Payload @{ session_id = $prepSession }
+            $statusResult = Get-OptionalProperty -InputObject $status -Name "result"
+            $prep.media_present = $(if ($null -ne $statusResult) { Get-OptionalProperty -InputObject $statusResult -Name "present" } else { $null })
+            $prep.title = $(if ($null -ne $statusResult) { Get-OptionalProperty -InputObject $statusResult -Name "title" } else { $null })
+            $null = Invoke-DeviceCommand -DeviceId $deviceId -Capability "browser.session_close" -TimeoutSec 30 -WaitSec 60 -Payload @{ session_id = $prepSession }
+            $prep.done = $true
+            Write-Host ("      alarm profile prepared: media element present={0} title={1}" -f $prep.media_present, $prep.title)
+        }
+        else { Write-Host ("      could not open the alarm profile for preparation ({0}); the alarm will still run and report truthfully" -f $openStatus) -ForegroundColor Yellow }
+    }
+    $evidence.profile_prep = $prep
 
     # ------------------------------------------------------------------ the chosen song
     $song = $null
