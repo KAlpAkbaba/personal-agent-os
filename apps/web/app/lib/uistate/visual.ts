@@ -29,8 +29,8 @@ import {
   isKnownState,
   metaNumber,
 } from "./contract";
-import { type ReleaseStage, releaseView } from "./ambient";
-import { type Claim, type CoreTruth, coreClaim, releaseClaim } from "./truth";
+import { type ReleaseStage, eyeView, releaseView } from "./ambient";
+import { type Claim, type CoreTruth, coreClaim, eyeClaim, releaseClaim } from "./truth";
 import type { VoiceUiState } from "../voice/controller";
 
 export type CoreVisualKind =
@@ -142,6 +142,87 @@ export type VisualIntent = {
   /** How faded the whole core is drawn: 0 fully present, 1 nearly gone. */
   dim: number;
 
+  // ------------------------------------------- M18.1: the layered structure
+  /**
+   * The instantaneous energy behind the state, 0..1: the publisher's declared
+   * `intensity` for a bus event, the gate's microphone level while this tab's
+   * own session listens, the playback RMS while it speaks. **0 when nothing
+   * was declared or measured** — this is the channel the glow answers to, and
+   * it must never carry a synthesised figure.
+   */
+  energy: number;
+  /**
+   * Light response 0..1: a per-state base plus half the `energy`. The base is
+   * an encoding of the published state (a completed goal is brighter than a
+   * held one); only the energy part moves within a state, and only because a
+   * real figure moved it.
+   */
+  glow: number;
+  /**
+   * How far the translucent structural shells stand off the nucleus, 0..1.
+   * Thinking and tool work expand it; listening contracts it. A geometry
+   * target, not a rhythm: it is approached once and then holds.
+   */
+  shellSpread: number;
+  /**
+   * Angular rate of the internal rings and topology layers, 0..1. Zero for
+   * every kind that reports no activity; the reported-idle drift is small and
+   * belongs to the same claim as the idle breath.
+   */
+  ringSpin: number;
+  /**
+   * Speed of the bounded particle travel along the internal connection paths,
+   * 0..1. Thinking and tool activity drive it; silence leaves it at zero.
+   */
+  flowRate: number;
+  /**
+   * OWNER_SPEAKING: the measured microphone level while this tab's own session
+   * is listening, 0..1. Exactly `micLevel`, never an estimate; 0 for a bus
+   * listening (whose `intensity` is declared, not measured here) and for
+   * every other state.
+   */
+  ownerVoice: number;
+
+  // -------------------------------------------------------- constellation
+  /**
+   * Research: how many nodes the source/evidence constellation draws before
+   * the tier caps it. The published count when there is one; the fixed
+   * restrained motif (`CONSTELLATION_MOTIF`) when research is running but no
+   * count was sent — `sourceNodesKnown` says which, and the readout labels the
+   * motif as a representation. 0 outside research.
+   */
+  constellationNodes: number;
+  /**
+   * Research: the constellation's motion, 0..1. From published progress when
+   * there is one; otherwise the fixed restrained `CONSTELLATION_REST`. Never
+   * a random or clock-driven figure. 0 outside research.
+   */
+  constellationDrift: number;
+  /**
+   * Research: the wider field of candidates seen, when the publisher counted
+   * both what it saw and what it kept. Drawn faint around the kept evidence.
+   */
+  fieldNodes: number;
+  fieldNodesKnown: boolean;
+
+  // ---------------------------------------------------------- capabilities
+  /**
+   * SHADOW_READY: peripheral capability nodes. The published count when the
+   * lab sent one (`candidates` / `ready`), else exactly one — the candidate
+   * the event itself is about. 0 when nothing is at SHADOW_READY.
+   */
+  capabilityNodes: number;
+  capabilityNodesCounted: boolean;
+
+  // ------------------------------------------------------------ the eye
+  /**
+   * 1 while the presence channel's `eye.active` is current, else 0. Read from
+   * the eye's own claim (never the core claim), and untouched by the voice
+   * overlay: the camera being on is a fact about the room, not about the
+   * assistant's turn.
+   */
+  eyeActive: number;
+
   // ---------------------------------------------------------- satellites
   /** Research evidence nodes. Exactly what the publisher counted. */
   sourceNodes: number;
@@ -190,6 +271,24 @@ export type VisualIntent = {
 export const ERROR_AGITATION = 0.35;
 export const ERROR_BREATH_HZ = 0.18;
 
+/**
+ * The research constellation when the publisher sent no count: a fixed,
+ * restrained motif of this many nodes, labelled as a representation. It is a
+ * constant so that "research is running, count unknown" always draws the same
+ * figure — a motif that varied would read as a count.
+ */
+export const CONSTELLATION_MOTIF = 5;
+/** The constellation's motion when research published no progress. */
+export const CONSTELLATION_REST = 0.2;
+
+/** The idle drift of the rings: part of the same reported-calm claim as the breath. */
+export const IDLE_RING_SPIN = 0.05;
+
+/** Half of the measured/declared energy reaches the glow. */
+function glowOf(base: number, e: number): number {
+  return Math.min(1, base + 0.5 * e);
+}
+
 /** A completely still, completely unknowing core. Every field starts honest. */
 function blank(kind: CoreVisualKind, palette: PaletteToken): VisualIntent {
   return {
@@ -213,6 +312,19 @@ function blank(kind: CoreVisualKind, palette: PaletteToken): VisualIntent {
     agitation: 0,
     restraint: 0,
     dim: 0,
+    energy: 0,
+    glow: 0,
+    shellSpread: 0,
+    ringSpin: 0,
+    flowRate: 0,
+    ownerVoice: 0,
+    constellationNodes: 0,
+    constellationDrift: 0,
+    fieldNodes: 0,
+    fieldNodesKnown: false,
+    capabilityNodes: 0,
+    capabilityNodesCounted: false,
+    eyeActive: 0,
     sourceNodes: 0,
     sourceNodesKnown: false,
     convergence: 0,
@@ -319,6 +431,33 @@ function researchNodes(event: UiStateEvent): { count: number; known: boolean } {
   return { count: Math.max(0, Math.round(value)), known: true };
 }
 
+/**
+ * The wider field research saw, drawn faint around what it kept.
+ *
+ * Only when the publisher counted BOTH: at the ranking stage it sends
+ * `candidates` and `kept`, and the difference is the field. A stage that sent
+ * one figure has no field to draw — `sourceNodes` already carries that one.
+ */
+function researchField(event: UiStateEvent): { count: number; known: boolean } {
+  const kept = metaNumber(event, "kept");
+  const candidates = metaNumber(event, "candidates");
+  if (kept === null || candidates === null) return { count: 0, known: false };
+  return { count: Math.max(0, Math.round(candidates) - Math.round(kept)), known: true };
+}
+
+/**
+ * How many capability nodes SHADOW_READY parks around the core.
+ *
+ * `app/evolution/service.py` publishes one event per candidate with no count,
+ * so the honest figure is one: the candidate this event is about. A publisher
+ * that later sends a count of ready candidates is read verbatim.
+ */
+function capabilityCount(event: UiStateEvent): { count: number; counted: boolean } {
+  const published = metaNumber(event, "ready", "candidates");
+  if (published === null) return { count: 1, counted: false };
+  return { count: Math.max(0, Math.round(published)), counted: true };
+}
+
 const EVOLUTION_LAYER: Record<string, number> = {
   "evolution.researching": 1,
   "evolution.designing": 2,
@@ -340,43 +479,71 @@ function forLiveState(event: UiStateEvent, claim: Claim): VisualIntent {
   switch (event.state) {
     case "agent.idle":
       // Calm breathing: the one place a steady rhythm is honest, because
-      // "nothing is running" is itself the reported truth.
-      return { ...base("idle", "calm"), breathAmplitude: 0.06, breathHz: 0.14, scale: 1 };
+      // "nothing is running" is itself the reported truth. The rings drift at
+      // the same claim's expense; nothing flows and nothing expands.
+      return {
+        ...base("idle", "calm"),
+        breathAmplitude: 0.06,
+        breathHz: 0.14,
+        scale: 1,
+        energy: e,
+        glow: glowOf(0.15, e),
+        shellSpread: 0.15,
+        ringSpin: IDLE_RING_SPIN,
+      };
 
     case "agent.listening":
       // Contracts, and draws energy inward. Depth tracks the reported level.
+      // The shells close in; the rings barely turn — attention, not work.
       return {
         ...base("listening", "inward"),
         scale: 0.88 - 0.05 * e,
         inwardFlow: 0.35 + 0.65 * e,
         breathAmplitude: 0.02,
         breathHz: 0.5,
+        energy: e,
+        glow: glowOf(0.2, e),
+        shellSpread: 0.05,
+        ringSpin: 0.12,
       };
 
     case "agent.thinking":
-      // Expands, with an active internal topology. Denser with reported load.
+      // Expands, with an active internal topology. Denser with reported load:
+      // the shells stand off, the rings turn, and energy travels the paths.
       return {
         ...base("thinking", "active"),
         scale: 1.12 + 0.1 * e,
         topology: 0.4 + 0.6 * e,
         breathAmplitude: 0.03,
         breathHz: 0.35,
+        energy: e,
+        glow: glowOf(0.4, e),
+        shellSpread: 0.55 + 0.25 * e,
+        ringSpin: 0.5 + 0.5 * e,
+        flowRate: 0.5 + 0.5 * e,
       };
 
     case "agent.speaking":
       // Pulses from the bounded energy the event carries — never from owner
       // audio, which this client neither captures nor persists. No intensity
-      // means no pulse.
+      // means no pulse, and the glow answers to the same figure.
       return {
         ...base("speaking", "voice"),
         scale: 1.04,
         pulse: e,
         breathAmplitude: 0.02,
         breathHz: 0.45,
+        energy: e,
+        glow: glowOf(0.3, e),
+        shellSpread: 0.3,
+        ringSpin: 0.2,
+        flowRate: 0.25,
       };
 
     case "agent.researching": {
       const nodes = researchNodes(event);
+      const field = researchField(event);
+      const p = progressOf(event);
       return {
         ...base("researching", "discovery"),
         scale: 1.06,
@@ -385,12 +552,25 @@ function forLiveState(event: UiStateEvent, claim: Claim): VisualIntent {
         breathHz: 0.25,
         sourceNodes: nodes.count,
         sourceNodesKnown: nodes.known,
+        energy: e,
+        glow: glowOf(0.3, e),
+        shellSpread: 0.4,
+        ringSpin: 0.3,
+        flowRate: 0.35,
+        // The constellation: the count the publisher sent, or the fixed motif.
+        // Its motion is published progress or the fixed rest figure — never a
+        // number this file made up.
+        constellationNodes: nodes.known ? nodes.count : CONSTELLATION_MOTIF,
+        constellationDrift: p !== null ? CONSTELLATION_REST + 0.6 * p : CONSTELLATION_REST,
+        fieldNodes: field.count,
+        fieldNodesKnown: field.known,
       };
     }
 
     case "agent.memory_retrieval": {
       // Convergence is drawn only from a real progress figure. Absent one, the
-      // core shows that memory work is running without claiming how far along.
+      // core shows that memory work is running — information moving inward —
+      // without claiming how far along.
       const p = progressOf(event);
       return {
         ...base("memory", "recall"),
@@ -400,27 +580,44 @@ function forLiveState(event: UiStateEvent, claim: Claim): VisualIntent {
         convergenceKnown: p !== null,
         breathAmplitude: 0.03,
         breathHz: 0.3,
+        energy: e,
+        glow: glowOf(0.3, e),
+        shellSpread: 0.2,
+        ringSpin: 0.25,
+        flowRate: 0.3,
       };
     }
 
     case "agent.tool_running":
+      // A capability at work: the paths carry the most traffic of any state,
+      // the shells open, the rings turn.
       return {
         ...base("tool_running", "work"),
         scale: 1.02,
         topology: 0.25,
         breathAmplitude: 0.025,
         breathHz: 0.4,
+        energy: e,
+        glow: glowOf(0.35, e),
+        shellSpread: 0.45,
+        ringSpin: 0.4,
+        flowRate: 0.6,
       };
 
     case "agent.waiting_owner":
       // Restrained: the system is deliberately not working. Showing busy motion
-      // here would be the exact lie ADR-0052 exists to prevent.
+      // here would be the exact lie ADR-0052 exists to prevent. The rings all
+      // but stop; the shells sit close; nothing flows.
       return {
         ...base("waiting_owner", "held"),
         scale: 0.94,
         restraint: 1,
         breathAmplitude: 0.015,
         breathHz: 0.09,
+        energy: e,
+        glow: glowOf(0.12, e),
+        shellSpread: 0.1,
+        ringSpin: 0.02,
       };
 
     case "agent.goal_completed":
@@ -429,6 +626,10 @@ function forLiveState(event: UiStateEvent, claim: Claim): VisualIntent {
         scale: 1.1,
         breathAmplitude: 0.04,
         breathHz: 0.2,
+        energy: e,
+        glow: glowOf(0.6, e),
+        shellSpread: 0.6,
+        ringSpin: 0.15,
       };
 
     case "agent.error":
@@ -440,18 +641,31 @@ function forLiveState(event: UiStateEvent, claim: Claim): VisualIntent {
         agitation: ERROR_AGITATION,
         breathAmplitude: 0.02,
         breathHz: ERROR_BREATH_HZ,
+        energy: e,
+        glow: glowOf(0.25, e),
+        shellSpread: 0.25,
+        ringSpin: 0.08,
       };
 
-    case "evolution.shadow_ready":
+    case "evolution.shadow_ready": {
       // A finished satellite, parked. Explicitly NOT live — the core itself is
-      // unchanged, because nothing about production changed.
+      // unchanged, because nothing about production changed. The capability
+      // nodes are the candidates the lab said are ready, and nothing more.
+      const capabilities = capabilityCount(event);
       return {
         ...base("shadow_ready", "ready"),
         scale: 1,
         breathAmplitude: 0.05,
         breathHz: 0.12,
         satelliteComplete: true,
+        energy: e,
+        glow: glowOf(0.2, e),
+        shellSpread: 0.2,
+        ringSpin: IDLE_RING_SPIN,
+        capabilityNodes: capabilities.count,
+        capabilityNodesCounted: capabilities.counted,
       };
+    }
 
     case "evolution.researching":
     case "evolution.designing":
@@ -463,6 +677,11 @@ function forLiveState(event: UiStateEvent, claim: Claim): VisualIntent {
         breathAmplitude: 0.03,
         breathHz: 0.22,
         constructionLayer: EVOLUTION_LAYER[event.state] ?? 0,
+        energy: e,
+        glow: glowOf(0.25, e),
+        shellSpread: 0.3,
+        ringSpin: 0.2,
+        flowRate: 0.2,
       };
 
     default:
@@ -490,8 +709,25 @@ export function visualFor(truth: CoreTruth, now: number, voice: VoiceOverlay | n
   }
   // The release orbit is independent of what the core body is doing: an idle
   // core with a deployment in flight shows both, and neither hides the other.
-  const bus = { ...coreVisual(truth, now), ...releaseFields(truth, now) };
+  // The eye likewise: the aperture is drawn from the camera's own claim.
+  const bus = {
+    ...coreVisual(truth, now),
+    ...releaseFields(truth, now),
+    eyeActive: eyeActiveOf(truth, now),
+  };
   return voice ? applyVoiceOverlay(bus, voice) : bus;
+}
+
+/**
+ * 1 while `eye.active` is the current, unexpired claim on the eye's channel.
+ *
+ * Read through `eyeView` so the aperture agrees with the ambient band on every
+ * render: an `eye.*` state this build cannot read is `untold` there and 0
+ * here — never drawn as active on the strength of a token it did not know.
+ */
+function eyeActiveOf(truth: CoreTruth, now: number): number {
+  const view = eyeView(eyeClaim(truth, now));
+  return view.status === "active" && !view.expired ? 1 : 0;
 }
 
 // ------------------------------------------------------------ voice overlay
@@ -564,6 +800,8 @@ export function applyVoiceOverlay(bus: VisualIntent, voice: VoiceOverlay): Visua
     releaseInFlight: bus.releaseInFlight,
     releaseAwaitingOwner: bus.releaseAwaitingOwner,
     releaseProgress: bus.releaseProgress,
+    // So is the eye: a fact about the room, not about this turn.
+    eyeActive: bus.eyeActive,
   });
 
   switch (voice.state) {
@@ -576,6 +814,8 @@ export function applyVoiceOverlay(bus: VisualIntent, voice: VoiceOverlay): Visua
     case "listening": {
       // Same geometry as `agent.listening`; depth from the measured level,
       // and a still 0.35 when no measurement exists (the gate not yet running).
+      // `ownerVoice` is that measurement and nothing else: above zero, the
+      // owner is speaking and the pull inward is drawn at their level.
       const e = voice.micLevel ?? 0;
       return {
         ...local("listening", "inward"),
@@ -584,6 +824,11 @@ export function applyVoiceOverlay(bus: VisualIntent, voice: VoiceOverlay): Visua
         inwardFlow: 0.35 + 0.65 * e,
         breathAmplitude: 0.02,
         breathHz: 0.5,
+        energy: e,
+        glow: glowOf(0.2, e),
+        shellSpread: 0.05,
+        ringSpin: 0.12,
+        ownerVoice: e,
       };
     }
 
@@ -595,20 +840,32 @@ export function applyVoiceOverlay(bus: VisualIntent, voice: VoiceOverlay): Visua
         topology: 0.25,
         breathAmplitude: 0.025,
         breathHz: 0.4,
+        glow: glowOf(0.35, 0),
+        shellSpread: 0.45,
+        ringSpin: 0.4,
+        flowRate: 0.6,
       };
 
-    case "speaking":
+    case "speaking": {
       // The pulse IS the output envelope. `null` (unmeasurable) draws no
-      // pulse and `intensity` stays null so the readout can say so.
+      // pulse and `intensity` stays null so the readout can say so. The glow
+      // answers to the same measurement.
+      const e = voice.outputLevel ?? 0;
       return {
         ...local("speaking", "voice"),
         intensity: voice.outputLevel,
         label: voice.caption,
         scale: 1.04,
-        pulse: voice.outputLevel ?? 0,
+        pulse: e,
         breathAmplitude: 0.02,
         breathHz: 0.45,
+        energy: e,
+        glow: glowOf(0.3, e),
+        shellSpread: 0.3,
+        ringSpin: 0.2,
+        flowRate: 0.25,
       };
+    }
 
     case "interrupted":
       // Playback is already silenced by the controller (stop-first, ADR-0040).
@@ -620,6 +877,8 @@ export function applyVoiceOverlay(bus: VisualIntent, voice: VoiceOverlay): Visua
         inwardFlow: 0.2,
         breathAmplitude: 0,
         breathHz: 0,
+        glow: 0.15,
+        shellSpread: 0.05,
       };
 
     case "error":
@@ -631,6 +890,9 @@ export function applyVoiceOverlay(bus: VisualIntent, voice: VoiceOverlay): Visua
         agitation: ERROR_AGITATION,
         breathAmplitude: 0.02,
         breathHz: ERROR_BREATH_HZ,
+        glow: 0.25,
+        shellSpread: 0.25,
+        ringSpin: 0.08,
       };
 
     default:
@@ -664,6 +926,14 @@ function coreVisual(truth: CoreTruth, now: number): VisualIntent {
       inwardFlow: 0,
       topology: last.topology * 0.3,
       agitation: 0,
+      // Memory of a shape, not observation of one: nothing turns, nothing
+      // flows, nothing glows from an energy nobody is measuring any more.
+      energy: 0,
+      glow: last.glow * 0.3,
+      ringSpin: 0,
+      flowRate: 0,
+      ownerVoice: 0,
+      constellationDrift: 0,
     };
   }
 
@@ -695,9 +965,17 @@ function coreVisual(truth: CoreTruth, now: number): VisualIntent {
       inwardFlow: 0,
       topology: 0,
       agitation: 0,
+      energy: 0,
+      glow: last.glow * 0.3,
+      ringSpin: 0,
+      flowRate: 0,
+      ownerVoice: 0,
+      constellationDrift: 0,
       // A finished lab candidate does not stop existing because time passed,
       // but it is a steady state and never reaches this branch anyway.
       satelliteComplete: false,
+      capabilityNodes: 0,
+      capabilityNodesCounted: false,
     };
   }
 

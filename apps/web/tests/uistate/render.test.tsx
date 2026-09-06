@@ -17,14 +17,17 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
+import ChannelReadout from "../../app/core/ChannelReadout";
 import CoreFallback2D from "../../app/core/CoreFallback2D";
 import StateReadout from "../../app/core/StateReadout";
 import Panel from "../../app/core/panels/Panel";
 import { applyError, applyResponse, emptyTruth } from "../../app/lib/uistate/truth";
-import { visualFor } from "../../app/lib/uistate/visual";
+import { CONSTELLATION_MOTIF, applyVoiceOverlay, visualFor } from "../../app/lib/uistate/visual";
 import {
   AGENT_ERROR,
   AGENT_IDLE,
+  EYE_ACTIVE,
+  GOAL_WAITING_OWNER,
   LAB_BUILDING,
   LAB_SHADOW_READY,
   MEMORY_RETRIEVAL,
@@ -32,6 +35,7 @@ import {
   RESEARCH_RANKING,
   SELFMODEL_THINKING,
   T0,
+  TOOL_RUNNING,
   VOICE_LISTENING,
   VOICE_SPEAKING,
   event,
@@ -243,6 +247,193 @@ describe("the readout says which kind of silence it is", () => {
     expect(html).toContain('data-core-kind="unknown_state"');
     expect(html).toContain('data-core-state="agent.daydreaming"');
     expect(html).toContain("Sözleşme güncellenmiş olabilir.");
+  });
+});
+
+// ---------------------------------------------- M18.1: the layered structure
+
+/** The 2D core for a bus that has never published. */
+const untold = () =>
+  renderToStaticMarkup(
+    <CoreFallback2D intent={visualFor(applyResponse(emptyTruth(), response([]), T0), T0)} tier="high" />,
+  );
+
+describe("the 2D core carries the layered structure, drawn only from channels", () => {
+  it("draws the rings and shells at every tier, and the tier's count of them", () => {
+    expect(core(AGENT_IDLE, T0, "high")).toContain('data-rings="3"');
+    expect(core(AGENT_IDLE, T0, "high")).toContain('data-shells="2"');
+    expect(core(AGENT_IDLE, T0, "balanced")).toContain('data-rings="2"');
+    expect(core(AGENT_IDLE, T0, "balanced")).toContain('data-shells="1"');
+    expect(core(AGENT_IDLE, T0, "low")).toContain('data-rings="1"');
+    expect(core(AGENT_IDLE, T0, "low")).not.toContain("core-shells");
+  });
+
+  it("the rings turn only at a reported spin: idle drifts, untold is still", () => {
+    expect(core(AGENT_IDLE)).toContain('data-spinning="yes"');
+    expect(core(AGENT_IDLE)).toMatch(/--ring-dur:140s/); // 7 s / 0.05
+    const silent = untold();
+    expect(silent).toContain('data-spinning="no"');
+    expect(silent).toMatch(/--ring-dur:0s/);
+    expect(silent).toContain('data-glow="0"');
+    expect(silent).toContain('data-shell-spread="0"');
+  });
+
+  it("a still core emits no ring rotation even in a state that reported spin", () => {
+    const html = renderToStaticMarkup(
+      <CoreFallback2D intent={intentFor(SELFMODEL_THINKING)} tier="high" still />,
+    );
+    expect(html).toContain('data-spinning="no"');
+    expect(html).toContain('data-breathing="no"');
+  });
+
+  it("thinking states its flow on the paths; the shells stand further off than idle", () => {
+    const thinking = core(SELFMODEL_THINKING);
+    expect(thinking).toMatch(/core-lattice" data-lattice-segments="\d+" data-flow-rate="0\.\d+"/);
+    expect(thinking).toContain('data-shell-spread="0.55"');
+    expect(core(AGENT_IDLE)).toContain('data-shell-spread="0.15"');
+    expect(core(TOOL_RUNNING)).toContain('data-flow-rate="0.6"');
+  });
+
+  it("listening states the owner's measured voice on the inward group", () => {
+    resetSequence();
+    const bus = visualFor(applyResponse(emptyTruth(), response([AGENT_IDLE()]), T0), T0);
+    const speaking = applyVoiceOverlay(bus, {
+      state: "listening",
+      micLevel: 0.5,
+      outputLevel: null,
+      caption: null,
+      toolLabel: null,
+      lastError: null,
+    });
+    const html = renderToStaticMarkup(<CoreFallback2D intent={speaking} tier="high" />);
+    expect(html).toContain('data-owner-voice="0.5"');
+    expect(html).toContain('data-inward-flow="0.68"');
+    // A bus listening never claims the owner's voice.
+    expect(core(VOICE_LISTENING)).toContain('data-owner-voice="0"');
+  });
+
+  it("research with counts draws the counted constellation with a spoke per node, and the field", () => {
+    const html = core(() => RESEARCH_RANKING(12, 5));
+    expect(html).toContain('data-constellation="counted"');
+    expect(html).toContain('data-drawn-nodes="5"');
+    expect(html.match(/<line x1="[\d.]+" y1="[\d.]+" x2="[\d.]+" y2="[\d.]+"><\/line>/g)?.length).toBeGreaterThanOrEqual(5);
+    expect(html).toContain('data-field-nodes="7"');
+    expect(html).not.toContain("core-motif");
+  });
+
+  it("research without counts draws the fixed motif, labelled as a motif and never as sources", () => {
+    const html = core(RESEARCH_NO_COUNTS);
+    expect(html).toContain('data-constellation="motif"');
+    expect(html).toContain(`data-motif-nodes="${CONSTELLATION_MOTIF}"`);
+    expect(html).not.toContain("core-sources");
+    expect(html).not.toContain("data-drawn-nodes");
+    expect(html).not.toContain("core-field");
+    // The readout says so in words, beside the "not reported" line.
+    const text = readout(RESEARCH_NO_COUNTS);
+    expect(text).toContain("Kaynak sayısı bildirilmedi.");
+    expect(text).toContain("sabit bir temsildir, sayım değildir");
+  });
+
+  it("the motif is byte-for-byte the same on every render", () => {
+    expect(core(RESEARCH_NO_COUNTS)).toBe(core(RESEARCH_NO_COUNTS));
+  });
+
+  it("nothing but research draws a constellation", () => {
+    for (const make of [AGENT_IDLE, SELFMODEL_THINKING, TOOL_RUNNING, LAB_BUILDING]) {
+      expect(core(make)).not.toContain("core-constellation");
+    }
+  });
+
+  it("shadow_ready parks one capability node for the one candidate, and says it was not counted", () => {
+    const html = core(LAB_SHADOW_READY);
+    expect(html).toContain('data-capability-nodes="1"');
+    expect(html).toContain('data-capability-counted="no"');
+    expect(html).toContain('data-satellite="complete"');
+    const text = readout(LAB_SHADOW_READY);
+    expect(text).toContain("laboratuvar sayı bildirmedi");
+    expect(text).toContain("canlıya alınmadı");
+  });
+
+  it("a published ready count parks that many, capped, and says it was counted", () => {
+    const html = core(() =>
+      event({ state: "evolution.shadow_ready", subsystem: "evolution", metadata: { ready: 3 } }),
+    );
+    expect(html).toContain('data-capability-nodes="3"');
+    expect(html).toContain('data-capability-counted="yes"');
+    const capped = core(() =>
+      event({ state: "evolution.shadow_ready", subsystem: "evolution", metadata: { ready: 40 } }),
+    );
+    expect(capped).toContain('data-capability-nodes="8"');
+    expect(readout(() => event({ state: "evolution.shadow_ready", subsystem: "evolution", metadata: { ready: 40 } })))
+      .toContain("40 hazır aday");
+  });
+
+  it("the eye's aperture is drawn only while eye.active is current, whatever the core is doing", () => {
+    resetSequence();
+    const withEye = visualFor(applyResponse(emptyTruth(), response([EYE_ACTIVE(), SELFMODEL_THINKING()]), T0), T0);
+    const html = renderToStaticMarkup(<CoreFallback2D intent={withEye} tier="high" />);
+    expect(html).toContain('data-eye-active="yes"');
+    expect(html).toContain('data-core-kind="thinking"');
+    expect(core(SELFMODEL_THINKING)).not.toContain("core-eye");
+    expect(untold()).not.toContain("core-eye");
+  });
+
+  it("waiting on the owner draws the held boundary and no flow", () => {
+    const html = core(GOAL_WAITING_OWNER);
+    expect(html).toContain("core-restraint");
+    expect(html).toContain('data-flow-rate="0"');
+    expect(html).not.toContain("core-lattice");
+    expect(html).not.toContain("core-inward");
+  });
+
+  it("memory converges inward and draws the ring only against real progress", () => {
+    const known = core(() => MEMORY_RETRIEVAL(0.4));
+    expect(known).toContain("core-inward");
+    expect(known).toContain('data-convergence="0.4"');
+    const unknown = core(() => MEMORY_RETRIEVAL(null));
+    expect(unknown).toContain("core-inward");
+    expect(unknown).not.toContain("core-convergence");
+  });
+
+  it("an expired claim keeps the shape and turns nothing", () => {
+    const html = core(SELFMODEL_THINKING, T0 + 60_000);
+    expect(html).toContain('data-core-kind="last_known"');
+    expect(html).toContain('data-spinning="no"');
+    expect(html).toContain('data-flow-rate="0"');
+    expect(html).toContain('data-shell-spread="0.55"'); // the shape it had
+  });
+});
+
+describe("the cockpit's channel telemetry prints the intent as it is", () => {
+  it("lists every numeric channel with its value", () => {
+    const html = renderToStaticMarkup(<ChannelReadout intent={intentFor(SELFMODEL_THINKING)} />);
+    expect(html).toContain("data-channel-readout");
+    expect(html).toContain('data-channel="ringSpin" data-value="0.50"');
+    expect(html).toContain('data-channel="flowRate" data-value="0.50"');
+    expect(html).toContain('data-channel="topology" data-value="0.40"');
+    expect(html).toContain('data-channel="pulse" data-value="0.00"');
+    expect(html).toContain('data-channel="ownerVoice" data-value="0.00"');
+    expect(html).toContain('data-channel="eyeActive" data-value="0"');
+  });
+
+  it("says whether the constellation and the capability nodes were counted", () => {
+    const motif = renderToStaticMarkup(<ChannelReadout intent={intentFor(RESEARCH_NO_COUNTS)} />);
+    expect(motif).toContain(`data-channel="constellationNodes" data-value="${CONSTELLATION_MOTIF}"`);
+    expect(motif).toContain("sabit temsil");
+    const counted = renderToStaticMarkup(<ChannelReadout intent={intentFor(() => RESEARCH_RANKING(12, 5))} />);
+    expect(counted).toContain('data-channel="constellationNodes" data-value="5"');
+    expect(counted).toContain('data-channel="fieldNodes" data-value="7"');
+    const ready = renderToStaticMarkup(<ChannelReadout intent={intentFor(LAB_SHADOW_READY)} />);
+    expect(ready).toContain('data-channel="capabilityNodes" data-value="1"');
+    expect(ready).toContain("bir aday");
+  });
+
+  it("an untold core reads as all zeros", () => {
+    const html = renderToStaticMarkup(
+      <ChannelReadout intent={visualFor(applyResponse(emptyTruth(), response([]), T0), T0)} />,
+    );
+    expect(html).not.toMatch(/data-value="0\.[1-9]/);
+    expect(html).toContain('data-channel="glow" data-value="0.00"');
   });
 });
 

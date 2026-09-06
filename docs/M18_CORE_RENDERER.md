@@ -3,7 +3,8 @@
 The milestone spec is `docs/M18_HOLOGRAPHIC_CORE_SPEC.md`; this document is the
 renderer half of it, written by the agent that built `apps/web/app/core`.
 
-Status: **implemented, reconciled to contract v2** (2026-09-05)
+Status: **implemented, reconciled to contract v2** (2026-09-05); **M18.1 visual language**
+applied (2026-09-07, ADR-0065, `docs/M18_1_CORE_VISUAL_LANGUAGE.md`).
 
 Governing document: `docs/DECISIONS.md` ADR-0052. Where this document and ADR-0052
 disagree, ADR-0052 wins.
@@ -84,20 +85,27 @@ the band states on every render that perception is not authentication.
 
 Implemented in `app/lib/uistate/visual.ts`, a pure function, exhaustively tested.
 
+Since M18.1 the Core is a layered structure — nucleus, three internal rings, connection
+paths, two structural shells, and outside them only what a subsystem said exists — with
+two bounded particle flows. `e` below is `energy`: the publisher's declared intensity, or
+the local session's measured level, and **0 when neither exists**. The full channel table
+is `docs/M18_1_CORE_VISUAL_LANGUAGE.md` §3–4.
+
 | State | Visual |
 | --- | --- |
-| `agent.idle` | calm breathing, 0.14 Hz |
-| `agent.listening` | contracts below unit scale, energy drawn inward, depth from reported intensity |
-| `agent.thinking` | expands, internal lattice topology, density from reported intensity |
-| `agent.speaking` | pulses; **amplitude is the event's bounded energy**, zero if none was sent |
-| `agent.researching` | evidence nodes, **exactly the count the publisher sent** (`kept`, else `candidates`) |
-| `agent.memory_retrieval` | inward convergence ring, drawn only against real progress |
-| `agent.tool_running` | modest expansion, light topology |
-| `agent.waiting_owner` | restrained: near-still, dashed held boundary |
-| `agent.goal_completed` | brief expansion |
+| `agent.idle` | calm breathing, 0.14 Hz; rings drift at 0.05; shells close; no flow |
+| `agent.listening` | contracts below unit scale, shells closed, rings slow; energy drawn inward at 0.35+0.65e. Locally, `ownerVoice` = the gate's mic level quickens and brightens the pull |
+| `agent.thinking` | expands 1.12+0.1e; shells open 0.55+0.25e; rings turn 0.5+0.5e; paths dense 0.4+0.6e with travellers at 0.5+0.5e |
+| `agent.speaking` | pulse shell; **amplitude is the event's bounded energy** (locally, the playback RMS), zero if none; glow answers to the same figure |
+| `agent.researching` | constellation of **exactly the count the publisher sent** (`kept`, else `candidates`), a spoke each, drifting at published progress or the fixed rest figure; the fixed 5-node **motif, labelled as a representation**, when no count was sent; the candidate field when both counts were |
+| `agent.memory_retrieval` | inward flow 0.4; convergence ring closes in only against real progress |
+| `agent.tool_running` | modest expansion, shells open 0.45, rings 0.4, the heaviest path traffic (0.6) |
+| `agent.waiting_owner` | restrained: near-still rings (0.02), shells near-closed, no flow, dashed held boundary |
+| `agent.goal_completed` | brief expansion, shells wide, brightest base glow |
 | `agent.error` | controlled: one bounded offset ring, 0.18 Hz. **Capped in code** (`ERROR_AGITATION`), and severity changes colour only — never speed |
-| `evolution.researching/designing/building/testing` | construction layers 1–4, one ring per phase reached |
-| `evolution.shadow_ready` | one completed satellite, parked and motionless, with "canlıya alınmadı" in words |
+| `evolution.researching/designing/building/testing` | construction layers 1–4, one ring per phase reached; light path traffic |
+| `evolution.shadow_ready` | capability nodes parked at the satellite's radius — the lab's `ready` count, else exactly one — with "canlıya alınmadı" in words and whether the lab counted |
+| `eye.active` (eye channel) | one thin aperture ring on the core, whatever the core body is doing; read from the eye's own claim |
 
 ### Audio
 
@@ -144,21 +152,30 @@ it. A refused bus session (`unauthorized`) draws nothing, overlay or not.
 
 `app/lib/uistate/quality.ts`.
 
-| | fps | detail | max satellites | lattice | DPR | glow |
-| --- | --- | --- | --- | --- | --- | --- |
-| high | 60 | 4 | 64 | 48 | 2 | yes |
-| balanced | 30 | 3 | 32 | 24 | 1.5 | yes |
-| low | 20 | 1 | 12 | 0 | 1 | no |
+| | fps | detail | max satellites | lattice | rings | shells | particles | parallax | DPR | glow |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| high | 60 | 4 | 64 | 48 | 3 | 2 | 160 | yes | 2 | yes |
+| balanced | 30 | 3 | 32 | 24 | 2 | 1 | 80 | yes | 1.5 | yes |
+| low | 20 | 1 | 12 | 0 | 1 | 0 | 0 | no | 1 | no |
 
-- `low` drops whole features rather than scaling them down.
+`sceneBudgetFor(tier)` states the most the 3D scene can mount at a tier, and
+`quality.test.ts` pins it: high 26 drawables / 296 instances; balanced 24 / 152;
+low 18 / 32. Instances = particles + 2 × satellites + 8 capability nodes.
+
+- `low` drops whole features rather than scaling them down; it keeps one ring so the
+  structure keeps its identity.
 - Counts from the API are capped before reaching the GPU; **the readout always states the
   true number** and, when capped, how many were drawn.
+- The frame is a pure reducer (`app/lib/uistate/scene.ts::stepScene`), dt-based, mutated in
+  place; the scene only copies its numbers. A structural test refuses any allocating
+  construct in the reducer or in the scene's frame body.
 - No WebGL → `CoreFallback2D`, pure SVG animated by CSS only, showing every fact the 3D
-  view shows with the same readout. `three` sits behind `next/dynamic({ssr:false})`, so a
-  machine on the 2D path never downloads it.
+  view shows with the same readout and, since M18.1, the same layered structure. `three`
+  sits behind `next/dynamic({ssr:false})`, so a machine on the 2D path never downloads it.
 - WebGL1 only → the high tier is refused (it would be a slideshow).
-- Hidden tab → no rendering, and polling drops from 1 s to 20 s.
-- `prefers-reduced-motion` → motion stops, information does not.
+- Hidden tab → no frame runs, nothing invalidates, and polling drops from 1 s to 20 s.
+- `prefers-reduced-motion` → one settled frame per intent change; motion stops,
+  information does not.
 - Failed polls back off exponentially to a 30 s cap.
 
 ## 6. Boundaries
@@ -187,4 +204,9 @@ Coverage of note:
   other state's visual;
 - a test fails if the API grows a state and the visual table is not updated;
 - silence, expiry, unreachability and refusal are each asserted to differ from idle;
-- counts, progress and pulse are each asserted absent when the publisher sent nothing.
+- counts, progress and pulse are each asserted absent when the publisher sent nothing;
+- M18.1: every core state has a channel profile no other state shares; with
+  `intensity: null` and no measurement the rhythm channels are zero; the frame reducer
+  stays still on a zero intent, is frame-rate independent, and — structurally, by reading
+  the source — allocates nothing (`scene.test.ts`); the 2D structure, the motif, the
+  capability nodes, the aperture and the cockpit telemetry are asserted as markup.

@@ -20,21 +20,24 @@ import CoreScene from "./CoreScene";
 export type CoreCanvasProps = {
   intent: VisualIntent;
   tier: QualityTier;
-  /** Stop drawing altogether: hidden tab, or reduced motion. */
+  /** Motion is reduced: draw the intent once, still, whenever it changes. */
   still: boolean;
+  /** The tab is hidden: draw nothing and run nothing until it is shown again. */
+  hidden: boolean;
 };
 
-export default function CoreCanvas({ intent, tier, still }: CoreCanvasProps) {
+export default function CoreCanvas({ intent, tier, still, hidden }: CoreCanvasProps) {
   const budget = TIER_BUDGETS[tier];
   return (
     <Canvas
-      // `demand` while still: three renders once for the current values and
-      // then stops entirely, rather than spinning a loop that early-returns.
-      frameloop={still ? "demand" : "always"}
+      // `demand` while still or hidden: three renders only when the scene asks
+      // (a settled frame on an intent change under reduced motion; never while
+      // hidden), rather than spinning a loop that early-returns.
+      frameloop={still || hidden ? "demand" : "always"}
       dpr={[1, budget.maxPixelRatio]}
-      // Framed so the widest thing the scene can draw - the SHADOW_READY
-      // satellite and its halo at x=1.7+0.26 - stays inside the frustum:
-      // tan(fov/2) * z = 0.3839 * 5.6 = 2.15 world units of half-extent.
+      // Framed so the widest thing the scene can draw - the evidence field at
+      // radius 2.0 - stays inside the frustum: tan(fov/2) * z = 0.3839 * 5.6 =
+      // 2.15 world units of half-extent.
       camera={{ position: [0, 0, 5.6], fov: 42 }}
       gl={{
         antialias: tier === "high",
@@ -45,9 +48,10 @@ export default function CoreCanvas({ intent, tier, still }: CoreCanvasProps) {
       }}
       data-render-mode="3d"
       data-tier={tier}
-      data-still={still ? "yes" : "no"}
+      data-still={still || hidden ? "yes" : "no"}
+      data-hidden={hidden ? "yes" : "no"}
     >
-      <CoreScene intent={intent} tier={tier} still={still} />
+      <CoreScene intent={intent} tier={tier} still={still} hidden={hidden} />
     </Canvas>
   );
 }

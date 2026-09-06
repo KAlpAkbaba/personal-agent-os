@@ -17,9 +17,11 @@
  */
 
 import {
+  CONSTELLATION_MOTIF_NOTE,
   KIND_LABEL,
   SEVERITY_LABEL,
   SOURCE_LABEL,
+  capabilityNodesLine,
   formatAge,
   formatProgress,
   kindDetail,
@@ -156,6 +158,8 @@ export default function StateReadout({
         ) : (
           <p className="muted core-count" data-source-nodes="0" data-source-nodes-known="no">
             Kaynak sayısı bildirilmedi.
+            {/* The fixed motif is drawn in its place, and said to be one. */}
+            {intent.constellationNodes > 0 && ` ${CONSTELLATION_MOTIF_NOTE}`}
           </p>
         ))}
 
@@ -169,6 +173,16 @@ export default function StateReadout({
         <p className="core-count" data-satellite-complete="yes">
           Aday onay bekliyor — canlıya alınmadı.
           {intent.composite !== null && ` Bileşik skor ${intent.composite.toFixed(2)}.`}
+        </p>
+      )}
+
+      {intent.capabilityNodes > 0 && !compact && (
+        <p
+          className="muted core-count"
+          data-capability-nodes={intent.capabilityNodes}
+          data-capability-counted={intent.capabilityNodesCounted ? "yes" : "no"}
+        >
+          {capabilityNodesLine(intent.capabilityNodes, intent.capabilityNodesCounted)}
         </p>
       )}
 
