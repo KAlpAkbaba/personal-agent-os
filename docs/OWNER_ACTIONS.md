@@ -96,13 +96,17 @@ and optionally a short research. Scale, depth, colour and motion are yours to ju
 script records only that the Core really listened and really spoke, and finishes by itself.
 Tell me what you would change — the reference you mentioned is welcome as inspiration.
 
-### 23b. One sentence, no research: `Teknik anlat.` — **M18.2 follow-up, ready (reuses the research that already completed; releases nothing, installs nothing)**
+### 23b. One sentence, no research: `Teknik anlat.` — **M18.2 follow-up, ready once the follow-up guard (ADR-0075) is on main; the command releases the Cloud Core once, before the check**
 
 Your run of 2026-09-06 proved every core row of M18.2 (item 23 below is closed on them).
-The one row not observed was the technical follow-up: the page reloaded 30 seconds after
-the result, so the next words went to a fresh session with no technical word in them, and
-the harness's 120-second step window was a timer the requirement never asked for. This
-check waits for you instead, on a new session, and re-runs nothing:
+Your follow-up run then proved the routing, the diagnostics-only-now and the conciseness —
+and found the real defect: the model also started a second research on the fresh session.
+The fix is architectural, not a phrase: the router now classifies research turns
+(new research / follow-up / technical explanation / explicit re-run), a follow-up binds to
+the completed job by identity, and `research.start` is refused at the server for a
+follow-up turn unless you explicitly ask for a fresh run ("Araştırmayı yeniden yap."). The
+check below waits for you, on a new session, releases the Cloud Core once BEFORE it starts
+when the deployed one predates the guard, and re-runs no research:
 
 ```powershell
 .\scripts\core\owner-m18-2-followup.ps1 -OutFile m18-2-followup-1.json
@@ -112,10 +116,11 @@ Open `/core`, connect voice, and when you are ready say **`Teknik anlat.`** — 
 about the research that already completed (task deabbd44, "Son üç gündeki OpenAI ile ilgili
 gelişmeler"). The script proves from the record that the request routed to the technical
 path, that the eliminated pages / interstitials / duplicates are spoken only now, that the
-findings were not recomputed (same `ready_at`, same artifact), that no second research
-started, that no release or install happened, and that the answer stayed within the
-technical budget. It waits up to ten minutes after you connect and finishes by itself.
-Paste the `checks` block back here; M18.2 closes on it.
+explanation names the SAME job and artifact that were complete before you spoke (identity,
+never timestamps), that `research.start` was called zero times on the new session and zero
+research tasks were created, that no release or install happened from your utterance on,
+and that the answer stayed within the technical budget. It waits up to ten minutes after
+you connect and finishes by itself. Paste the `checks` block back here; M18.2 closes on it.
 
 ### 23. Speaking continuity and research findings — **DONE on the core rows (2026-09-06 run, session be6d49ce; reconciled in `docs/evidence/m18-2-reconciliation-2026-09-06.json`); the follow-up is item 23b**
 

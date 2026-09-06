@@ -37,6 +37,7 @@ param(
     [string]$TaskId = "",
     [switch]$SkipWeb,
     [string]$PnpmPath = "pnpm",
+    [ValidateSet("auto", "never", "force")][string]$CloudCoreUpdate = "auto",
     [ValidateRange(30, 900)][int]$ConnectWaitSec = 180,
     [ValidateRange(60, 1800)][int]$FollowupWaitSec = 600,
     [ValidateRange(200, 4000)][int]$ConciseMaxChars = 1000,
@@ -49,6 +50,7 @@ Set-StrictMode -Version Latest
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 . (Join-Path $repoRoot "scripts\lib\HttpJson.ps1")
+. (Join-Path $repoRoot "scripts\lib\RepoState.ps1")
 . (Join-Path $repoRoot "scripts\lib\VoiceShell.ps1")
 . (Join-Path $repoRoot "scripts\lib\SecretStore.ps1")
 . (Join-Path $repoRoot "scripts\lib\OwnerHarness.ps1")
@@ -58,6 +60,11 @@ $BaseUrl = $BaseUrl.TrimEnd('/')
 $runId = "owner-m18-2-followup-" + (Get-Date -Format "yyyyMMdd-HHmmss")
 $startedAt = (Get-Date).ToUniversalTime()
 $runStart = [DateTimeOffset]::UtcNow
+# The follow-up guard (ADR-0075: an explanation never becomes a second crawl) is a product
+# change that must be RUNNING before the owner speaks; this checkout's contract says which
+# version carries it. One release BEFORE the check when the deployed Cloud Core is older -
+# never during it: `followup.no_deployment_repeated` measures from the owner's utterance on.
+$requiredContractVersion = Get-CheckoutActionContractVersion -RepoRoot $repoRoot
 
 $u_uml = [char]0x00FC; $i_dot = [char]0x0131; $s_ced = [char]0x015F
 $phraseTechnical = "Teknik anlat."
@@ -113,6 +120,13 @@ function Get-DeployedContractVersion {
     $v = if ($null -ne $vr) { Get-OptionalProperty -InputObject $vr -Name "action_contract_version" } else { $null }
     if ($null -eq $v) { return 1 }
     return [int]$v
+}
+
+function Invoke-CloudCoreRelease {
+    $release = Join-Path $repoRoot "scripts\cloud\release-cloud-core.ps1"
+    Write-Host "      releasing the Cloud Core (transactional: build, migrate, recreate api only, health, rollback on failure)..." -ForegroundColor Yellow
+    & $release
+    if ($LASTEXITCODE -ne 0) { throw "the Cloud Core release exited $LASTEXITCODE; nothing was qualified" }
 }
 
 function Get-DeviceVersions {
@@ -184,10 +198,24 @@ $webProcess = $null
 $exitCode = 2
 try {
  do {
-    # ------------------------------------------------------------------ what is already there
+    # ------------------------------------------------------------------ the deployed contract
     $deployedVersion = Get-DeployedContractVersion -Health $health
-    Add-Check -Name "cloud.contract_present" -Ok ($deployedVersion -ge 4) -Detail "action contract v$deployedVersion deployed (v4 or later carries the research result schema); this check never releases"
-    if ($deployedVersion -lt 4) { break }
+    $stale = ($deployedVersion -lt $requiredContractVersion)
+    $releaseBlockers = Get-ReleaseBlockers -RepoRoot $repoRoot
+    $blockerChanges = ConvertTo-Array -Value $releaseBlockers.Changes
+    $releaseCloud = switch ($CloudCoreUpdate) { "force" { $true } "never" { $false } default { $stale } }
+    Write-Host "      deployed action contract v$deployedVersion (this checkout: v$requiredContractVersion)"
+    if ($stale -and $CloudCoreUpdate -eq "never") { throw "the deployed Cloud Core is stale (v$deployedVersion < v$requiredContractVersion): the follow-up guard is not running there; -CloudCoreUpdate never refuses to release" }
+    if ($releaseCloud -and $releaseBlockers.Blocked) { Write-ReleaseBlockers -Blockers $releaseBlockers; throw "a Cloud Core release is required but the working tree has $($blockerChanges.Count) uncommitted change(s); commit or revert them, then rerun" }
+    if ($releaseCloud) {
+        Write-Host "      the deployed Cloud Core predates the follow-up guard (v$deployedVersion < v$requiredContractVersion): releasing it once, BEFORE the check" -ForegroundColor Yellow
+        Invoke-CloudCoreRelease
+        $health = Invoke-JsonUtf8 -Uri "$BaseUrl/v1/system/health" -TimeoutSec 20
+        $deployedVersion = Get-DeployedContractVersion -Health $health
+        $stale = ($deployedVersion -lt $requiredContractVersion)
+    }
+    Add-Check -Name "cloud.contract_deployed" -Ok (-not $stale) -Detail "action contract v$deployedVersion$(if ($releaseCloud) { ' (released once before the check)' })"
+    if ($stale) { break }
     $task = Get-CompletedResearch -Requested $TaskId
     $taskId = [string](Get-OptionalProperty -InputObject $task -Name "task_id")
     $readyBefore = [string](Get-OptionalProperty -InputObject $task -Name "ready_at")
@@ -279,26 +307,35 @@ try {
     Add-Check -Name "followup.routed_to_technical_path" -Ok ($technicalIntents.Count -ge 1 -and $null -ne $technicalCall) -Detail $(if ($null -ne $technicalCall) { "router: $($technicalIntents.Count) technical intent(s); activity.explain $(Get-OptionalProperty -InputObject $technicalCall -Name 'call_id') level=$(Get-OptionalProperty -InputObject $technicalCall -Name 'level') kind=$(Get-OptionalProperty -InputObject $technicalCall -Name 'query_kind')" } else { "no technical explanation on the session: $stopReason" })
     $followHead = if ($null -ne $technicalCall) { [string](Get-OptionalProperty -InputObject $technicalCall -Name "speech_head") } else { "" }
     $followChars = if ($null -ne $technicalCall) { [int](Get-OptionalProperty -InputObject $technicalCall -Name "speech_chars") } else { 0 }
+    # The job the explanation was bound to: on the call record itself (ADR-0075) first, then
+    # the briefing's provenance. Identity, never a timestamp, decides the reuse checks below.
+    $provJob = if ($null -ne $technicalCall) { [string](Get-OptionalProperty -InputObject $technicalCall -Name "research_job_id") } else { "" }
     $prov = if ($null -ne $technicalCall) { Get-OptionalProperty -InputObject $technicalCall -Name "provenance" } else { $null }
-    $provJob = if ($null -ne $prov) { [string](Get-OptionalProperty -InputObject $prov -Name "research_job_id") } else { "" }
-    $evidence.followup = [ordered]@{ call_id = $(if ($null -ne $technicalCall) { Get-OptionalProperty -InputObject $technicalCall -Name "call_id" } else { $null }); level = $(if ($null -ne $technicalCall) { Get-OptionalProperty -InputObject $technicalCall -Name "level" } else { $null }); query_kind = $(if ($null -ne $technicalCall) { Get-OptionalProperty -InputObject $technicalCall -Name "query_kind" } else { $null }); speech_head = $followHead; speech_chars = $followChars; research_job_id = $provJob }
+    if (-not $provJob -and $null -ne $prov) { $provJob = [string](Get-OptionalProperty -InputObject $prov -Name "research_job_id") }
+    $provArtifact = if ($null -ne $technicalCall) { [string](Get-OptionalProperty -InputObject $technicalCall -Name "artifact_id") } else { "" }
+    if (-not $provArtifact -and $null -ne $prov) { $provArtifact = [string](Get-OptionalProperty -InputObject $prov -Name "artifact_id") }
+    $evidence.followup = [ordered]@{ call_id = $(if ($null -ne $technicalCall) { Get-OptionalProperty -InputObject $technicalCall -Name "call_id" } else { $null }); level = $(if ($null -ne $technicalCall) { Get-OptionalProperty -InputObject $technicalCall -Name "level" } else { $null }); query_kind = $(if ($null -ne $technicalCall) { Get-OptionalProperty -InputObject $technicalCall -Name "query_kind" } else { $null }); speech_head = $followHead; speech_chars = $followChars; research_job_id = $provJob; artifact_id = $provArtifact }
     Add-Check -Name "followup.diagnostics_only_now" -Ok ($resultClean -and (Test-TextContainsAny -Text $followHead -Words $diagnosticWords)) -Detail $(if ($followHead) { "follow-up head: `"$followHead`"; result head had no crawler words: $resultClean" } else { "no follow-up speech" })
     $taskAfter = $null
     foreach ($t in (Get-ArrayProperty -InputObject (Get-JsonOrNull "/v1/research") -Name "tasks")) { if ([string](Get-OptionalProperty -InputObject $t -Name "task_id") -eq $taskId) { $taskAfter = $t } }
     $readyAfter = if ($null -ne $taskAfter) { [string](Get-OptionalProperty -InputObject $taskAfter -Name "ready_at") } else { "" }
     $artifactAfter = if ($null -ne $taskAfter) { [string](Get-OptionalProperty -InputObject $taskAfter -Name "artifact_id") } else { "" }
-    $sameTask = ($provJob -eq "" -or $provJob -eq $taskId)
-    Add-Check -Name "followup.findings_not_recomputed" -Ok ($readyAfter -eq $readyBefore -and $artifactAfter -eq $artifactBefore -and $sameTask) -Detail "task $taskId ready_at $readyBefore -> $readyAfter; artifact $artifactBefore -> $artifactAfter; explanation's research_job_id: $(if ($provJob) { $provJob } else { 'not carried' })"
+    # Identity, not timestamps (owner directive): the explanation must NAME the job it read,
+    # and it must be the job that was complete before the owner spoke.
+    Add-Check -Name "followup.job_identity_reused" -Ok ($provJob -ne "" -and $provJob -eq $taskId) -Detail "before_job_id $taskId; explained job_id $(if ($provJob) { $provJob } else { 'not carried on the record' })"
+    $artifactIdentity = ($artifactAfter -eq $artifactBefore) -and ($provArtifact -eq "" -or $provArtifact -eq $artifactBefore)
+    Add-Check -Name "followup.report_reused_not_recomputed" -Ok ($readyAfter -eq $readyBefore -and $artifactAfter -eq $artifactBefore -and $artifactIdentity) -Detail "artifact $artifactBefore -> $artifactAfter$(if ($provArtifact) { ' (explanation cites ' + $provArtifact + ')' }); ready_at $readyBefore -> $readyAfter"
     $taskIdsAfter = Get-ResearchTaskIds
     $newTasks = @($taskIdsAfter | Where-Object { $taskIdsBefore -notcontains $_ })
-    Add-Check -Name "followup.no_second_crawl" -Ok ($researchCallsNew.Count -eq 0 -and $newTasks.Count -eq 0) -Detail "research.start calls on the new session: $($researchCallsNew.Count); research tasks created since this check began: $($newTasks.Count)"
+    Add-Check -Name "followup.no_second_crawl" -Ok ($researchCallsNew.Count -eq 0 -and $newTasks.Count -eq 0) -Detail "research.start_on_followup: $($researchCallsNew.Count); new_research_task_count: $($newTasks.Count)"
+    if ($researchCallsNew.Count -gt 0) { Write-Host ("      research.start on the follow-up session: " + (($researchCallsNew | ForEach-Object { "{0}:{1}" -f (Get-OptionalProperty -InputObject $_ -Name "status"), (Get-OptionalProperty -InputObject $_ -Name "speech_head") }) -join " | ")) -ForegroundColor Yellow }
     $healthAfter = Invoke-JsonUtf8 -Uri "$BaseUrl/v1/system/health" -TimeoutSec 20
     $versionAfter = Get-DeployedContractVersion -Health $healthAfter
     $versionsAfter = Get-DeviceVersions
     $deviceSame = $true
     foreach ($k in $versionsBefore.Keys) { if (-not $versionsAfter.ContainsKey($k) -or $versionsAfter[$k] -ne $versionsBefore[$k]) { $deviceSame = $false } }
     $evidence.after = [ordered]@{ contract = $versionAfter; research_tasks = $taskIdsAfter.Count; devices = $versionsAfter }
-    Add-Check -Name "followup.no_deployment_repeated" -Ok ($versionAfter -eq $deployedVersion -and $deviceSame) -Detail "contract v$deployedVersion -> v$versionAfter; device versions unchanged: $deviceSame (this script has no release step)"
+    Add-Check -Name "followup.no_deployment_repeated" -Ok ($versionAfter -eq $deployedVersion -and $deviceSame) -Detail "from the owner's utterance on: contract v$deployedVersion -> v$versionAfter; device versions unchanged: $deviceSame (any release happened once, before the check, and is named above)"
     Add-Check -Name "followup.concise" -Ok ($followChars -gt 0 -and $followChars -le $ConciseMaxChars) -Detail "$followChars spoken characters (technical budget 700; limit $ConciseMaxChars); more detail only on request"
     $failed = @($evidence.checks | Where-Object { -not $_.ok })
     if ($failed.Count -eq 0) { $evidence.verdict = "PASS"; $exitCode = 0 } else { $evidence.verdict = "FAIL"; $exitCode = 2 }
