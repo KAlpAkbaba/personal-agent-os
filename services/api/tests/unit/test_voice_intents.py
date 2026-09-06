@@ -11,6 +11,10 @@ import pytest
 from app.narration.commands import NarrationState, State
 from app.narration.engine import build_plan
 from app.voice.intents import (
+    RESEARCH_CLASS_FOLLOWUP,
+    RESEARCH_CLASS_NEW,
+    RESEARCH_CLASS_RETRY,
+    RESEARCH_CLASS_TECHNICAL_EXPLANATION,
     SCOPE_CONVERSATION,
     SCOPE_NARRATION,
     Intent,
@@ -391,3 +395,91 @@ def test_bridge_unknown_intent_is_a_noop(plan) -> None:
     st = _reading(plan, 1)
     res = apply_to_narration(resolve_intent("bugün hava güzel"), st, plan)
     assert not res.ok and res.action == "noop" and res.state == st
+
+
+# ---------------------------------- the four research interaction classes (ADR-0075)
+
+
+@pytest.mark.parametrize(
+    ("text", "research_class"),
+    [
+        # NEW_RESEARCH and RESEARCH_RETRY are decided from the words alone: they ask for
+        # a CRAWL, and a completed run neither creates nor removes that request.
+        ("Son üç gündeki AI agent gelişmelerini araştır.", RESEARCH_CLASS_NEW),
+        ("Araştırmayı yeniden yap.", RESEARCH_CLASS_RETRY),
+        ("Tekrar araştır.", RESEARCH_CLASS_RETRY),
+        ("Yeniden araştır.", RESEARCH_CLASS_RETRY),
+    ],
+)
+def test_research_crawl_classes_do_not_depend_on_a_completed_run(
+    text: str, research_class: str
+) -> None:
+    for has_completed in (False, True):
+        resolved = resolve_intent(text, has_completed_research=has_completed)
+        assert resolved.research_class == research_class, resolved
+        assert resolved.to_dict()["research_class"] == research_class
+
+
+@pytest.mark.parametrize(
+    ("text", "research_class"),
+    [
+        # The owner's real 2026-09-06/07 run opened with exactly the first of these.
+        ("Teknik anlat.", RESEARCH_CLASS_TECHNICAL_EXPLANATION),
+        ("Hangi sayfalar elendi?", RESEARCH_CLASS_TECHNICAL_EXPLANATION),
+        ("Araştırma sırasında ne sorun oldu?", RESEARCH_CLASS_TECHNICAL_EXPLANATION),
+        ("Kaynakları söyle.", RESEARCH_CLASS_FOLLOWUP),
+        ("Birinci bulguyu detaylandır.", RESEARCH_CLASS_FOLLOWUP),
+        ("Neden önemli?", RESEARCH_CLASS_FOLLOWUP),
+    ],
+)
+def test_research_followup_classes_need_a_completed_run_to_bind_to(
+    text: str, research_class: str
+) -> None:
+    """With nothing finished, "teknik anlat" is an ordinary technical explanation and
+    binds to no research; with a finished run it is a question ABOUT that run."""
+    assert resolve_intent(text, has_completed_research=False).research_class is None
+    resolved = resolve_intent(text, has_completed_research=True)
+    assert resolved.research_class == research_class, resolved
+    assert resolved.to_dict()["research_class"] == research_class
+
+
+def test_teknik_anlat_still_resolves_to_the_technical_intent() -> None:
+    """The class rides ALONGSIDE the intent, it does not replace it: in the owner's run
+    the technical explanation itself was correct and must stay correct - only the second
+    crawl beside it was wrong."""
+    resolved = resolve_intent("Teknik anlat.", has_completed_research=True)
+    assert resolved.intent == Intent.TECHNICAL
+    assert resolved.klass == "control"
+    assert resolved.research_class == RESEARCH_CLASS_TECHNICAL_EXPLANATION
+
+
+def test_telling_the_research_again_is_a_followup_not_a_rerun() -> None:
+    """"Tekrar" beside the word research is not an order to run it again: "araştırmayı
+    tekrar anlat" asks for the finished run to be narrated once more. Only a RUN verb
+    ("yap", "başlat") or the imperative "araştır" makes it a retry."""
+    told = resolve_intent("Araştırmayı tekrar anlat.", has_completed_research=True)
+    assert told.research_class == RESEARCH_CLASS_FOLLOWUP, told
+    rerun = resolve_intent("Araştırmayı yeniden başlat.", has_completed_research=True)
+    assert rerun.research_class == RESEARCH_CLASS_RETRY, rerun
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # the contract §2 table's own owner phrases: none of them is about research
+        "Gözünü kapat.",
+        "Gözünü aç.",
+        "Kamera açık mı?",
+        "Kendi sisteminde şu anda ne görüyorsun?",
+        "Son yaptıklarını anlat.",
+        "Ne öğrendin?",
+        "Bunu canlıya alabilir misin?",
+        "Canlıya al.",
+        "Dur.",
+        "bugün hava güzel",
+    ],
+)
+def test_owner_phrases_that_are_not_about_research_carry_no_research_class(text: str) -> None:
+    for has_completed in (False, True):
+        resolved = resolve_intent(text, has_completed_research=has_completed)
+        assert resolved.research_class is None, resolved

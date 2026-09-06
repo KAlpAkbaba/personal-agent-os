@@ -1,6 +1,6 @@
 ---
 name: env-worktree-venv-and-test-speed
-description: services/api has no .venv inside a fresh git worktree; how to bootstrap it, and why FastAPI TestClient-based test files are extremely slow here.
+description: services/api has no .venv inside a fresh git worktree; how to bootstrap it, real measured gate timings once warm, and the PYTHONIOENCODING=utf-8 needed to print Turkish.
 metadata:
   type: reference
 ---
@@ -21,18 +21,23 @@ matching `.venv` in seconds — no need to touch `pyproject.toml`. `tzdata` is a
 pinned dependency, so `zoneinfo.ZoneInfo("Europe/Istanbul")` (or any IANA zone) works out
 of the box on Windows once synced.
 
-**Test speed varies enormously by file.** Pure-logic unit tests (no FastAPI app, no
-`TestClient`) run in well under a second even across 50+ tests. Any test file that calls
-`app.main.create_app(...)` and builds a `fastapi.testclient.TestClient` is dramatically
-slower in this environment — roughly 8-10 seconds PER TEST (a 15-test route file took
-~133s; a mixed 6-file presence suite with ~15 such route tests took 394s). This appears to
-be fixed overhead in `create_app`/import machinery, not something introduced by any one
-package. Practical implications:
+**The first `uv run` in a fresh worktree is the slow one; after that the suite is fast.**
+The initial `uv sync`/first `uv run` builds the venv and takes ~2 minutes (it will exceed a
+120s foreground Bash timeout and fall through to background — that is normal, not a hang).
+Once warm, measured 2026-09-06 in this worktree:
 
-- Iterate on logic bugs using a fast, targeted `python -c` script or the non-route test
-  files first; only run the full route-test file once you're fairly confident, and launch
-  it with `run_in_background: true` — plan for multiple minutes, not seconds.
-- Don't run `pytest tests/unit -q -k <keyword>` as a quick sanity check expecting fast
-  results if the keyword happens to also match any route-test file — it will collect and
-  run the WHOLE slow file too. Target specific non-route files by path when you just want a
-  fast signal.
+- `uv run ruff check .` — seconds.
+- `pytest tests/unit/test_voice_*.py tests/unit/test_explain*.py tests/unit/test_research_routes.py tests/unit/test_health_endpoint.py -q` — 562 tests in **~20s**, `test_health_endpoint.py` included and NOT hanging.
+- `pytest tests/unit -q` (whole suite, 3657 tests) — **~160s**.
+
+So earlier notes of "8-10s per TestClient test" and "test_health_endpoint.py hangs for
+minutes" describe a cold venv / an earlier environment, not the steady state: budget one
+generous timeout for the first command in a new worktree, then treat the gates as cheap and
+run them often. Still prefer targeted files while iterating, but the full suite is a
+reasonable final check rather than a background-and-wait affair.
+
+**Printing Turkish to stdout through the Bash tool needs `PYTHONIOENCODING=utf-8`.**
+Without it Python's stdout is cp1252 here and any `ş`/`ğ`/`ı` in a `print` raises
+`UnicodeEncodeError: 'charmap' codec` — which looks like a code bug and is not one. Prefix
+every `uv run python` / `uv run pytest` invocation that may print Turkish with
+`PYTHONIOENCODING=utf-8`.

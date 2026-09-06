@@ -126,6 +126,39 @@ QUERY_TOOL_BY_INTENT: dict[Intent, str] = {
 }
 
 
+#: The four RESEARCH interaction classes (docs/DECISIONS.md ADR-0075). They are not
+#: intents: an owner utterance about a research already carries an intent (TECHNICAL,
+#: EXPLAIN, REPEAT, NONE ...), and what the server additionally has to know is whether
+#: this turn may START A CRAWL. That question has exactly four answers, and they are
+#: decided HERE, in the one router, so the durable audit row says which class was
+#: decided and no second Turkish table can disagree with it.
+RESEARCH_CLASS_NEW = "new_research"
+RESEARCH_CLASS_TECHNICAL_EXPLANATION = "research_technical_explanation"
+RESEARCH_CLASS_FOLLOWUP = "research_followup"
+RESEARCH_CLASS_RETRY = "research_retry"
+
+RESEARCH_CLASSES: Final[tuple[str, ...]] = (
+    RESEARCH_CLASS_NEW,
+    RESEARCH_CLASS_TECHNICAL_EXPLANATION,
+    RESEARCH_CLASS_FOLLOWUP,
+    RESEARCH_CLASS_RETRY,
+)
+
+#: The two classes that MAY start a crawl. Everything else about a completed research is
+#: answered from that research's own report.
+RESEARCH_CLASSES_MAY_CRAWL: Final[tuple[str, ...]] = (
+    RESEARCH_CLASS_NEW,
+    RESEARCH_CLASS_RETRY,
+)
+
+#: The two classes that are ABOUT a research that already finished, and therefore must
+#: never become a second crawl (ADR-0075 decision 3).
+RESEARCH_CLASSES_BOUND_TO_A_RUN: Final[tuple[str, ...]] = (
+    RESEARCH_CLASS_TECHNICAL_EXPLANATION,
+    RESEARCH_CLASS_FOLLOWUP,
+)
+
+
 def klass_for(intent: Intent) -> str:
     """query | action | control for an intent (contract §2).
 
@@ -217,6 +250,9 @@ class ResolvedIntent:
     confidence: float = 1.0
     matched: str = ""  # the token/phrase that decided it (for audit/debug)
     query_kind: str | None = None  # EXPLAIN only: which question about the system
+    #: One of :data:`RESEARCH_CLASSES` when this utterance is about research at all
+    #: (ADR-0075). ``None`` means "nothing to do with research" - never "safe to crawl".
+    research_class: str | None = None
     #: query | action | control (contract §2); derived from the intent unless given.
     klass: str = ""
     #: The canonical capability an ACTION targets ("eye.disable"); None for the rest.
@@ -240,6 +276,7 @@ class ResolvedIntent:
             "confidence": self.confidence,
             "matched": self.matched,
             "query_kind": self.query_kind,
+            "research_class": self.research_class,
         }
 
 
@@ -604,6 +641,127 @@ def _display_match(tokens: tuple[str, ...]) -> tuple[Intent, str] | None:
     return None
 
 
+# ------------------------------------------------- research interaction classes
+
+#: A research word in any Turkish inflection: "araştır", "araştırma", "araştırmayı",
+#: "araştırmasını". A prefix stem is right here (unlike the eye nouns) because every
+#: word that starts with "araştır" IS about researching - there is no unrelated Turkish
+#: word sharing that prefix the way "gözlük" shares "göz".
+_RESEARCH_STEMS: Final[tuple[str, ...]] = ("araştır", "arastir", "research")
+
+#: "Do it again": the words that make a research request a RE-RUN rather than a question
+#: about the run that finished.
+_RERUN_WORDS: Final[tuple[str, ...]] = ("yeniden", "tekrar", "baştan", "bastan")
+
+#: The imperative that actually asks for a crawl. Exact forms: "araştırmayı tekrar
+#: ANLAT" is a question about the finished run, not an order to run it again, and the
+#: difference is exactly this verb (ADR-0075: the whole defect is one utterance class
+#: being read as another).
+_RESEARCH_IMPERATIVES: Final[tuple[str, ...]] = ("araştır", "arastir", "araştırsana")
+_RUN_VERB_FORMS: Final[tuple[str, ...]] = ("yap", "yapar", "başlat", "baslat", "çalıştır")
+
+#: Words that make an utterance a question about the PIPELINE (technical/diagnostic)
+#: rather than about the findings. Mirrors the two diagnostic query kinds
+#: app.explain.classify already owns (research_problems / rejected_pages) - it does not
+#: restate them: those kinds ride on ``query_kind`` and are consulted here directly.
+_RESEARCH_PROBLEM_WORDS: Final[tuple[str, ...]] = ("sorun", "hata", "problem")
+
+#: Words that make an utterance a follow-up ON the findings of the finished run.
+_RESEARCH_FOLLOWUP_STEMS: Final[tuple[str, ...]] = (
+    "kaynak",  # "Kaynakları söyle."
+    "bulgu",  # "Birinci bulguyu detaylandır."
+    "sonuç",  # "Sonuçları anlat."
+    "sonuc",
+    "detay",  # "detaylandır"
+    "ayrıntı",
+    "ayrinti",
+    "özet",
+    "ozet",
+    "kısaca",
+)
+_RESEARCH_TELLING_VERBS: Final[tuple[str, ...]] = ("anlat", "söyle", "soyle", "oku", "aktar")
+
+
+def classify_research_interaction(
+    tokens: tuple[str, ...],
+    *,
+    has_completed_research: bool,
+    query_kind: str | None = None,
+) -> str | None:
+    """Which of the four research interaction classes this utterance is, or None.
+
+    Pure: the utterance's tokens, whether a COMPLETED research context exists, and the
+    query kind the one question table (``app.explain.classify``) already decided. No
+    database, no session, no second Turkish table.
+
+    Order is the whole point, and it is the owner's own rule (ADR-0075):
+
+    1. an explicit re-run ("araştırmayı yeniden yap", "tekrar araştır") is a RETRY, and
+       a retry may crawl;
+    2. a research imperative on a topic ("... gelişmelerini araştır") is NEW_RESEARCH,
+       and it may crawl;
+    3. with a completed research to answer from, a pipeline question ("teknik anlat",
+       "hangi sayfalar elendi", "araştırma sırasında ne sorun oldu") is a
+       TECHNICAL_EXPLANATION, and it may NOT crawl;
+    4. with a completed research to answer from, a question about the findings
+       ("kaynakları söyle", "birinci bulguyu detaylandır", "neden önemli") is a
+       FOLLOWUP, and it may NOT crawl.
+
+    Classes 3 and 4 exist only when there IS a completed research: without one,
+    "teknik anlat" is an ordinary technical explanation of the last activity and has
+    nothing to bind to.
+    """
+    research_word = _has(tokens, *_RESEARCH_STEMS)
+    rerun_word = _has_exact(tokens, *_RERUN_WORDS)
+    imperative = _has_exact(tokens, *_RESEARCH_IMPERATIVES)
+    run_verb = _has_exact(tokens, *_RUN_VERB_FORMS)
+
+    # 1. RETRY - "again" plus an order to RUN it, never merely "again" plus the word
+    #    research ("araştırmayı tekrar anlat" is a follow-up, not a re-run).
+    if rerun_word and (imperative or (research_word and run_verb)):
+        return RESEARCH_CLASS_RETRY
+    # 2. NEW - the research imperative, or "araştırma yap/başlat", with no "again".
+    if imperative or (research_word and run_verb):
+        return RESEARCH_CLASS_NEW
+    if not has_completed_research:
+        return None
+    # 3. TECHNICAL EXPLANATION - the pipeline's own diagnostics.
+    if query_kind in ("rejected_pages", "research_problems"):
+        return RESEARCH_CLASS_TECHNICAL_EXPLANATION
+    if _has(tokens, "teknik") or (_has(tokens, "kod") and _has(tokens, "seviye")):
+        return RESEARCH_CLASS_TECHNICAL_EXPLANATION
+    if _has(tokens, "elendi", "elen") or (_has(tokens, "hangi") and _has(tokens, "sayfa")):
+        return RESEARCH_CLASS_TECHNICAL_EXPLANATION
+    if research_word and _has(tokens, *_RESEARCH_PROBLEM_WORDS):
+        return RESEARCH_CLASS_TECHNICAL_EXPLANATION
+    # 4. FOLLOW-UP - the findings themselves.
+    if query_kind == "research_detail":
+        return RESEARCH_CLASS_FOLLOWUP
+    if _has(tokens, *_RESEARCH_FOLLOWUP_STEMS):
+        return RESEARCH_CLASS_FOLLOWUP
+    if _has(tokens, "neden") and _has(tokens, "önemli", "onemli"):
+        return RESEARCH_CLASS_FOLLOWUP
+    if research_word and _has(tokens, *_RESEARCH_TELLING_VERBS):
+        return RESEARCH_CLASS_FOLLOWUP
+    return None
+
+
+def research_class_for(text: str, *, has_completed_research: bool) -> str | None:
+    """:func:`classify_research_interaction` from raw speech (normalises first).
+
+    The sibling entry point for callers that hold an utterance rather than a resolved
+    intent; ``resolve_intent`` attaches the same value to every ``ResolvedIntent``.
+    """
+    _normalized, tokens, _dropped = normalize_transcript(text)
+    if not tokens:
+        return None
+    return classify_research_interaction(
+        tokens,
+        has_completed_research=has_completed_research,
+        query_kind=_explain_kind(tokens, _normalized),
+    )
+
+
 def _stop_match(text: str, tokens: tuple[str, ...]) -> str | None:
     for phrase in _MULTI_STOP_PHRASES:
         if re.search(rf"(?<!\S){re.escape(phrase)}(?!\S)", text):
@@ -633,6 +791,7 @@ def resolve_intent(
     *,
     session_state: RealtimeState | None = None,
     narration: NarrationState | None = None,
+    has_completed_research: bool = False,
 ) -> ResolvedIntent:
     """Resolve a transcript into an :class:`Intent` against the live state.
 
@@ -640,6 +799,13 @@ def resolve_intent(
     ``narration`` the narration machine state when a narration is attached.
     Stop words win from ANY state (spec §5); everything else is resolved in
     a fixed priority order documented inline.
+
+    ``has_completed_research`` is the one piece of durable context this resolver takes:
+    whether a COMPLETED research exists for the owner (ADR-0075). It decides nothing
+    about the intent; it decides whether "teknik anlat" is additionally a
+    ``research_technical_explanation`` (a question about a finished run) or just a
+    technical explanation of the last activity. The caller establishes it from the
+    research runs/reports - the resolver stays pure.
     """
     normalized, tokens, dropped = normalize_transcript(text)
     confidence = 1.0 if dropped == 0 else 0.9
@@ -651,6 +817,14 @@ def resolve_intent(
     }
     if not tokens:
         return ResolvedIntent(Intent.NONE, **{**base, "confidence": 0.0})
+
+    # The question table is consulted ONCE, here, and its answer serves both the
+    # research interaction class (below) and the EXPLAIN branch further down - the two
+    # can therefore never disagree about what kind of question was asked.
+    explain_kind = _explain_kind(tokens, normalized)
+    base["research_class"] = classify_research_interaction(
+        tokens, has_completed_research=has_completed_research, query_kind=explain_kind
+    )
 
     # 0. Active Eye privacy stop (M18 spec §2) — checked before even STOP. A camera
     #    disable phrase must never be shadowed by anything this resolver learns
@@ -706,7 +880,6 @@ def resolve_intent(
     # 1b. questions about the system's own activity resolve BEFORE presentation words,
     #     because "araştırmayı detaylandır" with no briefing open is a request for one,
     #     while the same words with a briefing attached are a jump into its detail section.
-    explain_kind = _explain_kind(tokens, normalized)
     if (
         explain_kind is not None
         and not (narration is not None and explain_kind in ("research_detail", "technical"))
@@ -1127,6 +1300,14 @@ __all__ = [
     "PRESENTATION_SUMMARY",
     "PRESENTATION_TECHNICAL",
     "QUERY_TOOL_BY_INTENT",
+
+    "RESEARCH_CLASSES",
+    "RESEARCH_CLASSES_BOUND_TO_A_RUN",
+    "RESEARCH_CLASSES_MAY_CRAWL",
+    "RESEARCH_CLASS_FOLLOWUP",
+    "RESEARCH_CLASS_NEW",
+    "RESEARCH_CLASS_RETRY",
+    "RESEARCH_CLASS_TECHNICAL_EXPLANATION",
     "SPEECH_BUDGET_CHARS",
     "SCOPE_CONVERSATION",
     "SCOPE_NARRATION",
@@ -1136,12 +1317,14 @@ __all__ = [
     "NarrationBridgeResult",
     "ResolvedIntent",
     "apply_to_narration",
+    "classify_research_interaction",
     "current_item_index",
     "is_filler",
     "klass_for",
     "level_section_cursor",
     "normalize_transcript",
     "ordered_paragraph_ids",
+    "research_class_for",
     "resolve_intent",
     "speech_budget",
     "speech_from",

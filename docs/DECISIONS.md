@@ -5461,6 +5461,7 @@ real media wake may well answer `consent_wall` and fall back to the tone; the ho
 it does, is for the owner to accept the consent once by hand in that profile's own window
 (the profile is persistent and keeps it), never for the worker to click it. Cloud Core's
 dispatch allowlist and the `media.play` receipt are Track C's.
+
 ## ADR-0074 — A short research is allowed to be thin, never empty by accident (2026-09-07)
 
 Status: Accepted
@@ -5624,3 +5625,136 @@ new `thin` flag inside `app/explain` (the flag and its reasons are published; wh
 explain level says what about them is that module's own decision), enforcement of
 `min_distinct_publishers` (still diagnostics-only, ADR-0068's open item), and a
 `research.start` utterance field (ADR-0068 item 1's open note, still open).
+
+## ADR-0075 — A research explanation never becomes a second crawl (2026-09-07)
+
+Status: Accepted
+
+Context: the owner's real run, 2026-09-06/07 (production record). A research had
+completed — "Son üç gündeki OpenAI ile ilgili gelişmeler", task `deabbd44`, artifact
+`5eacab10`, a report with three findings. The owner then opened a NEW `/core` voice
+session and said one thing: "Teknik anlat." The router resolved the technical intent,
+the model called `activity.explain` at the technical level and the diagnostics were
+spoken correctly, concisely, only now — that half worked. AND the model also called
+`research.start`, which (since the ADR-0067 amendment wired it to the real M13
+pipeline) created a second research task and began a second crawl. Nothing in the
+server connected "teknik anlat" to the run it was obviously about, and nothing stopped
+a question about a finished research from becoming a new one: the only thing linking
+the two was the owner's own memory of having asked. The owner's directive is explicit
+and is the shape of this ADR: "Teknik anlat after a completed research run must NEVER
+start a new crawl unless the owner explicitly requests a fresh/re-run research. Fix the
+architecture, not just the exact Turkish phrase. Do not rely only on the LLM behaving
+correctly."
+
+Decisions:
+
+1. **Four research interaction classes, decided in the ONE router.**
+   `app.voice.intents.classify_research_interaction` is a pure function over the
+   utterance's tokens, the query kind `app.explain.classify` already decided, and one
+   durable bit of context — whether a COMPLETED research exists. It answers
+   `NEW_RESEARCH` ("Son üç gündeki AI agent gelişmelerini araştır."), `RESEARCH_RETRY`
+   ("Araştırmayı yeniden yap.", "Tekrar araştır.", "Yeniden araştır."),
+   `RESEARCH_TECHNICAL_EXPLANATION` ("Teknik anlat.", "Hangi sayfalar elendi?",
+   "Araştırma sırasında ne sorun oldu?") or `RESEARCH_FOLLOWUP` ("Kaynakları söyle.",
+   "Birinci bulguyu detaylandır.", "Neden önemli?") — or None, which means "not about
+   research", never "safe to crawl". Only the first two may start a crawl
+   (`RESEARCH_CLASSES_MAY_CRAWL`); the last two are ABOUT a run that already finished
+   (`RESEARCH_CLASSES_BOUND_TO_A_RUN`) and exist only when there is one to bind to.
+   The class rides on `ResolvedIntent` (`research_class`, in `to_dict()`), so the
+   durable `voice_intent_resolved` audit row and `session_activity`'s `intents` say
+   which class was decided — and `resolve_intent` keeps its ordinary answer alongside
+   it: "Teknik anlat." is still `Intent.TECHNICAL`, klass `control`, exactly as before.
+   Ordering is where the owner's rule lives: an explicit re-run outranks everything, a
+   research imperative outranks the follow-up classes, and "tekrar" beside the word
+   research is NOT a re-run — "araştırmayı tekrar anlat" asks for the finished run to
+   be narrated again, so a retry additionally requires a RUN verb ("yap", "başlat") or
+   the imperative "araştır" itself.
+2. **A follow-up binds to a completed run by identity, never by re-running the query.**
+   `app.explain.research_context.bind_completed_research` reads, in order: the research
+   THIS session started and saw complete (`context_json['last_research']`, written by
+   `service._record_research_linkage` from the `task_id` the RUNNING `research.start`
+   result already carried — both completion paths, owner and system); then the session's
+   open plan (`plan['research_job_id']` / `plan['task_id']`); then the most recently
+   completed research of the owner — a `ResearchRunRow` at stage `ready` whose
+   `ResearchReportRow` carries a report, inside a 14-day context window. "Completed"
+   means what the pipeline means by it, so a still-crawling run, a failed run and a
+   ready run whose report never landed are all "nothing to bind". The bound pair
+   travels everywhere a checker can read it: `explain()` takes `research_job_id` and
+   selects THAT `research.completed` event instead of whatever is latest; `Briefing`
+   gained `research_artifact_id` beside `research_job_id`, both in `provenance()` and
+   `cognition()`; `BriefingRecord.as_dict()` carries `research_job_id` /
+   `research_artifact_id` at the top level, so the `activity.explain` tool-call row
+   itself names the run; `session_activity` and `GET .../sessions/{id}` expose
+   `last_research` and `last_utterance`. `activity.explain` on a fresh session with no
+   plan still finds the completed research through the ledger event and its report —
+   that worked in the owner's run and is unchanged.
+3. **The refusal lives in the server's tool relay, not in the model's judgment.**
+   `service.handle_tool_call` calls `tools.research_followup_refusal` BEFORE any
+   handler runs, for any tool in `CRAWL_STARTING_TOOLS` (today `research.start`), keyed
+   on the LATEST utterance the router resolved for that session
+   (`context_json['last_utterance']`, the same record the audit row is written from,
+   overwritten every utterance so an intervening "yeniden araştır" is never shadowed by
+   an older follow-up, and bounded by `RESEARCH_TURN_TTL_S = 600`). On a
+   `research_technical_explanation` / `research_followup` turn with a completed run
+   bound, the call is recorded SUCCEEDED with
+   `{"status": "refused", "reason": "research_followup_turn", "research_class": ...,
+   "research_job_id": ..., "research_artifact_id": ..., "binding_basis": ...,
+   "ambiguous": false, "speech": "Yeni bir araştırma başlatmadım efendim; son
+   araştırmanın sonuçlarını anlatıyorum."}` — the same honest shape `plan.redirect`'s
+   refusal has (ADR-0067 amendment): the tool CALL succeeded, the crawl did not, and
+   the result says so in the owner's language. It is audited under its own action,
+   `voice_research_start_refused`, with the bound ids. Because the guard sits in the
+   relay every tool call passes through, the model's CHOICE of tool cannot route around
+   it; because it is keyed on the resolved intent rather than on the tool's arguments,
+   a differently-worded topic cannot either.
+4. **Ambiguity is a question, not a guess — and still not a crawl.** When two completed
+   researches finished within six hours of each other and neither is linked to the
+   conversation, `activity.explain` returns
+   `{"status": "needs_clarification", "reason": "ambiguous_research_context", "speech":
+   "Efendim, iki tamamlanmış araştırmam var: «...» ve «...». Hangisini anlatayım?"}`
+   with the candidates, and the guard refuses `research.start` on that same turn with
+   the clarifying question as its speech. Picking the newer of two runs by a few
+   minutes would be a guess presented as a fact; starting a third research because the
+   context was unclear would be the original defect wearing a different hat.
+5. **The persona is told, in two sentences, what the server will do anyway.**
+   `RESEARCH_FOLLOWUP_TR`: after a research completes, every question about it is
+   answered from the completed report through `activity.explain`; `research.start` is
+   only for a new topic or an explicit "yeniden"; otherwise the server will refuse, so
+   do not try; and when the tool returns one short question about which research is
+   meant, ask it verbatim rather than choosing.
+
+What was refused:
+
+- **Trusting the model.** The persona instruction (decision 5) is the cheap half and it
+  is worth having; it is not the fix. The owner's directive says so directly, and the
+  2026-09-06 eye run said it before that: privacy and correctness must not rest on the
+  model calling the right tool. The guard is deterministic, server-side, and audited.
+- **A second Turkish table.** Every temptation here was to add one — a list of
+  follow-up phrases in `tools.py`, a "is this a research question?" check in the
+  explain service, a client-side hint. `app.voice.intents` is the one command
+  interpreter and `app.explain.classify` the one question table (ADR-0063 §2); the new
+  classes are computed in the former FROM the latter's answer, so the two cannot
+  disagree, and no third table exists. Two tables that must agree will not — the
+  `_explain_kind` docstring records what that already cost once.
+- **Inferring the job by re-running the query.** The obvious shortcut for "which
+  research does the owner mean?" is to match the topic text, or to re-run the search
+  and see. Identity comes from a durable row's own primary key or from nothing: the
+  session's recorded linkage, the plan's task id, or the most recent ready run — and
+  when that is ambiguous, from the owner.
+- **Refusing a crawl whenever a research exists.** The guard is keyed on the TURN, not
+  on the existence of a report. A new topic after a completed research still crawls; so
+  does an explicit re-run. Only a question about the finished run is refused.
+
+Consequences: `services/api` gains `app/explain/research_context.py`;
+`app.voice.intents` gains the four classes, `classify_research_interaction`,
+`research_class_for` and `ResolvedIntent.research_class`; `explain()` /
+`explain_to_briefing()` take `research_job_id` and `Briefing` carries
+`research_artifact_id`; `handle_tool_call` refuses a crawl on a follow-up turn and
+`complete_tool_call` / `complete_tool_call_system` record the session's research
+linkage; `record_client_events` establishes "is there a completed research?" once per
+request and stores the resolved turn on the session. What this ADR does NOT build: a
+way for the owner to name WHICH older research to explain ("geçen haftaki araştırmayı
+anlat" binds to the latest, not to a searched-for one) — the clarifying question covers
+the two-run case and a topic-addressed history is a larger change; and nothing here
+teaches the M13 pipeline to resume or extend a finished run, so "biraz daha araştır"
+on a completed topic is still a NEW crawl, honestly, rather than a continuation.
