@@ -553,6 +553,21 @@ mechanism before any change (ADR-0066, ADR-0067). `PROVEN_REAL` needs the owner'
 Cloud Core's record can prove most of them (the session's `first_audio` / `audio_done`
 timing events; the research call's terminal result and `speech_head`).
 
+**Implemented 2026-09-07, all rows `PROVEN_PROXY` pending item 23.** The trace behind 13.2
+found more than the wording: a spoken `research.start` never started the real pipeline (it
+fabricated a local plan and returned "running" forever; whatever the owner later heard came
+from `activity.explain` reading the LAST REST-started run's statistics). Now the tool
+starts the same run as the REST route (task + device selection inside the tool call, the
+Temporal start as a route-awaited follow-up), the announcer completes the originating
+session's call with `spoken_result` when the durable report lands, and a failure to start
+is a truthful failed call, never a silent "running". Proxy evidence: web
+`tests/voice/speech-lifecycle.test.ts` (16), `voice-overlay.test.ts`; api
+`test_research_result.py`, `test_voice_research_start.py` (6), `test_voice_research_completion.py`,
+`test_explain_*` (research executive from findings; `research_problems` / `rejected_pages`);
+`test_realtime_bench.py` (`audio_done`). Gates: web 678, api 1132 across the affected suites.
+The owner check `scripts/core/owner-m18-2.ps1` gates on action contract v4 (the deployed
+Cloud Core runs v3 and is released once by the run).
+
 | # | Criterion | Status | Evidence required |
 |---|---|---|---|
 | 13.1 | SPEAKING is a lifecycle, not an analyser frame: from the first audible playback until the final assistant audio of that response actually completed; a natural pause inside the answer leaves the state SPEAKING with a calmer Core; barge-in / `Dur` / cancel end it at once | `NOT_YET_PROVEN` | Web: controller lifecycle tests (first audio → speaking; `response_done` with the provider buffer still playing → still speaking; `audio_stopped` for that response → listening with one `audio_done`; silence release and drain cap fallbacks; interruption immediate; a previous response's `audio_stopped` ignored). Real: Test A — a multi-sentence answer; the session records `first_audio` then `audio_done` (basis provider) after the last sentence, and the owner sees SPEAKING held through the pauses. |
