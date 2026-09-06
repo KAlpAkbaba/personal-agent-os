@@ -189,9 +189,7 @@ def test_only_a_real_transition_writes_a_ledger_row_not_every_observation(
         "/v1/presence/observations",
         json=_observation(observed_at=_iso_at(40)),
     )
-    transitions = [
-        r for r in _rows(engine) if r.event_type == EVENT_TYPE_PRESENCE_STATE_CHANGED
-    ]
+    transitions = [r for r in _rows(engine) if r.event_type == EVENT_TYPE_PRESENCE_STATE_CHANGED]
     assert len(transitions) == 1
     assert transitions[0].detail_json["to_state"] == "present"
 
@@ -242,16 +240,48 @@ def test_the_eye_disable_is_durable_and_observable(client: TestClient, engine) -
     assert current.state.value == "eye.disabled"
 
 
+def test_an_eye_write_made_for_a_voice_action_carries_its_identity(
+    client: TestClient, engine
+) -> None:
+    """Contract §5.5: the browser writes the durable flag on the voice path BEFORE the
+    tool call is relayed, so the ledger row must name the action that caused it - the
+    owner's sixth run (2026-09-06) showed rows 71 ms before their receipts that a time
+    window still could not attribute. Absent ids leave the row exactly as before."""
+    client.post(
+        "/v1/presence/eye/disable",
+        json={
+            "reason": "voice:gözünü kapat",
+            "action_id": "call_qDJyUhGO3eKZpDrq",
+            "session_id": "9df439af-8a07-4e42-b81e-b50ea786df8d",
+        },
+    )
+    row = next(r for r in _rows(engine) if r.event_type == EVENT_TYPE_EYE_DISABLED)
+    assert row.detail_json == {
+        "reason": "voice:gözünü kapat",
+        "action_id": "call_qDJyUhGO3eKZpDrq",
+        "session_id": "9df439af-8a07-4e42-b81e-b50ea786df8d",
+    }
+    # Without ids, the row is the plain owner action it always was.
+    client.post("/v1/presence/eye/enable", json={"reason": "owner_start"})
+    enabled = next(r for r in _rows(engine) if r.event_type == "eye.enabled")
+    assert enabled.detail_json == {"reason": "owner_start"}
+    # Bounded, and unknown keys are still refused.
+    assert client.post("/v1/presence/eye/disable", json={"action_id": "x" * 65}).status_code == 422
+    assert client.post("/v1/presence/eye/disable", json={"frame": "..."}).status_code == 422
+
+
 def test_re_enabling_the_eye_allows_camera_observations_again(client: TestClient) -> None:
     client.post("/v1/presence/eye/disable")
-    assert client.post(
-        "/v1/presence/observations", json=_observation(source="camera")
-    ).status_code == 409
+    assert (
+        client.post("/v1/presence/observations", json=_observation(source="camera")).status_code
+        == 409
+    )
 
     client.post("/v1/presence/eye/enable")
-    assert client.post(
-        "/v1/presence/observations", json=_observation(source="camera")
-    ).status_code == 201
+    assert (
+        client.post("/v1/presence/observations", json=_observation(source="camera")).status_code
+        == 201
+    )
 
 
 def test_eye_is_enabled_by_default_with_no_prior_action(client: TestClient) -> None:

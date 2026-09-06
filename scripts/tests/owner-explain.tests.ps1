@@ -634,11 +634,37 @@ Test-Case "19. Test-HiddenEyeMutation: a voice: eye row outside every receipt wi
     $inside = [pscustomobject]@{ event_type = "eye.disabled"; occurred_at = "2026-09-04T20:01:00.5Z"; detail_json = [pscustomobject]@{ reason = "voice:gozunu kapat" } }
     $outside = [pscustomobject]@{ event_type = "eye.disabled"; occurred_at = "2026-09-04T20:05:00Z"; detail_json = [pscustomobject]@{ reason = "voice:gozunu kapat" } }
     $control = [pscustomobject]@{ event_type = "eye.enabled"; occurred_at = "2026-09-04T20:05:00Z"; detail_json = [pscustomobject]@{ reason = "owner_start" } }
-    Assert-Equal 0 (Test-HiddenEyeMutation -LedgerRows @($inside, $control) -Receipts $receipts).Count "inside a window, or not by voice: explained"
+    $none = Test-HiddenEyeMutation -LedgerRows @($inside, $control) -Receipts $receipts
+    Assert-Equal 0 $none.Count "inside a window, or not by voice: explained"
     $bad = Test-HiddenEyeMutation -LedgerRows @($inside, $outside) -Receipts $receipts
     Assert-Equal 1 $bad.Count "one unexplained voice mutation"
-    Assert-True ($bad[0] -like "*eye.disabled (voice:gozunu kapat)") "named: $($bad[0])"
-    Assert-Equal 1 (Test-HiddenEyeMutation -LedgerRows @($outside) -Receipts $null).Count "no receipts at all: every voice row is unexplained"
+    Assert-True ($bad[0] -like "*eye.disabled (voice:gozunu kapat; no action_id on the row)") "named: $($bad[0])"
+    $noReceipts = Test-HiddenEyeMutation -LedgerRows @($outside) -Receipts $null
+    Assert-Equal 1 $noReceipts.Count "no receipts at all: every voice row is unexplained"
+}
+Test-Case "19b. the receipts are ledger ROWS (fields under detail_json), and a row 71 ms BEFORE its receipt is explained (owner run, session 9df439af)" {
+    # The production shape: action.receipt rows from /v1/ledger/events, the eye row written
+    # by the browser durable-first, before the tool call was relayed.
+    $receiptRow = [pscustomobject]@{ event_type = "action.receipt"; occurred_at = "2026-09-06T14:32:00.987141Z"; detail_json = [pscustomobject]@{ capability = "eye.disable"; action_id = "call_qDJyUhGO3eKZpDrq"; started_at = "2026-09-06T14:32:00.977128Z"; completed_at = "2026-09-06T14:32:00.987141Z" } }
+    $eyeRow = [pscustomobject]@{ event_type = "eye.disabled"; occurred_at = "2026-09-06T14:32:00.903584Z"; detail_json = [pscustomobject]@{ reason = "voice:gozunu kapat" } }
+    $r = Test-HiddenEyeMutation -LedgerRows @($eyeRow) -Receipts @($receiptRow)
+    Assert-Equal 0 $r.Count "explained by the window (was unexplained before the fix: no windows were built from rows)"
+    # A row that precedes its receipt by a permission prompt's worth is still explained...
+    $early = [pscustomobject]@{ event_type = "eye.enabled"; occurred_at = "2026-09-06T14:31:49.000000Z"; detail_json = [pscustomobject]@{ reason = "voice:gozunu ac" } }
+    $enableRow = [pscustomobject]@{ event_type = "action.receipt"; occurred_at = "2026-09-06T14:31:53.988463Z"; detail_json = [pscustomobject]@{ capability = "eye.enable"; action_id = "call_KVHgZm2aQO5f4ETh"; started_at = "2026-09-06T14:31:53.980894Z"; completed_at = "2026-09-06T14:31:53.988463Z" } }
+    Assert-Equal 0 (Test-HiddenEyeMutation -LedgerRows @($early) -Receipts @($enableRow)).Count "5 s of camera prompt before the relay is inside the lead"
+    # ...but a row a minute earlier is not.
+    $stale = [pscustomobject]@{ event_type = "eye.enabled"; occurred_at = "2026-09-06T14:30:40.000000Z"; detail_json = [pscustomobject]@{ reason = "voice:gozunu ac" } }
+    Assert-Equal 1 (Test-HiddenEyeMutation -LedgerRows @($stale) -Receipts @($enableRow)).Count "a minute before: unexplained"
+}
+Test-Case "19c. identity beats time: a row carrying a receipt's action_id is explained wherever it is; an unknown action_id is named" {
+    $receiptRow = [pscustomobject]@{ event_type = "action.receipt"; occurred_at = "2026-09-06T14:32:00.987141Z"; detail_json = [pscustomobject]@{ action_id = "call_A"; started_at = "2026-09-06T14:32:00.977128Z"; completed_at = "2026-09-06T14:32:00.987141Z" } }
+    $byId = [pscustomobject]@{ event_type = "eye.disabled"; occurred_at = "2026-09-06T14:20:00Z"; detail_json = [pscustomobject]@{ reason = "voice:gozunu kapat"; action_id = "call_A" } }
+    Assert-Equal 0 (Test-HiddenEyeMutation -LedgerRows @($byId) -Receipts @($receiptRow)).Count "matched by action_id, far outside the window"
+    $unknown = [pscustomobject]@{ event_type = "eye.disabled"; occurred_at = "2026-09-06T14:20:00Z"; detail_json = [pscustomobject]@{ reason = "voice:gozunu kapat"; action_id = "call_Z" } }
+    $r = Test-HiddenEyeMutation -LedgerRows @($unknown) -Receipts @($receiptRow)
+    Assert-Equal 1 $r.Count "unknown action id, outside every window"
+    Assert-True ($r[0] -like "*action_id call_Z matches no receipt*") "the reason names the id: $($r[0])"
 }
 Test-Case "15. Get-SessionRouterSummary: none / one / many, through the array traps" {
     $none = Get-SessionRouterSummary -Activity ([pscustomobject]@{ session_id = "x" })

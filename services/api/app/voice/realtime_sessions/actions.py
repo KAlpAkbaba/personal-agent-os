@@ -194,11 +194,22 @@ def _eye_action(ctx: ToolContext, arguments: dict[str, Any], *, enable: bool) ->
     changed = False
     write_error: str | None = None
     try:
+        # The action's identity rides the durable row (contract §5.5): when the browser's
+        # own write already flipped the flag this call changes nothing, and when it did
+        # not, the row written here still names the action that caused it.
         if enable:
             if physical_ok:
-                changed = bool(enable_eye(db, reason=reason))
+                changed = bool(
+                    enable_eye(
+                        db, reason=reason, action_id=ctx.call_id, session_id=str(ctx.session_id)
+                    )
+                )
         else:
-            changed = bool(disable_eye(db, reason=reason))
+            changed = bool(
+                disable_eye(
+                    db, reason=reason, action_id=ctx.call_id, session_id=str(ctx.session_id)
+                )
+            )
     except Exception as exc:  # noqa: BLE001 - the receipt says the record is unverified
         logger.error(
             "eye_action_durable_write_failed",

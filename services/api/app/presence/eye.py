@@ -83,21 +83,41 @@ def is_eye_enabled(session: Session) -> bool:
     return bool(row.event_type == EVENT_TYPE_EYE_ENABLED)
 
 
-def _set_eye_state(session: Session, *, enabled: bool, reason: str) -> bool:
+def _set_eye_state(
+    session: Session,
+    *,
+    enabled: bool,
+    reason: str,
+    action_id: str | None = None,
+    session_id: str | None = None,
+) -> bool:
     """Idempotent durable write (docs/M18_ACTION_CONTRACT.md §5.4).
 
     When the flag already equals the requested value nothing is written, nothing is
     published and ``False`` is returned: the ledger must not fill with "disabled again"
-    rows every time the safety net and the tool handler both honour one command, and an
-    action receipt needs to know whether THIS command changed anything ("verified") or
-    found it already so ("already"). Otherwise the row is written, the UI-state event is
-    published and ``True`` is returned.
+    rows every time two callers honour one command, and an action receipt needs to know
+    whether THIS command changed anything ("verified") or found it already so
+    ("already"). Otherwise the row is written, the UI-state event is published and
+    ``True`` is returned.
+
+    ``action_id`` / ``session_id`` are the voice action's identity (the provider call id
+    and the realtime session), recorded on the row so a ledger eye event correlates to its
+    receipt by IDENTITY, not by a time window. The owner's sixth run (2026-09-06) proved
+    the need: the rows were 71 ms before their receipts and a window check still could
+    not say which action wrote them.
     """
     if is_eye_enabled(session) == enabled:
         return False
     event_type = EVENT_TYPE_EYE_ENABLED if enabled else EVENT_TYPE_EYE_DISABLED
     action = "enable" if enabled else "disable"
     now = datetime.now(UTC)
+    detail: dict[str, Any] = {}
+    if reason:
+        detail["reason"] = reason
+    if action_id:
+        detail["action_id"] = str(action_id)[:64]
+    if session_id:
+        detail["session_id"] = str(session_id)[:64]
     try:
         ledger_service.record(
             session,
@@ -113,7 +133,7 @@ def _set_eye_state(session: Session, *, enabled: bool, reason: str) -> bool:
                 # worth collapsing — every real call is a genuine owner ask).
                 source_ref=f"presence-eye:{action}:{now.isoformat()}",
                 occurred_at=now,
-                detail_json={"reason": reason} if reason else {},
+                detail_json=detail,
             ),
         )
     except Exception:  # noqa: BLE001 - the ledger is evidence, never a hard dependency
@@ -128,15 +148,29 @@ def _set_eye_state(session: Session, *, enabled: bool, reason: str) -> bool:
     return True
 
 
-def enable_eye(session: Session, *, reason: str = "") -> bool:
+def enable_eye(
+    session: Session,
+    *,
+    reason: str = "",
+    action_id: str | None = None,
+    session_id: str | None = None,
+) -> bool:
     """Returns True when the durable flag actually changed (contract §5.4).
 
     Opening the camera never asserts presence: the fusion engine is untouched here, and
     only real observations can move it (``tests/unit/test_presence_worldmodel.py``)."""
-    return _set_eye_state(session, enabled=True, reason=reason)
+    return _set_eye_state(
+        session, enabled=True, reason=reason, action_id=action_id, session_id=session_id
+    )
 
 
-def disable_eye(session: Session, *, reason: str = "") -> bool:
+def disable_eye(
+    session: Session,
+    *,
+    reason: str = "",
+    action_id: str | None = None,
+    session_id: str | None = None,
+) -> bool:
     """Stops perception immediately: after this call,
     ``app.presence.routes`` refuses every subsequent camera-sourced
     observation until re-enabled (spec §2: "stop perception immediately").
@@ -147,7 +181,9 @@ def disable_eye(session: Session, *, reason: str = "") -> bool:
     command by its TTL. The import is local because ``app.presence.service`` imports
     this module.
     """
-    changed = _set_eye_state(session, enabled=False, reason=reason)
+    changed = _set_eye_state(
+        session, enabled=False, reason=reason, action_id=action_id, session_id=session_id
+    )
     if changed:
         from app.presence.service import on_eye_disabled
 

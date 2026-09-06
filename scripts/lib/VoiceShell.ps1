@@ -593,24 +593,38 @@ function Test-HiddenEyeMutation {
         widened by ToleranceSec) - otherwise a second, unreceipted path mutated the eye.
         Returns the unexplained rows' descriptions (empty = one canonical path).
     #>
-    param([AllowNull()]$LedgerRows, [AllowNull()]$Receipts, [int]$ToleranceSec = 3)
+    param([AllowNull()]$LedgerRows, [AllowNull()]$Receipts, [int]$ToleranceSec = 3, [int]$LeadSec = 15)
+    # A receipt is either a ledger action.receipt ROW (its fields under detail_json) or the
+    # receipt dict itself (fields at the top). The owner's sixth run found the check reading
+    # started_at off the row's top level: no windows, every voice row "unexplained".
+    $ids = @{}
     $windows = @()
     foreach ($r in (ConvertTo-Array -Value $Receipts)) {
-        $from = ConvertTo-SessionInstant -Raw ([string](Get-OptionalProperty -InputObject $r -Name "started_at"))
-        $to = ConvertTo-SessionInstant -Raw ([string](Get-OptionalProperty -InputObject $r -Name "completed_at"))
+        $src = Get-OptionalProperty -InputObject $r -Name "detail_json"
+        if ($null -eq $src) { $src = $r }
+        $rid = [string](Get-OptionalProperty -InputObject $src -Name "action_id")
+        if ($rid) { $ids[$rid] = $true }
+        $from = ConvertTo-SessionInstant -Raw ([string](Get-OptionalProperty -InputObject $src -Name "started_at"))
+        $to = ConvertTo-SessionInstant -Raw ([string](Get-OptionalProperty -InputObject $src -Name "completed_at"))
         if ($null -eq $from) { continue }
         if ($null -eq $to) { $to = $from }
-        $windows += [pscustomobject]@{ From = ([DateTimeOffset]$from).AddSeconds(-$ToleranceSec); To = ([DateTimeOffset]$to).AddSeconds($ToleranceSec); Id = [string](Get-OptionalProperty -InputObject $r -Name "action_id") }
+        # The browser writes the durable row BEFORE relaying the tool call (durable-first on
+        # disable; camera-first then durable on enable), so a row legitimately precedes its
+        # receipt's started_at - by the local action's duration, up to a permission prompt.
+        $windows += [pscustomobject]@{ From = ([DateTimeOffset]$from).AddSeconds(-$LeadSec); To = ([DateTimeOffset]$to).AddSeconds($ToleranceSec); Id = $rid }
     }
     $unexplained = @()
     foreach ($row in (ConvertTo-Array -Value $LedgerRows)) {
         $detail = Get-OptionalProperty -InputObject $row -Name "detail_json"
         $reason = if ($null -ne $detail) { [string](Get-OptionalProperty -InputObject $detail -Name "reason") } else { "" }
         if (-not $reason.StartsWith("voice:")) { continue }
+        # By identity first (contract §5.5: the row carries the action_id that caused it).
+        $rowAction = if ($null -ne $detail) { [string](Get-OptionalProperty -InputObject $detail -Name "action_id") } else { "" }
+        if ($rowAction -and $ids.ContainsKey($rowAction)) { continue }
         $at = ConvertTo-SessionInstant -Raw ([string](Get-OptionalProperty -InputObject $row -Name "occurred_at"))
         $covered = $false
         foreach ($w in $windows) { if ($null -ne $at -and ([DateTimeOffset]$at) -ge $w.From -and ([DateTimeOffset]$at) -le $w.To) { $covered = $true; break } }
-        if (-not $covered) { $unexplained += ("{0} {1} ({2})" -f (Get-OptionalProperty -InputObject $row -Name "occurred_at"), (Get-OptionalProperty -InputObject $row -Name "event_type"), $reason) }
+        if (-not $covered) { $unexplained += ("{0} {1} ({2}{3})" -f (Get-OptionalProperty -InputObject $row -Name "occurred_at"), (Get-OptionalProperty -InputObject $row -Name "event_type"), $reason, $(if ($rowAction) { "; action_id " + $rowAction + " matches no receipt" } else { "; no action_id on the row" })) }
     }
     return , $unexplained
 }

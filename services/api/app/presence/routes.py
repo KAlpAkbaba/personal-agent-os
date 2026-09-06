@@ -52,6 +52,12 @@ class EyeActionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     reason: str = Field(default="", max_length=200)
+    # The voice action's identity, when the write is made on behalf of one (the browser
+    # writes durable-first on disable, camera-first on enable, before the tool call is
+    # relayed): the provider call id and the realtime session. Recorded on the ledger row
+    # so it correlates to its action.receipt by identity (contract §5.5).
+    action_id: str | None = Field(default=None, max_length=64)
+    session_id: str | None = Field(default=None, max_length=64)
 
 
 @router.get("/policy")
@@ -124,10 +130,12 @@ async def post_observation(request: Request, body: dict[str, Any]) -> dict[str, 
 async def post_eye_enable(request: Request, body: EyeActionRequest | None = None) -> dict[str, Any]:
     artifacts = _artifacts(request)
     reason = body.reason if body else ""
+    action_id = body.action_id if body else None
+    session_id = body.session_id if body else None
 
     def write() -> None:
         with artifacts.session() as session:
-            enable_eye(session, reason=reason)
+            enable_eye(session, reason=reason, action_id=action_id, session_id=session_id)
 
     await asyncio.to_thread(write)
     return {"eye_enabled": True}
@@ -139,10 +147,12 @@ async def post_eye_disable(
 ) -> dict[str, Any]:
     artifacts = _artifacts(request)
     reason = body.reason if body else ""
+    action_id = body.action_id if body else None
+    session_id = body.session_id if body else None
 
     def write() -> None:
         with artifacts.session() as session:
-            disable_eye(session, reason=reason)
+            disable_eye(session, reason=reason, action_id=action_id, session_id=session_id)
 
     await asyncio.to_thread(write)
     return {"eye_enabled": False}
