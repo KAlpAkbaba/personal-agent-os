@@ -24,7 +24,7 @@
 import { useCallback, useSyncExternalStore } from "react";
 
 import type { PerceptionStatus } from "./perception";
-import { type EyeStore, getEyeStore } from "./store";
+import { type BusEyeEvent, type EyeStore, getEyeStore } from "./store";
 import type { CameraPermission } from "./types";
 
 export type ActivePerceptionHandle = {
@@ -40,10 +40,12 @@ export type ActivePerceptionHandle = {
   start: () => Promise<void>;
   stop: () => Promise<void>;
   /**
-   * Stops the LOCAL loop only — no `disableEye()` call. For reacting to a
-   * disable that already happened elsewhere; see `EyeStore.stopLocalOnly`.
+   * Offers the bus's dated `eye.disabled` to the store, which stops the
+   * LOCAL loop only — no `disableEye()` call — and only if that event is
+   * genuinely newer than the store's own ACTIVE; see
+   * `EyeStore.stopLocalIfStale`. Returns whether it stopped anything.
    */
-  stopLocalOnly: () => void;
+  stopLocalIfStale: (eye: BusEyeEvent) => boolean;
 };
 
 export function useActivePerception(store: EyeStore = getEyeStore()): ActivePerceptionHandle {
@@ -57,9 +59,7 @@ export function useActivePerception(store: EyeStore = getEyeStore()): ActivePerc
     await store.disable("owner_stop");
   }, [store]);
 
-  const stopLocalOnly = useCallback(() => {
-    store.stopLocalOnly();
-  }, [store]);
+  const stopLocalIfStale = useCallback((bus: BusEyeEvent) => store.stopLocalIfStale(bus), [store]);
 
   return {
     status: eye.status,
@@ -69,6 +69,6 @@ export function useActivePerception(store: EyeStore = getEyeStore()): ActivePerc
     lastActionTrace: eye.lastActionTrace,
     start,
     stop,
-    stopLocalOnly,
+    stopLocalIfStale,
   };
 }

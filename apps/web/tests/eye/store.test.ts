@@ -19,6 +19,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { EyeActionIdentity } from "../../app/lib/eye/client";
 import { LOCAL_EYE_ERROR_TEXT } from "../../app/lib/eye/labels";
 import {
   CameraTrackEndedError,
@@ -98,7 +99,8 @@ class Camera implements FrameSource {
   }
 }
 
-type Durable = { kind: "enable" | "disable"; reason: string };
+/** `identity` is recorded only when the call carried one (the voice tool's); the owner's button carries none. */
+type Durable = { kind: "enable" | "disable"; reason: string; identity?: EyeActionIdentity };
 
 function harness(options: { auto?: boolean; cameraAvailable?: boolean } = {}) {
   let now = 1_700_000_000_000;
@@ -110,8 +112,8 @@ function harness(options: { auto?: boolean; cameraAvailable?: boolean } = {}) {
   /** Durable calls resolve at once unless held; held ones are released by `releaseDurable()`. */
   let hold = false;
   const held: Array<() => void> = [];
-  const durableCall = (kind: Durable["kind"]) => (reason: string) => {
-    durable.push({ kind, reason });
+  const durableCall = (kind: Durable["kind"]) => (reason: string, identity?: EyeActionIdentity) => {
+    durable.push(identity?.action_id || identity?.session_id ? { kind, reason, identity } : { kind, reason });
     if (!hold) return Promise.resolve();
     return new Promise<void>((resolve) => held.push(resolve));
   };
@@ -162,8 +164,8 @@ const state = (t: ReturnType<typeof harness>) => t.store.getSnapshot().state;
 
 /** A consumer exactly like `EyeControl`'s: one hook call, one span. */
 function Probe() {
-  const { status, permission, busy, error, start, stop, stopLocalOnly } = useActivePerception();
-  const shape = [typeof start, typeof stop, typeof stopLocalOnly].join(",");
+  const { status, permission, busy, error, start, stop, stopLocalIfStale } = useActivePerception();
+  const shape = [typeof start, typeof stop, typeof stopLocalIfStale].join(",");
   return createElement(
     "span",
     { "data-running": String(status.running), "data-permission": permission, "data-busy": String(busy), "data-error": String(error) },
@@ -203,9 +205,10 @@ describe("the state machine", () => {
       observed_at: new Date(1_700_000_000_000).toISOString(),
       changed: true,
       media_track_ready_state: null, // a synthetic source holds no MediaStreamTrack
-      action_trace: ["request:enable", "getUserMedia:called", "loop:started", "durable:enable", "state:ENABLING->ACTIVE"],
+      action_trace: ["gen:1", "request:enable", "getUserMedia:called", "loop:started", "durable:enable", "state:ENABLING->ACTIVE"],
     });
     expect(t.store.getSnapshot().lastActionTrace).toEqual(result.action_trace);
+    expect(t.store.getSnapshot().generation).toBe(1);
     expect(t.durable).toEqual([{ kind: "enable", reason: "owner_start" }]);
     expect(t.store.getSnapshot().permission).toBe("granted");
     expect(eyeInstances.snapshot()).toEqual({ sessions: 1, cameraOpens: 1, loopsStarted: 1 });
@@ -231,7 +234,8 @@ describe("the state machine", () => {
     expect(t.camera.stops).toBe(1); // …then the camera light goes out
     expect(state(t)).toBe("DISABLED");
     expect(result).toMatchObject({ state: "DISABLED", running: false, camera_label: null, error_class: null, changed: true });
-    expect(result.action_trace).toEqual(["request:disable", "durable:disable", "loop:stopped", "state:DISABLING->DISABLED"]);
+    expect(result.action_trace).toEqual(["gen:2", "request:disable", "durable:disable", "loop:stopped", "state:DISABLING->DISABLED"]);
+    expect(t.store.getSnapshot().generation).toBe(2);
     // No further sample is taken.
     const before = t.posted.length;
     await t.advance(5000);
@@ -270,17 +274,137 @@ describe("the state machine", () => {
     expect(t.store.getSnapshot().lastActionTrace.slice(-2)).toEqual(["loop:stopped", "state:ACTIVE->DISABLED"]);
   });
 
-  it("stopLocalOnly (the bus said disabled) releases the camera and reads DISABLED, with no durable call", async () => {
+  it("stopLocalIfStale with a GENUINELY newer bus eye.disabled (another device) releases the camera and reads DISABLED, with no durable call", async () => {
     const t = harness();
     await t.store.enable("owner_start");
-    t.store.stopLocalOnly();
+    expect(t.store.localFacts()).toEqual({ state: "ACTIVE", activeSince: 1_700_000_000_000, durableEnabledAt: 1_700_000_000_000 });
+    await t.advance(1000); // the other device's disable is published 800 ms after this ACTIVE
+    expect(t.store.stopLocalIfStale({ status: "disabled", ageMs: 200, expired: false })).toBe(true);
     expect(state(t)).toBe("DISABLED");
     expect(t.camera.stops).toBe(1);
     expect(t.durable.map((d) => d.kind)).toEqual(["enable"]);
-    // And it is idempotent.
-    t.store.stopLocalOnly();
-    expect(t.camera.stops).toBe(2);
+    expect(t.store.getSnapshot().lastActionTrace).toEqual(["gen:2", "request:stop_local", "loop:stopped", "state:ACTIVE->DISABLED"]);
+    expect(t.store.localFacts()).toEqual({ state: "DISABLED", activeSince: null, durableEnabledAt: null });
+    // And it is idempotent: DISABLED has nothing to stop, so nothing is touched.
+    expect(t.store.stopLocalIfStale({ status: "disabled", ageMs: 200, expired: false })).toBe(false);
+    expect(t.camera.stops).toBe(1);
     expect(state(t)).toBe("DISABLED");
+    expect(t.store.getSnapshot().generation).toBe(2);
+  });
+
+  it("stopLocalIfStale with a bus eye.disabled OLDER than this ACTIVE, an expired one, or an undated one stops nothing and says so once on the trace", async () => {
+    const t = harness();
+    await t.store.enable("owner_start");
+    await t.advance(1000);
+    // The previous command's eye.disabled, still the page's picture: 3 s old, i.e. before this ACTIVE.
+    expect(t.store.stopLocalIfStale({ status: "disabled", ageMs: 3000, expired: false })).toBe(false);
+    expect(t.store.stopLocalIfStale({ status: "disabled", ageMs: 1000, expired: false })).toBe(false); // exactly at the commit: not newer
+    expect(t.store.stopLocalIfStale({ status: "disabled", ageMs: 200, expired: true })).toBe(false); // decayed
+    expect(t.store.stopLocalIfStale({ status: "disabled", ageMs: null, expired: false })).toBe(false); // undated
+    expect(t.store.stopLocalIfStale({ status: "active", ageMs: 200, expired: false })).toBe(false); // the bus never starts a camera either
+    expect(t.store.stopLocalIfStale({ status: "untold", ageMs: null, expired: false })).toBe(false);
+    expect(state(t)).toBe("ACTIVE");
+    expect(t.camera.stops).toBe(0);
+    expect(t.store.getSnapshot().status.running).toBe(true);
+    expect(t.store.getSnapshot().lastActionTrace).toEqual([
+      "gen:1",
+      "request:enable",
+      "getUserMedia:called",
+      "loop:started",
+      "durable:enable",
+      "state:ENABLING->ACTIVE",
+      "bus:stale_disable_ignored", // once, however many polls repeat it
+    ]);
+    expect(t.store.getSnapshot().generation).toBe(1);
+    // The loop is untouched: it still samples on its interval.
+    const before = t.posted.length;
+    await t.advance(1000);
+    expect(t.posted).toHaveLength(before + 1);
+  });
+});
+
+describe("generation-owned transitions (the owner's 2026-09-06 run, session 9df439af)", () => {
+  it("a stale bus eye.disabled arriving at EVERY stage of a re-enable never cancels it: the enable completes ACTIVE, its trace intact, with bus:stale_disable_ignored", async () => {
+    const t = harness();
+    await t.store.enable("voice:Gözünü aç.");
+    await t.store.disable("voice:Gözünü kapat."); // step 2: verified, and the bus now carries eye.disabled
+    await t.advance(6000); // the owner speaks again 6 s later; the page still holds that eye.disabled
+    const stale = { status: "disabled" as const, ageMs: 6000, expired: false };
+
+    t.camera.auto = false; // this time the prompt is settled by hand, stage by stage
+    const pending = t.store.enable("voice:Gözünü aç.");
+    await t.flush();
+    expect(state(t)).toBe("ENABLING");
+    expect(t.store.stopLocalIfStale(stale)).toBe(false); // before getUserMedia resolves
+    t.camera.opened();
+    t.holdDurable();
+    await t.flush();
+    expect(t.store.getSnapshot().status.running).toBe(true); // the loop started, the durable enable not yet written…
+    expect(state(t)).toBe("ENABLING");
+    expect(t.store.stopLocalIfStale(stale)).toBe(false); // …which is the exact moment the old effect fired stop_local
+    expect(state(t)).toBe("ENABLING");
+    expect(t.camera.open).toBe(true);
+    t.releaseDurable();
+    const result = await pending;
+    expect(result).toMatchObject({ state: "ACTIVE", running: true, changed: true });
+    expect(result.action_trace).toEqual([
+      "gen:3",
+      "request:enable",
+      "getUserMedia:called",
+      "bus:stale_disable_ignored",
+      "loop:started",
+      "durable:enable",
+      "state:ENABLING->ACTIVE",
+    ]);
+    expect(result.action_trace).not.toContain("request:stop_local");
+    expect(t.store.stopLocalIfStale(stale)).toBe(false); // after ACTIVE: older than the commit, still ignored
+    expect(state(t)).toBe("ACTIVE");
+    expect(t.camera.stops).toBe(1); // only the real disable ever stopped the camera
+    expect(eyeInstances.snapshot()).toEqual({ sessions: 1, cameraOpens: 2, loopsStarted: 2 });
+  });
+
+  it("after `await disable()` resolves, the superseded enable's camera answering late changes nothing: no state, no trace stage of its own, no live camera", async () => {
+    const t = harness({ auto: false });
+    const enabling = t.store.enable("owner_start");
+    await t.flush();
+    expect(state(t)).toBe("ENABLING");
+    const off = await t.store.disable("voice:Gözünü kapat.");
+    expect(off.action_trace).toEqual(["gen:2", "request:disable", "durable:disable", "loop:stopped", "state:DISABLING->DISABLED"]);
+    expect((await enabling).action_trace).toEqual(["gen:1", "request:enable", "getUserMedia:called", "superseded:disable"]);
+    const settled = t.store.getSnapshot();
+    expect(settled.generation).toBe(2);
+
+    // The owner grants the prompt now — generation 1's camera, long after generation 2 settled.
+    t.camera.opened();
+    await t.flush();
+    await t.advance(LOCAL_EYE_TIMEOUT_MS); // and generation 1's 8 s bound would have fired by now, had it survived
+    expect(state(t)).toBe("DISABLED");
+    expect(t.camera.open).toBe(false);
+    expect(t.store.getSnapshot().generation).toBe(2);
+    expect(t.store.getSnapshot().lastActionTrace).toEqual(settled.lastActionTrace);
+    expect(t.store.getSnapshot().errorClass).toBeNull(); // no late `timeout`
+    expect(eyeInstances.snapshot().loopsStarted).toBe(0);
+    expect(t.durable.map((d) => d.kind)).toEqual(["disable"]);
+  });
+
+  it("a disable queued behind an enable whose durable POST is still on the wire lands after that POST, in its own generation", async () => {
+    const t = harness();
+    t.holdDurable();
+    const enabling = t.store.enable("owner_start");
+    await t.flush();
+    expect(state(t)).toBe("ENABLING");
+    expect(t.durable.map((d) => d.kind)).toEqual(["enable"]); // on the wire, unacknowledged
+    const disabling = t.store.disable("owner_stop"); // queued behind the enable: it must land after that POST
+    await t.flush();
+    expect(state(t)).toBe("ENABLING");
+    t.releaseDurable(); // the enable's POST acknowledges (generation 1 completes), then the disable runs
+    const on = await enabling;
+    expect(on.state).toBe("ACTIVE");
+    const off = await disabling;
+    expect(off.state).toBe("DISABLED");
+    expect(t.durable.map((d) => d.kind)).toEqual(["enable", "disable"]);
+    expect(t.store.getSnapshot().generation).toBe(2);
+    expect(t.store.localFacts()).toEqual({ state: "DISABLED", activeSince: null, durableEnabledAt: null });
   });
 });
 
@@ -407,7 +531,7 @@ describe("failures are answers on the receipt's closed vocabulary", () => {
     t.camera.failed(new DOMException("Permission denied", "NotAllowedError"));
     const result = await pending;
     expect(result).toMatchObject({ state: "ERROR", running: false, camera_label: null, error_class: "permission_denied", changed: true });
-    expect(result.action_trace).toEqual(["request:enable", "getUserMedia:called", "getUserMedia:NotAllowedError", "state:ENABLING->ERROR"]);
+    expect(result.action_trace).toEqual(["gen:1", "request:enable", "getUserMedia:called", "getUserMedia:NotAllowedError", "state:ENABLING->ERROR"]);
     expect(state(t)).toBe("ERROR");
     expect(t.store.getSnapshot()).toMatchObject({ permission: "denied", errorClass: "permission_denied", busy: false });
     expect(t.store.getSnapshot().error).toBe("Tarayıcı kamera izni vermedi.");
@@ -444,7 +568,7 @@ describe("failures are answers on the receipt's closed vocabulary", () => {
     t.camera.failed(new DOMException("Could not start video source", "NotReadableError"));
     const result = await pending;
     expect(result.error_class).toBe("device_busy");
-    expect(result.action_trace).toEqual(["request:enable", "getUserMedia:called", "getUserMedia:NotReadableError", "state:ENABLING->ERROR"]);
+    expect(result.action_trace).toEqual(["gen:1", "request:enable", "getUserMedia:called", "getUserMedia:NotReadableError", "state:ENABLING->ERROR"]);
     expect(t.store.getSnapshot().error).toBe(LOCAL_EYE_ERROR_TEXT.device_busy);
     expect(t.store.getSnapshot().permission).toBe("unknown"); // a busy device says nothing about permission
 
@@ -481,7 +605,7 @@ describe("failures are answers on the receipt's closed vocabulary", () => {
     const t = harness({ cameraAvailable: false });
     const result = await t.store.enable("owner_start");
     expect(result).toMatchObject({ state: "ERROR", error_class: "capability_missing", running: false });
-    expect(result.action_trace).toEqual(["request:enable", "capability:missing", "state:ENABLING->ERROR"]);
+    expect(result.action_trace).toEqual(["gen:1", "request:enable", "capability:missing", "state:ENABLING->ERROR"]);
     expect(t.camera.starts).toBe(0);
     expect(eyeInstances.snapshot()).toEqual({ sessions: 1, cameraOpens: 0, loopsStarted: 0 });
   });
@@ -493,7 +617,7 @@ describe("failures are answers on the receipt's closed vocabulary", () => {
     });
     const result = await t.store.enable("owner_start");
     expect(result).toMatchObject({ state: "ERROR", running: false, error_class: "perception_start_failed", changed: true });
-    expect(result.action_trace).toEqual(["request:enable", "getUserMedia:called", "loop:start failed", "state:ENABLING->ERROR"]);
+    expect(result.action_trace).toEqual(["gen:1", "request:enable", "getUserMedia:called", "loop:start failed", "state:ENABLING->ERROR"]);
     expect(t.camera.open).toBe(false); // the stream that DID open is not left running
     expect(t.durable).toEqual([]); // and the Cloud Core was never told the eye is on
     expect(eyeInstances.snapshot()).toEqual({ sessions: 1, cameraOpens: 1, loopsStarted: 0 });
@@ -507,7 +631,7 @@ describe("failures are answers on the receipt's closed vocabulary", () => {
     };
     const result = await t.store.disable("owner_stop"); // resolves: a failure is an observation
     expect(result).toMatchObject({ state: "ERROR", error_class: "state_transition_failed", changed: true });
-    expect(result.action_trace).toEqual(["request:disable", "durable:disable", "unexpected:RangeError", "state:DISABLING->ERROR"]);
+    expect(result.action_trace).toEqual(["gen:2", "request:disable", "durable:disable", "unexpected:RangeError", "state:DISABLING->ERROR"]);
     expect(t.store.getSnapshot()).toMatchObject({ state: "ERROR", errorClass: "state_transition_failed", busy: false });
     expect(t.store.getSnapshot().error).toBe(LOCAL_EYE_ERROR_TEXT.state_transition_failed);
   });
@@ -519,12 +643,30 @@ describe("the action trace", () => {
     expect(t.store.getSnapshot().lastActionTrace).toEqual([]);
     await t.store.enable("owner_start");
     const again = await t.store.enable("owner_start");
-    expect(again.action_trace).toEqual(["request:enable", "already:ACTIVE"]);
-    expect(t.store.getSnapshot().lastActionTrace).toEqual(["request:enable", "already:ACTIVE"]);
+    // No transition, so no new generation: the trace names the one that owns the state.
+    expect(again.action_trace).toEqual(["gen:1", "request:enable", "already:ACTIVE"]);
+    expect(t.store.getSnapshot().lastActionTrace).toEqual(["gen:1", "request:enable", "already:ACTIVE"]);
     const off = await t.store.disable("owner_stop");
-    expect(off.action_trace).toEqual(["request:disable", "durable:disable", "loop:stopped", "state:DISABLING->DISABLED"]);
+    expect(off.action_trace).toEqual(["gen:2", "request:disable", "durable:disable", "loop:stopped", "state:DISABLING->DISABLED"]);
     const offAgain = await t.store.disable("owner_stop");
-    expect(offAgain.action_trace).toEqual(["request:disable", "already:DISABLED"]);
+    expect(offAgain.action_trace).toEqual(["gen:2", "request:disable", "already:DISABLED"]);
+  });
+
+  it("an action's identity rides in the trace as action:<call_id> and onto the durable call", async () => {
+    const t = harness();
+    const identity = { action_id: "call_7f2", session_id: "11111111-2222-4333-8444-555555555555" };
+    const on = await t.store.enable("voice:Gözünü aç.", identity);
+    expect(on.action_trace).toEqual(["gen:1", "request:enable", "action:call_7f2", "getUserMedia:called", "loop:started", "durable:enable", "state:ENABLING->ACTIVE"]);
+    const off = await t.store.disable("voice:Gözünü kapat.", { action_id: "call_7f3", session_id: identity.session_id });
+    expect(off.action_trace).toEqual(["gen:2", "request:disable", "action:call_7f3", "durable:disable", "loop:stopped", "state:DISABLING->DISABLED"]);
+    expect(t.durable).toEqual([
+      { kind: "enable", reason: "voice:Gözünü aç.", identity },
+      { kind: "disable", reason: "voice:Gözünü kapat.", identity: { action_id: "call_7f3", session_id: identity.session_id } },
+    ]);
+    // The owner's button has no identity: no `action:` stage, nothing extra on the durable call.
+    const back = await t.store.enable("owner_start");
+    expect(back.action_trace[2]).toBe("getUserMedia:called");
+    expect(t.durable[2]).toEqual({ kind: "enable", reason: "owner_start" });
   });
 
   it("a timeout, a superseded enable and a bus stop each say what happened to THIS action", async () => {
@@ -532,6 +674,7 @@ describe("the action trace", () => {
     const timedOut = t.store.enable("voice:Gözünü aç.");
     await t.advance(LOCAL_EYE_TIMEOUT_MS);
     expect((await timedOut).action_trace).toEqual([
+      "gen:1",
       "request:enable",
       "getUserMedia:called",
       `timeout:${LOCAL_EYE_TIMEOUT_MS}ms`,
@@ -541,13 +684,14 @@ describe("the action trace", () => {
     const enabling = t.store.enable("owner_start");
     await t.flush();
     const disabling = t.store.disable("voice:Gözünü kapat.");
-    expect((await enabling).action_trace).toEqual(["request:enable", "getUserMedia:called", "superseded:disable"]);
-    expect((await disabling).action_trace).toEqual(["request:disable", "durable:disable", "loop:stopped", "state:DISABLING->DISABLED"]);
+    expect((await enabling).action_trace).toEqual(["gen:2", "request:enable", "getUserMedia:called", "superseded:disable"]);
+    expect((await disabling).action_trace).toEqual(["gen:3", "request:disable", "durable:disable", "loop:stopped", "state:DISABLING->DISABLED"]);
 
     t.camera.auto = true;
     await t.store.enable("owner_start");
-    t.store.stopLocalOnly();
-    expect(t.store.getSnapshot().lastActionTrace).toEqual(["request:stop_local", "loop:stopped", "state:ACTIVE->DISABLED"]);
+    await t.advance(1000);
+    expect(t.store.stopLocalIfStale({ status: "disabled", ageMs: 200, expired: false })).toBe(true);
+    expect(t.store.getSnapshot().lastActionTrace).toEqual(["gen:5", "request:stop_local", "loop:stopped", "state:ACTIVE->DISABLED"]);
   });
 
   it("is bounded: a durable call that fails still fits, and a trace never exceeds MAX_ACTION_TRACE entries", async () => {
@@ -563,6 +707,7 @@ describe("the action trace", () => {
     });
     const result = await store.enable("owner_start");
     expect(result.action_trace).toEqual([
+      "gen:1",
       "request:enable",
       "getUserMedia:called",
       "loop:started",
@@ -572,7 +717,7 @@ describe("the action trace", () => {
     ]);
     expect(result.action_trace.length).toBeLessThanOrEqual(MAX_ACTION_TRACE);
     expect(MAX_ACTION_TRACE).toBe(12);
-    // The trace carries no frame, no pixel count, no identifier: only stage words and the camera's label.
+    // The trace carries no frame and no pixel count: stage words, the generation, the camera's label.
     for (const stage of result.action_trace) expect(stage).toMatch(/^[a-zA-Z_]+:[ ->A-Za-z0-9_:.]+$/);
     store.dispose();
   });

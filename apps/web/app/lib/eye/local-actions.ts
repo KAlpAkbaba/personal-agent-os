@@ -36,6 +36,7 @@
  */
 
 import type { LocalActionPort } from "../voice/ports";
+import type { EyeActionIdentity } from "./client";
 import type { EyeStore, LocalEyeResult } from "./store";
 
 export const EYE_ENABLE_TOOL = "eye.enable";
@@ -48,6 +49,21 @@ export const EYE_REASON_MAX_CHARS = 200;
 export function voiceReason(args: Record<string, unknown>): string {
   const utterance = typeof args.utterance === "string" ? args.utterance.trim() : "";
   return `voice:${utterance}`.slice(0, EYE_REASON_MAX_CHARS);
+}
+
+/**
+ * The action's identity, from what the controller adds to the port's `args`:
+ * `call_id` (the provider's tool call id, the receipt's `action_id`) and
+ * `session_id` (the realtime session). The store carries both onto the
+ * durable POST and `action:<call_id>` into the trace, so the ledger row, the
+ * receipt and the trace all name the same command. Absent or non-string →
+ * `null`, and `client.ts` then sends the body it always did.
+ */
+export function actionIdentity(args: Record<string, unknown>): EyeActionIdentity {
+  return {
+    action_id: typeof args.call_id === "string" ? args.call_id : null,
+    session_id: typeof args.session_id === "string" ? args.session_id : null,
+  };
 }
 
 /** §5.1's `observed_after`, from what the store answered. */
@@ -73,8 +89,8 @@ export function observedAfter(result: LocalEyeResult): Record<string, unknown> {
 export function eyeLocalActions(store: () => EyeStore): LocalActionPort {
   return {
     async run(name, args) {
-      if (name === EYE_ENABLE_TOOL) return observedAfter(await store().enable(voiceReason(args)));
-      if (name === EYE_DISABLE_TOOL) return observedAfter(await store().disable(voiceReason(args)));
+      if (name === EYE_ENABLE_TOOL) return observedAfter(await store().enable(voiceReason(args), actionIdentity(args)));
+      if (name === EYE_DISABLE_TOOL) return observedAfter(await store().disable(voiceReason(args), actionIdentity(args)));
       return null;
     },
   };
