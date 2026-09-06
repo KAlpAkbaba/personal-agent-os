@@ -96,7 +96,24 @@ and optionally a short research. Scale, depth, colour and motion are yours to ju
 script records only that the Core really listened and really spoke, and finishes by itself.
 Tell me what you would change — the reference you mentioned is welcome as inspiration.
 
-### 23b. One sentence, no research: `Teknik anlat.` — **M18.2 follow-up, READY (the guard, ADR-0075, is on main; the command releases the Cloud Core once, before the check)**
+### 23b. Point at one research, then two sentences — **M18.2 follow-up, NOT YET: waits for the research focus (ADR-0076) to land on main; then the command releases the Cloud Core once, before the check**
+
+**Updated 2026-09-07 after your third run.** The record shows what you heard: on the
+earlier contract "Teknik anlat." started a research and explained that one; on the guarded
+contract the fresh session asked "iki tamamlanmış araştırmam var … hangisini anlatayım?"
+six times in a row, because nothing could take your spoken answer and a page reload had
+dropped the conversation's link to the research. The fix is the architecture you described:
+a research is a thing you point at — an ID-based, owner-level **focus** that survives
+reconnects and reloads (set when a research completes, when its result is spoken, when you
+click one in the cockpit or the research page, when you choose one by voice, or when a
+"bir önceki" moves it), a bounded stack for "son / bir önceki / ikinci", a deterministic
+resolver for "bunu / bu araştırma / bunun kaynakları / bir öncekini / OpenAI araştırması",
+follow-up tools that run only against a resolved id, a clarification you can answer ("ilki",
+"20:19'daki", "sonuncusu") asked at most once, and no crawl for an unresolved reference.
+Research items now show their time, mode and source count so two with the same title can
+be told apart.
+
+The retest is short and re-runs nothing:
 
 Your run of 2026-09-06 proved every core row of M18.2 (item 23 below is closed on them).
 Your follow-up run then proved the routing, the diagnostics-only-now and the conciseness —
@@ -112,15 +129,17 @@ when the deployed one predates the guard, and re-runs no research:
 .\scripts\core\owner-m18-2-followup.ps1 -OutFile m18-2-followup-1.json
 ```
 
-Open `/core`, connect voice, and when you are ready say **`Teknik anlat.`** — it answers
-about the research that already completed (task deabbd44, "Son üç gündeki OpenAI ile ilgili
-gelişmeler"). The script proves from the record that the request routed to the technical
-path, that the eliminated pages / interstitials / duplicates are spoken only now, that the
-explanation names the SAME job and artifact that were complete before you spoke (identity,
-never timestamps), that `research.start` was called zero times on the new session and zero
-research tasks were created, that no release or install happened from your utterance on,
-and that the answer stayed within the technical budget. It waits up to ten minutes after
-you connect and finishes by itself. Paste the `checks` block back here; M18.2 closes on it.
+1. Open `/core` (the cockpit's research panel) or `/research` and **click one completed
+   research** — any one. It becomes the conversation focus; the script continues by itself.
+2. Connect voice and say **`Bunu teknik anlat.`** — the diagnostics of exactly that one.
+3. Say **`Bir önceki araştırmayı anlat.`** — the one before it in the focus stack.
+
+The script proves from the record that each explanation names the exact job and artifact
+it should (the selected one, then the previous one — by id, never by title or time), that
+`research.start` ran zero times and zero research tasks were created, that both reports
+kept their artifacts (nothing recomputed), that at most one clarification was asked, that
+nothing was deployed from your first sentence on, and that the answers stayed within the
+technical budget. Paste the `checks` block back here; M18.2 closes on it.
 
 ### 23. Speaking continuity and research findings — **DONE on the core rows (2026-09-06 run, session be6d49ce; reconciled in `docs/evidence/m18-2-reconciliation-2026-09-06.json`); the follow-up is item 23b**
 
