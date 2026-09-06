@@ -1,51 +1,35 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import OwnerGate, { SignOutButton } from "../components/OwnerGate";
-import { apiFetch } from "../lib/session";
-import { VoiceSessionApi } from "../lib/voice/api";
 import {
   BrowserMicrophone,
-  BrowserNetworkMonitor,
   type GatedDetectorSnapshot,
-  GatedSpeechDetector,
-  WebAudioPlayback,
-  WebAudioUplinkShaper,
-  listAudioDevices,
   measureNoiseFloor,
 } from "../lib/voice/audio";
-import type { EnvironmentClass, EnvironmentMode } from "../lib/voice/calibration";
-import { type ControllerSnapshot, VoiceSessionController, describeNarrationCursor } from "../lib/voice/controller";
-import { PassthroughDenoiser } from "../lib/voice/denoiser";
-import { FakeTransport } from "../lib/voice/fake";
-import type { AppliedInputSettings, AudioDevice } from "../lib/voice/ports";
+import type { EnvironmentMode } from "../lib/voice/calibration";
+import { type ControllerSnapshot, describeNarrationCursor } from "../lib/voice/controller";
+import {
+  ENVIRONMENT_LABEL,
+  MODE_LABEL,
+  SUPPRESSION_LABEL,
+  VOICE_LABEL,
+  VOICE_STATE_LABEL,
+} from "../lib/voice/labels";
 import {
   type AgcPreference,
   type DeviceIdentity,
-  LocalStorageProfileStore,
   type MicrophoneProfile,
   VOICE_CANDIDATES,
-  type VoiceChoice,
-  appliedSettingsRecord,
-  constraintsFor,
-  defaultProfile,
   effectiveAgc,
-  fingerprintDevice,
-  learnFromSession,
-  loadVoiceChoice,
-  normalizeVoiceChoice,
-  saveVoiceChoice,
   scoreBenchmarkSample,
 } from "../lib/voice/profile";
-import {
-  type RealtimeTransport,
-  type TransportDescriptor,
-  TransportConfigError,
-} from "../lib/voice/transport";
+import { GATED_ATTENUATION_DB } from "../lib/voice/rig";
 import { copySessionId, shortSessionId } from "../lib/voice/session-id";
-import type { UplinkShaper } from "../lib/voice/uplink";
-import { WebRtcTransport } from "../lib/voice/webrtc";
+import { isBusyState, isLiveState, microphoneName } from "../lib/voice/store";
+import { useVoiceSession } from "../lib/voice/useVoiceSession";
 
 /**
  * /voice — the browser leg of a realtime voice session (M12 track D).
@@ -61,22 +45,17 @@ import { WebRtcTransport } from "../lib/voice/webrtc";
  *
  * When Cloud Core selects a provider whose transport is `simulated` (the
  * offline simulator, i.e. no real adapter is configured yet) there is no
- * browser media path. The page then drives a scripted fake transport so the
+ * browser media path. The rig then drives a scripted fake transport so the
  * session, event, tool-relay and close paths still run against the real API.
+ *
+ * M18 / ADR-0061: this page no longer OWNS the audio rig or the controller.
+ * They live in `lib/voice/store.ts`, the tab's one voice session, which `/core`
+ * reads too; this is the diagnostics / developer view over that same session.
+ * Leaving this page does not end the session, and returning to it does not
+ * open a second microphone.
  */
 
-const STATE_LABEL: Record<ControllerSnapshot["state"], string> = {
-  idle: "Hazır",
-  creating: "Oturum oluşturuluyor…",
-  connecting: "Bağlanıyor…",
-  listening: "Dinliyor",
-  speaking: "Konuşuyor",
-  tool_running: "Araç çalışıyor",
-  interrupted: "Kesildi",
-  reconnecting: "Yeniden bağlanıyor…",
-  closed: "Kapalı",
-  error: "Hata",
-};
+const STATE_LABEL = VOICE_STATE_LABEL;
 
 const LATENCY_LABEL: Array<[keyof ControllerSnapshot["latency"], string]> = [
   ["barge_in_to_stop_ms", "Söze girme → ses kesildi"],
@@ -85,79 +64,6 @@ const LATENCY_LABEL: Array<[keyof ControllerSnapshot["latency"], string]> = [
   ["tool_preamble_ms", "Araç çağrısı → ön cümle"],
   ["tool_done_to_speech_ms", "Araç bitti → konuşma"],
 ];
-
-const MODE_LABEL: Record<EnvironmentMode, string> = {
-  auto: "Otomatik",
-  quiet: "Sessiz ortam",
-  noisy: "Gürültülü ortam",
-  very_noisy: "Çok gürültülü ortam",
-};
-
-const ENVIRONMENT_LABEL: Record<EnvironmentClass, string> = {
-  quiet: "Sessiz",
-  normal: "Normal",
-  noisy: "Gürültülü",
-  very_noisy: "Çok gürültülü",
-};
-
-const VOICE_LABEL: Record<VoiceChoice, string> = { marin: "Marin", cedar: "Cedar" };
-
-const SUPPRESSION_LABEL: Record<MicrophoneProfile["noiseSuppressionMode"], string> = {
-  auto: "Otomatik",
-  browser: "Tarayıcı",
-  off: "Kapalı",
-};
-
-/** Attenuation depth when the profile opts into the gated uplink shaper. */
-const GATED_ATTENUATION_DB = 9;
-
-class ScriptedSimulatorTransport extends FakeTransport {
-  private timer: ReturnType<typeof setTimeout> | null = null;
-  private calls = 0;
-
-  constructor() {
-    super({ now: () => performance.now() });
-  }
-
-  override async connect(
-    ...args: Parameters<FakeTransport["connect"]>
-  ): Promise<void> {
-    await super.connect(...args);
-    this.timer = setTimeout(() => this.demoTurn("Simülatör bağlandı; bu sağlayıcının tarayıcı ses yolu yok."), 800);
-  }
-
-  demoTurn(text: string): void {
-    const at = performance.now();
-    this.emit({ type: "response_started", at });
-    this.emit({ type: "response_text", at, text, final: true });
-    this.emit({ type: "audio_started", at: at + 120 });
-    setTimeout(() => this.emit({ type: "response_done", at: performance.now() }), 1200);
-  }
-
-  demoToolCall(): void {
-    this.calls += 1;
-    this.emit({
-      type: "tool_call",
-      at: performance.now(),
-      callId: `sim-web-${Date.now()}-${this.calls}`,
-      name: "clock.now",
-      arguments: {},
-    });
-  }
-
-  override close(reason?: string): void {
-    if (this.timer) clearTimeout(this.timer);
-    this.timer = null;
-    super.close(reason);
-  }
-}
-
-type AudioRig = {
-  playback: WebAudioPlayback;
-  microphone: BrowserMicrophone;
-  detector: GatedSpeechDetector;
-  store: LocalStorageProfileStore;
-};
 
 const smallButton: React.CSSProperties = {
   background: "none",
@@ -170,177 +76,37 @@ const smallButton: React.CSSProperties = {
 };
 
 function VoiceConsole() {
-  const controllerRef = useRef<VoiceSessionController | null>(null);
-  const rigRef = useRef<AudioRig | null>(null);
-  const simulatorRef = useRef<ScriptedSimulatorTransport | null>(null);
-  const profileRef = useRef<MicrophoneProfile | null>(null);
-  const [snapshot, setSnapshot] = useState<ControllerSnapshot | null>(null);
-  const [devices, setDevices] = useState<AudioDevice[]>([]);
-  const [micId, setMicId] = useState<string>("");
-  const [speakerId, setSpeakerId] = useState<string>("");
-  const [simulated, setSimulated] = useState(false);
-  const [profile, setProfile] = useState<MicrophoneProfile | null>(null);
+  const { voice, actions, store } = useVoiceSession();
+  const snapshot: ControllerSnapshot | null = voice.ready ? voice.controller : null;
+  const { devices, micId, speakerId, simulated, profile, applied } = voice;
+  const voiceChoice = voice.voice;
   const [mic, setMic] = useState<GatedDetectorSnapshot | null>(null);
-  const [applied, setApplied] = useState<AppliedInputSettings | null>(null);
   const [diagnostics, setDiagnostics] = useState(false);
-  const [voice, setVoice] = useState<VoiceChoice>("marin");
   const [benchmark, setBenchmark] = useState<"idle" | "running" | "done" | "failed">("idle");
   const [copied, setCopied] = useState(false);
   const [idCopied, setIdCopied] = useState<"idle" | "copied" | "failed">("idle");
   /** read-only holder of the full session id: the legacy copy fallback selects it */
   const sessionIdInputRef = useRef<HTMLInputElement | null>(null);
 
-  /** Persist + publish a profile change (the ref is what the audio rig reads). */
-  const commitProfile = useCallback((next: MicrophoneProfile) => {
-    profileRef.current = next;
-    setProfile(next);
-    rigRef.current?.store.save(next);
-  }, []);
-
-  const resolveProfile = useCallback((identity: DeviceIdentity): MicrophoneProfile => {
-    const store = rigRef.current?.store;
-    const fingerprint = fingerprintDevice(identity.label, identity.groupId);
-    const found = store?.load(fingerprint) ?? null;
-    const next = found ? { ...found, deviceId: identity.deviceId || found.deviceId } : defaultProfile(identity);
-    profileRef.current = next;
-    setProfile(next);
-    return next;
-  }, []);
+  // ADR-0045: the same scrubbed request record the diagnostics view shows,
+  // once per request on the dev console; never a header, never a credential.
+  useEffect(() => {
+    if (process.env.NODE_ENV !== "development") return;
+    // The rig exists once the store is ready; re-run when that flips.
+    const rig = voice.ready ? store.peekRig() : null;
+    if (!rig) return;
+    return rig.parts.api.onRequest((entry) => {
+      // oxlint-disable-next-line no-console
+      console.debug("[voice] Cloud Core", entry);
+    });
+  }, [store, voice.ready]);
 
   useEffect(() => {
-    const store = new LocalStorageProfileStore();
-    const playback = new WebAudioPlayback();
-    let shaper: UplinkShaper | null = null;
-    const microphone = new BrowserMicrophone({
-      constraintsFor: () => (profileRef.current ? constraintsFor(profileRef.current) : {}),
-      denoiser: new PassthroughDenoiser(),
-      uplinkFor: () => {
-        shaper = profileRef.current?.inputGainStrategy === "gated_attenuation" ? new WebAudioUplinkShaper() : null;
-        return shaper;
-      },
-    });
-    const detector = new GatedSpeechDetector({
-      playbackActive: () => playback.playing,
-      mode: () => profileRef.current?.environmentMode ?? "auto",
-      sensitivity: () => profileRef.current?.preferredVadSensitivity ?? "auto",
-      attenuationDb: () => (profileRef.current?.inputGainStrategy === "gated_attenuation" ? GATED_ATTENUATION_DB : 0),
-      uplink: () => shaper,
-      analysisStream: () => microphone.raw,
-      // ADR-0047 §4: the profile's learned offsets and last measured echo residual.
-      adaptation: () => profileRef.current?.learned ?? null,
-      initialEchoResidualDb: () => profileRef.current?.measuredEchoResidualDb ?? null,
-    });
-    /** The default device only reveals its identity after the grant. */
-    const currentProfile = (): MicrophoneProfile | null => {
-      const readBack = microphone.applied;
-      return (
-        profileRef.current ??
-        (readBack ? resolveProfile({ deviceId: readBack.deviceId ?? "", label: readBack.label, groupId: readBack.groupId ?? "" }) : null)
-      );
-    };
-    detector.onCalibration((c) => {
-      // ADR-0047 §5: only a MEASUREMENT updates the profile; a dead or
-      // contaminated window is reported, never persisted as "the room".
-      if (c.measured !== 1) return;
-      const readBack = microphone.applied;
-      const current = currentProfile();
-      if (!current) return;
-      const at = new Date().toISOString();
-      commitProfile({
-        ...current,
-        measuredNoiseFloorDb: c.noise_floor_db,
-        lastCalibratedAt: at,
-        appliedVoiceIsolation: readBack?.voiceIsolation ?? current.appliedVoiceIsolation,
-        appliedSettings: readBack ? appliedSettingsRecord(readBack, at) : current.appliedSettings,
-        friendlyName: readBack?.label || current.friendlyName,
-      });
-    });
-    // ADR-0047 §4: the measured echo residual is a per-device fact; persist it.
-    detector.onEchoResidualMeasured((residualDb) => {
-      const current = currentProfile();
-      if (!current || current.measuredEchoResidualDb === residualDb) return;
-      commitProfile({ ...current, measuredEchoResidualDb: residualDb });
-    });
-    rigRef.current = { playback, microphone, detector, store };
-    setVoice(loadVoiceChoice());
+    if (voice.ready) void actions.refreshDevices();
+  }, [voice.ready, actions]);
 
-    const api = new VoiceSessionApi(apiFetch);
-    const controller = new VoiceSessionController({
-      api,
-      transportFactory: (descriptor: TransportDescriptor): RealtimeTransport => {
-        if (descriptor.kind === "webrtc") {
-          setSimulated(false);
-          return new WebRtcTransport();
-        }
-        if (descriptor.kind === "simulated") {
-          setSimulated(true);
-          const transport = new ScriptedSimulatorTransport();
-          simulatorRef.current = transport;
-          return transport;
-        }
-        throw new TransportConfigError(`tarayıcı ${descriptor.kind} taşıyıcısını açamaz`);
-      },
-      playback,
-      microphone,
-      localSpeech: detector,
-      network: new BrowserNetworkMonitor(),
-      now: () => performance.now(),
-      // ADR-0047 §4: the AGC A/B result travels with the read-back, as numbers.
-      inputEvidence: () => {
-        const bench = profileRef.current?.agcBenchmark;
-        if (!bench) return { agc_bench: 0 };
-        return {
-          agc_bench: 1,
-          agc_bench_off_score: bench.off.score,
-          agc_bench_on_score: bench.on.score,
-          agc_bench_off_floor_db: bench.off.noise_floor_db,
-          agc_bench_on_floor_db: bench.on.noise_floor_db,
-          agc_bench_recommended_on: bench.recommended === "on" ? 1 : 0,
-        };
-      },
-    });
-    controllerRef.current = controller;
-    const unsubscribe = controller.subscribe(setSnapshot);
-    // ADR-0045: the same scrubbed request record the diagnostics view shows,
-    // once per request on the dev console; never a header, never a credential.
-    const unsubscribeLog =
-      process.env.NODE_ENV === "development"
-        ? api.onRequest((entry) => {
-            // oxlint-disable-next-line no-console
-            console.debug("[voice] Cloud Core", entry);
-          })
-        : () => {};
-    // Ask the server which contract it speaks before the owner clicks Connect,
-    // so the voice selector can already say when the choice will not apply.
-    void controller.probeContract();
-    return () => {
-      unsubscribe();
-      unsubscribeLog();
-      controller.dispose();
-      detector.stop();
-      playback.dispose();
-    };
-  }, [commitProfile, resolveProfile]);
-
-  const refreshDevices = useCallback(async () => {
-    setDevices(await listAudioDevices());
-  }, []);
-
-  useEffect(() => {
-    void refreshDevices();
-  }, [refreshDevices]);
-
-  // The selected device's profile (labels are only known after a grant).
-  useEffect(() => {
-    if (!micId) return;
-    const device = devices.find((d) => d.kind === "audioinput" && d.deviceId === micId);
-    if (device && device.label) resolveProfile(device);
-  }, [micId, devices, resolveProfile]);
-
-  const live =
-    snapshot !== null &&
-    ["listening", "speaking", "tool_running", "interrupted", "reconnecting"].includes(snapshot.state);
-  const busy = snapshot?.state === "creating" || snapshot?.state === "connecting";
+  const live = snapshot !== null && isLiveState(snapshot.state);
+  const busy = snapshot !== null && isBusyState(snapshot.state);
 
   // Live level / gate meter while a session is open.
   useEffect(() => {
@@ -349,93 +115,29 @@ function VoiceConsole() {
       return;
     }
     const timer = setInterval(() => {
-      setMic(rigRef.current?.detector.snapshot() ?? null);
-      setApplied(rigRef.current?.microphone.applied ?? null);
+      setMic(store.detectorSnapshot());
     }, 100);
     return () => clearInterval(timer);
-  }, [live]);
+  }, [live, store]);
 
-  const connect = useCallback(async () => {
-    // ADR-0047 §3: the output AudioContext is created and resumed inside the
-    // owner's click, so the first response never waits for `resume()`.
-    rigRef.current?.playback.prepare();
-    await controllerRef.current?.connect({ deviceId: micId || undefined, voice });
-    // Labels are only revealed after a getUserMedia grant.
-    void refreshDevices();
-    const readBack = rigRef.current?.microphone.applied ?? null;
-    setApplied(readBack);
-    if (readBack) {
-      const current =
-        profileRef.current ??
-        resolveProfile({ deviceId: readBack.deviceId ?? "", label: readBack.label, groupId: readBack.groupId ?? "" });
-      // ADR-0047 §4: the read-back is a measurement; the profile keeps it as one.
-      commitProfile({ ...current, appliedSettings: appliedSettingsRecord(readBack, new Date().toISOString()) });
-    }
-  }, [micId, voice, refreshDevices, resolveProfile, commitProfile]);
+  const connect = useCallback(() => actions.connect(), [actions]);
+  const disconnect = useCallback(() => actions.disconnect(), [actions]);
+  const changeMic = useCallback((deviceId: string) => actions.setMicrophone(deviceId), [actions]);
+  const changeSpeaker = useCallback((deviceId: string) => actions.setSpeaker(deviceId), [actions]);
+  const changeVoice = useCallback((value: string) => actions.setVoice(value), [actions]);
+  const changeMode = useCallback((mode: EnvironmentMode) => actions.setNoiseMode(mode), [actions]);
+  const patchProfile = useCallback((partial: Partial<MicrophoneProfile>) => actions.patchProfile(partial), [actions]);
+  const recalibrate = useCallback(() => actions.recalibrate(), [actions]);
 
-  const disconnect = useCallback(async () => {
-    const controller = controllerRef.current;
-    if (!controller) return;
-    await controller.disconnect();
-    // ADR-0047 §4: the profile learns from the session's own counters — bounded, reversible, no owner question.
-    const current = profileRef.current;
-    const m = controller.getSnapshot().micMetrics;
-    if (current) {
-      const learned = learnFromSession(
-        current,
-        { false_starts: m.false_starts, false_barge_ins: m.false_barge_ins, gate_opens: m.gate_opens, confirmed_turns: m.confirmed_turns },
-        new Date().toISOString(),
-      );
-      if (learned !== current) {
-        commitProfile(learned);
-        rigRef.current?.detector.applyPreferences();
-      }
-    }
-  }, [commitProfile]);
-
-  const changeMic = useCallback(async (deviceId: string) => {
-    setMicId(deviceId);
-    const device = devices.find((d) => d.kind === "audioinput" && d.deviceId === deviceId);
-    if (device) resolveProfile(device);
-    if (snapshot && ["listening", "speaking", "tool_running", "interrupted"].includes(snapshot.state)) {
-      // A new device: its own profile, its own calibration (the detector recalibrates on start).
-      await controllerRef.current?.switchMicrophone(deviceId);
-    }
-  }, [snapshot, devices, resolveProfile]);
-
-  const changeSpeaker = useCallback(async (deviceId: string) => {
-    setSpeakerId(deviceId);
-    await rigRef.current?.playback.setOutputDevice(deviceId);
-  }, []);
-
-  const changeVoice = useCallback((value: string) => {
-    const choice = normalizeVoiceChoice(value);
-    setVoice(choice);
-    saveVoiceChoice(choice);
-  }, []);
-
-  const changeMode = useCallback((mode: EnvironmentMode) => {
-    const current = profileRef.current;
-    if (!current) return;
-    commitProfile({ ...current, environmentMode: mode });
-    rigRef.current?.detector.applyPreferences();
-  }, [commitProfile]);
-
-  const patchProfile = useCallback((partial: Partial<MicrophoneProfile>) => {
-    const current = profileRef.current;
-    if (!current) return;
-    commitProfile({ ...current, ...partial });
-    rigRef.current?.detector.applyPreferences();
-  }, [commitProfile]);
-
-  const recalibrate = useCallback(() => {
-    rigRef.current?.detector.recalibrate(2);
-  }, []);
-
-  /** AGC A/B: two short ambient measurements on a temporary capture; the better floor wins. */
+  /**
+   * AGC A/B: two short ambient measurements on a temporary capture; the better
+   * floor wins. This is the one place outside the rig that opens a microphone,
+   * and it is an owner-triggered measurement that closes its probe before
+   * returning — never while the session's own microphone is open (`!live`).
+   */
   const runAgcBenchmark = useCallback(async () => {
-    const rig = rigRef.current;
-    const current = profileRef.current;
+    const rig = store.peekRig();
+    const current = rig?.profile ?? null;
     if (!rig || live) return;
     setBenchmark("running");
     try {
@@ -462,16 +164,16 @@ function VoiceConsole() {
           probe.close();
         }
       }
-      const base = current ?? (identity ? resolveProfile(identity) : null);
+      const base = current ?? (identity ? rig.resolveProfile(identity) : null);
       if (!base) throw new Error("no profile");
       // AGC has to win clearly (≥ 1 point) to be switched on for a sensitive microphone.
       const recommended: "off" | "on" = samples.on.score >= samples.off.score + 1 ? "on" : "off";
-      commitProfile({ ...base, agcBenchmark: { ...samples, recommended, at: new Date().toISOString() } });
+      rig.commitProfile({ ...base, agcBenchmark: { ...samples, recommended, at: new Date().toISOString() } });
       setBenchmark("done");
     } catch {
       setBenchmark("failed");
     }
-  }, [live, micId, commitProfile, resolveProfile]);
+  }, [live, micId, store]);
 
   const copyReadBack = useCallback(async () => {
     if (!applied) return;
@@ -545,7 +247,7 @@ function VoiceConsole() {
   const floorPercent = gate ? Math.round(Math.min(1, Math.max(0, (gate.floorDb + 80) / 80)) * 100) : 0;
   const levelColor =
     gate?.classification === "speech" ? "var(--accent)" : gate?.classification === "background" ? "var(--warn)" : "#3a4256";
-  const micName = applied?.label || profile?.friendlyName || devices.find((d) => d.deviceId === micId)?.label || "Varsayılan";
+  const micName = microphoneName(voice);
 
   // ADR-0045: the A/B voice selector stays visible; on a server whose contract
   // has no `voice` field it is marked unavailable instead of silently ignored.
@@ -568,7 +270,10 @@ function VoiceConsole() {
         <h1 style={{ margin: 0 }}>Sesli Asistan</h1>
         <SignOutButton />
       </div>
-      <p className="subtitle">Gerçek zamanlı konuşma — tarayıcı medya bacağı (M12 / D).</p>
+      <p className="subtitle">
+        Gerçek zamanlı konuşma — tarayıcı medya bacağı (M12 / D). Bu sayfa tanılama görünümüdür; oturum{" "}
+        <Link href="/core">Çekirdek</Link> ile paylaşılır ve sayfadan ayrılınca kapanmaz.
+      </p>
 
       <div className="panel">
         <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
@@ -616,7 +321,7 @@ function VoiceConsole() {
           <label className="muted" title={voiceUnavailable ? `Sunucu sözleşmesi v${contract?.version}: ses seçimi bu sürümde yok` : undefined}>
             Ses{voiceUnavailable ? " (sunucuda kullanılamaz)" : ""}{" "}
             <select
-              value={voice}
+              value={voiceChoice}
               onChange={(e) => changeVoice(e.target.value)}
               aria-label="Ses"
               aria-disabled={voiceUnavailable || undefined}
@@ -629,14 +334,14 @@ function VoiceConsole() {
               ))}
             </select>
           </label>
-          <button onClick={refreshDevices} className="badge unknown" style={{ border: "none", cursor: "pointer", font: "inherit" }}>
+          <button onClick={() => void actions.refreshDevices()} className="badge unknown" style={{ border: "none", cursor: "pointer", font: "inherit" }}>
             Cihazları yenile
           </button>
         </div>
         {simulated && live && (
           <p className="muted" style={{ marginTop: "0.75rem" }}>
             Sunucu simülatör sağlayıcısını seçti: ses yok, kablolama gerçek API üzerinden çalışıyor.{" "}
-            <button onClick={() => simulatorRef.current?.demoToolCall()} style={smallButton}>
+            <button onClick={() => store.peekRig()?.simulator?.demoToolCall()} style={smallButton}>
               Demo araç çağrısı (clock.now)
             </button>
           </p>
@@ -657,8 +362,8 @@ function VoiceConsole() {
               <span title={snapshot.sessionId ?? undefined}>
                 {snapshot.sessionId
                   ? `${shortSessionId(snapshot.sessionId)} · ${snapshot.provider} · ${snapshot.transport} · bacak ${snapshot.legs}` +
-                    ` · ses: ${snapshot.voice ?? voice} · profil: ${snapshot.voiceProfile ?? "—"}`
-                  : `ses: ${voice}`}
+                    ` · ses: ${snapshot.voice ?? voiceChoice} · profil: ${snapshot.voiceProfile ?? "—"}`
+                  : `ses: ${voiceChoice}`}
               </span>
               {copyIdButton}
               {snapshot.sessionId && (

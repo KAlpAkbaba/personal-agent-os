@@ -3925,3 +3925,99 @@ the Windows agent (a companion with no render endpoint answers `dependency_unava
 retryable), so the installed agent must be updated before Stage 12.12 (a real alarm) can be
 attempted — carried by the next needed install, not a forced redeploy. `voice_briefing`,
 `media_playback` and `browser_action` execute end to end against what is already installed.
+
+## ADR-0061 — The Core is the owner's voice surface: one session, drawn as itself (2026-09-06)
+
+Status: Accepted
+
+Context: the owner opened `/core`, saw a truthful Holographic Core, and could not speak to
+PersonalAgentOS. The PROVEN_REAL realtime voice client (`VoiceSessionController`, M12–M17)
+existed only as `/voice`, a 1057-line page that built its own audio rig and controller
+inside a React effect and tore them down on unmount. Nothing on `/core` could reach it,
+and the obvious wrong fix — a second controller for the Core — would have meant a second
+`getUserMedia`, a second transport and a second realtime session in the same tab.
+
+Decisions:
+
+1. **One rig, one controller, one session per tab, and a counter that can disprove it.**
+   The construction `/voice` did in its effect is extracted verbatim into
+   `apps/web/app/lib/voice/rig.ts` (`createVoiceRig`, `browserRigParts`) and owned by a
+   module-level singleton, `apps/web/app/lib/voice/store.ts` (`getVoiceStore`). The rig is
+   built lazily on first use and never disposed by a view: leaving `/voice` no longer ends
+   the session, and returning to it does not open a second microphone. `/core`,
+   `/core/cockpit` and `/voice` are all `useSyncExternalStore` subscribers. The controller's
+   behaviour is untouched — barge-in, the hesitation guard, `Dur`/`Devam et`, the narration
+   cursor and tool routing are exactly the M12–M17 code. `voiceInstances` counts rigs,
+   controllers, microphone opens (each is one `getUserMedia`), transports and
+   `201 Created` sessions at the construction sites themselves, and
+   `tests/voice/store.test.tsx` asserts `{1,1,1,1,1}` after two consumers, a remount, and
+   two simultaneous `connect()` calls. The `BrowserMicrophone` in `lib/voice/audio.ts`
+   remains the only audio `getUserMedia` in the codebase; the one exception outside the
+   rig is `/voice`'s owner-triggered AGC A/B benchmark, which opens a temporary probe only
+   while no session microphone is open and closes it before returning.
+2. **The voice session is drawn as a local overlay in the same `visualFor` pipeline, never
+   as bus events.** `visualFor(truth, now, voice?)` takes a `VoiceOverlay` — the
+   controller's state, two measured levels, a caption, a tool label, an error — and
+   `applyVoiceOverlay` replaces the core body for the states the controller actually holds,
+   keeping the release orbit exactly as the bus drew it. `idle`/`closed` return the bus
+   intent untouched: a closed leg says nothing about what the agent is doing elsewhere.
+   `VisualIntent` gained `source: "bus" | "voice"` and `voiceState`, and `StateReadout`
+   names the source on every render ("Kaynak: bu cihazdaki ses oturumu" / "Kaynak: Cloud
+   Core durum akışı"), because a listening core drawn from this device's own session and
+   one drawn from the cloud's account of some other device are different claims. The Core
+   still has no write path; the overlay is a report, and nothing here publishes.
+3. **The speaking pulse is the assistant's real output envelope.** `Playback` gained an
+   optional `outputLevel()`; `WebAudioPlayback` implements it as the RMS of the same
+   analyser that already detects first audio, normalised by a fixed
+   `OUTPUT_FULL_SCALE_RMS` (a linear measurement, not an auto-gained one), 0 whenever the
+   path is not playing or is silenced, `null` when no output context exists. The page
+   samples it with `requestAnimationFrame` only while the controller is `speaking`, and
+   the local gate's level only while `listening`. There is no timer that advances state and
+   no synthesised rhythm: `interrupted` pulses at exactly 0 because the controller already
+   silenced the path (stop-first, ADR-0040), and an unmeasurable envelope draws no pulse and
+   is worded "Çıkış seviyesi ölçülemedi" rather than drawn as silence. The Core itself has
+   no Web Audio code — it reads one number from the store.
+4. **The Core's voice control states facts and offers one action.** `VoiceControl` /
+   `VoiceControlView` is an `ambient-cell`: connected / connecting / disconnected, the
+   controller state, the selected microphone and speaker by name, the noise mode from the
+   device profile (or that no profile exists yet), the provider, a running tool, the last
+   error, and one control — Bağlan / Bağlantıyı kes / Yeniden bağlan — plus a link to
+   `/voice`. No `<select>`, `<input>` or `<form>`: choosing devices, voices and noise modes
+   stays on `/voice`, which is now the diagnostics/developer view over the same session.
+   After the first browser permission and owner sign-in, reconnecting is done from the Core.
+5. **The speech caption is one semantic line, never the transcript.** While speaking the
+   Core's label is `speechCaption()`: the running tool's Turkish phrase
+   (`research.start` → "Araştırma sonuçlarını anlatıyorum…"; an unlisted tool falls back to
+   its own name rather than an invented phrase), else the narration cursor's position, else
+   nothing. `assistantText` is not part of the overlay type at all. The transcript stays on
+   `/voice`.
+6. **Eye ↔ voice needed no new mechanism, only a pure seam and a test.** `Gözünü kapat`
+   already resolves server-side, the bus already publishes `eye.disabled`, and
+   `EyeControl` already called `stopLocalOnly()`. The one-line decision is now
+   `lib/eye/reconcile.ts::shouldStopLocalPerception` (stop-only: a bus `eye.active` never
+   starts this device's camera, because starting is a `getUserMedia` grant on this device),
+   and `tests/eye/reconcile.test.tsx` runs it against a real `PerceptionSession` on a fake
+   frame source: the loop stops, the camera is released synchronously, no further tick is
+   scheduled, and the band and control both read disabled; `eye.active` is reflected on the
+   same render. React effects cannot run under `react-dom/server`, so the effect itself is
+   one line joining three tested parts rather than a fourth thing to test.
+
+What was found wrong along the way, recorded rather than silently fixed:
+
+- `/voice` disposed the controller on unmount, so any navigation ended the session and the
+  next mount opened a fresh microphone — the defect this ADR exists for, and the reason
+  the store never disposes the rig.
+- `/voice`'s `connect` re-listed devices after the grant but its `changeMic` resolved the
+  profile from the *pre-grant* device list; the store resolves on both paths.
+- `docs/M18_CORE_RENDERER.md` §3 said the Core has "no Web Audio code" and never reads
+  owner audio; the first is still true and the second needed qualifying (the local gate's
+  bounded level is read while listening). Rewritten, with the overlay table.
+- The controller exposes no cognition `query_kind`/subsystem, so the caption cannot yet
+  say "World Model"; it says the tool or the cursor, and nothing when neither is known.
+
+Consequences: `pnpm --filter @pagentos/web test` grows from 420 to 488 tests, all Node +
+`react-dom/server` + the existing fakes; no browser, no Playwright. The owner's next real
+run on `/core` should show: Bağlan → `listening` with inward flow tracking the microphone,
+a tool → `tool_running` with its Turkish name, speech → a pulse that is the audio, "Dur" →
+`interrupted` with the pulse at zero on the same frame, and "Gözünü kapat" → the eye cell
+reading disabled while the local camera light goes out.

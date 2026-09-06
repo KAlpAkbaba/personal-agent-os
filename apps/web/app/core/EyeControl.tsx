@@ -20,6 +20,7 @@
 
 import { useEffect } from "react";
 
+import { shouldStopLocalPerception } from "../lib/eye/reconcile";
 import { useActivePerception } from "../lib/eye/useActivePerception";
 import type { EyeView } from "../lib/uistate/ambient";
 import EyeControlView from "./EyeControlView";
@@ -39,9 +40,10 @@ export default function EyeControl({ eye }: EyeControlProps) {
   // reach the same conclusion on its own next tick anyway (a 409 stops it);
   // this only makes the local camera light go out sooner, bounded by how
   // often the page polls `/v1/ui/state` rather than by the sampling interval.
+  const eyeStatus = eye.status;
   useEffect(() => {
-    if (eye.status === "disabled" && status.running) stopLocalOnly();
-  }, [eye.status, status.running, stopLocalOnly]);
+    if (shouldStopLocalPerception({ status: eyeStatus }, status.running)) stopLocalOnly();
+  }, [eyeStatus, status.running, stopLocalOnly]);
 
   return (
     <EyeControlView

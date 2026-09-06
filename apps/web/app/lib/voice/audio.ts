@@ -274,6 +274,14 @@ export function measureNoiseFloor(
 // -------------------------------------------------------------- playback
 
 /**
+ * RMS that counts as a full-scale pulse (M18, `outputLevel`). Provider speech
+ * peaks around 0.2–0.3 RMS in float samples; a fixed divisor keeps the figure
+ * a linear measurement (loud speech → 1, silence → 0) rather than an
+ * auto-gained one.
+ */
+export const OUTPUT_FULL_SCALE_RMS = 0.25;
+
+/**
  * Remote audio → (hidden, muted element keeps the WebRTC track flowing in
  * Chromium) → AudioContext source → gain → destination. `stop()` drives the
  * gain to zero on the audio thread's next quantum, which is the fastest
@@ -407,6 +415,26 @@ export class WebAudioPlayback implements Playback {
   onActivity(sink: (at: number) => void): Unsubscribe {
     this.activitySinks.add(sink);
     return () => this.activitySinks.delete(sink);
+  }
+
+  /**
+   * The output envelope the Core pulses to (M18). Read straight off the same
+   * analyser that detects first audio: RMS of the last render quantum,
+   * normalised against `OUTPUT_FULL_SCALE_RMS`. Zero whenever the path is not
+   * playing or is silenced (barge-in, mute), so a stopped response stops the
+   * pulse on the same frame; `null` before any output context exists, which
+   * the renderer reports as "not measurable" rather than drawing stillness
+   * as a measurement.
+   */
+  outputLevel(): number | null {
+    if (!this.analyser || !this.context) return null;
+    if (!this.playing || this.muted) return 0;
+    const buffer = new Float32Array(this.analyser.fftSize);
+    this.analyser.getFloatTimeDomainData(buffer);
+    let sum = 0;
+    for (const v of buffer) sum += v * v;
+    const rms = Math.sqrt(sum / buffer.length);
+    return Math.min(1, rms / OUTPUT_FULL_SCALE_RMS);
   }
 
   async setOutputDevice(deviceId: string): Promise<void> {

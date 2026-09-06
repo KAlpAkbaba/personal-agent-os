@@ -101,10 +101,35 @@ Implemented in `app/lib/uistate/visual.ts`, a pure function, exhaustively tested
 
 ### Audio
 
-`agent.speaking` pulses from the `intensity` the state event already carries — a bounded
-0..1 figure the API derives from levels the voice client reports. **This client never
-captures, requests or persists owner audio**, and there is no Web Audio code in the Core.
-No intensity means no pulse.
+A bus `agent.speaking` pulses from the `intensity` the state event already carries — a
+bounded 0..1 figure the API derives from levels the voice client reports. No intensity
+means no pulse.
+
+Since ADR-0061 the Core is also the owner's voice surface, and when THIS tab's own
+realtime session is speaking the pulse is the assistant's real output envelope: RMS read
+off the playback analyser of the one shared `WebAudioPlayback` (`lib/voice/audio.ts`),
+sampled at animation rate, 0 the moment playback stops, `null` (drawn as no pulse and
+worded as "ölçülemedi") when no output path exists. The Core still has no Web Audio code
+of its own — it reads one number from the voice store — and it still never captures,
+requests or persists owner audio: the microphone belongs to the voice session, which
+exists because the owner connected it, and the only thing the Core takes from it while
+listening is the local gate's bounded level. The readout names which source (bus or the
+local session) produced the visual on every render.
+
+### Local voice overlay (ADR-0061)
+
+| Controller state | Visual | Scalar source |
+| --- | --- | --- |
+| `idle`, `closed` | none — the bus body shows | — |
+| `creating`, `connecting`, `reconnecting` | `connecting`, dimmed and still | — |
+| `listening` | `listening` (contracts, inward flow) | mic level from the local gate, or a still 0.35 when unmeasured |
+| `tool_running` | `tool_running` topology, label = the tool's Turkish name | — |
+| `speaking` | `speaking`; `pulse` = output envelope; label = the speech caption | playback analyser RMS |
+| `interrupted` | `interrupted`: pulse 0, no breathing | — |
+| `error` | `error`, bounded agitation, label = `lastError` | — |
+
+The overlay replaces the core body only; the release orbit stays exactly as the bus drew
+it. A refused bus session (`unauthorized`) draws nothing, overlay or not.
 
 ## 4. Truthful empty states
 

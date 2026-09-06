@@ -45,6 +45,13 @@ export interface Playback {
   /** First audible energy after `arm()`; used for first-audio timing. */
   onActivity(sink: (at: number) => void): Unsubscribe;
   setOutputDevice?(deviceId: string): Promise<void>;
+  /**
+   * The assistant's REAL output envelope right now, as a bounded 0..1 figure
+   * measured at the output path (M18: the Core's speaking pulse). `0` while
+   * nothing is playing or the path is silenced; `null` when the path cannot be
+   * measured at all (no output context yet). Never a synthesised rhythm.
+   */
+  outputLevel?(): number | null;
   dispose(): void;
 }
 
