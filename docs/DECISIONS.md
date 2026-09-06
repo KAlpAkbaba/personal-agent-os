@@ -4643,3 +4643,80 @@ UI or voice affordance to CHANGE the recency/device/max_sources of a research al
 running (the honest refusal above is the whole answer for now), and no attempt to make
 the M13 workflow itself signal-aware — that stays a real gap, named rather than
 half-closed.
+
+## ADR-0069 — M18.3: a Living Core the owner can wake up to, and a display that prefers to stay on (2026-09-07)
+
+**Context.** The owner's directive after M18.2: the small wireframe Core is no longer
+acceptable as the primary experience; the owner wants to say "Yarın 07:30'da YouTube'dan
+… ile beni uyandır" and be woken by real music, a rising volume, the displays coming on
+and "Günaydın efendim" — with no voice session open, no tab focused, and no dependence on
+the network being up at that minute; and the displays should turn off when the owner is
+away or asleep, yet ANY key or mouse movement must wake them at once even if the camera is
+off or wrong. Everything M18 proved (receipts, one router, the eye lifecycle, presence
+from the camera, the alarm ramp, browser isolation, the authority boundary) is the floor.
+The full architecture is `docs/M18_3_LIVING_CORE_WAKE_ALARM_SPEC.md`; this ADR records
+the decisions and what was refused.
+
+**Decisions.**
+
+1. **A wake alarm is a routine with a clock and a device fallback, run as a receipted
+   sequence.** The `WakeAlarm` aggregate holds the owner-facing policy and lifecycle;
+   its trigger is an ordinary `at`/`schedule` routine with one `wake_alarm` action, so
+   `RoutineFiring`'s uniqueness stays the first line against double firing. A named,
+   health-visible `RoutineClock` (asyncio, 10 s, single-flight) calls `evaluate_due`;
+   this amends M18 row 12.15 — the routines package still owns no timer, the clock is
+   the thing that asks. The firing runs `disarm → display.wake → media (or tone) → ramp
+   → greeting with duck/restore → completion`, each physical step an `ActionReceipt`
+   with a ledger row; both audio paths failing is `FAILED` + `UiState.ERROR`.
+2. **The device arms its own fallback.** `desktop.alarm_arm` persists the alarm on the
+   companion; the companion rings the tone at `fire_at + grace` unless a cloud start or
+   disarm for that `alarm_id` came first, and a cloud start consumes the arm. A network
+   interruption cannot erase an accepted alarm; a reconnect cannot ring it twice.
+3. **Alarm media is the browser worker's own `alarm` profile, verified by the media
+   element, never helped.** Four worker operations (`media_play/volume/status/stop`);
+   the ramp and the ducking are the `<video>` element's volume inside our dedicated
+   window; Chrome's autoplay policy is a preference of that window, not an anti-bot
+   measure; a CAPTCHA, bot check, sign-in or consent wall is a recorded failure and the
+   tone. The owner's own Chrome and tabs are never touched.
+4. **The greeting is background narration, not a voice session.** OpenAI TTS in the
+   persona's nearest voice → a single-use, five-minute audio token → `desktop.play_audio`
+   on the companion (fetch from the broker origin only, sha256-checked, played through
+   the tone's own render path at its own level). No microphone, no realtime session.
+5. **The display policy lives in Cloud Core and prefers ON; the last line of defence is
+   on the device.** `app/ambient.decide()` is pure: `UNKNOWN`, stale, eye disabled,
+   low confidence, any holdoff, an alarm context or a display already off → `none`;
+   only sustained AWAY or sustained, confident LIKELY_ASLEEP with `auto_off_enabled`
+   → `display.off`. Independently, the companion refuses `desktop.display_off` inside
+   its own recent-input window (`{display_off:false, refused:"recent_input"}`, a
+   successful command the cloud reads as a refused receipt). Keyboard/mouse wake the
+   display at the OS level; we never intercept input, we observe an idle tick count.
+6. **The device reports on the heartbeat; no new frame type.** An optional `status`
+   object (input idle, display state, alarm ringing, armed alarms, local fires) rides the
+   existing heartbeat every ~10 s; the cloud derives `input` presence observations,
+   `owner.input_active`, holdoffs, `display.on|off` and World Model facts from it.
+7. **The Living Core is full-viewport, gold/amber and still drawn only from what is
+   true.** UI state contract v3 adds `alarm.*` (a wake-surge channel that never displaces
+   a thinking/speaking Core) and `display.*` (ambient strip only). Fullscreen only on
+   the owner's gesture with a visible exit; a PWA manifest; tiers, hidden-tab stillness
+   and the 2D fallback preserved.
+8. **Display power is the only machine-state capability.** Nothing in M18.3 locks,
+   sleeps, hibernates, logs off, reboots or shuts down; the source-reading guard extends
+   to every display file. `ACTION_CONTRACT_VERSION` becomes 6.
+
+**Refused, and why.** A per-alarm Temporal workflow (durable, but a second scheduler
+beside the routine engine the owner already proved; the DB row plus a clock plus the
+device arm is simpler and survives the same failures). A self-hosted YouTube IFrame page
+(needs an origin and adds a second player surface; the real page plus the media element
+is the highest semantic control we own). CoreAudio per-app ducking (touches the
+machine's mixer, which M18 forbade). Browser `setTimeout` alarms (the owner's explicit
+prohibition). A new device→cloud frame type (the heartbeat already flows; additive
+optional fields need no protocol version). WebView2 inside the companion (a second
+browser runtime on the device when the qualified worker already exists).
+
+**Consequences.** The Windows agent gains capabilities and must be updated on the owner's
+machine (an owner-authorised install with `-DisplayPower`); the Cloud Core release that
+carries M18.3 also carries M18.2's research fast path (one release, contract v6); the
+routine clock runs in production from that release with `auto_off_enabled=false` until the
+owner turns it on. Four tracks implement the spec in parallel (ADR-0070 web, ADR-0071
+cloud, ADR-0072 Windows, ADR-0073 browser); the integrator owns the harnesses, Stage 14 of
+`docs/QUALIFICATION.md` and the owner queue.

@@ -474,6 +474,87 @@ the Cloud Core's own records by the harness; none is a yes/no question to the ow
 Display-off is a **separate** qualification, run on its own, because a wrong inference there
 interrupts unrelated owner work. It is not part of the main M18 run.
 
+## M18.3 Fullscreen Living Core, durable Wake Alarm, ambient display control
+
+Spec: `docs/M18_3_LIVING_CORE_WAKE_ALARM_SPEC.md` (ADR-0069). Real-only acceptance for the
+three owner outcomes; the deterministic gates below are what must be green BEFORE the owner
+is asked for anything (owner directive: "Continue autonomously through implementation and
+automated verification. Only ask the owner for genuinely human visual/audio/physical
+qualification").
+
+### Deterministic gates (offline, every CI run)
+
+- **the full-viewport renderer adapts.** `stageSizeFor(width, height)` keeps the Core at
+  60–80 % of the usable viewport for portrait, square, wide and ultrawide viewports; Minimal
+  mode has no page scroll; the overlays' fade is a pure timer reducer;
+- **High / Balanced / Low stay bounded.** `sceneBudgetFor(tier)` equals what `CoreScene`
+  mounts at that tier; particles and fragments are instanced; a hidden page draws nothing;
+  reduced motion is still; no WebGL → the 2D view in the same identity, same facts;
+- **the truth rule is unchanged.** Every new state (`alarm.*`, `display.*`) has its own
+  visual and no other's; zero channels outside it; `alarm.*` never displaces a genuinely
+  thinking or speaking Core; `display.*` never reaches the Core geometry; contract v3 on both
+  sides, and a v2 server still renders;
+- **Voice, Eye and the speaking lifecycle do not regress:** the existing suites (one
+  session per tab, no duplicate microphone, SPEAKING from first audible playback to actual
+  playback end, RMS only on amplitude) are unchanged and green;
+- **the alarm is durable and idempotent.** A SCHEDULED/ARMED alarm fires on a fresh
+  process's first clock tick; two ticks, two processes and a reconnect produce ONE firing
+  and ONE ring; the device's armed fallback rings once at `fire_at + grace` only when no
+  cloud start or disarm for that `alarm_id` arrived, and once only across a companion
+  restart; an overdue arm older than two hours expires with an audit line;
+- **YouTube failure has a truthful fallback.** `no_media_element`, `autoplay_blocked`,
+  `challenge`, `consent_wall` and `navigation_failed` each produce a failed `media.play`
+  receipt with that reason and the tone with its ramp; no retry, no bypass, no click;
+- **volume is never the master volume.** Structural: no CoreAudio endpoint-volume or
+  session-volume API name in the companion sources; the ramp scales samples (tone) or the
+  media element (YouTube); nothing is left changed;
+- **the greeting needs no microphone and no realtime session.** Structural: the alarms
+  package never imports `RealtimeSessionRow`; the greeting plays with the tone fallback too;
+  the audio token is single-use and expires;
+- **display-off never suspends the PC.** Structural: every display source file is read by
+  the guard and no shutdown / suspend / hibernate / logoff / lock / reboot API name appears;
+- **camera failure never independently implies sleep.** `decide()` returns `none` for
+  `UNKNOWN`, stale, eye disabled, below-confidence and every holdoff; `display.off` only from
+  AWAY sustained ≥ `away_after_s` or LIKELY_ASLEEP sustained ≥ `asleep_after_s` at
+  ≥ `asleep_min_confidence`, with `auto_off_enabled` true and the display on;
+- **keyboard/mouse input always overrides display-off.** The companion refuses
+  `desktop.display_off` inside its recent-input window as a successful, refused result; the
+  cloud maps it to `execution_status=refused` and starts the input holdoff; the wake path
+  has no presence, eye or camera dependency;
+- **stale AWAY/ASLEEP cannot re-darken after real input.** With the presence assertion
+  still AWAY, an input-idle reset starts the holdoff and `decide()` is `none` for its whole
+  length;
+- **alarm wake works with the eye disabled and display failure does not suppress the
+  audio.** The sequence runs identically with `eye_enabled=false`; a failed `display.wake`
+  receipt is followed by the media/tone step;
+- **no raw camera archive** (the M18 guards unchanged) and **the input observer reads only
+  an idle tick count** (structural: no key or pointer content API in the companion);
+- **no hidden actions.** A structural test enumerates every device call the wake sequence
+  and the ambient tick can make and maps each to a receipt capability;
+- **the migration chain has exactly one head**; the health manifest carries
+  `action_contract_version` 6, `checks.routine_clock` and the new tools;
+- **no test launches a browser, blanks a display or plays audio.**
+
+### Real gates (owner machine; three short runs, in order)
+
+- **A — Visual** (`scripts/core/owner-m18-3-core.ps1`): the served build is the Living
+  Core; the owner opens `/core` and reviews scale, depth, gold/amber appearance, speaking,
+  listening, eye and the research constellation. The old small wireframe view is gone.
+- **B — Wake alarm** (`scripts/core/owner-m18-3-alarm.ps1`): Cloud Core released once if
+  the contract is stale; the agent updated once if the device manifest lacks the new
+  capabilities (elevation is the owner's); then `90 saniye sonra seçtiğim YouTube müziğiyle
+  test alarmı kur.` and, from the record: alarm created → device armed → fired at the
+  scheduled instant by the clock (a routine firing, not the voice session) → `display.wake`
+  receipt → `media.play` verified in the alarm profile (or the truthful tone fallback) →
+  the ramp figures → the greeting receipt over ducked music → restore → `Alarmı kapat.` →
+  STOPPED → cleaned up (nothing armed, no media session, the one-shot routine resolved).
+- **C — Ambient display** (`scripts/core/owner-m18-3-display.ps1`): the eye disabled
+  through the proven path → `Ekran uyku otomasyonunu test et.` → the real `display.off`
+  receipt → the owner presses a key or moves the mouse → the display is on within seconds
+  (heartbeat status) → `owner.input_active` recorded → the input holdoff → no `display.off`
+  within it. Separately, when the owner wants it: the presence-based automatic off with the
+  conservative thresholds, observed for real.
+
 ## M19 Multi-device / roaming owner qualification
 
 Real-only acceptance on at least two owner-authorised physical computers (PC-A, PC-B) and
