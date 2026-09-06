@@ -55,6 +55,7 @@ from app.security.runtime import SecurityRuntime
 from app.selfhealing.routes import router as selfhealing_router
 from app.selfhealing.runtime import SelfHealingRuntime
 from app.selfmodel.routes import router as selfmodel_router
+from app.state.routes import router as state_router
 from app.uistate import UiState
 from app.uistate import publish as publish_ui_state
 from app.uistate.routes import router as ui_state_router
@@ -239,6 +240,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(experience_router)
     app.include_router(goals_router)
     app.include_router(world_router)
+    app.include_router(state_router)
     app.include_router(selfmodel_router)
     app.include_router(ledger_router)
     app.include_router(presence_router)
