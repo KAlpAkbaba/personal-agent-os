@@ -31,6 +31,7 @@ import {
 } from "./contract";
 import { type ReleaseStage, releaseView } from "./ambient";
 import { type Claim, type CoreTruth, coreClaim, releaseClaim } from "./truth";
+import type { VoiceUiState } from "../voice/controller";
 
 export type CoreVisualKind =
   /** No poll has succeeded yet. */
@@ -49,6 +50,8 @@ export type CoreVisualKind =
   | "listening"
   | "thinking"
   | "speaking"
+  /** The owner spoke over the assistant; playback is already stopped (local voice only). */
+  | "interrupted"
   | "researching"
   | "memory"
   | "tool_running"
@@ -58,6 +61,16 @@ export type CoreVisualKind =
   /** evolution.researching | designing | building | testing */
   | "evolution_working"
   | "shadow_ready";
+
+/**
+ * Which of the two evidence sources produced the intent (ADR-0061 §4).
+ *
+ * `bus` is `GET /v1/ui/state`, the cloud's account of every subsystem. `voice`
+ * is this tab's own `VoiceSessionController` — a direct observation of the
+ * session this device is in, which is why it may overlay the bus for the
+ * states it actually holds, and why the readout must say which one it is.
+ */
+export type VisualSource = "bus" | "voice";
 
 export type PaletteToken =
   | "calm"
@@ -82,6 +95,10 @@ export type PaletteToken =
  */
 export type VisualIntent = {
   kind: CoreVisualKind;
+  /** Who produced this intent: the state bus, or the local voice controller. */
+  source: VisualSource;
+  /** The local controller's state when `source` is `voice`; `null` otherwise. */
+  voiceState: VoiceUiState | null;
   /** The raw state token this came from, `null` when no event backs it. */
   state: string | null;
   subsystem: string | null;
@@ -177,6 +194,8 @@ export const ERROR_BREATH_HZ = 0.18;
 function blank(kind: CoreVisualKind, palette: PaletteToken): VisualIntent {
   return {
     kind,
+    source: "bus",
+    voiceState: null,
     state: null,
     subsystem: null,
     label: null,
@@ -463,14 +482,160 @@ function forLiveState(event: UiStateEvent, claim: Claim): VisualIntent {
  * outranks the state it expired from, because in both cases the honest answer
  * is about our knowledge rather than about the agent.
  */
-export function visualFor(truth: CoreTruth, now: number): VisualIntent {
+export function visualFor(truth: CoreTruth, now: number, voice: VoiceOverlay | null = null): VisualIntent {
   if (truth.connection.kind === "unauthorized") {
-    // Nothing known, so nothing drawn - on either channel.
+    // Nothing known, so nothing drawn - on either channel. A refused session
+    // is refused for the voice leg too, so no overlay applies here either.
     return { ...blank("unauthorized", "unknown"), dim: 0.7 };
   }
   // The release orbit is independent of what the core body is doing: an idle
   // core with a deployment in flight shows both, and neither hides the other.
-  return { ...coreVisual(truth, now), ...releaseFields(truth, now) };
+  const bus = { ...coreVisual(truth, now), ...releaseFields(truth, now) };
+  return voice ? applyVoiceOverlay(bus, voice) : bus;
+}
+
+// ------------------------------------------------------------ voice overlay
+
+/**
+ * What this tab's own voice session reports (ADR-0061 §4).
+ *
+ * Every field is a fact the `VoiceSessionController` holds or a measurement
+ * the audio path took. Nothing here is a bus event and nothing is published
+ * anywhere: the overlay is drawn from the local controller and labelled as
+ * such, which is the difference between "reporting what this device is in"
+ * and "fabricating an `agent.speaking` nobody sent".
+ */
+export type VoiceOverlay = {
+  state: VoiceUiState;
+  /** Owner microphone level 0..1 from the local gate; `null` when not measured. */
+  micLevel: number | null;
+  /**
+   * The assistant's REAL output envelope 0..1 from the playback analyser;
+   * `null` when the path cannot be measured. Sampled at animation rate by the
+   * page; 0 the moment playback stops. Never a synthesised rhythm.
+   */
+  outputLevel: number | null;
+  /** The short semantic caption while speaking (a tool, a cursor), or `null`. */
+  caption: string | null;
+  /** The running tool's Turkish label while `tool_running`, or `null`. */
+  toolLabel: string | null;
+  /** The controller's last error text while `error`, or `null`. */
+  lastError: string | null;
+};
+
+/** The voice controller's states that draw the core; `idle`/`closed` do not. */
+export const VOICE_OVERLAY_STATES: ReadonlySet<VoiceUiState> = new Set<VoiceUiState>([
+  "creating",
+  "connecting",
+  "reconnecting",
+  "listening",
+  "speaking",
+  "tool_running",
+  "interrupted",
+  "error",
+]);
+
+/** True when the overlay would replace the bus body. */
+export function voiceOverlayApplies(voice: VoiceOverlay | null): boolean {
+  return voice !== null && VOICE_OVERLAY_STATES.has(voice.state);
+}
+
+/**
+ * Replace the core body with the local voice session's state, keeping the
+ * release orbit (a separate channel) from the bus intent.
+ *
+ * The state table mirrors `forLiveState` for the states the two share, so a
+ * bus `agent.listening` and a local `listening` are drawn identically — the
+ * only differences are the `source` and that the scalars here are
+ * *measurements* (`micLevel`, `outputLevel`) rather than a publisher's
+ * declared `intensity`. No local state is synthesised: `idle` and `closed`
+ * return the bus intent untouched, because a closed voice leg says nothing
+ * about what the agent is doing elsewhere.
+ */
+export function applyVoiceOverlay(bus: VisualIntent, voice: VoiceOverlay): VisualIntent {
+  if (!VOICE_OVERLAY_STATES.has(voice.state)) return bus;
+  const local = (kind: CoreVisualKind, palette: PaletteToken): VisualIntent => ({
+    ...blank(kind, palette),
+    source: "voice",
+    voiceState: voice.state,
+    subsystem: "voice",
+    // The orbit is the bus's channel and stays exactly as the bus drew it.
+    releaseStage: bus.releaseStage,
+    releaseInFlight: bus.releaseInFlight,
+    releaseAwaitingOwner: bus.releaseAwaitingOwner,
+    releaseProgress: bus.releaseProgress,
+  });
+
+  switch (voice.state) {
+    case "creating":
+    case "connecting":
+    case "reconnecting":
+      // A leg being opened: dimmed and still, like the bus's own connecting.
+      return { ...local("connecting", "unknown"), dim: 0.5 };
+
+    case "listening": {
+      // Same geometry as `agent.listening`; depth from the measured level,
+      // and a still 0.35 when no measurement exists (the gate not yet running).
+      const e = voice.micLevel ?? 0;
+      return {
+        ...local("listening", "inward"),
+        intensity: voice.micLevel,
+        scale: 0.88 - 0.05 * e,
+        inwardFlow: 0.35 + 0.65 * e,
+        breathAmplitude: 0.02,
+        breathHz: 0.5,
+      };
+    }
+
+    case "tool_running":
+      return {
+        ...local("tool_running", "work"),
+        label: voice.toolLabel,
+        scale: 1.02,
+        topology: 0.25,
+        breathAmplitude: 0.025,
+        breathHz: 0.4,
+      };
+
+    case "speaking":
+      // The pulse IS the output envelope. `null` (unmeasurable) draws no
+      // pulse and `intensity` stays null so the readout can say so.
+      return {
+        ...local("speaking", "voice"),
+        intensity: voice.outputLevel,
+        label: voice.caption,
+        scale: 1.04,
+        pulse: voice.outputLevel ?? 0,
+        breathAmplitude: 0.02,
+        breathHz: 0.45,
+      };
+
+    case "interrupted":
+      // Playback is already silenced by the controller (stop-first, ADR-0040).
+      // Nothing pulses; the core is drawn as held between turns.
+      return {
+        ...local("interrupted", "inward"),
+        scale: 0.94,
+        pulse: 0,
+        inwardFlow: 0.2,
+        breathAmplitude: 0,
+        breathHz: 0,
+      };
+
+    case "error":
+      return {
+        ...local("error", "fault"),
+        label: voice.lastError,
+        severity: "warning",
+        scale: 0.98,
+        agitation: ERROR_AGITATION,
+        breathAmplitude: 0.02,
+        breathHz: ERROR_BREATH_HZ,
+      };
+
+    default:
+      return bus;
+  }
 }
 
 /** The core body alone: agent and lab channels, as before contract v2. */

@@ -547,3 +547,42 @@
 .palette-work {
   --core-color: #5aa7e8;
 }
+
+/* ------------------------------------------------------ voice cell (M18) */
+
+/* The Core's one voice control. Same cell as the room and the release path;
+   the border says whether a leg is open, and nothing here animates. */
+.voice-cell[data-voice-connection="connected"] {
+  border-color: var(--accent);
+}
+
+.voice-cell[data-voice-connection="connected"] .ambient-title::before {
+  content: "● ";
+  color: var(--accent);
+}
+
+.voice-cell[data-voice-connection="connecting"] {
+  border-style: dashed;
+}
+
+.voice-cell[data-voice-state="error"] {
+  border-color: var(--fail);
+}
+
+.voice-cell-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.4rem;
+}
+
+.voice-cell-link {
+  color: var(--accent);
+  text-decoration: none;
+  font-size: 0.78rem;
+}
+
+.core-label[data-caption="yes"] {
+  color: var(--muted);
+  font-style: italic;
+}

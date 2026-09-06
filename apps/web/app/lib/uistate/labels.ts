@@ -10,7 +10,7 @@
 
 import type { EyeStatus, PresenceKind, ReleaseStage } from "./ambient";
 import type { KnownUiState } from "./contract";
-import type { CoreVisualKind } from "./visual";
+import type { CoreVisualKind, VisualSource } from "./visual";
 
 /** Headline shown under the core. One short phrase, no invented detail. */
 export const KIND_LABEL: Record<CoreVisualKind, string> = {
@@ -24,6 +24,7 @@ export const KIND_LABEL: Record<CoreVisualKind, string> = {
   listening: "Dinliyor",
   thinking: "Düşünüyor",
   speaking: "Konuşuyor",
+  interrupted: "Kesildi",
   researching: "Araştırıyor",
   memory: "Hafıza çalışıyor",
   tool_running: "Araç çalışıyor",
@@ -55,6 +56,7 @@ export const KIND_DETAIL: Record<CoreVisualKind, string> = {
   listening: "Sahip konuşuyor.",
   thinking: "Girdi ile yanıt arasında akıl yürütme çalışıyor.",
   speaking: "Anlatım sürüyor.",
+  interrupted: "Sahip söze girdi; konuşma durduruldu.",
   researching: "Bir araştırma işi kaynak buluyor ve getiriyor.",
   memory: "Hafıza geri çağırma / pekiştirme çalışıyor.",
   tool_running: "Bir yetenek çalışıyor.",
@@ -64,6 +66,35 @@ export const KIND_DETAIL: Record<CoreVisualKind, string> = {
   evolution_working: "Evrim laboratuvarı bir aday üzerinde çalışıyor. Canlı değil.",
   shadow_ready: "Bir aday kapılarını geçti ve onay bekliyor. Canlıya alınmadı.",
 };
+
+/**
+ * Which source produced the visual (ADR-0061 §4). Stated on every readout,
+ * because a listening core drawn from this device's own session and one drawn
+ * from the cloud's account of some other device are different claims.
+ */
+export const SOURCE_LABEL: Record<VisualSource, string> = {
+  bus: "Kaynak: Cloud Core durum akışı",
+  voice: "Kaynak: bu cihazdaki ses oturumu",
+};
+
+/**
+ * The second line for a voice-sourced intent, where the bus wording would be
+ * wrong: `connecting` from the bus means "no poll has succeeded yet", from the
+ * voice controller it means "a media leg is being opened".
+ */
+export const VOICE_KIND_DETAIL: Partial<Record<CoreVisualKind, string>> = {
+  connecting: "Ses oturumu kuruluyor.",
+  listening: "Mikrofon açık; sahip dinleniyor.",
+  speaking: "Asistan konuşuyor. Nabız, gerçek çıkış seviyesidir.",
+  tool_running: "Ses oturumunda bir araç çalışıyor.",
+  interrupted: "Sahip söze girdi; ses anında kesildi.",
+  error: "Ses oturumunda hata.",
+};
+
+/** The detail line for an intent, by its source. */
+export function kindDetail(kind: CoreVisualKind, source: VisualSource): string {
+  return (source === "voice" ? VOICE_KIND_DETAIL[kind] : undefined) ?? KIND_DETAIL[kind];
+}
 
 /** Raw contract token → Turkish. Used where the exact state matters. */
 export const STATE_LABEL: Record<KnownUiState, string> = {

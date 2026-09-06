@@ -258,6 +258,16 @@ export class FakePlayback implements Playback {
     /* nothing to warm up */
   }
 
+  /** Scripted output envelope (0..1); `null` = "no output path to measure". */
+  level: number | null = 0;
+
+  /** Same contract as `WebAudioPlayback.outputLevel`: 0 while not playing or muted. */
+  outputLevel(): number | null {
+    if (this.level === null) return null;
+    if (!this.playing || this.muted) return 0;
+    return this.level;
+  }
+
   onActivity(sink: (at: number) => void): Unsubscribe {
     this.activitySinks.add(sink);
     return () => this.activitySinks.delete(sink);

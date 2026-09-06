@@ -22,11 +22,14 @@ import { eyeView, presenceView, releaseView } from "../../lib/uistate/ambient";
 import { eyeClaim, presenceClaim, releaseClaim } from "../../lib/uistate/truth";
 import { useCoreState } from "../../lib/uistate/useCoreState";
 import { visualFor } from "../../lib/uistate/visual";
+import { voiceOverlayFrom } from "../../lib/uistate/voice-overlay";
+import { useVoiceLevels, useVoiceSession } from "../../lib/voice/useVoiceSession";
 import AmbientBand from "../AmbientBand";
 import CoreBar from "../CoreBar";
 import CoreView from "../CoreView";
 import EyeControl from "../EyeControl";
 import StateReadout from "../StateReadout";
+import VoiceControl from "../VoiceControl";
 import { useCorePreferences } from "../usePreferences";
 import {
   EvolutionPanel,
@@ -49,7 +52,12 @@ function Cockpit() {
   const { data, refresh: refreshPanels } = useCockpitData();
   const { tier, setTier, force2d, setForce2d } = useCorePreferences();
 
-  const intent = useMemo(() => visualFor(truth, now), [truth, now]);
+  // The tab's one voice session (ADR-0061): its real states overlay the bus
+  // body, labelled as this device's own observation.
+  const { voice } = useVoiceSession();
+  const levels = useVoiceLevels(voice.controller.state);
+  const overlay = useMemo(() => voiceOverlayFrom(voice.controller, levels), [voice.controller, levels]);
+  const intent = useMemo(() => visualFor(truth, now, overlay), [truth, now, overlay]);
   const eye = useMemo(() => eyeView(eyeClaim(truth, now)), [truth, now]);
   const presence = useMemo(() => presenceView(presenceClaim(truth, now)), [truth, now]);
   const release = useMemo(() => releaseView(releaseClaim(truth, now)), [truth, now]);
@@ -73,6 +81,9 @@ function Cockpit() {
         <div className="cockpit-core">
           <CoreView intent={intent} tier={tier} force2d={force2d} />
           <StateReadout intent={intent} />
+          <section className="ambient-band" aria-label="Ses oturumu">
+            <VoiceControl />
+          </section>
           <AmbientBand eye={eye} presence={presence} release={release} />
           <section className="ambient-band" aria-label="Göz kontrolü">
             <EyeControl eye={eye} />

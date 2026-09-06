@@ -17,11 +17,12 @@
  */
 
 import {
-  KIND_DETAIL,
   KIND_LABEL,
   SEVERITY_LABEL,
+  SOURCE_LABEL,
   formatAge,
   formatProgress,
+  kindDetail,
   stateLabel,
   subsystemLabel,
 } from "../lib/uistate/labels";
@@ -61,6 +62,8 @@ export default function StateReadout({
       data-core-kind={intent.kind}
       data-core-state={intent.state ?? ""}
       data-core-subsystem={intent.subsystem ?? ""}
+      data-core-source={intent.source}
+      data-voice-state={intent.voiceState ?? ""}
       data-live={live ? "yes" : "no"}
       data-severity={intent.severity}
     >
@@ -85,12 +88,33 @@ export default function StateReadout({
         </p>
       )}
 
-      {!compact && <p className="core-detail">{KIND_DETAIL[intent.kind]}</p>}
+      {/*
+        ADR-0061 §4: the readout names which of the two sources produced the
+        visual, on every render. A voice-sourced intent has no bus event and
+        therefore no age or subsystem line above; this line is what it has.
+      */}
+      <p className="core-sub" data-source-line={intent.source}>
+        {SOURCE_LABEL[intent.source]}
+      </p>
 
-      {/* A publisher-supplied short label: a topic, a goal title. Never prose. */}
+      {!compact && <p className="core-detail">{kindDetail(intent.kind, intent.source)}</p>}
+
+      {/*
+        A publisher-supplied short label: a topic, a goal title. Never prose.
+        For a voice-sourced speaking intent this is the speech caption (a tool,
+        a narration position) — one semantic line, never the transcript.
+      */}
       {intent.label && (
-        <p className="core-label" data-label>
+        <p className="core-label" data-label data-caption={intent.source === "voice" ? "yes" : undefined}>
           {intent.label}
+        </p>
+      )}
+
+      {/* A speaking voice leg whose output path could not be measured says so
+          rather than drawing stillness as silence. */}
+      {intent.source === "voice" && intent.kind === "speaking" && intent.intensity === null && (
+        <p className="muted core-count" data-output-level="unmeasured">
+          Çıkış seviyesi ölçülemedi.
         </p>
       )}
 
@@ -111,7 +135,9 @@ export default function StateReadout({
         </div>
       ) : (
         !compact &&
-        live && (
+        live &&
+        // A voice leg never reports progress; "not reported" would be noise there.
+        intent.source === "bus" && (
           <p className="muted core-no-progress" data-no-progress>
             İlerleme bildirilmedi.
           </p>
