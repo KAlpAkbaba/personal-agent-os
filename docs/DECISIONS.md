@@ -4643,3 +4643,160 @@ UI or voice affordance to CHANGE the recency/device/max_sources of a research al
 running (the honest refusal above is the whole answer for now), and no attempt to make
 the M13 workflow itself signal-aware — that stays a real gap, named rather than
 half-closed.
+
+## ADR-0072 — The companion refuses to darken a screen the owner just touched, arms its own fallback alarm, and reports what it sees on the heartbeat (2026-09-07)
+
+M18 gave the device a wake alarm and one machine-state action (`desktop.display_off`), both
+behind gates. M18.3 asks the device to be part of a living core: to bring a screen back, to say
+what it can see, to be ready for a wake-up the cloud may not be able to deliver, and to speak a
+greeting the cloud rendered. That is six new capabilities, and the interesting question for each
+of them was not how to build it but what it is allowed to do when nobody is looking. This ADR is
+the answer to that question, in `devices/windows-agent` and `packages/protocol`.
+
+1. **Six new names are advertised UNCONDITIONALLY, and the seventh still is not.**
+   `desktop.display_wake`, `desktop.display_status`, `desktop.activity_status`,
+   `desktop.alarm_arm`, `desktop.alarm_disarm` and `desktop.play_audio` join
+   `AgentCapabilities.Compose` with no flag, in one `Ambient` group appended after the alarm
+   pair so a manifest diff reads as an addition rather than a reshuffle. The rule that decided
+   this is not "how risky does it feel" but **does it take anything away from the owner**. Waking
+   a screen is the exact inverse of the one operation that does. Reporting a state removes
+   nothing. Arming a local fallback can only make an alarm the owner already asked for more
+   likely to ring. Playing a bounded, digest-verified sound the owner's own broker rendered is
+   the audio equivalent of `desktop.open_artifact`. `desktop.display_off` is the only one that
+   subtracts, and it keeps both gates of ADR-0028's successor arrangement: the service will not
+   route it and the companion will not execute it unless `DisplayPowerEnabled` is set in BOTH
+   configurations, which `scripts/install-device-service.ps1 -DisplayPower` now writes to both
+   in one place — writing one alone produces a device that either advertises a name it will
+   refuse or refuses a name it advertised.
+
+2. **Display-off gains a third gate that is not a flag, and refusing is a SUCCESS.**
+   Even fully enabled, `desktop.display_off` now refuses when the owner touched the machine
+   inside `holdoff_s` (default 120 s) or while an alarm is ringing, returning
+   `{display_off: false, refused: "recent_input"|"alarm_active", input_idle_s, holdoff_s,
+   observed_state, observed_at}` as a **successful** `command_ack`. That choice is the load-bearing
+   one. An error class here would make a correct refusal indistinguishable from a broken device,
+   and a caller — Cloud Core's routine dispatcher, which retries retryable classes — would retry
+   it until the holdoff happened to expire, which is exactly the "screen goes dark two seconds
+   after a keystroke" failure the gate exists to prevent. The alarm check runs first and
+   overrides idle time entirely: three hours of quiet is precisely the state a wake alarm fires
+   into, and darkening the screen at that moment is the machine working against the thing it
+   just did. The holdoff comparison is strictly-less-than, so 120 s of quiet is enough and 119.9
+   is not; and an **unknown** idle time (a companion with no real input source) satisfies the
+   holdoff on its own no more than it blocks the off — the device does not fabricate a zero,
+   which would refuse forever, nor a large value, which would claim quiet it never observed.
+
+3. **The display state is observed, never inferred, and "unknown" is a real answer.**
+   `Win32DisplayStateObserver` is a message-only window registered for
+   `GUID_CONSOLE_DISPLAY_STATE` and `GUID_MONITOR_POWER_ON`; the reported state is the last value
+   Windows handed it, with the moment it arrived, and before the first notification it is
+   `unknown` with a null timestamp — permanently, if nothing ever arrives. The temptation here
+   was to infer "on" from a recent keystroke, and it was declined because that would report the
+   idle timer twice under two different names, and because the display idling out and the owner
+   idling out are different events with different consequences. Windows offers no reliable
+   synchronous "is the display on?" call, and the ones that resemble it are the same APIs that
+   turn a display off; so the observer holds no way of driving a display at all — no broadcast
+   target, no execution state, no synthetic input — and a test asserts that from outside. A
+   successful display-off reports the state read BACK after the broadcast, so a broadcast nothing
+   honoured cannot be reported as a dark screen.
+
+4. **`display_wake` is a pointer move and an execution-state reset, and there is no keyboard
+   member in its input structure to fill in.** Two steps in a fixed order: a MOMENTARY
+   `SetThreadExecutionState(ES_DISPLAY_REQUIRED)` — never `ES_CONTINUOUS`, because a standing
+   claim nobody clears is indistinguishable from a broken power plan on the owner's side — then
+   `SendInput` with `MOUSEEVENTF_MOVE` and `dx = dy = 0`. The synthetic-input struct declared in
+   `DisplayWake.cs` has a pointer member and no key member, which makes "this file cannot type
+   into the owner's foreground window" a fact about the code rather than a promise about its
+   behaviour.
+
+5. **The source-reading guard now covers the whole family, by glob, with a bigger list.**
+   `AmbientCapabilityTests.The_display_capability_can_only_turn_a_display_off_never_suspend_the_machine`
+   reads every `Display*.cs` and `Monitor*.cs` in the companion — a glob, so a display file added
+   next month is guarded the day it appears rather than the day someone remembers this test —
+   and fails on any name that could end a session or change the machine's power state
+   (`ExitWindowsEx`, `SetSuspendState`, `InitiateSystemShutdown`, `hibernate`, `logoff`, and
+   `LockWorkStation` plus a capital-`Lock` catch-all), any CONTINUOUS execution-state constant,
+   any keyboard API, and any display-CONFIGURATION API (M18.3 reports monitor topology from
+   `EnumDisplayMonitors`; it never sets resolution, orientation or the primary monitor). One
+   deliberate imprecision, recorded so it is not "fixed" later: the forbidden token is capital
+   `Lock`, not bare `lock`. Banning the lower-case keyword would fail on ordinary mutual
+   exclusion, and the predictable response to that failure would be to weaken the list — a guard
+   that cries wolf is a guard that gets deleted. DISPLAY OFF IS NOT SYSTEM SLEEP is the whole
+   design (M18_THREAT_MODEL.md §5), and it now has a test that grows with the code.
+
+6. **The alarm arm is a fallback, and the hard part is that it rings exactly once.**
+   `desktop.alarm_arm` writes `{alarm_id, fire_at, grace_s, label, wake_volume, max_duration_s}`
+   to `%LOCALAPPDATA%\PagentOS\companion\armed-alarms.json` (write-then-move, the same shape as
+   the idempotency store), and a `TimeProvider`-driven ticker rings the ordinary
+   `AlarmController.Start` path at `fire_at + grace_s`. The failure it exists for is the one
+   where the network is down at 06:30 — and an in-memory arm would also be gone if the companion
+   had restarted overnight, so the file is the only version of this that survives both. The grace
+   (default 60 s) is not padding: firing at exactly `fire_at` would race the cloud's own command
+   over a link with any latency at all, and the owner would sometimes hear two alarms. Three
+   things consume an arm, each removing it from the store first — a `desktop.alarm_start` naming
+   that id (the ordinary case: the cloud got there in time), a `desktop.alarm_stop` naming it
+   (the owner has already dealt with it), and `desktop.alarm_disarm` — and a local firing removes
+   it too, **persisted before the first sample is generated**, so a companion that dies mid-ring
+   gives the owner a missed alarm, which they notice, rather than a second one on the next start.
+   Reload is deliberately conservative: an overdue arm rings once if it is less than two hours
+   late and is expired with an audit row otherwise, because waking someone twenty minutes late is
+   a late alarm while waking them at 14:00 for a 06:30 alarm is a machine behaving badly.
+
+7. **The heartbeat carries a status, and the Device Service closes its key set.**
+   `desktop.activity_status` returns seven fields — `input_idle_s`, `display_state`,
+   `display_observed_at`, `alarm_ringing`, `ringing_alarm_id`, `armed_alarms`, `next_alarm_at` —
+   and the Device Service asks the companion for that same object before each heartbeat and
+   attaches it as an OPTIONAL `status` (schema `deviceStatus`; `protocol_version` stays 1, the
+   field is purely additive, and a heartbeat without one is byte-for-byte the frame v1 always
+   sent). Two decisions inside that are worth stating. First, the wait is hard-bounded at 1.5 s
+   and every failure — no companion, slow companion, throwing companion — collapses to "no
+   status": presence is computed from heartbeats, so a status path that could stall one would let
+   a busy companion make the device look offline, which is strictly worse than a heartbeat with
+   nothing on it. Second, `status` is `additionalProperties: false`, which means one unknown key
+   from a newer companion would fail the broker's validation for the **whole heartbeat** and take
+   the connection down; so `HeartbeatStatus.Project` runs on the SERVICE side and keeps only the
+   seven known keys. A component that changes independently must not be able to break the frame
+   that proves the device is alive. What the status deliberately does not carry: any key,
+   character, pointer position, window title or application name — `input_idle_s` comes from one
+   `GetLastInputInfo` tick count, and a structural test fails if a hook, key-state, raw-input or
+   foreground-window API name appears in `InputActivity.cs`. And there is no "the owner is asleep"
+   field: the inference from idle time and display state to a person's state belongs where it can
+   be explained, argued with and turned off, in Cloud Core against the presence model
+   (M18_THREAT_MODEL.md §4). A device that shipped its own conclusion would make that argument
+   unreachable.
+
+8. **`desktop.play_audio` is bounded four ways, and the origin check lives on the side that has
+   not been asked to fetch yet.** The Device Service refuses the command with
+   `security_scope_error` before it reaches the pipe unless the URL's scheme, host AND port equal
+   the broker REST origin this device is enrolled against; a device with no configured broker
+   origin refuses every `play_audio`, because "we could not tell where audio may come from" and
+   "this audio may be played" must not be the same answer. The companion then enforces the other
+   three: at most 2 MiB, checked while reading rather than from a `Content-Length` header that is
+   only a claim; a SHA-256 that must match the bytes that arrived, whose mismatch is
+   `security_scope_error` and **never retryable** because fetching the same URL again would not
+   change what is at it; and at most 20 s at a level that defaults to 0.75 and **scales the
+   samples**, with audio over the cap trimmed rather than refused (the owner asked to be greeted,
+   and a slightly short greeting serves that better than silence plus an error). The alarm's
+   promise about the machine's mixer now covers the greeting too, and is asserted the same way: a
+   test reads every companion source and fails if an endpoint-volume API name appears in any of
+   them. The container parser is written here rather than pulled in, and accepts exactly one
+   shape — RIFF/WAVE PCM16, mono or stereo, 8–192 kHz — because every refusal is a refusal to
+   hand unfamiliar bytes to an audio stack running in the owner's session. The render endpoint is
+   opened at the WAV's own rate and the shared-mode path converts; there is no resampler in this
+   agent, and there should not be one to be wrong about at 06:30.
+
+Consequences: `PagentOS.Agent.Core` gains `AgentCapabilities.Ambient`,
+`Protocol/HeartbeatStatus.cs`, `Connection/IHeartbeatStatusProvider.cs` and an optional
+`HeartbeatMessage.Status`; `AgentConnection` takes an optional status provider and asks it under
+a 1.5 s bound. `PagentOS.SessionCompanion` gains `InputActivity.cs`, `DisplayStateObserver.cs`,
+`DisplayWake.cs`, `MonitorInventory.cs`, `ArmedAlarmStore.cs`, `AlarmArmController.cs`,
+`ActivityStatusReporter.cs`, `WavAudio.cs` and `GreetingPlayer.cs`; `DisplayPowerController`
+gains `Wake`, `Status` and the holdoff refusal; `CompanionRuntime` routes the six new names and
+runs `desktop.play_audio` on the concurrent path the browser family already used, so a status
+request arriving during a 20 s greeting is still answered. `PagentOS.DeviceService` gains
+`CompanionHeartbeatStatusProvider` and the audio-origin check in `InteractiveCapabilityExecutor`.
+`packages/schemas/device-protocol.schema.json` gains the optional `deviceStatus`;
+`DEVICE_PROTOCOL.md` gains §6e–§6h and an updated §9. What this ADR does NOT build: any
+device-side inference about the owner's state, any way to change monitor topology, any resampler,
+any authenticated fetch (the greeting URL is expected to be capability-bearing or loopback-scoped
+on the broker's side — the device authenticates the CONTENT with the digest, not the request),
+and no way for the companion to reach the machine's volume, now or later without a test going red.
