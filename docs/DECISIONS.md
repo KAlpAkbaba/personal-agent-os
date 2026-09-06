@@ -5178,3 +5178,166 @@ real media wake may well answer `consent_wall` and fall back to the tone; the ho
 it does, is for the owner to accept the consent once by hand in that profile's own window
 (the profile is persistent and keeps it), never for the worker to click it. Cloud Core's
 dispatch allowlist and the `media.play` receipt are Track C's.
+## ADR-0074 — A short research is allowed to be thin, never empty by accident (2026-09-07)
+
+Status: Accepted
+
+Context: ADR-0068 gave conversational research a budget it had never had, and it worked —
+the runs got fast. On 2026-09-06 the owner asked the same kind of short question three
+times on the same device inside six minutes, and the production record says what the
+budget cost:
+
+- **afee23c9** (19:49:51Z): 103 candidates discovered, shortlist capped at 25, openai.com
+  challenged twice (`page_validity` access_denied, then interstitial) and COOLED, then
+  "19 candidate(s) skipped: domain cooled" and "11 candidate(s) skipped: per-domain
+  quota"; `fetch_done` 10 over 3 waves; 2 pieces of evidence survived the gate
+  (rejections: date_uncertain, off_topic); synthesis: "openai produced 0 defensible
+  finding(s); 3 required" → FAILED `insufficient_valid_findings` at **81 s of a 120 s**
+  hard budget.
+- **d914e44f** (19:54:09Z): 109 discovered, the same shape, 10 fetched, **1** piece of
+  evidence (interstitial 2, date_uncertain, off_topic 2, outside_recency_window 2,
+  insufficient_content) → FAILED at **58 s**.
+- **deabbd44** (19:51:55Z): 46 discovered, 3 pieces of evidence after 8 fetches,
+  "synthesized via deterministic", 3 findings, READY at 43 s. The owner heard this one.
+
+Two runs in three failed for lack of evidence while a third to a half of their own budget
+sat unspent, and the owner heard "yeterli doğrulanmış kaynak bulamadım" about runs that
+had found real, defensible things. Three separate defects, none of them the challenge
+policy (which did exactly what ADR-0068 said and cost the run nothing after the second
+challenge):
+
+1. **The shortlist was a truncation, not a plan.** `fetch_targets_activity` sorted the
+   whole pending pool by one preference (`_prefetch_preference`) and kept the top
+   `candidate_urls_max`. openai.com answered the query best and carried recent date hints,
+   so it filled most of those 25 slots — and then those slots were thrown away twice over,
+   by the cooldown and by the per-domain quota. Nothing refilled them: the ~78 candidates
+   from other publishers that discovery had ALREADY found were never looked at again. The
+   cap had landed on what was DISCOVERED rather than on what could be FETCHED.
+2. **A wave count, not the budget, ended the run.** `decide_next_wave` stopped at
+   `waves_used >= max_waves` (3) and at `sources_fetched >= max_sources` (10), both of
+   which a QUICK run reaches in under a minute. The 39-62 s that remained were simply not
+   spent. `elapsed_s` was also measured from the first fetch, not from the start of the
+   run, so the "120 s budget" was 120 s of fetching on top of however long discovery took,
+   and the number in diagnostics was not the time the run took.
+3. **The findings gate was binary.** `MIN_REPORT_FINDINGS = 3`, so two real findings and
+   zero findings were the same outcome to the owner: a failure sentence. The pipeline had
+   no way to say "here is what I found, and it is thin".
+
+Decisions:
+
+1. **The shortlist is built for domain diversity, from the whole remaining pool, every
+   wave** (`app.research.browser_activities.build_fetch_shortlist`, pure and unit-tested
+   independently of the activity). Candidates are grouped by domain, ordered within a
+   domain by the existing `_prefetch_preference`, and taken round-robin: domains take
+   turns, best-first. A domain contributes at most `per_domain_max_pages` MINUS what it
+   has already spent this run (read from the run's real fetched-evidence tally), and at
+   most `SHORTLIST_DOMAIN_SHARE` (0.4) of the shortlist before other domains have had a
+   turn. A domain with no allowance left therefore occupies **no slot at all**, and a
+   cooled domain is filtered out before the shortlist is built — it is not "less
+   preferred", it is not fetchable. `candidate_urls_max` now means *the shortlist of
+   FETCHABLE candidates*, which is the reading that makes the number mean something: the
+   cap is on what can be fetched, not on what was discovered. The refill is structural —
+   slot *k* is the *k*-th best candidate of a domain that has not had its turn — rather
+   than a special case that has to fire.
+
+2. **`max_waves` and `max_sources` are floors of attempts; the budget is the ceiling.**
+   We took the first of the two options the brief offered and did NOT raise QUICK's
+   `max_waves`: raising a number would have moved the same arbitrary wall a little
+   further out, and it was `max_sources` (10, reached at wave 3) that actually bound
+   these runs, not the wave count. `decide_next_wave` now continues while (evidence <
+   `target_findings`) AND (something is fetchable) AND (`elapsed_s` + one wave's own
+   worst case still fits the budget), stopping on `ResearchPolicy.fetch_ceiling`
+   (= `max(max_sources, candidate_urls_max)`) pages as an absolute bound and on a
+   structural safety net (never more waves than pages) so the loop terminates even
+   against a frozen clock. **The policy table of ADR-0068 is unchanged**; two derived
+   properties (`wave_expected_s` = `per_page_timeout_s × ceil(wave_size /
+   concurrent_fetches)`, `fetch_ceiling`) are added instead.
+
+   Three things make this stricter rather than looser, which matters because "spend more
+   of the budget" is exactly the kind of change that quietly becomes "spend more than the
+   budget":
+
+   - the budget check is now `elapsed + wave_expected_s >= budget`, not `elapsed >=
+     budget`: a run never STARTS a wave it cannot be sure of finishing inside the budget,
+     where before it could start one at 119.9 s;
+   - the run clock starts when the run does (`workflow.now()` at the top of
+     `BrowserResearchWorkflow.run`), not after discovery, so `hard_budget_s` bounds the
+     whole run and the `elapsed_s` in diagnostics is the time the run actually took;
+   - a run that could ALREADY publish a full report (`evidence >= MIN_REPORT_FINDINGS`)
+     is bounded by the SOFT `target_budget_s` instead, so the extra waves belong to a run
+     that would otherwise have no answer — deabbd44's 43 s success cannot become a 110 s
+     one in pursuit of a fourth finding.
+
+   A new stop reason, `no_fetchable_candidates`, distinguishes "ran out of web" from
+   "ran out of time": a wave that returns fewer targets than it asked for has drained the
+   shortlist, and the workflow reports that as `fetchable_remaining=0`.
+
+3. **A run that verified between 1 and `MIN_REPORT_FINDINGS - 1` sources answers THINLY
+   and says so** (`app.research.synthesis.synthesize_thin`), instead of failing as though
+   it had found nothing. The report is READY, carries the findings that exist, and its
+   `executive_summary` states the thinness in the owner's own language — "Kısa araştırma
+   bütçesinde yalnızca N kaynak doğrulanabildi; bulgular sınırlı." — with `uncertainty`
+   naming each reason (`evidence_thin`, `cooled_domains`, `undated_pages`, as diagnostics
+   codes on `ReportStats.thin_reasons`; the owner hears them as plain Turkish sentences,
+   never as codes). `ResearchReport.thin` and the tool terminal payload's `thin` are the
+   one bit the explain engine and the harness branch on. `spoken_result` says the
+   thinness without a single count or crawler word and closes with a broader run —
+   "İstersen daha geniş araştırayım.", deliberately phrased in the words
+   `derive_mode_from_utterance` already resolves to STANDARD, so an owner who says yes
+   gets the mode the sentence promised.
+
+   Three boundaries hold: **zero evidence is still a truthful failure**, unchanged;
+   **`MIN_REPORT_FINDINGS` is untouched** as the threshold for a FULL report (thinness is
+   a differently-shaped, explicitly-labelled answer, never a lowered bar); and **the
+   provenance gate is not weakened** — every thin finding rests on real evidence and
+   passes `run_provenance_gate` exactly as a full report's does. A thin run uses the
+   deterministic provider ONLY: asking a model for three findings from one source is
+   inviting it to invent the other two, and the honest fix is not to ask.
+
+4. **QUICK's two discovery queries are the two most DIFFERENT ones, not the first two**
+   (`app.research.plan.diversify_queries`). `expand_queries`' first three entries are
+   Turkish variants of the same phrase ("X", "X haberleri", "X son gelişmeler"), so
+   `queries[:2]` bought one language's view of one engine's coverage — part of why ~100
+   candidates concentrated in a handful of domains. The pick is greedy and deterministic:
+   the owner's own phrasing always leads, then the remaining query with the lowest word
+   overlap against everything already picked, ties broken by the expansion's own order.
+   For a Turkish topic naming an English entity this yields the Turkish query and the
+   English core query without any language list — no provider change, no new dependency.
+
+What this ADR REFUSED to do, and why:
+
+- **Lower `MIN_REPORT_FINDINGS` globally.** That would make every report — including
+  STANDARD and DEEP ones with a full budget behind them — publishable on two sources, to
+  fix a problem that only ever appeared under QUICK's tight budget. The floor is a
+  statement about what a full answer is; the fix is to have a second, honest shape of
+  answer, not to move the floor.
+- **Retry a challenged page.** ADR-0068 decision 3's zero-retry rule is what made the
+  budget affordable at all, and the record shows it working: openai.com cost this run two
+  fetches, not nineteen. A run short of evidence has many other domains to try; it does
+  not have another attempt at a site that already refused.
+- **Add a headless / plain-HTTP fetch path.** ADR-0068 decision 7 already recorded the
+  live evidence against it (the same newsroom answered headless Chrome 403 and headful
+  Chrome 200). Nothing about being short of evidence makes that finding less true; it
+  makes the temptation stronger, which is exactly when a recorded refusal earns its keep.
+- **Bypass, solve or wait out any CAPTCHA, consent wall or interstitial.** Unchanged and
+  not negotiable, at any evidence count.
+- **Raise QUICK's `max_sources`.** See decision 2: the honest change was to stop treating
+  a page count as the run's limit, not to pick a bigger page count.
+
+Consequences: `app/research/policy.py` gains `wave_expected_s`, `fetch_ceiling`,
+`REASON_NO_CANDIDATES`, `SHORTLIST_DOMAIN_SHARE` and two new `decide_next_wave`
+arguments (`fetchable_remaining`, `publishable`); `app/research/browser_activities.py`
+gains `build_fetch_shortlist` and the thin branch of `synthesize_activity`;
+`app/research/synthesis.py` gains `synthesize_thin` and the `THIN_REASON_*` codes;
+`ReportStats` gains `thin`/`thin_reasons` and `ResearchReport`/`ResearchResult`/
+`ResearchDiagnostics` and the tool terminal payload gain `thin`;
+`app/research/plan.py` gains `diversify_queries`; `BrowserResearchWorkflow.run` starts
+its clock at the top and threads the two new wave arguments. A QUICK run may now fetch
+more than 10 pages and take longer than it used to when it is short of evidence — up to,
+never past, the 120 s the owner set — and a run that already has a publishable answer
+stops at the 90 s soft budget instead. `tests/unit/test_research_regression_20260906.py`
+pins all three runs by their real counts. What this ADR does NOT build: any use of the
+new `thin` flag inside `app/explain` (the flag and its reasons are published; which
+explain level says what about them is that module's own decision), enforcement of
+`min_distinct_publishers` (still diagnostics-only, ADR-0068's open item), and a
+`research.start` utterance field (ADR-0068 item 1's open note, still open).
