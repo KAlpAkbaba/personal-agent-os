@@ -218,4 +218,29 @@ Two rules with a history behind them:
   not take effect.
 * Display-off has its own separate qualification, deliberately not folded into the main M18
   owner run, because a wrong inference there interrupts unrelated owner work.
+* **One session owns the microphone.** The first real run (2026-09-06) found `/core` and
+  `/voice` were two pages with two rigs; opening both would have meant two `getUserMedia`
+  captures and two OpenAI realtime sessions — the owner's voice leaving the machine twice,
+  billed twice, with two speakers answering. The voice session is now a single client-side
+  store (ADR-0061): one rig, one capture, one realtime session, and a second `connect()`
+  while one is live is refused rather than stacked. `/voice` reads that store; it cannot
+  create a second. The owner qualification asserts the server-side half — no two web
+  realtime sessions of the run were open at once — from the sessions' own started/ended
+  instants; the client half is a unit-suite property, because a harness cannot count
+  microphones.
+* **An open camera is not presence.** Also from the first real run: the Core said "Sahip
+  durumu bilinmiyor" with the eye on, and that was the *correct* half of a two-part failure.
+  `device.camera_state` is an evidence fact about a device; `owner.presence` is a runtime
+  inference that needs observations, and with the eye on and nothing observed the World
+  Model carries the first and refuses the second by name (`no_observations_yet`,
+  `test_an_open_camera_is_not_evidence_of_presence`). The other half — a held state never
+  republished, so a live claim looked like no claim — is fixed by a heartbeat at half the
+  TTL. Neither fix infers anything from the camera being open.
+* **The presence client was a motion sensor at the wrong unit.** A seated owner was read as
+  `away` for eleven minutes because presence was "whole-frame mean luminance changed by more
+  than 2% between two samples". The rewrite (ADR-0062) counts changed grid CELLS and keeps a
+  90 s memory of the last real movement, distinguishes an exit burst from sitting still,
+  and caps absence confidence at 0.75 because a motion sensor has no positive evidence of
+  an empty room. The privacy property is unchanged: still a 108-number grid, still no frame
+  leaving its source, and the diagnostics on the Core are an age, a level and a fraction.
 * Owner voice identification is not built. When it is, §2's rule is the acceptance criterion.

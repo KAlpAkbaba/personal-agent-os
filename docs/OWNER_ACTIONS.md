@@ -21,52 +21,69 @@ Status vocabulary matches `docs/QUALIFICATION.md`: `PROVEN_REAL`, `PROVEN_PROXY`
 
 ## Now
 
-**Item 19 — M18 in one command.** Everything before it is built, merged and proven on fakes;
-this is the only thing that cannot be proven without you: your real camera, your real room,
-and a real alarm through the real chain. Under five minutes.
+**Item 19 — M18 in one command, from `/core` alone.** Everything before it is built, merged
+and proven on fakes; this is the only thing that cannot be proven without you: your real
+microphone, your real camera, your real room, and a real alarm through the real chain. About
+eight minutes, most of it you leaving the room and coming back.
 
 Item 9 (K66 re-qualification) stays open and optional; it is not on M18's path.
 
 ---
 
-### 19. The Core, the camera, one quiet alarm — **this is the current action**
+### 19. The Core, your voice, the camera, one quiet alarm — one run — **this is the current action (2nd attempt)**
 
-Unblocks: `docs/QUALIFICATION.md` Stage 12 rows 12.1, 12.5–12.8, 12.12, 12.16, 12.17 (the
-Core renders real state; the camera indicator is truthful; a real presence transition; the
-eye actually stops; no raw camera archive; a real alarm that ramps and stops itself; the
-ledger records all of it; nothing is deployed by asking).
+Unblocks: `docs/QUALIFICATION.md` Stage 12 rows 12.1, 12.5–12.8, 12.12, 12.16, 12.17 and
+the integrated rows 12.21–12.25 (voice from the Core; real listening/speaking states; a
+cognitive request from the Core; `Gözünü kapat` by voice; one session, one microphone).
 
-**What you are checking.** M18 gave PagentOS a body it can be seen thinking in (`/core`), a
-camera whose only output is seven structured fields, a presence model that says
-`likely_asleep confidence=0.86` rather than a fact, and routines that act on time. Every part
-is built, merged and proven against fakes; two things need your machine: the camera sees your
-room, and the alarm rings on your speaker.
+**What happened on the first attempt (2026-09-06 morning), so you know what was real:** the
+Cloud Core release went through, the Windows agent update was verified, the alarm pair was
+advertised, `/core` answered, and the alarm routine triggered. Then the harness itself
+crashed on a PowerShell shape bug (fixed, with a regression suite), the presence model read
+you as `away` while you sat in front of the camera (the client was measuring whole-frame
+motion; rewritten — the unit is now the grid cell, and presence is a 90 s memory), the Core
+showed "Sahip durumu bilinmiyor" because a held state was never republished (fixed — it
+heartbeats), and your `Gözünü kapat` was recorded as never having happened because the
+harness gated it on something unrelated (fixed). And `/core` and `/voice` were still two
+pages: the Core could not hear you. That is the change this attempt qualifies — the voice
+session now lives under the Core, and `/voice` is a diagnostics view of the same session.
 
-**Two things happen automatically inside the command, and you should know they will:**
+**What you are checking.** From `http://localhost:3000/core` alone: the Core loads real
+state; voice connects there; when you speak the Core actually listens; the answer comes
+through the real Realtime system and the Core moves to the generated speech; a real
+cognitive request reaches its subsystem; the camera can be enabled; a current presence
+observation reaches the World Model and the Core; `Gözünü kapat` really stops perception;
+the alarm still works; everything closes; and no second microphone or realtime session is
+ever opened. Every one of those is asserted from the Cloud Core's own records — there are no
+yes/no questions this time.
 
-- the deployed Cloud Core predates M18 (it has no `/v1/routines`), so the command releases it
-  once — the same transactional release as items 10 and 13: build, migrate (0017–0020),
-  recreate the api container only, health check, rollback on failure;
-- the installed Windows agent predates the alarm capability. The command checks this FIRST
-  and, if so, stops with `OWNER M18: NEEDS_AGENT_INSTALL` and prints the one install command
-  (one UAC prompt). It never installs anything itself. Run that, then rerun the command.
+**Two things may happen automatically inside the command:** a Cloud Core release if the
+deployed core predates this checkout (transactional, rollback on failure), and a stop with
+`OWNER M18: NEEDS_AGENT_INSTALL` if the installed agent lacks the alarm pair (it prints the
+one install command and never installs anything itself).
 
 **One command:**
 
 ```powershell
-.\scripts\core\owner-m18.ps1 -OutFile m18-1.json
+.\scripts\core\owner-m18.ps1 -OutFile m18-2.json
 ```
 
-It will: probe and (once) release the Cloud Core; check the agent; start the web shell and
-wait for `/core`; then ask you to sign in at `http://localhost:3000/core`, enable the camera,
-stay in view ~30 s, leave the room for ~1 minute, come back, and say **`Gözünü kapat`** (or
-click the disable control). It watches the Presence Engine meanwhile and continues on its
-own. Then it arms a one-shot routine: ~45 s later a *quiet* alarm ramps from 5% to 40% over
-10 s, rings for 15 s and stops by itself — the ramp is enforced on the device, and nothing
-touches your master volume. Two yes/no questions at the end (did you hear it ramp and stop;
-did the Core show the camera state, your presence and the candidate awaiting approval).
+It starts the web shell, waits for `/core`, and prints a seven-line script. Sign in at
+`/core`, connect voice **there** (the voice control under the Core, not `/voice`), then:
 
-Expected last line: `OWNER M18: PASS`, and `m18-1.json` beside the repo — paste its `checks`
+1. say **`Son yaptıklarını anlat.`**
+2. say **`Kendi sisteminde ne görüyorsun?`**
+3. enable the camera (`Gözü aç`) and stay in view about 30 seconds
+4. leave the room for about 2.5 minutes, then come back and sit down
+5. say **`Gözünü kapat.`**
+6. a quiet alarm ramps from 5% to 40% over 10 s, rings 15 s and stops by itself
+7. disconnect voice on the Core, then press Enter in the terminal
+
+The script watches the Cloud Core the whole time. The presence part needs the 2.5 minutes
+away: the engine needs sustained evidence (45 s) to change its mind, and the client
+remembers movement for 90 s before it lets you go.
+
+Expected last line: `OWNER M18: PASS`, and `m18-2.json` beside the repo — paste its `checks`
 block back here. If any check fails, paste the whole file; it names the failing assertion.
 
 **What it deliberately does not do:** turn your display off (built, gated twice, its own

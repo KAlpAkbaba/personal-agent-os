@@ -122,3 +122,22 @@ def test_no_observations_yet_is_an_honest_uncertainty_not_a_guess(session) -> No
     snapshot = assemble_snapshot(session, now=NOW, presence_runtime=engine)
     assert not [f for f in snapshot.facts if f.key == "owner.presence"]
     assert any(u.subject == "owner.presence" for u in snapshot.uncertainties)
+
+
+def test_an_open_camera_is_not_evidence_of_presence(session) -> None:
+    """The first real M18 run, 2026-09-06: the eye was on and the Core said
+    "Sahip durumu bilinmiyor" - and that half was CORRECT. "camera enabled" is
+    an evidence fact about a device; "the owner is present" is a runtime
+    inference that needs observations. With the eye on and nothing observed the
+    World Model must carry the first and refuse the second, by name."""
+    enable_eye(session, reason="owner_start")
+    engine = PresenceFusionEngine()
+    snapshot = assemble_snapshot(session, now=NOW, presence_runtime=engine)
+
+    camera = next(f for f in snapshot.facts if f.key == "device.camera_state")
+    assert camera.value == "enabled"
+    assert camera.truth_kind is TruthKind.EVIDENCE
+
+    assert not [f for f in snapshot.facts if f.key == "owner.presence"]
+    reasons = {u.reason for u in snapshot.uncertainties if u.subject == "owner.presence"}
+    assert reasons == {"no_observations_yet"}
