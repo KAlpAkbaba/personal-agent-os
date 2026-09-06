@@ -28,7 +28,29 @@ the Cloud Core's own record (ADR-0064; `docs/evidence/`). Two rows stay open by 
 are optional, whenever you want them: a one-minute media-action run (row 12.13, an
 owner-selected item playing on the real chain) and the display-off qualification
 (row 12.19, deliberately separate). M18.1 — the Holographic Core visual experience pass —
-has started; you will get a `/core` visual preview only when the improvement is substantial.
+is implemented and merged (ADR-0065); item 22 is your look at it, when you like.
+
+---
+
+### 22. Look at the new Core — **optional, when you like (M18.1)**
+
+The Core on `/core` is now a layered structure — nucleus, concentric rings, rotating
+topology layers, translucent shells, internal connection paths, two bounded particle flows,
+depth and glow — and much larger in Minimal mode. Every motion is a published state or a
+real measurement: listening pulls energy inward by your own mic level; speech pulses the
+Core with the real playback envelope; thinking and tool work expand the topology; research
+grows a restrained constellation of sources; memory retrieval converges toward the Core; a
+SHADOW_READY capability appears as a parked peripheral node; the eye draws a thin aperture.
+Idle is breath and a minute-scale drift, nothing more. `docs/M18_1_CORE_VISUAL_LANGUAGE.md`
+is the design note.
+
+A server-rendered preview of the 2D fallback for ten states was handed over in chat; the
+WebGL scene itself has not been rendered on any screen yet (no browser is launched here), so
+your look is the visual check. Start the shell as usual, open `/core`, then `/core/cockpit`;
+connect voice and say anything, open the eye, ask `Araştır …` if you want to see the
+constellation. Quality is High / Balanced / Low in the Core's preferences; Low draws no
+particles and no parallax. Say what does not read right, or what reads as motion the system
+did not actually have.
 
 **Item 21 — the presence-only run (about six minutes, most of it out of the room) — DONE.**
 M18 closed from combined durable evidence, not from one monolithic run. Your final run
