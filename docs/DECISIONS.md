@@ -4021,3 +4021,55 @@ run on `/core` should show: Bağlan → `listening` with inward flow tracking th
 a tool → `tool_running` with its Turkish name, speech → a pulse that is the audio, "Dur" →
 `interrupted` with the pulse at zero on the same frame, and "Gözünü kapat" → the eye cell
 reading disabled while the local camera light goes out.
+
+
+## ADR-0062 — Presence from a camera: the unit is the cell, and presence is a memory (2026-09-06)
+
+Status: Accepted
+
+Context: the first real M18 owner run. The owner enabled the camera and sat in front of it
+for eleven minutes; the production Presence Engine held `away` at confidence 0.75 the whole
+time, on 1,102 camera observations, and published exactly one transition. Every layer below
+the camera behaved correctly — the intake screened, the engine fused, the ledger recorded,
+the alarm fired — and the answer was still wrong, because the observation the device client
+sent was wrong. Its `person_present` was "the whole-grid mean luminance difference between
+two samples exceeds 2%". A seated person typing or turning their head changes a handful of
+the 108 grid cells strongly; averaged over all of them that is under 1%. The client was a
+motion sensor whose unit was the whole frame, and at that unit a still person and an empty
+room are the same picture.
+
+A second defect compounded it: the UI-state bus publishes `owner.*` on change, the camera
+observation's TTL is 90 s, and a held state was never republished — so the Core showed
+"Sahip durumu bilinmiyor" for ten of those eleven minutes while the engine held a live claim.
+
+Decisions:
+
+1. **The unit is the cell.** `measureMotion` reports the FRACTION OF CELLS whose luminance
+   changed by more than `CELL_CHANGE_THRESHOLD` (0.05, which a cell's thousands of averaged
+   pixels do not reach by noise), plus the strongest single-cell change. Activity buckets on
+   that fraction: two cells is the least a real movement produces, a tenth of the grid is a
+   shift or gesture, a third is someone walking through. The whole-grid mean is kept only
+   for the record.
+2. **Presence is a memory, not a moment.** A person in a room moves within a minute or two,
+   always. `person_present` is "a meaningful movement within `PRESENCE_MEMORY_MS` (90 s)",
+   and confidence is a stated function of how recent that movement was and whether the
+   owner is moving now — never of a single frame.
+3. **An exit is distinguishable from stillness.** Leaving a room is a large burst of change
+   followed by nothing; sitting still after a fidget is not. The level of the last movement
+   before the stillness began is kept: an exit-sized last movement leans "absent" as the
+   silence grows; a small one leans "present, very still" through a `LINGER_MS` (10 min)
+   window at a confidence that says how weak that evidence is (a 0.35 floor, fading), and
+   only then "absent". Absence confidence never passes 0.75, because a motion sensor has no
+   positive evidence of an empty room.
+4. **The numbers are on the Core.** The eye cell shows the age and level of the last
+   movement and the changed-cell fraction, so "why does it think that?" is readable off the
+   screen during qualification without any frame existing anywhere.
+5. **A held state heartbeats.** The presence service republishes a held, non-UNKNOWN state
+   once half its TTL has elapsed since the last publish — a bus event, not a ledger row.
+
+Consequences: the thresholds are named constants calibrated against synthetic frames and
+one real room's failure; the next real owner run is what calibrates them further, and the
+diagnostics on the Core exist so that run can say what it saw. `resting` is now reachable
+(a present owner still for five minutes after a small movement) and so, in time, is
+`likely_asleep`; both remain inferences with stated confidence. Not built: any person or
+face model. The client still cannot tell one person from another, and must not.

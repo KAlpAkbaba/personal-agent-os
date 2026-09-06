@@ -135,7 +135,7 @@ describe("enabling the eye is reflected immediately, and never starts a camera b
     const html = renderToStaticMarkup(
       <EyeControlView
         eye={eye}
-        status={{ running: false, cameraLabel: null, lastObservation: null, lastError: null, startedAt: null }}
+        status={{ running: false, cameraLabel: null, lastObservation: null, motion: null, lastError: null, startedAt: null }}
         permission="granted"
         busy={false}
         error={null}
