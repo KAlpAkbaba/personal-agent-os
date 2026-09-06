@@ -47,8 +47,16 @@ import {
 
 const VIEW = 320;
 const CENTER = VIEW / 2;
-/** The nucleus at scale 1, in SVG units. */
-const BASE_RADIUS = 48;
+/**
+ * The nucleus at scale 1, in SVG units.
+ *
+ * Chosen so the OUTERMOST layer fits the viewbox: the outer field at world
+ * radius 2.18 maps to 2.18 / 0.62 * 44 = 154.7, just inside the 160 half-box.
+ * The Core's principal structure (the outermost orbital, 1.98) then spans
+ * about 0.88 of the box, which is within a hair of the 3D view's CORE_FILL -
+ * so the two paths really do fill the stage the same way.
+ */
+const BASE_RADIUS = 44;
 /** The 3D scene's nucleus radius; every other radius is stated relative to it. */
 const NUCLEUS_WORLD = 0.62;
 

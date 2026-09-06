@@ -1,0 +1,8 @@
+# Generated pictures of the Core, written by
+# `pnpm exec vitest run tests/preview/core-preview.test.tsx`.
+#
+# They are build output, not source: the intent they are drawn from lives in
+# `app/lib/uistate/visual.ts` and the drawing in `app/core/CoreFallback2D.tsx`,
+# so a checked-in SVG could only ever be a stale copy of both.
+*
+!.gitignore
