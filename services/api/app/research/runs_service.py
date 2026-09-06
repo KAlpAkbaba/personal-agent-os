@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from app.research.discovery import DiscoveredCandidate
 from app.research.models import (
     STAGE_PLANNED,
+    STAGE_READY,
     ResearchCandidateRow,
     ResearchEvidenceRow,
     ResearchReportRow,
@@ -85,6 +86,17 @@ def update_run(
         events.append({**event, "at": utcnow().isoformat()})
         run.events_json = events[-MAX_EVENTS:]
     run.updated_at = utcnow()
+    # docs/DECISIONS.md ADR-0076: the moment a run becomes READY, it becomes the research
+    # the owner is pointing at. HERE, because this is the one choke point every path that
+    # marks a run ready goes through - the Temporal activity that persists the report, the
+    # REST-started run and the voice-started run alike - so the focus cannot exist for one
+    # entry point and not another. It is a best-effort append (see note_research_ready):
+    # a completed research must never become a failed one because a focus row would not
+    # write.
+    if stage == STAGE_READY:
+        from app.research import focus as focus_module
+
+        focus_module.note_research_ready(session, task_id)
     session.commit()
     return run
 

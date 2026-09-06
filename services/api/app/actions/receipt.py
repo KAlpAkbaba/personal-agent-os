@@ -122,7 +122,17 @@ TERMINAL_CLAIMABLE: Final[frozenset[str]] = frozenset({TERMINAL_VERIFIED, TERMIN
 #: completed research, and `activity.explain` names the job and artifact it read
 #: (`research_job_id` / `research_artifact_id`, also under provenance) - the identity an
 #: owner qualification asserts instead of timestamps.
-ACTION_CONTRACT_VERSION: Final = 7
+#: v8 (2026-09-07, M18.2 architectural fix, ADR-0076): a research is a thing the owner
+#: POINTS AT. A durable, owner-level research focus survives voice reconnects and page
+#: reloads; three follow-up tools (`research.explain`, `research.sources`,
+#: `research.finding_detail`) execute against an explicitly resolved job id and take no
+#: title and no id from the model; every research-bound tool result names
+#: `research_job_id`, `research_artifact_id`, `resolution_reason` and `focus_source`; and
+#: `research.start` is refused for any turn that POINTS at a run - including when no
+#: research exists at all, where the answer is one question rather than a crawl. A
+#: deployed v7 has no focus, no resolver and no such tools: it binds a follow-up to
+#: whatever ran most recently and asks an unanswerable clarification when it cannot.
+ACTION_CONTRACT_VERSION: Final = 8
 
 FAKE_COMPLETION_PHRASES: Final[tuple[str, ...]] = (
     "yapmış gibi düşün",
@@ -138,10 +148,36 @@ ACTION_TRACE_MAX_STEPS: Final = 12
 ACTION_TRACE_STEP_CHARS: Final = 80
 
 
+#: docs/DECISIONS.md ADR-0076. The OTHER thing an owner must never hear instead of an
+#: answer: the assistant narrating its own bookkeeping. On 2026-09-06 the owner asked
+#: "Teknik anlat." and got "kayıtlarımı kontrol edeceğim" and "hangi kayda bakmam
+#: gerektiğini bulmaya çalışıyorum" — six times, with no answer after any of them. A
+#: follow-up about a finished research is answered from that research's own report, at
+#: once; where the answer came from is not a sentence.
+BOOKKEEPING_PHRASES: Final[tuple[str, ...]] = (
+    "kayıtlarımı kontrol",
+    "kayıtlara bakıyorum",
+    "kayıtlara bakayım",
+    "hangi kayda bak",
+    "hangi kaydı",
+    "bulmaya çalışıyorum",
+    "kontrol etmem gerek",
+    "biraz bakmam gerek",
+)
+
+
+def _fold(text: str) -> str:
+    return text.replace("İ", "i").replace("I", "ı").lower()
+
+
 def contains_fake_completion(text: str) -> bool:
     """True when ``text`` carries one of the banned phrases (Turkish-casefolded)."""
-    folded = text.replace("İ", "i").replace("I", "ı").lower()
-    return any(phrase in folded for phrase in FAKE_COMPLETION_PHRASES)
+    return any(phrase in _fold(text) for phrase in FAKE_COMPLETION_PHRASES)
+
+
+def contains_bookkeeping(text: str) -> bool:
+    """True when ``text`` narrates the lookup instead of answering (ADR-0076)."""
+    return any(phrase in _fold(text) for phrase in BOOKKEEPING_PHRASES)
 
 
 # ------------------------------------------------------------------ client error classes
@@ -413,6 +449,7 @@ def record_receipt(db: Session, receipt: ActionReceipt, subsystem: str) -> Any |
 __all__ = [
     "ACTION_TRACE_MAX_STEPS",
     "ACTION_TRACE_STEP_CHARS",
+    "BOOKKEEPING_PHRASES",
     "CLIENT_ERROR_CLASSES",
     "ERROR_CAPABILITY_MISSING",
     "ERROR_DEVICE_BUSY",
@@ -456,6 +493,7 @@ __all__ = [
     "TERMINAL_VERIFIED",
     "ActionReceipt",
     "bound_action_trace",
+    "contains_bookkeeping",
     "contains_fake_completion",
     "eye_speech",
     "record_receipt",

@@ -226,6 +226,10 @@ def test_create_selects_by_capability_and_returns_the_contract(wired) -> None:
         "voice.intent",
         "narration.control",
         "research.start",
+        # ADR-0076: follow-ups on a FINISHED research, resolved server-side.
+        "research.explain",
+        "research.sources",
+        "research.finding_detail",
         "plan.redirect",
         "activity.explain",
         "state.now",

@@ -17,8 +17,10 @@ from typing import Any
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     String,
     Text,
     UniqueConstraint,
@@ -148,7 +150,103 @@ class ResearchReportRow(Base):
     )
 
 
+#: docs/DECISIONS.md ADR-0076. Why a research became the one the owner is pointing at.
+#: Closed vocabulary, mirrored by the CHECK constraint in
+#: alembic/versions/20260907_0022_research_focus.py.
+FOCUS_RESEARCH_JUST_COMPLETED = "research_just_completed"
+FOCUS_RESULT_JUST_SPOKEN = "result_just_spoken"
+FOCUS_OWNER_SELECTED_IN_UI = "owner_selected_in_ui"
+FOCUS_OWNER_SELECTED_BY_VOICE = "owner_selected_by_voice"
+FOCUS_FOLLOWUP_REFERENCE = "followup_reference"
+
+FOCUS_SOURCES = (
+    FOCUS_RESEARCH_JUST_COMPLETED,
+    FOCUS_RESULT_JUST_SPOKEN,
+    FOCUS_OWNER_SELECTED_IN_UI,
+    FOCUS_OWNER_SELECTED_BY_VOICE,
+    FOCUS_FOLLOWUP_REFERENCE,
+)
+
+#: The single owner (constitution: one human owner, no tenant model). The column exists
+#: so the row says WHOSE focus this is rather than leaving it implied by the schema.
+OWNER_ID = "owner"
+
+
+def _in_list(column: str, values: tuple[str, ...]) -> str:
+    joined = ", ".join(f"'{v}'" for v in values)
+    return f"{column} IN ({joined})"
+
+
+class ResearchFocusRow(Base):
+    """One entry of the owner's research focus stack (docs/DECISIONS.md ADR-0076).
+
+    APPEND-ONLY by design: "which research is the owner pointing at?" is answered by the
+    most recent row, "the previous one" by the most recent row naming a DIFFERENT job,
+    and an ordinal by counting distinct jobs down that list. Setting focus on a job that
+    is already current appends again on purpose — recency is the whole ordering, and a
+    row that was updated in place would lose the history "bir önceki" reads.
+    """
+
+    __tablename__ = "research_focus"
+    __table_args__ = (
+        CheckConstraint(
+            _in_list("source_of_focus", FOCUS_SOURCES), name="ck_research_focus_source"
+        ),
+        Index("ix_research_focus_owner_selected_at", "owner_id", "selected_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False, default=OWNER_ID)
+    #: The research task id — the identity. Never a title: two runs may share one
+    #: (the owner's 2026-09-06 record has exactly that pair).
+    research_job_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    artifact_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("artifacts.id", ondelete="SET NULL"), nullable=True
+    )
+    source_of_focus: Mapped[str] = mapped_column(String(32), nullable=False)
+    #: Informational only: which voice session (if any) was in the room when the focus
+    #: moved. The focus itself is the OWNER's and outlives every session — that is the
+    #: point of the table (a page reload used to lose the conversation's only linkage).
+    session_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    selected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class ResearchOwnerStateRow(Base):
+    """One row, primary key ``'owner'``: the question the server is waiting on.
+
+    ADR-0076: when a reference is genuinely ambiguous the server asks ONE short question
+    and remembers what it offered, so the owner's spoken answer ("ikincisi", "20:19'daki")
+    has something to land on. In the owner's 2026-09-06 record nothing did, and the same
+    clarification was spoken six times in two and a half minutes.
+    """
+
+    __tablename__ = "research_owner_state"
+
+    owner_id: Mapped[str] = mapped_column(String(64), primary_key=True, default=OWNER_ID)
+    #: {asked_at, question, candidates:[{research_job_id, artifact_id, topic,
+    #: completed_at, mode, source_count}]} or NULL. Bounded by a TTL on read
+    #: (app.research.focus.PENDING_CLARIFICATION_TTL), never by a sweeper.
+    pending_clarification_json: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONColumn, nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 __all__ = [
+    "FOCUS_FOLLOWUP_REFERENCE",
+    "FOCUS_OWNER_SELECTED_BY_VOICE",
+    "FOCUS_OWNER_SELECTED_IN_UI",
+    "FOCUS_RESEARCH_JUST_COMPLETED",
+    "FOCUS_RESULT_JUST_SPOKEN",
+    "FOCUS_SOURCES",
+    "OWNER_ID",
     "STAGES",
     "STAGE_CANCELLED",
     "STAGE_DISCOVERING",
@@ -164,6 +262,8 @@ __all__ = [
     "TERMINAL_STAGES",
     "ResearchCandidateRow",
     "ResearchEvidenceRow",
+    "ResearchFocusRow",
+    "ResearchOwnerStateRow",
     "ResearchReportRow",
     "ResearchRunRow",
 ]
