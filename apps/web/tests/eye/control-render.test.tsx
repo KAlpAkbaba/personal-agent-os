@@ -10,7 +10,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-import EyeControlView, { type EyeControlViewProps } from "../../app/core/EyeControlView";
+import EyeControlView, { type EyeControlViewProps, TRACE_SEPARATOR } from "../../app/core/EyeControlView";
 import type { PerceptionStatus } from "../../app/lib/eye/perception";
 import type { EyeObservation } from "../../app/lib/eye/types";
 import { eyeView } from "../../app/lib/uistate/ambient";
@@ -154,6 +154,17 @@ describe("the control itself", () => {
 
   it("is an ambient-cell, styled like the rest of contract v2's band", () => {
     expect(render()).toContain('class="ambient-cell"');
+  });
+
+  it("shows the last action's stages on one muted line, and nothing before any action", () => {
+    expect(render()).not.toContain("data-eye-trace");
+    expect(render({ lastActionTrace: [] })).not.toContain("data-eye-trace");
+    const html = render({
+      lastActionTrace: ["request:enable", "getUserMedia:called", "getUserMedia:NotAllowedError", "state:ENABLING->ERROR"],
+    });
+    expect(html).toContain('data-eye-trace="4"');
+    expect(html).toContain(["request:enable", "getUserMedia:called", "getUserMedia:NotAllowedError"].join(TRACE_SEPARATOR));
+    expect(html).toContain("state:ENABLING-&gt;ERROR"); // the arrow is text, escaped as markup must be
   });
 });
 

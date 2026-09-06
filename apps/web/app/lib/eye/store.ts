@@ -51,7 +51,7 @@ import {
   type PerceptionOptions,
   type PerceptionStatus,
 } from "./perception";
-import type { CameraPermission, EyeErrorClass } from "./types";
+import type { CameraPermission, EyeErrorClass, MediaTrackReadyState } from "./types";
 
 export type EyeState = "DISABLED" | "ENABLING" | "ACTIVE" | "DISABLING" | "ERROR";
 
@@ -67,10 +67,28 @@ export type LocalEyeResult = {
   observed_at: string;
   /** False when the store was already in the requested state and did nothing. */
   changed: boolean;
+  /**
+   * The current video track's `readyState` right after the action: `"live"`
+   * for an open camera, `"ended"` for one that was really stopped (the light
+   * is off), `null` when this device holds no track at all.
+   */
+  media_track_ready_state: MediaTrackReadyState | null;
+  /**
+   * The stages the store went through for THIS action, in order, bounded to
+   * `MAX_ACTION_TRACE` entries — e.g. `["request:enable", "getUserMedia:called",
+   * "permission:granted", "device:Integrated Webcam", "stream:1 track live",
+   * "loop:started", "state:ENABLING->ACTIVE"]`. Text only: step names, the
+   * camera's label, a track state, an error's NAME. Never a frame, a pixel
+   * count, or any identifier.
+   */
+  action_trace: string[];
 };
 
 /** §5.1: the local capability is bounded; past this an enable is `timeout`. */
 export const LOCAL_EYE_TIMEOUT_MS = 8_000;
+
+/** The action trace never grows past this; the newest stage always survives. */
+export const MAX_ACTION_TRACE = 12;
 
 // ---------------------------------------------------------------- registry
 
@@ -186,16 +204,28 @@ export function browserEyeParts(): EyeBuilder {
 
 // ----------------------------------------------------------------- errors
 
+/** An error's `name` (a DOMException's is its kind), or `""` for a non-error. */
+export function errorName(err: unknown): string {
+  return typeof err === "object" && err !== null && "name" in err ? String((err as { name: unknown }).name) : "";
+}
+
 /**
- * `getUserMedia`'s failure names, onto the receipt's closed set (§5.1). Any
- * name we do not know is a device-side failure to open — the camera did not
- * come up — rather than a permission or capability question.
+ * A camera open's failure, onto the receipt's closed set (`types.ts`) by the
+ * error's NAME — structured, never generic. The `getUserMedia` names are the
+ * WebRTC spec's; the two class names are this module's own (`perception.ts`)
+ * and mark failures AFTER `getUserMedia` resolved, which is why "any other
+ * rejection" is `get_user_media_failed` and not one of those. A TypeError
+ * (no `mediaDevices` at all) never reaches here: `cameraAvailable()` answers
+ * `capability_missing` before the source is touched.
  */
 export function classifyCameraError(err: unknown): EyeErrorClass {
-  const name = typeof err === "object" && err !== null && "name" in err ? String((err as { name: unknown }).name) : "";
+  const name = errorName(err);
   if (name === "NotAllowedError" || name === "SecurityError") return "permission_denied";
-  if (name === "TypeError") return "capability_missing"; // `navigator.mediaDevices` missing → a TypeError at the call
-  return "device_unavailable"; // NotFoundError, NotReadableError, OverconstrainedError, AbortError, …
+  if (name === "NotFoundError" || name === "OverconstrainedError") return "device_not_found";
+  if (name === "NotReadableError" || name === "AbortError") return "device_busy";
+  if (name === "CameraTrackEndedError") return "stream_created_but_track_ended";
+  if (name === "PerceptionStartError") return "perception_start_failed";
+  return "get_user_media_failed";
 }
 
 // ------------------------------------------------------------------ store
@@ -213,6 +243,8 @@ export type EyeStoreSnapshot = {
   error: string | null;
   /** The closed-vocabulary reason behind `state === "ERROR"`, else `null`. */
   errorClass: EyeErrorClass | null;
+  /** The stages of the most recent (or in-flight) action, for the Core's eye cell; see `LocalEyeResult.action_trace`. */
+  lastActionTrace: string[];
   instances: EyeInstanceCounts;
 };
 
@@ -233,6 +265,7 @@ const SERVER_SNAPSHOT: EyeStoreSnapshot = Object.freeze({
   busy: false,
   error: null,
   errorClass: null,
+  lastActionTrace: [],
   instances: emptyCounts(),
 });
 
@@ -292,13 +325,14 @@ export class EyeStore {
     const source = parts.frameSource;
     // Count what the loop actually opens, at the source itself.
     const counted: FrameSource = {
-      start: (deviceId) => {
+      start: (deviceId, report) => {
         eyeInstances.bump("cameraOpens");
-        return source.start(deviceId);
+        return source.start(deviceId, report);
       },
       sample: (reduce) => source.sample(reduce),
       stop: () => source.stop(),
       label: () => source.label(),
+      trackReadyState: () => source.trackReadyState?.() ?? null,
     };
     eyeInstances.bump("sessions");
     const session = new PerceptionSession({
@@ -328,8 +362,15 @@ export class EyeStore {
     // The loop stopped on its own: the Cloud Core answered 409 (the durable
     // flag went off elsewhere — another device, or the voice safety net) or
     // the bus stop ran. Either way this device is no longer perceiving, and
-    // the state must say so rather than keep claiming ACTIVE.
-    if (this.state === "ACTIVE" && !status.running) this.state = "DISABLED";
+    // the state must say so rather than keep claiming ACTIVE. The stop is
+    // appended to the current trace (`stopLocalOnly`'s own, or the last
+    // action's): that is the story of how the eye came to be DISABLED.
+    if (this.state === "ACTIVE" && !status.running) {
+      this.stage("loop:stopped");
+      this.traceTrack();
+      this.setState("DISABLED");
+      return;
+    }
     this.publish();
   }
 
@@ -343,18 +384,42 @@ export class EyeStore {
           busy: this.state === "ENABLING" || this.state === "DISABLING",
           error: this.error,
           errorClass: this.errorClass,
+          lastActionTrace: [...this.trace],
           instances: eyeInstances.snapshot(),
         }
       : SERVER_SNAPSHOT;
     for (const listener of this.listeners) listener();
   }
 
+  /**
+   * Move the machine. A TERMINAL destination (ACTIVE / DISABLED / ERROR) is a
+   * stage of the current action (`state:<from>-><to>`); the transient ones
+   * (ENABLING / DISABLING) are not, so the trace reads as the spec's example.
+   */
   private setState(state: EyeState, patch: { error?: string | null; errorClass?: EyeErrorClass | null } = {}): void {
+    const from = this.state;
     this.state = state;
     if ("error" in patch) this.error = patch.error ?? null;
     if ("errorClass" in patch) this.errorClass = patch.errorClass ?? null;
+    if (state !== "ENABLING" && state !== "DISABLING") this.stage(`state:${from}->${state}`);
     this.publish();
   }
+
+  // ---------------------------------------------------------------- trace
+
+  /** The stages of the action in flight (or the last one); see `LocalEyeResult.action_trace`. */
+  private trace: string[] = [];
+
+  /** A new action: the trace starts over with its request. */
+  private beginTrace(request: string): void {
+    this.trace = [`request:${request}`];
+  }
+
+  /** Append a stage, bounded: past `MAX_ACTION_TRACE` the newest replaces the last slot. */
+  private stage = (stage: string): void => {
+    if (this.trace.length >= MAX_ACTION_TRACE) this.trace[MAX_ACTION_TRACE - 1] = stage;
+    else this.trace.push(stage);
+  };
 
   // ------------------------------------------------------------ observers
 
@@ -392,7 +457,17 @@ export class EyeStore {
       error_class: this.state === "ERROR" ? this.errorClass : null,
       observed_at: new Date(this.now()).toISOString(),
       changed,
+      media_track_ready_state: this.session?.trackReadyState() ?? null,
+      action_trace: [...this.trace],
     };
+  }
+
+  /** The store was already where it was asked to be: a two-stage trace, no transition. */
+  private already(request: "enable" | "disable"): LocalEyeResult {
+    this.beginTrace(request);
+    this.stage(`already:${this.state}`);
+    this.publish();
+    return this.result(false);
   }
 
   // ------------------------------------------------------------- commands
@@ -404,7 +479,7 @@ export class EyeStore {
    */
   enable(reason: string): Promise<LocalEyeResult> {
     this.ensureSession();
-    if (!this.last && this.state === "ACTIVE") return Promise.resolve(this.result(false));
+    if (!this.last && this.state === "ACTIVE") return Promise.resolve(this.already("enable"));
     return this.enqueue("enable", () => this.runEnable(reason));
   }
 
@@ -417,7 +492,7 @@ export class EyeStore {
    */
   disable(reason: string): Promise<LocalEyeResult> {
     this.ensureSession();
-    if (!this.last && this.state === "DISABLED") return Promise.resolve(this.result(false));
+    if (!this.last && this.state === "DISABLED") return Promise.resolve(this.already("disable"));
     if (this.last?.kind === "enable") this.interruptEnable();
     return this.enqueue("disable", () => this.runDisable(reason));
   }
@@ -433,15 +508,28 @@ export class EyeStore {
    */
   stopLocalOnly(): void {
     const session = this.ensureSession();
-    const wasEnabling = this.state === "ENABLING";
+    const from = this.state;
+    this.beginTrace("stop_local");
     this.interruptEnable();
-    session.stop();
-    if (this.state === "ACTIVE" || wasEnabling) this.setState("DISABLED");
+    session.stop(); // from ACTIVE, `onStatus` records the stop and the transition
+    if (from === "ENABLING") {
+      this.stage("superseded:stop");
+      this.setState("DISABLED");
+    } else if (from !== "ACTIVE") {
+      this.publish();
+    }
   }
 
+  /**
+   * One operation at a time, in order; a same-kind call joins the one in
+   * flight. `enable()` / `disable()` never reject: an unexpected throw
+   * anywhere in a transition is the observation `state_transition_failed`
+   * (with the camera released), not an exception for the voice rig to swallow.
+   */
   private enqueue(kind: Operation["kind"], run: () => Promise<LocalEyeResult>): Promise<LocalEyeResult> {
     if (this.last?.kind === kind) return this.last.promise; // join the in-flight/queued one
-    const promise = this.tail.then(run, run);
+    const guarded = () => run().catch((err: unknown) => this.transitionFailed(kind, err));
+    const promise = this.tail.then(guarded, guarded);
     this.tail = promise;
     const operation: Operation = { kind, promise };
     this.last = operation;
@@ -452,6 +540,19 @@ export class EyeStore {
     return promise;
   }
 
+  /** The requested state was not reached for a reason no other class names. */
+  private transitionFailed(kind: Operation["kind"], err: unknown): LocalEyeResult {
+    this.stage(`unexpected:${errorName(err) || "Error"}`);
+    try {
+      this.session?.stop();
+    } catch {
+      // the camera release itself failed; ERROR below is still the honest state
+    }
+    this.supersedeEnable = null;
+    if (kind === "disable") this.durableEnable = null;
+    return this.fail("state_transition_failed");
+  }
+
   /** Make the running enable settle now (its camera, if it opens late, is released by the session's generation check). */
   private interruptEnable(): void {
     if (!this.supersedeEnable) return;
@@ -460,27 +561,38 @@ export class EyeStore {
     this.supersedeEnable = null;
   }
 
+  /** `stream:<readyState>` — what the device's track says after a stop; nothing when it holds no track. */
+  private traceTrack(): void {
+    const readyState = this.session?.trackReadyState() ?? null;
+    if (readyState) this.stage(`stream:${readyState}`);
+  }
+
   private async runEnable(reason: string): Promise<LocalEyeResult> {
     const session = this.ensureSession();
     const parts = this.parts as EyeParts;
-    if (this.state === "ACTIVE") return this.result(false);
+    if (this.state === "ACTIVE") return this.already("enable");
+    this.beginTrace("enable");
     this.setState("ENABLING", { error: null, errorClass: null });
 
     if (parts.cameraAvailable && !parts.cameraAvailable()) {
+      this.stage("capability:missing");
       return this.fail("capability_missing");
     }
 
     // Local first: the camera, bounded. A slow prompt, a hung device, or a
     // disable arriving meanwhile all settle this race without waiting for
     // getUserMedia; the session's own generation check releases a late stream.
-    const opening = session.start();
+    // Every `FrameSource.start()` is one `getUserMedia` (see `eyeInstances`).
+    this.stage("getUserMedia:called");
+    const opening = session.start(this.stage);
     opening.catch(() => {}); // observed through the race below; never unhandled
     let timer: ReturnType<typeof setTimeout> | null = null;
     const superseded = new Promise<typeof SUPERSEDED>((resolve) => {
       this.supersedeEnable = () => resolve(SUPERSEDED);
     });
+    const timeoutMs = this.options.timeoutMs ?? LOCAL_EYE_TIMEOUT_MS;
     const timeout = new Promise<typeof TIMED_OUT>((resolve) => {
-      timer = setTimeout(() => resolve(TIMED_OUT), this.options.timeoutMs ?? LOCAL_EYE_TIMEOUT_MS);
+      timer = setTimeout(() => resolve(TIMED_OUT), timeoutMs);
     });
     let outcome: "opened" | { error: unknown } | typeof TIMED_OUT | typeof SUPERSEDED;
     try {
@@ -497,14 +609,22 @@ export class EyeStore {
       this.supersedeEnable = null;
     }
 
-    if (outcome === SUPERSEDED) return this.result(false); // a disable/bus stop owns the state now
+    if (outcome === SUPERSEDED) {
+      this.stage("superseded:disable");
+      return this.result(false); // a disable/bus stop owns the state now
+    }
     if (outcome === TIMED_OUT) {
       session.stop();
+      this.stage(`timeout:${timeoutMs}ms`);
       return this.fail("timeout");
     }
     if (outcome !== "opened") {
       session.stop();
       const errorClass = classifyCameraError(outcome.error);
+      // The two post-getUserMedia failures reported their own stage from the
+      // source/session; a rejection is named by the browser's error name.
+      if (errorClass === "perception_start_failed") this.stage("loop:start failed");
+      else if (errorClass !== "stream_created_but_track_ended") this.stage(`getUserMedia:${errorName(outcome.error) || "Error"}`);
       if (errorClass === "permission_denied") this.permission = "denied";
       return this.fail(errorClass);
     }
@@ -512,6 +632,7 @@ export class EyeStore {
       // start() resolved without a loop: stop() ran while the camera was
       // opening (the session released what it opened). Nothing durable was
       // ever sent, so DISABLED is the whole truth.
+      this.stage("superseded:stop");
       this.setState("DISABLED");
       return this.result(false);
     }
@@ -524,15 +645,20 @@ export class EyeStore {
     // honest observation, so the state stays ACTIVE with the error shown.
     // The loop self-corrects on its own next tick (a 409 stops it) if the
     // Cloud Core in fact never learned.
+    this.stage("durable:enable");
     const durable = (this.options.durable?.enable ?? enableEye)(reason).then(
       () => undefined,
       (err: unknown) => {
+        this.stage("durable:failed");
         this.error = explainEyeError(err);
       },
     );
     this.durableEnable = durable;
     await durable;
-    if (this.state !== "ENABLING") return this.result(false); // a disable/bus stop ran meanwhile
+    if (this.state !== "ENABLING") {
+      this.stage("superseded:disable");
+      return this.result(false); // a disable/bus stop ran meanwhile
+    }
     this.setState("ACTIVE", { errorClass: null });
     return this.result(true);
   }
@@ -544,18 +670,23 @@ export class EyeStore {
 
   private async runDisable(reason: string): Promise<LocalEyeResult> {
     const session = this.ensureSession();
-    if (this.state === "DISABLED") return this.result(false);
+    if (this.state === "DISABLED") return this.already("disable");
+    this.beginTrace("disable");
     this.setState("DISABLING", { error: null });
     // Never race an enable's POST still on the wire: the disable must land after it.
     if (this.durableEnable) await this.durableEnable;
     this.durableEnable = null;
     try {
       // Durable first, local second (see `client.ts`'s `disableEye` doc).
+      this.stage("durable:disable");
       await (this.options.durable?.disable ?? disableEye)(reason);
     } catch (err) {
+      this.stage("durable:failed");
       this.error = explainEyeError(err);
     } finally {
       session.stop();
+      this.stage("loop:stopped");
+      this.traceTrack();
     }
     this.setState("DISABLED", { errorClass: null });
     return this.result(true);
@@ -572,6 +703,7 @@ export class EyeStore {
     this.listeners.clear();
     this.state = "DISABLED";
     this.status = INITIAL_STATUS;
+    this.trace = [];
     this.snapshot = SERVER_SNAPSHOT;
   }
 }

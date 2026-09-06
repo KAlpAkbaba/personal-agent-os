@@ -19,16 +19,23 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { FrameReducer, FrameSource } from "../../app/lib/eye/perception";
+import { LOCAL_EYE_ERROR_TEXT } from "../../app/lib/eye/labels";
+import {
+  CameraTrackEndedError,
+  type FrameReducer,
+  type FrameSource,
+  PerceptionStartError,
+} from "../../app/lib/eye/perception";
 import {
   EyeStore,
   LOCAL_EYE_TIMEOUT_MS,
+  MAX_ACTION_TRACE,
   classifyCameraError,
   eyeInstances,
   getEyeStore,
   installEyeStore,
 } from "../../app/lib/eye/store";
-import type { EyeObservation } from "../../app/lib/eye/types";
+import { EYE_ERROR_CLASSES, type EyeObservation } from "../../app/lib/eye/types";
 import { useActivePerception } from "../../app/lib/eye/useActivePerception";
 import { flatFrame } from "./fixtures";
 
@@ -195,7 +202,10 @@ describe("the state machine", () => {
       error_class: null,
       observed_at: new Date(1_700_000_000_000).toISOString(),
       changed: true,
+      media_track_ready_state: null, // a synthetic source holds no MediaStreamTrack
+      action_trace: ["request:enable", "getUserMedia:called", "loop:started", "durable:enable", "state:ENABLING->ACTIVE"],
     });
+    expect(t.store.getSnapshot().lastActionTrace).toEqual(result.action_trace);
     expect(t.durable).toEqual([{ kind: "enable", reason: "owner_start" }]);
     expect(t.store.getSnapshot().permission).toBe("granted");
     expect(eyeInstances.snapshot()).toEqual({ sessions: 1, cameraOpens: 1, loopsStarted: 1 });
@@ -221,6 +231,7 @@ describe("the state machine", () => {
     expect(t.camera.stops).toBe(1); // …then the camera light goes out
     expect(state(t)).toBe("DISABLED");
     expect(result).toMatchObject({ state: "DISABLED", running: false, camera_label: null, error_class: null, changed: true });
+    expect(result.action_trace).toEqual(["request:disable", "durable:disable", "loop:stopped", "state:DISABLING->DISABLED"]);
     // No further sample is taken.
     const before = t.posted.length;
     await t.advance(5000);
@@ -255,6 +266,8 @@ describe("the state machine", () => {
     expect(state(t)).toBe("DISABLED");
     expect(t.camera.open).toBe(false);
     expect(t.durable.map((d) => d.kind)).toEqual(["enable"]);
+    // The self-stop is appended to the enable's trace: how the eye came to be DISABLED.
+    expect(t.store.getSnapshot().lastActionTrace.slice(-2)).toEqual(["loop:stopped", "state:ACTIVE->DISABLED"]);
   });
 
   it("stopLocalOnly (the bus said disabled) releases the camera and reads DISABLED, with no durable call", async () => {
@@ -394,6 +407,7 @@ describe("failures are answers on the receipt's closed vocabulary", () => {
     t.camera.failed(new DOMException("Permission denied", "NotAllowedError"));
     const result = await pending;
     expect(result).toMatchObject({ state: "ERROR", running: false, camera_label: null, error_class: "permission_denied", changed: true });
+    expect(result.action_trace).toEqual(["request:enable", "getUserMedia:called", "getUserMedia:NotAllowedError", "state:ENABLING->ERROR"]);
     expect(state(t)).toBe("ERROR");
     expect(t.store.getSnapshot()).toMatchObject({ permission: "denied", errorClass: "permission_denied", busy: false });
     expect(t.store.getSnapshot().error).toBe("Tarayıcı kamera izni vermedi.");
@@ -407,18 +421,31 @@ describe("failures are answers on the receipt's closed vocabulary", () => {
     expect(t.durable).toEqual([{ kind: "disable", reason: "voice:Gözünü kapat." }]);
   });
 
-  it("NotReadableError / NotFoundError / OverconstrainedError → device_unavailable, and an ERROR can be retried", async () => {
-    for (const name of ["NotReadableError", "NotFoundError", "OverconstrainedError"]) {
-      expect(classifyCameraError(new DOMException("x", name))).toBe("device_unavailable");
-    }
-    expect(classifyCameraError(new TypeError("navigator.mediaDevices is undefined"))).toBe("capability_missing");
+  it("every getUserMedia failure lands on a structured class by its error name — never a generic one", () => {
+    expect(classifyCameraError(new DOMException("x", "NotAllowedError"))).toBe("permission_denied");
     expect(classifyCameraError(new DOMException("x", "SecurityError"))).toBe("permission_denied");
+    expect(classifyCameraError(new DOMException("x", "NotFoundError"))).toBe("device_not_found");
+    expect(classifyCameraError(new DOMException("x", "OverconstrainedError"))).toBe("device_not_found");
+    expect(classifyCameraError(new DOMException("x", "NotReadableError"))).toBe("device_busy");
+    expect(classifyCameraError(new DOMException("x", "AbortError"))).toBe("device_busy");
+    expect(classifyCameraError(new CameraTrackEndedError("ended"))).toBe("stream_created_but_track_ended");
+    expect(classifyCameraError(new PerceptionStartError(new Error("listener threw")))).toBe("perception_start_failed");
+    // Anything else getUserMedia rejects with is still named, not "unavailable".
+    expect(classifyCameraError(new TypeError("bad constraints"))).toBe("get_user_media_failed");
+    expect(classifyCameraError(new Error("?"))).toBe("get_user_media_failed");
+    expect(classifyCameraError("not even an error")).toBe("get_user_media_failed");
+    for (const cls of EYE_ERROR_CLASSES) expect(typeof LOCAL_EYE_ERROR_TEXT[cls]).toBe("string"); // every class has on-screen text
+  });
 
+  it("NotReadableError → device_busy with the browser's error name in the trace, and an ERROR can be retried", async () => {
     const t = harness({ auto: false });
     const pending = t.store.enable("owner_start");
     await t.flush();
     t.camera.failed(new DOMException("Could not start video source", "NotReadableError"));
-    expect((await pending).error_class).toBe("device_unavailable");
+    const result = await pending;
+    expect(result.error_class).toBe("device_busy");
+    expect(result.action_trace).toEqual(["request:enable", "getUserMedia:called", "getUserMedia:NotReadableError", "state:ENABLING->ERROR"]);
+    expect(t.store.getSnapshot().error).toBe(LOCAL_EYE_ERROR_TEXT.device_busy);
     expect(t.store.getSnapshot().permission).toBe("unknown"); // a busy device says nothing about permission
 
     // The device frees up; the owner tries again.
@@ -454,8 +481,100 @@ describe("failures are answers on the receipt's closed vocabulary", () => {
     const t = harness({ cameraAvailable: false });
     const result = await t.store.enable("owner_start");
     expect(result).toMatchObject({ state: "ERROR", error_class: "capability_missing", running: false });
+    expect(result.action_trace).toEqual(["request:enable", "capability:missing", "state:ENABLING->ERROR"]);
     expect(t.camera.starts).toBe(0);
     expect(eyeInstances.snapshot()).toEqual({ sessions: 1, cameraOpens: 0, loopsStarted: 0 });
+  });
+
+  it("the stream opened but the loop could not start (a status listener throws) → perception_start_failed, camera released", async () => {
+    const t = harness();
+    t.store.subscribe(() => {
+      if (t.store.getSnapshot().status.running) throw new Error("listener broke");
+    });
+    const result = await t.store.enable("owner_start");
+    expect(result).toMatchObject({ state: "ERROR", running: false, error_class: "perception_start_failed", changed: true });
+    expect(result.action_trace).toEqual(["request:enable", "getUserMedia:called", "loop:start failed", "state:ENABLING->ERROR"]);
+    expect(t.camera.open).toBe(false); // the stream that DID open is not left running
+    expect(t.durable).toEqual([]); // and the Cloud Core was never told the eye is on
+    expect(eyeInstances.snapshot()).toEqual({ sessions: 1, cameraOpens: 1, loopsStarted: 0 });
+  });
+
+  it("an unexpected throw inside a transition (the camera's stop() breaks) → state_transition_failed, never a rejection", async () => {
+    const t = harness();
+    await t.store.enable("owner_start");
+    t.camera.stop = () => {
+      throw new RangeError("stop broke");
+    };
+    const result = await t.store.disable("owner_stop"); // resolves: a failure is an observation
+    expect(result).toMatchObject({ state: "ERROR", error_class: "state_transition_failed", changed: true });
+    expect(result.action_trace).toEqual(["request:disable", "durable:disable", "unexpected:RangeError", "state:DISABLING->ERROR"]);
+    expect(t.store.getSnapshot()).toMatchObject({ state: "ERROR", errorClass: "state_transition_failed", busy: false });
+    expect(t.store.getSnapshot().error).toBe(LOCAL_EYE_ERROR_TEXT.state_transition_failed);
+  });
+});
+
+describe("the action trace", () => {
+  it("an idempotent call is a two-stage trace with no transition, and the snapshot keeps the last trace", async () => {
+    const t = harness();
+    expect(t.store.getSnapshot().lastActionTrace).toEqual([]);
+    await t.store.enable("owner_start");
+    const again = await t.store.enable("owner_start");
+    expect(again.action_trace).toEqual(["request:enable", "already:ACTIVE"]);
+    expect(t.store.getSnapshot().lastActionTrace).toEqual(["request:enable", "already:ACTIVE"]);
+    const off = await t.store.disable("owner_stop");
+    expect(off.action_trace).toEqual(["request:disable", "durable:disable", "loop:stopped", "state:DISABLING->DISABLED"]);
+    const offAgain = await t.store.disable("owner_stop");
+    expect(offAgain.action_trace).toEqual(["request:disable", "already:DISABLED"]);
+  });
+
+  it("a timeout, a superseded enable and a bus stop each say what happened to THIS action", async () => {
+    const t = harness({ auto: false });
+    const timedOut = t.store.enable("voice:Gözünü aç.");
+    await t.advance(LOCAL_EYE_TIMEOUT_MS);
+    expect((await timedOut).action_trace).toEqual([
+      "request:enable",
+      "getUserMedia:called",
+      `timeout:${LOCAL_EYE_TIMEOUT_MS}ms`,
+      "state:ENABLING->ERROR",
+    ]);
+
+    const enabling = t.store.enable("owner_start");
+    await t.flush();
+    const disabling = t.store.disable("voice:Gözünü kapat.");
+    expect((await enabling).action_trace).toEqual(["request:enable", "getUserMedia:called", "superseded:disable"]);
+    expect((await disabling).action_trace).toEqual(["request:disable", "durable:disable", "loop:stopped", "state:DISABLING->DISABLED"]);
+
+    t.camera.auto = true;
+    await t.store.enable("owner_start");
+    t.store.stopLocalOnly();
+    expect(t.store.getSnapshot().lastActionTrace).toEqual(["request:stop_local", "loop:stopped", "state:ACTIVE->DISABLED"]);
+  });
+
+  it("is bounded: a durable call that fails still fits, and a trace never exceeds MAX_ACTION_TRACE entries", async () => {
+    const camera = new Camera();
+    const store = new EyeStore({
+      build: () => ({ frameSource: camera, postObservation: async () => ({ status: "posted" as const }), sampleIntervalMs: 1000 }),
+      durable: {
+        enable: async () => {
+          throw new Error("Cloud Core ulaşılamıyor");
+        },
+        disable: async () => {},
+      },
+    });
+    const result = await store.enable("owner_start");
+    expect(result.action_trace).toEqual([
+      "request:enable",
+      "getUserMedia:called",
+      "loop:started",
+      "durable:enable",
+      "durable:failed",
+      "state:ENABLING->ACTIVE",
+    ]);
+    expect(result.action_trace.length).toBeLessThanOrEqual(MAX_ACTION_TRACE);
+    expect(MAX_ACTION_TRACE).toBe(12);
+    // The trace carries no frame, no pixel count, no identifier: only stage words and the camera's label.
+    for (const stage of result.action_trace) expect(stage).toMatch(/^[a-zA-Z_]+:[ ->A-Za-z0-9_:.]+$/);
+    store.dispose();
   });
 
   it("a durable enable failure after the camera opened is not a local failure: ACTIVE, error shown, the loop keeps its own 409 self-correction", async () => {

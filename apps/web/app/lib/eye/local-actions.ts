@@ -6,11 +6,22 @@
  * The Cloud Core then builds a receipt from the real terminal state and the
  * model reads its `speech` — never "öyle olmuş gibi düşün" again.
  *
- * The relayed object is exactly §5.1's shape plus the store's `changed` flag:
+ * The relayed object is exactly §5.1's shape plus the store's `changed` flag
+ * and its two read-backs (owner requirement, 2026-09-06):
  *
  * ```
- * {local: {state, running, camera_label, error_class, observed_at, changed}}
+ * {local: {state, running, camera_label, error_class, observed_at, changed,
+ *          media_track_ready_state, action_trace}}
  * ```
+ *
+ * `media_track_ready_state` is the video track's own `readyState` right after
+ * the action (`"live"` / `"ended"` / `null` with no track); `action_trace` is
+ * the bounded, ordered list of stages the store went through for this one
+ * action (`store.ts`). Both are text and enums, never a frame or an identifier.
+ *
+ * The port speaks the Cloud Core's tool names (`eye.enable`); the controller
+ * normalises the provider's spelling (`eye__enable`) before calling `run`
+ * (`lib/voice/tool-names.ts`) — the port itself never sees a vendor name.
  *
  * `changed` travels because the durable POST is made by THIS store on the
  * voice path too (durable-first on disable, camera-first on enable), so by the
@@ -49,6 +60,8 @@ export function observedAfter(result: LocalEyeResult): Record<string, unknown> {
       error_class: result.error_class,
       observed_at: result.observed_at,
       changed: result.changed,
+      media_track_ready_state: result.media_track_ready_state,
+      action_trace: result.action_trace,
     },
   };
 }

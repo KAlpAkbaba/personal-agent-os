@@ -53,8 +53,7 @@
 
 import { postObservation } from "./client";
 import { activityLevelFor, computeGridLuminance, deriveObservation, measureMotion } from "./signal";
-import type { ActivityLevel } from "./types";
-import type { EyeObservation } from "./types";
+import type { ActivityLevel, EyeObservation, MediaTrackReadyState } from "./types";
 
 // ------------------------------------------------------------ frame source
 
@@ -83,9 +82,55 @@ export type FrameReducer = (
  * anywhere in the client through which a frame can leave its frame source, so
  * the invariant holds against the next edit as well as this one.
  */
+/**
+ * Where an open got to, one short stage at a time, for the action trace the
+ * store relays (`observed_after.local.action_trace`). Text only: a stage
+ * names a step (`permission:granted`), a device by its label, or a track
+ * state — never a frame, a pixel count, or any identifier.
+ */
+export type StageReport = (stage: string) => void;
+
+/**
+ * Thrown by `BrowserFrameSource.start()` when `getUserMedia` resolved but the
+ * stream's video track was not `"live"` — the browser handed over a stream
+ * that had already ended (a device unplugged mid-prompt, a track revoked by
+ * the OS). The source has already stopped the track when this is thrown; the
+ * store maps it onto `stream_created_but_track_ended`.
+ */
+export class CameraTrackEndedError extends Error {
+  override readonly name = "CameraTrackEndedError";
+
+  constructor(readonly readyState: MediaTrackReadyState | null) {
+    super(`camera stream created but its video track is ${readyState ?? "missing"}`);
+  }
+}
+
+/**
+ * Thrown by `PerceptionSession.start()` when the camera opened but the loop
+ * could not be started afterwards (a status listener threw, the timer could
+ * not be scheduled). The session has released the camera by then; the store
+ * maps it onto `perception_start_failed` — distinct from a `getUserMedia`
+ * failure, because the stream DID open.
+ */
+export class PerceptionStartError extends Error {
+  override readonly name = "PerceptionStartError";
+
+  constructor(readonly cause: unknown) {
+    super(`perception loop failed to start after the camera opened: ${describeCause(cause)}`);
+  }
+}
+
+function describeCause(cause: unknown): string {
+  if (cause instanceof Error) return cause.name;
+  return typeof cause === "string" ? cause : "unknown";
+}
+
 export interface FrameSource {
-  /** Opens the camera. Resolves once frames are capturable. */
-  start(deviceId?: string): Promise<void>;
+  /**
+   * Opens the camera. Resolves once frames are capturable. `report`, when
+   * given, receives each stage of the open as it happens (see `StageReport`).
+   */
+  start(deviceId?: string, report?: StageReport): Promise<void>;
   /**
    * Grab one frame, reduce it, and return only the reduction — or `null` if the
    * camera is not ready. The pixel buffer never crosses this boundary.
@@ -95,6 +140,13 @@ export interface FrameSource {
   stop(): void;
   /** The active camera's label, once permission has revealed one. */
   label(): string | null;
+  /**
+   * The `readyState` of the most recent video track this source opened —
+   * `"live"` while it is streaming, `"ended"` once stopped (proof the camera
+   * light is off, not merely that the track was forgotten) — or `null` when
+   * no track was ever opened. Optional: a synthetic source has no track.
+   */
+  trackReadyState?(): MediaTrackReadyState | null;
 }
 
 /**
@@ -103,20 +155,34 @@ export interface FrameSource {
  * This class is the ONLY place `getImageData` is called anywhere in the
  * client — see the module docstring for why that makes the frame-never-
  * escapes guarantee a property of the code.
+ *
+ * A stopped track is never reused: every `start()` is a fresh `getUserMedia`
+ * (the previous stream, if any, is released first), and a stream whose track
+ * is not live on arrival is stopped on the spot and reported as such rather
+ * than kept around as a camera that "opened".
  */
 export class BrowserFrameSource implements FrameSource {
   #stream: MediaStream | null = null;
   #video: HTMLVideoElement | null = null;
   #canvas: HTMLCanvasElement | null = null;
   #ctx: CanvasRenderingContext2D | null = null;
+  /** The last video track opened, kept only to answer `trackReadyState()` after a stop. */
+  #lastTrack: MediaStreamTrack | null = null;
 
-  async start(deviceId?: string): Promise<void> {
+  async start(deviceId?: string, report: StageReport = () => {}): Promise<void> {
     this.stop();
     const constraints: MediaStreamConstraints = {
       video: deviceId ? { deviceId: { exact: deviceId } } : true,
       audio: false,
     };
     const stream = await navigator.mediaDevices.getUserMedia(constraints);
+    // Resolved: the permission question is answered. What came back is checked
+    // before it is trusted — a stream is only a camera if its track is live.
+    report("permission:granted");
+    const track = stream.getVideoTracks()[0] ?? null;
+    this.#lastTrack = track;
+    if (track?.label) report(`device:${track.label}`);
+    this.#assertLive(stream, track, report);
     const video = document.createElement("video");
     video.muted = true;
     video.playsInline = true;
@@ -131,12 +197,29 @@ export class BrowserFrameSource implements FrameSource {
       }
       video.addEventListener("loadedmetadata", () => resolve(), { once: true });
     });
+    // The track can end while the element loads (device yanked); check again
+    // before this counts as an open camera.
+    this.#assertLive(stream, track, null);
+    report(`stream:${stream.getVideoTracks().length} track live`);
     this.#stream = stream;
     this.#video = video;
     this.#canvas = document.createElement("canvas");
     this.#canvas.width = video.videoWidth || 320;
     this.#canvas.height = video.videoHeight || 240;
     this.#ctx = this.#canvas.getContext("2d", { willReadFrequently: true });
+  }
+
+  /** Stop and throw unless the stream's video track is `"live"`; never leaves a track behind. */
+  #assertLive(stream: MediaStream, track: MediaStreamTrack | null, report: StageReport | null): void {
+    const readyState = track ? track.readyState : null;
+    if (readyState === "live") return;
+    stream.getTracks().forEach((t) => t.stop());
+    report?.(`stream:track ${readyState ?? "missing"}`);
+    throw new CameraTrackEndedError(readyState);
+  }
+
+  trackReadyState(): MediaTrackReadyState | null {
+    return this.#lastTrack ? this.#lastTrack.readyState : null;
   }
 
   sample(reduce: FrameReducer): Float32Array | null {
@@ -276,7 +359,13 @@ export class PerceptionSession {
     return this.#status;
   }
 
-  async start(): Promise<void> {
+  /**
+   * Opens the camera and starts the sampling loop. `report` receives the
+   * open's stages (see `StageReport`); `loop:started` is reported here, once
+   * the loop is really scheduled, so a caller can tell "the stream opened"
+   * from "the loop runs" when something throws in between.
+   */
+  async start(report: StageReport = () => {}): Promise<void> {
     this.#stopped = false;
     this.#generation += 1;
     const generation = this.#generation;
@@ -286,20 +375,37 @@ export class PerceptionSession {
     this.#lastMotionAtMs = null;
     this.#lastMotionLevel = "none";
 
-    await this.#frameSource.start(this.#opts.deviceId);
+    await this.#frameSource.start(this.#opts.deviceId, report);
     if (this.#stopped || generation !== this.#generation) {
       // stop() ran while the camera was opening: close what we just opened
       // and report nothing — never leave a track running behind a "stopped" status.
       this.#frameSource.stop();
       return;
     }
-    this.#setStatus({
-      running: true,
-      cameraLabel: this.#frameSource.label(),
-      startedAt: this.#opts.now(),
-      lastError: null,
-    });
-    this.#scheduleNext(generation, 0);
+    try {
+      this.#setStatus({
+        running: true,
+        cameraLabel: this.#frameSource.label(),
+        startedAt: this.#opts.now(),
+        lastError: null,
+      });
+      this.#scheduleNext(generation, 0);
+    } catch (cause) {
+      // The stream is open but the loop is not: release the camera rather
+      // than leave a track running behind a session that never started.
+      try {
+        this.stop();
+      } catch {
+        this.#frameSource.stop();
+      }
+      throw new PerceptionStartError(cause);
+    }
+    report("loop:started");
+  }
+
+  /** The frame source's track state, for the store's read-back; `null` for a source without tracks. */
+  trackReadyState(): MediaTrackReadyState | null {
+    return this.#frameSource.trackReadyState?.() ?? null;
   }
 
   /**

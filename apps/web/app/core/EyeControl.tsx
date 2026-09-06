@@ -33,7 +33,7 @@ export type EyeControlProps = {
 };
 
 export default function EyeControl({ eye }: EyeControlProps) {
-  const { status, permission, busy, error, start, stop, stopLocalOnly } = useActivePerception();
+  const { status, permission, busy, error, lastActionTrace, start, stop, stopLocalOnly } = useActivePerception();
 
   // "Gözünü kapat" spoken elsewhere, another device's owner action, or the
   // eye endpoint's own idempotent default all reach this the same way: the
@@ -54,6 +54,7 @@ export default function EyeControl({ eye }: EyeControlProps) {
       permission={permission}
       busy={busy}
       error={error}
+      lastActionTrace={lastActionTrace}
       onStart={() => void start()}
       onStop={() => void stop()}
     />
