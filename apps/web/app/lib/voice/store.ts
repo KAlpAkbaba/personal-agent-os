@@ -149,6 +149,13 @@ export type VoiceStoreOptions = {
   listDevices?: () => Promise<AudioDevice[]>;
   /** Where the voice choice persists; localStorage in the browser, injectable for tests. */
   storage?: StorageLike | null;
+  /** Where `pagehide` is heard; `window` in the browser, a fake target in tests, `null` on the server. */
+  unloadTarget?: UnloadTarget | null;
+};
+
+export type UnloadTarget = {
+  addEventListener(type: "pagehide", listener: () => void): void;
+  removeEventListener(type: "pagehide", listener: () => void): void;
 };
 
 export class VoiceStore {
@@ -179,9 +186,36 @@ export class VoiceStore {
       rig.controller.subscribe(() => this.publish()),
       rig.onProfile(() => this.publish()),
       rig.onTransport(() => this.publish()),
+      this.watchUnload(rig),
     );
     this.publish();
     return rig;
+  }
+
+  /**
+   * A reload or a closed tab ends the session on the Cloud Core too.
+   *
+   * The store lives for the tab, so navigating within the app keeps the
+   * session (ADR-0061); but the page going away takes the microphone and the
+   * WebRTC leg with it, and until 2026-09-06 nothing told the Cloud Core: the
+   * owner's reload left session a2ac0716 "active" while the next page created
+   * another, and the two overlapped on the record. `pagehide` fires on both a
+   * reload and a close; the close request is `keepalive` so it outlives the
+   * page. The local rig is not torn down here — the page is gone anyway — and
+   * a `pagehide` for a bfcache freeze with no live session does nothing.
+   */
+  private watchUnload(rig: VoiceRig): () => void {
+    const target = this.options.unloadTarget ?? (typeof window !== "undefined" ? window : null);
+    if (!target) return () => {};
+    const onHide = () => {
+      const snap = rig.controller.getSnapshot();
+      if (!snap.sessionId || !(isLiveState(snap.state) || isBusyState(snap.state))) return;
+      void rig.parts.api.close(snap.sessionId, "page_unload", { keepalive: true }).catch(() => {
+        /* the page is going away; there is nobody to tell */
+      });
+    };
+    target.addEventListener("pagehide", onHide);
+    return () => target.removeEventListener("pagehide", onHide);
   }
 
   private probed = false;

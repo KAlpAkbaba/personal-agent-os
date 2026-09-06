@@ -73,6 +73,16 @@ function fakeRig() {
       now: scheduler.now,
     };
   };
+  /** A fake `window` for `pagehide`: the test fires it the way a reload would. */
+  const hideListeners = new Set<() => void>();
+  const unload = {
+    addEventListener: (_type: "pagehide", listener: () => void) => void hideListeners.add(listener),
+    removeEventListener: (_type: "pagehide", listener: () => void) => void hideListeners.delete(listener),
+    fire: () => hideListeners.forEach((l) => l()),
+    get listeners() {
+      return hideListeners.size;
+    },
+  };
   const store = new VoiceStore({
     build,
     listDevices: async () => [
@@ -80,10 +90,12 @@ function fakeRig() {
       { deviceId: "spk-1", kind: "audiooutput", label: "Hoparlör", groupId: "g1" },
     ],
     storage: new MemoryStorage(),
+    unloadTarget: unload,
   });
   return {
     store,
     core,
+    unload,
     microphone,
     playback,
     transports,
@@ -206,6 +218,44 @@ describe("one controller per tab, however many views read it", () => {
     await tick();
     expect(t.store.getSnapshot().controller.state).toBe("listening");
     expect(voiceInstances.snapshot().controllers).toBe(1);
+  });
+});
+
+describe("the page going away ends the session on the Cloud Core", () => {
+  const closes = (t: ReturnType<typeof fakeRig>) =>
+    t.core.requests.filter((r) => r.method === "POST" && /\/v1\/voice\/realtime\/sessions\/[^/]+\/close$/.test(r.path));
+
+  it("pagehide with a live session posts a keepalive close for THAT session (owner reload, 2026-09-06: session a2ac0716 stayed active)", async () => {
+    const t = fakeRig();
+    t.store.subscribe(() => {});
+    expect(t.unload.listeners).toBe(1); // one rig, one listener
+    await t.store.connect();
+    await tick();
+    const id = t.store.getSnapshot().controller.sessionId;
+    expect(id).toBeTruthy();
+
+    t.unload.fire();
+    await tick();
+    expect(closes(t)).toHaveLength(1);
+    expect(closes(t)[0].path).toBe(`/v1/voice/realtime/sessions/${id}/close`);
+    expect(closes(t)[0].body).toEqual({ reason: "page_unload" });
+  });
+
+  it("pagehide with no live session posts nothing, and after a disconnect nothing either", async () => {
+    const t = fakeRig();
+    t.store.subscribe(() => {});
+    t.unload.fire();
+    await tick();
+    expect(closes(t)).toHaveLength(0);
+
+    await t.store.connect();
+    await tick();
+    await t.store.disconnect();
+    await tick();
+    const before = closes(t).length; // the disconnect's own close
+    t.unload.fire();
+    await tick();
+    expect(closes(t)).toHaveLength(before);
   });
 });
 

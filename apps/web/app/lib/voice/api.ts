@@ -309,10 +309,18 @@ export class VoiceSessionApi {
     });
   }
 
-  close(sessionId: string, reason = "client_closed"): Promise<{ session_id: string; state: string }> {
+  close(
+    sessionId: string,
+    reason = "client_closed",
+    options: { keepalive?: boolean } = {},
+  ): Promise<{ session_id: string; state: string }> {
+    // `keepalive` lets the request outlive the page: a reload or a closed tab
+    // still tells the Cloud Core the session is over (owner run 2026-09-06: a
+    // reload left session a2ac0716 "active" while the next one was created).
     return this.call(`${BASE}/${sessionId}/close`, {
       method: "POST",
       body: JSON.stringify({ reason }),
+      ...(options.keepalive ? { keepalive: true } : {}),
     });
   }
 }
