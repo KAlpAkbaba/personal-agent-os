@@ -374,14 +374,47 @@ one short real owner run.
   write endpoint in the UI-state surface;
 - **the migration chain has exactly one head**, no duplicate revision ids, and no
   `down_revision` pointing at nothing;
-- **no browser is launched by any test**, and no camera fixture contains real imagery.
+- **no browser is launched by any test**, and no camera fixture contains real imagery;
+- **one voice session per tab.** `/core`, `/core/cockpit` and `/voice` read one store; a
+  second consumer, a remount, or two `connect()` calls on one gesture open ONE microphone,
+  ONE transport and ONE realtime session, and a connect while a leg is live is a no-op;
+- **the Core's voice overlay is a report, not an effect.** It draws only the states the
+  local controller actually holds; `idle` and `closed` leave the bus intent untouched; the
+  speaking pulse is the playback analyser's own RMS and is zero the frame playback stops;
+  nothing the overlay draws is published to the bus as an event;
+- **an open camera is not presence.** With the eye enabled and no observation, the World
+  Model carries `device.camera_state=enabled` and refuses `owner.presence` by name; a held
+  presence state is republished at half its TTL so a live claim is never shown as unknown;
+- **the presence client counts cells, not the frame.** A seated owner who moves a few cells
+  every so often is present at real confidence; an empty room is absent at low confidence;
+  absence confidence never exceeds 0.75; the diagnostics are an age, a level and a fraction;
+- **the owner harness reads one-element arrays as arrays** under StrictMode, and each check
+  owns its own evidence (a disable is never gated on a presence state).
 
-### Real gates (owner machine, one run)
+### Real gates (owner machine, one run, from `/core` alone — `scripts/core/owner-m18.ps1`)
 
+The run must not require the owner to operate `/voice`. Every gate below is asserted from
+the Cloud Core's own records by the harness; none is a yes/no question to the owner.
+
+- the Core loads real state (the same `GET /v1/ui/state` document it renders from);
+- voice connects FROM `/core`: one new web realtime session since the run's baseline;
+- the owner speaks and the Core really listens: the session's own `mic_speech_start`;
+- the answer comes through the existing Realtime system: a succeeded tool call with spoken
+  characters, and the Core moves to the generated speech (`first_audio`);
+- a real cognitive request reaches its subsystem: the engine's own `query_kind` and
+  `subsystem` on the tool call, never inferred from prose;
+- `Gözünü kapat` spoken at the Core disables perception: `eye.disabled` with reason
+  `voice:<phrase>`, not the control's `owner_stop`;
+- no two web realtime sessions of the run were ever open at once;
+- the realtime session is closed, the web shell stopped, the test routine cancelled and the
+  owner session revoked when the run ends — on every path;
 - the Core renders on the owner's own machine and shows genuine state: listening, thinking
   and speaking transitions that correspond to what actually happened;
 - research, memory and evolution state appear on the Core while those subsystems really run;
 - the real camera can be enabled, and the indicator is truthful about it;
+- a current presence observation reaches the World Model (`owner.presence` fact) and the
+  Core (an `owner.*` bus event) while the owner is in view — and "camera enabled" never
+  stands in for it;
 - a real presence transition is detected from the owner actually leaving and returning;
 - disabling the Active Eye actually stops perception — the machine's own camera light goes
   out, and the Cloud Core stops accepting camera-sourced observations;
