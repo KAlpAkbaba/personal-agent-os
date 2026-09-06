@@ -21,16 +21,63 @@ Status vocabulary matches `docs/QUALIFICATION.md`: `PROVEN_REAL`, `PROVEN_PROXY`
 
 ## Now
 
-**Item 19 — M18 in one command, from `/core` alone.** Everything before it is built, merged
-and proven on fakes; this is the only thing that cannot be proven without you: your real
-microphone, your real camera, your real room, and a real alarm through the real chain. About
-eight minutes, most of it you leaving the room and coming back.
+**Item 20 — the short Eye/Voice qualification (about three minutes).** Your second real
+attempt at item 19 found two product defects that matter more than the rest of that run:
+`Gözünü kapat` really closed the eye but the assistant said *"öyle olmuş gibi düşün"*, and
+`Gözünü aç` did nothing. Both are fixed under one rule (WRITE → READ-BACK → SPEAK,
+`docs/M18_ACTION_CONTRACT.md`) and item 20 proves exactly that, from `/core` alone. Item 19
+(the long run with the presence transition and the alarm) waits until item 20 passes; do not
+repeat it yet.
+
+---
+
+### 20. Your voice opens and closes the eye, and every answer is grounded — **this is the current action**
+
+Unblocks: `docs/QUALIFICATION.md` rows 12.26–12.29 (action receipts; the symmetric enable
+path; live current-state answers; the confirmation spoken only after the terminal ACK).
+
+**What changed.** Eye commands are now real tools the assistant must call (`eye.enable`,
+`eye.disable`): the browser closes or opens the camera first, the Cloud Core writes the
+durable state, reads it back, and returns a receipt whose sentence is the only thing the
+assistant may say: `Gözümü kapattım efendim.` / `Gözümü açtım efendim.` / `Gözüm zaten
+kapalı efendim.` / `Kamerayı kapatamadım; işlem doğrulanmadı.` — never make-believe.
+Current-state questions (`Kendi sisteminde şu anda ne görüyorsun?`, `Kamera açık mı?`) go to
+a live-state tool that answers result-first from the runtime and the World Model, with each
+fact carrying a source and an age, not from the ledger and not with "kayıtlara bakmalıyım".
+
+**One command:**
+
+```powershell
+.\scripts\core\owner-m18-eye.ps1 -OutFile m18-eye-1.json
+```
+
+It starts the web shell, waits for `/core`, closes the eye durably if it was open, and prints
+six lines. Sign in at `/core`, connect voice **there**, then:
+
+1. say **`Kendi sisteminde şu anda ne görüyorsun?`**
+2. say **`Gözünü aç.`** (or press `Gözü aç`); wait for the eye cell to show the camera on
+3. say **`Gözünü kapat.`** — it must answer `Gözümü kapattım efendim.`
+4. say **`Gözünü aç.`** — it must answer `Gözümü açtım efendim.`
+5. say **`Gözünü kapat.`** once more, so the eye ends closed
+6. disconnect voice on the Core, then press Enter in the terminal
+
+The script reads the eye state back from the runtime after every step, reads the session's
+tool calls and receipts, checks the confirmation was spoken after the terminal ACK, and ends
+with `OWNER M18 EYE: PASS`. Paste the `checks` block from `m18-eye-1.json` back here, or the
+whole file if anything fails. If the browser refuses the camera on step 4, the assistant must
+say exactly that (`Kamerayı açamadım; tarayıcı kamera izni vermedi.`) — that is a correct
+answer, and the file will show it.
+
+**Item 19 — the long M18 run, from `/core` alone.** Waits for item 20. Everything before it
+is built, merged and proven on fakes; it is the only thing that cannot be proven without you:
+your real microphone, your real camera, your real room, and a real alarm through the real
+chain. About eight minutes, most of it you leaving the room and coming back.
 
 Item 9 (K66 re-qualification) stays open and optional; it is not on M18's path.
 
 ---
 
-### 19. The Core, your voice, the camera, one quiet alarm — one run — **this is the current action (2nd attempt)**
+### 19. The Core, your voice, the camera, one quiet alarm — one run — **waits for item 20 (2nd attempt found two product defects; see item 20)**
 
 Unblocks: `docs/QUALIFICATION.md` Stage 12 rows 12.1, 12.5–12.8, 12.12, 12.16, 12.17 and
 the integrated rows 12.21–12.25 (voice from the Core; real listening/speaking states; a
