@@ -433,6 +433,27 @@ watching it refuse — and are marked as such.
 | 12.28 | Current-state questions are answered from live state, result-first: `Kendi sisteminde şu anda ne görüyorsun?` → runtime + World Model facts each with source / observed_at / age / confidence / stale; stale is said as stale; 1–3 sentences; no bookkeeping narration | `NOT_YET_PROVEN` | API: `test_voice_state_tool.py` (facts carry provenance; stale spoken; eye scope sentences; `activity.explain` with a `world_state` question returns the same `speech` as `state.now`; no "kayıt"). Real: `state.live_path_reached`, `state.spoken_result_first`, `state.facts_carry_provenance`. The owner's second attempt: "kayıtlara bakmalıyım…". |
 | 12.29 | One router, three classes: QUERY / ACTION / CONTROL from `resolve_intent` alone; `Canlıya al.` is an ACTION that is refused with the authority sentence and recorded; `Bunu canlıya alabilir misin?` stays a QUERY; no second Turkish table anywhere | `NOT_YET_PROVEN` | API: `test_voice_intents.py` (the nine owner utterances → klass / intent / query_kind / capability), `test_voice_eye_tools.py` (`release.promote` refused, `action.receipt` recorded). **Structural**: the web client has no phrase table (grep-asserted in review). |
 
+**Fourth real attempt, 2026-09-06 later afternoon — `owner-m18-eye.ps1` second run:** proven
+real by the owner: clean working tree, transactional Cloud Core release succeeded,
+production advertises `eye.enable` / `eye.disable` / `state.now`, `/core` reachable, the
+closed-session leftover no longer accepted as current state. Then the harness crashed
+before the owner's part: `Get-NewSessions is not recognized` — both wait callbacks were
+`GetNewClosure` blocks, which run in a fresh module scope that sees no dot-sourced
+function. Fixed as a pattern: the wait owns fail-fast and progress (`ConnectWaitSec`,
+`RouterWaitSec`, `ProgressEverySec`, `CoreProbe`); callbacks receive their inputs as
+arguments; the wait's and selector's locals are prefixed so dynamic scope cannot shadow a
+callback's variables (tests 12e/12g/12h caught that on the way); no closure remains in any
+harness; `scripts/tests/harness-symbols.tests.ps1` parses every harness and library with
+the AST and fails on any invoked command nothing declares and on any `GetNewClosure`.
+`core.real_state` had failed only because nothing had been published since the release
+restarted the process; the route now reports `current_age_s` against the server clock and
+the lifespan publishes a truthful system `agent.idle` at startup (not yet released; the
+harness reports a null current as exactly "nothing since the Cloud Core started"). Proven
+automatically, twice, against production without the owner: no release (tools present),
+web shell ready in 3 s, real state truthful, bounded stop after 35 s with the exact reason,
+no Enter prompt, evidence written — and the run left `next dev` orphaned on port 3000, so
+the harness now stops the whole tree and refuses a foreign listener (`Get-ListeningProcess`).
+
 **Third real attempt, 2026-09-06 afternoon — `owner-m18-eye.ps1` first run, diagnosed from
 the production record:** the harness reached `/core` and then waited; `Gözünü aç` did
 nothing. The deployed Cloud Core's health manifest listed only the M17 tools

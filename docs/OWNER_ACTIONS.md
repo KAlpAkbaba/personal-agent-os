@@ -56,14 +56,34 @@ touched). Two more things it found: a closed session's `agent.listening` stayed 
 current state (sessions now publish `agent.idle` when they end), and a page reload left the
 previous voice session open on the Cloud Core (a reload now closes it).
 
+**Your second run of this command (2026-09-06, later that afternoon) did the release.** The
+working tree was clean, the transactional Cloud Core release succeeded, production now
+advertises `eye.enable`, `eye.disable` and `state.now`, `/core` answered, and the
+closed-session leftover was no longer accepted as current state. Then the harness crashed
+before your part began: `Get-NewSessions is not recognized`. Both of its wait callbacks had
+been bound with `GetNewClosure`, which runs a block in a fresh module scope that cannot see
+functions dot-sourced into the script. The fix is structural, not a renamed symbol: the wait
+now owns its own fail-fast and progress logic inside the library, callbacks receive
+everything as arguments, every local in the wait and the selector is prefixed so a callback's
+own variables are never shadowed, and a new static guard parses every harness and library
+and fails on any command nothing declares and on any closure. The whole thing was then run
+twice against production without you: the deployed-tools check passed with no release, the
+web shell started in 3 s, real state was reported truthfully, and the wait stopped after
+35 s with the exact reason. That run also exposed that the harness left `next dev` running
+after it finished; it now stops the whole process tree and refuses to start when something
+already listens on the port. **Production is not redeployed by this run** (the tools are
+already there); the one runtime change since (a truthful `agent.idle` at startup) waits for
+a later release.
+
 **One command:**
 
 ```powershell
 .\scripts\core\owner-m18-eye.ps1 -OutFile m18-eye-2.json
 ```
 
-It checks the deployed tools (releasing once if needed), starts the web shell, waits for
-`/core`, closes the eye durably if it was open, and prints six lines. While it waits it
+It checks the deployed tools (no release this time), refuses to start if port 3000 is
+already taken (it names the process; stop it or pass `-SkipWeb`), starts the web shell,
+waits for `/core`, closes the eye durably if it was open, and prints six lines. While it waits it
 prints, every 15 s, the current web session, the router events seen, the last query/action
 kind, the eye receipts and the Core's latest state — and it stops with the exact missing
 evidence if no session connects within 3 minutes or a session makes no router call within
