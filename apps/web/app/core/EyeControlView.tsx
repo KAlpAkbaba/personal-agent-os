@@ -56,6 +56,17 @@ export default function EyeControlView({
       </span>
 
       {status.cameraLabel && <span className="muted">Kamera: {status.cameraLabel}</span>}
+      {status.motion && (
+        // The numbers the verdict rests on, so "why does it think that?" is readable off
+        // the Core. Never a frame: a cell fraction and an age.
+        <span className="muted" data-eye-motion>
+          Son hareket:{" "}
+          {status.motion.msSinceLastMotion === null
+            ? "henüz yok"
+            : `${Math.round(status.motion.msSinceLastMotion / 1000)} sn önce (${ACTIVITY_LEVEL_LABEL[status.motion.lastMotionLevel]})`}
+          {" · "}değişen hücre %{Math.round(status.motion.changedCellRatio * 100)}
+        </span>
+      )}
 
       {observation && (
         <span className="muted" data-eye-last-observation>

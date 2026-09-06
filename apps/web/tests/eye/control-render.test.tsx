@@ -21,6 +21,7 @@ const IDLE_STATUS: PerceptionStatus = {
   running: false,
   cameraLabel: null,
   lastObservation: null,
+  motion: null,
   lastError: null,
   startedAt: null,
 };
@@ -153,5 +154,31 @@ describe("the control itself", () => {
 
   it("is an ambient-cell, styled like the rest of contract v2's band", () => {
     expect(render()).toContain('class="ambient-cell"');
+  });
+});
+
+describe("the numbers behind the verdict", () => {
+  it("are shown on the eye cell - an age and a cell fraction, never a frame", () => {
+    const html = render({
+      eye: serverEye([EYE_ACTIVE()]),
+      permission: "granted",
+      status: {
+        ...IDLE_STATUS,
+        running: true,
+        cameraLabel: "cam-0",
+        motion: { changedCellRatio: 0.037, maxCellDelta: 0.39, msSinceLastMotion: 12_000, lastMotionLevel: "low" },
+      },
+    });
+    expect(html).toContain("data-eye-motion");
+    expect(html).toContain("12 sn");
+    expect(html).toContain("%4");
+    expect(html).not.toContain("base64");
+  });
+
+  it("say 'no movement yet' rather than inventing an age", () => {
+    const html = render({
+      status: { ...IDLE_STATUS, running: true, motion: { changedCellRatio: 0, maxCellDelta: 0, msSinceLastMotion: null, lastMotionLevel: "none" } },
+    });
+    expect(html).toContain("henüz yok");
   });
 });

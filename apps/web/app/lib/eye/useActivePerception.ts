@@ -22,6 +22,7 @@ const INITIAL_STATUS: PerceptionStatus = {
   running: false,
   cameraLabel: null,
   lastObservation: null,
+  motion: null,
   lastError: null,
   startedAt: null,
 };

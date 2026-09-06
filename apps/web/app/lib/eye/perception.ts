@@ -52,7 +52,8 @@
  */
 
 import { postObservation } from "./client";
-import { NOISE_FLOOR, computeGridLuminance, deriveObservation, motionEnergyBetween } from "./signal";
+import { activityLevelFor, computeGridLuminance, deriveObservation, measureMotion } from "./signal";
+import type { ActivityLevel } from "./types";
 import type { EyeObservation } from "./types";
 
 // ------------------------------------------------------------ frame source
@@ -170,10 +171,27 @@ export class BrowserFrameSource implements FrameSource {
 
 // -------------------------------------------------------------- controller
 
+/**
+ * The measured numbers behind the last observation — shown on the Core so the
+ * owner can see WHY the eye says what it says. Numbers only, never a frame.
+ */
+export type MotionStatus = {
+  /** Fraction of grid cells that changed since the previous sample. */
+  changedCellRatio: number;
+  /** The strongest single-cell change, 0..1. */
+  maxCellDelta: number;
+  /** Milliseconds since the last meaningful movement, or `null` if none yet. */
+  msSinceLastMotion: number | null;
+  /** How strong that last movement was — an exit is `high`. */
+  lastMotionLevel: ActivityLevel;
+};
+
 export type PerceptionStatus = {
   running: boolean;
   cameraLabel: string | null;
   lastObservation: EyeObservation | null;
+  /** The measurements the last observation was derived from; `null` before the first sample. */
+  motion: MotionStatus | null;
   /** Owner-facing text for the last thing that went wrong, or `null`. */
   lastError: string | null;
   startedAt: number | null;
@@ -182,8 +200,6 @@ export type PerceptionStatus = {
 export type PerceptionOptions = {
   /** How often to sample. Configurable per the task brief; a low default. */
   sampleIntervalMs?: number;
-  /** How many trailing samples feed `recentMotionRatio`. */
-  windowSize?: number;
   /** Samples needed before `presence_confidence`'s sample term is "full". */
   samplesForFullConfidence?: number;
   deviceId?: string;
@@ -197,7 +213,6 @@ export type PerceptionOptions = {
 };
 
 const DEFAULT_SAMPLE_INTERVAL_MS = 5_000;
-const DEFAULT_WINDOW_SIZE = 8;
 const DEFAULT_SAMPLES_FOR_FULL_CONFIDENCE = 5;
 
 /**
@@ -211,7 +226,7 @@ const DEFAULT_SAMPLES_FOR_FULL_CONFIDENCE = 5;
  */
 export class PerceptionSession {
   readonly #opts: Required<
-    Pick<PerceptionOptions, "sampleIntervalMs" | "windowSize" | "samplesForFullConfidence" | "now">
+    Pick<PerceptionOptions, "sampleIntervalMs" | "samplesForFullConfidence" | "now">
   > &
     PerceptionOptions;
   readonly #frameSource: FrameSource;
@@ -223,14 +238,19 @@ export class PerceptionSession {
   #abort: AbortController | null = null;
 
   #previousGrid: Float32Array | null = null;
-  #motionWindow: boolean[] = [];
   #sampleCount = 0;
   #stillSinceMs: number | null = null;
+  // The motion memory (signal.ts): when the last meaningful movement happened and how
+  // strong it was. These two numbers are what "present" is derived from - not this tick's
+  // motion alone, which is what let a seated owner read as absent (2026-09-06 owner run).
+  #lastMotionAtMs: number | null = null;
+  #lastMotionLevel: ActivityLevel = "none";
 
   #status: PerceptionStatus = {
     running: false,
     cameraLabel: null,
     lastObservation: null,
+    motion: null,
     lastError: null,
     startedAt: null,
   };
@@ -238,7 +258,6 @@ export class PerceptionSession {
   constructor(options: PerceptionOptions = {}) {
     this.#opts = {
       sampleIntervalMs: options.sampleIntervalMs ?? DEFAULT_SAMPLE_INTERVAL_MS,
-      windowSize: options.windowSize ?? DEFAULT_WINDOW_SIZE,
       samplesForFullConfidence: options.samplesForFullConfidence ?? DEFAULT_SAMPLES_FOR_FULL_CONFIDENCE,
       now: options.now ?? Date.now,
       ...options,
@@ -256,9 +275,10 @@ export class PerceptionSession {
     this.#generation += 1;
     const generation = this.#generation;
     this.#previousGrid = null;
-    this.#motionWindow = [];
     this.#sampleCount = 0;
     this.#stillSinceMs = null;
+    this.#lastMotionAtMs = null;
+    this.#lastMotionLevel = "none";
 
     await this.#frameSource.start(this.#opts.deviceId);
     if (this.#stopped || generation !== this.#generation) {
@@ -321,29 +341,27 @@ export class PerceptionSession {
 
     // Everything from here to the pre-post check is synchronous: `stop()`
     // cannot run in the middle of it (see module docstring).
-    const motion = motionEnergyBetween(grid, this.#previousGrid);
+    const motion = measureMotion(grid, this.#previousGrid);
     this.#previousGrid = grid;
-
-    this.#motionWindow.push(motion >= NOISE_FLOOR);
-    if (this.#motionWindow.length > this.#opts.windowSize) this.#motionWindow.shift();
     this.#sampleCount += 1;
 
-    const recentMotionRatio =
-      this.#motionWindow.filter(Boolean).length / Math.max(1, this.#motionWindow.length);
-
     const observedAtMs = this.#opts.now();
-    const activityIsNone = motion < NOISE_FLOOR;
-    if (activityIsNone) {
+    const currentActivity = activityLevelFor(motion.changedCellRatio);
+    if (currentActivity === "none") {
       this.#stillSinceMs ??= observedAtMs;
     } else {
       this.#stillSinceMs = null;
+      this.#lastMotionAtMs = observedAtMs;
+      this.#lastMotionLevel = currentActivity;
     }
     const stillDurationMs = this.#stillSinceMs !== null ? observedAtMs - this.#stillSinceMs : 0;
+    const msSinceLastMotion = this.#lastMotionAtMs === null ? null : observedAtMs - this.#lastMotionAtMs;
 
     const observation = deriveObservation(
       {
-        currentMotion: motion,
-        recentMotionRatio,
+        currentActivity,
+        msSinceLastMotion,
+        lastMotionLevel: this.#lastMotionLevel,
         sampleCount: this.#sampleCount,
         samplesForFullConfidence: this.#opts.samplesForFullConfidence,
         stillDurationMs,
@@ -351,7 +369,16 @@ export class PerceptionSession {
       new Date(observedAtMs),
     );
 
-    this.#setStatus({ lastObservation: observation, cameraLabel: this.#frameSource.label() });
+    this.#setStatus({
+      lastObservation: observation,
+      cameraLabel: this.#frameSource.label(),
+      motion: {
+        changedCellRatio: motion.changedCellRatio,
+        maxCellDelta: motion.maxCellDelta,
+        msSinceLastMotion,
+        lastMotionLevel: this.#lastMotionLevel,
+      },
+    });
     this.#opts.onObservation?.(observation);
 
     if (this.#stopped || generation !== this.#generation) return; // disabled between capture and post
