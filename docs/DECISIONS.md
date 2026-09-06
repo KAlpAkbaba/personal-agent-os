@@ -5758,3 +5758,168 @@ anlat" binds to the latest, not to a searched-for one) — the clarifying questi
 the two-run case and a topic-addressed history is a larger change; and nothing here
 teaches the M13 pipeline to resume or extend a finished run, so "biraz daha araştır"
 on a completed topic is still a NEW crawl, honestly, rather than a continuation.
+
+## ADR-0076 — A research is a thing the owner points at: a durable focus, a deterministic reference resolver, and no crawl for an unresolved reference (2026-09-07)
+
+Status: Accepted
+
+Context: the owner's real evening, 2026-09-06 (production record). Three research runs
+finished in seventy-five minutes, and two of them had the SAME title: "Son üç gündeki
+OpenAI ile ilgili gelişmeler" at 19:53Z and again at 20:18Z, then "Bu haftadaki OpenAI
+ile ilgili geliştirmeler" at 21:08Z. Two things then happened, one on each side of the
+ADR-0075 deployment, and they are the same defect seen from opposite ends.
+
+On contract v6, "Teknik anlat." on a fresh voice session started a NEW research and bound
+the technical explanation to THAT run — `before_job_id != explained_job_id` in the
+harness's own output. That is the defect ADR-0075 was written for, and its guard closed
+it. On contract v7, with the guard deployed, the same phrase on a fresh session produced
+the clarification "Efendim, iki tamamlanmış araştırmam var: «…» ve «…». Hangisini
+anlatayım?" SIX TIMES IN A ROW, 21:05:00 through 21:07:35. Nothing was wrong with the
+question. What was wrong was that nothing in the server could accept the answer: the
+owner said which one, and there was no state anywhere that a spoken "the second one" or
+"the 20:19 one" could land on. And when the owner reloaded the page, the new WebRTC
+session had no context at all — ADR-0075's binding lived in the voice session's own
+`context_json`, and a reload is a new session.
+
+The owner's directive, in its own terms: research identity is ID-based, never title-based
+(two jobs may share a title); there must be a canonical, durable, owner-level research
+FOCUS with a bounded stack that survives voice reconnects and page reloads; deictic and
+anaphoric references must resolve deterministically ("bu", "bunu", "bunun", "bu
+araştırma", "az önceki", "son araştırma", "bir önceki", "bundan önceki", "onu", "bunun
+kaynakları", "bunu teknik anlat", "ikinci araştırma"); a selection in the UI sets the
+focus; ambiguity causes ONE concise clarification the owner can answer BY VOICE, never a
+guess and never a crawl; follow-up tools execute against an explicit resolved job id; and
+`research.start` is never a fallback for a reference the server could not resolve.
+
+Decisions:
+
+1. **The focus is a durable, owner-level row, and it is append-only.**
+   `research_focus` (migration `0022_research_focus`) records, each time the focus moves,
+   which research is now the one being talked about and WHY: `research_just_completed`,
+   `result_just_spoken`, `owner_selected_in_ui`, `owner_selected_by_voice`,
+   `followup_reference` — a closed vocabulary, in a CHECK constraint, so a source outside
+   it cannot reach the database from a path that skips the Python guard. The current
+   focus is the most recent row; `previous_focus` is the most recent row naming a
+   DIFFERENT job; an ordinal counts distinct jobs down the same list, bounded at eight
+   (`app.research.focus.FOCUS_STACK_LIMIT`) because "üçüncü araştırma" is a thing an owner
+   says and "sekizinci" is not. Nothing is ever updated in place: recency IS the ordering,
+   and an UPDATE would erase exactly the history "bir öncekini anlat" reads. It is
+   owner-level rather than session-level for the single reason the record demands — a page
+   reload must not lose it. `research_job_id` is a task id with a foreign key onto
+   `tasks.id`: the schema saying, structurally, that identity is the id.
+   The focus is set when a run's row goes READY (in `runs_service.update_run`, the ONE
+   choke point the REST-started and the voice-started run both pass through), when the
+   announcer's terminal payload is handed to a session and spoken, by the UI route, by a
+   spoken selection, and by a resolved reference — so after "bir öncekini anlat" the
+   previous research IS the current one, which is what the next "bunu" has to mean.
+
+2. **One resolver, one decision table, no title matching as identity.**
+   `app.research.reference.resolve_reference` is pure over durable state and answers
+   `resolved` / `ambiguous` / `missing` in a fixed order: an explicit job id; an answer to
+   a live clarification; a PREVIOUS reference; an ORDINAL; a CURRENT/deictic reference —
+   or no reference at all, which means the same thing; and finally a TOPIC phrase, which
+   is a FILTER over completed reports and never an identity. A topic matching exactly one
+   report resolves; matching several with the focus among them resolves to the focus;
+   matching several without one asks. Title equality never creates ambiguity when a
+   contextual identity exists: two runs called "OpenAI son gelişmeler" are not ambiguous
+   to someone who was just told about one of them, and the unit fixtures are deliberately
+   that pair — identical topic, different ids, different artifacts.
+   The Turkish lives where ADR-0075 put it, in the one router:
+   `app.voice.intents.classify_research_reference` reads the tokens the same pass that
+   decides the intent and the research class, and returns a bounded `ResearchReference`
+   (kind, ordinal, clock time, day, at most six content words). That projection — never a
+   transcript — is what the session row keeps, because a tool call carries no utterance of
+   its own; that is the point.
+
+3. **A clarification is a question the server remembers, so the owner can answer it.**
+   `research_owner_state` holds one pending clarification — the question and the bounded
+   candidates — with a ten-minute TTL applied on read. The answer may be an ordinal
+   ("ikincisi", "ilki"), a relative reference ("bir önceki"), a superlative ("en son",
+   "sonuncusu"), a day ("bugünkü") or, most usefully, the time the question itself
+   offered: "Aynı konuda iki araştırmanız var: bugün 20:19'daki mı, yoksa 19:53'teki mi?"
+   The times are local (Europe/Istanbul) with "bugün"/"dün", and the locative suffix is
+   derived from how the minutes are read aloud — 19 is "on dokuz", so `-daki`; 53 is "elli
+   üç", so `-teki`. The question is asked with TIMES rather than titles precisely because
+   the two candidates in the owner's record answer to the same title, and a question built
+   from titles is the same question twice.
+
+4. **Three follow-up tools that take no title and no job id from the model.**
+   `research.explain {level}`, `research.sources {}` and `research.finding_detail
+   {index}`: the server resolves which research from the turn's own reference, binds
+   `research_job_id`/`research_artifact_id`, and reads ONLY that job's durable report row
+   (`app.research.answers` composes the Turkish from `ResearchResult` /
+   `ResearchDiagnostics`, keeping ADR-0067's outcome/telemetry split). Every result names
+   the job, the artifact, `resolution_reason` and `focus_source`. An ambiguous or
+   unresolvable reference returns `{"status": "needs_clarification", "speech": <one short
+   question>}` and never a crawl. `activity.explain` was rewired onto the same resolver
+   for research-classified turns, so the existing path binds identically and the two
+   cannot drift. The answer is spoken IMMEDIATELY, prefixed naturally ("Bu araştırmada
+   …"); "kayıtlarımı kontrol edeceğim" and "hangi kayda bakmam gerektiğini bulmaya
+   çalışıyorum" are banned by name (`app.actions.receipt.BOOKKEEPING_PHRASES`,
+   `contains_bookkeeping`) because they are what the owner heard INSTEAD of an answer.
+
+5. **The guard refuses a crawl for any turn that POINTS at a run — including when there is
+   nothing to point at.** ADR-0075's guard refused only when a completed research could be
+   bound; with none bound it stood aside, and that is the hole the v6 half of the record
+   fell through. Two changes close it. `classify_research_shape` answers what class an
+   utterance IS without the "does a completed research exist?" precondition, so "Teknik
+   anlat." on an empty history is still a technical-explanation turn. And the guard now
+   also refuses on the reference itself (`ResearchReference.points_at_a_run`) and on the
+   turn after an open clarification. With nothing to resolve, the answer is "Hangi
+   araştırmayı kastediyorsunuz efendim?" — a question, not a research. Only explicit
+   new-research semantics still crawl: "araştır" on a topic, "yeniden/tekrar araştır",
+   "araştırma yap/başlat". The refusal happens in the relay before any handler runs, so no
+   `ResearchRunRow` and no task row is created and then refused; the tests assert the row
+   count and that no task exists with a `created_at` after the utterance.
+
+6. **The record says which research, and why that one.** `session_activity` exposes
+   `research_job_id`, `research_artifact_id`, `resolution_reason` and `focus_source` at
+   the TOP level of every tool-call entry, and `research_class` plus `research_reference`
+   (current | previous | ordinal | topic | selection | none) on every intent — the
+   assertions an owner qualification makes instead of comparing timestamps.
+   `GET /v1/research/focus` returns `{current, previous, stack, pending_clarification}`,
+   `POST /v1/research/{task_id}/focus` sets it (409 `not_completed` for a run with no
+   READY report), and `GET /v1/research` rows gained `mode`, `source_count`,
+   `completed_at` and `is_focus` so the web track can select a research by what it was and
+   when it finished rather than by a task id. `ACTION_CONTRACT_VERSION` is 8.
+
+What was refused:
+
+- **Title matching as identity.** The obvious fix for "which research does the owner
+  mean?" is to compare the topic text. The owner's own record is the counter-example: two
+  completed runs, one title, twenty-five minutes apart. A topic phrase is allowed to
+  FILTER candidates and is never allowed to BE the identity; when the filter leaves more
+  than one and nothing points at any of them, the server asks.
+- **An arbitrary latest row.** ADR-0075's third binding rule was "the most recently
+  completed research", and it is a guess wearing a timestamp: on the owner's evening the
+  most recent run was frequently not the one being discussed. Recency is now recorded as
+  an EVENT the owner caused — a completion they were told about, a result they heard, a
+  click, a spoken choice — rather than inferred from a `updated_at` column.
+- **A crawl as a fallback.** No unresolved reference may become a research. This is the
+  whole ADR in one line, and it now holds in the case ADR-0075 did not cover: with no
+  completed research at all, "Teknik anlat." gets a question. Starting a crawl because the
+  server could not work out what was meant is the original defect with better manners.
+- **LLM-only resolution.** The persona is told what the server does anyway
+  (`RESEARCH_FOCUS_TR`: the tools take no title and no id, ask nothing yourself,
+  `research.start` only for a new topic or an explicit re-run), and that block is the
+  cheap half. The resolver is deterministic, server-side and audited, for the reason this
+  repository has now recorded three times: correctness must not rest on the model choosing
+  the right tool with the right arguments.
+- **A session-scoped memory, again.** ADR-0075's `context_json['last_research']` is kept
+  (it costs nothing and is honest about what a session saw), but it is no longer what
+  answers "which research?". A page reload is a normal thing for an owner to do.
+
+Consequences: `services/api` gains `app/research/focus.py`, `app/research/reference.py`,
+`app/research/answers.py`, two tables and migration `0022_research_focus`, two research
+routes and four fields on the research list; `app.voice.intents` gains the reference
+vocabulary, `ResearchReference`, `classify_research_shape` and
+`ResolvedIntent.research_reference`; `tools.py` gains three tools and a guard keyed on the
+turn's SHAPE and REFERENCE rather than on whether anything could be bound;
+`record_client_events` stores the bounded reference on the session row and
+`session_activity` projects the identity fields. What this ADR does NOT build: a way to
+point at a research older than the eight-deep stack other than by naming its topic (an
+owner-facing history search is the web track's, not this one's); resuming or extending a
+finished run, so "biraz daha araştır" is still honestly a NEW crawl; and any
+disambiguation by ARTIFACT — the focus names an artifact but the owner cannot yet say
+"the report you saved", because nothing in the voice vocabulary distinguishes a research
+from its report.
