@@ -52,7 +52,10 @@ param(
     [string]$PnpmPath = "pnpm",
     [ValidateRange(20, 600)][int]$AlarmDelaySec = 20,
     [ValidateRange(10, 120)][int]$AlarmSeconds = 15,
-    [ValidateRange(60, 1800)][int]$SessionWaitSec = 600,
+    [ValidateRange(60, 1800)][int]$SessionWaitSec = 300,
+    # Bounded per-step windows (owner, 2026-09-06: never one ten-minute wait again).
+    [ValidateRange(30, 600)][int]$ConnectWaitSec = 60,
+    [ValidateRange(30, 600)][int]$RouterWaitSec = 90,
     [ValidateRange(60, 1800)][int]$PresenceWaitSec = 420,
     [ValidateRange(10, 900)][int]$WebReadyTimeoutSec = 180
 )
@@ -332,18 +335,25 @@ try {
 
     $listSessions = { Get-ArrayProperty -InputObject (Get-Json "/v1/voice/realtime/sessions?limit=50") -Name "sessions" }
     $activityProbe = { param($Id) Get-Json "/v1/voice/realtime/sessions/$Id/activity" }
-    # Recognised by what it did through the router (a live-state answer, an eye action, a
-    # briefing), never by one tool name: requiring activity.explain to prove the Core's
-    # voice works was the wrong test (owner, 2026-09-06).
+    # The Core session is correlated by IDENTITY - new since the baseline, or named by the
+    # Core's own bus events - never by a readiness instant and never by one tool name. The
+    # owner's final run (owner-m18-20260906-181122): the session was created 9 s after the
+    # harness started, while /core was still compiling, so a "started after the shell was
+    # ready" filter excluded it and 600 s were lost while every product action succeeded.
+    # Two bounded steps now: a connection (ConnectWaitSec), then a router call (RouterWaitSec).
+    $coreProbe = { Get-OptionalProperty -InputObject (Get-Json "/v1/ui/state") -Name "current" }
+    $acceptProbe = { Get-BusVoiceSessionIds -Events (Get-ArrayProperty -InputObject (Get-Json "/v1/ui/state?limit=64") -Name "events") -Since ([DateTimeOffset]$startedAt).AddSeconds(-5) }
+    Write-Host "      waiting for the Core's voice session (connect within $ConnectWaitSec s; a router call within $RouterWaitSec s of connecting)..."
     $waited = Wait-QualificationSession -ListSessions $listSessions -ActivityProbe $activityProbe -BaselineIds $baselineIds `
-        -ReadyAt $readyAt -NotBefore $null -TimeoutSec $SessionWaitSec -IntervalSec 5 -Qualifier ${function:Test-CoreQualification} `
-        -OnWaiting { param($Attempt, $Elapsed) if ($Attempt -eq 1) { Write-Host "      waiting for a web voice session that went through the router (up to $SessionWaitSec s)..." } }
+        -ReadyAt $null -NotBefore $null -TimeoutSec $SessionWaitSec -IntervalSec 3 -Qualifier ${function:Test-CoreQualification} `
+        -ConnectWaitSec $ConnectWaitSec -RouterWaitSec $RouterWaitSec -ProgressEverySec 15 -CoreProbe $coreProbe -AcceptProbe $acceptProbe `
+        -OnWaiting { param($Attempt, $Elapsed) if ($Attempt -eq 1) { Write-Host "      (the Core Voice session is named the moment it exists; the router call is the next step)" } }
     $sessionId = ""
     if ($null -ne $waited.Selected) {
         $sessionId = [string]$waited.Selected.SessionId
-        Write-Host "      voice session $sessionId seen after $([math]::Round([double]$waited.ElapsedSec)) s"
+        Write-Host "      Core Voice connected: $sessionId (after $([math]::Round([double]$waited.ElapsedSec)) s)" -ForegroundColor Green
     }
-    Add-Check -Name "voice.connected_from_core" -Ok ($sessionId -ne "") -Detail $(if ($sessionId) { "web session $sessionId, new since the baseline, asked activity.explain" } else { "no new web session asked activity.explain within $SessionWaitSec s" })
+    Add-Check -Name "voice.connected_from_core" -Ok ($sessionId -ne "") -Detail $(if ($sessionId) { "Core Voice session $sessionId, new since the baseline, went through the router" } else { [string]$waited.GaveUp })
 
     # ------------------------------------------------------------------ phase P: presence + the eye
 
@@ -385,17 +395,47 @@ try {
         Start-Sleep -Seconds 5
     }
     $presenceEvidence.states_seen = @($statesSeen.Keys | Sort-Object)
+    # The DURABLE rows decide, not the polling window: the owner's final run had its
+    # transition recorded while the harness was still waiting for the voice session, and
+    # the watcher above started only afterwards and saw a stable state. Rows since the run
+    # started carry the engine's to_state, confidence and signal sources with timestamps.
+    $sinceRows = $startedAt.ToString("yyyy-MM-ddTHH:mm:ssZ")
+    $presenceRowsDoc = Get-Json ("/v1/ledger/events?since=" + [uri]::EscapeDataString($sinceRows) + "&event_type=presence.state_changed&limit=100")
+    $presenceRows = Get-ArrayProperty -InputObject $presenceRowsDoc -Name "events"
+    $presenceRows = @($presenceRows | Sort-Object -Property occurred_at)
+    $rowStates = @()
+    $rowSummary = @()
+    foreach ($row in $presenceRows) {
+        $d = Get-OptionalProperty -InputObject $row -Name "detail_json"
+        $to = if ($null -ne $d) { [string](Get-OptionalProperty -InputObject $d -Name "to_state") } else { "" }
+        $conf = if ($null -ne $d) { Get-OptionalProperty -InputObject $d -Name "confidence" } else { $null }
+        $srcs = if ($null -ne $d) { (ConvertTo-Array -Value (Get-OptionalProperty -InputObject $d -Name "signal_sources")) -join "," } else { "" }
+        if ($to -and $to -ne "unknown") { $rowStates += $to }
+        $rowSummary += ("{0} {1} ({2}; {3})" -f ([string](Get-OptionalProperty -InputObject $row -Name "occurred_at")).Substring(11, 8), $to, $conf, $srcs)
+        if ($to -and $to -ne "unknown" -and -not $statesSeen.ContainsKey($to)) { $statesSeen[$to] = $conf; $presenceEvidence.confidences += [ordered]@{ state = $to; confidence = $conf } }
+    }
+    $presenceEvidence.rows = @($rowSummary)
+    $presenceEvidence.states_seen = @($statesSeen.Keys | Sort-Object)
+    $eyeEnabledRows = Get-LedgerSince -SinceIso $sinceRows -EventType "eye.enabled"
+    $eyeDisabledRowsNow = Get-LedgerSince -SinceIso $sinceRows -EventType "eye.disabled"
+    if ($eyeEnabledRows.Count -gt 0) { $eyeEvidence.enabled_observed = $true }
+    if ($eyeEvidence.enabled_observed -and $eyeDisabledRowsNow.Count -gt 0 -and -not $eyeEvidence.disabled_observed) { $eyeEvidence.disabled_observed = $true; $eyeEvidence.disabled_after_s = "recorded" }
     $evidence.presence = $presenceEvidence
     $evidence.eye = $eyeEvidence
 
-    Add-Check -Name "eye.enabled" -Ok $eyeEvidence.enabled_observed -Detail $(if ($eyeEvidence.enabled_observed) { "eye_enabled=true observed" } else { "the eye was never seen enabled" })
+    Add-Check -Name "eye.enabled" -Ok $eyeEvidence.enabled_observed -Detail $(if ($eyeEvidence.enabled_observed) { "eye_enabled=true observed or eye.enabled recorded ($($eyeEnabledRows.Count) row(s))" } else { "the eye was never seen enabled" })
     $presentSeen = @($presenceEvidence.states_seen | Where-Object { $presentStates -contains $_ })
-    Add-Check -Name "presence.current_observation" -Ok ($presentSeen.Count -ge 1) -Detail ("a present-family state was asserted while you were in view: " + $(if ($presentSeen.Count) { $presentSeen -join ", " } else { "none (states seen: " + ($presenceEvidence.states_seen -join ", ") + ")" }))
+    Add-Check -Name "presence.current_observation" -Ok ($presentSeen.Count -ge 1) -Detail ("a present-family state was asserted while you were in view: " + $(if ($presentSeen.Count) { $presentSeen -join ", " } else { "none (states seen: " + ($presenceEvidence.states_seen -join ", ") + ")" }) + "; rows: " + $(if ($rowSummary.Count) { $rowSummary -join " | " } else { "none" }))
     $allHaveConfidence = $true
     foreach ($entry in $presenceEvidence.confidences) { if ($null -eq $entry.confidence) { $allHaveConfidence = $false } }
     Add-Check -Name "presence.stated_with_confidence" -Ok ($allHaveConfidence -and $presenceEvidence.confidences.Count -gt 0) -Detail "every observed state carried the engine's own confidence"
-    Add-Check -Name "presence.transition_observed" -Ok ($statesSeen.Count -ge 2) -Detail ("distinct states: " + ($presenceEvidence.states_seen -join ", "))
-    Add-Check -Name "eye.disabled" -Ok $eyeEvidence.disabled_observed -Detail $(if ($eyeEvidence.disabled_observed) { "eye off after $($eyeEvidence.disabled_after_s) s" } else { "the eye was never seen disabled" })
+    # The real requirement, unweakened: the owner LEFT (away) and CAME BACK (a present-family
+    # state after it), in the durable rows of this run.
+    $awayIndex = [array]::IndexOf($rowStates, "away")
+    $returned = $false
+    if ($awayIndex -ge 0) { for ($i = $awayIndex + 1; $i -lt $rowStates.Count; $i++) { if ($presentStates -contains $rowStates[$i]) { $returned = $true } } }
+    Add-Check -Name "presence.transition_observed" -Ok $returned -Detail ("durable transitions: " + $(if ($rowStates.Count) { $rowStates -join " -> " } else { "none" }) + $(if (-not $returned) { " - a leave (away) followed by a return is required; scripts\core\owner-m18-presence.ps1 asks for exactly that" } else { "" }))
+    Add-Check -Name "eye.disabled" -Ok $eyeEvidence.disabled_observed -Detail $(if ($eyeEvidence.disabled_observed) { "eye off ($($eyeEvidence.disabled_after_s))" } else { "the eye was never seen disabled" })
 
     # ------------------------------------------------------------------ phase A: the alarm
 
