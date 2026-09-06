@@ -44,7 +44,7 @@ from urllib.parse import urlencode, urlsplit
 from playwright.async_api import Frame, Page
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
-from . import launch_guard, lifecycle, policy, release, search_engines
+from . import launch_guard, lifecycle, media, policy, release, search_engines
 from .backends import ManagedBackend
 from .destination import require_public_destination
 from .detect import BrowserInfo, detect_browser
@@ -66,12 +66,16 @@ from .targets import TargetSpec, coerce_target
 
 logger = get_logger(__name__)
 
-WORKER_VERSION = "0.4.0"
+WORKER_VERSION = "0.5.0"
 # Per-capability response schema versions (BROWSER_CAPABILITIES.md §3). A consumer that
 # needs the search-provider evidence checks `contracts["browser.search"] >= 2` on the hello
 # or worker_status BEFORE searching, so an old installed worker yields a clear contract/
 # version mismatch instead of a missing-property error (owner run, 2026-09-03).
-CONTRACTS: dict[str, int] = {"browser.search": 3}
+# `browser.media` (contract v1.2, M18.3) is the same promise for the alarm media family:
+# Cloud Core checks it before it plans a media wake, so an agent installed before M18.3
+# produces a named contract mismatch and the tone fallback, never a missing-key crash
+# in the middle of an alarm.
+CONTRACTS: dict[str, int] = {"browser.search": 3, "browser.media": 1}
 PROTOCOL_VERSION = 1
 DEFAULT_TIMEOUT_MS = 30_000
 DEFAULT_NAV_TIMEOUT_MS = 15_000
@@ -105,6 +109,20 @@ _CAPABILITY_NAME_RE = re.compile(policy.CAPABILITY_NAME_RE_SOURCE)
 # its class dynamically from the clicked element; browser.download adds an
 # authorization_ref requirement on top of the HIGH_IMPACT check).
 _CUSTOM_ENFORCEMENT_CAPS = frozenset({"browser.click", "browser.download"})
+
+# M18.3 (spec §4): transport-level navigation failures inside media_play become
+# a truthful `reason: "navigation_failed"` on a SUCCESSFUL command rather than a
+# typed error, because the alarm's caller needs a media receipt it can record
+# and fall back from, not a retryable error in the middle of a wake sequence.
+# A policy refusal (security_scope_error) and a bad payload (validation_error)
+# are NOT in this set: those stay hard errors.
+_MEDIA_NAVIGATION_FAILURE_CLASSES = frozenset(
+    {
+        ErrorClass.DEPENDENCY_UNAVAILABLE,
+        ErrorClass.TIMEOUT,
+        ErrorClass.UI_STATE_CHANGED,
+    }
+)
 
 # ----------------------------------------------------------------------- #
 # forbidden-key scan + result size cap (contract §3, §6)
@@ -251,6 +269,17 @@ def _err_result(
     }
 
 
+async def _media_wait(seconds: float) -> None:
+    """The media path's only wall-clock wait (verification, and a short ramp).
+
+    A named seam rather than a bare ``asyncio.sleep`` so the unit suite can
+    assert the DURATION that was asked for without spending it, and so every
+    place the media path pauses is greppable. Nothing else in this module
+    sleeps on a fixed interval: readiness is a DOM condition everywhere else.
+    """
+    await asyncio.sleep(seconds)
+
+
 def _elapsed_ms(start: float) -> float:
     return round((time.perf_counter() - start) * 1000, 1)
 
@@ -330,6 +359,11 @@ class SessionState:
     # recreated (fresh session_open, or after a dead-browser discard).
     session_uid: str = ""
     profile_dir: Path | None = None
+    # M18.3 (contract v1.2): "research" (everything that existed before) or
+    # "media" (the alarm surface). The media operations refuse to run on a
+    # research session, so alarm audio can never start inside the browser the
+    # owner's research is using.
+    session_kind: str = media.RESEARCH_SESSION_KIND
     max_tabs: int = DEFAULT_MAX_TABS
     popups_closed: int = 0
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -441,6 +475,19 @@ class Worker:
         self._profile_dir = (
             Path(args.profile_dir) if args.profile_dir else self._data_dir / "profile"
         )
+        # M18.3 (contract v1.2): the alarm media profile — a SEPARATE persistent
+        # directory beside the research one. Derived by default so a
+        # configuration mistake cannot collapse the two onto one directory, and
+        # checked either way: two Chrome instances on one profile is exactly the
+        # 2026-09-03 owner-machine incident. The owner's own Chrome is
+        # unreachable from here regardless (ManagedBackend rejects real profile
+        # trees).
+        self._alarm_profile_dir = (
+            Path(args.alarm_profile_dir)
+            if getattr(args, "alarm_profile_dir", None)
+            else media.alarm_profile_dir_for(self._profile_dir)
+        )
+        media.require_distinct_alarm_profile(self._alarm_profile_dir, self._profile_dir)
         self._default_channel: str | None = args.channel
         self._default_visible = bool(args.visible) and not args.headless
         self._idle_timeout_s = args.idle_timeout_s
@@ -462,13 +509,14 @@ class Worker:
         self._start_time = time.monotonic()
         self._browser_info: BrowserInfo | None = None
         # M13 lifecycle (owner-machine incident 2026-09-03): the single
-        # session_id currently allowed to hold the persistent "research"
-        # profile/browser. A second session_open for a *different*
-        # session_id with profile="research" while this is set (and that
-        # session is still tracked) is refused with
-        # browser_lifecycle_violation instead of ever attempting a second
-        # launch on the same profile.
-        self._research_owner_session_id: str | None = None
+        # session_id currently allowed to hold each PERSISTENT profile's
+        # browser, keyed by profile name ("research", and since M18.3
+        # "alarm"). A second session_open for a *different* session_id on a
+        # profile that is already owned (and whose owner is still tracked) is
+        # refused with browser_lifecycle_violation instead of ever attempting a
+        # second launch on the same profile directory. "isolated" never
+        # appears here: it has no shared directory to contend for.
+        self._persistent_profile_owner: dict[str, str] = {}
         # Cross-process guards (launch_guard): durable launch-rate breaker and
         # the ownership record, both under the worker data directory so they
         # survive this process.
@@ -478,6 +526,21 @@ class Worker:
     # ------------------------------------------------------------------ #
     # top-level lifecycle
     # ------------------------------------------------------------------ #
+
+    def _persistent_profile_dir(self, profile: str) -> Path | None:
+        """The directory a ``profile`` name resolves to, or ``None`` for
+        ``isolated`` (a fresh non-persistent context that owns no directory).
+
+        The two persistent profiles are distinct by construction (see
+        ``media.alarm_profile_dir_for`` and the ``__init__`` check) and neither
+        can be the owner's own Chrome: ``ManagedBackend`` rejects any path
+        inside a real browser profile tree.
+        """
+        if profile == media.RESEARCH_PROFILE:
+            return self._profile_dir
+        if profile == media.ALARM_PROFILE:
+            return self._alarm_profile_dir
+        return None
 
     def _lock_for(self, session_id: str) -> asyncio.Lock:
         lock = self._session_locks.get(session_id)
@@ -535,19 +598,24 @@ class Worker:
         escaped ``run()``'s own ``finally`` above — so it is a synchronous
         OS-level reap of ``--profile-dir``, not a graceful
         ``BrowserSession.close()``. Best effort: swallows every error, since
-        this is the process's last chance to clean up, not a place to raise."""
-        try:
-            pids = lifecycle.find_profile_chrome_pids(self._profile_dir)
-        except Exception:
-            return
-        if not pids:
-            return
-        logger.warning("browser.atexit_orphan_reap", profile_dir=str(self._profile_dir), pids=pids)
-        for pid in pids:
+        this is the process's last chance to clean up, not a place to raise.
+
+        M18.3: BOTH persistent profiles are swept. An alarm Chrome left running
+        after the worker died would keep playing music at the owner — the
+        loudest possible way to leak a browser."""
+        for profile_dir in (self._profile_dir, self._alarm_profile_dir):
+            try:
+                pids = lifecycle.find_profile_chrome_pids(profile_dir)
+            except Exception:
+                continue
+            if not pids:
+                continue
+            logger.warning("browser.atexit_orphan_reap", profile_dir=str(profile_dir), pids=pids)
+            for pid in pids:
+                with suppress(Exception):
+                    lifecycle.terminate_pid(pid)
             with suppress(Exception):
-                lifecycle.terminate_pid(pid)
-        with suppress(Exception):
-            lifecycle.wait_for_pids_exit(pids, timeout_s=BROWSER_PID_EXIT_TIMEOUT_S)
+                lifecycle.wait_for_pids_exit(pids, timeout_s=BROWSER_PID_EXIT_TIMEOUT_S)
 
     async def _reap_idle_sessions(self) -> None:
         while True:
@@ -588,8 +656,8 @@ class Worker:
         reaper and worker shutdown so all three answer ``browser_pid_exited``
         the same honest way. Never raises — cleanup must not crash the
         caller."""
-        if self._research_owner_session_id == session_id:
-            self._research_owner_session_id = None
+        if self._persistent_profile_owner.get(state.profile) == session_id:
+            self._persistent_profile_owner.pop(state.profile, None)
         try:
             await state.browser_session.close()
         except Exception as exc:
@@ -817,6 +885,15 @@ class Worker:
             async with self._lock_for(session_id):
                 return await self._op_session_close(session_id)
 
+        # media_stop ENDS the session (spec §4: "pauses, then closes the
+        # session"), so it is dispatched here beside session_close rather than
+        # through the session-scoped tail below — that tail reads the tab count
+        # and stamps `lifecycle` on a session that no longer exists.
+        if capability == "browser.media_stop":
+            session_id = _require_session_id(payload)
+            async with self._lock_for(session_id):
+                return await self._op_media_stop(session_id)
+
         session_id = _require_session_id(payload)
         async with self._lock_for(session_id):
             state = self._sessions.get(session_id)
@@ -851,11 +928,37 @@ class Worker:
     # ------------------------------------------------------------------ #
 
     async def _op_session_open(self, session_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-        profile = payload.get("profile", "research")
-        if profile not in ("research", "isolated"):
+        profile = payload.get("profile", media.RESEARCH_PROFILE)
+        if profile not in media.PROFILES:
             raise BrowserError(
                 ErrorClass.VALIDATION_ERROR,
-                "session_open: profile must be 'research' or 'isolated'",
+                f"session_open: profile must be one of {sorted(media.PROFILES)}",
+                retryable=False,
+            )
+        session_kind = payload.get("session_kind", media.RESEARCH_SESSION_KIND)
+        if session_kind not in media.SESSION_KINDS:
+            raise BrowserError(
+                ErrorClass.VALIDATION_ERROR,
+                f"session_open: session_kind must be one of {sorted(media.SESSION_KINDS)}",
+                retryable=False,
+            )
+        # M18.3 (contract §2, v1.2): the alarm profile and the media session
+        # kind are ONE thing, checked from both directions. A media session may
+        # never be opened on the research profile — the whole point of the
+        # dedicated profile is that alarm audio cannot appear in the browser the
+        # owner's research is using — and the alarm profile exists for nothing
+        # but media.
+        if profile == media.ALARM_PROFILE and session_kind != media.MEDIA_SESSION_KIND:
+            raise BrowserError(
+                ErrorClass.VALIDATION_ERROR,
+                "session_open: profile 'alarm' requires session_kind 'media'",
+                retryable=False,
+            )
+        if session_kind == media.MEDIA_SESSION_KIND and profile == media.RESEARCH_PROFILE:
+            raise BrowserError(
+                ErrorClass.VALIDATION_ERROR,
+                "session_open: a media session may not use the research profile; "
+                "use profile 'alarm' (or 'isolated')",
                 retryable=False,
             )
         channel = payload.get("channel", self._default_channel)
@@ -872,7 +975,14 @@ class Worker:
                 "session_open: policy must be an object",
                 retryable=False,
             )
-        visible = bool(policy_payload.get("visible", self._default_visible))
+        # A media session shows a real, visible window by default whatever the
+        # worker's own default is (spec §4: the owner's alarm plays in a window
+        # that exists). An explicit `policy.visible` in the payload still wins —
+        # the test suite's headless guard relies on being able to say so.
+        default_visible = (
+            True if session_kind == media.MEDIA_SESSION_KIND else self._default_visible
+        )
+        visible = bool(policy_payload.get("visible", default_visible))
         requested_classes: frozenset[policy.RiskClass] | None = None
         if "allowed_risk_classes" in policy_payload:
             requested_classes = policy.parse_risk_classes(policy_payload["allowed_risk_classes"])
@@ -901,13 +1011,25 @@ class Worker:
             # exactly once, by the normal creation path's single _launch()
             # attempt below, never a retry loop.
             del self._sessions[session_id]
-            if self._research_owner_session_id == session_id:
-                self._research_owner_session_id = None
+            if self._persistent_profile_owner.get(existing.profile) == session_id:
+                self._persistent_profile_owner.pop(existing.profile, None)
             with suppress(Exception):
                 await existing.browser_session.close()
             logger.info("browser.session_recreated_after_crash", session_id=session_id)
             existing = None
         if existing is not None:
+            # A reopen narrows policy (contract §2); it never re-points a live
+            # session at a different profile or turns a research session into a
+            # media one. Either would silently hand the caller a browser that is
+            # not the one it asked for.
+            if profile != existing.profile or session_kind != existing.session_kind:
+                raise BrowserError(
+                    ErrorClass.VALIDATION_ERROR,
+                    f"session_open: session {session_id!r} is already open as "
+                    f"profile={existing.profile!r} session_kind={existing.session_kind!r}; "
+                    "close it before reopening it as something else",
+                    retryable=False,
+                )
             new_allowed = policy.narrow_reopen(existing.policy_allowed, requested_classes)
             existing.policy_allowed = new_allowed
             existing.max_tabs = max_tabs
@@ -916,6 +1038,8 @@ class Worker:
             return {
                 "session_id": session_id,
                 "created": False,
+                "profile": existing.profile,
+                "session_kind": existing.session_kind,
                 "channel": existing.channel,
                 "browser_version": existing.browser_version,
                 "idle_timeout_s": self._idle_timeout_s,
@@ -926,33 +1050,44 @@ class Worker:
                 "lifecycle": self._lifecycle_info(existing, tab_count=tab_count, reused=True),
             }
 
-        # M13 lifecycle guard (owner-machine incident 2026-09-03): one owned
-        # research browser. The persistent "research" profile is a single
-        # shared directory (self._profile_dir) across every session_id this
+        # M13 lifecycle guard (owner-machine incident 2026-09-03), generalised
+        # in M18.3: one owned browser per PERSISTENT profile. Each persistent
+        # profile is a single shared directory across every session_id this
         # worker tracks — only ONE session_id may hold it at a time. A
         # DIFFERENT session_id requesting it while the current owner is still
         # tracked is refused outright; the worker never attempts a second
         # launch on the same profile (that second launch is exactly what
         # opens a new window in the existing Chrome on the owner's machine).
-        if (
-            profile == "research"
-            and self._research_owner_session_id is not None
-            and self._research_owner_session_id != session_id
-            and self._research_owner_session_id in self._sessions
-        ):
-            owner = self._research_owner_session_id
+        owner = self._persistent_profile_owner.get(profile)
+        if owner is not None and owner != session_id and owner in self._sessions:
             raise BrowserError(
                 ErrorClass.BROWSER_LIFECYCLE_VIOLATION,
-                f"session '{owner}' already owns the research browser; close it first",
+                f"session '{owner}' already owns the {profile} browser; close it first",
                 retryable=False,
-                evidence={"owner_session_id": owner, "requested_session_id": session_id},
+                evidence={
+                    "owner_session_id": owner,
+                    "requested_session_id": session_id,
+                    "profile": profile,
+                },
             )
 
-        allowed = (
-            requested_classes if requested_classes is not None else policy.RESEARCH_SESSION_CLASSES
+        default_classes = (
+            policy.MEDIA_SESSION_CLASSES
+            if session_kind == media.MEDIA_SESSION_KIND
+            else policy.RESEARCH_SESSION_CLASSES
         )
-        profile_dir = self._profile_dir if profile == "research" else None
-        backend = ManagedBackend(headless=not visible, profile_dir=profile_dir, channel=channel)
+        allowed = requested_classes if requested_classes is not None else default_classes
+        profile_dir = self._persistent_profile_dir(profile)
+        # The autoplay preference is applied ONLY here, to a media session's own
+        # window (browser_agent.media documents why it is a preference and not
+        # an anti-bot measure). A research launch is byte-for-byte what it was.
+        browser_args = media.media_launch_args(session_kind)
+        backend = ManagedBackend(
+            headless=not visible,
+            profile_dir=profile_dir,
+            channel=channel,
+            browser_args=browser_args or None,
+        )
         if profile_dir is not None:
             backend.breaker = self._breaker
         # A single, non-retried launch attempt (ManagedBackend._launch reaps
@@ -977,12 +1112,19 @@ class Worker:
             profile=profile,
             session_uid=str(uuid.uuid4()),
             profile_dir=profile_dir,
+            session_kind=session_kind,
             max_tabs=max_tabs,
             last_used=time.monotonic(),
         )
         self._sessions[session_id] = state
-        if profile == "research":
-            self._research_owner_session_id = session_id
+        if profile_dir is not None:
+            self._persistent_profile_owner[profile] = session_id
+        # `browser-ownership.json` is the RESEARCH job's durable ownership
+        # record (contract §2); an alarm session is not a research job and does
+        # not claim it. The alarm profile's own cross-process protection is the
+        # launch lock, the breaker and the kill-on-close job, which apply to
+        # every persistent profile.
+        if profile == media.RESEARCH_PROFILE:
             self._ownership.write(
                 {
                     "research_job_id": payload.get("research_job_id") or session_id,
@@ -1027,13 +1169,17 @@ class Worker:
             session_uid=state.session_uid,
             browser_pid=backend.main_pid,
             profile=profile,
+            session_kind=session_kind,
             channel=state.channel,
             visible=visible,
+            browser_args=browser_args,
         )
         tab_count = await self._current_tab_count(state)
         return {
             "session_id": session_id,
             "created": True,
+            "profile": profile,
+            "session_kind": session_kind,
             "channel": state.channel,
             "browser_version": browser_version,
             "idle_timeout_s": self._idle_timeout_s,
@@ -1979,6 +2125,336 @@ class Worker:
         )
         return result
 
+    # ------------------------------------------------------------------ #
+    # M18.3 alarm media (contract v1.2 §3; spec §4)
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _require_media_session(state: SessionState, *, op: str) -> None:
+        """Media operations run ONLY on a ``session_kind="media"`` session.
+
+        Refusing here is the structural half of "alarm media never touches the
+        owner's browsing": a media op cannot be aimed at the research session
+        (or any other) by a caller that forgot the session kind. The message
+        names the fix so a Cloud Core that omitted ``session_kind`` gets a
+        contract error it can read, not a mystery.
+        """
+        if state.session_kind != media.MEDIA_SESSION_KIND:
+            raise BrowserError(
+                ErrorClass.VALIDATION_ERROR,
+                f"{op}: session {state.session_id!r} is a "
+                f"{state.session_kind!r} session; the media operations require a session "
+                "opened with profile='alarm' and session_kind='media'",
+                retryable=False,
+            )
+
+    @staticmethod
+    def _media_number(value: Any, default: float | None = None) -> float | None:
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            return default
+        return round(float(value), 3)
+
+    @staticmethod
+    def _media_play_result(
+        *,
+        url: str,
+        final_url: str | None,
+        title: str,
+        requested_volume: float,
+        reason: str | None,
+        playing: bool = False,
+        verified: bool = False,
+        readings: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """The one shape ``media_play`` ever answers with (spec §4).
+
+        ``volume``/``muted``/``current_time_s``/``duration_s`` are the media
+        element's OWN values whenever an element was reached; when none was
+        (challenge, consent wall, no element, failed navigation) they fall back
+        to the requested volume, ``false``, ``0.0`` and ``null`` — the `reason`
+        is what says nothing is playing, and no reading is ever invented.
+        """
+        readings = readings or {}
+        return {
+            "playing": bool(playing),
+            "verified": bool(verified),
+            "url": url,
+            "final_url": final_url,
+            "title": title,
+            "current_time_s": Worker._media_number(readings.get("current_time"), 0.0),
+            "duration_s": Worker._media_number(readings.get("duration"), None),
+            "volume": Worker._media_number(readings.get("volume"), round(requested_volume, 3)),
+            "muted": bool(readings.get("muted", False)),
+            "reason": reason,
+        }
+
+    async def _op_media_play(self, state: SessionState, payload: dict[str, Any]) -> dict[str, Any]:
+        """Navigate, set the volume, play, and PROVE it moved (spec §4).
+
+        No retry, no bypass, no click: every way this can fail is a successful
+        command carrying a truthful ``reason``, so Cloud Core can fall back to
+        the local tone and record what actually happened.
+        """
+        self._require_media_session(state, op="media_play")
+        url = payload.get("url")
+        if not isinstance(url, str) or not url:
+            raise BrowserError(
+                ErrorClass.VALIDATION_ERROR, "media_play: 'url' is required", retryable=False
+            )
+        # The same destination policy as navigate — a refusal here is a policy
+        # refusal (security_scope_error), never a playback "reason".
+        self._check_destination(url, op="media_play")
+        volume = media.parse_level(payload.get("volume"), field="volume", op="media_play")
+        verify_seconds = media.parse_verify_seconds(payload.get("verify_seconds"))
+        timeout_ms = payload.get("timeout_ms", DEFAULT_NAV_TIMEOUT_MS)
+
+        browser_session = state.browser_session
+        try:
+            response = await browser_session.navigate(url, timeout_ms=timeout_ms)
+        except BrowserError as err:
+            if err.error_class not in _MEDIA_NAVIGATION_FAILURE_CLASSES:
+                raise
+            logger.warning(
+                "browser.media_play_navigation_failed",
+                url=redact_url(url),
+                error_class=str(err.error_class),
+            )
+            return self._media_play_result(
+                url=url,
+                final_url=None,
+                title="",
+                requested_volume=volume,
+                reason="navigation_failed",
+            )
+
+        page = browser_session.backend.current_page
+        raw = await read_raw_page_data(page)
+        body_text = await browser_session.page_text()
+        http_status = response.status if response is not None else None
+        kind_result = classify_page(
+            title=raw.title,
+            heading_text=raw.heading_text,
+            body_text=body_text,
+            has_password_field=raw.has_password_field,
+            http_status=http_status,
+        )
+        final_url = page.url
+        landing_reason = media.classify_landing(
+            page_kind=kind_result.page_kind, final_url=final_url, body_text=body_text
+        )
+        if landing_reason is not None:
+            logger.info(
+                "browser.media_play_blocked",
+                url=redact_url(url),
+                reason=landing_reason,
+                page_kind=kind_result.page_kind,
+            )
+            return self._media_play_result(
+                url=url,
+                final_url=final_url,
+                title=raw.title,
+                requested_volume=volume,
+                reason=landing_reason,
+            )
+
+        # A DOM wait for the media element itself — the highest semantic
+        # surface a <video> has (there is no ARIA role for "the media
+        # element"). Never a coordinate, never a screenshot.
+        try:
+            await page.wait_for_selector(
+                "video", timeout=media.VIDEO_WAIT_TIMEOUT_MS, state="attached"
+            )
+        except PlaywrightTimeoutError:
+            reason = media.classify_missing_media(body_text)
+            logger.info("browser.media_play_no_element", url=redact_url(url), reason=reason)
+            return self._media_play_result(
+                url=url,
+                final_url=page.url,
+                title=raw.title,
+                requested_volume=volume,
+                reason=reason,
+            )
+
+        play = await page.evaluate(media.MEDIA_PLAY_JS, volume)
+        if not isinstance(play, dict) or not play.get("present"):
+            return self._media_play_result(
+                url=url,
+                final_url=page.url,
+                title=raw.title,
+                requested_volume=volume,
+                reason="no_media_element",
+            )
+        if not play.get("played"):
+            reason = media.classify_play_error(play.get("error_name"))
+            logger.info(
+                "browser.media_play_refused",
+                url=redact_url(url),
+                reason=reason,
+                error_name=str(play.get("error_name"))[:64],
+            )
+            return self._media_play_result(
+                url=url,
+                final_url=page.url,
+                title=raw.title,
+                requested_volume=volume,
+                reason=reason,
+                readings=play,
+            )
+
+        started_at = self._media_number(play.get("started_at"), 0.0)
+        await _media_wait(verify_seconds)
+        after = await page.evaluate(media.MEDIA_READ_JS)
+        if not isinstance(after, dict) or not after.get("present"):
+            return self._media_play_result(
+                url=url,
+                final_url=page.url,
+                title=raw.title,
+                requested_volume=volume,
+                reason="no_media_element",
+            )
+        paused = bool(after.get("paused", True))
+        current_time = self._media_number(after.get("current_time"), None)
+        verified = media.verified_from_readings(
+            started_at=started_at, current_time=current_time, paused=paused
+        )
+        playing = not paused and not bool(after.get("ended"))
+        # Played without being refused, yet the element did not move: a truthful
+        # `error`, never a silent "verified".
+        reason = None if verified else "error"
+        logger.info(
+            "browser.media_play",
+            url=redact_url(url),
+            final_url=redact_url(page.url),
+            verified=verified,
+            playing=playing,
+            verify_seconds=verify_seconds,
+        )
+        return self._media_play_result(
+            url=url,
+            final_url=page.url,
+            title=raw.title,
+            requested_volume=volume,
+            reason=reason,
+            playing=playing,
+            verified=verified,
+            readings=after,
+        )
+
+    async def _op_media_volume(
+        self, state: SessionState, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Ramp the media element's own volume, INSIDE the page (spec §4).
+
+        The ramp is a ``setInterval`` the page runs itself, so a 20 s wake ramp
+        does not hold a device command open for 20 s; the op returns as soon as
+        the interval is armed. A short ramp (<= 2 s) — the greeting's duck and
+        restore — is awaited so the caller may speak immediately afterwards.
+        This is the media element's volume, never the Windows master volume.
+        """
+        self._require_media_session(state, op="media_volume")
+        level = media.parse_level(payload.get("level"), field="level", op="media_volume")
+        ramp_seconds = media.parse_ramp_seconds(payload.get("ramp_seconds"))
+        script = media.build_volume_ramp_script(level, ramp_seconds)
+        page = state.browser_session.backend.current_page
+        outcome = await page.evaluate(script)
+        outcome = outcome if isinstance(outcome, dict) else {}
+        applied = bool(outcome.get("applied"))
+        level_from = self._media_number(outcome.get("level_from"), None)
+        if applied and 0 < ramp_seconds <= media.RAMP_AWAIT_CEILING_S:
+            await _media_wait(ramp_seconds)
+        logger.info(
+            "browser.media_volume",
+            applied=applied,
+            level_from=level_from,
+            level_to=level,
+            ramp_seconds=ramp_seconds,
+        )
+        return {
+            "applied": applied,
+            "level_from": level_from,
+            "level_to": round(level, 3),
+            "ramp_seconds": ramp_seconds,
+        }
+
+    async def _op_media_status(
+        self, state: SessionState, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """A pure READ of the media element. Touches nothing (spec §4)."""
+        self._require_media_session(state, op="media_status")
+        page = state.browser_session.backend.current_page
+        reading = await page.evaluate(media.MEDIA_READ_JS)
+        reading = reading if isinstance(reading, dict) else {}
+        present = bool(reading.get("present"))
+        paused = bool(reading.get("paused", True))
+        ended = bool(reading.get("ended", False))
+        try:
+            title = await page.title()
+        except Exception:  # noqa: BLE001 - a status read never fails on a title
+            title = ""
+        return {
+            "present": present,
+            "playing": present and not paused and not ended,
+            "paused": paused if present else True,
+            "ended": ended,
+            "current_time_s": self._media_number(reading.get("current_time"), 0.0),
+            "duration_s": self._media_number(reading.get("duration"), None),
+            # `null` rather than a fabricated 0.0 when there is no element to
+            # have a volume (documented deviation from the spec's shape).
+            "volume": self._media_number(reading.get("volume"), None),
+            "muted": bool(reading.get("muted", False)),
+            "title": title or "",
+            "url": page.url,
+        }
+
+    async def _op_media_stop(self, session_id: str) -> dict[str, Any]:
+        """Pause, then close the session (spec §4: session_close semantics).
+
+        Idempotent like ``session_close``: stopping an already-gone session is
+        a success, because the caller's intent — nothing is playing — holds.
+        """
+        state = self._sessions.get(session_id)
+        if state is None:
+            return {
+                "stopped": True,
+                "was_playing": False,
+                "session_id": session_id,
+                "browser_pid_exited": True,
+            }
+        self._require_media_session(state, op="media_stop")
+        policy.enforce(
+            state.policy_allowed,
+            policy.CAPABILITY_RISK_CLASS["browser.media_stop"],
+            capability="browser.media_stop",
+        )
+        state.last_used = time.monotonic()
+        was_playing = False
+        tab_count = await self._current_tab_count(state)
+        lifecycle_info = self._lifecycle_info(state, tab_count=tab_count, reused=True)
+        try:
+            page = state.browser_session.backend.current_page
+            outcome = await page.evaluate(media.MEDIA_PAUSE_JS)
+            if isinstance(outcome, dict):
+                was_playing = bool(outcome.get("was_playing"))
+        except Exception as exc:  # noqa: BLE001
+            # A page that is already gone still gets its session closed — the
+            # alarm must end even when the tab died first.
+            logger.warning("browser.media_stop_pause_failed", error=str(exc)[:200])
+        del self._sessions[session_id]
+        exited = await self._close_session_state(session_id, state, op="media_stop")
+        logger.info(
+            "browser.media_stop",
+            session_id=session_id,
+            was_playing=was_playing,
+            browser_pid_exited=exited,
+        )
+        return {
+            "stopped": True,
+            "was_playing": was_playing,
+            "session_id": session_id,
+            "browser_pid_exited": exited,
+            "lifecycle": lifecycle_info,
+        }
+
 
 # ----------------------------------------------------------------------- #
 # capability -> handler table (built after every handler is defined above)
@@ -2006,6 +2482,11 @@ _HANDLERS: dict[str, Callable[[Worker, SessionState, dict[str, Any]], Any]] = {
     "browser.download": Worker._op_download,
     "browser.search": Worker._op_search,
     "browser.fetch_evidence": Worker._op_fetch_evidence,
+    "browser.media_play": Worker._op_media_play,
+    "browser.media_volume": Worker._op_media_volume,
+    "browser.media_status": Worker._op_media_status,
+    # browser.media_stop is NOT here: it ends the session, so Worker._execute
+    # dispatches it beside browser.session_close (see the comment there).
 }
 
 
@@ -2025,6 +2506,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--profile-dir",
         default=None,
         help="Persistent 'research' profile directory (default: <data-dir>/profile)",
+    )
+    parser.add_argument(
+        "--alarm-profile-dir",
+        default=None,
+        help=(
+            "Persistent 'alarm' media profile directory (M18.3; default: the research "
+            "profile's sibling '<profile-dir>-alarm'). It must not be, or contain, the "
+            "research profile — and like every profile here it may never be a real "
+            "browser profile tree."
+        ),
     )
     parser.add_argument(
         "--channel",

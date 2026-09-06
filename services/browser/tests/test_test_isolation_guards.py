@@ -63,6 +63,24 @@ def test_chromium_processes_are_reaped_and_only_our_own() -> None:
     assert "Stop-Process" in source
 
 
+def test_the_media_suite_never_launches_a_browser() -> None:
+    """M18.3: the alarm media surface is the one that opens a VISIBLE window on
+    the owner's desktop, at an hour the owner is asleep. Its unit suite must
+    therefore be fake-page only — no real ManagedBackend, no launch helper —
+    and the two session_open tests must monkeypatch ManagedBackend rather than
+    construct a live one."""
+    media_tests = Path(__file__).resolve().parent / "unit" / "test_media_ops.py"
+    source = media_tests.read_text(encoding="utf-8")
+    assert media_tests.exists()
+    for forbidden in ("launch_dedicated", "launch_persistent_context", "async_playwright"):
+        assert forbidden not in source, f"the media unit suite must never call {forbidden!r}"
+    assert 'monkeypatch.setattr("browser_agent.worker.ManagedBackend", _RecordingBackend)' in source
+    # ManagedBackend is imported only to assert the real-profile guard refuses a
+    # path inside the owner's Chrome; it is never connected.
+    assert "await ManagedBackend" not in source
+    assert ".connect()" not in source
+
+
 @pytest.mark.parametrize("marker", ["live"])
 def test_the_live_marker_is_declared_so_it_must_be_opted_into(marker: str) -> None:
     ini = Path(__file__).resolve().parents[1] / "pyproject.toml"
