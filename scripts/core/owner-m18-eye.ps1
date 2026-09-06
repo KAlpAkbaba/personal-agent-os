@@ -160,6 +160,26 @@ function Get-DeployedVoiceTools {
     return , (Get-ArrayProperty -InputObject $vr -Name "tools")
 }
 
+function Get-DeployedContractVersion {
+    <#
+        The action-contract version the deployed Cloud Core runs (health voice_realtime
+        .action_contract_version). Absent means 1: the first release of the contract, whose
+        receipts could not tell "the camera closed" from "nothing happened" (owner run,
+        session 3eb6fee7). Tool NAMES alone no longer distinguish the two.
+    #>
+    param($Health)
+    $checks = Get-OptionalProperty -InputObject $Health -Name "checks"
+    $vr = if ($null -ne $checks) { Get-OptionalProperty -InputObject $checks -Name "voice_realtime" } else { $null }
+    $v = if ($null -ne $vr) { Get-OptionalProperty -InputObject $vr -Name "action_contract_version" } else { $null }
+    if ($null -eq $v) { return 1 }
+    return [int]$v
+}
+
+#: The contract version this checkout's harness reads receipts against (session_id and
+#: observed_at on receipts, media_track_ready_state and action_trace echoed, the truthful
+#: "kapandı ancak kaydını doğrulayamadım" wording, no server-side safety net).
+$requiredContractVersion = 2
+
 function Invoke-CloudCoreRelease {
     $release = Join-Path $repoRoot "scripts\cloud\release-cloud-core.ps1"
     Write-Host "      releasing the Cloud Core (transactional: build, migrate, recreate api only, health, rollback on failure)..." -ForegroundColor Yellow
@@ -204,27 +224,32 @@ try {
     $requiredTools = @("eye.enable", "eye.disable", "state.now")
     $deployedTools = Get-DeployedVoiceTools -Health $health
     $missingTools = @($requiredTools | Where-Object { $deployedTools -notcontains $_ })
+    $deployedVersion = Get-DeployedContractVersion -Health $health
+    $stale = ($missingTools.Count -gt 0) -or ($deployedVersion -lt $requiredContractVersion)
+    $staleWhy = if ($missingTools.Count -gt 0) { "missing tools: " + ($missingTools -join ", ") } else { "action contract v$deployedVersion deployed, this checkout needs v$requiredContractVersion" }
     $releaseBlockers = Get-ReleaseBlockers -RepoRoot $repoRoot
     $blockerChanges = ConvertTo-Array -Value $releaseBlockers.Changes
-    $releaseCloud = switch ($CloudCoreUpdate) { "force" { $true } "never" { $false } default { $missingTools.Count -gt 0 } }
-    Write-Host "      deployed voice tools: $($deployedTools -join ', ')"
-    if ($missingTools.Count -gt 0 -and $CloudCoreUpdate -eq "never") {
-        throw "the deployed Cloud Core does not advertise $($missingTools -join ', '); -CloudCoreUpdate never refuses to release, and nothing can be qualified without them"
+    $releaseCloud = switch ($CloudCoreUpdate) { "force" { $true } "never" { $false } default { $stale } }
+    Write-Host "      deployed voice tools: $($deployedTools -join ', '); action contract v$deployedVersion (this checkout: v$requiredContractVersion)"
+    if ($stale -and $CloudCoreUpdate -eq "never") {
+        throw "the deployed Cloud Core is stale ($staleWhy); -CloudCoreUpdate never refuses to release, and nothing can be qualified against it"
     }
     if ($releaseCloud -and $releaseBlockers.Blocked) {
         Write-ReleaseBlockers -Blockers $releaseBlockers
-        throw ("a Cloud Core release is required (missing: $($missingTools -join ', ')) but the working tree has " +
+        throw ("a Cloud Core release is required ($staleWhy) but the working tree has " +
                "$($blockerChanges.Count) uncommitted change(s), and a release ships HEAD only. Commit or revert them, then rerun.")
     }
     if ($releaseCloud) {
-        Write-Host "      the deployed Cloud Core predates the action contract (missing: $($missingTools -join ', ')): releasing it once" -ForegroundColor Yellow
+        Write-Host "      the deployed Cloud Core is stale ($staleWhy): releasing it once" -ForegroundColor Yellow
         Invoke-CloudCoreRelease
         $health = Invoke-JsonUtf8 -Uri "$BaseUrl/v1/system/health" -TimeoutSec 20
         $deployedTools = Get-DeployedVoiceTools -Health $health
         $missingTools = @($requiredTools | Where-Object { $deployedTools -notcontains $_ })
+        $deployedVersion = Get-DeployedContractVersion -Health $health
+        $stale = ($missingTools.Count -gt 0) -or ($deployedVersion -lt $requiredContractVersion)
     }
-    Add-Check -Name "cloud.action_contract_deployed" -Ok ($missingTools.Count -eq 0) -Detail $(if ($missingTools.Count -eq 0) { "eye.enable, eye.disable, state.now advertised$(if ($releaseCloud) { ' (released in this run)' })" } else { "still missing after the release: " + ($missingTools -join ", ") })
-    if ($missingTools.Count -gt 0) { break }
+    Add-Check -Name "cloud.action_contract_deployed" -Ok (-not $stale) -Detail $(if (-not $stale) { "eye.enable, eye.disable, state.now advertised; action contract v$deployedVersion$(if ($releaseCloud) { ' (released in this run)' })" } else { "still stale after the release: " + $(if ($missingTools.Count -gt 0) { "missing " + ($missingTools -join ", ") } else { "action contract v$deployedVersion < v$requiredContractVersion" }) })
+    if ($stale) { break }
 
     # ------------------------------------------------------------------ the Core
 
