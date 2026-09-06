@@ -303,8 +303,12 @@ def test_tool_terminal_payload_schema_and_no_diagnostics_leak_in_spoken_result()
         "executive_summary",
         "findings",
         "source_summary",
+        # ADR-0074: the one owner-facing bit that says this answer rests on fewer
+        # sources than a full report needs. False for an ordinary report.
+        "thin",
         "diagnostics",
     }
+    assert payload["thin"] is False
     # M18.2 follow-up to ADR-0067: "speech" mirrors "spoken_result" verbatim, so the
     # persona's generic "read speech verbatim" instruction and session_activity's
     # speech_head see the same sentence a research-specific reader gets from

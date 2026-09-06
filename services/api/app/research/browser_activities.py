@@ -79,7 +79,7 @@ from app.research.models import (
     STAGE_WAITING_FOR_OWNER_VERIFICATION,
 )
 from app.research.plan import build_plan
-from app.research.policy import ResearchPolicy, resolve_policy
+from app.research.policy import SHORTLIST_DOMAIN_SHARE, ResearchPolicy, resolve_policy
 from app.research.report import (
     DetailSection,
     Finding,
@@ -92,7 +92,7 @@ from app.research.report import (
     render_research_markdown,
     run_provenance_gate,
 )
-from app.research.synthesis import resolve_synthesis_provider
+from app.research.synthesis import resolve_synthesis_provider, synthesize_thin
 from app.uistate import UiState
 from app.uistate import publish as publish_ui
 
@@ -710,6 +710,78 @@ def select_fetch_order(
     return unique
 
 
+def build_fetch_shortlist(
+    candidates: list,
+    *,
+    limit: int,
+    per_domain_max: int,
+    domain_counts: dict[str, int] | None = None,
+    topic: str = "",
+    challenged_domains: frozenset[str] = frozenset(),
+    domain_share: float = SHORTLIST_DOMAIN_SHARE,
+) -> list:
+    """The working shortlist: up to ``limit`` candidates this run could ACTUALLY
+    fetch, drawn from the whole remaining discovered pool, with domain diversity
+    (ADR-0074 decision 1).
+
+    The defect this replaces: the shortlist used to be the top ``limit`` of a single
+    preference sort. On 2026-09-06 that sort put one domain (openai.com) in most of a
+    QUICK run's 25 slots; two challenges cooled it, 19 slots evaporated as "domain
+    cooled" and 11 more as "per-domain quota" — and nothing refilled them, although
+    discovery had already found ~100 other candidates. The run then failed for lack of
+    evidence with 40 s of budget unspent. **The cap belongs on what can be fetched,
+    not on what was discovered.**
+
+    So the shortlist is built by round-robin over domains rather than by truncation:
+
+    - a domain contributes at most ``per_domain_max`` MINUS what it already spent
+      (``domain_counts``, the run's real fetched-evidence tally) — a domain with no
+      allowance left contributes nothing and therefore occupies no slot;
+    - and at most ``domain_share`` of the shortlist, the soft cap that keeps one
+      domain from taking the list before other domains are represented at all;
+    - domains take turns, best-first, so slot *k* of the shortlist is the *k*-th best
+      candidate of a domain that has not had its turn yet — the refill is structural,
+      not a special case that has to fire.
+
+    Cooled domains are the caller's business, filtered out before this is called:
+    a cooled domain is not "less preferred", it is not fetchable at all. Pure and
+    deterministic (no I/O, no clock): the same rows always yield the same shortlist.
+    """
+    if limit <= 0 or not candidates:
+        return []
+    already = dict(domain_counts or {})
+    share_cap = max(1, int(limit * domain_share))
+
+    def preference(candidate: Any) -> tuple[int, int, float]:
+        return _prefetch_preference(candidate, topic, challenged_domains=challenged_domains)
+
+    by_domain: dict[str, list] = {}
+    for candidate in sorted(candidates, key=preference):
+        by_domain.setdefault(challenge_policy.domain_of(str(candidate.url)), []).append(candidate)
+
+    def cap_for(domain: str) -> int:
+        room = limit if per_domain_max <= 0 else max(0, per_domain_max - already.get(domain, 0))
+        return min(room, share_cap)
+
+    domains = sorted(by_domain, key=lambda d: (preference(by_domain[d][0]), d))
+    shortlist: list = []
+    round_index = 0
+    while len(shortlist) < limit:
+        added = False
+        for domain in domains:
+            bucket = by_domain[domain]
+            if round_index >= min(cap_for(domain), len(bucket)):
+                continue
+            shortlist.append(bucket[round_index])
+            added = True
+            if len(shortlist) >= limit:
+                break
+        if not added:
+            break
+        round_index += 1
+    return shortlist
+
+
 @activity.defn(name="browser_research_fetch_targets")
 def fetch_targets_activity(task_id: str, max_sources: int, topic: str = "") -> list[dict[str, str]]:
     """Candidate URLs not yet fetched, oldest-discovered first, capped at
@@ -724,10 +796,18 @@ def fetch_targets_activity(task_id: str, max_sources: int, topic: str = "") -> l
 
     M18.2 (ADR-0068, owner rules 2-5): a domain already COOLED (two challenges
     this run, app.research.challenge) is skipped without navigation entirely;
-    the full pending pool is trimmed to the run's ``candidate_urls_max`` on
-    cheap pre-fetch signals before any per-class ordering ("quick ranking
-    before any expensive navigation"); and a per-domain page quota keeps one
-    site from consuming the whole wave even when it has not been challenged.
+    the pending pool is reduced to the run's ``candidate_urls_max`` on cheap
+    pre-fetch signals before any per-class ordering ("quick ranking before any
+    expensive navigation"); and a per-domain page quota keeps one site from
+    consuming the whole wave even when it has not been challenged.
+
+    ADR-0074: that reduction is now :func:`build_fetch_shortlist` — a
+    domain-diverse shortlist of ``candidate_urls_max`` candidates this run could
+    ACTUALLY fetch, rebuilt from the whole remaining discovered pool on every
+    wave. A slot lost to a cooled domain or a spent per-domain quota is refilled
+    from the next domain in line instead of silently shrinking the run's reach,
+    which is what left the owner's 2026-09-06 QUICK runs with 2 and 1 pieces of
+    evidence out of ~100 candidates already discovered.
     """
     task_id_var.set(task_id)
     tid = uuid.UUID(task_id)
@@ -755,18 +835,35 @@ def fetch_targets_activity(task_id: str, max_sources: int, topic: str = "") -> l
         cooled_skipped = [c for c in pending if challenge_policy.domain_of(c.url) in cooled]
         pending = [c for c in pending if challenge_policy.domain_of(c.url) not in cooled]
 
-        if policy.candidate_urls_max > 0 and len(pending) > policy.candidate_urls_max:
-            pending = sorted(
-                pending,
-                key=lambda c: _prefetch_preference(c, topic, challenged_domains=challenged_once),
-            )[: policy.candidate_urls_max]
+        # ADR-0074 decision 1: a candidate whose domain has already spent its
+        # per-run page allowance is not fetchable either. Counted here (for the
+        # event trail) and then simply given no room by build_fetch_shortlist,
+        # so it occupies no shortlist slot that another domain could have used.
+        quota_skipped = 0
+        if policy.per_domain_max_pages > 0:
+            quota_skipped = sum(
+                1
+                for c in pending
+                if domain_counts.get(challenge_policy.domain_of(c.url), 0)
+                >= policy.per_domain_max_pages
+            )
 
+        # The shortlist is drawn from the WHOLE remaining pool with domain diversity,
+        # never the top-N of one preference sort: that is what refills the slots a
+        # cooled domain or a per-domain quota would otherwise leave empty.
+        pending = build_fetch_shortlist(
+            pending,
+            limit=policy.candidate_urls_max if policy.candidate_urls_max > 0 else len(pending),
+            per_domain_max=policy.per_domain_max_pages,
+            domain_counts=domain_counts,
+            topic=topic,
+            challenged_domains=challenged_once,
+        )
         pending = select_fetch_order(
             pending, max_sources, topic, challenged_domains=challenged_once
         )
 
         targets = []
-        quota_skipped = 0
         for c in pending:
             try:
                 validate_fetch_target(c.url)
@@ -1404,26 +1501,58 @@ def synthesize_activity(
             metadata={"kept": len(ranked), "primary": len(primary_only)},
         )
 
-        provider = resolve_synthesis_provider(synthesis_name, settings)
-        try:
-            result, provider, synthesis_attempts = _synthesize_with_fallback(
-                provider,
+        # ADR-0074 decision 3: a run that ends with at least one but fewer than
+        # MIN_REPORT_FINDINGS pieces of evidence answers THINLY and says so, instead
+        # of failing as though it had found nothing. Zero evidence is still a truthful
+        # failure (the branch below, unchanged) — thinness is a shape of answer, never
+        # a way to publish an empty one, and every finding still rests on real evidence
+        # that the provenance gate checks exactly as it does for a full report.
+        thin = 0 < len(primary_only) < MIN_REPORT_FINDINGS
+        thin_reasons: tuple[str, ...] = ()
+        synthesis_attempts: list[dict[str, Any]] = []
+        if thin:
+            provider = resolve_synthesis_provider("deterministic", settings)
+            result, thin_reasons = synthesize_thin(
                 topic,
                 primary_only,
                 recency_label=window_json["label"],
-                settings=settings,
+                mode=str(stats_in.get("mode") or policy.mode),
+                cooled_domains=len(progress.get("cooled_domains") or []),
+                rejected_by_reason=rejected_by_reason,
             )
-        except InsufficientValidFindings as exc:
             runs_service.update_run(
                 session,
                 tid,
                 event={
                     "stage": STAGE_SYNTHESIZING,
-                    "detail": "no defensible findings could be produced",
-                    **exc.as_dict(),
+                    "detail": (
+                        f"thin result: {len(primary_only)} source(s) verified, "
+                        f"{MIN_REPORT_FINDINGS} required for a full report"
+                    ),
+                    "thin_reasons": list(thin_reasons),
                 },
             )
-            raise _non_retryable(ERROR_INSUFFICIENT_VALID_FINDINGS, str(exc)) from exc
+        else:
+            provider = resolve_synthesis_provider(synthesis_name, settings)
+            try:
+                result, provider, synthesis_attempts = _synthesize_with_fallback(
+                    provider,
+                    topic,
+                    primary_only,
+                    recency_label=window_json["label"],
+                    settings=settings,
+                )
+            except InsufficientValidFindings as exc:
+                runs_service.update_run(
+                    session,
+                    tid,
+                    event={
+                        "stage": STAGE_SYNTHESIZING,
+                        "detail": "no defensible findings could be produced",
+                        **exc.as_dict(),
+                    },
+                )
+                raise _non_retryable(ERROR_INSUFFICIENT_VALID_FINDINGS, str(exc)) from exc
         synthesis_quarantine = (
             list(quarantine.entries)
             + list(getattr(result, "quarantined", ()))
@@ -1465,6 +1594,8 @@ def synthesize_activity(
             waves=int(stats_in.get("waves") or 0),
             challenged_pages=int(progress.get("challenged_pages") or 0),
             cooled_domains=len(progress.get("cooled_domains") or []),
+            thin=thin,
+            thin_reasons=thin_reasons,
         )
         if synthesis_quarantine:
             logger.info(
@@ -1490,6 +1621,7 @@ def synthesize_activity(
             uncertainty=result.uncertainty,
             sources=tuple(SourceItem.from_evidence(e.id, e) for e in ranked),
             stats=stats,
+            thin=thin,
         )
         report = run_provenance_gate(report, evidence_by_id)
 

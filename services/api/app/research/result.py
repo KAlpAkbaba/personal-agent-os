@@ -100,6 +100,11 @@ class ResearchResult:
     #: gate failure, not merely "few findings") — see ``insufficient_evidence``.
     insufficient: bool = False
     insufficient_reason: str | None = None
+    #: ADR-0074: a real answer, from real evidence, that rests on fewer sources than a
+    #: full report needs. Emphatically NOT ``insufficient`` — there are findings and
+    #: they are spoken; the narration just says plainly how little it stands on and
+    #: offers a broader run. Read from the report's own ``thin`` flag.
+    thin: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -110,6 +115,7 @@ class ResearchResult:
             "sources": [s.as_dict() for s in self.sources],
             "insufficient": self.insufficient,
             "insufficient_reason": self.insufficient_reason,
+            "thin": self.thin,
         }
 
     @classmethod
@@ -162,6 +168,7 @@ class ResearchResult:
             findings=tuple(findings),
             why_it_matters=top_why,
             sources=tuple(sources),
+            thin=bool(data.get("thin")),
         )
 
     @classmethod
@@ -171,7 +178,25 @@ class ResearchResult:
         return cls(topic=topic.strip(), insufficient=True, insufficient_reason=reason)
 
 
+#: What the owner is offered when an answer came back thin (ADR-0074): a broader run,
+#: in the same words the mode derivation already understands ("geniş" -> STANDARD), so
+#: an owner who says yes gets exactly the mode this sentence promised.
+BROADER_RUN_OFFER_TR = "İstersen daha geniş araştırayım."
+
+
 def _conclusion_tr(result: ResearchResult) -> str:
+    if result.thin:
+        # Honest about the thinness without a single count or crawler word: the owner
+        # hears WHAT was found and HOW MUCH it stands on, never how the crawl went.
+        if result.topic:
+            return (
+                f"Efendim, '{result.topic}' konusunda kısa araştırma bütçesinde yalnızca "
+                "sınırlı sayıda kaynak doğrulayabildim; bulgular sınırlı."
+            )
+        return (
+            "Efendim, kısa araştırma bütçesinde yalnızca sınırlı sayıda kaynak "
+            "doğrulayabildim; bulgular sınırlı."
+        )
     if result.topic:
         return f"Efendim, '{result.topic}' konusunda araştırmayı tamamladım."
     return "Efendim, araştırmayı tamamladım."
@@ -213,7 +238,12 @@ def spoken_result(result: ResearchResult) -> str:
         if why:
             sentence += f" Bu önemli çünkü {why}."
         parts.append(sentence)
-    if len(result.findings) > len(shown) or result.sources:
+    if result.thin:
+        # A thin answer's closing offer is a BROADER run, not "more of the same":
+        # there is no unspoken remainder to read out, only a shallower search than
+        # the question deserved (ADR-0074).
+        parts.append(BROADER_RUN_OFFER_TR)
+    elif len(result.findings) > len(shown) or result.sources:
         parts.append("İstersen diğer bulguları veya kaynakları da anlatabilirim.")
     return " ".join(parts)
 
@@ -252,6 +282,11 @@ class ResearchDiagnostics:
     waves: int = 0
     challenged_pages: int = 0
     cooled_domains: int = 0
+    #: ADR-0074: whether the answer was thin, and the reason codes for it
+    #: (app.research.synthesis.THIN_REASON_*). Technical level only — the owner hears
+    #: the thinness in plain Turkish from ``spoken_result``, never these codes.
+    thin: bool = False
+    thin_reasons: tuple[str, ...] = field(default_factory=tuple)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -272,6 +307,8 @@ class ResearchDiagnostics:
             "waves": self.waves,
             "challenged_pages": self.challenged_pages,
             "cooled_domains": self.cooled_domains,
+            "thin": self.thin,
+            "thin_reasons": list(self.thin_reasons),
         }
 
     @classmethod
@@ -313,6 +350,10 @@ class ResearchDiagnostics:
             waves=_int("waves"),
             challenged_pages=_int("challenged_pages"),
             cooled_domains=_int("cooled_domains"),
+            # The flag is authoritative at the report's top level (that is what the
+            # owner-facing layer reads); stats carries it too for a legacy row.
+            thin=bool(data.get("thin") or stats.get("thin")),
+            thin_reasons=tuple(str(r) for r in (stats.get("thin_reasons") or ())),
         )
 
 
@@ -347,6 +388,11 @@ def build_tool_terminal_payload(
         "executive_summary": result.executive_summary,
         "findings": [f.as_dict() for f in result.findings],
         "source_summary": [s.as_dict() for s in result.sources],
+        # ADR-0074: the explain engine and the acceptance harness both need to tell a
+        # THIN answer from a full one without re-deriving it from counts. The reason
+        # codes stay in diagnostics (stats.thin_reasons), where the crawler vocabulary
+        # belongs; this is the one bit the owner-facing layer branches on.
+        "thin": result.thin,
         "diagnostics": diag.as_dict(),
     }
 
@@ -364,11 +410,13 @@ def build_insufficient_terminal_payload(
         "executive_summary": "",
         "findings": [],
         "source_summary": [],
+        "thin": False,
         "diagnostics": ResearchDiagnostics().as_dict(),
     }
 
 
 __all__ = [
+    "BROADER_RUN_OFFER_TR",
     "MAX_SPOKEN_FINDINGS",
     "REASON_INSUFFICIENT_EVIDENCE",
     "REASON_INSUFFICIENT_FINDINGS",

@@ -563,6 +563,107 @@ def parse_synthesis_response(payload: dict[str, Any]) -> SynthesisResult:
     )
 
 
+# --------------------------------------------------------------------------- #
+# the THIN result (ADR-0074 decision 3)
+# --------------------------------------------------------------------------- #
+
+#: Why a run came back thin. Diagnostics vocabulary — the report carries these codes,
+#: the owner hears the Turkish sentences below, never the codes.
+THIN_REASON_EVIDENCE = "evidence_thin"
+THIN_REASON_COOLED_DOMAINS = "cooled_domains"
+THIN_REASON_UNDATED_PAGES = "undated_pages"
+
+
+def synthesize_thin(
+    topic: str,
+    evidence: list[EvidenceRecord],
+    *,
+    recency_label: str,
+    mode: str = "quick",
+    cooled_domains: int = 0,
+    rejected_by_reason: dict[str, int] | None = None,
+) -> tuple[SynthesisResult, tuple[str, ...]]:
+    """A truthful THIN answer: fewer than ``MIN_REPORT_FINDINGS`` findings, said so.
+
+    On 2026-09-06 two of the owner's three QUICK runs ended with 2 and 1 pieces of
+    validated evidence and were reported as outright failures — "yeterli doğrulanmış
+    kaynak bulamadım" — although real, defensible findings existed and the owner had
+    asked a short question. A short research run is allowed to be thin; it is not
+    allowed to be silently empty, and it is not allowed to pretend.
+
+    So: **the deterministic provider only** (a model asked for three findings from one
+    source is being invited to invent the other two — the provenance gate would catch
+    it, but the honest fix is not to ask), every finding still resting on real evidence
+    exactly as in a full report, the executive summary stating the thinness in the
+    owner's own language, and ``uncertainty`` naming each reason it was thin. The
+    returned reason codes are what the report/diagnostics carry.
+
+    ``MIN_REPORT_FINDINGS`` is untouched as the threshold for a FULL report — this is
+    a differently-shaped, explicitly-labelled answer, never a lowered bar.
+    """
+    if not evidence:
+        raise InsufficientValidFindings(
+            produced=0, required=MIN_REPORT_FINDINGS, provider="thin"
+        )
+
+    result = DeterministicSynthesisProvider().synthesize(
+        topic, evidence, recency_label=recency_label
+    )
+
+    budget_phrase = "Kısa araştırma bütçesinde" if mode == "quick" else "Araştırma bütçesi içinde"
+    executive_summary = (
+        f"{budget_phrase} yalnızca {len(evidence)} kaynak doğrulanabildi; bulgular sınırlı."
+    )
+
+    reasons: list[str] = [THIN_REASON_EVIDENCE]
+    statements: list[Statement] = [
+        Statement(
+            text=(
+                f"{budget_phrase} yalnızca {len(evidence)} kaynak doğrulanabildi; "
+                "aşağıdaki bulgular bu kaynaklarla sınırlıdır ve bağımsız olarak "
+                "teyit edilmemiştir."
+            ),
+            label=STATEMENT_LABEL_UNCERTAINTY,
+        )
+    ]
+    if cooled_domains > 0:
+        reasons.append(THIN_REASON_COOLED_DOMAINS)
+        statements.append(
+            Statement(
+                text=(
+                    "Bazı siteler otomatik doğrulama duvarı gösterdiği için bu çalışmanın "
+                    "geri kalanında devre dışı bırakıldı; oradaki içerik değerlendirilemedi."
+                ),
+                label=STATEMENT_LABEL_UNCERTAINTY,
+            )
+        )
+    if int((rejected_by_reason or {}).get("date_uncertain") or 0) > 0:
+        reasons.append(THIN_REASON_UNDATED_PAGES)
+        statements.append(
+            Statement(
+                text=(
+                    "Bazı sayfaların yayın tarihi okunamadığı için istenen zaman aralığına "
+                    "girip girmedikleri doğrulanamadı ve kaynak olarak kullanılmadı."
+                ),
+                label=STATEMENT_LABEL_UNCERTAINTY,
+            )
+        )
+
+    return (
+        SynthesisResult(
+            executive_summary=executive_summary,
+            findings=result.findings,
+            why_it_matters=result.why_it_matters,
+            watch_next=result.watch_next,
+            details=result.details,
+            uncertainty=tuple(statements),
+            truncated_fields=result.truncated_fields,
+            quarantined=result.quarantined,
+        ),
+        tuple(reasons),
+    )
+
+
 def _drop_assistant_directed(result: SynthesisResult) -> tuple[SynthesisResult, int]:
     """Output validation (spec §6): any statement mentioning instructions to
     the assistant is dropped; ``injection_dropped`` is the count removed."""
@@ -761,6 +862,9 @@ def resolve_synthesis_provider(name: str, settings: Settings) -> SynthesisProvid
 
 
 __all__ = [
+    "THIN_REASON_COOLED_DOMAINS",
+    "THIN_REASON_EVIDENCE",
+    "THIN_REASON_UNDATED_PAGES",
     "AnthropicSynthesisProvider",
     "DeterministicSynthesisProvider",
     "OpenAISynthesisProvider",
@@ -771,4 +875,5 @@ __all__ = [
     "build_prompt",
     "parse_synthesis_response",
     "resolve_synthesis_provider",
+    "synthesize_thin",
 ]

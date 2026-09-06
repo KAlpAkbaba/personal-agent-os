@@ -8,6 +8,7 @@ browser, the network or a database.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -119,6 +120,58 @@ def expand_queries(topic: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(q for q in base if q))
 
 
+def _query_tokens(query: str) -> frozenset[str]:
+    lowered = query.lower()
+    for ch in ",.:;!?\"'()[]{}":
+        lowered = lowered.replace(ch, " ")
+    return frozenset(w for w in lowered.split() if w)
+
+
+def _similarity(a: frozenset[str], b: frozenset[str]) -> float:
+    """Jaccard overlap of two queries' word sets — 1.0 for the same words, 0.0 for
+    none in common. Deterministic and language-agnostic: it needs no term list to notice
+    that "X" and "X haberleri" ask a search engine almost the same thing."""
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
+def diversify_queries(queries: Sequence[str], limit: int) -> tuple[str, ...]:
+    """The ``limit`` most DIFFERENT queries from an expansion, first one kept.
+
+    :func:`expand_queries` returns its expansions in a fixed order whose first three
+    entries are all Turkish variants of the same phrase ("X", "X haberleri", "X son
+    gelişmeler"). Taking the first ``limit`` of that — which is exactly what a QUICK
+    run's ``discovery_queries_max`` of 2 did — issues two near-identical searches and
+    gets back one search engine's view of one language's coverage. On 2026-09-06 that
+    is how a QUICK run reached ~100 candidates dominated by a handful of domains
+    (ADR-0074 decision 4).
+
+    Greedy and deterministic: query 0 (the owner's own phrasing) always leads; every
+    later pick is the remaining query with the LOWEST word overlap against everything
+    already picked, ties broken by the expansion's own order. For a Turkish topic
+    naming an English entity this naturally yields a Turkish query and the English
+    core query rather than two Turkish ones — no language list, no provider change.
+    """
+    ordered = [q for q in queries if q and q.strip()]
+    if limit <= 0:
+        return ()
+    if len(ordered) <= limit:
+        return tuple(ordered)
+    tokens = {q: _query_tokens(q) for q in ordered}
+    picked = [ordered[0]]
+    remaining = ordered[1:]
+    while len(picked) < limit and remaining:
+        best_index = 0
+        best_score = None
+        for index, candidate in enumerate(remaining):
+            score = max(_similarity(tokens[candidate], tokens[p]) for p in picked)
+            if best_score is None or score < best_score:
+                best_score, best_index = score, index
+        picked.append(remaining.pop(best_index))
+    return tuple(picked)
+
+
 @dataclass(frozen=True, slots=True)
 class ResearchPlan:
     """The M13 plan: what to search for, where, and in what time window."""
@@ -190,6 +243,7 @@ def build_plan(
 
 
 __all__ = [
+    "diversify_queries",
     "english_core_query",
     "expand_queries",
     "DEFAULT_MAX_SOURCES_PER_QUERY",

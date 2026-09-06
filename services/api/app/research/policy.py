@@ -79,7 +79,12 @@ class ResearchPolicy:
     min_distinct_publishers: int
     #: How many candidates one fetch wave requests (owner rule 6: "wave 1 = top 4").
     wave_size: int
-    #: How many waves the run may spend at most, independent of the time budget.
+    #: A FLOOR of attempts, not a ceiling (ADR-0074). Before M18.2's follow-up this
+    #: was a hard stop, and two of the owner's three QUICK runs on 2026-09-06 ended
+    #: with too little evidence while 40-80 s of their 120 s budget was still unspent.
+    #: The wave loop now keeps going past this number while the HARD budget clearly
+    #: has room for another wave and fetchable candidates remain; the budget — never
+    #: a wave count — is what ends a run that has not found enough yet.
     max_waves: int
     #: The soft, documented target this mode aims to finish within.
     target_budget_s: float
@@ -87,6 +92,33 @@ class ResearchPolicy:
     #: stops fetching and synthesizes from whatever evidence it already has (or
     #: says truthfully that it has too little) — never silently keeps browsing.
     hard_budget_s: float
+
+    @property
+    def wave_expected_s(self) -> float:
+        """What one more wave is expected to cost, at most.
+
+        A wave runs ``concurrent_fetches`` at a time and every fetch is capped at
+        ``per_page_timeout_s``, so ``ceil(wave_size / concurrent_fetches)`` rounds of
+        that timeout is the wave's own worst case. The loop adds this to ``elapsed_s``
+        before starting another wave (ADR-0074), which is what makes the hard budget
+        genuinely hard: a run never *begins* work it cannot be sure of finishing
+        inside the budget, rather than discovering afterwards that it overran.
+        """
+        rounds = max(1, -(-self.wave_size // max(1, self.concurrent_fetches)))
+        return float(self.per_page_timeout_s) * rounds
+
+    @property
+    def fetch_ceiling(self) -> int:
+        """The absolute number of pages one run may fetch.
+
+        ``max_sources`` is the mode's TARGET effort (its floor of attempts); the
+        shortlist the pipeline is allowed to build — ``candidate_urls_max`` FETCHABLE
+        candidates (ADR-0074 decision 1) — is the true ceiling, because a candidate
+        that was skipped for a cooled domain or a per-domain quota was never a page
+        this run could have read. In practice the budget stops the loop long before
+        this number does; it exists so the loop is bounded even with a frozen clock.
+        """
+        return max(self.max_sources, self.candidate_urls_max)
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -278,10 +310,25 @@ def derive_mode_from_utterance(text: str) -> str:
 # --------------------------------------------------------------------------- #
 
 REASON_ENOUGH_EVIDENCE = "enough_evidence"
+#: Retained as a diagnostics string, but no longer a *bound* the loop stops on:
+#: ``max_waves`` became a floor of attempts in ADR-0074. It is reported only by the
+#: structural safety net below (more waves than there are pages the run may fetch),
+#: which a real run can never reach.
 REASON_MAX_WAVES = "max_waves"
 REASON_BUDGET_EXHAUSTED = "budget_exhausted"
 REASON_MAX_SOURCES_REACHED = "max_sources_reached"
+#: The shortlist has nothing fetchable left: every remaining candidate is on a cooled
+#: domain, over its per-domain quota, already fetched, or refused by destination
+#: policy. Distinct from "budget spent" — this run ran out of *web*, not of time.
+REASON_NO_CANDIDATES = "no_fetchable_candidates"
 REASON_CONTINUE = "continue"
+
+#: A soft diversity cap on the working shortlist (ADR-0074 decision 1): before every
+#: domain has had a turn, no single domain may take more than this share of the
+#: shortlist. On 2026-09-06 the owner's QUICK shortlist was filled largely from one
+#: domain, which was then cooled after two challenges — 19 of its slots evaporated and
+#: nothing refilled them from the ~100 candidates discovery had already found.
+SHORTLIST_DOMAIN_SHARE = 0.4
 
 
 @dataclass(frozen=True, slots=True)
@@ -301,23 +348,45 @@ def decide_next_wave(
     waves_used: int,
     elapsed_s: float,
     sources_fetched: int,
+    fetchable_remaining: int | None = None,
 ) -> WaveDecision:
-    """The early-stop rule (owner rule 6): stop the moment there is enough
-    evidence for the requested answer; otherwise keep going one wave at a time,
-    never fetching everything up front, until a bound is hit. Every bound here
-    is checked independently so the reported ``reason`` is always the one that
-    actually applies first (evidence is enough > waves spent > time spent > the
-    run's own source ceiling)."""
+    """The early-stop rule (owner rule 6, amended by ADR-0074): stop the moment
+    there is enough evidence for the requested answer; otherwise keep going one
+    wave at a time, never fetching everything up front, while the budget clearly
+    has room for another wave and there is still something fetchable to spend it on.
+
+    "max_waves is a floor of attempts, the budget is the ceiling": a run that has
+    not found enough yet is no longer stopped by a wave count while 40-80 s of its
+    own hard budget sit unspent (the shape of the owner's two failed QUICK runs on
+    2026-09-06). What DOES stop it, in the order the reasons are reported:
+
+    1. enough evidence — the early stop, unchanged;
+    2. nothing fetchable left (``fetchable_remaining`` 0; ``None`` = the caller does
+       not know yet, which is not a reason to stop);
+    3. the budget: ``elapsed_s`` plus one more wave's own worst case
+       (:attr:`ResearchPolicy.wave_expected_s`) would reach ``hard_budget_s``. The
+       run never starts a wave it cannot finish inside the budget, so the hard
+       budget stays hard — strictly stricter than the old ``elapsed >= budget``
+       check it replaces;
+    4. :attr:`ResearchPolicy.fetch_ceiling` pages already fetched;
+    5. a structural safety net — more waves than the run could ever have pages —
+       so the loop terminates even against a frozen clock.
+    """
     if evidence_count >= policy.target_findings:
         return WaveDecision(False, 0, REASON_ENOUGH_EVIDENCE)
-    if waves_used >= policy.max_waves:
-        return WaveDecision(False, 0, REASON_MAX_WAVES)
-    if elapsed_s >= policy.hard_budget_s:
+    if fetchable_remaining is not None and fetchable_remaining <= 0:
+        return WaveDecision(False, 0, REASON_NO_CANDIDATES)
+    if elapsed_s + policy.wave_expected_s >= policy.hard_budget_s:
         return WaveDecision(False, 0, REASON_BUDGET_EXHAUSTED)
-    remaining = policy.max_sources - sources_fetched
+    remaining = policy.fetch_ceiling - sources_fetched
     if remaining <= 0:
         return WaveDecision(False, 0, REASON_MAX_SOURCES_REACHED)
-    return WaveDecision(True, min(policy.wave_size, remaining), REASON_CONTINUE)
+    if waves_used >= policy.fetch_ceiling:
+        return WaveDecision(False, 0, REASON_MAX_WAVES)
+    want = min(policy.wave_size, remaining)
+    if fetchable_remaining is not None:
+        want = min(want, fetchable_remaining)
+    return WaveDecision(True, want, REASON_CONTINUE)
 
 
 __all__ = [
@@ -331,7 +400,9 @@ __all__ = [
     "REASON_ENOUGH_EVIDENCE",
     "REASON_MAX_SOURCES_REACHED",
     "REASON_MAX_WAVES",
+    "REASON_NO_CANDIDATES",
     "RESEARCH_MODES",
+    "SHORTLIST_DOMAIN_SHARE",
     "ResearchPolicy",
     "WaveDecision",
     "decide_next_wave",

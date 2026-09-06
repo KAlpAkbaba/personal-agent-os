@@ -1869,11 +1869,14 @@ def test_incident_20260904_all_bad_evidence_fails_instead_of_publishing(
     """With only unusable pages, the run must fail loudly rather than reach ready.
 
     Publishing a fluent summary over nothing is the exact failure this gate exists to
-    prevent, so the absence of a report here is the assertion.
+    prevent, so the absence of a report here is the assertion. ADR-0074's thin result
+    does NOT touch this: thinness needs at least one real, gated page — the last
+    record of the incident set (a genuine mirror of the OpenAI story) is excluded
+    here precisely so that nothing survives the gate.
     """
     from temporalio.exceptions import ApplicationError
 
-    _seed_evidence(db_url, task_id, _incident_evidence(NOW)[3:])
+    _seed_evidence(db_url, task_id, _incident_evidence(NOW)[3:-1])
     window_start = (NOW - timedelta(days=3)).isoformat()
     topic = "yapay zeka ajanlari"
 
