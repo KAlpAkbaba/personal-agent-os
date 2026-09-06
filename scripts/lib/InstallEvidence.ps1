@@ -24,7 +24,10 @@ $script:EvidenceArtifacts = @(
     @{ Component = "companion"; File = "PagentOS.Agent.Core.dll" }
 )
 
-# BROWSER_CAPABILITIES.md §1: the family marker plus the 24 operations.
+# BROWSER_CAPABILITIES.md §1: the family marker plus the 28 operations (24 through contract
+# v1.1, plus the four M18.3 alarm media names added by v1.2). This list is a MIRROR of the
+# contract: a name added there and not here silently stops being verified on the installed
+# agent, and the first thing anyone would notice is an alarm that did not ring.
 $script:BrowserFamilyMarker = "browser.chrome"
 $script:BrowserOperations = @(
     "browser.session_open", "browser.session_close", "browser.worker_status",
@@ -32,7 +35,8 @@ $script:BrowserOperations = @(
     "browser.tab_list", "browser.tab_new", "browser.tab_close", "browser.tab_select",
     "browser.inspect", "browser.find", "browser.click", "browser.fill", "browser.select_option",
     "browser.set_checked", "browser.scroll", "browser.wait", "browser.extract", "browser.snapshot",
-    "browser.screenshot", "browser.download", "browser.search", "browser.fetch_evidence"
+    "browser.screenshot", "browser.download", "browser.search", "browser.fetch_evidence",
+    "browser.media_play", "browser.media_volume", "browser.media_status", "browser.media_stop"
 )
 
 function Get-RepoHead {

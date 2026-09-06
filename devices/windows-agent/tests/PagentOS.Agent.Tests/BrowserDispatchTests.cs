@@ -60,11 +60,12 @@ public sealed class BrowserDispatchTests : IDisposable
     {
         var composed = AgentCapabilities.Compose(browserEnabled: true);
 
-        Assert.Equal(AgentCapabilities.Desktop.Count + AgentCapabilities.Alarm.Count + 1 + 24, composed.Count);
+        // 24 through contract v1.1, plus the four M18.3 alarm media operations (v1.2).
+        Assert.Equal(AgentCapabilities.Desktop.Count + AgentCapabilities.Alarm.Count + 1 + 28, composed.Count);
         Assert.Equal(AgentCapabilities.Desktop, composed.Take(2));
         Assert.Equal(AgentCapabilities.Alarm, composed.Skip(2).Take(2));
         Assert.Equal(BrowserCapabilities.Family, composed[4]);
-        Assert.Equal(24, BrowserCapabilities.Operations.Count);
+        Assert.Equal(28, BrowserCapabilities.Operations.Count);
         Assert.Equal(composed.Count, composed.Distinct(StringComparer.Ordinal).Count());
         Assert.All(composed, name => Assert.Matches(CapabilityName, name));
         Assert.All(BrowserCapabilities.All, name => Assert.StartsWith("browser.", name, StringComparison.Ordinal));
@@ -79,8 +80,32 @@ public sealed class BrowserDispatchTests : IDisposable
                 "browser.inspect", "browser.find", "browser.click", "browser.fill", "browser.select_option",
                 "browser.set_checked", "browser.scroll", "browser.wait", "browser.extract", "browser.snapshot",
                 "browser.screenshot", "browser.download", "browser.search", "browser.fetch_evidence",
+                "browser.media_play", "browser.media_volume", "browser.media_status", "browser.media_stop",
             },
             BrowserCapabilities.Operations);
+    }
+
+    [Fact]
+    public void The_alarm_media_family_is_advertised_and_allowed_through_the_host()
+    {
+        // M18.3 (contract v1.2 §3b): the wake alarm's media surface reaches the worker over
+        // exactly the path every other browser operation uses — the host allowlist IS
+        // `Operations`, so a name that is not here is refused before anything is written to
+        // the worker's stdin, and a name that is here needs no second list to be maintained.
+        string[] media = ["browser.media_play", "browser.media_volume", "browser.media_status", "browser.media_stop"];
+        Assert.All(media, name => Assert.True(BrowserCapabilities.IsOperation(name), name));
+        Assert.All(media, name => Assert.True(AgentCapabilities.IsBrowser(name), name));
+        Assert.All(media, name => Assert.Matches(CapabilityName, name));
+        Assert.All(media, name => Assert.Contains(name, AgentCapabilities.Compose(browserEnabled: true)));
+
+        // ...and only when a worker is configured. A device with no browser worker advertises
+        // no media operation, so an alarm on it plans the local tone from the start.
+        Assert.All(media, name => Assert.DoesNotContain(name, AgentCapabilities.Compose(browserEnabled: false)));
+
+        // Near-miss names stay refused: the family prefix is not an allowlist.
+        Assert.False(BrowserCapabilities.IsOperation("browser.media"));
+        Assert.False(BrowserCapabilities.IsOperation("browser.media_pause"));
+        Assert.False(BrowserCapabilities.IsOperation("browser.media_play_"));
     }
 
     [Fact]

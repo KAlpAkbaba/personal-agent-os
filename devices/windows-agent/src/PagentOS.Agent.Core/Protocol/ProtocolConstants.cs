@@ -158,6 +158,15 @@ public static class BrowserCapabilities
     public const string Search = "browser.search";
     public const string FetchEvidence = "browser.fetch_evidence";
 
+    // BROWSER_CAPABILITIES.md §3b (contract v1.2, M18.3): the alarm media family. The worker
+    // plays the owner's named wake music in its own dedicated `alarm` profile; the host's
+    // only job here is to let these four names through the allowlist below and to apply the
+    // same result cap and forbidden-key scan it applies to every other browser result.
+    public const string MediaPlay = "browser.media_play";
+    public const string MediaVolume = "browser.media_volume";
+    public const string MediaStatus = "browser.media_status";
+    public const string MediaStop = "browser.media_stop";
+
     /// <summary>Every per-operation name, in the order of BROWSER_CAPABILITIES.md §1.</summary>
     public static readonly IReadOnlyList<string> Operations =
     [
@@ -166,6 +175,7 @@ public static class BrowserCapabilities
         TabList, TabNew, TabClose, TabSelect,
         Inspect, Find, Click, Fill, SelectOption, SetChecked, Scroll, Wait,
         Extract, Snapshot, Screenshot, Download, Search, FetchEvidence,
+        MediaPlay, MediaVolume, MediaStatus, MediaStop,
     ];
 
     /// <summary>Family marker first, then the operations — what the manifest carries.</summary>

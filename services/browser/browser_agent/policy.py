@@ -65,6 +65,12 @@ CAPABILITIES: tuple[str, ...] = (
     "browser.download",
     "browser.search",
     "browser.fetch_evidence",
+    # M18.3 (contract v1.2): the alarm media surface. NAVIGATE for the three
+    # that change what the page is doing, READ for the pure status read.
+    "browser.media_play",
+    "browser.media_volume",
+    "browser.media_status",
+    "browser.media_stop",
 )
 
 #: Static risk class per capability. ``browser.click`` is intentionally absent
@@ -94,10 +100,20 @@ CAPABILITY_RISK_CLASS: dict[str, RiskClass] = {
     "browser.download": RiskClass.HIGH_IMPACT,
     "browser.search": RiskClass.NAVIGATE,
     "browser.fetch_evidence": RiskClass.NAVIGATE,
+    "browser.media_play": RiskClass.NAVIGATE,
+    "browser.media_volume": RiskClass.NAVIGATE,
+    "browser.media_status": RiskClass.READ,
+    "browser.media_stop": RiskClass.NAVIGATE,
 }
 
 #: Research sessions per contract §2: READ + NAVIGATE only.
 RESEARCH_SESSION_CLASSES: frozenset[RiskClass] = frozenset({RiskClass.READ, RiskClass.NAVIGATE})
+
+#: Alarm media sessions (contract §2, M18.3): the SAME two classes. The media
+#: surface never fills a field, never submits, never downloads and never clicks
+#: anything — a wall is reported, not opened — so it needs nothing a research
+#: session does not already have.
+MEDIA_SESSION_CLASSES: frozenset[RiskClass] = frozenset({RiskClass.READ, RiskClass.NAVIGATE})
 
 #: All classes — used to validate a session_open payload's requested set.
 ALL_RISK_CLASSES: frozenset[RiskClass] = frozenset(RiskClass)
@@ -236,6 +252,7 @@ __all__ = [
     "CAPABILITIES",
     "CAPABILITY_NAME_RE_SOURCE",
     "CAPABILITY_RISK_CLASS",
+    "MEDIA_SESSION_CLASSES",
     "RESEARCH_SESSION_CLASSES",
     "ResolvedElement",
     "RiskClass",
