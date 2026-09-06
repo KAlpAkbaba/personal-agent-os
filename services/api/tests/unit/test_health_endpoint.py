@@ -181,7 +181,9 @@ def test_health_serves_the_realtime_contract_version() -> None:
     # 5 = M18.2 (ADR-0068): the research fast path's terminal result and failure receipts.
     # 6 = M18.3 (ADR-0071): the alarm/display/ambient capability family, the
     # device-refusal receipt shape, and one receipt per physical step of the wake sequence.
-    assert doc["checks"]["voice_realtime"]["action_contract_version"] == 6
+    # 7 = M18.2 follow-up (ADR-0075): research.start's refused terminal shape on a follow-up
+    # turn, and the explanation naming the job and artifact it read.
+    assert doc["checks"]["voice_realtime"]["action_contract_version"] == 7
     # M18.3 spec §3.8: the ten new tools ride the same manifest an owner harness reads.
     tools = set(doc["checks"]["voice_realtime"]["tools"])
     assert {"alarm.create", "alarm.stop", "display.off", "ambient.test_display"} <= tools

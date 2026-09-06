@@ -223,9 +223,12 @@ def test_the_registry_exposes_all_ten_tools() -> None:
     assert len(tools_ambient.AMBIENT_TOOL_NAMES) == 10
 
 
-def test_the_action_contract_version_is_six() -> None:
-    """Spec §3.8: the M18.3 harness gates on this."""
-    assert ACTION_CONTRACT_VERSION == 6
+def test_the_action_contract_version_carries_the_alarm_family() -> None:
+    """Spec §3.8: the M18.3 harness gates on this. v6 introduced the alarm / display /
+    ambient family; later contracts (v7: ADR-0075's refused research.start) only add to it,
+    so the floor is what matters here - the exact current value is pinned once, in
+    test_health_endpoint.py."""
+    assert ACTION_CONTRACT_VERSION >= 6
 
 
 def test_every_new_tool_description_tells_the_model_to_read_speech_verbatim() -> None:

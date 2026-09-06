@@ -96,7 +96,7 @@ and optionally a short research. Scale, depth, colour and motion are yours to ju
 script records only that the Core really listened and really spoke, and finishes by itself.
 Tell me what you would change — the reference you mentioned is welcome as inspiration.
 
-### 23b. One sentence, no research: `Teknik anlat.` — **M18.2 follow-up, ready once the follow-up guard (ADR-0075) is on main; the command releases the Cloud Core once, before the check**
+### 23b. One sentence, no research: `Teknik anlat.` — **M18.2 follow-up, READY (the guard, ADR-0075, is on main; the command releases the Cloud Core once, before the check)**
 
 Your run of 2026-09-06 proved every core row of M18.2 (item 23 below is closed on them).
 Your follow-up run then proved the routing, the diagnostics-only-now and the conciseness —

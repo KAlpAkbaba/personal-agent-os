@@ -312,7 +312,8 @@ try {
     $provJob = if ($null -ne $technicalCall) { [string](Get-OptionalProperty -InputObject $technicalCall -Name "research_job_id") } else { "" }
     $prov = if ($null -ne $technicalCall) { Get-OptionalProperty -InputObject $technicalCall -Name "provenance" } else { $null }
     if (-not $provJob -and $null -ne $prov) { $provJob = [string](Get-OptionalProperty -InputObject $prov -Name "research_job_id") }
-    $provArtifact = if ($null -ne $technicalCall) { [string](Get-OptionalProperty -InputObject $technicalCall -Name "artifact_id") } else { "" }
+    $provArtifact = if ($null -ne $technicalCall) { [string](Get-OptionalProperty -InputObject $technicalCall -Name "research_artifact_id") } else { "" }
+    if (-not $provArtifact -and $null -ne $prov) { $provArtifact = [string](Get-OptionalProperty -InputObject $prov -Name "research_artifact_id") }
     if (-not $provArtifact -and $null -ne $prov) { $provArtifact = [string](Get-OptionalProperty -InputObject $prov -Name "artifact_id") }
     $evidence.followup = [ordered]@{ call_id = $(if ($null -ne $technicalCall) { Get-OptionalProperty -InputObject $technicalCall -Name "call_id" } else { $null }); level = $(if ($null -ne $technicalCall) { Get-OptionalProperty -InputObject $technicalCall -Name "level" } else { $null }); query_kind = $(if ($null -ne $technicalCall) { Get-OptionalProperty -InputObject $technicalCall -Name "query_kind" } else { $null }); speech_head = $followHead; speech_chars = $followChars; research_job_id = $provJob; artifact_id = $provArtifact }
     Add-Check -Name "followup.diagnostics_only_now" -Ok ($resultClean -and (Test-TextContainsAny -Text $followHead -Words $diagnosticWords)) -Detail $(if ($followHead) { "follow-up head: `"$followHead`"; result head had no crawler words: $resultClean" } else { "no follow-up speech" })
@@ -327,7 +328,13 @@ try {
     Add-Check -Name "followup.report_reused_not_recomputed" -Ok ($readyAfter -eq $readyBefore -and $artifactAfter -eq $artifactBefore -and $artifactIdentity) -Detail "artifact $artifactBefore -> $artifactAfter$(if ($provArtifact) { ' (explanation cites ' + $provArtifact + ')' }); ready_at $readyBefore -> $readyAfter"
     $taskIdsAfter = Get-ResearchTaskIds
     $newTasks = @($taskIdsAfter | Where-Object { $taskIdsBefore -notcontains $_ })
-    Add-Check -Name "followup.no_second_crawl" -Ok ($researchCallsNew.Count -eq 0 -and $newTasks.Count -eq 0) -Detail "research.start_on_followup: $($researchCallsNew.Count); new_research_task_count: $($newTasks.Count)"
+    # ADR-0075: a research.start the server REFUSED on a follow-up turn is a succeeded call
+    # whose speech head says no research was started - it started nothing and is reported
+    # on its own line; a research.start that ran (running / succeeded / failed with a task)
+    # is the second crawl the owner forbade.
+    $refusedStarts = @($researchCallsNew | Where-Object { [string](Get-OptionalProperty -InputObject $_ -Name "status") -eq "succeeded" -and ([string](Get-OptionalProperty -InputObject $_ -Name "speech_head")).StartsWith("Yeni bir ara") })
+    $crawlStarts = @($researchCallsNew | Where-Object { $refusedStarts -notcontains $_ })
+    Add-Check -Name "followup.no_second_crawl" -Ok ($crawlStarts.Count -eq 0 -and $newTasks.Count -eq 0) -Detail "research.start_on_followup: $($crawlStarts.Count) (refused by the guard: $($refusedStarts.Count)); new_research_task_count: $($newTasks.Count)"
     if ($researchCallsNew.Count -gt 0) { Write-Host ("      research.start on the follow-up session: " + (($researchCallsNew | ForEach-Object { "{0}:{1}" -f (Get-OptionalProperty -InputObject $_ -Name "status"), (Get-OptionalProperty -InputObject $_ -Name "speech_head") }) -join " | ")) -ForegroundColor Yellow }
     $healthAfter = Invoke-JsonUtf8 -Uri "$BaseUrl/v1/system/health" -TimeoutSec 20
     $versionAfter = Get-DeployedContractVersion -Health $healthAfter

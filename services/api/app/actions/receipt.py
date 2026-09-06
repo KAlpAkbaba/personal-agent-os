@@ -115,7 +115,14 @@ TERMINAL_CLAIMABLE: Final[frozenset[str]] = frozenset({TERMINAL_VERIFIED, TERMIN
 #: read-back rather than a browser's. The wake sequence writes one receipt per physical
 #: step (app.alarms.sequence.RECEIPT_BY_DEVICE_CALL enumerates them), so a qualification
 #: run can prove every physical action from the ledger alone.
-ACTION_CONTRACT_VERSION: Final = 6
+#: v7 (2026-09-07, M18.2 follow-up, ADR-0075): a research explanation never becomes a
+#: second crawl. `research.start` gains a REFUSED terminal shape
+#: ({"status": "refused", "reason": "research_followup_turn", research_job_id,
+#: research_artifact_id, speech}) on a follow-up or technical-explanation turn bound to a
+#: completed research, and `activity.explain` names the job and artifact it read
+#: (`research_job_id` / `research_artifact_id`, also under provenance) - the identity an
+#: owner qualification asserts instead of timestamps.
+ACTION_CONTRACT_VERSION: Final = 7
 
 FAKE_COMPLETION_PHRASES: Final[tuple[str, ...]] = (
     "yapmış gibi düşün",
