@@ -236,6 +236,18 @@ Two rules with a history behind them:
   `test_an_open_camera_is_not_evidence_of_presence`). The other half — a held state never
   republished, so a live claim looked like no claim — is fixed by a heartbeat at half the
   TTL. Neither fix infers anything from the camera being open.
+* **A claimed mutation without a receipt is a lie the system told about itself.** The second
+  real attempt (2026-09-06): `Gözünü kapat` really closed the eye through the deterministic
+  safety net, and the model — which had no tool and was told nothing — said *"öyle olmuş
+  gibi düşün"*. The privacy action was correct and the owner could not know it. Under the
+  action contract (`docs/M18_ACTION_CONTRACT.md`, ADR-0063) every eye command is a tool
+  whose result is a receipt built from the durable read-back plus the browser's observed
+  local state; the model may only read the receipt's sentence, and the sentences for
+  "unverified" and "refused" exist so that failure is spoken as failure. The enable path
+  is deliberately camera-first: the durable flag is set only after the browser observed its
+  own camera `ACTIVE`, so the cloud can never assert an open camera on a device that
+  refused it. `Canlıya al.` by voice is an ACTION the router recognises and the tool
+  refuses with the authority sentence — recorded, so the refusal is evidence too.
 * **The presence client was a motion sensor at the wrong unit.** A seated owner was read as
   `away` for eleven minutes because presence was "whole-frame mean luminance changed by more
   than 2% between two samples". The rewrite (ADR-0062) counts changed grid CELLS and keeps a
