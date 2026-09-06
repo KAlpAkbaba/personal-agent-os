@@ -45,14 +45,30 @@ Current-state questions (`Kendi sisteminde şu anda ne görüyorsun?`, `Kamera a
 a live-state tool that answers result-first from the runtime and the World Model, with each
 fact carrying a source and an age, not from the ledger and not with "kayıtlara bakmalıyım".
 
+**What your first run of this command found (2026-09-06 afternoon).** It waited at
+"waiting for a web voice session" and `Gözünü aç` did nothing in `/core`, because the
+deployed Cloud Core still advertised the M17 tool set: no `eye.enable`, no `eye.disable`, no
+`state.now`. The contract was merged but never released, so there was nothing for the
+router to reach. The command now checks that first and releases the Cloud Core once if it is
+stale (the same transactional release as before: build, migrate, recreate the api container
+only, health check, rollback on failure — about five minutes; nothing on Windows is
+touched). Two more things it found: a closed session's `agent.listening` stayed the Core's
+current state (sessions now publish `agent.idle` when they end), and a page reload left the
+previous voice session open on the Cloud Core (a reload now closes it).
+
 **One command:**
 
 ```powershell
-.\scripts\core\owner-m18-eye.ps1 -OutFile m18-eye-1.json
+.\scripts\core\owner-m18-eye.ps1 -OutFile m18-eye-2.json
 ```
 
-It starts the web shell, waits for `/core`, closes the eye durably if it was open, and prints
-six lines. Sign in at `/core`, connect voice **there**, then:
+It checks the deployed tools (releasing once if needed), starts the web shell, waits for
+`/core`, closes the eye durably if it was open, and prints six lines. While it waits it
+prints, every 15 s, the current web session, the router events seen, the last query/action
+kind, the eye receipts and the Core's latest state — and it stops with the exact missing
+evidence if no session connects within 3 minutes or a session makes no router call within
+2.5 minutes. It asks for Enter only once there is a session to close. Sign in at `/core`,
+connect voice **there**, then:
 
 1. say **`Kendi sisteminde şu anda ne görüyorsun?`**
 2. say **`Gözünü aç.`** (or press `Gözü aç`); wait for the eye cell to show the camera on
@@ -63,8 +79,8 @@ six lines. Sign in at `/core`, connect voice **there**, then:
 
 The script reads the eye state back from the runtime after every step, reads the session's
 tool calls and receipts, checks the confirmation was spoken after the terminal ACK, and ends
-with `OWNER M18 EYE: PASS`. Paste the `checks` block from `m18-eye-1.json` back here, or the
-whole file if anything fails. If the browser refuses the camera on step 4, the assistant must
+with `OWNER M18 EYE: PASS`. Paste the `checks` block from `m18-eye-2.json` back here, or the
+whole file if anything fails (a fail-fast stop also writes it, with the reason). If the browser refuses the camera on step 4, the assistant must
 say exactly that (`Kamerayı açamadım; tarayıcı kamera izni vermedi.`) — that is a correct
 answer, and the file will show it.
 

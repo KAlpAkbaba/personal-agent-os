@@ -433,6 +433,23 @@ watching it refuse — and are marked as such.
 | 12.28 | Current-state questions are answered from live state, result-first: `Kendi sisteminde şu anda ne görüyorsun?` → runtime + World Model facts each with source / observed_at / age / confidence / stale; stale is said as stale; 1–3 sentences; no bookkeeping narration | `NOT_YET_PROVEN` | API: `test_voice_state_tool.py` (facts carry provenance; stale spoken; eye scope sentences; `activity.explain` with a `world_state` question returns the same `speech` as `state.now`; no "kayıt"). Real: `state.live_path_reached`, `state.spoken_result_first`, `state.facts_carry_provenance`. The owner's second attempt: "kayıtlara bakmalıyım…". |
 | 12.29 | One router, three classes: QUERY / ACTION / CONTROL from `resolve_intent` alone; `Canlıya al.` is an ACTION that is refused with the authority sentence and recorded; `Bunu canlıya alabilir misin?` stays a QUERY; no second Turkish table anywhere | `NOT_YET_PROVEN` | API: `test_voice_intents.py` (the nine owner utterances → klass / intent / query_kind / capability), `test_voice_eye_tools.py` (`release.promote` refused, `action.receipt` recorded). **Structural**: the web client has no phrase table (grep-asserted in review). |
 
+**Third real attempt, 2026-09-06 afternoon — `owner-m18-eye.ps1` first run, diagnosed from
+the production record:** the harness reached `/core` and then waited; `Gözünü aç` did
+nothing. The deployed Cloud Core's health manifest listed only the M17 tools
+(`activity.explain`, `clock.now`, `narration.control`, `plan.redirect`, `research.start`,
+`voice.intent`): the action contract was merged, never released, so no router existed in
+production for the harness or the model to reach. The old safety net still wrote
+`eye.disabled` (13:09:54Z, 13:13:53Z) but no `eye.enabled` row exists in that window, so the
+camera was never durably on when `Gözünü kapat` was said. The `agent.listening` the harness
+read at startup belonged to session a71096ca, closed at 13:14:08Z — closing published
+nothing. Sessions a2ac0716 (never closed) and a71096ca overlapped — a reload left the first
+open. Fixes: the harness checks the deployed tools first and releases once; a session that
+ends publishes `agent.idle`; a reload posts a keepalive close; the wait prints what it sees
+and fails fast with the missing evidence. The camera lifecycle the owner asked to see proven
+runs in `tests/eye/browser-frame-source.test.ts` against the real `BrowserFrameSource` with
+`getUserMedia` stubbed: one stream per real transition, tracks ended on disable, no orphan,
+permission refusal surfaced.
+
 **Second real attempt, 2026-09-06 midday — the owner's observations (defect evidence, no
 file was produced):** from `/core`, `Gözünü kapat` really disabled the eye and the assistant
 answered *"öyle olmuş gibi düşün"*; `Gözünü aç` / `Kamerayı aç` / `Beni tekrar izle` did
