@@ -4643,3 +4643,118 @@ UI or voice affordance to CHANGE the recency/device/max_sources of a research al
 running (the honest refusal above is the whole answer for now), and no attempt to make
 the M13 workflow itself signal-aware — that stays a real gap, named rather than
 half-closed.
+
+## ADR-0073 — Alarm media plays in the worker's own alarm profile, verified by the media element, never helped past a challenge (2026-09-07)
+
+Status: Accepted
+
+Context: M18.3's owner outcome B ends with real music: "90 saniye sonra seçtiğim YouTube
+müziğiyle test alarmı kur." → the display wakes → *the named YouTube item really plays* →
+the volume ramps → the greeting speaks over ducked music → "Alarmı kapat." stops it. Before
+this milestone the browser worker (M13, ADR-0050) could navigate, read and search, but it
+had no notion of a media element, no way to say whether audio was actually coming out, and
+exactly one persistent profile — the research one, which at 07:30 may well be holding the
+tab the owner fell asleep reading. Three facts shaped the decisions:
+
+1. **"It played" is not observable from a navigation result.** A `page_kind: "ok"` on a
+   YouTube URL says the page loaded. It says nothing about whether the video element
+   exists, whether `play()` was honoured, or whether a consent gate is standing in front of
+   it. An alarm that reports success on the strength of a 200 is an alarm that silently
+   does not ring.
+2. **The autoplay policy is a real obstacle and the honest way past it is a preference for
+   our own window, not a trick.** Chrome refuses `play()` without a user gesture; the
+   documented switch `--autoplay-policy=no-user-gesture-required` changes that for the
+   profile it is given to. It is not a bot-detection bypass, and this project has a
+   standing rule (ADR-0050 decision 3, spec §1 item 6) that nothing is ever spoofed,
+   masked or solved — so the switch had to be scoped so narrowly that it could not be
+   mistaken for one.
+3. **The 2026-09-03 owner-machine incident was about one profile held twice.** The M13
+   lifecycle guards (launch lock, breaker, kill-on-close job, one owner session id) were
+   written for "the research profile" as a proper noun. A second persistent profile that
+   inherited none of that would have reintroduced the exact window cascade — this time at
+   an hour the owner is asleep.
+
+Decisions:
+
+1. **A second dedicated persistent profile, `alarm`, derived rather than configured.** The
+   alarm profile directory is the research profile's sibling (`<profile-dir>-alarm`); the
+   worker refuses at startup an `--alarm-profile-dir` that is, or contains, the research
+   profile, and `ManagedBackend`'s existing real-profile guard refuses either of them
+   anywhere inside a real Chrome/Edge/Brave tree. Deriving it means a configuration mistake
+   cannot collapse the two onto one directory — the shape of the incident. `profile:
+   "alarm"` and `session_kind: "media"` are one thing, checked from both directions, and a
+   media session may never use the research profile. The four media operations REFUSE to
+   run on a session that is not `session_kind: "media"`: alarm audio staying out of the
+   owner's research browser is a structural refusal, not a convention.
+2. **The one-owned-browser guard is generalised from "research" to "each persistent
+   profile".** The single-owner session id, the launch lock, the launch-rate breaker and
+   the kill-on-close job now apply per profile, so the research and alarm browsers coexist
+   and neither can be opened twice; a second session id on `alarm` is
+   `browser_lifecycle_violation` exactly as it is on `research`. The worker's last-resort
+   `atexit` reap sweeps BOTH profiles — an alarm Chrome outliving the worker would keep
+   playing music at the owner, the loudest possible way to leak a browser. The durable
+   `browser-ownership.json` stays what it is, the RESEARCH job's ownership record; an alarm
+   session is not a research job and does not claim it.
+3. **The autoplay switch is scoped to a media launch and documented as a preference.** It is
+   passed only for `session_kind: "media"`, to that session's own dedicated window, and both
+   the contract (§2) and the module docstring say in as many words that it is not an
+   anti-bot measure: it changes how our profile treats our page's `play()` call and defeats
+   no site protection, bot detection, DRM, advertising or consent handling. A unit test
+   reads the source for that sentence, so the claim cannot quietly rot away from the code.
+4. **Playback is proven by the media element, never assumed.** `media_play` sets `volume`
+   FIRST (so the owner is never hit by the page's own level for the instant before the
+   ramp), calls `play()`, and then reads the element's own `currentTime` again after
+   `verify_seconds`: `verified` is true only when it advanced ≥ 0.5 s with `paused === false`.
+   A `play()` that resolves and then does not move the element is `reason: "error"` — a
+   truthful failure, not a "verified" that would leave the owner asleep.
+5. **A wall is named and reported; it is never opened.** `challenge` (CAPTCHA, "confirm
+   you're not a bot", sign-in wall — reusing M13's `page_kind` classification and the
+   existing Google interstitial detector), `consent_wall` (a `consent.youtube.*` /
+   `consent.google.*` landing, or consent wording on a page that produced no media element),
+   `autoplay_blocked` (Chrome's `NotAllowedError`), `no_media_element`, `navigation_failed`,
+   `error`. No retry, no bypass, no click on anything — not a consent button, not an ad, not
+   a challenge; no DRM or ad circumvention; no download; nothing that reads cookies or
+   storage. Each is a SUCCESSFUL command carrying the reason, so Cloud Core writes a
+   truthful `media.play` receipt and rings the device's own tone instead. Consent WORDING
+   alone is deliberately not enough: a cookie banner floating over a video that plays anyway
+   is a successful play, and calling it a wall would cost the owner real music for nothing.
+6. **The ramp runs inside the page, and the command comes back.** `media_volume` generates a
+   script that steps the media element's own `volume` on a 250 ms `setInterval`, cancelling
+   any ramp already running (the greeting's duck and restore issue three ramps within
+   seconds), clamping every write and landing exactly on the level asked for. The operation
+   returns as soon as the interval is armed — a 20 s wake ramp must not hold a device
+   command open for 20 s — while a ramp of ≤ 2 s is awaited so the greeting can follow it
+   immediately. The generator is a pure function, tested by reading its output; this is the
+   media element's own volume and never the Windows master volume (M18.3 §1 item 8).
+7. **Two deviations from the spec's result table, written into the contract rather than
+   discovered later.** A transport-level navigation failure inside `media_play` is a
+   successful command with `reason: "navigation_failed"` rather than a retryable typed
+   error, because a firing alarm's caller needs a receipt it can record and fall back from,
+   not a `dependency_unavailable` mid-sequence; payload and destination-policy errors stay
+   hard errors. And `media_volume.level_from` / `media_status.volume` / `duration_s` answer
+   `null` when there is no element (or no known duration) instead of a fabricated `0.0` — a
+   missing element must not raise in the middle of a greeting, and must not lie either.
+8. **Worker release 0.5.0 and `contracts["browser.media"] = 1`.** The media family is new
+   capability surface, so the release moves and the worker advertises a media contract
+   version alongside the search one. Cloud Core checks it BEFORE planning a media wake: an
+   agent installed before M18.3 then produces a named contract mismatch and the tone
+   fallback, rather than a missing-key failure inside an alarm that is already ringing —
+   the lesson of the 2026-09-03 owner run, applied before it could cost a second one.
+9. **No test may launch a browser, and the guard now says so by name.** The media suite is
+   fake-`Page` only; the two `session_open` tests replace `ManagedBackend` with a recording
+   double. `tests/test_test_isolation_guards.py` reads the media suite's source and fails if
+   it ever grows a real launch. This is the one surface that opens a VISIBLE window on the
+   owner's desktop at an hour the owner is asleep, so the standing rule from the
+   2026-09-03 desktop flood is enforced here specifically, not only in general.
+
+Consequences: `browser.media_play`, `browser.media_volume`, `browser.media_status` and
+`browser.media_stop` become advertised device capabilities whenever a browser worker is
+configured (a device without one advertises none of them, so an alarm on it plans the local
+tone from the start), and the installed Windows agent must be updated before a media wake can
+be attempted — the release-currency check now says so by version rather than failing at
+07:30. What this ADR does NOT settle: how YouTube's consent page actually behaves on a
+freshly created `alarm` profile has never been observed on the owner's machine, so the first
+real media wake may well answer `consent_wall` and fall back to the tone; the honest fix, if
+it does, is for the owner to accept the consent once by hand in that profile's own window
+(the profile is persistent and keeps it), never for the worker to click it. Cloud Core's
+dispatch allowlist and the `media.play` receipt are Track C's.
