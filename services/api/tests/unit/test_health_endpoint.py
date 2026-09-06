@@ -157,6 +157,9 @@ def test_health_serves_the_realtime_contract_version() -> None:
     with TestClient(app) as client:
         doc = client.get("/v1/system/health").json()
     assert doc["checks"]["voice_realtime"]["contract_version"] == CONTRACT_VERSION == 2
+    # The action contract's own version rides the manifest too: an owner qualification
+    # releases the Cloud Core when the deployed value is older than its checkout's.
+    assert doc["checks"]["voice_realtime"]["action_contract_version"] == 2
 
 
 def test_health_temporal_worker_skipped_when_worker_mode_off(monkeypatch) -> None:
@@ -165,7 +168,9 @@ def test_health_temporal_worker_skipped_when_worker_mode_off(monkeypatch) -> Non
     body = response.json()
     assert body["status"] == "ok"  # "skipped" is not degraded
     assert body["checks"]["temporal_worker"] == {
-        "status": "skipped", "mode": "off", "running": False,
+        "status": "skipped",
+        "mode": "off",
+        "running": False,
     }
 
 

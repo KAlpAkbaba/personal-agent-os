@@ -559,8 +559,10 @@ function Get-EyeReceiptSteps {
         # Built OUTSIDE the hashtable literal: a $( ) subexpression there unrolls a
         # one-element trace to a string (no .Count under StrictMode) and turns an empty one
         # into $null. Assigned first, then cast, it stays a string[] of any length.
-        $trace = @()
-        if ($null -ne $local) { $trace = ConvertTo-Array -Value (Get-OptionalProperty -InputObject $local -Name "action_trace") }
+        # The receipt stores the trace at its top level (the server clips it there); the
+        # client's relay carries it under local. Either, top level first.
+        $trace = ConvertTo-Array -Value (Get-OptionalProperty -InputObject $c -Name "action_trace")
+        if ($trace.Count -eq 0 -and $null -ne $local) { $trace = ConvertTo-Array -Value (Get-OptionalProperty -InputObject $local -Name "action_trace") }
         $receipts += [pscustomobject]@{
             Name       = $name
             CallId     = [string](Get-OptionalProperty -InputObject $c -Name "call_id")

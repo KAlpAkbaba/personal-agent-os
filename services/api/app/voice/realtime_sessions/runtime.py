@@ -21,6 +21,7 @@ from typing import Any
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.actions.receipt import ACTION_CONTRACT_VERSION
 from app.config import Settings
 from app.db import build_engine, build_session_factory
 from app.logging import get_logger
@@ -212,6 +213,9 @@ class RealtimeVoiceRuntime:
             # The served wire-contract version: the release qualification refuses an
             # unexpectedly old one (ADR-0045), and a client can tell v1 from v2 here.
             "contract_version": CONTRACT_VERSION,
+            # The action contract (ADR-0063) the receipts follow; tool names alone cannot
+            # tell a v1 deployment from v2 (owner run 2026-09-06, session 3eb6fee7).
+            "action_contract_version": ACTION_CONTRACT_VERSION,
             "providers": sorted(self._providers),
             "inactive": dict(self._inactive),
             "selection": selection,

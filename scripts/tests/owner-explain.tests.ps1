@@ -613,6 +613,10 @@ Test-Case "18. Get-EyeReceiptSteps: ac -> kapat -> ac read off the receipts, ver
     Assert-Equal 0 $steps.Receipts[2].Trace.Count "no trace reported is an empty list, not null"
     $oneTrace = Get-EyeReceiptSteps -Calls @([pscustomobject]@{ name = "eye.enable"; call_id = "t1"; status = "succeeded"; terminal_status = "verified"; observed_after = [pscustomobject]@{ local = [pscustomobject]@{ state = "ACTIVE"; action_trace = @("request:enable") } } })
     Assert-Equal 1 $oneTrace.Receipts[0].Trace.Count "a one-entry trace is still a list"
+    # The server stores the trace at the receipt's top level (session_activity exposes it there).
+    $topTrace = Get-EyeReceiptSteps -Calls @([pscustomobject]@{ name = "eye.disable"; call_id = "t2"; status = "succeeded"; terminal_status = "verified"; action_trace = @("request:disable", "loop:stopped", "stream:ended"); observed_after = [pscustomobject]@{ local = [pscustomobject]@{ state = "DISABLED"; media_track_ready_state = "ended" } } })
+    Assert-Equal 3 $topTrace.Receipts[0].Trace.Count "the top-level trace is read first"
+    Assert-Equal "ended" $topTrace.Receipts[0].Track "and the track state from local"
     Assert-Equal 2 $steps.Satisfied "enable then disable satisfied; the third step is open"
     Assert-True (-not $steps.Done) "not done"
     Assert-Equal "c2,c3" (($steps.Matched | ForEach-Object { $_.CallId }) -join ",") "the failed enable did not count"

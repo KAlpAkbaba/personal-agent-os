@@ -78,6 +78,14 @@ TERMINAL_CLAIMABLE: Final[frozenset[str]] = frozenset({TERMINAL_VERIFIED, TERMIN
 
 #: Banned in ANY assistant speech about a mutation (contract §1). One place; the persona
 #: names them, and ``test_actions_receipt.py`` asserts no speech template contains one.
+#: The action-contract version this Cloud Core runs, advertised on the health manifest
+#: (voice_realtime.action_contract_version) so an owner qualification can tell a deployed
+#: v1 (receipts without session_id / observed_at / the track read-back, a server-side
+#: safety net, "kapatamadım" for a camera that had closed) from what this checkout needs.
+#: Tool NAMES did not change between v1 and v2, so they cannot tell the two apart. Bump it
+#: whenever the receipt shape, the terminal logic or the speech table changes.
+ACTION_CONTRACT_VERSION: Final = 2
+
 FAKE_COMPLETION_PHRASES: Final[tuple[str, ...]] = (
     "yapmış gibi düşün",
     "olmuş gibi düşün",
