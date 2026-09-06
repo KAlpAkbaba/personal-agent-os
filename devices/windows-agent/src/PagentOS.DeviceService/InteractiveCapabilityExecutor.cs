@@ -30,7 +30,8 @@ public sealed class InteractiveCapabilityExecutor(
     ICompanionCapabilityTransport pipeServer,
     TimeProvider? timeProvider = null,
     bool browserEnabled = false,
-    bool displayPowerEnabled = false) : ICapabilityExecutor
+    bool displayPowerEnabled = false,
+    string? brokerRestUrl = null) : ICapabilityExecutor
 {
     private static readonly TimeSpan MinTimeout = TimeSpan.FromSeconds(1);
 
@@ -49,6 +50,15 @@ public sealed class InteractiveCapabilityExecutor(
     /// have the capability.
     /// </summary>
     public bool DisplayPowerEnabled { get; } = displayPowerEnabled;
+
+    /// <summary>
+    /// M18.3 (§6h): the ONE origin <c>desktop.play_audio</c> may fetch from — the broker REST
+    /// base this device is enrolled against, reduced to scheme, host and port. Null when the
+    /// service has no broker URL configured, in which case every <c>play_audio</c> is refused:
+    /// a capability that fetches and plays a URL with nothing to compare it against is a
+    /// capability that plays whatever reaches the payload.
+    /// </summary>
+    public string? AudioOrigin { get; } = OriginOf(brokerRestUrl);
 
     /// <summary>Per-family cap on the time one command may hold the companion.</summary>
     public static TimeSpan TimeoutCapFor(string capability)
@@ -106,6 +116,12 @@ public sealed class InteractiveCapabilityExecutor(
                     retryable: false);
             }
         }
+        else if (string.Equals(command.Capability, AgentCapabilities.DesktopPlayAudio, StringComparison.Ordinal))
+        {
+            // Before the pipe, not after: the companion is the thing that would fetch and play
+            // the URL, so the check has to happen on the side that has not been asked to yet.
+            ValidateAudioOrigin(command.Payload, AudioOrigin);
+        }
         else if (!AgentCapabilities.IsInteractive(command.Capability))
         {
             throw new CapabilityException(
@@ -117,4 +133,55 @@ public sealed class InteractiveCapabilityExecutor(
         var timeout = ResolveTimeout(command);
         return await pipeServer.ExecuteCapabilityAsync(command.Capability, command.Payload, timeout, cancellationToken).ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// Refuses a <c>desktop.play_audio</c> payload whose <c>audio.url</c> is not on
+    /// <paramref name="allowedOrigin"/>, with <c>security_scope_error</c> (never retryable —
+    /// the same URL will be just as wrong next time). Public and pure so the refusal is asserted
+    /// directly rather than inferred from what did not reach the pipe.
+    ///
+    /// <para>Scheme, host and port must all match. A default-deny when no origin is configured
+    /// is deliberate: "we could not tell where audio may come from" and "this audio may be
+    /// played" must not be the same answer.</para>
+    /// </summary>
+    public static void ValidateAudioOrigin(JsonObject payload, string? allowedOrigin)
+    {
+        ArgumentNullException.ThrowIfNull(payload);
+
+        if (string.IsNullOrWhiteSpace(allowedOrigin))
+        {
+            throw new CapabilityException(
+                ErrorClasses.SecurityScopeError,
+                $"'{AgentCapabilities.DesktopPlayAudio}' is refused: this device has no configured broker origin, "
+                + "so no audio URL can be recognised as the owner's own",
+                retryable: false);
+        }
+
+        var raw = payload["audio"] is JsonObject audio ? audio["url"]?.GetValue<string>() : null;
+        if (string.IsNullOrWhiteSpace(raw)
+            || !Uri.TryCreate(raw, UriKind.Absolute, out var url)
+            || (url.Scheme != Uri.UriSchemeHttp && url.Scheme != Uri.UriSchemeHttps))
+        {
+            throw new CapabilityException(
+                ErrorClasses.ValidationError,
+                "payload.audio.url must be an absolute http(s) URL",
+                retryable: false);
+        }
+
+        var origin = url.GetLeftPart(UriPartial.Authority);
+        if (!string.Equals(origin, allowedOrigin, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new CapabilityException(
+                ErrorClasses.SecurityScopeError,
+                $"audio may only be fetched from {allowedOrigin}; this payload named {origin}",
+                retryable: false);
+        }
+    }
+
+    /// <summary>Scheme, host and port of a configured URL, or null when it is unusable.</summary>
+    public static string? OriginOf(string? url)
+        => Uri.TryCreate(url, UriKind.Absolute, out var parsed)
+           && (parsed.Scheme == Uri.UriSchemeHttp || parsed.Scheme == Uri.UriSchemeHttps)
+            ? parsed.GetLeftPart(UriPartial.Authority)
+            : null;
 }

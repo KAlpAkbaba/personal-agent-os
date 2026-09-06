@@ -1,13 +1,14 @@
 ---
 name: windows-agent-gates
-description: Non-obvious gate and structure facts for devices/windows-agent and scripts/ - CRLF via dotnet format, PS5.1 lints, worktree lags main, where the audio fake boundary already is, and that AgentCapabilities.Desktop is locked
+description: Non-obvious gate and structure facts for devices/windows-agent and scripts/ - LF line endings (not CRLF any more), Bash-tool refusals for computed dotnet paths, PS5.1 lints, where the audio fake boundary already is, and that AgentCapabilities.Desktop is locked
 metadata:
   type: project
 ---
 
 Gate facts for Windows-agent work that cost a round trip each the first time (2026-09-03, M13 track W):
 
-- `dotnet format --verify-no-changes` is a README gate and the repo's .editorconfig wants CRLF. Files created with the Write tool are LF, so every new .cs file fails with `ENDOFLINE`. Run `dotnet format PagentOS.WindowsAgent.sln --no-restore` once before verifying; it also strips stray BOMs in untouched files (PipeTests/IpcWiringTests had them).
+- `dotnet format --verify-no-changes` is a README gate. The repo's root `.editorconfig` now says `end_of_line = lf` (verified 2026-09-07; it used to want CRLF, which cost a round trip in M13). Files created with the Write tool are LF, so new `.cs` files pass as written - do NOT convert them to CRLF. `.gitattributes` still checks `*.ps1` out as CRLF, so a script rewritten through Python must be written back with CRLF or the working copy drifts (git renormalises on commit, so the diff hides it). If a format run is ever needed: `dotnet format PagentOS.WindowsAgent.sln --no-restore`; it also strips stray BOMs.
+- The Bash tool refuses a command whose executable name is computed (`"/c/Program Files/dotnet/dotnet.exe"` in a quoted path counts) or whose `sed` argument comes from `$(...)`. Run dotnet through the PowerShell tool with the absolute path `& "C:\Program Files\dotnet\dotnet.exe"`; its output is Turkish (`Hata`=error, `Uyarı`=warning, `Başarılı`=passed, `Başarısız`=failed), so filter with `Select-String` on those words too.
 - `scripts/tests/installer-strictmode.tests.ps1` lints install-device-service.ps1 AND verify-device-service.ps1 for bare `$x.Count` (must be `@($x).Count`); `$home` is a read-only automatic variable in PS 5.1 (use `$venvHome`). `scripts/quality-gate.ps1` enumerates test scripts explicitly, so a new scripts/tests/*.tests.ps1 is NOT picked up by the gate until quality-gate.ps1 lists it.
 - Referencing an Exe project from the test csproj copies its apphost `.exe` beside the tests (verified on SDK 10.0.400), so a fake worker process can be a plain console project and spawned by path.
 - A fresh agent worktree can be behind `main`; `git merge --ff-only main` inside the worktree is allowed by the isolation guard, `git -C <main checkout>` is not.

@@ -81,6 +81,77 @@ public class SerializationTests
             envelope);
     }
 
+    /// <summary>
+    /// M18.3 (§6g): the heartbeat's <c>status</c> is OPTIONAL and additive, so both shapes must
+    /// round-trip and the one without it must be byte-identical to the frame this agent has
+    /// always sent. A heartbeat that grew a <c>"status": null</c> would be a new frame shape for
+    /// every device on the old code path, which is not what additive means.
+    /// </summary>
+    [Fact]
+    public void A_heartbeat_without_a_status_is_exactly_the_frame_it_always_was()
+    {
+        var plain = ProtocolJson.Serialize(new HeartbeatMessage { Seq = 4 });
+        Assert.Equal("""{"type":"heartbeat","seq":4}""", plain);
+
+        var withStatus = ProtocolJson.Serialize(new HeartbeatMessage
+        {
+            Seq = 5,
+            Status = new JsonObject { ["display_state"] = "off", ["armed_alarms"] = 1 },
+        });
+        var fields = JsonNode.Parse(withStatus)!.AsObject().Select(pair => pair.Key).ToHashSet();
+        Assert.Equal(new HashSet<string> { "type", "seq", "status" }, fields);
+
+        var parsed = (HeartbeatMessage)ProtocolJson.Deserialize(withStatus);
+        Assert.Equal(5, parsed.Seq);
+        Assert.Equal("off", parsed.Status!["display_state"]!.GetValue<string>());
+        Assert.Null(((HeartbeatMessage)ProtocolJson.Deserialize(plain)).Status);
+    }
+
+    /// <summary>
+    /// Every key the fixture carries is one the schema's closed <c>deviceStatus</c> object
+    /// declares, and every key the code can produce is one of those too. Two lists that must
+    /// agree, checked against each other rather than against a comment.
+    /// </summary>
+    [Fact]
+    public void The_heartbeat_status_fixture_uses_only_the_keys_the_schema_declares()
+    {
+        var fixture = JsonNode.Parse(File.ReadAllText(Path.Combine(FixturesDir, "heartbeat_status.json")))!;
+        var status = fixture["status"]!.AsObject();
+
+        Assert.Equal(
+            HeartbeatStatus.Fields.OrderBy(f => f, StringComparer.Ordinal),
+            status.Select(pair => pair.Key).OrderBy(k => k, StringComparer.Ordinal));
+
+        var schema = JsonNode.Parse(File.ReadAllText(SchemaPath()))!;
+        var declared = schema["$defs"]!["deviceStatus"]!["properties"]!.AsObject()
+            .Select(pair => pair.Key)
+            .OrderBy(k => k, StringComparer.Ordinal);
+        Assert.Equal(HeartbeatStatus.Fields.OrderBy(f => f, StringComparer.Ordinal), declared);
+
+        // Closed, on purpose: an unknown key inside status would fail the broker's validation
+        // for the whole heartbeat, so nothing may be added here without the schema agreeing.
+        Assert.False(schema["$defs"]!["deviceStatus"]!["additionalProperties"]!.GetValue<bool>());
+        Assert.Equal("heartbeat", schema["$defs"]!["heartbeat"]!["properties"]!["type"]!["const"]!.GetValue<string>());
+        Assert.Equal(
+            "#/$defs/deviceStatus",
+            schema["$defs"]!["heartbeat"]!["properties"]!["status"]!["$ref"]!.GetValue<string>());
+
+        // ...and the protocol version does not move for an additive, optional field.
+        Assert.Equal(1, ProtocolConstants.Version);
+    }
+
+    private static string SchemaPath()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !Directory.Exists(Path.Combine(dir.FullName, "packages", "schemas")))
+        {
+            dir = dir.Parent;
+        }
+
+        Assert.NotNull(dir);
+        return Path.Combine(dir!.FullName, "packages", "schemas", "device-protocol.schema.json");
+    }
+
     [Fact]
     public void Expires_at_accepts_utc_z_suffix()
     {

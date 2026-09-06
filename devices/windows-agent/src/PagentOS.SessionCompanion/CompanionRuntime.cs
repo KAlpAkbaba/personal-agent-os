@@ -43,7 +43,10 @@ public sealed class CompanionRuntime(
     ISidebandForwardSink? sidebandSink = null,
     BrowserWorkerHost? browserWorker = null,
     AlarmController? alarm = null,
-    DisplayPowerController? displayPower = null)
+    DisplayPowerController? displayPower = null,
+    AlarmArmController? alarmArms = null,
+    ActivityStatusReporter? activityStatus = null,
+    GreetingPlayer? greeting = null)
 {
     private const int ConnectTimeoutMs = 2000;
 
@@ -365,14 +368,19 @@ public sealed class CompanionRuntime(
                 continue;
             }
 
-            if (AgentCapabilities.IsBrowser(request.Capability))
+            if (AgentCapabilities.IsBrowser(request.Capability)
+                || string.Equals(request.Capability, AgentCapabilities.DesktopPlayAudio, StringComparison.Ordinal))
             {
                 // M13: browser requests are long (a navigation, an extraction) and may run
                 // concurrently; the read loop must not stall on them. Each one answers on
                 // its own task through the shared, sequenced writer; request_id correlates.
+                //
+                // M18.3 puts desktop.play_audio on the same path for the same reason: it
+                // blocks until the greeting has finished (up to 20 s), and a status request
+                // that arrived meanwhile must still be answered — the heartbeat depends on it.
                 var task = Task.Run(async () =>
                 {
-                    var browserResponse = await ExecuteBrowserAsync(request, cancellationToken).ConfigureAwait(false);
+                    var browserResponse = await ExecuteLongRunningAsync(request, cancellationToken).ConfigureAwait(false);
                     try
                     {
                         await sendResponse(browserResponse).ConfigureAwait(false);
@@ -403,10 +411,23 @@ public sealed class CompanionRuntime(
     /// exactly like an unknown desktop capability, because to Cloud Core they are the same
     /// fact: this device cannot do that.
     /// </summary>
-    private async Task<ExecResponse> ExecuteBrowserAsync(ExecRequest request, CancellationToken cancellationToken)
+    private async Task<ExecResponse> ExecuteLongRunningAsync(ExecRequest request, CancellationToken cancellationToken)
     {
         try
         {
+            if (string.Equals(request.Capability, AgentCapabilities.DesktopPlayAudio, StringComparison.Ordinal))
+            {
+                var greetingResult = await RequireGreeting()
+                    .PlayAsync(request.Payload, cancellationToken)
+                    .ConfigureAwait(false);
+                logger.LogInformation(
+                    "executed {Capability}: audio_id={AudioId} duration_ms={DurationMs}",
+                    request.Capability,
+                    greetingResult["audio_id"]?.GetValue<string>(),
+                    greetingResult["duration_ms"]?.GetValue<int>());
+                return new ExecResponse { RequestId = request.RequestId, Ok = true, Result = greetingResult };
+            }
+
             if (browserWorker is null || !browserWorker.IsConfigured)
             {
                 throw new CapabilityException(
@@ -489,6 +510,35 @@ public sealed class CompanionRuntime(
             + "(PAGENTOS_AGENT_DisplayPowerEnabled=true, after the owner qualification for display-off)",
             retryable: false);
 
+    /// <summary>
+    /// Waking and reporting are NOT behind <c>DisplayPowerEnabled</c> — that flag guards the one
+    /// operation that takes something away — so they need their own message when this companion
+    /// has no display access at all (a non-Windows host, a build without it).
+    /// </summary>
+    private DisplayPowerController RequireDisplay()
+        => displayPower ?? throw new CapabilityException(
+            ErrorClasses.CapabilityMissing,
+            "this companion has no access to the owner's display",
+            retryable: false);
+
+    private AlarmArmController RequireArms()
+        => alarmArms ?? throw new CapabilityException(
+            ErrorClasses.CapabilityMissing,
+            "no local alarm arming is configured on this companion, so no fallback can be armed",
+            retryable: false);
+
+    private ActivityStatusReporter RequireActivityStatus()
+        => activityStatus ?? throw new CapabilityException(
+            ErrorClasses.CapabilityMissing,
+            "this companion reports no activity status",
+            retryable: false);
+
+    private GreetingPlayer RequireGreeting()
+        => greeting ?? throw new CapabilityException(
+            ErrorClasses.CapabilityMissing,
+            "no audio output is configured on this companion, so no greeting can play",
+            retryable: false);
+
     private ExecResponse Execute(ExecRequest request)
     {
         try
@@ -519,6 +569,9 @@ public sealed class CompanionRuntime(
                 // an unconfigured companion answers capability_missing rather than hanging.
                 case AgentCapabilities.DesktopAlarmStart:
                     result = RequireAlarm().Start(request.Payload);
+                    // The cloud got here in time: whatever local fallback was armed for this
+                    // id is consumed now, so the device cannot ring it a second time.
+                    alarmArms?.Consume(result["alarm_id"]?.GetValue<string>(), "cloud_alarm_start");
                     logger.LogInformation(
                         "executed {Capability}: alarm_id={AlarmId}",
                         request.Capability,
@@ -527,6 +580,13 @@ public sealed class CompanionRuntime(
 
                 case AgentCapabilities.DesktopAlarmStop:
                     result = RequireAlarm().Stop(request.Payload);
+                    if (result["stopped"]?.GetValue<bool>() == true)
+                    {
+                        // The owner has dealt with this alarm. A fallback that rang afterwards
+                        // would be the machine arguing with them.
+                        alarmArms?.Consume(result["alarm_id"]?.GetValue<string>(), "cloud_alarm_stop");
+                    }
+
                     logger.LogInformation(
                         "executed {Capability}: stopped={Stopped} was_ringing={WasRinging}",
                         request.Capability,
@@ -534,9 +594,48 @@ public sealed class CompanionRuntime(
                         result["was_ringing"]?.GetValue<bool>());
                     break;
 
+                // M18.3 (§6f): the local fallback arm. Not the alarm — the promise that one
+                // rings even if the cloud cannot reach this device at 06:30.
+                case AgentCapabilities.DesktopAlarmArm:
+                    result = RequireArms().Arm(request.Payload);
+                    logger.LogInformation(
+                        "executed {Capability}: alarm_id={AlarmId} fire_local_at={FireLocalAt}",
+                        request.Capability,
+                        result["alarm_id"]?.GetValue<string>(),
+                        result["fire_local_at"]?.GetValue<string>());
+                    break;
+
+                case AgentCapabilities.DesktopAlarmDisarm:
+                    result = RequireArms().Disarm(request.Payload);
+                    logger.LogInformation(
+                        "executed {Capability}: alarm_id={AlarmId} was_armed={WasArmed}",
+                        request.Capability,
+                        result["alarm_id"]?.GetValue<string>(),
+                        result["was_armed"]?.GetValue<bool>());
+                    break;
+
                 case AgentCapabilities.DesktopDisplayOff:
                     result = RequireDisplayPower().TurnOff(request.Payload);
+                    logger.LogInformation(
+                        "executed {Capability}: display_off={DisplayOff} refused={Refused}",
+                        request.Capability,
+                        result["display_off"]?.GetValue<bool>(),
+                        result["refused"]?.GetValue<string>() ?? "-");
+                    break;
+
+                // M18.3 (§6e): waking and reporting need no flag. They add; they never subtract.
+                case AgentCapabilities.DesktopDisplayWake:
+                    result = RequireDisplay().Wake(request.Payload);
                     logger.LogInformation("executed {Capability}", request.Capability);
+                    break;
+
+                case AgentCapabilities.DesktopDisplayStatus:
+                    result = RequireDisplay().Status(request.Payload);
+                    break;
+
+                // M18.3 (§6g): the same object the Device Service attaches to its heartbeat.
+                case AgentCapabilities.DesktopActivityStatus:
+                    result = RequireActivityStatus().Report(request.Payload);
                     break;
 
                 default:

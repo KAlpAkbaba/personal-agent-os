@@ -43,6 +43,17 @@
 .PARAMETER BrowserChannel
     "chrome" (installed Google Chrome — the qualification target, default) or "chromium".
 
+.PARAMETER DisplayPower
+    Enable desktop.display_off (M18/M18.3). OFF by default and expected to stay off until
+    display-off has passed its own owner qualification: a wrong inference that blanks the
+    screen interrupts unrelated owner work. The switch writes DisplayPowerEnabled=true to
+    BOTH configuration files, because the service and the companion gate it independently
+    and neither knows about the other; setting one alone produces a device that either
+    advertises a name it will refuse, or refuses a name it advertised.
+
+    Waking and reporting a display (desktop.display_wake, desktop.display_status) need no
+    switch. They add; they never subtract.
+
 .PARAMETER UvPath
     Explicit path to uv.exe. By default uv is resolved the way scripts\preflight.ps1
     resolves it (PATH, then the known install locations) — never assumed.
@@ -63,6 +74,7 @@ param(
     [switch]$SkipBuild,
     [switch]$SkipBrowser,
     [ValidateSet("chrome", "chromium")][string]$BrowserChannel = "chrome",
+    [switch]$DisplayPower,
     [string]$UvPath
 )
 
@@ -183,7 +195,8 @@ function Write-ServiceConfig {
         [string]$DataDir,
         [string]$BrokerRestUrl,
         [string]$BrokerWsUrl,
-        [bool]$BrowserEnabled
+        [bool]$BrowserEnabled,
+        [bool]$DisplayPowerEnabled
     )
     $config = [ordered]@{
         BrokerRestUrl      = $BrokerRestUrl
@@ -199,6 +212,11 @@ function Write-ServiceConfig {
         # M13: advertise and route browser.* only when a worker was provisioned and proved
         # to start. Never true by default; a device must not promise what it cannot do.
         BrowserEnabled     = $BrowserEnabled
+        # M18/M18.3: display-off is the one capability that takes something away from the
+        # owner, so it is advertised and routed only when this was asked for out loud. The
+        # companion carries the same flag; both must agree or the device lies one way or the
+        # other about what it can do.
+        DisplayPowerEnabled = $DisplayPowerEnabled
     }
     $path = Join-Path $ServiceDir "appsettings.json"
     Write-JsonFile -Path $path -Content ($config | ConvertTo-Json -Depth 4)
@@ -485,12 +503,19 @@ if (Test-Path -LiteralPath $keyPath) {
 # is the ordering fix: the previous version wrote config into the live tree after it had
 # been hardened, and an existing appsettings.json could not be replaced.
 Write-ServiceConfig -ServiceDir $stagedServiceDir -CompanionExe $companionExe -OwnerSid $OwnerSid `
-    -DataDir $DataDir -BrokerRestUrl $BrokerRestUrl -BrokerWsUrl $BrokerWsUrl -BrowserEnabled (-not $SkipBrowser)
+    -DataDir $DataDir -BrokerRestUrl $BrokerRestUrl -BrokerWsUrl $BrokerWsUrl -BrowserEnabled (-not $SkipBrowser) `
+    -DisplayPowerEnabled ([bool]$DisplayPower)
 
 # The companion reads its own settings from its own directory.
 $companionConfig = [ordered]@{
     PipeName = "pagentos-companion-$OwnerSid"
     DataDir  = $companionDataDir
+}
+# The SECOND half of the display-off gate. The service decides whether to route the name and
+# whether to advertise it; the companion decides whether to execute it. Writing only one of
+# these is how a device ends up advertising a capability it will then refuse.
+if ($DisplayPower) {
+    $companionConfig["DisplayPowerEnabled"] = $true
 }
 if (-not $SkipBrowser) {
     # Paths the companion will use at runtime: the LIVE browser tree (not staging) and a
@@ -500,6 +525,14 @@ if (-not $SkipBrowser) {
     }
 }
 Write-JsonFile -Path (Join-Path $stagedCompanionDir "appsettings.json") -Content ($companionConfig | ConvertTo-Json -Depth 4)
+
+if ($DisplayPower) {
+    Write-Host "display power: ENABLED on BOTH the service and the companion (desktop.display_off is advertised)"
+    Write-Host "  it still refuses while input is recent (holdoff 120 s by default) or while an alarm is ringing"
+}
+else {
+    Write-Host "display power: disabled (pass -DisplayPower to enable desktop.display_off); waking and reporting stay available"
+}
 
 if (-not $SkipBrowser) {
     # ProgramData's inherited ACL would make a directory created by this ELEVATED process

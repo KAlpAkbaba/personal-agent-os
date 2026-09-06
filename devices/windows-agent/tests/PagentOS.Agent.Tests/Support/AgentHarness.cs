@@ -72,7 +72,8 @@ public sealed class AgentHarness : IAsyncDisposable
         Uri wsUri,
         ICapabilityExecutor executor,
         string? dataDir = null,
-        double? heartbeatOverrideS = null)
+        double? heartbeatOverrideS = null,
+        IHeartbeatStatusProvider? statusProvider = null)
     {
         DataDir = dataDir ?? TestPaths.NewTempDir();
         Identity = DeviceIdentity.LoadOrCreate(Path.Combine(DataDir, "device.key"), developerRun: true);
@@ -92,7 +93,8 @@ public sealed class AgentHarness : IAsyncDisposable
             Identity,
             Dispatcher,
             Audit,
-            NullLogger<AgentConnection>.Instance);
+            NullLogger<AgentConnection>.Instance,
+            statusProvider: statusProvider);
         _runTask = Task.Run(() => connection.RunAsync(_cts.Token));
     }
 

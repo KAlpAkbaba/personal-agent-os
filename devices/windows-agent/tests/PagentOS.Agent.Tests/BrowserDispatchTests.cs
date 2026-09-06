@@ -47,11 +47,18 @@ public sealed class BrowserDispatchTests : IDisposable
         Assert.Equal(new[] { "desktop.open_application", "desktop.open_artifact" }, AgentCapabilities.Desktop);
         Assert.Equal(AgentCapabilities.Desktop, AgentCapabilities.All);
 
-        // M18 added the alarm pair to what a device advertises; `Desktop` and `All` still mean
-        // exactly the M1/M3 pair, so the byte-for-byte hello/enrollment expectations that use
-        // them are untouched and the growth is visible here rather than inherited silently.
+        // M18 added the alarm pair to what a device advertises, and M18.3 the ambient group;
+        // `Desktop` and `All` still mean exactly the M1/M3 pair, so the byte-for-byte
+        // hello/enrollment expectations that use them are untouched and the growth is visible
+        // here — as an APPEND, in a fixed order — rather than inherited silently.
         Assert.Equal(
-            new[] { "desktop.open_application", "desktop.open_artifact", "desktop.alarm_start", "desktop.alarm_stop" },
+            new[]
+            {
+                "desktop.open_application", "desktop.open_artifact",
+                "desktop.alarm_start", "desktop.alarm_stop",
+                "desktop.display_wake", "desktop.display_status", "desktop.activity_status",
+                "desktop.alarm_arm", "desktop.alarm_disarm", "desktop.play_audio",
+            },
             AgentCapabilities.Compose(browserEnabled: false));
     }
 
@@ -60,11 +67,18 @@ public sealed class BrowserDispatchTests : IDisposable
     {
         var composed = AgentCapabilities.Compose(browserEnabled: true);
 
-        // 24 through contract v1.1, plus the four M18.3 alarm media operations (v1.2).
-        Assert.Equal(AgentCapabilities.Desktop.Count + AgentCapabilities.Alarm.Count + 1 + 28, composed.Count);
+        // 24 browser operations through contract v1.1, plus the four M18.3 alarm media
+        // operations (v1.2); the M18.3 ambient group sits between the alarm pair and the
+        // browser family.
+        Assert.Equal(
+            AgentCapabilities.Desktop.Count + AgentCapabilities.Alarm.Count + AgentCapabilities.Ambient.Count + 1 + 28,
+            composed.Count);
         Assert.Equal(AgentCapabilities.Desktop, composed.Take(2));
         Assert.Equal(AgentCapabilities.Alarm, composed.Skip(2).Take(2));
-        Assert.Equal(BrowserCapabilities.Family, composed[4]);
+        Assert.Equal(AgentCapabilities.Ambient, composed.Skip(4).Take(AgentCapabilities.Ambient.Count));
+
+        // The browser family still begins with its marker, wherever the ambient group pushed it.
+        Assert.Equal(BrowserCapabilities.Family, composed[4 + AgentCapabilities.Ambient.Count]);
         Assert.Equal(28, BrowserCapabilities.Operations.Count);
         Assert.Equal(composed.Count, composed.Distinct(StringComparer.Ordinal).Count());
         Assert.All(composed, name => Assert.Matches(CapabilityName, name));

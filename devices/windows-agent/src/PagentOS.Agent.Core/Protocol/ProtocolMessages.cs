@@ -63,6 +63,18 @@ public sealed record HeartbeatMessage : ProtocolMessage
 {
     [JsonPropertyName("seq")]
     public required long Seq { get; init; }
+
+    /// <summary>
+    /// M18.3, additive and optional (DEVICE_PROTOCOL.md §6g): what the owner-session companion
+    /// currently sees — idle time, display state, alarm state. Absent when there is no companion,
+    /// when it did not answer inside <see cref="HeartbeatStatus.MaxWait"/>, or when this device
+    /// is older than the field. Its keys are exactly <see cref="HeartbeatStatus.Fields"/>; the
+    /// service projects onto that list before sending, so a newer companion cannot put a key
+    /// here that the broker's schema would refuse.
+    /// </summary>
+    [JsonPropertyName("status")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public JsonObject? Status { get; init; }
 }
 
 public sealed record HeartbeatAckMessage : ProtocolMessage

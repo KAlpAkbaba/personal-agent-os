@@ -18,6 +18,11 @@ namespace PagentOS.Agent.Core.Connection;
 /// <paramref name="sidebandSink"/> (M12, ADR-0039) is where a <c>voice_sideband</c> frame
 /// goes; it is optional and additive — with none, the frame is logged and dropped, and no
 /// command, ack or heartbeat behaviour changes either way.
+///
+/// <paramref name="statusProvider"/> (M18.3, DEVICE_PROTOCOL.md §6g) is asked for the optional
+/// <c>status</c> object before each heartbeat, under a hard
+/// <see cref="HeartbeatStatus.MaxWait"/> bound. With none — or with a provider that is slow,
+/// empty or throwing — the heartbeat is byte-for-byte the frame it always was.
 /// </summary>
 public sealed class AgentConnection(
     AgentConnectionOptions options,
@@ -26,7 +31,8 @@ public sealed class AgentConnection(
     AuditLog audit,
     ILogger<AgentConnection> logger,
     Random? jitterRandom = null,
-    ISidebandFrameSink? sidebandSink = null)
+    ISidebandFrameSink? sidebandSink = null,
+    IHeartbeatStatusProvider? statusProvider = null)
 {
     private const int MaxFrameBytes = 1024 * 1024;
 
@@ -242,7 +248,8 @@ public sealed class AgentConnection(
             while (true)
             {
                 await Task.Delay(interval, cancellationToken).ConfigureAwait(false);
-                await send(new HeartbeatMessage { Seq = seq++ }, cancellationToken).ConfigureAwait(false);
+                var status = await CollectStatusAsync(cancellationToken).ConfigureAwait(false);
+                await send(new HeartbeatMessage { Seq = seq++, Status = status }, cancellationToken).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException)
@@ -253,6 +260,41 @@ public sealed class AgentConnection(
         {
             logger.LogWarning("heartbeat send failed ({Reason}); aborting socket", ex.Message);
             ws.Abort();
+        }
+    }
+
+    /// <summary>
+    /// The optional heartbeat <c>status</c> (M18.3, §6g), or null. Every failure mode collapses
+    /// to the same answer — null — and none of them delays the frame past
+    /// <see cref="HeartbeatStatus.MaxWait"/>: no provider, no companion, a companion that is
+    /// slow, a companion that threw. The heartbeat's job is to say this device is alive, and it
+    /// must not be able to fail because a second process was busy.
+    /// </summary>
+    private async Task<JsonObject?> CollectStatusAsync(CancellationToken cancellationToken)
+    {
+        if (statusProvider is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            using var boundedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            boundedCts.CancelAfter(HeartbeatStatus.MaxWait);
+            var status = await statusProvider
+                .GetStatusAsync(boundedCts.Token)
+                .WaitAsync(HeartbeatStatus.MaxWait, cancellationToken)
+                .ConfigureAwait(false);
+            return HeartbeatStatus.Project(status);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug("heartbeat status omitted: {Reason}", ex.Message);
+            return null;
         }
     }
 

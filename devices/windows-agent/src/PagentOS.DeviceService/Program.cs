@@ -362,7 +362,9 @@ public static class Program
             new InteractiveCapabilityExecutor(
                 provider.GetRequiredService<CompanionPipeServer>(),
                 browserEnabled: options.BrowserEnabled,
-                displayPowerEnabled: options.DisplayPowerEnabled));
+                displayPowerEnabled: options.DisplayPowerEnabled,
+                // M18.3 (§6h): the only origin desktop.play_audio may fetch from.
+                brokerRestUrl: options.BrokerRestUrl));
         builder.Services.AddSingleton(provider => new CommandDispatcher(
             provider.GetRequiredService<IdempotencyStore>(),
             provider.GetRequiredService<ICapabilityExecutor>(),
@@ -386,7 +388,10 @@ public static class Program
             provider.GetRequiredService<AuditLog>(),
             provider.GetRequiredService<ILogger<AgentConnection>>(),
             // M12 (ADR-0039): voice_sideband frames are forwarded to the companion, opaquely.
-            sidebandSink: new PipeSidebandForwarder(provider.GetRequiredService<CompanionPipeServer>())));
+            sidebandSink: new PipeSidebandForwarder(provider.GetRequiredService<CompanionPipeServer>()),
+            // M18.3 (§6g): each heartbeat carries what the companion currently sees, when it can
+            // say so within 1.5 s. It never delays or fails the heartbeat itself.
+            statusProvider: new CompanionHeartbeatStatusProvider(provider.GetRequiredService<CompanionPipeServer>())));
 
         builder.Services.AddHostedService(provider => provider.GetRequiredService<CompanionPipeServer>());
         builder.Services.AddHostedService(provider => new AgentWorker(

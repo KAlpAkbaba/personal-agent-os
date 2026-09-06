@@ -35,6 +35,7 @@ Failure at any step: broker sends `{"type":"error","error":{"class":"auth_error"
 - Agent sends `{"type":"heartbeat","seq":n}` every `heartbeat_interval_s`; broker replies `{"type":"heartbeat_ack","seq":n}`.
 - Broker marks the device **offline** when no frame arrives for `2.5 × heartbeat_interval_s`, and on socket close. Presence is observable at `GET /v1/devices`.
 - Any frame refreshes liveness; heartbeats are only a floor.
+- Since M18.3 a heartbeat MAY carry an optional `status` object (§6g). It is additive, `protocol_version` stays 1, and nothing about presence depends on it: a heartbeat without one is the frame v1 always sent.
 
 ## 5. Commands
 
@@ -199,21 +200,128 @@ Rules, all enforced on the device regardless of what Cloud Core validated (a rou
 - **It always stops.** Three ways: `desktop.alarm_stop`, the alarm's own `max_duration_s` (default 300 s, clamped to 10–1800 s, checked continuously), and companion shutdown. No ringing alarm outlives the companion process.
 - **`alarm_stop` is idempotent.** Stopping an alarm that already stopped is a success with `was_ringing:false`. A stop naming a *different* alarm than the one ringing does nothing and reports `stopped:false`, so a stale retry cannot silence the alarm that replaced it.
 - **One alarm at a time.** A second `alarm_start` stops the first and names it in `replaced_alarm_id` rather than layering two ramps on one endpoint.
+- **Since M18.3, both names consume a local arm** (§6f) carrying the same `alarm_id`: a successful `alarm_start` because the cloud got there in time, and a successful `alarm_stop` because the owner has already dealt with it. That is what makes "the fallback never doubles the cloud's alarm" true rather than likely.
 
 Configuration (companion, `PAGENTOS_AGENT_`-prefixed): `AlarmRenderDevice` (id or name substring; falls back to `VoiceRenderDevice`, then the session's default render endpoint, resolved per alarm so a headset plugged in after startup is usable).
 
-## 6d. Capability: `desktop.display_off` (M18)
+## 6d. Capability: `desktop.display_off` — the invariants (M18)
 
-Turns the owner's display off, and nothing else. **Interactive-session capability, executed by the Session Companion** — a `WM_SYSCOMMAND` / `SC_MONITORPOWER` broadcast from Session 0 reaches no window the owner can see. Sent with `SendMessageTimeout` (2 s, `SMTO_ABORTIFHUNG`), because a single hung top-level window would otherwise block the companion forever; a timed-out broadcast is reported as `dependency_unavailable`, never as success.
+Turns the owner's display off, and nothing else. **Interactive-session capability, executed by the Session Companion** — a `WM_SYSCOMMAND` / `SC_MONITORPOWER` broadcast from Session 0 reaches no window the owner can see. Sent with `SendMessageTimeout` (2 s, `SMTO_ABORTIFHUNG`), because a single hung top-level window would otherwise stall the companion forever; a timed-out broadcast is reported as `dependency_unavailable`, never as success.
 
-Payload: `{"reason":"<short token>"?}`
-Result: `{"display_off":true,"method":"wm_syscommand_monitorpower"}`
+> **Payload, result and the third gate are in §6e** (M18.3). This section keeps the invariants,
+> which have not changed; §6e adds `holdoff_s`, the refusal shape, the observed state and the
+> monitor list.
 
 - **Off is the only operation.** M18 v1 does not shut down, reboot, hibernate, suspend or log off on any inference (`docs/M18_HOLOGRAPHIC_CORE_SPEC.md` §4, `docs/M18_THREAT_MODEL.md` §5). Turning a display off is undone by moving the mouse; suspending a machine that is mid-research is not, and the background work would stop with it. A test reads the implementation source and fails if a shutdown/suspend API name appears in it, so the capability cannot quietly grow a second meaning.
 - **Two independent gates, and neither knows about the other.** On the device, the name is advertised and routed only when `DisplayPowerEnabled` is set (default false) — service and companion each refuse it otherwise with `capability_missing`, so a command aimed straight at the device still cannot blank the screen. In Cloud Core, a routine's `display_action` is refused before it ever becomes a command, until display-off has passed its own owner qualification (`docs/M18_HOLOGRAPHIC_CORE_SPEC.md` §7). A single flag flipped by accident is therefore not enough to interrupt unrelated owner work.
 - A device with the flag off does not advertise the name, so Cloud Core's capability selection reports `no_capable_device` rather than reaching a device that lied about what it can do.
 
 Configuration: `PAGENTOS_AGENT_DisplayPowerEnabled` on both the Device Service (routing + advertisement) and the Session Companion (execution + advertisement).
+
+## 6e. Capability family: `desktop.display_wake` / `desktop.display_status` / `desktop.display_off` (M18.3)
+
+The display family. All three are **interactive-session capabilities executed by the Session Companion**, under the desktop family's 60 s per-command cap. `display_wake` and `display_status` are advertised **unconditionally**; `display_off` keeps both gates of §6d and gains a third that is not a flag.
+
+### `desktop.display_wake`
+
+Payload: `{"reason":"<short token>"?}`
+Result: `{"woken":true,"method":"display_needed+pointer_move_zero","observed_state":"unknown"|"off"|"on"|"dimmed","observed_at":"<iso-8601>"|null,"input_idle_s":<number>|null}`
+
+Two steps, in this order: a **momentary** `SetThreadExecutionState(ES_DISPLAY_REQUIRED)` — never `ES_CONTINUOUS`, because a standing claim nobody clears is indistinguishable from a broken power plan — then a zero-delta pointer move (`SendInput`, `MOUSEEVENTF_MOVE`, `dx = dy = 0`). **Never a key event.** The synthetic-input structure the companion declares has a pointer member and no keyboard member, so there is nothing to fill in even by mistake, and a structural test fails if any keyboard API name appears in a display source file. Advertised unconditionally: waking a screen is the exact inverse of the one operation that takes something away.
+
+### `desktop.display_status`
+
+Payload: `{}`
+Result: `{"observed_state":"unknown"|"off"|"on"|"dimmed","observed_at":"<iso-8601>"|null,"input_idle_s":<number>|null,"monitors":[{"index":<i>,"primary":<bool>,"left":<i>,"top":<i>,"width":<i>,"height":<i>}]?}`
+
+- **Observed, never inferred.** The companion runs a message-only window registered for `GUID_CONSOLE_DISPLAY_STATE` (0 off, 1 on, 2 dimmed) and `GUID_MONITOR_POWER_ON` (0 off, 1 on); the state is the last value it was handed, with the moment it arrived. Before the first notification the answer is `unknown` with a null `observed_at`, and it stays `unknown` — a device that guessed "on" from a recent keystroke would be reporting the idle timer twice under two names. Windows offers no reliable synchronous "is the display on?" call, and the ones that look like it are the same APIs that turn a display off, so the observer holds no way of driving a display at all.
+- **`monitors` is reporting only.** From `EnumDisplayMonitors`; **absent** (not empty) when the session could not enumerate them, because "could not tell" and "this machine has no monitors" are different claims. M18.3 changes no topology, resolution, orientation or primary-monitor choice, and a structural test fails if a display-configuration API name appears.
+- **`input_idle_s` is `null` when unknown**, which is a different statement from `0`.
+
+### `desktop.display_off` (changed in M18.3)
+
+Payload: `{"reason":"<short token>"?,"holdoff_s":<int>?}` — `holdoff_s` defaults to **120**, clamped to 0…3600. A non-integer `holdoff_s` is a `validation_error`; an out-of-range one is clamped, because an absurd number still describes an intent while a non-number does not.
+
+Result on a **refusal**, which is a **successful** `command_ack` and not an error:
+
+```json
+{"display_off":false,"refused":"recent_input"|"alarm_active",
+ "input_idle_s":<number>|null,"holdoff_s":<int>,
+ "observed_state":"…","observed_at":"…"|null}
+```
+
+Result on a real off:
+
+```json
+{"display_off":true,"method":"wm_syscommand_monitorpower",
+ "input_idle_s":<number>|null,"holdoff_s":<int>,
+ "observed_state":"…","observed_at":"…"|null,"monitors":[{…}]?}
+```
+
+- **Why a refusal is a success.** Nothing failed: the device looked, and the answer was no. An error class here would make a correct refusal indistinguishable from a broken device, and the caller would retry it.
+- **`recent_input`** when the idle time is known and strictly less than `holdoff_s`. 120 s of quiet is enough; 119.9 s is not. An **unknown** idle never satisfies the holdoff by itself and never blocks the off either — the device does not fabricate a zero (refuse forever) or a large value (claim quiet it never observed).
+- **`alarm_active`** whenever an alarm is ringing, checked first and whatever the idle timer says. Three hours of quiet is exactly the state a wake alarm fires into; darkening the screen at that moment is the machine working against the thing it just did.
+- **The observed state on a successful off is read back after the broadcast**, so a broadcast nothing honoured cannot be reported as a dark screen. It may still be `unknown` on a device that was never told.
+- The two gates of §6d are unchanged and are checked first: with `DisplayPowerEnabled=false` the answer is `capability_missing` (not a refusal result), from the service before the companion is consulted and from the companion again.
+
+## 6f. Capability pair: `desktop.alarm_arm` / `desktop.alarm_disarm` (M18.3)
+
+The **local fallback** for an alarm the cloud intends to ring. A wake alarm that only rings when the cloud can reach the device is not a wake alarm; it is a wake alarm plus an availability requirement the owner never agreed to. So when Cloud Core schedules a wake-up it also ARMS the device. Both names are advertised unconditionally; the companion persists arms at `%LOCALAPPDATA%\PagentOS\companion\armed-alarms.json` (owner profile, not the service's machine tree), written atomically by write-then-move.
+
+`desktop.alarm_arm`
+
+Payload: `{"alarm_id":"<id>","fire_at":"<iso-8601>","grace_s":<int>?,"label":"<text>"?,"wake_volume":{…}?,"max_duration_s":<int>?}`
+Result: `{"armed":true,"alarm_id":"…","fire_at":"…","grace_s":<i>,"fire_local_at":"…","replaced":<bool>,"armed_count":<i>}`
+
+`desktop.alarm_disarm`
+
+Payload: `{"alarm_id":"<id>"?}` — omit it to forget every arm.
+Result: `{"disarmed":true,"alarm_id":"…"|null,"was_armed":<bool>,"armed_count":<i>}`
+
+- **`alarm_id` is required to arm.** Unlike `alarm_start`, an anonymous arm could never be consumed by anything except its own firing.
+- **`grace_s` defaults to 60**, clamped to 0…3600. The device rings at `fire_at + grace_s`, not at `fire_at`: firing at exactly `fire_at` would race the cloud's own command over a link with any latency at all, and the owner would sometimes hear two alarms.
+- **One ring per `alarm_id`, always.** Three things consume an arm, each removing it from the store first: a `desktop.alarm_start` naming that id (the ordinary case — the cloud got there in time), a `desktop.alarm_stop` naming it (the owner has already dealt with it), and `desktop.alarm_disarm`. Firing locally removes it too, **persisted before the first sample is generated**, so a companion that dies mid-ring gives the owner a missed alarm — which they notice — rather than a second one on the next start.
+- **Arming is idempotent by `alarm_id`**: the same id replaces the existing arm and says so in `replaced`. Disarming is idempotent the way `alarm_stop` is: disarming something never armed is a success with `was_armed:false`.
+- **Reload on start is conservative.** An arm whose local fire time already passed rings **once** if it passed less than **2 hours** ago, and is **expired with an audit row** otherwise. Waking someone twenty minutes late is a late alarm; waking them at 14:00 for a 06:30 alarm is a machine behaving badly.
+- **The fallback rings the same alarm.** `label`, `wake_volume` and `max_duration_s` are carried into the `alarm_start` path of §6c, so the local ring obeys the same ramp, the same ceiling and the same `max_duration_s`. With no render endpoint the failure is audited once per arm, not once per tick.
+- Audit rows: `alarm_arm`, `alarm_disarm`, `alarm_arm_consumed`, `alarm_arm_fired`, `alarm_arm_expired`, `alarm_arm_ring_failed`.
+
+Configuration (companion): `PAGENTOS_AGENT_ArmedAlarmStorePath` overrides the default path.
+
+## 6g. Capability: `desktop.activity_status`, and the heartbeat's `status` (M18.3)
+
+Payload: `{}`
+Result — and, verbatim, the optional `status` object on a heartbeat:
+
+```json
+{"input_idle_s":<number>|null,
+ "display_state":"unknown"|"off"|"on"|"dimmed",
+ "display_observed_at":"<iso-8601>"|null,
+ "alarm_ringing":<bool>,"ringing_alarm_id":"…"|null,
+ "armed_alarms":<int>,"next_alarm_at":"<iso-8601>"|null}
+```
+
+- **One shape, one producer.** The heartbeat's `status` IS this capability's result. A status assembled separately from the capability's answer would drift, and the version Cloud Core reasons about most often would be the one nothing tests.
+- **`input_idle_s` comes from `GetLastInputInfo` — a tick count and nothing else.** No key, character, pointer position, window title or application name is ever read, stored or sent. A structural test fails if a hook, key-state, raw-input or foreground-window API name appears in the companion's input source.
+- **It reports; it does not decide.** There is no "the owner is asleep" field and there will not be one. The inference from idle time and display state to a person's state belongs where it can be explained, argued with and turned off — in Cloud Core, against the presence model (`docs/M18_THREAT_MODEL.md` §4).
+- **On the heartbeat the field is OPTIONAL and additive; `protocol_version` stays 1.** The Device Service asks the companion for `desktop.activity_status` before each heartbeat and attaches the answer. Absent means "not known", never "nothing is happening": no companion connected, a companion that did not answer within **1.5 s**, a companion that threw, or an agent older than the field all produce a heartbeat without `status`, byte-for-byte the frame v1 always sent. Presence and liveness never depend on it — a status path that could stall a heartbeat would let a busy companion make the device look offline, which is strictly worse.
+- **The key set is closed and the SERVICE closes it.** `additionalProperties: false` inside `status` means one unknown key would fail the broker's validation for the whole heartbeat, so the Device Service projects the companion's answer onto exactly the seven keys above before sending. A newer companion cannot break an older service's connection.
+
+## 6h. Capability: `desktop.play_audio` (M18.3)
+
+Plays ONE short piece of audio the owner's own broker rendered — a spoken greeting after a wake alarm — in the owner's interactive session. Advertised unconditionally; **interactive-session capability, executed by the Session Companion**, under the desktop family's 60 s cap, and it **blocks until the audio has finished** so a caller sequencing "ring, then greet" gets an honest completion.
+
+Payload: `{"audio_id":"<id>","audio":{"url":"<https://broker/…>","sha256":"<64 hex>","bytes":<int ≤ 2097152>,"format":"wav"},"level":<0..1>?,"max_seconds":<int ≤ 20>?}`
+Result: `{"played":true,"audio_id":"…","duration_ms":<int>,"level":<f>}`
+
+Four bounds, all checked on the device:
+
+- **Origin.** The **Device Service** refuses the command with `security_scope_error` (never retryable) before it reaches the pipe unless the URL's scheme, host and port equal the broker REST origin this device is configured for. A device with no configured broker origin refuses every `play_audio`: "we could not tell where audio may come from" and "this audio may be played" must not be the same answer. The same host on a different port is a different server.
+- **Size.** `bytes` must be 1…2 MiB, and the bound is enforced **while reading** (a `Content-Length` is a claim). A body that differs from the declared size is a `validation_error`.
+- **Digest.** The SHA-256 of the bytes that arrived must equal `audio.sha256`. A mismatch is `security_scope_error`, **not retryable**: what is at that URL is not what Cloud Core described, and fetching it again would not change that.
+- **Duration and level.** `max_seconds` defaults to 20 and is clamped to 1…20; audio longer than that is **trimmed rather than refused**, because the owner asked to be greeted and a slightly short greeting serves that better than silence plus an error. `level` defaults to **0.75**, clamped to 0…1, and **scales the samples** — nothing in this capability touches the Windows master or endpoint volume, and a structural test fails if any endpoint-volume API name appears in any companion source.
+
+Other rules: the fetch has a **10 s** timeout (`timeout`, retryable); a non-2xx answer is `dependency_unavailable` (retryable); the container must be RIFF/WAVE **PCM16**, mono or stereo, 8 000…192 000 Hz — anything else is a `validation_error` rather than a best-effort guess. The render endpoint is opened at the **WAV's own rate and channel count** and the shared-mode render path converts to the endpoint's mix format; there is no resampler in the agent. With no render endpoint the answer is `dependency_unavailable` (retryable), as for the alarm.
 
 ## 7. Audit
 
@@ -235,5 +343,5 @@ Since M9 every endpoint below requires `Authorization: Bearer <owner-session-tok
 ## 9. Windows agent process architecture
 
 - **Device Service** (background; Windows Service-capable, Session 0): owns the keypair, the WS connection, idempotency store, local audit log, and machine-level capabilities. Never touches the interactive desktop.
-- **Session Companion** (runs in the owner's interactive session): executes every interactive capability — `desktop.open_application`, `desktop.open_artifact`, the `browser.*` family, and since M18 `desktop.alarm_start` / `desktop.alarm_stop` (audio in the owner's session) and `desktop.display_off` (a broadcast that only reaches the owner's windows) — and connects to the Device Service over an authenticated local named pipe. If no companion is connected, interactive commands fail fast with `dependency_unavailable` (`retryable: true`).
+- **Session Companion** (runs in the owner's interactive session): executes every interactive capability — `desktop.open_application`, `desktop.open_artifact`, the `browser.*` family, since M18 `desktop.alarm_start` / `desktop.alarm_stop` (audio in the owner's session) and `desktop.display_off` (a broadcast that only reaches the owner's windows), and since M18.3 `desktop.display_wake` / `desktop.display_status` (a message-only window registered for the console display-state notifications, plus a momentary display-required request and a zero-delta pointer move), `desktop.activity_status` (a `GetLastInputInfo` tick count, which the Device Service also attaches to each heartbeat), `desktop.alarm_arm` / `desktop.alarm_disarm` (a local fallback ring persisted in the owner's profile) and `desktop.play_audio` (one bounded, digest-verified greeting on the same render path as the alarm) — and connects to the Device Service over an authenticated local named pipe. Every one of those needs the owner's session: a Session-0 process has no display to observe, no input to time, no render endpoint and no window a broadcast can reach. If no companion is connected, interactive commands fail fast with `dependency_unavailable` (`retryable: true`), and the heartbeat simply carries no `status`.
 - In development both run as console processes; installing the service (requires UAC) is an owner action recorded in `OWNER_ACTIONS_MINIMAL.md`.

@@ -35,6 +35,13 @@ public static class AckStatus
 /// <item><c>desktop.alarm_*</c> — always present (M18). The companion can always answer them:
 /// with no render endpoint it says <c>dependency_unavailable</c>, which is a true statement
 /// about right now, not a missing capability.</item>
+/// <item><c>desktop.display_wake</c>, <c>desktop.display_status</c>,
+/// <c>desktop.activity_status</c>, <c>desktop.alarm_arm</c>, <c>desktop.alarm_disarm</c>,
+/// <c>desktop.play_audio</c> — always present (M18.3). Every one of them is safe by
+/// construction: waking a screen, reading a state, arming a local fallback and playing a
+/// bounded sound the owner's own broker served are all reversible and none of them takes
+/// anything away from the owner. Only the one irreversible-feeling action — darkening a
+/// screen — stays behind a flag.</item>
 /// <item><c>desktop.display_off</c> — present only when the companion was started with
 /// <c>DisplayPowerEnabled</c>. Display-off has its own owner qualification
 /// (M18_HOLOGRAPHIC_CORE_SPEC.md §7), and until it has run this device must look to Cloud
@@ -57,14 +64,44 @@ public static class AgentCapabilities
     /// <summary>M18: stop a ringing alarm. An alarm that cannot be stopped is not an alarm.</summary>
     public const string DesktopAlarmStop = "desktop.alarm_stop";
 
-    /// <summary>M18: turn the display off — the ONLY machine-state action, and only off (§6d).</summary>
+    /// <summary>M18.3: arm a LOCAL fallback for an alarm the cloud intends to ring (§6f).</summary>
+    public const string DesktopAlarmArm = "desktop.alarm_arm";
+
+    /// <summary>M18.3: forget a local fallback arm (§6f). Idempotent by <c>alarm_id</c>.</summary>
+    public const string DesktopAlarmDisarm = "desktop.alarm_disarm";
+
+    /// <summary>M18: turn the display off — the ONLY machine-state action, and only off (§6e).</summary>
     public const string DesktopDisplayOff = "desktop.display_off";
+
+    /// <summary>M18.3: nudge the display back on. Never a key event, never the machine's power state (§6e).</summary>
+    public const string DesktopDisplayWake = "desktop.display_wake";
+
+    /// <summary>M18.3: report what the display observer has seen, and the monitor geometry (§6e).</summary>
+    public const string DesktopDisplayStatus = "desktop.display_status";
+
+    /// <summary>M18.3: idle time, display state and alarm state — also the heartbeat's <c>status</c> (§6g).</summary>
+    public const string DesktopActivityStatus = "desktop.activity_status";
+
+    /// <summary>M18.3: play one short greeting the owner's own broker served (§6h).</summary>
+    public const string DesktopPlayAudio = "desktop.play_audio";
 
     /// <summary>The desktop family — what every device advertises (M1/M3 behaviour, unchanged).</summary>
     public static readonly IReadOnlyList<string> Desktop = [DesktopOpenApplication, DesktopOpenArtifact];
 
     /// <summary>The alarm pair (M18). Always advertised; see the class docstring for why.</summary>
     public static readonly IReadOnlyList<string> Alarm = [DesktopAlarmStart, DesktopAlarmStop];
+
+    /// <summary>
+    /// The M18.3 living-core group: everything the companion can do that only ADDS — waking a
+    /// screen, reporting a state, arming a local fallback, playing a short greeting. Always
+    /// advertised, for the same reason the alarm pair is: each of them has a truthful answer
+    /// on every device, and none of them can take anything away from the owner.
+    /// </summary>
+    public static readonly IReadOnlyList<string> Ambient =
+    [
+        DesktopDisplayWake, DesktopDisplayStatus, DesktopActivityStatus,
+        DesktopAlarmArm, DesktopAlarmDisarm, DesktopPlayAudio,
+    ];
 
     /// <summary>Display power (M18). Advertised only behind <c>DisplayPowerEnabled</c>.</summary>
     public static readonly IReadOnlyList<string> DisplayPower = [DesktopDisplayOff];
@@ -81,16 +118,18 @@ public static class AgentCapabilities
     public static IReadOnlyList<string> Browser => BrowserCapabilities.All;
 
     /// <summary>
-    /// The manifest this device actually advertises: the desktop names and the alarm pair
-    /// always, display power and the browser family only when each is configured. Order is
-    /// stable (desktop, alarm, display, browser) so a manifest diff between two versions
-    /// reads as an addition rather than a reshuffle.
+    /// The manifest this device actually advertises: the desktop names, the alarm pair and
+    /// the M18.3 ambient group always, display power and the browser family only when each is
+    /// configured. Order is stable (desktop, alarm, ambient, display, browser) so a manifest
+    /// diff between two versions reads as an addition rather than a reshuffle.
     /// </summary>
     public static IReadOnlyList<string> Compose(bool browserEnabled, bool displayPowerEnabled = false)
     {
-        var names = new List<string>(Desktop.Count + Alarm.Count + DisplayPower.Count + BrowserCapabilities.All.Count);
+        var names = new List<string>(
+            Desktop.Count + Alarm.Count + Ambient.Count + DisplayPower.Count + BrowserCapabilities.All.Count);
         names.AddRange(Desktop);
         names.AddRange(Alarm);
+        names.AddRange(Ambient);
         if (displayPowerEnabled)
         {
             names.AddRange(DisplayPower);
@@ -108,6 +147,8 @@ public static class AgentCapabilities
 
     public static bool IsAlarm(string capability) => Alarm.Contains(capability, StringComparer.Ordinal);
 
+    public static bool IsAmbient(string capability) => Ambient.Contains(capability, StringComparer.Ordinal);
+
     public static bool IsDisplayPower(string capability) => DisplayPower.Contains(capability, StringComparer.Ordinal);
 
     /// <summary>
@@ -117,7 +158,7 @@ public static class AgentCapabilities
     /// added here — never by being spelled <c>desktop.</c>-something.
     /// </summary>
     public static bool IsInteractive(string capability)
-        => IsDesktop(capability) || IsAlarm(capability) || IsDisplayPower(capability);
+        => IsDesktop(capability) || IsAlarm(capability) || IsAmbient(capability) || IsDisplayPower(capability);
 
     public static bool IsBrowser(string capability) => BrowserCapabilities.IsFamilyMember(capability);
 }
