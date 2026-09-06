@@ -545,6 +545,22 @@ the seated owner was read as `away` at 0.75 for eleven minutes on 1,102 observat
 now heartbeats). And `/core` could not hear the owner at all, because voice lived on
 `/voice` (ADR-0061). The second attempt is `owner-m18.ps1` v2, twelve points from `/core`.
 
+## Stage 13 — M18.2 Voice visual continuity + research result narration (pre-registered 2026-09-07; nothing PROVEN_REAL yet)
+
+Two product defects the owner observed on `/core` after M18 closed. Both were traced to a
+mechanism before any change (ADR-0066, ADR-0067). `PROVEN_REAL` needs the owner's short
+`/core` check (Test A, Test B in `docs/OWNER_ACTIONS.md`); the rows are written so that the
+Cloud Core's record can prove most of them (the session's `first_audio` / `audio_done`
+timing events; the research call's terminal result and `speech_head`).
+
+| # | Criterion | Status | Evidence required |
+|---|---|---|---|
+| 13.1 | SPEAKING is a lifecycle, not an analyser frame: from the first audible playback until the final assistant audio of that response actually completed; a natural pause inside the answer leaves the state SPEAKING with a calmer Core; barge-in / `Dur` / cancel end it at once | `NOT_YET_PROVEN` | Web: controller lifecycle tests (first audio → speaking; `response_done` with the provider buffer still playing → still speaking; `audio_stopped` for that response → listening with one `audio_done`; silence release and drain cap fallbacks; interruption immediate; a previous response's `audio_stopped` ignored). Real: Test A — a multi-sentence answer; the session records `first_audio` then `audio_done` (basis provider) after the last sentence, and the owner sees SPEAKING held through the pauses. |
+| 13.2 | The default spoken research answer is the findings and why they matter — a concise conclusion, up to three findings each with its importance, an optional offer — never crawler statistics | `NOT_YET_PROVEN` | API: `spoken_result` deterministic from the validated report; a no-diagnostics invariant (no "elendi", "interstitial", "dedup", "aday", counts of pages); insufficient evidence said truthfully. Real: Test B — a real research question; the research call's terminal `speech_head` starts with the conclusion; the owner hears findings, not telemetry. |
+| 13.3 | Diagnostics stay available and are spoken only on request: `Teknik anlat.`, `Hangi sayfalar elendi?`, `Araştırma sırasında ne sorun oldu?` | `NOT_YET_PROVEN` | API: the technical level / the diagnostics question kinds return `ResearchDiagnostics` with evidence refs; the executive level never does. Real: Test B, second half. |
+| 13.4 | The Core's lifecycle during research is truthful: RESEARCHING through discovery/fetch/rank, THINKING or RESEARCHING with progress at synthesis, SPEAKING for the entire presentation, then LISTENING/IDLE after the last audio; the constellation may stay while presenting | `NOT_YET_PROVEN` | API: `test_research_uistate.py` per stage. Web: overlay tests (speaking + outputLevel 0 keeps kind speaking). Real: Test B, watched on `/core`. |
+| 13.5 | The result-first policy holds across the spoken answers of this stage: answer, why it matters, action where appropriate, details on request; no "kayıtlara bakmam gerekiyor", no "şu sayfaları eledim" unless asked | `NOT_YET_PROVEN` | API: persona + `spoken_result`/`state.now` wording tests. Real: the owner's judgement during Test B. |
+
 ## Stage 7 — Real voice
 
 | # | Criterion | Status |
