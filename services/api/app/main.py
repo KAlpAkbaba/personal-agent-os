@@ -14,6 +14,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app import __version__
+from app.alarms.audio_store import get_audio_store
+from app.alarms.greeting_audio import build_greeting_tts
+from app.alarms.routes import audio_router as alarms_audio_router
+from app.alarms.routes import router as alarms_router
+from app.alarms.routine_port import WakeAlarmRunner
+from app.alarms.sequence import WakeSequence
+from app.ambient.routes import router as ambient_router
 from app.artifacts.routes import router as artifacts_router
 from app.artifacts.runtime import ArtifactRuntime
 from app.broker.routes import router as broker_router
@@ -22,6 +29,8 @@ from app.broker.ws import router as broker_ws_router
 from app.config import Settings, get_settings
 from app.db import build_engine, build_session_factory
 from app.devices.commands import DeviceCommandClient, register_broker_runtime
+from app.devices.routes import router as devices_router
+from app.devices.status import get_status_registry
 from app.evolution.routes import router as evolution_router
 from app.evolution.runtime import EvolutionRuntime
 from app.experience.routes import router as experience_router
@@ -42,6 +51,7 @@ from app.presence.routes import router as presence_router
 from app.research.embedded_worker import EmbeddedWorkerRuntime
 from app.research.health import research_health
 from app.research.routes import router as research_router
+from app.routines.clock import RoutineClock, register_routine_clock, routine_clock_health
 from app.routines.dispatch import (
     ActionDispatcher,
     BrokerDeviceAction,
@@ -123,24 +133,77 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except Exception:  # noqa: BLE001 - a label lookup must never break dispatch
             return None
 
+    # A dedicated engine/session factory (mirrors app.research.browser_activities' own
+    # `_session_factory()`): app.devices.commands.DeviceCommandClient wants a plain
+    # `sessionmaker`, not ArtifactRuntime's context-manager `.session()`. Shared by the
+    # routine dispatcher, the wake sequence and the routine clock — one connection pool for
+    # everything that runs off the event loop.
+    dispatch_engine = build_engine(settings.database_url)
+    dispatch_session_factory = build_session_factory(dispatch_engine)
+
+    device_action = BrokerDeviceAction(
+        session_factory=dispatch_session_factory,
+        command_client=DeviceCommandClient(dispatch_session_factory),
+    )
+    # M18.3 (spec §3.5, §3.7): the wake sequence, and the TTS provider for its greeting.
+    # The provider is resolved through the voice runtime's own registry, so a process with
+    # no OpenAI key gets the offline fake and the greeting still has a truthful path —
+    # never a silent alarm because a key is missing.
+    wake_sequence = WakeSequence(
+        device_action=device_action,
+        tts=build_greeting_tts(settings),
+        audio_store=get_audio_store(),
+        broker_audio_origin=settings.alarm_audio_origin,
+    )
+
     def _build_routine_dispatcher() -> ActionDispatcher:
-        # A dedicated engine/session factory (mirrors app.research.browser_activities'
-        # own `_session_factory()`): app.devices.commands.DeviceCommandClient wants a
-        # plain `sessionmaker`, not ArtifactRuntime's context-manager `.session()`.
-        dispatch_engine = build_engine(settings.database_url)
-        dispatch_session_factory = build_session_factory(dispatch_engine)
         return ActionDispatcher(
             briefing=RealtimeSayBriefing(
                 session_factory=dispatch_session_factory, sideband=voice_realtime.sideband
             ),
-            device_action=BrokerDeviceAction(
-                session_factory=dispatch_session_factory,
-                command_client=DeviceCommandClient(dispatch_session_factory),
-            ),
+            device_action=device_action,
             routine_label=_routine_label,
+            wake_alarm=WakeAlarmRunner(
+                session_factory=dispatch_session_factory, sequence=wake_sequence
+            ),
         )
 
     routine_dispatcher = _build_routine_dispatcher()
+
+    def _build_routine_clock() -> RoutineClock:
+        """M18.3 spec §3.3. The three ticks, in order, each in the same worker thread and
+        the same session: routines decide, alarms advance, ambient acts."""
+        from app.alarms import service as alarms_service
+        from app.ambient import service as ambient_service
+        from app.routines import service as routines_service
+        from app.routines.presence_link import greeting_verdict, resolve_greeting_decision
+
+        def _evaluate_due(session: Any, now: Any) -> Any:
+            decision = resolve_greeting_decision(session)
+            allowed, reason = greeting_verdict(decision)
+            from app.routines.conditions import RoutineConditionContext
+
+            context = RoutineConditionContext(
+                greeting_allowed=allowed,
+                greeting_reason=reason,
+                greeting_decision=decision,
+            )
+            return routines_service.evaluate_due(session, now=now, context=context)
+
+        return RoutineClock(
+            session_factory=dispatch_session_factory,
+            evaluate_due=_evaluate_due,
+            alarm_tick=lambda session, now: alarms_service.tick(
+                session, sequence=wake_sequence, now=now
+            ),
+            ambient_tick=lambda session, now: ambient_service.tick(
+                session, sequence=wake_sequence, now=now
+            ),
+            interval_s=settings.routine_clock_interval_s,
+            enabled=settings.routine_clock_enabled,
+        )
+
+    routine_clock = _build_routine_clock()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -150,6 +213,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # depends on. app.routines.service falls back to NoopDispatcher when nothing is
         # registered, so every unit test (none of which run this lifespan) is unaffected.
         register_routine_dispatcher(routine_dispatcher)
+        # M18.3 (spec §3.3): the ONE named, owner-visible component that asks. Started
+        # after the dispatcher it drives and stopped before it, so a tick can never find a
+        # half-wired process.
+        register_routine_clock(routine_clock)
+        await routine_clock.start()
         await artifacts.start()
         # M9: the artifact-ready announcer runs HERE, in the process that holds
         # the push registrations. The Temporal worker only makes a task READY;
@@ -190,6 +258,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await embedded_worker.stop()
             await research_tool_call_announcer.stop()
             await mobile.announcer.stop()
+            await routine_clock.stop()
+            register_routine_clock(None)
             register_routine_dispatcher(None)
             register_broker_runtime(None)
             await broker.stop()
@@ -219,6 +289,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.mobile = mobile
     app.state.voice_realtime = voice_realtime
     app.state.embedded_worker = embedded_worker
+    # M18.3: the routes and the voice tools reach the device through these, injected
+    # rather than imported as singletons (docs/M18_ACTION_CONTRACT.md §4).
+    app.state.wake_sequence = wake_sequence
+    app.state.routine_clock = routine_clock
+    app.state.device_statuses = get_status_registry()
+    app.state.alarm_audio_store = get_audio_store()
     # Scoped CORS: the web shell is a separate origin from the API. Allow only
     # the configured loopback/private web origins (never "*"); M0 review #3.
     app.add_middleware(
@@ -260,6 +336,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # M18: durable TRIGGER -> CONDITIONS -> ACTIONS routines; evaluation is an explicit
     # call only (POST /v1/routines/evaluate), never a background timer at startup.
     app.include_router(routines_router)
+    # M18.3: wake alarms, the ambient display policy, and one device-status read. The
+    # alarms AUDIO router is separate and deliberately not owner-gated — the companion
+    # holds a one-time token instead of a session (app/alarms/routes.py's docstring).
+    app.include_router(alarms_router)
+    app.include_router(alarms_audio_router)
+    app.include_router(ambient_router)
+    app.include_router(devices_router)
 
     @app.get("/v1/system/health")
     async def system_health() -> dict[str, Any]:
@@ -293,6 +376,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         checks["temporal_worker"] = await asyncio.to_thread(embedded_worker.health_check)
         # M13: synthesis-provider configuration posture (no I/O, no secrets).
         checks["research"] = await asyncio.to_thread(research_health, settings)
+        # M18.3 (spec §3.3): the routine clock is owner-visible BECAUSE it is the thing
+        # that asks. "skipped" when no clock is registered (every test process); "fail"
+        # when one was configured and is not running, which is exactly the state in which
+        # no alarm would ever fire.
+        checks["routine_clock"] = routine_clock_health()
         degraded = any(check["status"] not in ("ok", "skipped") for check in checks.values())
         status = "degraded" if degraded else "ok"
         logger.info("health_checked", status=status, checks=checks)

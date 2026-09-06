@@ -28,7 +28,11 @@ from typing import Any
 #: keeps working - it simply never sees the new states - and
 #: ``GET /v1/ui/state/contract`` reports the true version, so a caller that
 #: enumerates the vocabulary should re-read it rather than cache it.
-CONTRACT_VERSION = 2
+#: v3 (M18.3 spec §7) adds the wake-alarm channel (``alarm.armed`` .. ``alarm.failed``) and
+#: the ambient display channel (``display.on`` / ``display.off``), plus the ``ambient``
+#: subsystem. Same additive rule as v2: a v2 renderer keeps working and simply never sees
+#: the new states, and ``GET /v1/ui/state/contract`` reports the true version.
+CONTRACT_VERSION = 3
 
 #: Metadata value bounds. Numbers are floats in [0, 1] except where noted; strings are
 #: short machine tokens, never prose.
@@ -83,6 +87,29 @@ class UiState(StrEnum):
     ROUTINE_TRIGGERED = "routine.triggered"
     ALARM_TRIGGERED = "alarm.triggered"
 
+    #: M18.3 (spec §7): the wake alarm's own channel. ``alarm.*`` never displaces a Core
+    #: that is genuinely thinking or speaking — it is its own channel, like release
+    #: (ADR-0056/0065) — and every one of these is published because the alarm ENTERED
+    #: that state, never to animate a surge. ``alarm.triggered`` above stays what it was:
+    #: the routine engine's "this routine's alarm action fired"; these are the physical
+    #: wake sequence's own states.
+    ALARM_ARMED = "alarm.armed"
+    ALARM_FIRING = "alarm.firing"
+    ALARM_PLAYING = "alarm.playing"
+    ALARM_GREETING = "alarm.greeting"
+    ALARM_SNOOZED = "alarm.snoozed"
+    ALARM_STOPPED = "alarm.stopped"
+    ALARM_COMPLETED = "alarm.completed"
+    ALARM_FAILED = "alarm.failed"
+
+    #: M18.3 (spec §7): the ambient display channel. Ambient-band only — the display is
+    #: never the Core. Published from an OBSERVED change of the device's own power state
+    #: (the companion's power-setting notification, relayed on the heartbeat), never from
+    #: having asked for one: a display-off command that the device refused must not leave
+    #: the strip claiming the screens are dark.
+    DISPLAY_ON = "display.on"
+    DISPLAY_OFF = "display.off"
+
     #: The owner-authorised release path (ADR-0055). These exist so a deployment is
     #: WATCHABLE - and so a failure visibly becomes a rollback instead of a false success.
     RELEASE_OWNER_APPROVAL_REQUIRED = "release.owner_approval_required"
@@ -112,6 +139,8 @@ SUBSYSTEMS: tuple[str, ...] = (
     "system",
     "presence",
     "routine",
+    # M18.3: the ambient display policy publishes display.on/display.off (spec §7).
+    "ambient",
 )
 
 SEVERITIES: tuple[str, ...] = ("info", "notice", "warning", "critical")

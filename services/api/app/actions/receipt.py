@@ -99,7 +99,18 @@ TERMINAL_CLAIMABLE: Final[frozenset[str]] = frozenset({TERMINAL_VERIFIED, TERMIN
 #: truthful Turkish speech - never a "running" call the pipeline can never finish, and
 #: plan.redirect refuses a running research plan honestly rather than claiming a
 #: redirect the workflow has no signal to receive.
-ACTION_CONTRACT_VERSION: Final = 4
+#: v5 (2026-09-07, M18.2): the research fast path — research.start's terminal result and
+#: its failure receipts, as ADR-0068 records them.
+#: v6 (2026-09-07, M18.3, ADR-0071): a whole new family of mutating capabilities reaches
+#: the owner by voice — alarm.create/cancel/snooze/stop, display.off/wake,
+#: ambient.set_policy/test_display — and with it two receipt shapes this contract had not
+#: needed before: a DEVICE REFUSAL that is a successful command (the companion answering
+#: "no, the owner just touched the keyboard" is execution_status=refused with its own
+#: sentence, never a failure), and a receipt whose observed_after.local is the DEVICE's own
+#: read-back rather than a browser's. The wake sequence writes one receipt per physical
+#: step (app.alarms.sequence.RECEIPT_BY_DEVICE_CALL enumerates them), so a qualification
+#: run can prove every physical action from the ledger alone.
+ACTION_CONTRACT_VERSION: Final = 6
 
 FAKE_COMPLETION_PHRASES: Final[tuple[str, ...]] = (
     "yapmış gibi düşün",

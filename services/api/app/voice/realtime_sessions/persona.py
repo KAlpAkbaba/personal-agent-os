@@ -136,6 +136,43 @@ ACTION_GROUNDING_TR = (
 )
 
 
+#: M18.3 (docs/M18_3_LIVING_CORE_WAKE_ALARM_SPEC.md §3.8, §6). A whole family of physical
+#: capabilities the owner now commands by voice — an alarm that wakes them, and the power
+#: of the screens in front of them. The rules are the ones ACTION_GROUNDING_TR already
+#: states, applied to the two places they matter most:
+#:
+#: * the owner is ASLEEP when most of this runs, so a wrong time is not recoverable by
+#:   asking again — the model must never compute a clock time itself, and hands the
+#:   utterance to `alarm.create` verbatim in `when_text`;
+#: * "alarmı kapat" is said by someone who has just been woken, so it is a tool call and
+#:   never a conversational acknowledgement;
+#: * a display command that the DEVICE refused ("az önce klavye kullanıldı") is not a
+#:   failure to apologise for — it is the system correctly refusing to fight a person who
+#:   is using their computer, and the receipt's sentence already says so.
+ALARM_DISPLAY_GROUNDING_TR = (
+    "Alarm ve ekran komutlarında da araç çağırırsın; ezberden ya da sohbetle yanıtlamazsın. "
+    "'Yarın sabah yedi buçukta beni uyandır', 'saat sekize alarm kur', 'her hafta içi "
+    "yedi on beşte beni uyandır', 'doksan saniye sonra test alarmı kur' denince alarm.create "
+    "aracını çağırırsın. Saati SEN hesaplamazsın: sahibin söylediği zaman ifadesini "
+    "'when_text' alanına aynen verirsin, saati sistem çözer. Müzik istenirse bağlantıyı "
+    "'media.url', adı 'media.title' olarak verirsin; bağlantı yoksa uydurmazsın. "
+    "'Alarmı kapat', 'alarmı durdur', 'alarmı sustur' denince alarm.stop; 'beş dakika "
+    "ertele', 'on dakika ertele' denince alarm.snooze; 'alarmı iptal et' denince "
+    "alarm.cancel; 'sabah alarmım kaçta' denince alarm.status aracını çağırırsın. "
+    "'Ekranları kapat' / 'ekranı kapat' denince display.off, 'ekranları aç' denince "
+    "display.wake, 'ekranlar açık mı' denince display.status aracını çağırırsın. "
+    "'Uyurken ekranları kapat', 'ben yokken ekranları kapat', 'otomatik ekran kapatmayı "
+    "aç/kapat', 'ben geri geldiğimde ekranı aç' ayarlardır: ambient.set_policy aracını "
+    "çağırırsın. 'Ekran uyku otomasyonunu test et' denince ambient.test_display. "
+    "Bu araçlarda ön cümle yok: dönen 'speech' metnini aynen okursun, ekleme yapmazsın. "
+    "Ekran komutu cihaz tarafından reddedilirse (örneğin az önce klavye kullanıldıysa) "
+    "dönen cümleyi olduğu gibi söylersin; özür dilemez, tekrar denemezsin. "
+    "Ekran kapatmak yalnızca ekranın gücünü keser; bilgisayarı uyutmaz, kilitlemez, "
+    "kapatmaz - böyle bir şey yaptığını asla söylemezsin. "
+    "Alarm çalarken sahibin sesini duyduğunda önce alarmı ele alırsın."
+)
+
+
 def build_instructions(
     prefs: VoicePreferences | None = None,
     *,
@@ -150,6 +187,7 @@ def build_instructions(
         EXECUTIVE_DEFAULTS_TR,
         SELF_EXPLANATION_TR,
         ACTION_GROUNDING_TR,
+        ALARM_DISPLAY_GROUNDING_TR,
         RESEARCH_RESULT_TR,
     ]
     style = VOICE_STYLE_BLOCKS.get((voice_profile or "").lower())
@@ -185,6 +223,7 @@ def build_instructions(
 
 __all__ = [
     "ACTION_GROUNDING_TR",
+    "ALARM_DISPLAY_GROUNDING_TR",
     "EXECUTIVE_DEFAULTS_TR",
     "PERSONA_TR",
     "RESEARCH_RESULT_TR",

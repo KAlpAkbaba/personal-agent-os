@@ -40,6 +40,7 @@ from app.voice.providers import cloud_tool_name
 from app.voice.realtime import RealtimeState
 from app.voice.realtime_sessions import actions
 from app.voice.realtime_sessions.sideband import SB_NARRATION_CURSOR, SB_PLAN_CHANGED
+from app.voice.realtime_sessions.tools_ambient import register_ambient_tools
 
 logger = get_logger("app.voice.realtime_sessions.tools")
 
@@ -848,6 +849,9 @@ def default_registry() -> ToolRegistry:
             handler=actions.release_promote,
         )
     )
+    # M18.3 spec §3.8: the alarm, display and ambient tools. One line, by design — the
+    # manifest stays a manifest and `tools_ambient` stays the receipt discipline.
+    register_ambient_tools(reg)
     return reg
 
 

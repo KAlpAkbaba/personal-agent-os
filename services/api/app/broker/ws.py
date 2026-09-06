@@ -320,6 +320,14 @@ async def device_connect(websocket: WebSocket) -> None:
                 break
             await asyncio.to_thread(_touch, runtime, device_id)
             if isinstance(frame, HeartbeatFrame):
+                if frame.status:
+                    # M18.3 spec §3.6: input activity, display power, locally-fired alarms.
+                    # In a thread and swallowed whole — a heartbeat must be acknowledged
+                    # even when Cloud Core cannot make sense of what it carried, because a
+                    # device that gets disconnected cannot ring an alarm.
+                    await asyncio.to_thread(
+                        _ingest_status, runtime, device_id, dict(frame.status)
+                    )
                 await connection.send_json(frames.heartbeat_ack_frame(frame.seq))
             elif isinstance(frame, CommandAckFrame):
                 await _handle_command_ack(runtime, connection, frame)
@@ -356,6 +364,21 @@ async def device_connect(websocket: WebSocket) -> None:
 def _touch(runtime: BrokerRuntime, device_id: uuid.UUID) -> None:
     with runtime.session() as db:
         service.touch_last_seen(db, device_id)
+
+
+def _ingest_status(runtime: BrokerRuntime, device_id: uuid.UUID, status: dict) -> None:
+    """M18.3 spec §3.6, in a worker thread. Never raises (see the call site)."""
+    try:
+        from app.ambient.ingest import ingest_status
+
+        with runtime.session() as db:
+            ingest_status(db, device_id, status)
+    except Exception as exc:  # noqa: BLE001 - a heartbeat must never fail on telemetry
+        logger.warning(
+            "device_status_ingest_failed",
+            device_id=str(device_id),
+            error=f"{type(exc).__name__}: {exc}",
+        )
 
 
 def _end_session(

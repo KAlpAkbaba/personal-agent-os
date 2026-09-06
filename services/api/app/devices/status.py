@@ -1,0 +1,334 @@
+"""Device activity status from the heartbeat (M18.3 spec §3.6, §5.3).
+
+The Device Service asks its owner-session companion for
+``desktop.activity_status`` before each heartbeat and attaches the answer as an OPTIONAL
+``status`` object on the heartbeat frame. This module is the cloud side of that: a
+last-known status per device, held in memory, and the DIFFS a caller needs to act on.
+
+Why in memory. This is a ~10 s telemetry stream about a machine's current input idleness
+and screen power — the definition of ephemeral. Nothing durable is derived from it directly:
+what matters (an input-active moment, a display transition, a locally-fired alarm) becomes a
+ledger row, a presence observation or an alarm reconciliation through
+``app.ambient.ingest``, which is where the durable writes live. PROJECT_CONSTITUTION.md's
+"Redis is never the sole source of truth" rule applied one level down — a process restart
+loses the last idle counter and the next heartbeat replaces it, ten seconds later.
+
+Validation is LENIENT by design (task contract): the authoritative schema is Track D's, in
+``packages/schemas``, and this side must tolerate both a companion that predates the field
+and one that adds a field this Cloud Core has never heard of. Unknown keys are ignored,
+malformed values fall back to "unknown", and NOTHING here raises on a status object — a
+device that sends a strange heartbeat must stay connected.
+"""
+
+from __future__ import annotations
+
+import threading
+import uuid
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from typing import Any, Final
+
+DISPLAY_ON: Final = "on"
+DISPLAY_OFF: Final = "off"
+DISPLAY_DIMMED: Final = "dimmed"
+DISPLAY_UNKNOWN: Final = "unknown"
+DISPLAY_STATES: Final[tuple[str, ...]] = (
+    DISPLAY_ON,
+    DISPLAY_OFF,
+    DISPLAY_DIMMED,
+    DISPLAY_UNKNOWN,
+)
+
+#: Spec §3.6a: an idle counter at or below this is CURRENT input activity worth a presence
+#: observation. Above it, nothing is published — absence of input is not evidence of
+#: absence, and inferring "the owner left" from a quiet keyboard is exactly the mistake
+#: "uncertain means ON" exists to prevent.
+INPUT_ACTIVE_WITHIN_S: Final = 120.0
+#: Spec §3.6a: at most one input-sourced presence observation per device per this window.
+INPUT_OBSERVATION_THROTTLE_S: Final = 30.0
+#: Spec §3.6b: an idle RESET that follows at least this much idleness is a real "the owner
+#: came back to the keyboard" moment, not a pause between keystrokes.
+INPUT_RESET_AFTER_IDLE_S: Final = 300.0
+
+#: How many devices' statuses are kept. One owner, a handful of machines.
+MAX_DEVICES: Final = 32
+
+
+def _clamp_float(value: Any, *, default: float | None = None) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return default
+    if value < 0:
+        return default
+    return float(value)
+
+
+def _display_state(raw: Any) -> str:
+    if not isinstance(raw, dict):
+        return DISPLAY_UNKNOWN
+    state = raw.get("state")
+    return state if state in DISPLAY_STATES else DISPLAY_UNKNOWN
+
+
+def _id_list(raw: Any) -> tuple[str, ...]:
+    if not isinstance(raw, list | tuple):
+        return ()
+    out: list[str] = []
+    for item in raw:
+        if isinstance(item, str) and item.strip():
+            out.append(item.strip()[:64])
+        if len(out) >= 32:
+            break
+    return tuple(out)
+
+
+@dataclass(frozen=True, slots=True)
+class DeviceStatus:
+    """One companion activity report, normalised (spec §5.3).
+
+    Every field has a defined value for a status object that omitted it, so a caller never
+    has to distinguish "absent" from "malformed" — both mean "this device is not telling me,
+    so I know nothing", which is the only safe reading for a policy that can darken screens.
+    """
+
+    device_id: uuid.UUID
+    observed_at: datetime
+    input_idle_s: float | None = None
+    display_state: str = DISPLAY_UNKNOWN
+    display_observed_at: datetime | None = None
+    alarm_ringing: bool = False
+    ringing_alarm_id: str | None = None
+    armed_alarms: tuple[str, ...] = ()
+    local_alarm_fired: tuple[str, ...] = ()
+    holdoff_until: datetime | None = None
+    monitors: int | None = None
+    raw_keys: tuple[str, ...] = field(default_factory=tuple)
+
+    @property
+    def input_active(self) -> bool:
+        """The owner touched something within the last :data:`INPUT_ACTIVE_WITHIN_S`."""
+        return self.input_idle_s is not None and self.input_idle_s <= INPUT_ACTIVE_WITHIN_S
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "device_id": str(self.device_id),
+            "observed_at": _iso(self.observed_at),
+            "input_idle_s": self.input_idle_s,
+            "input_active": self.input_active,
+            "display": {
+                "state": self.display_state,
+                "observed_at": _iso(self.display_observed_at),
+            },
+            "alarm_ringing": self.alarm_ringing,
+            "ringing_alarm_id": self.ringing_alarm_id,
+            "armed_alarms": list(self.armed_alarms),
+            "local_alarm_fired": list(self.local_alarm_fired),
+            "holdoff_until": _iso(self.holdoff_until),
+            "monitors": self.monitors,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class StatusChange:
+    """What is NEW about this report — the only thing a caller should act on.
+
+    A heartbeat arrives every ~10 s and almost always says the same thing; acting on the
+    status rather than on the change would write a ledger row, a presence observation and a
+    bus event six times a minute forever.
+    """
+
+    status: DeviceStatus
+    previous: DeviceStatus | None
+    display_changed: bool
+    input_reset: bool
+    should_observe_input: bool
+    newly_fired_alarms: tuple[str, ...]
+
+    @property
+    def display_state(self) -> str:
+        return self.status.display_state
+
+
+def _iso(dt: datetime | None) -> str | None:
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _parse_dt(raw: Any) -> datetime | None:
+    if isinstance(raw, datetime):
+        return raw if raw.tzinfo else raw.replace(tzinfo=UTC)
+    if isinstance(raw, str) and raw:
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+    return None
+
+
+def parse_status(
+    device_id: uuid.UUID, raw: Any, *, now: datetime | None = None
+) -> DeviceStatus | None:
+    """Normalise a heartbeat ``status`` object. ``None`` when there is nothing usable.
+
+    Never raises (module docstring): an unparseable status is the same as no status.
+    """
+    if not isinstance(raw, dict) or not raw:
+        return None
+    moment = now or datetime.now(UTC)
+    display = raw.get("display")
+    return DeviceStatus(
+        device_id=device_id,
+        observed_at=_parse_dt(raw.get("observed_at")) or moment,
+        input_idle_s=_clamp_float(raw.get("input_idle_s")),
+        display_state=_display_state(display),
+        display_observed_at=(
+            _parse_dt(display.get("observed_at")) if isinstance(display, dict) else None
+        ),
+        alarm_ringing=bool(raw.get("alarm_ringing")),
+        ringing_alarm_id=(
+            str(raw["ringing_alarm_id"])[:64]
+            if isinstance(raw.get("ringing_alarm_id"), str)
+            else None
+        ),
+        armed_alarms=_id_list(raw.get("armed_alarms")),
+        local_alarm_fired=_id_list(raw.get("local_alarm_fired")),
+        holdoff_until=_parse_dt(raw.get("holdoff_until")),
+        monitors=(
+            int(raw["monitors"])
+            if isinstance(raw.get("monitors"), int) and not isinstance(raw.get("monitors"), bool)
+            else None
+        ),
+        raw_keys=tuple(sorted(str(k)[:32] for k in raw)),
+    )
+
+
+class DeviceStatusRegistry:
+    """Last-known status per device, plus what changed (spec §3.6)."""
+
+    def __init__(self, *, max_devices: int = MAX_DEVICES) -> None:
+        self._max_devices = max_devices
+        self._by_device: dict[uuid.UUID, DeviceStatus] = {}
+        self._last_input_observation: dict[uuid.UUID, datetime] = {}
+        self._lock = threading.Lock()
+
+    def record(
+        self, device_id: uuid.UUID, raw: Any, *, now: datetime | None = None
+    ) -> StatusChange | None:
+        """Store a report and return what is new about it, or ``None`` for no usable status."""
+        status = parse_status(device_id, raw, now=now)
+        if status is None:
+            return None
+        moment = now or datetime.now(UTC)
+        with self._lock:
+            previous = self._by_device.get(device_id)
+            if len(self._by_device) >= self._max_devices and device_id not in self._by_device:
+                self._by_device.pop(next(iter(self._by_device)), None)
+            self._by_device[device_id] = status
+
+            display_changed = (
+                previous is None or previous.display_state != status.display_state
+            ) and status.display_state != DISPLAY_UNKNOWN
+
+            # Spec §3.6b: a reset after a long idle, OR any input while the display is off
+            # (the owner pressing a key on a dark screen is exactly the wake we must never
+            # fight, and its idle counter may be well under 300 s by the time we see it).
+            input_reset = False
+            if status.input_active:
+                if previous is not None and previous.input_idle_s is not None:
+                    was_long_idle = previous.input_idle_s >= INPUT_RESET_AFTER_IDLE_S
+                    dropped = status.input_idle_s is not None and (
+                        status.input_idle_s < previous.input_idle_s
+                    )
+                    display_was_off = previous.display_state == DISPLAY_OFF
+                    input_reset = (was_long_idle and dropped) or (display_was_off and dropped)
+                elif previous is None:
+                    # First report from a device whose screen is off and whose keyboard was
+                    # just touched: the owner is there. A first report on a lit screen is
+                    # not a reset — nothing changed, we simply had not been watching.
+                    input_reset = status.display_state == DISPLAY_OFF
+
+            should_observe = False
+            if status.input_active:
+                last = self._last_input_observation.get(device_id)
+                if last is None or (moment - last).total_seconds() >= INPUT_OBSERVATION_THROTTLE_S:
+                    should_observe = True
+                    self._last_input_observation[device_id] = moment
+
+            seen = set(previous.local_alarm_fired) if previous else set()
+            newly_fired = tuple(a for a in status.local_alarm_fired if a not in seen)
+
+        return StatusChange(
+            status=status,
+            previous=previous,
+            display_changed=display_changed,
+            input_reset=input_reset,
+            should_observe_input=should_observe,
+            newly_fired_alarms=newly_fired,
+        )
+
+    def get(self, device_id: uuid.UUID) -> DeviceStatus | None:
+        with self._lock:
+            return self._by_device.get(device_id)
+
+    def all(self) -> dict[uuid.UUID, DeviceStatus]:
+        with self._lock:
+            return dict(self._by_device)
+
+    def any_alarm_ringing(self) -> bool:
+        with self._lock:
+            return any(s.alarm_ringing for s in self._by_device.values())
+
+    def displays_on(self) -> bool | None:
+        """True when at least one device reports its display ON, False when every device
+        that reports at all says OFF, ``None`` when nobody knows. ``None`` is the answer the
+        ambient policy refuses to act on — uncertain means ON stays on (spec §1.4)."""
+        with self._lock:
+            states = [
+                s.display_state
+                for s in self._by_device.values()
+                if s.display_state != DISPLAY_UNKNOWN
+            ]
+        if not states:
+            return None
+        return any(state in (DISPLAY_ON, DISPLAY_DIMMED) for state in states)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._by_device.clear()
+            self._last_input_observation.clear()
+
+
+#: Process-wide registry, the same shape as ``app.devices.commands``'s broker registry.
+_registry = DeviceStatusRegistry()
+
+
+def get_status_registry() -> DeviceStatusRegistry:
+    return _registry
+
+
+def set_status_registry(registry: DeviceStatusRegistry) -> None:
+    """Tests and alternative runtimes swap the process-wide registry."""
+    global _registry
+    _registry = registry
+
+
+__all__ = [
+    "DISPLAY_DIMMED",
+    "DISPLAY_OFF",
+    "DISPLAY_ON",
+    "DISPLAY_STATES",
+    "DISPLAY_UNKNOWN",
+    "INPUT_ACTIVE_WITHIN_S",
+    "INPUT_OBSERVATION_THROTTLE_S",
+    "INPUT_RESET_AFTER_IDLE_S",
+    "MAX_DEVICES",
+    "DeviceStatus",
+    "DeviceStatusRegistry",
+    "StatusChange",
+    "get_status_registry",
+    "parse_status",
+    "set_status_registry",
+]

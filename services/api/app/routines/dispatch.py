@@ -3,7 +3,7 @@
 ``app.routines.actions.RoutineDispatcher`` is a ``Protocol``; until this module existed the
 only implementation was ``NoopDispatcher``, so a routine could decide, record a
 ``RoutineFiring`` and write ledger events — and then nothing ever happened. ``ActionDispatcher``
-closes that gap by routing each of the five action kinds to the subsystem that owns it,
+closes that gap by routing each of the six action kinds to the subsystem that owns it,
 through two small ``Protocol`` ports so this module is unit-testable with no network, no
 device, no audio and no browser:
 
@@ -32,6 +32,9 @@ capability that does not exist on the device side yet:
 * ``display_action`` — refused, always, on purpose (see ``DISPLAY_ACTION_QUALIFIED`` below).
   This is not "not implemented yet"; it is "built but deliberately unreachable" until its
   own separate owner qualification exists (M18 spec §4, §7's last line).
+* ``wake_alarm`` (M18.3) — handed to :class:`WakeAlarmPort`, whose one implementation is
+  ``app.alarms.routine_port.WakeAlarmRunner``. A third port, for the same reason as the
+  first two: the whole wake sequence is a subsystem this package must not import.
 """
 
 from __future__ import annotations
@@ -64,6 +67,7 @@ from app.routines.actions import (
     ACTION_KIND_DISPLAY_ACTION,
     ACTION_KIND_MEDIA_PLAYBACK,
     ACTION_KIND_VOICE_BRIEFING,
+    ACTION_KIND_WAKE_ALARM,
     DEFAULT_WAKE_VOLUME_END,
     DEFAULT_WAKE_VOLUME_RAMP_SECONDS,
     DEFAULT_WAKE_VOLUME_START,
@@ -120,6 +124,21 @@ class DeviceActionPort(Protocol):
         idempotency_key: str,
         timeout_s: float,
     ) -> DeviceRunResult: ...
+
+
+class WakeAlarmPort(Protocol):
+    """Runs the whole M18.3 wake sequence for one alarm (spec §3.5).
+
+    A ``Protocol`` here and an implementation in ``app.alarms.routine_port`` — deliberately
+    that way round. ``app.alarms`` creates routines (it imports ``app.routines.service``),
+    so a direct import back would be a cycle; more importantly the wake sequence is not
+    this package's business. This package fires triggers; what a wake alarm DOES is the
+    alarms package's, and the seam is one method.
+    """
+
+    def fire(
+        self, *, alarm_id: UUID, routine_id: UUID, firing_id: UUID
+    ) -> DispatchOutcome: ...
 
 
 # --------------------------------------------------------------- real: voice briefing
@@ -278,12 +297,41 @@ BROWSER_ACTION_ALLOWLIST: frozenset[str] = frozenset(
         "download",
         "search",
         "fetch_evidence",
+        # BROWSER_CAPABILITIES.md v1.2 (M18.3 spec §4): the four media operations the
+        # browser worker gained for the wake alarm. The cloud side of the allowlist is
+        # Track C's (this file); the worker, the protocol constants and the companion host
+        # allowlist are Track B's. Listed here so a wake alarm can reach them at all —
+        # without these four names a media_play is refused by this allowlist before the
+        # device is ever asked, and the alarm falls back to the tone for a reason that
+        # would have been a bug rather than a device fact.
+        "media_play",
+        "media_volume",
+        "media_status",
+        "media_stop",
     }
 )
 
 CAPABILITY_DESKTOP_ALARM_START = "desktop.alarm_start"
 CAPABILITY_BROWSER_SESSION_OPEN = "browser.session_open"
 CAPABILITY_BROWSER_NAVIGATE = "browser.navigate"
+
+#: M18.3 device capabilities (spec §5). Named here, beside the alarm capability that was
+#: already here, because ``app.alarms`` dispatches every one of them through this module's
+#: ``DeviceActionPort`` — one place names what Cloud Core may ask a device to do, so a
+#: capability the Windows agent has not shipped yet fails as ``no_capable_device`` at
+#: selection rather than as a typo nobody notices.
+CAPABILITY_DESKTOP_ALARM_STOP = "desktop.alarm_stop"
+CAPABILITY_DESKTOP_ALARM_ARM = "desktop.alarm_arm"
+CAPABILITY_DESKTOP_ALARM_DISARM = "desktop.alarm_disarm"
+CAPABILITY_DESKTOP_DISPLAY_WAKE = "desktop.display_wake"
+CAPABILITY_DESKTOP_DISPLAY_OFF = "desktop.display_off"
+CAPABILITY_DESKTOP_DISPLAY_STATUS = "desktop.display_status"
+CAPABILITY_DESKTOP_ACTIVITY_STATUS = "desktop.activity_status"
+CAPABILITY_DESKTOP_PLAY_AUDIO = "desktop.play_audio"
+CAPABILITY_BROWSER_MEDIA_PLAY = "browser.media_play"
+CAPABILITY_BROWSER_MEDIA_VOLUME = "browser.media_volume"
+CAPABILITY_BROWSER_MEDIA_STATUS = "browser.media_status"
+CAPABILITY_BROWSER_MEDIA_STOP = "browser.media_stop"
 
 #: Display power is the one machine-state action this milestone builds but does not wire
 #: live (M18 spec §4, §7's last line: "Display-off gets its own separate qualification").
@@ -353,11 +401,13 @@ class ActionDispatcher:
         device_action: DeviceActionPort,
         browser_allowlist: frozenset[str] = BROWSER_ACTION_ALLOWLIST,
         routine_label: Callable[[UUID], str | None] | None = None,
+        wake_alarm: WakeAlarmPort | None = None,
     ) -> None:
         self._briefing = briefing
         self._device_action = device_action
         self._browser_allowlist = browser_allowlist
         self._routine_label = routine_label
+        self._wake_alarm = wake_alarm
 
     def dispatch(
         self, *, routine_id: UUID, firing_id: UUID, action: dict[str, Any]
@@ -374,6 +424,8 @@ class ActionDispatcher:
             return self._browser_action(routine_id, firing_id, detail)
         if kind == ACTION_KIND_DISPLAY_ACTION:
             return self._display_action(routine_id, firing_id, detail)
+        if kind == ACTION_KIND_WAKE_ALARM:
+            return self._wake_alarm_action(routine_id, firing_id, detail)
         return DispatchOutcome.refused(f"unknown_action_kind:{kind}")
 
     # -------------------------------------------------------------- voice_briefing
@@ -496,6 +548,32 @@ class ActionDispatcher:
             {"code": "display_action_not_qualified"},
         )
 
+    # ------------------------------------------------------------------ wake_alarm
+
+    def _wake_alarm_action(
+        self, routine_id: UUID, firing_id: UUID, detail: dict[str, Any]
+    ) -> DispatchOutcome:
+        """Hand the alarm id to the wake sequence (M18.3 spec §3.5).
+
+        A missing port is a FAILURE, never a silent success: a process wired without one
+        would otherwise record "the routine fired" for an alarm that never rang. The
+        honest answer is that nothing woke the owner.
+        """
+        raw = detail.get("alarm_id")
+        if not isinstance(raw, str) or not raw:
+            return DispatchOutcome.refused("wake_alarm_missing_alarm_id")
+        try:
+            alarm_id = UUID(raw)
+        except ValueError:
+            return DispatchOutcome.refused(f"wake_alarm_alarm_id_not_uuid:{raw[:64]}")
+        if self._wake_alarm is None:
+            return DispatchOutcome.failed(
+                "wake_alarm_port_unavailable", {"alarm_id": raw}
+            )
+        return self._wake_alarm.fire(
+            alarm_id=alarm_id, routine_id=routine_id, firing_id=firing_id
+        )
+
 
 # ------------------------------------------------------------------------- module registry
 
@@ -516,9 +594,21 @@ def get_routine_dispatcher() -> RoutineDispatcher | None:
 
 __all__ = [
     "BROWSER_ACTION_ALLOWLIST",
+    "CAPABILITY_BROWSER_MEDIA_PLAY",
+    "CAPABILITY_BROWSER_MEDIA_STATUS",
+    "CAPABILITY_BROWSER_MEDIA_STOP",
+    "CAPABILITY_BROWSER_MEDIA_VOLUME",
     "CAPABILITY_BROWSER_NAVIGATE",
     "CAPABILITY_BROWSER_SESSION_OPEN",
+    "CAPABILITY_DESKTOP_ACTIVITY_STATUS",
+    "CAPABILITY_DESKTOP_ALARM_ARM",
+    "CAPABILITY_DESKTOP_ALARM_DISARM",
     "CAPABILITY_DESKTOP_ALARM_START",
+    "CAPABILITY_DESKTOP_ALARM_STOP",
+    "CAPABILITY_DESKTOP_DISPLAY_OFF",
+    "CAPABILITY_DESKTOP_DISPLAY_STATUS",
+    "CAPABILITY_DESKTOP_DISPLAY_WAKE",
+    "CAPABILITY_DESKTOP_PLAY_AUDIO",
     "DISPLAY_ACTION_QUALIFIED",
     "ActionDispatcher",
     "BriefingDelivery",
@@ -527,6 +617,7 @@ __all__ = [
     "DeviceActionPort",
     "DeviceRunResult",
     "RealtimeSayBriefing",
+    "WakeAlarmPort",
     "get_routine_dispatcher",
     "register_routine_dispatcher",
 ]

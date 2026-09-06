@@ -1,0 +1,848 @@
+"""Wake alarm service (M18.3 spec §3): create, arm, fire, snooze, stop, tick.
+
+Same discipline as ``app.routines.service`` / ``app.goals.service``: every function takes
+an open ``Session`` and owns its commit, so async routes run it through
+``asyncio.to_thread`` and nothing here is coupled to FastAPI.
+
+Three things this module is careful about, each because the failure mode is one a sleeping
+owner cannot correct:
+
+**One ring per occurrence, across processes.** The routine engine's ``RoutineFiring``
+uniqueness on ``(routine_id, occurrence_key)`` stops a second dispatch inside one process.
+``WakeAlarm.last_firing_id`` plus the state machine stops the rest: a second tick, a second
+process, or a broker reconnect that redelivers a command all find the alarm already past
+``ARMED`` and holding a firing id, and do nothing. That is why the idempotency key lives on
+the ALARM and not only on the occurrence — an occurrence is a row another process may not
+have committed yet, and an alarm is the thing that is physically making noise.
+
+**The clock is not the schedule.** ``tick`` is called on a cadence but decides nothing from
+the cadence: everything it does is derived from stored timestamps (``scheduled_for``,
+``greeting_due_at``, ``playing_since`` + ``max_play_seconds``), so a process that was down
+for ten minutes catches up correctly on its first tick instead of losing what it missed.
+This is what makes "an ARMED row fires after a fresh process's first tick" true.
+
+**Terminal means released.** Every terminal state runs the same cleanup — stop playback,
+disarm the device, resolve or re-arm the routine, write ``alarm.cleaned_up`` — so a test
+alarm never leaves a device armed, a browser session open or a routine waiting. Not a
+special case for test alarms: the same path, with a shorter ``max_play_seconds``.
+"""
+
+from __future__ import annotations
+
+import uuid
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from typing import Any
+from zoneinfo import ZoneInfo
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.alarms import speech as alarm_speech
+from app.alarms.models import (
+    ALARM_ACTIVE_STATES,
+    ALARM_PENDING_STATES,
+    ALARM_TERMINAL_STATES,
+    DEFAULT_MAX_PLAY_SECONDS,
+    DEFAULT_SNOOZE_MINUTES,
+    DEFAULT_TIMEZONE,
+    MAX_SNOOZE_MINUTES,
+    MEDIA_KIND_TONE,
+    MEDIA_KIND_YOUTUBE,
+    PLAYED_KIND_LOCAL_FALLBACK,
+    STATE_ARMED,
+    STATE_CANCELLED,
+    STATE_COMPLETED,
+    STATE_FIRING,
+    STATE_PLAYING,
+    STATE_SCHEDULED,
+    STATE_SNOOZED,
+    STATE_STOPPED,
+    TEST_MAX_PLAY_SECONDS,
+    WakeAlarm,
+)
+from app.alarms.sequence import (
+    DEFAULT_DISPLAY_WAKE_POLICY,
+    DEFAULT_GREETING_POLICY,
+    DEFAULT_VOLUME_POLICY,
+    FireResult,
+    WakeSequence,
+)
+from app.alarms.state import IllegalAlarmTransition, assert_alarm_transition
+from app.alarms.tr_time import ParsedWhen, next_occurrence_after
+from app.ledger import service as ledger_service
+from app.ledger.vocabulary import (
+    ALARM_EVENT_TYPE_BY_STATE,
+    EVENT_TYPE_ALARM_CLEANED_UP,
+    EVENT_TYPE_ALARM_LOCAL_FALLBACK_RANG,
+    SEVERITY_CRITICAL,
+    SEVERITY_INFO,
+    SUBSYSTEM_ROUTINE,
+)
+from app.logging import get_logger
+from app.routines import service as routines_service
+from app.routines.actions import ACTION_KIND_WAKE_ALARM
+from app.routines.models import (
+    ROUTINE_STATUS_ARMED,
+    TRIGGER_KIND_AT,
+    TRIGGER_KIND_SCHEDULE,
+    Routine,
+)
+from app.uistate.contract import UiState
+from app.uistate.publisher import publish
+
+logger = get_logger("app.alarms.service")
+
+#: How long before a scheduled instant the tick tries to arm the device (spec §3.4: arming
+#: is continuous while the alarm is pending, but a device that has been offline for a week
+#: does not need an arm attempt on every one of those ticks).
+ARM_LEAD_S = 12 * 3600
+
+#: An alarm whose moment passed by more than this while the process was down is fired
+#: anyway (the owner still wants to be woken), but one older than this is not: waking
+#: someone for an alarm from yesterday morning is worse than not waking them.
+MAX_LATE_FIRE_S = 2 * 3600
+
+#: Spec §7's bus TTLs, published as metadata so the renderer never invents one.
+_UI_STATE_BY_ALARM_STATE: dict[str, UiState] = {
+    STATE_ARMED: UiState.ALARM_ARMED,
+    STATE_FIRING: UiState.ALARM_FIRING,
+    STATE_PLAYING: UiState.ALARM_PLAYING,
+    "GREETING": UiState.ALARM_GREETING,
+    STATE_SNOOZED: UiState.ALARM_SNOOZED,
+    STATE_STOPPED: UiState.ALARM_STOPPED,
+    STATE_COMPLETED: UiState.ALARM_COMPLETED,
+    "FAILED": UiState.ALARM_FAILED,
+}
+
+
+def utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
+class AlarmNotFoundError(ValueError):
+    pass
+
+
+class InvalidAlarmRequest(ValueError):
+    """A create/snooze request this service refuses rather than guesses at."""
+
+
+# ---------------------------------------------------------------- ledger + uistate
+
+
+def _record_ledger(
+    session: Session,
+    *,
+    event_type: str,
+    alarm: WakeAlarm,
+    action: str,
+    factual_summary: str,
+    source_ref: str,
+    severity: str = SEVERITY_INFO,
+    detail: dict[str, Any] | None = None,
+) -> None:
+    """Never fails the caller — the ledger is evidence, not a dependency (the rule
+    ``app.routines.service._record_ledger`` already follows)."""
+    try:
+        ledger_service.record(
+            session,
+            ledger_service.ActivityEvent(
+                event_type=event_type,
+                subsystem=SUBSYSTEM_ROUTINE,
+                action=action,
+                severity=severity,
+                factual_summary=factual_summary,
+                source="live",
+                source_ref=source_ref,
+                occurred_at=utcnow(),
+                related_module_id=f"alarm:{alarm.id}",
+                detail_json=detail or {},
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001 - see docstring
+        logger.warning("alarm_ledger_failed", alarm_id=str(alarm.id), error=type(exc).__name__)
+
+
+def _publish(alarm: WakeAlarm, state: str, **metadata: Any) -> None:
+    """Never fails the caller — a UI signal must not fail a wake alarm."""
+    ui_state = _UI_STATE_BY_ALARM_STATE.get(state)
+    if ui_state is None:
+        return
+    publish(
+        ui_state,
+        subsystem=SUBSYSTEM_ROUTINE,
+        severity="critical" if state == "FAILED" else "info",
+        status=state.lower(),
+        label=alarm.local_time,
+        metadata={
+            "alarm_id": str(alarm.id),
+            "is_test": alarm.is_test,
+            **{k: v for k, v in metadata.items() if v is not None},
+        },
+    )
+
+
+def _occurrence(alarm: WakeAlarm) -> str:
+    """The occurrence this alarm is currently on: the scheduled instant plus the snooze
+    counter, so a snooze is a genuinely new occurrence rather than a re-run of the old one
+    (which the ledger's ``(source, source_ref)`` idempotency would otherwise swallow)."""
+    return f"{int(alarm.scheduled_for.timestamp())}:{alarm.snooze_count}"
+
+
+def transition(
+    session: Session, alarm: WakeAlarm, state: str, *, now: datetime | None = None, **detail: Any
+) -> WakeAlarm:
+    """Move the alarm to ``state``: guard, write, ledger, publish, commit.
+
+    Exactly one ledger event per transition (spec §3.2), idempotent per
+    ``(alarm_id, state, occurrence)`` through the ledger's own ``(source, source_ref)``
+    uniqueness — so a re-entered state does not multiply rows.
+    """
+    moment = now or utcnow()
+    assert_alarm_transition(alarm.state, state)
+    changed = alarm.state != state
+    alarm.state = state
+    alarm.updated_at = moment
+    if state == STATE_ARMED and alarm.armed_at is None:
+        alarm.armed_at = moment
+    if state == STATE_FIRING and alarm.triggered_at is None:
+        alarm.triggered_at = moment
+    if detail.get("firing_id"):
+        alarm.last_firing_id = uuid.UUID(str(detail["firing_id"]))
+    if state in ALARM_TERMINAL_STATES:
+        alarm.terminal_at = moment
+        alarm.terminal_state = state
+        alarm.terminal_reason = str(detail.get("reason") or "")[:200] or None
+    session.commit()
+
+    _record_ledger(
+        session,
+        event_type=ALARM_EVENT_TYPE_BY_STATE[state],
+        alarm=alarm,
+        action=f"alarm_{state.lower()}",
+        severity=SEVERITY_CRITICAL if state == "FAILED" else SEVERITY_INFO,
+        factual_summary=f"Alarm {state.lower()}: {alarm.local_time} ({alarm.timezone})",
+        source_ref=f"alarms:{alarm.id}:{state.lower()}:{_occurrence(alarm)}",
+        detail={"is_test": alarm.is_test, **{k: str(v)[:200] for k, v in detail.items()}},
+    )
+    if changed or state in ALARM_ACTIVE_STATES:
+        _publish(alarm, state, **{k: v for k, v in detail.items() if isinstance(v, str | int)})
+    return alarm
+
+
+# ---------------------------------------------------------------------- creation
+
+
+def _media_source(media: dict[str, Any] | None) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """(what the owner asked for, what is actually resolved).
+
+    A title with no url resolves to NOTHING — this system never picks a video on the
+    owner's behalf, the rule ``app.routines.actions.validate_media_playback`` already
+    states. The caller turns an unresolved media source into either a tone alarm with a
+    follow-up question or a refusal, depending on whether the alarm recurs (spec §3.8).
+    """
+    media = media or {}
+    url = media.get("url")
+    title = media.get("title") or media.get("remembered")
+    if isinstance(url, str) and url:
+        source = {"kind": MEDIA_KIND_YOUTUBE, "url": url}
+        if title:
+            source["title"] = str(title)[:200]
+        return source, dict(source)
+    if title:
+        return {"kind": "remembered", "name": str(title)[:200]}, None
+    return {"kind": MEDIA_KIND_TONE}, None
+
+
+def create_alarm(
+    session: Session,
+    *,
+    when: ParsedWhen,
+    media: dict[str, Any] | None = None,
+    is_test: bool = False,
+    label: str | None = None,
+    greeting_policy: dict[str, Any] | None = None,
+    volume_policy: dict[str, Any] | None = None,
+    display_wake_policy: dict[str, Any] | None = None,
+    snooze_minutes: int = DEFAULT_SNOOZE_MINUTES,
+    source_ref: str | None = None,
+) -> WakeAlarm:
+    """Create the alarm AND the routine that will fire it (spec §3.1).
+
+    The routine is created first-class through ``app.routines.service.create_routine``, so
+    a wake alarm is visible in ``/v1/routines`` exactly like every other routine and the
+    engine's own idempotency and ledger rows apply to it unchanged.
+    """
+    source, resolved = _media_source(media)
+    alarm = WakeAlarm(
+        id=uuid.uuid4(),
+        timezone=when.timezone or DEFAULT_TIMEZONE,
+        scheduled_for=when.at,
+        local_time=when.local_time,
+        recurrence={"weekdays": list(when.weekdays)} if when.weekdays else None,
+        state=STATE_SCHEDULED,
+        media_source=source,
+        resolved_media_identity=resolved,
+        volume_policy={**DEFAULT_VOLUME_POLICY, **(volume_policy or {})},
+        greeting_policy={**DEFAULT_GREETING_POLICY, **(greeting_policy or {})},
+        display_wake_policy={**DEFAULT_DISPLAY_WAKE_POLICY, **(display_wake_policy or {})},
+        is_test=is_test,
+        label=label,
+        snooze_minutes=max(1, min(int(snooze_minutes), MAX_SNOOZE_MINUTES)),
+        max_play_seconds=TEST_MAX_PLAY_SECONDS if is_test else DEFAULT_MAX_PLAY_SECONDS,
+        detail_json={},
+    )
+    session.add(alarm)
+    session.commit()
+
+    routine = _create_trigger_routine(session, alarm, source_ref=source_ref)
+    alarm.routine_id = routine.routine_id
+    session.commit()
+
+    _record_ledger(
+        session,
+        event_type=ALARM_EVENT_TYPE_BY_STATE[STATE_SCHEDULED],
+        alarm=alarm,
+        action="alarm_scheduled",
+        factual_summary=(
+            f"Alarm kuruldu: {alarm.local_time} ({alarm.timezone})"
+            + (" [test]" if is_test else "")
+        ),
+        source_ref=f"alarms:{alarm.id}:scheduled:{_occurrence(alarm)}",
+        detail={
+            "is_test": is_test,
+            "recurring": bool(when.weekdays),
+            "media_kind": source.get("kind"),
+            "routine_id": str(routine.routine_id),
+        },
+    )
+    return alarm
+
+
+def _create_trigger_routine(
+    session: Session, alarm: WakeAlarm, *, source_ref: str | None = None
+) -> Routine:
+    """One-shot alarms get an ``at`` routine, recurring ones a ``schedule`` routine
+    (spec §3.1). Both carry the single ``wake_alarm`` action and nothing else."""
+    action = {"kind": ACTION_KIND_WAKE_ALARM, "detail": {"alarm_id": str(alarm.id)}}
+    name = ("Test alarmı " if alarm.is_test else "Alarm ") + alarm.local_time
+    if alarm.recurrence:
+        return routines_service.create_routine(
+            session,
+            name=name,
+            trigger_kind=TRIGGER_KIND_SCHEDULE,
+            trigger={
+                "weekdays": list(alarm.recurrence["weekdays"]),
+                "time": alarm.local_time,
+                "timezone": alarm.timezone,
+            },
+            actions=[action],
+            source="alarm",
+            source_ref=source_ref or f"alarm:{alarm.id}",
+            detail_json={"alarm_id": str(alarm.id)},
+        )
+    return routines_service.create_routine(
+        session,
+        name=name,
+        trigger_kind=TRIGGER_KIND_AT,
+        trigger={"at": alarm.scheduled_for.astimezone(UTC).isoformat()},
+        actions=[action],
+        source="alarm",
+        source_ref=source_ref or f"alarm:{alarm.id}:{alarm.snooze_count}",
+        detail_json={"alarm_id": str(alarm.id)},
+    )
+
+
+# ------------------------------------------------------------------------ reads
+
+
+def get_alarm(session: Session, alarm_id: uuid.UUID) -> WakeAlarm | None:
+    return session.get(WakeAlarm, alarm_id)
+
+
+def require_alarm(session: Session, alarm_id: uuid.UUID) -> WakeAlarm:
+    alarm = get_alarm(session, alarm_id)
+    if alarm is None:
+        raise AlarmNotFoundError(f"unknown alarm: {alarm_id}")
+    return alarm
+
+
+def list_alarms(
+    session: Session, *, state: str | None = None, include_terminal: bool = False, limit: int = 100
+) -> list[WakeAlarm]:
+    stmt = select(WakeAlarm)
+    if state is not None:
+        stmt = stmt.where(WakeAlarm.state == state)
+    elif not include_terminal:
+        stmt = stmt.where(WakeAlarm.state.not_in(tuple(sorted(ALARM_TERMINAL_STATES))))
+    stmt = stmt.order_by(WakeAlarm.scheduled_for.asc()).limit(max(1, min(limit, 200)))
+    return list(session.execute(stmt).scalars().all())
+
+
+def next_alarm(session: Session, *, now: datetime | None = None) -> WakeAlarm | None:
+    """The next alarm the owner will hear: the ringing one if there is one, else the
+    soonest pending one. "Sabah alarmım kaçta?" is answered from this."""
+    moment = now or utcnow()
+    active = [a for a in list_alarms(session, limit=200) if a.state in ALARM_ACTIVE_STATES]
+    if active:
+        return active[0]
+    pending = [
+        a
+        for a in list_alarms(session, limit=200)
+        if a.state in ALARM_PENDING_STATES and a.scheduled_for >= moment - timedelta(minutes=1)
+    ]
+    return pending[0] if pending else None
+
+
+def alarms_ringing(session: Session) -> list[WakeAlarm]:
+    return [a for a in list_alarms(session, limit=200) if a.state in ALARM_ACTIVE_STATES]
+
+
+# ------------------------------------------------------------------ owner commands
+
+
+def cancel_alarm(
+    session: Session,
+    alarm_id: uuid.UUID,
+    *,
+    sequence: WakeSequence | None = None,
+    reason: str = "owner",
+    now: datetime | None = None,
+) -> WakeAlarm:
+    """Idempotent: cancelling an already-cancelled alarm is a no-op success."""
+    alarm = require_alarm(session, alarm_id)
+    if alarm.state == STATE_CANCELLED:
+        return alarm
+    if alarm.state in ALARM_TERMINAL_STATES:
+        raise IllegalAlarmTransition(f"alarm is already {alarm.state}")
+    transition(session, alarm, STATE_CANCELLED, now=now, reason=reason)
+    _release(session, alarm, sequence=sequence, reason=reason, now=now)
+    return alarm
+
+
+def stop_alarm(
+    session: Session,
+    alarm_id: uuid.UUID,
+    *,
+    sequence: WakeSequence | None = None,
+    reason: str = "owner",
+    now: datetime | None = None,
+) -> WakeAlarm:
+    """"Alarmı kapat." Idempotent (spec §3.8): stopping a stopped alarm succeeds."""
+    alarm = require_alarm(session, alarm_id)
+    if alarm.state in ALARM_TERMINAL_STATES:
+        return alarm
+    if sequence is not None:
+        sequence.stop_playback(session, alarm, reason=reason, now=now)
+    transition(session, alarm, STATE_STOPPED, now=now, reason=reason)
+    _release(session, alarm, sequence=sequence, reason=reason, now=now)
+    return alarm
+
+
+def snooze_alarm(
+    session: Session,
+    alarm_id: uuid.UUID,
+    *,
+    minutes: int | None = None,
+    sequence: WakeSequence | None = None,
+    now: datetime | None = None,
+) -> WakeAlarm:
+    """Stop the playback, push the alarm forward, arm a fresh one-shot routine (spec §3.5).
+
+    Only meaningful while the alarm is physically happening; a snooze on an idle alarm is
+    refused rather than silently rescheduling something the owner did not ask about.
+    """
+    moment = now or utcnow()
+    alarm = require_alarm(session, alarm_id)
+    if alarm.state not in ALARM_ACTIVE_STATES:
+        raise InvalidAlarmRequest("only a ringing alarm can be snoozed")
+    span = int(minutes if minutes is not None else alarm.snooze_minutes)
+    if span < 1 or span > MAX_SNOOZE_MINUTES:
+        raise InvalidAlarmRequest(f"snooze minutes must be 1..{MAX_SNOOZE_MINUTES}")
+
+    if sequence is not None:
+        sequence.stop_playback(session, alarm, reason="snooze", now=moment)
+    alarm.scheduled_for = moment + timedelta(minutes=span)
+    alarm.local_time = alarm.scheduled_for.astimezone(ZoneInfo(alarm.timezone)).strftime("%H:%M")
+    alarm.snooze_count += 1
+    alarm.snooze_minutes = span
+    alarm.last_firing_id = None
+    alarm.media_kind = None
+    alarm.media_session_id = None
+    alarm.greeting_due_at = None
+    alarm.greeted_at = None
+    alarm.playing_since = None
+    alarm.armed_at = None
+    alarm.triggered_at = None
+    transition(session, alarm, STATE_SNOOZED, now=moment, minutes=span)
+
+    # A fresh one-shot routine for the new moment; the old one is resolved by the engine
+    # (it already fired) or cancelled here if it is still armed (a recurring alarm's
+    # schedule routine stays armed and is NOT touched — tomorrow still happens).
+    routine = _create_trigger_routine(
+        session, alarm, source_ref=f"alarm:{alarm.id}:snooze:{alarm.snooze_count}"
+    )
+    alarm.routine_id = routine.routine_id
+    session.commit()
+    if sequence is not None:
+        sequence.arm(session, alarm, now=moment)
+        transition(session, alarm, STATE_ARMED, now=moment)
+    else:
+        transition(session, alarm, STATE_SCHEDULED, now=moment)
+    return alarm
+
+
+# ------------------------------------------------------------------------- firing
+
+
+@dataclass(frozen=True, slots=True)
+class FireDecision:
+    """Why a fire request did or did not start a ring — the honest answer a dispatcher
+    turns into a ``DispatchOutcome``."""
+
+    fired: bool
+    reason: str
+    result: FireResult | None = None
+
+
+def fire_alarm(
+    session: Session,
+    alarm_id: uuid.UUID,
+    *,
+    sequence: WakeSequence,
+    firing_id: uuid.UUID | None = None,
+    now: datetime | None = None,
+) -> FireDecision:
+    """Start the wake sequence for one alarm, ONCE (module docstring).
+
+    Every refusal below is a real fact about the alarm, not a lock: a terminal alarm, an
+    alarm already ringing, or a re-delivery of the firing that started the current ring.
+    """
+    moment = now or utcnow()
+    alarm = get_alarm(session, alarm_id)
+    if alarm is None:
+        return FireDecision(False, "alarm_not_found")
+    if alarm.state in ALARM_TERMINAL_STATES:
+        return FireDecision(False, f"alarm_{alarm.state.lower()}")
+    if alarm.state in ALARM_ACTIVE_STATES:
+        # A second tick, a second process, or a redelivered command. One ring.
+        return FireDecision(False, "already_firing")
+    if firing_id is not None and alarm.last_firing_id == firing_id:
+        return FireDecision(False, "firing_already_handled")
+    late_by = (moment - alarm.scheduled_for).total_seconds()
+    if late_by > MAX_LATE_FIRE_S:
+        transition(session, alarm, STATE_STOPPED, now=moment, reason="expired_while_down")
+        _release(session, alarm, sequence=sequence, reason="expired", now=moment)
+        return FireDecision(False, "expired")
+
+    result = sequence.fire(
+        session, alarm, firing_id=firing_id, now=moment, transition=transition
+    )
+    session.commit()
+    if result.state == "FAILED":
+        publish(
+            UiState.ERROR,
+            subsystem=SUBSYSTEM_ROUTINE,
+            severity="critical",
+            status="alarm_failed",
+            label=alarm.local_time,
+            metadata={"alarm_id": str(alarm.id), "reason": result.reason[:64]},
+        )
+        _release(session, alarm, sequence=sequence, reason="audio_failed", now=moment)
+        return FireDecision(False, "audio_failed", result)
+    return FireDecision(True, result.media_kind or "", result)
+
+
+# --------------------------------------------------------------------------- tick
+
+
+@dataclass(frozen=True, slots=True)
+class TickResult:
+    armed: int = 0
+    greeted: int = 0
+    completed: int = 0
+    checked: int = 0
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "checked": self.checked,
+            "armed": self.armed,
+            "greeted": self.greeted,
+            "completed": self.completed,
+        }
+
+
+def tick(
+    session: Session,
+    *,
+    sequence: WakeSequence | None = None,
+    now: datetime | None = None,
+) -> TickResult:
+    """One pass over every non-terminal alarm (spec §3.3's second step).
+
+    Arms what needs arming, speaks a greeting that has come due, and completes an alarm
+    that has played long enough. Every decision comes from a stored timestamp compared to
+    ``now`` — never from "this is the Nth tick" — so a process that missed ten ticks does
+    the right thing on its first one.
+    """
+    moment = now or utcnow()
+    armed = greeted = completed = 0
+    alarms = list_alarms(session, limit=200)
+    for alarm in alarms:
+        try:
+            if alarm.state in ALARM_PENDING_STATES:
+                if sequence is not None and _should_arm(alarm, moment):
+                    step = sequence.arm(session, alarm, now=moment)
+                    if step.ok:
+                        transition(session, alarm, STATE_ARMED, now=moment)
+                        armed += 1
+                continue
+            if alarm.state == STATE_PLAYING:
+                if _greeting_due(alarm, moment) and sequence is not None:
+                    local_now = moment.astimezone(ZoneInfo(alarm.timezone))
+                    sequence.speak_greeting(
+                        session,
+                        alarm,
+                        local_now=local_now,
+                        now=moment,
+                        transition=transition,
+                    )
+                    session.commit()
+                    greeted += 1
+                    continue
+                if _play_expired(alarm, moment):
+                    complete_alarm(session, alarm, sequence=sequence, now=moment)
+                    completed += 1
+        except Exception as exc:  # noqa: BLE001 - one alarm's failure must not skip the rest
+            logger.warning(
+                "alarm_tick_failed",
+                alarm_id=str(alarm.id),
+                state=alarm.state,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+    return TickResult(armed=armed, greeted=greeted, completed=completed, checked=len(alarms))
+
+
+def _should_arm(alarm: WakeAlarm, now: datetime) -> bool:
+    if alarm.state == STATE_ARMED:
+        return False
+    return (alarm.scheduled_for - now).total_seconds() <= ARM_LEAD_S
+
+
+def _greeting_due(alarm: WakeAlarm, now: datetime) -> bool:
+    if alarm.greeted_at is not None or alarm.greeting_due_at is None:
+        return False
+    if not (alarm.greeting_policy or {}).get("enabled", True):
+        return False
+    return _aware(alarm.greeting_due_at) <= now
+
+
+def _play_expired(alarm: WakeAlarm, now: datetime) -> bool:
+    if alarm.playing_since is None:
+        return False
+    return (now - _aware(alarm.playing_since)).total_seconds() >= alarm.max_play_seconds
+
+
+def _aware(dt: datetime) -> datetime:
+    return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
+
+
+def complete_alarm(
+    session: Session,
+    alarm: WakeAlarm,
+    *,
+    sequence: WakeSequence | None = None,
+    now: datetime | None = None,
+) -> WakeAlarm:
+    moment = now or utcnow()
+    if sequence is not None:
+        sequence.stop_playback(session, alarm, reason="completed", now=moment)
+    transition(session, alarm, STATE_COMPLETED, now=moment, reason="max_play_seconds")
+    _release(session, alarm, sequence=sequence, reason="completed", now=moment)
+    return alarm
+
+
+# ------------------------------------------------------------- device reconciliation
+
+
+def reconcile_local_fired(
+    session: Session, alarm_ids: list[str], *, now: datetime | None = None
+) -> list[WakeAlarm]:
+    """The device rang its own armed fallback (spec §3.6d).
+
+    The cloud did not reach it in time and the fallback did exactly its job. The alarm is
+    marked PLAYING with ``media_kind=local_fallback`` so a later stop/snooze addresses the
+    real thing, and the ledger says what happened — never a second ring on top.
+    """
+    moment = now or utcnow()
+    touched: list[WakeAlarm] = []
+    for raw in alarm_ids:
+        try:
+            alarm = get_alarm(session, uuid.UUID(str(raw)))
+        except (ValueError, AttributeError, TypeError):
+            continue
+        if alarm is None or alarm.state in ALARM_TERMINAL_STATES:
+            continue
+        if alarm.state not in ALARM_ACTIVE_STATES:
+            transition(session, alarm, STATE_FIRING, now=moment, reason="local_fallback")
+        alarm.media_kind = PLAYED_KIND_LOCAL_FALLBACK
+        alarm.playing_since = alarm.playing_since or moment
+        transition(session, alarm, STATE_PLAYING, now=moment, media_kind=PLAYED_KIND_LOCAL_FALLBACK)
+        _record_ledger(
+            session,
+            event_type=EVENT_TYPE_ALARM_LOCAL_FALLBACK_RANG,
+            alarm=alarm,
+            action="alarm_local_fallback_rang",
+            factual_summary=f"Cihaz kendi yedek alarmını çaldı: {alarm.local_time}",
+            source_ref=f"alarms:{alarm.id}:local_fallback:{_occurrence(alarm)}",
+            detail={"media_kind": PLAYED_KIND_LOCAL_FALLBACK},
+        )
+        touched.append(alarm)
+    return touched
+
+
+# -------------------------------------------------------------------- the release
+
+
+def _release(
+    session: Session,
+    alarm: WakeAlarm,
+    *,
+    sequence: WakeSequence | None,
+    reason: str,
+    now: datetime | None = None,
+) -> None:
+    """Everything a terminal alarm must let go of (spec §8.1), on EVERY terminal state.
+
+    Disarm the device, close the media session, resolve or re-schedule the routine, write
+    ``alarm.cleaned_up``. Not a test-alarm special case: a real alarm that leaves a device
+    armed would ring again tomorrow for no reason.
+    """
+    moment = now or utcnow()
+    disarmed = False
+    if sequence is not None:
+        try:
+            disarmed = sequence.disarm(session, alarm, reason=reason, now=moment).ok
+        except Exception as exc:  # noqa: BLE001 - cleanup is best effort, never a new failure
+            logger.warning("alarm_disarm_failed", alarm_id=str(alarm.id), error=type(exc).__name__)
+    alarm.media_session_id = None
+    alarm.greeting_due_at = None
+
+    rescheduled = False
+    if alarm.recurrence and alarm.state not in (STATE_CANCELLED,):
+        # A recurring alarm's next occurrence: the schedule routine stays armed, and the
+        # aggregate follows it forward so "Sabah alarmım kaçta?" answers about tomorrow.
+        try:
+            alarm.scheduled_for = next_occurrence_after(
+                local_time=alarm.local_time,
+                weekdays=alarm.recurrence.get("weekdays") or [],
+                after=moment,
+                timezone=alarm.timezone,
+            )
+            alarm.state = STATE_SCHEDULED
+            alarm.terminal_at = None
+            alarm.terminal_state = None
+            alarm.terminal_reason = None
+            alarm.last_firing_id = None
+            alarm.media_kind = None
+            alarm.greeted_at = None
+            alarm.playing_since = None
+            alarm.armed_at = None
+            alarm.triggered_at = None
+            rescheduled = True
+        except Exception as exc:  # noqa: BLE001 - a broken recurrence must not break cleanup
+            logger.warning(
+                "alarm_reschedule_failed", alarm_id=str(alarm.id), error=type(exc).__name__
+            )
+    elif alarm.routine_id is not None:
+        try:
+            routine = session.get(Routine, alarm.routine_id)
+            if routine is not None and routine.status == ROUTINE_STATUS_ARMED:
+                routines_service.cancel_routine(
+                    session, routine.routine_id, reason=f"alarm_{alarm.state.lower()}"
+                )
+        except Exception as exc:  # noqa: BLE001 - see above
+            logger.warning(
+                "alarm_routine_cancel_failed", alarm_id=str(alarm.id), error=type(exc).__name__
+            )
+    session.commit()
+
+    _record_ledger(
+        session,
+        event_type=EVENT_TYPE_ALARM_CLEANED_UP,
+        alarm=alarm,
+        action="alarm_cleaned_up",
+        factual_summary=f"Alarm serbest bırakıldı: {alarm.local_time} ({reason})",
+        source_ref=f"alarms:{alarm.id}:cleaned_up:{_occurrence(alarm)}:{reason}",
+        detail={
+            "reason": reason,
+            "device_disarmed": disarmed,
+            "rescheduled": rescheduled,
+            "is_test": alarm.is_test,
+        },
+    )
+
+
+# ------------------------------------------------------------------------- speech
+
+
+def status_speech(session: Session, *, now: datetime | None = None) -> tuple[str, WakeAlarm | None]:
+    """The "Sabah alarmım kaçta?" answer and the alarm it is about (spec §6)."""
+    alarm = next_alarm(session, now=now)
+    return alarm_speech.alarm_query_speech(alarm.local_time if alarm else None), alarm
+
+
+def alarm_dict(alarm: WakeAlarm) -> dict[str, Any]:
+    return {
+        "alarm_id": str(alarm.id),
+        "state": alarm.state,
+        "timezone": alarm.timezone,
+        "scheduled_for": _aware(alarm.scheduled_for).astimezone(UTC).isoformat().replace(
+            "+00:00", "Z"
+        ),
+        "local_time": alarm.local_time,
+        "recurrence": alarm.recurrence,
+        "media_source": alarm.media_source,
+        "resolved_media_identity": alarm.resolved_media_identity,
+        "media_kind": alarm.media_kind,
+        "volume_policy": alarm.volume_policy,
+        "greeting_policy": alarm.greeting_policy,
+        "display_wake_policy": alarm.display_wake_policy,
+        "is_test": alarm.is_test,
+        "label": alarm.label,
+        "routine_id": str(alarm.routine_id) if alarm.routine_id else None,
+        "snooze_count": alarm.snooze_count,
+        "snooze_minutes": alarm.snooze_minutes,
+        "terminal_state": alarm.terminal_state,
+        "terminal_reason": alarm.terminal_reason,
+        "max_play_seconds": alarm.max_play_seconds,
+        "greeted_at": _aware(alarm.greeted_at).isoformat() if alarm.greeted_at else None,
+    }
+
+
+__all__ = [
+    "ARM_LEAD_S",
+    "MAX_LATE_FIRE_S",
+    "AlarmNotFoundError",
+    "FireDecision",
+    "InvalidAlarmRequest",
+    "TickResult",
+    "alarm_dict",
+    "alarms_ringing",
+    "cancel_alarm",
+    "complete_alarm",
+    "create_alarm",
+    "fire_alarm",
+    "get_alarm",
+    "list_alarms",
+    "next_alarm",
+    "reconcile_local_fired",
+    "require_alarm",
+    "snooze_alarm",
+    "status_speech",
+    "stop_alarm",
+    "tick",
+    "transition",
+    "utcnow",
+]
