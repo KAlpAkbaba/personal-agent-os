@@ -96,7 +96,22 @@
       "required": ["type", "seq"],
       "properties": {
         "type": { "const": "heartbeat" },
-        "seq": { "type": "integer", "minimum": 0 }
+        "seq": { "type": "integer", "minimum": 0 },
+        "status": { "$ref": "#/$defs/deviceStatus" }
+      },
+      "additionalProperties": false
+    },
+    "deviceStatus": {
+      "$comment": "M18.3 (DEVICE_PROTOCOL.md §6g): OPTIONAL and additive; protocol_version stays 1. What the owner-session companion currently sees, attached by the Device Service when the companion answers desktop.activity_status within 1.5 s. Absent means 'not known', never 'nothing is happening': no companion connected, a slow companion, or an agent older than this field all produce a heartbeat without it, and presence/liveness never depend on it. The key set is CLOSED (additionalProperties false) and the Device Service projects onto exactly these keys before sending, so a newer companion cannot make a heartbeat fail validation. It carries no key, character, pointer position, window title or application name: input_idle_s is derived from one tick count, display_state is what the OS broadcast, and the alarm fields are the agent's own state.",
+      "type": "object",
+      "properties": {
+        "input_idle_s": { "type": ["number", "null"], "minimum": 0 },
+        "display_state": { "enum": ["unknown", "off", "on", "dimmed"] },
+        "display_observed_at": { "type": ["string", "null"], "format": "date-time" },
+        "alarm_ringing": { "type": "boolean" },
+        "ringing_alarm_id": { "type": ["string", "null"], "maxLength": 128 },
+        "armed_alarms": { "type": "integer", "minimum": 0 },
+        "next_alarm_at": { "type": ["string", "null"], "format": "date-time" }
       },
       "additionalProperties": false
     },

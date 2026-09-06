@@ -210,27 +210,92 @@ public static class Program
         // the ramp is enforced by WakeRamp, independently of whatever Cloud Core validated.
         // With no render endpoint present the capability answers dependency_unavailable —
         // true about right now, and retryable — rather than pretending to have rung.
-        var alarm = OperatingSystem.IsWindows()
-            ? BuildAlarmController(configuration, loggerFactory.CreateLogger("Alarm"), audit)
-            : null;
+        var audioLogger = loggerFactory.CreateLogger("Alarm");
+        (PagentOS.Companion.Audio.Audio.IAudioDeviceFactory Factory, Func<string?> ResolveRenderDevice)? audio =
+            OperatingSystem.IsWindows() ? BuildAudioOutput(configuration, audioLogger) : null;
+        var alarm = audio is null
+            ? null
+            : new AlarmController(audio.Value.Factory, audio.Value.ResolveRenderDevice, audioLogger, audit: audit);
+
+        // M18.3 (§6h): the greeting. Same render path as the alarm, same "resolve the endpoint
+        // per use" rule, and the same promise about the machine's mixer: it is never touched.
+        using var greetingHttp = new HttpClient();
+        var greeting = audio is null
+            ? null
+            : new GreetingPlayer(
+                audio.Value.Factory,
+                audio.Value.ResolveRenderDevice,
+                greetingHttp,
+                loggerFactory.CreateLogger("Greeting"),
+                audit);
+
+        // M18.3 (§6f): the LOCAL fallback for an alarm the cloud means to ring. Persisted in the
+        // owner's profile, so a companion restart between "arm" and 06:30 does not lose it, and
+        // consumed by the cloud's own alarm_start so one wake-up never rings twice.
+        var armStorePath = configuration["ArmedAlarmStorePath"];
+        if (string.IsNullOrWhiteSpace(armStorePath))
+        {
+            armStorePath = ArmedAlarmStore.DefaultPath();
+        }
+
+        var armLogger = loggerFactory.CreateLogger("AlarmArm");
+        var alarmArms = new AlarmArmController(
+            new ArmedAlarmStore(armStorePath, armLogger),
+            alarm,
+            armLogger,
+            audit: audit);
+        var rangOnStart = alarmArms.ReloadOnStart();
+        logger.LogInformation(
+            "armed alarm store: {Path} ({Count} armed, {Rang} rang on reload)",
+            armStorePath,
+            alarmArms.ArmedCount,
+            rangOnStart);
 
         // M18 (§6d): display-off. OFF unless asked for out loud, because display-off has its
         // own owner qualification and a wrong sleep inference that blanks the screen
         // interrupts unrelated owner work. Not enabled => not advertised, and refused twice
         // over (here and in the Device Service) if something sends it anyway.
         var displayPowerEnabled = ParseFlag(configuration["DisplayPowerEnabled"]);
+
+        // M18.3 (§6e/§6g): the two things this companion SENSES. Both are read-only, both are
+        // unconditional (they add nothing to what anyone can already do to this machine), and
+        // both report "unknown" rather than a guess when they have not been told anything.
+        var inputActivity = OperatingSystem.IsWindows()
+            ? new Win32InputActivitySource()
+            : (IInputActivitySource)UnknownInputActivitySource.Instance;
+        Win32DisplayStateObserver? displayObserver = null;
+        if (OperatingSystem.IsWindows())
+        {
+            displayObserver = new Win32DisplayStateObserver(loggerFactory.CreateLogger("DisplayObserver"));
+            displayObserver.Start();
+        }
+
         var displayPower = OperatingSystem.IsWindows()
             ? new DisplayPowerController(
                 new Win32DisplayPower(),
                 loggerFactory.CreateLogger("DisplayPower"),
                 displayPowerEnabled,
-                audit)
+                audit,
+                input: inputActivity,
+                observer: displayObserver ?? (IDisplayStateObserver)UnknownDisplayStateObserver.Instance,
+                monitors: new Win32MonitorInventory(),
+                // The holdoff's second half: a screen must not go dark while an alarm is
+                // ringing, whatever the idle timer says.
+                isAlarmRinging: () => alarm?.IsRinging == true,
+                wake: new Win32DisplayWake())
             : null;
         logger.LogInformation(
             displayPowerEnabled
-                ? "display power: ENABLED - desktop.display_off is advertised and will turn the display off"
+                ? "display power: ENABLED - desktop.display_off is advertised and will turn the display off "
+                  + "unless input is recent or an alarm is ringing"
                 : "display power: disabled (PAGENTOS_AGENT_DisplayPowerEnabled=true enables it); "
-                  + "desktop.display_off is not advertised");
+                  + "desktop.display_off is not advertised. Waking and reporting stay available.");
+
+        var activityStatus = new ActivityStatusReporter(
+            inputActivity,
+            displayObserver ?? (IDisplayStateObserver)UnknownDisplayStateObserver.Instance,
+            () => alarm?.RingingAlarmId,
+            alarmArms);
 
         var runtime = new CompanionRuntime(
             pipeName,
@@ -242,7 +307,10 @@ public static class Program
             sidebandSink: sidebandSource,
             browserWorker: browserHost,
             alarm: alarm,
-            displayPower: displayPower);
+            displayPower: displayPower,
+            alarmArms: alarmArms,
+            activityStatus: activityStatus,
+            greeting: greeting);
         logger.LogInformation("capabilities advertised to the device service: {Capabilities}", string.Join(",", runtime.AdvertisedCapabilities));
 
         if (browserHost is not null && browserOptions.Eager)
@@ -284,7 +352,9 @@ public static class Program
 
             // A ringing alarm must not outlive the process that started it: there would be no
             // way left to stop it except killing the audio session.
+            alarmArms.Dispose();
             alarm?.Dispose();
+            displayObserver?.Dispose();
         }
 
         return 0;
@@ -300,14 +370,15 @@ public static class Program
     }
 
     /// <summary>
-    /// The alarm's render endpoint: the configured <c>AlarmRenderDevice</c>, else
-    /// <c>VoiceRenderDevice</c> (the owner already chose a speaker for the assistant's voice),
-    /// else the session's default render endpoint. Resolved lazily on every
-    /// <c>desktop.alarm_start</c>, not once at startup — a headset plugged in after the
-    /// companion started should be usable by the next alarm.
+    /// The companion's render path, shared by the alarm (§6c) and the greeting (§6h): the
+    /// configured <c>AlarmRenderDevice</c>, else <c>VoiceRenderDevice</c> (the owner already
+    /// chose a speaker for the assistant's voice), else the session's default render endpoint.
+    /// Resolved lazily on every use, not once at startup — a headset plugged in after the
+    /// companion started should be usable by the next alarm, and by the greeting after it.
     /// </summary>
     [System.Runtime.Versioning.SupportedOSPlatform("windows")]
-    private static AlarmController BuildAlarmController(IConfiguration configuration, ILogger logger, AuditLog audit)
+    private static (PagentOS.Companion.Audio.Audio.IAudioDeviceFactory Factory, Func<string?> ResolveRenderDevice)
+        BuildAudioOutput(IConfiguration configuration, ILogger logger)
     {
         var configured = configuration["AlarmRenderDevice"];
         if (string.IsNullOrWhiteSpace(configured))
@@ -317,12 +388,7 @@ public static class Program
 
         var catalog = new PagentOS.Companion.Audio.Wasapi.WasapiDeviceCatalog();
         var factory = new PagentOS.Companion.Audio.Wasapi.WasapiDeviceFactory(catalog, logger);
-
-        return new AlarmController(
-            factory,
-            () => ResolveRenderDevice(catalog, configured),
-            logger,
-            audit: audit);
+        return (factory, () => ResolveRenderDevice(catalog, configured));
     }
 
     [System.Runtime.Versioning.SupportedOSPlatform("windows")]
