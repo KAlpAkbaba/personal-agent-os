@@ -232,6 +232,17 @@ def test_create_selects_by_capability_and_returns_the_contract(wired) -> None:
         "eye.enable",
         "eye.disable",
         "release.promote",
+        # M18.3 (ADR-0071): the wake alarm, the displays and the ambient policy by voice.
+        "alarm.create",
+        "alarm.cancel",
+        "alarm.snooze",
+        "alarm.stop",
+        "alarm.status",
+        "display.off",
+        "display.wake",
+        "display.status",
+        "ambient.set_policy",
+        "ambient.test_display",
     }
     research = next(t for t in data["tools"] if t["name"] == "research.start")
     assert research["long_running"] is True and research["preamble"] == RESEARCH_PREAMBLE_TR

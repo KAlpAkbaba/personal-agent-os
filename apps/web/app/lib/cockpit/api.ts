@@ -426,26 +426,43 @@ export type DeviceStatus = {
   statusKnown: boolean;
 };
 
-function parseDevice(raw: unknown): DeviceStatus {
+export function parseDevice(raw: unknown): DeviceStatus {
   const o = (raw ?? {}) as Record<string, unknown>;
-  const status = (o.status && typeof o.status === "object" ? o.status : null) as Record<
+  // The heartbeat status rides the inventory row under `heartbeat_status` (the row's own
+  // `status` is the ENROLLMENT status string); an object under `status` is accepted for a
+  // reader of the older shape.
+  const candidate = o.heartbeat_status ?? o.status;
+  const status = (candidate && typeof candidate === "object" ? candidate : null) as Record<
     string,
     unknown
   > | null;
   const display = (status?.display && typeof status.display === "object"
     ? status.display
     : {}) as Record<string, unknown>;
+  // The companion reports armed alarms as a COUNT (`armed_alarm_count`, or a bare number
+  // under `armed_alarms`); the spec's original shape was an id list. Either is a count here.
   const armed = status?.armed_alarms;
+  const armedCount =
+    status && typeof status.armed_alarm_count === "number"
+      ? (status.armed_alarm_count as number)
+      : Array.isArray(armed)
+        ? armed.length
+        : typeof armed === "number"
+          ? armed
+          : null;
+  const online = flag(o, "online") ?? flag(o, "connected");
+  const presence = str(o, "presence");
   return {
     device_id: str(o, "id") ?? str(o, "device_id") ?? "",
     label: str(o, "label") ?? str(o, "name"),
-    online: flag(o, "online") ?? flag(o, "connected"),
+    online: online ?? (presence ? presence === "online" : null),
     last_seen_at: str(o, "last_seen_at"),
     input_idle_s: status ? num(status, "input_idle_s") : null,
-    display_state: str(display, "state"),
-    display_observed_at: str(display, "observed_at"),
+    display_state: str(display, "state") ?? (status ? str(status, "display_state") : null),
+    display_observed_at:
+      str(display, "observed_at") ?? (status ? str(status, "display_observed_at") : null),
     alarm_ringing: status ? flag(status, "alarm_ringing") : null,
-    armed_alarms: Array.isArray(armed) ? armed.length : null,
+    armed_alarms: armedCount,
     statusKnown: status !== null,
   };
 }

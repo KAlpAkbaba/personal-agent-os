@@ -252,7 +252,9 @@ try {
     Write-Host "HANDS OFF the keyboard and mouse now. In about $DelaySec s the displays go dark." -ForegroundColor Cyan
     Write-Host "When they do, press SHIFT once (or move the mouse). Then hands off again until this script finishes." -ForegroundColor Cyan
     Write-Host ""
-    $testBody = @{ delay_seconds = $DelaySec; reason = "owner_test"; device_holdoff_s = 5 } | ConvertTo-Json -Compress
+    # The route takes only the delay (app/ambient/routes.py); the reason is owner_test and the
+    # device holdoff is short by construction on the test path (app/ambient/service.py).
+    $testBody = @{ delay_seconds = $DelaySec } | ConvertTo-Json -Compress
     $armed = Send-Json -Method "POST" -Path $routeTestDisplay -Body $testBody
     $evidence.test = $armed
     Add-Timeline -What "test armed" -Detail ("scheduled for " + [string](Get-OptionalProperty -InputObject $armed -Name "scheduled_at"))

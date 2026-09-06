@@ -137,6 +137,7 @@ def upgrade() -> None:
         sa.Column("alarm_holdoff_s", sa.Integer(), nullable=False, server_default="1800"),
         sa.Column("return_holdoff_s", sa.Integer(), nullable=False, server_default="600"),
         sa.Column("quiet_hours", json_type, nullable=True),
+        sa.Column("wake_song", json_type, nullable=True),
         sa.Column(
             "updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
         ),

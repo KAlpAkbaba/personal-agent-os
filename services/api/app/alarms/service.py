@@ -248,12 +248,49 @@ def transition(
 # ---------------------------------------------------------------------- creation
 
 
-def _media_source(media: dict[str, Any] | None) -> tuple[dict[str, Any], dict[str, Any] | None]:
+def get_wake_song(session: Session) -> dict[str, Any] | None:
+    """The owner's approved wake song, or None. Lives on the ambient policy row (one row,
+    one owner); the alarms package reads it, the owner sets it through
+    :func:`set_wake_song` / ``PUT /v1/alarms/wake-song``."""
+    from app.alarms.models import AMBIENT_POLICY_ID, AmbientPolicyRow
+
+    row = session.get(AmbientPolicyRow, AMBIENT_POLICY_ID)
+    if row is None or not isinstance(row.wake_song, dict):
+        return None
+    url = row.wake_song.get("url")
+    if not isinstance(url, str) or not url:
+        return None
+    return {"url": url, "title": str(row.wake_song.get("title") or "")[:200]}
+
+
+def set_wake_song(session: Session, *, url: str, title: str | None = None) -> dict[str, Any]:
+    """Remember the wake song the owner named. Only an http(s) URL the owner gave is ever
+    stored — this is the one place a "remembered" title becomes a playable item."""
+    from app.alarms.models import AMBIENT_POLICY_ID, AmbientPolicyRow
+
+    url = url.strip()
+    if not (url.startswith("https://") or url.startswith("http://")):
+        raise InvalidAlarmRequest("the wake song must be an http(s) URL the owner named")
+    row = session.get(AmbientPolicyRow, AMBIENT_POLICY_ID)
+    if row is None:
+        row = AmbientPolicyRow(policy_id=AMBIENT_POLICY_ID)
+        session.add(row)
+    row.wake_song = {"url": url[:2000], "title": str(title or "")[:200]}
+    row.updated_at = utcnow()
+    session.commit()
+    return dict(row.wake_song)
+
+
+def _media_source(
+    media: dict[str, Any] | None, *, wake_song: dict[str, Any] | None = None
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """(what the owner asked for, what is actually resolved).
 
     A title with no url resolves to NOTHING — this system never picks a video on the
     owner's behalf, the rule ``app.routines.actions.validate_media_playback`` already
-    states. The caller turns an unresolved media source into either a tone alarm with a
+    states — UNLESS the owner has approved a wake song (:func:`set_wake_song`): then
+    "seçtiğim müzik" / a remembered title resolves to that one item, which the owner
+    named. The caller turns an unresolved media source into either a tone alarm with a
     follow-up question or a refusal, depending on whether the alarm recurs (spec §3.8).
     """
     media = media or {}
@@ -265,7 +302,13 @@ def _media_source(media: dict[str, Any] | None) -> tuple[dict[str, Any], dict[st
             source["title"] = str(title)[:200]
         return source, dict(source)
     if title:
-        return {"kind": "remembered", "name": str(title)[:200]}, None
+        source = {"kind": "remembered", "name": str(title)[:200]}
+        if wake_song and isinstance(wake_song.get("url"), str) and wake_song["url"]:
+            resolved = {"kind": MEDIA_KIND_YOUTUBE, "url": wake_song["url"]}
+            if wake_song.get("title"):
+                resolved["title"] = str(wake_song["title"])[:200]
+            return source, resolved
+        return source, None
     return {"kind": MEDIA_KIND_TONE}, None
 
 
@@ -288,7 +331,7 @@ def create_alarm(
     a wake alarm is visible in ``/v1/routines`` exactly like every other routine and the
     engine's own idempotency and ledger rows apply to it unchanged.
     """
-    source, resolved = _media_source(media)
+    source, resolved = _media_source(media, wake_song=get_wake_song(session))
     alarm = WakeAlarm(
         id=uuid.uuid4(),
         timezone=when.timezone or DEFAULT_TIMEZONE,
@@ -831,6 +874,14 @@ def alarm_dict(alarm: WakeAlarm) -> dict[str, Any]:
         "terminal_reason": alarm.terminal_reason,
         "max_play_seconds": alarm.max_play_seconds,
         "greeted_at": _aware(alarm.greeted_at).isoformat() if alarm.greeted_at else None,
+        # The lifecycle instants and the device, so an owner harness can prove "armed on
+        # the device", "fired at the scheduled instant" and "cleaned up" from this row alone.
+        "device_id": str(alarm.device_id) if alarm.device_id else None,
+        "last_firing_id": str(alarm.last_firing_id) if alarm.last_firing_id else None,
+        "created_at": _aware(alarm.created_at).isoformat() if alarm.created_at else None,
+        "armed_at": _aware(alarm.armed_at).isoformat() if alarm.armed_at else None,
+        "triggered_at": _aware(alarm.triggered_at).isoformat() if alarm.triggered_at else None,
+        "terminal_at": _aware(alarm.terminal_at).isoformat() if alarm.terminal_at else None,
     }
 
 

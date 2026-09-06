@@ -258,6 +258,10 @@ class AmbientPolicyRow(Base):
     return_holdoff_s: Mapped[int] = mapped_column(Integer, nullable=False, default=600)
     #: None, or {"start": "HH:MM", "end": "HH:MM"} — reserved, never used to force an off.
     quiet_hours: Mapped[dict[str, Any] | None] = mapped_column(JSONColumn, nullable=True)
+    #: The owner's approved wake song — {"url": ..., "title": ...} — the one item
+    #: "seçtiğim müzik" / a remembered title resolves to (spec §3.8). Set only by the owner
+    #: (a URL they named); never chosen by the system. None until the owner picks one.
+    wake_song: Mapped[dict[str, Any] | None] = mapped_column(JSONColumn, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

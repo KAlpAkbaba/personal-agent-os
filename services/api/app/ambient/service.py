@@ -301,8 +301,11 @@ def tick(
     pending_test = _due_test(moment)
     if pending_test is not None and sequence is not None:
         _clear_test()
+        # The owner asked for this darkening out loud seconds ago - typing or speaking the
+        # request IS recent input. A short device holdoff (not the automatic policy's 120 s)
+        # lets the test run; the automatic path below keeps the long one.
         step = sequence.display_off(
-            session, reason=REASON_OWNER_TEST, holdoff_s=120, now=moment
+            session, reason=REASON_OWNER_TEST, holdoff_s=5, now=moment
         )
         _publish_display_intent(step, reason=REASON_OWNER_TEST)
         return AmbientTickResult(

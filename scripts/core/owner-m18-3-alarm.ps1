@@ -441,12 +441,17 @@ try {
     $cleanRows = @($rows | Where-Object { [string](Get-OptionalProperty -InputObject $_ -Name "event_type") -eq "alarm.cleaned_up" })
     $statusAfter = Get-DeviceStatus -DeviceId $deviceId
     $evidence.device_status_after = $statusAfter
-    # The device reports armed_alarms as a COUNT (DEVICE_PROTOCOL.md 6g); an older shape was a list.
-    $armedRaw = Get-OptionalProperty -InputObject $statusAfter -Name "armed_alarms"
+    # The device reports armed_alarms as a COUNT (DEVICE_PROTOCOL.md 6g); the Cloud Core's
+    # status document carries it as armed_alarm_count beside an id list for the older shape.
     $armedCount = 0
-    if ($null -ne $armedRaw) {
-        if ($armedRaw -is [array]) { $armedCount = $armedRaw.Count }
-        else { try { $armedCount = [int]$armedRaw } catch { $armedCount = 1 } }
+    $armedCounted = Get-OptionalProperty -InputObject $statusAfter -Name "armed_alarm_count"
+    if ($null -ne $armedCounted) { try { $armedCount = [int]$armedCounted } catch { $armedCount = 1 } }
+    else {
+        $armedRaw = Get-OptionalProperty -InputObject $statusAfter -Name "armed_alarms"
+        if ($null -ne $armedRaw) {
+            if ($armedRaw -is [array]) { $armedCount = $armedRaw.Count }
+            else { try { $armedCount = [int]$armedRaw } catch { $armedCount = 1 } }
+        }
     }
     $ringingAfter = if ($null -ne $statusAfter) { [bool](Get-OptionalProperty -InputObject $statusAfter -Name "alarm_ringing") } else { $false }
     Add-Check -Name "alarm.cleaned_up" -Ok ($terminalStates -contains $state -and $cleanRows.Count -ge 1 -and $armedCount -eq 0 -and -not $ringingAfter) -Detail "state $state; alarm.cleaned_up rows: $($cleanRows.Count); device armed alarms after: $armedCount; ringing after: $ringingAfter"

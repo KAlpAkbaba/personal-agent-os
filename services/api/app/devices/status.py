@@ -63,10 +63,27 @@ def _clamp_float(value: Any, *, default: float | None = None) -> float | None:
 
 
 def _display_state(raw: Any) -> str:
-    if not isinstance(raw, dict):
-        return DISPLAY_UNKNOWN
-    state = raw.get("state")
-    return state if state in DISPLAY_STATES else DISPLAY_UNKNOWN
+    """The display state from either shape the device may send: the spec's nested
+    ``display: {state, observed_at}`` or the companion's flat ``display_state`` string
+    (DEVICE_PROTOCOL.md §6g as shipped). Anything else is unknown."""
+    if isinstance(raw, dict):
+        state = raw.get("state")
+        return state if state in DISPLAY_STATES else DISPLAY_UNKNOWN
+    if isinstance(raw, str):
+        return raw if raw in DISPLAY_STATES else DISPLAY_UNKNOWN
+    return DISPLAY_UNKNOWN
+
+
+def _armed_count(raw: Any) -> int:
+    """``armed_alarms`` as the companion reports it: a COUNT (§6g), or an id list in the
+    spec's original shape. Never negative, never a bool read as one."""
+    if isinstance(raw, bool):
+        return 0
+    if isinstance(raw, int):
+        return max(0, raw)
+    if isinstance(raw, list | tuple):
+        return len(_id_list(raw))
+    return 0
 
 
 def _id_list(raw: Any) -> tuple[str, ...]:
@@ -98,8 +115,11 @@ class DeviceStatus:
     alarm_ringing: bool = False
     ringing_alarm_id: str | None = None
     armed_alarms: tuple[str, ...] = ()
+    #: How many alarms the companion holds armed (the count it reports, or the list's length).
+    armed_alarm_count: int = 0
     local_alarm_fired: tuple[str, ...] = ()
     holdoff_until: datetime | None = None
+    next_alarm_at: datetime | None = None
     monitors: int | None = None
     raw_keys: tuple[str, ...] = field(default_factory=tuple)
 
@@ -118,11 +138,18 @@ class DeviceStatus:
                 "state": self.display_state,
                 "observed_at": _iso(self.display_observed_at),
             },
+            # The flat spellings beside the nested block, so a reader written against either
+            # shape (the web cockpit, the owner harnesses, the companion's own document) finds
+            # the display state where it looks for it.
+            "display_state": self.display_state,
+            "display_observed_at": _iso(self.display_observed_at),
             "alarm_ringing": self.alarm_ringing,
             "ringing_alarm_id": self.ringing_alarm_id,
             "armed_alarms": list(self.armed_alarms),
+            "armed_alarm_count": self.armed_alarm_count,
             "local_alarm_fired": list(self.local_alarm_fired),
             "holdoff_until": _iso(self.holdoff_until),
+            "next_alarm_at": _iso(self.next_alarm_at),
             "monitors": self.monitors,
         }
 
@@ -178,15 +205,20 @@ def parse_status(
     if not isinstance(raw, dict) or not raw:
         return None
     moment = now or datetime.now(UTC)
+    # Either shape: the spec's nested `display` block, or the companion's flat
+    # `display_state` / `display_observed_at` (DEVICE_PROTOCOL.md §6g as shipped).
     display = raw.get("display")
+    if display is None:
+        display = raw.get("display_state")
+    display_observed = (
+        display.get("observed_at") if isinstance(display, dict) else raw.get("display_observed_at")
+    )
     return DeviceStatus(
         device_id=device_id,
         observed_at=_parse_dt(raw.get("observed_at")) or moment,
         input_idle_s=_clamp_float(raw.get("input_idle_s")),
         display_state=_display_state(display),
-        display_observed_at=(
-            _parse_dt(display.get("observed_at")) if isinstance(display, dict) else None
-        ),
+        display_observed_at=_parse_dt(display_observed),
         alarm_ringing=bool(raw.get("alarm_ringing")),
         ringing_alarm_id=(
             str(raw["ringing_alarm_id"])[:64]
@@ -194,8 +226,10 @@ def parse_status(
             else None
         ),
         armed_alarms=_id_list(raw.get("armed_alarms")),
+        armed_alarm_count=_armed_count(raw.get("armed_alarms")),
         local_alarm_fired=_id_list(raw.get("local_alarm_fired")),
         holdoff_until=_parse_dt(raw.get("holdoff_until")),
+        next_alarm_at=_parse_dt(raw.get("next_alarm_at")),
         monitors=(
             int(raw["monitors"])
             if isinstance(raw.get("monitors"), int) and not isinstance(raw.get("monitors"), bool)
@@ -212,6 +246,8 @@ class DeviceStatusRegistry:
         self._max_devices = max_devices
         self._by_device: dict[uuid.UUID, DeviceStatus] = {}
         self._last_input_observation: dict[uuid.UUID, datetime] = {}
+        #: device -> the broker origin it dialled (insertion order = recency).
+        self._dial_origins: dict[uuid.UUID, str] = {}
         self._lock = threading.Lock()
 
     def record(
@@ -294,6 +330,32 @@ class DeviceStatusRegistry:
         if not states:
             return None
         return any(state in (DISPLAY_ON, DISPLAY_DIMMED) for state in states)
+
+    def record_dial_origin(self, device_id: uuid.UUID, origin: str) -> None:
+        """The origin THIS device dialled the broker at (scheme + host[:port] of its
+        WebSocket handshake). The companion fetches greeting audio only from the origin its
+        Device Service is configured with (DEVICE_PROTOCOL.md §6h), so an absolute audio URL
+        must be built from what the device actually used - never from what the cloud
+        believes its own name to be."""
+        origin = (origin or "").strip().rstrip("/")
+        if not origin:
+            return
+        with self._lock:
+            # Re-insert so dict order is recency (a reconnect moves the device to the end).
+            self._dial_origins.pop(device_id, None)
+            self._dial_origins[device_id] = origin
+
+    def dial_origin(self, device_id: uuid.UUID) -> str | None:
+        with self._lock:
+            return self._dial_origins.get(device_id)
+
+    def latest_dial_origin(self) -> str | None:
+        """The most recently recorded dial origin across devices (a single-owner system
+        normally has one), or ``None`` when no device has connected since startup."""
+        with self._lock:
+            if not self._dial_origins:
+                return None
+            return next(reversed(self._dial_origins.values()))
 
     def clear(self) -> None:
         with self._lock:

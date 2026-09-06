@@ -291,6 +291,20 @@ async def device_connect(websocket: WebSocket) -> None:
         device_id=device_id, session_id=session_id, websocket=websocket
     )
 
+    # M18.3 (spec §3.7 / DEVICE_PROTOCOL.md §6h): remember the origin this device dialled,
+    # so a greeting-audio URL is built from the host the device's own Device Service will
+    # accept - the Host header of THIS handshake, scheme derived from the socket - and
+    # never from a name the cloud assumes for itself.
+    try:
+        from app.devices.status import get_status_registry
+
+        host = websocket.headers.get("host")
+        if host:
+            scheme = "https" if websocket.url.scheme == "wss" else "http"
+            get_status_registry().record_dial_origin(device_id, f"{scheme}://{host}")
+    except Exception:  # pragma: no cover - a missing header must never break a connect
+        logger.warning("broker_dial_origin_unrecorded", device_id=str(device_id))
+
     # Replace any lingering previous connection for this device.
     previous = runtime.get_connection(device_id)
     if previous is not None:

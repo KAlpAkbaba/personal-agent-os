@@ -287,3 +287,49 @@ def test_devices_status_requires_an_owner_session(app_and_client) -> None:
 
     _, test_client = app_and_client
     assert test_client.get(f"/v1/devices/{uuid.uuid4()}/status").status_code == 401
+
+
+# ------------------------------------------------------------------- the wake song
+
+
+def test_the_wake_song_is_absent_until_the_owner_names_one(client: TestClient) -> None:
+    assert client.get("/v1/alarms/wake-song").json() == {"wake_song": None}
+
+
+def test_the_owner_names_the_wake_song_and_a_remembered_alarm_resolves_to_it(
+    client: TestClient,
+) -> None:
+    song = "https://www.youtube.com/watch?v=RxabLA7UQ9k"
+    put = client.put("/v1/alarms/wake-song", json={"url": song, "title": "Time"})
+    assert put.status_code == 200
+    assert put.json()["wake_song"] == {"url": song, "title": "Time"}
+    assert client.get("/v1/alarms/wake-song").json()["wake_song"]["url"] == song
+
+    created = client.post(
+        "/v1/alarms",
+        json={
+            "when": {"relative_seconds": 90},
+            "media": {"remembered": "seçtiğim müzik"},
+            "test": True,
+        },
+    )
+    assert created.status_code == 201
+    body = created.json()
+    assert body["media_source"] == {"kind": "remembered", "name": "seçtiğim müzik"}
+    assert body["resolved_media_identity"] == {"kind": "youtube", "url": song, "title": "Time"}
+    # The lifecycle instants an owner harness reads are on the row.
+    assert body["created_at"] is not None
+    assert body["armed_at"] is None and body["triggered_at"] is None
+    client.post(f"/v1/alarms/{body['alarm_id']}/cancel", json={})
+
+
+def test_the_wake_song_route_refuses_anything_but_an_http_url(client: TestClient) -> None:
+    put = client.put
+    assert put("/v1/alarms/wake-song", json={"url": "Hans Zimmer Time"}).status_code == 422
+    assert put("/v1/alarms/wake-song", json={"url": "javascript:x", "x": 1}).status_code == 422
+    assert client.get("/v1/alarms/wake-song").json() == {"wake_song": None}
+
+
+def test_the_wake_song_requires_an_owner_session(app_and_client) -> None:
+    _, test_client = app_and_client
+    assert test_client.get("/v1/alarms/wake-song").status_code == 401

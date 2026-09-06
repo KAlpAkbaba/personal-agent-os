@@ -246,6 +246,24 @@ class WakeSequence:
         self._broker_audio_origin = broker_audio_origin.rstrip("/")
         self._greeting_cache: dict[str, GreetingAudio] = {}
 
+    def _audio_origin(self) -> str:
+        """The absolute origin the greeting URL is built on.
+
+        The companion fetches only from the origin its Device Service dialled
+        (DEVICE_PROTOCOL.md §6h), so: an explicitly configured origin
+        (``PAGENTOS_ALARM_AUDIO_ORIGIN``) first; else the origin the device actually used in
+        its WebSocket handshake, recorded by the broker; else empty, which yields a relative
+        path the device will refuse - a truthful failed greeting receipt, never a guess.
+        """
+        if self._broker_audio_origin:
+            return self._broker_audio_origin
+        try:
+            from app.devices.status import get_status_registry
+
+            return (get_status_registry().latest_dial_origin() or "").rstrip("/")
+        except Exception:  # pragma: no cover - the registry is in-process; defensive only
+            return ""
+
     # ------------------------------------------------------------------ receipts
 
     def _run_step(
@@ -259,16 +277,18 @@ class WakeSequence:
         idempotency_key: str,
         timeout_s: float,
         speech: str = "",
-        observed_key: str | None = None,
+        observed_key: str | tuple[str, ...] | None = None,
         observed_expect: Any = True,
         now: datetime | None = None,
     ) -> StepOutcome:
         """Dispatch ONE device command and write its receipt.
 
         ``observed_key``/``observed_expect`` name the field in the device's own result that
-        constitutes the read-back (``{"display_wake_requested": true}``, ``{"armed": true}``,
-        ...). When the device returns no such field the receipt is ``unverified`` rather
-        than ``verified``: this system does not call a physical change verified because a
+        constitutes the read-back (``{"woken": true}``, ``{"armed": true}``, ...); a tuple
+        names the spellings a device may use (the companion answers a display wake with
+        ``woken``, the spec wrote ``display_wake_requested``) and any of them counts. When
+        the device returns no such field the receipt is ``unverified`` rather than
+        ``verified``: this system does not call a physical change verified because a
         transport call returned 200.
         """
         started = now or datetime.now(UTC)
@@ -281,7 +301,8 @@ class WakeSequence:
         )
         observed_ok: bool | None = None
         if observed_key is not None and result.ok:
-            observed_ok = result.result.get(observed_key) == observed_expect
+            keys = (observed_key,) if isinstance(observed_key, str) else observed_key
+            observed_ok = any(result.result.get(k) == observed_expect for k in keys)
         terminal = _terminal_for(result, observed_ok=observed_ok)
         error_class = _error_class_for(result)
         refused = str(result.result.get("refused") or "") if result.ok else ""
@@ -353,12 +374,12 @@ class WakeSequence:
                 .astimezone(UTC)
                 .isoformat()
                 .replace("+00:00", "Z"),
+                # The companion's flat payload (DEVICE_PROTOCOL.md §6f as shipped): the
+                # fallback's label, ramp and duration sit beside the id and the instant.
                 "grace_s": 45,
-                "fallback": {
-                    "label": alarm.label or "",
-                    "wake_volume": volume,
-                    "max_duration_s": alarm.max_play_seconds,
-                },
+                "label": alarm.label or "",
+                "wake_volume": volume,
+                "max_duration_s": alarm.max_play_seconds,
             },
             requested_state="armed",
             idempotency_key=f"alarm-arm:{alarm.id}:{int(_aware(alarm.scheduled_for).timestamp())}",
@@ -410,6 +431,25 @@ class WakeSequence:
 
         # 1. Disarm the device's own fallback FIRST (spec §3.5 step 1).
         steps.append(self.disarm(db, alarm, reason="cloud_firing", now=moment))
+        # 1b. If the device had ALREADY rung its fallback for this alarm (the cloud reached
+        #     it late - a network gap longer than the arm's grace), silence that tone now,
+        #     by id: the music or the cloud's own ramp is about to start, and two alarms
+        #     sounding at once is the one thing the whole arm/disarm dance exists to
+        #     prevent. Idempotent by contract; `was_ringing` on the result says whether
+        #     there was anything to stop, and the receipt records it either way.
+        steps.append(
+            self._run_step(
+                db,
+                alarm,
+                capability=CAPABILITY_DESKTOP_ALARM_STOP,
+                payload={"alarm_id": str(alarm.id)},
+                requested_state="silent",
+                idempotency_key=f"alarm-stop-local:{alarm.id}:{firing_id or 'once'}",
+                timeout_s=TIMEOUT_DISARM,
+                observed_key="stopped",
+                now=moment,
+            )
+        )
 
         # 2. Wake the display — best effort, never a gate on the audio (spec §1.5).
         if _display_wake_policy(alarm).get("enabled", True):
@@ -424,7 +464,7 @@ class WakeSequence:
                     idempotency_key=f"alarm-display-wake:{alarm.id}:{firing_id or 'once'}",
                     timeout_s=TIMEOUT_DISPLAY,
                     speech="",
-                    observed_key="display_wake_requested",
+                    observed_key=("woken", "display_wake_requested"),
                     now=moment,
                 )
             )
@@ -639,7 +679,7 @@ class WakeSequence:
                     payload={
                         "audio_id": f"greeting-{alarm.id}",
                         "audio": {
-                            "url": f"{self._broker_audio_origin}{handle.path()}",
+                            "url": f"{self._audio_origin()}{handle.path()}",
                             "sha256": handle.sha256,
                             "bytes": handle.size_bytes,
                             "format": "wav",
@@ -838,7 +878,7 @@ class WakeSequence:
             requested_state="on",
             idempotency_key=key,
             timeout_s=TIMEOUT_DISPLAY,
-            observed_key="display_wake_requested",
+            observed_key=("woken", "display_wake_requested"),
             now=moment,
         )
 

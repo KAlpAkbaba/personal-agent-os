@@ -184,6 +184,43 @@ async def list_alarms(
     return {"alarms": await asyncio.to_thread(load)}
 
 
+class WakeSongRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    url: str = Field(min_length=8, max_length=2000)
+    title: str | None = Field(default=None, max_length=200)
+
+
+# Declared BEFORE the /{alarm_id} routes: "wake-song" is not a UUID and must not be
+# captured by them.
+@router.get("/wake-song")
+async def get_wake_song(request: Request) -> dict[str, Any]:
+    """The owner's approved wake song, or ``{"wake_song": null}``."""
+    artifacts = _artifacts(request)
+
+    def load() -> dict[str, Any] | None:
+        with artifacts.session() as session:
+            return alarms_service.get_wake_song(session)
+
+    return {"wake_song": await asyncio.to_thread(load)}
+
+
+@router.put("/wake-song")
+async def put_wake_song(request: Request, body: WakeSongRequest) -> dict[str, Any]:
+    """Remember the wake song the owner named (spec §3.8: "an already approved remembered
+    wake song"). Only an http(s) URL the owner gave; the system never picks one."""
+    artifacts = _artifacts(request)
+
+    def write() -> dict[str, Any]:
+        with artifacts.session() as session:
+            try:
+                return alarms_service.set_wake_song(session, url=body.url, title=body.title)
+            except alarms_service.InvalidAlarmRequest as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return {"wake_song": await asyncio.to_thread(write)}
+
+
 @router.get("/{alarm_id}")
 async def get_alarm(request: Request, alarm_id: uuid.UUID) -> dict[str, Any]:
     artifacts = _artifacts(request)

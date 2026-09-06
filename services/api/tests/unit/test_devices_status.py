@@ -236,3 +236,54 @@ def test_as_dict_exposes_the_fields_the_route_returns(registry) -> None:
     assert payload["display"]["state"] == DISPLAY_ON
     assert payload["input_active"] is True
     assert payload["monitors"] == 1
+
+
+# ------------------------------------------------ the companion's own shape (§6g as shipped)
+
+
+def test_the_companions_flat_status_shape_is_read_the_same(registry) -> None:
+    # DEVICE_PROTOCOL.md §6g as the Windows agent ships it: display_state flat, armed_alarms a
+    # COUNT, next_alarm_at, no nested block. The spec's nested shape stays readable too.
+    raw = {
+        "input_idle_s": 3.5,
+        "display_state": "off",
+        "display_observed_at": "2026-09-07T04:00:00Z",
+        "alarm_ringing": True,
+        "ringing_alarm_id": "a-1",
+        "armed_alarms": 2,
+        "next_alarm_at": "2026-09-07T04:30:00Z",
+    }
+    change = registry.record(DEVICE, raw, now=NOW)
+    assert change is not None
+    status = registry.get(DEVICE)
+    assert status.display_state == "off"
+    assert status.display_observed_at is not None
+    assert status.alarm_ringing is True and status.ringing_alarm_id == "a-1"
+    assert status.armed_alarm_count == 2 and status.armed_alarms == ()
+    assert status.next_alarm_at is not None
+    payload = status.as_dict()
+    assert payload["display"]["state"] == "off" and payload["display_state"] == "off"
+    assert payload["armed_alarm_count"] == 2
+
+
+def test_an_armed_alarm_list_still_counts(registry) -> None:
+    registry.record(DEVICE, {"input_idle_s": 900, "armed_alarms": ["a-1", "a-2"]}, now=NOW)
+    status = registry.get(DEVICE)
+    assert status.armed_alarms == ("a-1", "a-2") and status.armed_alarm_count == 2
+    registry.record(DEVICE, {"input_idle_s": 900, "armed_alarms": True}, now=NOW)
+    assert registry.get(DEVICE).armed_alarm_count == 0
+
+
+def test_the_dial_origin_is_the_latest_handshake(registry) -> None:
+    # The greeting URL is built on the origin the device dialled (§6h); a reconnect on a
+    # new address moves it to the front, and nothing is recorded for an empty host.
+    other = uuid.uuid4()
+    assert registry.latest_dial_origin() is None
+    registry.record_dial_origin(DEVICE, "http://100.90.158.26:8001/")
+    registry.record_dial_origin(other, "http://pagentos-core:8001")
+    assert registry.dial_origin(DEVICE) == "http://100.90.158.26:8001"
+    assert registry.latest_dial_origin() == "http://pagentos-core:8001"
+    registry.record_dial_origin(DEVICE, "http://100.90.158.26:8001")
+    assert registry.latest_dial_origin() == "http://100.90.158.26:8001"
+    registry.record_dial_origin(other, "")
+    assert registry.latest_dial_origin() == "http://100.90.158.26:8001"

@@ -157,12 +157,25 @@ async def get_devices(request: Request) -> dict[str, Any]:
     runtime = _runtime(request)
 
     def load() -> list[dict[str, Any]]:
+        # M18.3 (spec §5.3): the last heartbeat `status` the companion reported, beside the
+        # inventory row, under its own key - `status` on a device row is the ENROLLMENT
+        # status string and stays so. None when no companion has reported.
+        from app.devices.status import get_status_registry
+
+        registry = get_status_registry()
         with runtime.session() as db:
             views = devices_service.list_device_views(db, runtime)
-            return [
-                {**v.as_dict(), **_device_payload(runtime, service.get_device(db, v.id))}
-                for v in views
-            ]
+            rows: list[dict[str, Any]] = []
+            for v in views:
+                heartbeat = registry.get(v.id)
+                rows.append(
+                    {
+                        **v.as_dict(),
+                        **_device_payload(runtime, service.get_device(db, v.id)),
+                        "heartbeat_status": heartbeat.as_dict() if heartbeat else None,
+                    }
+                )
+            return rows
 
     devices = await asyncio.to_thread(load)
     return {"devices": devices}

@@ -174,7 +174,11 @@ def test_the_tick_arms_a_scheduled_alarm_once_the_device_acknowledges(session, s
     assert device.count("desktop.alarm_arm") == 1
     payload = device.payload_for("desktop.alarm_arm")
     assert payload["alarm_id"] == str(alarm.id)
-    assert payload["fallback"]["max_duration_s"] == alarm.max_play_seconds
+    # The companion's flat arm payload (DEVICE_PROTOCOL.md §6f as shipped): the fallback's
+    # ramp and duration beside the id and the instant, no nested block.
+    assert payload["max_duration_s"] == alarm.max_play_seconds
+    assert payload["wake_volume"]["start"] < payload["wake_volume"]["end"]
+    assert payload["grace_s"] == 45 and "fallback" not in payload
     assert "alarm.armed" in _states()
 
 
