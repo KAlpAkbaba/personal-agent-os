@@ -359,6 +359,40 @@ function Get-SessionRouterSummary {
     }
 }
 
+function Get-ReceiptRows {
+    <#
+        Action receipts read off ledger rows (event_type action.receipt; the row's `action`
+        is the capability and detail_json is the receipt without its speech - contract §5.5),
+        optionally filtered to one capability, oldest first. Each returned object carries the
+        receipt's own fields so a check names the execution/terminal status it saw. A missing
+        detail_json is tolerated (an older row): capability from `action`, the rest empty.
+    #>
+    param([AllowNull()]$Rows, [string]$Capability = "")
+    $out = @()
+    foreach ($row in (ConvertTo-Array -Value $Rows)) {
+        if ([string](Get-OptionalProperty -InputObject $row -Name "event_type") -ne "action.receipt") { continue }
+        $detail = Get-OptionalProperty -InputObject $row -Name "detail_json"
+        $cap = [string](Get-OptionalProperty -InputObject $row -Name "action")
+        if (-not $cap -and $null -ne $detail) { $cap = [string](Get-OptionalProperty -InputObject $detail -Name "capability") }
+        if ($Capability -and $cap -ne $Capability) { continue }
+        $observedAfter = $null
+        if ($null -ne $detail) { $observedAfter = Get-OptionalProperty -InputObject $detail -Name "observed_after" }
+        $out += [pscustomobject]@{
+            Capability  = $cap
+            ActionId    = $(if ($null -ne $detail) { [string](Get-OptionalProperty -InputObject $detail -Name "action_id") } else { "" })
+            Execution   = $(if ($null -ne $detail) { [string](Get-OptionalProperty -InputObject $detail -Name "execution_status") } else { "" })
+            Terminal    = $(if ($null -ne $detail) { [string](Get-OptionalProperty -InputObject $detail -Name "terminal_status") } else { "" })
+            ErrorClass  = $(if ($null -ne $detail) { [string](Get-OptionalProperty -InputObject $detail -Name "error_class") } else { "" })
+            Requested   = $(if ($null -ne $detail) { [string](Get-OptionalProperty -InputObject $detail -Name "requested_state") } else { "" })
+            OccurredAt  = [string](Get-OptionalProperty -InputObject $row -Name "occurred_at")
+            Observed    = $observedAfter
+            Detail      = $detail
+        }
+    }
+    $sorted = @($out | Sort-Object -Property OccurredAt)
+    return , $sorted
+}
+
 function Get-CheckoutActionContractVersion {
     <#
         The action-contract version THIS CHECKOUT carries (app/actions/receipt.py's

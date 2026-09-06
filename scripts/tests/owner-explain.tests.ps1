@@ -795,6 +795,33 @@ Test-Case "22. Get-CheckoutActionContractVersion reads receipt.py, and refuses a
     finally { Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
+Test-Case "23. Get-ReceiptRows reads receipts off production-shaped ledger rows, filtered by capability, oldest first" {
+    # The shape app/actions/receipt.py::record_receipt writes: event_type action.receipt, the
+    # capability in `action`, the receipt (no speech) in detail_json.
+    $rows = @(
+        [pscustomobject]@{ event_type = "action.receipt"; action = "display.wake"; occurred_at = "2026-09-07T05:00:02Z"; detail_json = [pscustomobject]@{ capability = "display.wake"; action_id = "a-2"; execution_status = "executed"; terminal_status = "verified"; error_class = $null; requested_state = "on"; observed_after = [pscustomobject]@{ server = [pscustomobject]@{ state = "on" } } } },
+        [pscustomobject]@{ event_type = "alarm.firing"; action = $null; occurred_at = "2026-09-07T05:00:01Z"; detail_json = [pscustomobject]@{ alarm_id = "x" } },
+        [pscustomobject]@{ event_type = "action.receipt"; action = "media.play"; occurred_at = "2026-09-07T05:00:05Z"; detail_json = [pscustomobject]@{ capability = "media.play"; action_id = "a-3"; execution_status = "failed"; terminal_status = "failed"; error_class = "blocked"; requested_state = "playing" } },
+        [pscustomobject]@{ event_type = "action.receipt"; action = "media.play"; occurred_at = "2026-09-07T05:00:00Z"; detail_json = $null }
+    )
+    $all = Get-ReceiptRows -Rows $rows
+    Assert-Equal 3 $all.Count "three receipts, the alarm row skipped"
+    Assert-Equal "media.play" $all[0].Capability "oldest first, capability from `action` when detail_json is missing"
+    Assert-Equal "" $all[0].Terminal "an older row has empty receipt fields"
+    $wake = Get-ReceiptRows -Rows $rows -Capability "display.wake"
+    Assert-True ($wake -is [array]) "ONE result is still an array"
+    Assert-Equal 1 $wake.Count "filtered"
+    Assert-Equal "verified" $wake[0].Terminal "terminal status read"
+    Assert-Equal "on" $wake[0].Observed.server.state "observed_after kept"
+    $play = Get-ReceiptRows -Rows $rows -Capability "media.play"
+    Assert-Equal 2 $play.Count "both media.play rows"
+    Assert-Equal "blocked" $play[1].ErrorClass "error class read"
+    $none = Get-ReceiptRows -Rows $rows -Capability "alarm.start"
+    Assert-Equal 0 $none.Count "none"
+    $empty = Get-ReceiptRows -Rows $null
+    Assert-Equal 0 $empty.Count "null rows"
+}
+
 Write-Host ""
 Write-Host "owner-explain harness: $script:Passes passed, $script:Failures failed"
 if ($script:Failures -gt 0) { exit 1 }
