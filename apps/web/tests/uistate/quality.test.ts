@@ -9,6 +9,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  MAX_CAPABILITY_NODES,
   POLL_HIDDEN_MS,
   POLL_VISIBLE_MS,
   QUALITY_TIERS,
@@ -18,6 +19,7 @@ import {
   detectRenderCapability,
   drawableCount,
   pollIntervalMs,
+  sceneBudgetFor,
   shouldRenderFrame,
   tierFor,
 } from "../../app/lib/uistate/quality";
@@ -34,6 +36,30 @@ describe("tiers", () => {
     // features rather than scaling them down.
     expect(low.latticeSegments).toBe(0);
     expect(low.glow).toBe(false);
+    // M18.1: the layered structure is budgeted the same way.
+    expect(high.rings).toBeGreaterThan(balanced.rings);
+    expect(balanced.rings).toBeGreaterThanOrEqual(low.rings);
+    expect(low.rings).toBeGreaterThanOrEqual(1); // the structure keeps its identity
+    expect(high.shells).toBeGreaterThan(balanced.shells);
+    expect(high.maxParticles).toBeGreaterThan(balanced.maxParticles);
+    expect(low.shells).toBe(0);
+    expect(low.maxParticles).toBe(0);
+    expect(low.parallax).toBe(false);
+  });
+
+  it("declares a scene budget a test can hold the scene to", () => {
+    // These are the declared ceilings (M18.1 design note §5). Changing a tier's
+    // budget means changing this table on purpose.
+    expect(sceneBudgetFor("high")).toEqual({ drawables: 26, instances: 296, maxParticles: 160 });
+    expect(sceneBudgetFor("balanced")).toEqual({ drawables: 24, instances: 152, maxParticles: 80 });
+    expect(sceneBudgetFor("low")).toEqual({ drawables: 18, instances: 32, maxParticles: 0 });
+    for (const tier of QUALITY_TIERS) {
+      const budget = sceneBudgetFor(tier);
+      expect(budget.instances).toBe(
+        budget.maxParticles + TIER_BUDGETS[tier].maxSatellites * 2 + MAX_CAPABILITY_NODES,
+      );
+    }
+    expect(sceneBudgetFor("high").drawables).toBeGreaterThan(sceneBudgetFor("low").drawables);
   });
 
   it("caps a reported count without changing what was reported", () => {

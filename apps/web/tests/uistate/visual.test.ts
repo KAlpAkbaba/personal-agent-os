@@ -14,8 +14,13 @@ import { describe, expect, it } from "vitest";
 
 import { UI_STATES, isCoreChannel } from "../../app/lib/uistate/contract";
 import {
+  CONSTELLATION_MOTIF,
+  CONSTELLATION_REST,
   type CoreVisualKind,
   ERROR_AGITATION,
+  IDLE_RING_SPIN,
+  type VisualIntent,
+  applyVoiceOverlay,
   isLabIntent,
   isLive,
   visualFor,
@@ -24,6 +29,8 @@ import { applyError, applyResponse, applyUnauthorized, emptyTruth } from "../../
 import {
   AGENT_ERROR,
   AGENT_IDLE,
+  EYE_ACTIVE,
+  EYE_DISABLED,
   LAB_BUILDING,
   LAB_SHADOW_READY,
   MEMORY_RETRIEVAL,
@@ -395,5 +402,346 @@ describe("states this build does not know", () => {
     expect(intent.topology).toBe(0);
     expect(intent.pulse).toBe(0);
     expect(intent.sourceNodes).toBe(0);
+    expect(intent.ringSpin).toBe(0);
+    expect(intent.flowRate).toBe(0);
+    expect(intent.glow).toBe(0);
+  });
+});
+
+// ------------------------------------------------- M18.1: the channel profiles
+
+/**
+ * The layered structure's channels (ADR-0065). Two properties are pinned for
+ * every core state: it has a channel profile of its own, and with no declared
+ * intensity and no measurement it animates no rhythm — the shape is the
+ * state's, the motion within it is the evidence's.
+ */
+const MOTION_CHANNELS = [
+  "breathAmplitude",
+  "inwardFlow",
+  "topology",
+  "pulse",
+  "agitation",
+  "ringSpin",
+  "flowRate",
+  "ownerVoice",
+  "constellationDrift",
+  "energy",
+] as const satisfies readonly (keyof VisualIntent)[];
+
+/** The channels that carry a rhythm from a measurement or a declared figure. */
+const RHYTHM_CHANNELS = ["pulse", "ownerVoice", "energy"] as const satisfies readonly (keyof VisualIntent)[];
+
+function profileOf(intent: VisualIntent): string {
+  return JSON.stringify({
+    kind: intent.kind,
+    scale: intent.scale,
+    shellSpread: intent.shellSpread,
+    ringSpin: intent.ringSpin,
+    flowRate: intent.flowRate,
+    inwardFlow: intent.inwardFlow,
+    topology: intent.topology,
+    glow: intent.glow,
+    restraint: intent.restraint,
+    agitation: intent.agitation,
+    constructionLayer: intent.constructionLayer,
+    capabilityNodes: intent.capabilityNodes,
+  });
+}
+
+describe("M18.1: every core state has its own channel profile", () => {
+  it("no two core states share a profile", () => {
+    const profiles = new Map<string, string>();
+    for (const state of CORE_STATES) {
+      const profile = profileOf(visualAfter(state));
+      const clash = [...profiles.entries()].find(([, p]) => p === profile);
+      expect(clash, `${state} shares a profile with ${clash?.[0]}`).toBeUndefined();
+      profiles.set(state, profile);
+    }
+    expect(profiles.size).toBe(CORE_STATES.length);
+  });
+
+  it("every live state carries a glow and a shell spread above zero; silence carries none", () => {
+    for (const state of CORE_STATES) {
+      const intent = visualAfter(state);
+      expect(intent.glow, state).toBeGreaterThan(0);
+      expect(intent.shellSpread, state).toBeGreaterThan(0);
+    }
+    const untold = visualFor(applyResponse(emptyTruth(), response([]), T0), T0);
+    expect(untold.glow).toBe(0);
+    expect(untold.shellSpread).toBe(0);
+  });
+
+  it("the profile is what the spec describes", () => {
+    const idle = visualAfter("agent.idle");
+    expect(idle.ringSpin).toBe(IDLE_RING_SPIN);
+    expect(idle.flowRate).toBe(0);
+
+    const listening = visualAfter("agent.listening");
+    expect(listening.shellSpread).toBeLessThan(idle.shellSpread); // closes in
+    expect(listening.inwardFlow).toBeGreaterThan(0);
+    expect(listening.flowRate).toBe(0);
+
+    const thinking = visualAfter("agent.thinking");
+    expect(thinking.shellSpread).toBeGreaterThan(idle.shellSpread); // expands
+    expect(thinking.ringSpin).toBeGreaterThan(idle.ringSpin);
+    expect(thinking.flowRate).toBeGreaterThan(0);
+    expect(thinking.topology).toBeGreaterThan(0);
+
+    const tool = visualAfter("agent.tool_running");
+    expect(tool.shellSpread).toBeGreaterThan(idle.shellSpread);
+    expect(tool.flowRate).toBeGreaterThan(thinking.flowRate); // most path traffic of any state
+
+    const memory = visualAfter("agent.memory_retrieval");
+    expect(memory.inwardFlow).toBeGreaterThan(0); // information converges
+
+    const waiting = visualAfter("agent.waiting_owner");
+    expect(waiting.ringSpin).toBeLessThan(idle.ringSpin);
+    expect(waiting.flowRate).toBe(0);
+    expect(waiting.glow).toBeLessThan(idle.glow);
+  });
+});
+
+describe("M18.1: no intensity and no measurement means no rhythm", () => {
+  for (const state of CORE_STATES) {
+    it(`${state} with intensity null animates no measured rhythm`, () => {
+      const intent = visualAfter(state, { state, intensity: null });
+      expect(intent.intensity).toBeNull();
+      for (const channel of RHYTHM_CHANNELS) {
+        expect(intent[channel], channel).toBe(0);
+      }
+    });
+  }
+
+  it("a declared intensity is the energy, and the glow answers to it", () => {
+    const quiet = visualAfter("agent.thinking", { state: "agent.thinking", intensity: 0 });
+    const loud = visualAfter("agent.thinking", { state: "agent.thinking", intensity: 1 });
+    expect(quiet.energy).toBe(0);
+    expect(loud.energy).toBe(1);
+    expect(loud.glow).toBeGreaterThan(quiet.glow);
+    expect(loud.glow).toBeLessThanOrEqual(1);
+    expect(loud.ringSpin).toBeGreaterThan(quiet.ringSpin);
+    expect(loud.shellSpread).toBeGreaterThan(quiet.shellSpread);
+  });
+
+  it("an unreachable API leaves the shape and stops every motion channel", () => {
+    resetSequence();
+    let truth = applyResponse(emptyTruth(), response([SELFMODEL_THINKING()]), T0);
+    truth = applyError(truth, "ağ koptu", T0);
+    const intent = visualFor(truth, T0);
+    expect(intent.kind).toBe("unreachable");
+    expect(intent.shellSpread).toBeGreaterThan(0); // the shape it had
+    expect(intent.ringSpin).toBe(0);
+    expect(intent.flowRate).toBe(0);
+    expect(intent.energy).toBe(0);
+    expect(intent.ownerVoice).toBe(0);
+  });
+
+  it("an expired claim stops every motion channel", () => {
+    resetSequence();
+    const truth = applyResponse(emptyTruth(), response([SELFMODEL_THINKING()]), T0);
+    const stale = visualFor(truth, T0 + 60_000);
+    expect(stale.kind).toBe("last_known");
+    for (const channel of MOTION_CHANNELS) {
+      expect(stale[channel], channel).toBe(0);
+    }
+  });
+
+  it("the room's states never move the core body", () => {
+    for (const state of UI_STATES.filter((s) => !isCoreChannel(s))) {
+      const intent = visualAfter(state);
+      for (const channel of MOTION_CHANNELS) {
+        expect(intent[channel], `${state}.${channel}`).toBe(0);
+      }
+    }
+  });
+});
+
+/** A local voice overlay with one measured level, for the listening/speaking tests. */
+function overlay(state: "listening" | "speaking", level: number | null) {
+  return {
+    state,
+    micLevel: state === "listening" ? level : null,
+    outputLevel: state === "speaking" ? level : null,
+    caption: null,
+    toolLabel: null,
+    lastError: null,
+  };
+}
+
+describe("M18.1: the owner's voice is the measured microphone level", () => {
+  it("OWNER_SPEAKING is listening with the gate's level above zero", () => {
+    resetSequence();
+    const bus = visualFor(applyResponse(emptyTruth(), response([AGENT_IDLE()]), T0), T0);
+    const silent = applyVoiceOverlay(bus, overlay("listening", 0));
+    const speaking = applyVoiceOverlay(bus, overlay("listening", 0.6));
+    expect(silent.kind).toBe("listening");
+    expect(silent.ownerVoice).toBe(0);
+    expect(speaking.ownerVoice).toBe(0.6);
+    expect(speaking.energy).toBe(0.6);
+    expect(speaking.inwardFlow).toBeGreaterThan(silent.inwardFlow);
+    expect(speaking.glow).toBeGreaterThan(silent.glow);
+  });
+
+  it("an unmeasured microphone is a still listening core, not an estimated one", () => {
+    resetSequence();
+    const bus = visualFor(applyResponse(emptyTruth(), response([AGENT_IDLE()]), T0), T0);
+    const unmeasured = applyVoiceOverlay(bus, overlay("listening", null));
+    expect(unmeasured.ownerVoice).toBe(0);
+    expect(unmeasured.energy).toBe(0);
+    expect(unmeasured.intensity).toBeNull();
+  });
+
+  it("a bus listening never claims the owner's voice: its intensity is declared, not measured here", () => {
+    resetSequence();
+    const bus = visualFor(applyResponse(emptyTruth(), response([VOICE_LISTENING()]), T0), T0);
+    expect(bus.kind).toBe("listening");
+    expect(bus.energy).toBeCloseTo(0.5);
+    expect(bus.ownerVoice).toBe(0);
+  });
+
+  it("the assistant's speech glows by the real playback envelope", () => {
+    resetSequence();
+    const bus = visualFor(applyResponse(emptyTruth(), response([AGENT_IDLE()]), T0), T0);
+    const quiet = applyVoiceOverlay(bus, overlay("speaking", 0));
+    const loud = applyVoiceOverlay(bus, overlay("speaking", 0.8));
+    expect(quiet.pulse).toBe(0);
+    expect(loud.pulse).toBe(0.8);
+    expect(loud.energy).toBe(0.8);
+    expect(loud.glow).toBeGreaterThan(quiet.glow);
+    expect(loud.ownerVoice).toBe(0);
+  });
+});
+
+describe("M18.1: the constellation is counted or it is a labelled motif", () => {
+  it("draws the published count, and its motion from published progress only", () => {
+    resetSequence();
+    const counted = visualFor(applyResponse(emptyTruth(), response([RESEARCH_RANKING(12, 5)]), T0), T0);
+    expect(counted.constellationNodes).toBe(5);
+    expect(counted.sourceNodesKnown).toBe(true);
+    // No progress was published, so the drift is the fixed rest figure.
+    expect(counted.constellationDrift).toBe(CONSTELLATION_REST);
+    // The wider field: what was seen minus what was kept.
+    expect(counted.fieldNodesKnown).toBe(true);
+    expect(counted.fieldNodes).toBe(7);
+  });
+
+  it("draws the fixed motif when no count was sent, and says it is not a count", () => {
+    resetSequence();
+    const motif = visualFor(applyResponse(emptyTruth(), response([RESEARCH_NO_COUNTS()]), T0), T0);
+    expect(motif.sourceNodesKnown).toBe(false);
+    expect(motif.sourceNodes).toBe(0);
+    expect(motif.constellationNodes).toBe(CONSTELLATION_MOTIF);
+    expect(motif.constellationDrift).toBe(CONSTELLATION_REST);
+    expect(motif.fieldNodesKnown).toBe(false);
+    expect(motif.fieldNodes).toBe(0);
+  });
+
+  it("the motif is the same figure every time", () => {
+    resetSequence();
+    const a = visualFor(applyResponse(emptyTruth(), response([RESEARCH_NO_COUNTS()]), T0), T0);
+    resetSequence();
+    const b = visualFor(applyResponse(emptyTruth(), response([RESEARCH_NO_COUNTS()]), T0), T0);
+    expect(a.constellationNodes).toBe(b.constellationNodes);
+    expect(a.constellationDrift).toBe(b.constellationDrift);
+  });
+
+  it("published progress moves the constellation, and a zero kept count draws none", () => {
+    resetSequence();
+    const moving = visualFor(
+      applyResponse(
+        emptyTruth(),
+        response([event({ state: "agent.researching", subsystem: "research", progress: 0.5, metadata: { candidates: 9, kept: 3 } })]),
+        T0,
+      ),
+      T0,
+    );
+    expect(moving.constellationDrift).toBeCloseTo(CONSTELLATION_REST + 0.3);
+
+    resetSequence();
+    const none = visualFor(applyResponse(emptyTruth(), response([RESEARCH_RANKING(9, 0)]), T0), T0);
+    expect(none.constellationNodes).toBe(0);
+    expect(none.sourceNodesKnown).toBe(true);
+  });
+
+  it("nothing but research has a constellation", () => {
+    for (const state of CORE_STATES) {
+      if (state === "agent.researching") continue;
+      const intent = visualAfter(state);
+      expect(intent.constellationNodes, state).toBe(0);
+      expect(intent.constellationDrift, state).toBe(0);
+    }
+  });
+});
+
+describe("M18.1: capability nodes are the candidates the lab said are ready", () => {
+  it("one candidate per event when the lab sent no count, and says it was not counted", () => {
+    resetSequence();
+    const intent = visualFor(applyResponse(emptyTruth(), response([LAB_SHADOW_READY()]), T0), T0);
+    expect(intent.capabilityNodes).toBe(1);
+    expect(intent.capabilityNodesCounted).toBe(false);
+  });
+
+  it("reads a published ready count verbatim", () => {
+    resetSequence();
+    const intent = visualFor(
+      applyResponse(
+        emptyTruth(),
+        response([event({ state: "evolution.shadow_ready", subsystem: "evolution", metadata: { ready: 3, composite: 0.7 } })]),
+        T0,
+      ),
+      T0,
+    );
+    expect(intent.capabilityNodes).toBe(3);
+    expect(intent.capabilityNodesCounted).toBe(true);
+  });
+
+  it("nothing but shadow_ready parks capability nodes", () => {
+    for (const state of CORE_STATES) {
+      if (state === "evolution.shadow_ready") continue;
+      expect(visualAfter(state).capabilityNodes, state).toBe(0);
+    }
+  });
+});
+
+describe("M18.1: the eye's aperture is read from the eye's own claim", () => {
+  it("is 1 only while eye.active is current", () => {
+    resetSequence();
+    const active = visualFor(applyResponse(emptyTruth(), response([EYE_ACTIVE()]), T0), T0);
+    expect(active.eyeActive).toBe(1);
+    // The core body is still untold: the camera says nothing about the agent.
+    expect(active.kind).toBe("untold");
+
+    resetSequence();
+    const disabled = visualFor(applyResponse(emptyTruth(), response([EYE_DISABLED()]), T0), T0);
+    expect(disabled.eyeActive).toBe(0);
+
+    const untold = visualFor(applyResponse(emptyTruth(), response([]), T0), T0);
+    expect(untold.eyeActive).toBe(0);
+  });
+
+  it("stays on the intent alongside a working core and through the voice overlay", () => {
+    resetSequence();
+    const truth = applyResponse(emptyTruth(), response([EYE_ACTIVE(), SELFMODEL_THINKING()]), T0);
+    const bus = visualFor(truth, T0);
+    expect(bus.kind).toBe("thinking");
+    expect(bus.eyeActive).toBe(1);
+    const local = visualFor(truth, T0, {
+      state: "speaking",
+      micLevel: null,
+      outputLevel: 0.4,
+      caption: null,
+      toolLabel: null,
+      lastError: null,
+    });
+    expect(local.kind).toBe("speaking");
+    expect(local.eyeActive).toBe(1);
+  });
+
+  it("is never drawn for a refused session", () => {
+    resetSequence();
+    let truth = applyResponse(emptyTruth(), response([EYE_ACTIVE()]), T0);
+    truth = applyUnauthorized();
+    expect(visualFor(truth, T0).eyeActive).toBe(0);
   });
 });

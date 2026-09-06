@@ -47,6 +47,19 @@ export type TierBudget = {
   maxPixelRatio: number;
   /** Whether the additive glow shell is drawn at all. */
   glow: boolean;
+
+  // ------------------------------------------- M18.1: the layered structure
+  /** Internal concentric rings (the topology layers). */
+  rings: number;
+  /** Translucent structural shells standing off the nucleus. */
+  shells: number;
+  /**
+   * Instanced energy particles, in total, across the two bounded flows (the
+   * inward pull and the connection-path travellers). Zero drops the feature.
+   */
+  maxParticles: number;
+  /** Whether the camera answers the pointer with a slight parallax. */
+  parallax: boolean;
 };
 
 export const TIER_BUDGETS: Record<QualityTier, TierBudget> = {
@@ -57,6 +70,10 @@ export const TIER_BUDGETS: Record<QualityTier, TierBudget> = {
     latticeSegments: 48,
     maxPixelRatio: 2,
     glow: true,
+    rings: 3,
+    shells: 2,
+    maxParticles: 160,
+    parallax: true,
   },
   balanced: {
     fps: 30,
@@ -65,6 +82,10 @@ export const TIER_BUDGETS: Record<QualityTier, TierBudget> = {
     latticeSegments: 24,
     maxPixelRatio: 1.5,
     glow: true,
+    rings: 2,
+    shells: 1,
+    maxParticles: 80,
+    parallax: true,
   },
   low: {
     fps: 20,
@@ -73,8 +94,62 @@ export const TIER_BUDGETS: Record<QualityTier, TierBudget> = {
     latticeSegments: 0,
     maxPixelRatio: 1,
     glow: false,
+    rings: 1,
+    shells: 0,
+    maxParticles: 0,
+    parallax: false,
   },
 };
+
+/**
+ * The most the 3D scene can mount at a tier, counted before any frame runs.
+ *
+ * `drawables` is the ceiling on three.js objects with their own draw call
+ * (meshes, line sets, instanced meshes count once each); `instances` is the
+ * ceiling on instanced copies across every instanced mesh; `maxParticles` is
+ * the particle share of that. The figures are derived from the budget rather
+ * than typed beside it, so the scene and this function cannot drift apart
+ * without a test noticing: `CoreScene` mounts at most what is listed here.
+ *
+ * Every entry is a *maximum*: the scene draws far less in most states, because
+ * a channel at zero mounts nothing.
+ */
+export type SceneBudget = {
+  drawables: number;
+  instances: number;
+  maxParticles: number;
+};
+
+/** Peripheral capability nodes (SHADOW_READY) are capped separately and low. */
+export const MAX_CAPABILITY_NODES = 8;
+
+/** The evolution lab's construction layers: one ring per phase, four phases. */
+const CONSTRUCTION_LAYERS = 4;
+
+export function sceneBudgetFor(tier: QualityTier): SceneBudget {
+  const b = TIER_BUDGETS[tier];
+  const drawables =
+    1 + // nucleus
+    1 + // nucleus wire
+    b.rings +
+    b.shells +
+    (b.latticeSegments > 0 ? 1 : 0) + // connection paths
+    (b.maxParticles > 0 ? 2 : 0) + // inward flow, path travellers
+    (b.glow ? 1 : 0) + // pulse shell
+    1 + // evidence constellation (instanced)
+    1 + // evidence field (instanced)
+    1 + // constellation spokes
+    1 + // capability nodes (instanced)
+    1 + // eye aperture
+    1 + // held boundary (waiting on the owner)
+    1 + // error offset ring
+    1 + // memory convergence ring
+    CONSTRUCTION_LAYERS +
+    2 + // release orbit: track and progress arc
+    1; // the parked satellite's halo (its body is the first capability node)
+  const instances = b.maxParticles + b.maxSatellites * 2 + MAX_CAPABILITY_NODES;
+  return { drawables, instances, maxParticles: b.maxParticles };
+}
 
 export type RenderCapability =
   /** WebGL2 is available; the 3D core renders. */
