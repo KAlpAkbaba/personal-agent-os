@@ -9,15 +9,22 @@
  * answer different questions, and mixing them would either hammer nine
  * endpoints once a second or leave the Core a second behind.
  *
- * Every panel here is read-only. Approving a goal or a SHADOW_READY candidate
- * is an owner action on the surface that owns it (ADR-0053 §5) — the cockpit
- * shows that something is waiting, and stops there.
+ * Every panel here is read-only about the system's own work. Approving a goal
+ * or a SHADOW_READY candidate is an owner action on the surface that owns it
+ * (ADR-0053 §5) — the cockpit shows that something is waiting, and stops there.
+ *
+ * The single exception, M18.2, is not an exception to that rule: choosing
+ * which completed report the conversation is about is the owner's own act, not
+ * the renderer approving work or setting policy. Clicking a research row says
+ * "this one", by id.
  */
 
-import { useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import OwnerGate from "../../components/OwnerGate";
 import { useCockpitData } from "../../lib/cockpit/useCockpitData";
+import { selectResearchFocus } from "../../lib/research/api";
+import { UnauthorizedError } from "../../lib/session";
 import { alarmView, displayView, eyeView, presenceView, releaseView } from "../../lib/uistate/ambient";
 import {
   alarmClaim,
@@ -60,6 +67,24 @@ function Cockpit() {
   const { truth, now, refresh } = useCoreState();
   const { data, refresh: refreshPanels } = useCockpitData();
   const { tier, setTier, force2d, setForce2d } = useCorePreferences();
+  const [focusNotice, setFocusNotice] = useState<string | null>(null);
+
+  // "Bunu anlat." has to mean this report; the click is what says which.
+  const chooseFocus = useCallback(
+    async (taskId: string) => {
+      try {
+        const selection = await selectResearchFocus(taskId);
+        setFocusNotice(selection.notice);
+        // The refreshed focus reaches the panel through the normal loader,
+        // so there is one source of truth for what the focus is.
+        refreshPanels();
+      } catch (err) {
+        if (err instanceof UnauthorizedError) return;
+        setFocusNotice(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [refreshPanels],
+  );
 
   // The tab's one voice session (ADR-0061): its real states overlay the bus
   // body, labelled as this device's own observation.
@@ -126,7 +151,13 @@ function Cockpit() {
           <AmbientPanel policy={data.ambientPolicy} devices={data.devices} />
           <ShadowReadyPanel state={data.shadowReady} />
           <GoalsPanel state={data.goals} now={now} />
-          <ResearchPanel state={data.research} now={now} />
+          <ResearchPanel
+            state={data.research}
+            focus={data.researchFocus}
+            now={now}
+            onSelect={(taskId) => void chooseFocus(taskId)}
+            notice={focusNotice}
+          />
           <MemoryPanel state={data.memory} now={now} />
           <WorldPanel state={data.world} />
           <EvolutionPanel state={data.opportunities} />

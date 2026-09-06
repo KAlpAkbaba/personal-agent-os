@@ -4,16 +4,20 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import OwnerGate, { SignOutButton } from "../components/OwnerGate";
+import type { Loaded } from "../lib/cockpit/api";
 import {
   cancelResearch,
   explainError,
   fetchReportJson,
+  getResearchFocus,
   getResearchTask,
   listDevices,
   listResearchTasks,
   previewSelection,
+  selectResearchFocus,
   startResearch,
 } from "../lib/research/api";
+import type { FocusState } from "../lib/research/focus";
 import {
   DEFAULT_MAX_SOURCES,
   DEFAULT_RECENCY_DAYS,
@@ -28,15 +32,15 @@ import {
   type SelectionPreview,
   clampMaxSources,
   clampRecencyDays,
-  formatWhen,
   isTerminal,
-  stageLabel,
 } from "../lib/research/model";
 import { ResearchPoller } from "../lib/research/poll";
 import { UnauthorizedError } from "../lib/session";
 import DeviceChooser, { AUTO } from "./DeviceChooser";
+import FocusStrip from "./FocusStrip";
 import ProgressPanel from "./ProgressPanel";
 import ReportView from "./ReportView";
+import TaskList from "./TaskList";
 
 /**
  * /research — M13 track F: the owner's research surface.
@@ -47,6 +51,12 @@ import ReportView from "./ReportView";
  * when ready). Nothing else is auto-loaded: a finished task is announced in
  * the progress panel, the report is what the owner opened — not what the
  * system pushed (constitution: notify briefly and wait).
+ *
+ * M18.2: several runs can share a title, so every row carries an identity line
+ * built from the run's own facts, and opening a row also makes it the
+ * **conversational focus** — what "Bunu anlat." refers to next. The focus is
+ * read and set by id; the topic is presentation metadata and is never used to
+ * decide which report is meant.
  */
 
 const inputStyle: React.CSSProperties = {
@@ -70,6 +80,9 @@ function ResearchSurface() {
   const [previewBusy, setPreviewBusy] = useState(false);
 
   const [tasks, setTasks] = useState<ResearchTaskSummary[]>([]);
+  const [focus, setFocus] = useState<Loaded<FocusState>>({ kind: "loading" });
+  const [focusNotice, setFocusNotice] = useState<string | null>(null);
+  const [now, setNow] = useState(() => Date.now());
   const [active, setActive] = useState<ResearchTaskDetail | null>(null);
   const [starting, setStarting] = useState(false);
   const [cancelBusy, setCancelBusy] = useState(false);
@@ -83,13 +96,36 @@ function ResearchSurface() {
     setError(explainError(err));
   }, []);
 
+  /**
+   * The list and the focus are one refresh, on the existing cadence: the
+   * poller's terminal stop, a start, a selection and the first mount. No
+   * second timer — the focus changes exactly when the list does.
+   */
   const refreshTasks = useCallback(async () => {
+    setNow(Date.now());
     try {
       setTasks(await listResearchTasks());
     } catch (err) {
       report(err);
     }
+    // `getResearchFocus` folds every outcome into its result; it never throws.
+    setFocus(await getResearchFocus());
   }, [report]);
+
+  /**
+   * The owner said "this one". It becomes the conversational focus, so that
+   * "Bunu anlat." by voice means this report and not the last one to finish.
+   */
+  const chooseFocus = useCallback(async (taskId: string) => {
+    try {
+      const selection = await selectResearchFocus(taskId);
+      if (selection.focus) setFocus(selection.focus);
+      setFocusNotice(selection.notice);
+    } catch (err) {
+      if (err instanceof UnauthorizedError) return;
+      setFocusNotice(explainError(err));
+    }
+  }, []);
 
   const refreshDevices = useCallback(async () => {
     try {
@@ -178,7 +214,12 @@ function ResearchSurface() {
     async (taskId: string) => {
       setError(null);
       setCopyState("idle");
+      setFocusNotice(null);
       pollerRef.current?.stop();
+      // Opening a report IS selecting it; the two are the same owner act. It
+      // runs alongside the detail fetch rather than gating it, so a focus
+      // route that is missing or refuses never stops the report from opening.
+      void chooseFocus(taskId);
       try {
         const task = await getResearchTask(taskId);
         setActive(task);
@@ -187,7 +228,7 @@ function ResearchSurface() {
         report(err);
       }
     },
-    [report],
+    [report, chooseFocus],
   );
 
   const cancel = useCallback(async () => {
@@ -325,38 +366,13 @@ function ResearchSurface() {
       )}
 
       <h2 style={{ fontSize: "1.1rem", margin: "1.5rem 0 0.5rem" }}>Önceki araştırmalar</h2>
-      {tasks.length === 0 && <p className="muted">Henüz araştırma yok.</p>}
-      {tasks.map((t) => (
-        <div
-          className="panel task"
-          key={t.task_id}
-          data-task-id={t.task_id}
-          style={{ padding: "0.75rem 1.25rem", cursor: "pointer" }}
-          role="button"
-          tabIndex={0}
-          onClick={() => open(t.task_id)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              open(t.task_id);
-            }
-          }}
-        >
-          <div className="status-row" style={{ borderBottom: "none", padding: 0 }}>
-            <span style={{ lineHeight: 1.4 }}>{t.topic}</span>
-            <span
-              className={`badge ${t.stage === "ready" ? "ok" : t.stage === "failed" ? "fail" : "unknown"}`}
-            >
-              {stageLabel(t.stage)}
-            </span>
-          </div>
-          <div className="muted" style={{ marginTop: "0.25rem" }}>
-            {formatWhen(t.created_at)}
-            {t.device && <> · {t.device.name}</>}
-            {t.artifact_id && <> · artifact</>}
-          </div>
-        </div>
-      ))}
+      <FocusStrip
+        state={focus}
+        now={now}
+        notice={focusNotice}
+        onSelect={(taskId) => void open(taskId)}
+      />
+      <TaskList tasks={tasks} focus={focus} now={now} onOpen={open} />
     </main>
   );
 }
