@@ -255,6 +255,7 @@ def require_live(
             metadata={"expires_at": _iso(row.expires_at)},
         )
         db.commit()
+        _publish_session_over(row, reason="expired")
         raise VoiceError(
             VoiceErrorClass.VALIDATION_ERROR,
             "session has expired",
@@ -1243,7 +1244,30 @@ def close_session(
         snapshot_benchmark_at_close(db, row)
         db.commit()
         _ledger(db, "closed", row, trace_id=trace_id, detail={"reason": reason[:64]})
+        _publish_session_over(row, reason=reason)
     return {"session_id": str(row.id), "state": row.state, "closed_at": _iso(row.closed_at)}
+
+
+def _publish_session_over(row: RealtimeSessionRow, *, reason: str) -> None:
+    """A session that is over says so on the UI-state bus.
+
+    Until 2026-09-06 nothing was published at close or expiry, so the last
+    ``agent.listening`` of a closed session stayed the bus's current event: the
+    owner's Core reported "listening" with no live session, and the M18 eye
+    qualification read that stale state at startup (owner run, session
+    a71096ca). ``agent.idle`` with this session's id lets the Core - and any
+    harness - tell "over" from "listening", and lets a fresh session's first
+    event be recognised as fresh.
+    """
+    publish_ui(
+        UiState.IDLE,
+        subsystem="voice",
+        intensity=0.0,
+        session_id=str(row.id),
+        status=row.state,
+        label=reason[:64] if reason else None,
+        metadata={"session_over": True},
+    )
 
 
 # ---------------------------------------------------------------- benchmark

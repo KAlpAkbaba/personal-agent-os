@@ -527,6 +527,52 @@ def test_close_and_expiry_refuse_further_work(wired) -> None:
     assert len(_audit_rows(runtime, expired, service.ACTION_SESSION_EXPIRED)) == 1
 
 
+def test_a_session_that_is_over_says_so_on_the_bus(wired) -> None:
+    """Owner run 2026-09-06 (session a71096ca): the last ``agent.listening`` of a
+    CLOSED session stayed the bus's current event, so the Core showed "listening"
+    with no live session and the eye qualification read that at startup. Close
+    and expiry now publish ``agent.idle`` carrying the session id."""
+    from app.uistate.publisher import UiStatePublisher, get_publisher, set_publisher
+
+    client, _, runtime, _, _, _ = wired
+    sid = _create(client)["session_id"]
+    expired = _create(client, session_ttl_s=60)["session_id"]
+    with runtime.session() as db:
+        row = db.get(RealtimeSessionRow, uuid.UUID(expired))
+        row.expires_at = service.utcnow() - service.timedelta(seconds=1)
+        db.commit()
+
+    previous = get_publisher()
+    bus = UiStatePublisher()
+    set_publisher(bus)
+    try:
+        # A listening event from the live session, then the owner hangs up.
+        client.post(
+            f"/v1/voice/realtime/sessions/{sid}/events",
+            json={"events": [{"kind": "mic_speech_start", "t_ms": 10, "turn": 1}]},
+        )
+        assert bus.current().state.value == "agent.listening"
+        client.post(f"/v1/voice/realtime/sessions/{sid}/close", json={"reason": "owner_hung_up"})
+        current = bus.current()
+        assert current.state.value == "agent.idle"
+        assert current.subsystem == "voice"
+        assert current.session_id == sid
+        assert current.metadata == {"session_over": True}
+        # Closing again is idempotent on the bus too: no second "over".
+        client.post(f"/v1/voice/realtime/sessions/{sid}/close")
+        assert len([e for e in bus.tail() if e.state.value == "agent.idle"]) == 1
+        # Expiry, discovered lazily on the next request, says so as well.
+        client.post(
+            f"/v1/voice/realtime/sessions/{expired}/events",
+            json={"events": [{"kind": "end_of_turn", "t_ms": 1}]},
+        )
+        overs = [e for e in bus.tail() if e.state.value == "agent.idle"]
+        assert [e.session_id for e in overs] == [sid, expired]
+        assert overs[-1].status == "expired"
+    finally:
+        set_publisher(previous)
+
+
 # --------------------------------------------------------------- narration
 
 
