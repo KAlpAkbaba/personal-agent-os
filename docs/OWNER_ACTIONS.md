@@ -32,7 +32,22 @@ is implemented and merged (ADR-0065); item 22 is your look at it, when you like.
 
 ---
 
-### 23. Speaking continuity and research findings — **M18.2, ready once the Cloud Core carries contract v4 (the command releases it once)**
+### 23. Speaking continuity and research findings — **M18.2, ready: the command releases the Cloud Core once if it is older than this checkout's contract (v5, the research fast path)**
+
+**Updated 2026-09-07 after your real run.** Research was functionally working but far too
+slow and CAPTCHA-heavy (254 candidates, minutes). The pipeline now has a fast path
+(ADR-0068): QUICK is the conversational default — target 60–90 s, hard budget 120 s, two
+discovery queries, a ranked shortlist, fetches in waves of four with an early stop once the
+evidence is enough; STANDARD (2–3 min) and DEEP are taken only when you say so ("geniş",
+"karşılaştırmalı" / "kapsamlı", "derinlemesine", "detaylı"). A CAPTCHA, bot check or
+consent wall is left alone: the page is abandoned in one attempt with its reason recorded,
+the domain is cooled after a second one, and the next ranked source is taken — nothing is
+ever bypassed. The Core shows only coarse Turkish progress ("Kaynaklar aranıyor",
+"4 güvenilir kaynak incelendi", "Bulgular doğrulanıyor", "Sonuç hazırlanıyor"). The harness
+crash you hit (a bare character in a word list) is fixed and pinned, and the speaking check
+now reads the turn's own timestamps. Test B below should finish within about two minutes;
+if it takes clearly longer, that is a finding in itself — `Teknik anlat.` afterwards names
+what was slow and what was left alone.
 
 Two defects you observed are fixed at their mechanisms. SPEAKING ended early because the
 voice controller left the state on the provider's `response.done`, which on WebRTC marks
@@ -52,8 +67,9 @@ completes the tool call with it, and the diagnostics are spoken only on `Teknik 
 .\scripts\core\owner-m18-2.ps1 -OutFile m18-2-1.json
 ```
 
-It releases the Cloud Core once if it predates contract v4, starts the web shell, and
-prints three lines. Sign in at `/core`, connect voice there, then say:
+It releases the Cloud Core once if it predates this checkout's action contract (the
+version is read from the code, never a literal), starts the web shell, and prints three
+lines. Sign in at `/core`, connect voice there, then say:
 
 - **A.** `Bana PagentOS'un ne olduğunu beş cümleyle anlat.` — watch the Core stay in
   SPEAKING through the pauses and end at the last word.
