@@ -32,6 +32,46 @@ is implemented and merged (ADR-0065); item 22 is your look at it, when you like.
 
 ---
 
+### 25. The wake alarm, end to end — **M18.3 qualification B, ready after item 23b (one Cloud Core release and one elevated agent update, both inside the run)**
+
+Say one sentence and be woken ninety seconds later. Pick the YouTube music first: pass its
+URL to the command, and the run registers it as your wake song (the system never chooses
+one), opens the worker's own alarm profile once at that page so you can accept YouTube's
+consent by hand if it appears (the profile keeps it; the worker never clicks anything), and
+then asks you to speak.
+
+```powershell
+.\scripts\core\owner-m18-3-alarm.ps1 -MusicUrl "https://www.youtube.com/watch?v=..." -OutFile m18-3-alarm-1.json
+```
+
+It releases the Cloud Core once if it predates this checkout's contract, and if the
+installed agent predates M18.3 it prints the update command for an elevated window (one
+UAC prompt; `-DisplayPower` turns display control on) and waits for the device to come
+back. Then, on `/core`, say **`90 saniye sonra seçtiğim YouTube müziğiyle test alarmı kur.`**
+and wait: the displays wake, the music starts low and rises, and it greets you over the
+music. When the script says so, say **`Alarmı kapat.`** It proves every step from the
+record — created, armed on the device, fired by the clock at the instant, the display
+wake receipt, the media really playing (or the tone, named truthfully), the ramp, the
+greeting with its duck and restore, the stop, the cleanup — and finishes by itself.
+
+### 26. Displays off, one key wakes them — **M18.3 qualification C, ready after item 25 (display control must be enabled on the agent by item 25's update)**
+
+```powershell
+.\scripts\core\owner-m18-3-display.ps1 -OutFile m18-3-display-1.json
+```
+
+It disables the eye first (the camera is deliberately out of this test), arms the display
+test, and tells you to keep your hands off the keyboard and mouse. About twenty seconds
+later the displays go dark: press **Shift** once, or move the mouse. They come back at
+once. The script proves from the record that the darkening was a real receipt, that the
+device observed the screen off and then on, that your input was recorded, and that for
+the next ninety seconds nothing darkened the screen again although the presence state was
+unknown. It finishes by itself; if the eye was on before, say `Gözünü aç.` afterwards.
+
+The automatic, presence-based off (away for fifteen minutes, or asleep for ten with
+confidence) stays OFF until you turn it on by voice (`Otomatik ekran kapatmayı aç.`); its
+own longer observation comes when you want it.
+
 ### 24. Look at the Living Core — **M18.3 qualification A, ready (web only: no release, no install)**
 
 The small wireframe is gone. `/core` is now a full-viewport gold and amber Core: nine
