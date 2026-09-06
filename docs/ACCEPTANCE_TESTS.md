@@ -389,7 +389,23 @@ one short real owner run.
   every so often is present at real confidence; an empty room is absent at low confidence;
   absence confidence never exceeds 0.75; the diagnostics are an age, a level and a fraction;
 - **the owner harness reads one-element arrays as arrays** under StrictMode, and each check
-  owns its own evidence (a disable is never gated on a presence state).
+  owns its own evidence (a disable is never gated on a presence state);
+- **a mutation is spoken only from a receipt** (`docs/M18_ACTION_CONTRACT.md`): `eye.enable`
+  / `eye.disable` / `release.promote` return an `ActionReceipt` whose `terminal_status` comes
+  from a read-back of the durable state plus the client's observed local state; the speech
+  table contains none of the banned completion phrases; a receipt is a ledger row;
+- **the enable path never trusts the cloud alone:** the durable eye flag is set on enable
+  only when the client observed its own camera `ACTIVE`; a missing `observed_after` never
+  sets it; `permission_denied` is spoken as the browser refusing, not as success;
+- **one router, three classes:** `resolve_intent` classifies every owner utterance as
+  QUERY / ACTION / CONTROL with the canonical capability; the nine owner utterances of the
+  contract are pinned; `Canlıya al.` is refused with the authority sentence and recorded;
+- **"now" is never the ledger:** `state.now` composes live facts each with source,
+  observed_at, age, confidence and stale; stale is spoken as stale; `activity.explain` with a
+  `world_state` question returns the same speech; no bookkeeping words in the answer;
+- **the eye is a state machine on the client:** DISABLED / ENABLING / ACTIVE / DISABLING /
+  ERROR; idempotent commands; a second enable joins the in-flight one; exactly one camera
+  open per real transition; disabling invalidates the presence assertion (`eye_disabled`).
 
 ### Real gates (owner machine, one run, from `/core` alone — `scripts/core/owner-m18.ps1`)
 
@@ -408,6 +424,12 @@ the Cloud Core's own records by the harness; none is a yes/no question to the ow
 - no two web realtime sessions of the run were ever open at once;
 - the realtime session is closed, the web shell stopped, the test routine cancelled and the
   owner session revoked when the run ends — on every path;
+- **the short eye/voice run first** (`scripts/core/owner-m18-eye.ps1`, before the long run is
+  repeated): `Kendi sisteminde şu anda ne görüyorsun?` reaches the live-state path and is
+  spoken result-first; the eye is enabled; `Gözünü kapat.` executes the real capability, the
+  runtime reads back `eye_enabled=false`, the receipt is `verified`, and the confirmation
+  (`Gözümü kapattım efendim.`) is spoken only after the terminal ACK; `Gözünü aç.` re-enables
+  through the same contract and the runtime reads back `eye_enabled=true`;
 - the Core renders on the owner's own machine and shows genuine state: listening, thinking
   and speaking transitions that correspond to what actually happened;
 - research, memory and evolution state appear on the Core while those subsystems really run;
