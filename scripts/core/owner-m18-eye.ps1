@@ -177,8 +177,9 @@ function Get-DeployedContractVersion {
 
 #: The contract version this checkout's harness reads receipts against (session_id and
 #: observed_at on receipts, media_track_ready_state and action_trace echoed, the truthful
-#: "kapandı ancak kaydını doğrulayamadım" wording, no server-side safety net).
-$requiredContractVersion = 2
+#: "kapandı ancak kaydını doğrulayamadım" wording, no server-side safety net; v3: the eye
+#: ledger row carries the action_id of the voice action that wrote it).
+$requiredContractVersion = 3
 
 function Invoke-CloudCoreRelease {
     $release = Join-Path $repoRoot "scripts\cloud\release-cloud-core.ps1"

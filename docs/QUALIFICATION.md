@@ -433,6 +433,25 @@ watching it refuse — and are marked as such.
 | 12.28 | Current-state questions are answered from live state, result-first: `Kendi sisteminde şu anda ne görüyorsun?` → runtime + World Model facts each with source / observed_at / age / confidence / stale; stale is said as stale; 1–3 sentences; no bookkeeping narration | `NOT_YET_PROVEN` | API: `test_voice_state_tool.py` (facts carry provenance; stale spoken; eye scope sentences; `activity.explain` with a `world_state` question returns the same `speech` as `state.now`; no "kayıt"). Real: `state.live_path_reached`, `state.spoken_result_first`, `state.facts_carry_provenance`. The owner's second attempt: "kayıtlara bakmalıyım…". |
 | 12.29 | One router, three classes: QUERY / ACTION / CONTROL from `resolve_intent` alone; `Canlıya al.` is an ACTION that is refused with the authority sentence and recorded; `Bunu canlıya alabilir misin?` stays a QUERY; no second Turkish table anywhere | `NOT_YET_PROVEN` | API: `test_voice_intents.py` (the nine owner utterances → klass / intent / query_kind / capability), `test_voice_eye_tools.py` (`release.promote` refused, `action.receipt` recorded). **Structural**: the web client has no phrase table (grep-asserted in review). |
 
+**Sixth real attempt, 2026-09-06 evening — `owner-m18-eye.ps1` fourth run (session
+9df439af), contract v2 deployed by the run itself:** steps 1 and 2 `PROVEN_REAL` for the
+first time — `eye.enable` verified (browser ACTIVE, Logi C615 track live, runtime
+`eye_enabled=true`, `Gözümü açtım efendim.`), `eye.disable` verified (DISABLED, track
+ended, `eye_enabled=false`, `Gözümü kapattım efendim.`). Step 3 failed three times with
+`request:stop_local > superseded:stop > state:ENABLING->DISABLED`: the Core's eye control
+stops the local loop whenever the bus still says `eye.disabled` and the loop reports
+running; on a second enable the bus still carries step 2's `eye.disabled` and the loop
+starts before the durable enable is written, so a stale bus state cancelled a newer
+transition (step 1 escaped only because the older `eye.disabled` had decayed). Fix:
+generation-owned transitions — a bus stop is a dated request applied only to an ACTIVE
+loop older than the event, never to an enable in flight; late callbacks of an older
+generation are ignored; every enable is a fresh stream with the track id in the trace;
+proven by a repeated-sequence race test. `eye.no_hidden_mutation` FAIL in the same run was
+the CHECK's defect: it read the receipt's timestamps off the ledger row's top level, built
+no windows, and flagged rows 71 ms before their receipts; fixed with the production rows as
+the fixture, and eye rows now carry the `action_id` / `session_id` of the voice action that
+wrote them (contract v3), so correlation is by identity first.
+
 **Fifth real attempt, 2026-09-06 evening — `owner-m18-eye.ps1` third run (session
 3eb6fee7), diagnosed from the production record:** `state.now` answered result-first
 ("Cloud Core sağlıklı, ses bağlı, göz kapalı. Bir modül canlıya alınmayı bekliyor"). Every

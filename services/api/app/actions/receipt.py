@@ -84,7 +84,10 @@ TERMINAL_CLAIMABLE: Final[frozenset[str]] = frozenset({TERMINAL_VERIFIED, TERMIN
 #: safety net, "kapatamadım" for a camera that had closed) from what this checkout needs.
 #: Tool NAMES did not change between v1 and v2, so they cannot tell the two apart. Bump it
 #: whenever the receipt shape, the terminal logic or the speech table changes.
-ACTION_CONTRACT_VERSION: Final = 2
+#: v3 (2026-09-06, owner run 9df439af): the durable eye row carries the action_id and
+#: session_id of the voice action that wrote it, so a ledger row correlates to its receipt
+#: by identity rather than by a time window.
+ACTION_CONTRACT_VERSION: Final = 3
 
 FAKE_COMPLETION_PHRASES: Final[tuple[str, ...]] = (
     "yapmış gibi düşün",

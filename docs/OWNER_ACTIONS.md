@@ -92,11 +92,29 @@ be verified is said as exactly that (`Kamera kapandı ancak işlem kaydını do�
 never as "kapatamadım"; and each browser failure has its own sentence (permission, no
 camera, camera busy, stream failed, track ended, loop failed).
 
+**Your fourth run (2026-09-06 evening, session 9df439af) proved steps 1 and 2 for real for
+the first time** — `Gözünü aç` opened the Logi C615 (browser ACTIVE, track live, runtime
+`eye_enabled=true`, `Gözümü açtım efendim.`), `Gözünü kapat` closed it (DISABLED, track
+ended, `eye_enabled=false`, `Gözümü kapattım efendim.`) — and step 3 failed three times
+with the same trace: `request:stop_local > superseded:stop > state:ENABLING->DISABLED`.
+That `stop_local` has one source: the Core's eye control stops the local loop whenever the
+bus still says `eye.disabled` and the loop reports running. On a second enable the bus is
+still carrying step 2's `eye.disabled`, and the loop starts before the durable enable is
+written, so a stale bus state cancelled a newer transition. Step 1 escaped only because the
+bus's older `eye.disabled` had decayed by then. Fixed as generation-owned transitions: a
+bus-driven stop is a dated request that applies only to an ACTIVE loop older than the
+event, never to an enable in flight; late callbacks of an older generation are ignored;
+every enable creates a new stream and the trace records the track id. The
+`eye.no_hidden_mutation` failure in the same run was a defect in the check itself (it read
+the receipt's timestamps from the wrong level and built no windows); fixed against the
+production rows, and eye rows now carry the `action_id` of the voice action that wrote
+them, so correlation is by identity.
+
 **One command (this run releases the Cloud Core once, about five minutes — the deployed
-contract is v1, this needs v2):**
+contract predates these fixes):**
 
 ```powershell
-.\scripts\core\owner-m18-eye.ps1 -OutFile m18-eye-3.json
+.\scripts\core\owner-m18-eye.ps1 -OutFile m18-eye-4.json
 ```
 
 It refuses to start if port 3000 is already taken (it names the process; stop it or pass
@@ -114,7 +132,7 @@ runs it prints, on every change, the Core Voice session, the last routed action 
 action id, the browser's eye state and media track, the receipt with its sentence, the
 live-state answer and the runtime read-back. It stops with the exact missing evidence if no
 session is correlated within 2 minutes or a step is not verified within 2 minutes of the
-previous one. Paste the `checks` block from `m18-eye-3.json` back here, or the whole file if
+previous one. Paste the `checks` block from `m18-eye-4.json` back here, or the whole file if
 anything fails. If the browser refuses the camera, the assistant must say exactly that
 (`Kamerayı açamadım; tarayıcı kamera izni vermedi.`) — a correct answer, and the file will
 show the browser's own trace.
