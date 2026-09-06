@@ -16,6 +16,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import type { FocusState } from "../research/focus";
 import {
   type AmbientPolicy,
   type DeviceStatus,
@@ -41,6 +42,7 @@ import {
   fetchMemoryAudit,
   fetchOpportunities,
   fetchPendingBriefings,
+  fetchResearchFocus,
   fetchResearchTasks,
   fetchShadowReady,
   fetchWorld,
@@ -50,6 +52,8 @@ const POLL_VISIBLE_MS = 15_000;
 
 export type CockpitData = {
   research: Loaded<ResearchTask[]>;
+  /** M18.2: which completed report the owner is talking about. */
+  researchFocus: Loaded<FocusState>;
   goals: Loaded<Goal[]>;
   opportunities: Loaded<Opportunity[]>;
   shadowReady: Loaded<ShadowReady>;
@@ -68,6 +72,7 @@ export type CockpitData = {
 
 const INITIAL: CockpitData = {
   research: { kind: "loading" },
+  researchFocus: { kind: "loading" },
   goals: { kind: "loading" },
   opportunities: { kind: "loading" },
   shadowReady: { kind: "loading" },
@@ -93,6 +98,7 @@ export function useCockpitData(enabled = true): { data: CockpitData; refresh: ()
     try {
       const [
         research,
+        researchFocus,
         goals,
         opportunities,
         shadowReady,
@@ -107,6 +113,8 @@ export function useCockpitData(enabled = true): { data: CockpitData; refresh: ()
         devices,
       ] = await Promise.all([
         fetchResearchTasks(),
+        // Same refresh, no extra timer: the focus changes when the list does.
+        fetchResearchFocus(),
         fetchGoals(),
         fetchOpportunities(),
         fetchShadowReady(),
@@ -123,6 +131,7 @@ export function useCockpitData(enabled = true): { data: CockpitData; refresh: ()
       if (stopped.current) return;
       setData({
         research,
+        researchFocus,
         goals,
         opportunities,
         shadowReady,

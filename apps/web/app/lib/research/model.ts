@@ -243,6 +243,17 @@ export type ResearchTaskSummary = {
   created_at?: string | null;
   ready_at?: string | null;
   artifact_id?: string | null;
+  // M18.2 identity metadata. Optional in the type because it is optional on
+  // the wire: an older Cloud Core reports none of it, and the identity line
+  // then shows only what it was actually told.
+  /** "quick" | "standard" | "deep" — how much work the run was allowed. */
+  mode?: string | null;
+  /** How many sources the report stands on. */
+  source_count?: number | null;
+  /** Alias of `ready_at`, as the M18.2 list route names it. */
+  completed_at?: string | null;
+  /** The server's own view of which row is the conversational focus. */
+  is_focus?: boolean | null;
 };
 
 export type ResearchTaskDetail = {

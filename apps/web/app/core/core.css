@@ -865,6 +865,31 @@
   border-color: var(--warn);
 }
 
+/* ------------------------------------------------- research focus (M18.2) */
+
+/* Which report the conversation is about. The chip is the visible half; the
+   row also carries `data-focus` and `aria-current`, so the fact survives for
+   a reader who never sees the colour. */
+.focus-chip {
+  border-radius: 999px;
+  padding: 0.05rem 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  background: rgba(90, 167, 232, 0.15);
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.panel li[data-focus="current"] {
+  border-left: 2px solid var(--accent);
+  padding-left: 0.5rem;
+}
+
+.panel li[data-focus="previous"] {
+  border-left: 2px solid #2c3550;
+  padding-left: 0.5rem;
+}
+
 /* ---------------------------------------------------- reduced motion */
 
 /*

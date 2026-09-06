@@ -35,6 +35,12 @@ import {
   type World,
   isHealthy,
 } from "../../lib/cockpit/api";
+import {
+  FOCUS_UNSUPPORTED,
+  focusSourceLabel,
+  focusSummary,
+  identityLine,
+} from "../../lib/research/focus";
 import { formatAge, stateLabel, subsystemLabel } from "../../lib/uistate/labels";
 import type { CoreTruth } from "../../lib/uistate/truth";
 import { liveEventFor, recentDescending } from "../../lib/uistate/truth";
@@ -48,7 +54,39 @@ function when(iso: string | null | undefined, now: number): string {
 
 // ------------------------------------------------------------------ panels
 
-export function ResearchPanel({ state, now }: { state: CockpitData["research"]; now: number }) {
+/**
+ * Research runs, told apart by what they are rather than by what they are
+ * called (M18.2).
+ *
+ * Several runs share the title "OpenAI son gelişmeler"; the second line is the
+ * run's identity — when it finished, which mode, how many sources, what state
+ * — and the id lives in `data-research-task`, never on the screen. The focus
+ * chip is placed by `current.research_job_id`, never by topic.
+ *
+ * The one thing the cockpit writes: which report the owner is talking about.
+ * That is the owner's own act on the owner's own surface, not the renderer
+ * approving work or changing policy — the panel still decides nothing.
+ */
+export function ResearchPanel({
+  state,
+  focus,
+  now,
+  onSelect,
+  notice,
+}: {
+  state: CockpitData["research"];
+  focus?: CockpitData["researchFocus"];
+  now: number;
+  onSelect?: (taskId: string) => void;
+  notice?: string | null;
+}) {
+  // The focus route's answer is the authority whenever it answered at all;
+  // the row's own `is_focus` flag is the fallback for a Core that could not
+  // be asked. Neither path ever looks at the topic.
+  const known = focus?.kind === "ok";
+  const currentId = focus?.kind === "ok" ? (focus.value.current?.research_job_id ?? null) : null;
+  const previousId = focus?.kind === "ok" ? (focus.value.previous?.research_job_id ?? null) : null;
+
   return (
     <Panel<ResearchTask[]>
       id="research"
@@ -60,19 +98,82 @@ export function ResearchPanel({ state, now }: { state: CockpitData["research"]; 
       attention={(tasks) => tasks.some((t) => t.stage === "waiting_for_owner_verification")}
     >
       {(tasks) => (
-        <ul>
-          {tasks.slice(0, 6).map((task) => (
-            <li key={task.task_id} data-research-task={task.task_id} data-stage={task.stage}>
-              <div className="event-row">
-                <span>{task.topic}</span>
-                <span className="event-when">{when(task.ready_at ?? task.created_at, now)}</span>
-              </div>
-              <span className="muted">
-                {task.status} · {task.stage}
-              </span>
-            </li>
-          ))}
-        </ul>
+        <>
+          {focus?.kind === "absent" && (
+            <p className="panel-unknown" data-focus-strip="absent">
+              {FOCUS_UNSUPPORTED}
+            </p>
+          )}
+          {focus?.kind === "ok" && focus.value.current && (
+            <p
+              className="muted"
+              data-focus-strip="current"
+              data-focus-id={focus.value.current.research_job_id}
+            >
+              {[
+                `Konuşma odağı: ${focusSummary(focus.value.current, now)}`,
+                focusSourceLabel(focus.value.current.source_of_focus),
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+            </p>
+          )}
+          {notice && (
+            <p className="panel-unknown" data-focus-notice>
+              {notice}
+            </p>
+          )}
+          <ul>
+            {tasks.slice(0, 6).map((task) => {
+              const current = known ? task.task_id === currentId : task.is_focus === true;
+              const previous = !current && previousId !== null && task.task_id === previousId;
+              const identity = identityLine(task, now);
+              return (
+                <li
+                  key={task.task_id}
+                  data-research-task={task.task_id}
+                  data-stage={task.stage}
+                  data-focus={current ? "current" : previous ? "previous" : undefined}
+                  aria-current={current ? "true" : undefined}
+                  role={onSelect ? "button" : undefined}
+                  tabIndex={onSelect ? 0 : undefined}
+                  onClick={onSelect ? () => onSelect(task.task_id) : undefined}
+                  onKeyDown={
+                    onSelect
+                      ? (e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            onSelect(task.task_id);
+                          }
+                        }
+                      : undefined
+                  }
+                  style={onSelect ? { cursor: "pointer" } : undefined}
+                >
+                  <div className="event-row">
+                    <span>
+                      {task.topic}
+                      {current && (
+                        <>
+                          {" "}
+                          <span className="focus-chip" data-focus-chip>
+                            Konuşma odağı
+                          </span>
+                        </>
+                      )}
+                    </span>
+                    <span className="event-when">{when(task.completed_at ?? task.ready_at ?? task.created_at, now)}</span>
+                  </div>
+                  {identity && (
+                    <span className="muted" data-research-identity>
+                      {identity}
+                    </span>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </>
       )}
     </Panel>
   );

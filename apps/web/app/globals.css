@@ -79,6 +79,29 @@ h1 {
   color: var(--warn);
 }
 
+/* M18.2: the row the conversation is about. Marked, not merely coloured —
+   `data-focus` and `aria-current` carry the same fact to a screen reader. */
+.badge.focus {
+  background: rgba(90, 167, 232, 0.15);
+  color: var(--accent);
+}
+
+.task[data-focus="current"] {
+  border-color: var(--accent);
+}
+
+.task[data-focus="previous"] {
+  border-color: #2c3550;
+}
+
+.focus-strip {
+  border-color: #2c3550;
+}
+
+.focus-candidates li:hover {
+  color: var(--accent);
+}
+
 .muted {
   color: var(--muted);
   font-size: 0.85rem;
