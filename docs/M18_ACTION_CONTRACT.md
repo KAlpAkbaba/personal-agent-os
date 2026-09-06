@@ -315,7 +315,15 @@ any failure -> ERROR (error_class kept), then DISABLED on the next disable()
   camera_label, error_class, observed_at, changed}`; `changed=false` when already in the
   requested state (idempotent, no second stream, no fake transition).
 - A second `enable()` while ENABLING joins the in-flight promise (one `getUserMedia`).
-- `stopLocalOnly()` for the bus-driven stop (`eye.disabled` on the bus → local loop stops).
+- `stopLocalIfStale(busEvent)` for the bus-driven stop: a bus `eye.disabled` is a DATED
+  request, not a command. It stops the local loop only when the store is `ACTIVE` (never a
+  transition in flight), the event is newer than the moment that ACTIVE committed, and the
+  generation's durable enable was not acknowledged after the event; an undated or expired
+  event never stops anything. Transitions are generation-owned (`gen:N` first in every
+  trace): a late callback of an older generation is ignored and traced as `ignored:genN`,
+  never applied. Owner run 2026-09-06 (session 9df439af): a stale `eye.disabled` from the
+  previous command cancelled a newer enable mid-ENABLING (`request:stop_local >
+  superseded:stop > state:ENABLING->DISABLED`), three times.
 - `eyeInstances` counters: `sessions`, `cameraOpens`, `loopsStarted` — asserted `{1,1,1}`
   across two consumers + a remount + a double `enable()`, and `enable → ACTIVE → disable →
   DISABLED → enable → ACTIVE` with exactly two camera opens and never two loops at once.
