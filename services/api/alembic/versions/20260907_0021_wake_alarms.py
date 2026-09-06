@@ -22,9 +22,15 @@ rather than a JSON preferences blob: the thresholds that decide whether the owne
 go dark are worth a typed column each, and a NOT NULL default each, so a half-written policy
 cannot exist. Every default here is the conservative one (``auto_off_enabled`` false).
 
-Verified end to end against a throwaway SQLite database
-(``PAGENTOS_DATABASE_URL=sqlite:///... alembic upgrade head`` then ``downgrade -1``) while
-authoring it, the same way 0020 was.
+Verified while authoring it by applying THIS revision, in both directions, against a
+throwaway SQLite database: ``PAGENTOS_DATABASE_URL=sqlite:///... alembic stamp
+0020_routine_dispatch`` (the chain BELOW this point is not SQLite-portable — 0001 issues
+``CREATE EXTENSION IF NOT EXISTS vector``, which is exactly the kind of Postgres-only
+construct ``alembic/env.py``'s own docstring says the migrations stay authoritative for),
+then ``alembic upgrade head`` and ``alembic downgrade -1``. Migration 0020's docstring
+claims a full-chain SQLite run; that is no longer possible and this one does not repeat the
+claim. What the two directions actually prove is what matters here: every DDL statement in
+THIS file is dialect-portable, and the downgrade really drops what the upgrade created.
 """
 
 from __future__ import annotations

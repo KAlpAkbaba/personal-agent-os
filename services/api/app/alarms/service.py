@@ -120,6 +120,20 @@ def utcnow() -> datetime:
     return datetime.now(UTC)
 
 
+def _aware(dt: datetime) -> datetime:
+    """A stored timestamp, made comparable.
+
+    SQLite has no timezone type, so a ``DateTime(timezone=True)`` column round-trips as a
+    NAIVE datetime there while Postgres returns an aware one. Every comparison in this
+    module is between "what the database said" and "now", and mixing the two raises
+    ``TypeError`` — on SQLite, in the unit suite, which is exactly where it should surface
+    rather than at 07:30 on a real morning. Stored instants are UTC by construction (the
+    service only ever writes ``datetime.now(UTC)`` or a ``ParsedWhen.at``), so attaching UTC
+    to a naive read is a restatement, not a guess.
+    """
+    return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
+
+
 class AlarmNotFoundError(ValueError):
     pass
 
@@ -187,7 +201,7 @@ def _occurrence(alarm: WakeAlarm) -> str:
     """The occurrence this alarm is currently on: the scheduled instant plus the snooze
     counter, so a snooze is a genuinely new occurrence rather than a re-run of the old one
     (which the ledger's ``(source, source_ref)`` idempotency would otherwise swallow)."""
-    return f"{int(alarm.scheduled_for.timestamp())}:{alarm.snooze_count}"
+    return f"{int(_aware(alarm.scheduled_for).timestamp())}:{alarm.snooze_count}"
 
 
 def transition(
@@ -390,7 +404,8 @@ def next_alarm(session: Session, *, now: datetime | None = None) -> WakeAlarm | 
     pending = [
         a
         for a in list_alarms(session, limit=200)
-        if a.state in ALARM_PENDING_STATES and a.scheduled_for >= moment - timedelta(minutes=1)
+        if a.state in ALARM_PENDING_STATES
+        and _aware(a.scheduled_for) >= moment - timedelta(minutes=1)
     ]
     return pending[0] if pending else None
 
@@ -464,7 +479,9 @@ def snooze_alarm(
     if sequence is not None:
         sequence.stop_playback(session, alarm, reason="snooze", now=moment)
     alarm.scheduled_for = moment + timedelta(minutes=span)
-    alarm.local_time = alarm.scheduled_for.astimezone(ZoneInfo(alarm.timezone)).strftime("%H:%M")
+    alarm.local_time = _aware(alarm.scheduled_for).astimezone(
+        ZoneInfo(alarm.timezone)
+    ).strftime("%H:%M")
     alarm.snooze_count += 1
     alarm.snooze_minutes = span
     alarm.last_firing_id = None
@@ -530,7 +547,7 @@ def fire_alarm(
         return FireDecision(False, "already_firing")
     if firing_id is not None and alarm.last_firing_id == firing_id:
         return FireDecision(False, "firing_already_handled")
-    late_by = (moment - alarm.scheduled_for).total_seconds()
+    late_by = (moment - _aware(alarm.scheduled_for)).total_seconds()
     if late_by > MAX_LATE_FIRE_S:
         transition(session, alarm, STATE_STOPPED, now=moment, reason="expired_while_down")
         _release(session, alarm, sequence=sequence, reason="expired", now=moment)
@@ -627,7 +644,7 @@ def tick(
 def _should_arm(alarm: WakeAlarm, now: datetime) -> bool:
     if alarm.state == STATE_ARMED:
         return False
-    return (alarm.scheduled_for - now).total_seconds() <= ARM_LEAD_S
+    return (_aware(alarm.scheduled_for) - now).total_seconds() <= ARM_LEAD_S
 
 
 def _greeting_due(alarm: WakeAlarm, now: datetime) -> bool:
@@ -642,10 +659,6 @@ def _play_expired(alarm: WakeAlarm, now: datetime) -> bool:
     if alarm.playing_since is None:
         return False
     return (now - _aware(alarm.playing_since)).total_seconds() >= alarm.max_play_seconds
-
-
-def _aware(dt: datetime) -> datetime:
-    return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
 
 
 def complete_alarm(

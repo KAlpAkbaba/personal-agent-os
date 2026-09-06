@@ -349,7 +349,10 @@ class WakeSequence:
             capability=CAPABILITY_DESKTOP_ALARM_ARM,
             payload={
                 "alarm_id": str(alarm.id),
-                "fire_at": alarm.scheduled_for.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+                "fire_at": _aware(alarm.scheduled_for)
+                .astimezone(UTC)
+                .isoformat()
+                .replace("+00:00", "Z"),
                 "grace_s": 45,
                 "fallback": {
                     "label": alarm.label or "",
@@ -358,7 +361,7 @@ class WakeSequence:
                 },
             },
             requested_state="armed",
-            idempotency_key=f"alarm-arm:{alarm.id}:{int(alarm.scheduled_for.timestamp())}",
+            idempotency_key=f"alarm-arm:{alarm.id}:{int(_aware(alarm.scheduled_for).timestamp())}",
             timeout_s=TIMEOUT_DISARM,
             observed_key="armed",
             now=now,
@@ -656,6 +659,11 @@ class WakeSequence:
         restored = self._restore_volume(db, alarm, firing_key="greeting", now=moment)
         if restored is not None:
             steps.append(restored)
+        # The greeting is no longer DUE, whether or not it was spoken. Only ``greeted_at``
+        # says it happened; clearing the due time is what stops a failed synthesis being
+        # retried on every tick for the rest of the alarm — which would both spam the
+        # provider and keep the alarm from ever completing.
+        alarm.greeting_due_at = None
         if transition is not None:
             transition(db, alarm, STATE_PLAYING, now=moment, after="greeting")
         return steps
@@ -836,6 +844,12 @@ class WakeSequence:
 
 
 # ------------------------------------------------------------------------- helpers
+
+
+def _aware(dt: datetime) -> datetime:
+    """A stored timestamp, made comparable — see ``app.alarms.service._aware`` for why
+    (SQLite returns naive datetimes for a ``DateTime(timezone=True)`` column)."""
+    return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
 
 
 def _display_only_alarm() -> WakeAlarm:

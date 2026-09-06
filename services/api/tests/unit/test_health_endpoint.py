@@ -41,6 +41,11 @@ ALL_CHECKS = DEPENDENCY_CHECKS | {
     # and "research" (synthesis-provider configuration posture; no I/O).
     "temporal_worker",
     "research",
+    # M18.3 adds "routine_clock" (spec §3.3): the one named component that asks
+    # `evaluate_due`. It is on the health manifest BECAUSE it is that component — a
+    # configured clock that is not running is the state in which no alarm would ever
+    # fire, and that must be visible rather than silent.
+    "routine_clock",
 }
 # "skipped" (temporal_worker when worker_mode != embedded) is a legitimate
 # non-degraded status alongside "ok" — see app.main's degraded computation.
@@ -79,8 +84,22 @@ def test_health_ok_shape(monkeypatch) -> None:
     assert set(body["checks"].keys()) == ALL_CHECKS
     for name, check in body["checks"].items():
         assert check["status"] in NON_DEGRADED_STATUSES
-        if name != "temporal_worker":  # skipped in tests; carries no latency_ms
+        # ``temporal_worker`` is skipped in tests, and ``routine_clock`` is a STATE report
+        # rather than a probe (M18.3 spec §3.3: running, interval, ticks, last error) —
+        # neither has a round trip to time, and inventing a zero for one would be a
+        # latency this endpoint never measured.
+        if name not in ("temporal_worker", "routine_clock"):
             assert isinstance(check["latency_ms"], int | float)
+    clock = body["checks"]["routine_clock"]
+    assert set(clock) == {
+        "status",
+        "running",
+        "enabled",
+        "interval_s",
+        "ticks",
+        "last_tick_at",
+        "last_error",
+    }
 
 
 def test_health_broker_check_shape(monkeypatch) -> None:
@@ -159,7 +178,12 @@ def test_health_serves_the_realtime_contract_version() -> None:
     assert doc["checks"]["voice_realtime"]["contract_version"] == CONTRACT_VERSION == 2
     # The action contract's own version rides the manifest too: an owner qualification
     # releases the Cloud Core when the deployed value is older than its checkout's.
-    assert doc["checks"]["voice_realtime"]["action_contract_version"] == 4
+    # 6 = M18.3 (ADR-0071): the alarm/display/ambient capability family, the
+    # device-refusal receipt shape, and one receipt per physical step of the wake sequence.
+    assert doc["checks"]["voice_realtime"]["action_contract_version"] == 6
+    # M18.3 spec §3.8: the ten new tools ride the same manifest an owner harness reads.
+    tools = set(doc["checks"]["voice_realtime"]["tools"])
+    assert {"alarm.create", "alarm.stop", "display.off", "ambient.test_display"} <= tools
 
 
 def test_health_temporal_worker_skipped_when_worker_mode_off(monkeypatch) -> None:

@@ -327,10 +327,24 @@ def display_status_speech(state: str | None) -> str:
     return DISPLAY_STATUS_UNKNOWN_TR
 
 
+def capitalize_tr(text: str) -> str:
+    """Sentence case, the Turkish way: a leading "i" becomes "İ", never "I".
+
+    ``str.capitalize()`` would turn "iki dakika" into "Iki dakika" — the dotless capital,
+    which is a different letter and reads as a spelling mistake to the owner. It also
+    lowercases the rest of the string, which would flatten a proper noun later in the
+    sentence. Both are why this is four lines rather than a method call.
+    """
+    if not text:
+        return text
+    head = "İ" if text[0] == "i" else text[0].upper()
+    return head + text[1:]
+
+
 def alarm_snoozed_speech(*, minutes: int, local_time: str) -> str:
     """"Beş dakika erteledim efendim; yedi otuz beşte tekrar çalacak." (spec §6)."""
     return ALARM_SNOOZED_TR.format(
-        minutes=f"{cardinal(minutes)} dakika", when=at_phrase(local_time)
+        minutes=capitalize_tr(f"{cardinal(minutes)} dakika"), when=at_phrase(local_time)
     )
 
 
@@ -402,6 +416,7 @@ __all__ = [
     "alarm_query_speech",
     "alarm_snoozed_speech",
     "at_phrase",
+    "capitalize_tr",
     "clock_words_tr",
     "daypart_greeting",
     "display_off_speech",

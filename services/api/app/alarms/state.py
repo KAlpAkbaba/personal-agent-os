@@ -40,12 +40,24 @@ from app.alarms.models import (
     STATE_STOPPED,
 )
 
+#: SCHEDULED/ARMED -> STOPPED covers the alarm whose moment passed while the process was
+#: down for longer than ``app.alarms.service.MAX_LATE_FIRE_S``. It never rang, so it is not
+#: COMPLETED; the owner did not ask, so it is not CANCELLED. STOPPED with
+#: ``terminal_reason="expired_while_down"`` is the truthful third answer, and it releases
+#: the device arm like every other terminal state.
 _EDGES: dict[str, frozenset[str]] = {
     STATE_SCHEDULED: frozenset(
-        {STATE_ARMED, STATE_FIRING, STATE_SNOOZED, STATE_CANCELLED, STATE_FAILED}
+        {STATE_ARMED, STATE_FIRING, STATE_SNOOZED, STATE_CANCELLED, STATE_STOPPED, STATE_FAILED}
     ),
     STATE_ARMED: frozenset(
-        {STATE_FIRING, STATE_SCHEDULED, STATE_SNOOZED, STATE_CANCELLED, STATE_FAILED}
+        {
+            STATE_FIRING,
+            STATE_SCHEDULED,
+            STATE_SNOOZED,
+            STATE_CANCELLED,
+            STATE_STOPPED,
+            STATE_FAILED,
+        }
     ),
     STATE_FIRING: frozenset(
         {
