@@ -423,6 +423,61 @@ Test-Case "a failed subsystem invocation is reported as failed, not as never ask
 
 
 Write-Host ""
+Write-Host "M18: the Core session qualifies by what it did, not by one tool name"
+
+function New-CoreActivity {
+    param([string]$Id, [string[]]$Succeeded = @(), [string[]]$Failed = @())
+    $calls = @()
+    foreach ($n in $Succeeded) { $calls += [pscustomobject]@{ name = $n; status = "succeeded" } }
+    foreach ($n in $Failed) { $calls += [pscustomobject]@{ name = $n; status = "failed" } }
+    return [pscustomobject]@{ session_id = $Id; tool_calls = $calls }
+}
+
+Test-Case "10. the default qualifier is unchanged: activity.explain succeeded (M17 scripts keep working)" {
+    Assert-True (Test-ExplainQualification -Activity (New-Activity -Id "a")) "explained qualifies"
+    Assert-True (-not (Test-ExplainQualification -Activity (New-Activity -Id "b" -Explained $false))) "narration only does not"
+    Assert-True (-not (Test-ExplainQualification -Activity (New-CoreActivity -Id "c" -Succeeded @("state.now")))) "the M17 rule does not accept state.now"
+}
+Test-Case "11. a live-state answer alone qualifies a Core session (no activity.explain required)" {
+    $s = New-Session -Id "core-1" -StartedAt "2026-09-04T20:01:00Z"
+    $selected = Select-QualificationSession -Sessions @($s) -BaselineIds @() -ReadyAt $readyAt `
+        -ActivityProbe { param($Id) New-CoreActivity -Id $Id -Succeeded @("state.now") } -Qualifier ${function:Test-CoreQualification}
+    Assert-Equal "core-1" $selected.SessionId "selected"
+}
+Test-Case "11b. an eye action alone qualifies; a failed one does not; a non-router tool does not" {
+    $s = New-Session -Id "core-2" -StartedAt "2026-09-04T20:01:00Z"
+    $ok = Select-QualificationSession -Sessions @($s) -BaselineIds @() -ReadyAt $readyAt `
+        -ActivityProbe { param($Id) New-CoreActivity -Id $Id -Succeeded @("eye.disable") } -Qualifier ${function:Test-CoreQualification}
+    Assert-Equal "core-2" $ok.SessionId "eye.disable qualifies"
+    $failed = Select-QualificationSession -Sessions @($s) -BaselineIds @() -ReadyAt $readyAt `
+        -ActivityProbe { param($Id) New-CoreActivity -Id $Id -Failed @("eye.disable", "state.now") } -Qualifier ${function:Test-CoreQualification}
+    Assert-True ($null -eq $failed) "failed calls do not qualify"
+    $clock = Select-QualificationSession -Sessions @($s) -BaselineIds @() -ReadyAt $readyAt `
+        -ActivityProbe { param($Id) New-CoreActivity -Id $Id -Succeeded @("clock.now", "narration.control") } -Qualifier ${function:Test-CoreQualification}
+    Assert-True ($null -eq $clock) "clock.now / narration.control are not the router"
+}
+Test-Case "11c. ONE succeeded call is an array of one under the qualifier (the .Count trap, again)" {
+    $one = Get-SucceededToolCalls -Activity (New-CoreActivity -Id "x" -Succeeded @("state.now"))
+    Assert-True ($one -is [array]) "array"
+    Assert-Equal 1 $one.Count "count"
+    $none = Get-SucceededToolCalls -Activity (New-CoreActivity -Id "y")
+    Assert-Equal 0 $none.Count "empty"
+    $absent = Get-SucceededToolCalls -Activity ([pscustomobject]@{ session_id = "z" })
+    Assert-Equal 0 $absent.Count "no tool_calls property at all"
+}
+Test-Case "11d. Wait-QualificationSession passes the qualifier through" {
+    $fake = New-FakeClock
+    $polls = @{ n = 0 }
+    $list = { $polls.n++; if ($polls.n -ge 2) { @(New-Session -Id "core-3" -StartedAt "2026-09-04T20:01:00Z") } else { @() } }.GetNewClosure()
+    $result = Wait-QualificationSession -ListSessions $list -ActivityProbe { param($Id) New-CoreActivity -Id $Id -Succeeded @("eye.enable") } `
+        -BaselineIds @() -ReadyAt $readyAt -TimeoutSec 60 -IntervalSec 5 -Sleep $fake.Sleep -Clock $fake.Clock -Qualifier ${function:Test-CoreQualification}
+    Assert-Equal "core-3" $result.Selected.SessionId "selected on the second poll"
+    $never = Wait-QualificationSession -ListSessions $list -ActivityProbe { param($Id) New-CoreActivity -Id $Id -Succeeded @("eye.enable") } `
+        -BaselineIds @() -ReadyAt $readyAt -TimeoutSec 20 -IntervalSec 5 -Sleep $fake.Sleep -Clock $fake.Clock
+    Assert-True ($null -eq $never.Selected) "without the qualifier the M17 rule applies and eye.enable does not qualify"
+}
+
+Write-Host ""
 Write-Host "owner-explain harness: $script:Passes passed, $script:Failures failed"
 if ($script:Failures -gt 0) { exit 1 }
 exit 0

@@ -176,8 +176,13 @@ function Select-QualificationSession {
         NotBefore: OPTIONAL absolute floor. -VerifyOnly uses it to bound how far back a
         session may be and still be considered this owner's completed qualification, so
         "no ReadyAt" never means "any session ever".
-        ActivityProbe: scriptblock(session_id) -> the session's activity record; a session
-        qualifies only when it carries a succeeded activity.explain call.
+        ActivityProbe: scriptblock(session_id) -> the session's activity record.
+        Qualifier: OPTIONAL scriptblock(activity) -> bool deciding whether that record is
+        the owner's qualification. The default is the M17 rule (a succeeded activity.explain
+        call). M18 passes Test-CoreQualification instead: the Core session is recognised by
+        WHAT it did (a live-state answer, an eye action, a briefing), never by one tool name -
+        requiring activity.explain to prove that the Core's voice works was the wrong test
+        (owner, 2026-09-06).
     #>
     param(
         [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Sessions,
@@ -186,8 +191,10 @@ function Select-QualificationSession {
         [AllowNull()][Nullable[DateTimeOffset]]$ReadyAt = $null,
         [AllowNull()][Nullable[DateTimeOffset]]$NotBefore = $null,
         [string[]]$ClientKinds = @("web"),
-        [int]$ToleranceSec = 1
+        [int]$ToleranceSec = 1,
+        [AllowNull()][scriptblock]$Qualifier = $null
     )
+    if ($null -eq $Qualifier) { $Qualifier = ${function:Test-ExplainQualification} }
     $candidates = @()
     foreach ($session in $Sessions) {
         $id = [string]$session.session_id
@@ -209,13 +216,50 @@ function Select-QualificationSession {
         $activity = $null
         try { $activity = & $ActivityProbe $candidate.Id } catch { $activity = $null }
         if ($null -eq $activity) { continue }
-        $calls = @($activity.tool_calls)
-        $explained = @($calls | Where-Object { [string]$_.name -eq "activity.explain" -and [string]$_.status -eq "succeeded" })
-        if ($explained.Count -gt 0) {
+        $qualifies = $false
+        try { $qualifies = [bool](& $Qualifier $activity) } catch { $qualifies = $false }
+        if ($qualifies) {
             return [pscustomobject]@{ SessionId = $candidate.Id; Session = $candidate.Session; Activity = $activity; Started = $candidate.Started }
         }
     }
     return $null
+}
+
+function Get-SucceededToolCalls {
+    <#  The succeeded tool calls of an activity record, as an array whatever their number.  #>
+    param($Activity)
+    if ($null -eq $Activity) { return , @() }
+    $calls = @()
+    $raw = $null
+    try { $raw = $Activity.tool_calls } catch { $raw = $null }
+    foreach ($c in @($raw)) {
+        if ($null -eq $c) { continue }
+        if ([string]$c.status -eq "succeeded") { $calls += $c }
+    }
+    return , $calls
+}
+
+function Test-ExplainQualification {
+    <#  M17: the session asked activity.explain and it succeeded.  #>
+    param($Activity)
+    # Assigned BEFORE it is piped: a `, @(...)` return piped directly arrives in the
+    # pipeline as ONE item (the whole array), so `$_.name` would be a list of names and
+    # the string comparison would match nothing (owner-explain.tests.ps1 caught it).
+    $calls = Get-SucceededToolCalls -Activity $Activity
+    $explained = @($calls | Where-Object { [string]$_.name -eq "activity.explain" })
+    return ($explained.Count -gt 0)
+}
+
+#: The tool calls a Core voice session can make that prove the owner really spoke to it
+#: through the canonical router (docs\M18_ACTION_CONTRACT.md section 2).
+$script:CoreQualifyingTools = @("state.now", "eye.enable", "eye.disable", "activity.explain", "release.promote")
+
+function Test-CoreQualification {
+    <#  M18: the session made at least one succeeded call through the Core's router.  #>
+    param($Activity)
+    $calls = Get-SucceededToolCalls -Activity $Activity
+    $hits = @($calls | Where-Object { $script:CoreQualifyingTools -contains [string]$_.name })
+    return ($hits.Count -gt 0)
 }
 
 function Wait-QualificationSession {
@@ -234,7 +278,8 @@ function Wait-QualificationSession {
         [int]$IntervalSec = 5,
         [scriptblock]$Sleep = { param($Seconds) Start-Sleep -Seconds $Seconds },
         [scriptblock]$Clock = { [double](Get-Date).ToUniversalTime().Subtract([datetime]'1970-01-01').TotalSeconds },
-        [scriptblock]$OnWaiting = $null
+        [scriptblock]$OnWaiting = $null,
+        [AllowNull()][scriptblock]$Qualifier = $null
     )
     $started = [double](& $Clock)
     $attempts = 0
@@ -242,7 +287,7 @@ function Wait-QualificationSession {
         $attempts++
         $sessions = @(& $ListSessions)
         $selected = Select-QualificationSession -Sessions $sessions -BaselineIds $BaselineIds `
-            -ActivityProbe $ActivityProbe -ReadyAt $ReadyAt -NotBefore $NotBefore
+            -ActivityProbe $ActivityProbe -ReadyAt $ReadyAt -NotBefore $NotBefore -Qualifier $Qualifier
         $elapsed = [double](& $Clock) - $started
         if ($null -ne $selected) {
             return [pscustomobject]@{ Selected = $selected; Attempts = $attempts; ElapsedSec = $elapsed }

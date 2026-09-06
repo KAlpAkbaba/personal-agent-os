@@ -92,6 +92,19 @@ Test-Case "a wrapping helper keeps two rows" {
     $rows = Get-RowsLike -Doc $docTwo
     Assert-Equal 2 $rows.Count "count"
 }
+Test-Case "the third trap: a , @(...) return PIPED directly arrives as ONE item (the whole array)" {
+    # 2026-09-06, scripts\lib\VoiceShell.ps1: `Get-Rows | Where-Object { $_.name -eq 'x' }`
+    # matched nothing, because $_ was the array itself and $_.name a list of names.
+    $items = 0
+    Get-RowsLike -Doc $docTwo | ForEach-Object { $items++ }
+    Assert-Equal 1 $items "piped directly: one pipeline item"
+    $direct = @(Get-RowsLike -Doc $docTwo | Where-Object { [string]$_.event_type -eq "a" })
+    Assert-Equal 0 $direct.Count "so a per-row filter over the direct pipe finds nothing"
+    # The fix, and the rule: assign first, pipe the variable.
+    $rows = Get-RowsLike -Doc $docTwo
+    $viaVariable = @($rows | Where-Object { [string]$_.event_type -eq "a" })
+    Assert-Equal 1 $viaVariable.Count "assigned first, the filter sees each row"
+}
 Test-Case "a scalar-in-a-collection helper output filtered to nothing is an empty array, not null" {
     $rows = Get-RowsLike -Doc $docOne
     $none = @($rows | Where-Object { $_.event_type -eq "never" })

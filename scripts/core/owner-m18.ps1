@@ -323,9 +323,12 @@ try {
 
     $listSessions = { Get-ArrayProperty -InputObject (Get-Json "/v1/voice/realtime/sessions?limit=50") -Name "sessions" }
     $activityProbe = { param($Id) Get-Json "/v1/voice/realtime/sessions/$Id/activity" }
+    # Recognised by what it did through the router (a live-state answer, an eye action, a
+    # briefing), never by one tool name: requiring activity.explain to prove the Core's
+    # voice works was the wrong test (owner, 2026-09-06).
     $waited = Wait-QualificationSession -ListSessions $listSessions -ActivityProbe $activityProbe -BaselineIds $baselineIds `
-        -ReadyAt $readyAt -NotBefore $null -TimeoutSec $SessionWaitSec -IntervalSec 5 `
-        -OnWaiting { param($Attempt, $Elapsed) if ($Attempt -eq 1) { Write-Host "      waiting for a web voice session that asked activity.explain (up to $SessionWaitSec s)..." } }
+        -ReadyAt $readyAt -NotBefore $null -TimeoutSec $SessionWaitSec -IntervalSec 5 -Qualifier ${function:Test-CoreQualification} `
+        -OnWaiting { param($Attempt, $Elapsed) if ($Attempt -eq 1) { Write-Host "      waiting for a web voice session that went through the router (up to $SessionWaitSec s)..." } }
     $sessionId = ""
     if ($null -ne $waited.Selected) {
         $sessionId = [string]$waited.Selected.SessionId
