@@ -4712,8 +4712,9 @@ Decisions:
    a worse lie than the lag, and an empty alarm cell without that line would read as "no
    alarm is set". A server NEWER than this build stays a hard mismatch: we do not know its
    vocabulary.
-6. **The stage is the viewport, and the coverage is arithmetic.** `/core` is fixed,
-   `100dvh`, near-black (`#06050a`), with no page scroll at all. `stageSizeFor(w, h)` sizes
+6. **The stage is the viewport, and the coverage is arithmetic.** `/core` is fixed to the
+   viewport (`position: fixed; inset: 0`) and near-black (`#06050a`), so there is no page
+   scroll at all rather than a scroll with nowhere to go. `stageSizeFor(w, h)` sizes
    the stage so the Core covers 60–80 % of the usable viewport at every aspect ratio
    (portrait 0.74, square 0.78, landscape 0.72, ultrawide 0.66 of the short side, clamped
    into the band), and the `CORE_FILL` it works from is **derived from the camera** rather

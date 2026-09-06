@@ -6,7 +6,8 @@
  * The owner's directive for this milestone: "the existing small wireframe
  * sphere is no longer acceptable as the primary owner experience; /core must
  * become a full-viewport living visual presence." So the stage IS the
- * viewport — fixed, `100dvh`, no page scroll, a near-black ground — and
+ * viewport — `position: fixed; inset: 0`, so there is no page scroll at all
+ * rather than a scroll with nowhere to go, on a near-black ground — and
  * everything else is an overlay on it:
  *
  *   · a tiny semantic caption, bottom centre (the same `StateReadout`, compact)

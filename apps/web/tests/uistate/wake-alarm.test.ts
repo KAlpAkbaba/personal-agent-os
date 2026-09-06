@@ -35,6 +35,7 @@ import {
 import { alarmIsSounding, alarmView, displayView, releaseView } from "../../app/lib/uistate/ambient";
 import {
   alarmClaim,
+  applyError,
   applyResponse,
   applyUnauthorized,
   displayClaim,
@@ -199,6 +200,19 @@ describe("the wake alarm is drawn only while it is actually sounding", () => {
     const stale = visualFor(truth, T0 + 21 * 60_000);
     expect(stale.wakeStage).toBe("none");
     expect(stale.wakeSurge).toBe(0);
+  });
+
+  it("stops surging when the API cannot be reached, and keeps the stage", () => {
+    resetSequence();
+    let truth = applyResponse(emptyTruth(), response([ALARM_PLAYING()]), T0);
+    truth = applyError(truth, "ağ koptu", T0);
+    const intent = visualFor(truth, T0);
+    // We are drawing memory, not observation: the strip still says what the
+    // last poll saw, and with what age; the light stops claiming it is now.
+    expect(intent.wakeStage).toBe("playing");
+    expect(intent.wakeSurge).toBe(0);
+    expect(intent.wakeLevel).toBeNull();
+    expect(hasWakeSurge(intent)).toBe(false);
   });
 
   it("draws nothing for a refused session", () => {

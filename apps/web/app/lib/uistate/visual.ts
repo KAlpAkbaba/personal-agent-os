@@ -412,8 +412,14 @@ function wakeFields(truth: CoreTruth, now: number): Pick<
   "wakeStage" | "wakeSurge" | "wakeLevel" | "wakeLevelKnown"
 > {
   const view = alarmView(alarmClaim(truth, now));
-  const base = WAKE_SURGE[view.stage];
-  const level = alarmIsSounding(view) ? view.level : null;
+  // An unreachable API means we are drawing memory, not observation. The core
+  // body already damps every channel there; a surge that kept pulsing would be
+  // claiming an alarm is ringing NOW on the strength of a poll that failed. The
+  // stage survives — the strip still names it, with its age — and the light
+  // does not.
+  const observing = truth.connection.kind !== "unreachable";
+  const base = observing ? WAKE_SURGE[view.stage] : 0;
+  const level = alarmIsSounding(view) && observing ? view.level : null;
   return {
     wakeStage: view.stage,
     // The level only ever raises a stage that is already sounding, and is
