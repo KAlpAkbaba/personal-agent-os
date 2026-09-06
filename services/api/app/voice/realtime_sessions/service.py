@@ -36,7 +36,7 @@ from app.uistate import UiState
 from app.uistate import publish as publish_ui
 from app.voice import service as voice_service
 from app.voice.errors import VoiceError, VoiceErrorClass
-from app.voice.intents import Intent, ResolvedIntent, resolve_intent
+from app.voice.intents import ResolvedIntent, resolve_intent
 from app.voice.providers import EphemeralCredential, RealtimeProvider, RealtimeSessionConfig
 from app.voice.realtime import RealtimeState
 from app.voice.realtime_bench import (
@@ -803,6 +803,8 @@ def record_client_events(
     Timing events are stored as audit rows and later assembled into a report;
     ``utterance`` events are resolved into intents HERE (Cloud Core resolves,
     the client only transcribes) and the intent — not the text — is audited.
+    Resolving is all an utterance does: no utterance mutates anything (the eye
+    included); mutations go through tool calls and end in receipts (contract §5.3).
     """
     now = utcnow()
     require_live(db, row, now=now, trace_id=trace_id)
@@ -834,51 +836,16 @@ def record_client_events(
             resolved.append(
                 {"t_ms": t_ms, "turn": turn, **intent.to_dict(), "normalized_text": None}
             )
-            if intent.intent == Intent.EYE_DISABLE:
-                # M18 spec §2: "Gözünü kapat", "Kamerayı kapat" and "Beni izleme"
-                # stop perception immediately. This is deterministic — it does not
-                # wait for the realtime provider to decide to call a tool — because
-                # a privacy-critical disable must not depend on a model's judgment
-                # call. app.presence.eye.disable_eye is itself idempotent, durable
-                # (ledger row) and observable (eye.disabled UI-state event); a
-                # repeated phrase just repeats the same real owner action.
-                from app.presence.eye import disable_eye
-
-                try:
-                    changed = bool(disable_eye(db, reason=f"voice:{intent.matched}"))
-                    meta["eye_disable"] = "applied" if changed else "already"
-                    # The bookkeeping the eye.disable tool handler reads (contract §5.3):
-                    # if the model calls the tool for this same command, the receipt says
-                    # "verified" - the command closed the eye - rather than "already",
-                    # even though the durable write was this safety net's.
-                    ctx["eye_safety"] = {
-                        "turn": turn,
-                        "action": "disable",
-                        "applied_at": _iso(now),
-                        "changed": changed,
-                    }
-                except Exception as exc:  # noqa: BLE001
-                    # The failure is caught so one broken write cannot lose the
-                    # owner's transcript - but it is NOT swallowed. The owner just
-                    # said "stop watching me" and it did not happen; a debug line
-                    # nobody reads is the wrong place for that. It goes on the
-                    # audit record, and onto the UI-state bus as an error, so the
-                    # Core can say the camera did not close.
-                    logger.error(
-                        "voice_eye_disable_failed",
-                        matched=intent.matched,
-                        reason=type(exc).__name__,
-                    )
-                    meta["eye_disable"] = "failed"
-                    meta["eye_disable_error"] = type(exc).__name__
-                    publish_ui(
-                        UiState.ERROR,
-                        subsystem="presence",
-                        severity="critical",
-                        status="eye_disable_failed",
-                        session_id=str(row.id),
-                        label="kamera kapatılamadı",
-                    )
+            # An utterance resolved to EYE_DISABLE / EYE_ENABLE is resolved and audited
+            # here (intent, klass, capability) and NOTHING ELSE: the tool call is the one
+            # canonical mutation path (docs/M18_ACTION_CONTRACT.md §5.3). Until 2026-09-06
+            # this branch also wrote the durable disable itself, "so privacy would not
+            # depend on the model". In owner session 3eb6fee7 that hook closed the camera
+            # 7 ms after the eye.disable tool call, with no receipt of its own, while every
+            # receipt said failed - a hidden second mutation the owner could not see or
+            # verify. The persona makes the model call the tool; a model that does not is
+            # a defect to fix in the persona, not to paper over with a write nobody
+            # narrates.
             meta.update(
                 {
                     "intent": intent.intent.value,
@@ -1297,6 +1264,38 @@ def _result_field(result: Any, *path: str) -> Any:
     return node
 
 
+_OBSERVED_AFTER_SIDES = ("server", "local")
+_OBSERVED_AFTER_SCALAR_CHARS = 120
+
+
+def _bounded_observed_after(raw: Any) -> dict[str, Any] | None:
+    """A receipt's ``observed_after`` for ``session_activity``: the ``server`` and
+    ``local`` blocks, scalars only (strings clipped), nested structures dropped."""
+    if not isinstance(raw, dict):
+        return None
+    out: dict[str, Any] = {}
+    for side in _OBSERVED_AFTER_SIDES:
+        block = raw.get(side)
+        if not isinstance(block, dict):
+            continue
+        kept: dict[str, Any] = {}
+        for key, value in block.items():
+            if isinstance(value, str):
+                kept[str(key)] = value[:_OBSERVED_AFTER_SCALAR_CHARS]
+            elif value is None or isinstance(value, bool | int | float):
+                kept[str(key)] = value
+        out[side] = kept
+    return out or None
+
+
+def _bounded_trace(raw: Any) -> list[str] | None:
+    from app.actions.receipt import bound_action_trace
+
+    if not isinstance(raw, list | tuple):
+        return None
+    return bound_action_trace(raw)
+
+
 def session_activity(db: Session, row: RealtimeSessionRow) -> dict[str, Any]:
     """What happened in a session, from durable rows only (M16 spec §5).
 
@@ -1331,6 +1330,9 @@ def session_activity(db: Session, row: RealtimeSessionRow) -> dict[str, Any]:
         tool_calls.append(
             {
                 "call_id": call.call_id,
+                # The row's session, on every entry, so a harness line can be correlated
+                # with the receipt's own ``session_id`` and the ledger's ``detail_json``.
+                "session_id": str(row.id),
                 "name": call.name,
                 "status": call.status,
                 "created_at": _iso(call.created_at) if call.created_at else None,
@@ -1362,6 +1364,12 @@ def session_activity(db: Session, row: RealtimeSessionRow) -> dict[str, Any]:
                 "terminal_status": _result_field(result, "terminal_status"),
                 "execution_status": _result_field(result, "execution_status"),
                 "requested_state": _result_field(result, "requested_state"),
+                # The receipt's read-back, bounded to scalars, and the client's own step
+                # trace, so the qualification harness prints "browser eye state / media
+                # track / receipt" per call from durable rows alone.
+                "observed_after": _bounded_observed_after(_result_field(result, "observed_after")),
+                "action_trace": _bounded_trace(_result_field(result, "action_trace")),
+                "observed_at": _result_field(result, "observed_at"),
                 "routed": _result_field(result, "routed"),
                 "entity_ids": _result_field(result, "cognition", "entity_ids"),
                 "evidence_kinds": _result_field(result, "cognition", "evidence_kinds"),
@@ -1406,7 +1414,6 @@ def session_activity(db: Session, row: RealtimeSessionRow) -> dict[str, Any]:
                     "query_kind": meta.get("query_kind"),
                     "klass": meta.get("klass"),
                     "capability": meta.get("capability"),
-                    "eye_disable": meta.get("eye_disable"),
                 }
             )
         else:

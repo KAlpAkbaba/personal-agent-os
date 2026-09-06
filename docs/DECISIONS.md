@@ -4131,9 +4131,41 @@ Decisions:
 6. **The ledger vocabulary grew, not the rules.** `action.receipt` and
    `voice.state_answered` are event types; `verified`, `already` and `unverified` are
    statuses, because a receipt row's `status` IS its terminal status and "did the camera
-   really close?" must be answerable from the status column. The safety net in
+   really close?" must be answerable from the status column. ~~The safety net in
    `record_client_events` stays and records `eye_safety` in the session context so a
-   following `eye.disable` call for the same command is `verified`, not `already`.
+   following `eye.disable` call for the same command is `verified`, not `already`.~~
+   Reversed the same day; see the amendment below.
+
+Amendment (2026-09-06, later the same day; owner session `3eb6fee7`, 13:57Z):
+
+7. **Exactly one mutation path per capability: the tool. The utterance safety net is
+   removed.** The production record showed every eye receipt as `capability_missing` /
+   `failed` (the client relayed without `observed_after` - a client bug fixed there) while
+   the camera physically closed at 13:57:33, written by the utterance net in
+   `record_client_events` 7 ms after the tool call with reason `voice:gözünü kapat`. Two
+   writers, one receipt, and the receipt was the wrong one: the record could not connect
+   the failed action to the closed camera. An utterance resolved to `EYE_DISABLE` /
+   `EYE_ENABLE` is now resolved and audited (intent, klass, capability) and mutates
+   nothing; `eye_safety` and the handler's same-turn window are gone; the contract's §5.3
+   says why. Privacy rests on the persona making the model call the tool always, on the
+   disable handler writing the flag regardless of the client's report, and on the owner's
+   button - never on a write nobody narrates.
+8. **The receipt says which session and when it looked.** `ActionReceipt` carries
+   `session_id`, `observed_at` (the read-back moment) and the client's bounded
+   `action_trace`; the ledger `detail_json` carries them too, and `session_activity`
+   exposes `session_id`, the receipt's `observed_after` and `action_trace` per tool call.
+   `GET /v1/state/now?scope=` (owner-gated) returns the `state.now` composer's answer
+   over HTTP, so the harness can hold the runtime's view, the browser's report and the
+   receipt side by side.
+9. **Truthful in both directions.** The client names its failure (`device_not_found`,
+   `device_busy`, `get_user_media_failed`, `stream_created_but_track_ended`,
+   `perception_start_failed`, `state_transition_failed`, plus the four already known) and
+   each has its own sentence. When the browser reports the camera physically in the
+   requested state but the Cloud Core's record is not confirmed (write raised, read-back
+   mismatch), the receipt is `unverified` and the sentence is "Kamera kapandı/açıldı ancak
+   işlem kaydını doğrulayamadım." - never "kapatamadım/açamadım", which on 2026-09-06 was
+   said of a camera that was off. An enable relayed as `ACTIVE` with the media track
+   `ended` is `failed` and never sets the flag.
 
 Consequences: every future mutating capability (display-off, mail, files, media, a
 deployment the owner authorises) inherits the receipt, the four terminal statuses, the

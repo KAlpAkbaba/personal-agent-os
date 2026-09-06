@@ -6,6 +6,13 @@ acting - the durable flag re-read from the ledger, the client's own report of it
 camera - and the model reads the receipt's ``speech`` verbatim. ``state.now`` is the
 QUERY tool for "what is true now"; it delegates to :func:`app.state.now.compose_live_state`.
 
+The tool is the ONE canonical mutation path for the eye (contract §5.3). Nothing else on
+the Cloud Core changes the durable flag on the owner's voice: on 2026-09-06 (owner
+session 3eb6fee7) a second, hidden path - an utterance hook in ``record_client_events`` -
+closed the camera 7 ms after the tool call with no receipt of its own, while every
+receipt said ``failed``. There is no such hook any more; a mutation without a receipt is
+the defect, not a safety margin.
+
 Handlers here take the same ``(ToolContext, arguments)`` shape as the rest of the
 registry (``app.voice.realtime_sessions.tools``); they live in their own module because
 that one is the manifest and this one is the WRITE -> READ-BACK -> SPEAK discipline.
@@ -19,6 +26,8 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Final
 
 from app.actions.receipt import (
+    ERROR_CAPABILITY_MISSING,
+    ERROR_STREAM_CREATED_BUT_TRACK_ENDED,
     EXECUTION_EXECUTED,
     EXECUTION_FAILED,
     EXECUTION_NOOP,
@@ -29,6 +38,7 @@ from app.actions.receipt import (
     TERMINAL_UNVERIFIED,
     TERMINAL_VERIFIED,
     ActionReceipt,
+    bound_action_trace,
     eye_speech,
     record_receipt,
 )
@@ -54,13 +64,15 @@ LOCAL_DISABLED: Final = "DISABLED"
 LOCAL_ERROR: Final = "ERROR"
 LOCAL_STATES: Final[tuple[str, ...]] = (LOCAL_ACTIVE, LOCAL_DISABLED, LOCAL_ERROR)
 
-ERROR_CAPABILITY_MISSING: Final = "capability_missing"
-ERROR_STATE_MISMATCH: Final = "state_mismatch"
-ERROR_OWNER_AUTHORIZATION_REQUIRED: Final = "owner_authorization_required"
+TRACK_LIVE: Final = "live"
+TRACK_ENDED: Final = "ended"
+TRACK_STATES: Final[tuple[str, ...]] = (TRACK_LIVE, TRACK_ENDED)
 
-#: How long after the deterministic safety net disabled the eye a following
-#: ``eye.disable`` tool call still counts as THE command that closed it (contract §5.3).
-SAFETY_NET_WINDOW_S: Final = 30.0
+#: Server-side error classes (the client's own are in ``app.actions.receipt``).
+ERROR_STATE_MISMATCH: Final = "state_mismatch"  # local and server read-backs disagree
+ERROR_DURABLE_WRITE_FAILED: Final = "durable_write_failed"  # the flag write raised
+ERROR_READ_BACK_FAILED: Final = "read_back_failed"  # the flag could not be re-read
+ERROR_OWNER_AUTHORIZATION_REQUIRED: Final = "owner_authorization_required"
 
 
 def _require_str(arguments: dict[str, Any], key: str, *, max_len: int) -> str:
@@ -95,6 +107,11 @@ def local_report(arguments: dict[str, Any]) -> dict[str, Any]:
     reported as ``ERROR`` / ``capability_missing`` - the server never sets the durable
     flag on enable for a camera nobody opened, and a disable is not called verified when
     nothing local confirmed the loop stopped.
+
+    ``media_track_ready_state`` (``live`` | ``ended`` | None) and ``action_trace`` (a
+    bounded list of short step names) are optional evidence; their absence never fails
+    the call. The trace is returned under ``action_trace`` for the receipt, not echoed
+    inside the local block.
     """
     raw = arguments.get("observed_after")
     local = raw.get("local") if isinstance(raw, dict) else None
@@ -106,6 +123,8 @@ def local_report(arguments: dict[str, Any]) -> dict[str, Any]:
             "error_class": ERROR_CAPABILITY_MISSING,
             "observed_at": None,
             "changed": False,
+            "media_track_ready_state": None,
+            "action_trace": [],
         }
     state = str(local.get("state") or LOCAL_ERROR).upper()
     if state not in LOCAL_STATES:
@@ -115,6 +134,12 @@ def local_report(arguments: dict[str, Any]) -> dict[str, Any]:
         value = local.get(key)
         return str(value)[:limit] if isinstance(value, str) and value else None
 
+    track = _text("media_track_ready_state", 16)
+    if track is not None:
+        track = track.lower()
+        if track not in TRACK_STATES:
+            track = None
+
     return {
         "state": state,
         "running": bool(local.get("running")),
@@ -122,26 +147,9 @@ def local_report(arguments: dict[str, Any]) -> dict[str, Any]:
         "error_class": _text("error_class", 64),
         "observed_at": _text("observed_at", 40),
         "changed": bool(local.get("changed")),
+        "media_track_ready_state": track,
+        "action_trace": bound_action_trace(local.get("action_trace")),
     }
-
-
-def _safety_net_changed_recently(ctx: ToolContext) -> bool:
-    """Did ``record_client_events``' deterministic disable (contract §5.3) close the eye
-    in this same turn, or within the last thirty seconds? Then this tool call IS the
-    command that closed it, and "already disabled" would be the wrong receipt."""
-    note = ctx.context.get("eye_safety")
-    if not isinstance(note, dict) or note.get("action") != "disable" or not note.get("changed"):
-        return False
-    raw = note.get("applied_at")
-    if not isinstance(raw, str):
-        return False
-    try:
-        applied = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-    except ValueError:
-        return False
-    if applied.tzinfo is None:
-        applied = applied.replace(tzinfo=UTC)
-    return abs((ctx.now - applied).total_seconds()) <= SAFETY_NET_WINDOW_S
 
 
 def _eye_action(ctx: ToolContext, arguments: dict[str, Any], *, enable: bool) -> dict[str, Any]:
@@ -159,42 +167,94 @@ def _eye_action(ctx: ToolContext, arguments: dict[str, Any], *, enable: bool) ->
     )
     reason = f"voice:{matched}"
     local = local_report(arguments)
+    trace = list(local.pop("action_trace"))
+    track = local["media_track_ready_state"]
+
+    # What the browser itself says about the camera. An enable whose stream was created
+    # and whose track is already ENDED is not an open camera, whatever ``state`` says.
+    if enable:
+        track_ended = local["state"] == LOCAL_ACTIVE and track == TRACK_ENDED
+        physical_ok = local["state"] == LOCAL_ACTIVE and not track_ended
+        failed_locally = local["state"] == LOCAL_ERROR or track_ended
+    else:
+        track_ended = False
+        physical_ok = local["state"] == LOCAL_DISABLED
+        failed_locally = local["state"] == LOCAL_ERROR
 
     # WRITE (idempotent, contract §5.4). Enable only when the camera actually opened:
-    # "never tell the Cloud Core perception is on before the camera actually opened".
-    was_enabled = is_eye_enabled(db)
+    # "never tell the Cloud Core perception is on before the camera actually opened". A
+    # disable is written regardless of what the browser reported: privacy is the server's
+    # side too, and the receipt records whether the write happened.
+    was_enabled: bool | None
+    try:
+        was_enabled = bool(is_eye_enabled(db))
+    except Exception as exc:  # noqa: BLE001 - reported on the receipt, never hidden
+        logger.warning("eye_action_read_before_failed", error=type(exc).__name__)
+        was_enabled = None
     changed = False
-    if enable:
-        if local["state"] == LOCAL_ACTIVE:
-            changed = bool(enable_eye(db, reason=reason))
-    else:
-        changed = bool(disable_eye(db, reason=reason))
+    write_error: str | None = None
+    try:
+        if enable:
+            if physical_ok:
+                changed = bool(enable_eye(db, reason=reason))
+        else:
+            changed = bool(disable_eye(db, reason=reason))
+    except Exception as exc:  # noqa: BLE001 - the receipt says the record is unverified
+        logger.error(
+            "eye_action_durable_write_failed",
+            capability=capability,
+            error=type(exc).__name__,
+        )
+        write_error = type(exc).__name__
+        # No rollback here: the caller flushed this tool call's own row before dispatch
+        # and owns the transaction. If the session is poisoned the read-back below fails
+        # and the receipt says so.
 
     # READ-BACK.
-    now_enabled = is_eye_enabled(db)
-    server_matches = now_enabled == enable
-    local_matches = local["state"] == (LOCAL_ACTIVE if enable else LOCAL_DISABLED)
-    safety_net = (not enable) and _safety_net_changed_recently(ctx)
-    changed_now = changed or safety_net or bool(local["changed"])
+    now_enabled: bool | None
+    try:
+        now_enabled = bool(is_eye_enabled(db))
+    except Exception as exc:  # noqa: BLE001 - an unreadable flag is "unverified", not a crash
+        logger.warning("eye_action_read_back_failed", error=type(exc).__name__)
+        now_enabled = None
+    observed_at = datetime.now(UTC)
+    server_matches = now_enabled is not None and now_enabled == enable
+    changed_now = changed or bool(local["changed"])
 
     error_class: str | None = None
-    if local["state"] == LOCAL_ERROR:
+    if failed_locally:
         terminal = TERMINAL_FAILED
         execution = EXECUTION_EXECUTED if changed else EXECUTION_FAILED
-        error_class = local["error_class"] or ERROR_CAPABILITY_MISSING
-    elif server_matches and local_matches and changed_now:
+        if track_ended:
+            error_class = local["error_class"] or ERROR_STREAM_CREATED_BUT_TRACK_ENDED
+        else:
+            error_class = local["error_class"] or ERROR_CAPABILITY_MISSING
+    elif physical_ok and server_matches and changed_now:
         terminal = TERMINAL_VERIFIED
         execution = EXECUTION_EXECUTED
-    elif server_matches and local_matches:
+    elif physical_ok and server_matches:
         terminal = TERMINAL_ALREADY
         execution = EXECUTION_NOOP
     else:
+        # The camera did what was asked but the record does not agree (write raised, flag
+        # unreadable, or the flag simply disagrees) - or the browser reports the camera
+        # still in the OLD state. Both are "unverified"; the speech tells them apart.
         terminal = TERMINAL_UNVERIFIED
-        execution = EXECUTION_EXECUTED if changed else EXECUTION_NOOP
-        error_class = ERROR_STATE_MISMATCH
+        if write_error is not None:
+            execution = EXECUTION_FAILED
+            error_class = ERROR_DURABLE_WRITE_FAILED
+        elif now_enabled is None:
+            execution = EXECUTION_EXECUTED if changed else EXECUTION_NOOP
+            error_class = ERROR_READ_BACK_FAILED
+        else:
+            execution = EXECUTION_EXECUTED if changed else EXECUTION_NOOP
+            error_class = ERROR_STATE_MISMATCH
 
     evidence: list[dict[str, Any]] = []
-    set_by = latest_eye_event(db)
+    try:
+        set_by = latest_eye_event(db)
+    except Exception:  # noqa: BLE001 - evidence, not a dependency
+        set_by = None
     if set_by is not None:
         evidence.append({"kind": "ledger_event", "ref": str(set_by.event_id)})
     evidence.append({"kind": "realtime_session", "ref": str(ctx.session_id)})
@@ -210,15 +270,23 @@ def _eye_action(ctx: ToolContext, arguments: dict[str, Any], *, enable: bool) ->
                 "eye_enabled": now_enabled,
                 "was_enabled": was_enabled,
                 "changed": changed,
-                "safety_net": safety_net,
+                "write_error": write_error,
             },
             "local": local,
         },
         evidence_refs=evidence,
         error_class=error_class,
-        speech=eye_speech(enable=enable, terminal_status=terminal, error_class=error_class),
+        speech=eye_speech(
+            enable=enable,
+            terminal_status=terminal,
+            error_class=error_class,
+            physical_ok=physical_ok,
+        ),
         started_at=started,
         completed_at=datetime.now(UTC),
+        session_id=str(ctx.session_id),
+        observed_at=observed_at,
+        action_trace=trace,
     )
     record_receipt(db, receipt, SUBSYSTEM_PRESENCE)
     ctx.context["last_intent"] = resolved.intent.value
@@ -266,6 +334,8 @@ def release_promote(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, An
         speech=RELEASE_PROMOTE_REFUSED_SPEECH,
         started_at=ctx.now,
         completed_at=datetime.now(UTC),
+        session_id=str(ctx.session_id),
+        observed_at=ctx.now,
     )
     if ctx.db is not None:
         record_receipt(ctx.db, receipt, SUBSYSTEM_DEPLOYMENT)
@@ -326,10 +396,13 @@ __all__ = [
     "CAPABILITY_EYE_ENABLE",
     "CAPABILITY_RELEASE_PROMOTE",
     "ERROR_CAPABILITY_MISSING",
+    "ERROR_DURABLE_WRITE_FAILED",
     "ERROR_OWNER_AUTHORIZATION_REQUIRED",
+    "ERROR_READ_BACK_FAILED",
     "ERROR_STATE_MISMATCH",
-    "SAFETY_NET_WINDOW_S",
     "TOOL_STATE_NOW",
+    "TRACK_ENDED",
+    "TRACK_LIVE",
     "eye_disable",
     "eye_enable",
     "local_report",

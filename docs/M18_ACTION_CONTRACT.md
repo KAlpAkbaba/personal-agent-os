@@ -136,36 +136,31 @@ flag is set by the server handler ONLY when the client's `observed_after.local.s
 
 ```json
 {"local": {"state": "ACTIVE|DISABLED|ERROR", "running": true, "camera_label": "…" | null,
-           "error_class": "<EyeErrorClass>" | null,
+           "error_class": "<client error class>" | null,
            "observed_at": "<iso>", "changed": true,
-           "media_track_ready_state": "live|ended" | null,
-           "action_trace": ["request:enable", "getUserMedia:called", "permission:granted",
-                            "device:Integrated Webcam", "stream:1 track live", "loop:started",
-                            "state:ENABLING->ACTIVE"]}}
+           "media_track_ready_state": "live" | "ended" | null,
+           "action_trace": ["getUserMedia", "track_live", "loop_started"]}}
 ```
 
-`error_class` is a closed set (`apps/web/app/lib/eye/types.ts`, owner requirement 2026-09-06 —
-structured, never generic): `permission_denied` (NotAllowedError/SecurityError),
-`device_not_found` (NotFoundError/OverconstrainedError), `device_busy`
-(NotReadableError/AbortError), `get_user_media_failed` (any other `getUserMedia` rejection),
-`stream_created_but_track_ended` (`getUserMedia` resolved but the video track was not `live`),
-`perception_start_failed` (the stream opened, the loop's start threw), `state_transition_failed`
-(the store could not reach the requested state for any other reason), `timeout`,
-`capability_missing`. `media_track_ready_state` is the video track's own `readyState` right after
-the action (`null` when the device holds no track); `action_trace` is the bounded (≤ 12), ordered
-list of stages the store went through for THIS action — text only: stage names, the camera label,
-an error's name. Never a frame, a pixel count or an identifier.
+Client error classes (`app/actions/receipt.py:CLIENT_ERROR_CLASSES`, each with its own
+sentence in §5.2): `permission_denied`, `device_not_found`, `device_busy`,
+`device_unavailable` (legacy: not-found-or-busy), `get_user_media_failed`,
+`stream_created_but_track_ended`, `perception_start_failed`, `state_transition_failed`,
+`timeout`, `capability_missing`.
 
-The provider delivers function names in its own spelling (`eye__disable`: no dot allowed,
-`app/voice/providers.py::vendor_tool_name`); the client relays that spelling verbatim and the
-server's registry maps it back. The client normalises the name to the Cloud Core spelling
-(`apps/web/app/lib/voice/tool-names.ts::cloudToolName`) ONLY for its local port — the owner's
-2026-09-06 run (session 3eb6fee7) reached the port as `eye__disable`, matched nothing, and every
-eye command was recorded `capability_missing`.
+`media_track_ready_state` is the camera track's `readyState` at `observed_at` and
+`action_trace` is the client's own step list (≤ 12 short strings; the server clips to 12 ×
+80 chars). Both are optional evidence: the server never fails on their absence. It echoes
+`media_track_ready_state` in the receipt's `observed_after.local` and stores
+`action_trace` on the receipt. An enable relayed as `ACTIVE` with the track `ended` is not
+an open camera: the server treats it as `failed` / `stream_created_but_track_ended` and
+does not set the durable flag.
 
 If the client has no eye capability at all (a non-web client), it relays without
 `observed_after`; the server treats that as `local.state = "ERROR", error_class =
-capability_missing` and never sets the durable flag on enable.
+capability_missing` and never sets the durable flag on enable. (A disable is still written
+durably in that case - privacy is the server's side too - and its `execution_status` says
+so: `executed` when the flag changed.)
 
 ### 5.2 Server handler
 
@@ -173,36 +168,65 @@ capability_missing` and never sets the durable flag on enable.
 - Before: `was_enabled = is_eye_enabled(db)`.
 - disable: `disable_eye(db, reason)` (idempotent, see 5.4); enable: `enable_eye(db, reason)`
   only if `local.state == "ACTIVE"`.
-- Read back `now_enabled = is_eye_enabled(db)`.
+- Read back `now_enabled = is_eye_enabled(db)` (a read-back that raises is `None`).
+- `physical_ok` (the browser's own account): disable → `local.state == "DISABLED"`;
+  enable → `local.state == "ACTIVE"` and `media_track_ready_state != "ended"`.
 - `terminal_status`:
-  - `verified` — `now_enabled == (requested == active)` AND `local.state` matches AND the
-    state changed in this command (or the same-turn safety net changed it, 5.3);
-  - `already` — nothing changed and local already matched (the eye was already so before
-    this turn);
-  - `failed` — `local.state == "ERROR"` (speech by `error_class`);
-  - `unverified` — anything else (server and local disagree, read-back mismatch).
-- `execution_status`: `executed` (a write happened), `noop` (already), `failed`, `refused`.
-- Speech (exact strings, `app/actions/receipt.py`):
+  - `verified` — `physical_ok` AND `now_enabled == (requested == active)` AND the state
+    changed in this command (the handler's write returned `True`, or the client relayed
+    `local.changed = true` because its own durable call landed first);
+  - `already` — `physical_ok`, server matches, nothing changed (the eye was already so
+    before this turn);
+  - `failed` — `local.state == "ERROR"`, or an enable with the track `ended` (speech by
+    `error_class`);
+  - `unverified` — anything else: the write raised (`error_class: durable_write_failed`),
+    the flag could not be re-read (`read_back_failed`), or server and local disagree
+    (`state_mismatch`).
+- `execution_status`: `executed` (a write happened), `noop` (already), `failed` (the write
+  raised or the capability could not do it), `refused`.
+- Speech (exact strings, `app/actions/receipt.py`). Truthful in both directions: below
+  `verified` the sentence never says "kapattım/açtım", and when the browser reports the
+  camera physically in the requested state it never says "kapatamadım/açamadım" either:
   - disable verified: `Gözümü kapattım efendim.`
   - disable already: `Gözüm zaten kapalı efendim.`
-  - disable unverified/failed: `Kamerayı kapatamadım; işlem doğrulanmadı.`
+  - disable unverified, camera closed by the browser's account (write raised / read-back
+    mismatch): `Kamera kapandı ancak işlem kaydını doğrulayamadım.`
+  - disable unverified, browser reports the camera still running; disable failed
+    (`capability_missing`): `Kamerayı kapatamadım; işlem doğrulanmadı.`
   - enable verified: `Gözümü açtım efendim.`
   - enable already: `Gözüm zaten açık efendim.`
-  - enable failed permission_denied: `Kamerayı açamadım; tarayıcı kamera izni vermedi.`
-  - enable failed device_not_found: `Kamerayı açamadım; kamera bulunamadı.`
-  - enable failed device_busy: `Kamerayı açamadım; kamera meşgul.`
-  - enable failed get_user_media_failed / stream_created_but_track_ended / perception_start_failed /
-    state_transition_failed / timeout / capability_missing / unverified: `Kamerayı açamadım; işlem doğrulanmadı.`
+  - enable unverified, camera open with a live track by the browser's account:
+    `Kamera açıldı ancak işlem kaydını doğrulayamadım.`
+  - enable failed `permission_denied`: `Kamerayı açamadım; tarayıcı kamera izni vermedi.`
+  - enable failed `device_not_found`: `Kamerayı açamadım; kamera bulunamadı.`
+  - enable failed `device_busy`: `Kamerayı açamadım; kamera başka bir uygulama tarafından kullanılıyor.`
+  - enable failed `device_unavailable` (legacy): `Kamerayı açamadım; kamera bulunamadı ya da meşgul.`
+  - enable failed `get_user_media_failed`: `Kamerayı açamadım; tarayıcı kamera akışını başlatamadı.`
+  - enable failed `stream_created_but_track_ended`: `Kamera açıldı ama görüntü akışı hemen kesildi.`
+  - enable failed `perception_start_failed`: `Kamera açıldı ama algılama döngüsü başlatılamadı.`
+  - enable failed `state_transition_failed`: `Kamerayı açamadım; durum geçişi tamamlanamadı.`
+  - enable failed `timeout` / `capability_missing` / unknown class; enable unverified with
+    the camera not open: `Kamerayı açamadım; işlem doğrulanmadı.`
 
-### 5.3 The deterministic safety net stays (disable only)
+### 5.3 One canonical mutation path: the tool. No server-side safety net.
 
-`record_client_events` keeps applying `disable_eye` on an `utterance` resolved to
-`EYE_DISABLE` (privacy must not depend on the model). It records
-`ctx["eye_safety"] = {"turn": n, "action": "disable", "applied_at": iso}`. The `eye.disable`
-handler treats "already disabled, but by the safety net in this same turn (or ≤ 30 s ago)"
-as `verified` with `Gözümü kapattım efendim.` — the command was this one. There is no
-server-side safety net for enable (a camera cannot be opened from the cloud); the persona
-makes the model call `eye.enable`.
+There is no server-side safety net any more, for disable or enable. `record_client_events`
+resolves an `utterance` to `EYE_DISABLE` / `EYE_ENABLE` and audits it (intent, `klass`,
+`capability`, `query_kind`) — and does nothing else. It never calls `disable_eye`, keeps no
+`eye_safety` bookkeeping, and the eye tool handler has no same-turn window.
+
+Why: the original net ("privacy must not depend on the model") was a second, hidden
+mutation path with no receipt. In the owner's session `3eb6fee7` (2026-09-06 13:57Z) the
+client relayed every eye tool call without `observed_after`, so every receipt was
+`capability_missing` / `failed` — and the camera still closed at 13:57:33, written by the
+net 7 ms after the tool call with reason `voice:gözünü kapat`. The owner's record showed
+an action that failed and a camera that closed, and nothing that connected the two. The
+owner's rule is exactly ONE mutation path per capability, the one that ends in a receipt.
+Privacy is served by the tool the persona makes the model call always (§6), by the
+`eye.disable` handler writing the durable flag regardless of what the client reported,
+and by the owner's own button; a model that fails to call the tool is a persona defect to
+fix where it is, not a reason for a write nobody narrates. A regression test pins that an
+`EYE_DISABLE` utterance leaves the eye exactly as it was.
 
 ### 5.4 Idempotent durable writes and presence invalidation
 
@@ -236,14 +260,32 @@ class ActionReceipt:
     speech: str
     started_at: datetime
     completed_at: datetime
+    session_id: str | None     # the realtime session the command came through
+    observed_at: datetime | None  # when the read-back was taken
+    action_trace: list[str]    # the client's own steps, ≤ 12 × 80 chars
     def as_dict(self) -> dict: ...
 ```
 
+`observed_after.server` for the eye is `{"eye_enabled": bool | null, "was_enabled": bool |
+null, "changed": bool, "write_error": "<ExceptionName>" | null}`; `observed_after.local` is
+the normalised client report of §5.1 (`state`, `running`, `camera_label`, `error_class`,
+`observed_at`, `changed`, `media_track_ready_state`).
+
 Ledger event `action.receipt` (subsystem of the capability, e.g. `presence`; `action` =
-capability; `status` = terminal_status; `detail_json` = receipt without `speech`). The tool
-result IS `receipt.as_dict()` (with `speech`). `session_activity` exposes `capability`,
-`terminal_status`, `execution_status` and `error_class` per tool call so the harness can
-assert them.
+capability; `status` = terminal_status; `detail_json` = receipt without `speech`, so
+`detail_json.session_id`, `detail_json.observed_at` and `detail_json.action_trace` are
+queryable and a ledger query can correlate receipts by session). The tool result IS
+`receipt.as_dict()` (with `speech`). `session_activity` exposes, per tool call,
+`session_id` (the row's session), `capability`, `terminal_status`, `execution_status`,
+`error_class`, `observed_at`, the receipt's `observed_after` (server + local, scalars only)
+and `action_trace`, so the harness can print "browser eye state / media track / receipt"
+per call from durable rows alone.
+
+`GET /v1/state/now?scope=all|eye|voice|presence|devices|release[&session_id=<realtime>]`
+(`app/state/routes.py`, owner-gated like `/v1/world`) returns exactly what the `state.now`
+tool returns — the same `compose_live_state` over the same live runtimes — so a harness can
+compare the runtime's view with the browser's without a voice session in the loop. It
+writes nothing (no `voice.state_answered` row: nothing was told to the owner by voice).
 
 ## 6. Persona (services/api/app/voice/realtime_sessions/persona.py)
 
@@ -300,10 +342,20 @@ a failing local enable relays `local.state === "ERROR"` with its `error_class`; 
 ## 8. Tests (api)
 
 - `test_voice_intents.py`: every utterance in §2 → klass / intent / query_kind / capability.
-- `test_actions_receipt.py`: speech table, banned phrases absent, `as_dict` shape.
-- `test_voice_eye_tools.py`: disable verified / already / unverified / safety-net-same-turn;
-  enable verified / permission_denied / no `observed_after` (never sets the flag) /
-  already; ledger `action.receipt` row; `session_activity` exposes capability + terminal.
+- `test_actions_receipt.py`: speech table (every client error class named; the
+  physically-done-but-unverified sentences), banned phrases absent, `as_dict` shape with
+  `session_id` / `observed_at` / `action_trace`, the ledger row carries them.
+- `test_voice_eye_tools.py`: an `EYE_DISABLE` utterance never mutates (audited as
+  action / `eye.disable`, eye unchanged, no ledger row, no `eye_safety`); disable verified
+  (incl. track `ended`, client-did-the-write-first) / already / unverified (camera still
+  running) / unverified-truthful (camera closed, write raised) / `capability_missing`
+  (`executed`); enable verified (track `live`) / track `ended` → failed and flag NOT set /
+  write raised → "açıldı ancak kaydını doğrulayamadım" / every named error class / no
+  `observed_after` / already; `media_track_ready_state` and `action_trace` optional and
+  bounded; `action.receipt` row with `session_id`; `session_activity` exposes
+  `session_id`, `observed_after`, `action_trace`.
+- `test_state_routes.py`: `/v1/state/now` owner-gated, the tool's shape, eye scope follows
+  the durable flag, identical to `compose_live_state` for every scope, writes nothing.
 - `test_voice_state_tool.py`: composer facts carry source/observed_at/age/confidence/stale;
   stale spoken as stale; eye scope sentences; `activity.explain` with a `world_state`
   question returns the same `speech` as `state.now`; concise (≤ 3 sentences, no banned words,
