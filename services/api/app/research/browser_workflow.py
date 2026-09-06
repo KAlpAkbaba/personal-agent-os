@@ -15,6 +15,7 @@ persisted rows directly; this return value is what the caller/route uses to
 know the run finished and where to look).
 """
 
+import asyncio
 from dataclasses import dataclass, field
 from datetime import timedelta
 
@@ -37,14 +38,10 @@ with workflow.unsafe.imports_passed_through():
         select_device_activity,
         synthesize_activity,
     )
-    from app.research.contracts import TARGET_REPORT_FINDINGS
     from app.research.models import STAGE_FAILED, STAGE_READY
+    from app.research.policy import MODE_QUICK, ResearchPolicy, decide_next_wave
 
 DEFAULT_MAX_SOURCES = 12
-#: How many extra fetch rounds a run may spend when the quality gate leaves it short of
-#: TARGET_REPORT_FINDINGS. Bounded on purpose: a run that cannot find enough usable coverage
-#: should say so, not keep browsing.
-MAX_TOPUP_ROUNDS = 3
 DEFAULT_SYNTHESIS = "auto"
 #: spec §5a: the owner-handoff wait budget, per waiting occurrence.
 DEFAULT_INTERACTIVE_WAIT_S = 600
@@ -60,10 +57,18 @@ _STANDARD_RETRY = RetryPolicy(
     maximum_interval=timedelta(seconds=20),
     maximum_attempts=3,
 )
+#: M18.2 owner rule 3 ("ZERO retries for a confirmed challenge ... at most one
+#: retry only with clear evidence of a transient navigation failure"): a challenge
+#: page is never an exception here at all (app.research.browser_activities.
+#: fetch_activity records it as data and returns normally, per ADR-0050's
+#: "website error != browser error"), so this policy governs only genuine
+#: transport-level dispatch failures (timeout, dependency_unavailable, ...) — capped
+#: at one retry (two attempts total), down from three, so even a transient-looking
+#: failure never quietly re-spends a QUICK run's tight time budget.
 _FETCH_RETRY = RetryPolicy(
     initial_interval=timedelta(seconds=2),
     maximum_interval=timedelta(seconds=30),
-    maximum_attempts=4,
+    maximum_attempts=2,
 )
 _NO_RETRY = RetryPolicy(maximum_attempts=1)
 
@@ -100,6 +105,11 @@ class BrowserResearchRequest:
     #: CAPTCHA/owner-handoff machinery, unchanged — or "auto" to let the
     #: device worker's own provider order decide.
     search_provider: str = "duckduckgo"
+    #: M18.2 (ADR-0068): "quick" (default, the conversational research fast path) |
+    #: "standard" | "deep". Never chosen silently — a caller must ask for anything
+    #: past QUICK (app.research.policy.derive_mode_from_utterance /
+    #: the REST route's own `research_mode` field).
+    mode: str = MODE_QUICK
 
 
 class OwnerVerificationTimeout(Exception):
@@ -113,10 +123,21 @@ class BrowserResearchWorkflow:
     async def run(self, request: BrowserResearchRequest) -> dict:
         plan = await workflow.execute_activity(
             plan_activity,
-            args=[request.task_id, request.topic, request.recency_days, request.max_sources],
+            args=[
+                request.task_id,
+                request.topic,
+                request.recency_days,
+                request.max_sources,
+                request.mode,
+            ],
             start_to_close_timeout=_SHORT,
             retry_policy=_STANDARD_RETRY,
         )
+        # The policy plan_activity resolved and stored ONCE (ADR-0068): every
+        # activity that needs it re-reads this SAME stored dict from the run row,
+        # so a replay/resume never re-resolves a policy that could have since
+        # changed defaults out from under an in-flight run.
+        policy = ResearchPolicy.from_dict(plan["policy"])
 
         try:
             device = await workflow.execute_activity(
@@ -130,9 +151,18 @@ class BrowserResearchWorkflow:
 
         device_id = device["device_id"]
 
+        # M18.2 owner rule 1 ("discovery queries <= 2" for QUICK): cap how many of
+        # the plan's expanded queries are actually issued PER source class. This is
+        # what keeps a conversational request from repeating the real run's blow-up
+        # (254 candidates from every query-expansion template x every source
+        # class) — official/technical/academic discovery stays cheap either way (an
+        # API call, never a browser), but capping them too keeps the candidate pool
+        # itself small enough for the wave loop below to matter.
+        discovery_queries = plan["queries"][: policy.discovery_queries_max]
+
         try:
             for source_class in plan["source_classes"]:
-                for i, query_text in enumerate(plan["queries"]):
+                for i, query_text in enumerate(discovery_queries):
                     query_id = f"{source_class}:{i}"
                     await self._discover_with_handoff(
                         request,
@@ -144,7 +174,7 @@ class BrowserResearchWorkflow:
                     )
         except OwnerVerificationTimeout as exc:
             detail = str(exc)
-            for activity, args, policy in (
+            for activity, args, retry_policy in (
                 (
                     fail_run_activity,
                     [request.task_id, "owner_verification_timeout", detail],
@@ -154,20 +184,32 @@ class BrowserResearchWorkflow:
             ):
                 try:
                     await workflow.execute_activity(
-                        activity, args=args, start_to_close_timeout=_SHORT, retry_policy=policy
+                        activity,
+                        args=args,
+                        start_to_close_timeout=_SHORT,
+                        retry_policy=retry_policy,
                     )
                 except ActivityError:
                     pass
             return self._failed(request.task_id, plan, detail, "owner_verification_timeout")
 
+        # Owner rule 6: fetch in WAVES and stop early, never fetch everything up
+        # front. Wave 1 is always fetched (rank_activity must run at least once so
+        # its own InsufficientValidEvidence gate still applies exactly as before);
+        # every wave after that is a deliberate, bounded decision
+        # (app.research.policy.decide_next_wave — pure and unit-tested on its own)
+        # weighing evidence-so-far against the mode's wave/time/source budgets.
+        run_start = workflow.now()
         targets = await workflow.execute_activity(
             fetch_targets_activity,
-            args=[request.task_id, request.max_sources, request.topic],
+            args=[request.task_id, policy.wave_size, request.topic],
             start_to_close_timeout=_SHORT,
             retry_policy=_STANDARD_RETRY,
         )
 
-        await self._fetch_all(request.task_id, device_id, targets)
+        await self._fetch_all(request.task_id, device_id, targets, policy)
+        sources_fetched = len(targets)
+        waves_used = 1
 
         try:
             ranked = await workflow.execute_activity(
@@ -181,31 +223,30 @@ class BrowserResearchWorkflow:
                 start_to_close_timeout=_SHORT,
                 retry_policy=_STANDARD_RETRY,
             )
+            evidence_count = int(ranked.get("evidence", 0))
 
-            # Top-up rounds when the quality gate left too little to answer with. Most
-            # fetched pages are refused in practice (2026-09-04: nine of twelve, as off topic,
-            # out of window or interstitials), so a fixed budget spent once decides the size of
-            # the report by luck. Each round is sized to the shortfall and the number of
-            # rounds is fixed, so this is never a loop that keeps fetching until it likes the
-            # answer; it stops early when discovery has nothing left, and it only ever fetches
-            # candidates that were never fetched, so nothing is duplicated on replay.
-            for _round in range(MAX_TOPUP_ROUNDS):
-                shortfall = TARGET_REPORT_FINDINGS - int(ranked.get("evidence", 0))
-                if shortfall <= 0:
+            while True:
+                elapsed_s = (workflow.now() - run_start).total_seconds()
+                decision = decide_next_wave(
+                    policy=policy,
+                    evidence_count=evidence_count,
+                    waves_used=waves_used,
+                    elapsed_s=elapsed_s,
+                    sources_fetched=sources_fetched,
+                )
+                if not decision.should_fetch:
                     break
                 extra = await workflow.execute_activity(
                     fetch_targets_activity,
-                    args=[
-                        request.task_id,
-                        min(request.max_sources, max(3, shortfall * 3)),
-                        request.topic,
-                    ],
+                    args=[request.task_id, decision.fetch_count, request.topic],
                     start_to_close_timeout=_SHORT,
                     retry_policy=_STANDARD_RETRY,
                 )
                 if not extra:
                     break  # discovery has nothing left to offer
-                await self._fetch_all(request.task_id, device_id, extra)
+                await self._fetch_all(request.task_id, device_id, extra, policy)
+                sources_fetched += len(extra)
+                waves_used += 1
                 ranked = await workflow.execute_activity(
                     rank_activity,
                     args=[
@@ -217,10 +258,24 @@ class BrowserResearchWorkflow:
                     start_to_close_timeout=_SHORT,
                     retry_policy=_STANDARD_RETRY,
                 )
+                evidence_count = int(ranked.get("evidence", 0))
 
+            elapsed_s = (workflow.now() - run_start).total_seconds()
+            run_stats = {
+                "mode": policy.mode,
+                "budget_s": policy.hard_budget_s,
+                "elapsed_s": elapsed_s,
+                "waves": waves_used,
+            }
             report = await workflow.execute_activity(
                 synthesize_activity,
-                args=[request.task_id, plan["topic"], plan["recency"], request.synthesis],
+                args=[
+                    request.task_id,
+                    plan["topic"],
+                    plan["recency"],
+                    request.synthesis,
+                    run_stats,
+                ],
                 start_to_close_timeout=_MEDIUM,
                 retry_policy=_STANDARD_RETRY,
             )
@@ -434,25 +489,37 @@ class BrowserResearchWorkflow:
             return str(cause.type)
         return "research_failed"
 
-    async def _fetch_all(self, task_id: str, device_id: str, targets: list) -> None:
-        """Fetch every target in order. One bad URL never fails the run."""
-        for target in targets:
-            try:
-                await workflow.execute_activity(
-                    fetch_activity,
-                    args=[
-                        task_id,
-                        device_id,
-                        target["url"],
-                        target["query"],
-                        target["source_class"],
-                    ],
-                    start_to_close_timeout=_FETCH_TIMEOUT,
-                    heartbeat_timeout=timedelta(seconds=20),
-                    retry_policy=_FETCH_RETRY,
-                )
-            except ActivityError:
-                continue  # recorded as a fetch failure
+    async def _fetch_one(self, task_id: str, device_id: str, target: dict) -> None:
+        try:
+            await workflow.execute_activity(
+                fetch_activity,
+                args=[
+                    task_id,
+                    device_id,
+                    target["url"],
+                    target["query"],
+                    target["source_class"],
+                ],
+                start_to_close_timeout=_FETCH_TIMEOUT,
+                heartbeat_timeout=timedelta(seconds=20),
+                retry_policy=_FETCH_RETRY,
+            )
+        except ActivityError:
+            pass  # recorded as a fetch failure; one bad URL never fails the run
+
+    async def _fetch_all(
+        self, task_id: str, device_id: str, targets: list, policy: ResearchPolicy | None = None
+    ) -> None:
+        """Fetch this wave's targets with up to ``policy.concurrent_fetches`` (owner
+        rule 2) in flight at once — chunked rather than a single unbounded
+        ``asyncio.gather`` so the device is never asked for more concurrent
+        sessions/tabs than the mode's own policy allows. One bad URL never fails
+        the run (each fetch's own ActivityError is swallowed in ``_fetch_one``, so
+        one slow/failed activity in a chunk never cancels its siblings)."""
+        concurrency = max(1, (policy or ResearchPolicy.from_dict({})).concurrent_fetches)
+        for start in range(0, len(targets), concurrency):
+            chunk = targets[start : start + concurrency]
+            await asyncio.gather(*(self._fetch_one(task_id, device_id, t) for t in chunk))
 
     def _failed(self, task_id: str, plan: dict, detail: str, error_class: str) -> dict:
         return {

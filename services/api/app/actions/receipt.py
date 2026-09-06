@@ -99,7 +99,14 @@ TERMINAL_CLAIMABLE: Final[frozenset[str]] = frozenset({TERMINAL_VERIFIED, TERMIN
 #: truthful Turkish speech - never a "running" call the pipeline can never finish, and
 #: plan.redirect refuses a running research plan honestly rather than claiming a
 #: redirect the workflow has no signal to receive.
-ACTION_CONTRACT_VERSION: Final = 4
+#: v5 (2026-09-07, M18.2 owner run a4455670, ADR-0068): research.start's terminal
+#: `diagnostics` gained the fast-path fields (`mode`, `budget_s`, `elapsed_s`,
+#: `waves`, `challenged_pages`, `cooled_domains`) and the run itself now carries an
+#: explicit speed mode (quick default / standard / deep, never chosen silently) —
+#: a deployed v4 has no mode concept at all and always ran what v5 calls QUICK's
+#: unbounded predecessor (fetch everything discovery found, up to max_sources, no
+#: wave/time budget, no challenge/cooldown memory).
+ACTION_CONTRACT_VERSION: Final = 5
 
 FAKE_COMPLETION_PHRASES: Final[tuple[str, ...]] = (
     "yapmış gibi düşün",

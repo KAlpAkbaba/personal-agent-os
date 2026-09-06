@@ -4643,3 +4643,189 @@ UI or voice affordance to CHANGE the recency/device/max_sources of a research al
 running (the honest refusal above is the whole answer for now), and no attempt to make
 the M13 workflow itself signal-aware — that stays a real gap, named rather than
 half-closed.
+
+## ADR-0068 — Research fast path: modes, waves, and challenges left alone (2026-09-07)
+
+Status: Accepted
+
+Context: the owner's first end-to-end spoken research (2026-09-06 18:30Z, session
+a4455670, "Son üç gündeki yapay zekâ ajan gelişmelerini araştır") worked — findings were
+discovered, fetched, ranked, synthesized and spoken — but it discovered 254 candidates
+and took several minutes, much of it spent on CAPTCHA/challenge pages. Nothing in the
+M13 pipeline (`app.research.browser_workflow`/`browser_activities`) had ever declared how
+much research a *conversational* request should cost: `BrowserResearchWorkflow` fetched
+everything `fetch_targets_activity` handed it up to `max_sources`, ranked once, and only
+topped up (`MAX_TOPUP_ROUNDS`) when short of `TARGET_REPORT_FINDINGS` — a single, fixed
+policy regardless of whether the owner asked a quick conversational question or an
+explicit "araştır kapsamlı". Discovery itself issued every expanded query
+(`app.research.plan.expand_queries`, typically 8-12 phrases) against every source class,
+which is where 254 candidates came from. And a CAPTCHA/interstitial page was only ever
+recognised once, at ranking (`app.research.eligibility.classify_page_validity`), long
+after the budget to fetch it — and every other page from the same blocked site — had
+already been spent.
+
+Decisions:
+
+1. **Three named modes, as data** (`app.research.policy.ResearchPolicy`,
+   `POLICIES = {quick, standard, deep}`). Every number in the owner's rule 2 is a field on
+   one dataclass, not a scattered constant:
+
+   | field | QUICK (default) | STANDARD | DEEP (explicit only) |
+   |---|---|---|---|
+   | discovery_queries_max (per source class) | 2 | 4 | 8 |
+   | candidate_urls_max (considered before any fetch) | 25 | 40 | 60 |
+   | max_sources (pages actually fetched) | 10 | 16 | 24 |
+   | concurrent_fetches | 4 | 4 | 4 |
+   | per_page_timeout_s | 10 | 12 | 15 |
+   | per_domain_max_pages | 2 | 3 | 4 |
+   | final_findings_max | 5 | 7 | 7 |
+   | target_findings (early-stop threshold) | 4 | 5 | 6 |
+   | min_distinct_publishers (soft goal, diagnostics only) | 3 | 3 | 4 |
+   | wave_size | 4 | 4 | 6 |
+   | max_waves | 3 | 4 | 4 |
+   | target_budget_s | 90 | 150 | 360 |
+   | hard_budget_s | 120 | 210 | 600 |
+
+   `BrowserResearchRequest.mode` (default `"quick"`) is resolved to a `ResearchPolicy`
+   ONCE, by `plan_activity`, and stored in the plan row's own JSON
+   (`plan_json["policy"]`) — every later activity and the workflow's own wave loop
+   re-read that SAME stored policy rather than re-resolving `mode` independently, so a
+   replayed/resumed run never picks up a changed default mid-flight. `research_start`
+   (the voice tool) derives the mode from the owner's own words via
+   `app.research.policy.derive_mode_from_utterance` — "kapsamlı"/"derinlemesine"/"detaylı
+   araştır" → DEEP, "geniş"/"karşılaştırmalı" → STANDARD, else QUICK — applied to
+   `topic + " " + scope` since the tool's schema has no separate free-text "utterance"
+   argument today (a real, if minor, gap: giving `research.start` its own utterance field
+   would make this detection more reliable than reading it back out of whatever the model
+   folded into `topic`/`scope`; left for the model-side/tool-schema work this pass does
+   not touch). The REST route gets a NEW field, `research_mode` (default `"quick"`,
+   pattern `quick|standard|deep`) — deliberately NOT named `mode`, because
+   `CreateResearchRequest.mode` already means interactive/unattended owner-handoff
+   (ADR-0050 §5a/contract §3a, tested in `test_research_routes.py`); reusing the name
+   would have silently broken that existing, tested contract. `GET /v1/research/policy`
+   (bumped to policy version 5) publishes `research_modes`, `research_mode_default` and
+   the full `research_policies` table so a client can read a deployment's actual budgets
+   rather than assuming the owner's numbers above.
+
+2. **Wave-based fetching with early stop, replacing the old fixed-budget-then-top-up
+   loop** (owner rule 6). `BrowserResearchWorkflow.run` fetches `policy.wave_size`
+   candidates, ranks once (guaranteeing the existing `InsufficientValidEvidence` gate
+   still runs at least once, unchanged), then loops: after every rank,
+   `app.research.policy.decide_next_wave` (pure, unit-tested independent of Temporal) is
+   asked whether to fetch another wave, checking in order — enough evidence
+   (`evidence_count >= policy.target_findings`) → stop; `waves_used >= policy.max_waves`
+   → stop; `elapsed_s >= policy.hard_budget_s` (measured via `workflow.now()`, a
+   deterministic workflow clock, never wall-clock `datetime.now()`) → stop; the run's own
+   `max_sources` ceiling reached → stop; otherwise fetch
+   `min(policy.wave_size, remaining_budget)` more. This is never a loop that keeps
+   fetching until it likes the answer — the exact discipline the old top-up loop already
+   had, generalised to apply from wave 1 rather than only after the whole budget was
+   already spent once. A QUICK run that hits its 120s hard budget still calls
+   `synthesize_activity` with whatever evidence it has; that activity's own
+   `InsufficientValidEvidence`/`InsufficientValidFindings` gates (unchanged) decide
+   whether that is enough for a defensible answer or an honest
+   `ResearchResult.insufficient_evidence` (ADR-0067, unchanged either way). Fetches within
+   one wave run up to `policy.concurrent_fetches` at a time
+   (`BrowserResearchWorkflow._fetch_all`, chunked `asyncio.gather` over
+   `workflow.execute_activity` coroutines — a standard, deterministic Temporal pattern;
+   one bad/slow fetch in a chunk never cancels its siblings). `fetch_targets_activity`
+   trims the FULL pending-candidate pool to `policy.candidate_urls_max` on cheap,
+   pre-fetch signals (`_prefetch_preference`: URL topicality + a recency hint from the
+   provider) before any per-class ordering or navigation — "quick ranking before any
+   expensive navigation" (owner rule 4) — and enforces `policy.per_domain_max_pages`
+   across the whole run (using already-fetched evidence's own domains, not just the
+   current wave), so one site can never consume a disproportionate share of the budget
+   even when it was never challenged. `synthesize_activity` truncates the synthesis
+   provider's own findings list to `policy.final_findings_max` AFTER the
+   `MIN_REPORT_FINDINGS` floor is already satisfied, so a mode's ceiling can never be the
+   reason a run fails its findings floor.
+
+3. **Challenge policy: detect fast, never retry, cool the domain, rank it last**
+   (`app.research.challenge`, owner rule 3). `fetch_activity` classifies every fetched
+   page THE MOMENT it returns, with the SAME text-based classifier the quality gate
+   already used at ranking (`eligibility.classify_page_validity`) plus the device's own
+   `page_kind` — never a second, competing detector, and never a solve/bypass attempt.
+   The page is still a *successful* fetch (ADR-0050's "website error != browser error"):
+   the challenge is recorded as `challenge_reason` on the evidence row and the domain's
+   own challenge count (`run.progress_json["challenge_counts"]`) is incremented right
+   there. A CONFIRMED challenge is a zero-retry event by construction — it is data, never
+   an exception, so Temporal's retry policy never sees it at all; `_FETCH_RETRY` itself
+   drops from 4 attempts to 2 (one retry) so even a genuinely transient dispatch failure
+   (timeout, dependency_unavailable) never quietly re-spends a QUICK run's tight budget.
+   The SECOND challenge on one domain in a run cools it
+   (`DOMAIN_COOLDOWN_THRESHOLD = 2`, `cooled_domains`): `fetch_targets_activity` skips
+   every remaining candidate from a cooled domain WITHOUT dispatching any device
+   command — never even attempted, so five URLs from the same blocked site cost nothing
+   after the second one. A domain with exactly one challenge (not yet cooled) is not
+   excluded, but `select_fetch_order`/`_prefetch_preference` sort it last within its
+   source-class bucket ("a domain already challenged ranks last", owner rule 5) — still
+   tried, just after everything that has not raised a flag yet. `ResearchDiagnostics`
+   (never `spoken_result`) gains `challenged_pages` and `cooled_domains` counts, read from
+   the run's own accumulated progress at synthesis time.
+
+4. **Coarse, fixed Turkish labels on the UI-state bus — never the raw topic, never a
+   count** (owner rule 7). Exactly four labels, one per stage that is actually slow:
+   "Kaynaklar aranıyor" (discovery), "N güvenilir kaynak incelendi" (published by
+   `fetch_activity` itself, incrementing per completed source — `fetch_targets_activity`
+   publishes no label at all at its own point in the stage, since nothing has been
+   fetched yet when it runs), "Bulgular doğrulanıyor" (ranking), "Sonuç hazırlanıyor"
+   (synthesis). The previous behaviour — the raw topic text as the ranking/fetching-stage
+   `label` — is replaced; `test_research_uistate.py`'s
+   `test_fetch_targets_publishes_the_counts_it_actually_has` (previously asserting
+   `event.label == "ai agents"`) is updated along with it, the one existing-test change
+   this ADR's rule 7 required. Bus `metadata` (candidate/target/kept counts) is untouched
+   — those are bounded numbers on a technical channel already, not the spoken-language
+   label this rule governs.
+
+5. **Search snippets already never become evidence — verified, not changed.**
+   `app.research.discovery.DiscoveredCandidate` and `app.research.evidence.EvidenceRecord`
+   have no `snippet` field at all; `discover_activity`'s "news"/"community" branch builds
+   candidates from `SearchHit.url`/`.title`/`.published_hint` only, and every fetched
+   page's `excerpt` comes from the device's own extraction
+   (`browser.fetch_evidence`), never from a search result's snippet text. This was already
+   true by construction; `test_search_snippets_never_become_persisted_candidate_data`
+   pins it as a structural regression guard.
+
+6. **Ranking already prefers primary over secondary and drops duplicate stories —
+   verified, not changed.** `app.research.evidence.dedup_and_rank`'s source-class weight
+   (official > academic > news > technical > community) and near-duplicate-title
+   syndication were already exercised by
+   `test_dedup_and_rank_orders_by_source_class_weight` and
+   `test_near_duplicate_title_syndication_prefers_higher_priority_source_class`; nothing
+   in this pass changes that ranking formula, only what reaches it (the candidate-pool
+   trim and domain quota in decision 2).
+
+7. **No lightweight (plain-HTTP, no-browser) fetch path added — kept as a named gap,
+   not attempted.** ADR-0050 addendum item 1 recorded a specific, hard-won finding: on
+   the live internet, the SAME public newsroom answered headless Chrome with 403 and
+   headful Chrome with 200, and every search engine challenged headless automation but
+   served headful Chrome. That is direct evidence that "ordinary article pages" are
+   exactly where bot detection is most aggressive against a non-browser fetch — the
+   opposite of the assumption that would make a lightweight path safe. Adding one now
+   would mean a second fetch/evidence path with its own provenance, destination-policy
+   and injection-boundary review (ADR-0050 §6), decided under conversational-latency
+   pressure rather than on its own merits. The device/real-Chrome path stays the only
+   fetch path this pass builds; a lightweight path — IF ever justified by data from
+   further live runs — is separate, future work, not attempted here.
+
+8. **`ACTION_CONTRACT_VERSION` becomes 5.** `research.start`'s terminal `diagnostics`
+   schema gains `mode`/`budget_s`/`elapsed_s`/`waves`/`challenged_pages`/`cooled_domains`,
+   and every run now carries an explicit, resolved speed mode instead of always running
+   what v5 calls QUICK's unbounded predecessor. `test_health_endpoint.py` is updated
+   alongside it (v4 → v5), matching the precedent `ACTION_CONTRACT_VERSION` v3→v4 set
+   for the SAME kind of change (ADR-0067 amendment).
+
+Consequences: `services/api` gains `app/research/policy.py`
+(`ResearchPolicy`/`POLICIES`/`resolve_policy`/`derive_mode_from_utterance`/
+`decide_next_wave`) and `app/research/challenge.py`
+(`domain_of`/`is_challenge`/`record_challenge`/`is_domain_cooled`); `ReportStats` and
+`ResearchDiagnostics` gain the six fast-path fields; `BrowserResearchRequest` gains
+`mode`; `plan_activity` gains a `mode` argument and stores the resolved policy;
+`fetch_targets_activity`/`fetch_activity`/`synthesize_activity` read that stored policy
+and the run's own progress for challenge/cooldown state, never re-resolving or
+re-deriving it; `BrowserResearchWorkflow.run`'s fetch/rank/top-up section is rewritten as
+the wave loop; `CreateResearchRequest` gains `research_mode`; `research_start` derives a
+mode from topic+scope. What this ADR does NOT build: a dedicated `utterance` argument on
+the `research.start` tool schema (item 1's open note), enforcement (as opposed to
+diagnostics-only reporting) of `min_distinct_publishers`, and the lightweight fetch path
+(item 7) — each a real, named gap for a future pass rather than half-closed here.

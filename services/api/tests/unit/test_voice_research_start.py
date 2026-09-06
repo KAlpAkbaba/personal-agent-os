@@ -274,6 +274,74 @@ def test_research_start_follow_up_starts_the_workflow_and_persists_the_workflow_
         assert task.workflow_id == f"research-browser-{task_id}"
 
 
+def test_research_start_maps_explicit_words_to_deep(wired) -> None:
+    """M18.2 (ADR-0068, owner rule 1): "never silently choose DEEP" - only an
+    utterance naming it explicitly does. research.start's own schema has no
+    separate "utterance" field, so topic+scope together are what the mode is
+    derived from (docs/DECISIONS.md ADR-0068)."""
+    from app.research.policy import MODE_DEEP
+
+    client, runtime, sideband, broker, artifacts = wired
+    _enroll_online_device(broker)
+    sid = _create(client)
+    fake_client = AsyncMock()
+    fake_client.start_workflow = AsyncMock(return_value=None)
+    with _patched_temporal_client(fake_client):
+        client.post(
+            f"/v1/voice/realtime/sessions/{sid}/tool-calls",
+            json={
+                "call_id": "r1",
+                "name": "research.start",
+                "arguments": {"topic": "yapay zeka ajanları", "scope": "kapsamlı araştır"},
+            },
+        )
+    assert fake_client.start_workflow.await_count == 1
+    request_arg = fake_client.start_workflow.call_args.args[1]
+    assert request_arg.mode == MODE_DEEP
+
+
+def test_research_start_maps_explicit_words_to_standard(wired) -> None:
+    from app.research.policy import MODE_STANDARD
+
+    client, runtime, sideband, broker, artifacts = wired
+    _enroll_online_device(broker)
+    sid = _create(client)
+    fake_client = AsyncMock()
+    fake_client.start_workflow = AsyncMock(return_value=None)
+    with _patched_temporal_client(fake_client):
+        client.post(
+            f"/v1/voice/realtime/sessions/{sid}/tool-calls",
+            json={
+                "call_id": "r1",
+                "name": "research.start",
+                "arguments": {"topic": "yapay zeka ajanları", "scope": "geniş bir bakış"},
+            },
+        )
+    request_arg = fake_client.start_workflow.call_args.args[1]
+    assert request_arg.mode == MODE_STANDARD
+
+
+def test_research_start_ordinary_topic_stays_quick(wired) -> None:
+    from app.research.policy import MODE_QUICK
+
+    client, runtime, sideband, broker, artifacts = wired
+    _enroll_online_device(broker)
+    sid = _create(client)
+    fake_client = AsyncMock()
+    fake_client.start_workflow = AsyncMock(return_value=None)
+    with _patched_temporal_client(fake_client):
+        client.post(
+            f"/v1/voice/realtime/sessions/{sid}/tool-calls",
+            json={
+                "call_id": "r1",
+                "name": "research.start",
+                "arguments": {"topic": "son üç gündeki agent gelişmeleri"},
+            },
+        )
+    request_arg = fake_client.start_workflow.call_args.args[1]
+    assert request_arg.mode == MODE_QUICK
+
+
 def test_research_start_without_capable_device_is_an_immediate_truthful_failure(wired) -> None:
     client, runtime, sideband, broker, artifacts = wired
     sid = _create(client)

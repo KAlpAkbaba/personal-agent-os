@@ -43,6 +43,7 @@ from app.research.eligibility import (
     REJECTION_REASONS,
 )
 from app.research.models import STAGE_CANCELLED, ResearchRunRow
+from app.research.policy import DEFAULT_MODE, POLICIES, RESEARCH_MODES
 
 logger = get_logger("app.research.routes")
 
@@ -111,6 +112,12 @@ class CreateResearchRequest(BaseModel):
     #: (research_search_provider). "google" stays fully selectable —
     #: including its CAPTCHA/owner-handoff machinery, unchanged.
     search_provider: str | None = Field(default=None, pattern="^(duckduckgo|google|auto)$")
+    #: M18.2 (ADR-0068): "quick" (default) | "standard" | "deep" — how much research
+    #: this run does (app.research.policy.ResearchPolicy), never how it searches.
+    #: Named ``research_mode`` rather than reusing ``mode`` above: that field
+    #: already means interactive/unattended (owner-handoff), an existing, tested
+    #: contract this change leaves alone (ADR-0067 amendment).
+    research_mode: str = Field(default=DEFAULT_MODE, pattern="^(quick|standard|deep)$")
 
 
 def _effective_interactive(body: CreateResearchRequest) -> bool:
@@ -170,6 +177,7 @@ async def create_research(request: Request, body: CreateResearchRequest) -> JSON
         interactive_wait_s=body.interactive_wait_s,
         on_verification_timeout=body.on_verification_timeout,
         search_provider=body.search_provider or artifacts.settings.research_search_provider,
+        mode=body.research_mode,
     )
     logger.info("research_created", task_id=str(started.task_id), workflow_id=started.workflow_id)
     return JSONResponse(
@@ -190,7 +198,9 @@ async def create_research(request: Request, body: CreateResearchRequest) -> JSON
 #: 2 - typed field contracts + per-candidate quarantine (ADR-0050 item 20, 2026-09-04)
 #: 3 - named, versioned entity schemas: required/optional/derived fields, per-item quarantine
 #:     for statements and detail sections (ADR-0050 item 21, 2026-09-04)
-RESEARCH_POLICY_VERSION = 4
+#: 4 - research speed modes (quick/standard/deep), wave-based fetching with early stop, and
+#:     the challenge/cooldown policy (ADR-0068, 2026-09-07)
+RESEARCH_POLICY_VERSION = 5
 
 
 @router.get("/policy")
@@ -237,6 +247,12 @@ async def get_research_policy(request: Request) -> dict[str, Any]:
         },
         "verification_timeout_policies": ["fallback", "fail"],
         "modes": ["interactive", "unattended"],
+        # M18.2 (ADR-0068): the research SPEED modes — quick/standard/deep — distinct
+        # from "modes" above (owner-handoff interactive/unattended). "research_mode"
+        # is this route's own request field name for the same reason.
+        "research_modes": RESEARCH_MODES,
+        "research_mode_default": DEFAULT_MODE,
+        "research_policies": {name: p.as_dict() for name, p in POLICIES.items()},
     }
 
 

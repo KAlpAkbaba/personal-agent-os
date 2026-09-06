@@ -242,6 +242,16 @@ class ResearchDiagnostics:
     provider_errors: tuple[str, ...] = field(default_factory=tuple)
     synthesis_provider: str = ""
     timings: dict[str, Any] = field(default_factory=dict)
+    #: M18.2 fast-path fields (ADR-0068): which speed mode ran, its hard budget in
+    #: seconds, how long the run actually took, how many fetch waves it spent, and
+    #: the challenge policy's own counters — TECHNICAL-level/explicit-question only,
+    #: never read by the executive narration (same rule as every other field here).
+    mode: str = ""
+    budget_s: float = 0.0
+    elapsed_s: float = 0.0
+    waves: int = 0
+    challenged_pages: int = 0
+    cooled_domains: int = 0
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -256,6 +266,12 @@ class ResearchDiagnostics:
             "provider_errors": list(self.provider_errors),
             "synthesis_provider": self.synthesis_provider,
             "timings": dict(self.timings),
+            "mode": self.mode,
+            "budget_s": self.budget_s,
+            "elapsed_s": self.elapsed_s,
+            "waves": self.waves,
+            "challenged_pages": self.challenged_pages,
+            "cooled_domains": self.cooled_domains,
         }
 
     @classmethod
@@ -274,6 +290,13 @@ class ResearchDiagnostics:
         rejected_by_reason = stats.get("rejected_by_reason") or {}
         if not isinstance(rejected_by_reason, dict):
             rejected_by_reason = {}
+
+        def _float(key: str) -> float:
+            try:
+                return float(stats.get(key) or 0.0)
+            except (TypeError, ValueError):
+                return 0.0
+
         return cls(
             discovered_count=_int("discovered"),
             fetched_count=_int("fetched"),
@@ -284,6 +307,12 @@ class ResearchDiagnostics:
             quarantined_pages=_int("quarantined"),
             dedup_stats={"deduplicated": _int("deduplicated")},
             synthesis_provider=str(data.get("synthesis_provider") or ""),
+            mode=str(stats.get("mode") or ""),
+            budget_s=_float("budget_s"),
+            elapsed_s=_float("elapsed_s"),
+            waves=_int("waves"),
+            challenged_pages=_int("challenged_pages"),
+            cooled_domains=_int("cooled_domains"),
         )
 
 

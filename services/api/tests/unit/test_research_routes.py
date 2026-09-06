@@ -251,6 +251,40 @@ def test_create_research_mode_alias_wins_over_interactive(client: TestClient) ->
     assert request_arg.on_verification_timeout == "fail"
 
 
+def test_create_research_default_research_mode_is_quick(client: TestClient) -> None:
+    """M18.2 (ADR-0068): the REST route's speed mode defaults to QUICK for an
+    ordinary request that names none - existing callers (every test above, and
+    every production caller before this change) are unaffected."""
+    from app.research.policy import MODE_QUICK
+
+    _enroll_online_device(client)
+    fake_client = AsyncMock()
+    fake_client.start_workflow = AsyncMock(return_value=None)
+    with patch("app.research.routes.Client.connect", AsyncMock(return_value=fake_client)):
+        response = client.post("/v1/research", json={"input": "konu"})
+    assert response.status_code == 202
+    request_arg = fake_client.start_workflow.call_args.args[1]
+    assert request_arg.mode == MODE_QUICK
+
+
+def test_create_research_accepts_an_explicit_research_mode(client: TestClient) -> None:
+    from app.research.policy import MODE_DEEP
+
+    _enroll_online_device(client)
+    fake_client = AsyncMock()
+    fake_client.start_workflow = AsyncMock(return_value=None)
+    with patch("app.research.routes.Client.connect", AsyncMock(return_value=fake_client)):
+        response = client.post("/v1/research", json={"input": "konu", "research_mode": "deep"})
+    assert response.status_code == 202
+    request_arg = fake_client.start_workflow.call_args.args[1]
+    assert request_arg.mode == MODE_DEEP
+
+
+def test_create_research_rejects_unknown_research_mode(client: TestClient) -> None:
+    response = client.post("/v1/research", json={"input": "konu", "research_mode": "turbo"})
+    assert response.status_code == 422
+
+
 def test_create_research_rejects_unknown_mode_and_timeout_policy(client: TestClient) -> None:
     assert client.post("/v1/research", json={"input": "konu", "mode": "stealth"}).status_code == 422
     assert (
@@ -358,6 +392,24 @@ def test_research_policy_reports_the_effective_provider(client: TestClient) -> N
     assert set(body["search_providers"]) == {"duckduckgo", "google", "auto"}
     assert body["interactive_wait_s"]["min"] == 30
     assert body["modes"] == ["interactive", "unattended"]
+
+
+def test_research_policy_publishes_the_speed_modes(client: TestClient) -> None:
+    """M18.2 (ADR-0068): a client can see the QUICK/STANDARD/DEEP modes and their
+    budgets without guessing - distinct from `modes` (owner-handoff interactive/
+    unattended), which stays exactly as it was."""
+    from app.research.policy import DEFAULT_MODE, RESEARCH_MODES
+
+    response = client.get("/v1/research/policy")
+    body = response.json()
+    assert body["modes"] == ["interactive", "unattended"]  # unchanged
+    assert body["research_modes"] == list(RESEARCH_MODES)
+    assert body["research_mode_default"] == DEFAULT_MODE
+    assert body["research_policies"]["quick"]["hard_budget_s"] == 120.0
+    assert (
+        body["research_policies"]["standard"]["hard_budget_s"]
+        > body["research_policies"]["quick"]["hard_budget_s"]
+    )
 
 
 def test_research_policy_publishes_the_quality_gate_and_findings_floor(
