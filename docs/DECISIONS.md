@@ -4235,3 +4235,115 @@ guards every harness against the closure and undeclared-symbol classes structura
 next milestone's qualification starts from the record, not from a script that must run to
 completion in one sitting. The same-day amendment to ADR-0063 stands: action contract v3
 (action id and session id on the durable eye row) is what production runs.
+
+
+## ADR-0065 — The Core's visual language: layered, bounded, measured (2026-09-07)
+
+Status: Accepted
+
+Context: M18 closed PROVEN_REAL with a Core that was truthful and plain — an icosahedron, a
+wireframe, a lattice, a few rings. The owner asked for the thing the milestone had deferred:
+a visual language of its own, spatial and holographic, in which listening visibly pulls
+energy inward, thinking expands the topology, research grows a constellation, memory
+converges, the assistant's speech drives the light, and the Minimal mode gives the Core the
+viewport. The temptation in that brief is the one ADR-0052 and ADR-0056 exist to refuse: to
+make it *look alive*. A structure that breathes, turns and sparkles on its own would teach
+the owner, within a day, that the Core's motion means nothing. So the design problem was
+stated the other way round — what is the richest structure that can move **only** on
+evidence — and that constraint is what makes the result original rather than a copy of any
+film interface. Nothing here relaxes the rule that the Core draws only what was published
+or measured; the frozen Core/Voice/Eye architecture, the voice store and the eye reconcile
+seam are untouched.
+
+Decisions:
+
+1. **The structure is layered; the layers are the vocabulary.** A translucent nucleus;
+   three concentric internal rings on tilted planes (the topology layers); the connection
+   paths across the interior; two translucent structural shells that stand off the nucleus;
+   and, beyond them, only things a subsystem said exist — the evidence constellation, the
+   parked capability nodes, the eye's aperture, the lab's construction layers, the release
+   orbit. Two bounded particle populations move through it: one pulled inward while the
+   system listens or recalls, one travelling the paths while it thinks or works. Depth is
+   the layering itself plus a slight camera lean towards the pointer, which is a way of
+   seeing the layers and not a claim about the system. `docs/M18_1_CORE_VISUAL_LANGUAGE.md`
+   holds the shape table and the per-state table.
+2. **Every new visual channel is a number on `VisualIntent`, derived in `visual.ts` from a
+   published field or a real measurement, and nowhere else.** `energy` is the publisher's
+   `intensity`, or the gate's microphone level, or the playback RMS, and is 0 when nothing
+   was declared or measured. `glow` is a per-state base plus half of `energy`. `shellSpread`,
+   `ringSpin` and `flowRate` are per-state constants that `energy` may raise. `ownerVoice` is
+   exactly the local gate's `micLevel` while this tab's own session is listening — the
+   OWNER_SPEAKING the owner asked for is "listening with that number above zero", and a bus
+   `agent.listening` never claims it, because its intensity is declared elsewhere, not
+   measured here. `eyeActive` is read from the eye's own claim through `eyeView`, so the
+   aperture and the ambient band cannot disagree. `visual.test.ts` now asserts, for every
+   core state, that it has a channel profile no other state shares, and that with
+   `intensity: null` and no measurement the rhythm channels (`pulse`, `ownerVoice`,
+   `energy`) are all zero; and that every silence kind and every room state leaves every
+   motion channel at zero.
+3. **Research without a count draws a fixed motif and says so.** The owner's brief asked
+   for a constellation whenever research runs. The publisher sends counts at some stages and
+   none at others, and drawing a plausible number at the latter would be the estimate rule 2
+   of `visual.ts` forbids. So `constellationNodes` is the published count when there is one
+   and the constant `CONSTELLATION_MOTIF` (5) when there is none; the 2D markup marks the
+   motif `data-constellation="motif"` with hollow nodes and no `core-sources` group, the
+   readout appends "Çizilen takımyıldız sabit bir temsildir, sayım değildir." to the
+   existing "Kaynak sayısı bildirilmedi.", and the motif is byte-for-byte the same on every
+   render. Its motion, `constellationDrift`, is published progress or the constant
+   `CONSTELLATION_REST`; never a random or clock-driven figure. When both `candidates` and
+   `kept` were published, the difference is drawn as a faint outer field — the set the
+   evidence was kept from — and only then.
+4. **SHADOW_READY parks capability nodes; the count is the lab's or it is one.**
+   `app/evolution/service.py` publishes one event per candidate with no count, so the
+   honest figure is one — the candidate the event is about — with `capabilityNodesCounted`
+   false and the readout saying the lab did not count. A publisher that sends `ready` or
+   `candidates` is read verbatim, capped at `MAX_CAPABILITY_NODES` (8) for the GPU while the
+   readout keeps the true number. The nodes are parked and never orbit; the first sits under
+   the completed satellite's halo, which is the same object as before.
+5. **The frame is a pure reducer, and allocation-free by construction.** `stepScene(state,
+   intent, dt, pointer)` in `app/lib/uistate/scene.ts` approaches every smoothed value
+   towards its channel (exponential in `dt`) and accumulates rotations and particle phases
+   (linear in `dt`); `CoreScene` only copies its numbers onto three.js objects. The truth is
+   the intent; the frame draws it. `tests/uistate/scene.test.ts` runs the reducer in Node
+   with no three.js: a zero intent stays still through thirty seconds of frames; sixty small
+   steps and twenty large ones reach the same picture; the state object and its phase buffer
+   are the same objects after five hundred steps; and a structural test reads the source of
+   both the reducer and the scene's frame body and refuses `new`, literals and array
+   methods inside them. That last test is what "no per-frame allocations" means here — a
+   property of the text, not a profiler's opinion.
+6. **A hidden tab does no work; reduced motion draws one settled frame.** `CoreCanvas` now
+   takes `hidden` and `still` apart. Hidden puts the canvas in `demand` mode, the frame loop
+   returns before any arithmetic, and no effect invalidates. Reduced motion settles the
+   structure on the new intent in one long reducer step and draws that frame once per
+   intent change — the shape, the counts and the glow are shown; nothing moves.
+7. **Tiers budget the structure and a pure function states the ceiling.** `TIER_BUDGETS`
+   gains `rings`, `shells`, `maxParticles` and `parallax` (high 3/2/160/yes, balanced
+   2/1/80/yes, low 1/0/0/no). `sceneBudgetFor(tier)` derives the most the scene can mount —
+   high 26 drawables, 296 instances; balanced 24, 152; low 18, 32 — and `quality.test.ts`
+   pins those figures, so a change to the scene's composition is a change to a table. `low`
+   keeps one ring so the structure keeps its identity and drops shells, particles, paths,
+   parallax and the glow shell whole. Particles are instanced, two meshes, culling off.
+8. **The 2D fallback carries the same identity.** `CoreFallback2D` draws the rings, shells,
+   aperture, constellation, field and capability nodes in static SVG at the same proportions,
+   from the same constants in `scene.ts`; the ring rotation is a CSS animation whose duration
+   is `7 / ringSpin` seconds and which is absent at zero spin, and it stops under
+   `prefers-reduced-motion` like the breath. It remains the view the render tests assert
+   on, under `react-dom/server`, with no browser.
+9. **Minimal mode gives the Core the viewport; the Cockpit prints the numbers.** On `/core`
+   the stage is sized by the window's shorter side, the readout sits over its lower edge, and
+   the voice cell, the room and the eye control recede into one row that comes forward on
+   hover or focus — except the camera cell, which never fades, because a faded privacy
+   assurance is not one. `/core/cockpit` keeps its panels and adds `ChannelReadout`: every
+   channel printed as it is, with the counted/uncounted state of the constellation, the
+   field and the capability nodes in words.
+
+Consequences: `pnpm --filter @pagentos/web test` grows from 588 to 660 tests, all Node +
+`react-dom/server`; no browser, no Playwright; `next build` compiles in about 12 s and the
+whole gate in under 20 s. What is deliberately not drawn: any idle activity beyond the
+reported-idle breath and a minute-scale ring drift; any synthesised speech rhythm (the pulse
+and the glow while speaking are the playback RMS); any estimated source count; any random
+position, phase or tilt; any motion for `untold`, `connecting`, `unauthorized`,
+`last_known`, `unreachable` or for the room's states on the core body; any parallax on
+`low` or as a claim anywhere; any strobe. The first thing the owner should notice on a real
+run is that the Core is still when the system is quiet and that this reads as calm rather
+than as broken — the whole reason the structure was allowed to become this rich.
