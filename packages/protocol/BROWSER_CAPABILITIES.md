@@ -96,8 +96,14 @@ widened by a second open; a narrower reopen is applied). A reopen may NOT change
 `session_kind` — that answers `validation_error`, because silently handing the caller a
 different browser than the one it named is worse than refusing.
 
-**The alarm profile and the media session kind (v1.2, M18.3, ADR-0073).** They are one thing,
-checked from both directions: `profile: "alarm"` requires `session_kind: "media"`, and a
+**The alarm profile and the media session kind (v1.2, M18.3, ADR-0073).** The wake sequence
+opens its session exactly like this:
+
+```json
+{"session_id":"alarm-<alarm_id>","profile":"alarm","session_kind":"media"}
+```
+
+They are one thing, checked from both directions: `profile: "alarm"` requires `session_kind: "media"`, and a
 `media` session may never use the `research` profile (both refusals are `validation_error`).
 The alarm profile directory is DERIVED, not configured by default — the research profile's
 sibling, `<profile-dir>-alarm` — and the worker refuses at startup an
