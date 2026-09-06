@@ -279,8 +279,17 @@ try {
     }
 
     $coreUrl = "http://localhost:$WebPort/core"
-    $shell = [ordered]@{ url = $coreUrl; started = $false; ready = $false; ready_after_s = $null; baseline_sessions = $baselineIds.Count }
+    $shell = [ordered]@{ url = $coreUrl; started = $false; ready = $false; ready_after_s = $null; baseline_sessions = $baselineIds.Count; existing_listener = $null }
     if (-not $SkipWeb) {
+        # A shell left behind by an earlier run would answer /core in seconds - with OLD
+        # code. It is named and refused; the owner stops it, or passes -SkipWeb to mean it.
+        $listener = Get-ListeningProcess -Port $WebPort
+        if ($null -ne $listener) {
+            $shell.existing_listener = [ordered]@{ pid = $listener.Pid; name = $listener.Name; started_at = $listener.StartedAt }
+            $evidence.web_shell = $shell
+            throw ("port $WebPort is already in use by pid $($listener.Pid) ($($listener.Name), started $($listener.StartedAt)) - a web shell from an earlier run, or one you started. " +
+                   "Stop it (taskkill /PID $($listener.Pid) /T /F) so this run starts a shell with the current code, or pass -SkipWeb to qualify against that one deliberately.")
+        }
         $logPath = Join-Path $env:TEMP "$runId-web.log"
         $webProcess = Start-WebShellProcess -RepoRoot $repoRoot -Upstream $BaseUrl -WebPort $WebPort -LogPath $logPath -PnpmPath $PnpmPath
         $shell.started = $true
@@ -592,9 +601,8 @@ finally {
         [System.IO.File]::WriteAllText($OutFile, $json, (New-Object System.Text.UTF8Encoding($false)))
         Write-Host "      evidence written: $OutFile"
     }
-    if ($null -ne $webProcess -and -not $webProcess.HasExited) {
-        try { Stop-Process -Id $webProcess.Id -Force -ErrorAction SilentlyContinue } catch { }
-    }
+    # The whole tree (PowerShell wrapper -> pnpm -> next dev), never just the wrapper.
+    if ($null -ne $webProcess) { Stop-WebShellProcess -Process $webProcess }
     try { Invoke-JsonUtf8 -Method POST -Uri "$BaseUrl/v1/identity/sessions/$mintedId/revoke" -Headers $headers -Body "{}" | Out-Null } catch { }
     $headers = $null; $token = $null
 }

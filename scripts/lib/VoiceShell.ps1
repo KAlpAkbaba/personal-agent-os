@@ -121,6 +121,45 @@ function Start-WebShellProcess {
         -RedirectStandardOutput $LogPath -RedirectStandardError $errorLog
 }
 
+function Stop-WebShellProcess {
+    <#
+        Stop the web shell AND everything it started. Stop-Process on the PowerShell
+        wrapper alone leaves `next dev` (node) listening on the port: the harness's dry run
+        of 2026-09-06 left pid 17176 behind, its stdout pipe kept the calling command open,
+        and the NEXT run would have found "the Core" answering in 3 s from a stale shell
+        running old code. taskkill /T ends the tree; the absolute path matters because a
+        spawned shell's PATH on this machine is not to be trusted.
+    #>
+    param([Parameter(Mandatory = $true)]$Process)
+    if ($null -eq $Process) { return }
+    $taskkill = Join-Path $env:SystemRoot "System32\taskkill.exe"
+    try {
+        if (-not $Process.HasExited) { & $taskkill /PID $Process.Id /T /F 2>&1 | Out-Null }
+    }
+    catch { }
+    try { if (-not $Process.HasExited) { Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue } } catch { }
+}
+
+function Get-ListeningProcess {
+    <#
+        Who is listening on a local TCP port: @{ Pid; Name; StartedAt } or $null. Used before
+        starting a web shell, so a stale shell from an earlier run (old code!) is named and
+        refused instead of silently qualifying the owner against it.
+    #>
+    param([Parameter(Mandatory = $true)][int]$Port)
+    $conn = $null
+    try { $conn = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue) } catch { $conn = @() }
+    if ($conn.Count -eq 0) { return $null }
+    $owner = [int]$conn[0].OwningProcess
+    $proc = $null
+    try { $proc = Get-Process -Id $owner -ErrorAction SilentlyContinue } catch { $proc = $null }
+    return [pscustomobject]@{
+        Pid       = $owner
+        Name      = $(if ($null -ne $proc) { [string]$proc.ProcessName } else { "unknown" })
+        StartedAt = $(if ($null -ne $proc) { try { $proc.StartTime.ToString("o") } catch { "" } } else { "" })
+    }
+}
+
 function ConvertTo-SessionInstant {
     <#
         One session's started_at as a UTC DateTimeOffset, or $null when it is absent or
