@@ -775,6 +775,26 @@ Test-Case "14. Format-QualificationProgress names the missing transition from wh
     Assert-True ($text1 -match "last query/action kind: none") "no intents"
 }
 
+Test-Case "22. Get-CheckoutActionContractVersion reads receipt.py, and refuses a checkout without it" {
+    $v = Get-CheckoutActionContractVersion -RepoRoot $repoRoot
+    Assert-True ($v -is [int]) "an int"
+    Assert-True ($v -ge 4) "M18.2 raised the contract to 4; the checkout answers $v"
+    $tmpRoot = Join-Path $env:TEMP ("no-contract-" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $tmpRoot | Out-Null
+    try {
+        $threw = $false
+        try { $null = Get-CheckoutActionContractVersion -RepoRoot $tmpRoot } catch { $threw = $true }
+        Assert-True $threw "a checkout with no receipt.py is refused, not read as v1"
+        $dir = Join-Path $tmpRoot "services\api\app\actions"
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $dir "receipt.py"), "x = 1`r`nACTION_CONTRACT_VERSION: Final = 12`r`n")
+        Assert-Equal 12 (Get-CheckoutActionContractVersion -RepoRoot $tmpRoot) "the Final-annotated form"
+        [System.IO.File]::WriteAllText((Join-Path $dir "receipt.py"), "ACTION_CONTRACT_VERSION = 7`r`n")
+        Assert-Equal 7 (Get-CheckoutActionContractVersion -RepoRoot $tmpRoot) "the bare form"
+    }
+    finally { Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
 Write-Host ""
 Write-Host "owner-explain harness: $script:Passes passed, $script:Failures failed"
 if ($script:Failures -gt 0) { exit 1 }

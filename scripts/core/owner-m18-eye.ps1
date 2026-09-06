@@ -179,7 +179,9 @@ function Get-DeployedContractVersion {
 #: observed_at on receipts, media_track_ready_state and action_trace echoed, the truthful
 #: "kapandı ancak kaydını doğrulayamadım" wording, no server-side safety net; v3: the eye
 #: ledger row carries the action_id of the voice action that wrote it).
-$requiredContractVersion = 3
+# The version this checkout would release (receipt.py), never a literal; the eye run needs at least v3.
+$requiredContractVersion = Get-CheckoutActionContractVersion -RepoRoot $repoRoot
+if ($requiredContractVersion -lt 3) { throw "this checkout carries action contract v$requiredContractVersion; the eye run needs v3 or later" }
 
 function Invoke-CloudCoreRelease {
     $release = Join-Path $repoRoot "scripts\cloud\release-cloud-core.ps1"

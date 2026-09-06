@@ -359,6 +359,22 @@ function Get-SessionRouterSummary {
     }
 }
 
+function Get-CheckoutActionContractVersion {
+    <#
+        The action-contract version THIS CHECKOUT carries (app/actions/receipt.py's
+        ACTION_CONTRACT_VERSION), so a harness gates the deployed Cloud Core against the code it
+        would release rather than against a literal that goes stale with every contract bump
+        (M18.2's harness said 4 while the tree had moved on). Throws when the file or the
+        constant is missing: a harness with no contract to compare against must not run.
+    #>
+    param([Parameter(Mandatory)][string]$RepoRoot)
+    $receipt = Join-Path $RepoRoot "services\api\app\actions\receipt.py"
+    if (-not (Test-Path -LiteralPath $receipt)) { throw "this checkout has no action contract ($receipt); nothing to qualify" }
+    $match = [regex]::Match([System.IO.File]::ReadAllText($receipt), '(?m)^ACTION_CONTRACT_VERSION\s*(?::\s*Final)?\s*=\s*(\d+)')
+    if (-not $match.Success) { throw "ACTION_CONTRACT_VERSION not found in $receipt" }
+    return [int]$match.Groups[1].Value
+}
+
 function ConvertTo-TextList {
     <#
         Every input as a [string], whatever shape it arrived in: a string, ONE character (a

@@ -58,7 +58,10 @@ $BaseUrl = $BaseUrl.TrimEnd('/')
 $runId = "owner-m18-2-" + (Get-Date -Format "yyyyMMdd-HHmmss")
 $startedAt = (Get-Date).ToUniversalTime()
 $runStart = [DateTimeOffset]::UtcNow
-$requiredContractVersion = 4
+# The version this checkout would release (receipt.py), never a literal: the run needs at
+# least v4 (the research terminal schema) and releases whatever the tree carries now.
+$requiredContractVersion = Get-CheckoutActionContractVersion -RepoRoot $repoRoot
+if ($requiredContractVersion -lt 4) { throw "this checkout carries action contract v$requiredContractVersion; M18.2 needs v4 or later" }
 
 $u_uml = [char]0x00FC; $c_ced = [char]0x00E7; $g_br = [char]0x011F; $i_dot = [char]0x0131; $s_ced = [char]0x015F
 $phraseLong = "Bana PagentOS'un ne oldu" + $g_br + "unu be" + $s_ced + " c" + $u_uml + "mleyle anlat."
@@ -146,7 +149,7 @@ try {
     if ($stale -and $CloudCoreUpdate -eq "never") { throw "the deployed Cloud Core is stale (v$deployedVersion < v$requiredContractVersion); -CloudCoreUpdate never refuses to release" }
     if ($releaseCloud -and $releaseBlockers.Blocked) { Write-ReleaseBlockers -Blockers $releaseBlockers; throw "a Cloud Core release is required but the working tree has $($blockerChanges.Count) uncommitted change(s); commit or revert them, then rerun" }
     if ($releaseCloud) {
-        Write-Host "      the deployed Cloud Core predates the research result schema: releasing it once" -ForegroundColor Yellow
+        Write-Host "      the deployed Cloud Core carries an older action contract (v$deployedVersion < v$requiredContractVersion): releasing it once" -ForegroundColor Yellow
         Invoke-CloudCoreRelease
         $health = Invoke-JsonUtf8 -Uri "$BaseUrl/v1/system/health" -TimeoutSec 20
         $deployedVersion = Get-DeployedContractVersion -Health $health
