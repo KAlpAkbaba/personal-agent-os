@@ -21,14 +21,34 @@ import { UnauthorizedError, apiFetch } from "../session";
 export type Loaded<T> =
   | { kind: "loading" }
   | { kind: "ok"; value: T; at: number }
-  | { kind: "failed"; error: string };
+  | { kind: "failed"; error: string }
+  /**
+   * The endpoint is not on this server yet (a 404 from a route a parallel
+   * track is still building).
+   *
+   * A fourth outcome, because it is a fourth fact: "there are no alarms",
+   * "I could not find out whether there are alarms" and "this Cloud Core does
+   * not have alarms yet" are three different sentences, and rendering the
+   * third as either of the first two is the same class of lie as an empty list
+   * for a failed request.
+   */
+  | { kind: "absent"; detail: string };
 
 export function isOk<T>(state: Loaded<T>): state is { kind: "ok"; value: T; at: number } {
   return state.kind === "ok";
 }
 
+/** Raised so `load` can tell a missing route from a broken one. */
+class NotFoundError extends Error {
+  constructor(path: string) {
+    super(`not found: ${path}`);
+    this.name = "NotFoundError";
+  }
+}
+
 async function getJson<T>(path: string): Promise<T> {
   const response = await apiFetch(path);
+  if (response.status === 404) throw new NotFoundError(path);
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   return (await response.json()) as T;
 }
@@ -39,6 +59,9 @@ export async function load<T>(path: string, pick: (raw: unknown) => T): Promise<
     return { kind: "ok", value: pick(await getJson<unknown>(path)), at: Date.now() };
   } catch (err) {
     if (err instanceof UnauthorizedError) return { kind: "failed", error: "oturum reddedildi" };
+    if (err instanceof NotFoundError) {
+      return { kind: "absent", detail: `Bu Cloud Core sürümünde ${path} yok (HTTP 404).` };
+    }
     return { kind: "failed", error: err instanceof Error ? err.message : String(err) };
   }
 }
@@ -269,3 +292,163 @@ export const fetchHealth = () =>
 export function isHealthy(status: string): boolean {
   return status === "ok" || status === "skipped";
 }
+
+// ------------------------------------------------- M18.3: alarms and ambient
+
+/**
+ * One wake alarm, as `docs/M18_3_LIVING_CORE_WAKE_ALARM_SPEC.md` §3.1 shapes
+ * it. Every field is optional in the parser rather than in the contract: the
+ * route is being built on another track, and a renderer that throws on a
+ * field that has not landed yet is a renderer that fails the owner for no
+ * reason. What is missing is drawn as missing.
+ */
+export type WakeAlarm = {
+  id: string;
+  state: string;
+  local_time: string | null;
+  scheduled_for: string | null;
+  timezone: string | null;
+  is_test: boolean;
+  recurrence: { weekdays?: number[] } | null;
+  media_kind: string | null;
+  media_title: string | null;
+  device_id: string | null;
+  snooze_count: number | null;
+  terminal_reason: string | null;
+};
+
+/** The alarm lifecycle's Turkish names, for the panel's rows. */
+export const ALARM_STATE_LABEL: Record<string, string> = {
+  SCHEDULED: "kuruldu",
+  ARMED: "cihazda hazır",
+  FIRING: "tetiklendi",
+  DISPLAY_WAKING: "ekran uyandırılıyor",
+  MEDIA_STARTING: "ses başlatılıyor",
+  PLAYING: "çalıyor",
+  GREETING: "seslendiriyor",
+  SNOOZED: "ertelendi",
+  STOPPED: "durduruldu",
+  COMPLETED: "tamamlandı",
+  CANCELLED: "iptal edildi",
+  FAILED: "başarısız",
+};
+
+function str(o: Record<string, unknown>, key: string): string | null {
+  const value = o[key];
+  return typeof value === "string" && value ? value : null;
+}
+
+function num(o: Record<string, unknown>, key: string): number | null {
+  const value = o[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function parseAlarm(raw: unknown): WakeAlarm {
+  const o = (raw ?? {}) as Record<string, unknown>;
+  const media = (o.resolved_media_identity ?? o.media_source ?? {}) as Record<string, unknown>;
+  return {
+    id: str(o, "id") ?? str(o, "alarm_id") ?? "",
+    state: str(o, "state") ?? "",
+    local_time: str(o, "local_time"),
+    scheduled_for: str(o, "scheduled_for"),
+    timezone: str(o, "timezone"),
+    is_test: o.is_test === true,
+    recurrence:
+      o.recurrence && typeof o.recurrence === "object"
+        ? (o.recurrence as { weekdays?: number[] })
+        : null,
+    media_kind: str(media, "kind"),
+    media_title: str(media, "title") ?? str(media, "name"),
+    device_id: str(o, "device_id"),
+    snooze_count: num(o, "snooze_count"),
+    terminal_reason: str(o, "terminal_reason"),
+  };
+}
+
+export const fetchAlarms = () =>
+  load<WakeAlarm[]>("/v1/alarms", (raw) => arrayAt<unknown>(raw, "alarms").map(parseAlarm));
+
+/**
+ * The ambient policy (spec §3.9). Read-only here, as everything in the cockpit
+ * is: the policy is changed by voice or by the API that owns it, never from
+ * this page. **Nothing in the renderer decides physical policy.**
+ */
+export type AmbientPolicy = {
+  auto_off_enabled: boolean | null;
+  off_when_away: boolean | null;
+  off_when_asleep: boolean | null;
+  wake_on_return: boolean | null;
+  away_after_s: number | null;
+  asleep_after_s: number | null;
+  input_holdoff_s: number | null;
+  quiet_hours: string | null;
+};
+
+function flag(o: Record<string, unknown>, key: string): boolean | null {
+  const value = o[key];
+  return typeof value === "boolean" ? value : null;
+}
+
+export const fetchAmbientPolicy = () =>
+  load<AmbientPolicy>("/v1/ambient/policy", (raw) => {
+    const o = (raw ?? {}) as Record<string, unknown>;
+    const p = (o.policy && typeof o.policy === "object" ? o.policy : o) as Record<string, unknown>;
+    return {
+      auto_off_enabled: flag(p, "auto_off_enabled"),
+      off_when_away: flag(p, "off_when_away"),
+      off_when_asleep: flag(p, "off_when_asleep"),
+      wake_on_return: flag(p, "wake_on_return"),
+      away_after_s: num(p, "away_after_s"),
+      asleep_after_s: num(p, "asleep_after_s"),
+      input_holdoff_s: num(p, "input_holdoff_s"),
+      quiet_hours: str(p, "quiet_hours"),
+    };
+  });
+
+/**
+ * A device and the status its heartbeat carried (spec §5.3).
+ *
+ * `status` is optional in the device protocol — a device with no companion
+ * sends none — so "no status" is a real answer and is rendered as one rather
+ * than as a screen that is presumed on.
+ */
+export type DeviceStatus = {
+  device_id: string;
+  label: string | null;
+  online: boolean | null;
+  last_seen_at: string | null;
+  input_idle_s: number | null;
+  display_state: string | null;
+  display_observed_at: string | null;
+  alarm_ringing: boolean | null;
+  armed_alarms: number | null;
+  /** True when the heartbeat carried a `status` block at all. */
+  statusKnown: boolean;
+};
+
+function parseDevice(raw: unknown): DeviceStatus {
+  const o = (raw ?? {}) as Record<string, unknown>;
+  const status = (o.status && typeof o.status === "object" ? o.status : null) as Record<
+    string,
+    unknown
+  > | null;
+  const display = (status?.display && typeof status.display === "object"
+    ? status.display
+    : {}) as Record<string, unknown>;
+  const armed = status?.armed_alarms;
+  return {
+    device_id: str(o, "id") ?? str(o, "device_id") ?? "",
+    label: str(o, "label") ?? str(o, "name"),
+    online: flag(o, "online") ?? flag(o, "connected"),
+    last_seen_at: str(o, "last_seen_at"),
+    input_idle_s: status ? num(status, "input_idle_s") : null,
+    display_state: str(display, "state"),
+    display_observed_at: str(display, "observed_at"),
+    alarm_ringing: status ? flag(status, "alarm_ringing") : null,
+    armed_alarms: Array.isArray(armed) ? armed.length : null,
+    statusKnown: status !== null,
+  };
+}
+
+export const fetchDeviceStatus = () =>
+  load<DeviceStatus[]>("/v1/devices", (raw) => arrayAt<unknown>(raw, "devices").map(parseDevice));

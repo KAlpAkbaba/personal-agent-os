@@ -6,13 +6,16 @@
  *
  *   loading  — "yükleniyor"        we have not asked yet
  *   failed   — "alınamadı: …"      we asked and could not find out
+ *   absent   — "henüz yok"         this server has no such endpoint (404)
  *   empty    — the panel's own     we asked, and there is genuinely nothing
  *   loaded   — the rows
  *
  * Collapsing "failed" into "empty" is the panel-level version of animating
  * work that is not happening: it reads as a confident statement about the
  * world that was never actually checked. Keeping them apart is why every panel
- * must supply its own `empty` sentence.
+ * must supply its own `empty` sentence. `absent` (M18.3) is the same argument
+ * once more: a route another track is still building has told us nothing, and
+ * an empty list would say it told us there is nothing.
  */
 
 import type { Loaded } from "../../lib/cockpit/api";
@@ -70,6 +73,14 @@ export default function Panel<T>({
         // Never an empty list: we do not know whether it is empty.
         <p className="panel-unknown" data-panel-failed>
           Alınamadı: {state.error}
+        </p>
+      )}
+
+      {state.kind === "absent" && (
+        // A route that does not exist yet. Distinct from both "empty" and
+        // "failed": the question could not be asked, so no answer is implied.
+        <p className="panel-unknown" data-panel-absent>
+          Henüz yok. {state.detail}
         </p>
       )}
 

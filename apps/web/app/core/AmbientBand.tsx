@@ -18,17 +18,25 @@
  */
 
 import {
+  type AlarmView,
+  DISPLAY_IS_AMBIENT_ONLY,
+  type DisplayView,
   type EyeView,
   type PresenceView,
   RELEASE_AUTHORITY_NOTE,
   type ReleaseView,
 } from "../lib/uistate/ambient";
 import {
+  ALARM_DETAIL,
+  ALARM_LABEL,
+  DISPLAY_DETAIL,
+  DISPLAY_LABEL,
   EYE_DETAIL,
   EYE_LABEL,
   PRESENCE_LABEL,
   RELEASE_LABEL,
   formatAge,
+  formatAlarmLevel,
   formatConfidence,
   formatProgress,
 } from "../lib/uistate/labels";
@@ -37,9 +45,16 @@ export type AmbientBandProps = {
   eye: EyeView;
   presence: PresenceView;
   release: ReleaseView;
+  /**
+   * v3. Both optional so a caller that has not been taught them renders
+   * exactly what it rendered before, rather than two cells full of "unknown"
+   * it never asked for.
+   */
+  display?: DisplayView;
+  alarm?: AlarmView;
 };
 
-export default function AmbientBand({ eye, presence, release }: AmbientBandProps) {
+export default function AmbientBand({ eye, presence, release, display, alarm }: AmbientBandProps) {
   return (
     <section className="ambient-band" aria-label="Ortam ve yayın durumu">
       <div className="ambient-cell" data-eye-status={eye.status}>
@@ -80,6 +95,47 @@ export default function AmbientBand({ eye, presence, release }: AmbientBandProps
         )}
         <span className="muted">Algı kimlik doğrulaması değildir.</span>
       </div>
+
+      {/* v3: the screens. Ambient only — a dark monitor says nothing about the
+          agent, and this cell is the only place in the UI that says anything
+          about display power at all. */}
+      {display && (
+        <div className="ambient-cell" data-display-state={display.state}>
+          <span className="ambient-title">{DISPLAY_LABEL[display.state]}</span>
+          <span className="muted">{DISPLAY_DETAIL[display.state]}</span>
+          {display.unknownState && (
+            <span className="muted" data-display-unknown="yes">
+              Bildirilen ekran durumu bu sürümde tanınmıyor.
+            </span>
+          )}
+          {display.reason && <span className="muted">Sebep: {display.reason}</span>}
+          {display.state !== "untold" && (
+            <span className="muted">Bildirim: {formatAge(display.ageMs)}</span>
+          )}
+          <span className="muted">{DISPLAY_IS_AMBIENT_ONLY}</span>
+        </div>
+      )}
+
+      {/* v3: the wake alarm. "Kuruldu" and "çalıyor" are different sentences,
+          and a failure is stated as a failure rather than drawn as quiet. */}
+      {alarm && (
+        <div className="ambient-cell" data-alarm-stage={alarm.stage} data-alarm-severity={alarm.severity}>
+          <span className="ambient-title">
+            {ALARM_LABEL[alarm.stage]}
+            {alarm.isTest && <span className="muted" data-alarm-test="yes"> · test</span>}
+          </span>
+          <span className="muted">{ALARM_DETAIL[alarm.stage]}</span>
+          {alarm.label && <span className="muted" data-alarm-label>{alarm.label}</span>}
+          {alarm.stage !== "none" && (
+            <>
+              <span className="muted" data-alarm-level={alarm.level === null ? "unknown" : alarm.level}>
+                {formatAlarmLevel(alarm.level)}
+              </span>
+              <span className="muted">Bildirim: {formatAge(alarm.ageMs)}</span>
+            </>
+          )}
+        </div>
+      )}
 
       <div className="ambient-cell" data-release-stage={release.stage}>
         <span className="ambient-title">{RELEASE_LABEL[release.stage]}</span>

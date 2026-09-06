@@ -1,17 +1,24 @@
 "use client";
 
 /**
- * `/core` — Minimal Core Mode.
+ * `/core` — Minimal Core Mode, since M18.3 a full-viewport living presence.
  *
- * Primarily the living Core, its current state, and the least context that is
- * still honest. Meant to be left open on a second screen, so it does as little
- * work as it can: one poll a second while visible, one every twenty seconds
- * while hidden, and no rendering at all in a background tab.
+ * The owner's directive for this milestone: "the existing small wireframe
+ * sphere is no longer acceptable as the primary owner experience; /core must
+ * become a full-viewport living visual presence." So the stage IS the
+ * viewport — fixed, `100dvh`, no page scroll, a near-black ground — and
+ * everything else is an overlay on it:
  *
- * What "minimal" does NOT mean here: it does not mean fewer facts. The
- * connection state, the age of the claim, and the difference between "idle" and
- * "nothing reported" are all present, because a calm-looking core with no way
- * to tell those apart is precisely the thing ADR-0052 forbids.
+ *   · a tiny semantic caption, bottom centre (the same `StateReadout`, compact)
+ *   · a connection dot, because a still Core looks the same live and lost
+ *   · a control cluster that recedes to a quarter after four idle seconds
+ *   · an ambient strip: presence, the camera, the screens, the alarm, releases
+ *
+ * What "minimal" does NOT mean here is fewer facts. The connection state, the
+ * age of the claim, and the difference between "idle" and "nothing reported"
+ * are all still present, because a calm-looking Core with no way to tell those
+ * apart is precisely the thing ADR-0052 forbids. The detail moves to the
+ * Cockpit; the truth does not.
  *
  * M18 / ADR-0061: this is also the owner's voice surface. The tab's one voice
  * session (`lib/voice/store.ts`) is read here, and its real states overlay the
@@ -22,68 +29,125 @@
 import { useMemo } from "react";
 
 import OwnerGate from "../components/OwnerGate";
-import { eyeView, presenceView, releaseView } from "../lib/uistate/ambient";
-import { eyeClaim, presenceClaim, releaseClaim } from "../lib/uistate/truth";
+import { alarmView, displayView, eyeView, presenceView, releaseView } from "../lib/uistate/ambient";
+import { KNOWN_CONTRACT_VERSION } from "../lib/uistate/contract";
+import { contractLagNote } from "../lib/uistate/labels";
+import {
+  alarmClaim,
+  displayClaim,
+  eyeClaim,
+  presenceClaim,
+  releaseClaim,
+} from "../lib/uistate/truth";
 import { useCoreState } from "../lib/uistate/useCoreState";
 import { visualFor } from "../lib/uistate/visual";
 import { voiceOverlayFrom } from "../lib/uistate/voice-overlay";
+import { useActivePerception } from "../lib/eye/useActivePerception";
+import { isBusyState, isLiveState } from "../lib/voice/store";
 import { useVoiceLevels, useVoiceSession } from "../lib/voice/useVoiceSession";
 import AmbientBand from "./AmbientBand";
-import CoreBar from "./CoreBar";
+import ConnectionDot from "./ConnectionDot";
+import CoreControls from "./CoreControls";
 import CoreView from "./CoreView";
-import EyeControl from "./EyeControl";
 import StateReadout from "./StateReadout";
-import VoiceControl from "./VoiceControl";
+import { useControlFade, useFullscreen, useViewportStage } from "./useMinimalStage";
 import { useCorePreferences } from "./usePreferences";
 import "./core.css";
 
 function MinimalCore() {
-  const { truth, now, refresh } = useCoreState();
+  const { truth, now } = useCoreState();
   const { tier, setTier, force2d, setForce2d } = useCorePreferences();
-  const { voice } = useVoiceSession();
+  const { voice, actions } = useVoiceSession();
   const levels = useVoiceLevels(voice.controller.state);
+  const perception = useActivePerception();
+
+  const stage = useViewportStage();
+  const fade = useControlFade();
+  const fullscreen = useFullscreen();
 
   // Recomputed whenever the truth, the clock or the local voice session moves —
   // and only then. The intent is a pure function of all three, so there is no
   // hidden animation state; the output envelope is a sampled measurement.
   const overlay = useMemo(() => voiceOverlayFrom(voice.controller, levels), [voice.controller, levels]);
   const intent = useMemo(() => visualFor(truth, now, overlay), [truth, now, overlay]);
-  // Contract v2's other channels, each read from its own claim so none of them
-  // can overwrite another (see `prefixClaim`).
+  // Every ambient channel is read from its own claim so none of them can
+  // overwrite another (see `prefixClaim`).
   const eye = useMemo(() => eyeView(eyeClaim(truth, now)), [truth, now]);
   const presence = useMemo(() => presenceView(presenceClaim(truth, now)), [truth, now]);
   const release = useMemo(() => releaseView(releaseClaim(truth, now)), [truth, now]);
+  const display = useMemo(() => displayView(displayClaim(truth, now)), [truth, now]);
+  const alarm = useMemo(() => alarmView(alarmClaim(truth, now)), [truth, now]);
+
+  const voiceState = voice.controller.state;
+  const voiceLive = isLiveState(voiceState);
+  const stageStyle = stage && stage.size > 0 ? { width: stage.size, height: stage.size } : undefined;
+  // A server this build is ahead of never publishes the alarm or display
+  // states. Saying so is the difference between "nothing is set" and "this
+  // server cannot tell you whether anything is set".
+  const contractLag =
+    truth.contractVersion !== null && truth.contractVersion < KNOWN_CONTRACT_VERSION
+      ? contractLagNote(truth.contractVersion, KNOWN_CONTRACT_VERSION)
+      : null;
 
   return (
-    <div className="core-page">
-      <CoreBar
-        mode="minimal"
-        connection={truth.connection}
+    <div
+      className="core-shell"
+      data-core-mode="minimal"
+      data-fullscreen={fullscreen.active ? "yes" : "no"}
+    >
+      <div
+        className="core-shell-stage"
+        data-core-stage
+        data-stage-size={stage?.size ?? ""}
+        data-stage-coverage={stage ? stage.coverage.toFixed(3) : ""}
+        data-stage-band={stage?.band ?? ""}
+        style={stageStyle}
+      >
+        <CoreView intent={intent} tier={tier} force2d={force2d} />
+      </div>
+
+      <ConnectionDot connection={truth.connection} contractLag={contractLag} />
+
+      <CoreControls
+        opacity={fade.opacity}
+        faded={fade.faded}
+        onHold={fade.hold}
+        onRelease={fade.release}
+        voiceConnected={voiceLive}
+        voiceBusy={isBusyState(voiceState)}
+        voiceReady={voice.ready}
+        onVoice={() => void (voiceLive ? actions.disconnect() : actions.connect())}
+        eyeRunning={perception.status.running}
+        eyeBusy={perception.busy}
+        eyeServerStatus={eye.status}
+        onEye={() => void (perception.status.running ? perception.stop() : perception.start())}
         tier={tier}
         onTier={setTier}
         force2d={force2d}
         onForce2d={setForce2d}
-        onRefresh={refresh}
+        fullscreen={fullscreen.active}
+        fullscreenSupported={fullscreen.supported}
+        onFullscreen={fullscreen.toggle}
       />
-      {/* M18.1: the Core owns the viewport; the readout sits over its lower
-          edge; the cells recede into one quiet row (see core.css). */}
-      <main className="core-minimal" data-core-mode="minimal">
-        <div className="core-minimal-stage">
-          <CoreView intent={intent} tier={tier} force2d={force2d} />
-          <div className="core-minimal-readout">
-            <StateReadout intent={intent} />
-          </div>
-        </div>
-        <div className="core-minimal-ambient">
-          <section className="ambient-band" aria-label="Ses oturumu">
-            <VoiceControl />
-          </section>
-          <AmbientBand eye={eye} presence={presence} release={release} />
-          <section className="ambient-band" aria-label="Göz kontrolü">
-            <EyeControl eye={eye} />
-          </section>
-        </div>
-      </main>
+
+      {/* The caption: one short semantic line over the Core's lower edge. */}
+      <div className="core-caption" data-core-caption>
+        <StateReadout intent={intent} compact />
+      </div>
+
+      {/* The ambient strip. It does NOT fade with the control cluster, and
+          that is deliberate: a parent's opacity cannot be undone by a child,
+          so a fading strip would fade the camera cell with it — and a faded
+          privacy assurance is not one. The strip is facts, not controls. */}
+      <div className="core-strip" data-core-strip>
+        <AmbientBand
+          eye={eye}
+          presence={presence}
+          release={release}
+          display={display}
+          alarm={alarm}
+        />
+      </div>
     </div>
   );
 }

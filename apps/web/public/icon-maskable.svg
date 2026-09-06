@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="Personal Agent OS Çekirdeği">
+  <title>Personal Agent OS — Çekirdek (maskable)</title>
+  <defs>
+    <radialGradient id="nucleus-maskable" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#fff1d0" stop-opacity="0.95" />
+      <stop offset="55%" stop-color="#ffc86a" stop-opacity="0.55" />
+      <stop offset="100%" stop-color="#f0a53a" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+
+  <rect width="512" height="512" fill="#06050a" />
+
+  <!-- Everything inside the 80% safe area, so a round or squircle mask cannot
+       crop the structure: the icon is the same machine, drawn smaller. -->
+  <g transform="translate(256 256) scale(0.72) translate(-256 -256)">
+    <ellipse cx="256" cy="256" rx="206" ry="70" fill="none" stroke="#f0a53a" stroke-opacity="0.42" stroke-width="4" transform="rotate(-24 256 256)" />
+    <ellipse cx="256" cy="256" rx="176" ry="102" fill="none" stroke="#ffb347" stroke-opacity="0.36" stroke-width="3.5" transform="rotate(37 256 256)" />
+    <circle cx="256" cy="256" r="152" fill="none" stroke="#c9a05a" stroke-opacity="0.3" stroke-width="2.2" />
+    <circle cx="256" cy="256" r="96" fill="none" stroke="#ffc86a" stroke-opacity="0.45" stroke-width="2.2" stroke-dasharray="3 8" />
+    <circle cx="256" cy="256" r="112" fill="url(#nucleus-maskable)" />
+    <circle cx="256" cy="256" r="62" fill="#fff1d0" fill-opacity="0.72" stroke="#ffc86a" stroke-width="3" />
+  </g>
+</svg>
