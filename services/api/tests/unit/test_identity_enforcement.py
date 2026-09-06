@@ -79,6 +79,12 @@ EXPECTED_OPEN = {
     ("POST", "/v1/identity/bootstrap"),
     ("POST", "/v1/identity/sessions"),
     ("POST", "/v1/devices/enroll"),
+    # M18.3 (spec §3.7, DEVICE_PROTOCOL.md §6h, ADR-0071): the greeting audio the Session
+    # Companion fetches for `desktop.play_audio` carries its own authority - a 256-bit,
+    # single-use, five-minute token in the path - because the device holds no owner
+    # session and must never be handed one; the companion additionally checks the
+    # origin and the sha256 the command named. Deliberately open, like enrollment.
+    ("GET", "/v1/alarms/audio/{token}"),
 }
 
 

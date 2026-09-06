@@ -96,7 +96,7 @@ and optionally a short research. Scale, depth, colour and motion are yours to ju
 script records only that the Core really listened and really spoke, and finishes by itself.
 Tell me what you would change — the reference you mentioned is welcome as inspiration.
 
-### 23b. Point at one research, then two sentences — **M18.2 follow-up, NOT YET: waits for the research focus (ADR-0076) to land on main; then the command releases the Cloud Core once, before the check**
+### 23b. Point at one research, then two sentences — **M18.2 follow-up, READY (the research focus, ADR-0076, is on main; the command releases the Cloud Core once, before the check)**
 
 **Updated 2026-09-07 after your third run.** The record shows what you heard: on the
 earlier contract "Teknik anlat." started a research and explained that one; on the guarded
