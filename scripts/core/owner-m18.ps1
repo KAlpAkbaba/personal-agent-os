@@ -64,28 +64,12 @@ $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 . (Join-Path $repoRoot "scripts\lib\RepoState.ps1")
 . (Join-Path $repoRoot "scripts\lib\VoiceShell.ps1")
 . (Join-Path $repoRoot "scripts\lib\SecretStore.ps1")
+. (Join-Path $repoRoot "scripts\lib\OwnerHarness.ps1")
 
 if (-not $BaseUrl) { $BaseUrl = "http://${BrokerHost}:$ApiPort" }
 $BaseUrl = $BaseUrl.TrimEnd('/')
 $runId = "owner-m18-" + (Get-Date -Format "yyyyMMdd-HHmmss")
 $startedAt = (Get-Date).ToUniversalTime()
-
-function Get-OptionalProperty {
-    param($InputObject, [string]$Name)
-    if ($null -eq $InputObject) { return $null }
-    $prop = $InputObject.PSObject.Properties[$Name]
-    if ($null -ne $prop) { return $prop.Value }
-    return $null
-}
-
-function Get-ArrayProperty {
-    # An absent or null property is an EMPTY array, never @($null): a missing list must read
-    # as "nothing there", which @($null).Count = 1 does not.
-    param($InputObject, [string]$Name)
-    $value = Get-OptionalProperty -InputObject $InputObject -Name $Name
-    if ($null -eq $value) { return , @() }
-    return , @($value)
-}
 
 # Turkish text from character codes so this file stays pure ASCII (Windows PowerShell 5.1
 # reads a BOM-less file as ANSI and would mangle the letters).
@@ -311,11 +295,15 @@ try {
                     }
                     if ($name -ne $lastState) { $lastState = $name }
                 }
-                if ($eyeWasEnabled -and -not $eyeEnabled -and $statesSeen.Count -ge 2) {
+                # The disable is its own fact. It used to be gated on two presence states as
+                # well, so a real "Gozunu kapat" that arrived before a second state was
+                # recorded as never having happened (2026-09-06 run: disabled at 09:46:44,
+                # reported FAIL).
+                if ($eyeWasEnabled -and -not $eyeEnabled -and -not $eyeEvidence.disabled_observed) {
                     $eyeEvidence.disabled_observed = $true
                     $eyeEvidence.disabled_after_s = [math]::Round(((Get-Date) - $t0).TotalSeconds, 1)
-                    break
                 }
+                if ($eyeEvidence.disabled_observed -and $statesSeen.Count -ge 2) { break }
             }
             Start-Sleep -Seconds 5
         }
@@ -371,7 +359,9 @@ try {
     $firings = (Get-ArrayProperty -InputObject $firingsDoc -Name "firings")
     $firing = if ($firings.Count -gt 0) { $firings[0] } else { $null }
     $dispatchStatus = if ($null -ne $firing) { [string](Get-OptionalProperty -InputObject $firing -Name "dispatch_status") } else { "" }
-    $dispatchResults = if ($null -ne $firing) { (Get-ArrayProperty -InputObject $firing -Name "dispatch_results") } else { @() }
+    # NOT through an if-expression: that unrolls a one-element array, and the alarm firing
+    # has exactly one dispatch result - the 2026-09-06 crash (scripts\lib\OwnerHarness.ps1).
+    $dispatchResults = Get-ArrayProperty -InputObject $firing -Name "dispatch_results"
     $alarmResult = if ($dispatchResults.Count -gt 0) { $dispatchResults[0] } else { $null }
     $alarmDetail = if ($null -ne $alarmResult) { Get-OptionalProperty -InputObject $alarmResult -Name "detail" } else { $null }
     $started = if ($null -ne $alarmDetail) { [bool](Get-OptionalProperty -InputObject $alarmDetail -Name "started") } else { $false }

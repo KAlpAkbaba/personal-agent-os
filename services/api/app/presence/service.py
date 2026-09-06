@@ -90,6 +90,27 @@ def _record_transition(session: Session, assertion: PresenceAssertion) -> None:
     except Exception:  # noqa: BLE001 - ledger is evidence, never a hard dependency
         logger.warning("presence_transition_ledger_note_failed", state=assertion.state.value)
 
+    _publish_presence(assertion)
+    _note_published(assertion)
+
+
+#: When a held state was last put on the UI-state bus. The bus is published on CHANGE, but
+#: the Core expires an observation after its ttl_s - so a state held for ten minutes on fresh
+#: signals went "unknown" on the Core after ninety seconds while the engine still held it
+#: (2026-09-06 owner run: `away` held 09:43-09:54, published once). A heartbeat republish
+#: keeps the Core's claim alive exactly as long as the engine's evidence does - and never
+#: republishes UNKNOWN, which is the absence of a claim.
+_last_published_at: datetime | None = None
+_last_published_state: PresenceState | None = None
+
+
+def _note_published(assertion: PresenceAssertion) -> None:
+    global _last_published_at, _last_published_state
+    _last_published_at = datetime.now(UTC)
+    _last_published_state = assertion.state
+
+
+def _publish_presence(assertion: PresenceAssertion) -> None:
     ui_state = _UI_STATE_BY_PRESENCE.get(assertion.state)
     if ui_state is not None:
         publish(
@@ -111,6 +132,24 @@ def _record_transition(session: Session, assertion: PresenceAssertion) -> None:
                 "ttl_s": assertion.stale_after_s,
             },
         )
+
+
+def heartbeat_due(assertion: PresenceAssertion, *, now: datetime | None = None) -> bool:
+    """A held, non-UNKNOWN state is republished once half its TTL has elapsed since the
+    last publish, so the Core's claim never expires while the evidence is still fresh."""
+    if assertion.state is PresenceState.UNKNOWN:
+        return False
+    if _last_published_at is None or _last_published_state != assertion.state:
+        return True
+    moment = now or datetime.now(UTC)
+    return (moment - _last_published_at).total_seconds() >= assertion.stale_after_s / 2
+
+
+def reset_heartbeat() -> None:
+    """Tests only: forget the last publish."""
+    global _last_published_at, _last_published_state
+    _last_published_at = None
+    _last_published_state = None
 
 
 def ingest_observation(
@@ -137,6 +176,11 @@ def ingest_observation(
     assertion, changed = eng.add_observation(observation, now=now)
     if changed:
         _record_transition(session, assertion)
+    elif heartbeat_due(assertion, now=now):
+        # Nothing changed, but the Core would otherwise let a still-current state expire.
+        # A republish, not a ledger row: the ledger records transitions only.
+        _publish_presence(assertion)
+        _note_published(assertion)
     return observation, assertion, changed
 
 
@@ -223,7 +267,9 @@ __all__ = [
     # (ADR-0060). A `from app.presence.service import *` would not have re-exported either
     # one, silently.
     "evaluate_greeting_now",
+    "heartbeat_due",
     "ingest_observation",
     "last_greeted_at",
     "record_greeting_delivered",
+    "reset_heartbeat",
 ]
