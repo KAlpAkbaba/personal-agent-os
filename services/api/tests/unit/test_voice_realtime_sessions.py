@@ -12,22 +12,43 @@ audit rows that carry ids/timings only.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import uuid
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
+from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.artifacts.models import Artifact, ArtifactVersion
-from app.broker.models import AuditEvent
+from app.artifacts.models import (
+    Artifact,
+    ArtifactRender,
+    ArtifactVersion,
+    ResearchSource,
+    Task,
+    TaskRun,
+)
+from app.artifacts.runtime import ArtifactRuntime
+from app.broker import service as broker_service
+from app.broker.models import AuditEvent, Device, DeviceCommand, DeviceSession, EnrollmentToken
+from app.broker.runtime import BrokerRuntime, DeviceConnection
 from app.config import Settings
 from app.identity.root import InMemoryCredentialRoot
 from app.identity.runtime import IdentityRuntime
 from app.ledger.models import ActivityEventRow, PendingBriefingRow
 from app.main import create_app
 from app.narration.models import NarrationSession, PronunciationEntry
+from app.research.models import (
+    ResearchCandidateRow,
+    ResearchEvidenceRow,
+    ResearchReportRow,
+    ResearchRunRow,
+)
 from app.voice.models import VoiceProfile
 from app.voice.providers import TRANSPORT_SIMULATED
 from app.voice.realtime_sessions import service
@@ -42,6 +63,58 @@ from tests.identity_support import IDENTITY_TABLES, bearer
 # key format, so the repository's secret-hygiene scan has nothing to flag).
 VENDOR_KEY = "unit-test-vendor-key-sentinel-must-never-leave-the-server"
 DEVICE_ID = uuid.uuid4()
+
+#: research.start's own tables (M18.2 follow-up to ADR-0067): the tool now creates a
+#: REAL task/run through app.research.service.start_browser_research, so the fixture
+#: needs the same tables test_research_routes.py's does.
+RESEARCH_TABLES = (
+    Device.__table__,
+    DeviceSession.__table__,
+    DeviceCommand.__table__,
+    EnrollmentToken.__table__,
+    Task.__table__,
+    TaskRun.__table__,
+    ArtifactRender.__table__,
+    ResearchSource.__table__,
+    ResearchRunRow.__table__,
+    ResearchCandidateRow.__table__,
+    ResearchEvidenceRow.__table__,
+    ResearchReportRow.__table__,
+)
+
+
+def _spki() -> str:
+    key = ec.generate_private_key(ec.SECP256R1())
+    return base64.b64encode(
+        key.public_key().public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
+    ).decode("ascii")
+
+
+def _enroll_online_device(broker: BrokerRuntime, *, capabilities=("browser.chrome",)) -> uuid.UUID:
+    """A browser.chrome-capable device research.start's device selection can find —
+    mirrors tests/unit/test_research_routes.py's own helper."""
+    with broker.session() as db:
+        device = broker_service.enroll_device(
+            db,
+            name="ev-pc",
+            platform="windows",
+            public_key_spki_b64=_spki(),
+            capabilities=list(capabilities),
+            trace_id=None,
+        )
+    broker.connections[device.id] = DeviceConnection(
+        device_id=device.id, session_id=uuid.uuid4(), websocket=object()
+    )
+    return device.id
+
+
+def _patched_temporal_client():
+    """Stands in for app.research.service.connect_temporal's Client.connect during a
+    research.start follow-up (the DB half runs for real; Temporal never does)."""
+    fake_client = AsyncMock()
+    fake_client.start_workflow = AsyncMock(return_value=None)
+    return patch("app.research.service.Client.connect", AsyncMock(return_value=fake_client))
+
 
 DOC = """# Rapor
 
@@ -61,10 +134,19 @@ def wired():
     )
     for table in IDENTITY_TABLES:
         table.create(engine)
-    for table in (RealtimeSessionRow.__table__, RealtimeToolCall.__table__,
-                  AuditEvent.__table__, VoiceProfile.__table__, NarrationSession.__table__,
-                  PronunciationEntry.__table__, Artifact.__table__, ArtifactVersion.__table__,
-                  ActivityEventRow.__table__, PendingBriefingRow.__table__):
+    for table in (
+        RealtimeSessionRow.__table__,
+        RealtimeToolCall.__table__,
+        AuditEvent.__table__,
+        VoiceProfile.__table__,
+        NarrationSession.__table__,
+        PronunciationEntry.__table__,
+        Artifact.__table__,
+        ArtifactVersion.__table__,
+        ActivityEventRow.__table__,
+        PendingBriefingRow.__table__,
+        *RESEARCH_TABLES,
+    ):
         table.create(engine)
 
     app = create_app(settings)
@@ -73,12 +155,29 @@ def wired():
     app.state.identity = identity
     sideband = RecordingSideband(deliver=True)
     sim = SimulatedRealtimeProvider()
-    runtime = RealtimeVoiceRuntime(settings, engine=engine, providers={sim.name: sim},
-                                   sideband=sideband)
+    # M18.2 follow-up to ADR-0067: research.start needs a real BrokerRuntime (device
+    # selection) and ArtifactRuntime (task/run persistence), both bound to this test's
+    # own engine — the same wiring app.main.create_app gives production, and the same
+    # pattern test_research_routes.py's own fixture uses.
+    broker = BrokerRuntime(settings)
+    broker._engine = engine
+    broker._session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    app.state.broker = broker
+    artifacts = ArtifactRuntime(settings)
+    artifacts._engine = engine
+    artifacts._session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    app.state.artifacts = artifacts
+    runtime = RealtimeVoiceRuntime(
+        settings,
+        engine=engine,
+        providers={sim.name: sim},
+        sideband=sideband,
+        broker=broker,
+        artifacts=artifacts,
+    )
     app.state.voice_realtime = runtime
 
-    issued = identity.service.issue_session(client_kind="desktop", label="pc",
-                                            device_id=DEVICE_ID)
+    issued = identity.service.issue_session(client_kind="desktop", label="pc", device_id=DEVICE_ID)
     client = TestClient(app)
     client.headers["Authorization"] = f"Bearer {issued.token}"
     try:
@@ -95,8 +194,9 @@ def _create(client, **body):
 
 def _audit_rows(runtime, session_id: str, action: str | None = None) -> list[AuditEvent]:
     with runtime.session() as db:
-        stmt = select(AuditEvent).where(AuditEvent.category == service.AUDIT_CATEGORY,
-                                        AuditEvent.subject_ref == session_id)
+        stmt = select(AuditEvent).where(
+            AuditEvent.category == service.AUDIT_CATEGORY, AuditEvent.subject_ref == session_id
+        )
         if action:
             stmt = stmt.where(AuditEvent.action == action)
         return list(db.execute(stmt.order_by(AuditEvent.id)).scalars())
@@ -108,14 +208,31 @@ def _audit_rows(runtime, session_id: str, action: str | None = None) -> list[Aud
 def test_create_selects_by_capability_and_returns_the_contract(wired) -> None:
     client, _, runtime, _, issued, _ = wired
     data = _create(client)
-    assert set(data) >= {"session_id", "provider", "transport", "credential", "tools",
-                         "instructions", "expires_at", "state"}
+    assert set(data) >= {
+        "session_id",
+        "provider",
+        "transport",
+        "credential",
+        "tools",
+        "instructions",
+        "expires_at",
+        "state",
+    }
     assert data["provider"] == "simulator"
     assert data["transport"] == TRANSPORT_SIMULATED
     assert data["state"] == "created"
     assert {t["name"] for t in data["tools"]} == {
-        "clock.now", "voice.intent", "narration.control", "research.start", "plan.redirect",
-        "activity.explain", "state.now", "eye.enable", "eye.disable", "release.promote"}
+        "clock.now",
+        "voice.intent",
+        "narration.control",
+        "research.start",
+        "plan.redirect",
+        "activity.explain",
+        "state.now",
+        "eye.enable",
+        "eye.disable",
+        "release.promote",
+    }
     research = next(t for t in data["tools"] if t["name"] == "research.start")
     assert research["long_running"] is True and research["preamble"] == RESEARCH_PREAMBLE_TR
     assert "Türkçe" in data["instructions"] and "yönetici özeti" in data["instructions"]
@@ -156,12 +273,18 @@ def test_credential_is_per_session_short_lived_and_never_the_vendor_key(wired) -
 
 def test_create_validates_transport_and_narration_reference(wired) -> None:
     client, *_ = wired
-    assert client.post("/v1/voice/realtime/sessions",
-                       json={"transport": "webrtc"}).status_code == 422
-    assert client.post("/v1/voice/realtime/sessions",
-                       json={"transport": "carrier"}).status_code == 422
-    assert client.post("/v1/voice/realtime/sessions",
-                       json={"narration_session_id": str(uuid.uuid4())}).status_code == 422
+    assert (
+        client.post("/v1/voice/realtime/sessions", json={"transport": "webrtc"}).status_code == 422
+    )
+    assert (
+        client.post("/v1/voice/realtime/sessions", json={"transport": "carrier"}).status_code == 422
+    )
+    assert (
+        client.post(
+            "/v1/voice/realtime/sessions", json={"narration_session_id": str(uuid.uuid4())}
+        ).status_code
+        == 422
+    )
     assert client.post("/v1/voice/realtime/sessions", json={"bogus": 1}).status_code == 422
 
 
@@ -193,8 +316,9 @@ def test_sync_tool_call_executes_once_and_replays_idempotently(wired) -> None:
     assert first.status_code == 200, first.text
     assert first.json()["status"] == "succeeded" and first.json()["replayed"] is False
     assert "now" in first.json()["result"]
-    again = client.post(f"/v1/voice/realtime/sessions/{sid}/tool-calls",
-                        json={**body, "name": "research.start"})  # same call_id wins
+    again = client.post(
+        f"/v1/voice/realtime/sessions/{sid}/tool-calls", json={**body, "name": "research.start"}
+    )  # same call_id wins
     assert again.json()["replayed"] is True
     assert again.json()["result"] == first.json()["result"]
     with runtime.session() as db:
@@ -208,8 +332,10 @@ def test_sync_tool_call_executes_once_and_replays_idempotently(wired) -> None:
 def test_unknown_tool_fails_without_killing_the_session(wired) -> None:
     client, *_ = wired
     sid = _create(client)["session_id"]
-    response = client.post(f"/v1/voice/realtime/sessions/{sid}/tool-calls",
-                           json={"call_id": "c", "name": "shell.exec", "arguments": {}})
+    response = client.post(
+        f"/v1/voice/realtime/sessions/{sid}/tool-calls",
+        json={"call_id": "c", "name": "shell.exec", "arguments": {}},
+    )
     assert response.status_code == 200
     assert response.json()["status"] == "failed"
     assert response.json()["error"]["error_class"] == "capability_missing"
@@ -218,67 +344,102 @@ def test_unknown_tool_fails_without_killing_the_session(wired) -> None:
 
 def test_long_running_tool_returns_preamble_then_completes_over_the_sideband(wired) -> None:
     client, _, runtime, sideband, _, _ = wired
+    _enroll_online_device(runtime.broker)
     sid = _create(client)["session_id"]
-    response = client.post(f"/v1/voice/realtime/sessions/{sid}/tool-calls", json={
-        "call_id": "call_r1", "name": "research.start",
-        "arguments": {"topic": "OpenAI, Anthropic, Google ve açık kaynak gelişmeleri"},
-    })
+    with _patched_temporal_client():
+        response = client.post(
+            f"/v1/voice/realtime/sessions/{sid}/tool-calls",
+            json={
+                "call_id": "call_r1",
+                "name": "research.start",
+                "arguments": {"topic": "OpenAI, Anthropic, Google ve açık kaynak gelişmeleri"},
+            },
+        )
     assert response.status_code == 200, response.text
     data = response.json()
     assert data["status"] == "running"
     assert data["preamble"].startswith("Bakıyorum.")
     plan_id = data["result"]["plan_id"]
+    assert data["result"]["task_id"] == plan_id  # M18.2 follow-up to ADR-0067: real ids
+    assert data["result"]["workflow_id"] == f"research-browser-{plan_id}"
     state = client.get(f"/v1/voice/realtime/sessions/{sid}").json()
     assert state["plan_id"] == plan_id and state["plan"]["status"] == "running"
+    assert state["plan"]["task_id"] == plan_id
 
-    # mid-task redirect changes the SAME plan and pushes plan_changed
-    redirect = client.post(f"/v1/voice/realtime/sessions/{sid}/tool-calls", json={
-        "call_id": "call_r2", "name": "plan.redirect",
-        "arguments": {"instruction": "Sadece OpenAI kısmına bak"},
-    }).json()
+    # a mid-task redirect is an honest refusal (docs/DECISIONS.md ADR-0067 amendment):
+    # the M13 workflow has no signal to change scope, so nothing is claimed and the
+    # SAME plan comes back unchanged - no plan_changed push, because nothing changed.
+    redirect = client.post(
+        f"/v1/voice/realtime/sessions/{sid}/tool-calls",
+        json={
+            "call_id": "call_r2",
+            "name": "plan.redirect",
+            "arguments": {"instruction": "Sadece OpenAI kısmına bak"},
+        },
+    ).json()
     assert redirect["status"] == "succeeded"
+    assert redirect["result"]["status"] == "refused"
     assert redirect["result"]["plan"]["plan_id"] == plan_id
-    assert redirect["result"]["plan"]["revision"] == 2
-    assert redirect["result"]["plan"]["scope"] == "Sadece OpenAI kısmına bak"
-    assert sideband.events() == ["plan_changed"]
-    assert sideband.frames[0][0] == DEVICE_ID
-    assert sideband.frames[0][1]["type"] == "voice_sideband"
+    assert redirect["result"]["plan"]["revision"] == 1
+    assert redirect["result"]["plan"]["scope"] == "genel"
+    assert "değiştiremiyorum" in redirect["result"]["speech"]
+    assert sideband.events() == []
 
     # the pipeline finishes -> tool_completed pushed; the plan is completed
-    done = client.post(f"/v1/voice/realtime/sessions/{sid}/tool-calls/call_r1/complete",
-                       json={"result": {"summary": "3 kaynak"}})
+    done = client.post(
+        f"/v1/voice/realtime/sessions/{sid}/tool-calls/call_r1/complete",
+        json={"result": {"summary": "3 kaynak"}},
+    )
     assert done.status_code == 200, done.text
     assert done.json()["status"] == "succeeded" and done.json()["delivered"] is True
-    assert sideband.events() == ["plan_changed", "tool_completed"]
-    assert sideband.frames[1][1]["payload"]["result"] == {"summary": "3 kaynak"}
+    assert sideband.events() == ["tool_completed"]
+    assert sideband.frames[0][1]["payload"]["result"] == {"summary": "3 kaynak"}
     state = client.get(f"/v1/voice/realtime/sessions/{sid}").json()
     assert state["plan"]["status"] == "completed"
     # completing twice is refused
-    twice = client.post(f"/v1/voice/realtime/sessions/{sid}/tool-calls/call_r1/complete",
-                        json={"result": {}})
+    twice = client.post(
+        f"/v1/voice/realtime/sessions/{sid}/tool-calls/call_r1/complete", json={"result": {}}
+    )
     assert twice.status_code == 422
-    assert client.post(f"/v1/voice/realtime/sessions/{sid}/tool-calls/nope/complete",
-                       json={"result": {}}).status_code == 422
-    assert client.post(f"/v1/voice/realtime/sessions/{sid}/tool-calls/call_r1/complete",
-                       json={}).status_code == 422
+    assert (
+        client.post(
+            f"/v1/voice/realtime/sessions/{sid}/tool-calls/nope/complete", json={"result": {}}
+        ).status_code
+        == 422
+    )
+    assert (
+        client.post(
+            f"/v1/voice/realtime/sessions/{sid}/tool-calls/call_r1/complete", json={}
+        ).status_code
+        == 422
+    )
 
 
 def test_undeliverable_sideband_is_queued_and_drained_on_events(wired) -> None:
     client, _, runtime, sideband, _, _ = wired
+    _enroll_online_device(runtime.broker)
     sideband.deliver = False
     sid = _create(client)["session_id"]
-    client.post(f"/v1/voice/realtime/sessions/{sid}/tool-calls", json={
-        "call_id": "r", "name": "research.start", "arguments": {"topic": "x"}})
-    client.post(f"/v1/voice/realtime/sessions/{sid}/tool-calls/r/complete",
-                json={"error": {"error_class": "dependency_unavailable", "message": "boom"}})
+    with _patched_temporal_client():
+        client.post(
+            f"/v1/voice/realtime/sessions/{sid}/tool-calls",
+            json={"call_id": "r", "name": "research.start", "arguments": {"topic": "x"}},
+        )
+    client.post(
+        f"/v1/voice/realtime/sessions/{sid}/tool-calls/r/complete",
+        json={"error": {"error_class": "dependency_unavailable", "message": "boom"}},
+    )
     state = client.get(f"/v1/voice/realtime/sessions/{sid}").json()
     assert state["pending_sideband_count"] == 1 and state["plan"]["status"] == "failed"
     assert len(_audit_rows(runtime, sid, service.ACTION_SIDEBAND_QUEUED)) == 1
-    events = client.post(f"/v1/voice/realtime/sessions/{sid}/events", json={
-        "events": [{"kind": "mic_speech_start", "t_ms": 10, "turn": 1}]}).json()
+    events = client.post(
+        f"/v1/voice/realtime/sessions/{sid}/events",
+        json={"events": [{"kind": "mic_speech_start", "t_ms": 10, "turn": 1}]},
+    ).json()
     assert [f["event"] for f in events["pending_sideband"]] == ["tool_completed"]
     assert events["pending_sideband"][0]["payload"]["error"]["error_class"] == (
-        "dependency_unavailable")
+        "dependency_unavailable"
+    )
     assert client.get(f"/v1/voice/realtime/sessions/{sid}").json()["pending_sideband_count"] == 0
 
 
@@ -288,12 +449,25 @@ def test_tool_call_payload_validation(wired) -> None:
     url = f"/v1/voice/realtime/sessions/{sid}/tool-calls"
     assert client.post(url, json={"call_id": "", "name": "clock.now"}).status_code == 422
     assert client.post(url, json={"call_id": "c", "name": "Bad Name"}).status_code == 422
-    assert client.post(url, json={"call_id": "c", "name": "clock.now",
-                                  "arguments": {"audio_pcm": "..."}}).status_code == 422
-    assert client.post(url, json={"call_id": "c", "name": "clock.now",
-                                  "arguments": {"blob": "x" * 20_000}}).status_code == 422
-    assert client.post(f"/v1/voice/realtime/sessions/{uuid.uuid4()}/tool-calls",
-                       json={"call_id": "c", "name": "clock.now"}).status_code == 404
+    assert (
+        client.post(
+            url, json={"call_id": "c", "name": "clock.now", "arguments": {"audio_pcm": "..."}}
+        ).status_code
+        == 422
+    )
+    assert (
+        client.post(
+            url, json={"call_id": "c", "name": "clock.now", "arguments": {"blob": "x" * 20_000}}
+        ).status_code
+        == 422
+    )
+    assert (
+        client.post(
+            f"/v1/voice/realtime/sessions/{uuid.uuid4()}/tool-calls",
+            json={"call_id": "c", "name": "clock.now"},
+        ).status_code
+        == 404
+    )
 
 
 # ------------------------------------------------------------------- events
@@ -302,20 +476,35 @@ def test_tool_call_payload_validation(wired) -> None:
 def test_events_feed_the_benchmark_and_resolve_intents_server_side(wired) -> None:
     client, _, runtime, _, _, _ = wired
     sid = _create(client)["session_id"]
-    response = client.post(f"/v1/voice/realtime/sessions/{sid}/events", json={"events": [
-        {"kind": "mic_speech_start", "t_ms": 1000, "turn": 1},
-        {"kind": "uplink_first_packet", "t_ms": 1040, "turn": 1},
-        {"kind": "end_of_turn", "t_ms": 2200, "turn": 1},
-        {"kind": "first_audio", "t_ms": 2700, "turn": 1},
-        {"kind": "barge_in_start", "t_ms": 3000, "turn": 2, "payload": {"playback_stopped_ms": 70}},
-        {"kind": "playback_stopped", "t_ms": 3070, "turn": 2},
-        {"kind": "utterance", "t_ms": 3100, "turn": 2, "text": "şey, ikinci maddeyi tekrar oku"},
-        {"kind": "utterance", "t_ms": 3200, "turn": 2, "text": "durum raporu"},
-        {"kind": "state", "t_ms": 3300, "payload": {"state": "LISTENING"}},
-        {"kind": "summary", "t_ms": 3400, "text": "Sahip raporun ikinci maddesini istedi."},
-        {"kind": "network_lost", "t_ms": 4000},
-        {"kind": "network_restored", "t_ms": 4500},
-    ]})
+    response = client.post(
+        f"/v1/voice/realtime/sessions/{sid}/events",
+        json={
+            "events": [
+                {"kind": "mic_speech_start", "t_ms": 1000, "turn": 1},
+                {"kind": "uplink_first_packet", "t_ms": 1040, "turn": 1},
+                {"kind": "end_of_turn", "t_ms": 2200, "turn": 1},
+                {"kind": "first_audio", "t_ms": 2700, "turn": 1},
+                {
+                    "kind": "barge_in_start",
+                    "t_ms": 3000,
+                    "turn": 2,
+                    "payload": {"playback_stopped_ms": 70},
+                },
+                {"kind": "playback_stopped", "t_ms": 3070, "turn": 2},
+                {
+                    "kind": "utterance",
+                    "t_ms": 3100,
+                    "turn": 2,
+                    "text": "şey, ikinci maddeyi tekrar oku",
+                },
+                {"kind": "utterance", "t_ms": 3200, "turn": 2, "text": "durum raporu"},
+                {"kind": "state", "t_ms": 3300, "payload": {"state": "LISTENING"}},
+                {"kind": "summary", "t_ms": 3400, "text": "Sahip raporun ikinci maddesini istedi."},
+                {"kind": "network_lost", "t_ms": 4000},
+                {"kind": "network_restored", "t_ms": 4500},
+            ]
+        },
+    )
     assert response.status_code == 200, response.text
     data = response.json()
     assert data["accepted"] == 12
@@ -365,9 +554,14 @@ def test_eye_phrases_are_resolved_and_audited_but_the_utterance_never_mutates(wi
     set_publisher(bus)
     try:
         for turn, phrase in enumerate(("gözünü kapat", "kamerayı kapat", "beni izleme"), 1):
-            response = client.post(f"/v1/voice/realtime/sessions/{sid}/events", json={"events": [
-                {"kind": "utterance", "t_ms": 100 * turn, "turn": turn, "text": phrase},
-            ]})
+            response = client.post(
+                f"/v1/voice/realtime/sessions/{sid}/events",
+                json={
+                    "events": [
+                        {"kind": "utterance", "t_ms": 100 * turn, "turn": turn, "text": phrase},
+                    ]
+                },
+            )
             assert response.status_code == 200, response.text
             resolved = response.json()["resolved_intents"][0]
             assert resolved["intent"] == "eye_disable"
@@ -395,10 +589,18 @@ def test_events_reject_audio_unknown_kinds_and_oversize(wired) -> None:
     url = f"/v1/voice/realtime/sessions/{sid}/events"
     assert client.post(url, json={"events": []}).status_code == 422
     assert client.post(url, json={"events": [{"kind": "telemetry", "t_ms": 1}]}).status_code == 422
-    assert client.post(url, json={"events": [{"kind": "audio_frame", "t_ms": 1,
-                                              "payload": {"audio": "AAAA"}}]}).status_code == 422
-    assert client.post(url, json={"events": [{"kind": "audio_frame", "t_ms": 1,
-                                              "payload": {"x": "y" * 5000}}]}).status_code == 422
+    assert (
+        client.post(
+            url, json={"events": [{"kind": "audio_frame", "t_ms": 1, "payload": {"audio": "AAAA"}}]}
+        ).status_code
+        == 422
+    )
+    assert (
+        client.post(
+            url, json={"events": [{"kind": "audio_frame", "t_ms": 1, "payload": {"x": "y" * 5000}}]}
+        ).status_code
+        == 422
+    )
     negative = client.post(url, json={"events": [{"kind": "audio_frame", "t_ms": -1}]})
     assert negative.status_code == 422
 
@@ -408,21 +610,31 @@ def test_events_reject_audio_unknown_kinds_and_oversize(wired) -> None:
 
 def test_attach_moves_the_leg_replays_sideband_and_closes_the_old_leg(wired) -> None:
     client, identity, runtime, sideband, issued, _ = wired
+    _enroll_online_device(runtime.broker)
     sideband.deliver = False  # desktop is offline: pushes queue up
     created = _create(client)
     sid = created["session_id"]
-    client.post(f"/v1/voice/realtime/sessions/{sid}/tool-calls", json={
-        "call_id": "r", "name": "research.start", "arguments": {"topic": "x"}})
-    client.post(f"/v1/voice/realtime/sessions/{sid}/events", json={"events": [
-        {"kind": "summary", "t_ms": 1, "text": "Araştırma başladı."}]})
-    client.post(f"/v1/voice/realtime/sessions/{sid}/tool-calls/r/complete",
-                json={"result": {"ok": True}})
+    with _patched_temporal_client():
+        client.post(
+            f"/v1/voice/realtime/sessions/{sid}/tool-calls",
+            json={"call_id": "r", "name": "research.start", "arguments": {"topic": "x"}},
+        )
+    client.post(
+        f"/v1/voice/realtime/sessions/{sid}/events",
+        json={"events": [{"kind": "summary", "t_ms": 1, "text": "Araştırma başladı."}]},
+    )
+    client.post(
+        f"/v1/voice/realtime/sessions/{sid}/tool-calls/r/complete", json={"result": {"ok": True}}
+    )
 
     # the phone attaches with its own owner session
     phone = identity.service.issue_session(client_kind="mobile", label="phone")
     sideband.deliver = True
-    response = client.post(f"/v1/voice/realtime/sessions/{sid}/attach",
-                           json={"client_kind": "mobile"}, headers=bearer(phone.token))
+    response = client.post(
+        f"/v1/voice/realtime/sessions/{sid}/attach",
+        json={"client_kind": "mobile"},
+        headers=bearer(phone.token),
+    )
     assert response.status_code == 200, response.text
     data = response.json()
     assert data["credential"]["secret"] != created["credential"]["secret"]
@@ -442,30 +654,43 @@ def test_attach_moves_the_leg_replays_sideband_and_closes_the_old_leg(wired) -> 
         assert row.device_id is None  # the phone session is not device-bound
 
     # the desktop's owner session no longer holds the leg
-    stale = client.post(f"/v1/voice/realtime/sessions/{sid}/tool-calls",
-                        json={"call_id": "z", "name": "clock.now"})
+    stale = client.post(
+        f"/v1/voice/realtime/sessions/{sid}/tool-calls", json={"call_id": "z", "name": "clock.now"}
+    )
     assert stale.status_code == 409
-    stale_events = client.post(f"/v1/voice/realtime/sessions/{sid}/events",
-                               json={"events": [{"kind": "end_of_turn", "t_ms": 5}]})
+    stale_events = client.post(
+        f"/v1/voice/realtime/sessions/{sid}/events",
+        json={"events": [{"kind": "end_of_turn", "t_ms": 5}]},
+    )
     assert stale_events.status_code == 409
     # ...while the phone does
-    ok = client.post(f"/v1/voice/realtime/sessions/{sid}/tool-calls",
-                     json={"call_id": "z", "name": "clock.now"}, headers=bearer(phone.token))
+    ok = client.post(
+        f"/v1/voice/realtime/sessions/{sid}/tool-calls",
+        json={"call_id": "z", "name": "clock.now"},
+        headers=bearer(phone.token),
+    )
     assert ok.status_code == 200
     # re-attaching from the same leg is a no-op leg-wise (reconnect after network loss)
-    again = client.post(f"/v1/voice/realtime/sessions/{sid}/attach", json={},
-                        headers=bearer(phone.token)).json()
+    again = client.post(
+        f"/v1/voice/realtime/sessions/{sid}/attach", json={}, headers=bearer(phone.token)
+    ).json()
     assert again["state"]["legs"] == 2 and again["previous_leg"] is None
 
 
 def test_close_and_expiry_refuse_further_work(wired) -> None:
     client, _, runtime, _, _, _ = wired
     sid = _create(client)["session_id"]
-    closed = client.post(f"/v1/voice/realtime/sessions/{sid}/close",
-                         json={"reason": "owner_hung_up"}).json()
+    closed = client.post(
+        f"/v1/voice/realtime/sessions/{sid}/close", json={"reason": "owner_hung_up"}
+    ).json()
     assert closed["state"] == "closed" and closed["closed_at"]
-    assert client.post(f"/v1/voice/realtime/sessions/{sid}/tool-calls",
-                       json={"call_id": "c", "name": "clock.now"}).status_code == 410
+    assert (
+        client.post(
+            f"/v1/voice/realtime/sessions/{sid}/tool-calls",
+            json={"call_id": "c", "name": "clock.now"},
+        ).status_code
+        == 410
+    )
     assert client.post(f"/v1/voice/realtime/sessions/{sid}/attach", json={}).status_code == 410
     assert client.post(f"/v1/voice/realtime/sessions/{sid}/close").status_code == 200  # idempotent
     audit = _audit_rows(runtime, sid, service.ACTION_SESSION_CLOSED)
@@ -476,8 +701,13 @@ def test_close_and_expiry_refuse_further_work(wired) -> None:
         row = db.get(RealtimeSessionRow, uuid.UUID(expired))
         row.expires_at = service.utcnow() - service.timedelta(seconds=1)
         db.commit()
-    assert client.post(f"/v1/voice/realtime/sessions/{expired}/events",
-                       json={"events": [{"kind": "end_of_turn", "t_ms": 1}]}).status_code == 410
+    assert (
+        client.post(
+            f"/v1/voice/realtime/sessions/{expired}/events",
+            json={"events": [{"kind": "end_of_turn", "t_ms": 1}]},
+        ).status_code
+        == 410
+    )
     assert client.get(f"/v1/voice/realtime/sessions/{expired}").json()["state"] == "expired"
     assert len(_audit_rows(runtime, expired, service.ACTION_SESSION_EXPIRED)) == 1
 
@@ -538,8 +768,14 @@ def _seed_narration(engine) -> uuid.UUID:
         artifact = Artifact(title="Rapor", current_version=1)
         db.add(artifact)
         db.flush()
-        db.add(ArtifactVersion(artifact_id=artifact.id, version=1, canonical_body=DOC,
-                               content_hash=hashlib.sha256(DOC.encode()).hexdigest()))
+        db.add(
+            ArtifactVersion(
+                artifact_id=artifact.id,
+                version=1,
+                canonical_body=DOC,
+                content_hash=hashlib.sha256(DOC.encode()).hexdigest(),
+            )
+        )
         narration = NarrationSession(artifact_id=artifact.id, artifact_version=1)
         db.add(narration)
         db.commit()
@@ -553,8 +789,14 @@ def test_narration_control_moves_the_durable_cursor_and_pushes_it(wired) -> None
     assert "belge anlatımı bağlı" in created["instructions"]
     sid = created["session_id"]
     url = f"/v1/voice/realtime/sessions/{sid}/tool-calls"
-    r = client.post(url, json={"call_id": "n1", "name": "narration.control",
-                               "arguments": {"utterance": "ikinci maddeyi tekrar oku"}}).json()
+    r = client.post(
+        url,
+        json={
+            "call_id": "n1",
+            "name": "narration.control",
+            "arguments": {"utterance": "ikinci maddeyi tekrar oku"},
+        },
+    ).json()
     assert r["status"] == "succeeded", r
     assert r["result"]["intent"]["intent"] == "repeat_item"
     assert r["result"]["narration"]["action"] == "jump_item"
@@ -563,14 +805,23 @@ def test_narration_control_moves_the_durable_cursor_and_pushes_it(wired) -> None
     cursor_push = sideband.frames[-1][1]["payload"]
     assert cursor_push["state"] == "READING" and cursor_push["cursor"]["paragraph_id"]
 
-    r = client.post(url, json={"call_id": "n2", "name": "narration.control",
-                               "arguments": {"utterance": "dur"}}).json()
+    r = client.post(
+        url, json={"call_id": "n2", "name": "narration.control", "arguments": {"utterance": "dur"}}
+    ).json()
     assert r["result"]["narration"]["action"] == "paused"
-    r = client.post(url, json={"call_id": "n3", "name": "narration.control",
-                               "arguments": {"utterance": "şey, biraz daha yavaş"}}).json()
+    r = client.post(
+        url,
+        json={
+            "call_id": "n3",
+            "name": "narration.control",
+            "arguments": {"utterance": "şey, biraz daha yavaş"},
+        },
+    ).json()
     assert r["result"]["narration"]["speed"] == pytest.approx(0.75)
-    r = client.post(url, json={"call_id": "n4", "name": "narration.control",
-                               "arguments": {"utterance": "özet geç"}}).json()
+    r = client.post(
+        url,
+        json={"call_id": "n4", "name": "narration.control", "arguments": {"utterance": "özet geç"}},
+    ).json()
     assert r["result"]["narration"]["presentation"] == "summary"
 
     # the durable narration row is what another device would read back
@@ -586,9 +837,10 @@ def test_narration_control_moves_the_durable_cursor_and_pushes_it(wired) -> None
 def test_narration_control_without_narration_only_resolves(wired) -> None:
     client, *_ = wired
     sid = _create(client)["session_id"]
-    r = client.post(f"/v1/voice/realtime/sessions/{sid}/tool-calls",
-                    json={"call_id": "n", "name": "narration.control",
-                          "arguments": {"utterance": "devam"}}).json()
+    r = client.post(
+        f"/v1/voice/realtime/sessions/{sid}/tool-calls",
+        json={"call_id": "n", "name": "narration.control", "arguments": {"utterance": "devam"}},
+    ).json()
     assert r["result"] == {"intent": r["result"]["intent"], "narration": None}
     assert r["result"]["intent"]["intent"] == "resume"
 
@@ -599,16 +851,26 @@ def test_narration_control_without_narration_only_resolves(wired) -> None:
 def test_every_step_is_audited_with_ids_and_timings_only(wired) -> None:
     client, _, runtime, _, _, _ = wired
     sid = _create(client)["session_id"]
-    client.post(f"/v1/voice/realtime/sessions/{sid}/tool-calls",
-                json={"call_id": "c", "name": "clock.now"})
-    client.post(f"/v1/voice/realtime/sessions/{sid}/events", json={"events": [
-        {"kind": "utterance", "t_ms": 1, "text": "dur"},
-        {"kind": "audio_frame", "t_ms": 2, "payload": {"bytes": 640}}]})
+    client.post(
+        f"/v1/voice/realtime/sessions/{sid}/tool-calls", json={"call_id": "c", "name": "clock.now"}
+    )
+    client.post(
+        f"/v1/voice/realtime/sessions/{sid}/events",
+        json={
+            "events": [
+                {"kind": "utterance", "t_ms": 1, "text": "dur"},
+                {"kind": "audio_frame", "t_ms": 2, "payload": {"bytes": 640}},
+            ]
+        },
+    )
     client.post(f"/v1/voice/realtime/sessions/{sid}/close")
     actions = [r.action for r in _audit_rows(runtime, sid)]
     assert actions == [
-        service.ACTION_SESSION_CREATED, service.ACTION_CREDENTIAL_MINTED,
-        service.ACTION_TOOL_CALL, service.ACTION_INTENT_RESOLVED, service.ACTION_CLIENT_EVENT,
+        service.ACTION_SESSION_CREATED,
+        service.ACTION_CREDENTIAL_MINTED,
+        service.ACTION_TOOL_CALL,
+        service.ACTION_INTENT_RESOLVED,
+        service.ACTION_CLIENT_EVENT,
         service.ACTION_SESSION_CLOSED,
     ]
     for row in _audit_rows(runtime, sid):
@@ -619,13 +881,25 @@ def test_every_step_is_audited_with_ids_and_timings_only(wired) -> None:
 
 
 def test_scrubber_drops_audio_and_credential_shaped_keys() -> None:
-    scrubbed = service.scrub_metadata({
-        "call_id": "c", "duration_ms": 12, "audio": b"\x00", "secret": "x",
-        "api_key": "k", "nested": {"token": "t", "turn": 1}, "frames": [b"\x00", 1],
-        "long": "y" * 1000,
-    })
-    assert scrubbed == {"call_id": "c", "duration_ms": 12, "nested": {"turn": 1},
-                        "frames": [1], "long": "y" * 256}
+    scrubbed = service.scrub_metadata(
+        {
+            "call_id": "c",
+            "duration_ms": 12,
+            "audio": b"\x00",
+            "secret": "x",
+            "api_key": "k",
+            "nested": {"token": "t", "turn": 1},
+            "frames": [b"\x00", 1],
+            "long": "y" * 1000,
+        }
+    )
+    assert scrubbed == {
+        "call_id": "c",
+        "duration_ms": 12,
+        "nested": {"turn": 1},
+        "frames": [1],
+        "long": "y" * 256,
+    }
 
 
 def test_complete_is_refused_from_a_superseded_leg_and_from_a_dead_session(wired) -> None:
@@ -634,15 +908,27 @@ def test_complete_is_refused_from_a_superseded_leg_and_from_a_dead_session(wired
     # owner bearer still valid) could inject a tool result into the live conversation,
     # and a closed session could still be written to. Gated like /tool-calls and /events.
     client, identity, runtime, sideband, _, _ = wired
+    _enroll_online_device(runtime.broker)
     sid = _create(client)["session_id"]
-    client.post(f"/v1/voice/realtime/sessions/{sid}/tool-calls", json={
-        "call_id": "r", "name": "research.start", "arguments": {"topic": "x"}})
+    with _patched_temporal_client():
+        client.post(
+            f"/v1/voice/realtime/sessions/{sid}/tool-calls",
+            json={"call_id": "r", "name": "research.start", "arguments": {"topic": "x"}},
+        )
     phone = identity.service.issue_session(client_kind="mobile", label="phone")
-    assert client.post(f"/v1/voice/realtime/sessions/{sid}/attach", json={"client_kind": "mobile"},
-                       headers=bearer(phone.token)).status_code == 200
+    assert (
+        client.post(
+            f"/v1/voice/realtime/sessions/{sid}/attach",
+            json={"client_kind": "mobile"},
+            headers=bearer(phone.token),
+        ).status_code
+        == 200
+    )
 
-    injected = client.post(f"/v1/voice/realtime/sessions/{sid}/tool-calls/r/complete",
-                           json={"result": {"summary": "sahte sonuç"}})
+    injected = client.post(
+        f"/v1/voice/realtime/sessions/{sid}/tool-calls/r/complete",
+        json={"result": {"summary": "sahte sonuç"}},
+    )
     assert injected.status_code == 409, injected.text
     assert "tool_completed" not in sideband.events()
     with runtime.session() as db:
@@ -651,17 +937,27 @@ def test_complete_is_refused_from_a_superseded_leg_and_from_a_dead_session(wired
         assert call.status == service.TOOL_STATUS_RUNNING
         assert "summary" not in (call.result_json or {})
     # ...while the leg holder completes it normally
-    ok = client.post(f"/v1/voice/realtime/sessions/{sid}/tool-calls/r/complete",
-                     json={"result": {"summary": "3 kaynak"}}, headers=bearer(phone.token))
+    ok = client.post(
+        f"/v1/voice/realtime/sessions/{sid}/tool-calls/r/complete",
+        json={"result": {"summary": "3 kaynak"}},
+        headers=bearer(phone.token),
+    )
     assert ok.status_code == 200, ok.text
     assert sideband.events()[-1] == "tool_completed"
 
     dead = _create(client)["session_id"]
-    client.post(f"/v1/voice/realtime/sessions/{dead}/tool-calls", json={
-        "call_id": "r", "name": "research.start", "arguments": {"topic": "x"}})
+    with _patched_temporal_client():
+        client.post(
+            f"/v1/voice/realtime/sessions/{dead}/tool-calls",
+            json={"call_id": "r", "name": "research.start", "arguments": {"topic": "x"}},
+        )
     assert client.post(f"/v1/voice/realtime/sessions/{dead}/close").status_code == 200
-    assert client.post(f"/v1/voice/realtime/sessions/{dead}/tool-calls/r/complete",
-                       json={"result": {}}).status_code == 410
+    assert (
+        client.post(
+            f"/v1/voice/realtime/sessions/{dead}/tool-calls/r/complete", json={"result": {}}
+        ).status_code
+        == 410
+    )
 
 
 @pytest.mark.parametrize(
@@ -677,14 +973,29 @@ def test_forbidden_keys_are_caught_under_any_spelling_at_the_route_and_in_the_sc
     for benign in ("call_id", "duration_ms", "turn", "t_ms", "error_class"):
         assert not service.is_forbidden_key(benign)
     assert service.scrub_metadata({spelling: "v", "turn": 1, "nested": {spelling: "v"}}) == {
-        "turn": 1, "nested": {}}
+        "turn": 1,
+        "nested": {},
+    }
     client, *_ = wired
     sid = _create(client)["session_id"]
-    assert client.post(f"/v1/voice/realtime/sessions/{sid}/events", json={"events": [
-        {"kind": "error", "t_ms": 1, "payload": {spelling: "v"}}]}).status_code == 422
-    assert client.post(f"/v1/voice/realtime/sessions/{sid}/tool-calls", json={
-        "call_id": "c", "name": "clock.now", "arguments": {"nested": {spelling: "v"}},
-    }).status_code == 422
+    assert (
+        client.post(
+            f"/v1/voice/realtime/sessions/{sid}/events",
+            json={"events": [{"kind": "error", "t_ms": 1, "payload": {spelling: "v"}}]},
+        ).status_code
+        == 422
+    )
+    assert (
+        client.post(
+            f"/v1/voice/realtime/sessions/{sid}/tool-calls",
+            json={
+                "call_id": "c",
+                "name": "clock.now",
+                "arguments": {"nested": {spelling: "v"}},
+            },
+        ).status_code
+        == 422
+    )
 
 
 def test_tool_call_relayed_under_the_vendor_spelling_runs_the_cloud_core_tool(wired) -> None:
@@ -693,12 +1004,16 @@ def test_tool_call_relayed_under_the_vendor_spelling_runs_the_cloud_core_tool(wi
     # record keeps the canonical name, so audit/idempotency never see two names.
     client, *_ = wired
     sid = _create(client)["session_id"]
-    r = client.post(f"/v1/voice/realtime/sessions/{sid}/tool-calls",
-                    json={"call_id": "v1", "name": "clock__now", "arguments": {}})
+    r = client.post(
+        f"/v1/voice/realtime/sessions/{sid}/tool-calls",
+        json={"call_id": "v1", "name": "clock__now", "arguments": {}},
+    )
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "succeeded" and r.json()["name"] == "clock.now"
-    replay = client.post(f"/v1/voice/realtime/sessions/{sid}/tool-calls",
-                         json={"call_id": "v1", "name": "clock.now", "arguments": {}}).json()
+    replay = client.post(
+        f"/v1/voice/realtime/sessions/{sid}/tool-calls",
+        json={"call_id": "v1", "name": "clock.now", "arguments": {}},
+    ).json()
     assert replay["replayed"] is True and replay["name"] == "clock.now"
 
 
@@ -747,25 +1062,67 @@ def test_benchmark_carries_the_noise_counters_and_the_calibration_in_force(wired
     # "state" events; the benchmark the owner fetches must carry them (rows 6.16-6.21).
     client, *_ = wired
     sid = _create(client)["session_id"]
-    r = client.post(f"/v1/voice/realtime/sessions/{sid}/events", json={"events": [
-        {"kind": "state", "t_ms": 10, "payload": {"mic_calibration": 1, "noise_floor_db": -58.5,
-                                                   "env": 1, "clip_risk": 0}},
-        {"kind": "state", "t_ms": 500, "payload": {"mic_metrics": 1, "false_starts": 1,
-                                                    "false_barge_ins": 0, "false_turns": 0,
-                                                    "gate_opens": 3}},
-        {"kind": "state", "t_ms": 900, "payload": {"mic_calibration": 1, "noise_floor_db": -49.0,
-                                                   "env": 2, "clip_risk": 0}},
-        {"kind": "state", "t_ms": 2000, "payload": {"mic_metrics": 1, "false_starts": 2,
-                                                     "false_barge_ins": 1, "false_turns": 1,
-                                                     "gate_opens": 7, "session_end": 1}},
-        {"kind": "state", "t_ms": 2001, "payload": {"state": "IDLE"}},
-    ]})
+    r = client.post(
+        f"/v1/voice/realtime/sessions/{sid}/events",
+        json={
+            "events": [
+                {
+                    "kind": "state",
+                    "t_ms": 10,
+                    "payload": {
+                        "mic_calibration": 1,
+                        "noise_floor_db": -58.5,
+                        "env": 1,
+                        "clip_risk": 0,
+                    },
+                },
+                {
+                    "kind": "state",
+                    "t_ms": 500,
+                    "payload": {
+                        "mic_metrics": 1,
+                        "false_starts": 1,
+                        "false_barge_ins": 0,
+                        "false_turns": 0,
+                        "gate_opens": 3,
+                    },
+                },
+                {
+                    "kind": "state",
+                    "t_ms": 900,
+                    "payload": {
+                        "mic_calibration": 1,
+                        "noise_floor_db": -49.0,
+                        "env": 2,
+                        "clip_risk": 0,
+                    },
+                },
+                {
+                    "kind": "state",
+                    "t_ms": 2000,
+                    "payload": {
+                        "mic_metrics": 1,
+                        "false_starts": 2,
+                        "false_barge_ins": 1,
+                        "false_turns": 1,
+                        "gate_opens": 7,
+                        "session_end": 1,
+                    },
+                },
+                {"kind": "state", "t_ms": 2001, "payload": {"state": "IDLE"}},
+            ]
+        },
+    )
     assert r.status_code == 200, r.text
     bench = client.get(f"/v1/voice/realtime/sessions/{sid}/benchmark").json()
     noise = bench["context"]["noise"]
     assert noise["reported"] is True
-    assert (noise["false_starts"], noise["false_barge_ins"], noise["false_turns"],
-            noise["gate_opens"]) == (2, 1, 1, 7)
+    assert (
+        noise["false_starts"],
+        noise["false_barge_ins"],
+        noise["false_turns"],
+        noise["gate_opens"],
+    ) == (2, 1, 1, 7)
     assert noise["calibrations"] == 2 and noise["calibration"]["noise_floor_db"] == -49.0
     assert noise["metrics"]["session_end"] == 1 and "mic_metrics" not in noise["metrics"]
     assert bench["context"]["voice_profile"] == "arbor"
@@ -787,22 +1144,43 @@ def test_lifecycle_benchmark_fetchable_after_disconnect_and_secret_revocation(wi
     sim.require_supported_voice = OpenAIRealtimeProvider("k").require_supported_voice  # type: ignore[attr-defined]
     created = _create(client, voice="cedar")
     sid = created["session_id"]
-    assert client.post(f"/v1/voice/realtime/sessions/{sid}/events", json={"events": [
-        {"kind": "mic_speech_start", "t_ms": 100, "turn": 0},
-        {"kind": "end_of_turn", "t_ms": 900, "turn": 0},
-        {"kind": "first_audio", "t_ms": 1400, "turn": 0},
-        {"kind": "barge_in_start", "t_ms": 3000, "turn": 1},
-        {"kind": "playback_stopped", "t_ms": 3090, "turn": 1},
-        {"kind": "state", "t_ms": 3100,
-         "payload": {"mic_calibration": 1, "noise_floor_db": -52.0, "env": 1}},
-        {"kind": "state", "t_ms": 5000,
-         "payload": {"mic_metrics": 1, "false_starts": 1, "false_barge_ins": 0,
-                     "false_turns": 0, "gate_opens": 4, "session_end": 1}},
-    ]}).status_code == 200
+    assert (
+        client.post(
+            f"/v1/voice/realtime/sessions/{sid}/events",
+            json={
+                "events": [
+                    {"kind": "mic_speech_start", "t_ms": 100, "turn": 0},
+                    {"kind": "end_of_turn", "t_ms": 900, "turn": 0},
+                    {"kind": "first_audio", "t_ms": 1400, "turn": 0},
+                    {"kind": "barge_in_start", "t_ms": 3000, "turn": 1},
+                    {"kind": "playback_stopped", "t_ms": 3090, "turn": 1},
+                    {
+                        "kind": "state",
+                        "t_ms": 3100,
+                        "payload": {"mic_calibration": 1, "noise_floor_db": -52.0, "env": 1},
+                    },
+                    {
+                        "kind": "state",
+                        "t_ms": 5000,
+                        "payload": {
+                            "mic_metrics": 1,
+                            "false_starts": 1,
+                            "false_barge_ins": 0,
+                            "false_turns": 0,
+                            "gate_opens": 4,
+                            "session_end": 1,
+                        },
+                    },
+                ]
+            },
+        ).status_code
+        == 200
+    )
     # disconnect: the client closes; the provider's ephemeral credential is revoked/expired
     # on the provider side and is not part of any record here
-    closed = client.post(f"/v1/voice/realtime/sessions/{sid}/close",
-                         json={"reason": "provider_secret_revoked"}).json()
+    closed = client.post(
+        f"/v1/voice/realtime/sessions/{sid}/close", json={"reason": "provider_secret_revoked"}
+    ).json()
     assert closed["state"] == "closed"
     # "later": a fresh request, nothing cached
     bench = client.get(f"/v1/voice/realtime/sessions/{sid}/benchmark")
@@ -836,8 +1214,10 @@ def test_turkish_transcript_summary_round_trips_as_utf8_bytes(wired) -> None:
     client, *_ = wired
     sid = _create(client)["session_id"]
     text = "Şey... yani İstanbul'da ığüşöç harfleri: Işık ve Görüş"
-    r = client.post(f"/v1/voice/realtime/sessions/{sid}/events",
-                    json={"events": [{"kind": "summary", "t_ms": 1, "text": text}]})
+    r = client.post(
+        f"/v1/voice/realtime/sessions/{sid}/events",
+        json={"events": [{"kind": "summary", "t_ms": 1, "text": text}]},
+    )
     assert r.status_code == 200, r.text
     state = client.get(f"/v1/voice/realtime/sessions/{sid}")
     assert state.headers["content-type"].lower().startswith("application/json; charset=utf-8")
@@ -851,27 +1231,72 @@ def test_benchmark_breakdown_aggregates_client_sub_phases_and_flags(wired) -> No
     # decomposes the headline metrics and counts fallbacks/anomalies, numbers only.
     client, *_ = wired
     sid = _create(client)["session_id"]
-    r = client.post(f"/v1/voice/realtime/sessions/{sid}/events", json={"events": [
-        {"kind": "mic_speech_start", "t_ms": 100, "turn": 0,
-         "payload": {"source": 1, "gate_ms": 72, "capture_lag_ms": 21}},
-        {"kind": "uplink_first_packet", "t_ms": 160, "turn": 0,
-         "payload": {"basis": 1, "rtp_ms": 38, "provider_ms": 260}},
-        {"kind": "mic_speech_start", "t_ms": 5000, "turn": 1, "payload": {"gate_ms": 90}},
-        {"kind": "uplink_first_packet", "t_ms": 5400, "turn": 1,
-         "payload": {"basis": 0, "provider_ms": 391}},
-        {"kind": "barge_in_start", "t_ms": 8000, "turn": 2,
-         "payload": {"playback_stopped_ms": 210, "detect_ms": 90, "stop_command_ms": 3,
-                     "gain_zero_ms": 117}},
-        {"kind": "playback_stopped", "t_ms": 8210, "turn": 2},
-        {"kind": "barge_in_start", "t_ms": 9000, "turn": 3,
-         "payload": {"playback_stopped_ms": 0, "anomaly": 1}},
-        {"kind": "playback_stopped", "t_ms": 9000, "turn": 3},
-        {"kind": "first_audio", "t_ms": 12000, "turn": 4,
-         "payload": {"response_created_ms": 310, "first_delta_ms": 290, "playback_ms": 74}},
-        {"kind": "first_audio", "t_ms": 15000, "turn": 5},  # legacy client: no breakdown
-        {"kind": "state", "t_ms": 15001, "payload": {"mic_calibration": 1, "measured": 1,
-                                                      "samples": 84, "noise_floor_db": -51.5}},
-    ]})
+    r = client.post(
+        f"/v1/voice/realtime/sessions/{sid}/events",
+        json={
+            "events": [
+                {
+                    "kind": "mic_speech_start",
+                    "t_ms": 100,
+                    "turn": 0,
+                    "payload": {"source": 1, "gate_ms": 72, "capture_lag_ms": 21},
+                },
+                {
+                    "kind": "uplink_first_packet",
+                    "t_ms": 160,
+                    "turn": 0,
+                    "payload": {"basis": 1, "rtp_ms": 38, "provider_ms": 260},
+                },
+                {"kind": "mic_speech_start", "t_ms": 5000, "turn": 1, "payload": {"gate_ms": 90}},
+                {
+                    "kind": "uplink_first_packet",
+                    "t_ms": 5400,
+                    "turn": 1,
+                    "payload": {"basis": 0, "provider_ms": 391},
+                },
+                {
+                    "kind": "barge_in_start",
+                    "t_ms": 8000,
+                    "turn": 2,
+                    "payload": {
+                        "playback_stopped_ms": 210,
+                        "detect_ms": 90,
+                        "stop_command_ms": 3,
+                        "gain_zero_ms": 117,
+                    },
+                },
+                {"kind": "playback_stopped", "t_ms": 8210, "turn": 2},
+                {
+                    "kind": "barge_in_start",
+                    "t_ms": 9000,
+                    "turn": 3,
+                    "payload": {"playback_stopped_ms": 0, "anomaly": 1},
+                },
+                {"kind": "playback_stopped", "t_ms": 9000, "turn": 3},
+                {
+                    "kind": "first_audio",
+                    "t_ms": 12000,
+                    "turn": 4,
+                    "payload": {
+                        "response_created_ms": 310,
+                        "first_delta_ms": 290,
+                        "playback_ms": 74,
+                    },
+                },
+                {"kind": "first_audio", "t_ms": 15000, "turn": 5},  # legacy client: no breakdown
+                {
+                    "kind": "state",
+                    "t_ms": 15001,
+                    "payload": {
+                        "mic_calibration": 1,
+                        "measured": 1,
+                        "samples": 84,
+                        "noise_floor_db": -51.5,
+                    },
+                },
+            ]
+        },
+    )
     assert r.status_code == 200, r.text
     ctx = client.get(f"/v1/voice/realtime/sessions/{sid}/benchmark").json()["context"]
     bd = ctx["breakdown"]
@@ -888,9 +1313,23 @@ def test_benchmark_breakdown_aggregates_client_sub_phases_and_flags(wired) -> No
     assert ctx["noise"]["calibration_measured"] is True
     # and a calibration without the measured flag is reported as NOT measured
     other = _create(client)["session_id"]
-    client.post(f"/v1/voice/realtime/sessions/{other}/events", json={"events": [
-        {"kind": "state", "t_ms": 1, "payload": {"mic_calibration": 1, "noise_floor_db": -60.0,
-                                                  "env": 0, "peak_db": -100}}]})
+    client.post(
+        f"/v1/voice/realtime/sessions/{other}/events",
+        json={
+            "events": [
+                {
+                    "kind": "state",
+                    "t_ms": 1,
+                    "payload": {
+                        "mic_calibration": 1,
+                        "noise_floor_db": -60.0,
+                        "env": 0,
+                        "peak_db": -100,
+                    },
+                }
+            ]
+        },
+    )
     ctx2 = client.get(f"/v1/voice/realtime/sessions/{other}/benchmark").json()["context"]
     assert ctx2["noise"]["calibrations"] == 1 and ctx2["noise"]["calibration_measured"] is False
 

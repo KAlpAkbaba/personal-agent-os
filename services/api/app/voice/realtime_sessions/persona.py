@@ -93,7 +93,16 @@ RESEARCH_RESULT_TR = (
     "elendiğini, kaç aday bulunduğunu ya da hangi sitelerin tarandığını sahibi açıkça "
     "sormadıkça söylemezsin. 'Teknik anlat', 'hangi sayfalar elendi' ya da 'araştırma "
     "sırasında ne sorun oldu' denirse activity.explain aracını çağırır ve dönen "
-    "'speech' metnini aynen okursun."
+    "'speech' metnini aynen okursun. "
+    # M18.2 follow-up to ADR-0067: research.start now starts a real run, and a real
+    # run can fail to start at all (uygun cihaz yok) or later (araç çağrısı
+    # tamamlanamadı). Both arrive as a FAILED research.start with a 'speech' alanı;
+    # 'araştırıyorum' önsözünden sonra sessiz kalmak yerine bu metni aynen okursun.
+    "research.start başarısız dönerse (ör. uygun cihaz yoksa, ya da arka planda "
+    "araştırma başlatılamazsa) hatanın 'speech' alanını aynen okursun; araştırmayı "
+    "başlattığını iddia etmezsin. 'plan.redirect' çalışan bir araştırmayı "
+    "değiştiremeyeceğini söylerse (yeni bir sonuç değil, bir ret döner) dönen "
+    "'speech' metnini aynen okur, kapsamı değiştirdiğini iddia etmezsin."
 )
 
 

@@ -345,6 +345,12 @@ async def relay_tool_call(
     owner = _owner(request)
     trace_id = trace_id_var.get()
     _bind_loop(runtime)
+    # M18.2 follow-up to ADR-0067: a handler (research.start) may need to await a
+    # coroutine (starting a Temporal workflow) that cannot run inside the DB
+    # transaction handle_tool_call owns. Passing the SAME list in means the handler's
+    # ToolContext.followups and this local name refer to one list object, so whatever
+    # the thread appended is visible here once asyncio.to_thread returns.
+    followups: list[Any] = []
 
     def work() -> dict[str, Any]:
         with runtime.session() as db:
@@ -359,6 +365,7 @@ async def relay_tool_call(
                 sideband=runtime.sideband,
                 trace_id=trace_id,
                 live=runtime.live_sources(),
+                followups=followups,
             )
 
     try:
@@ -373,6 +380,12 @@ async def relay_tool_call(
         status=result["status"],
         replayed=result["replayed"],
     )
+    # Drained AFTER the tool-call transaction has committed and this response is
+    # built: a followup (research.start's workflow start) runs its own, separate DB
+    # transaction on failure (completing the call as FAILED) - never nested inside
+    # the one above.
+    for followup in followups:
+        await followup()
     return result
 
 

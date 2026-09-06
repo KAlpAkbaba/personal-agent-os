@@ -87,7 +87,19 @@ TERMINAL_CLAIMABLE: Final[frozenset[str]] = frozenset({TERMINAL_VERIFIED, TERMIN
 #: v3 (2026-09-06, owner run 9df439af): the durable eye row carries the action_id and
 #: session_id of the voice action that wrote it, so a ledger row correlates to its receipt
 #: by identity rather than by a time window.
-ACTION_CONTRACT_VERSION: Final = 3
+#: v4 (2026-09-07, M18.2 follow-up to ADR-0067): research.start starts the REAL M13
+#: pipeline (task + device selection, synchronously, inside the tool call; the Temporal
+#: workflow start is a ToolContext follow-up the route awaits after commit) instead of
+#: fabricating a local plan the pipeline never heard about. Its terminal schema is new
+#: (spoken_result/executive_summary/findings/source_summary/diagnostics, plus "speech"
+#: mirroring spoken_result so the persona's "read speech verbatim" instruction and
+#: session_activity's speech_head both work the same way every other tool's result
+#: does); a research.start failure (no capable device, or a workflow that could not be
+#: started) is an immediate or async-completed FAILED call with error_class and a
+#: truthful Turkish speech - never a "running" call the pipeline can never finish, and
+#: plan.redirect refuses a running research plan honestly rather than claiming a
+#: redirect the workflow has no signal to receive.
+ACTION_CONTRACT_VERSION: Final = 4
 
 FAKE_COMPLETION_PHRASES: Final[tuple[str, ...]] = (
     "yapmış gibi düşün",

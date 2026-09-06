@@ -17,7 +17,7 @@ plugs in behind ``research.start`` without changing this contract.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -47,6 +47,22 @@ RESEARCH_PREAMBLE_TR = (
     "Bakıyorum. OpenAI, Anthropic, Google ve önemli açık kaynak gelişmelerini karşılaştıracağım."
 )
 
+#: docs/DECISIONS.md ADR-0067 amendment (M18.2 follow-up): the honest answer when the
+#: pipeline finds no browser-capable device, and when a mid-run redirect is asked for
+#: on a run the pipeline has no signal to redirect. Named here (not inline) so the unit
+#: tests assert the exact sentence rather than a substring.
+RESEARCH_START_NO_DEVICE_TR = "Araştırma için tarayıcı yeteneği olan bir cihaz yok."
+RESEARCH_START_DB_MISSING_TR = "research.start needs the database; no database on this session"
+PLAN_REDIRECT_REFUSED_TR = (
+    "Bu araştırma çalışırken kapsamı değiştiremiyorum; bitince yeni bir araştırma başlatabilirim."
+)
+RESEARCH_START_WORKFLOW_FAILED_TR = "Araştırmayı başlatamadım; arka plan servisine ulaşamadım."
+
+#: Server-side error classes specific to research.start (contract-facing; mirrors the
+#: naming style of app.actions.receipt's ERROR_* constants).
+ERROR_NO_CAPABLE_DEVICE = "no_capable_device"
+ERROR_RESEARCH_WORKFLOW_START_FAILED = "research_workflow_start_failed"
+
 
 @dataclass
 class ToolContext:
@@ -65,12 +81,23 @@ class ToolContext:
     #: The provider's call id: an action receipt's ``action_id`` (contract §5.5).
     call_id: str | None = None
     #: In-process live runtimes a handler may read (``presence_runtime``,
-    #: ``broker_runtime``, ``health``), injected by the service the way the World Model
-    #: routes inject theirs - never imported as singletons here (contract §4).
+    #: ``broker_runtime``, ``health``, ``artifacts_runtime``, ``voice_runtime``),
+    #: injected by the service the way the World Model routes inject theirs - never
+    #: imported as singletons here (contract §4).
     live: dict[str, Any] = field(default_factory=dict)
+    #: Work a handler cannot do synchronously inside this DB transaction because it is
+    #: only ever a coroutine (M18.2 follow-up to ADR-0067: starting a Temporal workflow
+    #: from ``research.start``). The realtime-session ROUTE awaits each of these, in
+    #: order, once ``handle_tool_call``'s transaction has committed and the tool-call
+    #: response has been built - never inside the transaction itself, and never by the
+    #: handler directly (a sync handler cannot await anything).
+    followups: list[Callable[[], Awaitable[None]]] = field(default_factory=list)
 
     def push(self, event: str, payload: dict[str, Any]) -> None:
         self.pushes.append((event, dict(payload)))
+
+    def add_followup(self, followup: Callable[[], Awaitable[None]]) -> None:
+        self.followups.append(followup)
 
     @property
     def fsm_state(self) -> RealtimeState | None:
@@ -153,11 +180,68 @@ def voice_intent(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 def research_start(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """Starts the REAL M13 research pipeline (docs/DECISIONS.md ADR-0067 amendment):
+    the same task-creation + device-selection ``app.research.routes.create_research``
+    performs, run here inside this tool call's own DB transaction, so a spoken
+    "Araştır" and a REST-initiated research are the same run from the first row
+    written on — never a fabricated local plan the pipeline never heard about.
+
+    ``Client.start_workflow`` only exists as a coroutine; this handler is sync (it
+    runs inside ``handle_tool_call``'s transaction), so starting the workflow is
+    handed to ``ctx.followups`` for the realtime-session ROUTE to await once this
+    transaction has committed. A failure there completes the RUNNING call as FAILED
+    with a truthful Turkish ``speech`` (never leaves it running forever). No capable
+    device is an immediate, truthful failure raised from HERE — never a "running"
+    the pipeline will never make good on.
+    """
     topic = _require_str(arguments, "topic", max_len=500)
     scope = str(arguments.get("scope") or "genel")[:500]
-    plan_id = str(uuid.uuid4())
+    if ctx.db is None:
+        raise VoiceError(VoiceErrorClass.DEPENDENCY_UNAVAILABLE, RESEARCH_START_DB_MISSING_TR)
+    artifacts_runtime = ctx.live.get("artifacts_runtime")
+    voice_runtime = ctx.live.get("voice_runtime")
+    broker_runtime = ctx.live.get("broker_runtime")
+    if artifacts_runtime is None or voice_runtime is None or broker_runtime is None:
+        raise VoiceError(
+            VoiceErrorClass.DEPENDENCY_UNAVAILABLE,
+            "research.start needs the artifact runtime, the broker runtime and the "
+            "realtime voice runtime",
+        )
+
+    from app.research import service as research_service
+    from app.research.dates import default_window, parse_recency_window
+    from app.research.plan import DEFAULT_RECENCY_DAYS
+
+    # "son üç gündeki ..." -> 3 (app.research.dates, the same Turkish relative-date
+    # parser the REST plan stage uses); an int day count is the only shape the
+    # request's own recency_days override understands, so an hour/week/month phrase
+    # is left to the workflow's own build_plan to parse from the topic text instead
+    # of being lossily rounded into days here.
+    window = parse_recency_window(topic, now=ctx.now) or default_window(
+        ctx.now, days=DEFAULT_RECENCY_DAYS
+    )
+    recency_days = window.amount if window.unit == "day" else None
+
+    started = research_service.start_browser_research(
+        ctx.db,
+        broker_runtime,
+        input=topic,
+        recency_days=recency_days,
+        max_sources=artifacts_runtime.settings.research_default_max_sources,
+        trace_id=None,
+        source=research_service.SOURCE_VOICE,
+        session_id=ctx.session_id,
+        tool_call_id=ctx.call_id,
+    )
+    if started.error is not None:
+        raise VoiceError(
+            VoiceErrorClass.CAPABILITY_MISSING,
+            RESEARCH_START_NO_DEVICE_TR,
+            details={"speech": RESEARCH_START_NO_DEVICE_TR, "task_id": str(started.task_id)},
+        )
+
     plan = {
-        "plan_id": plan_id,
+        "plan_id": str(started.task_id),
         "kind": "research",
         "topic": topic,
         "scope": scope,
@@ -166,9 +250,67 @@ def research_start(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
         "redirects": [],
         "steps": ["kaynakları topla", "karşılaştır", "yönetici özeti çıkar"],
         "created_at": ctx.now.isoformat().replace("+00:00", "Z"),
+        "task_id": str(started.task_id),
+        "workflow_id": started.workflow_id,
+        "recency_days": recency_days or DEFAULT_RECENCY_DAYS,
+        "device": started.device,
     }
     ctx.context["plan"] = plan
-    return {"status": "running", "plan_id": plan_id, "topic": topic, "scope": scope}
+
+    session_id = ctx.session_id
+    call_id = ctx.call_id
+    task_id = started.task_id
+    workflow_id = started.workflow_id
+    max_sources = artifacts_runtime.settings.research_default_max_sources
+    synthesis = artifacts_runtime.settings.research_default_synthesis
+    search_provider = artifacts_runtime.settings.research_search_provider
+
+    async def _start_workflow_followup() -> None:
+        try:
+            client = await research_service.connect_temporal(artifacts_runtime)
+            await research_service.start_browser_research_workflow(
+                client,
+                artifacts_runtime,
+                task_id=task_id,
+                workflow_id=workflow_id,
+                input=topic,
+                recency_days=recency_days,
+                max_sources=max_sources,
+                synthesis=synthesis,
+                search_provider=search_provider,
+            )
+        except Exception:  # noqa: BLE001 - reported as a failed tool call, never raised here
+            logger.exception("voice_research_workflow_start_failed", task_id=str(task_id))
+            from app.voice.realtime_sessions.models import RealtimeSessionRow
+            from app.voice.realtime_sessions.service import complete_tool_call_system
+
+            with voice_runtime.session() as db2:
+                row2 = db2.get(RealtimeSessionRow, session_id)
+                if row2 is not None:
+                    complete_tool_call_system(
+                        db2,
+                        row2,
+                        call_id=call_id,
+                        result=None,
+                        error={
+                            "error_class": ERROR_RESEARCH_WORKFLOW_START_FAILED,
+                            "message": RESEARCH_START_WORKFLOW_FAILED_TR,
+                            "speech": RESEARCH_START_WORKFLOW_FAILED_TR,
+                        },
+                        sideband=voice_runtime.sideband,
+                        trace_id=None,
+                    )
+
+    ctx.add_followup(_start_workflow_followup)
+    return {
+        "status": "running",
+        "plan_id": str(started.task_id),
+        "topic": topic,
+        "scope": scope,
+        "task_id": str(started.task_id),
+        "workflow_id": workflow_id,
+        "device": started.device,
+    }
 
 
 def plan_redirect(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -179,6 +321,19 @@ def plan_redirect(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]
             VoiceErrorClass.VALIDATION_ERROR,
             "no open plan to redirect; start one first (research.start)",
         )
+    if plan.get("kind") == "research":
+        # The M13 pipeline (app.research.browser_workflow.BrowserResearchWorkflow) has
+        # no signal or query to change a running run's scope (docs/DECISIONS.md
+        # ADR-0067 amendment: checked, not assumed). Claiming a redirect that never
+        # reached the workflow would be exactly the false completion this action
+        # contract exists to refuse, so the plan is returned UNCHANGED and nothing is
+        # pushed over the sideband - nothing changed.
+        return {
+            "status": "refused",
+            "message": PLAN_REDIRECT_REFUSED_TR,
+            "speech": PLAN_REDIRECT_REFUSED_TR,
+            "plan": plan,
+        }
     plan = dict(plan)
     plan["scope"] = instruction
     plan["revision"] = int(plan.get("revision", 1)) + 1
@@ -697,11 +852,19 @@ def default_registry() -> ToolRegistry:
 
 
 __all__ = [
+    "ERROR_NO_CAPABLE_DEVICE",
+    "ERROR_RESEARCH_WORKFLOW_START_FAILED",
+    "PLAN_REDIRECT_REFUSED_TR",
     "RESEARCH_PREAMBLE_TR",
+    "RESEARCH_START_DB_MISSING_TR",
+    "RESEARCH_START_NO_DEVICE_TR",
+    "RESEARCH_START_WORKFLOW_FAILED_TR",
     "ToolContext",
     "ToolHandler",
     "ToolRegistry",
     "ToolSpec",
     "activity_explain",
     "default_registry",
+    "plan_redirect",
+    "research_start",
 ]

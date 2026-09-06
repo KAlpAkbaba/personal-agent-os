@@ -21,19 +21,15 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from temporalio.client import Client
-from temporalio.exceptions import WorkflowAlreadyStartedError
 
 from app.artifacts import service as artifact_service
-from app.artifacts.models import TASK_STATUS_FAILED_TERMINAL, Task
 from app.artifacts.runtime import ArtifactRuntime
 from app.broker.runtime import BrokerRuntime
-from app.devices import service as devices_service
-from app.devices.selection import NoCapableDeviceError, select_device
 from app.identity.dependencies import require_owner_session
 from app.logging import get_logger, trace_id_var
 from app.research import runs_service
+from app.research import service as research_service
 from app.research.browser_gateway import SearchEvidence
-from app.research.browser_workflow import BrowserResearchRequest, BrowserResearchWorkflow
 from app.research.contracts import (
     ERROR_INSUFFICIENT_VALID_FINDINGS,
     MIN_REPORT_FINDINGS,
@@ -46,7 +42,7 @@ from app.research.eligibility import (
     PAGE_VALIDITY_KINDS,
     REJECTION_REASONS,
 )
-from app.research.models import STAGE_CANCELLED, STAGE_FAILED, STAGE_PLANNED, ResearchRunRow
+from app.research.models import STAGE_CANCELLED, ResearchRunRow
 
 logger = get_logger("app.research.routes")
 
@@ -79,9 +75,11 @@ async def _temporal_client(request: Request) -> Client:
 #: spec §5a: interactive_wait_s bounds (60s = one browser.wait slice; 1800s = 30 minutes).
 # 30 s exists for owner QUALIFICATION runs (a 600 s wait is not a test); production
 # requests keep DEFAULT_INTERACTIVE_WAIT_S, and the owner smoke has -HandoffTimeoutSec.
-MIN_INTERACTIVE_WAIT_S = 30
-MAX_INTERACTIVE_WAIT_S = 1800
-DEFAULT_INTERACTIVE_WAIT_S = 600
+# Re-exported from app.research.service (the single definition both callers share) so
+# nothing importing them from this module needs to change.
+MIN_INTERACTIVE_WAIT_S = research_service.MIN_INTERACTIVE_WAIT_S
+MAX_INTERACTIVE_WAIT_S = research_service.MAX_INTERACTIVE_WAIT_S
+DEFAULT_INTERACTIVE_WAIT_S = research_service.DEFAULT_INTERACTIVE_WAIT_S
 
 
 class CreateResearchRequest(BaseModel):
@@ -124,101 +122,63 @@ def _effective_interactive(body: CreateResearchRequest) -> bool:
 CreateResearchRequest.effective_interactive = property(_effective_interactive)  # type: ignore[attr-defined]
 
 
-def _device_summary(view: Any) -> dict[str, Any]:
-    return {"device_id": str(view.id), "name": view.name}
-
-
 @router.post("", status_code=202)
 async def create_research(request: Request, body: CreateResearchRequest) -> JSONResponse:
     broker = _broker(request)
     artifacts = _artifacts(request)
     trace_id = trace_id_var.get()
 
-    def create_task_and_select() -> tuple[Task, dict[str, Any] | None, str | None]:
+    def create_task_and_select() -> research_service.StartedResearch:
         with artifacts.session() as session:
-            task = artifact_service.create_task(
+            return research_service.start_browser_research(
                 session,
-                intent=body.input,
+                broker,
+                input=body.input,
+                target_device=body.target_device,
+                recency_days=body.recency_days,
+                max_sources=body.max_sources,
                 trace_id=trace_id,
+                source=research_service.SOURCE_REST,
             )
-            views = devices_service.list_device_views(session, broker)
-            try:
-                result = select_device(
-                    views, capability="browser.chrome", target=body.target_device
-                )
-            except NoCapableDeviceError as exc:
-                artifact_service.transition_task(
-                    session,
-                    task.id,
-                    TASK_STATUS_FAILED_TERMINAL,
-                    error_class="no_capable_device",
-                    error_message=exc.detail_tr,
-                )
-                runs_service.update_run(
-                    session,
-                    task.id,
-                    stage=STAGE_FAILED,
-                    error=exc.detail_tr,
-                    event={"stage": STAGE_FAILED, "detail": exc.detail_tr},
-                )
-                return task, None, exc.detail_tr
-            runs_service.update_run(
-                session,
-                task.id,
-                stage=STAGE_PLANNED,
-                device_id=result.device.id,
-                event={"stage": STAGE_PLANNED, "detail": f"selected {result.device.name}"},
-            )
-            return task, _device_summary(result.device), None
 
-    task, device, error_detail = await asyncio.to_thread(create_task_and_select)
-    if error_detail is not None:
-        logger.info("research_no_capable_device", task_id=str(task.id), detail=error_detail)
+    started = await asyncio.to_thread(create_task_and_select)
+    if started.error is not None:
+        logger.info(
+            "research_no_capable_device", task_id=str(started.task_id), detail=started.error
+        )
         raise HTTPException(
             status_code=409,
             detail={
                 "error_class": "no_capable_device",
-                "detail": error_detail,
-                "task_id": str(task.id),
+                "detail": started.error,
+                "task_id": str(started.task_id),
             },
         )
 
-    workflow_id = f"research-browser-{task.id}"
     client = await _temporal_client(request)
-    try:
-        await client.start_workflow(
-            BrowserResearchWorkflow.run,
-            BrowserResearchRequest(
-                task_id=str(task.id),
-                topic=body.input,
-                target_device=body.target_device,
-                recency_days=body.recency_days,
-                max_sources=body.max_sources,
-                synthesis=body.synthesis,
-                interactive=body.effective_interactive,
-                interactive_wait_s=body.interactive_wait_s,
-                on_verification_timeout=body.on_verification_timeout,
-                search_provider=body.search_provider or artifacts.settings.research_search_provider,
-            ),
-            id=workflow_id,
-            task_queue=artifacts.settings.temporal_task_queue,
-        )
-    except WorkflowAlreadyStartedError:
-        pass  # idempotent retry of POST
-
-    def persist_wf() -> None:
-        with artifacts.session() as session:
-            artifact_service.set_task_workflow_id(session, task.id, workflow_id)
-
-    await asyncio.to_thread(persist_wf)
-    logger.info("research_created", task_id=str(task.id), workflow_id=workflow_id)
+    await research_service.start_browser_research_workflow(
+        client,
+        artifacts,
+        task_id=started.task_id,
+        workflow_id=started.workflow_id,
+        input=body.input,
+        target_device=body.target_device,
+        recency_days=body.recency_days,
+        max_sources=body.max_sources,
+        synthesis=body.synthesis,
+        interactive=body.effective_interactive,
+        interactive_wait_s=body.interactive_wait_s,
+        on_verification_timeout=body.on_verification_timeout,
+        search_provider=body.search_provider or artifacts.settings.research_search_provider,
+    )
+    logger.info("research_created", task_id=str(started.task_id), workflow_id=started.workflow_id)
     return JSONResponse(
         status_code=202,
         content={
-            "task_id": str(task.id),
-            "workflow_id": workflow_id,
+            "task_id": str(started.task_id),
+            "workflow_id": started.workflow_id,
             "status": "planned",
-            "device": device,
+            "device": started.device,
         },
     )
 

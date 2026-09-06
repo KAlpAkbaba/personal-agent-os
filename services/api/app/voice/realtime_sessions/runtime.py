@@ -94,6 +94,7 @@ class RealtimeVoiceRuntime:
         registry: ToolRegistry | None = None,
         sideband: SidebandPusher | None = None,
         broker: Any = None,
+        artifacts: Any = None,
     ) -> None:
         self.settings = settings
         self._engine: Engine | None = engine
@@ -106,6 +107,13 @@ class RealtimeVoiceRuntime:
         self._inactive: dict[str, str] = inactive_candidates(settings)
         self._registry: ToolRegistry = registry or default_registry()
         self._broker: Any = broker
+        # M18.2 follow-up to ADR-0067: research.start needs the ArtifactRuntime (task/
+        # device-selection persistence, Temporal settings) to start a REAL research
+        # run from inside a voice tool call, the same runtime app.research.routes
+        # already uses (app.state.artifacts). Optional so every existing test's
+        # RealtimeVoiceRuntime(...) construction (no artifacts=...) still works; a
+        # session without one simply cannot serve research.start (DEPENDENCY_UNAVAILABLE).
+        self._artifacts: Any = artifacts
         if sideband is not None:
             self._sideband: SidebandPusher = sideband
         elif broker is not None:
@@ -118,8 +126,19 @@ class RealtimeVoiceRuntime:
         docs/M18_ACTION_CONTRACT.md §4): the broker for device presence; the presence
         engine is left to the handler's default (the process-wide engine), and a health
         probe is not run per tool call - the composer makes the one probe it can make
-        itself. A test injects what it needs through the same dict."""
-        return {"broker_runtime": self._broker, "presence_runtime": None, "health": None}
+        itself. A test injects what it needs through the same dict.
+
+        ``artifacts_runtime`` and ``voice_runtime`` (M18.2 follow-up to ADR-0067) are
+        what ``research.start`` needs to create a real task/run and, later, to open its
+        own DB session and reach the sideband from a ToolContext follow-up running
+        after this request's own transaction has closed."""
+        return {
+            "broker_runtime": self._broker,
+            "presence_runtime": None,
+            "health": None,
+            "artifacts_runtime": self._artifacts,
+            "voice_runtime": self,
+        }
 
     # ------------------------------------------------------------------ db
 
@@ -139,6 +158,14 @@ class RealtimeVoiceRuntime:
             yield session
         finally:
             session.close()
+
+    @property
+    def broker(self) -> Any:
+        return self._broker
+
+    @property
+    def artifacts(self) -> Any:
+        return self._artifacts
 
     # ----------------------------------------------------------- providers
 

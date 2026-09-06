@@ -264,11 +264,17 @@ def test_tool_terminal_payload_schema_and_no_diagnostics_leak_in_spoken_result()
     payload = build_tool_terminal_payload(report)
     assert set(payload) == {
         "spoken_result",
+        "speech",
         "executive_summary",
         "findings",
         "source_summary",
         "diagnostics",
     }
+    # M18.2 follow-up to ADR-0067: "speech" mirrors "spoken_result" verbatim, so the
+    # persona's generic "read speech verbatim" instruction and session_activity's
+    # speech_head see the same sentence a research-specific reader gets from
+    # "spoken_result".
+    assert payload["speech"] == payload["spoken_result"]
     _assert_no_diagnostics_leak(payload["spoken_result"])
     assert payload["findings"][0]["finding"] == "Bulgu Başlığı 1"
     assert payload["source_summary"][0]["ref"] == "e1"
@@ -281,4 +287,5 @@ def test_insufficient_terminal_payload_has_no_findings_and_honest_diagnostics() 
     assert payload["findings"] == []
     assert payload["source_summary"] == []
     assert payload["diagnostics"] == ResearchDiagnostics().as_dict()
+    assert payload["speech"] == payload["spoken_result"]
     _assert_no_diagnostics_leak(payload["spoken_result"])
