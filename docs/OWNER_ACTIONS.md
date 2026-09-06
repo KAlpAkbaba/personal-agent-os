@@ -21,8 +21,17 @@ Status vocabulary matches `docs/QUALIFICATION.md`: `PROVEN_REAL`, `PROVEN_PROXY`
 
 ## Now
 
-**Item 21 — the presence-only run (about six minutes, most of it out of the room).** M18
-now closes from combined durable evidence, not from one monolithic run. Your final run
+**M18 is closed — nothing is required of you.** The presence-only run passed
+(`OWNER M18 PRESENCE: PASS`: present 0.56 → away 0.41 → present 0.68, the eye closed at
+the end), and with it every M18 capability the owner runs could prove is `PROVEN_REAL` from
+the Cloud Core's own record (ADR-0064; `docs/evidence/`). Two rows stay open by name and
+are optional, whenever you want them: a one-minute media-action run (row 12.13, an
+owner-selected item playing on the real chain) and the display-off qualification
+(row 12.19, deliberately separate). M18.1 — the Holographic Core visual experience pass —
+has started; you will get a `/core` visual preview only when the improvement is substantial.
+
+**Item 21 — the presence-only run (about six minutes, most of it out of the room) — DONE.**
+M18 closed from combined durable evidence, not from one monolithic run. Your final run
 (`owner-m18-20260906-181122`) and the eye run before it prove 13 of the 15 acceptance
 capabilities from the Cloud Core's own record (`scripts/core/reconcile-m18.ps1`,
 `docs/evidence/m18-reconciliation-2026-09-06.json`): voice from `/core`, real listening and
@@ -38,7 +47,7 @@ nothing else. Items 19 and 20 are done.
 
 ---
 
-### 21. Leave the room and come back — **this is the current action**
+### 21. Leave the room and come back — **DONE (2026-09-06, OWNER M18 PRESENCE: PASS; M18 closed)**
 
 Unblocks: `docs/QUALIFICATION.md` row 12.6 (a real presence transition), the last open M18
 row. No voice, no deployment, no long wait: the camera is opened from the Core's control

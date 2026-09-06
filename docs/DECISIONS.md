@@ -4176,3 +4176,62 @@ cannot see. The engine's `invalidate_source` is general: any source the owner fo
 be withdrawn from the fusion window the same way. Not built: a server-side enable safety
 net (a camera cannot be opened from the cloud) and a health probe per tool call (the
 composer probes its own database and accepts a caller's health results).
+
+
+## ADR-0064 — A milestone closes from the durable record, and a harness FAIL is attributed before it is believed (2026-09-06)
+
+Status: Accepted
+
+Context: M18 was qualified by the owner six times on one day. Every product capability the
+milestone claims was eventually exercised for real and left its mark in the Cloud Core's own
+record — sessions, tool calls, action receipts, ledger rows, routine firings — while the
+monolithic qualification harness printed `FAIL` after `FAIL`. Each of those failures had a
+cause that was the harness's own: a one-element array unrolled by a parenthesised call; a
+callback bound with `GetNewClosure` that could not see a dot-sourced function; a readiness
+filter that excluded a session created nine seconds after the harness started, while `/core`
+was still compiling; a presence watcher that began after the transition it was waiting for
+had already been written; a hidden-mutation check that read the receipt's timestamps off the
+wrong level and built no windows. In the final run the owner ended a 600-second wait by hand
+while `voice.single_session` — one line later, from the baseline alone — was already saying
+the session existed. The product had worked. The proof was in the record. The harness was in
+the way.
+
+Decisions:
+
+1. **The record is the acceptance.** `scripts/core/reconcile-m18.ps1` evaluates every Stage 12
+   row from the durable record of a window — web sessions created inside it, their tool calls
+   (query kind and subsystem, terminal receipts, what the browser observed), ledger rows (eye
+   rows with the action id that wrote them, presence transitions with confidence and sources,
+   routine dispatch results, action receipts), and the privacy shape of every presence row —
+   and writes its verdicts beside the evidence (`docs/evidence/`). M18 closed on that, with the
+   two owner runs of 2026-09-06 as its evidence. No monolithic run was repeated for ceremony.
+2. **A FAIL is attributed before anyone is asked to repeat anything.** A harness verdict that
+   contradicts the record is a harness defect until shown otherwise; the record is read first
+   (a scratch probe with the DPAPI credential, never an assumption about the code), and the
+   defect is named as a qualification-selection defect where the capability is independently
+   proven. The owner's time is the scarcest resource this project has.
+3. **Correlation is by identity, never by an instant or a tool name.** The Core's session is the
+   one the Core itself names on the UI-state bus, or a session created since the run's
+   baseline; it is recognised by having gone through the router at all, not by having called
+   `activity.explain`. Every receipt and every eye row carries the action id and the session
+   id, so evidence is joined by identity and time windows are the fallback.
+4. **Qualification is progressive and bounded.** Per-step windows sized by the thing being
+   waited for (a connection: seconds; a router call: a minute; a presence transition: the
+   engine's own sustain and memory) replace one global wait. A step that is not reached is
+   named with what was seen, without invalidating capabilities observed by other steps.
+   `Core Voice connected: <id>` is printed the moment it is true.
+5. **What the record cannot hold is asked for alone.** The only capability the final run's
+   record did not contain — the owner leaving the room and returning — was asked for in a
+   presence-only run of six minutes, and passed.
+6. **Two rows stay open by name, not by omission.** 12.13 (an owner-selected media action plays
+   the named item) was never exercised for real and gets its own short owner run when the
+   owner wants it; 12.19 (display-off) is deliberately separate and gated twice. Neither is
+   claimed by the closure.
+
+Consequences: M18 is `PROVEN_REAL` on 18 of 20 rows with the two exceptions recorded; the
+harnesses that remain (`owner-m18-eye.ps1`, `owner-m18-presence.ps1`, `owner-m18.ps1`)
+share the library's identity correlation and bounded waits, and `harness-symbols.tests.ps1`
+guards every harness against the closure and undeclared-symbol classes structurally. The
+next milestone's qualification starts from the record, not from a script that must run to
+completion in one sitting. The same-day amendment to ADR-0063 stands: action contract v3
+(action id and session id on the durable eye row) is what production runs.

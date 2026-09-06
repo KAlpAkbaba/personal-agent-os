@@ -1,0 +1,120 @@
+{
+    "since":  "2026-09-06T15:45:00.0000000+00:00",
+    "until":  "2026-09-06T15:56:00.0000000+00:00",
+    "sessions":  [
+
+                 ],
+    "ledger_types":  {
+                         "presence.state_changed":  5,
+                         "eye.disabled":  1,
+                         "eye.enabled":  1
+                     },
+    "rows":  [
+                 {
+                     "row":  "12.21",
+                     "capability":  "voice from /core (a Core session with router calls)",
+                     "proven":  false,
+                     "evidence":  "sessions ",
+                     "note":  ""
+                 },
+                 {
+                     "row":  "12.22",
+                     "capability":  "real listening / speaking states (the session\u0027s own mic_speech_start / first_audio)",
+                     "proven":  false,
+                     "evidence":  "mic_speech_start=False first_audio=False",
+                     "note":  ""
+                 },
+                 {
+                     "row":  "12.23",
+                     "capability":  "a cognitive request reached its subsystem (query_kind + subsystem on the call)",
+                     "proven":  false,
+                     "evidence":  "none",
+                     "note":  ""
+                 },
+                 {
+                     "row":  "12.28",
+                     "capability":  "current state answered from the live path (state.now / world_state)",
+                     "proven":  false,
+                     "evidence":  "none",
+                     "note":  ""
+                 },
+                 {
+                     "row":  "12.27a",
+                     "capability":  "Gozunu ac by voice: eye.enable verified (camera opened, track live, durable read back)",
+                     "proven":  false,
+                     "evidence":  "none",
+                     "note":  ""
+                 },
+                 {
+                     "row":  "12.24",
+                     "capability":  "Gozunu kapat by voice: eye.disable verified (camera closed, track ended, durable read back)",
+                     "proven":  false,
+                     "evidence":  "none",
+                     "note":  ""
+                 },
+                 {
+                     "row":  "12.27b",
+                     "capability":  "enable -\u003e disable -\u003e enable again, all verified in one session (the transition race is gone)",
+                     "proven":  false,
+                     "evidence":  "none",
+                     "note":  ""
+                 },
+                 {
+                     "row":  "12.26",
+                     "capability":  "every eye receipt is verified or names its class (no unverified/failed receipts in the window)",
+                     "proven":  false,
+                     "evidence":  "0 eye receipt(s), 0 not verified",
+                     "note":  ""
+                 },
+                 {
+                     "row":  "12.29",
+                     "capability":  "one mutation path: every voice-attributed eye row is explained by a receipt (by action_id or window)",
+                     "proven":  true,
+                     "evidence":  "2 eye row(s), 0 receipt(s), 0 unexplained",
+                     "note":  ""
+                 },
+                 {
+                     "row":  "12.25",
+                     "capability":  "a current presence observation from the camera reached the engine (a present-family state with confidence)",
+                     "proven":  true,
+                     "evidence":  "2026-09-06T15:49:13.575000Z present (0,5599999999999999, 5 signals); 2026-09-06T15:51:15.694000Z unknown (0,17125697222222225, 18 signals); 2026-09-06T15:51:56.415000Z away (0,4104813580246914, 18 signals); 2026-09-06T15:52:11.779000Z unknown (0,22438907407407407, 18 signals); 2026-09-06T15:53:07.758000Z present (0,6760827777777777, 18 signals)",
+                     "note":  ""
+                 },
+                 {
+                     "row":  "12.6",
+                     "capability":  "a real presence transition: the owner left (away) and came back (present/returned)",
+                     "proven":  true,
+                     "evidence":  "states: present -\u003e away -\u003e present",
+                     "note":  ""
+                 },
+                 {
+                     "row":  "12.12",
+                     "capability":  "a routine fires and the alarm is dispatched over the device path with a low, ramped start",
+                     "proven":  false,
+                     "evidence":  "none",
+                     "note":  ""
+                 },
+                 {
+                     "row":  "12.16",
+                     "capability":  "the ledger records the whole run (session, explained, state answered, eye, presence, routine)",
+                     "proven":  false,
+                     "evidence":  "eye.disabled=1, eye.enabled=1, presence.state_changed=5",
+                     "note":  ""
+                 },
+                 {
+                     "row":  "12.8",
+                     "capability":  "no raw camera archive: presence rows carry only the structured summary",
+                     "proven":  true,
+                     "evidence":  "5 presence row(s) inspected",
+                     "note":  ""
+                 },
+                 {
+                     "row":  "12.21b",
+                     "capability":  "the Core session(s) of the run are closed",
+                     "proven":  false,
+                     "evidence":  "0/0 closed",
+                     "note":  ""
+                 }
+             ],
+    "reconciled_at":  "2026-09-06T15:55:00.5610458+00:00"
+}

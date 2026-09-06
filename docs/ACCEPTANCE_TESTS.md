@@ -333,6 +333,17 @@ present; the owner's verdict that the summary is concise and the findings matter
 
 ## M18 Holographic Core, Active Eye, ambient presence
 
+**CLOSED 2026-09-06 — PROVEN_REAL from the durable record (ADR-0064).** The real gates
+below were met across the owner's runs of 2026-09-06 and reconciled by
+`scripts/core/reconcile-m18.ps1` (`docs/evidence/m18-reconciliation-2026-09-06.json`,
+`docs/evidence/m18-presence-reconciliation-2026-09-06.json`): voice from `/core`, real
+states, cognition, the eye by voice in both directions with verified receipts, the
+MediaStream lifecycle, a camera presence observation and a real leave-and-return, the
+alarm over the device path, privacy, the authority boundary. Two real gates are NOT closed
+and are not claimed: the owner-selected media action (its own short run, when the owner
+wants it) and display-off (separate by design). The monolithic harness's failures that day
+were qualification-selection defects; the record proved each capability independently.
+
 Real-only acceptance. Unit tests do not qualify this milestone and never will: everything
 here is a claim about the owner's actual room, their actual camera and their actual
 production system, and a fixture cannot be wrong about any of those. `PROVEN_REAL` requires
