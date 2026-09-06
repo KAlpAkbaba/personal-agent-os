@@ -360,24 +360,75 @@ public sealed class AmbientCapabilityTests
     [Fact]
     public void The_display_capability_can_only_turn_a_display_off_never_suspend_the_machine()
     {
-        // M18 v1 does not shut down, reboot, hibernate or suspend on a sleep inference
-        // (M18_HOLOGRAPHIC_CORE_SPEC.md §4). Turning a display off is undone by moving the
-        // mouse; suspending a machine mid-research is not. This reads the source so the class
-        // cannot quietly grow a second meaning: a new power API here fails this test.
-        var source = File.ReadAllText(SourcePath("DisplayPowerController.cs"));
+        // DISPLAY OFF IS NOT SYSTEM SLEEP. That sentence is the whole design of this family
+        // (M18_HOLOGRAPHIC_CORE_SPEC.md §4, M18_THREAT_MODEL.md §5): a dark screen is undone by
+        // moving a mouse, and a machine that was stopped, restarted or sent to sleep mid-research
+        // is not. So this reads the SOURCE of every display-related file — a glob, so a file
+        // added tomorrow is guarded tomorrow — and fails if any of them so much as names an API
+        // that could end a session, change the machine's power state, or synthesise a key.
+        var files = Support.CompanionSources.DisplayFiles();
+        Assert.True(files.Count >= 4, $"expected the display family to be several files, found {files.Count}");
+
         string[] forbidden =
         [
+            // Ending a session or the machine.
             "ExitWindowsEx", "InitiateSystemShutdown", "InitiateShutdown", "SetSuspendState",
-            "PowrProf", "powrprof", "shutdown.exe", "SC_MONITORPOWER_ON",
-            "EWX_", "SHTDN_", "WM_POWERBROADCAST",
+            "PowrProf", "powrprof", "shutdown.exe", "EWX_", "SHTDN_",
+            // Locking the workstation. Capital "Lock" catches LockWorkStation and any Lock*
+            // helper; the lower-case `lock` KEYWORD is deliberately not forbidden, because
+            // banning it would fail on ordinary mutual exclusion and the fix for that failure
+            // would be to weaken this list.
+            "LockWorkStation", "LockWorkstation", "Lock",
+            // Turning a monitor back on through the power broadcast (unreliable, and not what
+            // display_wake does), and reacting to the system's own power transitions.
+            "SC_MONITORPOWER_ON", "MonitorOn", "WM_POWERBROADCAST",
+            // A CONTINUOUS execution-state claim: display_wake resets the idle timer once and
+            // lets go. A standing claim nobody clears is indistinguishable from a broken power
+            // plan, from the owner's side.
+            "ES_CONTINUOUS", "EsContinuous", "ES_SYSTEM_REQUIRED", "EsSystemRequired",
+            "ES_AWAYMODE_REQUIRED", "EsAwaymodeRequired",
+            // Keys. display_wake moves a pointer by zero and nothing else; there is no keyboard
+            // member in its input structure to fill in, and there must never be one.
+            "KEYEVENTF", "INPUT_KEYBOARD", "InputKeyboard", "keybd_event", "VkKeyScan",
+            "SendKeys", "KeyboardInput",
+            // Rearranging the owner's monitors. M18.3 reports topology; it never sets it.
+            "ChangeDisplaySettings", "SetDisplayConfig", "DisplayConfigSetDeviceInfo",
         ];
-        foreach (var name in forbidden)
+
+        string[] forbiddenAnyCase = ["hibernate", "logoff", "log off"];
+
+        foreach (var file in files)
         {
-            Assert.DoesNotContain(name, source, StringComparison.Ordinal);
+            var source = File.ReadAllText(file);
+            var name = Path.GetFileName(file);
+            foreach (var token in forbidden)
+            {
+                Assert.False(
+                    source.Contains(token, StringComparison.Ordinal),
+                    $"{name} names '{token}'; the display family may only wake, report and turn OFF");
+            }
+
+            foreach (var token in forbiddenAnyCase)
+            {
+                Assert.False(
+                    source.Contains(token, StringComparison.OrdinalIgnoreCase),
+                    $"{name} names '{token}'; the display family may only wake, report and turn OFF");
+            }
         }
 
-        // ...and the one parameter it does send is the "off" one.
-        Assert.Contains("MonitorOff = 2", source, StringComparison.Ordinal);
+        // ...and the one parameter the OFF path sends is the "off" one.
+        Assert.Contains("MonitorOff = 2", Support.CompanionSources.Read("DisplayPowerController.cs"), StringComparison.Ordinal);
+
+        // The observer observes. It has no way to reach a window it does not own, no execution
+        // state and no synthetic input, so it cannot become a second, ungated way to darken a
+        // screen.
+        var observer = Support.CompanionSources.Read("DisplayStateObserver.cs");
+        foreach (var actor in new[] { "SendInput", "SendMessage", "HwndBroadcast", "HWND_BROADCAST", "SetThreadExecutionState", "ScMonitorPower" })
+        {
+            Assert.False(
+                observer.Contains(actor, StringComparison.Ordinal),
+                $"DisplayStateObserver.cs names '{actor}'; an observer that can act is not an observer");
+        }
     }
 
     // ------------------------------------------------------------------ manifest + routing
@@ -496,18 +547,6 @@ public sealed class AmbientCapabilityTests
         }
 
         return peak;
-    }
-
-    private static string SourcePath(string fileName)
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !Directory.Exists(Path.Combine(dir.FullName, "src", "PagentOS.SessionCompanion")))
-        {
-            dir = dir.Parent;
-        }
-
-        Assert.NotNull(dir);
-        return Path.Combine(dir!.FullName, "src", "PagentOS.SessionCompanion", fileName);
     }
 
     private sealed class RecordingDisplayPower : IDisplayPower
