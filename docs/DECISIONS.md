@@ -4545,3 +4545,101 @@ the announcer this ADR builds has nothing to announce until it does. Closing tha
 a synchronous tool handler starting `BrowserResearchWorkflow` and recording its `task_id`
 on the call's own `result_json` — is the natural next M18.2 item, not attempted here to
 keep this change bounded and fully tested end to end on the half that could be.
+
+### Amendment (2026-09-07): `research.start` starts the real run; gaps 1 and 2 close
+
+Gap 1 ("a voice-initiated 'araştır' and the durable report a later 'sonuçları anlat'
+finds are, today, two unrelated things") and gap 2 ("nothing ever completes the
+`research.start` tool call") are closed together, in `services/api` only.
+
+1. **One start path, two callers.** `app.research.routes.create_research`'s body is
+   extracted into `app.research.service`: `start_browser_research(db, broker, *, input,
+   target_device, recency_days, max_sources, trace_id, source, session_id,
+   tool_call_id) -> StartedResearch` is the synchronous half (create the task, select a
+   `browser.chrome`-capable device, record the PLANNED/FAILED run row) — the same code
+   both the REST route and the voice tool run, from a plain `Session` with no
+   `asyncio` involved, so a synchronous tool handler running inside its own DB
+   transaction can call it directly. `source` ("rest" | "voice") and, for voice,
+   `session_id`/`tool_call_id` are recorded on the run row's own PLANNED/FAILED event
+   (`app.research.runs_service.update_run`'s `event=`) — provenance alongside, not
+   instead of, the `task_id` linkage `find_running_tool_call_by_task_id` already used.
+   `start_browser_research_workflow(client, artifacts, *, task_id, workflow_id, ...)`
+   is the asynchronous half (`Client.start_workflow` + persisting the workflow id);
+   the REST route awaits it inline exactly as before (its own tests, including the
+   `Client.connect` patch target, are unchanged) — the extraction changed nothing
+   about `POST /v1/research`'s behaviour.
+2. **`research_start` (the voice tool handler) runs the synchronous half for real,
+   inside `handle_tool_call`'s own transaction, then hands the asynchronous half to a
+   follow-up.** A sync handler cannot `await`, so `ToolContext` gains `followups: list[
+   Callable[[], Awaitable[None]]]` (`ctx.add_followup(...)`); `handle_tool_call` takes
+   an optional `followups` list from its caller and seeds the `ToolContext` with it —
+   the SAME list object, so the realtime-session ROUTE (`POST .../tool-calls`) sees
+   whatever the handler appended once `asyncio.to_thread` returns, and awaits each one
+   AFTER the tool-call transaction has committed and the HTTP response body is built.
+   `research_start` derives `recency_days` from the topic through
+   `app.research.dates.parse_recency_window` (falling back to
+   `app.research.plan.DEFAULT_RECENCY_DAYS`) exactly as the REST plan stage would —
+   "son üç gündeki ..." records `recency_days: 3` on the tool's own local `plan` dict,
+   which now also carries the REAL `task_id`, `workflow_id` and selected `device`
+   (`plan_id` is `str(task_id)`, so `row.plan_id` — already set from `plan["plan_id"]`
+   by `handle_tool_call` for any long-running tool — is the task id, not a throwaway
+   UUID). No capable device is `start_browser_research` returning `StartedResearch(
+   error=...)`, which the handler turns into an immediate `VoiceError(
+   CAPABILITY_MISSING, "Araştırma için tarayıcı yeteneği olan bir cihaz yok.")` — a
+   FAILED tool call from the first round trip, never a fabricated "running". The
+   follow-up connects to Temporal and calls `start_browser_research_workflow`; on any
+   exception it completes the call itself, via `complete_tool_call_system`, as FAILED
+   with `error_class="research_workflow_start_failed"` and the Turkish sentence
+   "Araştırmayı başlatamadım; arka plan servisine ulaşamadım." — never leaves a call
+   RUNNING that will never receive a `task_id` a durable run can complete.
+3. **Failure speech rides the same `result_json` shape `session_activity` already
+   reads.** A raised `VoiceError` may now carry `details={"speech": ...}`; both
+   `handle_tool_call`'s `except VoiceError` branch and `complete_tool_call_system`'s
+   `error=` branch copy that into the call's own `result_json["speech"]` alongside
+   `message` — `exc.message` itself is not read as speech (most handlers' messages are
+   internal/English), so this is opt-in per raise, not a blanket promotion. Because
+   `session_activity` already reads `_result_field(result, "speech")` regardless of the
+   call's status, a FAILED research.start's `speech_head` shows the truthful sentence
+   from durable rows alone, the same way a SUCCEEDED one's does.
+4. **`ToolContext.live` gains `artifacts_runtime` and `voice_runtime`.**
+   `RealtimeVoiceRuntime` takes an optional `artifacts` (the same `ArtifactRuntime`
+   `app.state.artifacts` already is) and exposes it, plus itself (for `.session()` and
+   `.sideband` after the follow-up's own transaction), through `live_sources()`. Both
+   default to `None`/unset, so every existing `RealtimeVoiceRuntime(...)` construction
+   in a test that does not touch `research.start` is unaffected; a session with no
+   `artifacts_runtime` simply cannot serve `research.start`
+   (`DEPENDENCY_UNAVAILABLE`, not a crash).
+5. **`plan.redirect` on a research plan is now an honest, unconditional refusal.**
+   `app.research.browser_workflow.BrowserResearchWorkflow` defines no `@workflow.signal`
+   or `@workflow.query` — checked, not assumed — so there is no mechanism to change a
+   running run's topic or scope. Claiming a redirect that never reached the workflow
+   would be exactly the false-completion class this action contract exists to refuse
+   (`app.actions.receipt.FAKE_COMPLETION_PHRASES`); `plan_redirect` now returns the
+   plan UNCHANGED with `{"status": "refused", "speech": "Bu araştırma çalışırken
+   kapsamı değiştiremiyorum; bitince yeni bir araştırma başlatabilirim."}` and pushes
+   no `plan_changed` frame, for any plan whose `kind` is `"research"` (today, every
+   plan `research.start` sets). The old cancel-and-replan behaviour is kept, dead code
+   for now, for a future plan kind whose backing pipeline actually supports it.
+6. **`ACTION_CONTRACT_VERSION` becomes 4.** `research.start`'s terminal schema is new
+   (`spoken_result`/`executive_summary`/`findings`/`source_summary`/`diagnostics` on
+   success, `message`/`details`/`speech` on failure) and its failure/redirect honesty
+   rules are new; the health manifest's `action_contract_version` is how an owner
+   qualification tells a deployment that actually starts research by voice from one
+   that still only announces a linkage nothing sets.
+
+Consequences: `services/api` gains `app/research/service.py`
+(`start_browser_research`, `start_browser_research_workflow`, `connect_temporal`,
+`StartedResearch`); `app.research.routes.create_research` is behaviourally identical,
+now composed from that module; `ToolContext` gains `followups`; `research_start` and
+`plan_redirect` in `app.voice.realtime_sessions.tools` are rewritten; `handle_tool_call`
+takes an optional `followups` list and preserves a raised `VoiceError`'s
+`details["speech"]`; `complete_tool_call_system` preserves an `error["speech"]` the
+same way; `RealtimeVoiceRuntime` takes an optional `artifacts`. Every existing
+`test_voice_realtime_sessions.py` / `test_voice_research_completion.py` fixture that
+exercises `research.start` now wires an `ArtifactRuntime` + a `browser.chrome`-capable
+device (mirroring `test_research_routes.py`'s own fixture), and the REST route's own
+tests (`test_research_routes.py`) are unchanged. What this amendment does NOT build: a
+UI or voice affordance to CHANGE the recency/device/max_sources of a research already
+running (the honest refusal above is the whole answer for now), and no attempt to make
+the M13 workflow itself signal-aware — that stays a real gap, named rather than
+half-closed.

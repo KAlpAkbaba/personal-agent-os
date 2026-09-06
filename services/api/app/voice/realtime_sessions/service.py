@@ -580,12 +580,19 @@ def handle_tool_call(
     sideband: SidebandPusher,
     trace_id: str | None = None,
     live: dict[str, Any] | None = None,
+    followups: list[Any] | None = None,
 ) -> dict[str, Any]:
     """Spec §4 step 3. Idempotent on ``call_id`` per session: a replay returns
     the recorded outcome and executes nothing.
 
     ``live`` carries the in-process runtimes a handler may read (the presence engine,
-    the broker, a health probe) - see ``ToolContext.live``."""
+    the broker, a health probe) - see ``ToolContext.live``. ``followups`` (M18.2
+    follow-up to ADR-0067), when given, is the caller's own list: a handler that needs
+    to run a coroutine after this transaction commits (``research.start`` starting a
+    Temporal workflow) appends to ``ToolContext.followups``, which - because both
+    names are bound to the SAME list object - the caller (the async route) can drain
+    once ``asyncio.to_thread`` returns, without this function needing to know
+    ``asyncio`` exists."""
     now = utcnow()
     require_live(db, row, now=now, trace_id=trace_id)
     require_leg(row, owner)
@@ -635,6 +642,7 @@ def handle_tool_call(
         now=now,
         call_id=call_id,
         live=dict(live or {}),
+        followups=followups if followups is not None else [],
     )
     started = utcnow()
     preamble: str | None = None
@@ -650,6 +658,16 @@ def handle_tool_call(
             call.status = TOOL_STATUS_FAILED
             call.error_class = exc.error_class.value
             call.result_json = {"message": exc.message, "details": exc.details}
+            # A handler that names the exact Turkish sentence to speak puts it in
+            # details["speech"] (M18.2 follow-up to ADR-0067: research.start's "no
+            # capable device" truthful failure) - exc.message itself is often an
+            # internal validation string (English, not owner-facing), so it is never
+            # read as speech by default. Carried on the row's own result_json so
+            # session_activity's speech_head sees it from durable rows alone, the same
+            # way a succeeded call's "speech"/"spoken_result" already does.
+            speech = exc.details.get("speech") if isinstance(exc.details, dict) else None
+            if speech:
+                call.result_json["speech"] = str(speech)[:2000]
             call.completed_at = utcnow()
         except Exception as exc:  # noqa: BLE001 - a tool bug must not kill the session
             logger.exception("voice_tool_handler_crashed", tool=name, call_id=call_id)
@@ -839,6 +857,13 @@ def complete_tool_call_system(
         call.status = TOOL_STATUS_FAILED
         call.error_class = str(error.get("error_class") or VoiceErrorClass.DEPENDENCY_UNAVAILABLE)
         call.result_json = {"message": str(error.get("message") or "")[:2000]}
+        # Same carve-out as handle_tool_call's VoiceError branch: a caller that names
+        # the exact Turkish sentence (the voice research-workflow-start follow-up,
+        # M18.2 follow-up to ADR-0067) gets it onto the row's own result_json, so
+        # session_activity's speech_head sees it from durable rows alone.
+        speech = error.get("speech")
+        if speech:
+            call.result_json["speech"] = str(speech)[:2000]
     else:
         call.status = TOOL_STATUS_SUCCEEDED
         call.result_json = dict(result or {})

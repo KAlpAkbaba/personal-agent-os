@@ -304,8 +304,17 @@ def build_tool_terminal_payload(
         if diagnostics is not None
         else ResearchDiagnostics.from_report_json(report_json)
     )
+    spoken = spoken_result(result)
     return {
-        "spoken_result": spoken_result(result),
+        "spoken_result": spoken,
+        # M18.2 follow-up to ADR-0067: the SAME text, also under "speech" - the key
+        # every other tool result carries and the ONE key session_activity's
+        # speech_head and the persona's generic "read speech verbatim" instruction
+        # both already look for. "spoken_result" stays the primary name (the persona's
+        # research-specific instruction reads it explicitly, and it says more than
+        # "this is speech" - it names what kind of speech); this is a second door onto
+        # the same content, never a different sentence.
+        "speech": spoken,
         "executive_summary": result.executive_summary,
         "findings": [f.as_dict() for f in result.findings],
         "source_summary": [s.as_dict() for s in result.sources],
@@ -319,8 +328,10 @@ def build_insufficient_terminal_payload(
     """The same schema, for a run that failed its quality gate (spec item 1): honest
     and concise, never a report shaped like the log that explains the failure."""
     result = ResearchResult.insufficient_evidence(topic=topic, reason=reason)
+    spoken = spoken_result(result)
     return {
-        "spoken_result": spoken_result(result),
+        "spoken_result": spoken,
+        "speech": spoken,
         "executive_summary": "",
         "findings": [],
         "source_summary": [],

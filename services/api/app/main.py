@@ -96,7 +96,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     mobile = MobileRuntime(settings)
     # M12: realtime voice sessions push sideband messages over the broker's
     # device WebSocket, so the runtime is handed the broker (never a socket).
-    voice_realtime = RealtimeVoiceRuntime(settings, broker=broker)
+    # M18.2 follow-up to ADR-0067: also handed the ArtifactRuntime, so a spoken
+    # "araştır" (research.start) can create the same real task/run REST does.
+    voice_realtime = RealtimeVoiceRuntime(settings, broker=broker, artifacts=artifacts)
     # M13/ADR-0050 §9: the research pipeline's fetch activities dispatch
     # device commands through THIS process's BrokerRuntime for immediate
     # delivery (app.devices.commands); embedded_worker optionally runs the

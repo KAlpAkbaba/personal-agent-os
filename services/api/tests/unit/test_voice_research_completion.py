@@ -9,21 +9,42 @@ SQLite, a recording sideband standing in for the device WebSocket.
 
 from __future__ import annotations
 
+import base64
 import uuid
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.artifacts.models import Artifact, ArtifactVersion
-from app.broker.models import AuditEvent
+from app.artifacts.models import (
+    Artifact,
+    ArtifactRender,
+    ArtifactVersion,
+    ResearchSource,
+    Task,
+    TaskRun,
+)
+from app.artifacts.runtime import ArtifactRuntime
+from app.broker import service as broker_service
+from app.broker.models import AuditEvent, Device, DeviceCommand, DeviceSession, EnrollmentToken
+from app.broker.runtime import BrokerRuntime, DeviceConnection
 from app.config import Settings
 from app.identity.root import InMemoryCredentialRoot
 from app.identity.runtime import IdentityRuntime
 from app.ledger.models import ActivityEventRow, PendingBriefingRow
 from app.main import create_app
 from app.narration.models import NarrationSession, PronunciationEntry
+from app.research.models import (
+    ResearchCandidateRow,
+    ResearchEvidenceRow,
+    ResearchReportRow,
+    ResearchRunRow,
+)
 from app.research.result import build_tool_terminal_payload
 from app.voice.models import VoiceProfile
 from app.voice.realtime_sessions import service
@@ -37,6 +58,51 @@ from app.voice.realtime_sessions.runtime import RealtimeVoiceRuntime
 from app.voice.realtime_sessions.sideband import RecordingSideband
 from app.voice.simulator import SimulatedRealtimeProvider
 from tests.identity_support import IDENTITY_TABLES
+
+RESEARCH_TABLES = (
+    Device.__table__,
+    DeviceSession.__table__,
+    DeviceCommand.__table__,
+    EnrollmentToken.__table__,
+    Task.__table__,
+    TaskRun.__table__,
+    ArtifactRender.__table__,
+    ResearchSource.__table__,
+    ResearchRunRow.__table__,
+    ResearchCandidateRow.__table__,
+    ResearchEvidenceRow.__table__,
+    ResearchReportRow.__table__,
+)
+
+
+def _spki() -> str:
+    key = ec.generate_private_key(ec.SECP256R1())
+    return base64.b64encode(
+        key.public_key().public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
+    ).decode("ascii")
+
+
+def _enroll_online_device(broker: BrokerRuntime) -> uuid.UUID:
+    with broker.session() as db:
+        device = broker_service.enroll_device(
+            db,
+            name="ev-pc",
+            platform="windows",
+            public_key_spki_b64=_spki(),
+            capabilities=["browser.chrome"],
+            trace_id=None,
+        )
+    broker.connections[device.id] = DeviceConnection(
+        device_id=device.id, session_id=uuid.uuid4(), websocket=object()
+    )
+    return device.id
+
+
+def _patched_temporal_client():
+    fake_client = AsyncMock()
+    fake_client.start_workflow = AsyncMock(return_value=None)
+    return patch("app.research.service.Client.connect", AsyncMock(return_value=fake_client))
+
 
 VENDOR_KEY = "unit-test-vendor-key-sentinel-must-never-leave-the-server"
 
@@ -77,6 +143,7 @@ def wired():
         ArtifactVersion.__table__,
         ActivityEventRow.__table__,
         PendingBriefingRow.__table__,
+        *RESEARCH_TABLES,
     ):
         table.create(engine)
 
@@ -86,10 +153,27 @@ def wired():
     app.state.identity = identity
     sideband = RecordingSideband(deliver=True)
     sim = SimulatedRealtimeProvider()
+    # M18.2 follow-up to ADR-0067: research.start now creates a real task/run, so this
+    # fixture needs a BrokerRuntime + ArtifactRuntime bound to the same engine, exactly
+    # like test_voice_realtime_sessions.py's own "wired" fixture.
+    broker = BrokerRuntime(settings)
+    broker._engine = engine
+    broker._session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    app.state.broker = broker
+    artifacts = ArtifactRuntime(settings)
+    artifacts._engine = engine
+    artifacts._session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    app.state.artifacts = artifacts
     runtime = RealtimeVoiceRuntime(
-        settings, engine=engine, providers={sim.name: sim}, sideband=sideband
+        settings,
+        engine=engine,
+        providers={sim.name: sim},
+        sideband=sideband,
+        broker=broker,
+        artifacts=artifacts,
     )
     app.state.voice_realtime = runtime
+    _enroll_online_device(broker)
 
     issued = identity.service.issue_session(
         client_kind="desktop", label="pc", device_id=uuid.uuid4()
@@ -111,10 +195,11 @@ def _create(client) -> str:
 def test_complete_tool_call_system_delivers_spoken_result_verbatim(wired) -> None:
     client, runtime, sideband = wired
     sid = _create(client)
-    started = client.post(
-        f"/v1/voice/realtime/sessions/{sid}/tool-calls",
-        json={"call_id": "r1", "name": "research.start", "arguments": {"topic": "test"}},
-    )
+    with _patched_temporal_client():
+        started = client.post(
+            f"/v1/voice/realtime/sessions/{sid}/tool-calls",
+            json={"call_id": "r1", "name": "research.start", "arguments": {"topic": "test"}},
+        )
     assert started.status_code == 200 and started.json()["status"] == "running"
 
     payload = build_tool_terminal_payload(REPORT_JSON)
@@ -137,11 +222,13 @@ def test_complete_tool_call_system_delivers_spoken_result_verbatim(wired) -> Non
         assert call.status == TOOL_STATUS_SUCCEEDED
         assert set(call.result_json) == {
             "spoken_result",
+            "speech",
             "executive_summary",
             "findings",
             "source_summary",
             "diagnostics",
         }
+        assert call.result_json["speech"] == call.result_json["spoken_result"]
         assert "elendi" not in call.result_json["spoken_result"]
         assert "100" not in call.result_json["spoken_result"]
 
@@ -155,10 +242,11 @@ def test_complete_tool_call_system_delivers_spoken_result_verbatim(wired) -> Non
 def test_complete_tool_call_system_is_idempotent_and_never_raises_on_a_replay(wired) -> None:
     client, runtime, sideband = wired
     sid = _create(client)
-    client.post(
-        f"/v1/voice/realtime/sessions/{sid}/tool-calls",
-        json={"call_id": "r2", "name": "research.start", "arguments": {"topic": "test"}},
-    )
+    with _patched_temporal_client():
+        client.post(
+            f"/v1/voice/realtime/sessions/{sid}/tool-calls",
+            json={"call_id": "r2", "name": "research.start", "arguments": {"topic": "test"}},
+        )
     payload = build_tool_terminal_payload(REPORT_JSON)
     with runtime.session() as db:
         row = service.get_session(db, uuid.UUID(sid))
@@ -175,10 +263,11 @@ def test_complete_tool_call_system_is_idempotent_and_never_raises_on_a_replay(wi
 def test_complete_tool_call_system_records_an_error_honestly(wired) -> None:
     client, runtime, sideband = wired
     sid = _create(client)
-    client.post(
-        f"/v1/voice/realtime/sessions/{sid}/tool-calls",
-        json={"call_id": "r3", "name": "research.start", "arguments": {"topic": "test"}},
-    )
+    with _patched_temporal_client():
+        client.post(
+            f"/v1/voice/realtime/sessions/{sid}/tool-calls",
+            json={"call_id": "r3", "name": "research.start", "arguments": {"topic": "test"}},
+        )
     with runtime.session() as db:
         row = service.get_session(db, uuid.UUID(sid))
         outcome = service.complete_tool_call_system(
@@ -202,10 +291,11 @@ def test_complete_tool_call_system_still_records_the_outcome_when_the_session_is
 ) -> None:
     client, runtime, sideband = wired
     sid = _create(client)
-    client.post(
-        f"/v1/voice/realtime/sessions/{sid}/tool-calls",
-        json={"call_id": "r4", "name": "research.start", "arguments": {"topic": "test"}},
-    )
+    with _patched_temporal_client():
+        client.post(
+            f"/v1/voice/realtime/sessions/{sid}/tool-calls",
+            json={"call_id": "r4", "name": "research.start", "arguments": {"topic": "test"}},
+        )
     assert client.post(f"/v1/voice/realtime/sessions/{sid}/close").status_code == 200
     payload = build_tool_terminal_payload(REPORT_JSON)
     before = len(sideband.frames)
@@ -226,10 +316,11 @@ def test_find_running_tool_call_by_task_id_locates_the_right_session_and_call(wi
     client, runtime, sideband = wired
     sid = _create(client)
     task_id = str(uuid.uuid4())
-    client.post(
-        f"/v1/voice/realtime/sessions/{sid}/tool-calls",
-        json={"call_id": "r5", "name": "research.start", "arguments": {"topic": "test"}},
-    )
+    with _patched_temporal_client():
+        client.post(
+            f"/v1/voice/realtime/sessions/{sid}/tool-calls",
+            json={"call_id": "r5", "name": "research.start", "arguments": {"topic": "test"}},
+        )
     # A future research.start (once wired to the real pipeline) would record this
     # itself, on its own 'running' result; fabricated here for the lookup contract.
     with runtime.session() as db:
