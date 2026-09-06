@@ -691,6 +691,7 @@ def handle_tool_call(
                 "research_job_id": refusal["research_job_id"],
                 "research_artifact_id": refusal["research_artifact_id"],
                 "binding_basis": refusal["binding_basis"],
+                "ambiguous": refusal["ambiguous"],
             },
         )
         _touch(row, now)

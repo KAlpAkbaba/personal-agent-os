@@ -373,10 +373,12 @@ def research_followup_refusal(
       ``research_technical_explanation`` or ``research_followup`` and is recent enough
       to be this turn (an intervening "yeniden araştır" overwrites the record, so a
       retry is never shadowed by an older follow-up);
-    * a COMPLETED research is actually bound, so there is something to answer from.
+    * a COMPLETED research is actually bound - or the context is AMBIGUOUS, which is
+      still a follow-up turn and still not a reason to crawl; the refusal then carries
+      the clarifying question as its speech.
 
-    A crawl with nothing to answer from is not refused: refusing then would leave the
-    owner with neither a research nor an explanation.
+    A crawl with no completed research anywhere is not refused: refusing then would
+    leave the owner with neither a research nor an explanation.
     """
     if tool_name not in CRAWL_STARTING_TOOLS:
         return None
@@ -392,8 +394,13 @@ def research_followup_refusal(
     from app.explain.research_context import bind_completed_research
 
     binding = bind_completed_research(db, last_research=last_research, plan=plan, now=now)
-    if binding.context is None:
+    if binding.context is None and not binding.ambiguous:
         return None
+    speech = (
+        RESEARCH_FOLLOWUP_REFUSED_TR
+        if binding.context is not None
+        else binding.clarifying_question()
+    )
     return {
         "status": "refused",
         "reason": REASON_RESEARCH_FOLLOWUP_TURN,
@@ -401,10 +408,11 @@ def research_followup_refusal(
         "research_job_id": binding.research_job_id,
         "research_artifact_id": binding.artifact_id,
         "binding_basis": binding.basis,
+        "ambiguous": binding.ambiguous,
         "utterance_t_ms": record.get("t_ms"),
         "utterance_turn": record.get("turn"),
-        "message": RESEARCH_FOLLOWUP_REFUSED_TR,
-        "speech": RESEARCH_FOLLOWUP_REFUSED_TR,
+        "message": speech,
+        "speech": speech,
     }
 
 
