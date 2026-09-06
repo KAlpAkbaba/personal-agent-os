@@ -564,6 +564,78 @@ Test-Case "12h. the library's locals never shadow a callback's variables (dynami
         -Qualifier { param($A) ($null -ne $activity) -and (Test-CoreQualification -Activity $A) } -ConnectWaitSec 30 -RouterWaitSec 30
     Assert-Equal "shadow-1" $result.Selected.SessionId "the probe saw the caller's own variables and the session was selected"
 }
+Test-Case "17. a session the Core named on the bus is accepted even when it predates the baseline and the shell (owner, 2026-09-06 later)" {
+    # The owner connected voice BEFORE the harness took its baseline: the live session was
+    # in the baseline, so it was excluded as "old" while agent.listening named it every turn.
+    $live = New-Session -Id "live-before" -StartedAt "2026-09-04T19:50:00Z"
+    $probe = { param($Id) New-CoreActivity -Id $Id -Succeeded @("eye.enable") }
+    $excluded = Select-QualificationSession -Sessions @($live) -BaselineIds @("live-before") -ReadyAt $readyAt -ActivityProbe $probe -Qualifier ${function:Test-CoreQualification}
+    Assert-True ($null -eq $excluded) "without the bus id it is (rightly) excluded"
+    $accepted = Select-QualificationSession -Sessions @($live) -BaselineIds @("live-before") -ReadyAt $readyAt -ActivityProbe $probe -Qualifier ${function:Test-CoreQualification} -AcceptIds @("live-before")
+    Assert-Equal "live-before" $accepted.SessionId "named by the bus: accepted"
+    $new = Get-NewSessions -Sessions @($live) -BaselineIds @("live-before") -ReadyAt $readyAt -AcceptIds @("live-before")
+    Assert-Equal 1 $new.Count "Get-NewSessions accepts it too"
+}
+Test-Case "17b. Get-BusVoiceSessionIds: voice events since the run start, distinct, newest last; other subsystems ignored" {
+    $since = [DateTimeOffset]::Parse("2026-09-04T20:00:00Z", [Globalization.CultureInfo]::InvariantCulture)
+    $events = @(
+        [pscustomobject]@{ state = "agent.listening"; subsystem = "voice"; session_id = "old-s"; at = "2026-09-04T19:59:00Z" },
+        [pscustomobject]@{ state = "agent.listening"; subsystem = "voice"; session_id = "s-1"; at = "2026-09-04T20:01:00Z" },
+        [pscustomobject]@{ state = "eye.active"; subsystem = "presence"; session_id = $null; at = "2026-09-04T20:01:30Z" },
+        [pscustomobject]@{ state = "agent.speaking"; subsystem = "voice"; session_id = "s-1"; at = "2026-09-04T20:02:00Z" },
+        [pscustomobject]@{ state = "agent.idle"; subsystem = "voice"; session_id = "s-2"; at = "2026-09-04T20:03:00Z" }
+    )
+    $ids = Get-BusVoiceSessionIds -Events $events -Since $since
+    Assert-Equal "s-1,s-2" ($ids -join ",") "distinct voice ids since the start, newest last"
+    $one = Get-BusVoiceSessionIds -Events @($events[1]) -Since $since
+    Assert-True ($one -is [array]) "one id is still an array"
+    Assert-Equal 0 (Get-BusVoiceSessionIds -Events $null -Since $since).Count "no events"
+}
+Test-Case "17c. Wait-QualificationSession refreshes AcceptIds from AcceptProbe each poll and selects the bus-named session" {
+    $fake = New-FakeClock
+    $live = New-Session -Id "live-before" -StartedAt "2026-09-04T19:50:00Z"
+    $polls = @{ n = 0 }
+    $acceptProbe = { $polls.n++; if ($polls.n -ge 2) { @("live-before") } else { @() } }.GetNewClosure()
+    $result = Wait-QualificationSession -ListSessions { @($live) } -ActivityProbe { param($Id) New-CoreActivity -Id $Id -Succeeded @("state.now") } `
+        -BaselineIds @("live-before") -ReadyAt $readyAt -TimeoutSec 60 -IntervalSec 5 -Sleep $fake.Sleep -Clock $fake.Clock `
+        -Qualifier ${function:Test-CoreQualification} -ConnectWaitSec 30 -AcceptProbe $acceptProbe
+    Assert-Equal "live-before" $result.Selected.SessionId "selected once the bus named it"
+}
+Test-Case "18. Get-EyeReceiptSteps: ac -> kapat -> ac read off the receipts, verified only, in order" {
+    $calls = @(
+        [pscustomobject]@{ name = "state.now"; status = "succeeded" },
+        [pscustomobject]@{ name = "eye.enable"; call_id = "c1"; status = "succeeded"; terminal_status = "failed"; error_class = "permission_denied"; speech_head = "Kamerayi acamadim"; observed_after = [pscustomobject]@{ local = [pscustomobject]@{ state = "ERROR"; media_track_ready_state = $null; action_trace = @("request:enable", "getUserMedia:NotAllowedError") } } },
+        [pscustomobject]@{ name = "eye.enable"; call_id = "c2"; status = "succeeded"; terminal_status = "verified"; speech_head = "Gozumu actim efendim."; observed_after = [pscustomobject]@{ local = [pscustomobject]@{ state = "ACTIVE"; media_track_ready_state = "live"; action_trace = @("request:enable", "loop:started") } } },
+        [pscustomobject]@{ name = "eye.disable"; call_id = "c3"; status = "succeeded"; terminal_status = "verified"; speech_head = "Gozumu kapattim efendim."; observed_after = [pscustomobject]@{ local = [pscustomobject]@{ state = "DISABLED"; media_track_ready_state = "ended" } } }
+    )
+    $steps = Get-EyeReceiptSteps -Calls $calls
+    Assert-Equal 3 $steps.Receipts.Count "three eye receipts seen (state.now is not one)"
+    Assert-Equal 0 $steps.Receipts[2].Trace.Count "no trace reported is an empty list, not null"
+    $oneTrace = Get-EyeReceiptSteps -Calls @([pscustomobject]@{ name = "eye.enable"; call_id = "t1"; status = "succeeded"; terminal_status = "verified"; observed_after = [pscustomobject]@{ local = [pscustomobject]@{ state = "ACTIVE"; action_trace = @("request:enable") } } })
+    Assert-Equal 1 $oneTrace.Receipts[0].Trace.Count "a one-entry trace is still a list"
+    Assert-Equal 2 $steps.Satisfied "enable then disable satisfied; the third step is open"
+    Assert-True (-not $steps.Done) "not done"
+    Assert-Equal "c2,c3" (($steps.Matched | ForEach-Object { $_.CallId }) -join ",") "the failed enable did not count"
+    Assert-Equal "permission_denied" $steps.Receipts[0].ErrorClass "the failed one keeps its class"
+    Assert-Equal "live" $steps.Matched[0].Track "track state read off the receipt"
+    Assert-Equal 2 $steps.Matched[0].Trace.Count "trace is a list"
+    $done = Get-EyeReceiptSteps -Calls ($calls + @([pscustomobject]@{ name = "eye.enable"; call_id = "c4"; status = "succeeded"; terminal_status = "verified" }))
+    Assert-True $done.Done "third verified receipt finishes the test"
+    $one = Get-EyeReceiptSteps -Calls @([pscustomobject]@{ name = "eye.enable"; call_id = "only"; status = "succeeded"; terminal_status = "verified" })
+    Assert-Equal 1 $one.Receipts.Count "one receipt is a list of one"
+    Assert-Equal 0 (Get-EyeReceiptSteps -Calls $null).Receipts.Count "no calls"
+}
+Test-Case "19. Test-HiddenEyeMutation: a voice: eye row outside every receipt window is a second mutation path" {
+    $receipts = @([pscustomobject]@{ action_id = "c1"; started_at = "2026-09-04T20:01:00Z"; completed_at = "2026-09-04T20:01:01Z" })
+    $inside = [pscustomobject]@{ event_type = "eye.disabled"; occurred_at = "2026-09-04T20:01:00.5Z"; detail_json = [pscustomobject]@{ reason = "voice:gozunu kapat" } }
+    $outside = [pscustomobject]@{ event_type = "eye.disabled"; occurred_at = "2026-09-04T20:05:00Z"; detail_json = [pscustomobject]@{ reason = "voice:gozunu kapat" } }
+    $control = [pscustomobject]@{ event_type = "eye.enabled"; occurred_at = "2026-09-04T20:05:00Z"; detail_json = [pscustomobject]@{ reason = "owner_start" } }
+    Assert-Equal 0 (Test-HiddenEyeMutation -LedgerRows @($inside, $control) -Receipts $receipts).Count "inside a window, or not by voice: explained"
+    $bad = Test-HiddenEyeMutation -LedgerRows @($inside, $outside) -Receipts $receipts
+    Assert-Equal 1 $bad.Count "one unexplained voice mutation"
+    Assert-True ($bad[0] -like "*eye.disabled (voice:gozunu kapat)") "named: $($bad[0])"
+    Assert-Equal 1 (Test-HiddenEyeMutation -LedgerRows @($outside) -Receipts $null).Count "no receipts at all: every voice row is unexplained"
+}
 Test-Case "15. Get-SessionRouterSummary: none / one / many, through the array traps" {
     $none = Get-SessionRouterSummary -Activity ([pscustomobject]@{ session_id = "x" })
     Assert-Equal "none" $none.ToolCalls "no calls"

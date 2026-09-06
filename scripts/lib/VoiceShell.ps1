@@ -235,7 +235,13 @@ function Select-QualificationSession {
         [AllowNull()][Nullable[DateTimeOffset]]$NotBefore = $null,
         [string[]]$ClientKinds = @("web"),
         [int]$ToleranceSec = 1,
-        [AllowNull()][scriptblock]$Qualifier = $null
+        [AllowNull()][scriptblock]$Qualifier = $null,
+        # Ids the Core itself named on the UI-state bus after the run started (voice events
+        # carry session_id). Accepted regardless of baseline and readiness: the owner's run
+        # of 2026-09-06 (later) connected voice BEFORE the harness took its baseline, so the
+        # live Core session was excluded as "old" while the bus was naming it every turn.
+        # Correlation by the canonical session id, never inference from a state name.
+        [AllowEmptyCollection()][string[]]$AcceptIds = @()
     )
     if ($null -eq $Qualifier) { $Qualifier = ${function:Test-ExplainQualification} }
     # sel-prefixed locals: this function invokes two callbacks (ActivityProbe, Qualifier),
@@ -244,18 +250,22 @@ function Select-QualificationSession {
     $selCandidates = @()
     foreach ($selSession in $Sessions) {
         $selId = [string]$selSession.session_id
-        if (-not $selId -or $BaselineIds -contains $selId) { continue }
+        if (-not $selId) { continue }
         $selKind = [string]$selSession.client_kind
         if ($ClientKinds.Count -gt 0 -and $ClientKinds -notcontains $selKind) { continue }
         $selStarted = ConvertTo-SessionInstant -Raw ([string]$selSession.started_at)
         if ($null -eq $selStarted) { continue }
-        # $null -ne <param> is the presence test. The value is used directly rather than
-        # through .Value, because Windows PowerShell 5.1 binds a Nullable[T] parameter as a
-        # plain T once it has a value, and StrictMode then refuses the .Value access.
-        if ($null -ne $ReadyAt -and
-            -not (Test-InstantAtOrAfter -Instant $selStarted -Floor ([DateTimeOffset]$ReadyAt) -ToleranceSec $ToleranceSec)) { continue }
-        if ($null -ne $NotBefore -and
-            -not (Test-InstantAtOrAfter -Instant $selStarted -Floor ([DateTimeOffset]$NotBefore) -ToleranceSec 0)) { continue }
+        $selAccepted = ($AcceptIds -contains $selId)
+        if (-not $selAccepted) {
+            if ($BaselineIds -contains $selId) { continue }
+            # $null -ne <param> is the presence test. The value is used directly rather than
+            # through .Value, because Windows PowerShell 5.1 binds a Nullable[T] parameter as a
+            # plain T once it has a value, and StrictMode then refuses the .Value access.
+            if ($null -ne $ReadyAt -and
+                -not (Test-InstantAtOrAfter -Instant $selStarted -Floor ([DateTimeOffset]$ReadyAt) -ToleranceSec $ToleranceSec)) { continue }
+            if ($null -ne $NotBefore -and
+                -not (Test-InstantAtOrAfter -Instant $selStarted -Floor ([DateTimeOffset]$NotBefore) -ToleranceSec 0)) { continue }
+        }
         $selCandidates += [pscustomobject]@{ Session = $selSession; Id = $selId; Started = $selStarted }
     }
     foreach ($selCandidate in ($selCandidates | Sort-Object -Property Started -Descending)) {
@@ -411,7 +421,12 @@ function Wait-QualificationSession {
         # receives everything it needs as arguments and must not reach for library
         # functions: a closure (GetNewClosure) cannot see a dot-sourced script's functions,
         # which is exactly how the owner's run of 2026-09-06 crashed.
-        [AllowNull()][scriptblock]$GiveUp = $null
+        [AllowNull()][scriptblock]$GiveUp = $null,
+        # Ids the Core named on the bus (Get-BusVoiceSessionIds): accepted as this run's
+        # regardless of baseline/readiness. Optionally refreshed each poll via AcceptProbe
+        # (scriptblock() -> string[]), because the owner may connect after the wait began.
+        [AllowEmptyCollection()][string[]]$AcceptIds = @(),
+        [AllowNull()][scriptblock]$AcceptProbe = $null
     )
     # Every local here is wait-prefixed. A callback invoked from this function resolves
     # its free variables by DYNAMIC scope, nearest first - so a plain local named $act or
@@ -423,11 +438,15 @@ function Wait-QualificationSession {
     $waitConnectedAt = $null
     $waitLastProgressAt = [double]::NegativeInfinity
     $waitProgress = @()
+    $waitAccept = @($AcceptIds)
     while ($true) {
         $waitAttempts++
+        if ($null -ne $AcceptProbe) {
+            try { foreach ($waitId in @(& $AcceptProbe)) { if ($waitId -and $waitAccept -notcontains $waitId) { $waitAccept += $waitId } } } catch { }
+        }
         $waitSessions = @(& $ListSessions)
         $waitSelected = Select-QualificationSession -Sessions $waitSessions -BaselineIds $BaselineIds `
-            -ActivityProbe $ActivityProbe -ReadyAt $ReadyAt -NotBefore $NotBefore -Qualifier $Qualifier
+            -ActivityProbe $ActivityProbe -ReadyAt $ReadyAt -NotBefore $NotBefore -Qualifier $Qualifier -AcceptIds $waitAccept
         $waitElapsed = [double](& $Clock) - $waitStarted
         if ($null -ne $waitSelected) {
             return [pscustomobject]@{ Selected = $waitSelected; Attempts = $waitAttempts; ElapsedSec = $waitElapsed; GaveUp = $null; Progress = $waitProgress }
@@ -435,7 +454,7 @@ function Wait-QualificationSession {
         if ($waitElapsed -ge $TimeoutSec) {
             return [pscustomobject]@{ Selected = $null; Attempts = $waitAttempts; ElapsedSec = $waitElapsed; GaveUp = "budget of $TimeoutSec s spent"; Progress = $waitProgress }
         }
-        $waitNew = Get-NewSessions -Sessions $waitSessions -BaselineIds $BaselineIds -ReadyAt $ReadyAt
+        $waitNew = Get-NewSessions -Sessions $waitSessions -BaselineIds $BaselineIds -ReadyAt $ReadyAt -AcceptIds $waitAccept
         $waitNewest = $null
         if ($waitNew.Count -gt 0) {
             $waitSorted = @($waitNew | Sort-Object -Property { ConvertTo-SessionInstant -Raw ([string]$_.started_at) } -Descending)
@@ -481,19 +500,117 @@ function Get-NewSessions {
         [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Sessions,
         [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$BaselineIds,
         [AllowNull()][Nullable[DateTimeOffset]]$ReadyAt = $null,
-        [string[]]$ClientKinds = @("web")
+        [string[]]$ClientKinds = @("web"),
+        [AllowEmptyCollection()][string[]]$AcceptIds = @()
     )
     $out = @()
-    foreach ($session in $Sessions) {
-        $id = [string]$session.session_id
-        if (-not $id -or $BaselineIds -contains $id) { continue }
-        if ($ClientKinds.Count -gt 0 -and $ClientKinds -notcontains [string]$session.client_kind) { continue }
-        $started = ConvertTo-SessionInstant -Raw ([string]$session.started_at)
-        if ($null -eq $started) { continue }
-        if ($null -ne $ReadyAt -and -not (Test-InstantAtOrAfter -Instant $started -Floor ([DateTimeOffset]$ReadyAt) -ToleranceSec 1)) { continue }
-        $out += $session
+    foreach ($nsSession in $Sessions) {
+        $nsId = [string]$nsSession.session_id
+        if (-not $nsId) { continue }
+        if ($ClientKinds.Count -gt 0 -and $ClientKinds -notcontains [string]$nsSession.client_kind) { continue }
+        $nsStarted = ConvertTo-SessionInstant -Raw ([string]$nsSession.started_at)
+        if ($null -eq $nsStarted) { continue }
+        if ($AcceptIds -notcontains $nsId) {
+            if ($BaselineIds -contains $nsId) { continue }
+            if ($null -ne $ReadyAt -and -not (Test-InstantAtOrAfter -Instant $nsStarted -Floor ([DateTimeOffset]$ReadyAt) -ToleranceSec 1)) { continue }
+        }
+        $out += $nsSession
     }
     return , $out
+}
+
+function Get-BusVoiceSessionIds {
+    <#
+        The realtime session ids the Core itself named on the UI-state bus since an instant:
+        every voice-subsystem event carries the canonical session_id. Newest last, distinct.
+        This is how a harness correlates to the session the Core is REALLY in.
+    #>
+    param([AllowNull()]$Events, [AllowNull()][Nullable[DateTimeOffset]]$Since = $null)
+    $ids = @()
+    foreach ($ev in (ConvertTo-Array -Value $Events)) {
+        if ([string](Get-OptionalProperty -InputObject $ev -Name "subsystem") -ne "voice") { continue }
+        $id = [string](Get-OptionalProperty -InputObject $ev -Name "session_id")
+        if (-not $id) { continue }
+        if ($null -ne $Since) {
+            $at = ConvertTo-SessionInstant -Raw ([string](Get-OptionalProperty -InputObject $ev -Name "at"))
+            if ($null -eq $at -or -not (Test-InstantAtOrAfter -Instant $at -Floor ([DateTimeOffset]$Since) -ToleranceSec 1)) { continue }
+        }
+        if ($ids -contains $id) { $ids = @($ids | Where-Object { $_ -ne $id }) }
+        $ids += $id
+    }
+    return , $ids
+}
+
+function Get-EyeReceiptSteps {
+    <#
+        The owner's three-step eye test (aç, kapat, aç) read off a session's tool calls:
+        which VERIFIED eye receipts arrived, in order, and how many of the expected steps
+        (enable, disable, enable) they satisfy. Also every eye receipt seen, verified or
+        not, so a failed step is reported with its own error class.
+    #>
+    param([AllowNull()]$Calls, [string[]]$Expected = @("eye.enable", "eye.disable", "eye.enable"))
+    $receipts = @()
+    foreach ($c in (ConvertTo-Array -Value $Calls)) {
+        $name = [string](Get-OptionalProperty -InputObject $c -Name "name")
+        if ($name -notlike "eye.*") { continue }
+        $local = $null
+        $after = Get-OptionalProperty -InputObject $c -Name "observed_after"
+        if ($null -ne $after) { $local = Get-OptionalProperty -InputObject $after -Name "local" }
+        # Built OUTSIDE the hashtable literal: a $( ) subexpression there unrolls a
+        # one-element trace to a string (no .Count under StrictMode) and turns an empty one
+        # into $null. Assigned first, then cast, it stays a string[] of any length.
+        $trace = @()
+        if ($null -ne $local) { $trace = ConvertTo-Array -Value (Get-OptionalProperty -InputObject $local -Name "action_trace") }
+        $receipts += [pscustomobject]@{
+            Name       = $name
+            CallId     = [string](Get-OptionalProperty -InputObject $c -Name "call_id")
+            Status     = [string](Get-OptionalProperty -InputObject $c -Name "status")
+            Terminal   = [string](Get-OptionalProperty -InputObject $c -Name "terminal_status")
+            ErrorClass = [string](Get-OptionalProperty -InputObject $c -Name "error_class")
+            Speech     = [string](Get-OptionalProperty -InputObject $c -Name "speech_head")
+            LocalState = $(if ($null -ne $local) { [string](Get-OptionalProperty -InputObject $local -Name "state") } else { "" })
+            Track      = $(if ($null -ne $local) { [string](Get-OptionalProperty -InputObject $local -Name "media_track_ready_state") } else { "" })
+            Trace      = [string[]]$trace
+            SessionId  = [string](Get-OptionalProperty -InputObject $c -Name "session_id")
+            CreatedAt  = [string](Get-OptionalProperty -InputObject $c -Name "created_at")
+        }
+    }
+    $satisfied = 0
+    $matched = @()
+    foreach ($r in $receipts) {
+        if ($satisfied -ge $Expected.Count) { break }
+        if ($r.Name -eq $Expected[$satisfied] -and $r.Terminal -eq "verified") { $matched += $r; $satisfied++ }
+    }
+    return [pscustomobject]@{ Receipts = $receipts; Satisfied = $satisfied; Matched = $matched; Expected = $Expected; Done = ($satisfied -ge $Expected.Count) }
+}
+
+function Test-HiddenEyeMutation {
+    <#
+        Every durable eye row written by voice (reason voice:*) since the run must fall
+        inside the window of some eye receipt of this run (started_at .. completed_at,
+        widened by ToleranceSec) - otherwise a second, unreceipted path mutated the eye.
+        Returns the unexplained rows' descriptions (empty = one canonical path).
+    #>
+    param([AllowNull()]$LedgerRows, [AllowNull()]$Receipts, [int]$ToleranceSec = 3)
+    $windows = @()
+    foreach ($r in (ConvertTo-Array -Value $Receipts)) {
+        $from = ConvertTo-SessionInstant -Raw ([string](Get-OptionalProperty -InputObject $r -Name "started_at"))
+        $to = ConvertTo-SessionInstant -Raw ([string](Get-OptionalProperty -InputObject $r -Name "completed_at"))
+        if ($null -eq $from) { continue }
+        if ($null -eq $to) { $to = $from }
+        $windows += [pscustomobject]@{ From = ([DateTimeOffset]$from).AddSeconds(-$ToleranceSec); To = ([DateTimeOffset]$to).AddSeconds($ToleranceSec); Id = [string](Get-OptionalProperty -InputObject $r -Name "action_id") }
+    }
+    $unexplained = @()
+    foreach ($row in (ConvertTo-Array -Value $LedgerRows)) {
+        $detail = Get-OptionalProperty -InputObject $row -Name "detail_json"
+        $reason = if ($null -ne $detail) { [string](Get-OptionalProperty -InputObject $detail -Name "reason") } else { "" }
+        if (-not $reason.StartsWith("voice:")) { continue }
+        $at = ConvertTo-SessionInstant -Raw ([string](Get-OptionalProperty -InputObject $row -Name "occurred_at"))
+        $covered = $false
+        foreach ($w in $windows) { if ($null -ne $at -and ([DateTimeOffset]$at) -ge $w.From -and ([DateTimeOffset]$at) -le $w.To) { $covered = $true; break } }
+        if (-not $covered) { $unexplained += ("{0} {1} ({2})" -f (Get-OptionalProperty -InputObject $row -Name "occurred_at"), (Get-OptionalProperty -InputObject $row -Name "event_type"), $reason) }
+    }
+    return , $unexplained
 }
 
 function Format-QualificationProgress {

@@ -105,6 +105,25 @@ Test-Case "the third trap: a , @(...) return PIPED directly arrives as ONE item 
     $viaVariable = @($rows | Where-Object { [string]$_.event_type -eq "a" })
     Assert-Equal 1 $viaVariable.Count "assigned first, the filter sees each row"
 }
+Test-Case "the fourth trap: an EMPTY array through an if-expression is null, and @(helper-call) wraps the whole array as one element" {
+    # 2026-09-06, owner-m18-eye.ps1: `$receipts = if ($null -ne $steps) { ... } else { @() }`
+    # left $receipts null (no session), and `.Count` threw after every other check had run.
+    $x = if ($false) { @(1) } else { @() }
+    if ($null -ne $x) { throw "expected the empty array to have become null (PowerShell 5.1 semantics changed?)" }
+    $threw = $false
+    try { $null = $x.Count } catch { $threw = $true }
+    if (-not $threw) { throw "expected .Count on null to throw under StrictMode" }
+    # The fix: assign inside the branch.
+    $y = @()
+    if ($false) { $y = @(1) }
+    Assert-Equal 0 $y.Count "assigned inside the branch, an empty array stays an array"
+    # And `@(Get-RowsLike ...)` around a `, @(...)` return: ONE element, the array itself.
+    $wrapped = @(Get-RowsLike -Doc $docTwo)
+    Assert-Equal 1 $wrapped.Count "the whole two-row array became one element"
+    $rows = Get-RowsLike -Doc $docTwo
+    $kept = @($rows)
+    Assert-Equal 2 $kept.Count "assigned first, @(variable) keeps the rows"
+}
 Test-Case "a scalar-in-a-collection helper output filtered to nothing is an empty array, not null" {
     $rows = Get-RowsLike -Doc $docOne
     $none = @($rows | Where-Object { $_.event_type -eq "never" })
