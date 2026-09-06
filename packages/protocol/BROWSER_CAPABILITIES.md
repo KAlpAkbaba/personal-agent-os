@@ -1,7 +1,17 @@
 # Browser capabilities over the device protocol (M13, ADR-0050)
 
-Status: contract v1 — binding for `services/api` (Cloud Core), `devices/windows-agent`
+Status: contract **v1.2** — binding for `services/api` (Cloud Core), `devices/windows-agent`
 (Session Companion) and `services/browser` (Browser Worker). Change it here first.
+
+- v1 (M13, ADR-0050): the family, sessions, risk classes, the error taxonomy, §3's payloads.
+- v1.1 (2026-09-04, ADR-0050 addendum): the persistent research session, Google through the
+  real UI, the owner verification handoff (§3a), search schema 3.
+- **v1.2 (2026-09-07, M18.3 Track B, ADR-0073): the alarm media family** — `browser.media_play`,
+  `browser.media_volume`, `browser.media_status`, `browser.media_stop` (§1, §3b), the dedicated
+  `alarm` profile and the `media` session kind (§2). Additive: every v1.1 name, payload and
+  result is unchanged. The worker advertises `contracts["browser.media"] = 1`; a consumer
+  checks it BEFORE planning a media wake, so an agent installed before M18.3 produces a named
+  contract mismatch and the local tone fallback rather than a failure inside a firing alarm.
 
 The Windows Browser Agent is reached over the SAME proven device/broker command path as
 `desktop.open_application` (DEVICE_PROTOCOL.md §5): one command envelope, one
@@ -45,6 +55,10 @@ Per-operation names (each is a device command `capability`):
 | `browser.download` | HIGH_IMPACT | Save a file the owner authorised. Gated (§4). |
 | `browser.search` | NAVIGATE | Run a web search on a search engine page and read the result links semantically. |
 | `browser.fetch_evidence` | NAVIGATE | navigate + wait + extract + classify in one command (the research primitive). |
+| `browser.media_play` | NAVIGATE | v1.2. Play a named media URL in a `media` session and PROVE it is playing. |
+| `browser.media_volume` | NAVIGATE | v1.2. Ramp the media element's own volume inside the page. |
+| `browser.media_status` | READ | v1.2. Read the media element. Changes nothing. |
+| `browser.media_stop` | NAVIGATE | v1.2. Pause, then close the session. Idempotent. |
 
 Names match `^[a-z][a-z0-9_.]{1,63}$`. Anything else in the `browser.` namespace fails with
 `capability_missing`.
@@ -62,9 +76,12 @@ id). A session is one Playwright context in one Chrome instance with its own tab
 ```
 
 - `profile`: `research` (the dedicated PagentOS agent profile, persistent, never the owner's
-  `User Data`) or `isolated` (fresh non-persistent context). The owner's real Chrome session
+  `User Data`), `alarm` (v1.2 — a SECOND dedicated persistent profile, for alarm media only)
+  or `isolated` (fresh non-persistent context). The owner's real Chrome session
   is NOT reachable through this contract in v1; it stays behind `BrowserEnrollment` +
   `owner_authorized_for_research` (ADR-0035 §4) and a later contract version.
+- `session_kind` (v1.2, optional, default `research`): `research` — everything v1.1 did,
+  unchanged — or `media`, the alarm surface (§3b).
 - `policy.allowed_risk_classes`: the classes this session may execute (§4). A research session
   is `["READ","NAVIGATE"]`. The worker enforces this per operation and refuses the rest with
   `security_scope_error` — Cloud Core enforces the same rule before sending (defence in depth).
@@ -72,9 +89,37 @@ id). A session is one Playwright context in one Chrome instance with its own tab
 - `channel`: `chrome` (installed Google Chrome; the qualification target) or `chromium`
   (Playwright's bundled build, CI only). Missing channel → `dependency_unavailable`.
 
-Result: `{"session_id":"…","created":true|false,"channel":"chrome","browser_version":"…","idle_timeout_s":600,"policy":{…},"lifecycle":{…}}`.
+Result: `{"session_id":"…","created":true|false,"profile":"research","session_kind":"research","channel":"chrome","browser_version":"…","idle_timeout_s":600,"policy":{…},"lifecycle":{…}}`
+(`profile`/`session_kind` are v1.2 additions; every other key is unchanged).
 Reopening an existing session returns `created:false` and the existing policy (policy is not
-widened by a second open; a narrower reopen is applied).
+widened by a second open; a narrower reopen is applied). A reopen may NOT change `profile` or
+`session_kind` — that answers `validation_error`, because silently handing the caller a
+different browser than the one it named is worse than refusing.
+
+**The alarm profile and the media session kind (v1.2, M18.3, ADR-0073).** They are one thing,
+checked from both directions: `profile: "alarm"` requires `session_kind: "media"`, and a
+`media` session may never use the `research` profile (both refusals are `validation_error`).
+The alarm profile directory is DERIVED, not configured by default — the research profile's
+sibling, `<profile-dir>-alarm` — and the worker refuses at startup an
+`--alarm-profile-dir` that is, or contains, the research profile; `ManagedBackend`'s existing
+real-profile guard refuses either of them anywhere inside a real Chrome/Edge/Brave profile
+tree. So alarm audio can never appear in the browser the owner's research is using, and never
+in the owner's own Chrome. One session id owns each persistent profile at a time (the M13
+lifecycle guard, generalised): a second session id on the `alarm` profile is
+`browser_lifecycle_violation`, exactly as for `research`, and the two coexist happily.
+
+Under `session_kind: "media"` the worker launches Chrome with
+**`--autoplay-policy=no-user-gesture-required`** and, by default, a visible window (an
+explicit `policy.visible` still wins). That switch is a *preference for our own dedicated
+window* — it changes how our profile treats our page's `play()` call. **It is not an anti-bot
+measure**: it defeats no site protection, no bot detection, no DRM, no advertising and no
+consent handling, and it is applied to no other session kind. A media session's default risk
+classes are `["READ","NAVIGATE"]`, the same as research: the media surface never fills a
+field, never submits, never downloads and never clicks anything.
+
+The four media operations REFUSE to run on a session that is not `session_kind: "media"`
+(`validation_error` naming the fix). That refusal, not a convention, is what keeps alarm
+audio out of the research browser.
 
 **Lifecycle invariant and identity (ADR-0050 items 14/15).** One research job = one worker
 process + one Chrome process on the dedicated profile + one window; tabs are bounded
@@ -299,11 +344,82 @@ its query matches (`path=handoff_cleared`), otherwise types the query again.
 a new tab, extracts there, closes that tab and reselects the previous one, so the Google
 results tab stays loaded for the next search; the result carries `"tab_used"`.
 
+## 3b. Alarm media operations (contract v1.2, M18.3 spec §4, ADR-0073)
+
+Four operations on a `session_kind: "media"` session (§2). They exist so the wake alarm can
+play the music the owner named and PROVE it is playing — or say, truthfully, why it is not,
+so Cloud Core records that and rings the local tone instead.
+
+| op | risk | payload |
+|---|---|---|
+| `browser.media_play` | NAVIGATE | `{"session_id":"…","url":"https://…","volume":0.15,"verify_seconds":3}` — `volume` 0..1, `verify_seconds` an integer 1..10 (default 3) |
+| `browser.media_volume` | NAVIGATE | `{"session_id":"…","level":0.6,"ramp_seconds":20}` — `level` 0..1, `ramp_seconds` 0..120 (default 0 = set at once) |
+| `browser.media_status` | READ | `{"session_id":"…"}` |
+| `browser.media_stop` | NAVIGATE | `{"session_id":"…"}` |
+
+```json
+media_play   {"playing":true,"verified":true,"url":"…","final_url":"…","title":"…","current_time_s":1.5,"duration_s":250.0,"volume":0.15,"muted":false,"reason":null}
+media_volume {"applied":true,"level_from":0.15,"level_to":0.6,"ramp_seconds":20}
+media_status {"present":true,"playing":true,"paused":false,"ended":false,"current_time_s":13.0,"duration_s":250.0,"volume":0.6,"muted":false,"title":"…","url":"…"}
+media_stop   {"stopped":true,"was_playing":true,"session_id":"…","browser_pid_exited":true}
+```
+
+`media_play`: validates the URL against the same destination policy as `navigate` (a refusal
+is `security_scope_error`, never a playback `reason`), navigates, classifies the landing page
+(§3), waits at most **10 s** for a `<video>` element, sets `volume` **FIRST** (so the owner is
+never hit by the page's own level for the instant before the ramp), calls `play()`, then
+verifies that the element's own `currentTime` advanced by **≥ 0.5 s** over `verify_seconds`
+while `paused === false`. `verified: true` means the page really moved; `playing` is what the
+element reports at the end of the check.
+
+`reason` — `null` when verified, otherwise exactly one of:
+
+| reason | when |
+|---|---|
+| `no_media_element` | no `<video>` attached within 10 s (and no consent wording on the page) |
+| `autoplay_blocked` | `play()` rejected with `NotAllowedError` |
+| `challenge` | CAPTCHA / "confirm you're not a bot" / sign-in wall (`page_kind` `captcha`/`auth_wall`/`blocked`, or Google's `/sorry/` interstitial) |
+| `consent_wall` | a consent gate the page cannot leave without a click we will not make: a `consent.youtube.*` / `consent.google.*` landing, or consent wording on a page that produced no media element |
+| `navigation_failed` | HTTP ≥ 400, or a transport failure (`net::ERR_*`, DNS, navigation timeout) |
+| `error` | `play()` rejected for any other reason, or it resolved and the element still did not move |
+
+**NO retry, NO bypass, no click on anything** — not a consent button, not an ad, not a
+challenge. No DRM or ad circumvention, no download, nothing that reads cookies or storage
+(the forbidden-key scan and the 48 KiB cap apply unchanged). A wall is reported and the alarm
+falls back to the device's own tone. Consent WORDING alone never makes a `consent_wall`: a
+cookie banner floating over a video that plays anyway is a successful play.
+
+Deviation from the M18.3 spec table, deliberately: a transport-level navigation failure is a
+*successful* command with `reason: "navigation_failed"` rather than a retryable typed error,
+because the caller in a firing alarm needs a media receipt it can record and fall back from —
+not a `dependency_unavailable` in the middle of the wake sequence. Payload and policy errors
+(`validation_error`, `security_scope_error`) stay hard errors.
+
+`media_volume`: the ramp runs **inside the page** — a `setInterval` stepping the media
+element's own `volume` from its current level to `level` every **250 ms**, cancelling any ramp
+already running, clamping every write to 0..1 and landing exactly on `level`. The op returns
+as soon as the interval is armed, so a 20 s wake ramp does not hold a device command open for
+20 s; a ramp of **≤ 2 s** (the greeting's duck and restore) is awaited to completion before
+the op returns. `level_from` is the element's ACTUAL level, read in the page — `null`, with
+`applied: false`, when there is no media element (a documented addition to the spec's shape:
+a missing element must not raise in the middle of a greeting). This is the media element's
+own volume and never the Windows master volume.
+
+`media_status` reads and changes nothing. `volume` and `duration_s` are `null` rather than a
+fabricated `0.0` when there is no element or no known duration (documented addition).
+
+`media_stop` pauses the element, then closes the session with ordinary `session_close`
+semantics (including the bounded wait for the browser process to actually exit, reported as
+`browser_pid_exited`). Idempotent: stopping a session that is already gone answers
+`{"stopped":true,"was_playing":false,…}`. A page that has already died still gets its session
+closed — the alarm must end even when the tab did not survive. `media_stop` and `session_open`
+results also carry `lifecycle` (§2), as every session-scoped result does.
+
 ## 4. Risk classes and enforcement
 
-`READ` (inspect, find, wait, extract, snapshot, screenshot, worker_status) ·
+`READ` (inspect, find, wait, extract, snapshot, screenshot, worker_status, media_status) ·
 `NAVIGATE` (session_open/close, navigate, back, forward, tabs, scroll, search, fetch_evidence,
-click on a plain link) · `REVERSIBLE_WRITE` (fill, select_option, set_checked, click on a
+media_play, media_volume, media_stop, click on a plain link) · `REVERSIBLE_WRITE` (fill, select_option, set_checked, click on a
 non-submitting control) · `EXTERNAL_COMMUNICATION` (click on a submit control or inside a
 `<form>` submit path; pressing Enter is not exposed in v1) · `HIGH_IMPACT` (download; any
 click the worker classifies as purchase/delete/send by accessible name markers such as
@@ -384,7 +500,7 @@ requests fail with `dependency_unavailable`, retryable), `shutdown` then kill on
 stop; a request whose `timeout_ms` elapses is cancelled and answered `timeout`. Requests are
 executed concurrently by the worker per session but serially within a session.
 
-Worker CLI: `python -m browser_agent.worker --data-dir <dir> [--profile-dir <dir>] [--channel chrome|chromium] [--visible|--headless] [--idle-timeout-s 600]`. The profile dir must be a dedicated PagentOS profile (the package already rejects real `User Data` trees).
+Worker CLI: `python -m browser_agent.worker --data-dir <dir> [--profile-dir <dir>] [--alarm-profile-dir <dir>] [--channel chrome|chromium] [--visible|--headless] [--idle-timeout-s 600]`. Both profile dirs must be dedicated PagentOS profiles (the package already rejects real `User Data` trees), and `--alarm-profile-dir` (v1.2, default `<profile-dir>-alarm`) must not be, or contain, the research profile.
 
 ## 8. Capability advertisement and device selection (Cloud Core side)
 
