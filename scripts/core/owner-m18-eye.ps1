@@ -39,8 +39,17 @@ param(
     [string]$OutFile = "",
     [switch]$SkipWeb,
     [string]$PnpmPath = "pnpm",
+    # auto: release the Cloud Core once when it does not advertise the action-contract tools
+    # (eye.enable / eye.disable / state.now); never: refuse; force: always.
+    [ValidateSet("auto", "never", "force")][string]$CloudCoreUpdate = "auto",
     [ValidateRange(60, 1800)][int]$SessionWaitSec = 600,
+    # Fail fast, with the missing evidence, instead of sitting out the budget: no web session
+    # connected within ConnectWaitSec; a session connected but no router call within
+    # RouterWaitSec of it; the eye watch seeing no change for EyeStallSec.
+    [ValidateRange(30, 600)][int]$ConnectWaitSec = 180,
+    [ValidateRange(30, 600)][int]$RouterWaitSec = 150,
     [ValidateRange(60, 1800)][int]$EyeWaitSec = 420,
+    [ValidateRange(60, 600)][int]$EyeStallSec = 180,
     [ValidateRange(10, 900)][int]$WebReadyTimeoutSec = 180
 )
 
@@ -49,6 +58,7 @@ Set-StrictMode -Version Latest
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 . (Join-Path $repoRoot "scripts\lib\HttpJson.ps1")
+. (Join-Path $repoRoot "scripts\lib\RepoState.ps1")
 . (Join-Path $repoRoot "scripts\lib\VoiceShell.ps1")
 . (Join-Path $repoRoot "scripts\lib\SecretStore.ps1")
 . (Join-Path $repoRoot "scripts\lib\OwnerHarness.ps1")
@@ -156,15 +166,65 @@ function Get-Calls {
     return , $hits
 }
 
+function Get-DeployedVoiceTools {
+    <#  The tool names the deployed Cloud Core hands every realtime session (system health, voice_realtime.tools).  #>
+    param($Health)
+    $checks = Get-OptionalProperty -InputObject $Health -Name "checks"
+    $vr = if ($null -ne $checks) { Get-OptionalProperty -InputObject $checks -Name "voice_realtime" } else { $null }
+    return , (Get-ArrayProperty -InputObject $vr -Name "tools")
+}
+
+function Invoke-CloudCoreRelease {
+    $release = Join-Path $repoRoot "scripts\cloud\release-cloud-core.ps1"
+    Write-Host "      releasing the Cloud Core (transactional: build, migrate, recreate api only, health, rollback on failure)..." -ForegroundColor Yellow
+    & $release
+    if ($LASTEXITCODE -ne 0) { throw "the Cloud Core release exited $LASTEXITCODE; nothing was qualified" }
+}
+
 $webProcess = $null
 $exitCode = 2
 try {
  do {
+    # ------------------------------------------------------------------ the deployed contract
+
+    # The owner's run of 2026-09-06 waited ten minutes for a router session that could not
+    # exist: the deployed Cloud Core still advertised the M17 tool set (no eye.enable,
+    # eye.disable, state.now), so "Gozunu ac" had nothing to route to. The contract must be
+    # RUNNING before anything else is asked of the owner - checked here from the health
+    # manifest, released once if stale, and asserted again afterwards.
+    $requiredTools = @("eye.enable", "eye.disable", "state.now")
+    $deployedTools = Get-DeployedVoiceTools -Health $health
+    $missingTools = @($requiredTools | Where-Object { $deployedTools -notcontains $_ })
+    $releaseBlockers = Get-ReleaseBlockers -RepoRoot $repoRoot
+    $blockerChanges = ConvertTo-Array -Value $releaseBlockers.Changes
+    $releaseCloud = switch ($CloudCoreUpdate) { "force" { $true } "never" { $false } default { $missingTools.Count -gt 0 } }
+    Write-Host "      deployed voice tools: $($deployedTools -join ', ')"
+    if ($missingTools.Count -gt 0 -and $CloudCoreUpdate -eq "never") {
+        throw "the deployed Cloud Core does not advertise $($missingTools -join ', '); -CloudCoreUpdate never refuses to release, and nothing can be qualified without them"
+    }
+    if ($releaseCloud -and $releaseBlockers.Blocked) {
+        Write-ReleaseBlockers -Blockers $releaseBlockers
+        throw ("a Cloud Core release is required (missing: $($missingTools -join ', ')) but the working tree has " +
+               "$($blockerChanges.Count) uncommitted change(s), and a release ships HEAD only. Commit or revert them, then rerun.")
+    }
+    if ($releaseCloud) {
+        Write-Host "      the deployed Cloud Core predates the action contract (missing: $($missingTools -join ', ')): releasing it once" -ForegroundColor Yellow
+        Invoke-CloudCoreRelease
+        $health = Invoke-JsonUtf8 -Uri "$BaseUrl/v1/system/health" -TimeoutSec 20
+        $deployedTools = Get-DeployedVoiceTools -Health $health
+        $missingTools = @($requiredTools | Where-Object { $deployedTools -notcontains $_ })
+    }
+    Add-Check -Name "cloud.action_contract_deployed" -Ok ($missingTools.Count -eq 0) -Detail $(if ($missingTools.Count -eq 0) { "eye.enable, eye.disable, state.now advertised$(if ($releaseCloud) { ' (released in this run)' })" } else { "still missing after the release: " + ($missingTools -join ", ") })
+    if ($missingTools.Count -gt 0) { break }
+
     # ------------------------------------------------------------------ the Core
 
     $baselineIds = @()
+    $baselineSessions = @{}
     foreach ($s in (Get-ArrayProperty -InputObject (Get-Json "/v1/voice/realtime/sessions?limit=50") -Name "sessions")) {
-        $baselineIds += [string](Get-OptionalProperty -InputObject $s -Name "session_id")
+        $id = [string](Get-OptionalProperty -InputObject $s -Name "session_id")
+        $baselineIds += $id
+        $baselineSessions[$id] = [string](Get-OptionalProperty -InputObject $s -Name "state")
     }
     $coreUrl = "http://localhost:$WebPort/core"
     $shell = [ordered]@{ url = $coreUrl; started = $false; ready = $false; ready_after_s = $null; baseline_sessions = $baselineIds.Count }
@@ -186,8 +246,17 @@ try {
     $current = Get-OptionalProperty -InputObject $uiState -Name "current"
     $contractVersion = [int](Get-OptionalProperty -InputObject $uiState -Name "contract_version")
     $currentState = if ($null -ne $current) { [string](Get-OptionalProperty -InputObject $current -Name "state") } else { "" }
-    $evidence.core_state = [ordered]@{ contract_version = $contractVersion; current_state = $currentState }
-    Add-Check -Name "core.real_state" -Ok ($contractVersion -ge 2 -and $currentState -ne "") -Detail "contract v$contractVersion; current=$currentState"
+    # WHOSE state that is: the owner's run of 2026-09-06 read agent.listening at startup
+    # from a session closed minutes earlier. A current event is reported with its age and
+    # its session's state, and "real" means fresh or from a live session - never a leftover.
+    $currentAt = if ($null -ne $current) { ConvertTo-SessionInstant -Raw ([string](Get-OptionalProperty -InputObject $current -Name "at")) } else { $null }
+    $currentAgeS = if ($null -ne $currentAt) { [math]::Round(([DateTimeOffset]::UtcNow - [DateTimeOffset]$currentAt).TotalSeconds) } else { $null }
+    $currentSession = if ($null -ne $current) { [string](Get-OptionalProperty -InputObject $current -Name "session_id") } else { "" }
+    $currentSessionState = if ($currentSession -and $baselineSessions.ContainsKey($currentSession)) { $baselineSessions[$currentSession] } else { "" }
+    $fromLiveSession = ($currentSession -eq "") -or ($currentSessionState -eq "active")
+    $evidence.core_state = [ordered]@{ contract_version = $contractVersion; current_state = $currentState; age_s = $currentAgeS; session = $currentSession; session_state = $currentSessionState }
+    Add-Check -Name "core.real_state" -Ok ($contractVersion -ge 2 -and $currentState -ne "") -Detail "contract v$contractVersion; current=$currentState ($currentAgeS s old$(if ($currentSession) { "; session $currentSession $currentSessionState" }))"
+    Add-Check -Name "core.state_not_stale" -Ok ($currentState -eq "" -or $fromLiveSession -or $currentState -eq "agent.idle" -or ($null -ne $currentAgeS -and $currentAgeS -le 120)) -Detail $(if ($fromLiveSession -or $currentState -eq "agent.idle") { "the current event is not a closed session's leftover" } else { "current=$currentState belongs to session $currentSession ($currentSessionState), $currentAgeS s old - a leftover" })
 
     # The eye must start CLOSED so that "enable" is an observable change.
     $state0 = Get-Json "/v1/presence/state"
@@ -214,23 +283,69 @@ try {
 
     $listSessions = { Get-ArrayProperty -InputObject (Get-Json "/v1/voice/realtime/sessions?limit=50") -Name "sessions" }
     $activityProbe = { param($Id) Get-Json "/v1/voice/realtime/sessions/$Id/activity" }
+    # The wait says what it sees every 15 s and gives up with the exact missing evidence:
+    # no session connected within ConnectWaitSec, or a session connected but no router
+    # call within RouterWaitSec of its start. Never a silent ten minutes again.
+    $waitState = @{ firstSeenAt = $null; lastSession = $null }
+    $onWaiting = {
+        param($Attempt, $Elapsed)
+        if ($Attempt -eq 1) { Write-Host "      waiting for a web voice session that went through the router (up to $SessionWaitSec s; connect within $ConnectWaitSec s)..." }
+        if (($Attempt % 3) -ne 0) { return }
+        $sessionsNow = @()
+        try { $sessionsNow = @(& $listSessions) } catch { $sessionsNow = @() }
+        $mine = Get-NewSessions -Sessions $sessionsNow -BaselineIds $baselineIds -ReadyAt $readyAt
+        $newest = if ($mine.Count -gt 0) { $mine[0] } else { $null }
+        $act = $null
+        if ($null -ne $newest) { try { $act = & $activityProbe ([string]$newest.session_id) } catch { $act = $null } }
+        $core = $null
+        try { $core = Get-OptionalProperty -InputObject (Get-Json "/v1/ui/state") -Name "current" } catch { $core = $null }
+        foreach ($line in (Format-QualificationProgress -Session $newest -Activity $act -CoreCurrent $core -ElapsedSec $Elapsed)) { Write-Host $line -ForegroundColor DarkGray }
+    }.GetNewClosure()
+    $giveUp = {
+        param($Attempts, $Elapsed, $Sessions)
+        $mine = Get-NewSessions -Sessions $Sessions -BaselineIds $baselineIds -ReadyAt $readyAt
+        if ($mine.Count -eq 0) {
+            if ($Elapsed -ge $ConnectWaitSec) { return "no web voice session connected from $coreUrl within $ConnectWaitSec s (sessions since the baseline: 0)" }
+            return $null
+        }
+        if ($null -eq $waitState.firstSeenAt) { $waitState.firstSeenAt = $Elapsed; $waitState.lastSession = [string]$mine[0].session_id }
+        if (($Elapsed - $waitState.firstSeenAt) -ge $RouterWaitSec) {
+            $act = $null
+            try { $act = & $activityProbe ([string]$mine[0].session_id) } catch { $act = $null }
+            $seen = @()
+            foreach ($c in (Get-ArrayProperty -InputObject $act -Name "tool_calls")) { $seen += ("{0}:{1}" -f (Get-OptionalProperty -InputObject $c -Name "name"), (Get-OptionalProperty -InputObject $c -Name "status")) }
+            $kinds = @()
+            foreach ($i in (Get-ArrayProperty -InputObject $act -Name "intents")) { $kinds += ("{0}/{1}" -f (Get-OptionalProperty -InputObject $i -Name "intent"), (Get-OptionalProperty -InputObject $i -Name "klass")) }
+            return ("session {0} connected {1} s ago but made no succeeded router call (state.now / eye.* / activity.explain) within {2} s; tool calls seen: {3}; intents resolved: {4}" -f $mine[0].session_id, [math]::Round($Elapsed - $waitState.firstSeenAt), $RouterWaitSec, $(if ($seen.Count) { $seen -join ", " } else { "none" }), $(if ($kinds.Count) { $kinds -join ", " } else { "none" }))
+        }
+        return $null
+    }.GetNewClosure()
     $waited = Wait-QualificationSession -ListSessions $listSessions -ActivityProbe $activityProbe -BaselineIds $baselineIds `
         -ReadyAt $readyAt -NotBefore $null -TimeoutSec $SessionWaitSec -IntervalSec 5 -Qualifier ${function:Test-CoreQualification} `
-        -OnWaiting { param($Attempt, $Elapsed) if ($Attempt -eq 1) { Write-Host "      waiting for a web voice session that went through the router (up to $SessionWaitSec s)..." } }
+        -OnWaiting $onWaiting -GiveUp $giveUp
     $sessionId = ""
     if ($null -ne $waited.Selected) {
         $sessionId = [string]$waited.Selected.SessionId
         Write-Host "      voice session $sessionId seen after $([math]::Round([double]$waited.ElapsedSec)) s"
     }
-    Add-Check -Name "voice.connected_from_core" -Ok ($sessionId -ne "") -Detail $(if ($sessionId) { "web session $sessionId, new since the baseline, spoke through the router" } else { "no new web session went through the router within $SessionWaitSec s" })
+    Add-Check -Name "voice.connected_from_core" -Ok ($sessionId -ne "") -Detail $(if ($sessionId) { "web session $sessionId, new since the baseline, spoke through the router" } else { [string]$waited.GaveUp })
+    if (-not $sessionId) {
+        Write-Host ""
+        Write-Host "Stopping here: without a router session nothing further can be observed. The missing transition is named above." -ForegroundColor Red
+        foreach ($n in "eye.enabled_read_back", "eye.disabled_read_back", "eye.reenabled_read_back") { Add-Check -Name $n -Ok $false -Detail "not reached: no router session" }
+        $evidence.eye = $null
+    }
 
     # ------------------------------------------------------------------ the eye, read back live
 
-    $eye = [ordered]@{ enabled_seen_at_s = $null; disabled_after_enabled_at_s = $null; reenabled_at_s = $null; final_disabled_at_s = $null; samples = 0 }
+    if ($sessionId) {
+    $eye = [ordered]@{ enabled_seen_at_s = $null; disabled_after_enabled_at_s = $null; reenabled_at_s = $null; final_disabled_at_s = $null; samples = 0; stalled = $null }
     $t0 = Get-Date
     $deadline = $t0.AddSeconds($EyeWaitSec)
     $phase = "await_enable"
-    Write-Host "      watching /v1/presence/state for enable -> disable -> enable -> disable (up to $EyeWaitSec s)..."
+    $lastChange = $t0
+    $lastProgress = $t0
+    Write-Host "      watching /v1/presence/state for enable -> disable -> enable -> disable (up to $EyeWaitSec s; $EyeStallSec s without a change stops the watch)..."
     while ((Get-Date) -lt $deadline) {
         $st = $null
         try { $st = Get-Json "/v1/presence/state" } catch { $st = $null }
@@ -238,23 +353,45 @@ try {
             $eye.samples++
             $on = [bool](Get-OptionalProperty -InputObject $st -Name "eye_enabled")
             $at = [math]::Round(((Get-Date) - $t0).TotalSeconds, 1)
+            $before = $phase
             switch ($phase) {
                 "await_enable"    { if ($on) { $eye.enabled_seen_at_s = $at; $phase = "await_disable"; Write-Host "      eye: enabled ($at s)" } }
                 "await_disable"   { if (-not $on) { $eye.disabled_after_enabled_at_s = $at; $phase = "await_reenable"; Write-Host "      eye: disabled ($at s)" } }
                 "await_reenable"  { if ($on) { $eye.reenabled_at_s = $at; $phase = "await_final"; Write-Host "      eye: enabled again ($at s)" } }
                 "await_final"     { if (-not $on) { $eye.final_disabled_at_s = $at; $phase = "done"; Write-Host "      eye: closed again ($at s)" } }
             }
+            if ($phase -ne $before) { $lastChange = Get-Date }
             if ($phase -eq "done") { break }
+            if (((Get-Date) - $lastChange).TotalSeconds -ge $EyeStallSec) {
+                $eye.stalled = "no change for $EyeStallSec s while $phase (eye_enabled=$on)"
+                Write-Host "      eye watch stopped: $($eye.stalled)" -ForegroundColor Yellow
+                break
+            }
+            if (((Get-Date) - $lastProgress).TotalSeconds -ge 30) {
+                $lastProgress = Get-Date
+                $assertion = Get-OptionalProperty -InputObject $st -Name "assertion"
+                $presenceNow = if ($null -ne $assertion) { [string](Get-OptionalProperty -InputObject $assertion -Name "state") } else { "none" }
+                $act = $null
+                try { $act = Get-Json "/v1/voice/realtime/sessions/$sessionId/activity" } catch { $act = $null }
+                $receipts = @()
+                foreach ($c in (Get-ArrayProperty -InputObject $act -Name "tool_calls")) {
+                    $n = [string](Get-OptionalProperty -InputObject $c -Name "name")
+                    if ($n -like "eye.*") { $receipts += ("{0}={1}" -f $n, (Get-OptionalProperty -InputObject $c -Name "terminal_status")) }
+                }
+                Write-Host ("      [{0,4:N0} s] {1}; eye_enabled={2}; presence={3}; eye receipts: {4}" -f $at, $phase, $on, $presenceNow, $(if ($receipts.Count) { $receipts -join ", " } else { "none" })) -ForegroundColor DarkGray
+            }
         }
         Start-Sleep -Seconds 2
     }
     $evidence.eye = $eye
-    Add-Check -Name "eye.enabled_read_back" -Ok ($null -ne $eye.enabled_seen_at_s) -Detail $(if ($null -ne $eye.enabled_seen_at_s) { "runtime read eye_enabled=true at $($eye.enabled_seen_at_s) s" } else { "the runtime never read eye_enabled=true" })
-    Add-Check -Name "eye.disabled_read_back" -Ok ($null -ne $eye.disabled_after_enabled_at_s) -Detail $(if ($null -ne $eye.disabled_after_enabled_at_s) { "runtime read eye_enabled=false at $($eye.disabled_after_enabled_at_s) s" } else { "the runtime never read eye_enabled=false after the enable" })
-    Add-Check -Name "eye.reenabled_read_back" -Ok ($null -ne $eye.reenabled_at_s) -Detail $(if ($null -ne $eye.reenabled_at_s) { "runtime read eye_enabled=true again at $($eye.reenabled_at_s) s" } else { "the eye was never read enabled again (the voice enable path)" })
+    Add-Check -Name "eye.enabled_read_back" -Ok ($null -ne $eye.enabled_seen_at_s) -Detail $(if ($null -ne $eye.enabled_seen_at_s) { "runtime read eye_enabled=true at $($eye.enabled_seen_at_s) s" } else { "the runtime never read eye_enabled=true" + $(if ($eye.stalled) { " (" + $eye.stalled + ")" }) })
+    Add-Check -Name "eye.disabled_read_back" -Ok ($null -ne $eye.disabled_after_enabled_at_s) -Detail $(if ($null -ne $eye.disabled_after_enabled_at_s) { "runtime read eye_enabled=false at $($eye.disabled_after_enabled_at_s) s" } else { "the runtime never read eye_enabled=false after the enable" + $(if ($eye.stalled) { " (" + $eye.stalled + ")" }) })
+    Add-Check -Name "eye.reenabled_read_back" -Ok ($null -ne $eye.reenabled_at_s) -Detail $(if ($null -ne $eye.reenabled_at_s) { "runtime read eye_enabled=true again at $($eye.reenabled_at_s) s" } else { "the eye was never read enabled again (the voice enable path)" + $(if ($eye.stalled) { " (" + $eye.stalled + ")" }) })
 
+    # The manual completion stage - only reached with a real session to close.
     Write-Host ""
     Read-Host -Prompt "Disconnect voice on the Core, then press Enter" | Out-Null
+    }
 
     # ------------------------------------------------------------------ the durable record
 

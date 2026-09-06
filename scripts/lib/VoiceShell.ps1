@@ -29,6 +29,10 @@
 
 Set-StrictMode -Version Latest
 
+# The shape helpers (Get-ArrayProperty / Get-OptionalProperty): every activity record this
+# library reads has one-element arrays in it somewhere.
+. (Join-Path $PSScriptRoot "OwnerHarness.ps1")
+
 function Test-WebShellReady {
     <#  One HTTP probe of the shell: $true when GET <Url> answers 2xx/3xx.  #>
     param(
@@ -279,7 +283,12 @@ function Wait-QualificationSession {
         [scriptblock]$Sleep = { param($Seconds) Start-Sleep -Seconds $Seconds },
         [scriptblock]$Clock = { [double](Get-Date).ToUniversalTime().Subtract([datetime]'1970-01-01').TotalSeconds },
         [scriptblock]$OnWaiting = $null,
-        [AllowNull()][scriptblock]$Qualifier = $null
+        [AllowNull()][scriptblock]$Qualifier = $null,
+        # OPTIONAL scriptblock(attempts, elapsedSec, sessions) -> a non-empty string to stop
+        # waiting NOW with that reason (returned as GaveUp), or $null/"" to keep waiting. A
+        # harness uses it to fail fast with the exact missing evidence instead of sitting
+        # out a ten-minute budget (owner, 2026-09-06: "remained indefinitely at waiting").
+        [AllowNull()][scriptblock]$GiveUp = $null
     )
     $started = [double](& $Clock)
     $attempts = 0
@@ -290,12 +299,77 @@ function Wait-QualificationSession {
             -ActivityProbe $ActivityProbe -ReadyAt $ReadyAt -NotBefore $NotBefore -Qualifier $Qualifier
         $elapsed = [double](& $Clock) - $started
         if ($null -ne $selected) {
-            return [pscustomobject]@{ Selected = $selected; Attempts = $attempts; ElapsedSec = $elapsed }
+            return [pscustomobject]@{ Selected = $selected; Attempts = $attempts; ElapsedSec = $elapsed; GaveUp = $null }
         }
         if ($elapsed -ge $TimeoutSec) {
-            return [pscustomobject]@{ Selected = $null; Attempts = $attempts; ElapsedSec = $elapsed }
+            return [pscustomobject]@{ Selected = $null; Attempts = $attempts; ElapsedSec = $elapsed; GaveUp = "budget of $TimeoutSec s spent" }
+        }
+        if ($null -ne $GiveUp) {
+            $reason = $null
+            try { $reason = [string](& $GiveUp $attempts $elapsed $sessions) } catch { $reason = $null }
+            if ($reason) {
+                return [pscustomobject]@{ Selected = $null; Attempts = $attempts; ElapsedSec = $elapsed; GaveUp = $reason }
+            }
         }
         if ($null -ne $OnWaiting) { & $OnWaiting $attempts $elapsed }
         & $Sleep $IntervalSec
     }
+}
+
+function Get-NewSessions {
+    <#  The sessions of THIS run: not in the baseline, of the given kinds, started at or after ReadyAt.  #>
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Sessions,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$BaselineIds,
+        [AllowNull()][Nullable[DateTimeOffset]]$ReadyAt = $null,
+        [string[]]$ClientKinds = @("web")
+    )
+    $out = @()
+    foreach ($session in $Sessions) {
+        $id = [string]$session.session_id
+        if (-not $id -or $BaselineIds -contains $id) { continue }
+        if ($ClientKinds.Count -gt 0 -and $ClientKinds -notcontains [string]$session.client_kind) { continue }
+        $started = ConvertTo-SessionInstant -Raw ([string]$session.started_at)
+        if ($null -eq $started) { continue }
+        if ($null -ne $ReadyAt -and -not (Test-InstantAtOrAfter -Instant $started -Floor ([DateTimeOffset]$ReadyAt) -ToleranceSec 1)) { continue }
+        $out += $session
+    }
+    return , $out
+}
+
+function Format-QualificationProgress {
+    <#
+        The bounded diagnostic line block printed while a harness waits: which session of
+        this run exists, what router calls it made, its last intent, the eye receipts, and
+        the Core's latest state - so the owner can see WHICH transition is missing.
+        Pure: every input is handed in; returns the lines.
+    #>
+    param(
+        [AllowNull()]$Session,
+        [AllowNull()]$Activity,
+        [AllowNull()]$CoreCurrent,
+        [double]$ElapsedSec = 0
+    )
+    $lines = @()
+    $lines += ("      [{0,4:N0} s] current web session: {1}" -f $ElapsedSec, $(if ($null -ne $Session) { "{0} ({1}, started {2})" -f $Session.session_id, $Session.state, $Session.started_at } else { "none yet - connect voice on /core" }))
+    if ($null -ne $Activity) {
+        $calls = Get-ArrayProperty -InputObject $Activity -Name "tool_calls"
+        $router = @()
+        $receipts = @()
+        foreach ($c in $calls) {
+            $name = [string](Get-OptionalProperty -InputObject $c -Name "name")
+            $router += ("{0}:{1}" -f $name, (Get-OptionalProperty -InputObject $c -Name "status"))
+            if ($name -like "eye.*" -or $name -eq "release.promote") {
+                $receipts += ("{0}={1}" -f $name, (Get-OptionalProperty -InputObject $c -Name "terminal_status"))
+            }
+        }
+        $intents = Get-ArrayProperty -InputObject $Activity -Name "intents"
+        $last = if ($intents.Count -gt 0) { $intents[$intents.Count - 1] } else { $null }
+        $lastKind = if ($null -ne $last) { "{0} klass={1} query_kind={2} capability={3}" -f (Get-OptionalProperty -InputObject $last -Name "intent"), (Get-OptionalProperty -InputObject $last -Name "klass"), (Get-OptionalProperty -InputObject $last -Name "query_kind"), (Get-OptionalProperty -InputObject $last -Name "capability") } else { "none" }
+        $lines += ("               router events seen: {0}" -f $(if ($router.Count) { $router -join ", " } else { "none" }))
+        $lines += ("               last query/action kind: {0}" -f $lastKind)
+        $lines += ("               eye receipts seen: {0}" -f $(if ($receipts.Count) { $receipts -join ", " } else { "none" }))
+    }
+    $lines += ("               latest Core state: {0}" -f $(if ($null -ne $CoreCurrent) { "{0} (subsystem {1}, session {2}, at {3})" -f (Get-OptionalProperty -InputObject $CoreCurrent -Name "state"), (Get-OptionalProperty -InputObject $CoreCurrent -Name "subsystem"), (Get-OptionalProperty -InputObject $CoreCurrent -Name "session_id"), (Get-OptionalProperty -InputObject $CoreCurrent -Name "at") } else { "unknown" }))
+    return , $lines
 }

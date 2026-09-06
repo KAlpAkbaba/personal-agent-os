@@ -478,6 +478,72 @@ Test-Case "11d. Wait-QualificationSession passes the qualifier through" {
 }
 
 Write-Host ""
+Write-Host "M18: the wait fails fast with the missing evidence, and says what it sees meanwhile"
+
+Test-Case "12. GiveUp stops the wait NOW with its reason; without it the budget is spent" {
+    $fake = New-FakeClock
+    $result = Wait-QualificationSession -ListSessions { @() } -ActivityProbe { param($Id) $null } -BaselineIds @() -ReadyAt $readyAt `
+        -TimeoutSec 600 -IntervalSec 5 -Sleep $fake.Sleep -Clock $fake.Clock `
+        -GiveUp { param($Attempts, $Elapsed, $Sessions) if ($Elapsed -ge 20) { "no web voice session connected within 20 s" } else { $null } }
+    Assert-True ($null -eq $result.Selected) "nothing selected"
+    Assert-Equal "no web voice session connected within 20 s" $result.GaveUp "the reason travels"
+    Assert-True ($result.ElapsedSec -lt 60) "stopped long before the 600 s budget (elapsed $($result.ElapsedSec))"
+    $spent = Wait-QualificationSession -ListSessions { @() } -ActivityProbe { param($Id) $null } -BaselineIds @() -ReadyAt $readyAt `
+        -TimeoutSec 20 -IntervalSec 5 -Sleep $fake.Sleep -Clock $fake.Clock
+    Assert-Equal "budget of 20 s spent" $spent.GaveUp "the budget is a reason too"
+}
+Test-Case "12b. GiveUp sees the sessions of the current poll, so 'connected but silent' is a distinct reason" {
+    $fake = New-FakeClock
+    $s = New-Session -Id "quiet-1" -StartedAt "2026-09-04T20:01:00Z"
+    $result = Wait-QualificationSession -ListSessions { @($s) }.GetNewClosure() -ActivityProbe { param($Id) New-CoreActivity -Id $Id } -BaselineIds @() -ReadyAt $readyAt `
+        -TimeoutSec 600 -IntervalSec 5 -Sleep $fake.Sleep -Clock $fake.Clock -Qualifier ${function:Test-CoreQualification} `
+        -GiveUp { param($Attempts, $Elapsed, $Sessions) $new = Get-NewSessions -Sessions $Sessions -BaselineIds @() -ReadyAt $readyAt; if ($new.Count -gt 0 -and $Elapsed -ge 10) { "session $($new[0].session_id) connected but made no router call" } else { $null } }
+    Assert-Equal "session quiet-1 connected but made no router call" $result.GaveUp "reason names the silent session"
+}
+Test-Case "12c. a GiveUp that throws is ignored (the wait goes on), never fatal" {
+    $fake = New-FakeClock
+    $result = Wait-QualificationSession -ListSessions { @() } -ActivityProbe { param($Id) $null } -BaselineIds @() -ReadyAt $readyAt `
+        -TimeoutSec 10 -IntervalSec 5 -Sleep $fake.Sleep -Clock $fake.Clock -GiveUp { throw "boom" }
+    Assert-Equal "budget of 10 s spent" $result.GaveUp "fell through to the budget"
+}
+Test-Case "13. Get-NewSessions: baseline, kind and readiness filter; ONE result is an array of one" {
+    $old = New-Session -Id "old" -StartedAt "2026-09-04T20:01:00Z"
+    $cli = New-Session -Id "cli" -StartedAt "2026-09-04T20:01:00Z" -Kind "cli"
+    $early = New-Session -Id "early" -StartedAt "2026-09-04T19:59:00Z"
+    $mine = New-Session -Id "mine" -StartedAt "2026-09-04T20:01:00Z"
+    $new = Get-NewSessions -Sessions @($old, $cli, $early, $mine) -BaselineIds @("old") -ReadyAt $readyAt
+    Assert-True ($new -is [array]) "array"
+    Assert-Equal 1 $new.Count "one"
+    Assert-Equal "mine" $new[0].session_id "the right one"
+    $none = Get-NewSessions -Sessions @($old) -BaselineIds @("old") -ReadyAt $readyAt
+    Assert-Equal 0 $none.Count "none"
+}
+Test-Case "14. Format-QualificationProgress names the missing transition from what it is handed" {
+    $lines = Format-QualificationProgress -Session $null -Activity $null -CoreCurrent $null -ElapsedSec 15
+    Assert-True (($lines -join "`n") -match "current web session: none yet") "no session yet"
+    Assert-True (($lines -join "`n") -match "latest Core state: unknown") "no core state"
+    $s = New-Session -Id "s-1" -StartedAt "2026-09-04T20:01:00Z"
+    $act = [pscustomobject]@{
+        session_id = "s-1"
+        tool_calls = @([pscustomobject]@{ name = "state.now"; status = "succeeded"; terminal_status = $null }, [pscustomobject]@{ name = "eye.disable"; status = "succeeded"; terminal_status = "verified" })
+        intents    = @([pscustomobject]@{ intent = "eye_disable"; klass = "action"; query_kind = $null; capability = "eye.disable" })
+    }
+    $core = [pscustomobject]@{ state = "agent.listening"; subsystem = "voice"; session_id = "s-1"; at = "2026-09-04T20:02:00Z" }
+    $lines = Format-QualificationProgress -Session $s -Activity $act -CoreCurrent $core -ElapsedSec 30
+    $text = $lines -join "`n"
+    Assert-True ($text -match "current web session: s-1") "session named"
+    Assert-True ($text -match "router events seen: state.now:succeeded, eye.disable:succeeded") "router events"
+    Assert-True ($text -match "last query/action kind: eye_disable klass=action") "last kind"
+    Assert-True ($text -match "eye receipts seen: eye.disable=verified") "receipts"
+    Assert-True ($text -match "latest Core state: agent.listening") "core state"
+    # ONE tool call is still rendered (the array trap, through this path too).
+    $one = [pscustomobject]@{ session_id = "s-2"; tool_calls = @([pscustomobject]@{ name = "state.now"; status = "succeeded" }); intents = @() }
+    $text1 = (Format-QualificationProgress -Session $s -Activity $one -CoreCurrent $null -ElapsedSec 5) -join "`n"
+    Assert-True ($text1 -match "router events seen: state.now:succeeded") "one call rendered"
+    Assert-True ($text1 -match "last query/action kind: none") "no intents"
+}
+
+Write-Host ""
 Write-Host "owner-explain harness: $script:Passes passed, $script:Failures failed"
 if ($script:Failures -gt 0) { exit 1 }
 exit 0
