@@ -46,7 +46,8 @@ $allBrowser = @("browser.chrome") + @(
     "browser.tab_list", "browser.tab_new", "browser.tab_close", "browser.tab_select",
     "browser.inspect", "browser.find", "browser.click", "browser.fill", "browser.select_option",
     "browser.set_checked", "browser.scroll", "browser.wait", "browser.extract", "browser.snapshot",
-    "browser.screenshot", "browser.download", "browser.search", "browser.fetch_evidence")
+    "browser.screenshot", "browser.download", "browser.search", "browser.fetch_evidence",
+    "browser.media_play", "browser.media_volume", "browser.media_status", "browser.media_stop")
 $desktop = @("desktop.open_application", "desktop.open_artifact")
 
 try {
@@ -177,6 +178,14 @@ try {
         $partial = $desktop + ($allBrowser | Where-Object { $_ -ne "browser.fetch_evidence" })
         Assert-Throws -Body { Assert-InstalledAgentSupportsM13 -Manifest (New-FakeManifest -Capabilities $partial) -ExpectBrowser $true } `
             -Pattern "browser.fetch_evidence" -Because "every contract operation is required"
+    }
+
+    Test-Case "an agent installed before the M18.3 alarm media family fails verification by name" {
+        # The whole point of verifying the manifest is that the owner learns HERE, at install
+        # time, rather than at 07:30 from an alarm that did not ring.
+        $preM183 = $desktop + ($allBrowser | Where-Object { $_ -notlike "browser.media_*" })
+        Assert-Throws -Body { Assert-InstalledAgentSupportsM13 -Manifest (New-FakeManifest -Capabilities $preM183) -ExpectBrowser $true } `
+            -Pattern "browser.media_play" -Because "contract v1.2's media family is required too"
     }
 
     Test-Case "the full manifest passes; desktop-only passes when the browser was skipped; a skipped browser that still advertises the family fails" {
