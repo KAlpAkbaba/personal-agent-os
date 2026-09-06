@@ -1,6 +1,12 @@
 /**
  * Minimal mode's geometry, as pure arithmetic (M18.3 §9).
  *
+ * Named `stage.ts` and not `layout.ts` for one prosaic reason worth writing
+ * down so nobody renames it back: `layout` is a reserved filename anywhere
+ * under `app/` in the Next.js App Router, and a module called that is compiled
+ * as a route layout and fails the build. Only `next build` catches it - the
+ * test suite, `tsc --noEmit` and `oxlint` all pass happily.
+ *
  * The owner's directive for this milestone is a spatial one — "the Core must
  * become a full-viewport living visual presence" — and a spatial claim is
  * exactly the kind that quietly stops being true when a stylesheet changes.
@@ -17,7 +23,7 @@
  *    a component is a timer nobody can test, so it is a reducer here.
  *
  * Nothing in this file touches the DOM: it takes numbers and returns numbers,
- * which is what lets `tests/uistate/layout.test.ts` run in Node.
+ * which is what lets `tests/uistate/stage.test.ts` run in Node.
  */
 
 import { CORE_FILL } from "./scene";

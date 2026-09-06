@@ -153,7 +153,7 @@ intent change; no WebGL falls back to `CoreFallback2D` in the same identity.
 
 ## 7. Minimal mode's layout
 
-`app/lib/uistate/layout.ts`, pure and tested (`tests/uistate/layout.test.ts`).
+`app/lib/uistate/stage.ts`, pure and tested (`tests/uistate/stage.test.ts`).
 
 - `stageSizeFor(width, height)` returns the square stage's side and the resulting
   coverage. The Core's principal structure spans `CORE_FILL` of the stage — a figure

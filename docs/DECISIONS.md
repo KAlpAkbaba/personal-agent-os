@@ -4719,7 +4719,7 @@ Decisions:
    (portrait 0.74, square 0.78, landscape 0.72, ultrawide 0.66 of the short side, clamped
    into the band), and the `CORE_FILL` it works from is **derived from the camera** rather
    than typed beside it, so a change to the framing moves the layout instead of quietly
-   falsifying the claim. `tests/uistate/layout.test.ts` checks the band across sixteen real
+   falsifying the claim. `tests/uistate/stage.test.ts` checks the band across sixteen real
    viewports from a 360-wide phone to 32:9.
 7. **The cluster fades; the strip does not.** The six controls (voice, eye, tier, 2D,
    fullscreen, cockpit) recede to 25 % after four idle seconds and return on any pointer,

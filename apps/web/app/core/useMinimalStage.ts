@@ -4,7 +4,7 @@
  * The three browser-facing pieces of Minimal mode (M18.3 §9): the stage's
  * size, the control cluster's fade, and fullscreen.
  *
- * All three keep their judgement in `lib/uistate/layout.ts`, which is pure and
+ * All three keep their judgement in `lib/uistate/stage.ts`, which is pure and
  * tested; this file is only the subscription to the browser. The split is the
  * same one `CoreView`/`CoreFallback2D` and `EyeControl`/`EyeControlView` make,
  * and it is what lets the coverage claim and the fade timing be asserted in
@@ -27,7 +27,7 @@ import {
   controlOpacity,
   controlsAreFaded,
   stageSizeFor,
-} from "../lib/uistate/layout";
+} from "../lib/uistate/stage";
 
 /** How often the fade's timer ticks. Coarse: this is a four-second threshold. */
 const FADE_TICK_MS = 500;

@@ -35,7 +35,7 @@ import {
   presenceView,
   releaseView,
 } from "../../app/lib/uistate/ambient";
-import { CONTROL_FADED_OPACITY } from "../../app/lib/uistate/layout";
+import { CONTROL_FADED_OPACITY } from "../../app/lib/uistate/stage";
 import {
   alarmClaim,
   applyResponse,

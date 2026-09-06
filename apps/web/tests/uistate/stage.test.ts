@@ -22,7 +22,7 @@ import {
   controlsAreFaded,
   stageBandFor,
   stageSizeFor,
-} from "../../app/lib/uistate/layout";
+} from "../../app/lib/uistate/stage";
 import { CORE_FILL, CORE_SPAN_RADIUS, VIEW_HALF_EXTENT } from "../../app/lib/uistate/scene";
 
 /** Real viewports, not round numbers: phones, laptops, monitors, a 32:9. */
