@@ -4073,3 +4073,74 @@ diagnostics on the Core exist so that run can say what it saw. `resting` is now 
 (a present owner still for five minutes after a small movement) and so, in time, is
 `likely_asleep`; both remain inferences with stated confidence. Not built: any person or
 face model. The client still cannot tell one person from another, and must not.
+
+## ADR-0063 — Actions are receipts: WRITE -> READ-BACK -> SPEAK (2026-09-06)
+
+Status: Accepted
+
+Context: the owner's real M18 run, two defects in one session. The owner said "Gözünü
+kapat." The deterministic safety net in `record_client_events` really disabled the eye,
+but the realtime model had no tool for the eye and answered "öyle olmuş gibi düşün" - a
+spoken claim about a physical mutation, grounded in nothing but the intent. "Gözünü aç"
+then did nothing at all: no enable path existed on either side. Separately, "Kendi
+sisteminde şu anda ne görüyorsun?" was routed to `activity.explain`, whose `world_state`
+branch narrated how many facts of each truth kind the World Model held. The owner asked
+what the system sees now and heard bookkeeping. `docs/M18_ACTION_CONTRACT.md` is the
+binding contract for both halves; this ADR records the Cloud Core decisions.
+
+Decisions:
+
+1. **A mutation is narrated only from its receipt.** `OWNER COMMAND -> normalise ->
+   authorise -> execute -> wait for the terminal ACK -> read back the resulting runtime
+   state -> only then speak.` Every mutating capability the owner commands by voice ends
+   in an `app.actions.receipt.ActionReceipt` built from the read-back, the tool result IS
+   the receipt, and the model reads its `speech` verbatim. Speech claims the mutation only
+   when `terminal_status` is `verified` or `already`; below that it says the thing could
+   not be done. The fake-completion phrases (`gibi düşün`, `sayabiliriz`, `varsayalım`,
+   `oldu varsay` ...) live in one tuple, a test sweeps every speech template for them, and
+   the persona forbids them by name.
+2. **One router, three classes.** `app.voice.intents.resolve_intent` is the only Turkish
+   command interpreter. Every `ResolvedIntent` now carries `klass` (`query` | `action` |
+   `control`) and, for an action, the canonical `capability`. `EYE_ENABLE` (gözünü aç,
+   kamerayı aç, beni izle, beni tekrar izle, Active Eye'ı aç) is built on the same word
+   forms as `EYE_DISABLE` and checked after it, so "beni izleme" stays a disable and "beni
+   izle" is an enable. `DEPLOY` (canlıya al, yayına al) is an imperative and therefore an
+   action; "alabilir misin" stays the `can_deploy` question. The classifier gained one
+   query kind, `eye_state` (kamera açık mı, göz açık mı), and no third table exists.
+3. **Current state comes from the live runtime, never the ledger.** `state.now` composes
+   `cloud_core.health`, `voice.session`, `eye.enabled`, `eye.last_observation_age_s`,
+   `owner.presence`, `devices.online`, `release.shadow_ready` and `tasks.running` by
+   calling the World Model's own collectors and shaping the result: each fact carries
+   source, observed_at, age, confidence and stale; what cannot be established is an
+   uncertainty with a reason. `activity.explain` delegates `world_state` / `eye_state` to
+   the same composer, so the answer is identical whichever tool the model picked, and
+   attaches no briefing artifact or narration session for it. Speech is result-first,
+   one to three sentences, stale said as stale.
+4. **Durable eye writes are idempotent and a real disable invalidates camera evidence.**
+   `_set_eye_state` writes, publishes and returns True only when the flag actually
+   changes. On a real disable the presence service drops camera observations from the
+   fusion window, sets the assertion to UNKNOWN with reason `eye_disabled`, publishes the
+   degraded state once and resets the heartbeat; the World Model reports the presence
+   uncertainty as `eye_disabled`. An UNKNOWN assertion is an uncertainty, not a fact.
+   Enable sets the durable flag only when the client reports its camera `ACTIVE`, and
+   never asserts presence.
+5. **Authority by voice is a refused receipt.** `release.promote` always returns
+   `execution_status: refused`, `error_class: owner_authorization_required`, the fixed
+   sentence, and an `action.receipt` row in the deployment subsystem - the refusal is
+   evidence that the owner asked and the system declined.
+6. **The ledger vocabulary grew, not the rules.** `action.receipt` and
+   `voice.state_answered` are event types; `verified`, `already` and `unverified` are
+   statuses, because a receipt row's `status` IS its terminal status and "did the camera
+   really close?" must be answerable from the status column. The safety net in
+   `record_client_events` stays and records `eye_safety` in the session context so a
+   following `eye.disable` call for the same command is `verified`, not `already`.
+
+Consequences: every future mutating capability (display-off, mail, files, media, a
+deployment the owner authorises) inherits the receipt, the four terminal statuses, the
+ledger row and the "speak only from the read-back" rule; none is retrofitted now. The
+web half owns the local execution (`EyeStore`, `observed_after`), and a client without an
+eye capability is reported as `capability_missing` - the server never claims a camera it
+cannot see. The engine's `invalidate_source` is general: any source the owner forbids can
+be withdrawn from the fusion window the same way. Not built: a server-side enable safety
+net (a camera cannot be opened from the cloud) and a health probe per tool call (the
+composer probes its own database and accepts a caller's health results).

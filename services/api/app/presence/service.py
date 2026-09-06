@@ -184,6 +184,46 @@ def ingest_observation(
     return observation, assertion, changed
 
 
+#: The assertion reason, and the World Model uncertainty reason, after the owner disabled
+#: the eye (docs/M18_ACTION_CONTRACT.md §5.4).
+REASON_EYE_DISABLED = "eye_disabled"
+
+
+def on_eye_disabled(
+    now: datetime | None = None, *, engine: PresenceFusionEngine | None = None
+) -> PresenceAssertion:
+    """The owner disabled the Active Eye: invalidate the camera evidence NOW
+    (docs/M18_ACTION_CONTRACT.md §5.4).
+
+    Called by ``app.presence.eye.disable_eye`` on a REAL change of the durable flag
+    (never on an idempotent repeat). Camera-sourced observations leave the fusion
+    window, the current assertion becomes UNKNOWN with reason ``eye_disabled``, the
+    degraded state is published once, and the heartbeat forgets the state it was
+    keeping alive - otherwise the Core would go on showing "present" for up to a
+    camera TTL after the owner said "stop watching me", republished by the heartbeat
+    from frames the owner had just forbidden.
+
+    There is no ``owner.unknown`` UI state by design (``_UI_STATE_BY_PRESENCE``:
+    UNKNOWN is the absence of a claim). The one publish is therefore ``eye.disabled``
+    carrying ``presence: unknown`` in its metadata, which is what actually happened:
+    the eye closed, and with it the presence claim. No ledger row: the ``eye.disabled``
+    event already records the owner's action, and the ledger records transitions the
+    engine made from evidence, not evidence it was told to forget.
+    """
+    moment = now or datetime.now(UTC)
+    eng = engine or get_engine()
+    assertion = eng.invalidate_source("camera", now=moment, reason=REASON_EYE_DISABLED)
+    reset_heartbeat()
+    publish(
+        UiState.EYE_DISABLED,
+        subsystem="presence",
+        status="presence_invalidated",
+        label=REASON_EYE_DISABLED,
+        metadata={"presence": assertion.state.value, "reason": assertion.reason, "ttl_s": 0},
+    )
+    return assertion
+
+
 def last_greeted_at(session: Session) -> datetime | None:
     """When a greeting was last actually DELIVERED, from the ledger.
 
@@ -259,7 +299,9 @@ def record_greeting_delivered(
 
 
 __all__ = [
+    "REASON_EYE_DISABLED",
     "EyeDisabledError",
+    "on_eye_disabled",
     # `record_greeting_delivered` and `last_greeted_at` were missing here even though both
     # are public API other modules call directly (app.routines.presence_link calls the
     # former; this module's own docstring for evaluate_greeting_now describes the pairing

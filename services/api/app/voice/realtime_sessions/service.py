@@ -578,9 +578,13 @@ def handle_tool_call(
     registry: ToolRegistry,
     sideband: SidebandPusher,
     trace_id: str | None = None,
+    live: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Spec §4 step 3. Idempotent on ``call_id`` per session: a replay returns
-    the recorded outcome and executes nothing."""
+    the recorded outcome and executes nothing.
+
+    ``live`` carries the in-process runtimes a handler may read (the presence engine,
+    the broker, a health probe) - see ``ToolContext.live``."""
     now = utcnow()
     require_live(db, row, now=now, trace_id=trace_id)
     require_leg(row, owner)
@@ -628,6 +632,8 @@ def handle_tool_call(
         context=ctx,
         db=db,
         now=now,
+        call_id=call_id,
+        live=dict(live or {}),
     )
     started = utcnow()
     preamble: str | None = None
@@ -838,8 +844,18 @@ def record_client_events(
                 from app.presence.eye import disable_eye
 
                 try:
-                    disable_eye(db, reason=f"voice:{intent.matched}")
-                    meta["eye_disable"] = "applied"
+                    changed = bool(disable_eye(db, reason=f"voice:{intent.matched}"))
+                    meta["eye_disable"] = "applied" if changed else "already"
+                    # The bookkeeping the eye.disable tool handler reads (contract §5.3):
+                    # if the model calls the tool for this same command, the receipt says
+                    # "verified" - the command closed the eye - rather than "already",
+                    # even though the durable write was this safety net's.
+                    ctx["eye_safety"] = {
+                        "turn": turn,
+                        "action": "disable",
+                        "applied_at": _iso(now),
+                        "changed": changed,
+                    }
                 except Exception as exc:  # noqa: BLE001
                     # The failure is caught so one broken write cannot lose the
                     # owner's transcript - but it is NOT swallowed. The owner just
@@ -875,6 +891,10 @@ def record_client_events(
                     # it", and the second is what actually happened to the world model on
                     # 2026-09-05 (owner M17 run).
                     "query_kind": intent.query_kind,
+                    # query | action | control and the capability an action targets
+                    # (contract §2), so the record says what CLASS of thing was asked.
+                    "klass": intent.klass,
+                    "capability": intent.capability,
                 }
             )
             _audit(db, ACTION_INTENT_RESOLVED, row, trace_id=trace_id, metadata=meta)
@@ -1291,19 +1311,34 @@ def session_activity(db: Session, row: RealtimeSessionRow) -> dict[str, Any]:
                 "status": call.status,
                 "created_at": _iso(call.created_at) if call.created_at else None,
                 "completed_at": _iso(call.completed_at) if call.completed_at else None,
-                "error_class": call.error_class,
+                # A refused/failed ACTION is a succeeded tool call carrying a receipt whose
+                # error_class names why (contract §5.5); the harness reads it from here.
+                "error_class": call.error_class or _result_field(result, "error_class"),
                 "level": _result_field(result, "level"),
                 "intent": _result_field(result, "intent", "intent"),
                 # The cognition block first: it is written by the engine that dispatched
-                # the question. The narration intent's query_kind is the fallback and is
-                # None for a question (it resolves narration CONTROLS), which is why the
-                # owner's M17 run recorded five correct answers with an empty query_kind
-                # and the harness declared four subsystems unreached (2026-09-05).
+                # the question. A state.now answer carries its query_kind/subsystem at the
+                # top level (contract §4). The narration intent's query_kind is the last
+                # fallback and is None for a question (it resolves narration CONTROLS),
+                # which is why the owner's M17 run recorded five correct answers with an
+                # empty query_kind and the harness declared four subsystems unreached
+                # (2026-09-05).
                 "query_kind": (
                     _result_field(result, "cognition", "query_kind")
+                    or _result_field(result, "query_kind")
                     or _result_field(result, "intent", "query_kind")
                 ),
-                "subsystem": _result_field(result, "cognition", "subsystem"),
+                "subsystem": (
+                    _result_field(result, "cognition", "subsystem")
+                    or _result_field(result, "subsystem")
+                ),
+                # The receipt fields of an action (contract §5.5): what was targeted, what
+                # the read-back said, whether anything was written.
+                "capability": _result_field(result, "capability"),
+                "terminal_status": _result_field(result, "terminal_status"),
+                "execution_status": _result_field(result, "execution_status"),
+                "requested_state": _result_field(result, "requested_state"),
+                "routed": _result_field(result, "routed"),
                 "entity_ids": _result_field(result, "cognition", "entity_ids"),
                 "evidence_kinds": _result_field(result, "cognition", "evidence_kinds"),
                 "action": _result_field(result, "narration", "action"),
@@ -1345,6 +1380,9 @@ def session_activity(db: Session, row: RealtimeSessionRow) -> dict[str, Any]:
                     "scope": meta.get("scope"),
                     "chars": meta.get("chars"),
                     "query_kind": meta.get("query_kind"),
+                    "klass": meta.get("klass"),
+                    "capability": meta.get("capability"),
+                    "eye_disable": meta.get("eye_disable"),
                 }
             )
         else:

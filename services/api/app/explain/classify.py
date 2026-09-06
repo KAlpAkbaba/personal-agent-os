@@ -33,6 +33,13 @@ QUERY_SINCE_YOU_LEFT = "since_you_left"  # siz yokken / yokluğumda ne oldu
 QUERY_WORLD_STATE = "world_state"  # kendi sisteminde şu anda ne görüyorsun
 QUERY_SELF_CODE = "self_code"  # kendi kodun hakkında ne biliyorsun
 QUERY_CAN_DEPLOY = "can_deploy"  # bunu canlıya alabilir misin
+# docs/M18_ACTION_CONTRACT.md §2: "kamera açık mı?" is a CURRENT-STATE question about one
+# subsystem; it is answered by the live composer (app.state.now), never from the ledger.
+QUERY_EYE_STATE = "eye_state"  # kamera açık mı / göz açık mı / kameran açık mı
+
+#: The kinds whose authoritative source is the live runtime (contract §3, "CURRENT
+#: STATE"): ``activity.explain`` delegates these to ``state.now``'s composer.
+LIVE_STATE_KINDS = (QUERY_WORLD_STATE, QUERY_EYE_STATE)
 
 QUERY_KINDS = (
     QUERY_LAST_ACTIVITY,
@@ -55,6 +62,7 @@ QUERY_KINDS = (
     QUERY_WORLD_STATE,
     QUERY_SELF_CODE,
     QUERY_CAN_DEPLOY,
+    QUERY_EYE_STATE,
 )
 
 LEVEL_EXECUTIVE = "executive"
@@ -94,6 +102,15 @@ _PATTERNS: tuple[tuple[tuple[str, ...], str], ...] = (
     (("kendin", "dagit"), QUERY_CAN_DEPLOY),
     (("canlı", "alır", "mısın"), QUERY_CAN_DEPLOY),
     (("dağıtabilir", "misin"), QUERY_CAN_DEPLOY),
+    # --- is the camera open: one live subsystem (contract §2) --------------------
+    # "açık" is the adjective; the imperative "aç" is resolved as an ACTION before the
+    # classifier ever runs (app.voice.intents step 0b), so these can only be questions.
+    (("kamera", "açık"), QUERY_EYE_STATE),
+    (("göz", "açık"), QUERY_EYE_STATE),
+    (("gözün", "açık"), QUERY_EYE_STATE),
+    (("kamera", "acik"), QUERY_EYE_STATE),
+    (("goz", "acik"), QUERY_EYE_STATE),
+    (("beni", "izliyor"), QUERY_EYE_STATE),
     # --- what do you see in yourself: the world model ----------------------------
     # Broadened after the owner's second M17 run, where "Kendi sisteminde şu anda ne
     # görüyorsun?" produced no answer at all. The phrasings below are the ones the owner
@@ -111,6 +128,16 @@ _PATTERNS: tuple[tuple[tuple[str, ...], str], ...] = (
     (("durumunu", "anlat"), QUERY_WORLD_STATE),
     (("sistem", "durum"), QUERY_WORLD_STATE),
     (("sisteminde",), QUERY_WORLD_STATE),
+    # Plain current-state questions about one runtime fact (contract §2: "ses bağlı mı",
+    # "cihaz çevrimiçi mi", "şu an ne çalışıyor" are world_state) - answered live.
+    (("ses", "bağlı"), QUERY_WORLD_STATE),
+    (("ses", "bagli"), QUERY_WORLD_STATE),
+    (("bağlı", "mı"), QUERY_WORLD_STATE),
+    (("çevrimiçi",), QUERY_WORLD_STATE),
+    (("cevrimici",), QUERY_WORLD_STATE),
+    (("ne", "çalışıyor"), QUERY_WORLD_STATE),
+    (("neler", "çalışıyor"), QUERY_WORLD_STATE),
+    (("ne", "calisiyor"), QUERY_WORLD_STATE),
     # --- what do you know about your own code: the self model --------------------
     (("kendi", "kod"), QUERY_SELF_CODE),
     (("kod", "biliyor"), QUERY_SELF_CODE),
@@ -286,11 +313,13 @@ def classify(
 
 __all__ = [
     "LEVELS",
+    "LIVE_STATE_KINDS",
     "LEVEL_DETAILED",
     "LEVEL_EXECUTIVE",
     "LEVEL_FULL",
     "LEVEL_TECHNICAL",
     "QUERY_EVIDENCE",
+    "QUERY_EYE_STATE",
     "QUERY_FAILURES",
     "QUERY_KINDS",
     "QUERY_LEARNED",

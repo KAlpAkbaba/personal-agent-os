@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 from app.logging import get_logger
 from app.narration.commands import State
 from app.narration.engine import PARAGRAPH_LIST
+from app.state.now import SCOPES
 from app.voice.errors import VoiceError, VoiceErrorClass
 from app.voice.intents import (
     Intent,
@@ -37,6 +38,7 @@ from app.voice.intents import (
 )
 from app.voice.providers import cloud_tool_name
 from app.voice.realtime import RealtimeState
+from app.voice.realtime_sessions import actions
 from app.voice.realtime_sessions.sideband import SB_NARRATION_CURSOR, SB_PLAN_CHANGED
 
 logger = get_logger("app.voice.realtime_sessions.tools")
@@ -60,6 +62,12 @@ class ToolContext:
     db: Session | None = None
     now: datetime = field(default_factory=lambda: datetime.now(UTC))
     pushes: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
+    #: The provider's call id: an action receipt's ``action_id`` (contract §5.5).
+    call_id: str | None = None
+    #: In-process live runtimes a handler may read (``presence_runtime``,
+    #: ``broker_runtime``, ``health``), injected by the service the way the World Model
+    #: routes inject theirs - never imported as singletons here (contract §4).
+    live: dict[str, Any] = field(default_factory=dict)
 
     def push(self, event: str, payload: dict[str, Any]) -> None:
         self.pushes.append((event, dict(payload)))
@@ -364,6 +372,7 @@ def activity_explain(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, A
             VoiceErrorClass.DEPENDENCY_UNAVAILABLE,
             "activity.explain needs the ledger; no database on this session",
         )
+    from app.explain.classify import LIVE_STATE_KINDS, QUERY_EYE_STATE
     from app.explain.service import explain_to_briefing
     from app.voice.realtime_sessions.models import RealtimeSessionRow
 
@@ -383,6 +392,32 @@ def activity_explain(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, A
             **moved,
             "level": _level_for(ctx.context.get("presentation")),
             "routed": "narration",
+        }
+
+    # CURRENT STATE is not the ledger's to answer (docs/M18_ACTION_CONTRACT.md §3): a
+    # world_state / eye_state question goes to the same live composer state.now uses, so
+    # the spoken answer is identical whichever tool the model picked. No briefing artifact
+    # and no narration session are attached for these: persisting an artifact version and
+    # a narration row for a three-sentence answer that is stale within seconds is not
+    # cheap, and "ikinci madde" has no meaning over it. The routing is recorded in the
+    # result so session_activity can say which path served the question.
+    live_kind = resolved.query_kind
+    if live_kind is None:
+        from app.explain.classify import classify
+
+        query = classify(question)
+        live_kind = query.kind if query.matched else None
+    if live_kind in LIVE_STATE_KINDS:
+        live = actions.state_now(
+            ctx,
+            {"question": question, "scope": "eye" if live_kind == QUERY_EYE_STATE else "all"},
+        )
+        return {
+            **live,
+            "intent": resolved.to_dict(),
+            "level": "executive",
+            "narration_session_id": None,
+            "routed": "state.now",
         }
 
     record = explain_to_briefing(
@@ -509,17 +544,18 @@ def default_registry() -> ToolRegistry:
         ToolSpec(
             name="activity.explain",
             description=(
-                "Sahibin sistemin kendisiyle ilgili HER sorusunu KAYITLI KANITTAN "
-                "yanıtlar: son ne yaptın, bugün neler yaptın, ne başarısız oldu, sorun var "
-                "mı, araştırma motoru ne durumda, kanıtı ne, araştırmayı detaylandır, "
-                "teknik olarak ne değişti, ne öğrendin, son hatalardan ne öğrendin, kendi "
-                "üzerinde ne geliştiriyorsun, gece kendi üzerinde ne geliştirdin, hazır "
-                "modüllerin neler, canlıya alınmayı bekleyen ne var, bu özelliği neden "
-                "geliştirdin, test sonuçlarını anlat, hedeflerin ne durumda, şu anda hangi "
-                "hedeflerin var, kendi sisteminde şu anda ne görüyorsun, kendi kodun "
-                "hakkında ne biliyorsun, hangi modüllerin var, kendi sisteminde şu anda ne "
-                "görüyorsun, şu an kendinde ne görüyorsun, kendi durumunu anlat, sistemin "
-                "şu anda ne durumda. "
+                "Sahibin sistemin GEÇMİŞİ, öğrendikleri, hedefleri, kendi kodu ve yetkisiyle "
+                "ilgili sorularını KAYITLI KANITTAN yanıtlar: son ne yaptın, bugün neler "
+                "yaptın, ne başarısız oldu, sorun var mı, araştırma motoru ne durumda, "
+                "kanıtı ne, araştırmayı detaylandır, teknik olarak ne değişti, ne öğrendin, "
+                "son hatalardan ne öğrendin, kendi üzerinde ne geliştiriyorsun, gece kendi "
+                "üzerinde ne geliştirdin, hazır modüllerin neler, canlıya alınmayı bekleyen "
+                "ne var, bu özelliği neden geliştirdin, test sonuçlarını anlat, hedeflerin "
+                "ne durumda, şu anda hangi hedeflerin var, kendi kodun hakkında ne "
+                "biliyorsun, hangi modüllerin var. "
+                "ŞU ANKİ durum soruları (kendi sisteminde şu anda ne görüyorsun, sistemin şu "
+                "anda ne durumda, kamera açık mı) state.now aracının işidir; bu araç onları "
+                "aynı canlı kaynağa yönlendirir. "
                 # The authority questions are named explicitly because they do not READ like
                 # questions about the system - "bunu canliya alabilir misin?" reads like a
                 # request for permission, and on 2026-09-05 the model answered it from its
@@ -577,6 +613,84 @@ def default_registry() -> ToolRegistry:
                 "additionalProperties": False,
             },
             handler=plan_redirect,
+        )
+    )
+    # docs/M18_ACTION_CONTRACT.md §4, §5: the live-state query and the grounded actions.
+    # None is long-running; none has a preamble - one round trip, and the model reads the
+    # returned 'speech' verbatim.
+    _UTTERANCE_WITH_OBSERVATION = {
+        "type": "object",
+        "properties": {
+            "utterance": {"type": "string", "maxLength": 1000},
+            # The client's own report of what its camera did, merged in by the relay
+            # (contract §5.1); the model never fills this in itself.
+            "observed_after": {"type": "object"},
+        },
+        "required": ["utterance"],
+        "additionalProperties": False,
+    }
+    reg.register(
+        ToolSpec(
+            name=actions.TOOL_STATE_NOW,
+            description=(
+                "ŞU ANKİ durumu CANLI çalışma zamanından söyler: kendi sisteminde şu anda ne "
+                "görüyorsun, sistemin şu anda ne durumda, kamera açık mı, göz açık mı, ses "
+                "bağlı mı, cihaz çevrimiçi mi, şu an ne çalışıyor, canlıya alınmayı bekleyen "
+                "var mı, şu an sahip nerede. Kayıtlara bakmaz, saymaz; sonucu söyler. "
+                "Dönen 'speech' metnini aynen oku; ekleme yapma, nereden bildiğini anlatma."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "question": {"type": "string", "maxLength": 500},
+                    "scope": {"type": "string", "enum": list(SCOPES)},
+                },
+                "required": ["question"],
+                "additionalProperties": False,
+            },
+            handler=actions.state_now,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name=actions.CAPABILITY_EYE_ENABLE,
+            description=(
+                "Active Eye'ı (kamerayı) AÇAR: 'gözünü aç', 'kamerayı aç', 'beni izle', "
+                "'beni tekrar izle', 'gözünü tekrar aç' denince HER ZAMAN bu araç çağrılır; "
+                "sohbetle yanıtlanmaz. Dönen 'speech' metni aynen okunur; araç açtım demeden "
+                "açtım denmez."
+            ),
+            parameters=_UTTERANCE_WITH_OBSERVATION,
+            handler=actions.eye_enable,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name=actions.CAPABILITY_EYE_DISABLE,
+            description=(
+                "Active Eye'ı (kamerayı) KAPATIR: 'gözünü kapat', 'kamerayı kapat', 'beni "
+                "izleme' denince HER ZAMAN bu araç çağrılır; sohbetle yanıtlanmaz. Dönen "
+                "'speech' metni aynen okunur; araç kapattım demeden kapattım denmez."
+            ),
+            parameters=_UTTERANCE_WITH_OBSERVATION,
+            handler=actions.eye_disable,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name=actions.CAPABILITY_RELEASE_PROMOTE,
+            description=(
+                "'Canlıya al', 'yayına al' gibi bir DAĞITIM emrini işler. Sesle canlıya alma "
+                "her zaman reddedilir ve reddin kaydı tutulur; dönen 'speech' metni aynen "
+                "okunur. Kendi bilginle 'aldım' ya da 'alamam' deme; aracı çağır."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {"utterance": {"type": "string", "maxLength": 1000}},
+                "required": ["utterance"],
+                "additionalProperties": False,
+            },
+            handler=actions.release_promote,
         )
     )
     return reg

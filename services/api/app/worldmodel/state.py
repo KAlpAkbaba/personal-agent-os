@@ -297,22 +297,38 @@ def _collect_presence(c: _Collector, session: Session, presence_runtime: Any | N
     set, and this is exactly the case that floor exists for.
     """
     from app.presence.eye import is_eye_enabled
+    from app.presence.states import PresenceState
 
+    eye_enabled = is_eye_enabled(session)
     c.fact(
         "device.camera_state",
         "presence",
-        "enabled" if is_eye_enabled(session) else "disabled",
+        "enabled" if eye_enabled else "disabled",
         TruthKind.EVIDENCE,
         note="from the most recent eye.enabled/eye.disabled ledger event, or the default",
     )
+
+    assertion = presence_runtime.current() if presence_runtime is not None else None
+    if not eye_enabled and (assertion is None or assertion.state is PresenceState.UNKNOWN):
+        # The owner turned the eye off and the engine holds no claim: the reason the
+        # presence is unknown is the owner's own decision, and the answer says so
+        # (docs/M18_ACTION_CONTRACT.md §5.4) rather than "no observations yet", which
+        # would read as "the camera has not delivered" - a defect, not a choice.
+        c.uncertain("presence", "owner.presence", "eye_disabled")
+        return
 
     if presence_runtime is None:
         c.uncertain("presence", "owner.presence", "no_live_presence_runtime_supplied")
         return
 
-    assertion = presence_runtime.current()
     if assertion is None:
         c.uncertain("presence", "owner.presence", "no_observations_yet")
+        return
+    if assertion.state is PresenceState.UNKNOWN:
+        # UNKNOWN is the absence of a claim (app.presence.service), not a state the owner
+        # is in. Reported as a fact it read as "presence: unknown, stale" - and the live
+        # composer would then have dated a "last verified observation" that never was.
+        c.uncertain("presence", "owner.presence", assertion.reason or "no_observations_yet")
         return
 
     stale = assertion.is_stale(now=c.now)

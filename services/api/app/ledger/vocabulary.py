@@ -71,6 +71,15 @@ STATUS_FAILED = "failed"
 STATUS_SKIPPED = "skipped"
 STATUS_PENDING = "pending"
 STATUS_INFO = "info"
+#: Action receipts (docs/M18_ACTION_CONTRACT.md §5.5, ADR-0063): an ``action.receipt``
+#: row's ``status`` IS the receipt's terminal status, so "did the camera really close?"
+#: is answerable from the status column without opening detail_json. ``verified`` = the
+#: read-back matched the request and the state changed in this command; ``already`` =
+#: nothing changed because it was already so; ``unverified`` = server and client disagree
+#: or the read-back did not match. A refused or failed action uses STATUS_FAILED.
+STATUS_VERIFIED = "verified"
+STATUS_ALREADY = "already"
+STATUS_UNVERIFIED = "unverified"
 
 STATUSES: Final[tuple[str, ...]] = (
     STATUS_STARTED,
@@ -79,6 +88,9 @@ STATUSES: Final[tuple[str, ...]] = (
     STATUS_SKIPPED,
     STATUS_PENDING,
     STATUS_INFO,
+    STATUS_VERIFIED,
+    STATUS_ALREADY,
+    STATUS_UNVERIFIED,
 )
 
 # ----------------------------------------------------------------- severities
@@ -193,6 +205,14 @@ EVENT_TYPE_ROUTINE_CANCELLED = "routine.cancelled"
 #: applied to this package the same way it was already applied to every other one).
 EVENT_TYPE_ROUTINE_ACTION_FAILED = "routine.action_failed"
 EVENT_TYPE_ROUTINE_ACTION_REFUSED = "routine.action_refused"
+#: M18 action grounding (docs/M18_ACTION_CONTRACT.md §4, §5.5; ADR-0063). Every mutating
+#: capability the owner commands by voice ends in ONE ``action.receipt`` row (subsystem =
+#: the capability's, action = the capability, status = the receipt's terminal status) - a
+#: refusal included, because the refusal is the evidence. ``voice.state_answered`` records
+#: that a live-state question was answered from the composer: fact keys and uncertainty
+#: subjects only, never the sentence.
+EVENT_TYPE_ACTION_RECEIPT = "action.receipt"
+EVENT_TYPE_VOICE_STATE_ANSWERED = "voice.state_answered"
 
 EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_RESEARCH_PLANNED,
@@ -236,6 +256,8 @@ EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_ROUTINE_CANCELLED,
     EVENT_TYPE_ROUTINE_ACTION_FAILED,
     EVENT_TYPE_ROUTINE_ACTION_REFUSED,
+    EVENT_TYPE_ACTION_RECEIPT,
+    EVENT_TYPE_VOICE_STATE_ANSWERED,
 )
 
 #: Reserved for the Evolution Engine (M18): constants exist now, writers come
