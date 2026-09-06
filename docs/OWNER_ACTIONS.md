@@ -21,17 +21,47 @@ Status vocabulary matches `docs/QUALIFICATION.md`: `PROVEN_REAL`, `PROVEN_PROXY`
 
 ## Now
 
-**Item 20 — the short Eye/Voice qualification (about three minutes).** Your second real
-attempt at item 19 found two product defects that matter more than the rest of that run:
-`Gözünü kapat` really closed the eye but the assistant said *"öyle olmuş gibi düşün"*, and
-`Gözünü aç` did nothing. Both are fixed under one rule (WRITE → READ-BACK → SPEAK,
-`docs/M18_ACTION_CONTRACT.md`) and item 20 proves exactly that, from `/core` alone. Item 19
-(the long run with the presence transition and the alarm) waits until item 20 passes; do not
-repeat it yet.
+**Item 21 — the presence-only run (about six minutes, most of it out of the room).** M18
+now closes from combined durable evidence, not from one monolithic run. Your final run
+(`owner-m18-20260906-181122`) and the eye run before it prove 13 of the 15 acceptance
+capabilities from the Cloud Core's own record (`scripts/core/reconcile-m18.ps1`,
+`docs/evidence/m18-reconciliation-2026-09-06.json`): voice from `/core`, real listening and
+speaking states, cognition on both paths, the eye opened and closed by voice with verified
+receipts, the re-enable, one mutation path, a camera presence observation, the alarm over
+the device path with its ramp, the ledger, privacy. The long harness's `FAIL` rows were
+qualification-selection defects (your session was created nine seconds after the harness
+started, while `/core` was still compiling, and the readiness filter excluded it; the
+presence watcher then started after your transition had already been recorded). Those are
+fixed in the harness, which you do not need to run again. What the record does not hold is
+you leaving the room and coming back with the camera on. Item 21 asks for exactly that and
+nothing else. Items 19 and 20 are done.
 
 ---
 
-### 20. Your voice opens and closes the eye, and every answer is grounded — **this is the current action**
+### 21. Leave the room and come back — **this is the current action**
+
+Unblocks: `docs/QUALIFICATION.md` row 12.6 (a real presence transition), the last open M18
+row. No voice, no deployment, no long wait: the camera is opened from the Core's control
+(or by voice, either is fine; that path is already proven), and the script reads the
+Presence Engine's durable rows with per-step windows sized by the engine's own policy.
+
+```powershell
+.\scripts\core\owner-m18-presence.ps1 -OutFile m18-presence-1.json
+```
+
+It starts the web shell, closes the eye if it was open (printed, attributed), and prints
+three lines. Open `/core`, sign in, press `Gözü aç` (or say `Gözünü aç.`), sit in view and
+move a little. When the terminal prints **`present recorded - LEAVE NOW`**, leave the room
+and stay out; the engine needs about 2.5 minutes of sustained absence before it says `away`
+(the camera remembers movement for 90 s, then 45 s of sustained evidence). When it prints
+**`away recorded - COME BACK`**, come back and sit down in view. It finishes by itself when
+your return is recorded, then closes the eye. Every 10 s it prints the live assertion and
+the durable transitions so far; each step that is not reached is named with what was seen.
+Paste the `checks` block from `m18-presence-1.json` back here.
+
+---
+
+### 20. Your voice opens and closes the eye, and every answer is grounded — **DONE (2026-09-06, session 1ce36ca0: aç → kapat → aç, all three receipts verified; see item 21)**
 
 Unblocks: `docs/QUALIFICATION.md` rows 12.26–12.29 (action receipts; the symmetric enable
 path; live current-state answers; the confirmation spoken only after the terminal ACK).
@@ -146,7 +176,7 @@ Item 9 (K66 re-qualification) stays open and optional; it is not on M18's path.
 
 ---
 
-### 19. The Core, your voice, the camera, one quiet alarm — one run — **waits for item 20 (2nd attempt found two product defects; see item 20)**
+### 19. The Core, your voice, the camera, one quiet alarm — one run — **DONE except the presence transition (2026-09-06 run owner-m18-20260906-181122, reconciled from the record; the remaining row is item 21)**
 
 Unblocks: `docs/QUALIFICATION.md` Stage 12 rows 12.1, 12.5–12.8, 12.12, 12.16, 12.17 and
 the integrated rows 12.21–12.25 (voice from the Core; real listening/speaking states; a
