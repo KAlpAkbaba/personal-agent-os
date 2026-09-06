@@ -81,6 +81,31 @@ def test_the_media_suite_never_launches_a_browser() -> None:
     assert ".connect()" not in source
 
 
+def test_the_media_script_suite_runs_node_and_only_node() -> None:
+    """``test_media_scripts_in_node.py`` executes the media scripts as real
+    JavaScript. The interpreter it spawns must be Playwright's bundled NODE —
+    never a browser binary, and never anything discovered off PATH (this
+    machine's Chrome opens a window merely for ``--version``)."""
+    source = (
+        Path(__file__).resolve().parent / "unit" / "test_media_scripts_in_node.py"
+    ).read_text(encoding="utf-8")
+    assert "compute_driver_executable" in source, "the interpreter must be playwright's node"
+    # Asserted against CONSTRUCTS, not prose: the words "browser" and "launch" appear in
+    # this suite's own docstring explaining that it launches none.
+    for forbidden in (
+        "ManagedBackend",
+        "launch_dedicated",
+        "launch_persistent_context",
+        "async_playwright",
+        '"--version"',
+        "shell=True",
+    ):
+        assert forbidden not in source, f"the script suite must never reach for {forbidden!r}"
+    # the ONE subprocess it starts is that node, given a generated harness file
+    assert source.count("subprocess.run") == 1
+    assert "[_node(), str(harness), str(spec_file)]" in source
+
+
 @pytest.mark.parametrize("marker", ["live"])
 def test_the_live_marker_is_declared_so_it_must_be_opted_into(marker: str) -> None:
     ini = Path(__file__).resolve().parents[1] / "pyproject.toml"

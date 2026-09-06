@@ -2265,6 +2265,7 @@ class Worker:
                 "video", timeout=media.VIDEO_WAIT_TIMEOUT_MS, state="attached"
             )
         except PlaywrightTimeoutError:
+            # The deterministic case: ten seconds passed and no <video> attached.
             reason = media.classify_missing_media(body_text)
             logger.info("browser.media_play_no_element", url=redact_url(url), reason=reason)
             return self._media_play_result(
