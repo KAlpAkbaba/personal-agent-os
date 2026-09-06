@@ -32,6 +32,30 @@ is implemented and merged (ADR-0065); item 22 is your look at it, when you like.
 
 ---
 
+### 24. Look at the Living Core — **M18.3 qualification A, ready (web only: no release, no install)**
+
+The small wireframe is gone. `/core` is now a full-viewport gold and amber Core: nine
+layers (an outer field, two shells, three orbital rings turning at different rates and
+directions, a circuit layer, bounded particle transport, floating processor fragments, an
+energy chamber and a warm white-gold nucleus), a near-black ground, and only small overlays
+— a caption, a connection dot, a control cluster that fades after four seconds and returns
+when you move the pointer, and a slim strip for the room, the camera, the screens, the
+alarm and the release path. A fullscreen control (Esc leaves it) and a standalone-app
+manifest are there. It still draws only what is true: idle breathing, then listening pulls
+inward, speaking pulses with the real playback, the eye's aperture appears with the real
+camera, research grows its bounded constellation. A server-rendered preview page was sent
+to you; the WebGL scene on your own screen is what this item is about.
+
+```powershell
+.\scripts\core\owner-m18-3-core.ps1 -OutFile m18-3-core-1.json
+```
+
+It starts the web shell, proves the served build is the Living Core (the document's own
+build marker), and prints three things to try: a sentence, `Gözünü aç.` / `Gözünü kapat.`,
+and optionally a short research. Scale, depth, colour and motion are yours to judge; the
+script records only that the Core really listened and really spoke, and finishes by itself.
+Tell me what you would change — the reference you mentioned is welcome as inspiration.
+
 ### 23b. One sentence, no research: `Teknik anlat.` — **M18.2 follow-up, ready (reuses the research that already completed; releases nothing, installs nothing)**
 
 Your run of 2026-09-06 proved every core row of M18.2 (item 23 below is closed on them).

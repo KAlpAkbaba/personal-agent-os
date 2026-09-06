@@ -18,6 +18,15 @@
 export const KNOWN_CONTRACT_VERSION = 3;
 
 /**
+ * The build marker of the Living Core (M18.3 §12, qualification A). Rendered server-side
+ * into `/core`'s document head as `<meta name="pagentos-core-build">` by `app/core/layout.tsx`
+ * and onto the Minimal page's root as `data-core-build`, so an owner harness can prove the
+ * served build is this one with a plain HTTP fetch and no session. Bump it only when the
+ * Core's identity changes in a way an owner qualification must tell apart.
+ */
+export const CORE_BUILD_ID = "living-core-1";
+
+/**
  * The oldest server contract this build can still read honestly.
  *
  * v3 is purely ADDITIVE over v2 (M18.3 §7): the event shape is unchanged and

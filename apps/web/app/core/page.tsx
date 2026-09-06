@@ -31,7 +31,7 @@ import { useEffect, useMemo } from "react";
 
 import OwnerGate from "../components/OwnerGate";
 import { alarmView, displayView, eyeView, presenceView, releaseView } from "../lib/uistate/ambient";
-import { KNOWN_CONTRACT_VERSION } from "../lib/uistate/contract";
+import { CORE_BUILD_ID, KNOWN_CONTRACT_VERSION } from "../lib/uistate/contract";
 import { contractLagNote } from "../lib/uistate/labels";
 import {
   alarmClaim,
@@ -108,6 +108,7 @@ function MinimalCore() {
     <div
       className="core-shell"
       data-core-mode="minimal"
+      data-core-build={CORE_BUILD_ID}
       data-fullscreen={fullscreen.active ? "yes" : "no"}
     >
       <div
