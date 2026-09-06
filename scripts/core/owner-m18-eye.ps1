@@ -249,14 +249,23 @@ try {
     # WHOSE state that is: the owner's run of 2026-09-06 read agent.listening at startup
     # from a session closed minutes earlier. A current event is reported with its age and
     # its session's state, and "real" means fresh or from a live session - never a leftover.
+    # The age comes from the server when it says it (current_age_s, against ITS clock);
+    # an older Cloud Core without that field gets the client-side estimate.
+    $serverAge = Get-OptionalProperty -InputObject $uiState -Name "current_age_s"
     $currentAt = if ($null -ne $current) { ConvertTo-SessionInstant -Raw ([string](Get-OptionalProperty -InputObject $current -Name "at")) } else { $null }
-    $currentAgeS = if ($null -ne $currentAt) { [math]::Round(([DateTimeOffset]::UtcNow - [DateTimeOffset]$currentAt).TotalSeconds) } else { $null }
+    $currentAgeS = if ($null -ne $serverAge) { [math]::Round([double]$serverAge) } elseif ($null -ne $currentAt) { [math]::Round(([DateTimeOffset]::UtcNow - [DateTimeOffset]$currentAt).TotalSeconds) } else { $null }
+    $currentSubsystem = if ($null -ne $current) { [string](Get-OptionalProperty -InputObject $current -Name "subsystem") } else { "" }
     $currentSession = if ($null -ne $current) { [string](Get-OptionalProperty -InputObject $current -Name "session_id") } else { "" }
     $currentSessionState = if ($currentSession -and $baselineSessions.ContainsKey($currentSession)) { $baselineSessions[$currentSession] } else { "" }
     $fromLiveSession = ($currentSession -eq "") -or ($currentSessionState -eq "active")
-    $evidence.core_state = [ordered]@{ contract_version = $contractVersion; current_state = $currentState; age_s = $currentAgeS; session = $currentSession; session_state = $currentSessionState }
-    Add-Check -Name "core.real_state" -Ok ($contractVersion -ge 2 -and $currentState -ne "") -Detail "contract v$contractVersion; current=$currentState ($currentAgeS s old$(if ($currentSession) { "; session $currentSession $currentSessionState" }))"
-    Add-Check -Name "core.state_not_stale" -Ok ($currentState -eq "" -or $fromLiveSession -or $currentState -eq "agent.idle" -or ($null -ne $currentAgeS -and $currentAgeS -le 120)) -Detail $(if ($fromLiveSession -or $currentState -eq "agent.idle") { "the current event is not a closed session's leftover" } else { "current=$currentState belongs to session $currentSession ($currentSessionState), $currentAgeS s old - a leftover" })
+    $evidence.core_state = [ordered]@{ contract_version = $contractVersion; current_state = $currentState; subsystem = $currentSubsystem; age_s = $currentAgeS; session = $currentSession; session_state = $currentSessionState }
+    # Real state = the contract's document, and a current event that is either a fact
+    # (agent.idle from the system at startup, or from a session that ended) or live. NO
+    # current event is also truthful ("nothing published since this process started") and
+    # is reported as exactly that - never invented as listening before voice connects.
+    $stateDescription = if ($currentState -eq "") { "no event since the Cloud Core started (nothing invented)" } else { "current=$currentState from $currentSubsystem, $currentAgeS s old$(if ($currentSession) { "; session $currentSession $currentSessionState" })" }
+    Add-Check -Name "core.real_state" -Ok ($contractVersion -ge 2) -Detail "contract v$contractVersion; $stateDescription"
+    Add-Check -Name "core.state_not_stale" -Ok ($currentState -eq "" -or $fromLiveSession -or $currentState -eq "agent.idle" -or ($null -ne $currentAgeS -and $currentAgeS -le 120)) -Detail $(if ($currentState -eq "" -or $fromLiveSession -or $currentState -eq "agent.idle") { "the current event is not a closed session's leftover" } else { "current=$currentState belongs to session $currentSession ($currentSessionState), $currentAgeS s old - a leftover" })
 
     # The eye must start CLOSED so that "enable" is an observable change.
     $state0 = Get-Json "/v1/presence/state"
@@ -283,46 +292,16 @@ try {
 
     $listSessions = { Get-ArrayProperty -InputObject (Get-Json "/v1/voice/realtime/sessions?limit=50") -Name "sessions" }
     $activityProbe = { param($Id) Get-Json "/v1/voice/realtime/sessions/$Id/activity" }
-    # The wait says what it sees every 15 s and gives up with the exact missing evidence:
-    # no session connected within ConnectWaitSec, or a session connected but no router
-    # call within RouterWaitSec of its start. Never a silent ten minutes again.
-    $waitState = @{ firstSeenAt = $null; lastSession = $null }
-    $onWaiting = {
-        param($Attempt, $Elapsed)
-        if ($Attempt -eq 1) { Write-Host "      waiting for a web voice session that went through the router (up to $SessionWaitSec s; connect within $ConnectWaitSec s)..." }
-        if (($Attempt % 3) -ne 0) { return }
-        $sessionsNow = @()
-        try { $sessionsNow = @(& $listSessions) } catch { $sessionsNow = @() }
-        $mine = Get-NewSessions -Sessions $sessionsNow -BaselineIds $baselineIds -ReadyAt $readyAt
-        $newest = if ($mine.Count -gt 0) { $mine[0] } else { $null }
-        $act = $null
-        if ($null -ne $newest) { try { $act = & $activityProbe ([string]$newest.session_id) } catch { $act = $null } }
-        $core = $null
-        try { $core = Get-OptionalProperty -InputObject (Get-Json "/v1/ui/state") -Name "current" } catch { $core = $null }
-        foreach ($line in (Format-QualificationProgress -Session $newest -Activity $act -CoreCurrent $core -ElapsedSec $Elapsed)) { Write-Host $line -ForegroundColor DarkGray }
-    }.GetNewClosure()
-    $giveUp = {
-        param($Attempts, $Elapsed, $Sessions)
-        $mine = Get-NewSessions -Sessions $Sessions -BaselineIds $baselineIds -ReadyAt $readyAt
-        if ($mine.Count -eq 0) {
-            if ($Elapsed -ge $ConnectWaitSec) { return "no web voice session connected from $coreUrl within $ConnectWaitSec s (sessions since the baseline: 0)" }
-            return $null
-        }
-        if ($null -eq $waitState.firstSeenAt) { $waitState.firstSeenAt = $Elapsed; $waitState.lastSession = [string]$mine[0].session_id }
-        if (($Elapsed - $waitState.firstSeenAt) -ge $RouterWaitSec) {
-            $act = $null
-            try { $act = & $activityProbe ([string]$mine[0].session_id) } catch { $act = $null }
-            $seen = @()
-            foreach ($c in (Get-ArrayProperty -InputObject $act -Name "tool_calls")) { $seen += ("{0}:{1}" -f (Get-OptionalProperty -InputObject $c -Name "name"), (Get-OptionalProperty -InputObject $c -Name "status")) }
-            $kinds = @()
-            foreach ($i in (Get-ArrayProperty -InputObject $act -Name "intents")) { $kinds += ("{0}/{1}" -f (Get-OptionalProperty -InputObject $i -Name "intent"), (Get-OptionalProperty -InputObject $i -Name "klass")) }
-            return ("session {0} connected {1} s ago but made no succeeded router call (state.now / eye.* / activity.explain) within {2} s; tool calls seen: {3}; intents resolved: {4}" -f $mine[0].session_id, [math]::Round($Elapsed - $waitState.firstSeenAt), $RouterWaitSec, $(if ($seen.Count) { $seen -join ", " } else { "none" }), $(if ($kinds.Count) { $kinds -join ", " } else { "none" }))
-        }
-        return $null
-    }.GetNewClosure()
+    # The wait is the library's (scripts\lib\VoiceShell.ps1): it prints what it sees every
+    # 15 s and gives up with the exact missing evidence - no session within ConnectWaitSec,
+    # or a session with no router call within RouterWaitSec of it. The three callbacks below
+    # are plain script blocks over this script's own Get-Json; nothing here is a closure
+    # (a GetNewClosure block cannot see dot-sourced functions - the crash of 2026-09-06).
+    $coreProbe = { Get-OptionalProperty -InputObject (Get-Json "/v1/ui/state") -Name "current" }
+    Write-Host "      waiting for a web voice session that went through the router (connect within $ConnectWaitSec s; a router call within $RouterWaitSec s of connecting; $SessionWaitSec s in all)..."
     $waited = Wait-QualificationSession -ListSessions $listSessions -ActivityProbe $activityProbe -BaselineIds $baselineIds `
         -ReadyAt $readyAt -NotBefore $null -TimeoutSec $SessionWaitSec -IntervalSec 5 -Qualifier ${function:Test-CoreQualification} `
-        -OnWaiting $onWaiting -GiveUp $giveUp
+        -ConnectWaitSec $ConnectWaitSec -RouterWaitSec $RouterWaitSec -ProgressEverySec 15 -CoreProbe $coreProbe
     $sessionId = ""
     if ($null -ne $waited.Selected) {
         $sessionId = [string]$waited.Selected.SessionId
@@ -426,26 +405,9 @@ try {
         Add-Check -Name "state.facts_carry_provenance" -Ok ($null -ne $liveFacts -and [int]$liveFacts -gt 0) -Detail "facts=$liveFacts (each with source, observed_at, age, confidence, stale - asserted by the API suite; the count is what the activity endpoint exposes)"
 
         # 4/5/6/7. the eye actions: succeeded calls, verified receipts, confirmation after the ACK
+        # (Test-SpokenAfterToolDone lives in scripts\lib\VoiceShell.ps1, tested; no helper is
+        # defined inside a block here).
         $events = Get-ArrayProperty -InputObject $activity -Name "client_events"
-        function Test-ConfirmedAfterAck {
-            param([string]$CallId)
-            $done = $null
-            foreach ($e in $events) {
-                if ([string](Get-OptionalProperty -InputObject $e -Name "kind") -ne "tool_done") { continue }
-                $p = Get-OptionalProperty -InputObject $e -Name "payload"
-                if ($null -ne $p -and [string](Get-OptionalProperty -InputObject $p -Name "call_id") -eq $CallId) { $done = $e; break }
-            }
-            if ($null -eq $done) { return "no tool_done event for $CallId" }
-            $doneT = [double](Get-OptionalProperty -InputObject $done -Name "t_ms")
-            $doneTurn = [int](Get-OptionalProperty -InputObject $done -Name "turn")
-            foreach ($e in $events) {
-                if ([string](Get-OptionalProperty -InputObject $e -Name "kind") -ne "first_audio") { continue }
-                $t = [double](Get-OptionalProperty -InputObject $e -Name "t_ms")
-                $turn = [int](Get-OptionalProperty -InputObject $e -Name "turn")
-                if ($turn -eq $doneTurn -and $t -ge $doneT) { return "" }
-            }
-            return "no first_audio after tool_done in turn $doneTurn"
-        }
         $disableCalls = Get-Calls -Activity $activity -Name "eye.disable"
         $enableCalls = Get-Calls -Activity $activity -Name "eye.enable"
         $verifiedDisables = @($disableCalls | Where-Object { [string](Get-OptionalProperty -InputObject $_ -Name "terminal_status") -eq "verified" })
@@ -456,7 +418,7 @@ try {
         if ($verifiedDisables.Count -gt 0) {
             $first = $verifiedDisables[0]
             $head = [string](Get-OptionalProperty -InputObject $first -Name "speech_head")
-            $ordering = Test-ConfirmedAfterAck -CallId ([string](Get-OptionalProperty -InputObject $first -Name "call_id"))
+            $ordering = Test-SpokenAfterToolDone -Events $events -CallId ([string](Get-OptionalProperty -InputObject $first -Name "call_id"))
             $confirmOk = ($head.StartsWith($speechClosed) -and $ordering -eq "")
             $confirmDetail = "receipt speech '" + $head + "'" + $(if ($ordering) { "; " + $ordering } else { "; spoken after the terminal ACK (first_audio after tool_done)" })
         }

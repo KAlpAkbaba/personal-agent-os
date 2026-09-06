@@ -199,31 +199,34 @@ function Select-QualificationSession {
         [AllowNull()][scriptblock]$Qualifier = $null
     )
     if ($null -eq $Qualifier) { $Qualifier = ${function:Test-ExplainQualification} }
-    $candidates = @()
-    foreach ($session in $Sessions) {
-        $id = [string]$session.session_id
-        if (-not $id -or $BaselineIds -contains $id) { continue }
-        $kind = [string]$session.client_kind
-        if ($ClientKinds.Count -gt 0 -and $ClientKinds -notcontains $kind) { continue }
-        $started = ConvertTo-SessionInstant -Raw ([string]$session.started_at)
-        if ($null -eq $started) { continue }
+    # sel-prefixed locals: this function invokes two callbacks (ActivityProbe, Qualifier),
+    # and a callback resolves its free variables by dynamic scope, nearest first - a local
+    # named $activity or $session here would shadow the caller's own inside its block.
+    $selCandidates = @()
+    foreach ($selSession in $Sessions) {
+        $selId = [string]$selSession.session_id
+        if (-not $selId -or $BaselineIds -contains $selId) { continue }
+        $selKind = [string]$selSession.client_kind
+        if ($ClientKinds.Count -gt 0 -and $ClientKinds -notcontains $selKind) { continue }
+        $selStarted = ConvertTo-SessionInstant -Raw ([string]$selSession.started_at)
+        if ($null -eq $selStarted) { continue }
         # $null -ne <param> is the presence test. The value is used directly rather than
         # through .Value, because Windows PowerShell 5.1 binds a Nullable[T] parameter as a
         # plain T once it has a value, and StrictMode then refuses the .Value access.
         if ($null -ne $ReadyAt -and
-            -not (Test-InstantAtOrAfter -Instant $started -Floor ([DateTimeOffset]$ReadyAt) -ToleranceSec $ToleranceSec)) { continue }
+            -not (Test-InstantAtOrAfter -Instant $selStarted -Floor ([DateTimeOffset]$ReadyAt) -ToleranceSec $ToleranceSec)) { continue }
         if ($null -ne $NotBefore -and
-            -not (Test-InstantAtOrAfter -Instant $started -Floor ([DateTimeOffset]$NotBefore) -ToleranceSec 0)) { continue }
-        $candidates += [pscustomobject]@{ Session = $session; Id = $id; Started = $started }
+            -not (Test-InstantAtOrAfter -Instant $selStarted -Floor ([DateTimeOffset]$NotBefore) -ToleranceSec 0)) { continue }
+        $selCandidates += [pscustomobject]@{ Session = $selSession; Id = $selId; Started = $selStarted }
     }
-    foreach ($candidate in ($candidates | Sort-Object -Property Started -Descending)) {
-        $activity = $null
-        try { $activity = & $ActivityProbe $candidate.Id } catch { $activity = $null }
-        if ($null -eq $activity) { continue }
-        $qualifies = $false
-        try { $qualifies = [bool](& $Qualifier $activity) } catch { $qualifies = $false }
-        if ($qualifies) {
-            return [pscustomobject]@{ SessionId = $candidate.Id; Session = $candidate.Session; Activity = $activity; Started = $candidate.Started }
+    foreach ($selCandidate in ($selCandidates | Sort-Object -Property Started -Descending)) {
+        $selActivity = $null
+        try { $selActivity = & $ActivityProbe $selCandidate.Id } catch { $selActivity = $null }
+        if ($null -eq $selActivity) { continue }
+        $selQualifies = $false
+        try { $selQualifies = [bool](& $Qualifier $selActivity) } catch { $selQualifies = $false }
+        if ($selQualifies) {
+            return [pscustomobject]@{ SessionId = $selCandidate.Id; Session = $selCandidate.Session; Activity = $selActivity; Started = $selCandidate.Started }
         }
     }
     return $null
@@ -254,16 +257,82 @@ function Test-ExplainQualification {
     return ($explained.Count -gt 0)
 }
 
-#: The tool calls a Core voice session can make that prove the owner really spoke to it
-#: through the canonical router (docs\M18_ACTION_CONTRACT.md section 2).
-$script:CoreQualifyingTools = @("state.now", "eye.enable", "eye.disable", "activity.explain", "release.promote")
+function Get-CoreQualifyingTools {
+    <#
+        The tool calls a Core voice session can make that prove the owner really spoke to it
+        through the canonical router (docs\M18_ACTION_CONTRACT.md section 2). A function, not
+        a $script: variable: a dot-sourced library's $script: scope is whichever script
+        dot-sourced it, and a closure cannot see it at all.
+    #>
+    return , @("state.now", "eye.enable", "eye.disable", "activity.explain", "release.promote")
+}
 
 function Test-CoreQualification {
     <#  M18: the session made at least one succeeded call through the Core's router.  #>
     param($Activity)
+    $tools = Get-CoreQualifyingTools
     $calls = Get-SucceededToolCalls -Activity $Activity
-    $hits = @($calls | Where-Object { $script:CoreQualifyingTools -contains [string]$_.name })
+    $hits = @($calls | Where-Object { $tools -contains [string]$_.name })
     return ($hits.Count -gt 0)
+}
+
+function Get-SessionRouterSummary {
+    <#
+        What a session did, as three short strings for a diagnostic line or a give-up
+        reason: every tool call with its status, every resolved intent with its class, and
+        the eye/production receipts with their terminal status. "none" when empty.
+    #>
+    param([AllowNull()]$Activity)
+    $calls = @()
+    $receipts = @()
+    foreach ($c in (Get-ArrayProperty -InputObject $Activity -Name "tool_calls")) {
+        $name = [string](Get-OptionalProperty -InputObject $c -Name "name")
+        $calls += ("{0}:{1}" -f $name, (Get-OptionalProperty -InputObject $c -Name "status"))
+        if ($name -like "eye.*" -or $name -eq "release.promote") {
+            $receipts += ("{0}={1}" -f $name, (Get-OptionalProperty -InputObject $c -Name "terminal_status"))
+        }
+    }
+    $intents = @()
+    foreach ($i in (Get-ArrayProperty -InputObject $Activity -Name "intents")) {
+        $intents += ("{0}/{1}" -f (Get-OptionalProperty -InputObject $i -Name "intent"), (Get-OptionalProperty -InputObject $i -Name "klass"))
+    }
+    $last = "none"
+    $all = Get-ArrayProperty -InputObject $Activity -Name "intents"
+    if ($all.Count -gt 0) {
+        $i = $all[$all.Count - 1]
+        $last = "{0} klass={1} query_kind={2} capability={3}" -f (Get-OptionalProperty -InputObject $i -Name "intent"), (Get-OptionalProperty -InputObject $i -Name "klass"), (Get-OptionalProperty -InputObject $i -Name "query_kind"), (Get-OptionalProperty -InputObject $i -Name "capability")
+    }
+    return [pscustomobject]@{
+        ToolCalls = $(if ($calls.Count) { $calls -join ", " } else { "none" })
+        Intents   = $(if ($intents.Count) { $intents -join ", " } else { "none" })
+        Receipts  = $(if ($receipts.Count) { $receipts -join ", " } else { "none" })
+        LastKind  = $last
+    }
+}
+
+function Test-SpokenAfterToolDone {
+    <#
+        "" when the session's first_audio of the same turn came AT OR AFTER the tool_done
+        of the given call (the confirmation was spoken only after the terminal ACK);
+        otherwise the reason it cannot be shown. Pure over the activity's client_events.
+    #>
+    param([AllowNull()]$Events, [string]$CallId)
+    $done = $null
+    foreach ($e in (ConvertTo-Array -Value $Events)) {
+        if ([string](Get-OptionalProperty -InputObject $e -Name "kind") -ne "tool_done") { continue }
+        $p = Get-OptionalProperty -InputObject $e -Name "payload"
+        if ($null -ne $p -and [string](Get-OptionalProperty -InputObject $p -Name "call_id") -eq $CallId) { $done = $e; break }
+    }
+    if ($null -eq $done) { return "no tool_done event for $CallId" }
+    $doneT = [double](Get-OptionalProperty -InputObject $done -Name "t_ms")
+    $doneTurn = [int](Get-OptionalProperty -InputObject $done -Name "turn")
+    foreach ($e in (ConvertTo-Array -Value $Events)) {
+        if ([string](Get-OptionalProperty -InputObject $e -Name "kind") -ne "first_audio") { continue }
+        $t = [double](Get-OptionalProperty -InputObject $e -Name "t_ms")
+        $turn = [int](Get-OptionalProperty -InputObject $e -Name "turn")
+        if ($turn -eq $doneTurn -and $t -ge $doneT) { return "" }
+    }
+    return "no first_audio after tool_done in turn $doneTurn"
 }
 
 function Wait-QualificationSession {
@@ -284,34 +353,85 @@ function Wait-QualificationSession {
         [scriptblock]$Clock = { [double](Get-Date).ToUniversalTime().Subtract([datetime]'1970-01-01').TotalSeconds },
         [scriptblock]$OnWaiting = $null,
         [AllowNull()][scriptblock]$Qualifier = $null,
-        # OPTIONAL scriptblock(attempts, elapsedSec, sessions) -> a non-empty string to stop
-        # waiting NOW with that reason (returned as GaveUp), or $null/"" to keep waiting. A
-        # harness uses it to fail fast with the exact missing evidence instead of sitting
-        # out a ten-minute budget (owner, 2026-09-06: "remained indefinitely at waiting").
+        # Fail fast, inside the library, with the exact missing evidence (owner, 2026-09-06:
+        # "remained indefinitely at waiting"). 0 disables either bound.
+        #   ConnectWaitSec: no session of this run within this many seconds -> give up.
+        #   RouterWaitSec:  a session of this run exists but has made no qualifying call
+        #                   this many seconds after it was first seen -> give up, naming
+        #                   the tool calls and intents it did make.
+        [int]$ConnectWaitSec = 0,
+        [int]$RouterWaitSec = 0,
+        # Bounded diagnostic progress every ProgressEverySec (0 = none): the current session
+        # of this run, its router events, last query/action kind, eye receipts, and the
+        # Core's latest state (CoreProbe: scriptblock() -> the /v1/ui/state current object).
+        [int]$ProgressEverySec = 0,
+        [AllowNull()][scriptblock]$CoreProbe = $null,
+        [scriptblock]$Log = { param($Line) Write-Host $Line -ForegroundColor DarkGray },
+        # OPTIONAL extra policy: scriptblock(attempts, elapsedSec, sessions, newSessions) ->
+        # a non-empty string to stop NOW with that reason, or $null/"" to keep waiting. It
+        # receives everything it needs as arguments and must not reach for library
+        # functions: a closure (GetNewClosure) cannot see a dot-sourced script's functions,
+        # which is exactly how the owner's run of 2026-09-06 crashed.
         [AllowNull()][scriptblock]$GiveUp = $null
     )
-    $started = [double](& $Clock)
-    $attempts = 0
+    # Every local here is wait-prefixed. A callback invoked from this function resolves
+    # its free variables by DYNAMIC scope, nearest first - so a plain local named $act or
+    # $sessions in here would shadow the caller's own $act/$sessions inside its callback
+    # (owner-explain.tests.ps1 12e/12g caught exactly that). Callbacks are handed what they
+    # need as arguments; they must never depend on a name this function happens to use.
+    $waitStarted = [double](& $Clock)
+    $waitAttempts = 0
+    $waitConnectedAt = $null
+    $waitLastProgressAt = [double]::NegativeInfinity
+    $waitProgress = @()
     while ($true) {
-        $attempts++
-        $sessions = @(& $ListSessions)
-        $selected = Select-QualificationSession -Sessions $sessions -BaselineIds $BaselineIds `
+        $waitAttempts++
+        $waitSessions = @(& $ListSessions)
+        $waitSelected = Select-QualificationSession -Sessions $waitSessions -BaselineIds $BaselineIds `
             -ActivityProbe $ActivityProbe -ReadyAt $ReadyAt -NotBefore $NotBefore -Qualifier $Qualifier
-        $elapsed = [double](& $Clock) - $started
-        if ($null -ne $selected) {
-            return [pscustomobject]@{ Selected = $selected; Attempts = $attempts; ElapsedSec = $elapsed; GaveUp = $null }
+        $waitElapsed = [double](& $Clock) - $waitStarted
+        if ($null -ne $waitSelected) {
+            return [pscustomobject]@{ Selected = $waitSelected; Attempts = $waitAttempts; ElapsedSec = $waitElapsed; GaveUp = $null; Progress = $waitProgress }
         }
-        if ($elapsed -ge $TimeoutSec) {
-            return [pscustomobject]@{ Selected = $null; Attempts = $attempts; ElapsedSec = $elapsed; GaveUp = "budget of $TimeoutSec s spent" }
+        if ($waitElapsed -ge $TimeoutSec) {
+            return [pscustomobject]@{ Selected = $null; Attempts = $waitAttempts; ElapsedSec = $waitElapsed; GaveUp = "budget of $TimeoutSec s spent"; Progress = $waitProgress }
+        }
+        $waitNew = Get-NewSessions -Sessions $waitSessions -BaselineIds $BaselineIds -ReadyAt $ReadyAt
+        $waitNewest = $null
+        if ($waitNew.Count -gt 0) {
+            $waitSorted = @($waitNew | Sort-Object -Property { ConvertTo-SessionInstant -Raw ([string]$_.started_at) } -Descending)
+            $waitNewest = $waitSorted[0]
+            if ($null -eq $waitConnectedAt) { $waitConnectedAt = $waitElapsed }
+        }
+        if ($ConnectWaitSec -gt 0 -and $waitNew.Count -eq 0 -and $waitElapsed -ge $ConnectWaitSec) {
+            $waitReason = "no web voice session connected within $ConnectWaitSec s (sessions of this run: 0; connect voice on /core)"
+            return [pscustomobject]@{ Selected = $null; Attempts = $waitAttempts; ElapsedSec = $waitElapsed; GaveUp = $waitReason; Progress = $waitProgress }
+        }
+        if ($RouterWaitSec -gt 0 -and $null -ne $waitConnectedAt -and ($waitElapsed - $waitConnectedAt) -ge $RouterWaitSec) {
+            $waitActivity = $null
+            try { $waitActivity = & $ActivityProbe ([string]$waitNewest.session_id) } catch { $waitActivity = $null }
+            $waitSummary = Get-SessionRouterSummary -Activity $waitActivity
+            $waitReason = ("session {0} connected {1} s ago but made no succeeded router call ({2}) within {3} s; tool calls seen: {4}; intents resolved: {5}" -f `
+                $waitNewest.session_id, [math]::Round($waitElapsed - $waitConnectedAt), ((Get-CoreQualifyingTools) -join " / "), $RouterWaitSec, $waitSummary.ToolCalls, $waitSummary.Intents)
+            return [pscustomobject]@{ Selected = $null; Attempts = $waitAttempts; ElapsedSec = $waitElapsed; GaveUp = $waitReason; Progress = $waitProgress }
         }
         if ($null -ne $GiveUp) {
-            $reason = $null
-            try { $reason = [string](& $GiveUp $attempts $elapsed $sessions) } catch { $reason = $null }
-            if ($reason) {
-                return [pscustomobject]@{ Selected = $null; Attempts = $attempts; ElapsedSec = $elapsed; GaveUp = $reason }
+            $waitReason = $null
+            try { $waitReason = [string](& $GiveUp $waitAttempts $waitElapsed $waitSessions $waitNew) } catch { $waitReason = $null }
+            if ($waitReason) {
+                return [pscustomobject]@{ Selected = $null; Attempts = $waitAttempts; ElapsedSec = $waitElapsed; GaveUp = $waitReason; Progress = $waitProgress }
             }
         }
-        if ($null -ne $OnWaiting) { & $OnWaiting $attempts $elapsed }
+        if ($ProgressEverySec -gt 0 -and ($waitElapsed - $waitLastProgressAt) -ge $ProgressEverySec) {
+            $waitLastProgressAt = $waitElapsed
+            $waitActivity = $null
+            if ($null -ne $waitNewest) { try { $waitActivity = & $ActivityProbe ([string]$waitNewest.session_id) } catch { $waitActivity = $null } }
+            $waitCore = $null
+            if ($null -ne $CoreProbe) { try { $waitCore = & $CoreProbe } catch { $waitCore = $null } }
+            $waitProgress = Format-QualificationProgress -Session $waitNewest -Activity $waitActivity -CoreCurrent $waitCore -ElapsedSec $waitElapsed
+            foreach ($waitLine in $waitProgress) { & $Log $waitLine }
+        }
+        if ($null -ne $OnWaiting) { & $OnWaiting $waitAttempts $waitElapsed }
         & $Sleep $IntervalSec
     }
 }
@@ -353,22 +473,10 @@ function Format-QualificationProgress {
     $lines = @()
     $lines += ("      [{0,4:N0} s] current web session: {1}" -f $ElapsedSec, $(if ($null -ne $Session) { "{0} ({1}, started {2})" -f $Session.session_id, $Session.state, $Session.started_at } else { "none yet - connect voice on /core" }))
     if ($null -ne $Activity) {
-        $calls = Get-ArrayProperty -InputObject $Activity -Name "tool_calls"
-        $router = @()
-        $receipts = @()
-        foreach ($c in $calls) {
-            $name = [string](Get-OptionalProperty -InputObject $c -Name "name")
-            $router += ("{0}:{1}" -f $name, (Get-OptionalProperty -InputObject $c -Name "status"))
-            if ($name -like "eye.*" -or $name -eq "release.promote") {
-                $receipts += ("{0}={1}" -f $name, (Get-OptionalProperty -InputObject $c -Name "terminal_status"))
-            }
-        }
-        $intents = Get-ArrayProperty -InputObject $Activity -Name "intents"
-        $last = if ($intents.Count -gt 0) { $intents[$intents.Count - 1] } else { $null }
-        $lastKind = if ($null -ne $last) { "{0} klass={1} query_kind={2} capability={3}" -f (Get-OptionalProperty -InputObject $last -Name "intent"), (Get-OptionalProperty -InputObject $last -Name "klass"), (Get-OptionalProperty -InputObject $last -Name "query_kind"), (Get-OptionalProperty -InputObject $last -Name "capability") } else { "none" }
-        $lines += ("               router events seen: {0}" -f $(if ($router.Count) { $router -join ", " } else { "none" }))
-        $lines += ("               last query/action kind: {0}" -f $lastKind)
-        $lines += ("               eye receipts seen: {0}" -f $(if ($receipts.Count) { $receipts -join ", " } else { "none" }))
+        $summary = Get-SessionRouterSummary -Activity $Activity
+        $lines += ("               router events seen: {0}" -f $summary.ToolCalls)
+        $lines += ("               last query/action kind: {0}" -f $summary.LastKind)
+        $lines += ("               eye receipts seen: {0}" -f $summary.Receipts)
     }
     $lines += ("               latest Core state: {0}" -f $(if ($null -ne $CoreCurrent) { "{0} (subsystem {1}, session {2}, at {3})" -f (Get-OptionalProperty -InputObject $CoreCurrent -Name "state"), (Get-OptionalProperty -InputObject $CoreCurrent -Name "subsystem"), (Get-OptionalProperty -InputObject $CoreCurrent -Name "session_id"), (Get-OptionalProperty -InputObject $CoreCurrent -Name "at") } else { "unknown" }))
     return , $lines

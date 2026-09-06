@@ -492,13 +492,103 @@ Test-Case "12. GiveUp stops the wait NOW with its reason; without it the budget 
         -TimeoutSec 20 -IntervalSec 5 -Sleep $fake.Sleep -Clock $fake.Clock
     Assert-Equal "budget of 20 s spent" $spent.GaveUp "the budget is a reason too"
 }
-Test-Case "12b. GiveUp sees the sessions of the current poll, so 'connected but silent' is a distinct reason" {
+Test-Case "12b. GiveUp receives the sessions of this run as an argument: 'connected but silent' needs no library call from the callback" {
     $fake = New-FakeClock
     $s = New-Session -Id "quiet-1" -StartedAt "2026-09-04T20:01:00Z"
+    # The callback is deliberately a CLOSURE - the shape that crashed the owner's run - and
+    # it works because it reaches for nothing but its arguments.
     $result = Wait-QualificationSession -ListSessions { @($s) }.GetNewClosure() -ActivityProbe { param($Id) New-CoreActivity -Id $Id } -BaselineIds @() -ReadyAt $readyAt `
         -TimeoutSec 600 -IntervalSec 5 -Sleep $fake.Sleep -Clock $fake.Clock -Qualifier ${function:Test-CoreQualification} `
-        -GiveUp { param($Attempts, $Elapsed, $Sessions) $new = Get-NewSessions -Sessions $Sessions -BaselineIds @() -ReadyAt $readyAt; if ($new.Count -gt 0 -and $Elapsed -ge 10) { "session $($new[0].session_id) connected but made no router call" } else { $null } }
+        -GiveUp { param($Attempts, $Elapsed, $Sessions, $New) if ($New.Count -gt 0 -and $Elapsed -ge 10) { "session $($New[0].session_id) connected but made no router call" } else { $null } }.GetNewClosure()
     Assert-Equal "session quiet-1 connected but made no router call" $result.GaveUp "reason names the silent session"
+}
+Test-Case "12d. ConnectWaitSec: no session of this run within the bound -> a bounded diagnostic failure, in the library" {
+    $fake = New-FakeClock
+    $old = New-Session -Id "old-closed" -StartedAt "2026-09-04T19:00:00Z" -State "closed"
+    $result = Wait-QualificationSession -ListSessions { @($old) } -ActivityProbe { param($Id) New-Activity -Id $Id } -BaselineIds @("old-closed") -ReadyAt $readyAt `
+        -TimeoutSec 600 -IntervalSec 5 -Sleep $fake.Sleep -Clock $fake.Clock -Qualifier ${function:Test-CoreQualification} -ConnectWaitSec 30
+    Assert-True ($null -eq $result.Selected) "the old closed session never qualifies"
+    Assert-True ($result.GaveUp -like "no web voice session connected within 30 s*") "reason: '$($result.GaveUp)'"
+    Assert-True ($result.ElapsedSec -ge 30 -and $result.ElapsedSec -lt 60) "bounded (elapsed $($result.ElapsedSec))"
+}
+Test-Case "12e. RouterWaitSec: a session of this run with no router call -> give up naming what it did make" {
+    $fake = New-FakeClock
+    $s = New-Session -Id "core-quiet" -StartedAt "2026-09-04T20:01:00Z"
+    $act = [pscustomobject]@{ session_id = "core-quiet"; tool_calls = @([pscustomobject]@{ name = "clock.now"; status = "succeeded" }); intents = @([pscustomobject]@{ intent = "none"; klass = "query" }) }
+    $result = Wait-QualificationSession -ListSessions { @($s) } -ActivityProbe { param($Id) $act } -BaselineIds @() -ReadyAt $readyAt `
+        -TimeoutSec 600 -IntervalSec 5 -Sleep $fake.Sleep -Clock $fake.Clock -Qualifier ${function:Test-CoreQualification} -ConnectWaitSec 300 -RouterWaitSec 20
+    Assert-True ($result.GaveUp -like "session core-quiet connected * but made no succeeded router call*") "reason: '$($result.GaveUp)'"
+    Assert-True ($result.GaveUp -match "tool calls seen: clock.now:succeeded") "the calls it did make are named"
+    Assert-True ($result.GaveUp -match "intents resolved: none/query") "the intents are named"
+    Assert-True ($result.ElapsedSec -lt 60) "bounded"
+}
+Test-Case "12f. a session that DOES go through the router is selected before either bound fires" {
+    $fake = New-FakeClock
+    $polls = @{ n = 0 }
+    $list = { $polls.n++; if ($polls.n -ge 3) { @(New-Session -Id "core-ok" -StartedAt "2026-09-04T20:01:00Z") } else { @() } }.GetNewClosure()
+    $probe = { param($Id) if ($polls.n -ge 5) { New-CoreActivity -Id $Id -Succeeded @("state.now") } else { New-CoreActivity -Id $Id } }.GetNewClosure()
+    $result = Wait-QualificationSession -ListSessions $list -ActivityProbe $probe -BaselineIds @() -ReadyAt $readyAt `
+        -TimeoutSec 600 -IntervalSec 5 -Sleep $fake.Sleep -Clock $fake.Clock -Qualifier ${function:Test-CoreQualification} -ConnectWaitSec 60 -RouterWaitSec 60
+    Assert-Equal "core-ok" $result.Selected.SessionId "selected once the router call appeared"
+    Assert-True ($null -eq $result.GaveUp) "no give-up"
+}
+Test-Case "12g. progress lines go to Log every ProgressEverySec, naming the session, its calls and the Core's state" {
+    $fake = New-FakeClock
+    $s = New-Session -Id "core-p" -StartedAt "2026-09-04T20:01:00Z"
+    $act = [pscustomobject]@{ session_id = "core-p"; tool_calls = @([pscustomobject]@{ name = "eye.disable"; status = "succeeded"; terminal_status = "verified" }); intents = @() }
+    $logged = New-Object System.Collections.ArrayList
+    $log = { param($Line) [void]$logged.Add($Line) }.GetNewClosure()
+    $result = Wait-QualificationSession -ListSessions { @($s) } -ActivityProbe { param($Id) $act } -BaselineIds @() -ReadyAt $readyAt `
+        -TimeoutSec 30 -IntervalSec 5 -Sleep $fake.Sleep -Clock $fake.Clock -Qualifier { param($A) $false } `
+        -ProgressEverySec 10 -CoreProbe { [pscustomobject]@{ state = "agent.idle"; subsystem = "system"; session_id = $null; at = "2026-09-04T20:00:00Z" } } -Log $log
+    Assert-Equal "budget of 30 s spent" $result.GaveUp "ran out"
+    $text = ($logged -join "`n")
+    Assert-True ($text -match "current web session: core-p") "session named"
+    Assert-True ($text -match "eye receipts seen: eye.disable=verified") "receipt named"
+    Assert-True ($text -match "latest Core state: agent.idle \(subsystem system") "core state named"
+    Assert-True ($logged.Count -ge 8) "several progress blocks (got $($logged.Count) lines)"
+}
+Test-Case "12h. the library's locals never shadow a callback's variables (dynamic scope resolves nearest first)" {
+    # A caller's callbacks that use the most obvious names - $act, $sessions, $session,
+    # $activity, $selected, $elapsed - must see the CALLER's values, not whatever the wait
+    # or the selector happen to hold in a local of the same name at the moment of the call.
+    $fake = New-FakeClock
+    $sessions = @(New-Session -Id "shadow-1" -StartedAt "2026-09-04T20:01:00Z")
+    $session = $sessions[0]
+    $activity = New-CoreActivity -Id "shadow-1" -Succeeded @("state.now")
+    $act = $activity
+    $selected = "caller-owned"
+    $elapsed = 12345
+    $result = Wait-QualificationSession -ListSessions { $sessions } -ActivityProbe { param($Id) if ($Id -eq $session.session_id -and $selected -eq "caller-owned" -and $elapsed -eq 12345) { $act } else { $null } } `
+        -BaselineIds @() -ReadyAt $readyAt -TimeoutSec 60 -IntervalSec 5 -Sleep $fake.Sleep -Clock $fake.Clock `
+        -Qualifier { param($A) ($null -ne $activity) -and (Test-CoreQualification -Activity $A) } -ConnectWaitSec 30 -RouterWaitSec 30
+    Assert-Equal "shadow-1" $result.Selected.SessionId "the probe saw the caller's own variables and the session was selected"
+}
+Test-Case "15. Get-SessionRouterSummary: none / one / many, through the array traps" {
+    $none = Get-SessionRouterSummary -Activity ([pscustomobject]@{ session_id = "x" })
+    Assert-Equal "none" $none.ToolCalls "no calls"
+    Assert-Equal "none" $none.LastKind "no intents"
+    $one = Get-SessionRouterSummary -Activity ([pscustomobject]@{ tool_calls = @([pscustomobject]@{ name = "state.now"; status = "succeeded" }); intents = @([pscustomobject]@{ intent = "explain"; klass = "query"; query_kind = "world_state"; capability = $null }) })
+    Assert-Equal "state.now:succeeded" $one.ToolCalls "one call"
+    Assert-Equal "explain/query" $one.Intents "one intent"
+    Assert-True ($one.LastKind -like "explain klass=query query_kind=world_state*") "last kind"
+}
+Test-Case "16. Test-SpokenAfterToolDone: first_audio after tool_done in the same turn, and the two ways it is not" {
+    $events = @(
+        [pscustomobject]@{ kind = "tool_call"; t_ms = 100; turn = 2; payload = [pscustomobject]@{ call_id = "c-1" } },
+        [pscustomobject]@{ kind = "tool_done"; t_ms = 400; turn = 2; payload = [pscustomobject]@{ call_id = "c-1" } },
+        [pscustomobject]@{ kind = "first_audio"; t_ms = 650; turn = 2; payload = [pscustomobject]@{} }
+    )
+    Assert-Equal "" (Test-SpokenAfterToolDone -Events $events -CallId "c-1") "spoken after the ACK"
+    $early = @(
+        [pscustomobject]@{ kind = "first_audio"; t_ms = 50; turn = 2; payload = [pscustomobject]@{} },
+        [pscustomobject]@{ kind = "tool_done"; t_ms = 400; turn = 2; payload = [pscustomobject]@{ call_id = "c-1" } }
+    )
+    Assert-True ((Test-SpokenAfterToolDone -Events $early -CallId "c-1") -like "no first_audio after tool_done*") "spoken before the ACK is refused"
+    Assert-True ((Test-SpokenAfterToolDone -Events $events -CallId "c-9") -like "no tool_done event for c-9") "unknown call"
+    Assert-True ((Test-SpokenAfterToolDone -Events $null -CallId "c-1") -like "no tool_done event*") "no events at all"
+    $single = @([pscustomobject]@{ kind = "tool_done"; t_ms = 1; turn = 1; payload = [pscustomobject]@{ call_id = "c-1" } })
+    Assert-True ((Test-SpokenAfterToolDone -Events $single -CallId "c-1") -like "no first_audio*") "one event is still a list"
 }
 Test-Case "12c. a GiveUp that throws is ignored (the wait goes on), never fatal" {
     $fake = New-FakeClock

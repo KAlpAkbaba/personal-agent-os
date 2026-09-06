@@ -400,7 +400,11 @@ try {
     $listSessions = { @(Get-OptionalProperty -InputObject (Get-Json "/v1/voice/realtime/sessions?limit=50") -Name "sessions") }
     $activityProbe = { param($Id) Get-Json "/v1/voice/realtime/sessions/$Id/activity" }
     if ($SessionId) {
-        $listSessions = { @(Get-OptionalProperty -InputObject (Get-Json "/v1/voice/realtime/sessions?limit=50") -Name "sessions") | Where-Object { [string]$_.session_id -eq $SessionId } }.GetNewClosure()
+        # A plain script block, not a closure: GetNewClosure binds a block to a fresh
+        # module scope that cannot see this script's Get-Json (the M18 harness crash of
+        # 2026-09-06). $SessionId resolves by dynamic scope from this script's own
+        # parameter when the library invokes the block.
+        $listSessions = { @(Get-OptionalProperty -InputObject (Get-Json "/v1/voice/realtime/sessions?limit=50") -Name "sessions") | Where-Object { [string]$_.session_id -eq $SessionId } }
     }
     $waited = Wait-QualificationSession -ListSessions $listSessions -ActivityProbe $activityProbe -BaselineIds $baselineIds `
         -ReadyAt $readyAt -NotBefore $notBefore `
