@@ -291,6 +291,10 @@ class Briefing:
     evidence_refs: tuple[dict[str, Any], ...]
     #: The research job the briefing is about, when it is about one.
     research_job_id: str | None = None
+    #: That job's report artifact (docs/DECISIONS.md ADR-0075). The pair
+    #: (research_job_id, research_artifact_id) is what a harness compares against the
+    #: fixture to prove a follow-up REUSED the finished run instead of starting one.
+    research_artifact_id: str | None = None
     #: The structured numbers the sentences were built from (counts, versions, verdicts):
     #: what a checker compares against the source record, instead of matching wording.
     facts: dict[str, Any] = field(default_factory=dict)
@@ -329,6 +333,7 @@ class Briefing:
             "event_ids": [str(r.get("ref")) for r in events],
             "evidence_kinds": sources,
             "research_job_id": self.research_job_id,
+            "research_artifact_id": self.research_artifact_id,
             "facts": dict(self.facts),
             "seeded": False,
             "statement_labels": sorted({s.label for s in self.executive}),
@@ -364,6 +369,7 @@ class Briefing:
             "evidence_kinds": sorted(by_kind),
             "entity_ids": {kind: ids[:8] for kind, ids in sorted(by_kind.items())},
             "research_job_id": self.research_job_id,
+            "research_artifact_id": self.research_artifact_id,
         }
 
     def counts(self) -> dict[str, int]:
@@ -982,9 +988,22 @@ def _window_statement(events: list[EventView], query: ExplainQuery) -> Statement
 
 
 def explain(
-    source: EvidenceSource, question: str, query: ExplainQuery, *, now: datetime | None = None
+    source: EvidenceSource,
+    question: str,
+    query: ExplainQuery,
+    *,
+    now: datetime | None = None,
+    research_job_id: str | None = None,
 ) -> Briefing:
-    """Retrieve, then compose. The order is the whole point."""
+    """Retrieve, then compose. The order is the whole point.
+
+    ``research_job_id`` (docs/DECISIONS.md ADR-0075) BINDS the answer to one completed
+    research: a follow-up ("teknik anlat", "kaynakları söyle") is about the run the
+    caller resolved, not about whatever happens to be latest in the ledger by the time
+    the owner asks. It only ever narrows what is READ - it can never start, re-run or
+    change a research, and when no event for that job is in the window the engine
+    falls back to its ordinary "latest activity" behaviour rather than inventing one.
+    """
     now = now or datetime.now(UTC)
     subsystems = (query.subsystem,) if query.subsystem else None
     recent = source.events(since=query.since, subsystems=subsystems, statuses=None, limit=100)
@@ -1005,7 +1024,8 @@ def explain(
                 if ref not in refs:
                     refs.append(ref)
 
-    research_job_id: str | None = None
+    answered_research_job_id: str | None = None
+    answered_research_artifact_id: str | None = None
     facts: dict[str, Any] = {}
     #: Real activity, without the annotations that describe other events.
     activities = [e for e in recent if e.event_type not in _ANNOTATION_EVENT_TYPES]
@@ -1683,6 +1703,21 @@ def explain(
         pool = activities if asked_meta or not meaningful else meaningful
         finished = [e for e in pool if e.status in ("completed", "failed")]
         latest = finished[0] if finished else (pool[0] if pool else None)
+        if research_job_id:
+            # ADR-0075: the caller bound this question to a COMPLETED research, so the
+            # answer is about that run - not about whatever finished most recently.
+            # Identity, by the job's own id; never by re-matching the topic text.
+            bound_event = next(
+                (
+                    e
+                    for e in (*recent, *all_recent)
+                    if e.event_type == "research.completed"
+                    and e.research_job_id == research_job_id
+                ),
+                None,
+            )
+            if bound_event is not None:
+                latest = bound_event
         if latest is None:
             executive.append(Statement(NO_EVIDENCE_TR, LABEL_UNCERTAINTY, ()))
         elif latest.event_type == "research.completed":
@@ -1691,7 +1726,10 @@ def explain(
                 source.research_report(latest.research_job_id) if latest.research_job_id else None
             )
             executive.extend(_research_executive(latest, qualified, activities, report))
-            research_job_id = latest.research_job_id
+            answered_research_job_id = latest.research_job_id
+            answered_research_artifact_id = (
+                str(report["artifact_id"]) if report and report.get("artifact_id") else None
+            )
             d = latest.detail or {}
             facts = {
                 "findings": _n(d.get("findings")),
@@ -1799,7 +1837,8 @@ def explain(
         detailed=tuple(detailed),
         technical=tuple(technical),
         evidence_refs=tuple(refs),
-        research_job_id=research_job_id,
+        research_job_id=answered_research_job_id,
+        research_artifact_id=answered_research_artifact_id,
         facts=facts,
     )
 

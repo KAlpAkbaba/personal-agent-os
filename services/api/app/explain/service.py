@@ -359,6 +359,11 @@ class BriefingRecord:
             ),
             "level": self.level,
             "speech": self.speech,
+            # ADR-0075: the completed research this answer was built from, at the top
+            # level of the tool result - so the durable tool-call row itself says which
+            # run was reused, without a reader having to dig into provenance.
+            "research_job_id": self.briefing.research_job_id,
+            "research_artifact_id": self.briefing.research_artifact_id,
             "sections": ["Özet", "Ayrıntı", "Teknik"],
             "cursor": self.cursor.as_dict() if self.cursor else None,
             "query": self.briefing.query.as_dict(),
@@ -410,9 +415,14 @@ def explain_to_briefing(
     source: EvidenceSource | None = None,
     device_id: uuid.UUID | None = None,
     attach_narration: bool = True,
+    research_job_id: str | None = None,
 ) -> BriefingRecord:
     """The whole path: classify → retrieve → compose → artifact → narration session
-    positioned at the requested level, with the text to speak for that level."""
+    positioned at the requested level, with the text to speak for that level.
+
+    ``research_job_id`` binds the answer to one completed research (ADR-0075); it is
+    passed straight through to :func:`app.explain.engine.explain`, which uses it to
+    choose WHICH recorded run to read. Nothing here starts or re-runs a research."""
     now = now or datetime.now(UTC)
     query = classify(question, now=now)
     if level and level != query.level:
@@ -424,7 +434,13 @@ def explain_to_briefing(
             module=query.module,
             normalized=query.normalized,
         )
-    briefing = explain(source or evidence_source_factory(db), question, query, now=now)
+    briefing = explain(
+        source or evidence_source_factory(db),
+        question,
+        query,
+        now=now,
+        research_job_id=research_job_id,
+    )
     artifact_id, version_no, body = persist_briefing(db, briefing)
 
     plan = build_plan(
