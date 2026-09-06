@@ -62,6 +62,23 @@ class Intent(StrEnum):
     EXPLAIN_PREVIOUS = "explain_previous"  # önceki maddeyi açıkla
     EXPLAIN = "explain"  # son yaptıklarını anlat / ne başarısız oldu / kanıtı ne ...
     FULL = "full"  # hepsini oku / tamamını anlat / bütün detayları oku
+
+    # M18.3 (docs/M18_3_LIVING_CORE_WAKE_ALARM_SPEC.md §3.8, §6). The wake alarm and the
+    # ambient display, in the SAME router as everything else — there is deliberately no
+    # second Turkish table anywhere for these, for the reason `_explain_kind`'s docstring
+    # records: two tables that must agree will not.
+    ALARM_CREATE = "alarm_create"  # yarın sabah 07:30'da beni uyandır / saat 08:00'e alarm kur
+    ALARM_TEST_CREATE = "alarm_test_create"  # 90 saniye sonra test alarmı kur
+    ALARM_CANCEL = "alarm_cancel"  # alarmı iptal et
+    ALARM_SNOOZE = "alarm_snooze"  # beş dakika ertele / on dakika ertele
+    ALARM_STOP = "alarm_stop"  # alarmı kapat / alarmı durdur / alarmı sustur
+    ALARM_QUERY = "alarm_query"  # sabah alarmım kaçta?
+    DISPLAY_OFF = "display_off"  # ekranları kapat / ekranı kapat
+    DISPLAY_WAKE = "display_wake"  # ekranları aç / ekranı aç
+    DISPLAY_QUERY = "display_query"  # ekranlar açık mı?
+    AMBIENT_POLICY_SET = "ambient_policy_set"  # uyurken ekranları kapat / ben yokken ...
+    AMBIENT_TEST_DISPLAY = "ambient_test_display"  # ekran uyku otomasyonunu test et
+
     NONE = "none"
 
 
@@ -85,6 +102,27 @@ CAPABILITY_BY_INTENT: dict[Intent, str] = {
     Intent.EYE_DISABLE: "eye.disable",
     Intent.EYE_ENABLE: "eye.enable",
     Intent.DEPLOY: "release.promote",
+    # M18.3 (spec §3.8): every one of these ends in an ActionReceipt. ALARM_TEST_CREATE
+    # targets the SAME capability as ALARM_CREATE — a test alarm is a real alarm with
+    # `test=true` and a short offset (spec §8.1), not a second code path, so it must not be
+    # a second capability either.
+    Intent.ALARM_CREATE: "alarm.create",
+    Intent.ALARM_TEST_CREATE: "alarm.create",
+    Intent.ALARM_CANCEL: "alarm.cancel",
+    Intent.ALARM_SNOOZE: "alarm.snooze",
+    Intent.ALARM_STOP: "alarm.stop",
+    Intent.DISPLAY_OFF: "display.off",
+    Intent.DISPLAY_WAKE: "display.wake",
+    Intent.AMBIENT_POLICY_SET: "ambient.set_policy",
+    Intent.AMBIENT_TEST_DISPLAY: "ambient.test_display",
+}
+
+#: QUERY intents that name a tool rather than being answered conversationally (contract §2:
+#: a query is answered from an authoritative source and mutates nothing). Kept separate
+#: from CAPABILITY_BY_INTENT because that map is what makes an intent an ACTION.
+QUERY_TOOL_BY_INTENT: dict[Intent, str] = {
+    Intent.ALARM_QUERY: "alarm.status",
+    Intent.DISPLAY_QUERY: "display.status",
 }
 
 
@@ -96,7 +134,7 @@ def klass_for(intent: Intent) -> str:
     guarantee. It is emphatically not an action."""
     if intent in CAPABILITY_BY_INTENT:
         return KLASS_ACTION
-    if intent in (Intent.EXPLAIN, Intent.NONE):
+    if intent in (Intent.EXPLAIN, Intent.NONE) or intent in QUERY_TOOL_BY_INTENT:
         return KLASS_QUERY
     return KLASS_CONTROL
 
@@ -420,6 +458,152 @@ def _deploy_match(tokens: tuple[str, ...]) -> str | None:
     return None
 
 
+# ------------------------------------------------- M18.3: alarms and the display
+#
+# Built on the SAME token/stem primitives as every intent above (`_has`, `_has_exact`) —
+# there is deliberately no second Turkish pattern table for the alarm and display phrases,
+# for the reason `_explain_kind`'s docstring records: two tables that must agree will not.
+# The word forms are exact where a stem would over-match: "alarm" as a stem would also
+# match "alarmın" (fine) but "aç" as a stem would match "açık" (the QUERY), so the verb
+# forms are enumerated.
+
+_ALARM_WORD_FORMS: Final[tuple[str, ...]] = (
+    "alarm",
+    "alarmı",
+    "alarmi",
+    "alarmım",
+    "alarmim",
+    "alarmımı",
+    "alarmimi",
+    "alarmını",
+    "alarmini",
+)
+#: "uyandır" (wake me) in the forms an owner says it, plus the polite request form.
+_WAKE_VERB_STEMS: Final[tuple[str, ...]] = ("uyandır", "uyandir", "kaldır", "kaldir")
+#: "kur" (set), "kurar mısın" — a bare "kur" plus an alarm noun is the create imperative.
+_SET_VERB_FORMS: Final[tuple[str, ...]] = ("kur", "kursana", "kurar", "kurabilir")
+_CANCEL_VERB_STEMS: Final[tuple[str, ...]] = ("iptal", "sil", "kaldır", "kaldir")
+#: "kapat" is shared with the eye and the display, so an alarm noun must be present.
+_ALARM_STOP_VERB_FORMS: Final[tuple[str, ...]] = (
+    "kapat",
+    "durdur",
+    "sustur",
+    "kes",
+    "sus",
+)
+_SNOOZE_VERB_STEMS: Final[tuple[str, ...]] = ("ertele", "erteler")
+_TEST_WORD_FORMS: Final[tuple[str, ...]] = ("test", "deneme")
+
+_SCREEN_WORD_FORMS: Final[tuple[str, ...]] = (
+    "ekran",
+    "ekranı",
+    "ekrani",
+    "ekranlar",
+    "ekranları",
+    "ekranlari",
+    "ekranlarını",
+    "ekranlarini",
+    "monitör",
+    "monitor",
+    "monitörü",
+    "monitoru",
+    "monitörleri",
+    "monitorleri",
+)
+_CLOSE_VERB_FORMS: Final[tuple[str, ...]] = ("kapat", "kapatsana", "kapatır", "söndür", "sondur")
+#: Deliberately NOT the eye's `_OPEN_VERB_FORMS`: this is a display, and reusing that tuple
+#: would couple two privacy-unrelated vocabularies through one edit.
+_SCREEN_OPEN_VERB_FORMS: Final[tuple[str, ...]] = ("aç", "açsana", "açar", "uyandır", "uyandir")
+
+
+def _alarm_noun(tokens: tuple[str, ...]) -> str | None:
+    return _has_exact(tokens, *_ALARM_WORD_FORMS)
+
+
+def _screen_noun(tokens: tuple[str, ...]) -> str | None:
+    return _has_exact(tokens, *_SCREEN_WORD_FORMS)
+
+
+def _is_question(tokens: tuple[str, ...]) -> bool:
+    """"kaçta", "ne zaman", "var mı", "açık mı" — the shapes that make an alarm/display
+    utterance a QUERY rather than a command."""
+    return bool(
+        _has(tokens, "kaçta", "kacta", "kaçtı", "kacti")
+        or _has_exact(tokens, "mı", "mi", "mu", "mü")
+        or (_has_exact(tokens, "ne") and _has(tokens, "zaman"))
+    )
+
+
+def _alarm_match(tokens: tuple[str, ...]) -> tuple[Intent, str] | None:
+    """The alarm family (spec §6's phrase list), in priority order.
+
+    STOP before CANCEL before CREATE, because the words overlap and the physical
+    consequence of getting it wrong is asymmetric: "alarmı kapat" while it is ringing must
+    silence it, and mistaking that for "cancel tomorrow's alarm" would leave the owner
+    listening to it. The QUERY check runs first for the same reason in reverse — "sabah
+    alarmım kaçta?" must never mutate anything.
+    """
+    # "Beş dakika ertele." names no alarm at all — the owner is talking to the thing that
+    # just woke them, and requiring the noun would leave that sentence unresolved at
+    # exactly the moment they are least able to rephrase it. "ertele" means nothing else.
+    if _has(tokens, *_SNOOZE_VERB_STEMS):
+        return Intent.ALARM_SNOOZE, "ertele"
+
+    noun = _alarm_noun(tokens)
+    wake = _has(tokens, *_WAKE_VERB_STEMS)
+    if noun is None and not wake:
+        return None
+
+    if noun is not None and _is_question(tokens) and not _has_exact(tokens, *_SET_VERB_FORMS):
+        return Intent.ALARM_QUERY, noun
+
+    if noun is not None and _has_exact(tokens, *_ALARM_STOP_VERB_FORMS):
+        return Intent.ALARM_STOP, "alarmı kapat"
+
+    if noun is not None and _has(tokens, *_CANCEL_VERB_STEMS):
+        return Intent.ALARM_CANCEL, "alarmı iptal et"
+
+    creating = _has_exact(tokens, *_SET_VERB_FORMS) or bool(wake)
+    if creating:
+        if _has_exact(tokens, *_TEST_WORD_FORMS):
+            return Intent.ALARM_TEST_CREATE, "test alarmı kur"
+        return Intent.ALARM_CREATE, noun or wake or "uyandır"
+    return None
+
+
+def _ambient_policy_match(tokens: tuple[str, ...]) -> tuple[Intent, str] | None:
+    """The policy phrases of spec §6. Checked BEFORE the bare display commands, because
+    "uyurken ekranları kapat" is a standing preference and "ekranları kapat" is a command
+    for right now — one word apart, and the difference is whether the screens go dark in
+    two seconds or in twenty minutes."""
+    if _screen_noun(tokens) is None and not _has(tokens, "otomatik"):
+        return None
+    if _has(tokens, "test") and _has(tokens, "ekran"):
+        return Intent.AMBIENT_TEST_DISPLAY, "ekran testi"
+    if _has(tokens, "uyurken", "uyuyorken", "uyudu"):
+        return Intent.AMBIENT_POLICY_SET, "uyurken"
+    if _has_exact(tokens, "yokken", "olmadığımda", "olmadigimda"):
+        return Intent.AMBIENT_POLICY_SET, "yokken"
+    if _has(tokens, "otomatik"):
+        return Intent.AMBIENT_POLICY_SET, "otomatik"
+    if _has(tokens, "geldiğimde", "geldigimde", "döndüğümde", "dondugumde"):
+        return Intent.AMBIENT_POLICY_SET, "geri geldiğimde"
+    return None
+
+
+def _display_match(tokens: tuple[str, ...]) -> tuple[Intent, str] | None:
+    noun = _screen_noun(tokens)
+    if noun is None:
+        return None
+    if _is_question(tokens):
+        return Intent.DISPLAY_QUERY, noun
+    if _has_exact(tokens, *_CLOSE_VERB_FORMS):
+        return Intent.DISPLAY_OFF, "ekranları kapat"
+    if _has_exact(tokens, *_SCREEN_OPEN_VERB_FORMS):
+        return Intent.DISPLAY_WAKE, "ekranları aç"
+    return None
+
+
 def _stop_match(text: str, tokens: tuple[str, ...]) -> str | None:
     for phrase in _MULTI_STOP_PHRASES:
         if re.search(rf"(?<!\S){re.escape(phrase)}(?!\S)", text):
@@ -480,6 +664,27 @@ def resolve_intent(
     if eye_matched := _eye_enable_match(tokens):
         return ResolvedIntent(
             Intent.EYE_ENABLE, scope=SCOPE_CONVERSATION, matched=eye_matched, **base
+        )
+
+    # 0c. M18.3 (spec §3.8, §6): the alarm and the display. BEFORE the generic stop check,
+    #     because "Alarmı durdur" / "Alarmı sustur" / "Alarmı kes" are built from words that
+    #     are also STOP_TOKENS, and a ringing alarm that answered "dur" by stopping the
+    #     NARRATION would leave the owner listening to the alarm. `_alarm_match` requires an
+    #     alarm noun (or "ertele", which means nothing else), so a bare "dur" is untouched
+    #     and stop keeps its top priority everywhere it ever had it.
+    #     The ambient POLICY phrases come before the bare display commands: "uyurken
+    #     ekranları kapat" is a standing preference, "ekranları kapat" is a command for now.
+    if ambient_matched := _ambient_policy_match(tokens):
+        return ResolvedIntent(
+            ambient_matched[0], scope=SCOPE_CONVERSATION, matched=ambient_matched[1], **base
+        )
+    if alarm_matched := _alarm_match(tokens):
+        return ResolvedIntent(
+            alarm_matched[0], scope=SCOPE_CONVERSATION, matched=alarm_matched[1], **base
+        )
+    if display_matched := _display_match(tokens):
+        return ResolvedIntent(
+            display_matched[0], scope=SCOPE_CONVERSATION, matched=display_matched[1], **base
         )
 
     # 1. stop — top priority in any state, including TOOL_RUNNING progress.
@@ -921,6 +1126,7 @@ __all__ = [
     "PRESENTATION_FULL",
     "PRESENTATION_SUMMARY",
     "PRESENTATION_TECHNICAL",
+    "QUERY_TOOL_BY_INTENT",
     "SPEECH_BUDGET_CHARS",
     "SCOPE_CONVERSATION",
     "SCOPE_NARRATION",

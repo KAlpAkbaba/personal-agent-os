@@ -530,6 +530,49 @@ def _collect_environment(c: _Collector, settings: Settings) -> None:
 # ------------------------------------------------------------------ assembly
 
 
+def _collect_ambient(c: _Collector, session: Session) -> None:
+    """M18.3 §3.6e: what the owner's machines say about their screens and their keyboards,
+    and when the next alarm is due.
+
+    ``RUNTIME`` truth, deliberately: these come from a live heartbeat roughly every ten
+    seconds, not from a record, and ``STALE_AFTER[RUNTIME]`` is what makes a device that
+    stopped reporting fade to stale rather than sit there claiming a lit screen. A device
+    with no owner-session companion sends no status at all and simply contributes no facts —
+    the absence is the honest answer, not a default.
+    """
+    from app.ambient.ingest import world_model_facts
+
+    for entry in world_model_facts():
+        c.fact(
+            entry["key"],
+            "ambient",
+            entry["value"],
+            TruthKind.RUNTIME,
+            observed_at=entry["observed_at"],
+            evidence_refs=[{"kind": "device", "ref": entry["device_id"]}],
+        )
+
+    from app.alarms import service as alarms_service
+    from app.alarms.models import ALARM_PENDING_STATES
+
+    pending = [
+        a for a in alarms_service.list_alarms(session, limit=200)
+        if a.state in ALARM_PENDING_STATES
+    ]
+    if not pending:
+        c.fact("alarm.next_scheduled_for", "ambient", None, TruthKind.RUNTIME)
+        return
+    soonest = min(pending, key=lambda a: a.scheduled_for)
+    c.fact(
+        "alarm.next_scheduled_for",
+        "ambient",
+        _iso(soonest.scheduled_for),
+        TruthKind.RUNTIME,
+        evidence_refs=[{"kind": "wake_alarm", "ref": str(soonest.id)}],
+        note=f"{soonest.local_time} {soonest.timezone}",
+    )
+
+
 def assemble_snapshot(
     session: Session,
     *,
@@ -554,6 +597,7 @@ def assemble_snapshot(
     c.section("deployment", lambda: _collect_deployment(c, session))
     c.section("incidents", lambda: _collect_incidents(c, session))
     c.section("events", lambda: _collect_recent_events(c, session))
+    c.section("ambient", lambda: _collect_ambient(c, session))
     c.section("dependencies", lambda: _collect_dependencies(c, settings, health_results))
     c.section("environment", lambda: _collect_environment(c, settings))
 

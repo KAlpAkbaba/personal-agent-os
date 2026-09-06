@@ -5022,6 +5022,174 @@ worker, an automatic or manifest-driven fullscreen, ring acceleration from an al
 exist, and every form of motion that a published event or a real measurement did not
 produce.
 
+## ADR-0071 — Wake alarms are routines with a clock, a device fallback and a receipted sequence; display-off is a policy that prefers ON (2026-09-07)
+
+Context: M18.3 (`docs/M18_3_LIVING_CORE_WAKE_ALARM_SPEC.md`) asks Cloud Core for two
+things the owner will judge with their eyes closed. An alarm has to wake them — with the
+camera off, no browser tab focused, no voice session live, and the cloud possibly
+unreachable — and the screens in front of them have to go dark only when the system is
+genuinely sure, and come back the instant a hand touches the keyboard. Both are physical,
+both happen while nobody is watching the logs, and both fail in ways a person cannot
+correct afterwards: a wake alarm that did not ring is not recoverable at 07:31, and a
+screen that went dark because the camera broke is not recoverable by explaining it later.
+
+Everything below follows from that asymmetry.
+
+Decision:
+
+1. **A wake alarm is a routine, not a second scheduler.** `WakeAlarm` (table `wake_alarms`,
+   migration `0021_wake_alarms`) is the aggregate; the TRIGGER is an ordinary
+   `app.routines` routine carrying a single new action kind, `wake_alarm`, whose detail is
+   nothing but the alarm's uuid. One-shot alarms get an `at` routine, recurring ones a
+   `schedule` routine, every snooze a fresh `at` routine. The routine row therefore cannot
+   hold a stale copy of the media, the ramp or the greeting the owner changed afterwards,
+   and `RoutineFiring`'s uniqueness on `(routine_id, occurrence_key)` stays the first line
+   against a double ring — inherited, not reimplemented.
+
+2. **There is now a clock, and it is named.** M18 row 12.15 said "no routine fires without
+   something asking: there is no background timer". That property was never "no loop
+   exists" — it was "no HIDDEN loop". `app/routines/clock.py::RoutineClock` is a single
+   asyncio loop started by the API lifespan (`ROUTINE_CLOCK_INTERVAL_S` default 10 s,
+   `ROUTINE_CLOCK_ENABLED` default true), single-flight, each tick in a worker thread with
+   its own session, running `evaluate_due` → the alarm tick → the ambient tick. It is
+   owner-visible on the health manifest (`checks.routine_clock`: running, enabled,
+   interval, ticks, last tick, last error) precisely because a configured clock that is
+   not running is the state in which no alarm would ever fire. The routines PACKAGE still
+   owns no timer and `evaluate_due` is still its one explicit entry point;
+   `tests/unit/test_routines_clock.py` asserts both halves structurally, and that is the
+   amended form of row 12.15. The alternative — leaving evaluation to whoever thinks of it
+   — is not a scheduler a person can rely on to wake them, which is the whole point of
+   M18.3.
+
+3. **The clock is a cadence; the schedule is in the rows.** Nothing in the tick decides
+   anything from "this is the Nth tick": arming, the greeting, and completion are all
+   derived from stored timestamps compared to the supplied `now`. A process that was down
+   for ten minutes therefore catches up on its first tick instead of losing what it missed,
+   which is what makes "an ARMED row fires after a fresh process's first tick" true rather
+   than hopeful.
+
+4. **Idempotency lives on the ALARM, not only on the occurrence.** `WakeAlarm.last_firing_id`
+   plus the state machine (`app/alarms/state.py`) mean a second tick, a second process, or
+   a broker redelivery all find the alarm already past ARMED and do nothing. An occurrence
+   is a row another process may not have committed yet; an alarm is the thing that is
+   physically making noise. A duplicate-suppressed dispatch reports SUCCEEDED with
+   `deduplicated`, not FAILED — turning correct suppression into a critical UiState.ERROR
+   every time a tick overlapped a dispatch would have been a self-inflicted alarm.
+
+5. **The wake sequence is a list of promises, each with a receipt.** Disarm the device's own
+   fallback FIRST (so a cloud ring and a local fallback ring can never both happen, and a
+   FAILED disarm never stops the sequence — an unreachable device that rings its own
+   fallback is exactly what the owner wants). Wake the display best-effort; a dark screen is
+   never a reason for a silent alarm. Then the owner's media through the browser worker's
+   dedicated `alarm` profile, and if that is not possible for ANY reason — no capability, no
+   url, a challenge, autoplay blocked, an unverified play — the device's own ramping tone,
+   with the media failure recorded as its own receipt carrying the real reason. Only if BOTH
+   audio paths fail is the alarm FAILED, and then it says so (ledger `alarm.failed` plus a
+   critical `UiState.ERROR`). `app.alarms.sequence.RECEIPT_BY_DEVICE_CALL` enumerates every
+   device capability this package dispatches against the receipt capability it is recorded
+   under, and a structural test asserts the two sets are equal in both directions: a step
+   added later without a receipt fails the suite rather than quietly becoming a hidden
+   action.
+
+6. **`verified` means the browser watched `currentTime` advance.** An unverified
+   `browser.media_play` is treated as a FAILED play and the tone takes over. A silent tab is
+   indistinguishable from a broken alarm to a sleeping owner, so "play() was called" is not
+   allowed to count as ringing.
+
+7. **The greeting needs no voice session, no microphone and no camera.** It is a WAV
+   synthesised through `OpenAITTSProvider` (the owner's existing key) with the voice nearest
+   the realtime persona — `cedar` first, an explicit `alloy` fallback, and which voice
+   actually spoke rides the receipt — delivered as a one-time 256-bit token
+   (`app/alarms/audio_store.py`, 5 minute TTL, single use, sha256 in the signed command).
+   `GET /v1/alarms/audio/{token}` is the ONE endpoint in this milestone with no owner
+   session, on its own router so the exemption is a visible line rather than a per-route
+   flag: the fetcher is a Windows service holding no session, and the token is the
+   authority — the same shape as the broker's enrollment exception. The alarms package is
+   structurally forbidden from importing `RealtimeSessionRow` or anything under
+   `app.voice.realtime_sessions`, and a greeting that cannot be synthesised is recorded and
+   the music keeps playing; it never becomes a claim that it was spoken.
+
+8. **Uncertain means ON.** `app/ambient/policy.py::decide` is pure and is the only place in
+   this system that may conclude "turn the owner's screens off". Its table is ordered by
+   certainty, so the reason it reports is the first TRUE one — which is the one an owner
+   asking "why did/didn't my screens go off?" actually wants. UNKNOWN presence, a stale
+   assertion, low confidence, a disabled eye, an unreadable display state and any active
+   holdoff each return `none` with their own reason, and the two paths that DO act require a
+   sustained AWAY, or a sustained AND confident LIKELY_ASLEEP, with automatic display-off
+   off by default until the owner turns it on. An unwanted screen left on is the accepted
+   failure mode; a screen that goes dark because a camera failed is not.
+
+9. **Physical owner input outranks passive inference, on both sides independently.** The
+   heartbeat's optional `status` object (protocol version unchanged; validated leniently
+   here because the authoritative schema is Track D's and a device sending a shape this
+   Cloud Core has never seen must stay CONNECTED — a disconnected device cannot ring an
+   alarm) feeds `app/devices/status.py::DeviceStatusRegistry`. An input-idle RESET writes
+   `owner.input_active` and starts the cloud's `input` holdoff; a `recent_input` REFUSAL
+   from the device — a successful command carrying `refused`, mapped to
+   `execution_status=refused` with its own sentence, never a failure — starts the same
+   holdoff. Neither side depends on the other: the cloud can be unreachable and the device
+   still protects the owner, and the device can be old and the cloud still does. A long idle
+   produces NOTHING: absence of input is not evidence of absence.
+
+10. **Display power is the only machine-state capability, and that is enforced by reading
+    the source.** `tests/unit/test_alarms_structure.py` screens every executable line of
+    `app/alarms` and `app/ambient` for shutdown/suspend/hibernate/logoff/lock API names, the
+    cloud half of the guard the companion already has over its own display files. `display.on`
+    / `display.off` on the bus come from the device's OBSERVED power state on the next
+    heartbeat, never from having asked — a refused command must not leave the strip claiming
+    the screens are dark.
+
+11. **`ACTION_CONTRACT_VERSION` becomes 6** (M18.2 released 5) and the UI-state contract
+    becomes 3. A whole family of mutating capabilities now reaches the owner by voice
+    (`alarm.create/cancel/snooze/stop/status`, `display.off/wake/status`,
+    `ambient.set_policy/test_display` — ten tools registered from `default_registry()` by one
+    added line), with two receipt shapes the contract had not needed: a DEVICE REFUSAL that
+    is a successful command, and an `observed_after.local` that is a device's read-back
+    rather than a browser's. The intents live in the ONE router (`resolve_intent`), checked
+    before the generic stop words — "Alarmı durdur" is built from words that are also
+    STOP_TOKENS, and a ringing alarm that answered by stopping the NARRATION would leave the
+    owner listening to it — and after the eye's privacy stop, which still wins over
+    everything. There is no second Turkish table anywhere.
+
+12. **Two refusals are the system declining to invent something.** An unparseable "when" is
+    refused rather than rounded to a guess (`app/alarms/tr_time.py` raises `UnparsedWhen`; a
+    bare number is not a clock, so "Beni bir ara uyandır" cannot become 01:00). And a
+    RECURRING alarm whose music the owner only named — a title with no url — is refused
+    outright with `needs_media_confirmation` and nothing is created, because a repeating
+    alarm that silently rings a tone every weekday instead of the named song is a lie that
+    repeats. A ONE-SHOT alarm in the same position IS created with the tone and the speech
+    asks for the link: the owner still wakes up tomorrow.
+
+13. **Two clock readings, deliberately.** `spoken_clock_tr` is how a person tells the time
+    ("yedi buçuk") and belongs in the greeting; `clock_words_tr` reads the digits back
+    ("yedi otuza kurdum") and belongs in a confirmation, so a set time cannot be misheard as
+    a rounding. Spec §3.7 fixes the first and §6 the second; a test pins that they differ.
+
+14. **Test mode is the production path.** A test alarm is a real alarm with `is_test=true`
+    and `max_play_seconds=120`; the owner's display test arms a moment and the CLOCK issues
+    the real, receipted `display.off` when it arrives — which is also what gives the owner
+    the ten seconds to take their hand off the keyboard. Every terminal state — stopped,
+    cancelled, completed, failed — runs the same release: stop playback, disarm the device,
+    close the media session, resolve or re-schedule the routine, write `alarm.cleaned_up`.
+    Not a special case for test alarms: a real alarm that left a device armed would ring
+    again tomorrow for no reason.
+
+Consequences: `services/api` gains `app/alarms/` (models, state, tr_time, speech,
+audio_store, greeting_audio, sequence, service, routine_port, routes) and `app/ambient/`
+(policy, holdoff, service, ingest, routes), plus `app/devices/status.py`,
+`app/devices/routes.py` and `app/routines/clock.py`. `app.routines.actions` gains the
+`wake_alarm` kind; `app.routines.dispatch` gains a third port (`WakeAlarmPort`) and the four
+`browser.media_*` names on the cloud allowlist alongside the new `desktop.*` capability
+constants; `app.broker.frames.HeartbeatFrame` gains an optional `status`; the ledger
+vocabulary gains the `alarm.*` lifecycle events, `owner.input_active`,
+`ambient.policy_changed` and an `ambient` subsystem; `app.uistate.contract` gains the
+`alarm.*` and `display.*` states at version 3. What this does NOT build: the browser
+worker's four media operations (Track B), the Windows agent's display/arm/activity/audio
+capabilities (Track D), and the Living Core renderer (Track W). Until those land, an alarm on
+a device without them fails honestly — `no_capable_device` or `capability_missing` — and
+falls back to the tone, which is the behaviour the fallback exists for rather than a gap
+being papered over.
+
 ## ADR-0072 — The companion refuses to darken a screen the owner just touched, arms its own fallback alarm, and reports what it sees on the heartbeat (2026-09-07)
 
 M18 gave the device a wake alarm and one machine-state action (`desktop.display_off`), both

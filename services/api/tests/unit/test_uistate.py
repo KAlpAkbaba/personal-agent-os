@@ -66,9 +66,23 @@ def test_the_vocabulary_is_the_one_the_owner_specified() -> None:
         "release.verifying",
         "release.live",
         "release.rollback",
+        # M18.3 (spec §7): the wake alarm's own channel and the ambient display channel.
+        # ``alarm.triggered`` above is unchanged — that is the routine engine's "this
+        # routine's alarm action fired"; these are the physical wake sequence's own states.
+        "alarm.armed",
+        "alarm.firing",
+        "alarm.playing",
+        "alarm.greeting",
+        "alarm.snoozed",
+        "alarm.stopped",
+        "alarm.completed",
+        "alarm.failed",
+        "display.on",
+        "display.off",
     }
     contract = ui_state_contract()
-    assert contract["contract_version"] == 2
+    assert contract["contract_version"] == 3
+    assert "ambient" in contract["subsystems"]
     assert "audio" in contract["metadata_rules"]["forbidden"]
 
 
@@ -228,7 +242,7 @@ def test_the_ui_read_surface_is_owner_gated_and_replayable(wired) -> None:
         assert body["current"]["state"] == "agent.researching"
         assert body["current"]["progress"] == 0.4
         assert body["sequence"] == 1
-        assert client.get("/v1/ui/state/contract").json()["contract_version"] == 2
+        assert client.get("/v1/ui/state/contract").json()["contract_version"] == 3
         publish(UiState.IDLE, subsystem="system")
         after = client.get("/v1/ui/state", params={"after_sequence": 1}).json()
         assert [e["state"] for e in after["events"]] == ["agent.idle"]

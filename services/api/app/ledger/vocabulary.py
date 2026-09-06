@@ -45,6 +45,11 @@ SUBSYSTEM_LEDGER = "ledger"
 SUBSYSTEM_PRESENCE = "presence"
 #: M18 Routine Engine (app.routines).
 SUBSYSTEM_ROUTINE = "routine"
+#: M18.3: the ambient display policy (app.ambient) — display power and the holdoffs that
+#: keep it on. Its own subsystem rather than "presence" because presence is EVIDENCE and
+#: this is POLICY acting on it: a reader asking "why did my screens go dark?" must not have
+#: to separate the two by reading each row's detail.
+SUBSYSTEM_AMBIENT = "ambient"
 
 SUBSYSTEMS: Final[tuple[str, ...]] = (
     SUBSYSTEM_RESEARCH,
@@ -61,6 +66,7 @@ SUBSYSTEMS: Final[tuple[str, ...]] = (
     SUBSYSTEM_LEDGER,
     SUBSYSTEM_PRESENCE,
     SUBSYSTEM_ROUTINE,
+    SUBSYSTEM_AMBIENT,
 )
 
 # ------------------------------------------------------------------ statuses
@@ -213,6 +219,37 @@ EVENT_TYPE_ROUTINE_ACTION_REFUSED = "routine.action_refused"
 #: subjects only, never the sentence.
 EVENT_TYPE_ACTION_RECEIPT = "action.receipt"
 EVENT_TYPE_VOICE_STATE_ANSWERED = "voice.state_answered"
+#: M18.3 wake alarms (app.alarms.service, spec §3.2). EVERY lifecycle transition writes
+#: exactly one ``alarm.<state_lowercase>`` row, idempotent per (alarm_id, state,
+#: occurrence): "did that alarm actually ring, and what did it do?" is answerable from the
+#: ledger alone, which is the whole reason the owner qualification can be a record read
+#: rather than a person watching a screen.
+EVENT_TYPE_ALARM_SCHEDULED = "alarm.scheduled"
+EVENT_TYPE_ALARM_ARMED = "alarm.armed"
+EVENT_TYPE_ALARM_FIRING = "alarm.firing"
+EVENT_TYPE_ALARM_DISPLAY_WAKING = "alarm.display_waking"
+EVENT_TYPE_ALARM_MEDIA_STARTING = "alarm.media_starting"
+EVENT_TYPE_ALARM_PLAYING = "alarm.playing"
+EVENT_TYPE_ALARM_GREETING = "alarm.greeting"
+EVENT_TYPE_ALARM_SNOOZED = "alarm.snoozed"
+EVENT_TYPE_ALARM_STOPPED = "alarm.stopped"
+EVENT_TYPE_ALARM_COMPLETED = "alarm.completed"
+EVENT_TYPE_ALARM_CANCELLED = "alarm.cancelled"
+EVENT_TYPE_ALARM_FAILED = "alarm.failed"
+#: The device rang its own armed fallback because the cloud never reached it (spec §3.6d).
+#: Not a failure of the alarm — the opposite: the fallback did exactly its job, and the
+#: cloud reconciles rather than ringing a second time.
+EVENT_TYPE_ALARM_LOCAL_FALLBACK_RANG = "alarm.local_fallback_rang"
+#: A test alarm released everything it held (spec §8.1): media session closed, device
+#: disarmed, one-shot routine resolved. Written on EVERY terminal state, never only the
+#: happy one.
+EVENT_TYPE_ALARM_CLEANED_UP = "alarm.cleaned_up"
+#: M18.3 §3.6b: real keyboard/mouse activity, seen through the heartbeat's input-idle
+#: reset. Physical owner input outranks passive inference (spec §1.3), so this row is both
+#: the evidence and the start of the input holdoff.
+EVENT_TYPE_OWNER_INPUT_ACTIVE = "owner.input_active"
+#: M18.3 §3.9: the owner changed the ambient display policy, by voice or by REST.
+EVENT_TYPE_AMBIENT_POLICY_CHANGED = "ambient.policy_changed"
 
 EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_RESEARCH_PLANNED,
@@ -258,7 +295,42 @@ EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_ROUTINE_ACTION_REFUSED,
     EVENT_TYPE_ACTION_RECEIPT,
     EVENT_TYPE_VOICE_STATE_ANSWERED,
+    EVENT_TYPE_ALARM_SCHEDULED,
+    EVENT_TYPE_ALARM_ARMED,
+    EVENT_TYPE_ALARM_FIRING,
+    EVENT_TYPE_ALARM_DISPLAY_WAKING,
+    EVENT_TYPE_ALARM_MEDIA_STARTING,
+    EVENT_TYPE_ALARM_PLAYING,
+    EVENT_TYPE_ALARM_GREETING,
+    EVENT_TYPE_ALARM_SNOOZED,
+    EVENT_TYPE_ALARM_STOPPED,
+    EVENT_TYPE_ALARM_COMPLETED,
+    EVENT_TYPE_ALARM_CANCELLED,
+    EVENT_TYPE_ALARM_FAILED,
+    EVENT_TYPE_ALARM_LOCAL_FALLBACK_RANG,
+    EVENT_TYPE_ALARM_CLEANED_UP,
+    EVENT_TYPE_OWNER_INPUT_ACTIVE,
+    EVENT_TYPE_AMBIENT_POLICY_CHANGED,
 )
+
+#: ``alarm.<state_lowercase>`` for every state in ``app.alarms.models.ALARM_STATES``
+#: (spec §3.2). Named here so the alarm service derives the event type from the state it
+#: is entering instead of carrying a second, hand-maintained mapping that could disagree
+#: with the state vocabulary — the failure mode this module's docstring exists to prevent.
+ALARM_EVENT_TYPE_BY_STATE: Final[dict[str, str]] = {
+    "SCHEDULED": EVENT_TYPE_ALARM_SCHEDULED,
+    "ARMED": EVENT_TYPE_ALARM_ARMED,
+    "FIRING": EVENT_TYPE_ALARM_FIRING,
+    "DISPLAY_WAKING": EVENT_TYPE_ALARM_DISPLAY_WAKING,
+    "MEDIA_STARTING": EVENT_TYPE_ALARM_MEDIA_STARTING,
+    "PLAYING": EVENT_TYPE_ALARM_PLAYING,
+    "GREETING": EVENT_TYPE_ALARM_GREETING,
+    "SNOOZED": EVENT_TYPE_ALARM_SNOOZED,
+    "STOPPED": EVENT_TYPE_ALARM_STOPPED,
+    "COMPLETED": EVENT_TYPE_ALARM_COMPLETED,
+    "CANCELLED": EVENT_TYPE_ALARM_CANCELLED,
+    "FAILED": EVENT_TYPE_ALARM_FAILED,
+}
 
 #: Reserved for the Evolution Engine (M18): constants exist now, writers come
 #: later. Each carries related_module_id, version, production_state and
@@ -368,6 +440,7 @@ def validate_production_state(value: str) -> str:
 
 
 __all__ = [
+    "ALARM_EVENT_TYPE_BY_STATE",
     "EVENT_TYPES",
     "EVOLUTION_EVENT_TYPES",
     "InvalidVocabulary",

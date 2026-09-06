@@ -128,6 +128,21 @@ class Settings(BaseSettings):
     broker_default_command_timeout_s: float = 300.0
     broker_handshake_timeout_s: float = 10.0
 
+    # M18.3 (spec §3.3): the routine clock — the ONE named, owner-visible component that
+    # asks "is anything due?". The routines package still has no timer of its own and
+    # `evaluate_due` is still its only entry point; this is the thing that calls it, on a
+    # cadence the owner can see on the health manifest and turn off here. Disabled in every
+    # unit test by never running the lifespan; set PAGENTOS_ROUTINE_CLOCK_ENABLED=false to
+    # turn it off in a real process (an alarm will then never fire on its own — which is
+    # exactly why it is a setting and not a hidden constant).
+    routine_clock_enabled: bool = True
+    routine_clock_interval_s: float = 10.0
+    # M18.3 §3.7: the origin the COMPANION uses to fetch a greeting WAV. Empty means "the
+    # same origin the device already talks to"; the Device Service validates the URL's
+    # origin against its own configured broker REST origin before forwarding, so a wrong
+    # value here fails closed on the device rather than fetching from somewhere else.
+    alarm_audio_origin: str = ""
+
     # Devices layer (M13 track C, PROJECT_CONSTITUTION.md §11a). Presence is
     # "online" (live WS) vs "stale" (recently seen but disconnected, within
     # this gap) vs "offline"; selection only ever picks an "online" device.

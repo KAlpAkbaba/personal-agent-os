@@ -87,8 +87,20 @@ class AuthFrame(_Frame):
 
 
 class HeartbeatFrame(_Frame):
+    """M18.3 (spec §5.3) added an OPTIONAL ``status`` object: what the owner-session
+    companion reports about input idleness, display power and its armed alarms.
+
+    Additive, so the protocol version stays 1. Typed as a bare object here on purpose: the
+    authoritative schema is ``packages/schemas/device-protocol.schema.json`` (Track D's),
+    and Cloud Core validates it leniently in ``app.devices.status.parse_status`` — unknown
+    keys ignored, malformed values read as "unknown". A device sending a status shape this
+    Cloud Core has never seen must stay CONNECTED; a disconnected device cannot ring an
+    alarm, which makes strictness here the more dangerous choice.
+    """
+
     type: Literal["heartbeat"]
     seq: int = Field(ge=0)
+    status: dict[str, Any] | None = None
 
 
 class CommandAckFrame(_Frame):

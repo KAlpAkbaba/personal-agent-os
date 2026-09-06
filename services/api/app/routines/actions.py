@@ -8,7 +8,7 @@ verbatim (``RoutineFiring.actions_snapshot``) and hands each one to a
 tests use in the meantime — it never plays audio, opens a browser tab or touches a display.
 The real implementation is ``app.routines.dispatch.ActionDispatcher`` (ADR-0060).
 
-Five closed kinds:
+Six closed kinds:
 
 - ``voice_briefing``: text to narrate. Declarative only; narration itself is
   ``app.narration``'s job, not this package's.
@@ -24,6 +24,10 @@ Five closed kinds:
 - ``browser_action`` / ``display_action``: free-form declarative descriptors for the
   browser/display subsystems' own vocabularies, which this package does not own or import;
   only that a non-empty ``action`` name is present is checked here.
+- ``wake_alarm`` (M18.3): a uuid naming a ``app.alarms.models.WakeAlarm``. The whole wake
+  SEQUENCE lives in ``app.alarms``; this package only carries the trigger and the id, so
+  the routine row can never hold a stale copy of the media, the ramp or the greeting the
+  owner changed afterwards.
 """
 
 from __future__ import annotations
@@ -37,6 +41,13 @@ ACTION_KIND_ALARM = "alarm"
 ACTION_KIND_MEDIA_PLAYBACK = "media_playback"
 ACTION_KIND_BROWSER_ACTION = "browser_action"
 ACTION_KIND_DISPLAY_ACTION = "display_action"
+#: M18.3 (spec §3.1): the WAKE alarm — a whole receipted sequence (disarm, display wake,
+#: media or tone, ramp, greeting, completion) owned by ``app.alarms``, not a single device
+#: command. The descriptor carries ONLY the alarm id: the aggregate is the source of truth
+#: for the media, the volume ramp and the greeting policy, so a routine row can never
+#: disagree with the alarm the owner edited afterwards. Distinct from ``alarm`` above,
+#: which stays what it was — a bare ``desktop.alarm_start`` with a wake-volume ramp.
+ACTION_KIND_WAKE_ALARM = "wake_alarm"
 
 ACTION_KINDS: tuple[str, ...] = (
     ACTION_KIND_VOICE_BRIEFING,
@@ -44,6 +55,7 @@ ACTION_KINDS: tuple[str, ...] = (
     ACTION_KIND_MEDIA_PLAYBACK,
     ACTION_KIND_BROWSER_ACTION,
     ACTION_KIND_DISPLAY_ACTION,
+    ACTION_KIND_WAKE_ALARM,
 )
 
 #: Wake-volume ramp defaults (task brief: "configurable wake volume that ramps rather than
@@ -128,12 +140,31 @@ def validate_display_action(detail: dict[str, Any]) -> dict[str, Any]:
     return dict(detail)
 
 
+def validate_wake_alarm(detail: dict[str, Any]) -> dict[str, Any]:
+    """``{"alarm_id": "<uuid>"}`` and nothing else that matters (M18.3 spec §3.1).
+
+    The id is parsed as a real UUID rather than accepted as any string: a routine whose
+    action names an alarm that cannot exist is a routine that will fire at the right moment
+    and do nothing, which is the exact failure a wake alarm cannot have. Normalised to the
+    canonical lowercase form so two spellings of one id can never look like two alarms.
+    """
+    raw = detail.get("alarm_id")
+    if not isinstance(raw, str) or not raw.strip():
+        raise InvalidActionDescriptor("wake_alarm requires an 'alarm_id'")
+    try:
+        alarm_id = UUID(raw.strip())
+    except (ValueError, AttributeError, TypeError) as exc:
+        raise InvalidActionDescriptor(f"wake_alarm 'alarm_id' must be a uuid, got {raw!r}") from exc
+    return {**detail, "alarm_id": str(alarm_id)}
+
+
 _VALIDATORS = {
     ACTION_KIND_VOICE_BRIEFING: validate_voice_briefing,
     ACTION_KIND_ALARM: validate_alarm,
     ACTION_KIND_MEDIA_PLAYBACK: validate_media_playback,
     ACTION_KIND_BROWSER_ACTION: validate_browser_action,
     ACTION_KIND_DISPLAY_ACTION: validate_display_action,
+    ACTION_KIND_WAKE_ALARM: validate_wake_alarm,
 }
 
 
@@ -240,6 +271,7 @@ __all__ = [
     "ACTION_KIND_DISPLAY_ACTION",
     "ACTION_KIND_MEDIA_PLAYBACK",
     "ACTION_KIND_VOICE_BRIEFING",
+    "ACTION_KIND_WAKE_ALARM",
     "DEFAULT_WAKE_VOLUME_END",
     "DEFAULT_WAKE_VOLUME_RAMP_SECONDS",
     "DEFAULT_WAKE_VOLUME_START",
@@ -258,4 +290,5 @@ __all__ = [
     "validate_display_action",
     "validate_media_playback",
     "validate_voice_briefing",
+    "validate_wake_alarm",
 ]

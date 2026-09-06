@@ -9,6 +9,7 @@ from sqlalchemy import engine_from_config, pool
 # constructs (CHECK constraints, the pgvector hnsw index, BigInteger identity):
 # the ORM models stay portable so the service layer unit-tests on SQLite, which
 # is why `alembic check` reports those as differences by design.
+import app.alarms.models  # noqa: F401 - register M18.3 wake_alarms/ambient_policy on Base.metadata
 import app.artifacts.models  # noqa: F401 - register artifact/task tables on Base.metadata
 import app.broker.models  # noqa: F401 - register broker tables on Base.metadata
 import app.evolution.models  # noqa: F401 - register evolution tables on Base.metadata

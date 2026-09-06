@@ -106,7 +106,16 @@ TERMINAL_CLAIMABLE: Final[frozenset[str]] = frozenset({TERMINAL_VERIFIED, TERMIN
 #: a deployed v4 has no mode concept at all and always ran what v5 calls QUICK's
 #: unbounded predecessor (fetch everything discovery found, up to max_sources, no
 #: wave/time budget, no challenge/cooldown memory).
-ACTION_CONTRACT_VERSION: Final = 5
+#: v6 (2026-09-07, M18.3, ADR-0071): a whole new family of mutating capabilities reaches
+#: the owner by voice — alarm.create/cancel/snooze/stop, display.off/wake,
+#: ambient.set_policy/test_display — and with it two receipt shapes this contract had not
+#: needed before: a DEVICE REFUSAL that is a successful command (the companion answering
+#: "no, the owner just touched the keyboard" is execution_status=refused with its own
+#: sentence, never a failure), and a receipt whose observed_after.local is the DEVICE's own
+#: read-back rather than a browser's. The wake sequence writes one receipt per physical
+#: step (app.alarms.sequence.RECEIPT_BY_DEVICE_CALL enumerates them), so a qualification
+#: run can prove every physical action from the ledger alone.
+ACTION_CONTRACT_VERSION: Final = 6
 
 FAKE_COMPLETION_PHRASES: Final[tuple[str, ...]] = (
     "yapmış gibi düşün",
