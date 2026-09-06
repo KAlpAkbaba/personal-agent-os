@@ -20,6 +20,7 @@ from app.explain.classify import (
     QUERY_CAN_DEPLOY,
     QUERY_EVIDENCE,
     QUERY_EVOLUTION,
+    QUERY_EYE_STATE,
     QUERY_FAILURES,
     QUERY_GOALS,
     QUERY_LEARNED,
@@ -157,6 +158,7 @@ SUBSYSTEM_FOR_QUERY: dict[str, str] = {
     QUERY_LEARNED: "memory+experience",
     QUERY_GOALS: "goals",
     QUERY_WORLD_STATE: "worldmodel",
+    QUERY_EYE_STATE: "worldmodel",
     QUERY_SELF_CODE: "selfmodel",
     QUERY_EVOLUTION: "evolution",
     QUERY_SHADOW_READY: "evolution",
@@ -1330,10 +1332,16 @@ def explain(
             detailed.append(_goal_item(goal))
             add_refs((_goal_ref(goal),))
 
-    elif query.kind == QUERY_WORLD_STATE:
+    elif query.kind in (QUERY_WORLD_STATE, QUERY_EYE_STATE):
         # "Kendi sisteminde şu anda ne görüyorsun?" - the four truth kinds, kept apart.
         # The whole point of the world model is that source truth is not runtime truth, so
         # the answer says WHICH KIND each fact is, and says out loud what it does not know.
+        #
+        # This is the BRIEFING form (REST /v1/explain, an artifact with three levels). The
+        # spoken answer to the same question is not this: the realtime tools route
+        # world_state / eye_state to app.state.now.compose_live_state, which speaks the
+        # current state itself (docs/M18_ACTION_CONTRACT.md §3) - the owner heard counts of
+        # truth kinds on 2026-09-06 and that is not "what do you see".
         snapshot = _call_obj(source, "world_state")
         if not snapshot:
             executive.append(Statement("Dünya modelim şu anda okunamıyor.", LABEL_UNCERTAINTY, ()))

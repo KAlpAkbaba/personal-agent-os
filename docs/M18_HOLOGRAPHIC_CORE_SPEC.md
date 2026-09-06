@@ -79,7 +79,11 @@ CAMERA → LOCAL PERCEPTION → structured observations → World Model / Activi
 
 Camera activity is obvious: an indicator, the selected camera, the current perception state
 and its confidence, the privacy mode, and an enable/disable control. `Gözünü kapat`,
-`Kamerayı kapat` and `Beni izleme` stop perception immediately.
+`Kamerayı kapat` and `Beni izleme` stop perception immediately. `Gözünü aç`, `Kamerayı aç`
+and `Beni izle` re-open it by the same grounded path, by voice as well as by the control:
+the camera opens locally first, the durable flag follows the read-back, and the spoken
+acknowledgement is the action's receipt, never the intent (`docs/M18_ACTION_CONTRACT.md`
+§5, ADR-0063).
 
 **Perception is never authentication.** Presence is an interaction signal. No face or body
 observation may act as owner identity, and none may carry production-release authority.

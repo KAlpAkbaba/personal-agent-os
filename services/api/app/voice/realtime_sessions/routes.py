@@ -358,6 +358,7 @@ async def relay_tool_call(
                 registry=runtime.registry,
                 sideband=runtime.sideband,
                 trace_id=trace_id,
+                live=runtime.live_sources(),
             )
 
     try:

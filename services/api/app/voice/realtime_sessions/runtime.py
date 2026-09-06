@@ -104,12 +104,21 @@ class RealtimeVoiceRuntime:
         )
         self._inactive: dict[str, str] = inactive_candidates(settings)
         self._registry: ToolRegistry = registry or default_registry()
+        self._broker: Any = broker
         if sideband is not None:
             self._sideband: SidebandPusher = sideband
         elif broker is not None:
             self._sideband = BrokerSideband(broker)
         else:
             self._sideband = RecordingSideband(deliver=False)
+
+    def live_sources(self) -> dict[str, Any]:
+        """The in-process runtimes a tool handler may read (``ToolContext.live``,
+        docs/M18_ACTION_CONTRACT.md §4): the broker for device presence; the presence
+        engine is left to the handler's default (the process-wide engine), and a health
+        probe is not run per tool call - the composer makes the one probe it can make
+        itself. A test injects what it needs through the same dict."""
+        return {"broker_runtime": self._broker, "presence_runtime": None, "health": None}
 
     # ------------------------------------------------------------------ db
 

@@ -38,6 +38,11 @@ class Intent(StrEnum):
     # M18 (docs/M18_HOLOGRAPHIC_CORE_SPEC.md §2): the privacy-critical Active Eye
     # stop phrases. Listed first because it is checked first — see resolve_intent.
     EYE_DISABLE = "eye_disable"  # gözünü kapat / kamerayı kapat / beni izleme
+    # docs/M18_ACTION_CONTRACT.md §2: the enable path that did not exist on 2026-09-06.
+    EYE_ENABLE = "eye_enable"  # gözünü aç / kamerayı aç / beni izle / beni tekrar izle
+    # "Canlıya al." as an IMPERATIVE is an action (always refused by policy, contract §2);
+    # "canlıya alabilir misin?" stays the can_deploy QUERY.
+    DEPLOY = "deploy"  # canlıya al / yayına al
     STOP = "stop"  # dur / kes / sus / yeter / durdur / duraklat / bekle
     RESUME = "resume"  # devam / kaldığın yerden / sürdür
     REPEAT = "repeat"  # tekrar (oku) / yeniden oku / bir daha
@@ -65,6 +70,35 @@ class Intent(StrEnum):
 #: owns "devam" otherwise.
 SCOPE_NARRATION = "narration"
 SCOPE_CONVERSATION = "conversation"
+
+#: The three classes of owner utterance (docs/M18_ACTION_CONTRACT.md §2). A QUERY is
+#: answered from an authoritative source and mutates nothing; an ACTION targets a
+#: canonical capability and ends in a receipt; a CONTROL steers the conversation or a
+#: narration (stop, resume, item moves, speed). This resolver is the ONLY place the
+#: class is decided.
+KLASS_QUERY = "query"
+KLASS_ACTION = "action"
+KLASS_CONTROL = "control"
+
+#: The canonical capability each ACTION intent targets (contract §2's third column).
+CAPABILITY_BY_INTENT: dict[Intent, str] = {
+    Intent.EYE_DISABLE: "eye.disable",
+    Intent.EYE_ENABLE: "eye.enable",
+    Intent.DEPLOY: "release.promote",
+}
+
+
+def klass_for(intent: Intent) -> str:
+    """query | action | control for an intent (contract §2).
+
+    ``NONE`` is reported as a query: nothing this resolver owns was said, the model
+    answers conversationally, and nothing mutates - which is the query class's
+    guarantee. It is emphatically not an action."""
+    if intent in CAPABILITY_BY_INTENT:
+        return KLASS_ACTION
+    if intent in (Intent.EXPLAIN, Intent.NONE):
+        return KLASS_QUERY
+    return KLASS_CONTROL
 
 PRESENTATION_SUMMARY = "summary"
 PRESENTATION_DETAIL = "detail"
@@ -145,10 +179,22 @@ class ResolvedIntent:
     confidence: float = 1.0
     matched: str = ""  # the token/phrase that decided it (for audit/debug)
     query_kind: str | None = None  # EXPLAIN only: which question about the system
+    #: query | action | control (contract §2); derived from the intent unless given.
+    klass: str = ""
+    #: The canonical capability an ACTION targets ("eye.disable"); None for the rest.
+    capability: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.klass:
+            object.__setattr__(self, "klass", klass_for(self.intent))
+        if self.capability is None and self.intent in CAPABILITY_BY_INTENT:
+            object.__setattr__(self, "capability", CAPABILITY_BY_INTENT[self.intent])
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "intent": self.intent.value,
+            "klass": self.klass,
+            "capability": self.capability,
             "scope": self.scope,
             "target_index": self.target_index,
             "normalized_text": self.normalized_text,
@@ -328,6 +374,52 @@ def _eye_disable_match(tokens: tuple[str, ...]) -> str | None:
     return None
 
 
+#: The imperative "open" forms. Exact, like the eye/camera nouns: "açık" (open, adj.) is
+#: the QUERY "kamera açık mı?" and must not become an action; "açar mısın" is a request
+#: and is honoured as one.
+_OPEN_VERB_FORMS: Final[tuple[str, ...]] = ("aç", "açsana", "açar")
+#: "Active Eye'ı aç" — the product name, as the ASR renders it (the apostrophe survives
+#: normalisation, so the stem match on "eye" is the honest way to catch "eye'ı"/"eye'i").
+_ACTIVE_EYE_FORMS: Final[tuple[str, ...]] = ("active", "aktif")
+
+
+def _eye_enable_match(tokens: tuple[str, ...]) -> str | None:
+    """``Gözünü aç`` / ``Kamerayı aç`` / ``Beni izle`` / ``Beni tekrar izle`` /
+    ``Gözünü tekrar aç`` / ``Active Eye'ı aç`` (docs/M18_ACTION_CONTRACT.md §2).
+
+    Built on the same word forms as :func:`_eye_disable_match`, and evaluated AFTER
+    it, so "beni izleme" (the negative imperative: do not watch me) stays a disable and
+    "beni izle" (watch me) is an enable — the two differ by one suffix and the privacy
+    direction must win a tie.
+    """
+    if _has_exact(tokens, *_EYE_WORD_FORMS) and _has_exact(tokens, *_OPEN_VERB_FORMS):
+        return "gözünü aç"
+    if _has_exact(tokens, *_CAMERA_WORD_FORMS) and _has_exact(tokens, *_OPEN_VERB_FORMS):
+        return "kamerayı aç"
+    if (
+        _has_exact(tokens, *_ACTIVE_EYE_FORMS)
+        and _has(tokens, "eye")
+        and _has_exact(tokens, *_OPEN_VERB_FORMS)
+    ):
+        return "active eye'ı aç"
+    if _has_exact(tokens, "beni") and _has_exact(tokens, "izle"):
+        return "beni izle"
+    return None
+
+
+#: "Canlıya al." / "Yayına al." as imperatives (contract §2). Exact verb forms: "alabilir"
+#: is the question, and the question stays a can_deploy QUERY answered from policy.
+_PROMOTE_TARGETS: Final[tuple[str, ...]] = ("canlıya", "canliya", "yayına", "yayina")
+_TAKE_VERB_FORMS: Final[tuple[str, ...]] = ("al", "alsana")
+
+
+def _deploy_match(tokens: tuple[str, ...]) -> str | None:
+    target = _has_exact(tokens, *_PROMOTE_TARGETS)
+    if target and _has_exact(tokens, *_TAKE_VERB_FORMS):
+        return "yayına al" if target.startswith("yay") else "canlıya al"
+    return None
+
+
 def _stop_match(text: str, tokens: tuple[str, ...]) -> str | None:
     for phrase in _MULTI_STOP_PHRASES:
         if re.search(rf"(?<!\S){re.escape(phrase)}(?!\S)", text):
@@ -383,12 +475,27 @@ def resolve_intent(
         return ResolvedIntent(
             Intent.EYE_DISABLE, scope=SCOPE_CONVERSATION, matched=eye_matched, **base
         )
+    # 0b. The enable path (contract §2). Same place, same primitives, evaluated second so
+    #     the disable direction wins whenever both could read.
+    if eye_matched := _eye_enable_match(tokens):
+        return ResolvedIntent(
+            Intent.EYE_ENABLE, scope=SCOPE_CONVERSATION, matched=eye_matched, **base
+        )
 
     # 1. stop — top priority in any state, including TOOL_RUNNING progress.
     stop = _stop_match(normalized, tokens)
     if stop:
         return ResolvedIntent(
             Intent.STOP, scope=_scope_for(Intent.STOP, narration), matched=stop, **base
+        )
+
+    # 1a. "Canlıya al." — an action the policy always refuses, but an ACTION: it goes to
+    #     release.promote and comes back as a refused receipt, so the refusal is evidence
+    #     (contract §2). Checked before the question classifier so the imperative can never
+    #     be softened into the can_deploy question.
+    if deploy_matched := _deploy_match(tokens):
+        return ResolvedIntent(
+            Intent.DEPLOY, scope=SCOPE_CONVERSATION, matched=deploy_matched, **base
         )
 
     # 1b. questions about the system's own activity resolve BEFORE presentation words,
@@ -804,7 +911,11 @@ def apply_to_narration(
 
 
 __all__ = [
+    "CAPABILITY_BY_INTENT",
     "FILLERS",
+    "KLASS_ACTION",
+    "KLASS_CONTROL",
+    "KLASS_QUERY",
     "LEVEL_SECTION_TITLES",
     "PRESENTATION_DETAIL",
     "PRESENTATION_FULL",
@@ -821,6 +932,7 @@ __all__ = [
     "apply_to_narration",
     "current_item_index",
     "is_filler",
+    "klass_for",
     "level_section_cursor",
     "normalize_transcript",
     "ordered_paragraph_ids",

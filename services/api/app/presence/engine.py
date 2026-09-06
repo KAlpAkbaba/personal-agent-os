@@ -383,6 +383,49 @@ class PresenceFusionEngine:
 
             return new_assertion, changed
 
+    def last_observation_at(self, *, source: str | None = None) -> datetime | None:
+        """When the most recent buffered observation (optionally of one ``source``) was
+        made, or None. The buffer is bounded by ``buffer_lookback_s``, so "None" means
+        "nothing in the last half hour", which is what a live-state answer needs to say
+        (docs/M18_ACTION_CONTRACT.md §4: ``eye.last_observation_age_s``)."""
+        with self._lock:
+            candidates = [
+                _aware(o.observed_at)
+                for o in self._observations
+                if source is None or o.source == source
+            ]
+        return max(candidates) if candidates else None
+
+    def invalidate_source(
+        self, source: str, *, now: datetime | None = None, reason: str = "source_invalidated"
+    ) -> PresenceAssertion:
+        """Drop every buffered observation from ``source`` and degrade the current
+        assertion to UNKNOWN with ``reason`` (docs/M18_ACTION_CONTRACT.md §5.4).
+
+        Used when the owner disables the Active Eye: a state fused from camera frames
+        the owner just forbade is not allowed to be reported for the rest of its TTL.
+        The other sources' observations stay in the buffer; the next observation from
+        any of them re-classifies over what remains. Recorded as an UNKNOWN episode so
+        the greeting policy sees the gap rather than an unbroken run.
+        """
+        moment = now or datetime.now(UTC)
+        with self._lock:
+            self._observations = [o for o in self._observations if o.source != source]
+            assertion = unknown_assertion(now=moment, reason=reason)
+            self._current = assertion
+            if not self._episodes or self._episodes[-1].state != PresenceState.UNKNOWN:
+                self._episodes.append(
+                    PresenceEpisode(
+                        state=PresenceState.UNKNOWN,
+                        start_at=moment,
+                        end_at=moment,
+                        confidence=0.0,
+                    )
+                )
+                if len(self._episodes) > self._episode_limit:
+                    self._episodes = self._episodes[-self._episode_limit :]
+            return assertion
+
     def reset(self) -> None:
         with self._lock:
             self._observations.clear()

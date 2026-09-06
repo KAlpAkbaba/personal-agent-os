@@ -31,6 +31,7 @@ for the negative proof).
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -55,13 +56,14 @@ logger = get_logger("app.presence.eye")
 DEFAULT_EYE_ENABLED = True
 
 
-def is_eye_enabled(session: Session) -> bool:
-    """Read fresh, every time — see module docstring on why there is no
-    cached flag.
+def latest_eye_event(session: Session) -> Any | None:
+    """The most recent ``eye.enabled`` / ``eye.disabled`` ledger row, or None when the
+    owner has never set the flag. This IS the durable flag (module docstring); an action
+    receipt cites it as evidence (docs/M18_ACTION_CONTRACT.md §5.5).
 
     ``query()`` is used rather than ``latest()`` because presence also writes
-    ``presence.state_changed`` / ``presence.greeting_delivered`` rows into
-    the same subsystem; this must look only at the two eye events.
+    ``presence.state_changed`` / ``presence.greeting_delivered`` rows into the same
+    subsystem; this must look only at the two eye events.
     """
     rows = ledger_service.query(
         session,
@@ -69,12 +71,30 @@ def is_eye_enabled(session: Session) -> bool:
         event_types=[EVENT_TYPE_EYE_ENABLED, EVENT_TYPE_EYE_DISABLED],
         limit=1,
     )
-    if not rows:
+    return rows[0] if rows else None
+
+
+def is_eye_enabled(session: Session) -> bool:
+    """Read fresh, every time — see module docstring on why there is no
+    cached flag."""
+    row = latest_eye_event(session)
+    if row is None:
         return DEFAULT_EYE_ENABLED
-    return rows[0].event_type == EVENT_TYPE_EYE_ENABLED
+    return bool(row.event_type == EVENT_TYPE_EYE_ENABLED)
 
 
-def _set_eye_state(session: Session, *, enabled: bool, reason: str) -> None:
+def _set_eye_state(session: Session, *, enabled: bool, reason: str) -> bool:
+    """Idempotent durable write (docs/M18_ACTION_CONTRACT.md §5.4).
+
+    When the flag already equals the requested value nothing is written, nothing is
+    published and ``False`` is returned: the ledger must not fill with "disabled again"
+    rows every time the safety net and the tool handler both honour one command, and an
+    action receipt needs to know whether THIS command changed anything ("verified") or
+    found it already so ("already"). Otherwise the row is written, the UI-state event is
+    published and ``True`` is returned.
+    """
+    if is_eye_enabled(session) == enabled:
+        return False
     event_type = EVENT_TYPE_EYE_ENABLED if enabled else EVENT_TYPE_EYE_DISABLED
     action = "enable" if enabled else "disable"
     now = datetime.now(UTC)
@@ -105,17 +125,37 @@ def _set_eye_state(session: Session, *, enabled: bool, reason: str) -> None:
         status=action,
         label=reason[:64] if reason else None,
     )
+    return True
 
 
-def enable_eye(session: Session, *, reason: str = "") -> None:
-    _set_eye_state(session, enabled=True, reason=reason)
+def enable_eye(session: Session, *, reason: str = "") -> bool:
+    """Returns True when the durable flag actually changed (contract §5.4).
+
+    Opening the camera never asserts presence: the fusion engine is untouched here, and
+    only real observations can move it (``tests/unit/test_presence_worldmodel.py``)."""
+    return _set_eye_state(session, enabled=True, reason=reason)
 
 
-def disable_eye(session: Session, *, reason: str = "") -> None:
+def disable_eye(session: Session, *, reason: str = "") -> bool:
     """Stops perception immediately: after this call,
     ``app.presence.routes`` refuses every subsequent camera-sourced
-    observation until re-enabled (spec §2: "stop perception immediately")."""
-    _set_eye_state(session, enabled=False, reason=reason)
+    observation until re-enabled (spec §2: "stop perception immediately").
+
+    Returns True when the durable flag actually changed. On a real change the presence
+    service invalidates the camera evidence it already holds (contract §5.4): a
+    presence claim built from frames the owner just forbade must not outlive the
+    command by its TTL. The import is local because ``app.presence.service`` imports
+    this module.
+    """
+    changed = _set_eye_state(session, enabled=False, reason=reason)
+    if changed:
+        from app.presence.service import on_eye_disabled
+
+        try:
+            on_eye_disabled(datetime.now(UTC))
+        except Exception:  # noqa: BLE001 - the flag is durable already; log, do not undo it
+            logger.warning("presence_eye_invalidation_failed")
+    return changed
 
 
 __all__ = [
@@ -123,4 +163,5 @@ __all__ = [
     "disable_eye",
     "enable_eye",
     "is_eye_enabled",
+    "latest_eye_event",
 ]

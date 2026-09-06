@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.actions.receipt import FAKE_COMPLETION_PHRASES
 from app.voice.preferences import VoicePreferences
 
 PERSONA_TR = (
@@ -79,6 +80,34 @@ SELF_EXPLANATION_TR = (
 )
 
 
+#: docs/M18_ACTION_CONTRACT.md §6 (ADR-0063): current state comes from state.now, the past
+#: from activity.explain, and a command to the eye or to production is ALWAYS a tool call
+#: whose 'speech' is read verbatim. The banned phrases are named, from the one place they
+#: live (app.actions.receipt.FAKE_COMPLETION_PHRASES), because on 2026-09-06 the model
+#: answered "Gözünü kapat." with "öyle olmuş gibi düşün" - a claimed mutation grounded in
+#: nothing.
+ACTION_GROUNDING_TR = (
+    "ŞU ANKİ durum soruları ('kendi sisteminde şu anda ne görüyorsun', 'sistemin şu anda ne "
+    "durumda', 'kamera açık mı', 'göz açık mı', 'ses bağlı mı', 'cihaz çevrimiçi mi', 'şu "
+    "an ne çalışıyor') için state.now aracını çağırırsın. GEÇMİŞ, öğrenilenler, hedefler, "
+    "kendi kodun ve yetki soruları ('son yaptıklarını anlat', 'ne öğrendin', 'hedeflerin "
+    "ne', 'kendi kodunda ne var', 'bunu canlıya alabilir misin') için activity.explain "
+    "aracını çağırırsın. "
+    "'Gözünü aç', 'kamerayı aç', 'beni izle', 'beni tekrar izle', 'gözünü tekrar aç' "
+    "denince HER ZAMAN eye.enable aracını; 'gözünü kapat', 'kamerayı kapat', 'beni izleme' "
+    "denince HER ZAMAN eye.disable aracını çağırırsın. Bunları asla sohbetle yanıtlamazsın, "
+    "asla 'tamam' deyip geçmezsin. 'Canlıya al' ya da 'yayına al' denince release.promote "
+    "aracını çağırırsın; araç reddedecektir, dönen 'speech' metnini okursun. "
+    "Bu araçlarda ön cümle yok, 'bakıyorum' yok, bilginin nereden geldiğini anlatmak yok: "
+    "araç döner dönmez 'speech' metnini aynen okursun. Araç yaptım demeden hiçbir şeyin "
+    "yapıldığını, açıldığını, kapandığını ya da canlıya alındığını SÖYLEMEZSİN; araç "
+    "başarısız ya da doğrulanmamış döndüyse bunu olduğu gibi söylersin. "
+    "Şu ifadeler yasaktır: " + ", ".join(f"'{phrase}'" for phrase in FAKE_COMPLETION_PHRASES) + ". "
+    "Varsayılan sözlü yanıt: önce sonuç, bir ila üç cümle, kimlik numarası yok, dolgu yok; "
+    "'kanıtı ne?' ya da 'teknik anlat' denince ayrıntıyı açarsın."
+)
+
+
 def build_instructions(
     prefs: VoicePreferences | None = None,
     *,
@@ -88,7 +117,7 @@ def build_instructions(
     voice_profile: str | None = None,
 ) -> str:
     """Assemble the session instructions (Turkish persona + defaults + state)."""
-    parts = [PERSONA_TR, EXECUTIVE_DEFAULTS_TR, SELF_EXPLANATION_TR]
+    parts = [PERSONA_TR, EXECUTIVE_DEFAULTS_TR, SELF_EXPLANATION_TR, ACTION_GROUNDING_TR]
     style = VOICE_STYLE_BLOCKS.get((voice_profile or "").lower())
     if style:
         parts.append(style)
@@ -121,6 +150,7 @@ def build_instructions(
 
 
 __all__ = [
+    "ACTION_GROUNDING_TR",
     "EXECUTIVE_DEFAULTS_TR",
     "PERSONA_TR",
     "SELF_EXPLANATION_TR",

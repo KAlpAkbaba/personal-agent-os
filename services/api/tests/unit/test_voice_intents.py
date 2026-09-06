@@ -196,6 +196,86 @@ def test_eye_disable_does_not_fire_on_unrelated_or_opposite_phrases(text: str) -
     assert resolved.intent != Intent.EYE_DISABLE, resolved
 
 
+# ------------------------------------------------- one router, three classes (M18 §2)
+
+
+@pytest.mark.parametrize(
+    ("text", "klass", "intent", "query_kind", "capability"),
+    [
+        ("Gözünü kapat.", "action", Intent.EYE_DISABLE, None, "eye.disable"),
+        ("Kamerayı kapat.", "action", Intent.EYE_DISABLE, None, "eye.disable"),
+        ("Beni izleme.", "action", Intent.EYE_DISABLE, None, "eye.disable"),
+        ("Gözünü aç.", "action", Intent.EYE_ENABLE, None, "eye.enable"),
+        ("Kamerayı aç.", "action", Intent.EYE_ENABLE, None, "eye.enable"),
+        ("Beni izle.", "action", Intent.EYE_ENABLE, None, "eye.enable"),
+        ("Beni tekrar izle.", "action", Intent.EYE_ENABLE, None, "eye.enable"),
+        ("Gözünü tekrar aç.", "action", Intent.EYE_ENABLE, None, "eye.enable"),
+        ("Active Eye'ı aç.", "action", Intent.EYE_ENABLE, None, "eye.enable"),
+        ("Kamera açık mı?", "query", Intent.EXPLAIN, "eye_state", None),
+        ("Göz açık mı?", "query", Intent.EXPLAIN, "eye_state", None),
+        ("Kameran açık mı?", "query", Intent.EXPLAIN, "eye_state", None),
+        (
+            "Kendi sisteminde şu anda ne görüyorsun?",
+            "query",
+            Intent.EXPLAIN,
+            "world_state",
+            None,
+        ),
+        ("Sistemin şu anda ne durumda?", "query", Intent.EXPLAIN, "world_state", None),
+        ("Ses bağlı mı?", "query", Intent.EXPLAIN, "world_state", None),
+        ("Cihaz çevrimiçi mi?", "query", Intent.EXPLAIN, "world_state", None),
+        ("Şu an ne çalışıyor?", "query", Intent.EXPLAIN, "world_state", None),
+        ("Son yaptıklarını anlat.", "query", Intent.EXPLAIN, "last_activity", None),
+        ("Ne öğrendin?", "query", Intent.EXPLAIN, "learned", None),
+        ("Bunu canlıya alabilir misin?", "query", Intent.EXPLAIN, "can_deploy", None),
+        ("Canlıya al.", "action", Intent.DEPLOY, None, "release.promote"),
+        ("Yayına al.", "action", Intent.DEPLOY, None, "release.promote"),
+        ("Bunu canlıya al.", "action", Intent.DEPLOY, None, "release.promote"),
+        ("Dur.", "control", Intent.STOP, None, None),
+        ("devam et", "control", Intent.RESUME, None, None),
+        ("biraz daha yavaş", "control", Intent.SLOWER, None, None),
+    ],
+)
+def test_the_contract_table_resolves_to_klass_intent_query_kind_and_capability(
+    text: str, klass: str, intent: Intent, query_kind: str | None, capability: str | None
+) -> None:
+    resolved = resolve_intent(text)
+    assert resolved.intent == intent, resolved
+    assert resolved.klass == klass, resolved
+    assert resolved.query_kind == query_kind, resolved
+    assert resolved.capability == capability, resolved
+    as_dict = resolved.to_dict()
+    assert as_dict["klass"] == klass and as_dict["capability"] == capability
+
+
+def test_the_enable_and_disable_directions_differ_by_one_suffix_and_privacy_wins() -> None:
+    assert resolve_intent("beni izleme").intent == Intent.EYE_DISABLE
+    assert resolve_intent("beni izle").intent == Intent.EYE_ENABLE
+    # both verbs in one breath: the disable direction is checked first
+    assert resolve_intent("kamerayı aç, yok gözünü kapat").intent == Intent.EYE_DISABLE
+
+
+def test_the_open_adjective_is_a_question_not_an_action() -> None:
+    for text in ("kamera açık mı", "gözün açık mı", "kamera açık"):
+        resolved = resolve_intent(text)
+        assert resolved.intent != Intent.EYE_ENABLE, resolved
+        assert resolved.klass != "action", resolved
+
+
+def test_the_deploy_question_is_never_the_deploy_action() -> None:
+    for text in ("canlıya alabilir misin", "yayına alabilir misin", "kendin dağıtabilir misin"):
+        resolved = resolve_intent(text)
+        assert resolved.intent == Intent.EXPLAIN and resolved.query_kind == "can_deploy", resolved
+    assert resolve_intent("canlıya al").matched == "canlıya al"
+    assert resolve_intent("yayına al").matched == "yayına al"
+
+
+def test_none_is_reported_as_a_query_never_an_action() -> None:
+    resolved = resolve_intent("bugün hava çok güzel")
+    assert resolved.intent == Intent.NONE
+    assert resolved.klass == "query" and resolved.capability is None
+
+
 def test_stop_has_top_priority_over_everything_else() -> None:
     assert resolve_intent("dur, ikinci maddeyi tekrar oku").intent == Intent.STOP
     assert resolve_intent("biraz daha yavaş dur").intent == Intent.STOP
