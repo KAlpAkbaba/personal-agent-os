@@ -38,6 +38,7 @@ with workflow.unsafe.imports_passed_through():
         select_device_activity,
         synthesize_activity,
     )
+    from app.research.contracts import MIN_REPORT_FINDINGS
     from app.research.models import STAGE_FAILED, STAGE_READY
     from app.research.plan import diversify_queries
     from app.research.policy import MODE_QUICK, ResearchPolicy, decide_next_wave
@@ -262,6 +263,10 @@ class BrowserResearchWorkflow:
                     elapsed_s=elapsed_s,
                     sources_fetched=sources_fetched,
                     fetchable_remaining=fetchable_remaining,
+                    # A run that could already publish a FULL report spends only the
+                    # soft budget looking for one more finding; the whole hard budget
+                    # belongs to a run that would otherwise have nothing to say.
+                    publishable=evidence_count >= MIN_REPORT_FINDINGS,
                 )
                 if not decision.should_fetch:
                     break

@@ -12,6 +12,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from app.research.evidence import STATEMENT_LABEL_SOURCE_FACT, EvidenceRecord
+from app.research.policy import derive_mode_from_utterance
 from app.research.report import (
     Finding,
     ReportStats,
@@ -20,6 +21,7 @@ from app.research.report import (
     SourceItem,
 )
 from app.research.result import (
+    BROADER_RUN_OFFER_TR,
     REASON_INSUFFICIENT_EVIDENCE,
     REASON_INSUFFICIENT_FINDINGS,
     ResearchDiagnostics,
@@ -325,6 +327,89 @@ def test_insufficient_terminal_payload_has_no_findings_and_honest_diagnostics() 
     payload = build_insufficient_terminal_payload(reason=REASON_INSUFFICIENT_FINDINGS)
     assert payload["findings"] == []
     assert payload["source_summary"] == []
+    assert payload["thin"] is False
     assert payload["diagnostics"] == ResearchDiagnostics().as_dict()
     assert payload["speech"] == payload["spoken_result"]
     _assert_no_diagnostics_leak(payload["spoken_result"])
+
+
+# ------------------------------------------------- the thin answer (ADR-0074)
+
+
+def _thin_report(findings_count: int = 2) -> dict:
+    report = _real_report(findings_count=findings_count, discovered=103, rejected=8)
+    report["thin"] = True
+    report["executive_summary"] = (
+        f"Kısa araştırma bütçesinde yalnızca {findings_count} kaynak doğrulanabildi; "
+        "bulgular sınırlı."
+    )
+    report["stats"]["thin"] = True
+    report["stats"]["thin_reasons"] = ["evidence_thin", "cooled_domains"]
+    return report
+
+
+def test_a_thin_answer_is_spoken_as_thin_and_offers_a_broader_run() -> None:
+    """ADR-0074: the owner heard "yeterli doğrulanmış kaynak bulamadım" for a run that
+    HAD findings. A thin answer speaks its findings, says plainly how little it stands
+    on, and offers to go wider — without a single count or crawler word."""
+    result = ResearchResult.from_report_json(_thin_report())
+    assert result.thin is True
+    assert result.insufficient is False
+
+    spoken = spoken_result(result)
+    _assert_no_diagnostics_leak(spoken)
+    # It says it is thin ...
+    assert "sınırlı" in spoken
+    assert "yalnızca" in spoken
+    # ... it still says what it found ...
+    assert "Birincisi" in spoken
+    assert "Bulgu Başlığı 1" in spoken
+    # ... and it offers the broader run, in the words the mode derivation understands.
+    assert spoken.endswith(BROADER_RUN_OFFER_TR)
+    assert derive_mode_from_utterance(BROADER_RUN_OFFER_TR) == "standard"
+    # Never a number: the thinness is STATED, never counted. (The findings themselves
+    # are the report's own text and may carry whatever digits the sources did; the
+    # sentence this module composes may not.)
+    conclusion = spoken.split("Birincisi")[0]
+    assert not any(ch.isdigit() for ch in conclusion)
+    assert not any(ch.isdigit() for ch in BROADER_RUN_OFFER_TR)
+
+
+def test_a_thin_answer_never_reads_as_a_failure() -> None:
+    """The two must not be confused: `insufficient` says "no defensible answer",
+    `thin` says "a real answer, from few sources"."""
+    thin = spoken_result(ResearchResult.from_report_json(_thin_report()))
+    failed = spoken_result(
+        ResearchResult.insufficient_evidence(topic="x", reason=REASON_INSUFFICIENT_FINDINGS)
+    )
+    assert thin != failed
+    assert "bulamadım" not in thin
+    assert "çıkaramadım" not in thin
+
+
+def test_a_thin_answer_with_no_findings_is_still_the_no_findings_sentence() -> None:
+    """Defensive: `thin` never invents a finding-shaped narration out of nothing."""
+    report = _thin_report()
+    report["findings"] = []
+    spoken = spoken_result(ResearchResult.from_report_json(report))
+    assert "çıkaramadım" in spoken
+
+
+def test_thin_terminal_payload_flags_thinness_and_keeps_the_reasons_in_diagnostics() -> None:
+    payload = build_tool_terminal_payload(_thin_report())
+    assert payload["thin"] is True
+    assert payload["diagnostics"]["thin"] is True
+    assert payload["diagnostics"]["thin_reasons"] == ["evidence_thin", "cooled_domains"]
+    # The reason codes are technical vocabulary and stay out of the speech.
+    for code in payload["diagnostics"]["thin_reasons"]:
+        assert code not in payload["spoken_result"]
+    assert payload["speech"] == payload["spoken_result"]
+    _assert_no_diagnostics_leak(payload["spoken_result"])
+
+
+def test_an_ordinary_report_is_not_thin() -> None:
+    result = ResearchResult.from_report_json(_real_report())
+    assert result.thin is False
+    assert spoken_result(result).endswith(
+        "İstersen diğer bulguları veya kaynakları da anlatabilirim."
+    )

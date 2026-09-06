@@ -349,6 +349,7 @@ def decide_next_wave(
     elapsed_s: float,
     sources_fetched: int,
     fetchable_remaining: int | None = None,
+    publishable: bool = False,
 ) -> WaveDecision:
     """The early-stop rule (owner rule 6, amended by ADR-0074): stop the moment
     there is enough evidence for the requested answer; otherwise keep going one
@@ -364,10 +365,14 @@ def decide_next_wave(
     2. nothing fetchable left (``fetchable_remaining`` 0; ``None`` = the caller does
        not know yet, which is not a reason to stop);
     3. the budget: ``elapsed_s`` plus one more wave's own worst case
-       (:attr:`ResearchPolicy.wave_expected_s`) would reach ``hard_budget_s``. The
-       run never starts a wave it cannot finish inside the budget, so the hard
-       budget stays hard — strictly stricter than the old ``elapsed >= budget``
-       check it replaces;
+       (:attr:`ResearchPolicy.wave_expected_s`) would reach the applicable budget. The
+       run never starts a wave it cannot finish inside it, so the hard budget stays
+       hard — strictly stricter than the old ``elapsed >= budget`` check it replaces.
+       ``publishable`` (the run already has enough evidence for a FULL report, i.e.
+       ``MIN_REPORT_FINDINGS``) chooses WHICH budget: the SOFT ``target_budget_s``,
+       because extra time belongs to a run that would otherwise have no answer, not
+       to one that is merely reaching for one more finding. Only a run still short of
+       a publishable answer gets the whole hard budget;
     4. :attr:`ResearchPolicy.fetch_ceiling` pages already fetched;
     5. a structural safety net — more waves than the run could ever have pages —
        so the loop terminates even against a frozen clock.
@@ -376,7 +381,8 @@ def decide_next_wave(
         return WaveDecision(False, 0, REASON_ENOUGH_EVIDENCE)
     if fetchable_remaining is not None and fetchable_remaining <= 0:
         return WaveDecision(False, 0, REASON_NO_CANDIDATES)
-    if elapsed_s + policy.wave_expected_s >= policy.hard_budget_s:
+    budget_s = policy.target_budget_s if publishable else policy.hard_budget_s
+    if elapsed_s + policy.wave_expected_s >= budget_s:
         return WaveDecision(False, 0, REASON_BUDGET_EXHAUSTED)
     remaining = policy.fetch_ceiling - sources_fetched
     if remaining <= 0:
