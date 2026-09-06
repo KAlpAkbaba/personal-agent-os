@@ -1,0 +1,211 @@
+{
+    "generated_at":  "2026-09-06T20:11:32.8402202Z",
+    "cloud":  "http://pagentos-core:8001",
+    "contract_version":  5,
+    "session":  {
+                    "id":  "be6d49ce-de93-46bd-ade9-6472b4ef4c37",
+                    "started_at":  "2026-09-06T19:49:41.939958Z",
+                    "state":  "closed"
+                },
+    "research_call":  {
+                          "call_id":  "call_gqSiq7eQWlrztrHF",
+                          "created_at":  "2026-09-06T19:51:55.169620Z",
+                          "completed_at":  "2026-09-06T19:53:12.352290Z",
+                          "speech_head":  "Efendim, \u0027Son üç gündeki OpenAI ile ilgili gelişmeler\u0027 konusunda araştırmayı tam",
+                          "speech_chars":  936
+                      },
+    "task":  {
+                 "task_id":  "deabbd44-a8cf-4129-8cad-9c58814930f7",
+                 "status":  "READY",
+                 "ready_at":  "2026-09-06T19:53:09.036585Z",
+                 "artifact_id":  "5eacab10-3b5f-4d3f-b1f8-a895524cfd40",
+                 "mode":  "quick",
+                 "progress":  {
+                                  "evidence":  3,
+                                  "rejected":  0,
+                                  "discovered":  46,
+                                  "fetch_done":  8,
+                                  "quarantined":  0,
+                                  "cooled_domains":  [
+                                                         "openai.com"
+                                                     ],
+                                  "challenge_counts":  {
+                                                           "openai.com":  2
+                                                       },
+                                  "challenged_pages":  2,
+                                  "verification_url":  null,
+                                  "rejected_by_reason":  {
+
+                                                         }
+                              },
+                 "completed":  {
+                                   "mode":  "quick",
+                                   "waves":  3,
+                                   "fetched":  8,
+                                   "queries":  0,
+                                   "sources":  3,
+                                   "budget_s":  120.0,
+                                   "evidence":  3,
+                                   "findings":  3,
+                                   "rejected":  5,
+                                   "elapsed_s":  43.483047,
+                                   "discovered":  46,
+                                   "quarantined":  2,
+                                   "deduplicated":  5,
+                                   "fetch_failed":  0,
+                                   "cooled_domains":  1,
+                                   "challenged_pages":  2,
+                                   "truncated_fields":  0,
+                                   "injection_dropped":  0,
+                                   "rejected_by_reason":  {
+                                                              "off_topic":  1,
+                                                              "interstitial":  2,
+                                                              "date_uncertain":  1,
+                                                              "outside_recency_window":  1
+                                                          },
+                                   "injection_suspected_evidence":  0
+                               }
+             },
+    "speaking_turns":  [
+                           {
+                               "first_audio_ms":  7841,
+                               "response_done_ms":  9557,
+                               "audio_done_ms":  9842,
+                               "audible_ms":  2001,
+                               "ended_after_generation":  true,
+                               "basis":  ""
+                           },
+                           {
+                               "first_audio_ms":  9844,
+                               "response_done_ms":  13914,
+                               "audio_done_ms":  15895,
+                               "audible_ms":  6051,
+                               "ended_after_generation":  true,
+                               "basis":  ""
+                           },
+                           {
+                               "first_audio_ms":  90181,
+                               "response_done_ms":  92508,
+                               "audio_done_ms":  93342,
+                               "audible_ms":  3161,
+                               "ended_after_generation":  true,
+                               "basis":  ""
+                           },
+                           {
+                               "first_audio_ms":  99581,
+                               "response_done_ms":  104371,
+                               "audio_done_ms":  105968,
+                               "audible_ms":  6387,
+                               "ended_after_generation":  true,
+                               "basis":  ""
+                           },
+                           {
+                               "first_audio_ms":  111610,
+                               "response_done_ms":  114496,
+                               "audio_done_ms":  115761,
+                               "audible_ms":  4151,
+                               "ended_after_generation":  true,
+                               "basis":  ""
+                           },
+                           {
+                               "first_audio_ms":  131973,
+                               "response_done_ms":  133244,
+                               "audio_done_ms":  133557,
+                               "audible_ms":  1584,
+                               "ended_after_generation":  true,
+                               "basis":  ""
+                           },
+                           {
+                               "first_audio_ms":  133559,
+                               "response_done_ms":  137080,
+                               "audio_done_ms":  139500,
+                               "audible_ms":  5941,
+                               "ended_after_generation":  true,
+                               "basis":  ""
+                           }
+                       ],
+    "rows":  [
+                 {
+                     "row":  "13.1",
+                     "capability":  "SPEAKING is a lifecycle: first audible playback to the actual end of playback, held through pauses, ended after response.done",
+                     "status":  "PROVEN_REAL",
+                     "evidence":  "session be6d49ce-de93-46bd-ade9-6472b4ef4c37: 7 completed turn(s); 2 audible \u003e= 6 s; 7 ended after response_done (e.g. first_audio 9844 -\u003e response_done 13914 -\u003e audio_done 15895 ms, audible 6051 ms)",
+                     "note":  ""
+                 },
+                 {
+                     "row":  "13.2",
+                     "capability":  "the spoken research answer is the findings, never crawler statistics",
+                     "status":  "PROVEN_REAL",
+                     "evidence":  "research.start call_gqSiq7eQWlrztrHF: spoken head \"Efendim, \u0027Son üç gündeki OpenAI ile ilgili gelişmeler\u0027 konusunda araştırmayı tam\" (936 chars, no crawler words: True); report findings: 3",
+                     "note":  ""
+                 },
+                 {
+                     "row":  "13.3",
+                     "capability":  "diagnostics are spoken only on request (Teknik anlat. / Hangi sayfalar elendi? / Arastirma sirasinda ne sorun oldu?)",
+                     "status":  "NOT_YET_PROVEN",
+                     "evidence":  "no technical explanation after the result on any web session (the owner\u0027s page reloaded 30 s after it)",
+                     "note":  "its own short check: scripts/core/owner-m18-2-followup.ps1 (no research is re-run)"
+                 },
+                 {
+                     "row":  "13.4",
+                     "capability":  "the Core\u0027s lifecycle during research is truthful (RESEARCHING, then SPEAKING for the presentation)",
+                     "status":  "PROVEN_PROXY",
+                     "evidence":  "the bus history is not durable; the API publishes per stage (test_research_uistate.py) and the session\u0027s own first_audio/audio_done bracket the presentation",
+                     "note":  "owner-observed on /core during the run; no durable row can say more"
+                 },
+                 {
+                     "row":  "13.5",
+                     "capability":  "result-first: the answer, why it matters, details on request; no bookkeeping narration",
+                     "status":  "PROVEN_REAL",
+                     "evidence":  "the spoken head opens with the conclusion and names no records or pages: \"Efendim, \u0027Son üç gündeki OpenAI ile ilgili gelişmeler\u0027 konusunda araştırmayı tam\"",
+                     "note":  ""
+                 },
+                 {
+                     "row":  "13.6",
+                     "capability":  "a spoken Arastir is a real run: the same pipeline as the REST route, completed by the announcer with spoken_result",
+                     "status":  "PROVEN_REAL",
+                     "evidence":  "task deabbd44-a8cf-4129-8cad-9c58814930f7 READY ready 2026-09-06T19:53:09.036585Z artifact 5eacab10-3b5f-4d3f-b1f8-a895524cfd40; the call completed 2026-09-06T19:53:12.352290Z",
+                     "note":  ""
+                 },
+                 {
+                     "row":  "13.7",
+                     "capability":  "QUICK is the default and respects its budget (target 90 s, hard 120 s)",
+                     "status":  "PROVEN_REAL",
+                     "evidence":  "plan mode quick; research.completed elapsed 43.5 s of a 120 s hard budget; the voice call took 77 s end to end",
+                     "note":  ""
+                 },
+                 {
+                     "row":  "13.8",
+                     "capability":  "challenges are left alone: detected, recorded, abandoned without retry; the domain cooled; the next source taken",
+                     "status":  "PROVEN_REAL",
+                     "evidence":  "challenged pages 2; cooled domains openai.com; 2 \u0027skipped: domain cooled\u0027 event(s); the run still completed",
+                     "note":  ""
+                 },
+                 {
+                     "row":  "13.9",
+                     "capability":  "two-stage pipeline: ranked before navigation, fetched in waves, early stop",
+                     "status":  "PROVEN_REAL",
+                     "evidence":  "research.completed: waves 3, fetched 8 of 46 discovered, evidence 3, findings 3, dedup 5",
+                     "note":  ""
+                 },
+                 {
+                     "row":  "13.10",
+                     "capability":  "coarse Turkish progress on the Core, never crawler counters",
+                     "status":  "PROVEN_PROXY",
+                     "evidence":  "the bus history is not durable; the labels are pinned in test_research_uistate.py and the readout prints a label verbatim",
+                     "note":  "owner-observed on /core during the run"
+                 }
+             ],
+    "failed_runs":  [
+                        {
+                            "at":  "2026-09-06T19:55:06.197601Z",
+                            "error_class":  "insufficient_valid_findings",
+                            "error":  "openai produced 0 defensible finding(s); 3 required"
+                        },
+                        {
+                            "at":  "2026-09-06T19:51:12.674693Z",
+                            "error_class":  "insufficient_valid_findings",
+                            "error":  "openai produced 0 defensible finding(s); 3 required"
+                        }
+                    ]
+}

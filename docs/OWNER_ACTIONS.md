@@ -32,7 +32,28 @@ is implemented and merged (ADR-0065); item 22 is your look at it, when you like.
 
 ---
 
-### 23. Speaking continuity and research findings — **M18.2, ready: the command releases the Cloud Core once if it is older than this checkout's contract (v5, the research fast path)**
+### 23b. One sentence, no research: `Teknik anlat.` — **M18.2 follow-up, ready (reuses the research that already completed; releases nothing, installs nothing)**
+
+Your run of 2026-09-06 proved every core row of M18.2 (item 23 below is closed on them).
+The one row not observed was the technical follow-up: the page reloaded 30 seconds after
+the result, so the next words went to a fresh session with no technical word in them, and
+the harness's 120-second step window was a timer the requirement never asked for. This
+check waits for you instead, on a new session, and re-runs nothing:
+
+```powershell
+.\scripts\core\owner-m18-2-followup.ps1 -OutFile m18-2-followup-1.json
+```
+
+Open `/core`, connect voice, and when you are ready say **`Teknik anlat.`** — it answers
+about the research that already completed (task deabbd44, "Son üç gündeki OpenAI ile ilgili
+gelişmeler"). The script proves from the record that the request routed to the technical
+path, that the eliminated pages / interstitials / duplicates are spoken only now, that the
+findings were not recomputed (same `ready_at`, same artifact), that no second research
+started, that no release or install happened, and that the answer stayed within the
+technical budget. It waits up to ten minutes after you connect and finishes by itself.
+Paste the `checks` block back here; M18.2 closes on it.
+
+### 23. Speaking continuity and research findings — **DONE on the core rows (2026-09-06 run, session be6d49ce; reconciled in `docs/evidence/m18-2-reconciliation-2026-09-06.json`); the follow-up is item 23b**
 
 **Updated 2026-09-07 after your real run.** Research was functionally working but far too
 slow and CAPTCHA-heavy (254 candidates, minutes). The pipeline now has a fast path
