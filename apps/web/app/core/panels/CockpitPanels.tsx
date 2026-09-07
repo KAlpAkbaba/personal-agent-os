@@ -45,9 +45,18 @@ import {
   focusSummary,
   identityLine,
 } from "../../lib/research/focus";
-import { formatAge, stateLabel, subsystemLabel } from "../../lib/uistate/labels";
+import {
+  OPERATOR_EMPTY,
+  OPERATOR_LABEL,
+  formatAge,
+  operatorErrorLine,
+  operatorFactsLine,
+  stateLabel,
+  subsystemLabel,
+} from "../../lib/uistate/labels";
+import { operatorPosition, operatorView } from "../../lib/uistate/operator";
 import type { CoreTruth } from "../../lib/uistate/truth";
-import { liveEventFor, recentDescending } from "../../lib/uistate/truth";
+import { liveEventFor, operatorClaim, recentDescending } from "../../lib/uistate/truth";
 import Panel from "./Panel";
 
 function when(iso: string | null | undefined, now: number): string {
@@ -701,6 +710,97 @@ export function RunningToolsPanel({ truth, now }: { truth: CoreTruth; now: numbe
               </span>
             </li>
           ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+/**
+ * The Digital Operator (M19 spec §4): what it is doing on the owner's desktop,
+ * from the same state feed the Core reads.
+ *
+ * Deliberately NOT a REST panel: the operator publishes its transitions to the
+ * UI-state bus (`operator.running` / `verifying` / `failed`, with the step,
+ * the capability and the window the companion OBSERVED), and there is no
+ * separate status route to ask. Reading the bus is also what keeps the panel
+ * honest by construction — it can only show a step that was published, with
+ * the window title the companion actually saw, and it draws no progress
+ * because none is published.
+ *
+ * Three outcomes, three sentences: nothing ever published ("henüz
+ * çalışmadı"), a live stage with its facts, and a stage whose claim aged out
+ * ("son bilinen", with the age) — the last one is not "finished", it is "we
+ * stopped being told". A held `operator.failed` stays, with its error class,
+ * until a newer operator event replaces it.
+ */
+export function DigitalOperatorPanel({ truth, now }: { truth: CoreTruth; now: number }) {
+  const view = operatorView(operatorClaim(truth, now));
+  const told = view.lastKnown !== null;
+  const failed = view.stage === "failed";
+  const badge = !told
+    ? "0"
+    : view.stage === "none"
+      ? "son bilinen"
+      : view.stage === "failed"
+        ? "başarısız"
+        : view.stage === "verifying"
+          ? "doğruluyor"
+          : "çalışıyor";
+
+  return (
+    <section
+      className={`panel ${failed ? "attention" : ""}`}
+      data-panel="digital-operator"
+      data-panel-empty={told ? "no" : "yes"}
+      data-operator-stage={view.stage}
+      data-operator-last-known={view.lastKnown ?? ""}
+    >
+      <h3 className="panel-title">
+        <span>Dijital operatör</span>
+        <span className="panel-count">{badge}</span>
+      </h3>
+      {!told ? (
+        <p className="panel-empty">{OPERATOR_EMPTY}</p>
+      ) : (
+        <ul>
+          <li
+            data-operator-step={view.step ?? ""}
+            data-operator-position={operatorPosition(view) ?? ""}
+            data-operator-capability={view.capability ?? ""}
+            data-operator-window={view.windowTitle ?? ""}
+          >
+            <div className="event-row">
+              <span>
+                {view.stage === "none" && view.lastKnown
+                  ? `Son bilinen: ${OPERATOR_LABEL[view.lastKnown]}`
+                  : OPERATOR_LABEL[view.stage]}
+              </span>
+              <span className="event-when">{formatAge(view.ageMs)}</span>
+            </div>
+            {/*
+              The publisher's own label, as the stream panel prints it: the
+              task's goal on the task-level events, the step's name on the
+              step-level ones. It is printed bare because which of the two it
+              is belongs to the publisher, not to this panel.
+            */}
+            <span className="muted">
+              {operatorFactsLine(view)}
+              {view.label && ` · ${view.label}`}
+            </span>
+          </li>
+          {view.stage === "none" && (
+            <li data-operator-expired>
+              <span className="muted">
+                Bu adım için yeni bir bildirim gelmedi. Bittiği bildirilmedi — yalnızca haber alınamadı.
+              </span>
+            </li>
+          )}
+          {view.lastKnown === "failed" && (
+            <li data-operator-error-class={view.errorClass ?? ""}>
+              <span className="muted">{operatorErrorLine(view.errorClass)}</span>
+            </li>
+          )}
         </ul>
       )}
     </section>
