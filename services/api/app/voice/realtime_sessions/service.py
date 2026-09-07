@@ -1102,6 +1102,10 @@ def record_client_events(
     #: Whether a wake alarm is ringing RIGHT NOW: the one live fact that turns a bare
     #: "Sustur." into an alarm stop. Same lazy, once-per-request discipline.
     alarm_ringing_known: bool | None = None
+    #: M19 (spec §3): whether a Digital Operator task is running RIGHT NOW - the same
+    #: ringing-aware fact for the operator's own Cancel/Status pair. A process-wide
+    #: registry (app.operator.service), not a DB read: the running task is in-memory.
+    operator_running_known: bool | None = None
     accepted = 0
     sideband_payloads: list[tuple[str, dict[str, Any]]] = []
     for ev in events:
@@ -1131,12 +1135,21 @@ def record_client_events(
                     alarm_ringing_known = bool(alarms_service.alarms_ringing(db))
                 except Exception:  # noqa: BLE001 - a deployment without the alarm table
                     alarm_ringing_known = False
+            if operator_running_known is None:
+                from app.operator.service import get_operator_service
+
+                try:
+                    svc = get_operator_service()
+                    operator_running_known = bool(svc is not None and svc.is_running())
+                except Exception:  # noqa: BLE001 - a process with no operator runtime
+                    operator_running_known = False
             intent: ResolvedIntent = resolve_intent(
                 text,
                 session_state=RealtimeState(fsm) if fsm else None,
                 narration=narration_state,
                 has_completed_research=research_context_known,
                 alarm_ringing=alarm_ringing_known,
+                operator_running=operator_running_known,
             )
             ctx["last_intent"] = intent.intent.value
             # ADR-0075: the LATEST resolved utterance of this session, kept on the
@@ -1159,6 +1172,12 @@ def record_client_events(
                 "alarm_minutes": intent.alarm_minutes,
                 # M18.4: the self-evolution action the owner asked for, for the same reason.
                 "evolution_action": intent.evolution_action,
+                # M19 (spec §3): the operator fields the owner's WORDS carried, for the
+                # same "owner's words win over the model's argument" reason.
+                "application": intent.application,
+                "text_to_type": intent.text_to_type,
+                "shell_query": intent.shell_query,
+                "window_ref": intent.window_ref,
                 # ADR-0076. The research SHAPE, decided without the "does a completed
                 # research exist?" precondition (that precondition is what let a deictic
                 # follow-up on an empty history become a crawl), and WHICH research the

@@ -50,6 +50,11 @@ SUBSYSTEM_ROUTINE = "routine"
 #: this is POLICY acting on it: a reader asking "why did my screens go dark?" must not have
 #: to separate the two by reading each row's detail.
 SUBSYSTEM_AMBIENT = "ambient"
+#: M19 Digital Operator (docs/M19_DIGITAL_OPERATOR_SPEC.md §4): OBSERVE -> PLAN -> ACT ->
+#: OBSERVE AGAIN -> VERIFY over the owner's Windows desktop. Its own subsystem so "what did
+#: the operator actually do to my machine?" is answerable without separating it from
+#: routine/ambient rows that happen to share a device call.
+SUBSYSTEM_OPERATOR = "operator"
 
 SUBSYSTEMS: Final[tuple[str, ...]] = (
     SUBSYSTEM_RESEARCH,
@@ -67,6 +72,7 @@ SUBSYSTEMS: Final[tuple[str, ...]] = (
     SUBSYSTEM_PRESENCE,
     SUBSYSTEM_ROUTINE,
     SUBSYSTEM_AMBIENT,
+    SUBSYSTEM_OPERATOR,
 )
 
 # ------------------------------------------------------------------ statuses
@@ -264,6 +270,13 @@ EVENT_TYPE_VOICE_TTS_LOOPBACK = "voice.tts_loopback"
 EVENT_TYPE_EVOLUTION_PAUSED = "evolution.paused"
 EVENT_TYPE_EVOLUTION_RESUMED = "evolution.resumed"
 EVENT_TYPE_EVOLUTION_SUPERVISOR_SCANNED = "evolution.supervisor_scanned"
+#: M19 Digital Operator (spec §4): one row per task lifecycle transition - the SAME
+#: discipline routine.* already gives the routine engine. "operator.task.started" is
+#: written when OBSERVE -> PLAN -> ACT begins; exactly one of the other three closes it.
+EVENT_TYPE_OPERATOR_TASK_STARTED = "operator.task.started"
+EVENT_TYPE_OPERATOR_TASK_COMPLETED = "operator.task.completed"
+EVENT_TYPE_OPERATOR_TASK_FAILED = "operator.task.failed"
+EVENT_TYPE_OPERATOR_TASK_CANCELLED = "operator.task.cancelled"
 
 EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_RESEARCH_PLANNED,
@@ -330,6 +343,10 @@ EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_EVOLUTION_PAUSED,
     EVENT_TYPE_EVOLUTION_RESUMED,
     EVENT_TYPE_EVOLUTION_SUPERVISOR_SCANNED,
+    EVENT_TYPE_OPERATOR_TASK_STARTED,
+    EVENT_TYPE_OPERATOR_TASK_COMPLETED,
+    EVENT_TYPE_OPERATOR_TASK_FAILED,
+    EVENT_TYPE_OPERATOR_TASK_CANCELLED,
 )
 
 #: ``alarm.<state_lowercase>`` for every state in ``app.alarms.models.ALARM_STATES``

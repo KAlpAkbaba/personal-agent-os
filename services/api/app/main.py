@@ -47,6 +47,7 @@ from app.middleware import TraceIdMiddleware
 from app.mobile.routes import router as mobile_router
 from app.mobile.runtime import MobileRuntime
 from app.narration.routes import router as narration_router
+from app.operator.service import OperatorService, register_operator_service
 from app.presence.routes import router as presence_router
 from app.release.routes import router as release_router
 from app.release.version import release_model
@@ -162,6 +163,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # and the device-status registry from ToolContext.live (tools_ambient._sequence,
     # display_status). They are registered HERE, where they are built, on the same
     # objects app.state exposes below - a tool call and a route must never see two.
+    # M19 (docs/M19_DIGITAL_OPERATOR_SPEC.md §4): the Digital Operator's runtime, on the
+    # SAME BrokerDeviceAction object the wake sequence already holds - one device port,
+    # never a second desktop-control path. Registered on the module-wide registry too
+    # (app.operator.service), so the ONE router's ringing-aware Cancel/Status pair can
+    # ask "is a task running?" from record_client_events, which builds no ToolContext.
+    operator_service = OperatorService()
+    register_operator_service(operator_service)
     voice_realtime.register_live(
         wake_sequence=wake_sequence,
         device_statuses=get_status_registry(),
@@ -170,6 +178,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         evolution_runtime=evolution,
         evolution_service=evolution.evolution_service,
         settings=settings,
+        device_action=device_action,
+        operator=operator_service,
     )
 
     def _build_routine_dispatcher() -> ActionDispatcher:
@@ -323,6 +333,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.routine_clock = routine_clock
     app.state.device_statuses = get_status_registry()
     app.state.alarm_audio_store = get_audio_store()
+    app.state.operator_service = operator_service
     # Scoped CORS: the web shell is a separate origin from the API. Allow only
     # the configured loopback/private web origins (never "*"); M0 review #3.
     app.add_middleware(
