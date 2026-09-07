@@ -62,6 +62,16 @@ public sealed class FocusGuardTests : IDisposable
         Assert.False(FocusGuard.Matches(expected, expected with { Image = "chrome.exe" }));
         Assert.False(FocusGuard.Matches(expected, expected with { Title = "*Adsız - Not Defteri" }), "a changed beginning is a different window as far as the guard knows");
 
+        // The mid-stream leg (ADR-0082 addendum 2, finding 2) is identity only: the same
+        // handle stays the target when its title changes because of the typing (Notepad's
+        // dirty marker is a PREFIX on Windows 10), and no title makes another handle the target.
+        Assert.True(FocusGuard.SameWindow(expected, expected with { Title = "*Adsız - Not Defteri" }));
+        Assert.True(FocusGuard.SameWindow(expected, expected with { Title = "something else entirely" }));
+        Assert.False(FocusGuard.SameWindow(expected, expected with { Handle = new IntPtr(2) }));
+        Assert.False(FocusGuard.SameWindow(expected, expected with { Pid = 11 }));
+        Assert.False(FocusGuard.SameWindow(expected, expected with { Image = "chrome.exe" }));
+        Assert.False(FocusGuard.SameWindow(expected, null));
+
         var longTitle = new string('x', 40);
         var expectedLong = expected with { Title = longTitle + "-tail" };
         Assert.True(FocusGuard.Matches(expectedLong, expectedLong with { Title = longTitle[..FocusGuard.TitlePrefixChars] + "something else" }));

@@ -91,7 +91,7 @@ public sealed class AdvertisementTests
         var companion = OperatorOptions.FromConfiguration(configuration);
         Assert.Equal(expected, companion.Enabled);
         Assert.Equal(TerminalRunner.DefaultAllowlist, companion.TerminalAllowlist);
-        Assert.Single(companion.AuthorisedRoots);
+        Assert.Equal(OperatorOptions.DefaultRoots(), companion.AuthorisedRoots);
     }
 
     [Fact]

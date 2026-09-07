@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Text;
+using Microsoft.Win32.SafeHandles;
 
 namespace PagentOS.SessionCompanion.Operator;
 
@@ -269,6 +270,92 @@ internal static class OperatorNative
 
     [DllImport("kernel32.dll")]
     public static extern ulong GetTickCount64();
+
+    // ------------------------------------------------------------------ paths: resolve, then contain
+
+    public const uint FileReadAttributes = 0x0080;
+    public const uint FileShareReadWriteDelete = 0x0001 | 0x0002 | 0x0004;
+    public const uint OpenExisting = 3;
+    public const uint FileFlagBackupSemantics = 0x02000000;
+    public const uint FileNameNormalizedVolumeNameDos = 0;
+    public const int MaxFinalPathChars = 32768;
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern SafeFileHandle CreateFileW(string fileName, uint desiredAccess, uint shareMode, IntPtr securityAttributes, uint creationDisposition, uint flagsAndAttributes, IntPtr templateFile);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern uint GetFinalPathNameByHandleW(SafeFileHandle file, StringBuilder path, uint size, uint flags);
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    public static extern int SHGetKnownFolderPath(ref Guid folderId, uint flags, IntPtr token, out IntPtr path);
+
+    [DllImport("ole32.dll")]
+    public static extern void CoTaskMemFree(IntPtr memory);
+
+    /// <summary>
+    /// The path the file system ITSELF reports for what <paramref name="path"/> opens — every
+    /// junction, mount point and symbolic link in every component followed — or null when it
+    /// cannot be opened (missing, unreadable, on a volume without a drive letter). The open asks
+    /// for attributes only (no data access) and <c>FILE_FLAG_BACKUP_SEMANTICS</c> so a directory
+    /// can be opened at all; <c>FILE_FLAG_OPEN_REPARSE_POINT</c> is deliberately NOT set, so the
+    /// handle is the target's, never the link's. Prefixes (<c>\\?\</c>) are left for the caller.
+    /// </summary>
+    public static string? FinalPath(string path)
+    {
+        try
+        {
+            using var handle = CreateFileW(path, FileReadAttributes, FileShareReadWriteDelete, IntPtr.Zero, OpenExisting, FileFlagBackupSemantics, IntPtr.Zero);
+            if (handle.IsInvalid)
+            {
+                return null;
+            }
+
+            var builder = new StringBuilder(1024);
+            var length = GetFinalPathNameByHandleW(handle, builder, (uint)builder.Capacity, FileNameNormalizedVolumeNameDos);
+            if (length >= builder.Capacity && length < MaxFinalPathChars)
+            {
+                builder.Capacity = (int)length + 1;
+                length = GetFinalPathNameByHandleW(handle, builder, (uint)builder.Capacity, FileNameNormalizedVolumeNameDos);
+            }
+
+            if (length == 0 || length >= builder.Capacity)
+            {
+                return null;
+            }
+
+            return builder.ToString(0, (int)length);
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>A known folder's current path (the owner may have moved Downloads), or null.</summary>
+    public static string? KnownFolderPath(Guid folderId)
+    {
+        var memory = IntPtr.Zero;
+        try
+        {
+            if (SHGetKnownFolderPath(ref folderId, 0, IntPtr.Zero, out memory) != 0 || memory == IntPtr.Zero)
+            {
+                return null;
+            }
+
+            return Marshal.PtrToStringUni(memory);
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+        finally
+        {
+            if (memory != IntPtr.Zero)
+            {
+                CoTaskMemFree(memory);
+            }
+        }
+    }
 
     // ------------------------------------------------------------------ input + pointer
 

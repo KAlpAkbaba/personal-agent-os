@@ -244,7 +244,7 @@ public sealed class OperatorCapabilities
     {
         var application = RequireString(payload, "application", 260);
         var executable = ResolveApplication(application);
-        var args = ReadArgs(payload);
+        var args = ArgumentPolicy.For(application).Apply(application, ReadArgs(payload), Terminal.Roots);
         var process = StartTracked(executable, args, visible: true);
         var window = WaitForWindow(process.Id, LaunchWindowWait, cancellationToken);
         _logger.LogInformation("app.launch {Application} pid={Pid} window={Window}", application, process.Id, window?.WindowId ?? "-");
@@ -545,8 +545,7 @@ public sealed class OperatorCapabilities
         var text = RequireText(payload, "text");
         RefuseSecret(payload);
         var target = Registry.Resolve(payload["window_id"]?.GetValue<string>());
-        Guarded(target);
-        _input.TypeText(text);
+        GuardedInput(target, stillTargeted => _input.TypeText(text, stillTargeted));
         return new JsonObject
         {
             ["typed_chars"] = text.Length,
@@ -560,8 +559,7 @@ public sealed class OperatorCapabilities
         var key = RequireString(payload, "key", 16).ToLowerInvariant();
         KeyMap.ValidateKey(key);
         var target = Registry.Resolve(payload["window_id"]?.GetValue<string>());
-        Guarded(target);
-        _input.PressKey(key);
+        GuardedInput(target, stillTargeted => _input.PressKey(key, stillTargeted));
         return new JsonObject
         {
             ["key"] = key,
@@ -590,8 +588,7 @@ public sealed class OperatorCapabilities
 
         KeyMap.ValidateShortcut(keys);
         var target = Registry.Resolve(payload["window_id"]?.GetValue<string>());
-        Guarded(target);
-        _input.Shortcut(keys);
+        GuardedInput(target, stillTargeted => _input.Shortcut(keys, stillTargeted));
         return new JsonObject
         {
             ["keys"] = new JsonArray([.. keys.Select(k => (JsonNode)k)]),
@@ -877,7 +874,10 @@ public sealed class OperatorCapabilities
         if (application is not null)
         {
             var executable = ResolveApplication(application);
-            var process = StartTracked(executable, [path], visible: true);
+            // The application's argument policy applies to the one argument file.open gives
+            // it: notepad and explorer take a path, calc / powershell / the browsers do not.
+            var args = ArgumentPolicy.For(application).Apply(application, [path], Terminal.Roots);
+            var process = StartTracked(executable, args, visible: true);
             pid = process.Id;
             window = WaitForWindow(process.Id, LaunchWindowWait, cancellationToken);
         }
@@ -1049,6 +1049,30 @@ public sealed class OperatorCapabilities
         Guard.Verify();
     }
 
+    /// <summary>
+    /// The guard for a keyboard stream (ADR-0082 addendum 2, finding 2): verified once before
+    /// anything is sent — a mismatch there is the usual "nothing was sent" — and handed to the
+    /// synthesizer as <c>stillTargeted</c>, which asks it again before every batch. A stream
+    /// stopped mid-way is re-described here with both windows and the count the synthesizer
+    /// reported, so the planner knows exactly how much of the text reached the target.
+    /// </summary>
+    private void GuardedInput(WindowInfo target, Action<Func<bool>> send)
+    {
+        Guarded(target);
+        try
+        {
+            send(Guard.StillTargeted);
+        }
+        catch (CapabilityException ex) when (ex.ErrorClass == ErrorClasses.FocusMismatch && ex.Detail.ContainsKey("typed_chars"))
+        {
+            throw new CapabilityException(
+                ErrorClasses.FocusMismatch,
+                $"the window in front changed while input was being sent: expected {FocusGuard.Describe(target)}, actual {FocusGuard.Describe(Registry.Foreground())}; typed_chars={ex.Detail["typed_chars"]} of {ex.Detail["total_chars"]} characters were handed to the system before the change (confirmed_chars={ex.Detail["confirmed_chars"]}; the last uncertain_chars={ex.Detail["uncertain_chars"]} may have reached the window now in front - read the target back before continuing), none after",
+                retryable: true,
+                ex.Detail);
+        }
+    }
+
     private WindowInfo? WaitForWindow(int pid, TimeSpan wait, CancellationToken cancellationToken)
     {
         WindowInfo? window = null;
@@ -1207,6 +1231,13 @@ public sealed class OperatorCapabilities
             retryable: false);
     }
 
+    /// <summary>
+    /// <c>payload.path</c>, RESOLVED and CONTAINED (ADR-0082 addendum 2, finding 1): the path
+    /// is opened, the file system asked what it really opened, and only that final path is
+    /// compared with the roots' resolved forms. A path that cannot be resolved — missing,
+    /// unreadable — is <c>permission_denied</c> like one outside the roots; there is no lexical
+    /// fallback. What is returned, and acted on, is the resolved path.
+    /// </summary>
     private string RequireAuthorisedPath(JsonObject payload, bool mustBeFile)
     {
         var raw = RequireString(payload, "path", 1024);
@@ -1215,33 +1246,26 @@ public sealed class OperatorCapabilities
             throw new CapabilityException(ErrorClasses.ValidationError, "payload.path must be absolute", retryable: false);
         }
 
-        var full = Path.GetFullPath(raw);
-        if (!Terminal.IsUnderAuthorisedRoot(full))
-        {
-            throw new CapabilityException(
-                ErrorClasses.PermissionDenied,
-                $"'{full}' is outside the owner's authorised roots ({string.Join(";", AuthorisedRoots)})",
-                retryable: false);
-        }
+        var resolved = Terminal.Roots.Confine(raw)
+                       ?? throw new CapabilityException(
+                           ErrorClasses.PermissionDenied,
+                           $"'{raw}' does not resolve to a path inside the owner's authorised roots ({string.Join(";", AuthorisedRoots)}); every junction and link is followed before the comparison, and a path that cannot be resolved is refused",
+                           retryable: false);
 
         if (mustBeFile)
         {
-            if (!File.Exists(full))
+            if (!File.Exists(resolved))
             {
-                throw new CapabilityException(ErrorClasses.UiTargetNotFound, $"'{full}' does not exist", retryable: false);
+                throw new CapabilityException(ErrorClasses.UiTargetNotFound, $"'{resolved}' is not a file", retryable: false);
             }
 
-            if (ExecutableExtensions.Contains(Path.GetExtension(full)))
+            if (ExecutableExtensions.Contains(Path.GetExtension(resolved)))
             {
-                throw new CapabilityException(ErrorClasses.PermissionDenied, $"'{Path.GetFileName(full)}' is executable; file.open opens documents, app.launch runs programs", retryable: false);
+                throw new CapabilityException(ErrorClasses.PermissionDenied, $"'{Path.GetFileName(resolved)}' is executable; file.open opens documents, app.launch runs programs", retryable: false);
             }
         }
-        else if (!File.Exists(full) && !Directory.Exists(full))
-        {
-            throw new CapabilityException(ErrorClasses.UiTargetNotFound, $"'{full}' does not exist", retryable: false);
-        }
 
-        return full;
+        return resolved;
     }
 
     private static (int X, int Y, int Width, int Height) VirtualScreen()

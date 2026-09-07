@@ -15,18 +15,26 @@ public enum PointerButton
 /// The input the operator can synthesise (M19_DIGITAL_OPERATOR_SPEC.md §3), behind an
 /// interface so a test can prove that a refused payload sent NOTHING — not infer it from a
 /// window that happened to stay empty. Every call here is made only after the focus guard
-/// verified the target (invariant 2); the interface itself knows nothing about windows.
+/// verified the target (invariant 2), and the keyboard calls carry the guard along as
+/// <c>stillTargeted</c>: it is asked again before EVERY batch of events, and a "no" stops the
+/// stream where it is (ADR-0082 addendum 2, finding 2). The interface itself knows nothing
+/// about windows.
 /// </summary>
 public interface IInputSynthesizer
 {
-    /// <summary>Unicode text, one <c>KEYEVENTF_UNICODE</c> pair per UTF-16 code unit; newlines and tabs as their keys.</summary>
-    void TypeText(string text);
+    /// <summary>
+    /// Unicode text, one <c>KEYEVENTF_UNICODE</c> pair per UTF-16 code unit; newlines and tabs as
+    /// their keys. <paramref name="stillTargeted"/> is asked before every batch; a false answer
+    /// is <c>focus_mismatch</c> (retryable) whose <c>Detail["typed_chars"]</c> and message say how
+    /// many characters were sent before it, and nothing more is sent.
+    /// </summary>
+    void TypeText(string text, Func<bool> stillTargeted);
 
-    /// <summary>One named key (see <see cref="KeyMap"/>), pressed and released.</summary>
-    void PressKey(string key);
+    /// <summary>One named key (see <see cref="KeyMap"/>), pressed and released; <paramref name="stillTargeted"/> as for <see cref="TypeText"/>.</summary>
+    void PressKey(string key, Func<bool> stillTargeted);
 
-    /// <summary>Modifiers down in order, the key pressed and released, modifiers up in reverse.</summary>
-    void Shortcut(IReadOnlyList<string> keys);
+    /// <summary>Modifiers down in order, the key pressed and released, modifiers up in reverse; <paramref name="stillTargeted"/> as for <see cref="TypeText"/>.</summary>
+    void Shortcut(IReadOnlyList<string> keys, Func<bool> stillTargeted);
 
     /// <summary>Move the pointer to a screen position without pressing anything.</summary>
     void MoveTo(int screenX, int screenY);
@@ -165,24 +173,93 @@ public static class KeyMap
 }
 
 /// <summary>
+/// The batch loop, separated from <c>SendInput</c> so the rule can be PROVEN without a
+/// desktop: events go out in batches of <see cref="BatchSize"/> with a short pause between
+/// them (applications drop very large batches, and a dropped batch would be a silent
+/// truncation of what the owner asked to type), and <c>stillTargeted</c> is asked before
+/// EVERY batch, the first included. A "no" is <c>focus_mismatch</c> (retryable) carrying, in
+/// <see cref="CapabilityException.Detail"/> and in the message, <c>typed_chars</c> — the
+/// characters handed to the system while the target was verified in front — and
+/// <c>uncertain_chars</c>: the LAST batch of them. Windows assigns injected keyboard input to
+/// a thread's queue when that thread retrieves it, not when <c>SendInput</c> returns, so a
+/// batch handed over within one pause of the change can reach the window now in front (the
+/// lab measured exactly one batch doing so); <c>confirmed_chars</c> is everything before it.
+/// No further batch is sent. The guard is a check before each hand-over, not a lock on the
+/// foreground — nothing in user mode is.
+/// </summary>
+public static class InputBatcher
+{
+    public const int BatchSize = 64;
+    public const int PauseBetweenBatchesMs = 5;
+
+    /// <param name="eventCount">Events to send.</param>
+    /// <param name="send">Hands events <c>[offset, offset + count)</c> to the system; throws when the system took fewer than asked.</param>
+    /// <param name="stillTargeted">Asked before every batch.</param>
+    /// <param name="charactersCompletedBy">Maps "events sent so far" to "characters of the owner's text completed", for the refusal.</param>
+    /// <param name="totalCharacters">The text's length, for the refusal.</param>
+    /// <returns>Batches sent.</returns>
+    public static int Send(int eventCount, Action<int, int> send, Func<bool> stillTargeted, Func<int, int> charactersCompletedBy, int totalCharacters)
+    {
+        var batches = 0;
+        var lastBatchOffset = 0;
+        for (var offset = 0; offset < eventCount; offset += BatchSize)
+        {
+            if (!stillTargeted())
+            {
+                var typed = charactersCompletedBy(offset);
+                var confirmed = charactersCompletedBy(lastBatchOffset);
+                throw new CapabilityException(
+                    ErrorClasses.FocusMismatch,
+                    $"the window in front changed while input was being sent: typed_chars={typed} of {totalCharacters} characters were handed to the system before the change (confirmed_chars={confirmed}; the last uncertain_chars={typed - confirmed} went out within one batch pause of it and may have reached the window now in front), none after",
+                    retryable: true,
+                    new Dictionary<string, object?>
+                    {
+                        ["typed_chars"] = typed,
+                        ["confirmed_chars"] = confirmed,
+                        ["uncertain_chars"] = typed - confirmed,
+                        ["total_chars"] = totalCharacters,
+                        ["batches_sent"] = batches,
+                    });
+            }
+
+            var count = Math.Min(BatchSize, eventCount - offset);
+            lastBatchOffset = offset;
+            send(offset, count);
+            batches++;
+            if (offset + count < eventCount)
+            {
+                Thread.Sleep(PauseBetweenBatchesMs);
+            }
+        }
+
+        return batches;
+    }
+
+    /// <summary>The guard for a stream nothing can re-target (a pointer move the caller guarded once).</summary>
+    public static bool AlwaysTargeted() => true;
+}
+
+/// <summary>
 /// <c>SendInput</c>, in the owner's session. Text goes in as Unicode code units, so Turkish
 /// (ğüşöçıİ) and everything else the owner writes arrives as itself, independent of the
 /// keyboard layout; keys go in as virtual keys with the extended flag where Windows expects
-/// it; the pointer is placed with <c>SetCursorPos</c> and then pressed. Events are sent in
-/// small batches — applications drop very large batches, and a dropped batch would be a
-/// silent truncation of what the owner asked to type.
+/// it; the pointer is placed with <c>SetCursorPos</c> and then pressed. Events are sent
+/// through <see cref="InputBatcher"/>, which asks the focus guard before every batch.
 /// </summary>
 [SupportedOSPlatform("windows")]
 public sealed class Win32InputSynthesizer : IInputSynthesizer
 {
-    private const int BatchSize = 64;
-
-    public void TypeText(string text)
+    public void TypeText(string text, Func<bool> stillTargeted)
     {
         var events = new List<OperatorNative.Input>(text.Length * 2);
+        // The text index each event belongs to, so a stream stopped at a batch boundary can
+        // say how many characters were sent: a batch is 64 events and every character is
+        // exactly two, so a boundary never splits a character.
+        var characterOfEvent = new List<int>(text.Length * 2);
         for (var i = 0; i < text.Length; i++)
         {
             var ch = text[i];
+            var before = events.Count;
             switch (ch)
             {
                 case '\r':
@@ -204,12 +281,17 @@ public sealed class Win32InputSynthesizer : IInputSynthesizer
                     events.Add(Unicode(ch, up: true));
                     break;
             }
+
+            for (var e = before; e < events.Count; e++)
+            {
+                characterOfEvent.Add(i);
+            }
         }
 
-        SendInBatches(events);
+        SendInBatches(events, stillTargeted, sent => sent == 0 ? 0 : characterOfEvent[sent - 1] + 1, text.Length);
     }
 
-    public void PressKey(string key)
+    public void PressKey(string key, Func<bool> stillTargeted)
     {
         if (!KeyMap.TryKey(key, allowCharacters: false, out var vk, out var extended))
         {
@@ -218,10 +300,10 @@ public sealed class Win32InputSynthesizer : IInputSynthesizer
 
         var events = new List<OperatorNative.Input>(2);
         AddKey(events, vk, extended);
-        SendInBatches(events);
+        SendInBatches(events, stillTargeted, _ => 0, 0);
     }
 
-    public void Shortcut(IReadOnlyList<string> keys)
+    public void Shortcut(IReadOnlyList<string> keys, Func<bool> stillTargeted)
     {
         KeyMap.ValidateShortcut(keys);
         var modifiers = new List<ushort>();
@@ -252,7 +334,7 @@ public sealed class Win32InputSynthesizer : IInputSynthesizer
             events.Add(VirtualKey(modifiers[i], up: true, extended: false));
         }
 
-        SendInBatches(events);
+        SendInBatches(events, stillTargeted, _ => 0, 0);
     }
 
     public void MoveTo(int screenX, int screenY)
@@ -264,7 +346,7 @@ public sealed class Win32InputSynthesizer : IInputSynthesizer
 
         // A zero-delta move after SetCursorPos: the application sees a real pointer event at
         // the new place, which is what hover-sensitive controls need.
-        SendInBatches([Mouse(OperatorNative.MouseEventMove, 0)]);
+        SendInBatches([Mouse(OperatorNative.MouseEventMove, 0)], InputBatcher.AlwaysTargeted, _ => 0, 0);
     }
 
     public void Click(int screenX, int screenY, PointerButton button, int clicks)
@@ -280,17 +362,17 @@ public sealed class Win32InputSynthesizer : IInputSynthesizer
             events.Add(Mouse(up, 0));
         }
 
-        SendInBatches(events);
+        SendInBatches(events, InputBatcher.AlwaysTargeted, _ => 0, 0);
     }
 
     public void Scroll(int screenX, int screenY, int notches)
     {
         MoveTo(screenX, screenY);
-        SendInBatches([Mouse(OperatorNative.MouseEventWheel, unchecked((uint)(notches * OperatorNative.WheelDelta)))]);
+        SendInBatches([Mouse(OperatorNative.MouseEventWheel, unchecked((uint)(notches * OperatorNative.WheelDelta)))], InputBatcher.AlwaysTargeted, _ => 0, 0);
     }
 
     /// <summary>The zero-delta pointer move <see cref="WindowActions.Activate"/> uses to become "the process with the last input event".</summary>
-    public static void NudgePointer() => SendInBatches([Mouse(OperatorNative.MouseEventMove, 0)]);
+    public static void NudgePointer() => SendInBatches([Mouse(OperatorNative.MouseEventMove, 0)], InputBatcher.AlwaysTargeted, _ => 0, 0);
 
     private static void AddKey(List<OperatorNative.Input> events, ushort vk, bool extended)
     {
@@ -335,32 +417,31 @@ public sealed class Win32InputSynthesizer : IInputSynthesizer
         },
     };
 
-    private static void SendInBatches(IReadOnlyList<OperatorNative.Input> events)
+    private static void SendInBatches(IReadOnlyList<OperatorNative.Input> events, Func<bool> stillTargeted, Func<int, int> charactersCompletedBy, int totalCharacters)
     {
         var size = Marshal.SizeOf<OperatorNative.Input>();
-        for (var offset = 0; offset < events.Count; offset += BatchSize)
-        {
-            var count = Math.Min(BatchSize, events.Count - offset);
-            var batch = new OperatorNative.Input[count];
-            for (var i = 0; i < count; i++)
+        InputBatcher.Send(
+            events.Count,
+            (offset, count) =>
             {
-                batch[i] = events[offset + i];
-            }
+                var batch = new OperatorNative.Input[count];
+                for (var i = 0; i < count; i++)
+                {
+                    batch[i] = events[offset + i];
+                }
 
-            var sent = OperatorNative.SendInput((uint)count, batch, size);
-            if (sent != count)
-            {
-                var error = Marshal.GetLastWin32Error();
-                throw new CapabilityException(
-                    ErrorClasses.UiStateChanged,
-                    $"SendInput delivered {sent} of {count} events (win32={error}); the input is blocked (a UIPI-protected window, a locked session)",
-                    retryable: true);
-            }
-
-            if (offset + count < events.Count)
-            {
-                Thread.Sleep(5);
-            }
-        }
+                var sent = OperatorNative.SendInput((uint)count, batch, size);
+                if (sent != count)
+                {
+                    var error = Marshal.GetLastWin32Error();
+                    throw new CapabilityException(
+                        ErrorClasses.UiStateChanged,
+                        $"SendInput delivered {sent} of {count} events (win32={error}); the input is blocked (a UIPI-protected window, a locked session)",
+                        retryable: true);
+                }
+            },
+            stillTargeted,
+            charactersCompletedBy,
+            totalCharacters);
     }
 }

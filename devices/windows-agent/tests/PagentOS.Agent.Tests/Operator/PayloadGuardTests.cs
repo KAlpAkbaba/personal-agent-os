@@ -128,11 +128,11 @@ public sealed class PayloadGuardTests : IDisposable
     {
         public List<string> Calls { get; } = new();
 
-        public void TypeText(string text) => Calls.Add($"type {text}");
+        public void TypeText(string text, Func<bool> stillTargeted) => Calls.Add($"type {text}");
 
-        public void PressKey(string key) => Calls.Add($"key {key}");
+        public void PressKey(string key, Func<bool> stillTargeted) => Calls.Add($"key {key}");
 
-        public void Shortcut(IReadOnlyList<string> keys) => Calls.Add($"shortcut {string.Join('+', keys)}");
+        public void Shortcut(IReadOnlyList<string> keys, Func<bool> stillTargeted) => Calls.Add($"shortcut {string.Join('+', keys)}");
 
         public void MoveTo(int screenX, int screenY) => Calls.Add($"move {screenX},{screenY}");
 
