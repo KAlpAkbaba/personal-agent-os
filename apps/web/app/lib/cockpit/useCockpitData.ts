@@ -30,6 +30,7 @@ import {
   type PendingBriefing,
   type ResearchTask,
   type ShadowReady,
+  type VoiceQualification,
   type WakeAlarm,
   type World,
   fetchAlarms,
@@ -45,6 +46,7 @@ import {
   fetchResearchFocus,
   fetchResearchTasks,
   fetchShadowReady,
+  fetchVoiceQualification,
   fetchWorld,
 } from "./api";
 
@@ -68,6 +70,8 @@ export type CockpitData = {
   alarms: Loaded<WakeAlarm[]>;
   ambientPolicy: Loaded<AmbientPolicy>;
   devices: Loaded<DeviceStatus[]>;
+  /** ADR-0080: the Owner Utterance Suite's latest recorded result. */
+  voiceQualification: Loaded<VoiceQualification>;
 };
 
 const INITIAL: CockpitData = {
@@ -85,6 +89,7 @@ const INITIAL: CockpitData = {
   alarms: { kind: "loading" },
   ambientPolicy: { kind: "loading" },
   devices: { kind: "loading" },
+  voiceQualification: { kind: "loading" },
 };
 
 export function useCockpitData(enabled = true): { data: CockpitData; refresh: () => void } {
@@ -111,6 +116,7 @@ export function useCockpitData(enabled = true): { data: CockpitData; refresh: ()
         alarms,
         ambientPolicy,
         devices,
+        voiceQualification,
       ] = await Promise.all([
         fetchResearchTasks(),
         // Same refresh, no extra timer: the focus changes when the list does.
@@ -127,6 +133,7 @@ export function useCockpitData(enabled = true): { data: CockpitData; refresh: ()
         fetchAlarms(),
         fetchAmbientPolicy(),
         fetchDeviceStatus(),
+        fetchVoiceQualification(),
       ]);
       if (stopped.current) return;
       setData({
@@ -144,6 +151,7 @@ export function useCockpitData(enabled = true): { data: CockpitData; refresh: ()
         alarms,
         ambientPolicy,
         devices,
+        voiceQualification,
       });
     } finally {
       inFlight.current = false;

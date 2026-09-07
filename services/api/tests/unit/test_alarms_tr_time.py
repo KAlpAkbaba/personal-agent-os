@@ -176,3 +176,56 @@ def test_next_occurrence_after_skips_to_the_next_matching_weekday() -> None:
     local = nxt.astimezone(IST)
     assert local.weekday() == 3  # Thursday
     assert local.strftime("%H:%M") == "07:15"
+
+
+# ------------------------------------------------- Owner Utterance Corpus regressions
+# Found by the synthetic voice suite on 2026-09-07 (tests/voice_corpus): the ASR splits a
+# spoken "yedi otuz" into "7 30", and says the minutes with the case suffix ("otuzda").
+
+
+def test_asr_split_digits_with_a_case_suffix_are_a_clock() -> None:
+    for text in (
+        "yarın 7 30 da beni uyandır",
+        "yarin 7 30 da alarm kur",
+        "Lütfen yarın 7 30'da beni uyandır.",
+    ):
+        parsed = parse_when_text(text, now=NOW)
+        assert parsed.local_time == "07:30", text
+        assert _local(parsed).date() == datetime(2026, 9, 10).date()
+
+
+def test_asr_split_digits_with_a_clock_context_word_are_a_clock() -> None:
+    parsed = parse_when_text("sabah 7 30 beni uyandır", now=NOW)
+    assert parsed.local_time == "07:30"
+    parsed = parse_when_text("saat 21 15 alarm kur", now=NOW)
+    assert parsed.local_time == "21:15"
+
+
+def test_two_bare_numbers_without_suffix_or_context_are_not_a_clock() -> None:
+    """"7 30" alone names no time deterministically: never guess."""
+    with pytest.raises(UnparsedWhen):
+        parse_when_text("7 30 beni uyandır", now=NOW)
+
+
+def test_spoken_minutes_with_a_case_suffix_corroborate_the_hour() -> None:
+    for text in (
+        "yarın yedi otuzda beni uyandır",
+        "Beni yarın yedi otuzda beni uyandır.",
+        "sabah yedi otuzda beni uyandır",
+    ):
+        parsed = parse_when_text(text, now=NOW)
+        assert parsed.local_time == "07:30", text
+    parsed = parse_when_text("yarın sekiz kırk beşte uyandır", now=NOW)
+    assert parsed.local_time == "08:45"
+
+
+def test_a_compound_spoken_hour_is_read_before_the_minutes() -> None:
+    """"on beşte" is fifteen o'clock, not five past ten; "yirmi bir otuzda" is 21:30."""
+    assert parse_when_text("saat on beşte alarm kur", now=NOW).local_time == "15:00"
+    assert parse_when_text("yirmi bir otuzda beni uyandır", now=NOW).local_time == "21:30"
+    assert parse_when_text("yarın on yedide uyandır", now=NOW).local_time == "17:00"
+
+
+def test_a_bare_spoken_number_is_still_not_a_clock() -> None:
+    with pytest.raises(UnparsedWhen):
+        parse_when_text("Beni bir ara uyandır.", now=NOW)

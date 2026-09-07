@@ -69,6 +69,7 @@ from app.state.routes import router as state_router
 from app.uistate import UiState
 from app.uistate import publish as publish_ui_state
 from app.uistate.routes import router as ui_state_router
+from app.voice.qualification.routes import router as voice_qualification_router
 from app.voice.realtime_sessions.research_announcer import ResearchToolCallAnnouncer
 from app.voice.realtime_sessions.routes import router as voice_realtime_router
 from app.voice.realtime_sessions.runtime import RealtimeVoiceRuntime
@@ -349,6 +350,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(alarms_router)
     app.include_router(alarms_audio_router)
     app.include_router(ambient_router)
+    app.include_router(voice_qualification_router)
     app.include_router(devices_router)
 
     @app.get("/v1/system/health")

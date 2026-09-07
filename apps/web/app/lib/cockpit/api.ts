@@ -485,3 +485,85 @@ export function parseDevice(raw: unknown): DeviceStatus {
 
 export const fetchDeviceStatus = () =>
   load<DeviceStatus[]>("/v1/devices", (raw) => arrayAt<unknown>(raw, "devices").map(parseDevice));
+
+// ------------------------------------------------- voice routing qualification
+
+/**
+ * ADR-0080. The Owner Utterance Suite's latest result, as the Cloud Core recorded
+ * it. Five states, each a fact about the record: NOT_YET_RUN, HEALTHY,
+ * REGRESSION_FOUND, SELF_HEALING, OWNER_AUDIO_TEST_REQUIRED.
+ */
+export type VoiceQualificationRun = {
+  recorded_at: string | null;
+  age_s: number | null;
+  summary: string | null;
+  corpus_version: number | null;
+  total_cases: number | null;
+  passed: number | null;
+  clarification: number | null;
+  failed_routing: number | null;
+  forbidden_side_effects: number | null;
+  confusion: Array<{
+    case_id: string;
+    utterance: string;
+    expected: string | null;
+    resolved: string | null;
+  }>;
+};
+
+export type VoiceQualification = {
+  state: string;
+  routing_state: string;
+  owner_audio_qualified: boolean;
+  open_opportunities: number;
+  latest_synthetic_run: VoiceQualificationRun | null;
+  latest_owner_audio_run: VoiceQualificationRun | null;
+};
+
+export const VOICE_QUALIFICATION_LABEL: Record<string, string> = {
+  NOT_YET_RUN: "henüz çalıştırılmadı",
+  HEALTHY: "sağlıklı",
+  REGRESSION_FOUND: "regresyon bulundu",
+  SELF_HEALING: "kendini onarıyor",
+  OWNER_AUDIO_TEST_REQUIRED: "sahibin ses testi bekleniyor",
+};
+
+function numberOrNull(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function parseQualificationRun(raw: unknown): VoiceQualificationRun | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  const confusion = Array.isArray(r.confusion) ? (r.confusion as Record<string, unknown>[]) : [];
+  return {
+    recorded_at: typeof r.recorded_at === "string" ? r.recorded_at : null,
+    age_s: numberOrNull(r.age_s),
+    summary: typeof r.summary === "string" ? r.summary : null,
+    corpus_version: numberOrNull(r.corpus_version),
+    total_cases: numberOrNull(r.total_cases),
+    passed: numberOrNull(r.passed),
+    clarification: numberOrNull(r.clarification),
+    failed_routing: numberOrNull(r.failed_routing),
+    forbidden_side_effects: numberOrNull(r.forbidden_side_effects),
+    confusion: confusion.map((c) => ({
+      case_id: String(c.case_id ?? ""),
+      utterance: String(c.utterance ?? ""),
+      expected: typeof c.expected === "string" ? c.expected : null,
+      resolved: typeof c.resolved === "string" ? c.resolved : null,
+    })),
+  };
+}
+
+export const fetchVoiceQualification = () =>
+  load<VoiceQualification>("/v1/voice/qualification", (raw) => {
+    const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+    return {
+      state: typeof r.state === "string" ? r.state : "NOT_YET_RUN",
+      routing_state: typeof r.routing_state === "string" ? r.routing_state : "NOT_YET_RUN",
+      owner_audio_qualified: r.owner_audio_qualified === true,
+      open_opportunities: numberOrNull(r.open_opportunities) ?? 0,
+      latest_synthetic_run: parseQualificationRun(r.latest_synthetic_run),
+      latest_owner_audio_run: parseQualificationRun(r.latest_owner_audio_run),
+    };
+  });

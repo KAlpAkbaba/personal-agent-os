@@ -31,6 +31,8 @@ import {
   type ResearchTask,
   type ShadowReady,
   TRUTH_KIND_LABEL,
+  VOICE_QUALIFICATION_LABEL,
+  type VoiceQualification,
   type WakeAlarm,
   type World,
   isHealthy,
@@ -809,5 +811,88 @@ function DeviceDisplayRows({ devices }: { devices: CockpitData["devices"] }) {
         </span>
       ))}
     </>
+  );
+}
+
+/**
+ * ADR-0080: VOICE ROUTING QUALIFICATION. The Owner Utterance Suite's latest recorded
+ * run, and the state the record supports. No progress bar, no "improving": five
+ * states, each one a sentence about rows that exist.
+ */
+export function VoiceQualificationPanel({
+  state,
+  now,
+}: {
+  state: CockpitData["voiceQualification"];
+  now: number;
+}) {
+  return (
+    <Panel<VoiceQualification>
+      id="voice-qualification"
+      title="Ses yönlendirme sınaması"
+      state={state}
+      empty="Henüz hiç sınama kaydı yok."
+      isEmpty={(q) => q.state === "NOT_YET_RUN"}
+      badge={(q) => VOICE_QUALIFICATION_LABEL[q.state] ?? q.state}
+      attention={(q) => q.state === "REGRESSION_FOUND" || q.state === "SELF_HEALING"}
+    >
+      {(q) => {
+        const run = q.latest_synthetic_run;
+        return (
+          <ul>
+            <li data-voice-qualification-state={q.state}>
+              <div className="event-row">
+                <span>Durum</span>
+                <span className="event-when">
+                  {VOICE_QUALIFICATION_LABEL[q.state] ?? q.state}
+                </span>
+              </div>
+              <span className="muted">
+                yönlendirme: {VOICE_QUALIFICATION_LABEL[q.routing_state] ?? q.routing_state}
+                {" · "}
+                {q.owner_audio_qualified
+                  ? "sahibin ses testi kayıtlı"
+                  : "sahibin ses testi kayıtlı değil"}
+                {q.open_opportunities > 0
+                  ? ` · ${q.open_opportunities} açık evrim fırsatı`
+                  : ""}
+              </span>
+            </li>
+            {run && (
+              <li data-voice-qualification-run>
+                <div className="event-row">
+                  <span>
+                    Son sentetik koşu · derlem s{run.corpus_version ?? "?"}
+                  </span>
+                  <span className="event-when">{when(run.recorded_at, now)}</span>
+                </div>
+                <span className="muted">
+                  {run.total_cases ?? "?"} cümle · {run.passed ?? "?"} doğru ·{" "}
+                  {run.clarification ?? "?"} netleştirme · {run.failed_routing ?? "?"} yanlış
+                  yönlendirme · {run.forbidden_side_effects ?? "?"} yasak yan etki
+                </span>
+              </li>
+            )}
+            {run?.confusion.map((c) => (
+              <li key={c.case_id} data-voice-qualification-confusion={c.case_id}>
+                <div className="event-row">
+                  <span>{c.case_id}</span>
+                  <span className="event-when">
+                    {c.expected ?? "?"} → {c.resolved ?? "?"}
+                  </span>
+                </div>
+                <span className="muted">{c.utterance}</span>
+              </li>
+            ))}
+            <li data-voice-qualification-note>
+              <span className="muted">
+                Sentetik cümleler gerçek yönlendiriciden ve araç yolundan geçer; ses donanımı
+                sınanmaz. Fiziksel ses testi sahibindir.
+              </span>
+            </li>
+          </ul>
+        );
+      }}
+    </Panel>
   );
 }

@@ -26,6 +26,13 @@ Everything automatable in M18.2 and M18.3 was finished and gated during the day 
 ADR-0078; contract v10 on main). Four short items remain, each labelled with the one human
 boundary it needs. Order matters only where written; D needs no audio and can go first.
 
+> **Voice routing is PROVEN_AUTOMATED (2026-09-07 evening, ADR-0080).** 345 synthetic
+> owner utterances now run through the real transcription boundary, the one router and
+> the real tools every night (`scripts/core/voice-routing-qualification.ps1`), with zero
+> wrong routes and zero forbidden side effects; the nine routing defects the first run
+> found are fixed and pinned. What A and C still need from you is the audibility alone.
+> The Cockpit's "Ses yönlendirme sınaması" panel shows the recorded state.
+
 | | Item | Needs | Time |
 |---|---|---|---|
 | A | 23b — click one research, `Bunu teknik anlat.`, `Bir önceki araştırmayı anlat.` | `READY_FOR_OWNER_AUDIO_TEST` (releases the Cloud Core once, to v10) | ~2 min |

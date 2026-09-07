@@ -250,6 +250,10 @@ EVENT_TYPE_ALARM_CLEANED_UP = "alarm.cleaned_up"
 EVENT_TYPE_OWNER_INPUT_ACTIVE = "owner.input_active"
 #: M18.3 §3.9: the owner changed the ambient display policy, by voice or by REST.
 EVENT_TYPE_AMBIENT_POLICY_CHANGED = "ambient.policy_changed"
+#: ADR-0080: one row per Owner Utterance Suite run (app.voice.qualification) - the counts
+#: and the bounded confusion rows, never a transcript. What the Living Core's voice routing
+#: qualification state is derived from.
+EVENT_TYPE_VOICE_QUALIFICATION = "voice.qualification"
 
 EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_RESEARCH_PLANNED,
@@ -311,6 +315,7 @@ EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_ALARM_CLEANED_UP,
     EVENT_TYPE_OWNER_INPUT_ACTIVE,
     EVENT_TYPE_AMBIENT_POLICY_CHANGED,
+    EVENT_TYPE_VOICE_QUALIFICATION,
 )
 
 #: ``alarm.<state_lowercase>`` for every state in ``app.alarms.models.ALARM_STATES``

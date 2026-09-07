@@ -100,6 +100,13 @@ _MORNING_WORDS: Final[tuple[str, ...]] = ("sabah", "sabahleyin", "sabaha")
 _EVENING_WORDS: Final[tuple[str, ...]] = ("akşam", "aksam", "gece", "akşama", "aksama")
 
 _HHMM_RE: Final = re.compile(r"(?<!\d)([01]?\d|2[0-3])[:.]([0-5]\d)(?!\d)")
+#: "7 30 da" / "7 30'da": the ASR splits a spoken "yedi otuz" into two numerals. Two-digit
+#: minutes only, and accepted only with a case suffix or a clock context word (corpus
+#: a.create.5 / a.gen.30: "yarın 7 30 da beni uyandır" parsed to nothing).
+_HM_SPACED_RE: Final = re.compile(
+    r"(?<![\d:])(?P<h>[01]?\d|2[0-3])\s+(?P<m>[0-5]\d)(?![\d:])"
+    r"(?P<sfx>\s*'?\s*(?:d[ae]|t[ae]|y[ıie]|[ıiea])\b)?"
+)
 _BARE_HOUR_RE: Final = re.compile(r"(?<!\d)([01]?\d|2[0-3])(?!\d)\s*(?:'?[a-zçğıöşü]{1,4})?\b")
 _SECONDS_RE: Final = re.compile(r"(?<!\d)(\d{1,5})\s*(?:sn|saniye)")
 _MINUTES_RE: Final = re.compile(r"(?<!\d)(\d{1,4})\s*(?:dk|dakika)")
@@ -197,6 +204,36 @@ _HALF_WORDS: Final[tuple[str, ...]] = ("buçuk", "bucuk", "buçukta", "bucukta")
 _QUARTER_WORDS: Final[tuple[str, ...]] = ("çeyrek", "ceyrek")
 
 
+def _split_number_word(raw: str) -> tuple[str | None, bool]:
+    """A number word, bare or with a case suffix: ("otuz", False), ("otuz", True) for
+    "otuzda", (None, False) for anything else."""
+    token = raw.strip(".:")
+    if token in _NUMBER_WORDS:
+        return token, False
+    for suffix in _CLOCK_CASE_SUFFIXES:
+        if token.endswith(suffix) and token[: -len(suffix)] in _NUMBER_WORDS:
+            return token[: -len(suffix)], True
+    return None, False
+
+
+def _spoken_minute(rest: list[str]) -> tuple[int | None, int, bool]:
+    """The minutes after a spoken hour: (value, tokens consumed, carried a case suffix).
+    "otuzda" is thirty with a suffix; "kırk beşte" is forty-five with the suffix on the
+    last word. The suffix is what corroborates "yedi otuzda" as a clock (corpus a.gen.36:
+    "yarın yedi otuzda beni uyandır" parsed to nothing without it)."""
+    if not rest:
+        return None, 0, False
+    first, first_suffixed = _split_number_word(rest[0])
+    if first is None:
+        return None, 0, False
+    value = _NUMBER_WORDS[first]
+    if value >= 10 and not first_suffixed and len(rest) > 1:
+        second, second_suffixed = _split_number_word(rest[1])
+        if second is not None and _NUMBER_WORDS[second] < 10:
+            return value + _NUMBER_WORDS[second], 2, second_suffixed
+    return value, 1, first_suffixed
+
+
 def _spoken_clock(tokens: list[str]) -> tuple[int, int] | None:
     """"yedi buçuk", "yediyi çeyrek geçiyor", "sekize çeyrek var", "yedi kırk iki".
 
@@ -220,9 +257,21 @@ def _spoken_clock(tokens: list[str]) -> tuple[int, int] | None:
         if hour is None or not (0 <= hour <= 23):
             continue
         rest = tokens[i + 1 :]
+        # "on beşte" / "yirmi birde" / "on beş otuzda": a compound HOUR, with the case
+        # suffix on its last word. Read before the minutes, or "on beşte" is 10:05.
+        if hour in (10, 20) and not suffixed and rest:
+            unit, unit_suffixed = _split_number_word(rest[0])
+            unit_value = _NUMBER_WORDS[unit] if unit is not None else 0
+            if 0 < unit_value < 10 and hour + unit_value <= 23:
+                hour += unit_value
+                suffixed = unit_suffixed
+                rest = rest[1:]
+        fraction = bool(rest and (rest[0] in _HALF_WORDS or rest[0] in _QUARTER_WORDS))
+        minute, consumed, minute_suffixed = (None, 0, False) if fraction else _spoken_minute(rest)
         corroborated = (
             suffixed
-            or bool(rest and (rest[0] in _HALF_WORDS or rest[0] in _QUARTER_WORDS))
+            or minute_suffixed
+            or fraction
             or any(t.startswith("saat") for t in tokens)
             or (i > 0 and (tokens[i - 1] in _MORNING_WORDS or tokens[i - 1] in _EVENING_WORDS))
         )
@@ -236,7 +285,6 @@ def _spoken_clock(tokens: list[str]) -> tuple[int, int] | None:
             if any(w.startswith("var") for w in rest[1:2]):
                 return (hour - 1) % 24, 45
             return hour, 15
-        minute, consumed = _word_number(rest, 0)
         if minute is not None and consumed and 0 <= minute <= 59:
             return hour, minute
         return hour, 0
@@ -247,6 +295,12 @@ def _clock_from(text: str, tokens: list[str]) -> tuple[int, int] | None:
     match = _HHMM_RE.search(text)
     if match:
         return int(match.group(1)), int(match.group(2))
+    clock_context = any(t.startswith("saat") for t in tokens) or any(
+        t in _MORNING_WORDS or t in _EVENING_WORDS for t in tokens
+    )
+    spaced = _HM_SPACED_RE.search(text)
+    if spaced and (spaced.group("sfx") or clock_context):
+        return int(spaced.group("h")), int(spaced.group("m"))
     spoken = _spoken_clock(tokens)
     if spoken is not None:
         return spoken

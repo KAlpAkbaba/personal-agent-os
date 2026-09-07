@@ -335,6 +335,11 @@ def alarm_snooze(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
     raw_minutes = arguments.get("minutes")
     valid_minutes = isinstance(raw_minutes, int) and not isinstance(raw_minutes, bool)
     minutes = int(raw_minutes) if valid_minutes else None
+    # What the owner SAID outranks what the model passed (corpus a.snooze.1: "10 dakika
+    # ertele" arrived with no minutes argument and snoozed for the default five).
+    said = _turn_alarm_minutes(ctx)
+    if said is not None:
+        minutes = said
     try:
         alarms_service.snooze_alarm(db, alarm.id, minutes=minutes, sequence=_sequence(ctx))
     except alarms_service.InvalidAlarmRequest as exc:
@@ -491,6 +496,27 @@ def _turn_policy_changes(ctx: ToolContext) -> dict[str, bool] | None:
     if not isinstance(changes, dict) or not changes:
         return None
     return {str(k): bool(v) for k, v in changes.items() if isinstance(v, bool)}
+
+
+def _turn_alarm_minutes(ctx: ToolContext) -> int | None:
+    """The snooze minutes the owner SAID on this turn ("on dakika ertele"), from the
+    record the ONE router wrote - preferred over the model's ``minutes`` argument."""
+    record = dict(ctx.context.get("last_utterance") or {})
+    raw_at = record.get("at")
+    if raw_at:
+        try:
+            at = datetime.fromisoformat(str(raw_at).replace("Z", "+00:00"))
+        except ValueError:
+            at = None
+        if at is not None:
+            if at.tzinfo is None:
+                at = at.replace(tzinfo=UTC)
+            if (ctx.now - at).total_seconds() > _POLICY_TURN_TTL_S:
+                return None
+    minutes = record.get("alarm_minutes")
+    if isinstance(minutes, bool) or not isinstance(minutes, int):
+        return None
+    return minutes
 
 
 #: The sentence for the FIRST preference the change touched, in the order that matters

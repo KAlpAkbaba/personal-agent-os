@@ -6193,3 +6193,132 @@ What is NOT here: a durable presence assertion (by design), an owner-facing edit
 the thresholds beyond the REST and voice surfaces, and the physical run — row 14.12/14.14
 real evidence is the owner's item 26. AMBIENT DISPLAY ENGINEERING COMPLETE;
 READY_FOR_OWNER_PHYSICAL_TEST.
+
+
+## ADR-0080 — The Owner Utterance Corpus: synthetic voice qualification through the real path, and the routing defects it found on its first run (2026-09-07)
+
+Status: Accepted
+
+Context: the owner's directive of 2026-09-07 (evening): stop making the owner the test
+harness for voice routing. Every pending M18 owner test was really two tests — "does the
+audio pipeline carry my voice?" (only the owner can answer) and "do my words route to the
+right tool with the right target and no forbidden side effect?" (deterministic, and the part
+that had actually been failing: ADR-0075/0076/0077 were all routing defects found by ear).
+The directive asks for a textual utterance injected as synthetic owner speech at the ONE
+canonical boundary — right after transcription — through the SAME router, tool dispatch,
+response and speech-output path, with structured evidence and assertions; paraphrase sets
+per command; Turkish variation (punctuation, colloquial, polite, short/long, deictics, ASR
+misspellings, number/time formats, missing diacritics); negative routing assertions;
+multi-turn focus; side-effect sandboxing; a versioned corpus that every fix expands; a
+nightly bounded suite with a report; a Living Core / Cockpit state; and the marks VOICE
+ROUTING = PROVEN_AUTOMATED, AUDIO PIPELINE = PROVEN_PROXY, PHYSICAL OWNER AUDIO =
+READY_FOR_OWNER_TEST.
+
+Decision:
+
+1. **One corpus, one harness, no second router.** `services/api/tests/voice_corpus/corpus.py`
+   is the versioned `OwnerUtteranceCorpus` (`CORPUS_VERSION = 1`, 345 cases): each
+   `UtteranceCase` carries `case_id`, `utterance`, `expected_intent`, `expected_tool`,
+   `expected_response` (ok / refused / needs_clarification / running / control / none),
+   `expected_target` (current / previous), deterministic `expected` extras (research class,
+   level, local_time, weekdays, is_test, alarm state, snooze count and minutes, policy
+   changes, query kind, eye flag after), `forbidden_tools`, `side_effects` (the device
+   capabilities the case may touch), `context` (none / research_focus_b / alarm_ringing /
+   alarm_scheduled / eye_disabled), `category`, `source` (canonical / paraphrase /
+   asr_noise / regression / generated), `locale`, `regression_issue_id`. Variants are
+   generated deterministically (no final punctuation, lower case, diacritics stripped);
+   the alarm family is a bounded product of prefixes × days × times × verbs. No LLM
+   paraphrases: every label is deterministic.
+   `harness.py` builds a fresh application per case (`create_app`, the real relay, the real
+   router, real services, SQLite, the `FakeDeviceAction` as the only fake), seeds the
+   context through the product's own paths (two same-title researches completed through
+   `research.start` + the announcer; a ringing alarm through `fire_alarm`; the eye through
+   `disable_eye`), posts the utterance as a client `utterance` event, reads the ONE router's
+   resolved intent / research class / reference / policy changes off the response, dispatches
+   the contract-expected tool through `POST /tool-calls` with the arguments the persona tells
+   the model to pass (derived from the contract, never from a second parser), dispatches
+   `research.start` on every research follow-up turn to PROVE the relay refuses it, checks
+   the fake device's calls against the case's side-effect policy and the research/alarm
+   tables for rows a wrong route would have created, checks the speech (non-empty, no
+   banned completion phrase) and, through the client's own lifecycle events, that the
+   session record shows an audible turn. `build_report` produces the counts by category and
+   source, the confusion rows, and HEALTHY / REGRESSION_FOUND from the numbers.
+   `tests/unit/test_owner_utterance_corpus.py` is one parametrised test per case plus the
+   aggregate "zero forbidden side effects" and the report writer
+   (`PAGENTOS_VOICE_CORPUS_REPORT`); `scripts/core/voice-routing-qualification.ps1` is the
+   nightly run (report to `state/reports/`, `-Post` records it on the Cloud Core with the
+   DPAPI owner credential, never printed).
+
+2. **The first run found nine routing defects; all fixed, all with regression tests, per the
+   closed-loop policy.** 261 of 345 passed before the fixes; 0 forbidden side effects at any
+   point. Fixed in the ONE router (`app/voice/intents.py`), the time parser
+   (`app/alarms/tr_time.py`), the question table (`app/explain/classify.py`) and the snooze
+   tool (`tools_ambient.py`):
+   - a bare "Sustur." / "Tamam, kapat." / "Kes şunu." / "Durdur." while an alarm is RINGING
+     is `ALARM_STOP` — `resolve_intent(..., alarm_ringing=)` is the router's second and last
+     piece of live context (the service reads `alarms_ringing(db)` once per request); with no
+     alarm ringing the words keep every meaning they had (`Kes.` is still STOP);
+   - "On dakika sonra tekrar çal." is a snooze (again + ring verb + a "later"); "Şarkıyı
+     tekrar çal." is still a repeat; the router derives the minutes SAID
+     (`spoken_minutes`, `ResolvedIntent.alarm_minutes`, on the turn record) and
+     `alarm.snooze` prefers them over the model's `minutes` argument — the same rule ADR-0079
+     §7 made for the ambient policy fields; the corpus had shown "10 dakika ertele" snoozing
+     for the default five;
+   - "Ekranı uyandır." is `DISPLAY_WAKE` (it went to `alarm.create`: a screen noun with the
+     wake verb and no alarm noun is never an alarm); "Görüntüyü kapat." is `DISPLAY_OFF`;
+     "Ekran durumu ne?" / "Monitörler kapalı mı?" are `DISPLAY_QUERY` ("durum" + ne/nedir/nasıl
+     is a question shape; "monitörler" was missing);
+   - the eye's privacy-critical exact forms and the screen's open verbs gained their
+     diacritic-free spellings ("gozunu kapat", "kamerayi ac", "ekranlari ac");
+   - "Bunun arka planda nasıl çalıştığını anlat." is a technical explanation
+     (`_technical_match`: one helper for the research class AND the TECHNICAL intent, so the
+     two cannot disagree); the diacritic-free "arastirma ... detay" reaches the same
+     research_detail kind as its spelled sibling;
+   - "Beni görüyor musun?" is an eye_state question and "Şu an burada mıyım?" a world_state
+     question (both had resolved to nothing);
+   - the ASR's "7 30 da" (two numerals, a case suffix) and the spoken "yedi otuzda" /
+     "sekiz kırk beşte" are clocks; "on beşte" is 15:00 (a compound hour read before the
+     minutes — it had been 10:00), "yirmi bir otuzda" is 21:30; two bare numbers with no
+     suffix and no clock word are still refused ("never guess").
+   Regression tests: `test_voice_corpus_regressions.py` (37), `test_alarms_tr_time.py`
+   (+6); the corpus keeps the utterances. Three corpus expectations were wrong and were
+   corrected rather than the product: "detayını açıkla" / "hangi sayfalar elendi" / "ne
+   sorun oldu" resolve as EXPLAIN questions whose research class is technical (the class
+   and level are the contract); a snooze re-arms at once (ARMED with `snooze_count` 1 is the
+   state it rests in); `state.now` answers with `query_kind`, not a `routed` field.
+
+3. **The state is a fact, not a claim.** `app/voice/qualification`: `POST
+   /v1/voice/qualification` (owner-gated) records a run as ONE `voice.qualification` ledger
+   row (subsystem voice; counts + at most 20 confusion rows; idempotent on source + suite +
+   corpus version + generated_at; the summary is recomputed from the counts — a client
+   cannot post a healthy word over failing numbers); a failing run opens one
+   `EvolutionOpportunity` per wrong route (source `voice_corpus`, source_ref the case id,
+   citing the ledger row; idempotent across nights); `GET /v1/voice/qualification` derives
+   NOT_YET_RUN / HEALTHY / REGRESSION_FOUND (failing, nothing tracks it) / SELF_HEALING
+   (failing, an opportunity is open) / OWNER_AUDIO_TEST_REQUIRED (routing healthy, no
+   `owner_audio` run recorded) from the rows alone. The Cockpit's "Ses yönlendirme sınaması"
+   panel shows exactly that (`VoiceQualificationPanel`; empty ≠ failed ≠ absent).
+
+4. **What the marks mean.** VOICE ROUTING = PROVEN_AUTOMATED: 345/345 through the real
+   path, 0 wrong routes, 0 clarifications where an answer was expected, 0 forbidden side
+   effects (a PROVEN_PROXY-class mark whose stand-ins are the synthetic utterance and the
+   fake device, named as the owner asked). AUDIO PIPELINE = PROVEN_PROXY: the speech text,
+   its record and the client's lifecycle events are asserted; no sample is synthesised or
+   heard. PHYSICAL OWNER AUDIO = READY_FOR_OWNER_TEST: items 23b and 25 are now a thin
+   final layer — the routing under them is already proven.
+
+Consequences: a routing regression is found by the nightly suite, recorded, and turned into
+an opportunity before the owner hears it; every routing fix must add its utterance to the
+corpus (the policy, and the only way the corpus stays ahead of the owner); the router has
+exactly two pieces of live context (a completed research exists; an alarm is ringing) and
+both are read once per request in the service. Named gaps: no property-based fuzzing beyond
+the deterministic variants yet; the corpus has no "owner-real" source rows until the owner's
+next run is reconciled into it; the owner-audio qualification is recorded only when a
+harness posts it with `source=owner_audio` (none does yet); the Living Core (WebGL) has no
+state for this — the Cockpit panel is the surface.
+
+Evidence: `tests/voice_corpus/`, `tests/unit/test_owner_utterance_corpus.py` (345 cases +
+2 aggregates), `test_voice_corpus_regressions.py` (37), `test_alarms_tr_time.py` (27),
+`test_voice_qualification.py` (10), the neighbouring intent suites (469 passed after the
+fixes), `apps/web/tests/cockpit/voice-qualification.test.tsx`;
+`scripts/core/voice-routing-qualification.ps1`.

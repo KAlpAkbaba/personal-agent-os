@@ -1099,6 +1099,9 @@ def record_client_events(
     #: Established ONCE per request, lazily, and only when an utterance actually needs
     #: it: it is a durable read, and most client events are not utterances at all.
     research_context_known: bool | None = None
+    #: Whether a wake alarm is ringing RIGHT NOW: the one live fact that turns a bare
+    #: "Sustur." into an alarm stop. Same lazy, once-per-request discipline.
+    alarm_ringing_known: bool | None = None
     accepted = 0
     sideband_payloads: list[tuple[str, dict[str, Any]]] = []
     for ev in events:
@@ -1121,11 +1124,19 @@ def record_client_events(
                     research_context_known = has_completed_research(db, now=now)
                 except Exception:  # noqa: BLE001 - a deployment without the research tables
                     research_context_known = False
+            if alarm_ringing_known is None:
+                from app.alarms import service as alarms_service
+
+                try:
+                    alarm_ringing_known = bool(alarms_service.alarms_ringing(db))
+                except Exception:  # noqa: BLE001 - a deployment without the alarm table
+                    alarm_ringing_known = False
             intent: ResolvedIntent = resolve_intent(
                 text,
                 session_state=RealtimeState(fsm) if fsm else None,
                 narration=narration_state,
                 has_completed_research=research_context_known,
+                alarm_ringing=alarm_ringing_known,
             )
             ctx["last_intent"] = intent.intent.value
             # ADR-0075: the LATEST resolved utterance of this session, kept on the
@@ -1144,6 +1155,8 @@ def record_client_events(
                 # ADR-0079 §7: the policy fields the owner's words set, so the tool
                 # applies what was SAID rather than what the model chose to pass.
                 "policy_changes": intent.policy_changes,
+                # ...and the minutes a snooze SAID, for the same reason.
+                "alarm_minutes": intent.alarm_minutes,
                 # ADR-0076. The research SHAPE, decided without the "does a completed
                 # research exist?" precondition (that precondition is what let a deictic
                 # follow-up on an empty history become a crawl), and WHICH research the

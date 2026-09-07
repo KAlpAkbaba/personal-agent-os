@@ -119,6 +119,12 @@ _PATTERNS: tuple[tuple[tuple[str, ...], str], ...] = (
     (("kamera", "acik"), QUERY_EYE_STATE),
     (("goz", "acik"), QUERY_EYE_STATE),
     (("beni", "izliyor"), QUERY_EYE_STATE),
+    # "Beni görüyor musun?" - the eye asked about as a question about ME (corpus p.q.1).
+    (("beni", "görüyor"), QUERY_EYE_STATE),
+    (("beni", "goruyor"), QUERY_EYE_STATE),
+    # "Şu an burada mıyım?" - the presence assertion, asked back (corpus p.q.4).
+    (("burada", "mıyım"), QUERY_WORLD_STATE),
+    (("burada", "miyim"), QUERY_WORLD_STATE),
     # --- what do you see in yourself: the world model ----------------------------
     # Broadened after the owner's second M17 run, where "Kendi sisteminde şu anda ne
     # görüyorsun?" produced no answer at all. The phrasings below are the ones the owner
@@ -187,6 +193,8 @@ _PATTERNS: tuple[tuple[tuple[str, ...], str], ...] = (
     (("hedef",), QUERY_GOALS),
     (("araştırma", "detay"), QUERY_RESEARCH_DETAIL),
     (("araştırma", "ayrıntı"), QUERY_RESEARCH_DETAIL),
+    (("arastirma", "detay"), QUERY_RESEARCH_DETAIL),
+    (("arastirma", "ayrinti"), QUERY_RESEARCH_DETAIL),
     (("bulgu",), QUERY_RESEARCH_DETAIL),
     # --- research PIPELINE diagnostics, explicitly asked for (M18.2 DEFECT 2) -----
     # Ahead of the generic "sorun"/"hangi" patterns below on purpose: "araştırma

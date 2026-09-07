@@ -59,6 +59,7 @@ import {
   RunningToolsPanel,
   ShadowReadyPanel,
   StateStreamPanel,
+  VoiceQualificationPanel,
   WorldPanel,
 } from "../panels/CockpitPanels";
 import "../core.css";
@@ -149,6 +150,8 @@ function Cockpit() {
               doing. Both are read-only here; the renderer owns no policy. */}
           <AlarmsPanel state={data.alarms} now={now} />
           <AmbientPanel policy={data.ambientPolicy} devices={data.devices} />
+          {/* ADR-0080: whether the owner's words still route where they say. */}
+          <VoiceQualificationPanel state={data.voiceQualification} now={now} />
           <ShadowReadyPanel state={data.shadowReady} />
           <GoalsPanel state={data.goals} now={now} />
           <ResearchPanel

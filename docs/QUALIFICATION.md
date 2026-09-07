@@ -661,6 +661,25 @@ ENGINEERING COMPLETE; the physical run (item 26) is `READY_FOR_OWNER_PHYSICAL_TE
 | 14.17 | Privacy unchanged: no raw camera frame or video is persisted for sleep/away detection; the input observer reads only an idle tick count; presence stores state, confidence, observed_at and source | `PROVEN_PROXY` | **Proxy 2026-09-07** (ADR-0072): the input source is `GetLastInputInfo`'s tick count only — no key or pointer content API in the companion (source-read); the heartbeat status carries seven closed keys (`SerializationTests` cross-check the fixture, the code and the schema); the M18 perception guards are unchanged. **Structural.** |
 | 14.18 | Test mode is the production path: a test alarm is the same table, routine, arm and sequence with a short offset; the display test issues the real `display.off` receipt; nothing is simulated | `NOT_YET_PROVEN` | **API half proxy 2026-09-07** (ADR-0071): `is_test` changes only the offset, `max_play_seconds` (120) and the cleanup; the same table, routine, arm and sequence; `POST /v1/ambient/test-display` arms a moment the clock turns into the real `display.off` receipt (reason `owner_test`, a 5 s device holdoff because asking IS recent input). Real: B and C are those tests. |
 
+## Stage 15 — Voice routing qualification: the Owner Utterance Corpus (2026-09-07, ADR-0080)
+
+`PROVEN_AUTOMATED` here is the owner's own name for a `PROVEN_PROXY`-class mark whose
+stand-ins are the synthetic utterance (text injected at the boundary right after
+transcription) and the fake device: the router, the relay, the tools, the tables and the
+speech text are all real. Nothing in this stage claims a sound was heard.
+
+| # | Criterion | Status | Evidence |
+|---|---|---|---|
+| 15.1 | Every corpus case enters at the canonical boundary (`POST /events` utterance), is resolved by the ONE router, dispatches the contract-expected tool through the relay, and is judged on intent, class, target identity, tool status and speech | `PROVEN_AUTOMATED` | `tests/unit/test_owner_utterance_corpus.py`: 345/345 (corpus v1), 0 wrong routes, 0 unexpected clarifications, report HEALTHY. |
+| 15.2 | Turkish variation is covered deterministically: punctuation, case, missing diacritics, polite/short forms, deictics, number/time formats, weekly recurrence, ASR-split numerals | `PROVEN_AUTOMATED` | Sources canonical / paraphrase / asr_noise / regression / generated in the corpus; `_variants` per case; the alarm product set. |
+| 15.3 | Negative routing: a research follow-up never starts a research (the relay refuses `research.start`, dispatched to prove it), no wrong route creates an alarm or research row, no tool touches a device capability outside the case's policy | `PROVEN_AUTOMATED` | Forbidden side effects = 0 across every run, before and after the fixes (`test_corpus_has_no_forbidden_side_effect_anywhere`). |
+| 15.4 | Focus: with two same-title researches, "bunu"/"az önceki"/"son" bind the newer job and "bir önceki" the older, by id | `PROVEN_AUTOMATED` | `research_focus_b` context; target ids asserted per case. Reload / reconnect / same-title survival stays in `test_research_focus.py` (ADR-0076). |
+| 15.5 | The spoken result is structurally valid: non-empty, no banned completion phrase, recorded with its chars, and the client's first_audio/audio_done for the turn on the session record | `PROVEN_AUTOMATED` (speech text) / `PROVEN_PROXY` (audio pipeline) | Harness step 6; ADR-0066 lifecycle events. No sample is synthesised or heard. |
+| 15.6 | A regression becomes a durable state and an EvolutionOpportunity: `voice.qualification` ledger row, one opportunity per case (idempotent), state REGRESSION_FOUND / SELF_HEALING / OWNER_AUDIO_TEST_REQUIRED / HEALTHY from rows alone; a healthy word never outranks failing numbers | `PROVEN_PROXY` | `test_voice_qualification.py` (10) through `/v1/voice/qualification`; Cockpit panel `voice-qualification.test.tsx`. |
+| 15.7 | The nightly bounded run writes the report and can record it on the Cloud Core with the DPAPI owner credential | `PROVEN_PROXY` | `scripts/core/voice-routing-qualification.ps1` (syntax-gated; `-Post` not yet exercised against the real host). |
+| 15.8 | The nine routing defects the first run found are fixed with regression tests and their utterances kept in the corpus | `PROVEN_AUTOMATED` | ADR-0080 §2; `test_voice_corpus_regressions.py` (37), `test_alarms_tr_time.py` (+6); neighbouring suites 469 passed. |
+| 15.9 | Physical owner audio (microphone → transcription → the same path → audible answer) | `READY_FOR_OWNER_TEST` | Items 23b and 25 — now a thin final layer over proven routing. |
+
 ## Stage 7 — Real voice
 
 | # | Criterion | Status |

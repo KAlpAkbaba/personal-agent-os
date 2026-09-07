@@ -325,7 +325,8 @@ EVIDENCE_KINDS: Final[frozenset[str]] = frozenset(
 
 #: What may sit in the `source` column (the idempotency namespace).
 OPPORTUNITY_SOURCES: Final[frozenset[str]] = frozenset(
-    {"ledger_event", "incident", "lesson", "capability_gap", "owner"}
+    # "voice_corpus": ADR-0080, a wrong route the Owner Utterance Suite found (one per case).
+    {"ledger_event", "incident", "lesson", "capability_gap", "owner", "voice_corpus"}
 )
 
 

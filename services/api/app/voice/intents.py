@@ -270,6 +270,9 @@ class ResolvedIntent:
     #: WORDS set (``ambient_policy_changes``) - derived in the one router, recorded on the
     #: turn, and preferred by the tool over whatever booleans the model passed.
     policy_changes: dict[str, bool] | None = None
+    #: For an ALARM_SNOOZE utterance, the minutes the owner SAID (``spoken_minutes``);
+    #: None when no count was spoken, and the alarm's own default applies.
+    alarm_minutes: int | None = None
 
     def __post_init__(self) -> None:
         if not self.klass:
@@ -292,6 +295,7 @@ class ResolvedIntent:
             "research_class": self.research_class,
             "research_reference": self.research_reference,
             "policy_changes": dict(self.policy_changes) if self.policy_changes else None,
+            "alarm_minutes": self.alarm_minutes,
         }
 
     @property
@@ -438,13 +442,31 @@ def _explain_kind(tokens: tuple[str, ...], text: str = "") -> str | None:
 #: "gözlük" (glasses) and "gözlem" (observation), unrelated words that happen to
 #: share the root. A privacy-critical trigger is worth the extra explicit forms
 #: rather than a prefix match that fires on the wrong noun.
-_EYE_WORD_FORMS: Final[tuple[str, ...]] = ("göz", "gözü", "gözünü", "gözler", "gözlerini")
+_EYE_WORD_FORMS: Final[tuple[str, ...]] = (
+    "göz",
+    "gözü",
+    "gözünü",
+    "gözler",
+    "gözlerini",
+    # ...and the same words as an ASR that dropped the diacritics renders them (Owner
+    # Utterance Corpus, asr_noise source, 2026-09-07). Exact forms still: "goz" is not a
+    # prefix of anything, and "gozunu" is this word or nothing.
+    "goz",
+    "gozu",
+    "gozunu",
+    "gozler",
+    "gozlerini",
+)
 _CAMERA_WORD_FORMS: Final[tuple[str, ...]] = (
     "kamera",
     "kamerayı",
     "kameramı",
     "kamerasını",
     "kameraları",
+    "kamerayi",
+    "kamerami",
+    "kamerasini",
+    "kameralari",
 )
 
 
@@ -472,7 +494,7 @@ def _eye_disable_match(tokens: tuple[str, ...]) -> str | None:
 #: The imperative "open" forms. Exact, like the eye/camera nouns: "açık" (open, adj.) is
 #: the QUERY "kamera açık mı?" and must not become an action; "açar mısın" is a request
 #: and is honoured as one.
-_OPEN_VERB_FORMS: Final[tuple[str, ...]] = ("aç", "açsana", "açar")
+_OPEN_VERB_FORMS: Final[tuple[str, ...]] = ("aç", "açsana", "açar", "ac", "acsana", "acar")
 #: "Active Eye'ı aç" — the product name, as the ASR renders it (the apostrophe survives
 #: normalisation, so the stem match on "eye" is the honest way to catch "eye'ı"/"eye'i").
 _ACTIVE_EYE_FORMS: Final[tuple[str, ...]] = ("active", "aktif")
@@ -549,7 +571,80 @@ _ALARM_STOP_VERB_FORMS: Final[tuple[str, ...]] = (
     "sus",
 )
 _SNOOZE_VERB_STEMS: Final[tuple[str, ...]] = ("ertele", "erteler")
+#: "On dakika sonra tekrar çal." - a snooze said as "ring again later" (corpus a.snooze.2).
+#: Exact ring forms: "çalıştır" (run) belongs to the research re-run, never to an alarm.
+_RING_VERB_FORMS: Final[tuple[str, ...]] = ("çal", "cal", "çalsın", "calsin", "çalsana", "calsana")
 _TEST_WORD_FORMS: Final[tuple[str, ...]] = ("test", "deneme")
+
+#: Spoken minutes for a snooze: the tr-TR normaliser has already turned "10" into "on",
+#: so these are the words a minute count arrives as (compounds: "on beş", "yirmi").
+_MINUTE_WORDS: Final[dict[str, int]] = {
+    "bir": 1,
+    "iki": 2,
+    "üç": 3,
+    "uc": 3,
+    "dört": 4,
+    "dort": 4,
+    "beş": 5,
+    "bes": 5,
+    "altı": 6,
+    "alti": 6,
+    "yedi": 7,
+    "sekiz": 8,
+    "dokuz": 9,
+    "on": 10,
+    "yirmi": 20,
+    "otuz": 30,
+    "kırk": 40,
+    "kirk": 40,
+    "elli": 50,
+    "altmış": 60,
+    "altmis": 60,
+}
+_MAX_SPOKEN_MINUTES: Final = 180
+
+
+def _minute_value(token: str) -> int | None:
+    if token.isdigit():
+        return int(token)
+    return _MINUTE_WORDS.get(token)
+
+
+def spoken_minutes(tokens: tuple[str, ...]) -> int | None:
+    """The minute count the owner SAID ("on dakika", "on beş dakika", "5 dk"), or None.
+
+    Derived in the one router and carried on the turn (``ResolvedIntent.alarm_minutes``)
+    so the snooze tool applies what was said rather than what the model chose to pass -
+    the same rule ADR-0079 §7 made for the ambient policy fields.
+    """
+    for n, tok in enumerate(tokens):
+        if not (tok.startswith("dakika") or tok == "dk"):
+            continue
+        if n == 0:
+            return None
+        last = _minute_value(tokens[n - 1])
+        if last is None:
+            return None
+        value = last
+        if last < 10 and n >= 2:
+            tens = _minute_value(tokens[n - 2])
+            if tens is not None and tens >= 10 and tens % 10 == 0:
+                value = tens + last
+        return value if 1 <= value <= _MAX_SPOKEN_MINUTES else None
+    return None
+
+
+def _snooze_again_match(tokens: tuple[str, ...]) -> str | None:
+    """"On dakika sonra tekrar çal." / "Biraz sonra yeniden çal.": a snooze without the
+    verb "ertele". Needs "again" AND a ring verb AND a "later" (minutes or "sonra"), so
+    "şarkıyı tekrar çal" (play the song again) stays a repeat."""
+    if (
+        _has_exact(tokens, *_RERUN_WORDS)
+        and _has_exact(tokens, *_RING_VERB_FORMS)
+        and (_has_exact(tokens, "sonra") or spoken_minutes(tokens) is not None)
+    ):
+        return "tekrar çal"
+    return None
 
 _SCREEN_WORD_FORMS: Final[tuple[str, ...]] = (
     "ekran",
@@ -566,11 +661,28 @@ _SCREEN_WORD_FORMS: Final[tuple[str, ...]] = (
     "monitoru",
     "monitörleri",
     "monitorleri",
+    "monitörler",
+    "monitorler",
+    # "Görüntüyü kapat." - the owner's word for what the screen shows (corpus d.off.4).
+    # Exact forms: "görüntüsünü" belongs to "kamera görüntüsünü", which the eye owns.
+    "görüntü",
+    "görüntüyü",
+    "goruntu",
+    "goruntuyu",
 )
 _CLOSE_VERB_FORMS: Final[tuple[str, ...]] = ("kapat", "kapatsana", "kapatır", "söndür", "sondur")
 #: Deliberately NOT the eye's `_OPEN_VERB_FORMS`: this is a display, and reusing that tuple
 #: would couple two privacy-unrelated vocabularies through one edit.
-_SCREEN_OPEN_VERB_FORMS: Final[tuple[str, ...]] = ("aç", "açsana", "açar", "uyandır", "uyandir")
+_SCREEN_OPEN_VERB_FORMS: Final[tuple[str, ...]] = (
+    "aç",
+    "açsana",
+    "açar",
+    "ac",
+    "acsana",
+    "acar",
+    "uyandır",
+    "uyandir",
+)
 
 
 def _alarm_noun(tokens: tuple[str, ...]) -> str | None:
@@ -588,11 +700,21 @@ def _is_question(tokens: tuple[str, ...]) -> bool:
         _has(tokens, "kaçta", "kacta", "kaçtı", "kacti")
         or _has_exact(tokens, "mı", "mi", "mu", "mü")
         or (_has_exact(tokens, "ne") and _has(tokens, "zaman"))
+        # "Ekran durumu ne?" / "Alarm durumu nedir?" (corpus d.status.2).
+        or (_has(tokens, "durum") and _has_exact(tokens, "ne", "nedir", "nasıl", "nasil"))
     )
 
 
-def _alarm_match(tokens: tuple[str, ...]) -> tuple[Intent, str] | None:
+def _alarm_match(
+    tokens: tuple[str, ...], *, alarm_ringing: bool = False
+) -> tuple[Intent, str] | None:
     """The alarm family (spec §6's phrase list), in priority order.
+
+    ``alarm_ringing`` is the one piece of live context this family takes: while an alarm
+    is actually ringing, a bare "Sustur." / "Kapat." / "Kes şunu." is about the alarm -
+    the owner is talking to the thing that just woke them, and the noun is the loudest
+    thing in the room (Owner Utterance Corpus a.stop.4-6, 2026-09-07). With no alarm
+    ringing the same words keep every meaning they had.
 
     STOP before CANCEL before CREATE, because the words overlap and the physical
     consequence of getting it wrong is asymmetric: "alarmı kapat" while it is ringing must
@@ -605,9 +727,22 @@ def _alarm_match(tokens: tuple[str, ...]) -> tuple[Intent, str] | None:
     # exactly the moment they are least able to rephrase it. "ertele" means nothing else.
     if _has(tokens, *_SNOOZE_VERB_STEMS):
         return Intent.ALARM_SNOOZE, "ertele"
+    if again := _snooze_again_match(tokens):
+        return Intent.ALARM_SNOOZE, again
 
     noun = _alarm_noun(tokens)
     wake = _has(tokens, *_WAKE_VERB_STEMS)
+    # "Ekranı uyandır." wakes the DISPLAY: a screen noun with the wake verb and no alarm
+    # noun is never an alarm (corpus d.wake.3 misrouted here to alarm.create).
+    if noun is None and wake and _screen_noun(tokens) is not None:
+        return None
+    if (
+        noun is None
+        and alarm_ringing
+        and _screen_noun(tokens) is None
+        and _has_exact(tokens, *_ALARM_STOP_VERB_FORMS)
+    ):
+        return Intent.ALARM_STOP, "sustur"
     if noun is None and not wake:
         return None
 
@@ -778,6 +913,21 @@ _RUN_VERB_FORMS: Final[tuple[str, ...]] = ("yap", "yapar", "başlat", "baslat", 
 #: restate them: those kinds ride on ``query_kind`` and are consulted here directly.
 _RESEARCH_PROBLEM_WORDS: Final[tuple[str, ...]] = ("sorun", "hata", "problem")
 
+#: "Bunun arka planda nasıl çalıştığını anlat." - the pipeline asked about without the
+#: word "teknik" (corpus r.tech.6). One helper for the research CLASS and the TECHNICAL
+#: intent, so the two can never disagree about what counts as technical.
+def _technical_match(tokens: tuple[str, ...]) -> str | None:
+    if tok := _has(tokens, "teknik"):
+        return tok
+    if _has(tokens, "kod") and _has(tokens, "seviye"):
+        return "kod seviyesinde"
+    if _has_exact(tokens, "arka") and _has(tokens, "plan"):
+        return "arka planda"
+    if _has_exact(tokens, "nasıl", "nasil") and _has(tokens, "çalış", "calis"):
+        return "nasıl çalışıyor"
+    return None
+
+
 #: Words that make an utterance a follow-up ON the findings of the finished run.
 _RESEARCH_FOLLOWUP_STEMS: Final[tuple[str, ...]] = (
     "kaynak",  # "Kaynakları söyle."
@@ -863,7 +1013,7 @@ def classify_research_shape(
     # 3. TECHNICAL EXPLANATION - the pipeline's own diagnostics.
     if query_kind in ("rejected_pages", "research_problems"):
         return RESEARCH_CLASS_TECHNICAL_EXPLANATION
-    if _has(tokens, "teknik") or (_has(tokens, "kod") and _has(tokens, "seviye")):
+    if _technical_match(tokens):
         return RESEARCH_CLASS_TECHNICAL_EXPLANATION
     if _has(tokens, "elendi", "elen") or (_has(tokens, "hangi") and _has(tokens, "sayfa")):
         return RESEARCH_CLASS_TECHNICAL_EXPLANATION
@@ -1319,6 +1469,7 @@ def resolve_intent(
     session_state: RealtimeState | None = None,
     narration: NarrationState | None = None,
     has_completed_research: bool = False,
+    alarm_ringing: bool = False,
 ) -> ResolvedIntent:
     """Resolve a transcript into an :class:`Intent` against the live state.
 
@@ -1333,6 +1484,9 @@ def resolve_intent(
     ``research_technical_explanation`` (a question about a finished run) or just a
     technical explanation of the last activity. The caller establishes it from the
     research runs/reports - the resolver stays pure.
+
+    ``alarm_ringing`` is the second and last: whether a wake alarm is ringing right now,
+    which is what makes a bare "Sustur." an ``ALARM_STOP`` (see ``_alarm_match``).
     """
     normalized, tokens, dropped = normalize_transcript(text)
     confidence = 1.0 if dropped == 0 else 0.9
@@ -1390,9 +1544,15 @@ def resolve_intent(
             ),
             **base,
         )
-    if alarm_matched := _alarm_match(tokens):
+    if alarm_matched := _alarm_match(tokens, alarm_ringing=alarm_ringing):
         return ResolvedIntent(
-            alarm_matched[0], scope=SCOPE_CONVERSATION, matched=alarm_matched[1], **base
+            alarm_matched[0],
+            scope=SCOPE_CONVERSATION,
+            matched=alarm_matched[1],
+            alarm_minutes=(
+                spoken_minutes(tokens) if alarm_matched[0] is Intent.ALARM_SNOOZE else None
+            ),
+            **base,
         )
     if display_matched := _display_match(tokens):
         return ResolvedIntent(
@@ -1449,11 +1609,11 @@ def resolve_intent(
         return ResolvedIntent(
             Intent.SUMMARIZE, scope=_scope_for(Intent.SUMMARIZE, narration), matched=tok, **base
         )
-    if (tok := _has(tokens, "teknik")) or (_has(tokens, "kod") and _has(tokens, "seviye")):
+    if tok := _technical_match(tokens):
         return ResolvedIntent(
             Intent.TECHNICAL,
             scope=_scope_for(Intent.TECHNICAL, narration),
-            matched=tok or "kod seviyesinde",
+            matched=tok,
             **base,
         )
     if tok := _has(tokens, "detay", "ayrıntı", "derinle"):
