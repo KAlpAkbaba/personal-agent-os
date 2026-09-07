@@ -302,6 +302,7 @@ public static class Program
         // companion that was not told to operate the desktop has no object that could.
         var operatorOptions = Operator.OperatorOptions.FromConfiguration(configuration);
         Operator.OperatorCapabilities? operatorCapabilities = null;
+        Documents.DocumentCapabilities? documentCapabilities = null;
         if (operatorOptions.Enabled && OperatingSystem.IsWindows())
         {
             operatorCapabilities = new Operator.OperatorCapabilities(operatorOptions, loggerFactory.CreateLogger("Operator"), audit);
@@ -310,10 +311,18 @@ public static class Program
                 AgentCapabilities.Operator.Count,
                 string.Join(" | ", operatorCapabilities.Terminal.Allowlist),
                 string.Join(";", operatorCapabilities.AuthorisedRoots));
+
+            // M20 (M20_FILE_DOCUMENT_INTELLIGENCE_SPEC.md §2): the documents family rides the
+            // same flag and the same roots — one decision, "the companion may touch the
+            // owner's files", not two.
+            documentCapabilities = new Documents.DocumentCapabilities(operatorOptions, loggerFactory.CreateLogger("Documents"), audit);
+            logger.LogInformation(
+                "documents: ENABLED - {Count} capabilities inside the operator roots (read-only; secret-bearing names never read)",
+                AgentCapabilities.Documents.Count);
         }
         else
         {
-            logger.LogInformation("digital operator: disabled (PAGENTOS_AGENT_OperatorEnabled=true enables it); the operator family is not advertised");
+            logger.LogInformation("digital operator: disabled (PAGENTOS_AGENT_OperatorEnabled=true enables it); the operator and documents families are not advertised");
         }
 
         var runtime = new CompanionRuntime(
@@ -330,7 +339,8 @@ public static class Program
             alarmArms: alarmArms,
             activityStatus: activityStatus,
             greeting: greeting,
-            operatorCapabilities: operatorCapabilities);
+            operatorCapabilities: operatorCapabilities,
+            documentCapabilities: documentCapabilities);
         logger.LogInformation("capabilities advertised to the device service: {Capabilities}", string.Join(",", runtime.AdvertisedCapabilities));
 
         if (browserHost is not null && browserOptions.Eager)
