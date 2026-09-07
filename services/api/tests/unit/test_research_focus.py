@@ -72,7 +72,11 @@ from app.voice.realtime_sessions.models import RealtimeSessionRow, RealtimeToolC
 from app.voice.realtime_sessions.research_announcer import ResearchToolCallAnnouncer
 from app.voice.realtime_sessions.runtime import RealtimeVoiceRuntime
 from app.voice.realtime_sessions.sideband import RecordingSideband
-from app.voice.realtime_sessions.tools import RESEARCH_FOLLOWUP_REFUSED_TR
+from app.voice.realtime_sessions.tools import (
+    RESEARCH_EMPTY_ANSWER_TR,
+    RESEARCH_FOLLOWUP_REFUSED_TR,
+    RESEARCH_NO_REPORT_TR,
+)
 from app.voice.simulator import SimulatedRealtimeProvider
 from tests.identity_support import IDENTITY_TABLES
 
@@ -526,7 +530,10 @@ def test_true_ambiguity_asks_once_and_the_spoken_answer_lands(wired, two_same_ti
 
     sid = _create(client)
     _say(client, sid, "OpenAI araştırmasını anlat.")
-    asked = _tool(client, sid, "c-1", "research.explain", {})["result"]
+    asked_call = _tool(client, sid, "c-1", "research.explain", {})
+    # ADR-0077: a question is its own terminal status - never a succeeded call.
+    assert asked_call["status"] == "needs_clarification", asked_call
+    asked = asked_call["result"]
 
     assert asked["status"] == "needs_clarification"
     assert asked["ambiguous"] is True
@@ -777,3 +784,237 @@ def test_the_session_record_names_the_job_the_reference_and_the_focus_source(
     intent = activity["intents"][0]
     assert intent["research_class"] == "research_technical_explanation"
     assert intent["research_reference"] == "current"
+
+
+# ------------------------------------------------ the result contract (ADR-0077)
+#
+# The owner's fourth record (2026-09-06, sessions c3d88970 and 96f06af4): research.explain
+# recorded a clarification as a SUCCEEDED call with no target; "Bunu teknik anlat." went to
+# activity.explain, which resolved the model's paraphrase instead of the turn (previous_focus
+# for "bunu"), narrated the LEDGER's telemetry instead of the report and attached a narration
+# session; the next turn then became a cursor move inside that narration and never reached the
+# previous research. Every test below runs the exact contract under the canonical router: the
+# owner's words go through /events (the ONE router), the model's tool call follows.
+
+
+def _row_status(runtime, sid: str, call_id: str) -> str:
+    with runtime.session() as db:
+        row = db.execute(
+            select(RealtimeToolCall).where(
+                RealtimeToolCall.session_id == uuid.UUID(sid), RealtimeToolCall.call_id == call_id
+            )
+        ).scalar_one()
+        return row.status
+
+
+def _recorded(client, sid: str, call_id: str) -> dict:
+    activity = client.get(f"/v1/voice/realtime/sessions/{sid}/activity").json()
+    return next(c for c in activity["tool_calls"] if c["call_id"] == call_id)
+
+
+def test_a_clarification_is_its_own_terminal_status_never_a_success(
+    wired, two_same_title
+) -> None:
+    """call_UdBzeEH85slFqbNQ: 'succeeded', no job, a question for a result. Never again."""
+    client, runtime, _sideband, _artifacts = wired
+    _clear_focus(runtime)
+
+    sid = _create(client)
+    _say(client, sid, "OpenAI araştırmasını anlat.")
+    call = _tool(client, sid, "c-1", "research.explain", {"level": "technical"})
+
+    assert call["status"] == "needs_clarification", call
+    assert "error" not in call
+    assert call["result"]["status"] == "needs_clarification"
+    assert call["result"]["research_job_id"] is None
+    assert call["result"]["speech"].startswith("Aynı konuda iki araştırmanız var:")
+    assert _row_status(runtime, sid, "c-1") == "needs_clarification"
+
+    recorded = _recorded(client, sid, "c-1")
+    assert recorded["status"] == "needs_clarification"
+    assert recorded["research_job_id"] is None
+    assert recorded["speech_chars"] > 0
+
+
+def test_a_succeeded_research_answer_names_its_target_and_speaks(wired, two_same_title) -> None:
+    client, runtime, _sideband, _artifacts = wired
+    (_a_task, _a_art), (b_task, b_art) = two_same_title
+
+    sid = _create(client)
+    _say(client, sid, "Bunu teknik anlat.")
+    call = _tool(client, sid, "c-1", "research.explain", {"level": "technical"})
+
+    assert call["status"] == "succeeded", call
+    result = call["result"]
+    assert result["status"] == "ok"
+    assert result["research_job_id"] == b_task
+    assert result["research_artifact_id"] == b_art
+    assert result["speech"].startswith("Bu araştırmada")
+    assert result["provenance"]["research_job_id"] == b_task
+    assert result["provenance"]["research_artifact_id"] == b_art
+    # B's own numbers (the fixture gives A and B different stats on purpose)
+    assert result["provenance"]["facts"]["discovered"] == 111
+    assert _row_status(runtime, sid, "c-1") == "succeeded"
+
+
+def test_an_ok_without_words_is_recorded_as_failed_never_as_succeeded(
+    wired, two_same_title, monkeypatch
+) -> None:
+    """The contract's own assertion, in the relay: no target or no words -> failed."""
+    import app.research.answers as answers
+
+    client, runtime, _sideband, _artifacts = wired
+    (_a_task, _a_art), (b_task, _b_art) = two_same_title
+    monkeypatch.setattr(answers, "speech_for_level", lambda *_a, **_k: "")
+
+    sid = _create(client)
+    _say(client, sid, "Bunu anlat.")
+    call = _tool(client, sid, "c-1", "research.explain", {})
+
+    assert call["status"] == "failed", call
+    assert call["error"]["error_class"] == "internal_bug"
+    assert call["error"]["speech"] == RESEARCH_EMPTY_ANSWER_TR
+    # the identity it DID resolve stays on the row: the failure is about this job
+    assert call["error"]["research_job_id"] == b_task
+    assert _row_status(runtime, sid, "c-1") == "failed"
+    recorded = _recorded(client, sid, "c-1")
+    assert recorded["status"] == "failed" and recorded["error_class"] == "internal_bug"
+
+
+def test_a_research_whose_report_cannot_be_read_fails_honestly(
+    wired, two_same_title, monkeypatch
+) -> None:
+    from app.voice.realtime_sessions import tools as tools_module
+
+    client, runtime, _sideband, _artifacts = wired
+    (_a_task, _a_art), (b_task, _b_art) = two_same_title
+    monkeypatch.setattr(tools_module, "_report_for", lambda *_a, **_k: None)
+
+    sid = _create(client)
+    _say(client, sid, "Bunu anlat.")
+    call = _tool(client, sid, "c-1", "research.explain", {})
+
+    assert call["status"] == "failed", call
+    assert call["error"]["error_class"] == "empty_result"
+    assert call["error"]["speech"] == RESEARCH_NO_REPORT_TR
+    assert call["error"]["research_job_id"] == b_task
+    assert _row_status(runtime, sid, "c-1") == "failed"
+
+
+def test_activity_explain_on_a_research_turn_answers_from_the_report_bound_by_the_turn(
+    wired, two_same_title
+) -> None:
+    """The production failure, step 1 (call_JqB2Z11ZHF0oRnIb).
+
+    The owner said "Bunu teknik anlat."; the model called activity.explain with a
+    paraphrase that says "bir önceki". The TURN binds: the current focus, the report's own
+    diagnostics, no ledger narration, no narration session left behind.
+    """
+    client, runtime, _sideband, _artifacts = wired
+    (_a_task, _a_art), (b_task, b_art) = two_same_title
+
+    sid = _create(client)
+    _say(client, sid, "Bunu teknik anlat.")
+    call = _tool(
+        client,
+        sid,
+        "c-1",
+        "activity.explain",
+        {"question": "Bir önceki araştırmayı teknik anlat", "level": "technical"},
+    )
+
+    assert call["status"] == "succeeded", call
+    answer = call["result"]
+    assert answer["research_job_id"] == b_task
+    assert answer["research_artifact_id"] == b_art
+    assert answer["resolution_reason"] == "current_focus"
+    assert answer["routed"] == "research_report"
+    assert answer["answered_by"] == "research.explain"
+    assert answer["level"] == "technical"
+    assert answer["speech"].startswith("Bu araştırmada"), answer["speech"]
+    assert "aday keşfedildi" in answer["speech"]
+    assert "Research policy" not in answer["speech"]
+    assert answer["narration_session_id"] is None
+    assert "cognition" not in answer and answer.get("subsystem") != "ledger"
+    with runtime.session() as db:
+        assert db.get(RealtimeSessionRow, uuid.UUID(sid)).narration_session_id is None
+    # "bunu" is the current one: the focus did not move
+    assert client.get("/v1/research/focus").json()["current"]["research_job_id"] == b_task
+
+    recorded = _recorded(client, sid, "c-1")
+    assert recorded["status"] == "succeeded"
+    assert recorded["research_job_id"] == b_task
+    assert recorded["answered_by"] == "research.explain"
+    assert recorded["routed"] == "research_report"
+
+
+def test_one_turn_one_answer_whichever_tool_the_model_chose(wired, two_same_title) -> None:
+    client, _runtime, _sideband, _artifacts = wired
+    (_a_task, _a_art), (b_task, _b_art) = two_same_title
+
+    sid = _create(client)
+    _say(client, sid, "Bunu teknik anlat.")
+    direct = _tool(client, sid, "c-1", "research.explain", {"level": "technical"})["result"]
+    via_activity = _tool(
+        client, sid, "c-2", "activity.explain", {"question": "Teknik anlat."}
+    )["result"]
+
+    assert direct["research_job_id"] == b_task
+    assert via_activity["research_job_id"] == b_task
+    assert direct["speech"] == via_activity["speech"]
+    assert direct["level"] == via_activity["level"] == "technical"
+
+
+def test_the_previous_research_after_a_technical_answer_is_an_answer_not_a_cursor_move(
+    wired, two_same_title
+) -> None:
+    """The production failure, step 2 (call_1U5XeuPor2pqnVXI: routed=narration, jump_level,
+    the SAME job again). "Bir önceki araştırmayı anlat." is resolved afresh."""
+    client, _runtime, _sideband, _artifacts = wired
+    (a_task, a_art), (b_task, _b_art) = two_same_title
+
+    sid = _create(client)
+    _say(client, sid, "Bunu teknik anlat.")
+    first = _tool(
+        client,
+        sid,
+        "c-1",
+        "activity.explain",
+        {"question": "Bunu teknik anlat.", "level": "technical"},
+    )["result"]
+    assert first["research_job_id"] == b_task
+
+    _say(client, sid, "Bir önceki araştırmayı anlat.", turn=2, t_ms=30000)
+    call = _tool(
+        client, sid, "c-2", "activity.explain", {"question": "Bir önceki araştırmayı anlat."}
+    )
+
+    assert call["status"] == "succeeded", call
+    second = call["result"]
+    assert second["research_job_id"] == a_task
+    assert second["research_artifact_id"] == a_art
+    assert second["resolution_reason"] == "previous_focus"
+    assert second["routed"] == "research_report"
+    assert second.get("action") is None
+    assert second["level"] == "executive"
+    assert second["speech"].startswith("Bu araştırmada"), second["speech"]
+    assert client.get("/v1/research/focus").json()["current"]["research_job_id"] == a_task
+
+
+def test_a_question_about_the_system_itself_still_goes_to_the_ledger(
+    wired, two_same_title
+) -> None:
+    """"Son yaptıklarını anlat." carries a 'son' reference and content words; neither makes
+    it a research turn. The ledger answers, exactly as before."""
+    client, _runtime, _sideband, _artifacts = wired
+
+    sid = _create(client)
+    _say(client, sid, "Son yaptıklarını anlat.")
+    call = _tool(client, sid, "c-1", "activity.explain", {"question": "Son yaptıklarını anlat."})
+
+    assert call["status"] == "succeeded", call
+    answer = call["result"]
+    assert answer.get("routed") != "research_report"
+    assert "answered_by" not in answer
+    assert answer["speech"]
+    assert answer["narration_session_id"] is not None

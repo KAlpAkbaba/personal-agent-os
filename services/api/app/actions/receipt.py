@@ -132,7 +132,21 @@ TERMINAL_CLAIMABLE: Final[frozenset[str]] = frozenset({TERMINAL_VERIFIED, TERMIN
 #: research exists at all, where the answer is one question rather than a crawl. A
 #: deployed v7 has no focus, no resolver and no such tools: it binds a follow-up to
 #: whatever ran most recently and asks an unanswerable clarification when it cannot.
-ACTION_CONTRACT_VERSION: Final = 8
+#: v9 (2026-09-07, M18.2 final narrow defect, ADR-0077): a tool result is a CONTRACT, not
+#: a dict that happened to come back. A research-bound result (`research.explain`,
+#: `research.sources`, `research.finding_detail`, and `activity.explain` on a turn the
+#: canonical router recorded as being about a finished research) ends in exactly one of
+#: three terminal statuses: `succeeded` ONLY with `research_job_id`,
+#: `research_artifact_id` and a non-empty `speech`; `needs_clarification` (a new tool
+#: status, migration 0023) with the one question to ask and no target; `failed` with
+#: `error_class` and a truthful sentence. The relay enforces it: an "ok" with no target
+#: or no words is recorded as failed (internal_bug), never as succeeded. `activity.explain`
+#: on a research-bound turn answers from THAT research's report, bound by the turn's own
+#: reference (never the model's paraphrase), attaches no narration session and names
+#: `answered_by: research.explain` - one authoritative answer per turn whichever tool the
+#: model chose. A deployed v8 records a clarification as a succeeded call with no target
+#: and lets `activity.explain` narrate the ledger's telemetry instead of the report.
+ACTION_CONTRACT_VERSION: Final = 9
 
 FAKE_COMPLETION_PHRASES: Final[tuple[str, ...]] = (
     "yapmış gibi düşün",

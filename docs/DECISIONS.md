@@ -5923,3 +5923,122 @@ finished run, so "biraz daha araştır" is still honestly a NEW crawl; and any
 disambiguation by ARTIFACT — the focus names an artifact but the owner cannot yet say
 "the report you saved", because nothing in the voice vocabulary distinguishes a research
 from its report.
+
+## ADR-0077 — A tool result is a contract: no empty success, and one authoritative answer per research turn (2026-09-07)
+
+Status: Accepted
+
+Context: the owner's fourth M18.2 record, 2026-09-06 22:11Z–22:20Z (production, contract
+v8; sessions c3d88970 and 96f06af4). Crawling, titles and the focus are PROVEN by that
+record and were not the defect. What the durable rows show, call by call:
+
+1. `research.explain` at 22:12:09 was recorded **`succeeded`** with no `research_job_id`
+   and, for a result, the clarification "Aynı konuda iki araştırmanız var: bugün 00:10'daki
+   mı, yoksa dün 23:19'daki mı?" — a question stored as a success. A harness that counts a
+   bound succeeded call as an answer cannot tell that row from one; neither could the
+   owner, who heard the question and then nothing that was about a research.
+2. "Bunu teknik anlat." (the ONE router: `research_technical_explanation`, reference
+   `current`) went to **`activity.explain`**, which (a) resolved the MODEL's paraphrase of
+   the question instead of the turn — `previous_focus` for "bunu", at 22:19:28 —
+   (b) answered with the LEDGER's technical narration ("Sürümler. Research policy v5
+   çalıştı. Kanıt. …", `subsystem: ledger`) rather than the report's own diagnostics, and
+   (c) attached a narration session to the voice session.
+3. "Bir önceki araştırmayı anlat." twenty-eight seconds later was routed to `narration` as
+   a `jump_level` inside that narration — the SAME job again, no reference resolved — so
+   the previous research was never reached. Two tools, two different answers about "the
+   research", and the second one about nothing in particular.
+
+The owner's directive, in its own terms: a successful terminal result must contain an
+explicit structured result; never emit `succeeded` with no identifiable target and no
+owner-facing result; the target id is part of the event contract; the tool result must be
+delivered to voice; `activity.explain` and `research.explain` must not both answer — there
+is ONE authoritative owner-facing answer for a turn; test the exact contracts under the
+canonical router; fix the harness only after the product contract is explicit.
+
+Decisions:
+
+1. **The relay decides the tool status from the result, by contract.**
+   `handle_tool_call` no longer records every returned dict as `succeeded`.
+   `tools.terminal_status_for(name, result)` reads a RESEARCH-BOUND result — the three
+   follow-up tools by name, and any result whose `routed` is `research_report` or
+   `research_reference` — and returns the status it earns: `ok` with a `research_job_id`
+   AND a non-empty `speech` → `succeeded`; `needs_clarification` with a question and no
+   target → `needs_clarification`; `no_report` → `failed` / `empty_result`; anything else
+   → `failed` / `internal_bug`. A failed row keeps the identity the handler did resolve and
+   always carries a truthful sentence (`failed_result_payload`): the handler's own for an
+   empty result, otherwise "Bu araştırma için anlatabileceğim bir sonuç bulamadım efendim."
+   — never the words of an answer that had no target. Results that are not research-bound
+   are untouched: an action's refused or failed RECEIPT is a successful report of what
+   happened (docs/M18_ACTION_CONTRACT.md §5.5), and `research.start`'s guard refusal stays
+   the succeeded call ADR-0075 made it.
+2. **`needs_clarification` is a tool status of its own.** `realtime_tool_calls.status`
+   gains the word (migration `0023_tool_call_clarification`: the column widened from 16 to
+   32 characters, the CHECK constraint re-stated; downgrade relabels such rows `failed`).
+   The row payload carries `result` for it exactly as for a success — the one question, as
+   `speech` — and `session_activity` projects the status verbatim, so a qualification
+   harness that filters `succeeded` never again mistakes a question for an answer.
+3. **A research-bound `succeeded` always names its target and speaks.** This is the
+   contract's own assertion, in the relay rather than in the handler's good manners: an
+   `ok` with no `research_job_id` or with empty `speech` is recorded `failed`
+   (`internal_bug`) and spoken as an honest empty answer. A test pins it by patching the
+   sentence builder to return nothing.
+4. **`activity.explain` on a research turn IS the research answer.** Whether a turn is
+   about a finished research is decided from the ONE router's record of the owner's own
+   words (`last_utterance`: the research SHAPE first; a ledger question kind is the
+   ledger's; otherwise only a pointer an owner uses for one run — "bunu", "bir önceki",
+   "ikinci" — and never the topic kind, which any sentence with content words gets, nor
+   "son", which "son yaptıklarını anlat" carries too), never from the model's `question`,
+   which is a paraphrase and is consulted for identity only when no turn record exists at
+   all. On such a turn the tool hands over to the research answer path: the same resolver,
+   the same report row, the same sentences (`app.research.answers`), `routed:
+   research_report`, `answered_by: research.explain`, `provenance` with the job, the
+   artifact and the report's own numbers; the level from the turn's shape ("teknik anlat"
+   is technical whatever the model passed), then the model's explicit `level`, then the
+   intent. No briefing artifact and no narration session are created, so the NEXT research
+   turn is resolved afresh instead of becoming a cursor move. The ledger paths — the last
+   activity, failures, evidence, goals, the eye and world state, authority questions — are
+   unchanged, and a technical question with NO completed research is still the last
+   activity's technical account (ADR-0075).
+5. **The client hands a clarification to the model as the result it is.** `apps/web`
+   submits the `result` of a `needs_clarification` response as the function output (the
+   question, with its status inside), never wrapped as a failure — which would have the
+   model apologise instead of asking. `ToolCallStatus` names the fourth word.
+6. **The persona names one tool for research follow-ups.** `RESEARCH_RESULT_TR` and
+   `RESEARCH_FOLLOWUP_TR` no longer send "teknik anlat" to `activity.explain`; they name the
+   `research.*` family and say that `activity.explain` gives the same answer on a research
+   question. Cheap, and no longer load-bearing: correctness does not rest on the model's
+   choice of tool, which is the point of decision 4.
+7. **Contract v9.** `ACTION_CONTRACT_VERSION` 8 → 9; the owner harness releases the Cloud
+   Core once, before the check, when the deployed contract is older.
+
+Rejected:
+
+- **Mapping every `status: failed` / `refused` dict to a failed tool call.** An eye action
+  that could not verify its read-back is a `succeeded` call carrying a receipt that says
+  so (§5.5); a refused crawl is a succeeded call that says nothing was started. The
+  contract here is scoped to research-bound results on purpose.
+- **Resolving the model's `question` when a turn record exists.** The paraphrase is what
+  bound "bunu" to the previous research. It is used only when the client reported no
+  utterance at all (a CLI relay), and then it is all there is.
+- **Keeping the narration route for research turns.** "Teknik anlat" as a cursor jump
+  inside an earlier briefing is exactly what swallowed "bir önceki araştırmayı anlat".
+  A briefing about the ledger still gets its cursor moves; a research turn does not.
+- **Fixing the harness first.** The harness is extended only after the contract exists:
+  the clarification head it looks for now includes ADR-0076's wording, and one new row
+  (`followup.no_empty_success`) asserts that no research-bound call is recorded succeeded
+  without a job and words and that no clarification is recorded as succeeded.
+
+Consequences: `services/api` gains `terminal_status_for` / `failed_result_payload` /
+`result_is_research_bound` and the research-turn predicate in
+`app/voice/realtime_sessions/tools.py`, `TOOL_STATUS_NEEDS_CLARIFICATION`, migration
+`0023_tool_call_clarification` (the single head), `VoiceErrorClass.EMPTY_RESULT`, the
+`answered_by` field on the session record and a `provenance` block on every research
+answer; `apps/web` accepts the fourth status; the persona is harmonised; nine contract
+tests in `test_research_focus.py` run the owner's exact sequence under the canonical
+router (the clarification status, the bound success, the empty-success refusal, the
+unreadable report, the paraphrase that says "bir önceki" against a turn that says "bunu",
+one answer from either tool, the previous research as an answer rather than a cursor
+move, a ledger question left to the ledger, the record's projection). What this ADR does
+NOT change: which research the resolver picks (ADR-0076), the guard against a second crawl
+(ADR-0075), the research result itself (ADR-0074), or the statuses of any tool outside
+the research family.

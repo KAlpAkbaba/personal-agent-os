@@ -10,12 +10,18 @@ uniqueness enforced by PostgreSQL) and real ``owner_sessions`` rows.
 
 from __future__ import annotations
 
+import base64
 import uuid
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from fastapi.testclient import TestClient
 from sqlalchemy import select, text
 
+from app.broker import service as broker_service
+from app.broker.runtime import DeviceConnection
 from app.config import Settings
 from app.db import build_engine
 from app.voice.realtime_sessions.models import RealtimeSessionRow, RealtimeToolCall
@@ -32,6 +38,13 @@ def settings() -> Settings:
 @pytest.fixture()
 def client(settings: Settings) -> TestClient:
     return owner_client(settings)
+
+
+def _spki() -> str:
+    key = ec.generate_private_key(ec.SECP256R1())
+    return base64.b64encode(
+        key.public_key().public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
+    ).decode("ascii")
 
 
 def test_schema_has_the_m12_tables(settings: Settings) -> None:
@@ -63,11 +76,35 @@ def test_session_lifecycle_on_postgres(settings: Settings, client: TestClient) -
     second = client.post(f"/v1/voice/realtime/sessions/{sid}/tool-calls", json=body).json()
     assert first["status"] == "succeeded" and second["replayed"] is True
 
-    # long-running tool + completion
-    running = client.post(f"/v1/voice/realtime/sessions/{sid}/tool-calls", json={
-        "call_id": "pg_call_2", "name": "research.start", "arguments": {"topic": "Hetzner"},
-    }).json()
-    assert running["status"] == "running" and running["preamble"]
+    # long-running tool + completion. research.start runs the REAL device selection
+    # (ADR-0067 amendment): with no online browser.chrome device it is a truthful,
+    # immediate failure, so this test - which is about the relay's long-running path on
+    # the real schema - enrolls one, marks it online in the broker runtime, and patches
+    # the Temporal client the way the unit suite does. Nothing is started on the stack.
+    broker = client.app.state.broker
+    with broker.session() as db:
+        device = broker_service.enroll_device(
+            db,
+            name=f"integration-research-{uuid.uuid4().hex[:8]}",
+            platform="windows",
+            public_key_spki_b64=_spki(),
+            capabilities=["browser.chrome"],
+            trace_id=None,
+        )
+    broker.connections[device.id] = DeviceConnection(
+        device_id=device.id, session_id=uuid.uuid4(), websocket=object()
+    )
+    fake_temporal = AsyncMock()
+    fake_temporal.start_workflow = AsyncMock(return_value=None)
+    try:
+        with patch("app.research.service.Client.connect", AsyncMock(return_value=fake_temporal)):
+            running = client.post(f"/v1/voice/realtime/sessions/{sid}/tool-calls", json={
+                "call_id": "pg_call_2", "name": "research.start",
+                "arguments": {"topic": "Hetzner"},
+            }).json()
+    finally:
+        broker.connections.pop(device.id, None)
+    assert running["status"] == "running" and running["preamble"], running
     done = client.post(f"/v1/voice/realtime/sessions/{sid}/tool-calls/pg_call_2/complete",
                        json={"result": {"summary": "tamam"}})
     assert done.status_code == 200 and done.json()["status"] == "succeeded"

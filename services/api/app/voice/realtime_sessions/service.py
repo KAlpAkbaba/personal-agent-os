@@ -52,6 +52,7 @@ from app.voice.realtime_sessions.models import (
     REALTIME_STATE_CREATED,
     REALTIME_STATE_EXPIRED,
     TOOL_STATUS_FAILED,
+    TOOL_STATUS_NEEDS_CLARIFICATION,
     TOOL_STATUS_RUNNING,
     TOOL_STATUS_SUCCEEDED,
     RealtimeSessionRow,
@@ -68,7 +69,9 @@ from app.voice.realtime_sessions.sideband import (
 from app.voice.realtime_sessions.tools import (
     ToolContext,
     ToolRegistry,
+    failed_result_payload,
     research_followup_refusal,
+    terminal_status_for,
 )
 
 logger = get_logger("app.voice.realtime_sessions.service")
@@ -562,7 +565,10 @@ def _tool_row_payload(
         "long_running": call.long_running,
         "replayed": replayed,
     }
-    if call.status == TOOL_STATUS_SUCCEEDED:
+    # ADR-0077: a clarification carries its result (the one question, as ``speech``)
+    # exactly the way a success carries its answer; the client hands it to the model
+    # as-is, and the status says what it is.
+    if call.status in (TOOL_STATUS_SUCCEEDED, TOOL_STATUS_NEEDS_CLARIFICATION):
         out["result"] = call.result_json
     elif call.status == TOOL_STATUS_FAILED:
         out["error"] = {"error_class": call.error_class, **(call.result_json or {})}
@@ -735,8 +741,19 @@ def handle_tool_call(
                 if plan.get("plan_id"):
                     row.plan_id = uuid.UUID(str(plan["plan_id"]))
             else:
-                call.status = TOOL_STATUS_SUCCEEDED
-                call.result_json = result
+                # docs/DECISIONS.md ADR-0077: the status a result EARNS, never the
+                # status a returned dict was assumed to have. A research-bound result
+                # is succeeded only with a target and words, needs_clarification with
+                # a question, failed otherwise - and the failed row keeps the identity
+                # the handler did resolve plus a truthful sentence.
+                status, error_class = terminal_status_for(name, result)
+                call.status = status
+                call.error_class = error_class
+                call.result_json = (
+                    failed_result_payload(result, error_class)
+                    if status == TOOL_STATUS_FAILED and error_class
+                    else result
+                )
                 call.completed_at = utcnow()
     duration_ms = int((utcnow() - started).total_seconds() * 1000)
     for event, payload in tool_ctx.pushes:
@@ -1690,6 +1707,9 @@ def session_activity(db: Session, row: RealtimeSessionRow) -> dict[str, Any]:
                 "action_trace": _bounded_trace(_result_field(result, "action_trace")),
                 "observed_at": _result_field(result, "observed_at"),
                 "routed": _result_field(result, "routed"),
+                # ADR-0077: which tool's answer path served a research turn, so the
+                # record says an activity.explain answered as research.explain would.
+                "answered_by": _result_field(result, "answered_by"),
                 "entity_ids": _result_field(result, "cognition", "entity_ids"),
                 "evidence_kinds": _result_field(result, "cognition", "evidence_kinds"),
                 "action": _result_field(result, "narration", "action"),

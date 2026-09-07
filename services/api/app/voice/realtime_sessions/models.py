@@ -38,7 +38,18 @@ REALTIME_STATES = (
 TOOL_STATUS_RUNNING = "running"
 TOOL_STATUS_SUCCEEDED = "succeeded"
 TOOL_STATUS_FAILED = "failed"
-TOOL_STATUSES = (TOOL_STATUS_RUNNING, TOOL_STATUS_SUCCEEDED, TOOL_STATUS_FAILED)
+#: docs/DECISIONS.md ADR-0077: a research follow-up whose target could not be resolved
+#: from the turn ends as a QUESTION, in its own word. A ``succeeded`` row can therefore
+#: never carry no target and no owner-facing result; ``result_json["speech"]`` of a row
+#: in this status is the one question the owner is asked. Migration 0023 widened the
+#: column and re-stated the CHECK constraint for it.
+TOOL_STATUS_NEEDS_CLARIFICATION = "needs_clarification"
+TOOL_STATUSES = (
+    TOOL_STATUS_RUNNING,
+    TOOL_STATUS_SUCCEEDED,
+    TOOL_STATUS_FAILED,
+    TOOL_STATUS_NEEDS_CLARIFICATION,
+)
 
 
 class RealtimeSessionRow(Base):
@@ -90,7 +101,7 @@ class RealtimeToolCall(Base):
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     arguments_json: Mapped[dict[str, Any]] = mapped_column(JSONColumn, nullable=False, default=dict)
     status: Mapped[str] = mapped_column(
-        String(16), nullable=False, default=TOOL_STATUS_RUNNING, index=True
+        String(32), nullable=False, default=TOOL_STATUS_RUNNING, index=True
     )
     result_json: Mapped[dict[str, Any] | None] = mapped_column(JSONColumn, nullable=True)
     error_class: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -109,6 +120,7 @@ __all__ = [
     "REALTIME_STATE_EXPIRED",
     "TOOL_STATUSES",
     "TOOL_STATUS_FAILED",
+    "TOOL_STATUS_NEEDS_CLARIFICATION",
     "TOOL_STATUS_RUNNING",
     "TOOL_STATUS_SUCCEEDED",
     "RealtimeSessionRow",

@@ -96,7 +96,20 @@ and optionally a short research. Scale, depth, colour and motion are yours to ju
 script records only that the Core really listened and really spoke, and finishes by itself.
 Tell me what you would change — the reference you mentioned is welcome as inspiration.
 
-### 23b. Point at one research, then two sentences — **M18.2 follow-up, READY (the research focus, ADR-0076, is on main; the command releases the Cloud Core once, before the check)**
+### 23b. Point at one research, then two sentences — **M18.2 follow-up, READY (the research focus, ADR-0076, and the result contract, ADR-0077, are on main; the command releases the Cloud Core once, before the check)**
+
+**Updated 2026-09-07 after your fourth run.** Your record proved the crawling, the titles
+and the focus; the defect was narrower and it is fixed at its mechanism (ADR-0077). What
+the rows showed: `research.explain` had recorded a clarification as a *succeeded* call
+with no research behind it; "Bunu teknik anlat." was answered by `activity.explain`,
+which read the model's paraphrase ("bir önceki") instead of your words, narrated the
+ledger's telemetry instead of the report, and left a narration open — so "Bir önceki
+araştırmayı anlat." became a cursor jump inside it and never reached the previous
+research. Now a tool result is a contract: a clarification is its own status (never a
+success), a succeeded research answer always names its job and speaks, and on a research
+turn both tools give the one answer `research.explain` gives — from that report, bound by
+what you said, no narration left behind. The command below is unchanged; it releases the
+Cloud Core once (contract v9) before you speak.
 
 **Updated 2026-09-07 after your third run.** The record shows what you heard: on the
 earlier contract "Teknik anlat." started a research and explained that one; on the guarded

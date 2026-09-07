@@ -30,11 +30,16 @@ from app.narration.engine import PARAGRAPH_LIST
 from app.state.now import SCOPES
 from app.voice.errors import VoiceError, VoiceErrorClass
 from app.voice.intents import (
+    RESEARCH_CLASS_TECHNICAL_EXPLANATION,
     RESEARCH_CLASSES_BOUND_TO_A_RUN,
     RESEARCH_CLASSES_MAY_CRAWL,
+    RESEARCH_REFERENCE_CURRENT,
+    RESEARCH_REFERENCE_ORDINAL,
+    RESEARCH_REFERENCE_PREVIOUS,
     Intent,
     ResearchReference,
     apply_to_narration,
+    classify_research_shape,
     resolve_intent,
     speech_budget,
     speech_from,
@@ -481,19 +486,158 @@ RESEARCH_NO_REPORT_TR = (
 )
 
 
+#: The research follow-up family (ADR-0076). Every result of theirs is research-bound, so
+#: the result contract below (ADR-0077) applies to each of them by name.
+RESEARCH_EXPLAIN_TOOL_NAME = "research.explain"
+RESEARCH_FOLLOWUP_TOOLS: frozenset[str] = frozenset(
+    {RESEARCH_EXPLAIN_TOOL_NAME, "research.sources", "research.finding_detail"}
+)
+#: ``routed`` of an answer read from a research's own report, and of a question asked
+#: because no research could be resolved. Either marks a result as research-bound, which
+#: is how an ``activity.explain`` answer on a research turn falls under the same contract.
+ROUTED_RESEARCH_REPORT = "research_report"
+ROUTED_RESEARCH_REFERENCE = "research_reference"
+#: Result statuses of a research-bound handler (ADR-0077). ``ok`` is the only one the
+#: relay records as a SUCCEEDED tool call - and only with a target and words.
+RESULT_OK = "ok"
+RESULT_NEEDS_CLARIFICATION = "needs_clarification"
+RESULT_NO_REPORT = "no_report"
+#: What the owner hears when a research-bound tool produced nothing it could stand
+#: behind: an answer with no target, or words that never came. Truthful, and never the
+#: words of an answer that was about nothing.
+RESEARCH_EMPTY_ANSWER_TR = "Bu araştırma için anlatabileceğim bir sonuç bulamadım efendim."
+
+
+def result_is_research_bound(tool_name: str, result: Any) -> bool:
+    """Whether a handler's result falls under the research result contract (ADR-0077)."""
+    if tool_name in RESEARCH_FOLLOWUP_TOOLS:
+        return True
+    return isinstance(result, dict) and result.get("routed") in (
+        ROUTED_RESEARCH_REPORT,
+        ROUTED_RESEARCH_REFERENCE,
+    )
+
+
+def terminal_status_for(tool_name: str, result: Any) -> tuple[str, str | None]:
+    """The tool status a returned result EARNS, and the error class when it is failed.
+
+    docs/DECISIONS.md ADR-0077. A result that is not research-bound is a succeeded call,
+    as it always was: an action's refused or failed RECEIPT is a successful report of what
+    happened (docs/M18_ACTION_CONTRACT.md §5.5), and clock.now / state.now /
+    narration.control have shapes of their own. A research-bound result is read:
+
+    * ``needs_clarification`` with a question and no target -> the tool status of the
+      same name (a question is not a success, and it is not a failure either);
+    * ``no_report`` -> FAILED, ``empty_result``: the row exists and holds no report body,
+      which is honest and is spoken as such;
+    * ``ok`` with a ``research_job_id`` AND a non-empty ``speech`` -> SUCCEEDED;
+    * anything else -> FAILED, ``internal_bug``: an "ok" with no target or no words is the
+      empty success the owner's 2026-09-06 record showed (session c3d88970), and a
+      question without words is as empty. Neither can be recorded as succeeded again.
+    """
+    from app.voice.realtime_sessions.models import (
+        TOOL_STATUS_FAILED,
+        TOOL_STATUS_NEEDS_CLARIFICATION,
+        TOOL_STATUS_SUCCEEDED,
+    )
+
+    if not result_is_research_bound(tool_name, result):
+        return TOOL_STATUS_SUCCEEDED, None
+    status = str(result.get("status") or "")
+    speech = str(result.get("speech") or "").strip()
+    target = bool(result.get("research_job_id"))
+    if status == RESULT_NEEDS_CLARIFICATION:
+        if speech and not target:
+            return TOOL_STATUS_NEEDS_CLARIFICATION, None
+        return TOOL_STATUS_FAILED, VoiceErrorClass.INTERNAL_BUG.value
+    if status == RESULT_NO_REPORT:
+        return TOOL_STATUS_FAILED, VoiceErrorClass.EMPTY_RESULT.value
+    if status == RESULT_OK and target and speech:
+        return TOOL_STATUS_SUCCEEDED, None
+    return TOOL_STATUS_FAILED, VoiceErrorClass.INTERNAL_BUG.value
+
+
+def failed_result_payload(result: dict[str, Any], error_class: str) -> dict[str, Any]:
+    """The durable result of a research-bound call the contract refused to call succeeded.
+
+    Keeps the identity fields the handler did resolve (a ``no_report`` names the job it
+    could not read), states the failure, and always carries a sentence: the handler's own
+    honest one for an empty result, otherwise :data:`RESEARCH_EMPTY_ANSWER_TR` - never the
+    words of an answer that had no target.
+    """
+    speech = (
+        str(result.get("speech") or "").strip()
+        if error_class == VoiceErrorClass.EMPTY_RESULT.value
+        else ""
+    )
+    return {
+        **result,
+        "status": "failed",
+        "error_class": error_class,
+        "message": (
+            "the resolved research has no report body to read"
+            if error_class == VoiceErrorClass.EMPTY_RESULT.value
+            else "research-bound result without a target or without speech"
+        ),
+        "speech": speech or RESEARCH_EMPTY_ANSWER_TR,
+    }
+
+
+def _turn_record(ctx: ToolContext, *, ttl_s: float = RESEARCH_TURN_TTL_S) -> dict[str, Any] | None:
+    """The ONE router's record of this turn's utterance, or None when none is fresh.
+
+    ``record_client_events`` writes it from the owner's own words (ADR-0075/0076). A tool
+    call carries no utterance of its own, and the model's ``question`` argument is a
+    paraphrase - on 2026-09-06 it turned "Bunu teknik anlat." into a "bir önceki"
+    reference. Never older than one turn's worth of seconds.
+    """
+    record = dict(ctx.context.get("last_utterance") or {})
+    if not record:
+        return None
+    at = _parsed_at(record.get("at"))
+    if at is not None and (ctx.now - at).total_seconds() > ttl_s:
+        return None
+    return record
+
+
 def _turn_reference(ctx: ToolContext, *, ttl_s: float = RESEARCH_TURN_TTL_S) -> ResearchReference:
     """WHICH research the owner's latest utterance pointed at, off the session row.
 
     A tool call carries no utterance of its own (that is the point: the model does not get
     to name the research), so the turn's reference is read from the bounded projection
-    ``record_client_events`` stored — never a transcript, and never older than one turn's
+    ``record_client_events`` stored - never a transcript, and never older than one turn's
     worth of seconds.
     """
-    record = dict(ctx.context.get("last_utterance") or {})
-    at = _parsed_at(record.get("at"))
-    if at is not None and (ctx.now - at).total_seconds() > ttl_s:
-        return ResearchReference()
-    return ResearchReference.from_dict(record.get("reference"))
+    record = _turn_record(ctx, ttl_s=ttl_s)
+    return ResearchReference.from_dict((record or {}).get("reference"))
+
+
+def _turn_is_about_a_research(
+    record: dict[str, Any] | None, *, has_completed_research: bool
+) -> bool:
+    """Whether a turn is ABOUT a research that already finished (ADR-0077).
+
+    Read off the router's record, in this order: the research SHAPE decides when it can (a
+    technical explanation or a follow-up is about a run; a new research or a re-run is
+    not); a question the ledger's own table recognises (``query_kind``) is the ledger's;
+    otherwise only a pointer an owner uses for ONE run counts - "bunu", "bir önceki",
+    "ikinci" - and never the topic kind, which any sentence with content words gets, nor
+    "son", which "son yaptıklarını anlat" carries too. With no completed research there is
+    nothing to be about, and "teknik anlat" is the last activity's technical account.
+    """
+    if record is None or not has_completed_research:
+        return False
+    shape = record.get("research_shape") or record.get("research_class")
+    if shape in RESEARCH_CLASSES_BOUND_TO_A_RUN:
+        return True
+    if shape in RESEARCH_CLASSES_MAY_CRAWL or record.get("query_kind"):
+        return False
+    reference = ResearchReference.from_dict(record.get("reference"))
+    return (
+        reference.kind
+        in (RESEARCH_REFERENCE_CURRENT, RESEARCH_REFERENCE_PREVIOUS, RESEARCH_REFERENCE_ORDINAL)
+        and reference.matched != "son"
+    )
 
 
 def _resolve_research(ctx: ToolContext, *, question: str | None = None) -> Any:
@@ -536,7 +680,7 @@ def _needs_clarification(resolution: Any) -> dict[str, Any]:
     from app.research.reference import MISSING_QUESTION_TR, STATUS_AMBIGUOUS
 
     return {
-        "status": "needs_clarification",
+        "status": RESULT_NEEDS_CLARIFICATION,
         "reason": resolution.reason,
         "speech": resolution.question or MISSING_QUESTION_TR,
         "candidates": [c.as_dict() for c in resolution.candidates],
@@ -546,7 +690,7 @@ def _needs_clarification(resolution: Any) -> dict[str, Any]:
         "research_reference": resolution.reference,
         "focus_source": "",
         "ambiguous": resolution.status == STATUS_AMBIGUOUS,
-        "routed": "research_reference",
+        "routed": ROUTED_RESEARCH_REFERENCE,
     }
 
 
@@ -564,33 +708,63 @@ def _report_for(ctx: ToolContext, research_job_id: str) -> dict[str, Any] | None
     return dict(row.report_json or {}) or None
 
 
+def _research_provenance(resolution: Any, report_json: dict[str, Any] | None) -> dict[str, Any]:
+    """What the sentences rest on: the job, the artifact and the pipeline's own numbers."""
+    from app.research.result import ResearchDiagnostics
+
+    diag = ResearchDiagnostics.from_report_json(report_json or {})
+    return {
+        "research_job_id": resolution.research_job_id,
+        "research_artifact_id": resolution.artifact_id,
+        "facts": {
+            "discovered": diag.discovered_count,
+            "fetched": diag.fetched_count,
+            "rejected": diag.rejected_pages,
+            "rejected_by_reason": dict(diag.rejected_by_reason),
+        },
+    }
+
+
 def _followup(
-    ctx: ToolContext, speak: Callable[[dict[str, Any], Any], str], *, level: str | None = None
+    ctx: ToolContext,
+    speak: Callable[[dict[str, Any], Any], str],
+    *,
+    level: str | None = None,
+    resolution: Any | None = None,
 ) -> dict[str, Any]:
-    """The shape every research follow-up tool shares: resolve, read, answer."""
+    """The shape every research follow-up tool shares: resolve, read, answer.
+
+    ``resolution`` is passed by a caller that has already resolved the turn (ADR-0077:
+    ``activity.explain`` on a research turn), so an open clarification is consumed once
+    and the focus moves once. The result's ``status`` is what the relay reads to decide the
+    tool status (:func:`terminal_status_for`): ``ok`` only ever leaves here with a target
+    and, once ``speak`` has run, with words.
+    """
     if ctx.db is None:
         raise VoiceError(
             VoiceErrorClass.DEPENDENCY_UNAVAILABLE,
             "research follow-ups need the research tables; no database on this session",
         )
-    resolution = _resolve_research(ctx)
+    if resolution is None:
+        resolution = _resolve_research(ctx)
     if not resolution.resolved or not resolution.research_job_id:
         return _needs_clarification(resolution)
     report_json = _report_for(ctx, resolution.research_job_id)
     out: dict[str, Any] = {
-        "status": "ok",
+        "status": RESULT_OK,
         "research_job_id": resolution.research_job_id,
         "research_artifact_id": resolution.artifact_id,
         "resolution_reason": resolution.reason,
         "research_reference": resolution.reference,
         "focus_source": resolution.focus_source,
         "topic": resolution.entry.topic if resolution.entry is not None else "",
-        "routed": "research_report",
+        "routed": ROUTED_RESEARCH_REPORT,
+        "provenance": _research_provenance(resolution, report_json),
     }
     if level is not None:
         out["level"] = level
     if report_json is None:
-        return {**out, "status": "no_report", "speech": RESEARCH_NO_REPORT_TR}
+        return {**out, "status": RESULT_NO_REPORT, "speech": RESEARCH_NO_REPORT_TR}
     out["speech"] = speak(report_json, resolution)
     return out
 
@@ -840,10 +1014,104 @@ def _ledger_note(
         logger.warning("voice_ledger_note_failed", event_type=event_type)
 
 
+def _research_level(*, shape: str | None, intent: str, explicit: str | None) -> str:
+    """The presentation level of a research answer on this turn (ADR-0077).
+
+    The turn's shape wins ("teknik anlat" is technical whatever the model passed); then the
+    model's explicit ``level`` (a presentation choice, which is allowed); then the intent's
+    own word; executive otherwise.
+    """
+    from app.research.answers import LEVEL_DETAIL, LEVEL_EXECUTIVE, LEVEL_FULL, LEVEL_TECHNICAL
+
+    if shape == RESEARCH_CLASS_TECHNICAL_EXPLANATION:
+        return LEVEL_TECHNICAL
+    by_argument = {
+        "executive": LEVEL_EXECUTIVE,
+        "detailed": LEVEL_DETAIL,
+        "detail": LEVEL_DETAIL,
+        "technical": LEVEL_TECHNICAL,
+        "full": LEVEL_FULL,
+    }
+    if explicit in by_argument:
+        return by_argument[explicit]
+    return {
+        Intent.TECHNICAL.value: LEVEL_TECHNICAL,
+        Intent.DETAIL.value: LEVEL_DETAIL,
+        Intent.FULL.value: LEVEL_FULL,
+    }.get(intent, LEVEL_EXECUTIVE)
+
+
+def _research_answer_for_turn(
+    ctx: ToolContext,
+    *,
+    source: dict[str, Any],
+    from_turn: bool,
+    question: str,
+    resolved: Any,
+    level: str | None,
+) -> dict[str, Any]:
+    """ONE authoritative answer about the research the turn points at (ADR-0077).
+
+    The same resolver, the same report row and the same sentences ``research.explain``
+    speaks, so the owner hears one answer whichever tool the model chose. The turn's own
+    reference binds it - the model's ``question`` is a paraphrase and is consulted for
+    identity only when no turn record exists at all. No briefing artifact and no narration
+    session are created: the NEXT research turn is resolved afresh instead of becoming a
+    cursor move inside an older briefing, which is what swallowed "bir önceki
+    araştırmayı anlat" on 2026-09-06 (session 96f06af4).
+    """
+    from app.research.answers import LEVEL_EXECUTIVE, sources_speech, speech_for_level
+
+    ctx.context["last_intent"] = resolved.intent.value
+    resolution = _resolve_research(ctx) if from_turn else _resolve_research(ctx, question=question)
+    if not resolution.resolved or not resolution.research_job_id:
+        # Nothing points at a run, or two do: ONE short question, no guess, and
+        # emphatically no crawl. The relay records it in its own status.
+        return {
+            **_needs_clarification(resolution),
+            "intent": resolved.to_dict(),
+            "level": LEVEL_EXECUTIVE,
+            "narration_session_id": None,
+            "answered_by": RESEARCH_EXPLAIN_TOOL_NAME,
+        }
+    answer_level = _research_level(
+        shape=source.get("research_shape") or source.get("research_class"),
+        intent=str(source.get("intent") or resolved.intent.value),
+        explicit=level,
+    )
+    wants_sources = "kaynak" in question.casefold()
+
+    def speak(report: dict[str, Any], res: Any) -> str:
+        if wants_sources:
+            return sources_speech(report)
+        return speech_for_level(
+            report,
+            level=answer_level,
+            topic=res.entry.topic if res.entry is not None else "",
+        )
+
+    out = _followup(ctx, speak, level=answer_level, resolution=resolution)
+    return {
+        **out,
+        "intent": resolved.to_dict(),
+        "narration_session_id": None,
+        "answered_by": RESEARCH_EXPLAIN_TOOL_NAME,
+        "research_binding": resolution.as_dict(),
+    }
+
+
 def activity_explain(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
     """'Son yaptıklarını anlat': evidence first, then a briefing the provider reads
     verbatim (``speech``), with a narration session attached so dur / devam / ikinci
-    madde / teknik anlat move through the same durable cursor (M16 spec §3.1)."""
+    madde / teknik anlat move through the same durable cursor (M16 spec §3.1).
+
+    docs/DECISIONS.md ADR-0077: on a turn the ONE router recorded as being ABOUT a
+    research that already finished, this tool is not the ledger's to answer. It hands the
+    turn to the research answer path - the same resolver, the same report, the same
+    sentence ``research.explain`` would speak - so whichever tool the model chose, the
+    owner hears one answer bound to one job, and no narration session is left behind to
+    swallow the next research turn as a cursor move.
+    """
     question = _require_str(arguments, "question", max_len=500)
     level = arguments.get("level")
     if level is not None and level not in ("executive", "detailed", "technical", "full"):
@@ -861,20 +1129,49 @@ def activity_explain(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, A
     from app.explain.service import explain_to_briefing
     from app.voice.realtime_sessions.models import RealtimeSessionRow
 
-    # "Teknik anlat" / "detaylandır" / "özetle" / "hepsini oku" with a briefing already
-    # attached are moves through that briefing, not a new one: the provider may route them
-    # here, so they are honoured the same way narration.control does, and the durable
-    # record carries the normalised intent rather than the wording.
-    #
     # ADR-0075: the router also decides, from the SAME utterance, whether this is a
     # question about a research that has already finished. That is what binds the answer
     # to a job instead of leaving it to whatever is latest - and what the guard in
     # ``service.handle_tool_call`` reads to refuse a second crawl on this turn.
+    completed_research = has_completed_research(ctx.db, now=ctx.now)
     resolved = resolve_intent(
         question,
         session_state=ctx.fsm_state,
-        has_completed_research=has_completed_research(ctx.db, now=ctx.now),
+        has_completed_research=completed_research,
     )
+
+    # ADR-0077: the TURN decides whether this is about a research, and the turn is what
+    # the ONE router recorded from the owner's own words - never the model's paraphrase
+    # in ``question``. Only with no fresh record (a client that reports no utterances)
+    # does the question's own classification stand in for it.
+    turn = _turn_record(ctx)
+    if turn is None:
+        source: dict[str, Any] = {
+            "research_shape": classify_research_shape(
+                resolved.tokens, query_kind=resolved.query_kind
+            ),
+            "query_kind": resolved.query_kind,
+            "reference": (
+                resolved.reference.as_dict() if resolved.reference is not None else None
+            ),
+            "intent": resolved.intent.value,
+        }
+    else:
+        source = turn
+    if _turn_is_about_a_research(source, has_completed_research=completed_research):
+        return _research_answer_for_turn(
+            ctx,
+            source=source,
+            from_turn=turn is not None,
+            question=question,
+            resolved=resolved,
+            level=level,
+        )
+
+    # "Teknik anlat" / "detaylandır" / "özetle" / "hepsini oku" with a briefing already
+    # attached are moves through that briefing, not a new one: the provider may route them
+    # here, so they are honoured the same way narration.control does, and the durable
+    # record carries the normalised intent rather than the wording.
     briefing_ctx = dict(ctx.context.get("briefing") or {})
     if ctx.context.get("narration_session_id") and resolved.intent in (
         Intent.DETAIL,
@@ -887,30 +1184,11 @@ def activity_explain(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, A
             **moved,
             "level": _level_for(ctx.context.get("presentation")),
             "routed": "narration",
-            # The briefing being moved through is already bound to a run; say which,
-            # so every answer about a research carries the same identity.
+            # The briefing being moved through may be bound to a run; say which, so
+            # every answer about a research carries the same identity.
             "research_job_id": briefing_ctx.get("research_job_id"),
             "research_artifact_id": briefing_ctx.get("research_artifact_id"),
         }
-
-    # ADR-0076: the SAME resolver the three research follow-up tools use, so this path
-    # binds identically. ADR-0075 bound "the research this session started, else the
-    # plan's, else whatever ran most recently" - three rules that all die with the
-    # session or guess by timing. The focus outlives both.
-    resolution = None
-    if resolved.research_class in RESEARCH_CLASSES_BOUND_TO_A_RUN:
-        resolution = _resolve_research(ctx, question=question)
-        if not resolution.resolved:
-            # Nothing points at a run, or two do: ONE short question, no guess, and
-            # emphatically no crawl. Recorded on the tool call like any other answer.
-            ctx.context["last_intent"] = resolved.intent.value
-            return {
-                **_needs_clarification(resolution),
-                "intent": resolved.to_dict(),
-                "level": "executive",
-                "narration_session_id": None,
-                "routed": "research_context",
-            }
 
     # CURRENT STATE is not the ledger's to answer (docs/M18_ACTION_CONTRACT.md §3): a
     # world_state / eye_state question goes to the same live composer state.now uses, so
@@ -944,7 +1222,6 @@ def activity_explain(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, A
         level=level,
         now=ctx.now,
         device_id=ctx.device_id,
-        research_job_id=resolution.research_job_id if resolution is not None else None,
     )
     row = ctx.db.get(RealtimeSessionRow, ctx.session_id)
     if row is not None and record.narration_session_id is not None:
@@ -980,15 +1257,7 @@ def activity_explain(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, A
         },
     )
     _explained_note(ctx, record)
-    out: dict[str, Any] = {**record.as_dict(), "intent": resolved.to_dict()}
-    if resolution is not None:
-        # ADR-0075's key, kept; ADR-0076's fields alongside it, at the TOP level, because
-        # that is where the owner harness reads them off session_activity.
-        out["research_binding"] = resolution.as_dict()
-        out["resolution_reason"] = resolution.reason
-        out["research_reference"] = resolution.reference
-        out["focus_source"] = resolution.focus_source
-    return out
+    return {**record.as_dict(), "intent": resolved.to_dict()}
 
 
 def _level_for(presentation: Any) -> str:
@@ -1298,23 +1567,31 @@ __all__ = [
     "ERROR_RESEARCH_WORKFLOW_START_FAILED",
     "PLAN_REDIRECT_REFUSED_TR",
     "REASON_RESEARCH_FOLLOWUP_TURN",
+    "RESEARCH_EMPTY_ANSWER_TR",
+    "RESEARCH_EXPLAIN_TOOL_NAME",
     "RESEARCH_FOLLOWUP_REFUSED_TR",
+    "RESEARCH_FOLLOWUP_TOOLS",
     "RESEARCH_NO_REPORT_TR",
     "RESEARCH_PREAMBLE_TR",
     "RESEARCH_START_DB_MISSING_TR",
     "RESEARCH_START_NO_DEVICE_TR",
     "RESEARCH_START_WORKFLOW_FAILED_TR",
     "RESEARCH_TURN_TTL_S",
+    "ROUTED_RESEARCH_REFERENCE",
+    "ROUTED_RESEARCH_REPORT",
     "ToolContext",
     "ToolHandler",
     "ToolRegistry",
     "ToolSpec",
     "activity_explain",
     "default_registry",
+    "failed_result_payload",
     "plan_redirect",
     "research_explain",
     "research_finding_detail",
     "research_followup_refusal",
     "research_sources",
     "research_start",
+    "result_is_research_bound",
+    "terminal_status_for",
 ]

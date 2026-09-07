@@ -466,3 +466,39 @@ describe("the shapes", () => {
     expect(voiceReason({ utterance: "a".repeat(500) })).toHaveLength(200);
   });
 });
+
+describe("a tool result that is a QUESTION (ADR-0077)", () => {
+  it("needs_clarification reaches the provider as the result itself - the question to ask - never as a failure", async () => {
+    // The owner's 2026-09-06 record: research.explain could not resolve which research
+    // "OpenAI araştırmasını anlat" meant and returned one question. The relay must hand
+    // the model that question, and the durable status the client reports is the
+    // server's own word for it.
+    const question = {
+      status: "needs_clarification",
+      speech: "Hangi araştırmayı kastediyorsunuz efendim?",
+      research_job_id: null,
+      routed: "research_reference",
+    };
+    const t = await setup({
+      toolResponses: { "research.explain": { status: "needs_clarification", result: question } },
+    });
+    t.transport.emit({ type: "tool_call", at: 10, callId: "call-q", name: "research.explain", arguments: { level: "technical" } });
+    await tick();
+    expect(t.transport.sent).toEqual([`submit:call-q:${JSON.stringify(question)}`]);
+    expect(t.controller.getSnapshot().state).toBe("listening");
+    await t.controller.flushEvents();
+    expect(t.core.events.find((e) => e.kind === "tool_done")?.payload).toMatchObject({
+      call_id: "call-q",
+      name: "research.explain",
+      status: "needs_clarification",
+    });
+  });
+
+  it("a failed research answer (no report body, or an empty success the server refused) is still relayed as a failure with the server's sentence", async () => {
+    const error = { error_class: "empty_result", speech: "Bu araştırmanın kayıtlı bir raporu yok efendim; anlatabileceğim bir sonuç bulamadım." };
+    const t = await setup({ toolResponses: { "research.explain": { status: "failed", result: null, error } } });
+    t.transport.emit({ type: "tool_call", at: 10, callId: "call-f", name: "research.explain", arguments: {} });
+    await tick();
+    expect(t.transport.sent).toEqual([`submit:call-f:${JSON.stringify({ status: "failed", error })}`]);
+  });
+});

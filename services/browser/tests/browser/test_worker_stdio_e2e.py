@@ -90,6 +90,10 @@ async def test_worker_subprocess_full_session_lifecycle(site_url, tmp_path: Path
             "result": {
                 "session_id": "sess1",
                 "created": True,
+                # M18.3 (ADR-0073): the worker echoes the profile it opened and the
+                # session kind it was opened as; a research session is the default.
+                "profile": "isolated",
+                "session_kind": "research",
                 "channel": "chromium",
                 "browser_version": opened["result"]["browser_version"],
                 "idle_timeout_s": 600,

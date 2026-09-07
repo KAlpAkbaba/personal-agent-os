@@ -2138,9 +2138,12 @@ export class VoiceSessionController {
       turn: this.snapshot.turn,
       payload: { call_id: callId, name, status: response.status, replayed: response.replayed ? 1 : 0 },
     });
+    // ADR-0077: a clarification is handed to the model as the result it is - the
+    // question to ask, with `status: "needs_clarification"` inside it - never wrapped
+    // as a failure, which would have the model apologise instead of asking.
     this.transport?.submitToolResult(
       callId,
-      response.status === "succeeded"
+      response.status === "succeeded" || response.status === "needs_clarification"
         ? (response.result ?? {})
         : { status: "failed", error: response.error ?? {} },
     );

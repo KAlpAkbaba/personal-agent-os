@@ -35,6 +35,10 @@ class VoiceErrorClass(StrEnum):
     OPTIONAL_DEPENDENCY_MISSING = "optional_dependency_missing"
     # Anything unexpected.
     INTERNAL_BUG = "internal_bug"
+    # docs/DECISIONS.md ADR-0077: the call ran correctly and found nothing it could hand
+    # the owner (a research whose report row has no body). Not a bug and not a
+    # dependency: an honest empty result, spoken as such and never as a success.
+    EMPTY_RESULT = "empty_result"
 
 
 @dataclass(slots=True)

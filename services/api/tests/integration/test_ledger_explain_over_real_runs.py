@@ -78,9 +78,14 @@ def test_backfill_is_idempotent_and_the_briefing_matches_the_ledger(settings: Se
 
     if latest is not None and latest["event_type"] == "research.completed":
         detail = latest.get("detail_json") or {}
-        assert briefing.executive[0].label == LABEL_FACT
-        assert record.speech.startswith("Efendim, son araştırma")
-        assert "sonuç" in record.speech
+        # ADR-0067 / ADR-0074: the outcome sentence is the research RESULT - a completed
+        # run ("'<konu>' konusunda araştırmayı tamamladım"), an honestly thin one ("kısa
+        # araştırma bütçesinde ... bulgular sınırlı") or no defensible finding - never
+        # the pipeline's counts. Whichever the dev database holds, it addresses the owner
+        # and names the research.
+        assert record.speech.startswith("Efendim, "), record.speech
+        assert "araştırma" in record.speech or "bulgu" in record.speech, record.speech
+        assert briefing.executive[0].label in (LABEL_FACT, LABEL_UNCERTAINTY)
         # the numbers spoken are the numbers the ledger holds
         assert briefing.counts()["facts"] >= 3
         assert any(

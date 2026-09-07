@@ -76,6 +76,9 @@ $wordVersionTr = "s" + $u_uml + "r" + $u_uml + "m"
 $diagnosticWords = @("elendi", "eledi", "interstitial", "dedup", "aday", $wordPagesTr, "sayfa", $wordEvidenceTr, $wordVersionTr, "policy", "cooldown")
 $clarificationHead = "Efendim, iki tamamlanm"
 $askWhichHead = "Hangi ara"
+# ADR-0076 wording: "Ayni konuda iki arastirmaniz var: ... mi, yoksa ... mi?"
+$sameTopicHead = "Ayn" + $i_dot + " konuda iki ara"
+$researchTools = @("research.explain", "research.sources", "research.finding_detail")
 $explainTools = @("research.explain", "research.sources", "research.finding_detail", "activity.explain")
 $technicalKinds = @("technical", "research_problems", "rejected_pages", "research_detail")
 
@@ -216,7 +219,7 @@ function Get-ExplainCallsAfter {
 function Test-ClarificationHead {
     param([AllowNull()]$Text)
     $t = [string]$Text
-    return ($t.StartsWith($clarificationHead) -or $t.StartsWith($askWhichHead))
+    return ($t.StartsWith($clarificationHead) -or $t.StartsWith($askWhichHead) -or $t.StartsWith($sameTopicHead))
 }
 
 $webProcess = $null
@@ -401,6 +404,13 @@ try {
     Add-Check -Name "followup.exact_reports_reused" -Ok $unchanged -Detail "X and Y keep their ready_at and artifact ids (no recomputation, no new synthesis)"
     $clarifications = @($calls | Where-Object { $explainTools -contains [string](Get-OptionalProperty -InputObject $_ -Name "name") -and (Test-ClarificationHead -Text (Get-OptionalProperty -InputObject $_ -Name "speech_head")) })
     Add-Check -Name "followup.no_clarification_loop" -Ok ($clarifications.Count -le 1) -Detail "clarification questions on the session: $($clarifications.Count) (at most one is allowed; the owner's real run heard six)"
+    # ADR-0077: a research-bound answer is never an empty success. Every research.* call the
+    # record shows as succeeded names its job and spoke; a clarification is recorded in its
+    # own status (needs_clarification), never as succeeded.
+    $researchCalls = @($calls | Where-Object { $researchTools -contains [string](Get-OptionalProperty -InputObject $_ -Name "name") })
+    $emptySuccesses = @($researchCalls | Where-Object { [string](Get-OptionalProperty -InputObject $_ -Name "status") -eq "succeeded" -and ((Get-BoundJob -Call $_) -eq "" -or [int](Get-OptionalProperty -InputObject $_ -Name "speech_chars") -le 0) })
+    $clarificationsAsSuccess = @($researchCalls | Where-Object { [string](Get-OptionalProperty -InputObject $_ -Name "status") -eq "succeeded" -and (Test-ClarificationHead -Text (Get-OptionalProperty -InputObject $_ -Name "speech_head")) })
+    Add-Check -Name "followup.no_empty_success" -Ok ($emptySuccesses.Count -eq 0 -and $clarificationsAsSuccess.Count -eq 0) -Detail "research-bound calls on the session: $($researchCalls.Count); succeeded without a job or without speech: $($emptySuccesses.Count); clarifications recorded as succeeded: $($clarificationsAsSuccess.Count)"
     $healthAfter = Invoke-JsonUtf8 -Uri "$BaseUrl/v1/system/health" -TimeoutSec 20
     $versionAfter = Get-DeployedContractVersion -Health $healthAfter
     $versionsAfter = Get-DeviceVersions

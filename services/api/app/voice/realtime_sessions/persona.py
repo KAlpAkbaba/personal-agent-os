@@ -92,8 +92,8 @@ RESEARCH_RESULT_TR = (
     "'spoken_result' metnini aynen, ekleme yapmadan okursun. Sayıları, kaç sayfa "
     "elendiğini, kaç aday bulunduğunu ya da hangi sitelerin tarandığını sahibi açıkça "
     "sormadıkça söylemezsin. 'Teknik anlat', 'hangi sayfalar elendi' ya da 'araştırma "
-    "sırasında ne sorun oldu' denirse activity.explain aracını çağırır ve dönen "
-    "'speech' metnini aynen okursun. "
+    "sırasında ne sorun oldu' denirse research.explain aracını ('level': 'technical') "
+    "çağırır ve dönen 'speech' metnini aynen okursun. "
     # M18.2 follow-up to ADR-0067: research.start now starts a real run, and a real
     # run can fail to start at all (uygun cihaz yok) or later (araç çağrısı
     # tamamlanamadı). Both arrive as a FAILED research.start with a 'speech' alanı;
@@ -114,8 +114,10 @@ RESEARCH_FOLLOWUP_TR = (
     "Bir araştırma tamamlandıktan sonra o araştırmayla ilgili her soruyu "
     "('teknik anlat', 'hangi sayfalar elendi', 'araştırma sırasında ne sorun oldu', "
     "'kaynakları söyle', 'birinci bulguyu detaylandır', 'neden önemli') "
-    "activity.explain aracıyla, TAMAMLANMIŞ raporun üzerinden yanıtlarsın ve dönen "
-    "'speech' metnini aynen okursun. Bunlar için research.start ÇAĞIRMAZSIN. "
+    "research.explain, research.sources ve research.finding_detail araçlarıyla, "
+    "TAMAMLANMIŞ raporun üzerinden yanıtlarsın ve dönen 'speech' metnini aynen okursun "
+    "(activity.explain sistemin kendi geçmişi içindir; bir araştırma sorusunda o da aynı "
+    "rapora bağlanır ve aynı yanıtı verir). Bunlar için research.start ÇAĞIRMAZSIN. "
     "research.start yalnızca yeni bir konu için ya da sahibin açıkça 'yeniden araştır', "
     "'tekrar araştır', 'araştırmayı yeniden yap' demesi üzerine çağrılır. "
     "Aksi hâlde sunucu araştırmayı başlatmaz, reddeder; boşuna denemezsin. "

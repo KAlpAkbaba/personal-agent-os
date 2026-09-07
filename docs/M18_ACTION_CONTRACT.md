@@ -371,6 +371,37 @@ a failing local enable relays `local.state === "ERROR"` with its `error_class`; 
 - `test_presence_eye_invalidation.py`: disable → assertion UNKNOWN reason `eye_disabled`,
   camera observations dropped, World Model uncertainty; enable → no presence asserted.
 - persona: contains the tool names and the banned phrases; no test reads the model.
+- `test_research_focus.py` (the result contract, ADR-0077): a clarification is its own
+  tool status; a succeeded research answer names its target and speaks; an `ok` without
+  words is recorded failed; an unreadable report fails honestly; `activity.explain` on
+  "Bunu teknik anlat." answers from the report bound by the TURN even when the model's
+  paraphrase says "bir önceki"; one answer from either tool; "Bir önceki araştırmayı
+  anlat." after a technical answer is an answer, not a cursor move; "Son yaptıklarını
+  anlat." stays with the ledger; the session record projects `answered_by`.
+
+## 10. Tool result contract for research-bound answers (ADR-0077)
+
+A research-bound result — `research.explain`, `research.sources`, `research.finding_detail`,
+and `activity.explain` on a turn the ONE router recorded as being about a finished research
+(`routed: research_report` / `research_reference`) — ends in exactly one of three terminal
+statuses, decided by the relay from the result itself (`tools.terminal_status_for`):
+
+| result `status`        | requires                                   | tool status            | row carries |
+|------------------------|--------------------------------------------|------------------------|-------------|
+| `ok`                   | `research_job_id` AND non-empty `speech`   | `succeeded`            | `result` (the answer, `research_job_id`, `research_artifact_id`, `resolution_reason`, `focus_source`, `level`, `provenance`, `answered_by`) |
+| `needs_clarification`  | non-empty `speech`, no target              | `needs_clarification`  | `result` (the one question as `speech`, `candidates`) |
+| `no_report`            | —                                          | `failed` / `empty_result` | `error` (the identity resolved, the honest sentence) |
+| anything else          | —                                          | `failed` / `internal_bug` | `error` (identity if any, "Bu araştırma için anlatabileceğim bir sonuç bulamadım efendim.") |
+
+Never `succeeded` without a target and words. The web client submits `result` for both
+`succeeded` and `needs_clarification` as the function output; a `failed` reaches the model
+as `{status: "failed", error}` whose `speech` is read verbatim. Results outside the research
+family keep §5.5: a refused or failed RECEIPT is a succeeded call.
+
+Which tool the model chose does not change the answer: on a research turn `activity.explain`
+delegates to the research answer path (same resolver, same report, same sentences; the turn's
+own reference, never the model's paraphrase; no narration session), and the record says so
+(`answered_by: research.explain`).
 
 ## 9. Not in scope here
 

@@ -186,7 +186,10 @@ def test_health_serves_the_realtime_contract_version() -> None:
     # 8 = M18.2 architectural fix (ADR-0076): the durable research focus, the three
     # follow-up tools that take no title and no job id from the model, and a refusal for
     # ANY turn that points at a run - including when there is no research to point at.
-    assert doc["checks"]["voice_realtime"]["action_contract_version"] == 8
+    # 9 = M18.2 final narrow defect (ADR-0077): the tool result contract - a clarification
+    # is its own terminal status, a succeeded research answer always names its target and
+    # speaks, and activity.explain on a research turn gives the report's answer.
+    assert doc["checks"]["voice_realtime"]["action_contract_version"] == 9
     # The follow-up family rides the same manifest the owner harness reads.
     assert {"research.explain", "research.sources", "research.finding_detail"} <= set(
         doc["checks"]["voice_realtime"]["tools"]

@@ -378,9 +378,12 @@ def test_a_followup_phrase_never_starts_a_crawl_and_reuses_the_completed_report(
     assert answer["research_artifact_id"] == artifact_id
     assert answer["provenance"]["research_job_id"] == task_id
     assert answer["provenance"]["research_artifact_id"] == artifact_id
-    assert answer["cognition"]["research_job_id"] == task_id
     assert answer["research_binding"]["research_job_id"] == task_id
-    assert answer["speech"]
+    # ADR-0077: answered from the report by the research answer path - the sentence
+    # research.explain would speak, never the ledger's telemetry.
+    assert answer["routed"] == "research_report"
+    assert answer["answered_by"] == "research.explain"
+    assert answer["speech"].startswith("Bu araştırmada"), answer["speech"]
 
     # The report row is untouched: same ids, same body, same provider. Findings were
     # READ, never recomputed - and no second crawl produced a second report.

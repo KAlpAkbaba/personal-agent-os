@@ -94,7 +94,13 @@ export type SidebandFrame = {
   at: string;
 };
 
-export type ToolCallStatus = "running" | "succeeded" | "failed";
+/**
+ * ADR-0077: `needs_clarification` is a research follow-up whose target could not be
+ * resolved from the turn. It carries `result` (the one question to ask, as `speech`)
+ * and no target; it is neither a success nor a failure, and the model receives the
+ * result itself so it asks the question verbatim.
+ */
+export type ToolCallStatus = "running" | "succeeded" | "failed" | "needs_clarification";
 
 /** `POST .../tool-calls` response (idempotent on call_id per session). */
 export type ToolCallResponse = {
