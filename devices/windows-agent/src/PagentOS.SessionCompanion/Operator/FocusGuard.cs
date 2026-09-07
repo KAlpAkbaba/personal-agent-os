@@ -48,27 +48,40 @@ public sealed class FocusGuard(WindowRegistry registry)
         return actual!;
     }
 
+    /// <summary>
+    /// The mid-stream check, for the input synthesizer to ask before EVERY batch of events it
+    /// sends (ADR-0082 addendum 2, finding 2): is the SAME WINDOW still in front — a fresh read
+    /// of the foreground against the expected handle, pid and image. The title is deliberately
+    /// not part of it: the title leg of <see cref="Verify"/> catches a plan whose OBSERVE went
+    /// stale before ACT, but once input is streaming the title changes BECAUSE of the input
+    /// (Notepad prefixes <c>*</c> the moment the first character lands — the lab's first cut
+    /// of this check refused every second batch on that), and a same-handle window is the
+    /// window the guard verified. False when nothing is expected.
+    /// </summary>
+    public bool StillTargeted()
+    {
+        var expected = _expected;
+        return expected is not null && SameWindow(expected, registry.Foreground());
+    }
+
     /// <summary>The rule, pure and public: handle, pid and image equal, and the actual title starts with the expected title's first <see cref="TitlePrefixChars"/> characters.</summary>
     public static bool Matches(WindowInfo expected, WindowInfo? actual)
     {
-        if (actual is null)
-        {
-            return false;
-        }
-
-        if (actual.Handle != expected.Handle || actual.Pid != expected.Pid)
-        {
-            return false;
-        }
-
-        if (!string.Equals(actual.Image, expected.Image, StringComparison.OrdinalIgnoreCase))
+        if (!SameWindow(expected, actual))
         {
             return false;
         }
 
         var prefix = expected.Title.Length <= TitlePrefixChars ? expected.Title : expected.Title[..TitlePrefixChars];
-        return actual.Title.StartsWith(prefix, StringComparison.Ordinal);
+        return actual!.Title.StartsWith(prefix, StringComparison.Ordinal);
     }
+
+    /// <summary>The identity leg alone: handle, pid and image equal — the window, whatever it is titled right now.</summary>
+    public static bool SameWindow(WindowInfo expected, WindowInfo? actual)
+        => actual is not null
+           && actual.Handle == expected.Handle
+           && actual.Pid == expected.Pid
+           && string.Equals(actual.Image, expected.Image, StringComparison.OrdinalIgnoreCase);
 
     public static string Describe(WindowInfo? window)
         => window is null
