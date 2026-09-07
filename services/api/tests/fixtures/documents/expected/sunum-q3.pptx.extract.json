@@ -1,0 +1,83 @@
+{
+  "path": "sunum-q3.pptx",
+  "kind": "pptx",
+  "match": "equals_normalised",
+  "title": "Q3 Sunumu",
+  "structure": {
+    "slides": [
+      {
+        "index": 1,
+        "title": "Q3 Özeti"
+      },
+      {
+        "index": 2,
+        "title": "Gelirler"
+      },
+      {
+        "index": 3,
+        "title": "Giderler"
+      },
+      {
+        "index": 4,
+        "title": "Müşteri Kazanımı"
+      },
+      {
+        "index": 5,
+        "title": "Riskler"
+      },
+      {
+        "index": 6,
+        "title": "Hedefler"
+      },
+      {
+        "index": 7,
+        "title": "Teşekkürler"
+      }
+    ],
+    "slide_count": 7
+  },
+  "blocks": [
+    {
+      "ref": "s1",
+      "kind": "slide",
+      "title": "Q3 Özeti",
+      "text": "Q3 Özeti\nGelir hedefi aşıldı\nÜç yeni müşteri\nBir gecikmiş teslimat"
+    },
+    {
+      "ref": "s2",
+      "kind": "slide",
+      "title": "Gelirler",
+      "text": "Gelirler\nToplam gelir 1,2 milyon TL\nAbonelik payı yüzde 60"
+    },
+    {
+      "ref": "s3",
+      "kind": "slide",
+      "title": "Giderler",
+      "text": "Giderler\nPersonel gideri sabit\nBulut maliyeti yüzde 8 arttı"
+    },
+    {
+      "ref": "s4",
+      "kind": "slide",
+      "title": "Müşteri Kazanımı",
+      "text": "Müşteri Kazanımı\nÜç kurumsal müşteri\nDönüşüm oranı yüzde 12"
+    },
+    {
+      "ref": "s5",
+      "kind": "slide",
+      "title": "Riskler",
+      "text": "Riskler\nTedarikçi bağımlılığı\nKur dalgalanması"
+    },
+    {
+      "ref": "s6",
+      "kind": "slide",
+      "title": "Hedefler",
+      "text": "Hedefler\nQ4'te iki ürün lansmanı\nDestek süresini yarıya indirmek"
+    },
+    {
+      "ref": "s7",
+      "kind": "slide",
+      "title": "Teşekkürler",
+      "text": "Teşekkürler\nSorular?"
+    }
+  ]
+}

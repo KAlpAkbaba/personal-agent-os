@@ -1,0 +1,36 @@
+{
+  "path": "ayarlar.json",
+  "kind": "json",
+  "match": "equals_normalised",
+  "title": null,
+  "structure": {
+    "keys": [
+      "surum",
+      "ses",
+      "cihaz",
+      "kokler"
+    ]
+  },
+  "blocks": [
+    {
+      "ref": "$.surum",
+      "kind": "key",
+      "text": "\"0.2.0\""
+    },
+    {
+      "ref": "$.ses",
+      "kind": "key",
+      "text": "{\"dil\":\"tr-TR\",\"hiz\":1.0,\"ses_adi\":\"alloy\"}"
+    },
+    {
+      "ref": "$.cihaz",
+      "kind": "key",
+      "text": "{\"ad\":\"MAIL\",\"operator\":true}"
+    },
+    {
+      "ref": "$.kokler",
+      "kind": "key",
+      "text": "[\"Documents\",\"Desktop\",\"Downloads\"]"
+    }
+  ]
+}

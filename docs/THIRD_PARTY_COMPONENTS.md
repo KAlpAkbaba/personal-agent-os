@@ -55,3 +55,7 @@ Role: local STT fallback/benchmark candidate.
 - OpenAI realtime/TTS
 
 Selection depends on Turkish benchmark by use case.
+
+## Document fixture generators (dev only, M20)
+
+- `openpyxl` (MIT) and `python-pptx` (MIT): generate the committed XLSX/PPTX fixtures under `services/api/tests/fixtures/documents/` via `scripts/tests/make-document-fixtures.py`; dev group only, never in the production image. `python-docx` (MIT) and `fpdf2` (LGPL-3.0, already a runtime dependency for M13 artifacts) generate the DOCX/PDF fixtures.
