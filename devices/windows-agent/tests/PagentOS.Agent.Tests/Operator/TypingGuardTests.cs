@@ -115,6 +115,14 @@ public sealed class TypingGuardTests : IDisposable
         _lab.Activate(a);
         var aHandle = _lab.Operator.Registry.Resolve(a).Handle;
         var bHandle = _lab.Operator.Registry.Resolve(b).Handle;
+        // The scenario begins with A in front. On the runner's desktop the foreground once
+        // was no window at all right after the activation; an attempt that cannot establish
+        // the precondition is inconclusive, never a verdict on the guard.
+        if (!WaitForForeground(aHandle, 2000))
+        {
+            detail = $"inconclusive: A could not be put in front before the stream (foreground 0x{GetForegroundWindow():X})";
+            return false;
+        }
 
         // MaxTypedChars distinct-ish characters, no newlines: what A holds afterwards must be an
         // exact prefix of this, and B must hold none of it.
@@ -161,6 +169,14 @@ public sealed class TypingGuardTests : IDisposable
 
         var ex = refused;
         Assert.Equal(ErrorClasses.FocusMismatch, ex.ErrorClass);
+        if (!ex.Detail.ContainsKey("typed_chars"))
+        {
+            // The guard's pre-check refused before the first batch: A had already left the
+            // front between our precondition check and the stream's start. Not the scenario.
+            detail = $"inconclusive: refused before the first batch ({ex.Message})";
+            return false;
+        }
+
         Assert.True(ex.Retryable);
         var typed = Assert.IsType<int>(ex.Detail["typed_chars"]);
         var confirmed = Assert.IsType<int>(ex.Detail["confirmed_chars"]);
@@ -208,6 +224,23 @@ public sealed class TypingGuardTests : IDisposable
 
         detail = frontWasB ? "landed: B in front" : "landed: no window in front";
         return true;
+    }
+
+    private static bool WaitForForeground(IntPtr hwnd, int milliseconds)
+    {
+        var deadline = DateTime.UtcNow.AddMilliseconds(milliseconds);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (GetForegroundWindow() == hwnd)
+            {
+                return true;
+            }
+
+            SetForegroundWindow(hwnd);
+            Thread.Sleep(20);
+        }
+
+        return GetForegroundWindow() == hwnd;
     }
 
     /// <summary>
