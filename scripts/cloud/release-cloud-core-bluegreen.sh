@@ -37,7 +37,10 @@ envf="$base/.env"
 next="$base/app.next"
 cur="$base/app"
 prev="$base/app.prev"
-edge_dir=${PAGENTOS_EDGE_DIR:-$base/edge}
+# The edge reads its upstream file from the persistent volume (docker-compose.prod.yml
+# mounts ${PAGENTOS_EDGE_DIR:-/mnt/pagentos-data/edge}); the script writes where compose
+# mounts, and pins the path into the env file so the two can never disagree.
+edge_dir=${PAGENTOS_EDGE_DIR:-/mnt/pagentos-data/edge}
 health_url=${PAGENTOS_HEALTH_URL:-http://127.0.0.1:8001/v1/system/health}
 drain_s=${PAGENTOS_DRAIN_S:-60}
 image_repo=${PAGENTOS_IMAGE_REPO:-pagentos/cloud-core}
@@ -80,7 +83,7 @@ compose() { docker compose --profile bluegreen -f "$cur/infra/docker/docker-comp
 in_container_health() {
     # in_container_health COLOUR: the colour's own health JSON, from inside the container
     # (the colours publish no port; only the edge does).
-    compose exec -T "api-$1" python -c 'import sys, urllib.request; sys.stdout.write(urllib.request.urlopen("http://127.0.0.1:8001/v1/system/health", timeout=10).read().decode())'
+    compose exec -T "api-$1" python3 -c 'import sys, urllib.request; sys.stdout.write(urllib.request.urlopen("http://127.0.0.1:8001/v1/system/health", timeout=10).read().decode())'
 }
 
 wait_for_colour() {
@@ -166,14 +169,21 @@ if [ "$mode" = "--rollback" ]; then
         exit 65
     fi
     prev_colour="$(other_colour "$active")"
-    lkg="$(cat "$base/LAST_KNOWN_GOOD" 2>/dev/null || true)"
-    echo "rolling back: edge -> api-$prev_colour (last known good ${lkg:-unknown})"
+    PREV="$(upper "$prev_colour")"
+    # The colour we return to runs the sha the env file recorded for it when it was last
+    # released; that sha becomes RELEASE, and the sha we leave becomes LAST_KNOWN_GOOD
+    # (the bookkeeping must name what is actually running, not what a file remembers).
+    target_sha="$(grep "^PAGENTOS_RELEASE_$PREV=" "$envf" | head -1 | sed 's/^[^=]*=//' || true)"
+    leaving_sha="$(cat "$base/RELEASE" 2>/dev/null || true)"
+    echo "rolling back: edge -> api-$prev_colour (${target_sha:-sha unknown}; leaving ${leaving_sha:-unknown})"
     compose up -d --no-deps --wait "api-$prev_colour"
     body="$(wait_for_colour "$prev_colour")" || { echo "api-$prev_colour did not become healthy; the edge stays on api-$active" >&2; exit 75; }
     write_upstream "$prev_colour"
     reload_edge
     compose stop "api-$active" >/dev/null 2>&1 || true
-    [ -n "$lkg" ] && echo "$lkg" > "$base/RELEASE"
+    [ -n "$target_sha" ] && echo "$target_sha" > "$base/RELEASE"
+    [ -n "$leaving_sha" ] && echo "$leaving_sha" > "$base/LAST_KNOWN_GOOD"
+    [ -n "$leaving_sha" ] && upsert_env "PAGENTOS_LAST_KNOWN_GOOD" "$leaving_sha"
     echo "ROLLBACK OK: api-$prev_colour is active"
     exit 0
 fi
@@ -225,6 +235,7 @@ echo "building $image_repo:$sha ..."
 docker build -t "$image_repo:$sha" "$cur/services/api" 2>&1 | tail -2
 upsert_env "PAGENTOS_IMAGE_$IDLE" "$sha"
 upsert_env "PAGENTOS_RELEASE_$IDLE" "$sha"
+upsert_env "PAGENTOS_EDGE_DIR" "$edge_dir"
 [ -n "$previous_sha" ] && upsert_env "PAGENTOS_LAST_KNOWN_GOOD" "$previous_sha"
 
 echo "applying migrations (expand-only)..."

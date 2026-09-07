@@ -190,8 +190,10 @@ try {
         Assert-True ($rg.Exit -eq 0 -and (Get-Active) -eq "blue" -and (Get-Upstream) -match "api-blue" -and (Test-Up "blue") -and -not (Test-Up "green")) "from green the release lands on blue"
 
         Reset-Host
+        [IO.File]::AppendAllText((Join-Path $hostBase ".env"), "PAGENTOS_IMAGE_GREEN=0000000000000000000000000000000000000000`nPAGENTOS_RELEASE_GREEN=0000000000000000000000000000000000000000`n")
         $rr = Invoke-Release -Mode "--rollback" -Env @{ }
         Assert-True ($rr.Exit -eq 0 -and $rr.Output -match "ROLLBACK OK: api-green is active" -and (Get-Active) -eq "green") "--rollback switches to the other colour after bringing it up"
+        Assert-True ((Get-Content (Join-Path $hostBase "RELEASE") -Raw).Trim() -eq "0000000000000000000000000000000000000000" -and (Get-Content (Join-Path $hostBase "LAST_KNOWN_GOOD") -Raw).Trim() -eq "1111111111111111111111111111111111111111") "...RELEASE names the sha the other colour runs and LAST_KNOWN_GOOD the sha it left"
 
         Reset-Host -Active ""
         [IO.File]::WriteAllText((Join-Path $hostBase ".env"), "PAGENTOS_BIND_IP=100.64.0.1`n")

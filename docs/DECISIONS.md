@@ -6431,3 +6431,60 @@ Evidence: `test_evolution_supervisor.py` (10), `test_voice_evolution_tools.py` (
 (27), the corpus at 413/413 HEALTHY (`evolution` category 68), `cloud-release-bluegreen.tests.ps1`
 (18/18 under fakes), web `evolution-supervisor.test.tsx`; the unchanged
 `test_selfhealing_e2e.py` remains the real-process self-healing proof (CI integration job).
+
+### ADR-0081 addendum — the closed loop and the production qualification harness (2026-09-07, later the same evening)
+
+The owner's follow-up directive ("M18.4 PRODUCTION QUALIFICATION — PROVE SELF-EVOLUTION
+FOUNDATION FOR REAL") asked for the real pipeline behind an opportunity, not a scripted
+result. What landed:
+
+- **`app/evolution/closed_loop.py`** + `POST /v1/evolution/opportunities/{id}/heal`: an
+  incident-born opportunity is driven through the M6 self-healing pipeline's REAL phases,
+  and its lifecycle follows each gate as it lands — `load_incident` → researching,
+  `analyze_issue` → design_ready, `patch` → building (an isolated work directory),
+  `regression_on_candidate` → testing, `review_change` → evaluating (the independent
+  reviewer), `staging_deploy` → shadow_ready (green under the staging health policy); the
+  component's release is promoted by the supervisor deployer and the opportunity ends at
+  `owner_approval_required`, because LIVE is the owner's whatever the promotion class says
+  (ADR-0055). A failed gate parks the candidate `quarantined` (from build/test/evaluate) or
+  `rejected` (from research/design) with the failing step in the transition reason; the
+  incident stays recovered and the component's active release is untouched. The seam is
+  `SelfHealingPipeline(on_step=...)` (`_ObservedSteps`): the steps arrive as they happen,
+  nothing is replayed after the fact, and the lifecycle table decides what is legal.
+  `build_pipeline` in `app/selfhealing/routes.py` is now the ONE construction path for
+  both routes.
+- **`tests/unit/test_evolution_closed_loop.py`**: real processes — the recovery
+  supervisor (subprocess) promotes 1.0.0, detects broken 1.1.0 and rolls back; the report
+  is ingested; the supervisor scan opens the P0 opportunity; `/heal` runs the real
+  pipeline; the lifecycle reads idea → researching → design_ready → building → testing →
+  evaluating → shadow_ready → owner_approval_required with dated reasons; releases show
+  1.1.0 rolled_back / 1.1.1 active; the incident is fixed; `evolution.shadow_ready` and
+  `evolution.owner_approval_required` ledger rows exist; the Approval Center and the
+  supervisor status list it. Then a deliberately broken candidate (self-test raises)
+  passes regression and review and FAILS on staging: quarantined with
+  "gate 'staging_deploy' failed", its release rejected, the component still on 1.1.1.
+  22 s, SQLite, loopback.
+- **`scripts/core/qualify-m18-4.ps1`**: the production qualification, unattended once the
+  host is reachable over Tailscale SSH (`-WaitForHost` polls): a health prober at 250 ms
+  through the canonical edge measures every phase (gap = first failed probe to the next
+  success; dropped = failed probes); phases: snapshot → the FIRST blue/green cutover via
+  `release-cloud-core.ps1 -BlueGreen` (a gap is expected and recorded) → a
+  controlled-failure release whose post-switch verification is pointed at an unreachable
+  URL (the script switches back; expect zero dropped probes) → an explicit `--rollback` to
+  the other colour and the roll-forward (expect zero dropped probes) → the supervisor's
+  first scan of REAL production signals, pause → skipped_paused → resume → scanned, with
+  production health checked while paused → reconciliation (release/contracts/edge
+  colour/RELEASE and LAST_KNOWN_GOOD on the host/devices/SLO). Evidence:
+  `docs/evidence/m18-4-qualification-<stamp>.json` plus the probe logs.
+- `release-cloud-core-bluegreen.sh --rollback` now records what actually runs: RELEASE
+  becomes the sha the colour returned to was released with, LAST_KNOWN_GOOD the sha it
+  left (the file it used to copy could name a build no colour was running). The edge
+  directory defaults to the persistent volume path compose mounts and is pinned into the
+  env file.
+
+Why the production loop is still `PROVEN_PROXY`: the production image carries neither the
+recovery supervisor script nor the synthetic target service (`checks.selfhealing` reports
+both absent), so the synthetic self-healing story runs with real processes on the
+development machine and in CI, not inside the Hetzner container. Shipping those two files
+in the image is a deployment-mechanics change (tier 4) deliberately not made in the same
+evening as the first cutover.

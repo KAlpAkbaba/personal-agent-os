@@ -30,6 +30,7 @@ import subprocess
 import sys
 import tempfile
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -196,13 +197,26 @@ class PipelineResult:
         return {
             "incident_id": self.incident_id,
             "status": self.status,
-            "steps": [
-                {"name": s.name, "status": s.status, "detail": s.detail} for s in self.steps
-            ],
+            "steps": [{"name": s.name, "status": s.status, "detail": s.detail} for s in self.steps],
             "candidate_version": self.candidate_version,
             "release_id": self.release_id,
             "summary": self.summary,
         }
+
+
+class _ObservedSteps(list):
+    """The pipeline's step list, with an observer told about every step AS it lands -
+    the seam the M18.4 closed loop uses to move an opportunity through its lifecycle from
+    real gate outcomes (ADR-0081), instead of replaying a finished result after the fact."""
+
+    def __init__(self, on_step: Callable[[PipelineStep], None] | None) -> None:
+        super().__init__()
+        self._on_step = on_step
+
+    def append(self, step: PipelineStep) -> None:  # type: ignore[override]
+        super().append(step)
+        if self._on_step is not None:
+            self._on_step(step)
 
 
 class SelfHealingPipeline:
@@ -215,10 +229,12 @@ class SelfHealingPipeline:
         reviewer: DeterministicReviewer | None = None,
         work_root: Path | None = None,
         allowed_roots: list[Path] | None = None,
+        on_step: Callable[[PipelineStep], None] | None = None,
     ) -> None:
         self.service = service
         self.backend = backend
         self.deployer = deployer
+        self.on_step = on_step
         # Builder/reviewer separation: the reviewer instance is independent of
         # the coding backend and is the only acceptance authority.
         self.reviewer = reviewer or DeterministicReviewer()
@@ -229,6 +245,7 @@ class SelfHealingPipeline:
 
     def run(self, incident_id: uuid.UUID) -> PipelineResult:
         result = PipelineResult(incident_id=str(incident_id), status="failed")
+        result.steps = _ObservedSteps(self.on_step)
         steps = result.steps
         if self.work_root is not None:
             Path(self.work_root).mkdir(parents=True, exist_ok=True)
@@ -263,8 +280,9 @@ class SelfHealingPipeline:
             analysis = self.backend.analyze_issue(incident)
             steps.append(
                 PipelineStep(
-                    "analyze_issue", "ok", {"fault_kind": analysis.fault_kind,
-                                            "summary": analysis.summary}
+                    "analyze_issue",
+                    "ok",
+                    {"fault_kind": analysis.fault_kind, "summary": analysis.summary},
                 )
             )
 
@@ -384,9 +402,7 @@ class SelfHealingPipeline:
             steps.append(PipelineStep("production_promote", "ok", production.detail))
 
             # 9. Close the loop.
-            self.service.set_incident_status(
-                incident_id, "fixed", fixed_release_id=release_id
-            )
+            self.service.set_incident_status(incident_id, "fixed", fixed_release_id=release_id)
             result.status = "fixed"
             result.summary = self.backend.summarize_patch(analysis, patch)
             steps.append(PipelineStep("mark_incident_fixed", "ok", {}))
@@ -397,9 +413,7 @@ class SelfHealingPipeline:
             )
             return result
         except SelfHealingError as exc:
-            steps.append(
-                PipelineStep("pipeline_error", "failed", exc.to_dict())
-            )
+            steps.append(PipelineStep("pipeline_error", "failed", exc.to_dict()))
             result.summary = exc.message
             # The service was already restored by the supervisor's rollback;
             # the incident goes back to 'recovered' so the fix can be retried.
@@ -409,9 +423,7 @@ class SelfHealingPipeline:
                     self.service.set_incident_status(incident_id, "recovered")
             except SelfHealingError:
                 pass
-            logger.info(
-                "pipeline_failed", incident_id=str(incident_id), error=str(exc.error_class)
-            )
+            logger.info("pipeline_failed", incident_id=str(incident_id), error=str(exc.error_class))
             return result
 
     # ------------------------------------------------------------------ utils

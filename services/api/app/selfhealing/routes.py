@@ -164,31 +164,57 @@ def _require_under_root(path_value: str, root: Path, label: str) -> Path:
     return resolved
 
 
-def _run_pipeline(runtime: SelfHealingRuntime, body: PipelineRunBody) -> dict[str, Any]:
-    # Unknown incident surfaces as a 404 (typed NOT_FOUND) before any work.
-    runtime.service.get_incident(body.incident_id)
-    staging_ws = _require_under_root(
-        body.staging_workspace, runtime.workspace_root, "staging_workspace"
-    )
+def build_pipeline(
+    runtime: SelfHealingRuntime,
+    *,
+    component: str,
+    staging_workspace: str,
+    production_workspace: str,
+    staging_port: int,
+    production_port: int,
+    max_cycles: int = 3,
+    failure_threshold: int = 2,
+    on_step: Any = None,
+) -> SelfHealingPipeline:
+    """The ONE way a request becomes a pipeline: workspaces restricted to the configured
+    root, the runtime's own supervisor/target scripts and coding backend. The M18.4 closed
+    loop (``app.evolution.closed_loop``) builds through here too, with its step observer."""
+    staging_ws = _require_under_root(staging_workspace, runtime.workspace_root, "staging_workspace")
     production_ws = _require_under_root(
-        body.production_workspace, runtime.workspace_root, "production_workspace"
+        production_workspace, runtime.workspace_root, "production_workspace"
     )
     deployer = SupervisorDeployer(
         supervisor_script=runtime.supervisor_script,
         target_service_script=runtime.target_service_script,
         staging_workspace=staging_ws,
-        staging_port=body.staging_port,
+        staging_port=staging_port,
         production_workspace=production_ws,
-        production_port=body.production_port,
-        component=body.component,
-        max_cycles=body.max_cycles,
-        failure_threshold=body.failure_threshold,
+        production_port=production_port,
+        component=component,
+        max_cycles=max_cycles,
+        failure_threshold=failure_threshold,
     )
-    pipeline = SelfHealingPipeline(
+    return SelfHealingPipeline(
         runtime.service,
         runtime.backend,
         deployer,
         allowed_roots=[runtime.workspace_root],
+        on_step=on_step,
+    )
+
+
+def _run_pipeline(runtime: SelfHealingRuntime, body: PipelineRunBody) -> dict[str, Any]:
+    # Unknown incident surfaces as a 404 (typed NOT_FOUND) before any work.
+    runtime.service.get_incident(body.incident_id)
+    pipeline = build_pipeline(
+        runtime,
+        component=body.component,
+        staging_workspace=body.staging_workspace,
+        production_workspace=body.production_workspace,
+        staging_port=body.staging_port,
+        production_port=body.production_port,
+        max_cycles=body.max_cycles,
+        failure_threshold=body.failure_threshold,
     )
     return pipeline.run(body.incident_id).to_dict()
 
@@ -200,4 +226,4 @@ async def run_pipeline(request: Request, body: PipelineRunBody) -> dict[str, Any
     return await _call(_run_pipeline, runtime, body)
 
 
-__all__ = ["router"]
+__all__ = ["build_pipeline", "router"]
