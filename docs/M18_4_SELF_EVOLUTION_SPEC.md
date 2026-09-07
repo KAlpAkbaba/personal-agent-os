@@ -181,22 +181,56 @@ tailnet:8001 ──> edge (nginx) ──> api-blue   (active)
   first real blue/green handoff happens inside the next owner-authorised release and is
   `NOT_YET_PROVEN` until then.
 
-## 7. Windows agent: staged update with rollback (design; existing pieces)
+## 7. Windows agent: staged update with rollback (built 2026-09-07 night; PROVEN_PROXY)
 
-The installer already stages the new tree, journals the step, retries from staging, pins
-binaries and verifies ACLs. The M18.4 shape: `DeviceSupervisor` = the Windows Service
-itself supervising the companion + worker as versioned releases with a `last_known_good`
-pointer, health = the heartbeat's own status; a new agent version is staged by the
-installer, activated, and rolled back by the service when the companion fails to admit
-within the startup window. Every agent update is an elevated owner action today and stays
-one (`READY_FOR_OWNER_PHYSICAL_TEST`); the supervision half is `NOT_YET_PROVEN` and is
-named as future work, not claimed.
+The installer stages the new trees (publish into `.staging`), swaps through the journaled
+engine (stop by PID, same-volume renames, ACL, restart, health, commit / rollback in
+`finally`) and proves the live browser worker. The gap closure (ADR-0081 addendum 3) adds
+what the owner's list named, in `scripts/lib/AgentUpdate.ps1`:
 
-## 8. Browser worker drain
+- **the candidate manifest** — written at staging: the staged service binary's own
+  `capabilities` verb (which names `software_version` from 0.2.0 on), every staged file
+  hashed, the browser worker's release identity (`worker_version`, `package_sha256`); it is
+  re-verified file by file immediately before the engine moves anything
+  (`Test-AgentCandidateManifest`: a changed, missing or extra file, a missing version, a
+  missing required capability, a changed browser package are each refused by name, the
+  previous install untouched);
+- **heartbeat and capability verification on Cloud Core** — `Test-AgentHeartbeatOnCore`
+  runs INSIDE the engine's `TestHealth` handler: Cloud Core must list the device online
+  with the candidate's software version and every capability the manifest promised
+  (`GET /v1/devices` with the owner session from the DPAPI credential); otherwise the
+  engine rolls back to the previous trees. No stored credential → the read is reported
+  skipped, never faked (`-SkipCoreVerify` opts out explicitly);
+- **retire old** — the engine's commit deletes `.previous\<version>` only after health.
 
-A worker version switch waits for open sessions to close (`browser.session.closed` rows) or
-for a bounded drain, then restarts; a research in flight is a durable Temporal workflow and
-resumes on the new worker. Design only in M18.4; `NOT_YET_PROVEN`.
+Every agent update is still an elevated owner action (one UAC prompt) and stays one; the
+owner's session is preserved (the companion is restarted through its logon task in the
+owner's session, never in the elevated installer's). Proven under fakes:
+`scripts/tests/agent-update.tests.ps1` (16); the real run is the owner's next elevated
+update (item 26 / 27) — `PROVEN_PROXY` until then. The "service supervises the companion
+as versioned releases" half remains future work, not claimed.
+
+## 8. Browser worker staged update (built 2026-09-07 night; PROVEN_PROXY)
+
+`BrowserWorkerHost.SwapWorkerAsync(candidate, drainTimeout, expectedVersion,
+expectedPackageSha256)`: a candidate worker starts BESIDE the current one and must say
+hello, keep every capability the current worker serves (and browser availability), and
+match the expected release when one is named; then the current worker drains — its
+in-flight requests finish on it, a request arriving during the drain waits on the start
+lock (bounded by its own budget) and lands on the candidate, and it must hold no open
+browser session (`browser.worker_status`; owned media stays untouched: the swap answers
+`busy` and is retried later) — is told to shut down (its sessions close the way a companion
+stop closes them) and retires; then new work routes to the candidate. The candidate is
+never handed a request while the old worker lives (one research profile, one Chrome); the
+owner's own browser is never touched. A failing or rejected candidate is killed and the
+current worker keeps serving, untouched. Trigger: `browser-candidate.json` in the
+companion's data directory (`BrowserCandidateWatcher`, polled every 5 s) — the candidate
+command must live under the admin-only install root; the outcome is written beside it as
+`browser-candidate.result.json` and audited (`browser_worker_swapped` /
+`browser_worker_swap_failed` / `browser_worker_candidate`). Proven over the real fake
+worker: `BrowserWorkerSwapTests` (12). A real second tree under Program Files needs the
+owner's elevated hand — `PROVEN_PROXY` until then. A research in flight remains a durable
+Temporal workflow and resumes on the new worker (unchanged).
 
 ## 9. Web live update
 
@@ -242,8 +276,18 @@ supervisor tick.
 ## 14. Crash and boot recovery
 
 Unchanged and already proven (Stage 5): VPS reboot, Cloud Core restart, device reconnect.
-Blue/green adds: on boot, compose starts the colour named in `ACTIVE_COLOUR`; the edge's
-upstream file is on the persistent volume.
+Blue/green (ADR-0081 addendum 3): the edge's whole configuration (`nginx.conf` copy,
+`upstream.conf`, `active.txt`) lives on the persistent edge directory, and containers carry
+`restart: unless-stopped`, so a reboot brings the same colour back. A promotion interrupted
+at any point (the script SIGKILLed, the host lost) is rebuilt by
+`release-cloud-core-bluegreen.sh --reconcile`: the last COMPLETED promotion (`RELEASE`)
+is canonical even when the edge already names the candidate; a colour running a sha
+`RELEASE` does not name is a half-promoted candidate — drained, stopped, its tree kept
+aside as `app.interrupted` — and never made live by this path; a canonical colour that
+cannot start falls back to the other recorded colour LOUDLY (exit 81). The unit
+`infra/systemd/pagentos-bluegreen-reconcile.service` runs it once per boot after docker.
+`PAGENTOS_INTERRUPT_AT=after_idle_up|after_device_handoff|after_switch|after_drain` is
+the controlled crash for the proof.
 
 ## 15. Owner-facing states (real states only)
 
@@ -298,8 +342,9 @@ M18.4 adds the supervisor's opportunity for the incident it produced.
 | Expand/contract migration gate | `PROVEN_PROXY` (structural, whole tree) | `test_migration_compatibility.py` |
 | Zero-downtime blue/green handoff with drain and rollback | `PROVEN_REAL` (three production runs 2026-09-07: first cutover 4.1 s once; then 247/0, 234/1 build-time; rollbacks 92/0, 37/0, 25/0, 113/0, 99/0) | `docs/evidence/m18-4-qualification-2026-09-07-*.json`; `cloud-release-bluegreen.tests.ps1` |
 | Automatic rollback from a broken release, real processes | `PROVEN_PROXY` (real processes, loopback, CI) | `test_selfhealing_e2e.py` |
-| Windows agent staged update with supervisor rollback | `NOT_YET_PROVEN` (design §7) | — |
-| Browser worker drain, web live update | `NOT_YET_PROVEN` (design §8–9) | — |
+| Windows agent staged update with rollback (candidate manifest verified before the swap; Cloud Core sees the candidate or the engine rolls back) | `PROVEN_PROXY` (§7; the real run is the owner's elevated update) | `agent-update.tests.ps1` 16/16; `installer-*.tests.ps1` |
+| Browser worker staged update (drain, verified candidate, routing, retire; busy on an open session) | `PROVEN_PROXY` (§8; a real second tree needs the owner's elevated hand) | `BrowserWorkerSwapTests` 12/12 |
+| Web live update | `NOT_YET_PROVEN` (design §9) | — |
 | Availability measured | `PROVEN_PROXY` for the ledger half; probes `NOT_YET_PROVEN` | `test_release_slo.py` |
 | Engine never self-promotes; supervisor outside the component it updates | `PROVEN_PROXY` (structural) | authority tests + supervisor scope test |
 

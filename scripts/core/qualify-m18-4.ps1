@@ -417,6 +417,7 @@ try {
             $evidence.phases["G_${point}_snapshot_after_crash"] = $mid
             $bothUp = ($ps.Output -match "api-blue" -and $ps.Output -match "api-green")
             $servedMid = if ($mid.release) { [string]$mid.release.version } else { "" }
+            if ($crash.Output -match "device handoff UNAVAILABLE") { $evidence.phases["G_${point}_legacy_switch"] = $true }
             if ($point -eq "after_idle_up") {
                 Add-Check "G/$point`: both colours run; the edge still serves the previous release" ($bothUp -and $mid.edge_active -eq $activeBefore -and $servedMid -eq $servedBefore) "active=$($mid.edge_active) served=$servedMid"
             }
@@ -490,6 +491,16 @@ try {
         $handoffLine = (($releaseOut -split "`n") | Where-Object { $_ -match "device handoff:" } | Select-Object -First 1)
         Add-Check "release: the device sessions were handed to the new colour BEFORE it took HTTP" ($null -ne $handoffLine -and $handoffLine -match "device handoff: (\d+)/(\d+) after (\d+)s" -and [int]$Matches[1] -ge 1 -and [int]$Matches[1] -ge [int]$Matches[2]) "$(if ($handoffLine) { $handoffLine.Trim() } else { 'no handoff line in the release output' })"
         Add-DeviceGapCheck "release" $mB
+    }
+    elseif ($releaseOut -match "device handoff UNAVAILABLE") {
+        # The colour that was live predates the drain route: the one-time legacy switch
+        # (the device moves when the old colour stops). Zero HTTP downtime still; the
+        # presence gap is bounded by the drain window + the agent's reconnect, and named.
+        $evidence.phases.B_legacy_switch = $true
+        Add-Check "blue/green release with no gap" ($mB.probes -gt 0 -and $mB.dropped -eq 0) "probes=$($mB.probes) dropped=$($mB.dropped) gap=$($mB.gap_seconds)s"
+        Add-Check "release: LEGACY switch (the live colour predates the drain route; the device moved when it stopped)" ($releaseOut -match "LEGACY switch") "the first release past M18.4 gap 1 cannot hand devices over; the next release from this colour will"
+        $w = [double]$mB.device_offline_window_s
+        Add-Check "release (legacy): device presence gap bounded by the drain window" ($mB.device_polls -gt 0 -and $w -ge 0 -and $w -le 75) "polls=$($mB.device_polls) offline_polls=$($mB.device_offline_polls) window=$($w)s (limit 75 s = 60 s drain + reconnect)"
     }
     else {
         Add-Check "blue/green release with no gap" ($mB.probes -gt 0 -and $mB.dropped -eq 0) "probes=$($mB.probes) dropped=$($mB.dropped) gap=$($mB.gap_seconds)s"

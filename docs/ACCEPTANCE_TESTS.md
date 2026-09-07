@@ -574,9 +574,28 @@ Spec: `docs/M18_4_SELF_EVOLUTION_SPEC.md` (ADR-0081). Deterministic gates, every
   web is unknown from the server; `/v1/release/slo` never claims a fraction it did not
   measure;
 - **migrations are expand-only** or declare why not (`test_migration_compatibility.py`);
-- **blue/green under fakes.** build → migrate → up idle → verify on idle → switch → verify
-  through the edge → drain → stop old; rollback before and after the switch; the refusals
-  (`cloud-release-bluegreen.tests.ps1`, quality gate);
+- **blue/green under fakes.** build → migrate → up idle → verify on idle → the DEVICE
+  handoff (device upstream → idle colour, drain, wait for the sessions on the idle colour;
+  a handoff that never completes is refused, 79, and undone) → switch HTTP → verify
+  through the edge → drain → stop old; rollback before and after the switch takes the
+  devices back first; `--rollback` likewise; three interruption points followed by
+  `--reconcile` end with the last COMPLETED promotion live and the candidate stopped; a
+  consistent host reconciles to itself; the refusals (`cloud-release-bluegreen.tests.ps1`,
+  quality gate);
+- **the device handoff on the broker.** `POST /v1/devices/drain` closes every device socket
+  with 1012, drops presence at once, refuses new device connections with 1012; `/undrain`
+  reverses; both loopback-only (a tailnet peer gets 403); health carries `draining`
+  (`test_broker_drain.py`; the identity-enforcement allowlist names both);
+- **the agent's candidate manifest and Cloud Core verification** (`agent-update.tests.ps1`):
+  manifest round-trip; a changed / missing / extra file, a missing version, a missing
+  required capability, a changed browser package each refused by name; the heartbeat check
+  waits for online + version + capabilities and fails with the reasons on the old version,
+  an offline device, an unreadable Cloud Core, an unlisted device;
+- **the browser worker's staged swap** (`BrowserWorkerSwapTests`, real fake worker): the
+  in-flight request finishes on the old worker; a late request lands on the candidate; a
+  candidate with no hello / the wrong release / a dropped capability keeps the old worker
+  untouched; an open session answers `busy`; the request file refuses a candidate outside
+  the install root;
 - **the real self-healing story** stays green (`test_selfhealing_e2e.py`).
 
 Real acceptance (owner-authorised, not automatable here): the first blue/green cutover on

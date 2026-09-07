@@ -83,13 +83,16 @@ $docker = @(
     '    if [ ! -f "$FAKE_STATE/up-$colour" ]; then exit 1; fi',
     '    case "$*" in',
     '      *devices/drain*)',
+    '        if [ "${FAKE_DRAIN_UNSUPPORTED:-}" = "$colour" ]; then printf "STATUS 404\n"; exit 0; fi',
     '        n=$(sessions_of "$colour"); echo 0 > "$FAKE_STATE/sessions-$colour"; touch "$FAKE_STATE/draining-$colour"',
     '        target=$(grep -oE "pagentos_devices \{ server api-(blue|green)" "$FAKE_STATE/edge-upstream" 2>/dev/null | grep -oE "(blue|green)$")',
     '        if [ -z "${FAKE_HANDOFF_STUCK:-}" ] && [ -n "$target" ] && [ "$target" != "$colour" ] && [ -f "$FAKE_STATE/up-$target" ] && [ ! -f "$FAKE_STATE/draining-$target" ]; then',
     '          echo $(( $(sessions_of "$target") + n )) > "$FAKE_STATE/sessions-$target"',
     '        fi',
-    '        printf "{\"draining\":true,\"closed\":%s}" "$n"; exit 0;;',
-    '      *devices/undrain*) rm -f "$FAKE_STATE/draining-$colour"; printf "{\"draining\":false}"; exit 0;;',
+    '        printf "STATUS 200\n{\"draining\":true,\"closed\":%s}" "$n"; exit 0;;',
+    '      *devices/undrain*)',
+    '        if [ "${FAKE_DRAIN_UNSUPPORTED:-}" = "$colour" ]; then printf "STATUS 404\n"; exit 0; fi',
+    '        rm -f "$FAKE_STATE/draining-$colour"; printf "STATUS 200\n{\"draining\":false}"; exit 0;;',
     '    esac',
     '    if [ "${FAKE_HEALTH_DOWN:-}" = "$colour" ]; then exit 1; fi',
     '    rel="${FAKE_SERVED_RELEASE:-$(released_for "$colour")}"',
@@ -237,6 +240,16 @@ try {
         Reset-Host -Sessions 0
         $r0 = Invoke-Release
         Assert-True ($r0.Exit -eq 0 -and $r0.Output -match "device handoff: no device session on api-blue; nothing to move") "with no device connected the handoff has nothing to wait for"
+
+        Reset-Host
+        $rl = Invoke-Release -Env @{ FAKE_DRAIN_UNSUPPORTED = "blue" }
+        if ($env:PAGENTOS_BG_VERBOSE) { Write-Host $rl.Output }
+        Assert-True ($rl.Exit -eq 0 -and $rl.Output -match "device handoff UNAVAILABLE: api-blue has no drain route .* LEGACY switch: the device moves when api-blue stops" -and $rl.Output -match "legacy switch" -and $rl.Output -match "RELEASE OK") "an active colour that predates the drain route (404) falls back to the legacy switch, said out loud, and the release still completes"
+        Assert-True ((Test-UpstreamBoth "green") -and (Get-Active) -eq "green" -and -not (Test-Up "blue") -and (Get-Release) -eq $sha) "...the edge and the marker still land on the new colour and the old colour is stopped after the drain window"
+
+        Reset-Host
+        $rd = Invoke-Release -Env @{ FAKE_HEALTH_DOWN = "" ; FAKE_DRAIN_UNSUPPORTED = "" }
+        Assert-True ($rd.Exit -eq 0) "(control) the same release with a draining colour completes through the handoff"
 
         Reset-Host
         $stuck = Invoke-Release -Env @{ FAKE_HANDOFF_STUCK = "1" }

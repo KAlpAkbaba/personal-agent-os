@@ -54,6 +54,7 @@ boundary it needs. Order matters only where written; D needs no audio and can go
 | B | 24 — look at the Living Core on your own screen | `READY_FOR_OWNER_VISUAL_TEST` | ~2 min |
 | C | 25 — `90 saniye sonra ... test alarmı kur.`, YouTube, `Günaydın efendim`, `Alarmı kapat.` | `READY_FOR_OWNER_AUDIO_TEST` (+ one UAC prompt for the agent update if 26 did not run first) | ~3 min |
 | D | 26 — displays off, one key wakes them | `READY_FOR_OWNER_PHYSICAL_TEST` (one UAC prompt: the agent update with `-DisplayPower`; no audio) | ~3 min |
+| E | 27 — the same elevated update now verifies itself: the staged candidate against its manifest before the swap, then Cloud Core must see the device online as 0.2.0 with every promised capability, else the engine rolls back (`install-device-service.ps1`; ADR-0081 addendum 3) | `READY_FOR_OWNER` (folded into D's one UAC prompt; watch for "candidate manifest verified" and "Cloud Core sees the candidate") | 0 extra |
 
 Not repeated: research runs, the Eye, presence transitions - all proven on 2026-09-06.
 

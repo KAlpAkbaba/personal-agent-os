@@ -127,11 +127,18 @@ sessions_of() {
 
 post_loopback() {
     # post_loopback COLOUR PATH: a loopback-only POST from inside the colour's container.
-    compose exec -T "api-$1" python3 -c "import sys, urllib.request; req = urllib.request.Request('http://127.0.0.1:8001$2', data=b'{}', method='POST', headers={'Content-Type': 'application/json'}); sys.stdout.write(urllib.request.urlopen(req, timeout=10).read().decode())" 2>/dev/null || true
+    # First line "STATUS <http code>" (or "STATUS none" when nothing answered), then the body:
+    # a colour released before M18.4 gap 1 has no drain route and answers 404/405, and the
+    # caller must be able to tell that from a drained colour. One line of python (exec of
+    # an escaped source), so the call is one line in every log and every fake.
+    local code
+    code='exec("import sys, urllib.request, urllib.error\nreq = urllib.request.Request(\"http://127.0.0.1:8001'"$2"'\", data=b\"{}\", method=\"POST\", headers={\"Content-Type\": \"application/json\"})\ntry:\n    r = urllib.request.urlopen(req, timeout=10)\n    sys.stdout.write(\"STATUS %d\\n%s\" % (r.status, r.read().decode()))\nexcept urllib.error.HTTPError as e:\n    sys.stdout.write(\"STATUS %d\\n\" % e.code)\nexcept Exception:\n    sys.stdout.write(\"STATUS none\\n\")")'
+    compose exec -T "api-$1" python3 -c "$code" 2>/dev/null || echo "STATUS none"
 }
 
 drain_colour() { post_loopback "$1" /v1/devices/drain; }
 undrain_colour() { post_loopback "$1" /v1/devices/undrain; }
+status_of() { printf '%s\n' "$1" | head -1 | awk '{print $2}'; }
 
 wait_for_sessions() {
     # wait_for_sessions COLOUR WANTED SECONDS: until the colour holds at least WANTED
@@ -146,17 +153,33 @@ wait_for_sessions() {
     done
 }
 
+handoff_legacy=0
 handoff_devices() {
     # handoff_devices FROM TO: device authority FROM -> TO. The device upstream names TO,
     # the edge reloads, FROM hands its sessions over, and we wait until TO holds as many.
     # The HTTP upstream is left where it is (the caller moves it afterwards).
-    local from=$1 to=$2 http had moved
+    # A FROM that has no drain route (a release older than M18.4 gap 1 answers 404) cannot
+    # hand anything over: the switch falls back to the legacy shape, said out loud - the
+    # device moves when FROM stops, with a presence gap of up to the drain window. That is
+    # the one-time cost of the first release past this line, never a health override.
+    local from=$1 to=$2 http had moved drained status
     http="$(active_colour)"
     had="$(sessions_of "$from")"
     undrain_colour "$to" >/dev/null
     write_upstream "$http" "$to"
     reload_edge || return 77
-    drain_colour "$from" >/dev/null
+    drained="$(drain_colour "$from")"
+    status="$(status_of "$drained")"
+    case "$status" in
+        200) ;;
+        404|405)
+            handoff_legacy=1
+            echo "device handoff UNAVAILABLE: api-$from has no drain route (a release before M18.4 gap 1); LEGACY switch: the device moves when api-$from stops, a presence gap of up to ${drain_s}s is expected"
+            return 0;;
+        *)
+            echo "device handoff FAILED: api-$from did not answer the drain (status ${status:-none})" >&2
+            return 79;;
+    esac
     if [ "$had" -gt 0 ]; then
         if moved="$(wait_for_sessions "$to" "$had" "$handoff_wait_s")"; then
             echo "device handoff: $moved device session(s) on api-$to"
@@ -566,7 +589,11 @@ fi
 echo "health through the edge: release $sha"
 
 if [ "$first_cutover" != "1" ]; then
-    echo "draining api-$active for ${drain_s}s (in-flight requests; device sessions already moved)..."
+    if [ "$handoff_legacy" = "1" ]; then
+        echo "draining api-$active for ${drain_s}s (in-flight requests; the device still sits on it and moves when it stops - legacy switch)..."
+    else
+        echo "draining api-$active for ${drain_s}s (in-flight requests; device sessions already moved)..."
+    fi
     sleep "$drain_s"
     compose stop "api-$active" 2>&1 | tail -1
     echo "api-$active stopped"
