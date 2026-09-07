@@ -1,0 +1,41 @@
+# M21 — Mail & Calendar
+
+Status: DRAFT (owner master directive 2026-09-07, M21 section; kickoff at the M20 gate). Decision record: ADR-0084 (written at kickoff).
+Predecessors: M18 action contract (receipts, the one router), ADR-0076 ID-based focus, M19 `object_focus`, M20 documents (the pattern of a bounded index fed only by owner-initiated reads), the evolution risk table (`app/evolution/risk.py`: EXTERNAL_SIDE_EFFECT is never auto-promoted).
+
+The owner's rule, in one line: **reading and preparing are the assistant's; sending and changing the world outside are the owner's — every external mutation is a prepared object the owner hears read back and confirms, and no autonomous test ever sends anything real.**
+
+## 1. Three tiers, three vocabularies
+
+| Tier | Risk class | Examples | Who decides |
+|---|---|---|---|
+| READ | READ_ONLY | inbox summary, search, read a message, a thread, today's agenda, free slots | the assistant, on the owner's word |
+| PREPARE | REVERSIBLE_LOCAL | a draft reply / new mail (a `mail_drafts` row), a proposed event / reschedule (a `calendar_proposals` row), both read back in Turkish | the assistant, on the owner's word; edits by voice |
+| EXTERNAL MUTATION | EXTERNAL_SIDE_EFFECT | `mail.send(draft_id)`, `calendar.commit(proposal_id)` | the owner only: a confirmation turn after the read-back in the same session ("Gönder." / "Onayla.") or the Cockpit's approval pair, which runs the same gate; the provider's mutation is additionally gated by a host setting the autonomous system never writes (`PAGENTOS_MAIL_SEND_ENABLED`, `PAGENTOS_CALENDAR_WRITE_ENABLED`) |
+
+There is no delete, no move-to-trash, no mass action ("Tüm mailleri sil" reaches no tool). Attachments are listed, never downloaded in M21.
+
+## 2. Providers (behind interfaces; third-party services stay replaceable)
+
+- `MailProvider` (Protocol): `folders()`, `list_messages(folder, limit ≤ 50, since?)`, `search(query, limit ≤ 50)`, `get_message(id)` (headers + a bounded text body ≤ 32 KB + attachment metadata), `thread(message_id)`; `MailSender` (Protocol): `send(draft) -> provider_message_id`.
+  Implementations: `ImapMailProvider` (stdlib `imaplib`, IMAP4 over TLS, UTF-8 search, RFC 2047 headers decoded, HTML bodies reduced to text), `SmtpMailSender` (stdlib `smtplib`, STARTTLS/TLS, `In-Reply-To`/`References` on replies), `FakeMailProvider`/`FakeMailSender` for tests and the corpus (the fixture mailbox in Turkish).
+- `CalendarProvider` (Protocol): `calendars()`, `events(start, end)` (recurrences expanded with `dateutil.rrule`, all-day and timed, Europe/Istanbul default), `get_event(id)`, `free_slots(start, end, duration)`; `CalendarWriter` (Protocol): `create(proposal)`, `update(event_id, changes)`.
+  Implementations: `CalDavCalendarProvider` (`httpx` REPORT `calendar-query` + PUT of a VEVENT; iCalendar parsed by a small in-repo parser — no new dependency), `IcsUrlCalendarProvider` (read-only subscription URL), `FakeCalendarProvider` for tests.
+- Configuration by environment on the Cloud Core host (`PAGENTOS_MAIL_IMAP_HOST/PORT/USER/PASSWORD`, `PAGENTOS_MAIL_SMTP_*`, `PAGENTOS_MAIL_FROM`, `PAGENTOS_CALDAV_URL/USER/PASSWORD` or `PAGENTOS_CALENDAR_ICS_URL`); secrets never logged, never in receipts, never in ledger rows; with nothing configured every tool answers `account_missing` honestly ("Tanımlı bir posta hesabı yok") — the production answer until the owner configures an account (owner item; OAuth providers such as Gmail / Microsoft Graph are a later provider behind the same interface and need the owner's browser login).
+
+## 3. Cloud Core (`app/mail/`, `app/calendar/`)
+
+- Tables (expand-only migrations): `mail_index` (provider message id, folder, from, to, subject, date, snippet, has_attachments, thread key; filled only by owner-initiated reads/searches — no polling in M21), `mail_drafts` (id, kind reply|new, to/cc, subject, body, in_reply_to, state prepared|sent|discarded, read_back_at, confirmed_at, sent_message_id), `calendar_index`, `calendar_proposals` (id, kind create|reschedule, event fields, conflicts JSON, state prepared|committed|discarded, read_back_at, confirmed_at).
+- Services: `MailService` (`inbox_summary`, `search`, `read`, `thread`, `draft_reply`, `draft_new`, `edit_draft`, `read_draft`, `send` — refuses without a confirmation turn recorded after the read-back; refuses when the host flag is off with `send_disabled`; a second confirmation never sends twice; `discard`), `CalendarService` (`agenda`, `find_slot`, `propose`, `edit_proposal`, `read_proposal`, `commit` — the same gates; conflicts named in the read-back; `discard`).
+- REST for the Cockpit's approval pair, owner-session gated: `GET /v1/mail/drafts/pending`, `POST /v1/mail/drafts/{id}/confirm`, `POST /v1/mail/drafts/{id}/discard`, `GET /v1/calendar/proposals/pending`, `POST /v1/calendar/proposals/{id}/confirm`, `POST /v1/calendar/proposals/{id}/discard` — `confirm` runs the same gate as the voice confirmation and returns the receipt.
+- Focus kinds: `message`, `thread`, `event`, `draft`, `proposal` (the M19 `object_focus` stack). "Buna cevap yaz" = the current message; "Cevabı oku" = the current draft; "Gönder." = the current draft only after its read-back; "Bunu bir saat ertele" = the current event → a proposal.
+- Voice tools: `mail.inbox`, `mail.search`, `mail.read`, `mail.thread`, `mail.draft`, `mail.edit_draft`, `mail.read_draft`, `mail.send`, `mail.discard`; `calendar.agenda`, `calendar.find_slot`, `calendar.propose`, `calendar.read_proposal`, `calendar.commit`, `calendar.discard`. Intents `MAIL_*`, `CALENDAR_*`, `DISCARD` — the confirmation intents resolve only with a read-back pending in context (`CTX_DRAFT_READ_BACK`, `CTX_PROPOSAL_READ_BACK`); a bare "Gönder." without one → clarification "Neyi göndereyim?".
+- Ledger rows `mail.read/draft/send/discard`, `calendar.read/propose/commit/discard`; receipts subsystems `mail`, `calendar`; UI contract v6 (additive): `mail.activity` (metadata `{folder?, subject?, draft_state?}`), `calendar.activity` (`{range?, event?, proposal_state?}`); the Cockpit panels "Posta" (the pending draft with its read-back state and an Approve/Discard pair wired to the same gate as the voice) and "Takvim" (today + the pending proposal).
+
+## 4. Fixtures and the automated qualification
+
+`services/api/tests/fixtures/mail_calendar/` (generated by `scripts/tests/make-mail-calendar-fixtures.py`, deterministic): `mailbox.json` (37 messages in Turkish across INBOX / Gönderilmiş / Arşiv: the four-message "Proje planı" thread, the "Fatura" pair with an HTML-only body and a PDF attachment, six unread, RFC 2047-worthy subjects), `calendar.ics` (timed, all-day, a weekly RRULE with an EXDATE, a daily COUNT rule, a Europe/Istanbul VTIMEZONE, one conflict pair), `truth.json` (computed from the same data, never typed: counts, the unread run, the latest from Ali, the thread order, searches, the reply headers; the 19 expanded occurrences, today's agenda for the frozen `now` 2026-09-09T09:00+03:00, the EXDATE skipped, the conflict pair, Friday's free windows, two proposals with their conflicts). Tests: the IMAP provider against a scripted fake IMAP4 server (socket-level, the FETCH/SEARCH grammar the provider parses), the SMTP sender against a scripted fake SMTP server (the message never leaves the process; `send_disabled` when the flag is off), the CalDAV provider against `httpx.MockTransport`, the iCalendar parser + rrule expansion against `calendar.ics`; the services through `create_app` with the fake providers; the send/commit gates (no read-back → refused; read-back then "Gönder." → the fake sender records exactly one send with the draft's fields; a second "Gönder." → nothing sent twice); the corpus category `mail_calendar` ≥ 100 with `SIDE_EFFECTS_EXTERNAL` forbidden in every case but the two confirmation cases (which reach the fake only).
+
+## 5. Marks sought
+
+Providers PROVEN_AUTOMATED (scripted protocol fakes; no real account here); the three-tier gate PROVEN_AUTOMATED (never real); voice PROVEN_AUTOMATED; loopback PROVEN_PROXY; the Cloud Core half PROVEN_REAL (release; `account_missing` is the honest production answer); a real read-only run over the owner's account READY_FOR_OWNER after the owner puts the account on the host (owner item).
