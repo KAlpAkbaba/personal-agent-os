@@ -1,0 +1,59 @@
+# The Owner Utterance Suite, nightly (docs/DECISIONS.md ADR-0080 §1): every corpus case
+# through the real canonical voice path, with the JSON report kept as a run artifact. No
+# audio, no device, no secrets - the harness wires a fake device and SQLite.
+#
+# The same suite runs on every push inside "API lint + unit tests"; this workflow exists so
+# the report is produced and kept on a schedule even on a day nothing was pushed, and so a
+# routing regression from a dependency bump is found before the owner is.
+name: Nightly voice routing qualification
+
+on:
+  schedule:
+    - cron: "15 2 * * *"  # 02:15 UTC, after the day's work and before the owner's morning
+  workflow_dispatch:
+
+jobs:
+  owner-utterance-suite:
+    name: Owner Utterance Suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: services/api
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Sync dependencies
+        run: uv sync --frozen
+      - name: Run the corpus through the real path
+        env:
+          PAGENTOS_VOICE_CORPUS_REPORT: ${{ github.workspace }}/voice-routing-report.json
+        run: uv run pytest -q tests/unit/test_owner_utterance_corpus.py
+      - name: Summarise
+        if: always()
+        run: |
+          if [ -f "${{ github.workspace }}/voice-routing-report.json" ]; then
+            python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          r = json.load(open("${{ github.workspace }}/voice-routing-report.json", encoding="utf-8"))
+          print(f"## Owner Utterance Suite - {r['summary']}")
+          print(f"corpus v{r['corpus_version']}: {r['total_cases']} cases, {r['passed']} passed, "
+                f"{r['clarification']} clarification, {r['failed_routing']} wrong route, "
+                f"{r['forbidden_side_effects']} forbidden side effects")
+          for row in r.get("confusion", [])[:20]:
+              print(f"- `{row['case_id']}` {row['utterance']!r}: expected {row['expected']}, resolved {row['resolved']}")
+          PY
+          else
+            echo "## Owner Utterance Suite - no report written" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Keep the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: voice-routing-report
+          path: voice-routing-report.json
+          if-no-files-found: warn
+          retention-days: 30

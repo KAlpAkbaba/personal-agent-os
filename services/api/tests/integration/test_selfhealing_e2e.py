@@ -242,6 +242,38 @@ def test_m6_selfhealing_full_story(tmp_path: Path, monkeypatch) -> None:
         assert again.json()["incident_id"] == incident["incident_id"]
         assert again.json()["occurrence_count"] == 2
 
+        # ---- M18.4 (ADR-0081 §1, spec §18): the Evolution Supervisor turns the recovered
+        # incident into ONE P0 opportunity, evidence-verified against the incident row,
+        # with its promotion class derived from the risk table - through the REST surface
+        # of the same app, against the same database.
+        scanned = client.post("/v1/evolution/supervisor/scan")
+        assert scanned.status_code == 200, scanned.text
+        assert scanned.json()["status"] == "scanned"
+        listed = client.get("/v1/evolution/opportunities", params={"limit": 200}).json()
+        mine = [
+            o
+            for o in listed["opportunities"]
+            if o["source"] == "incident" and o["source_ref"] == incident["incident_id"]
+        ]
+        assert len(mine) == 1, [o["source_ref"] for o in listed["opportunities"]]
+        assert mine[0]["priority"] == "P0"
+        assert mine[0]["promotion_class"] in (
+            "AUTO_SAFE",
+            "AUTO_CANARY",
+            "OWNER_APPROVAL_REQUIRED",
+            "NEVER_AUTO_PROMOTE",
+        )
+        assert mine[0]["detail"]["evidence_verification"][0]["verified"] is True
+        # A second scan tracks it and opens nothing new.
+        rescanned = client.post("/v1/evolution/supervisor/scan").json()
+        assert incident["incident_id"] not in [
+            o["source_ref"]
+            for o in client.get("/v1/evolution/opportunities", params={"limit": 200}).json()[
+                "opportunities"
+            ]
+            if o["opportunity_id"] in rescanned["opened"]
+        ]
+
         # ---- 4+5. Engineering pipeline: reproduce -> regression -> patch ----
         # -> review -> staging deploy -> health green -> production promote.
         run_response = client.post(
@@ -280,17 +312,17 @@ def test_m6_selfhealing_full_story(tmp_path: Path, monkeypatch) -> None:
 
         # Records: incident fixed + linked to the fixing release; releases
         # reflect the whole story.
-        incidents = client.get(
-            "/v1/selfhealing/incidents", params={"component": component}
-        ).json()["incidents"]
+        incidents = client.get("/v1/selfhealing/incidents", params={"component": component}).json()[
+            "incidents"
+        ]
         assert len(incidents) == 1
         assert incidents[0]["status"] == "fixed"
         assert incidents[0]["fixed_release_id"] is not None
         releases = {
             r["version"]: r["status"]
-            for r in client.get(
-                "/v1/selfhealing/releases", params={"component": component}
-            ).json()["releases"]
+            for r in client.get("/v1/selfhealing/releases", params={"component": component}).json()[
+                "releases"
+            ]
         }
         assert releases["1.1.0"] == "rolled_back"
         assert releases["1.1.1"] == "active"
@@ -350,9 +382,7 @@ def test_m6_selfhealing_full_story(tmp_path: Path, monkeypatch) -> None:
         # The bad candidate is marked rejected in the release records.
         bad_version = bad_result.candidate_version
         assert bad_version is not None and bad_version != "1.1.1"
-        assert (
-            runtime.service.get_release(component, bad_version)["status"] == "rejected"
-        )
+        assert runtime.service.get_release(component, bad_version)["status"] == "rejected"
         # Production untouched and still healthy on the fixed release.
         status = workspace_status(prod_ws)
         assert status["current"] == "1.1.1"
