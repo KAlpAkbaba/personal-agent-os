@@ -21,6 +21,7 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # compat: widening (String -> Text; the old reader keeps working; M18.4 spec §10)
     op.alter_column(
         "research_candidates",
         "query_id",

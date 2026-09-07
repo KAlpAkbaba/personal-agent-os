@@ -161,7 +161,7 @@ TERMINAL_CLAIMABLE: Final[frozenset[str]] = frozenset({TERMINAL_VERIFIED, TERMIN
 #: from the ledger after a restart, an explicit `display.wake` starting the command
 #: holdoff, and the alarm-wake holdoff actually started by `fire_alarm` (it had no
 #: caller on v10).
-ACTION_CONTRACT_VERSION: Final = 11
+ACTION_CONTRACT_VERSION: Final = 12
 
 FAKE_COMPLETION_PHRASES: Final[tuple[str, ...]] = (
     "yapmış gibi düşün",

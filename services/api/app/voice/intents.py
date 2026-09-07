@@ -43,6 +43,12 @@ class Intent(StrEnum):
     # "Canlıya al." as an IMPERATIVE is an action (always refused by policy, contract §2);
     # "canlıya alabilir misin?" stays the can_deploy QUERY.
     DEPLOY = "deploy"  # canlıya al / yayına al
+    # M18.4 (spec §4): the owner's voice over self-evolution. Actions, every one a receipt.
+    EVOLUTION_PAUSE = "evolution_pause"  # kendi kendini geliştirmeyi duraklat
+    EVOLUTION_RESUME = "evolution_resume"  # kendi kendini geliştirmeyi aç
+    EVOLUTION_CANCEL = "evolution_cancel"  # bu geliştirmeyi iptal et
+    EVOLUTION_HOLD = "evolution_hold"  # bunu canlıya alma
+    RELEASE_ROLLBACK = "release_rollback"  # önceki sürüme dön
     STOP = "stop"  # dur / kes / sus / yeter / durdur / duraklat / bekle
     RESUME = "resume"  # devam / kaldığın yerden / sürdür
     REPEAT = "repeat"  # tekrar (oku) / yeniden oku / bir daha
@@ -103,6 +109,11 @@ CAPABILITY_BY_INTENT: dict[Intent, str] = {
     Intent.EYE_DISABLE: "eye.disable",
     Intent.EYE_ENABLE: "eye.enable",
     Intent.DEPLOY: "release.promote",
+    Intent.EVOLUTION_PAUSE: "evolution.control",
+    Intent.EVOLUTION_RESUME: "evolution.control",
+    Intent.EVOLUTION_CANCEL: "evolution.control",
+    Intent.EVOLUTION_HOLD: "evolution.control",
+    Intent.RELEASE_ROLLBACK: "release.rollback",
     # M18.3 (spec §3.8): every one of these ends in an ActionReceipt. ALARM_TEST_CREATE
     # targets the SAME capability as ALARM_CREATE — a test alarm is a real alarm with
     # `test=true` and a short offset (spec §8.1), not a second code path, so it must not be
@@ -174,6 +185,7 @@ def klass_for(intent: Intent) -> str:
     if intent in (Intent.EXPLAIN, Intent.NONE) or intent in QUERY_TOOL_BY_INTENT:
         return KLASS_QUERY
     return KLASS_CONTROL
+
 
 PRESENTATION_SUMMARY = "summary"
 PRESENTATION_DETAIL = "detail"
@@ -273,6 +285,9 @@ class ResolvedIntent:
     #: For an ALARM_SNOOZE utterance, the minutes the owner SAID (``spoken_minutes``);
     #: None when no count was spoken, and the alarm's own default applies.
     alarm_minutes: int | None = None
+    #: M18.4: for an EVOLUTION_* utterance, the action the owner's words asked for
+    #: (pause | resume | cancel | hold); the tool applies THIS, never the model's argument.
+    evolution_action: str | None = None
 
     def __post_init__(self) -> None:
         if not self.klass:
@@ -296,6 +311,7 @@ class ResolvedIntent:
             "research_reference": self.research_reference,
             "policy_changes": dict(self.policy_changes) if self.policy_changes else None,
             "alarm_minutes": self.alarm_minutes,
+            "evolution_action": self.evolution_action,
         }
 
     @property
@@ -530,6 +546,69 @@ _PROMOTE_TARGETS: Final[tuple[str, ...]] = ("canlıya", "canliya", "yayına", "y
 _TAKE_VERB_FORMS: Final[tuple[str, ...]] = ("al", "alsana")
 
 
+#: M18.4 (spec §4). "geliştirme" as a stem: "geliştirmeyi", "geliştirmeye", "geliştirmeleri"
+#: are all the noun; "geliştiriyorsun" (a question about what is being built) is NOT, and
+#: stays a question. Exact verb forms, as everywhere in this family.
+_EVOLUTION_NOUN_STEMS: Final[tuple[str, ...]] = (
+    "geliştirme",
+    "gelistirme",
+    "evrim",
+    "özgelişim",
+    "ozgelisim",
+)
+_EVOLUTION_PAUSE_FORMS: Final[tuple[str, ...]] = (
+    "duraklat",
+    "durdur",
+    "kapat",
+    "beklet",
+    "dondur",
+)
+_EVOLUTION_RESUME_FORMS: Final[tuple[str, ...]] = (
+    "aç",
+    "ac",
+    "başlat",
+    "baslat",
+    "sürdür",
+    "surdur",
+    "devam",
+)
+_EVOLUTION_CANCEL_STEMS: Final[tuple[str, ...]] = ("iptal", "vazgeç", "vazgec")
+_HOLD_NEGATION_FORMS: Final[tuple[str, ...]] = ("alma", "almayın", "almayin", "almayacaksın")
+_VERSION_STEMS: Final[tuple[str, ...]] = ("sürüm", "surum", "versiyon")
+_PREVIOUS_VERSION_STEMS: Final[tuple[str, ...]] = ("öncek", "oncek", "eski")
+_RETURN_VERB_STEMS: Final[tuple[str, ...]] = ("dön", "don", "geri")
+
+EVOLUTION_ACTION_BY_INTENT: Final[dict[Intent, str]] = {
+    Intent.EVOLUTION_PAUSE: "pause",
+    Intent.EVOLUTION_RESUME: "resume",
+    Intent.EVOLUTION_CANCEL: "cancel",
+    Intent.EVOLUTION_HOLD: "hold",
+}
+
+
+def _evolution_match(tokens: tuple[str, ...]) -> tuple[Intent, str] | None:
+    """The owner's voice over self-evolution (M18.4 spec §4), in priority order: the hold
+    ("canlıya alma" - a negation the deploy matcher must never read as "al"), the rollback,
+    then the pause / resume / cancel forms that need the evolution noun."""
+    if _has_exact(tokens, *_PROMOTE_TARGETS) and _has_exact(tokens, *_HOLD_NEGATION_FORMS):
+        return Intent.EVOLUTION_HOLD, "canlıya alma"
+    if (
+        _has(tokens, *_VERSION_STEMS)
+        and _has(tokens, *_PREVIOUS_VERSION_STEMS)
+        and _has(tokens, *_RETURN_VERB_STEMS)
+    ):
+        return Intent.RELEASE_ROLLBACK, "önceki sürüme dön"
+    if _has(tokens, *_EVOLUTION_NOUN_STEMS) is None:
+        return None
+    if _has(tokens, *_EVOLUTION_CANCEL_STEMS):
+        return Intent.EVOLUTION_CANCEL, "geliştirmeyi iptal et"
+    if _has_exact(tokens, *_EVOLUTION_PAUSE_FORMS):
+        return Intent.EVOLUTION_PAUSE, "geliştirmeyi duraklat"
+    if _has_exact(tokens, *_EVOLUTION_RESUME_FORMS):
+        return Intent.EVOLUTION_RESUME, "geliştirmeyi aç"
+    return None
+
+
 def _deploy_match(tokens: tuple[str, ...]) -> str | None:
     target = _has_exact(tokens, *_PROMOTE_TARGETS)
     if target and _has_exact(tokens, *_TAKE_VERB_FORMS):
@@ -635,7 +714,7 @@ def spoken_minutes(tokens: tuple[str, ...]) -> int | None:
 
 
 def _snooze_again_match(tokens: tuple[str, ...]) -> str | None:
-    """"On dakika sonra tekrar çal." / "Biraz sonra yeniden çal.": a snooze without the
+    """ "On dakika sonra tekrar çal." / "Biraz sonra yeniden çal.": a snooze without the
     verb "ertele". Needs "again" AND a ring verb AND a "later" (minutes or "sonra"), so
     "şarkıyı tekrar çal" (play the song again) stays a repeat."""
     if (
@@ -645,6 +724,7 @@ def _snooze_again_match(tokens: tuple[str, ...]) -> str | None:
     ):
         return "tekrar çal"
     return None
+
 
 _SCREEN_WORD_FORMS: Final[tuple[str, ...]] = (
     "ekran",
@@ -694,7 +774,7 @@ def _screen_noun(tokens: tuple[str, ...]) -> str | None:
 
 
 def _is_question(tokens: tuple[str, ...]) -> bool:
-    """"kaçta", "ne zaman", "var mı", "açık mı" — the shapes that make an alarm/display
+    """ "kaçta", "ne zaman", "var mı", "açık mı" — the shapes that make an alarm/display
     utterance a QUERY rather than a command."""
     return bool(
         _has(tokens, "kaçta", "kacta", "kaçtı", "kacti")
@@ -834,7 +914,7 @@ def ambient_policy_changes(tokens: tuple[str, ...]) -> dict[str, bool] | None:
 
 
 def _ambient_explain_match(tokens: tuple[str, ...]) -> str | None:
-    """"Ekranları neden kapattın?", "Neden açık bıraktın?", "Şu an ekran politikası ne?"
+    """ "Ekranları neden kapattın?", "Neden açık bıraktın?", "Şu an ekran politikası ne?"
     (ADR-0079 §12). "neden" alone is not enough - "Neden önemli?" is a research
     follow-up - so the question must name the screen, the leaving-on, or the policy."""
     why = _has_exact(tokens, "neden", "niye", "niçin", "nicin")
@@ -912,6 +992,7 @@ _RUN_VERB_FORMS: Final[tuple[str, ...]] = ("yap", "yapar", "başlat", "baslat", 
 #: app.explain.classify already owns (research_problems / rejected_pages) - it does not
 #: restate them: those kinds ride on ``query_kind`` and are consulted here directly.
 _RESEARCH_PROBLEM_WORDS: Final[tuple[str, ...]] = ("sorun", "hata", "problem")
+
 
 #: "Bunun arka planda nasıl çalıştığını anlat." - the pipeline asked about without the
 #: word "teknik" (corpus r.tech.6). One helper for the research CLASS and the TECHNICAL
@@ -1353,7 +1434,7 @@ def _content_words(tokens: tuple[str, ...]) -> tuple[str, ...]:
 
 
 def _previous_match(tokens: tuple[str, ...]) -> str | None:
-    """"bir önceki" / "bundan önceki" / "öncekini" — but not "az önceki"."""
+    """ "bir önceki" / "bundan önceki" / "öncekini" — but not "az önceki"."""
     for n, tok in enumerate(tokens):
         if not (tok.startswith("öncek") or tok.startswith("oncek")):
             continue
@@ -1522,6 +1603,18 @@ def resolve_intent(
     if eye_matched := _eye_enable_match(tokens):
         return ResolvedIntent(
             Intent.EYE_ENABLE, scope=SCOPE_CONVERSATION, matched=eye_matched, **base
+        )
+
+    # 0b'. M18.4 (spec §4): the owner's voice over self-evolution. Before the alarm and
+    #      the display, because "kendi kendini geliştirmeyi kapat" carries "kapat" (which a
+    #      ringing alarm would otherwise claim) and "bunu canlıya alma" carries "alma".
+    if evolution_matched := _evolution_match(tokens):
+        return ResolvedIntent(
+            evolution_matched[0],
+            scope=SCOPE_CONVERSATION,
+            matched=evolution_matched[1],
+            evolution_action=EVOLUTION_ACTION_BY_INTENT.get(evolution_matched[0]),
+            **base,
         )
 
     # 0c. M18.3 (spec §3.8, §6): the alarm and the display. BEFORE the generic stop check,
@@ -1998,7 +2091,6 @@ __all__ = [
     "PRESENTATION_SUMMARY",
     "PRESENTATION_TECHNICAL",
     "QUERY_TOOL_BY_INTENT",
-
     "RESEARCH_CLASSES",
     "RESEARCH_CLASSES_BOUND_TO_A_RUN",
     "RESEARCH_CLASSES_MAY_CRAWL",

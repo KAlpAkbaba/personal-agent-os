@@ -49,6 +49,7 @@ from app.voice.realtime import RealtimeState
 from app.voice.realtime_sessions import actions
 from app.voice.realtime_sessions.sideband import SB_NARRATION_CURSOR, SB_PLAN_CHANGED
 from app.voice.realtime_sessions.tools_ambient import register_ambient_tools
+from app.voice.realtime_sessions.tools_evolution import register_evolution_tools
 
 logger = get_logger("app.voice.realtime_sessions.tools")
 
@@ -1203,6 +1204,21 @@ def activity_explain(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, A
 
         query = classify(question)
         live_kind = query.kind if query.matched else None
+    # M18.4 (spec §4): the four self-evolution questions are answered from the Evolution
+    # Supervisor's status, the same way live state goes to state.now - whichever tool the
+    # model picked, the owner hears the same sentence, from rows alone.
+    from app.explain.classify import EVOLUTION_STATUS_KINDS
+
+    if live_kind in EVOLUTION_STATUS_KINDS:
+        from app.voice.realtime_sessions.tools_evolution import evolution_status
+
+        answered = evolution_status(ctx, {"question": question, "kind": live_kind})
+        return {
+            **answered,
+            "intent": resolved.to_dict(),
+            "level": "executive",
+            "narration_session_id": None,
+        }
     if live_kind in LIVE_STATE_KINDS:
         live = actions.state_now(
             ctx,
@@ -1558,6 +1574,8 @@ def default_registry() -> ToolRegistry:
     # M18.3 spec §3.8: the alarm, display and ambient tools. One line, by design — the
     # manifest stays a manifest and `tools_ambient` stays the receipt discipline.
     register_ambient_tools(reg)
+    # M18.4 (spec §4): the owner's voice over self-evolution. Same one-line discipline.
+    register_evolution_tools(reg)
     return reg
 
 

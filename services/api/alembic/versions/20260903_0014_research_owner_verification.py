@@ -57,6 +57,7 @@ def _in_list(column: str, values: Sequence[str]) -> str:
 
 
 def upgrade() -> None:
+    # compat: widening (the CHECK is replaced by a superset; M18.4 spec §10)
     op.drop_constraint("ck_research_runs_stage", "research_runs", type_="check")
     op.create_check_constraint(
         "ck_research_runs_stage",

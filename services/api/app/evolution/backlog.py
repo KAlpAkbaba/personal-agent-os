@@ -580,6 +580,10 @@ def opportunity_dict(row: EvolutionOpportunity) -> dict[str, Any]:
         "source": row.source,
         "source_ref": row.source_ref,
         "detail": dict(row.detail_json or {}),
+        # M18.4 (spec §3.2-3.3): derived by the supervisor at creation, read here so every
+        # surface (routes, cockpit, voice) sees the same two words without re-deriving.
+        "priority": (row.detail_json or {}).get("priority"),
+        "promotion_class": (row.detail_json or {}).get("promotion_class"),
     }
 
 

@@ -151,6 +151,20 @@ export type Opportunity = {
   risk_tier_label?: string | null;
   requires_second_confirmation?: boolean | null;
   risk_reasons?: string[];
+  /**
+   * M18.4 (ADR-0081): derived by the Evolution Supervisor at creation - the priority
+   * from the signal's kind, the promotion class from the risk table. `null` means the
+   * row predates the supervisor or was opened by hand; it is said as "sınıflanmadı".
+   */
+  priority?: string | null;
+  promotion_class?: string | null;
+};
+
+export const PROMOTION_CLASS_LABEL: Record<string, string> = {
+  AUTO_SAFE: "kendi başına güvenli",
+  AUTO_CANARY: "kanaryaya kadar kendi başına",
+  OWNER_APPROVAL_REQUIRED: "sahip onayı gerekir",
+  NEVER_AUTO_PROMOTE: "asla kendi başına canlıya çıkmaz",
 };
 
 export const fetchOpportunities = () =>
@@ -565,5 +579,106 @@ export const fetchVoiceQualification = () =>
       open_opportunities: numberOrNull(r.open_opportunities) ?? 0,
       latest_synthetic_run: parseQualificationRun(r.latest_synthetic_run),
       latest_owner_audio_run: parseQualificationRun(r.latest_owner_audio_run),
+    };
+  });
+
+// --------------------------------------------------- the Evolution Supervisor
+
+/** ADR-0081. What the supervisor last did and what the rows say it is working on. */
+export type EvolutionSupervisorStatus = {
+  paused: boolean;
+  enabled: boolean;
+  last_scan_at: string | null;
+  last_scan: { status: string; signals: number; opened: string[]; already_tracked: number } | null;
+  open_by_priority: Record<string, number>;
+  building: Array<{ opportunity_id: string; title: string; status: string; priority: string | null }>;
+  pending_candidates: Array<{ opportunity_id: string; title: string; status: string }>;
+  release_failures: Array<{ opportunity_id: string; title: string; status: string }>;
+  last_fix: {
+    incident_id: string | null;
+    component: string | null;
+    fixed_release_id: string | null;
+    last_seen_at: string | null;
+    error_class: string;
+  } | null;
+  running: { version: string; version_source: string; contracts: Record<string, number> } | null;
+};
+
+function rows(raw: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(raw) ? (raw as Array<Record<string, unknown>>) : [];
+}
+
+export const fetchEvolutionSupervisor = () =>
+  load<EvolutionSupervisorStatus>("/v1/evolution/supervisor", (raw) => {
+    const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+    const scan = (r.last_scan && typeof r.last_scan === "object" ? r.last_scan : null) as Record<
+      string,
+      unknown
+    > | null;
+    const fix = (r.last_fix && typeof r.last_fix === "object" ? r.last_fix : null) as Record<
+      string,
+      unknown
+    > | null;
+    const running = (r.running && typeof r.running === "object" ? r.running : null) as Record<
+      string,
+      unknown
+    > | null;
+    const counts = (r.open_by_priority && typeof r.open_by_priority === "object"
+      ? r.open_by_priority
+      : {}) as Record<string, unknown>;
+    return {
+      paused: r.paused === true,
+      enabled: r.enabled !== false,
+      last_scan_at: typeof r.last_scan_at === "string" ? r.last_scan_at : null,
+      last_scan: scan
+        ? {
+            status: String(scan.status ?? ""),
+            signals: numberOrNull(scan.signals) ?? 0,
+            opened: Array.isArray(scan.opened) ? scan.opened.map(String) : [],
+            already_tracked: numberOrNull(scan.already_tracked) ?? 0,
+          }
+        : null,
+      open_by_priority: Object.fromEntries(
+        Object.entries(counts).map(([k, v]) => [k, numberOrNull(v) ?? 0]),
+      ),
+      building: rows(r.building).map((b) => ({
+        opportunity_id: String(b.opportunity_id ?? ""),
+        title: String(b.title ?? ""),
+        status: String(b.status ?? ""),
+        priority: typeof b.priority === "string" ? b.priority : null,
+      })),
+      pending_candidates: rows(r.pending_candidates).map((b) => ({
+        opportunity_id: String(b.opportunity_id ?? ""),
+        title: String(b.title ?? ""),
+        status: String(b.status ?? ""),
+      })),
+      release_failures: rows(r.release_failures).map((b) => ({
+        opportunity_id: String(b.opportunity_id ?? ""),
+        title: String(b.title ?? ""),
+        status: String(b.status ?? ""),
+      })),
+      last_fix: fix
+        ? {
+            incident_id: typeof fix.incident_id === "string" ? fix.incident_id : null,
+            component: typeof fix.component === "string" ? fix.component : null,
+            fixed_release_id:
+              typeof fix.fixed_release_id === "string" ? fix.fixed_release_id : null,
+            last_seen_at: typeof fix.last_seen_at === "string" ? fix.last_seen_at : null,
+            error_class: String(fix.error_class ?? ""),
+          }
+        : null,
+      running: running
+        ? {
+            version: String(running.version ?? "unknown"),
+            version_source: String(running.version_source ?? "unknown"),
+            contracts: Object.fromEntries(
+              Object.entries(
+                (running.contracts && typeof running.contracts === "object"
+                  ? running.contracts
+                  : {}) as Record<string, unknown>,
+              ).map(([k, v]) => [k, numberOrNull(v) ?? 0]),
+            ),
+          }
+        : null,
     };
   });

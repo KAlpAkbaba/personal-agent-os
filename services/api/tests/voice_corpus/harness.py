@@ -51,6 +51,9 @@ from app.broker.models import AuditEvent, Device, DeviceCommand, DeviceSession, 
 from app.broker.runtime import BrokerRuntime, DeviceConnection
 from app.config import Settings
 from app.devices.status import DeviceStatusRegistry
+from app.evolution.models import Capability, CapabilityGap, EvolutionOpportunity, SkillVersion
+from app.evolution.runtime import EvolutionRuntime
+from app.evolution.supervisor import is_paused
 from app.identity.root import InMemoryCredentialRoot
 from app.identity.runtime import IdentityRuntime
 from app.ledger import service as ledger_service
@@ -341,6 +344,10 @@ class Harness:
         with self.factory() as db:
             return is_eye_enabled(db)
 
+    def evolution_paused(self) -> bool:
+        with self.factory() as db:
+            return is_paused(db)
+
 
 def build_harness() -> Harness:
     """A fresh application per case: real relay, real router, real services, fake device."""
@@ -380,7 +387,30 @@ def build_harness() -> Harness:
     device = FakeDeviceAction(results=happy_device_results())
     sequence = WakeSequence(device_action=device, tts=FakeTTSProvider())
     statuses = DeviceStatusRegistry()
-    runtime.register_live(wake_sequence=sequence, device_statuses=statuses)
+    # The evolution engine gets its OWN in-memory database: on a StaticPool SQLite engine
+    # every session shares one connection, so the evolution service's session exit would
+    # roll back the relay's uncommitted tool-call row mid-call (a harness artefact; Postgres
+    # gives each session its own connection). Nothing in a corpus case needs the two to
+    # share rows: the pause switch is on the ledger, which the tools read through ctx.db.
+    evolution_engine = create_engine(
+        "sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False}
+    )
+    for table in (
+        ActivityEventRow.__table__,
+        Capability.__table__,
+        SkillVersion.__table__,
+        CapabilityGap.__table__,
+        EvolutionOpportunity.__table__,
+    ):
+        table.create(evolution_engine)
+    evolution = EvolutionRuntime(settings, engine=evolution_engine)
+    runtime.register_live(
+        wake_sequence=sequence,
+        device_statuses=statuses,
+        evolution_runtime=evolution,
+        evolution_service=evolution.evolution_service,
+        settings=settings,
+    )
     holdoffs = HoldoffRegistry()
     set_holdoffs(holdoffs)
     set_publisher(UiStatePublisher())
@@ -460,7 +490,13 @@ def contract_arguments(case: UtteranceCase, tool: str, resolved: dict) -> dict:
             "utterance": text,
             "observed_after": _local_eye("DISABLED" if tool == "eye.disable" else "ACTIVE"),
         }
-    elif tool in ("narration.control", "release.promote", "voice.intent"):
+    elif tool in (
+        "narration.control",
+        "release.promote",
+        "release.rollback",
+        "evolution.control",
+        "voice.intent",
+    ):
         args = {"utterance": text}
     args.update(case.tool_arguments)
     return args
@@ -645,6 +681,8 @@ def run_case(case: UtteranceCase, *, harness: Harness | None = None) -> CaseResu
                 and (body.get("query_kind") or (body.get("intent") or {}).get("query_kind")) != want
             ):
                 result.problems.append(f"query_kind != {want!r}")
+            elif key == "evolution_paused_after" and h.evolution_paused() is not want:
+                result.problems.append(f"evolution paused after != {want}")
             elif key == "eye_enabled_after" and h.eye_enabled() is not want:
                 result.problems.append(f"eye enabled after != {want}")
             elif key == "alarm_state":

@@ -32,6 +32,16 @@ boundary it needs. Order matters only where written; D needs no audio and can go
 > wrong routes and zero forbidden side effects; the nine routing defects the first run
 > found are fixed and pinned. What A and C still need from you is the audibility alone.
 > The Cockpit's "Ses yönlendirme sınaması" panel shows the recorded state.
+>
+> **M18.4 foundation landed the same evening (ADR-0081).** The Evolution Supervisor now
+> turns incidents and recurring failures into prioritised opportunities on the clock; you
+> can say `Kendi kendini geliştirmeyi duraklat/aç`, `Bu geliştirmeyi iptal et`, `Bunu
+> canlıya alma`, and ask `Şu an ne geliştiriyorsun?` / `Hangi sürüm çalışıyor?` /
+> `Bekleyen aday sürüm var mı?`; the Cockpit has an "Evrim gözetmeni" panel. Nothing
+> here needs you. One choice is yours when you next release: `release-cloud-core.ps1
+> -BlueGreen` performs the first zero-downtime cutover (that FIRST one has a single short
+> gap while the edge starts; every release after it has none). Without the switch the
+> proven single-container release runs as before.
 
 | | Item | Needs | Time |
 |---|---|---|---|

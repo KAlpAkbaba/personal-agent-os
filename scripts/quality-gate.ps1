@@ -331,6 +331,15 @@ if (-not $Fast) {
     Assert-ExitCode "cloud release tests"
   }
 
+  Invoke-Step "Cloud Core blue/green release (PS5.1 + Git Bash)" {
+    # M18.4 (spec §6): the idle colour is brought up on the new sha, verified, switched to,
+    # the old colour drained; rollback is the switch in reverse. Proven under a fake docker
+    # that knows the two colours and the edge; the first real handoff is the next release.
+    $script = Join-Path $repoRoot "scripts\tests\cloud-release-bluegreen.tests.ps1"
+    & (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -NoProfile -File $script
+    Assert-ExitCode "cloud release blue/green tests"
+  }
+
   Invoke-Step "UTF-8 JSON decoding (PS5.1)" {
     # A real qualification record showed Turkish letters as mojibake: 5.1 decoded a
     # charset-less JSON body as Latin-1 while the database held correct UTF-8.

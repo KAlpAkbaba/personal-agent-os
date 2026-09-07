@@ -680,6 +680,23 @@ speech text are all real. Nothing in this stage claims a sound was heard.
 | 15.8 | The nine routing defects the first run found are fixed with regression tests and their utterances kept in the corpus | `PROVEN_AUTOMATED` | ADR-0080 §2; `test_voice_corpus_regressions.py` (37), `test_alarms_tr_time.py` (+6); neighbouring suites 469 passed. |
 | 15.9 | Physical owner audio (microphone → transcription → the same path → audible answer) | `READY_FOR_OWNER_TEST` | Items 23b and 25 — now a thin final layer over proven routing. |
 
+## Stage 16 — M18.4 self-evolution, self-healing and the zero-downtime update foundation (2026-09-07, ADR-0081; nothing PROVEN_REAL yet)
+
+Spec: `docs/M18_4_SELF_EVOLUTION_SPEC.md`. `PROVEN_AUTOMATED` as in Stage 15.
+
+| # | Criterion | Status | Evidence |
+|---|---|---|---|
+| 16.1 | Durable signals (incidents, recurring failed receipts, recurring research failures, open generation gaps) become deduplicated `EvolutionOpportunity` rows on a clock, each with a priority (P0–P3) and a promotion class derived from the risk table, never chosen | `PROVEN_PROXY` | `test_evolution_supervisor.py` (real EvolutionService, ledger and incident rows on SQLite); `checks.evolution.supervisor` on health. |
+| 16.2 | The owner's pause switch is a ledger row read back; a paused scan opens nothing; a failing source is a recorded fact, not a crash | `PROVEN_PROXY` | same suite. |
+| 16.3 | The supervisor holds LAB authority only and never drives a lifecycle transition | `PROVEN_PROXY` (structural) | `test_the_supervisor_acts_with_lab_authority_only`. |
+| 16.4 | The owner's voice over self-evolution routes through the ONE router and acts through receipts: pause / resume / cancel / hold; rollback and promotion by voice refused with the reason recorded; the four questions answered from rows | `PROVEN_AUTOMATED` | corpus category `evolution` (68 cases, 413/413 HEALTHY); `test_voice_evolution_tools.py`. |
+| 16.5 | "Which version is running" is a fact: sha (or `unknown`), app version, contract versions, last-known-good, uptime, on health and `/v1/release/*` | `PROVEN_PROXY` | `test_release_version.py`, `test_release_routes.py`. Real: the next release exports `PAGENTOS_RELEASE`. |
+| 16.6 | Every migration `upgrade()` is expand-only unless it declares a contract phase or a reviewed widening | `PROVEN_PROXY` (structural, whole tree) | `test_migration_compatibility.py` (24 migrations). |
+| 16.7 | Blue/green: idle colour up → verified → switch → verified through the edge → drain → old stopped; rollback the switch in reverse; refusals 73/75/76 before the switch; the first cutover named | `PROVEN_PROXY` | `cloud-release-bluegreen.tests.ps1` (18/18 under a fake docker/curl). Real: the owner's next authorised release with `-BlueGreen` (`NOT_YET_PROVEN`). |
+| 16.8 | A broken release is rolled back automatically by a supervisor outside the app, the incident recorded, a fix produced, staged and promoted; a bad candidate rejected with production untouched — real processes | `PROVEN_PROXY` | `tests/integration/test_selfhealing_e2e.py` (CI integration job, real processes on loopback). |
+| 16.9 | Availability is a measurement or "no measurement" | `PROVEN_PROXY` (ledger half) | `/v1/release/slo`: windows counted from the ledger, `availability: null`, `measurement: "none"`. Probes: `NOT_YET_PROVEN`. |
+| 16.10 | Windows agent staged update with supervisor rollback; browser worker drain; web live update | `NOT_YET_PROVEN` (designed, spec §7–9) | — |
+
 ## Stage 7 — Real voice
 
 | # | Criterion | Status |

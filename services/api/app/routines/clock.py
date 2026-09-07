@@ -91,6 +91,7 @@ class RoutineClock:
         evaluate_due: Callable[[Session, datetime], Any],
         alarm_tick: Callable[[Session, datetime], Any] | None = None,
         ambient_tick: Callable[[Session, datetime], Any] | None = None,
+        evolution_tick: Callable[[Session, datetime], Any] | None = None,
         interval_s: float = DEFAULT_INTERVAL_S,
         enabled: bool = True,
     ) -> None:
@@ -98,6 +99,9 @@ class RoutineClock:
         self._evaluate_due = evaluate_due
         self._alarm_tick = alarm_tick
         self._ambient_tick = ambient_tick
+        #: M18.4 (spec §3.4): the Evolution Supervisor's scan. Last, and only after the
+        #: owner-facing ticks ran, so a slow scan can never delay an alarm.
+        self._evolution_tick = evolution_tick
         self._interval_s = max(MIN_INTERVAL_S, float(interval_s))
         self._enabled = enabled
         self._task: asyncio.Task[None] | None = None
@@ -164,6 +168,8 @@ class RoutineClock:
                 self._alarm_tick(session, moment)
             if self._ambient_tick is not None:
                 self._ambient_tick(session, moment)
+            if self._evolution_tick is not None:
+                self._evolution_tick(session, moment)
             self._health.last_error = None
         except Exception as exc:  # noqa: BLE001 - a failing tick must not stop the clock
             self._health.last_error = f"{type(exc).__name__}: {exc}"[:200]

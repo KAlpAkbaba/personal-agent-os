@@ -20,6 +20,7 @@ import type { FocusState } from "../research/focus";
 import {
   type AmbientPolicy,
   type DeviceStatus,
+  type EvolutionSupervisorStatus,
   type Goal,
   type Health,
   type LedgerEvent,
@@ -36,6 +37,7 @@ import {
   fetchAlarms,
   fetchAmbientPolicy,
   fetchDeviceStatus,
+  fetchEvolutionSupervisor,
   fetchGoals,
   fetchHealth,
   fetchLedgerEvents,
@@ -72,6 +74,8 @@ export type CockpitData = {
   devices: Loaded<DeviceStatus[]>;
   /** ADR-0080: the Owner Utterance Suite's latest recorded result. */
   voiceQualification: Loaded<VoiceQualification>;
+  /** ADR-0081: the Evolution Supervisor's picture, from rows alone. */
+  evolutionSupervisor: Loaded<EvolutionSupervisorStatus>;
 };
 
 const INITIAL: CockpitData = {
@@ -90,6 +94,7 @@ const INITIAL: CockpitData = {
   ambientPolicy: { kind: "loading" },
   devices: { kind: "loading" },
   voiceQualification: { kind: "loading" },
+  evolutionSupervisor: { kind: "loading" },
 };
 
 export function useCockpitData(enabled = true): { data: CockpitData; refresh: () => void } {
@@ -117,6 +122,7 @@ export function useCockpitData(enabled = true): { data: CockpitData; refresh: ()
         ambientPolicy,
         devices,
         voiceQualification,
+        evolutionSupervisor,
       ] = await Promise.all([
         fetchResearchTasks(),
         // Same refresh, no extra timer: the focus changes when the list does.
@@ -134,6 +140,7 @@ export function useCockpitData(enabled = true): { data: CockpitData; refresh: ()
         fetchAmbientPolicy(),
         fetchDeviceStatus(),
         fetchVoiceQualification(),
+        fetchEvolutionSupervisor(),
       ]);
       if (stopped.current) return;
       setData({
@@ -152,6 +159,7 @@ export function useCockpitData(enabled = true): { data: CockpitData; refresh: ()
         ambientPolicy,
         devices,
         voiceQualification,
+        evolutionSupervisor,
       });
     } finally {
       inFlight.current = false;

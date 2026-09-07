@@ -49,7 +49,10 @@ param(
     [switch]$SkipVerify,
     [switch]$VerifyOnly,
     [switch]$Force,
-    [switch]$DryRun
+    [switch]$DryRun,
+    # M18.4 (ADR-0081): run the zero-downtime host script (two api colours behind the edge)
+    # instead of the single-container recreate. Opt-in until the first cutover is proven.
+    [switch]$BlueGreen
 )
 
 Set-StrictMode -Version Latest
@@ -79,7 +82,8 @@ function New-RemoteReleaseCommand {
         [Parameter(Mandatory = $true)][string]$Sha,
         [Parameter(Mandatory = $true)][string]$RemoteTar,
         [Parameter(Mandatory = $true)][string]$Base,
-        [switch]$PreflightOnly
+        [switch]$PreflightOnly,
+        [switch]$BlueGreen
     )
     foreach ($p in @($RemoteTar, $Base)) {
         if ($p -cnotmatch '^/[A-Za-z0-9_./-]+$') { throw "unsafe remote path '$p'" }
@@ -92,7 +96,7 @@ function New-RemoteReleaseCommand {
         "mkdir -p '$Base/app.next'",
         "tar -xf '$RemoteTar' -C '$Base/app.next'",
         "rm -f '$RemoteTar'",
-        "bash '$Base/app.next/scripts/cloud/release-cloud-core.sh' $Sha$mode"
+        "bash '$Base/app.next/scripts/cloud/$(if ($BlueGreen) { 'release-cloud-core-bluegreen.sh' } else { 'release-cloud-core.sh' })' $Sha$mode"
     )
     return ($lines -join '; ')
 }
@@ -117,7 +121,7 @@ try {
     }
     $localTar = Join-Path $env:TEMP "pagentos-release-$short.tar"
     $remoteTar = "/tmp/pagentos-release-$short.tar"
-    $remote = New-RemoteReleaseCommand -Sha $sha -RemoteTar $remoteTar -Base $HostBase -PreflightOnly:$Preflight
+    $remote = New-RemoteReleaseCommand -Sha $sha -RemoteTar $remoteTar -Base $HostBase -PreflightOnly:$Preflight -BlueGreen:$BlueGreen
     $target = "${CloudUser}@${BrokerHost}"
 
     Write-Host "release-cloud-core: HEAD $short -> $target ($(if ($Preflight) { 'PREFLIGHT: validate only' } else { 'RELEASE' }))"

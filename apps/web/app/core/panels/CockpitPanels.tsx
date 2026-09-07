@@ -20,6 +20,7 @@ import {
 import {
   ALARM_STATE_LABEL,
   type AmbientPolicy,
+  type EvolutionSupervisorStatus,
   GOAL_STATUS_LABEL,
   type Goal,
   type Health,
@@ -28,6 +29,7 @@ import {
   type MemoryAuditEvent,
   type Opportunity,
   type PendingBriefing,
+  PROMOTION_CLASS_LABEL,
   type ResearchTask,
   type ShadowReady,
   TRUTH_KIND_LABEL,
@@ -339,9 +341,100 @@ export function EvolutionPanel({ state }: { state: CockpitData["opportunities"] 
                   {item.scores?.composite != null ? item.scores.composite.toFixed(2) : ""}
                 </span>
               </div>
-              <span className="muted">{item.status}</span>
+              <span className="muted" data-opportunity-priority={item.priority ?? "unclassified"}>
+                {item.status}
+                {" · "}
+                {item.priority ?? "öncelik sınıflanmadı"}
+                {" · "}
+                {item.promotion_class
+                  ? (PROMOTION_CLASS_LABEL[item.promotion_class] ?? item.promotion_class)
+                  : "terfi sınıfı belirlenmedi"}
+              </span>
             </li>
           ))}
+        </ul>
+      )}
+    </Panel>
+  );
+}
+
+/**
+ * ADR-0081: the Evolution Supervisor. Paused or scanning, what the last scan did, what is
+ * being built, what waits for the owner, what failed on the way to LIVE, the last incident
+ * fixed and the version that is running - each a sentence about rows, none a promise.
+ */
+export function EvolutionSupervisorPanel({
+  state,
+  now,
+}: {
+  state: CockpitData["evolutionSupervisor"];
+  now: number;
+}) {
+  return (
+    <Panel<EvolutionSupervisorStatus>
+      id="evolution-supervisor"
+      title="Evrim gözetmeni"
+      state={state}
+      empty="Gözetmen henüz taramadı."
+      isEmpty={(s) => s.last_scan === null && !s.paused}
+      badge={(s) => (s.paused ? "duraklatıldı" : s.enabled ? "tarıyor" : "kapalı")}
+      attention={(s) => s.paused || s.release_failures.length > 0}
+    >
+      {(s) => (
+        <ul>
+          <li data-supervisor-paused={String(s.paused)}>
+            <div className="event-row">
+              <span>{s.paused ? "Kendi kendini geliştirme duraklatıldı" : "Kendi kendini geliştirme açık"}</span>
+              <span className="event-when">{when(s.last_scan_at, now)}</span>
+            </div>
+            <span className="muted">
+              {s.last_scan
+                ? `son tarama: ${s.last_scan.signals} sinyal, ${s.last_scan.opened.length} yeni fırsat, ${s.last_scan.already_tracked} zaten izleniyor`
+                : "henüz tarama yok"}
+              {" · "}
+              {Object.entries(s.open_by_priority)
+                .map(([p, n]) => `${p} ${n}`)
+                .join(" · ") || "açık fırsat yok"}
+            </span>
+          </li>
+          {s.building.map((b) => (
+            <li key={b.opportunity_id} data-supervisor-building={b.opportunity_id}>
+              <div className="event-row">
+                <span>{b.title}</span>
+                <span className="event-when">{b.status}</span>
+              </div>
+            </li>
+          ))}
+          {s.pending_candidates.map((b) => (
+            <li key={b.opportunity_id} data-supervisor-pending={b.opportunity_id}>
+              <div className="event-row">
+                <span>{b.title}</span>
+                <span className="event-when">sahip kararı bekliyor</span>
+              </div>
+            </li>
+          ))}
+          {s.release_failures.map((b) => (
+            <li key={b.opportunity_id} data-supervisor-failure={b.opportunity_id}>
+              <div className="event-row">
+                <span>{b.title}</span>
+                <span className="event-when">{b.status}</span>
+              </div>
+            </li>
+          ))}
+          <li data-supervisor-last-fix>
+            <span className="muted">
+              {s.last_fix
+                ? `son düzeltilen olay: ${s.last_fix.component ?? "?"} · ${s.last_fix.error_class || "sağlık"}${s.last_fix.fixed_release_id ? ` · sürüm ${s.last_fix.fixed_release_id}` : ""}`
+                : "kayıtlı düzeltilmiş olay yok"}
+            </span>
+          </li>
+          <li data-supervisor-running>
+            <span className="muted">
+              {s.running
+                ? `çalışan sürüm: ${s.running.version} (${s.running.version_source === "env" ? "dışa aktarılmış" : "kimliği dışa aktarılmamış"}) · eylem sözleşmesi ${s.running.contracts.action ?? "?"}`
+                : "çalışan sürüm bildirilmedi"}
+            </span>
+          </li>
         </ul>
       )}
     </Panel>

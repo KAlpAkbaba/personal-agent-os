@@ -555,6 +555,35 @@ qualification").
   within it. Separately, when the owner wants it: the presence-based automatic off with the
   conservative thresholds, observed for real.
 
+## M18.4 Self-evolution, self-healing and the zero-downtime update foundation
+
+Spec: `docs/M18_4_SELF_EVOLUTION_SPEC.md` (ADR-0081). Deterministic gates, every CI run:
+
+- **signals become opportunities.** an incident, two failed receipts of one capability and
+  error class, two research failures of one class, an open generation gap → one
+  `EvolutionOpportunity` each, deduplicated, with `priority` and `promotion_class` derived
+  from the risk table (`test_evolution_supervisor.py`);
+- **the switch is real.** `evolution.paused` / `evolution.resumed` rows decide; a paused scan
+  opens nothing; a scan that opened something writes `evolution.supervisor_scanned`;
+- **authority is untouched.** the supervisor holds LAB scope and never calls `advance`;
+  `release.rollback` and `release.promote` by voice are refused receipts;
+- **the owner's voice.** every phrase in spec §4 and its variants is a corpus case through
+  the real path with zero forbidden side effects (`test_owner_utterance_corpus.py`);
+- **the version model.** health and `/v1/release/current` report sha/app/contracts/LKG
+  honestly (`unknown` when unset); `/v1/release/components` names the devices and says the
+  web is unknown from the server; `/v1/release/slo` never claims a fraction it did not
+  measure;
+- **migrations are expand-only** or declare why not (`test_migration_compatibility.py`);
+- **blue/green under fakes.** build → migrate → up idle → verify on idle → switch → verify
+  through the edge → drain → stop old; rollback before and after the switch; the refusals
+  (`cloud-release-bluegreen.tests.ps1`, quality gate);
+- **the real self-healing story** stays green (`test_selfhealing_e2e.py`).
+
+Real acceptance (owner-authorised, not automatable here): the first blue/green cutover on
+the Hetzner host inside the next release (`release-cloud-core.ps1 -BlueGreen`), after which
+`/v1/system/health.release.version` names the sha and the edge's `/edge/active` names the
+colour; a later release with no gap observed by a device that stays connected.
+
 ## M19 Multi-device / roaming owner qualification
 
 Real-only acceptance on at least two owner-authorised physical computers (PC-A, PC-B) and

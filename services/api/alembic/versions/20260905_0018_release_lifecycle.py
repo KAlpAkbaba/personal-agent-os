@@ -60,6 +60,7 @@ def upgrade() -> None:
     # 23 characters is the longest state name today ("owner_approval_required") against a
     # 24-character column: room for exactly one more character. Widen it now rather than
     # discover the ceiling by truncating a status.
+    # compat: widening (a longer String and a superset CHECK; M18.4 spec §10)
     op.alter_column(_TABLE, "status", type_=sa.String(length=32), existing_nullable=False)
     op.create_check_constraint(_CONSTRAINT, _TABLE, _in_list(_AFTER))
 

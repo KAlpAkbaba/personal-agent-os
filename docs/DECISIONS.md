@@ -6322,3 +6322,112 @@ Evidence: `tests/voice_corpus/`, `tests/unit/test_owner_utterance_corpus.py` (34
 `test_voice_qualification.py` (10), the neighbouring intent suites (469 passed after the
 fixes), `apps/web/tests/cockpit/voice-qualification.test.tsx`;
 `scripts/core/voice-routing-qualification.ps1`.
+
+
+## ADR-0081 — M18.4 foundation: the Evolution Supervisor, the owner's voice over self-evolution, the version model, expand-only migrations and the blue/green Cloud Core release (2026-09-07)
+
+Status: Accepted (foundation; the real handoff and the agent/web halves are named as not yet proven)
+
+Context: the owner's directive "M18.4 — CONTINUOUS SELF-EVOLUTION + SELF-HEALING +
+ZERO-DOWNTIME UPDATE FOUNDATION" (34 sections). The inventory found most of the machinery
+already built and proven in isolation — the authority kernel (ADR-0055), the opportunity
+backlog and lifecycle, the M7 sandboxed pipeline with independent review, shadow/canary
+runners, risk tiers (ADR-0059), the release executor, the self-healing pipeline and the
+recovery supervisor with its real-process end-to-end proof — and four things missing: an
+observer that turns the OTHER durable signals into opportunities on a clock; a version
+model the owner can ask about; a Cloud Core release that does not recreate the one api
+container; and the owner's voice over all of it. `docs/M18_4_SELF_EVOLUTION_SPEC.md` is
+the design; this record is what landed and how it is proven.
+
+Decision:
+
+1. **The Evolution Supervisor** (`app/evolution/supervisor.py`): a pure, clock-driven
+   observer on the `RoutineClock` (`evolution_tick`, last, every
+   `evolution_supervisor_interval_s` = 300 s) that reads self-healing incidents
+   (open/recovered → **P0**), recurring failed action receipts (same capability + error
+   class ≥ 2 in 7 days → **P1**), recurring research failures (same error class ≥ 2 → **P2**)
+   and open generation-resolved capability gaps (**P3**), and opens ONE
+   `EvolutionOpportunity` per signal through `create_from_evidence` — evidence-verified,
+   scored, audited, deduplicated by the backlog's `(source, source_ref)`. The promotion
+   class (`AUTO_SAFE` / `AUTO_CANARY` / `OWNER_APPROVAL_REQUIRED` / `NEVER_AUTO_PROMOTE`) is
+   derived from the risk tier of the paths the signal's component maps to — the SAME
+   table the release path reads (`app/evolution/risk.py`): any Cloud Core app module is
+   tier 3 → owner approval; the authority kernel, the recovery supervisor, schema and
+   deployment mechanics are tier 4–5 → never; tests, corpus rows and generated skills are
+   tier 2 → canary; docs and web tier 1 → safe. A signal cannot declare its own class.
+   The supervisor holds the engine's LAB authority only and never calls `advance`
+   (structurally asserted). The owner's pause switch is the latest of two ledger rows
+   (`evolution.paused` / `evolution.resumed`, strictly ordered in time); a paused scan
+   records nothing and says so; a scan that opened something writes one
+   `evolution.supervisor_scanned` row. `GET /v1/evolution/supervisor` (+ `/scan`,
+   `/pause`, `/resume`) and `checks.evolution.supervisor` on health expose it;
+   `opportunity_dict` carries `priority` and `promotion_class`.
+
+2. **The owner's voice** (`tools_evolution.py`, corpus category `evolution`, 68 cases):
+   `Kendi kendini geliştirmeyi duraklat/aç/kapat`, `Kendini geliştirmeye devam et` →
+   `evolution.control` (the action is the router's `evolution_action` on the turn record,
+   never the model's argument); `Bu geliştirmeyi iptal et` / `Geliştirmeden vazgeç` →
+   the ONE lab-phase candidate is rejected `owner_cancelled`, two → a refusal naming them,
+   none → a truthful refusal; `Bunu canlıya/yayına alma` → the candidate awaiting
+   approval is rejected `owner_held`; `Önceki sürüme dön` / `Eski sürüme geri al` →
+   `release.rollback`, always refused with the authority sentence, naming the last-known-good
+   when the host exported one; the four questions (`Şu an ne geliştiriyorsun?`, `Son hangi
+   hatayı düzelttin?`, `Hangi sürüm çalışıyor?`, `Bekleyen aday sürüm var mı?`) are query
+   kinds in the one question table, answered by `evolution.status` from the supervisor's
+   rows whichever tool the model picked (`activity.explain` hands over, as it does for
+   live state). Every control is a receipt. Action contract v12. The evolution matcher
+   runs before the alarm's ringing-aware bare stop, so "kendi kendini geliştirmeyi kapat"
+   while an alarm rings is still the switch.
+
+3. **The version model** (`app/release/version.py`): `/v1/system/health.release` and
+   `GET /v1/release/current` name the component, the sha the release script exported
+   (`PAGENTOS_RELEASE`; `unknown` when unset, never guessed from the tree), the app
+   version, every contract version this process serves (action, ui_state, ambient,
+   voice_qualification), the exported last-known-good, the start instant and the uptime.
+   `GET /v1/release/components` lists the Cloud Core (live), each enrolled device's reported
+   software version and capabilities, and the web as `unknown_from_server` (its marker is
+   known to the browser). `GET /v1/release/slo` counts release windows and incidents from
+   the ledger and reports `availability: null, measurement: "none"` until a prober records
+   samples — a fraction is not claimed.
+
+4. **Expand-only migrations** (`tests/unit/test_migration_compatibility.py`): every
+   `upgrade()` may add, index and backfill; `drop_table` / `drop_column` / renames /
+   NOT NULL need a `contract-phase: ADR-XXXX` declaration; a type change or a constraint
+   drop needs a `compat: widening` note beside it. The four historical widenings
+   (0013, 0014, 0018, 0023) are so marked. The blue/green drain depends on this.
+
+5. **The blue/green Cloud Core release** (`scripts/cloud/release-cloud-core-bluegreen.sh`,
+   `infra/docker/edge/nginx.conf`, compose services `api-blue` / `api-green` / `edge`
+   under the `bluegreen` profile): build the image for THIS sha (the old image untouched),
+   migrate (expand-only), bring the IDLE colour up while the active one keeps serving,
+   verify health / contract / served release ON the idle colour (in-container; the colours
+   publish no port), switch the edge's one-line upstream and reload nginx (in-flight
+   requests finish on the old upstream), verify through the edge, drain the old colour for
+   `PAGENTOS_DRAIN_S` (60 s: in-flight requests, device reconnects, the voice session's
+   next tool call), stop it, record `RELEASE` / `LAST_KNOWN_GOOD` / the active colour.
+   Rollback is the switch in reverse (the old colour still up during the drain; started
+   again after it). A wrong served release (76), an older contract (73) or a colour that
+   never answers (75) are refused before the switch. The first cutover stops the legacy
+   `api` and starts the edge — one last gap, said so. The Windows driver gains an opt-in
+   `-BlueGreen` switch; the default stays the proven single-container path until the owner's
+   next authorised release exercises the cutover. Session state lives in Postgres and the
+   realtime media path is client ↔ provider, so a voice session survives the colour switch
+   by construction; the drain window is what guarantees the tool call in flight.
+
+6. **What is designed and NOT built**, named as such in the spec (§7–9, §13): the Windows
+   agent's staged update with supervisor rollback, the browser worker drain, the web live
+   update, and probe-based availability.
+
+Consequences: a durable failure becomes an opportunity within one scan, with a priority
+and a class the owner can read and a switch the owner can flip by voice; "which version is
+running" is a fact on the health surface; the next Cloud Core release can be zero-downtime
+by passing one switch, and every migration from here on is expand-only unless it says
+otherwise. Nothing here widens the engine's authority: the supervisor proposes, the
+lifecycle and the owner decide, and both rollback and promotion by voice are refused with
+the reason recorded.
+
+Evidence: `test_evolution_supervisor.py` (10), `test_voice_evolution_tools.py` (26),
+`test_release_version.py` (5), `test_release_routes.py` (4), `test_migration_compatibility.py`
+(27), the corpus at 413/413 HEALTHY (`evolution` category 68), `cloud-release-bluegreen.tests.ps1`
+(18/18 under fakes), web `evolution-supervisor.test.tsx`; the unchanged
+`test_selfhealing_e2e.py` remains the real-process self-healing proof (CI integration job).

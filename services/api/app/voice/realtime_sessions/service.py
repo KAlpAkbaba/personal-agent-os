@@ -1157,6 +1157,8 @@ def record_client_events(
                 "policy_changes": intent.policy_changes,
                 # ...and the minutes a snooze SAID, for the same reason.
                 "alarm_minutes": intent.alarm_minutes,
+                # M18.4: the self-evolution action the owner asked for, for the same reason.
+                "evolution_action": intent.evolution_action,
                 # ADR-0076. The research SHAPE, decided without the "does a completed
                 # research exist?" precondition (that precondition is what let a deictic
                 # follow-up on an empty history become a crawl), and WHICH research the

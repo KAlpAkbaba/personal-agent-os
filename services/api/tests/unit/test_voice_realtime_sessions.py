@@ -249,6 +249,10 @@ def test_create_selects_by_capability_and_returns_the_contract(wired) -> None:
         "ambient.test_display",
         # ADR-0079: the ambient explanation query.
         "ambient.explain",
+        # M18.4 (ADR-0081): the owner's voice over self-evolution.
+        "evolution.control",
+        "evolution.status",
+        "release.rollback",
     }
     research = next(t for t in data["tools"] if t["name"] == "research.start")
     assert research["long_running"] is True and research["preamble"] == RESEARCH_PREAMBLE_TR

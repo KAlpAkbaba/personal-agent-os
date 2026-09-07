@@ -37,6 +37,11 @@ class Settings(BaseSettings):
 
     app_name: str = "pagentos-api"
     environment: str = "dev"
+    #: M18.4 (spec §2): the git sha the release script exported for THIS process, and the
+    #: host's last-known-good pointer when it exported one. Empty means "unknown" and is
+    #: reported as unknown - never guessed from the tree.
+    release: str = ""
+    last_known_good: str = ""
 
     # PostgreSQL (compose service "postgres", host port 15432)
     database_url: str = "postgresql+psycopg://pagentos:pagentos-dev@127.0.0.1:15432/pagentos"
@@ -137,6 +142,10 @@ class Settings(BaseSettings):
     # exactly why it is a setting and not a hidden constant).
     routine_clock_enabled: bool = True
     routine_clock_interval_s: float = 10.0
+    #: M18.4 (spec §3.4): the Evolution Supervisor's scan rides the routine clock and runs
+    #: at most every ``evolution_supervisor_interval_s``; disabled means no scan at all.
+    evolution_supervisor_enabled: bool = True
+    evolution_supervisor_interval_s: float = 300.0
     # M18.3 §3.7: the origin the COMPANION uses to fetch a greeting WAV. Empty means "the
     # same origin the device already talks to"; the Device Service validates the URL's
     # origin against its own configured broker REST origin before forwarding, so a wrong

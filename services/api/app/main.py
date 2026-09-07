@@ -48,6 +48,8 @@ from app.mobile.routes import router as mobile_router
 from app.mobile.runtime import MobileRuntime
 from app.narration.routes import router as narration_router
 from app.presence.routes import router as presence_router
+from app.release.routes import router as release_router
+from app.release.version import release_model
 from app.research.embedded_worker import EmbeddedWorkerRuntime
 from app.research.health import research_health
 from app.research.routes import router as research_router
@@ -161,7 +163,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # display_status). They are registered HERE, where they are built, on the same
     # objects app.state exposes below - a tool call and a route must never see two.
     voice_realtime.register_live(
-        wake_sequence=wake_sequence, device_statuses=get_status_registry()
+        wake_sequence=wake_sequence,
+        device_statuses=get_status_registry(),
+        # M18.4 (spec §4): the owner's voice over self-evolution reads the supervisor and
+        # the engine through the same live-source path as every other tool.
+        evolution_runtime=evolution,
+        evolution_service=evolution.evolution_service,
+        settings=settings,
     )
 
     def _build_routine_dispatcher() -> ActionDispatcher:
@@ -207,10 +215,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ambient_tick=lambda session, now: ambient_service.tick(
                 session, sequence=wake_sequence, now=now
             ),
+            evolution_tick=lambda session, now: evolution.supervisor.scan(
+                session, now=now, evolution_service=evolution.evolution_service
+            ),
             interval_s=settings.routine_clock_interval_s,
             enabled=settings.routine_clock_enabled,
         )
 
+    # M18.4 (spec §3): the Evolution Supervisor reads incidents and gaps through the
+    # runtimes that own them, and scans on the routine clock after the owner-facing ticks.
+    evolution.supervisor.bind(
+        incidents=lambda status=None, limit=200: selfhealing.service.list_incidents(
+            status=status, limit=limit
+        ),
+        gaps=lambda status="open", limit=100: evolution.gaps.list(status=status, limit=limit),
+    )
     routine_clock = _build_routine_clock()
 
     @asynccontextmanager
@@ -290,6 +309,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.artifacts = artifacts
     app.state.voice = voice
     app.state.memory = memory
+    app.state.settings = settings
     app.state.selfhealing = selfhealing
     app.state.evolution = evolution
     app.state.security = security
@@ -351,6 +371,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(alarms_audio_router)
     app.include_router(ambient_router)
     app.include_router(voice_qualification_router)
+    app.include_router(release_router)
     app.include_router(devices_router)
 
     @app.get("/v1/system/health")
@@ -393,7 +414,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         degraded = any(check["status"] not in ("ok", "skipped") for check in checks.values())
         status = "degraded" if degraded else "ok"
         logger.info("health_checked", status=status, checks=checks)
-        return {"status": status, "version": __version__, "checks": checks}
+        # M18.4 (spec §2): WHAT is running - the release sha (or "unknown"), the app
+        # version and every contract this process serves - so "hangi sürüm çalışıyor?"
+        # and a release qualification read the same facts.
+        return {
+            "status": status,
+            "version": __version__,
+            "release": release_model(settings),
+            "checks": checks,
+        }
 
     return app
 

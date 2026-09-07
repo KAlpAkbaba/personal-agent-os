@@ -42,6 +42,18 @@ QUERY_CAN_DEPLOY = "can_deploy"  # bunu canlıya alabilir misin
 # docs/M18_ACTION_CONTRACT.md §2: "kamera açık mı?" is a CURRENT-STATE question about one
 # subsystem; it is answered by the live composer (app.state.now), never from the ledger.
 QUERY_EYE_STATE = "eye_state"  # kamera açık mı / göz açık mı / kameran açık mı
+# M18.4 (spec §4): the owner's four questions about self-evolution, answered by the
+# Evolution Supervisor's status (rows alone) through evolution.status.
+QUERY_EVOLUTION_NOW = "evolution_now"  # şu an ne geliştiriyorsun
+QUERY_LAST_FIX = "last_fix"  # son hangi hatayı düzelttin
+QUERY_RUNNING_VERSION = "running_version"  # hangi sürüm çalışıyor
+QUERY_PENDING_CANDIDATES = "pending_candidates"  # bekleyen aday sürüm var mı
+EVOLUTION_STATUS_KINDS = (
+    QUERY_EVOLUTION_NOW,
+    QUERY_LAST_FIX,
+    QUERY_RUNNING_VERSION,
+    QUERY_PENDING_CANDIDATES,
+)
 
 #: The kinds whose authoritative source is the live runtime (contract §3, "CURRENT
 #: STATE"): ``activity.explain`` delegates these to ``state.now``'s composer.
@@ -71,6 +83,10 @@ QUERY_KINDS = (
     QUERY_SELF_CODE,
     QUERY_CAN_DEPLOY,
     QUERY_EYE_STATE,
+    QUERY_EVOLUTION_NOW,
+    QUERY_LAST_FIX,
+    QUERY_RUNNING_VERSION,
+    QUERY_PENDING_CANDIDATES,
 )
 
 LEVEL_EXECUTIVE = "executive"
@@ -166,6 +182,25 @@ _PATTERNS: tuple[tuple[tuple[str, ...], str], ...] = (
     (("kendi", "üzerinde"), QUERY_EVOLUTION),
     (("kendi", "uzerinde"), QUERY_EVOLUTION),
     (("kendini", "geliştir"), QUERY_EVOLUTION),
+    # --- M18.4: the four self-evolution questions, after the M17 'kendi üzerinde' question -----
+    (("ne", "geliştiriyorsun"), QUERY_EVOLUTION_NOW),
+    (("ne", "gelistiriyorsun"), QUERY_EVOLUTION_NOW),
+    (("neyi", "geliştir"), QUERY_EVOLUTION_NOW),
+    (("ne", "üzerinde", "çalışıyorsun"), QUERY_EVOLUTION_NOW),
+    (("hangi", "hata", "düzelt"), QUERY_LAST_FIX),
+    (("hangi", "hata", "duzelt"), QUERY_LAST_FIX),
+    (("son", "düzelt"), QUERY_LAST_FIX),
+    (("son", "duzelt"), QUERY_LAST_FIX),
+    (("hangi", "sürüm"), QUERY_RUNNING_VERSION),
+    (("hangi", "surum"), QUERY_RUNNING_VERSION),
+    (("sürüm", "çalış"), QUERY_RUNNING_VERSION),
+    (("surum", "calis"), QUERY_RUNNING_VERSION),
+    (("hangi", "versiyon"), QUERY_RUNNING_VERSION),
+    (("bekleyen", "aday"), QUERY_PENDING_CANDIDATES),
+    (("aday", "sürüm"), QUERY_PENDING_CANDIDATES),
+    (("aday", "surum"), QUERY_PENDING_CANDIDATES),
+    (("bekleyen", "sürüm"), QUERY_PENDING_CANDIDATES),
+    (("bekleyen", "surum"), QUERY_PENDING_CANDIDATES),
     # --- the returning owner: one briefing for a whole absence ------------------
     (("yokken",), QUERY_SINCE_YOU_LEFT),
     (("yokluğum",), QUERY_SINCE_YOU_LEFT),
@@ -325,6 +360,8 @@ def classify(
     if kind in (QUERY_RESEARCH_DETAIL, QUERY_RESEARCH_PROBLEMS, QUERY_REJECTED_PAGES):
         subsystem = "research"
     elif kind in (QUERY_EVOLUTION, QUERY_SHADOW_READY, QUERY_WHY_BUILT):
+        subsystem = "evolution"
+    elif kind in EVOLUTION_STATUS_KINDS:
         subsystem = "evolution"
     elif kind == QUERY_LEARNED:
         subsystem = None  # lessons span every subsystem

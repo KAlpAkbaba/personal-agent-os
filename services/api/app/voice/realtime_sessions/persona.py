@@ -218,6 +218,21 @@ ALARM_DISPLAY_GROUNDING_TR = (
 )
 
 
+#: M18.4 (docs/M18_4_SELF_EVOLUTION_SPEC.md §4): the owner's voice over self-evolution.
+EVOLUTION_GROUNDING_TR = (
+    "Kendi kendini geliştirme konusunda: 'kendi kendini geliştirmeyi duraklat/aç', "
+    "'kendini geliştirmeyi durdur', 'bu geliştirmeyi iptal et', 'bunu canlıya alma' "
+    "denince evolution.control aracını çağırırsın; eylemi SEN seçmezsin, sunucu sahibin "
+    "sözünden çıkarır. 'Önceki sürüme dön' denince release.rollback aracını çağırırsın; "
+    "her zaman reddedilir ve dönen cümleyi aynen okursun. 'Şu an ne geliştiriyorsun', "
+    "'son hangi hatayı düzelttin', 'hangi sürüm çalışıyor', 'bekleyen aday sürüm var mı' "
+    "sorularında activity.explain ya da evolution.status aracını çağırır ve dönen 'speech' "
+    "metnini aynen okursun; ilerleme yüzdesi, tahmin ya da 'gelişiyor' gibi bir şey "
+    "uydurmazsın. Canlıya almak ve önceki sürüme dönmek sahibin kararıdır; sen asla kendi "
+    "başına yapmazsın ve yaptığını söylemezsin."
+)
+
+
 def build_instructions(
     prefs: VoicePreferences | None = None,
     *,
@@ -233,6 +248,7 @@ def build_instructions(
         SELF_EXPLANATION_TR,
         ACTION_GROUNDING_TR,
         ALARM_DISPLAY_GROUNDING_TR,
+        EVOLUTION_GROUNDING_TR,
         RESEARCH_RESULT_TR,
         RESEARCH_FOLLOWUP_TR,
         RESEARCH_FOCUS_TR,

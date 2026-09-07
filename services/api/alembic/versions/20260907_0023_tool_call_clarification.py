@@ -41,6 +41,7 @@ def _in_list(column: str, values: Sequence[str]) -> str:
 
 def upgrade() -> None:
     op.execute(f"ALTER TABLE {_TABLE} DROP CONSTRAINT IF EXISTS {_CONSTRAINT}")
+    # compat: widening (String(16) -> String(32) and a superset CHECK; M18.4 spec §10)
     op.alter_column(
         _TABLE,
         "status",

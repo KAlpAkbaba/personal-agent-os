@@ -131,6 +131,10 @@ try {
     Assert-True (($scpArgs -join " ") -match "BatchMode=yes" -and $scpArgs[-1] -eq "root@pagentos-core:/tmp/pagentos-release-$short.tar" -and $scpArgs[-2] -match "pagentos-release-$short\.tar$") "scp uploads the HEAD archive to /tmp/pagentos-release-<sha>.tar in BatchMode"
     Assert-True (-not (Test-Path (Join-Path $env:TEMP "pagentos-release-$short.tar"))) "the local tarball is deleted afterwards"
     Assert-True ($sshArgs[-2] -eq "root@pagentos-core" -and $sshArgs[-1] -ceq "set -eu; rm -rf '/opt/pagentos/app.next'; mkdir -p '/opt/pagentos/app.next'; tar -xf '/tmp/pagentos-release-$short.tar' -C '/opt/pagentos/app.next'; rm -f '/tmp/pagentos-release-$short.tar'; bash '/opt/pagentos/app.next/scripts/cloud/release-cloud-core.sh' $headSha") "the remote command extracts to app.next and runs the shipped release script with the full sha (byte for byte after 5.1 quoting)"
+    # M18.4 (ADR-0081): the opt-in switch names the blue/green host script, byte for byte.
+    $dbg = Invoke-Driver -Arguments @("-SshPath", $fakeSsh, "-ScpPath", $fakeScp, "-SkipVerify", "-AllowDirty", "-BlueGreen")
+    $bgArgs = ($dbg.Calls[2] -split "`n")
+    Assert-True ($dbg.Exit -eq 0 -and $bgArgs[-1] -ceq "set -eu; rm -rf '/opt/pagentos/app.next'; mkdir -p '/opt/pagentos/app.next'; tar -xf '/tmp/pagentos-release-$short.tar' -C '/opt/pagentos/app.next'; rm -f '/tmp/pagentos-release-$short.tar'; bash '/opt/pagentos/app.next/scripts/cloud/release-cloud-core-bluegreen.sh' $headSha") "-BlueGreen runs the zero-downtime host script; without it the proven single-container script runs"
     # Idempotence (the REAL release had committed on the host; only the local report failed):
     # when the host already runs HEAD the driver ships nothing and verifies only.
     $env:FAKE_SSH_STDOUT = $headSha

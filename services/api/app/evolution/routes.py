@@ -124,9 +124,7 @@ async def list_capabilities(
     limit: int = Query(default=100, ge=1, le=500),
 ) -> dict[str, Any]:
     runtime = _runtime(request)
-    capabilities = await _call(
-        runtime.registry.list_capabilities, status=status, limit=limit
-    )
+    capabilities = await _call(runtime.registry.list_capabilities, status=status, limit=limit)
     return {"capabilities": capabilities}
 
 
@@ -184,9 +182,7 @@ def _detect(runtime: EvolutionRuntime, body: GapDetectBody, trace_id: str | None
 
 
 @router.post("/gaps")
-async def detect_gap(
-    request: Request, body: GapDetectBody, response: Response
-) -> dict[str, Any]:
+async def detect_gap(request: Request, body: GapDetectBody, response: Response) -> dict[str, Any]:
     runtime = _runtime(request)
     trace_id = trace_id_var.get(None)
     gap = await _call(_detect, runtime, body, trace_id)
@@ -443,3 +439,71 @@ async def evolution_policy(request: Request) -> dict[str, Any]:
 
 
 __all__ = ["router"]
+
+
+# ------------------------------------------------------------ M18.4: the supervisor
+
+
+class PauseBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(default="", max_length=200)
+
+
+@router.get("/supervisor")
+async def supervisor_status(request: Request) -> dict[str, Any]:
+    """The Evolution Supervisor's owner-facing picture (spec §3.5), from rows alone."""
+    runtime = _runtime(request)
+    from app.release.version import release_model
+
+    def load() -> dict[str, Any]:
+        with runtime.session() as session:
+            return runtime.supervisor.status(
+                session,
+                evolution_service=runtime.evolution_service,
+                release=release_model(runtime.settings),
+            )
+
+    return await asyncio.to_thread(load)
+
+
+@router.post("/supervisor/scan")
+async def supervisor_scan(request: Request) -> dict[str, Any]:
+    """One scan now (owner-gated; the clock's own scans are unaffected)."""
+    runtime = _runtime(request)
+
+    def run() -> dict[str, Any]:
+        with runtime.session() as session:
+            return runtime.supervisor.scan(
+                session, evolution_service=runtime.evolution_service, force=True
+            ).as_dict()
+
+    return await asyncio.to_thread(run)
+
+
+@router.post("/supervisor/pause")
+async def supervisor_pause(request: Request, body: PauseBody) -> dict[str, Any]:
+    runtime = _runtime(request)
+
+    def write() -> dict[str, Any]:
+        with runtime.session() as session:
+            from app.evolution.supervisor import set_paused
+
+            set_paused(session, paused=True, actor="rest", reason=body.reason)
+            return runtime.supervisor.status(session, evolution_service=runtime.evolution_service)
+
+    return await asyncio.to_thread(write)
+
+
+@router.post("/supervisor/resume")
+async def supervisor_resume(request: Request, body: PauseBody) -> dict[str, Any]:
+    runtime = _runtime(request)
+
+    def write() -> dict[str, Any]:
+        with runtime.session() as session:
+            from app.evolution.supervisor import set_paused
+
+            set_paused(session, paused=False, actor="rest", reason=body.reason)
+            return runtime.supervisor.status(session, evolution_service=runtime.evolution_service)
+
+    return await asyncio.to_thread(write)

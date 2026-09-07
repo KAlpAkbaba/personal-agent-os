@@ -87,7 +87,7 @@ services:
       start_period: 10s
     restart: unless-stopped
 
-  api:
+  api: &cloud-core
     build:
       context: ../../services/api
     image: pagentos/cloud-core:local
@@ -101,7 +101,7 @@ services:
         condition: service_healthy
       temporal:
         condition: service_healthy
-    environment:
+    environment: &cloud-core-env
       PAGENTOS_DATABASE_URL: postgresql+psycopg://pagentos:${PAGENTOS_DB_PASSWORD:?}@postgres:5432/pagentos_prod
       PAGENTOS_REDIS_URL: redis://redis:6379/0
       PAGENTOS_S3_ENDPOINT_URL: http://minio:9000
@@ -130,6 +130,10 @@ services:
       # immediate device-command delivery anyway — so the Temporal worker runs
       # embedded, in-process. Tests default to PAGENTOS_WORKER_MODE=off.
       PAGENTOS_WORKER_MODE: embedded
+      # M18.4 (spec §2): the version model. The release script exports the sha it put
+      # here; "unknown" is reported as unknown, never guessed from the tree.
+      PAGENTOS_RELEASE: ${PAGENTOS_RELEASE:-}
+      PAGENTOS_LAST_KNOWN_GOOD: ${PAGENTOS_LAST_KNOWN_GOOD:-}
     volumes:
       # ADR-0027: the owner-credential hash lives OUTSIDE the database and OUTSIDE the
       # image, on the persistent volume, so neither a DB restore nor an image rebuild
@@ -140,5 +144,47 @@ services:
       # is unset the stack refuses to start rather than defaulting to 0.0.0.0.
       - "${PAGENTOS_BIND_IP:?the host's Tailscale IP; set in /opt/pagentos/.env}:8001:8001"
       # Loopback too, for the one-time identity bootstrap and host-side recovery/health.
+      - "127.0.0.1:8001:8001"
+    restart: unless-stopped
+
+  # ------------------------------------------------------------------ M18.4: blue/green
+  # Two colours of the SAME workload behind the edge (docs/M18_4_SELF_EVOLUTION_SPEC.md §6).
+  # Neither publishes a port; the edge is the one published socket. Both live under the
+  # `bluegreen` profile, so `docker compose up` without it still runs the single `api`
+  # exactly as before, and scripts/cloud/release-cloud-core-bluegreen.sh is the only thing
+  # that starts them (first cutover: it stops `api`, starts the edge, brings blue up).
+  api-blue:
+    <<: *cloud-core
+    image: pagentos/cloud-core:${PAGENTOS_IMAGE_BLUE:-local}
+    container_name: pagentos-prod-api-blue
+    profiles: ["bluegreen"]
+    ports: []
+    environment:
+      <<: *cloud-core-env
+      PAGENTOS_RELEASE: ${PAGENTOS_RELEASE_BLUE:-}
+      PAGENTOS_LAST_KNOWN_GOOD: ${PAGENTOS_LAST_KNOWN_GOOD:-}
+
+  api-green:
+    <<: *cloud-core
+    image: pagentos/cloud-core:${PAGENTOS_IMAGE_GREEN:-local}
+    container_name: pagentos-prod-api-green
+    profiles: ["bluegreen"]
+    ports: []
+    environment:
+      <<: *cloud-core-env
+      PAGENTOS_RELEASE: ${PAGENTOS_RELEASE_GREEN:-}
+      PAGENTOS_LAST_KNOWN_GOOD: ${PAGENTOS_LAST_KNOWN_GOOD:-}
+
+  edge:
+    image: nginx:1.27-alpine
+    container_name: pagentos-prod-edge
+    profiles: ["bluegreen"]
+    volumes:
+      - ./edge/nginx.conf:/etc/nginx/nginx.conf:ro
+      # upstream.conf + active.txt, written by the release script; on the persistent
+      # volume so a reboot brings the same colour back (spec §14).
+      - ${PAGENTOS_EDGE_DIR:-/mnt/pagentos-data/edge}:/etc/nginx/edge:ro
+    ports:
+      - "${PAGENTOS_BIND_IP:?the host's Tailscale IP; set in /opt/pagentos/.env}:8001:8001"
       - "127.0.0.1:8001:8001"
     restart: unless-stopped

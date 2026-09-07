@@ -193,7 +193,7 @@ def test_health_serves_the_realtime_contract_version() -> None:
     # wake sequence and the status registry ride the runtime's live sources.
     # 11 = M18.3 ambient hardening (ADR-0079): ambient.explain, keep_on, quiet hours, the
     # camera grace, restored holdoffs, the alarm-wake holdoff wired.
-    assert doc["checks"]["voice_realtime"]["action_contract_version"] == 11
+    assert doc["checks"]["voice_realtime"]["action_contract_version"] == 12
     # The follow-up family rides the same manifest the owner harness reads.
     assert {"research.explain", "research.sources", "research.finding_detail"} <= set(
         doc["checks"]["voice_realtime"]["tools"]

@@ -254,6 +254,12 @@ EVENT_TYPE_AMBIENT_POLICY_CHANGED = "ambient.policy_changed"
 #: and the bounded confusion rows, never a transcript. What the Living Core's voice routing
 #: qualification state is derived from.
 EVENT_TYPE_VOICE_QUALIFICATION = "voice.qualification"
+#: M18.4 (spec §3.4, §16): the owner's pause switch for self-evolution is the latest of
+#: these two rows; and one row per supervisor scan that opened at least one opportunity
+#: (a quiet scan writes nothing - the ledger records facts, not heartbeats).
+EVENT_TYPE_EVOLUTION_PAUSED = "evolution.paused"
+EVENT_TYPE_EVOLUTION_RESUMED = "evolution.resumed"
+EVENT_TYPE_EVOLUTION_SUPERVISOR_SCANNED = "evolution.supervisor_scanned"
 
 EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_RESEARCH_PLANNED,
@@ -316,6 +322,9 @@ EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_OWNER_INPUT_ACTIVE,
     EVENT_TYPE_AMBIENT_POLICY_CHANGED,
     EVENT_TYPE_VOICE_QUALIFICATION,
+    EVENT_TYPE_EVOLUTION_PAUSED,
+    EVENT_TYPE_EVOLUTION_RESUMED,
+    EVENT_TYPE_EVOLUTION_SUPERVISOR_SCANNED,
 )
 
 #: ``alarm.<state_lowercase>`` for every state in ``app.alarms.models.ALARM_STATES``

@@ -49,6 +49,7 @@ import {
   AlarmsPanel,
   AmbientPanel,
   EvolutionPanel,
+  EvolutionSupervisorPanel,
   GoalsPanel,
   HealthPanel,
   LedgerPanel,
@@ -153,6 +154,8 @@ function Cockpit() {
           {/* ADR-0080: whether the owner's words still route where they say. */}
           <VoiceQualificationPanel state={data.voiceQualification} now={now} />
           <ShadowReadyPanel state={data.shadowReady} />
+          {/* ADR-0081: what the supervisor found, what is being built, what is running. */}
+          <EvolutionSupervisorPanel state={data.evolutionSupervisor} now={now} />
           <GoalsPanel state={data.goals} now={now} />
           <ResearchPanel
             state={data.research}

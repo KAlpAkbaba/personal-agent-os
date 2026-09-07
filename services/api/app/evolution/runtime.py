@@ -56,6 +56,7 @@ from app.evolution.skills import (
     DeterministicSkillGenerator,
     SkillGenerator,
 )
+from app.evolution.supervisor import EvolutionSupervisor
 from app.evolution.task_resumption import CapabilityDispatcher, TaskResumer
 from app.logging import get_logger
 
@@ -74,6 +75,11 @@ class EvolutionRuntime:
         self._registry: CapabilityRegistry | None = None
         self._gaps: GapService | None = None
         self._evolution_service: EvolutionService | None = None
+        #: M18.4 (spec §3): the clock-driven observer. Bound to its sources by the app.
+        self.supervisor = EvolutionSupervisor(
+            enabled=settings.evolution_supervisor_enabled,
+            interval_s=settings.evolution_supervisor_interval_s,
+        )
 
         self.skills_root = Path(
             os.environ.get(
@@ -246,6 +252,8 @@ class EvolutionRuntime:
             "engine_authority_scope": str(Scope.LAB),
             "production_grants_held": 0,
             "root_policy_digest": ROOT_POLICY_DIGEST,
+            # M18.4 (spec §3.4): whether the observer runs, and what its last scan did.
+            "supervisor": self.supervisor.health(),
         }
 
 
