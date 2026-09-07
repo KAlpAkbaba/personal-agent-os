@@ -1,0 +1,74 @@
+{
+  "path": "veri.csv",
+  "kind": "csv",
+  "match": "equals_normalised",
+  "title": null,
+  "structure": {
+    "columns": [
+      "Ad",
+      "Şehir",
+      "Yaş",
+      "Tutar",
+      "Durum"
+    ],
+    "rows": 10,
+    "delimiter": ","
+  },
+  "blocks": [
+    {
+      "ref": "r1",
+      "kind": "row",
+      "text": "Ad,Şehir,Yaş,Tutar,Durum"
+    },
+    {
+      "ref": "r2",
+      "kind": "row",
+      "text": "Ayşe,Ankara,34,1200,aktif"
+    },
+    {
+      "ref": "r3",
+      "kind": "row",
+      "text": "Mehmet,İstanbul,41,980,pasif"
+    },
+    {
+      "ref": "r4",
+      "kind": "row",
+      "text": "Zeynep,Bursa,29,1500,aktif"
+    },
+    {
+      "ref": "r5",
+      "kind": "row",
+      "text": "Can,Antalya,52,700,aktif"
+    },
+    {
+      "ref": "r6",
+      "kind": "row",
+      "text": "Elif,Adana,37,1100,pasif"
+    },
+    {
+      "ref": "r7",
+      "kind": "row",
+      "text": "Kerem,İzmir,45,1320,aktif"
+    },
+    {
+      "ref": "r8",
+      "kind": "row",
+      "text": "Deniz,Trabzon,31,890,aktif"
+    },
+    {
+      "ref": "r9",
+      "kind": "row",
+      "text": "Selin,Eskişehir,27,1010,pasif"
+    },
+    {
+      "ref": "r10",
+      "kind": "row",
+      "text": "Burak,Konya,39,1230,aktif"
+    },
+    {
+      "ref": "r11",
+      "kind": "row",
+      "text": "Naz,Samsun,33,760,aktif"
+    }
+  ]
+}

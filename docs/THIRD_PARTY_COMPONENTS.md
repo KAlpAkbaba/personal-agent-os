@@ -55,3 +55,16 @@ Role: local STT fallback/benchmark candidate.
 - OpenAI realtime/TTS
 
 Selection depends on Turkish benchmark by use case.
+
+## Document fixture generators (dev only, M20)
+
+- `openpyxl` (MIT) and `python-pptx` (MIT): generate the committed XLSX/PPTX fixtures under `services/api/tests/fixtures/documents/` via `scripts/tests/make-document-fixtures.py`; dev group only, never in the production image. `python-docx` (MIT) and `fpdf2` (LGPL-3.0, already a runtime dependency for M13 artifacts) generate the DOCX/PDF fixtures.
+
+## Document parsers in the Windows agent (M20, ADR-0083)
+
+Role: the per-format providers behind `PagentOS.SessionCompanion/Documents/` (`IDocumentExtractor`); they run on the owner's machine only, inside the authorised roots, and never in Cloud Core. Both are pinned in `PagentOS.SessionCompanion.csproj`.
+
+- `DocumentFormat.OpenXml` **3.5.1** (MIT; Microsoft, https://github.com/dotnet/Open-XML-SDK) — DOCX / XLSX / PPTX. Parts are read through the SDK's package model; the zip is never walked by hand. Pulls `DocumentFormat.OpenXml.Framework` (same version, MIT).
+- `PdfPig` **0.1.16** (Apache-2.0; UglyToad, https://github.com/UglyToad/PdfPig) — PDF page text in content order (`ContentOrderTextExtractor`) and the information dictionary's title. Pulls its own `PdfPig.*` assemblies (same version, Apache-2.0); no native code.
+
+Upgrade rule: bump the pin, run the documents lab (`dotnet test … --filter FullyQualifiedName~Documents`: every fixture against its expected extract), then the whole agent project.

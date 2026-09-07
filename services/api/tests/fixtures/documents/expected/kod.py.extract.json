@@ -1,0 +1,39 @@
+{
+  "path": "kod.py",
+  "kind": "source",
+  "match": "equals_normalised",
+  "title": null,
+  "structure": {
+    "symbols": [
+      {
+        "name": "hesapla",
+        "line": 4
+      },
+      {
+        "name": "kdv",
+        "line": 9
+      },
+      {
+        "name": "Butce",
+        "line": 13
+      },
+      {
+        "name": "__init__",
+        "line": 14
+      },
+      {
+        "name": "toplam",
+        "line": 17
+      }
+    ],
+    "lines": 18,
+    "language": "python"
+  },
+  "blocks": [
+    {
+      "ref": "L1-18",
+      "kind": "lines",
+      "text": "\"\"\"Örnek modül: bütçe hesapları.\"\"\"\n\n\ndef hesapla(kira: int, maas: int, yazilim: int) -> int:\n    \"\"\"Üç kalemin toplamı.\"\"\"\n    return kira + maas + yazilim\n\n\ndef kdv(tutar: int, oran: float = 0.2) -> float:\n    return tutar * oran\n\n\nclass Butce:\n    def __init__(self, kalemler: dict[str, int]) -> None:\n        self.kalemler = kalemler\n\n    def toplam(self) -> int:\n        return sum(self.kalemler.values())"
+    }
+  ]
+}

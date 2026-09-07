@@ -1,0 +1,104 @@
+{
+  "path": "sozlesmeler/2026/sozlesme.docx",
+  "kind": "docx",
+  "match": "equals_normalised",
+  "title": "Hizmet Sözleşmesi",
+  "structure": {
+    "headings": [
+      "Hizmet Sözleşmesi",
+      "Madde 1 - Taraflar",
+      "Madde 2 - Konu",
+      "Madde 3 - Ödeme",
+      "Madde 4 - Gizlilik",
+      "Madde 5 - Süre"
+    ],
+    "tables": 1
+  },
+  "blocks": [
+    {
+      "ref": "p1",
+      "text": "Hizmet Sözleşmesi",
+      "kind": "heading",
+      "level": 1
+    },
+    {
+      "ref": "p2",
+      "text": "Sürüm 2 (2026).",
+      "kind": "paragraph"
+    },
+    {
+      "ref": "p3",
+      "text": "Madde 1 - Taraflar",
+      "kind": "heading",
+      "level": 2
+    },
+    {
+      "ref": "p4",
+      "text": "Bu sözleşme, Alp Akbaba (İşveren) ile Örnek Yazılım A.Ş. (Yüklenici) arasında imzalanmıştır.",
+      "kind": "paragraph"
+    },
+    {
+      "ref": "p5",
+      "text": "Madde 2 - Konu",
+      "kind": "heading",
+      "level": 2
+    },
+    {
+      "ref": "p6",
+      "text": "Yüklenici, kişisel ajan işletim sisteminin bakım ve geliştirme hizmetlerini üstlenir.",
+      "kind": "paragraph"
+    },
+    {
+      "ref": "p7",
+      "text": "Madde 3 - Ödeme",
+      "kind": "heading",
+      "level": 2
+    },
+    {
+      "ref": "p8",
+      "text": "Fatura tarihinden itibaren ödeme süresi 45 gündür.",
+      "kind": "paragraph"
+    },
+    {
+      "ref": "p9",
+      "text": "Madde 4 - Gizlilik",
+      "kind": "heading",
+      "level": 2
+    },
+    {
+      "ref": "p10",
+      "text": "Taraflar, sözleşme kapsamında edindikleri bilgileri üçüncü kişilerle paylaşmaz.",
+      "kind": "paragraph"
+    },
+    {
+      "ref": "p11",
+      "text": "Madde 5 - Süre",
+      "kind": "heading",
+      "level": 2
+    },
+    {
+      "ref": "p12",
+      "text": "Sözleşme imza tarihinden itibaren bir yıl geçerlidir ve yazılı bildirimle yenilenir.",
+      "kind": "paragraph"
+    },
+    {
+      "ref": "t1",
+      "kind": "table",
+      "text": "Taraf\tİmza\nİşveren\tAlp Akbaba\nYüklenici\tÖrnek Yazılım A.Ş.",
+      "rows": [
+        [
+          "Taraf",
+          "İmza"
+        ],
+        [
+          "İşveren",
+          "Alp Akbaba"
+        ],
+        [
+          "Yüklenici",
+          "Örnek Yazılım A.Ş."
+        ]
+      ]
+    }
+  ]
+}

@@ -1,0 +1,202 @@
+{
+  "generated_by": "scripts/tests/make-document-fixtures.py",
+  "reference_scheme": {
+    "docx": "p<n> per non-empty paragraph in order (headings included, kind=heading with level); t<n> per table",
+    "xlsx": "sheet:<name>!A<r>:<lastcol><r> per non-empty row; formulas reported as text with a leading '='",
+    "pptx": "s<n> per slide; text = title then body paragraphs",
+    "pdf": "p<n> per page; match=contains (layout engines differ in whitespace)",
+    "md": "h<level>:<title> per heading section; text = the section body",
+    "csv": "r<n> per line including the header line",
+    "json": "$.<key> per top-level key; text = compact JSON of the value",
+    "source": "L<a>-<b> per 40-line chunk; structure.symbols from def/class lines"
+  },
+  "files": [
+    {
+      "path": "sozlesmeler/2025/sozlesme.docx",
+      "kind": "docx",
+      "size": 37178,
+      "sha256": "9bf781087cd82ed3742982edc5cb02dcbec74f8dc83d26d85ae323e92e073165",
+      "blocks": 13,
+      "title": "Hizmet Sözleşmesi"
+    },
+    {
+      "path": "sozlesmeler/2026/sozlesme.docx",
+      "kind": "docx",
+      "size": 37179,
+      "sha256": "ea5dc403956d2548e7f18abc04c5e46c4cb4b5d48931e967f937fc52b89130f2",
+      "blocks": 13,
+      "title": "Hizmet Sözleşmesi"
+    },
+    {
+      "path": "butce-2026.xlsx",
+      "kind": "xlsx",
+      "size": 5681,
+      "sha256": "2d3d437d35e4ec24ee1bd22a882efb2dfdb7c86a37bad9fb562ea98e2905cdb4",
+      "blocks": 19,
+      "title": "butce-2026"
+    },
+    {
+      "path": "sunum-q3.pptx",
+      "kind": "pptx",
+      "size": 33632,
+      "sha256": "6cd87e3415742e5e9b9416d0f091b78cea75d37323a1a0420c08bd58e5aa4b8c",
+      "blocks": 7,
+      "title": "Q3 Sunumu"
+    },
+    {
+      "path": "rapor.pdf",
+      "kind": "pdf",
+      "size": 21419,
+      "sha256": "8bc53301674573c8f3388fe122c46046fd01e701d016aa2e0748dcf9ea44eb81",
+      "blocks": 5,
+      "title": "Yıllık Rapor 2026"
+    },
+    {
+      "path": "notlar.md",
+      "kind": "md",
+      "size": 386,
+      "sha256": "5cf1c183cc498f941d88ef2d7baa071fbbd24382043062a793d79e141ae295db",
+      "blocks": 4,
+      "title": "Toplantı Notları"
+    },
+    {
+      "path": "veri.csv",
+      "kind": "csv",
+      "size": 296,
+      "sha256": "3e3c051c0a6041938f138b9574cd17f59c7df36fd5f79e31a0428baf12a76484",
+      "blocks": 11
+    },
+    {
+      "path": "ayarlar.json",
+      "kind": "json",
+      "size": 222,
+      "sha256": "a92650408cfd2149d23eee798b608c4084f82a7ccc18b1326ec86d50f2f70a07",
+      "blocks": 4
+    },
+    {
+      "path": "kod.py",
+      "kind": "source",
+      "size": 419,
+      "sha256": "3a07e4210feb6bc9f43a9cf89a0293c608f0c7fc279b0b5e07161eecfcf77565",
+      "blocks": 1
+    }
+  ],
+  "questions": [
+    {
+      "id": "pdf-page-3",
+      "file": "rapor.pdf",
+      "question": "Üçüncü sayfada ne yazıyor?",
+      "expect_ref": "p3",
+      "expect_contains": "referans testidir"
+    },
+    {
+      "id": "xlsx-total",
+      "file": "butce-2026.xlsx",
+      "question": "Toplam bütçe ne kadar?",
+      "expect_ref": "sheet:Ozet!A5:B5",
+      "expect_contains": "65000"
+    },
+    {
+      "id": "xlsx-formula",
+      "file": "butce-2026.xlsx",
+      "question": "KDV nasıl hesaplanıyor?",
+      "expect_ref": "sheet:Ozet!A6:B6",
+      "expect_contains": "B5*0.2"
+    },
+    {
+      "id": "pptx-slide-4",
+      "file": "sunum-q3.pptx",
+      "question": "Dördüncü slaytın başlığı ne?",
+      "expect_ref": "s4",
+      "expect_contains": "Müşteri Kazanımı"
+    },
+    {
+      "id": "pptx-count",
+      "file": "sunum-q3.pptx",
+      "question": "Sunumda kaç slayt var?",
+      "expect_structure": {
+        "slide_count": 7
+      }
+    },
+    {
+      "id": "docx-clause-3",
+      "file": "sozlesmeler/2026/sozlesme.docx",
+      "question": "Ödeme süresi kaç gün?",
+      "expect_ref": "p8",
+      "expect_contains": "45 gün"
+    },
+    {
+      "id": "md-decisions",
+      "file": "notlar.md",
+      "question": "Kararlar bölümünde ne var?",
+      "expect_ref": "h2:Kararlar",
+      "expect_contains": "Bütçe onaylandı"
+    },
+    {
+      "id": "csv-row-7",
+      "file": "veri.csv",
+      "question": "Kerem hangi şehirde?",
+      "expect_ref": "r7",
+      "expect_contains": "İzmir"
+    },
+    {
+      "id": "json-dil",
+      "file": "ayarlar.json",
+      "question": "Ses dili ne?",
+      "expect_ref": "$.ses",
+      "expect_contains": "tr-TR"
+    },
+    {
+      "id": "py-symbol",
+      "file": "kod.py",
+      "question": "hesapla fonksiyonu kaçıncı satırda?",
+      "expect_structure": {
+        "symbol": "hesapla",
+        "line": 4
+      }
+    }
+  ],
+  "comparisons": [
+    {
+      "id": "sozlesme-v1-v2",
+      "a": "sozlesmeler/2025/sozlesme.docx",
+      "b": "sozlesmeler/2026/sozlesme.docx",
+      "same_title": "Hizmet Sözleşmesi",
+      "changed_refs": [
+        "p2",
+        "p8"
+      ],
+      "changed_clause": {
+        "ref": "p8",
+        "a_contains": "30 gün",
+        "b_contains": "45 gün"
+      },
+      "unchanged_refs": [
+        "p1",
+        "p3",
+        "p4",
+        "p5",
+        "p6",
+        "p7",
+        "p9",
+        "p10",
+        "p11",
+        "p12",
+        "t1"
+      ]
+    }
+  ],
+  "common_points": [
+    {
+      "id": "budget-across",
+      "files": [
+        "butce-2026.xlsx",
+        "kod.py",
+        "notlar.md"
+      ],
+      "expect_terms": [
+        "bütçe"
+      ]
+    }
+  ]
+}

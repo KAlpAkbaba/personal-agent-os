@@ -1,0 +1,62 @@
+{
+  "path": "rapor.pdf",
+  "kind": "pdf",
+  "match": "contains",
+  "title": "Yıllık Rapor 2026",
+  "structure": {
+    "pages": 5
+  },
+  "blocks": [
+    {
+      "ref": "p1",
+      "kind": "page",
+      "match": "contains",
+      "text": "Yıllık Rapor 2026 Bu rapor kişisel ajan işletim sisteminin yıllık durumunu özetler.",
+      "contains": [
+        "Yıllık Rapor 2026",
+        "Bu rapor kişisel ajan işletim sisteminin yıllık durumunu özetler."
+      ]
+    },
+    {
+      "ref": "p2",
+      "kind": "page",
+      "match": "contains",
+      "text": "Bölüm 1 - Altyapı Bulut çekirdeği Hetzner üzerinde mavi-yeşil dağıtımla çalışır.",
+      "contains": [
+        "Bölüm 1 - Altyapı",
+        "Bulut çekirdeği Hetzner üzerinde mavi-yeşil dağıtımla çalışır."
+      ]
+    },
+    {
+      "ref": "p3",
+      "kind": "page",
+      "match": "contains",
+      "text": "Bölüm 2 - Belgeler Üçüncü sayfada yer alan bu cümle referans testidir. Belge zekâsı her yanıtta dosyayı ve yeri adıyla söyler.",
+      "contains": [
+        "Bölüm 2 - Belgeler",
+        "Üçüncü sayfada yer alan bu cümle referans testidir.",
+        "Belge zekâsı her yanıtta dosyayı ve yeri adıyla söyler."
+      ]
+    },
+    {
+      "ref": "p4",
+      "kind": "page",
+      "match": "contains",
+      "text": "Bölüm 3 - Ses Türkçe ses yolu ilk sınıf vatandaştır.",
+      "contains": [
+        "Bölüm 3 - Ses",
+        "Türkçe ses yolu ilk sınıf vatandaştır."
+      ]
+    },
+    {
+      "ref": "p5",
+      "kind": "page",
+      "match": "contains",
+      "text": "Sonuç Sistem sahibinin bakımcı olmasını gerektirmez.",
+      "contains": [
+        "Sonuç",
+        "Sistem sahibinin bakımcı olmasını gerektirmez."
+      ]
+    }
+  ]
+}

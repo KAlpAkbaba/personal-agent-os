@@ -42,6 +42,8 @@
             "focus_mismatch",
             "permission_denied",
             "postcondition_failed",
+            "unsupported_format",
+            "not_found",
             "internal_bug"
           ]
         },

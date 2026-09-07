@@ -1,0 +1,44 @@
+{
+  "path": "notlar.md",
+  "kind": "md",
+  "match": "equals_normalised",
+  "title": "Toplantı Notları",
+  "structure": {
+    "headings": [
+      "Toplantı Notları",
+      "Giriş",
+      "Kararlar",
+      "Sonraki adımlar"
+    ]
+  },
+  "blocks": [
+    {
+      "ref": "h1:Toplantı Notları",
+      "kind": "section",
+      "level": 1,
+      "title": "Toplantı Notları",
+      "text": "Tarih: 8 Eylül 2026. Katılımcılar: Alp, sistem."
+    },
+    {
+      "ref": "h2:Giriş",
+      "kind": "section",
+      "level": 2,
+      "title": "Giriş",
+      "text": "M20 belge zekâsı kapsamı konuşuldu. Dosyalar sahibin makinesinde kalır."
+    },
+    {
+      "ref": "h2:Kararlar",
+      "kind": "section",
+      "level": 2,
+      "title": "Kararlar",
+      "text": "- Bütçe onaylandı. - Her yanıt dosyayı ve yeri adıyla söyler. - Silme yeteneği bu aşamada yoktur."
+    },
+    {
+      "ref": "h2:Sonraki adımlar",
+      "kind": "section",
+      "level": 2,
+      "title": "Sonraki adımlar",
+      "text": "Sabitler üretilir, cihaz çıkarımı doğrulanır, ses derlemi genişletilir."
+    }
+  ]
+}

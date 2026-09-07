@@ -26,6 +26,11 @@ namespace PagentOS.DeviceService;
 /// when <c>OperatorEnabled</c> is configured, otherwise <c>capability_missing</c> before the
 /// companion is consulted. Per-command cap 30 s (<c>app.launch</c> 15 s): every member acts
 /// and re-observes within seconds, and a terminal command has its own 30 s ceiling.</item>
+/// <item>the documents family (M20, M20_FILE_DOCUMENT_INTELLIGENCE_SPEC.md §2) — routed under
+/// the SAME <c>OperatorEnabled</c> gate (one trust decision: the companion may touch the
+/// owner's files), otherwise <c>capability_missing</c> before the companion is consulted.
+/// Per-command cap 30 s: a search is bounded at 10 s by contract and an extraction of a
+/// 50 MiB document fits well inside the rest.</item>
 /// </list>
 /// The "no companion connected → <c>dependency_unavailable</c>, retryable" rule belongs to
 /// the pipe server and applies to every family.
@@ -48,6 +53,9 @@ public sealed class InteractiveCapabilityExecutor(
 
     /// <summary>The M19 cap for <c>app.launch</c> alone: a 10 s window wait plus headroom.</summary>
     public static readonly TimeSpan OperatorLaunchTimeoutCap = OperatorCapabilityNames.LaunchTimeoutCap;
+
+    /// <summary>The M20 cap for the documents family (§2 bounds: a 10 s search, a bounded extraction).</summary>
+    public static readonly TimeSpan DocumentsTimeoutCap = DocumentCapabilityNames.CommandTimeoutCap;
 
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
 
@@ -89,6 +97,11 @@ public sealed class InteractiveCapabilityExecutor(
         if (string.Equals(capability, OperatorCapabilityNames.AppLaunch, StringComparison.Ordinal))
         {
             return OperatorLaunchTimeoutCap;
+        }
+
+        if (AgentCapabilities.IsDocuments(capability))
+        {
+            return DocumentsTimeoutCap;
         }
 
         return AgentCapabilities.IsOperator(capability) ? OperatorTimeoutCap : DesktopTimeoutCap;
@@ -162,6 +175,19 @@ public sealed class InteractiveCapabilityExecutor(
                 throw new CapabilityException(
                     ErrorClasses.CapabilityMissing,
                     $"capability '{command.Capability}' is not enabled on this device (OperatorEnabled=false)",
+                    retryable: false);
+            }
+        }
+        else if (AgentCapabilities.IsDocuments(command.Capability))
+        {
+            if (!OperatorEnabled)
+            {
+                // M20: the documents family is advertised and routed under the operator's
+                // flag; a command aimed straight at the device cannot read the owner's files
+                // before that flag was switched on out loud.
+                throw new CapabilityException(
+                    ErrorClasses.CapabilityMissing,
+                    $"capability '{command.Capability}' is not enabled on this device (OperatorEnabled=false gates the documents family)",
                     retryable: false);
             }
         }

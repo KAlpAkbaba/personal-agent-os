@@ -1,0 +1,17 @@
+{
+  "surum": "0.2.0",
+  "ses": {
+    "dil": "tr-TR",
+    "hiz": 1.0,
+    "ses_adi": "alloy"
+  },
+  "cihaz": {
+    "ad": "MAIL",
+    "operator": true
+  },
+  "kokler": [
+    "Documents",
+    "Desktop",
+    "Downloads"
+  ]
+}

@@ -47,7 +47,8 @@ public sealed class CompanionRuntime(
     AlarmArmController? alarmArms = null,
     ActivityStatusReporter? activityStatus = null,
     GreetingPlayer? greeting = null,
-    Operator.OperatorCapabilities? operatorCapabilities = null)
+    Operator.OperatorCapabilities? operatorCapabilities = null,
+    Documents.DocumentCapabilities? documentCapabilities = null)
 {
     private const int ConnectTimeoutMs = 2000;
 
@@ -117,14 +118,18 @@ public sealed class CompanionRuntime(
     /// The capabilities this companion announces in its hello: the desktop names and the M18
     /// alarm pair always, the browser family only when a worker is configured (M13),
     /// <c>desktop.display_off</c> only when display power was enabled out loud (M18), and the
-    /// Digital Operator family only when it was enabled out loud (M19). Advertising a name is
-    /// a promise to answer it with something other than a hang.
+    /// Digital Operator family — with the M20 documents family that shares its gate — only
+    /// when it was enabled out loud (M19). Advertising a name is a promise to answer it with
+    /// something other than a hang: a companion built with the operator but without the
+    /// documents object still advertises the six names (the gate is the flag, as on the
+    /// service side) and answers each with <c>capability_missing</c>; <c>Program</c> builds
+    /// both objects from the one flag so that never happens in the shipped process.
     /// </summary>
     public IReadOnlyList<string> AdvertisedCapabilities
         => AgentCapabilities.Compose(
             browserWorker?.IsConfigured == true,
             displayPower?.Enabled == true,
-            operatorCapabilities?.Enabled == true);
+            operatorCapabilities?.Enabled == true || documentCapabilities?.Enabled == true);
 
     /// <summary>
     /// The operator's budget for a request: what is LEFT of the service's wait, less the
@@ -385,6 +390,7 @@ public sealed class CompanionRuntime(
 
             if (AgentCapabilities.IsBrowser(request.Capability)
                 || AgentCapabilities.IsOperator(request.Capability)
+                || AgentCapabilities.IsDocuments(request.Capability)
                 || string.Equals(request.Capability, AgentCapabilities.DesktopPlayAudio, StringComparison.Ordinal))
             {
                 // M13: browser requests are long (a navigation, an extraction) and may run
@@ -468,6 +474,28 @@ public sealed class CompanionRuntime(
                     .ConfigureAwait(false);
                 logger.LogInformation("executed {Capability}: ok", request.Capability);
                 return new ExecResponse { RequestId = request.RequestId, Ok = true, Result = operatorResult };
+            }
+
+            if (AgentCapabilities.IsDocuments(request.Capability))
+            {
+                // M20: the documents family shares the operator's gate (the same trust
+                // decision: the companion may touch the owner's files) and the same typed
+                // answers — capability_missing when it was not enabled out loud, the same
+                // budget rule, the same CapabilityException → error frame path.
+                if (documentCapabilities is null || !documentCapabilities.Enabled)
+                {
+                    throw new CapabilityException(
+                        ErrorClasses.CapabilityMissing,
+                        $"capability '{request.Capability}' is not enabled on this companion (PAGENTOS_AGENT_OperatorEnabled=true enables the documents family with the Digital Operator)",
+                        retryable: false);
+                }
+
+                var documentsBudget = OperatorBudget(request, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+                var documentsResult = await documentCapabilities
+                    .ExecuteAsync(request.Capability, request.Payload, documentsBudget, cancellationToken)
+                    .ConfigureAwait(false);
+                logger.LogInformation("executed {Capability}: ok", request.Capability);
+                return new ExecResponse { RequestId = request.RequestId, Ok = true, Result = documentsResult };
             }
 
             if (browserWorker is null || !browserWorker.IsConfigured)
