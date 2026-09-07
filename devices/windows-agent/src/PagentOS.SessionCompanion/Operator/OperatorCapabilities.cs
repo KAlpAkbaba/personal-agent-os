@@ -943,7 +943,15 @@ public sealed class OperatorCapabilities
             throw new CapabilityException(ErrorClasses.PostconditionFailed, "no Explorer window appeared for the path within 5 s", retryable: true);
         }
 
-        var selection = WaitForSelection(window, Path.GetFileName(path), TimeSpan.FromSeconds(5), cancellationToken);
+        var fileName = Path.GetFileName(path);
+        var selection = WaitForSelection(window, fileName, TimeSpan.FromSeconds(5), cancellationToken);
+        var stem = Path.GetFileNameWithoutExtension(fileName);
+        var selectionNamesFile = selection.Any(s => s.StartsWith(stem, StringComparison.OrdinalIgnoreCase));
+        // Whether the file is SHOWN in the view is observed separately from whether the
+        // platform reports it selected: Windows Server's Explorer (the GitHub runner) never
+        // exposed the item's selection through UI Automation while the item was plainly
+        // listed. A planner reads both; a postcondition that needs the selection asks for it.
+        var fileVisible = selectionNamesFile || FileListedInWindow(window, stem);
         return new JsonObject
         {
             ["revealed"] = true,
@@ -953,8 +961,51 @@ public sealed class OperatorCapabilities
             {
                 ["window"] = Registry.Read(window.Handle)?.ToJson(),
                 ["selection"] = new JsonArray([.. selection.Select(s => (JsonNode)s)]),
+                ["selection_names_file"] = selectionNamesFile,
+                ["file_visible"] = fileVisible,
             },
         };
+    }
+
+    private bool FileListedInWindow(WindowInfo window, string stem)
+    {
+        try
+        {
+            var root = Inspector.RootForWindow(window.Handle);
+            foreach (var controlType in new[] { ControlType.ListItem, ControlType.DataItem, ControlType.TreeItem })
+            {
+                var items = root.FindAll(TreeScope.Descendants, new PropertyCondition(AutomationElement.ControlTypeProperty, controlType));
+                var inspected = 0;
+                foreach (AutomationElement item in items)
+                {
+                    if (++inspected > 400)
+                    {
+                        break;
+                    }
+
+                    string? name;
+                    try
+                    {
+                        name = item.Current.Name;
+                    }
+                    catch (Exception)
+                    {
+                        continue;
+                    }
+
+                    if (name is not null && name.StartsWith(stem, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        catch (Exception)
+        {
+            // An inspector failure is "not observed", never "not there".
+        }
+
+        return false;
     }
 
     // ================================================================== terminal.*

@@ -37,18 +37,27 @@ public sealed class ExplorerFixtureTests : IDisposable
         Assert.StartsWith(Path.GetFileName(dir), window["title"]!.GetValue<string>(), StringComparison.Ordinal);
 
         var selection = revealed["observed"]!["selection"]!.AsArray().Select(s => s!.GetValue<string>()).ToList();
-        Assert.Contains(selection, s => s.StartsWith("fixture", StringComparison.OrdinalIgnoreCase));
-
-        // The item is reachable by name through ui.inspect too: the planner's way of checking.
-        var inspected = _lab.Exec(OperatorCapabilityNames.UiInspect, new JsonObject
+        Assert.True(revealed["observed"]!["file_visible"]!.GetValue<bool>(), "the file is listed in the Explorer view");
+        var selectionNamesFile = revealed["observed"]!["selection_names_file"]!.GetValue<bool>();
+        if (OperatorLab.IsClientWindows)
         {
-            ["window_id"] = windowId,
-            ["control_type"] = "ListItem",
-            ["name_prefix"] = "fixture",
-            ["depth"] = 1,
-        });
-        Assert.StartsWith("fixture", inspected["root"]!["name"]!.GetValue<string>(), StringComparison.OrdinalIgnoreCase);
-        Assert.True(inspected["root"]!["selected"]!.GetValue<bool>());
+            // On client Windows Explorer reports the /select item through UI Automation;
+            // Windows Server's Explorer (the GitHub runner) lists the item but never reports
+            // it selected - observed and recorded, not asserted, there.
+            Assert.True(selectionNamesFile, $"selection: [{string.Join(", ", selection)}]");
+            Assert.Contains(selection, s => s.StartsWith("fixture", StringComparison.OrdinalIgnoreCase));
+
+            // The item is reachable by name through ui.inspect too: the planner's way of checking.
+            var inspected = _lab.Exec(OperatorCapabilityNames.UiInspect, new JsonObject
+            {
+                ["window_id"] = windowId,
+                ["control_type"] = "ListItem",
+                ["name_prefix"] = "fixture",
+                ["depth"] = 1,
+            });
+            Assert.StartsWith("fixture", inspected["root"]!["name"]!.GetValue<string>(), StringComparison.OrdinalIgnoreCase);
+            Assert.True(inspected["root"]!["selected"]!.GetValue<bool>());
+        }
 
         var closed = _lab.Exec(OperatorCapabilityNames.WindowClose, new JsonObject { ["window_id"] = windowId });
         Assert.True(closed["closed"]!.GetValue<bool>());

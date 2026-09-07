@@ -230,6 +230,28 @@ public sealed class OperatorLab : IDisposable
         }
     }
 
+    /// <summary>
+    /// Client Windows (10/11) versus Windows Server: Explorer's UI Automation selection
+    /// reporting differs (the GitHub runner is Server). Read from the registry's
+    /// InstallationType, "Client" on a workstation.
+    /// </summary>
+    public static bool IsClientWindows
+    {
+        get
+        {
+            try
+            {
+                using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
+                var type = key?.GetValue("InstallationType") as string;
+                return string.Equals(type, "Client", StringComparison.OrdinalIgnoreCase);
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+    }
+
     public static bool WaitForExit(int pid, TimeSpan wait)
     {
         var deadline = DateTime.UtcNow + wait;
