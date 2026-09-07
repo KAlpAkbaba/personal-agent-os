@@ -4,9 +4,10 @@
  * Every event here is shaped exactly as `UiStateEvent.as_dict()` serialises it,
  * with the metadata keys the real publishers actually send (checked against
  * `app/voice/realtime_sessions/service.py`, `app/research/browser_activities.py`,
- * `app/evolution/service.py`, `app/goals/cognitive.py` and
- * `app/selfmodel/progress.py`). Inventing a convenient key here would let the
- * renderer pass its tests while failing against the real bus.
+ * `app/evolution/service.py`, `app/goals/cognitive.py`,
+ * `app/selfmodel/progress.py` and, for the M19 operator, `app/operator/service.py`
+ * on the core track). Inventing a convenient key here would let the renderer
+ * pass its tests while failing against the real bus.
  */
 
 import {
@@ -326,6 +327,103 @@ export const DISPLAY_ON = () =>
 
 export const DISPLAY_OFF = () =>
   event({ state: "display.off", subsystem: "ambient", status: "off", metadata: { reason: "owner_away" } });
+
+// ------------------------------------------ v4: the Digital Operator (M19 §4)
+
+/**
+ * `OperatorTask` transitions as `app/operator/` publishes them: subsystem
+ * `operator`, the task id, the owner's goal as the label, and in metadata the
+ * step the planner named, the capability sent to the companion and the
+ * window title the companion OBSERVED (never the one the plan expected).
+ * `error_class` rides on `operator.failed` only.
+ */
+export const OPERATOR_RUNNING = (
+  step = "open_notepad",
+  capability = "app.launch",
+  windowTitle: string | null = "Adsız - Not Defteri",
+) =>
+  event({
+    state: "operator.running",
+    subsystem: "operator",
+    task_id: "op-task-1",
+    status: "acting",
+    label: "Not Defteri'ni aç",
+    metadata: {
+      step,
+      capability,
+      ...(windowTitle === null ? {} : { window_title: windowTitle }),
+    },
+  });
+
+export const OPERATOR_VERIFYING = (step = "open_notepad", capability = "app.launch") =>
+  event({
+    state: "operator.verifying",
+    subsystem: "operator",
+    task_id: "op-task-1",
+    status: "verifying",
+    label: "Not Defteri'ni aç",
+    metadata: { step, capability, window_title: "Adsız - Not Defteri" },
+  });
+
+export const OPERATOR_FAILED = (errorClass: string | null = "focus_mismatch") =>
+  event({
+    state: "operator.failed",
+    subsystem: "operator",
+    task_id: "op-task-1",
+    status: "failed",
+    severity: "warning",
+    label: "Buraya merhaba yaz",
+    metadata: {
+      step: "type_text",
+      capability: "keyboard.type",
+      window_title: "Hesap Makinesi",
+      ...(errorClass === null ? {} : { error_class: errorClass }),
+    },
+  });
+
+/** An operator event whose publisher sent no metadata at all. */
+export const OPERATOR_RUNNING_BARE = () =>
+  event({ state: "operator.running", subsystem: "operator", task_id: "op-task-2" });
+
+/**
+ * A step event in the shape `OperatorService._on_step` publishes: the step as
+ * its zero-based INDEX plus the plan's length, the step's name as the label,
+ * the capability, and the window title the companion observed.
+ */
+export const OPERATOR_RUNNING_INDEXED = (
+  index = 0,
+  count: number | null = 3,
+  label: string | null = "open_notepad",
+  state: "operator.running" | "operator.verifying" = "operator.running",
+) =>
+  event({
+    state,
+    subsystem: "operator",
+    task_id: "op-task-3",
+    status: state === "operator.running" ? "acting" : "verifying",
+    label,
+    metadata: {
+      step: index,
+      ...(count === null ? {} : { step_count: count }),
+      capability: "app.launch",
+      window_title: "Adsız - Not Defteri",
+    },
+  });
+
+/**
+ * A task-level failure in the shape `OperatorService.start_task` publishes:
+ * the plan's name as the label and the error class alone in metadata — no
+ * step, capability or window, because the failure is the task's, not a step's.
+ */
+export const OPERATOR_FAILED_TASK = (errorClass = "timeout") =>
+  event({
+    state: "operator.failed",
+    subsystem: "operator",
+    task_id: "op-task-3",
+    severity: "warning",
+    label: "app_open",
+    metadata: { error_class: errorClass },
+  });
 
 /** The owner-authorised release path, mid-deployment (ADR-0055). */
 export const RELEASE_DEPLOYING = () =>

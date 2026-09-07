@@ -100,6 +100,9 @@ sees.
 | WAITING_OWNER | 0.94 | near-closed 0.1 | almost still (0.02) | none | none; dashed held boundary | 0.12+e/2 |
 | GOAL_COMPLETED | 1.1 | wide 0.6 | 0.15 | none | none | 0.6+e/2 |
 | ERROR | 0.98 | 0.25 | 0.08 | none | none; one bounded offset ring at 0.18 Hz | 0.25+e/2 |
+| OPERATOR_RUNNING (v4, M19) | 1.02 | open 0.5 | 0.45 | 0.3 | travellers 0.6 — the tool posture, a shade more open; caption = the published `step` | 0.35+e/2 |
+| OPERATOR_VERIFYING (v4) | 1 | 0.4 | 0.3 | 0.3 | travellers 0.3; inward 0.35 — the second OBSERVE coming back in | 0.3+e/2 |
+| OPERATOR_FAILED (v4) | 0.98 | 0.2 | 0.05 | none | none; the error offset ring, held (restraint 0.5); the published `error_class` in words | 0.22+e/2 |
 | EYE_ACTIVE | (unchanged) | | | | | one thin aperture ring, on any of the above |
 | untold / connecting / unauthorized | still | none | still | none | none | 0 |
 | last_known / unreachable | the shape it had, faded | as it was | still | none | none | ×0.3 |

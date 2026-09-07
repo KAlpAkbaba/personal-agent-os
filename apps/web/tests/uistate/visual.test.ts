@@ -80,6 +80,12 @@ const EXPECTED_KIND: Record<string, CoreVisualKind> = {
   "evolution.building": "evolution_working",
   "evolution.testing": "evolution_working",
   "evolution.shadow_ready": "shadow_ready",
+  // v4 (M19): the operator is a core channel, and each of its three states is
+  // its own deliberate kind — "acting", "verifying" and "failed" are different
+  // statements and the headline names the one that was published.
+  "operator.running": "operator_running",
+  "operator.verifying": "operator_verifying",
+  "operator.failed": "operator_failed",
 };
 
 describe("a visual state is entered only by its own event", () => {
