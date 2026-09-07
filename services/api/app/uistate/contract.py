@@ -36,9 +36,11 @@ from typing import Any
 #: (``operator.running`` / ``operator.verifying`` / ``operator.failed``), published from
 #: ``OperatorService`` transitions, plus the ``operator`` subsystem. Same additive rule.
 #: v5 (M20 File & Document Intelligence spec §3) adds ``document.analysis``, published
-#: around every device call and answer with metadata ``{file, part}``, plus the
-#: ``documents`` subsystem. Same additive rule: a v4 renderer keeps working and simply
-#: never sees it.
+#: around every device call and answer with metadata ``{file, part, refs?}`` (``refs``
+#: only on an answer/summary that cited any — the ONE structured metadata value the
+#: publisher allows through, as ``[{ref, path}]``, never ``excerpt``: see
+#: ``app.uistate.publisher._clean_metadata``), plus the ``documents`` subsystem. Same
+#: additive rule: a v4 renderer keeps working and simply never sees it.
 CONTRACT_VERSION = 5
 
 #: Metadata value bounds. Numbers are floats in [0, 1] except where noted; strings are

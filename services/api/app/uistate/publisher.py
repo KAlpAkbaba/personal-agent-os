@@ -33,6 +33,14 @@ logger = get_logger("app.uistate")
 #: How many recent events a late client may replay to reach the current picture.
 TAIL_SIZE = 64
 
+#: The ONE structured metadata value the bus allows through (M20 functional gap fix):
+#: ``refs`` end to end (model -> contract v5 -> ``apps/web``'s ``parseDocumentRefs``) but
+#: ``_clean_metadata`` used to drop every list/dict, so an answer's citations never
+#: reached the bus. A ``refs`` list is kept — capped, and with only the two identity
+#: fields, never the excerpt (``excerpt`` stays a forbidden key part below; content never
+#: rides this channel) — everything else stays dropped exactly as before.
+MAX_METADATA_REFS = 8
+
 #: Metadata keys that normalize to any of these are refused: the UI carries state, never
 #: content. Mirrors the voice/ledger scrubber's intent (ADR-0036 §3).
 _FORBIDDEN_KEY_PARTS = (
@@ -62,14 +70,45 @@ def is_forbidden_metadata_key(key: str) -> bool:
     return any(part.replace("_", "") in normalized for part in _FORBIDDEN_KEY_PARTS)
 
 
+def _clean_document_refs(value: Any) -> list[dict[str, str]]:
+    """``[{ref, path}]``, capped and field-whitelisted — the one shape ``refs`` may take
+    on the bus. An entry with no ``ref`` is not a reference (ADR-0083 decision 2 read
+    onto the bus) and is dropped rather than defaulted; ``excerpt`` or any other field on
+    an entry is dropped even though the top-level key is allowed, because the ALLOWANCE
+    is for identity, not content."""
+    if not isinstance(value, list):
+        return []
+    cleaned: list[dict[str, str]] = []
+    for item in value:
+        if len(cleaned) >= MAX_METADATA_REFS:
+            break
+        if not isinstance(item, dict):
+            continue
+        ref = item.get("ref")
+        if not isinstance(ref, str) or not ref:
+            continue
+        entry: dict[str, str] = {"ref": ref[:MAX_LABEL_CHARS]}
+        path = item.get("path")
+        if isinstance(path, str) and path:
+            entry["path"] = path[:MAX_LABEL_CHARS]
+        cleaned.append(entry)
+    return cleaned
+
+
 def _clean_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
-    """Keep only bounded numbers, bools and short tokens under allowed keys."""
+    """Keep only bounded numbers, bools and short tokens under allowed keys, plus the
+    one structured exception: a ``refs`` list, cleaned by :func:`_clean_document_refs`."""
     if not metadata:
         return {}
     out: dict[str, Any] = {}
     for key, value in list(metadata.items())[:MAX_METADATA_KEYS]:
         if is_forbidden_metadata_key(key):
             logger.warning("uistate_metadata_key_refused", key=str(key)[:32])
+            continue
+        if key == "refs":
+            refs = _clean_document_refs(value)
+            if refs:
+                out["refs"] = refs
             continue
         if isinstance(value, bool) or isinstance(value, int | float):
             out[str(key)[:32]] = value
@@ -216,6 +255,7 @@ def publish_many(events: Iterable[UiStateEvent]) -> None:
 
 
 __all__ = [
+    "MAX_METADATA_REFS",
     "TAIL_SIZE",
     "UiStatePublisher",
     "get_publisher",
