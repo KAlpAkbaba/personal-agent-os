@@ -6492,3 +6492,84 @@ both absent), so the synthetic self-healing story runs with real processes on th
 development machine and in CI, not inside the Hetzner container. Shipping those two files
 in the image is a deployment-mechanics change (tier 4) deliberately not made in the same
 evening as the first cutover.
+
+### ADR-0081 addendum 2 — the production qualification: what was measured, what broke, what is proven (2026-09-07, night)
+
+Three runs of `scripts/core/qualify-m18-4.ps1` against the Hetzner host, once the owner had
+completed the Tailscale SSH check (a browser login; the one human action of the evening).
+Every number below is from `docs/evidence/m18-4-qualification-2026-09-07-*.json` and the
+probe logs beside them (a probe every 250 ms through the canonical edge; "dropped" = probes
+that did not get a 2xx; "gap" = first failure to next success).
+
+**Run 1 (14:58Z, sha 396deae) — the FIRST cutover.** Production moved from the single
+`api` container (contract v8) to the edge + `api-blue` (contract v12); migrations 0023 and
+0024 applied; alarms 1 → 1, routines 1 → 1. The first cutover's gap, from the legacy
+container's exit to the edge's start, was **4.1 s** by the containers' own timestamps
+(15:03:05.26 → 15:03:09.39); bounded above by 14 s if uvicorn held the socket through its
+stop grace. The prober's numbers from this run are void: it constructed
+`System.Net.Http.HttpClient`, which Windows PowerShell 5.1 does not load, so every probe
+failed before the network. The device rows were empty for a second harness defect (below).
+
+**Run 2 (15:11Z, sha ea92674).** Release: 234 probes, 1 dropped, gap 3.28 s — the drop is a
+timeout at 15:11:37, fourteen seconds in, during the image build on the host, long before
+the switch. Controlled-failure rollback 63/0, explicit rollback 25/0, roll-forward 113/0.
+This run found the real bug: the rollback path removed `/opt/pagentos/app` from inside it
+(the script had `cd`'d there for the build), so every `docker compose` call after the `mv`
+failed with `getwd: no such file or directory`, the edge was NOT switched back, and the
+marker (green) disagreed with nginx (blue) until the next explicit rollback corrected it.
+No request failed — the colour nginx kept serving was healthy — but the rollback had not
+happened. Fixed: both rollback paths `cd "$base"` first; the fake docker now refuses a
+deleted working directory too.
+
+**Run 3 (15:22Z, sha c109302) — 23/23 PASS.** Release 247/0/0 s; controlled-failure
+rollback 92/0/0 s with the edge switched back and the idle colour stopped as designed;
+explicit rollback 37/0/0 s; roll-forward 99/0/0 s. The Windows agent was online on the
+answering colour at the first check after every switch (it reconnects within seconds of
+the old colour stopping). Supervisor: 2 real signals, 0 opened, 2 already tracked (the
+clock's own first scan after the first cutover had opened them: a P1 for recurring
+`eye.enable` `capability_missing` receipts and a P2 for recurring
+`insufficient_valid_findings` research failures — both from the owner's real runs of
+2026-09-06). Pause → `skipped_paused` with production health `ok` → resume → `scanned`.
+Final: `health.release.version` = c109302, contracts action 12 / ui_state 3 / ambient 1 /
+voice_qualification 1, `RELEASE` and `LAST_KNOWN_GOOD` on the host and in the env file,
+`/edge/active` = blue, images for c109302, ea92674 and the v8 `:local` retained.
+
+**Harness defects found and fixed, with the rule each taught:** (1) PS 5.1 has no
+`HttpClient` — probe with `HttpWebRequest`; (2) `@(Get-ArrayProperty ...)` wraps the
+returned array as ONE element (measured on the live listing: count 1, `Object[]`), the bare
+assignment receives the elements — never wrap a call that returns `, @(...)` in `@()`;
+(3) never `cd` into a tree a rollback may remove.
+
+**A finding recorded as an opportunity, then corrected.** Device presence is the
+answering process's in-memory WebSocket set, so during the drain window a read or a
+command routed to the NEW colour sees the agent offline while its socket still ends on
+the OLD colour; the agent moves within seconds of the old colour stopping. The first
+opportunity for this (`m18-4:device-presence-during-drain`) stated a 1–3 minute lag from
+the empty device rows and was rejected with that reason; the corrected one
+(`...:v2`, P2, owner approval required) names the drain window as the bound and the fix
+direction (close device sockets with a reconnect close code at the start of the drain).
+
+**Marks (spec §19 / directive §9), from this evidence and nothing else:**
+
+| Capability | Mark | Evidence |
+|---|---|---|
+| EvolutionOpportunity detection | PROVEN_REAL | two opportunities opened by the clock-driven supervisor from production ledger rows; deduplicated across three later scans |
+| Isolated candidate creation, autonomous bug fix, regression retest, shadow | PROVEN_PROXY | real processes (`test_evolution_closed_loop.py`, `test_selfhealing_e2e.py` in CI); the production image carries neither the supervisor script nor the synthetic service |
+| Canary | PROVEN_PROXY | `CanaryRunner` over eval cases; not exercised on production |
+| Blue/green | PROVEN_REAL | first cutover 4.1 s gap (by design, once); two later releases 0 dropped of 247 and 234 (one build-time timeout) |
+| Rollback | PROVEN_REAL | controlled failure: automatic switch-back 92/0; explicit `--rollback` 37/0 and 25/0 |
+| Last-known-good | PROVEN_REAL | host markers, env file and `health.release.last_known_good` agree; the rollback used the colour's recorded sha |
+| Reboot / interrupted-promotion recovery | NOT_YET_PROVEN | not simulated on production |
+| Windows agent staged update, browser worker staged update | NOT_YET_PROVEN | designed (spec §7–8), not built |
+| Owner pause/resume | PROVEN_REAL (REST on production) + PROVEN_AUTOMATED (voice path, corpus) | run 3 phase E; corpus category `evolution` |
+
+**M18.4 SELF-EVOLUTION FOUNDATION CLOSED** on this evidence: every non-human engineering item
+is built, gated and on production; the four NOT_YET_PROVEN rows are named designs, not
+claims. Deployed-version reconciliation: Cloud Core c109302 (contract v12) on `api-blue`
+behind the edge; Windows agent 0.1.0 on device MAIL (29 capabilities, connected; the M18.3
+capabilities wait on the owner's elevated update, item 26); browser worker present through
+the agent's `browser.*` capabilities, version not reported separately; web/Living Core
+served locally, marker unknown to the server. Named gaps carried forward: a device-bound
+command during the drain window; the image build on the production host (one 3 s timeout);
+the recovery supervisor and synthetic service absent from the image; SLO availability still
+unmeasured (counts only: 4 releases, 4 rollbacks in 24 h, all from this qualification).

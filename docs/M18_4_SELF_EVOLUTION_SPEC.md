@@ -1,6 +1,6 @@
 # M18.4 — Continuous self-evolution, self-healing and the zero-downtime update foundation
 
-Status: foundation in progress (2026-09-07, owner directive). Decision record: ADR-0081.
+Status: FOUNDATION CLOSED 2026-09-07 night (ADR-0081 and its two addenda; QUALIFICATION Stage 16). Decision record: ADR-0081.
 Predecessors this builds on and does not replace: `EVOLUTION_ENGINE_SPEC` (M7 pipeline,
 sandbox, review, registry), `RECOVERY_AND_SELF_HEALING.md` (M6 recovery supervisor,
 incidents, last-known-good), ADR-0055 (the authority kernel: LAB vs PRODUCTION),
@@ -292,11 +292,11 @@ M18.4 adds the supervisor's opportunity for the incident it produced.
 
 | Criterion | Mark | Evidence |
 |---|---|---|
-| Signals → deduplicated opportunities with priority/promotion class, on a clock, pausable | `PROVEN_PROXY` | `test_evolution_supervisor.py` (SQLite, real service, real ledger) |
+| Signals → deduplicated opportunities with priority/promotion class, on a clock, pausable | `PROVEN_REAL` (two opportunities from production ledger evidence; pause/resume on production) | run 3 phase E; `test_evolution_supervisor.py` |
 | Owner voice controls and questions | `PROVEN_AUTOMATED` | corpus category `evolution` |
-| Version model per component | `PROVEN_PROXY` (cloud-core real in health; agent/web as observed) | `test_release_version.py` |
+| Version model per component | `PROVEN_REAL` (production health names the sha, contracts and last-known-good; the agent as its row reports; the web as unknown) | run 3 phase F; `test_release_version.py` |
 | Expand/contract migration gate | `PROVEN_PROXY` (structural, whole tree) | `test_migration_compatibility.py` |
-| Zero-downtime blue/green handoff with drain and rollback | `PROVEN_PROXY` (fakes) / `NOT_YET_PROVEN` (real host) | `cloud-release.tests.ps1`; the next owner-authorised release |
+| Zero-downtime blue/green handoff with drain and rollback | `PROVEN_REAL` (three production runs 2026-09-07: first cutover 4.1 s once; then 247/0, 234/1 build-time; rollbacks 92/0, 37/0, 25/0, 113/0, 99/0) | `docs/evidence/m18-4-qualification-2026-09-07-*.json`; `cloud-release-bluegreen.tests.ps1` |
 | Automatic rollback from a broken release, real processes | `PROVEN_PROXY` (real processes, loopback, CI) | `test_selfhealing_e2e.py` |
 | Windows agent staged update with supervisor rollback | `NOT_YET_PROVEN` (design §7) | — |
 | Browser worker drain, web live update | `NOT_YET_PROVEN` (design §8–9) | — |

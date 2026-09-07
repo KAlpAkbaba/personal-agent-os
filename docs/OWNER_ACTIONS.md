@@ -38,10 +38,15 @@ boundary it needs. Order matters only where written; D needs no audio and can go
 > can say `Kendi kendini geliştirmeyi duraklat/aç`, `Bu geliştirmeyi iptal et`, `Bunu
 > canlıya alma`, and ask `Şu an ne geliştiriyorsun?` / `Hangi sürüm çalışıyor?` /
 > `Bekleyen aday sürüm var mı?`; the Cockpit has an "Evrim gözetmeni" panel. Nothing
-> here needs you. One choice is yours when you next release: `release-cloud-core.ps1
-> -BlueGreen` performs the first zero-downtime cutover (that FIRST one has a single short
-> gap while the edge starts; every release after it has none). Without the switch the
-> proven single-container release runs as before.
+> here needs you.
+>
+> **Production is blue/green since 2026-09-07 night (ADR-0081 addendum 2).** Your one Tailscale
+> SSH check unblocked three qualification runs: the first cutover (4.1 s gap, once), then two
+> releases and four rollbacks with zero dropped probes through the edge. Production runs
+> c109302 (contract v12) on `api-blue`; every release from here is `release-cloud-core.ps1
+> -BlueGreen` (the owner harnesses still call the single-container path; switch them when
+> you next run one, or leave them - both work). Items 23b, 24, 25, 26 are unchanged and
+> still yours; the M18.3 agent capabilities still wait on item 26's elevated update.
 
 | | Item | Needs | Time |
 |---|---|---|---|
