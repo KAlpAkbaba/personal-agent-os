@@ -119,7 +119,15 @@ def test_openai_tts_build_request() -> None:
 
 def test_openai_stt_and_azure_stt_build_request() -> None:
     o = OpenAISTTProvider("K").build_request(synthesize_wav("x"), language="tr-TR")
-    assert o.query["language"] == "tr"
+    # multipart/form-data: the audio is the ``file`` part, the fields sit beside it (the
+    # query-string shape was refused by the real endpoint on the first loopback run).
+    assert o.form["language"] == "tr"
+    assert o.form["model"] == "whisper-1"
+    assert o.query == {}
+    assert o.data is None
+    name, payload, content_type = o.files["file"]
+    assert name == "speech.wav" and content_type == "audio/wav"
+    assert payload[:4] == b"RIFF"
     assert o.headers["Authorization"] == "Bearer K"
     a = AzureSTTProvider("K", region="westeurope").build_request(
         synthesize_wav("x"), language="tr-TR"

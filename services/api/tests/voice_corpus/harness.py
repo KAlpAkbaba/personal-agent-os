@@ -521,6 +521,12 @@ class CaseResult:
     problems: list[str] = field(default_factory=list)
     target_id: str | None = None
     speech_head: str = ""
+    #: The tool's full spoken response: what the TTS -> STT loopback proxy synthesises
+    #: (app.voice.loopback). ``speech_head`` stays the short form for the confusion rows.
+    speech: str = ""
+    #: The case's response class (ok / refused / ...), so a report reader can pick the
+    #: cases that carry an answer without knowing the corpus.
+    expected_response: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -539,6 +545,8 @@ class CaseResult:
             "problems": list(self.problems),
             "target_id": self.target_id,
             "speech_head": self.speech_head,
+            "speech": self.speech,
+            "expected_response": self.expected_response,
         }
 
 
@@ -552,6 +560,7 @@ def run_case(case: UtteranceCase, *, harness: Harness | None = None) -> CaseResu
         context=case.context,
         expected_intent=case.expected_intent,
         expected_tool=case.expected_tool,
+        expected_response=case.expected_response,
     )
     try:
         h.seed(case.context)
@@ -617,6 +626,7 @@ def run_case(case: UtteranceCase, *, harness: Harness | None = None) -> CaseResu
         body = call.get("result") or call.get("error") or {}
         speech = str(body.get("speech") or body.get("spoken_result") or "")
         result.speech_head = speech[:80]
+        result.speech = speech
 
         if case.expected_response == RESPONSE_RUNNING:
             if call["status"] != "running":

@@ -254,6 +254,10 @@ EVENT_TYPE_AMBIENT_POLICY_CHANGED = "ambient.policy_changed"
 #: and the bounded confusion rows, never a transcript. What the Living Core's voice routing
 #: qualification state is derived from.
 EVENT_TYPE_VOICE_QUALIFICATION = "voice.qualification"
+#: VOICE_SPEC §7a: one row per TTS -> STT loopback proxy run (app.voice.loopback) - the
+#: verdict counts, the mean WER, the synthesis statistics, the provider names and the
+#: three marks; never a transcript, never audio. The evidence file holds the texts.
+EVENT_TYPE_VOICE_TTS_LOOPBACK = "voice.tts_loopback"
 #: M18.4 (spec §3.4, §16): the owner's pause switch for self-evolution is the latest of
 #: these two rows; and one row per supervisor scan that opened at least one opportunity
 #: (a quiet scan writes nothing - the ledger records facts, not heartbeats).
@@ -322,6 +326,7 @@ EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_OWNER_INPUT_ACTIVE,
     EVENT_TYPE_AMBIENT_POLICY_CHANGED,
     EVENT_TYPE_VOICE_QUALIFICATION,
+    EVENT_TYPE_VOICE_TTS_LOOPBACK,
     EVENT_TYPE_EVOLUTION_PAUSED,
     EVENT_TYPE_EVOLUTION_RESUMED,
     EVENT_TYPE_EVOLUTION_SUPERVISOR_SCANNED,

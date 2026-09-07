@@ -80,13 +80,44 @@ def _wrap_wav(pcm: bytes, sample_rate: int) -> bytes:
     return header + pcm
 
 
+def wav_info(audio: bytes) -> tuple[int, int, int, int] | None:
+    """``(sample_rate, channels, bits_per_sample, data_bytes)`` of a RIFF/WAVE stream.
+
+    Walks the chunk list, so a vendor WAV with a ``LIST`` chunk before ``data`` (OpenAI's
+    TTS output) is read at its real sample rate, and a streamed WAV whose ``data`` size is
+    0 or larger than the bytes present (an unknown length at header time) is measured by
+    the bytes actually there. None when it is not a WAV or has no data chunk.
+    """
+    if len(audio) < 12 or audio[:4] != b"RIFF" or audio[8:12] != b"WAVE":
+        return None
+    rate, channels, bits = _WAV_SAMPLE_RATE, _WAV_CHANNELS, _WAV_BITS
+    pos = 12
+    while pos + 8 <= len(audio):
+        chunk_id = audio[pos : pos + 4]
+        size = struct.unpack("<I", audio[pos + 4 : pos + 8])[0]
+        body = pos + 8
+        if chunk_id == b"fmt " and size >= 16 and body + 16 <= len(audio):
+            _fmt, channels, rate, _byte_rate, _align, bits = struct.unpack(
+                "<HHIIHH", audio[body : body + 16]
+            )
+        elif chunk_id == b"data":
+            available = len(audio) - body
+            data = size if 0 < size <= available else available
+            return rate, channels, bits, data
+        pos = body + size + (size & 1)
+    return None
+
+
 def wav_duration_ms(audio: bytes) -> int:
-    """Duration of a PCM16 mono WAV in milliseconds (0 if it is not parseable)."""
-    if len(audio) < 44 or audio[:4] != b"RIFF" or audio[8:12] != b"WAVE":
+    """Duration of a PCM WAV in milliseconds, from its own header (0 if not parseable)."""
+    info = wav_info(audio)
+    if info is None:
         return 0
-    data_size = struct.unpack("<I", audio[40:44])[0]
-    n_samples = data_size // (_WAV_BITS // 8)
-    return int(round(n_samples / _WAV_SAMPLE_RATE * 1000))
+    rate, channels, bits, data = info
+    frame = max(1, channels) * max(1, bits // 8)
+    if rate <= 0:
+        return 0
+    return int(round(data / frame / rate * 1000))
 
 
 def is_wav(audio: bytes) -> bool:
@@ -243,6 +274,10 @@ class ProviderRequest:
     json_body: dict[str, Any] | None = None
     data: bytes | None = None
     query: dict[str, str] = field(default_factory=dict)
+    #: multipart/form-data: text fields and ``{field: (filename, bytes, content_type)}``.
+    #: When ``files`` is set the request is multipart and ``data`` is not sent.
+    form: dict[str, str] | None = None
+    files: dict[str, tuple[str, bytes, str]] | None = None
 
 
 # ------------------------------------------------------------------- Protocols
@@ -662,10 +697,16 @@ def _send(req: ProviderRequest, *, timeout_s: float, provider: str) -> Any:
                          provider=provider) from exc
     try:
         with httpx.Client(timeout=timeout_s) as client:
-            resp = client.request(
-                req.method, req.url, headers=req.headers, params=req.query or None,
-                json=req.json_body, content=req.data,
-            )
+            if req.files:
+                resp = client.request(
+                    req.method, req.url, headers=req.headers, params=req.query or None,
+                    data=req.form or None, files=req.files,
+                )
+            else:
+                resp = client.request(
+                    req.method, req.url, headers=req.headers, params=req.query or None,
+                    json=req.json_body, content=req.data,
+                )
             resp.raise_for_status()
             return resp
     except httpx.TimeoutException as exc:
@@ -911,14 +952,26 @@ class OpenAISTTProvider:
         )
 
     def build_request(self, audio: bytes, *, language: str) -> ProviderRequest:
-        # multipart is assembled by httpx at send time from `data`/files; here we
-        # carry the raw audio and let _send wrap it. We model the fields in query
-        # for unit-test visibility of the target + model + language.
+        # The transcription endpoint is multipart/form-data: the audio as the ``file``
+        # part (named with its container so the vendor can sniff it) and the text fields
+        # beside it. A raw body with the fields in the query string was the shape the
+        # first real loopback run refused (2026-09-07); the request is built here without
+        # I/O so the unit tests can assert every part.
+        if is_wav(audio):
+            file_part = ("speech.wav", audio, "audio/wav")
+        elif audio[:3] == b"ID3" or audio[:2] == b"\xff\xfb":
+            file_part = ("speech.mp3", audio, "audio/mpeg")
+        else:
+            file_part = ("speech.bin", audio, "application/octet-stream")
         return ProviderRequest(
             method="POST", url=self._URL,
             headers={"Authorization": f"Bearer {self._api_key or ''}"},
-            data=audio,
-            query={"model": self._model, "language": language.split("-")[0]},
+            form={
+                "model": self._model,
+                "language": language.split("-")[0],
+                "response_format": "json",
+            },
+            files={"file": file_part},
         )
 
     def transcribe(self, audio: bytes, *, language: str = "tr-TR") -> STTResult:
