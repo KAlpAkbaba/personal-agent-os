@@ -176,3 +176,33 @@ def test_an_unknown_assertion_is_an_uncertainty_not_a_fact(session) -> None:
     assert not [f for f in snapshot.facts if f.key == "owner.presence"]
     reasons = {u.reason for u in snapshot.uncertainties if u.subject == "owner.presence"}
     assert reasons == {"insufficient_observations"}
+
+
+def test_two_eye_writes_inside_one_clock_tick_still_order_by_write(
+    session, engine, bus, monkeypatch
+) -> None:
+    """Windows resolves the clock in ~1-15 ms; two commands inside one tick used to tie on
+    the ledger's ordering and the flag read the OLDER row (a real flake, 2026-09-07). The
+    write clock is strictly increasing: the later write is the later state."""
+    from datetime import UTC as _utc
+    from datetime import datetime as _dt
+
+    from app.presence import eye as eye_module
+
+    frozen = _dt(2026, 9, 7, 22, 0, 0, tzinfo=_utc)
+
+    class FrozenDateTime(_dt):
+        @classmethod
+        def now(cls, tz=None):  # noqa: ANN001 - the datetime signature
+            return frozen if tz is None else frozen.astimezone(tz)
+
+    monkeypatch.setattr(eye_module, "datetime", FrozenDateTime)
+    assert disable_eye(session, reason="first") is True
+    assert disable_eye(session, reason="second") is False
+    assert enable_eye(session, reason="third") is True
+    assert enable_eye(session, reason="fourth") is False
+    assert disable_eye(session, reason="fifth") is True
+    latest = eye_module.latest_eye_event(session)
+    assert latest is not None and latest.event_type == "eye.disabled"
+    assert latest.occurred_at.replace(tzinfo=_utc) > frozen
+

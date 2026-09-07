@@ -30,7 +30,7 @@ for the negative proof).
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -106,11 +106,25 @@ def _set_eye_state(
     the need: the rows were 71 ms before their receipts and a window check still could
     not say which action wrote them.
     """
-    if is_eye_enabled(session) == enabled:
+    latest = latest_eye_event(session)
+    current = DEFAULT_EYE_ENABLED if latest is None else latest.event_type == EVENT_TYPE_EYE_ENABLED
+    if current == enabled:
         return False
     event_type = EVENT_TYPE_EYE_ENABLED if enabled else EVENT_TYPE_EYE_DISABLED
     action = "enable" if enabled else "disable"
     now = datetime.now(UTC)
+    # The latest row IS the flag, so its occurred_at must be strictly increasing: two
+    # commands inside one clock tick (Windows resolves ~1-15 ms; a test clock that does
+    # not move) would otherwise tie on the ledger's ordering and leave "which is latest"
+    # to the database - the flake M19's core track met (an enable after an enable read
+    # the older disable as current). The later WRITE is the later state (the same rule
+    # as the evolution pause switch, ADR-0081).
+    if latest is not None:
+        previous = latest.occurred_at
+        if previous.tzinfo is None:
+            previous = previous.replace(tzinfo=UTC)
+        if previous >= now:
+            now = previous + timedelta(microseconds=1)
     detail: dict[str, Any] = {}
     if reason:
         detail["reason"] = reason
