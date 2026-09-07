@@ -141,6 +141,62 @@ def test_content_never_reaches_the_renderer(bus: UiStatePublisher) -> None:
     assert not is_forbidden_metadata_key("turn")
 
 
+def test_refs_is_the_one_structured_metadata_value_the_bus_allows(bus: UiStatePublisher) -> None:
+    """M20 functional gap fix: ``refs`` is defined end to end (model -> contract v5 ->
+    the web's ``parseDocumentRefs``) but ``_clean_metadata`` used to drop every list/dict
+    outright, so an answer's citations never reached the bus. Now exactly one structured
+    key is allowed through, capped at 8 entries, fields whitelisted to ``{ref, path}``
+    (each cut to the same 64-char token bound every other value gets) — ``excerpt`` never
+    rides the bus even nested one level inside an allowed key, and every OTHER list/dict
+    is still dropped exactly as before."""
+    event = publish(
+        UiState.DOCUMENT_ANALYSIS,
+        subsystem="documents",
+        label="sozlesme",
+        metadata={
+            "file": "sozlesme.docx",
+            "part": "answer",
+            "refs": [
+                {"ref": f"p{n}", "path": f"/docs/p{n}.pdf", "excerpt": "gizli metin " * 50}
+                for n in range(1, 10)  # 9 entries: the 9th must be dropped
+            ]
+            + [{"path": "/no/ref/here.pdf"}],  # no `ref` -> not a reference, dropped
+            "structure": {"sheets": ["Ozet"]},  # a different list/dict key: still dropped
+        },
+    )
+    assert event is not None
+    metadata = event.metadata
+    assert metadata["file"] == "sozlesme.docx"
+    assert metadata["part"] == "answer"
+    assert "structure" not in metadata
+    refs = metadata["refs"]
+    assert len(refs) == 8  # capped; the 9th (and the ref-less entry) dropped
+    assert refs[0] == {"ref": "p1", "path": "/docs/p1.pdf"}
+    assert all(set(r) <= {"ref", "path"} for r in refs)
+    assert all("excerpt" not in r for r in refs)
+
+
+def test_a_refs_path_longer_than_the_token_bound_is_cut(bus: UiStatePublisher) -> None:
+    event = publish(
+        UiState.DOCUMENT_ANALYSIS,
+        subsystem="documents",
+        metadata={"refs": [{"ref": "p1", "path": "x" * 65}]},
+    )
+    assert event is not None
+    assert event.metadata["refs"][0]["path"] == "x" * 64
+
+
+def test_refs_with_no_well_formed_entry_is_dropped_entirely(bus: UiStatePublisher) -> None:
+    event = publish(
+        UiState.DOCUMENT_ANALYSIS,
+        subsystem="documents",
+        metadata={"file": "x.pdf", "refs": [{"path": "/no/ref.pdf"}, {"ref": ""}, "not-a-dict"]},
+    )
+    assert event is not None
+    assert "refs" not in event.metadata
+    assert event.metadata == {"file": "x.pdf"}
+
+
 def test_out_of_range_numbers_are_clamped_and_unknown_progress_stays_unknown(
     bus: UiStatePublisher,
 ) -> None:

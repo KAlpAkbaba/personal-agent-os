@@ -24,6 +24,7 @@ from sqlalchemy.pool import StaticPool
 from app.documents.service import DocumentService
 from app.operator import focus as focus_module
 from app.operator.models import FOCUS_KIND_DOCUMENT
+from app.uistate.publisher import UiStatePublisher, set_publisher
 from app.voice.realtime_sessions.tools import ToolContext
 from app.voice.realtime_sessions.tools_documents import document_read
 from tests.documents_support import doc_id_for, file_id_for
@@ -108,6 +109,44 @@ def test_document_answer_with_no_document_focused_is_a_clarification() -> None:
     assert call["status"] == "needs_clarification", call
     assert call["result"]["speech"] == "Hangi belge?"
     assert h.device.calls == []
+
+
+def test_document_answer_publishes_document_analysis_with_refs_and_no_excerpt_on_the_bus() -> (
+    None
+):
+    """The functional gap fix: ``refs`` is defined end to end (model -> contract v5 ->
+    the web's ``parseDocumentRefs``) but ``DocumentService._publish`` used to send only
+    ``{file, part}`` and the publisher dropped every list/dict outright. An answer must
+    now publish ``document.analysis`` with a ``refs`` list of ``{ref, path}`` — and the
+    excerpt text the receipt's OWN ``refs[]`` carries ("45 gün", the same oracle question
+    ``test_document_answer_names_the_place_and_cites_a_ref_with_an_excerpt`` checks) must
+    never appear anywhere in what actually reached the bus."""
+    try:
+        h = build_harness()  # build_harness itself resets the publisher; set OUR bus after
+        bus = UiStatePublisher(tail_size=32)
+        set_publisher(bus)
+        h.seed(CTX_DOCX_FOCUSED)
+        sid = h.new_session()
+        h.say(sid, "Ödeme süresi kaç gün?")
+        call = h.tool(sid, "c-1", "document.answer", {"question": "Ödeme süresi kaç gün?"})
+        assert call["status"] == "succeeded", call
+        assert "45 gün" in call["result"]["speech"]  # the receipt itself DOES carry it
+
+        analysis_events = [e for e in bus.tail() if e.state.value == "document.analysis"]
+        assert analysis_events, "no document.analysis event was published"
+        last = analysis_events[-1]
+        assert last.metadata.get("part") == "answer"
+        refs = last.metadata.get("refs")
+        assert refs, "the answer's refs never reached the bus"
+        assert any(r.get("ref") == "p8" for r in refs)
+        for r in refs:
+            assert set(r) <= {"ref", "path"}
+        # The excerpt text is nowhere on the bus, not even truncated or nested.
+        for event in bus.tail():
+            assert "45 gün" not in str(event.metadata)
+            assert "excerpt" not in event.metadata
+    finally:
+        set_publisher(UiStatePublisher())
 
 
 # ------------------------------------------------------------------------ inspect

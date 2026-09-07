@@ -21,10 +21,11 @@ first. No focus at all -> ``needs_clarification`` "Hangi belge?".
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Final
 
 from sqlalchemy.orm import Session
 
@@ -66,8 +67,77 @@ SPEECH_NO_DEVICE = "Bu bilgisayarda belge okuma yetkisi yok efendim."
 SPEECH_NO_DOCUMENT = "Hangi belge?"
 SPEECH_NO_PREVIOUS_DOCUMENT = "Dönebileceğim önceki bir belge yok efendim."
 SPEECH_NOT_FOUND = "Aradığınızı bulamadım efendim."
+SPEECH_INVALID_FOLDER = "Bu klasörü tanımıyorum efendim."
+SPEECH_INVALID_PATTERN = "Bu deseni kullanamam efendim."
 
 ERROR_CAPABILITY_MISSING = "capability_missing"
+ERROR_INVALID_ARGUMENT = "invalid_argument"
+
+# --------------------------------------------------------------- confinement guard
+#
+# Single-layer confinement (security review, MEDIUM): the device confines every path
+# argument for real (spec §2), but Cloud Core forwarded ``folder``/``pattern`` straight
+# through with no check of its own — a second line of defence a model-supplied tool
+# argument deserves, since ``file_search``/``document_answer`` accept the model's raw
+# ``folder``/``target`` string whenever the router did not resolve one itself
+# (``tools_documents.py``'s own docstring: "the owner's WORDS, preferred over the
+# model's own argument"). Used by :meth:`DocumentService.search` and every
+# named-target resolution path (``_resolve_document``, ``_resolve_target_file``) —
+# the one place in this module a caller-supplied string reaches ``file.search``.
+
+#: Root names the device confines to by default (spec §1's ``AuthorisedRoots``) —
+#: accepted as a ``folder`` without further checking because they name a well-known
+#: bucket the DEVICE resolves, never a path this layer would have to reason about.
+_KNOWN_FOLDER_ROOTS: Final[frozenset[str]] = frozenset(
+    {"documents", "desktop", "downloads", "pictures", "videos", "music"}
+)
+#: The Turkish words the voice router already resolves to one of the roots above
+#: (``app.voice.intents._FOLDER_ALIASES`` keys, duplicated here — not imported — so this
+#: module's own second line of defence does not depend on the router's private
+#: vocabulary table keeping the same name or shape).
+_KNOWN_FOLDER_ALIASES: Final[frozenset[str]] = frozenset(
+    {"masaüstü", "masaustu", "belgelerim", "belgelerimde", "indirilenler"}
+)
+_UNC_OR_DEVICE_PREFIXES: Final[tuple[str, ...]] = ("\\\\", "//", "\\\\?\\", "\\\\.\\")
+_DRIVE_LETTER_RE = re.compile(r"^[A-Za-z]:")
+_MAX_PATTERN_CHARS: Final = 200
+
+
+def _is_known_folder_name(folder: str) -> bool:
+    normalized = folder.strip().lower()
+    return normalized in _KNOWN_FOLDER_ROOTS or normalized in _KNOWN_FOLDER_ALIASES
+
+
+def _is_safe_relative_folder(folder: str) -> bool:
+    """A folder Cloud Core still forwards to the device, but only when it cannot
+    possibly name an absolute location: no drive letter, no leading separator, no
+    UNC/device prefix, no ``..`` segment, no embedded NUL. The device still confines
+    for real (spec §2's resolve-then-contain); this only keeps an obviously
+    out-of-bounds string from ever reaching the device call at all."""
+    if not folder or "\x00" in folder:
+        return False
+    if any(folder.startswith(prefix) for prefix in _UNC_OR_DEVICE_PREFIXES):
+        return False
+    if folder.startswith(("\\", "/")):
+        return False
+    if _DRIVE_LETTER_RE.match(folder):
+        return False
+    parts = re.split(r"[\\/]+", folder)
+    return ".." not in parts
+
+
+def _validate_folder(folder: str) -> bool:
+    return _is_known_folder_name(folder) or _is_safe_relative_folder(folder)
+
+
+def _validate_pattern(pattern: str) -> bool:
+    """A bounded name fragment or glob — no path separators, no ``..``, no NUL, at
+    most 200 characters (the same bound ``file.search``'s own payload names)."""
+    if not pattern or len(pattern) > _MAX_PATTERN_CHARS or "\x00" in pattern:
+        return False
+    if "\\" in pattern or "/" in pattern:
+        return False
+    return ".." not in pattern
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,6 +187,30 @@ class DocumentService:
         if device_action is None:
             return None, self._capability_missing_receipt()
         return "device:default", None
+
+    def _invalid_argument_receipt(
+        self,
+        *,
+        capability: str,
+        requested_state: str,
+        speech: str,
+        db: Session,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        """A typed refusal for a ``folder``/``pattern`` the confinement guard rejected —
+        never echoes the rejected value (the speech names only what kind of argument was
+        refused, exactly as the two constant strings above do)."""
+        return self._receipt(
+            capability=capability,
+            requested_state=requested_state,
+            execution=EXECUTION_REFUSED,
+            terminal=TERMINAL_FAILED,
+            server={"reason": ERROR_INVALID_ARGUMENT},
+            speech=speech,
+            db=db,
+            error_class=ERROR_INVALID_ARGUMENT,
+            session_id=session_id,
+        )
 
     def _capability_missing_receipt(
         self, *, capability: str = "documents", session_id: str | None = None
@@ -197,12 +291,34 @@ class DocumentService:
         except Exception:  # noqa: BLE001 - evidence, never a dependency of the action
             logger.warning("document_ledger_failed", action=action)
 
-    def _publish(self, *, file_label: str, part: str | None = None) -> None:
+    def _publish(
+        self,
+        *,
+        file_label: str,
+        part: str | None = None,
+        refs: list[dict[str, Any]] | None = None,
+    ) -> None:
+        metadata: dict[str, Any] = {"file": file_label[:64]}
+        if part:
+            metadata["part"] = part[:64]
+        if refs:
+            # {ref, path} ONLY (functional gap fix) — no excerpt: "excerpt" is a
+            # forbidden metadata-key part (app.uistate.publisher._FORBIDDEN_KEY_PARTS)
+            # and must never reach the bus; the publisher's own ``_clean_metadata``
+            # re-enforces the {ref, path} shape and the 8-item cap independently, this
+            # is only the honest shape the caller intends to send.
+            cleaned = [
+                {"ref": str(r.get("ref")), "path": str(r.get("path") or "")}
+                for r in refs
+                if r.get("ref")
+            ][:8]
+            if cleaned:
+                metadata["refs"] = cleaned
         publish_ui_state(
             UiState.DOCUMENT_ANALYSIS,
             subsystem=SUBSYSTEM_DOCUMENTS,
             label=file_label[:64],
-            metadata={"file": file_label[:64], **({"part": part[:64]} if part else {})},
+            metadata=metadata,
         )
 
     # ------------------------------------------------------------------- search
@@ -220,6 +336,22 @@ class DocumentService:
         device_id, missing = self._select_device(device_action)
         if missing is not None:
             return missing
+        if folder and not _validate_folder(folder):
+            return self._invalid_argument_receipt(
+                capability=CAPABILITY_FILE_SEARCH,
+                requested_state="searched",
+                speech=SPEECH_INVALID_FOLDER,
+                db=db,
+                session_id=session_id,
+            )
+        if pattern and not _validate_pattern(pattern):
+            return self._invalid_argument_receipt(
+                capability=CAPABILITY_FILE_SEARCH,
+                requested_state="searched",
+                speech=SPEECH_INVALID_PATTERN,
+                db=db,
+                session_id=session_id,
+            )
         payload: dict[str, Any] = {}
         if pattern:
             payload["pattern"] = pattern
@@ -274,9 +406,23 @@ class DocumentService:
             else:
                 speech = "Şunları buldum: " + ", ".join(str(f.get("name")) for f in files) + "."
             if folder:
-                focus_module.set_focus(
-                    db, FOCUS_KIND_FOLDER, folder, label=folder, source="document_search"
-                )
+                # A folder focus is an identity, not a transcript of what the model
+                # typed (security review, LOW): persist it only from a name this layer
+                # itself already recognises (a router-resolved alias or one of the
+                # spec's own root names) or from the DEVICE's own ``searched_roots`` —
+                # never the raw ``folder`` argument verbatim when it is neither.
+                searched_roots = list((result.result or {}).get("searched_roots") or [])
+                focus_folder = folder if _is_known_folder_name(folder) else None
+                if focus_folder is None and searched_roots:
+                    focus_folder = str(searched_roots[0])
+                if focus_folder:
+                    focus_module.set_focus(
+                        db,
+                        FOCUS_KIND_FOLDER,
+                        focus_folder,
+                        label=focus_folder,
+                        source="document_search",
+                    )
         return self._receipt(
             capability=CAPABILITY_FILE_SEARCH,
             requested_state="searched",
@@ -431,6 +577,14 @@ class DocumentService:
         # A spoken name: search, and read the single hit.
         if device_action is None:
             return None, _clarification(SPEECH_NO_DOCUMENT)
+        if not _validate_pattern(target):
+            return None, self._invalid_argument_receipt(
+                capability=CAPABILITY_FILE_SEARCH,
+                requested_state="searched",
+                speech=SPEECH_INVALID_PATTERN,
+                db=db,
+                session_id=session_id,
+            )
         found = device_action.run(
             capability=CAPABILITY_FILE_SEARCH,
             payload={"pattern": target},
@@ -451,7 +605,12 @@ class DocumentService:
     # ---------------------------------------------------------------- inspect
 
     def _resolve_target_file(
-        self, db: Session, device_action: DeviceActionPort | None, target: str
+        self,
+        db: Session,
+        device_action: DeviceActionPort | None,
+        target: str,
+        *,
+        session_id: str | None = None,
     ) -> tuple[str | None, str | None, dict[str, Any] | None]:
         """(file_id, path, clarification) for a target, WITHOUT extracting content -
         ``inspect``'s own resolution (spec §3: inspect reads STRUCTURE only, headers-only
@@ -480,6 +639,14 @@ class DocumentService:
             return file_entry.object_id, None, None
         if device_action is None:
             return None, None, _clarification(SPEECH_NO_DOCUMENT)
+        if not _validate_pattern(target):
+            return None, None, self._invalid_argument_receipt(
+                capability=CAPABILITY_FILE_SEARCH,
+                requested_state="inspected",
+                speech=SPEECH_INVALID_PATTERN,
+                db=db,
+                session_id=session_id,
+            )
         found = device_action.run(
             capability=CAPABILITY_FILE_SEARCH,
             payload={"pattern": target},
@@ -550,7 +717,9 @@ class DocumentService:
             )
         # Not indexed yet: resolve just the file identity - never ``document.extract``,
         # only the lightweight ``file.inspect`` (headers only, no text; spec §2).
-        file_id, path, resolve_clar = self._resolve_target_file(db, device_action, target)
+        file_id, path, resolve_clar = self._resolve_target_file(
+            db, device_action, target, session_id=session_id
+        )
         if resolve_clar is not None:
             return resolve_clar
         if device_action is None:
@@ -613,7 +782,7 @@ class DocumentService:
         assert row is not None
         doc = self._doc_ref(db, row)
         result = answers_module.summarize(doc)
-        self._publish(file_label=row.name, part="summary")
+        self._publish(file_label=row.name, part="summary", refs=result["refs"])
         return self._receipt(
             capability="document.summarize",
             requested_state="summarized",
@@ -655,7 +824,7 @@ class DocumentService:
             summary=f"document.answer -> {row.name}",
             detail={"file_id": row.file_id, "found": result["found"]},
         )
-        self._publish(file_label=row.name, part="answer")
+        self._publish(file_label=row.name, part="answer", refs=result["refs"])
         return self._receipt(
             capability="document.answer",
             requested_state="answered",

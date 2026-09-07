@@ -85,6 +85,24 @@ def _ref_dict(doc: DocRef, block: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+#: The spoken excerpt's own bound (security review, LOW) — narrower than ``refs[].excerpt``
+#: (500, above): a spoken sentence is not a document viewer, and an unbounded block's raw
+#: text embedded straight into ``speech`` had no cap at all.
+_MAX_SPOKEN_EXCERPT_CHARS = 400
+
+
+def _bounded_spoken_excerpt(text: str, *, limit: int = _MAX_SPOKEN_EXCERPT_CHARS) -> str:
+    """``text`` cut to ``limit`` characters at a word boundary, with an honest "…" when
+    it was actually cut — never mid-word, never a silent truncation."""
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    last_space = cut.rfind(" ")
+    if last_space > 0:
+        cut = cut[:last_space]
+    return cut.rstrip() + "…"
+
+
 # ------------------------------------------------------------------- place phrases
 
 _SHEET_RE = re.compile(r"^sheet:(?P<sheet>[^!]+)!\D*(?P<row>\d+)")
@@ -316,7 +334,7 @@ def answer(doc: DocRef, question: str) -> dict[str, Any]:
 
     top = results[0]
     place = place_phrase(top.ref, kind=doc.kind)
-    excerpt = str(top.block.get("text") or "")
+    excerpt = _bounded_spoken_excerpt(str(top.block.get("text") or ""))
     speech = f"{file_label(doc)}, {place}: {excerpt}"
     refs = [_ref_dict(doc, r.block) for r in results]
     return {"speech": speech, "refs": refs, "found": True, "structure": None}
