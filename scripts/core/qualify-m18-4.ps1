@@ -555,7 +555,14 @@ try {
             } | Out-Null
         } catch { Write-Host "      (ledger row not recorded: $($_.Exception.Message))" }
     }
-    if (-not $SkipFirstCutover) { Record-Deployment "deployment.cloud_core.released" "Cloud Core $($evidence.head_sha) canliya alindi (ilk blue/green gecisi, kenar + api-blue)." "bluegreen:first:$($evidence.head_sha):$stamp" }
+    if (-not $SkipFirstCutover) {
+        # The row's wording follows what happened: the FIRST cutover (legacy -> edge + blue)
+        # or an ordinary blue/green release onto the colour the edge now names. Run 10 found
+        # every row saying "ilk" (first).
+        $colourNow = try { (Invoke-WebRequest -UseBasicParsing -Uri "$BaseUrl/edge/active" -TimeoutSec 10).Content.Trim() } catch { "?" }
+        $summary = if ($firstCutover) { "Cloud Core $($evidence.head_sha) canliya alindi (ilk blue/green gecisi, kenar + api-blue)." } else { "Cloud Core $($evidence.head_sha) canliya alindi (blue/green gecisi, api-$colourNow)." }
+        Record-Deployment "deployment.cloud_core.released" $summary "bluegreen:$(if ($firstCutover) { 'first' } else { 'release' }):$($evidence.head_sha):$stamp"
+    }
 
     if (-not $SkipControlledFailure) {
         Write-Host "== C: controlled-failure rollback (post-switch verification pointed at an unreachable URL)"

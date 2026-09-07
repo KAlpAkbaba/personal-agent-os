@@ -1,6 +1,6 @@
 # M19 — Digital Operator
 
-Status: IN PROGRESS (started 2026-09-07 late night under the owner's master directive "CLOSE M18.4 AND COMPLETE M19 -> M28"). Decision record: ADR-0082.
+Status: ENGINEERING CLOSED 2026-09-08 (ADR-0082 + addenda 1–4; QUALIFICATION Stage 17; Cloud Core released as bd21f7f). Decision record: ADR-0082.
 Predecessors: `packages/protocol/DEVICE_PROTOCOL.md` (the one command envelope, the Session Companion as the only interactive executor), `docs/M18_ACTION_CONTRACT.md` (receipts, the one router, `state.now`), M13 `BROWSER_CAPABILITIES.md` (the browser worker), ADR-0076/0077 (ID-based object focus, the reference resolver), ADR-0080 (the Owner Utterance Corpus), ADR-0081 (self-evolution foundation, blue/green, the device handoff).
 
 The owner's rule for this milestone, in one line: **the system observes, operates and verifies the owner's Windows environment through the canonical path — Cloud Core → capability contract → Device Service → Session Companion → the owner's interactive session — and never assumes a click succeeded.**

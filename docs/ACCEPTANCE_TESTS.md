@@ -603,7 +603,32 @@ the Hetzner host inside the next release (`release-cloud-core.ps1 -BlueGreen`), 
 `/v1/system/health.release.version` names the sha and the edge's `/edge/active` names the
 colour; a later release with no gap observed by a device that stays connected.
 
-## M19 Multi-device / roaming owner qualification
+## M19 Digital Operator
+
+Spec: `docs/M19_DIGITAL_OPERATOR_SPEC.md` (ADR-0082). Deterministic gates, every CI run:
+
+- **the lab is real.** Notepad / Explorer / PowerShell on the runner's own desktop: launch →
+  observe → activate → type Turkish Unicode → read the value back over UI Automation →
+  maximize / restore / move / resize with re-observed rects → close → verified gone; the
+  fixture folder revealed with the file selected; `hostname` with exit 0; a non-allowlisted
+  command refused before a process exists; cancel and timeout typed; the focus guard
+  refusing a switched window mid-stream; a modal named; a junction inside a root refused;
+  the argument policy per application (`devices/windows-agent/tests/.../Operator/`);
+- **the loop verifies.** postconditions over the re-observed result, bounded retries, cancel,
+  timeout, modal, the receipt trail (`test_operator_task.py`); the tools through the real
+  app object (`test_operator_tools.py`, `test_operator_wiring.py`); the focus stack and its
+  expand-only migration;
+- **the owner's voice.** the corpus category `operator` with 0 forbidden side effects and
+  every earlier category unchanged (`test_owner_utterance_corpus.py`); the loopback proxy
+  harness's unit tests (`test_voice_loopback.py`);
+- **the Core tells the truth.** the v4 operator states and the Cockpit panel from published
+  facts only (`operator-states.test.ts`, `digital-operator.test.tsx`).
+
+Real acceptance: the Cloud Core half released through blue/green (Stage 17.10); the device
+half is machine-proven on this machine and the runner, and reaches the deployed agent with
+the owner's elevated update `install-device-service.ps1 -Operator` (item 28).
+
+## M19b Multi-device / roaming owner qualification
 
 Real-only acceptance on at least two owner-authorised physical computers (PC-A, PC-B) and
 the real Hetzner Cloud Core; nothing here is accepted from fakes or a single machine.
