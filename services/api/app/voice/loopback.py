@@ -35,7 +35,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.voice.benchmark import levenshtein, word_error_rate
-from app.voice.errors import VoiceError
+from app.voice.errors import VoiceError, VoiceErrorClass
 from app.voice.intents import normalize_transcript
 from app.voice.providers import (
     FakeSTTProvider,
@@ -96,16 +96,91 @@ _DIACRITICS = str.maketrans("çğıöşüâîû", "cgiosuaiu")
 #: matter, not a semantic miss.
 STOP_WORDS: frozenset[str] = frozenset(
     {
-        "icin", "gibi", "daha", "ancak", "simdi", "sonra", "once", "kadar", "degil",
-        "olan", "olarak", "bunu", "bunun", "bunlar", "sunu", "sunun", "sunlar", "onun",
-        "onlar", "sana", "bana", "size", "sizin", "senin", "benim", "bizim", "hangi",
-        "nasil", "neden", "veya", "yani", "hemen", "artik", "biraz", "boyle", "soyle",
-        "oyle", "burada", "orada", "surada", "butun", "hepsi", "baska", "diger", "ayni",
-        "henuz", "zaten", "tabii", "elbette", "tamam", "evet", "hayir", "lutfen", "peki",
-        "yoksa", "fakat", "cunku", "olsun", "oldu", "olur", "olacak", "misin", "musun",
-        "musunuz", "misiniz", "seyi", "seyler", "birlikte", "sadece", "yalnizca", "hakkinda",
-        "uzerine", "kendi", "burasi", "orasi", "boylece", "ayrica", "iste", "hani",
-        "suan", "simdilik", "bile", "hala", "yine", "gene",
+        "icin",
+        "gibi",
+        "daha",
+        "ancak",
+        "simdi",
+        "sonra",
+        "once",
+        "kadar",
+        "degil",
+        "olan",
+        "olarak",
+        "bunu",
+        "bunun",
+        "bunlar",
+        "sunu",
+        "sunun",
+        "sunlar",
+        "onun",
+        "onlar",
+        "sana",
+        "bana",
+        "size",
+        "sizin",
+        "senin",
+        "benim",
+        "bizim",
+        "hangi",
+        "nasil",
+        "neden",
+        "veya",
+        "yani",
+        "hemen",
+        "artik",
+        "biraz",
+        "boyle",
+        "soyle",
+        "oyle",
+        "burada",
+        "orada",
+        "surada",
+        "butun",
+        "hepsi",
+        "baska",
+        "diger",
+        "ayni",
+        "henuz",
+        "zaten",
+        "tabii",
+        "elbette",
+        "tamam",
+        "evet",
+        "hayir",
+        "lutfen",
+        "peki",
+        "yoksa",
+        "fakat",
+        "cunku",
+        "olsun",
+        "oldu",
+        "olur",
+        "olacak",
+        "misin",
+        "musun",
+        "musunuz",
+        "misiniz",
+        "seyi",
+        "seyler",
+        "birlikte",
+        "sadece",
+        "yalnizca",
+        "hakkinda",
+        "uzerine",
+        "kendi",
+        "burasi",
+        "orasi",
+        "boylece",
+        "ayrica",
+        "iste",
+        "hani",
+        "suan",
+        "simdilik",
+        "bile",
+        "hala",
+        "yine",
+        "gene",
     }
 )
 
@@ -130,9 +205,7 @@ def normalize_for_comparison(text: str) -> tuple[str, tuple[str, ...]]:
     """
     joined, tokens, _fillers = normalize_transcript(text or "")
     folded = tuple(
-        stripped
-        for stripped in (strip_diacritics(t).replace("'", "") for t in tokens)
-        if stripped
+        stripped for stripped in (strip_diacritics(t).replace("'", "") for t in tokens) if stripped
     )
     return " ".join(folded), folded
 
@@ -425,11 +498,29 @@ class LoopbackReport:
         }
 
     @property
+    def provider_outages(self) -> int:
+        """Error verdicts whose cause is a provider that could not serve (a 429 with no
+        credits, a network refusal, an outage): ``dependency_unavailable`` at either stage."""
+        outage = f":{VoiceErrorClass.DEPENDENCY_UNAVAILABLE.value}"
+        return sum(
+            1 for c in self.cases if c.verdict == VERDICT_ERROR and outage in (c.error or "")
+        )
+
+    @property
     def summary(self) -> str:
+        """What the run proved. A mismatch is a regression. An error is a regression only
+        when it is the harness's or the product's; a run whose every error is a provider
+        outage (the second M20 sample: OpenAI answered 429 "no credits remaining" for 22
+        of 32 cases) proved nothing either way and says so — ``PROVIDER_UNAVAILABLE`` —
+        instead of raising a regression the product does not have."""
         t = self.totals
         if t["cases"] == 0:
             return "NO_CASES"
-        if t["error"] or t["mismatched"]:
+        if t["mismatched"]:
+            return "REGRESSION_FOUND"
+        if t["error"]:
+            if self.provider_outages == t["error"]:
+                return "PROVIDER_UNAVAILABLE"
             return "REGRESSION_FOUND"
         if t["degraded"]:
             return "DEGRADED"
@@ -491,6 +582,7 @@ class LoopbackReport:
             "HEALTHY": "sağlıklı",
             "DEGRADED": "bozulma var",
             "REGRESSION_FOUND": "regresyon bulundu",
+            "PROVIDER_UNAVAILABLE": "sağlayıcı erişilemedi, sonuç yok",
             "NO_CASES": "cümle yok",
         }[self.summary]
         wer = "-" if self.mean_wer is None else f"{self.mean_wer:.3f}"
@@ -565,7 +657,11 @@ def _error_text(stage: str, provider: str, exc: BaseException) -> str:
 
 
 def run_case(
-    case: LoopbackCase, *, tts: TTSProvider, stt: STTProvider, language: str = "tr-TR",
+    case: LoopbackCase,
+    *,
+    tts: TTSProvider,
+    stt: STTProvider,
+    language: str = "tr-TR",
     voice: str = "default",
 ) -> LoopbackCaseResult:
     """One case through the loop; a provider failure is an ``error`` verdict that names

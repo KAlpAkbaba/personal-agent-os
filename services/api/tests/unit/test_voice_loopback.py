@@ -114,7 +114,10 @@ def test_a_perfect_loop_matches_every_case_with_proxy_marks() -> None:
     assert set(report.per_category) == {"research", "alarm", "eye", "evolution"}
     payload = report.to_dict()
     assert payload["providers"] == {
-        "tts": "fake-tts", "stt": "fake-stt", "tts_is_fake": True, "stt_is_fake": True
+        "tts": "fake-tts",
+        "stt": "fake-stt",
+        "tts_is_fake": True,
+        "stt_is_fake": True,
     }
     assert payload["cases"][0]["transcript"] == TR_CASES[0].expected_speech
 
@@ -146,8 +149,33 @@ def test_a_tts_failure_is_an_error_verdict_that_names_the_stage_and_provider() -
     assert report.totals["error"] == 2
     assert report.cases[0].error.startswith("tts:failing-tts:dependency_unavailable")
     assert report.mean_wer is None
-    # a non-fake provider that produced nothing proves nothing
+    # a non-fake provider that produced nothing proves nothing - and says so: an outage
+    # at the provider is not a regression of the product
     assert report.marks["audio_generation"]["mark"] == loopback.MARK_NOT_PROVEN
+    assert report.provider_outages == 2
+    assert report.summary == "PROVIDER_UNAVAILABLE"
+    assert "sağlayıcı erişilemedi" in report.factual_summary_tr()
+
+
+def test_a_mismatch_beside_provider_outages_is_still_a_regression() -> None:
+    import dataclasses
+
+    report = loopback.run_loopback(TR_CASES[:3], FailingTTSProvider(), FakeSTTProvider())
+    assert report.summary == "PROVIDER_UNAVAILABLE"
+    report.cases[0] = dataclasses.replace(
+        report.cases[0], verdict=loopback.VERDICT_MISMATCHED, error=None, wer=0.7
+    )
+    assert report.summary == "REGRESSION_FOUND"
+
+
+def test_an_error_that_is_not_a_provider_outage_is_a_regression() -> None:
+    import dataclasses
+
+    report = loopback.run_loopback(TR_CASES[:2], FailingTTSProvider(), FakeSTTProvider())
+    report.cases[1] = dataclasses.replace(
+        report.cases[1], error="stt:crashing-stt:internal_error: socket closed"
+    )
+    assert report.provider_outages == 1
     assert report.summary == "REGRESSION_FOUND"
 
 
@@ -177,17 +205,33 @@ class _RealLookingTTS:
 
     def capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(
-            name=self.name, kind="tts", languages=("tr-TR",), streaming=True,
-            long_form_stability="medium", pronunciation_dict=False, voice_selection=True,
-            speed_control=True, cost_metadata={"unit": "characters", "usd_per_1m": 15.0},
-            output_formats=("wav",), latency_class="low", requires_api_key=True,
+            name=self.name,
+            kind="tts",
+            languages=("tr-TR",),
+            streaming=True,
+            long_form_stability="medium",
+            pronunciation_dict=False,
+            voice_selection=True,
+            speed_control=True,
+            cost_metadata={"unit": "characters", "usd_per_1m": 15.0},
+            output_formats=("wav",),
+            latency_class="low",
+            requires_api_key=True,
         )
 
-    def synthesize(self, text: str, *, voice: str = "default", speed: float = 1.0,
-                   fmt: str = "wav") -> TTSResult:
+    def synthesize(
+        self, text: str, *, voice: str = "default", speed: float = 1.0, fmt: str = "wav"
+    ) -> TTSResult:
         audio = synthesize_wav(text)
-        return TTSResult(audio=audio, audio_format="wav", duration_ms=0, latency_ms=0.0,
-                         provider=self.name, voice=voice, char_count=len(text))
+        return TTSResult(
+            audio=audio,
+            audio_format="wav",
+            duration_ms=0,
+            latency_ms=0.0,
+            provider=self.name,
+            voice=voice,
+            char_count=len(text),
+        )
 
 
 def test_a_real_provider_with_audio_for_every_case_is_proven_automated() -> None:
@@ -217,24 +261,80 @@ def test_an_empty_speech_is_a_named_error_not_a_crash() -> None:
 def _corpus_rows() -> list[dict]:
     rows = []
     for i in range(30):
-        rows.append({"case_id": f"al.{i:02d}", "category": "alarm", "verdict": "correct",
-                     "expected_response": "ok", "speech": f"Alarm {i} kuruldu."})
+        rows.append(
+            {
+                "case_id": f"al.{i:02d}",
+                "category": "alarm",
+                "verdict": "correct",
+                "expected_response": "ok",
+                "speech": f"Alarm {i} kuruldu.",
+            }
+        )
     for i in range(3):
-        rows.append({"case_id": f"ev.{i}", "category": "evolution", "verdict": "correct",
-                     "expected_response": "refused", "speech": f"Reddedildi {i}."})
-    rows.append({"case_id": "op.0", "category": "operator", "verdict": "correct",
-                 "expected_response": "ok", "speech": "Operatör hazır."})
+        rows.append(
+            {
+                "case_id": f"ev.{i}",
+                "category": "evolution",
+                "verdict": "correct",
+                "expected_response": "refused",
+                "speech": f"Reddedildi {i}.",
+            }
+        )
+    rows.append(
+        {
+            "case_id": "op.0",
+            "category": "operator",
+            "verdict": "correct",
+            "expected_response": "ok",
+            "speech": "Operatör hazır.",
+        }
+    )
     # excluded: a wrong route, a clarification, a running tool, an empty speech, a variant
-    rows.append({"case_id": "al.bad", "category": "alarm", "verdict": "wrong_route",
-                 "expected_response": "ok", "speech": "Yanlış."})
-    rows.append({"case_id": "r.clar", "category": "research", "verdict": "correct",
-                 "expected_response": "needs_clarification", "speech": "Hangisi?"})
-    rows.append({"case_id": "r.run", "category": "research", "verdict": "correct",
-                 "expected_response": "running", "speech": "Başladım."})
-    rows.append({"case_id": "st.0", "category": "state", "verdict": "correct",
-                 "expected_response": "ok", "speech": ""})
-    rows.append({"case_id": "al.00.v1", "category": "alarm", "verdict": "correct",
-                 "expected_response": "ok", "speech": "Alarm 0 kuruldu."})
+    rows.append(
+        {
+            "case_id": "al.bad",
+            "category": "alarm",
+            "verdict": "wrong_route",
+            "expected_response": "ok",
+            "speech": "Yanlış.",
+        }
+    )
+    rows.append(
+        {
+            "case_id": "r.clar",
+            "category": "research",
+            "verdict": "correct",
+            "expected_response": "needs_clarification",
+            "speech": "Hangisi?",
+        }
+    )
+    rows.append(
+        {
+            "case_id": "r.run",
+            "category": "research",
+            "verdict": "correct",
+            "expected_response": "running",
+            "speech": "Başladım.",
+        }
+    )
+    rows.append(
+        {
+            "case_id": "st.0",
+            "category": "state",
+            "verdict": "correct",
+            "expected_response": "ok",
+            "speech": "",
+        }
+    )
+    rows.append(
+        {
+            "case_id": "al.00.v1",
+            "category": "alarm",
+            "verdict": "correct",
+            "expected_response": "ok",
+            "speech": "Alarm 0 kuruldu.",
+        }
+    )
     return rows
 
 
@@ -321,7 +421,11 @@ def test_the_cli_writes_a_report_from_a_corpus_report(tmp_path: Path, capsys) ->
     payload = json.loads(out.read_text(encoding="utf-8"))
     assert payload["suite"] == loopback.SUITE
     assert payload["totals"] == {
-        "cases": 6, "matched": 6, "degraded": 0, "mismatched": 0, "error": 0
+        "cases": 6,
+        "matched": 6,
+        "degraded": 0,
+        "mismatched": 0,
+        "error": 0,
     }
     assert {c["category"] for c in payload["cases"]} == {"alarm", "evolution", "operator"}
     assert payload["marks"]["audio_generation"]["mark"] == loopback.MARK_PROVEN_PROXY
@@ -373,8 +477,9 @@ def test_a_real_provider_error_is_a_verdict_not_an_exit(monkeypatch, tmp_path: P
     import app.voice.providers as providers_mod
 
     def refuse(req, *, timeout_s, provider):
-        raise VoiceError(VoiceErrorClass.DEPENDENCY_UNAVAILABLE, f"{provider}: HTTP 401",
-                         provider=provider)
+        raise VoiceError(
+            VoiceErrorClass.DEPENDENCY_UNAVAILABLE, f"{provider}: HTTP 401", provider=provider
+        )
 
     monkeypatch.setattr(providers_mod, "_send", refuse)
     monkeypatch.setenv(loopback_cli.KEY_ENV, "unit-test-not-a-real-key")
