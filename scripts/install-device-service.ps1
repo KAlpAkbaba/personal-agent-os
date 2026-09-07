@@ -54,6 +54,14 @@
     Waking and reporting a display (desktop.display_wake, desktop.display_status) need no
     switch. They add; they never subtract.
 
+.PARAMETER Operator
+    M19 (ADR-0082): enable the Digital Operator family (app.*, window.*, keyboard.*,
+    pointer.*, ui.*, screen.*, file.open/reveal, terminal.*). OFF by default. Like
+    -DisplayPower it writes OperatorEnabled=true to BOTH configuration files: the service
+    advertises and routes the family, the companion executes it; one without the other is
+    a device that lies about what it can do. Every action stays behind the focus guard,
+    the path roots and the terminal allowlist (DEVICE_PROTOCOL.md §6i).
+
 .PARAMETER UvPath
     Explicit path to uv.exe. By default uv is resolved the way scripts\preflight.ps1
     resolves it (PATH, then the known install locations) — never assumed.
@@ -83,6 +91,7 @@ param(
     [switch]$SkipBrowser,
     [ValidateSet("chrome", "chromium")][string]$BrowserChannel = "chrome",
     [switch]$DisplayPower,
+    [switch]$Operator,
     [string]$UvPath,
     [switch]$SkipCoreVerify,
     [int]$CoreVerifyTimeoutSeconds = 90
@@ -208,7 +217,8 @@ function Write-ServiceConfig {
         [string]$BrokerRestUrl,
         [string]$BrokerWsUrl,
         [bool]$BrowserEnabled,
-        [bool]$DisplayPowerEnabled
+        [bool]$DisplayPowerEnabled,
+        [bool]$OperatorEnabled = $false
     )
     $config = [ordered]@{
         BrokerRestUrl      = $BrokerRestUrl
@@ -229,6 +239,9 @@ function Write-ServiceConfig {
         # companion carries the same flag; both must agree or the device lies one way or the
         # other about what it can do.
         DisplayPowerEnabled = $DisplayPowerEnabled
+        # M19: the Digital Operator family, asked for out loud (-Operator); the companion
+        # carries the same flag, for the same reason as display power.
+        OperatorEnabled    = $OperatorEnabled
     }
     $path = Join-Path $ServiceDir "appsettings.json"
     Write-JsonFile -Path $path -Content ($config | ConvertTo-Json -Depth 4)
@@ -516,7 +529,7 @@ if (Test-Path -LiteralPath $keyPath) {
 # been hardened, and an existing appsettings.json could not be replaced.
 Write-ServiceConfig -ServiceDir $stagedServiceDir -CompanionExe $companionExe -OwnerSid $OwnerSid `
     -DataDir $DataDir -BrokerRestUrl $BrokerRestUrl -BrokerWsUrl $BrokerWsUrl -BrowserEnabled (-not $SkipBrowser) `
-    -DisplayPowerEnabled ([bool]$DisplayPower)
+    -DisplayPowerEnabled ([bool]$DisplayPower) -OperatorEnabled ([bool]$Operator)
 
 # The companion reads its own settings from its own directory.
 $companionConfig = [ordered]@{
@@ -528,6 +541,10 @@ $companionConfig = [ordered]@{
 # these is how a device ends up advertising a capability it will then refuse.
 if ($DisplayPower) {
     $companionConfig["DisplayPowerEnabled"] = $true
+}
+# M19: the operator family's second half, same rule.
+if ($Operator) {
+    $companionConfig["OperatorEnabled"] = $true
 }
 if (-not $SkipBrowser) {
     # Paths the companion will use at runtime: the LIVE browser tree (not staging) and a
@@ -544,6 +561,12 @@ if ($DisplayPower) {
 }
 else {
     Write-Host "display power: disabled (pass -DisplayPower to enable desktop.display_off); waking and reporting stay available"
+}
+if ($Operator) {
+    Write-Host "digital operator: ENABLED on BOTH the service and the companion (the app/window/keyboard/pointer/ui/screen/file/terminal families are advertised; DEVICE_PROTOCOL.md §6i)"
+}
+else {
+    Write-Host "digital operator: disabled (pass -Operator to enable the M19 families)"
 }
 
 if (-not $SkipBrowser) {
