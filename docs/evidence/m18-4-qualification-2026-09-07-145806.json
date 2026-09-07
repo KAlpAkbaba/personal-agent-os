@@ -1,0 +1,1025 @@
+{
+    "run_id":  "m18-4-2026-09-07-145806",
+    "started_at":  "2026-09-07T14:58:06.5298496Z",
+    "cloud":  "http://100.90.158.26:8001",
+    "head_sha":  "396deaedae7c25e0d17a64c915859222a4b2bd3e",
+    "phases":  {
+                   "A_before":  {
+                                    "at":  "2026-09-07T15:01:36.4294776Z",
+                                    "health_status":  "ok",
+                                    "release":  null,
+                                    "action_contract_version":  8,
+                                    "realtime_contract":  2,
+                                    "edge_active":  null,
+                                    "devices":  [
+                                                    {
+                                                        "device_id":  "",
+                                                        "name":  "",
+                                                        "presence":  "",
+                                                        "version":  "unknown",
+                                                        "capabilities":  [
+                                                                             ""
+                                                                         ],
+                                                        "heartbeat_status":  null
+                                                    }
+                                                ],
+                                    "alarm_count":  1,
+                                    "alarm_ids":  [
+                                                      ""
+                                                  ],
+                                    "routine_count":  1,
+                                    "incident_count":  1,
+                                    "opportunity_count":  1,
+                                    "ledger_summary":  {
+                                                           "since":  "2026-09-06T15:01:36.454614Z",
+                                                           "by_status":  {
+                                                                             "info":  23,
+                                                                             "failed":  2,
+                                                                             "verified":  7,
+                                                                             "completed":  78
+                                                                         },
+                                                           "by_subsystem":  {
+                                                                                "voice":  42,
+                                                                                "research":  29,
+                                                                                "routine":  4,
+                                                                                "presence":  24,
+                                                                                "ledger":  11
+                                                                            },
+                                                           "latest":  {
+                                                                          "event_id":  "3e7c2fd7-ebcc-45d7-8930-8be7204f8a01",
+                                                                          "occurred_at":  "2026-09-06T22:20:30.879285Z",
+                                                                          "recorded_at":  "2026-09-06T22:20:30.898354Z",
+                                                                          "event_type":  "voice.narration.resumed",
+                                                                          "subsystem":  "voice",
+                                                                          "module":  null,
+                                                                          "version":  null,
+                                                                          "status":  "completed",
+                                                                          "severity":  "info",
+                                                                          "action":  "reading",
+                                                                          "result":  null,
+                                                                          "production_state":  "n/a",
+                                                                          "command_id":  null,
+                                                                          "trace_id":  null,
+                                                                          "research_job_id":  null,
+                                                                          "browser_session_id":  null,
+                                                                          "related_goal_id":  null,
+                                                                          "related_module_id":  null,
+                                                                          "evidence_refs":  [
+                                                                                                {
+                                                                                                    "ref":  "8538fb25-fc6f-4d52-8b5a-e6580f6795b6",
+                                                                                                    "kind":  "narration_session"
+                                                                                                },
+                                                                                                {
+                                                                                                    "ref":  "96f06af4-4950-43b9-97c1-4237120530f9",
+                                                                                                    "kind":  "realtime_session"
+                                                                                                }
+                                                                                            ],
+                                                                          "factual_summary":  "Anlatım kaldığı yerden sürdü.",
+                                                                          "detail_json":  {
+                                                                                              "action":  "reading",
+                                                                                              "cursor":  {
+                                                                                                             "section_id":  "s2",
+                                                                                                             "char_offset":  0,
+                                                                                                             "paragraph_id":  "p2",
+                                                                                                             "sentence_index":  5
+                                                                                                         },
+                                                                                              "intent":  "resume"
+                                                                                          },
+                                                                          "source":  "live",
+                                                                          "source_ref":  "voice_narration:8538fb25-fc6f-4d52-8b5a-e6580f6795b6:2026-09-06T22:20:30.879285+00:00"
+                                                                      }
+                                                       }
+                                },
+                   "B_release":  {
+                                     "exit":  0,
+                                     "seconds":  86,
+                                     "output_tail":  "archived HEAD 396deae (15.4 MB, committed content only)\r\nuploaded to root@pagentos-core:/tmp/pagentos-release-396deae.tar\r\n  host: preflight: tree 396deaedae7c25e0d17a64c915859222a4b2bd3e extracted, compose valid, env posture 600:root, active colour (first cutover: no colour is behind the edge yet) green, idle blue, drain 60s\r\n  host: tree swapped: /opt/pagentos/app is 396deaedae7c25e0d17a64c915859222a4b2bd3e (previous kept at /opt/pagentos/app.prev)\r\n  host: building pagentos/cloud-core:396deaedae7c25e0d17a64c915859222a4b2bd3e ...\r\n  host: #16 unpacking to docker.io/pagentos/cloud-core:396deaedae7c25e0d17a64c915859222a4b2bd3e 2.7s done\r\n  host: #16 DONE 14.6s\r\n  host: applying migrations (expand-only)...\r\n  host: INFO  [alembic.runtime.migration] Running upgrade 0022_research_focus -\u003e 0023_tool_call_clarification, M18.2 tool-call result contract: a clarification is its own terminal status (ADR-0077).\r\n  host: INFO  [alembic.runtime.migration] Running upgrade 0023_tool_call_clarification -\u003e 0024_ambient_hardening, M18.3 ambient hardening (ADR-0079): keep-on, quiet-hours threshold, camera grace.\r\n  host: starting the idle colour api-blue on 396deaedae7c25e0d17a64c915859222a4b2bd3e (api-green keeps serving)...\r\n  host:  Container pagentos-prod-api-blue Waiting \r\n  host:  Container pagentos-prod-api-blue Healthy \r\n  host: health ok on api-blue\r\n  host: realtime contract_version 2 served (matches the tree)\r\n  host: api-blue reports release 396deaedae7c25e0d17a64c915859222a4b2bd3e\r\n  host: first cutover: stopping the legacy pagentos-prod-api and starting the edge (one last gap)\r\n  host:  Container pagentos-prod-edge Waiting \r\n  host:  Container pagentos-prod-edge Healthy \r\n  host: edge -\u003e api-blue\r\n  host: health through the edge: release 396deaedae7c25e0d17a64c915859222a4b2bd3e\r\n  host: RELEASE OK: 396deaedae7c25e0d17a64c915859222a4b2bd3e is running as api-blue behind the edge (previous none kept as last known good)\r\nverified from this machine over the tailnet: http://pagentos-core:8001/v1/system/health status=ok realtime providers=[openai-realtime] contract_version=2\r\nRELEASE OK: 396deae is running on pagentos-core\r\n"
+                                 },
+                   "B_after":  {
+                                   "at":  "2026-09-07T15:03:16.4658024Z",
+                                   "health_status":  "ok",
+                                   "release":  {
+                                                   "version_model":  1,
+                                                   "component":  "cloud-core",
+                                                   "version":  "396deaedae7c25e0d17a64c915859222a4b2bd3e",
+                                                   "version_source":  "env",
+                                                   "app_version":  "0.1.0",
+                                                   "contracts":  {
+                                                                     "action":  12,
+                                                                     "ui_state":  3,
+                                                                     "ambient":  1,
+                                                                     "voice_qualification":  1
+                                                                 },
+                                                   "last_known_good":  null,
+                                                   "last_known_good_source":  "unknown",
+                                                   "environment":  "prod",
+                                                   "started_at":  "2026-09-07T15:02:59.859042Z",
+                                                   "uptime_s":  16.231623
+                                               },
+                                   "action_contract_version":  12,
+                                   "realtime_contract":  2,
+                                   "edge_active":  "blue",
+                                   "devices":  [
+                                                   {
+                                                       "device_id":  "",
+                                                       "name":  "",
+                                                       "presence":  "",
+                                                       "version":  "unknown",
+                                                       "capabilities":  [
+                                                                            ""
+                                                                        ],
+                                                       "heartbeat_status":  null
+                                                   }
+                                               ],
+                                   "alarm_count":  1,
+                                   "alarm_ids":  [
+                                                     ""
+                                                 ],
+                                   "routine_count":  1,
+                                   "incident_count":  1,
+                                   "opportunity_count":  1,
+                                   "ledger_summary":  {
+                                                          "since":  "2026-09-06T15:03:16.504796Z",
+                                                          "by_status":  {
+                                                                            "info":  23,
+                                                                            "failed":  2,
+                                                                            "verified":  7,
+                                                                            "completed":  85
+                                                                        },
+                                                          "by_subsystem":  {
+                                                                               "evolution":  3,
+                                                                               "voice":  45,
+                                                                               "research":  29,
+                                                                               "routine":  4,
+                                                                               "presence":  24,
+                                                                               "ledger":  12
+                                                                           },
+                                                          "latest":  {
+                                                                         "event_id":  "163fe8f9-6ebf-40e1-a1e4-d907ad66a2e8",
+                                                                         "occurred_at":  "2026-09-07T15:03:10.972922Z",
+                                                                         "recorded_at":  "2026-09-07T15:03:10.979590Z",
+                                                                         "event_type":  "evolution.idea_created",
+                                                                         "subsystem":  "evolution",
+                                                                         "module":  "evolution.backlog",
+                                                                         "version":  "1",
+                                                                         "status":  "completed",
+                                                                         "severity":  "info",
+                                                                         "action":  "opportunity.idea",
+                                                                         "result":  null,
+                                                                         "production_state":  "idea",
+                                                                         "command_id":  null,
+                                                                         "trace_id":  null,
+                                                                         "research_job_id":  null,
+                                                                         "browser_session_id":  null,
+                                                                         "related_goal_id":  null,
+                                                                         "related_module_id":  "38352abc-2cf7-4937-a58d-620f4a097c9a",
+                                                                         "evidence_refs":  [
+                                                                                               {
+                                                                                                   "ref":  "3867bd63-6031-470f-8a5d-5a5dfda3c979",
+                                                                                                   "kind":  "ledger_event"
+                                                                                               },
+                                                                                               {
+                                                                                                   "ref":  "86f4cb6d-ff40-4a96-9edb-473f77e72a2e",
+                                                                                                   "kind":  "ledger_event"
+                                                                                               }
+                                                                                           ],
+                                                                         "factual_summary":  "Evrim fırsatı \u0027Tekrarlayan araştırma hatası: insufficient_valid_findings\u0027 fikir durumuna geçti (lab).",
+                                                                         "detail_json":  {
+                                                                                             "actor":  "lab",
+                                                                                             "status":  "idea",
+                                                                                             "composite":  0.33139,
+                                                                                             "approved_by":  null,
+                                                                                             "candidate_ref":  null,
+                                                                                             "workspace_ref":  null
+                                                                                         },
+                                                                         "source":  "live",
+                                                                         "source_ref":  "evolution_opportunities:38352abc-2cf7-4937-a58d-620f4a097c9a:idea"
+                                                                     }
+                                                      }
+                               },
+                   "B_host":  "396deaedae7c25e0d17a64c915859222a4b2bd3e\r\n\r\n\r\nblue\r\n\r\npagentos-prod-edge Up 7 seconds\r\npagentos-prod-api-blue Up 23 seconds (healthy)\r\npagentos-prod-postgres Up 5 days (healthy)\r\npagentos-prod-temporal Up 5 days (healthy)\r\npagentos-prod-redis Up 5 days (healthy)\r\npagentos-prod-minio Up 5 days (healthy)\r\n",
+                   "C_output_tail":  "preflight: tree 396deaedae7c25e0d17a64c915859222a4b2bd3e extracted, compose valid, env posture 600:root, active colour blue, idle green, drain 5s\r\ntree swapped: /opt/pagentos/app is 396deaedae7c25e0d17a64c915859222a4b2bd3e (previous kept at /opt/pagentos/app.prev)\r\nbuilding pagentos/cloud-core:396deaedae7c25e0d17a64c915859222a4b2bd3e ...\r\n#16 unpacking to docker.io/pagentos/cloud-core:396deaedae7c25e0d17a64c915859222a4b2bd3e 0.0s done\r\n#16 DONE 0.1s\r\napplying migrations (expand-only)...\r\nINFO  [alembic.runtime.migration] Context impl PostgresqlImpl.\r\nINFO  [alembic.runtime.migration] Will assume transactional DDL.\r\nstarting the idle colour api-green on 396deaedae7c25e0d17a64c915859222a4b2bd3e (api-blue keeps serving)...\r\n Container pagentos-prod-api-green Waiting \r\n Container pagentos-prod-api-green Healthy \r\nhealth ok on api-green\r\nrealtime contract_version 2 served (matches the tree)\r\napi-green reports release 396deaedae7c25e0d17a64c915859222a4b2bd3e\r\n2026/09/07 15:05:16 [notice] 37#37: signal process started\r\nedge -\u003e api-green\r\ncurl: (22) The requested URL returned error: 404\r\nROLLBACK: switching the edge back to api-blue\r\nedge config test FAILED\r\n",
+                   "D_rollback_output_tail":  "rolling back: edge -\u003e api-green (396deaedae7c25e0d17a64c915859222a4b2bd3e; leaving 396deaedae7c25e0d17a64c915859222a4b2bd3e)\r\n Container pagentos-prod-api-green Running \r\n Container pagentos-prod-api-green Waiting \r\n Container pagentos-prod-api-green Healthy \r\n2026/09/07 15:05:27 [notice] 50#50: signal process started\r\nROLLBACK OK: api-green is active\r\nEXIT=0\r\n",
+                   "D_forward_output_tail":  "starting the idle colour api-blue on 396deaedae7c25e0d17a64c915859222a4b2bd3e (api-green keeps serving)...\r\n Container pagentos-prod-api-blue Waiting \r\n Container pagentos-prod-api-blue Healthy \r\nhealth ok on api-blue\r\nrealtime contract_version 2 served (matches the tree)\r\napi-blue reports release 396deaedae7c25e0d17a64c915859222a4b2bd3e\r\n2026/09/07 15:05:53 [notice] 63#63: signal process started\r\nedge -\u003e api-blue\r\nhealth through the edge: release 396deaedae7c25e0d17a64c915859222a4b2bd3e\r\ndraining api-green for 20s (in-flight requests, device reconnects, the voice session\u0027s next tool call)...\r\n Container pagentos-prod-api-green Stopped \r\napi-green stopped\r\nRELEASE OK: 396deaedae7c25e0d17a64c915859222a4b2bd3e is running as api-blue behind the edge (previous 396deaedae7c25e0d17a64c915859222a4b2bd3e kept as last known good)\r\nEXIT=0\r\n",
+                   "E_scan_1":  {
+                                    "status":  "scanned",
+                                    "at":  "2026-09-07T15:06:20.234500Z",
+                                    "signals":  2,
+                                    "opened":  [
+
+                                               ],
+                                    "already_tracked":  2,
+                                    "by_kind":  {
+                                                    "action_failure":  1,
+                                                    "research_failure":  1
+                                                },
+                                    "error":  null
+                                },
+                   "E_status":  {
+                                    "supervisor_version":  1,
+                                    "paused":  false,
+                                    "enabled":  true,
+                                    "last_scan_at":  "2026-09-07T15:06:20.788718Z",
+                                    "last_scan":  {
+                                                      "status":  "scanned",
+                                                      "at":  "2026-09-07T15:06:20.788718Z",
+                                                      "signals":  2,
+                                                      "opened":  [
+
+                                                                 ],
+                                                      "already_tracked":  2,
+                                                      "by_kind":  {
+                                                                      "action_failure":  1,
+                                                                      "research_failure":  1
+                                                                  },
+                                                      "error":  null
+                                                  },
+                                    "open_by_priority":  {
+                                                             "P0":  0,
+                                                             "P1":  1,
+                                                             "P2":  1,
+                                                             "P3":  0,
+                                                             "unclassified":  1
+                                                         },
+                                    "building":  [
+
+                                                 ],
+                                    "pending_candidates":  [
+                                                               {
+                                                                   "opportunity_id":  "a23fbfb9-dd25-4b2f-b94e-0a7e2eb4b82a",
+                                                                   "title":  "Acceptance Wording Guard",
+                                                                   "status":  "shadow_ready",
+                                                                   "priority":  null,
+                                                                   "promotion_class":  null,
+                                                                   "updated_at":  "2026-09-05T16:42:47.923884+00:00"
+                                                               }
+                                                           ],
+                                    "release_failures":  [
+
+                                                         ],
+                                    "last_fix":  null,
+                                    "running":  {
+                                                    "version_model":  1,
+                                                    "component":  "cloud-core",
+                                                    "version":  "396deaedae7c25e0d17a64c915859222a4b2bd3e",
+                                                    "version_source":  "env",
+                                                    "app_version":  "0.1.0",
+                                                    "contracts":  {
+                                                                      "action":  12,
+                                                                      "ui_state":  3,
+                                                                      "ambient":  1,
+                                                                      "voice_qualification":  1
+                                                                  },
+                                                    "last_known_good":  "396deaedae7c25e0d17a64c915859222a4b2bd3e",
+                                                    "last_known_good_source":  "env",
+                                                    "environment":  "prod",
+                                                    "started_at":  "2026-09-07T15:05:47.472933Z",
+                                                    "uptime_s":  33.379272
+                                                },
+                                    "observed_at":  "2026-09-07T15:06:20.852252Z"
+                                },
+                   "E_ledger":  {
+                                    "events":  [
+                                                   {
+                                                       "event_id":  "b00b42fd-e219-4c94-9a83-13bc4a29c22a",
+                                                       "occurred_at":  "2026-09-07T15:06:20.679993Z",
+                                                       "recorded_at":  "2026-09-07T15:06:20.681022Z",
+                                                       "event_type":  "evolution.resumed",
+                                                       "subsystem":  "evolution",
+                                                       "module":  null,
+                                                       "version":  "1",
+                                                       "status":  "completed",
+                                                       "severity":  "info",
+                                                       "action":  "evolution_resumed",
+                                                       "result":  "resumed",
+                                                       "production_state":  "n/a",
+                                                       "command_id":  null,
+                                                       "trace_id":  null,
+                                                       "research_job_id":  null,
+                                                       "browser_session_id":  null,
+                                                       "related_goal_id":  null,
+                                                       "related_module_id":  null,
+                                                       "evidence_refs":  [
+
+                                                                         ],
+                                                       "factual_summary":  "Kendi kendini geliştirme yeniden açıldı.",
+                                                       "detail_json":  {
+                                                                           "actor":  "rest",
+                                                                           "paused":  false,
+                                                                           "reason":  "m18-4 qualification"
+                                                                       },
+                                                       "source":  "rest",
+                                                       "source_ref":  "evolution_pause:off:2026-09-07T15:06:20.679993+00:00"
+                                                   },
+                                                   {
+                                                       "event_id":  "fd3d720c-084d-4bcd-b0ce-d5e27d9704a4",
+                                                       "occurred_at":  "2026-09-07T15:06:20.374504Z",
+                                                       "recorded_at":  "2026-09-07T15:06:20.376158Z",
+                                                       "event_type":  "evolution.paused",
+                                                       "subsystem":  "evolution",
+                                                       "module":  null,
+                                                       "version":  "1",
+                                                       "status":  "completed",
+                                                       "severity":  "info",
+                                                       "action":  "evolution_paused",
+                                                       "result":  "paused",
+                                                       "production_state":  "n/a",
+                                                       "command_id":  null,
+                                                       "trace_id":  null,
+                                                       "research_job_id":  null,
+                                                       "browser_session_id":  null,
+                                                       "related_goal_id":  null,
+                                                       "related_module_id":  null,
+                                                       "evidence_refs":  [
+
+                                                                         ],
+                                                       "factual_summary":  "Kendi kendini geliştirme duraklatıldı.",
+                                                       "detail_json":  {
+                                                                           "actor":  "rest",
+                                                                           "paused":  true,
+                                                                           "reason":  "m18-4 qualification"
+                                                                       },
+                                                       "source":  "rest",
+                                                       "source_ref":  "evolution_pause:on:2026-09-07T15:06:20.374504+00:00"
+                                                   },
+                                                   {
+                                                       "event_id":  "163fe8f9-6ebf-40e1-a1e4-d907ad66a2e8",
+                                                       "occurred_at":  "2026-09-07T15:03:10.972922Z",
+                                                       "recorded_at":  "2026-09-07T15:03:10.979590Z",
+                                                       "event_type":  "evolution.idea_created",
+                                                       "subsystem":  "evolution",
+                                                       "module":  "evolution.backlog",
+                                                       "version":  "1",
+                                                       "status":  "completed",
+                                                       "severity":  "info",
+                                                       "action":  "opportunity.idea",
+                                                       "result":  null,
+                                                       "production_state":  "idea",
+                                                       "command_id":  null,
+                                                       "trace_id":  null,
+                                                       "research_job_id":  null,
+                                                       "browser_session_id":  null,
+                                                       "related_goal_id":  null,
+                                                       "related_module_id":  "38352abc-2cf7-4937-a58d-620f4a097c9a",
+                                                       "evidence_refs":  [
+                                                                             {
+                                                                                 "ref":  "3867bd63-6031-470f-8a5d-5a5dfda3c979",
+                                                                                 "kind":  "ledger_event"
+                                                                             },
+                                                                             {
+                                                                                 "ref":  "86f4cb6d-ff40-4a96-9edb-473f77e72a2e",
+                                                                                 "kind":  "ledger_event"
+                                                                             }
+                                                                         ],
+                                                       "factual_summary":  "Evrim fırsatı \u0027Tekrarlayan araştırma hatası: insufficient_valid_findings\u0027 fikir durumuna geçti (lab).",
+                                                       "detail_json":  {
+                                                                           "actor":  "lab",
+                                                                           "status":  "idea",
+                                                                           "composite":  0.33139,
+                                                                           "approved_by":  null,
+                                                                           "candidate_ref":  null,
+                                                                           "workspace_ref":  null
+                                                                       },
+                                                       "source":  "live",
+                                                       "source_ref":  "evolution_opportunities:38352abc-2cf7-4937-a58d-620f4a097c9a:idea"
+                                                   },
+                                                   {
+                                                       "event_id":  "d9aa5458-3bcb-434a-9774-e135c02a1766",
+                                                       "occurred_at":  "2026-09-07T15:03:10.953117Z",
+                                                       "recorded_at":  "2026-09-07T15:03:10.963657Z",
+                                                       "event_type":  "evolution.idea_created",
+                                                       "subsystem":  "evolution",
+                                                       "module":  "evolution.backlog",
+                                                       "version":  "1",
+                                                       "status":  "completed",
+                                                       "severity":  "info",
+                                                       "action":  "opportunity.idea",
+                                                       "result":  null,
+                                                       "production_state":  "idea",
+                                                       "command_id":  null,
+                                                       "trace_id":  null,
+                                                       "research_job_id":  null,
+                                                       "browser_session_id":  null,
+                                                       "related_goal_id":  null,
+                                                       "related_module_id":  "d0e55361-89c6-4861-82e6-aeed0a23c65e",
+                                                       "evidence_refs":  [
+                                                                             {
+                                                                                 "ref":  "b89745db-122d-41bf-bcb8-27f264b5fd3e",
+                                                                                 "kind":  "ledger_event"
+                                                                             },
+                                                                             {
+                                                                                 "ref":  "e6313bff-0db3-4304-99b8-e4f37a06d4ec",
+                                                                                 "kind":  "ledger_event"
+                                                                             }
+                                                                         ],
+                                                       "factual_summary":  "Evrim fırsatı \u0027Tekrarlayan eylem hatası: eye.enable (capability_missing)\u0027 fikir durumuna geçti (lab).",
+                                                       "detail_json":  {
+                                                                           "actor":  "lab",
+                                                                           "status":  "idea",
+                                                                           "composite":  0.46211,
+                                                                           "approved_by":  null,
+                                                                           "candidate_ref":  null,
+                                                                           "workspace_ref":  null
+                                                                       },
+                                                       "source":  "live",
+                                                       "source_ref":  "evolution_opportunities:d0e55361-89c6-4861-82e6-aeed0a23c65e:idea"
+                                                   },
+                                                   {
+                                                       "event_id":  "4e00de41-7b7a-4c15-a1eb-8715f315b290",
+                                                       "occurred_at":  "2026-09-07T15:03:10.836087Z",
+                                                       "recorded_at":  "2026-09-07T15:03:10.851396Z",
+                                                       "event_type":  "evolution.supervisor_scanned",
+                                                       "subsystem":  "evolution",
+                                                       "module":  null,
+                                                       "version":  "1",
+                                                       "status":  "completed",
+                                                       "severity":  "info",
+                                                       "action":  "supervisor_scanned",
+                                                       "result":  "2 opened",
+                                                       "production_state":  "n/a",
+                                                       "command_id":  null,
+                                                       "trace_id":  null,
+                                                       "research_job_id":  null,
+                                                       "browser_session_id":  null,
+                                                       "related_goal_id":  null,
+                                                       "related_module_id":  null,
+                                                       "evidence_refs":  [
+                                                                             {
+                                                                                 "ref":  "d0e55361-89c6-4861-82e6-aeed0a23c65e",
+                                                                                 "kind":  "evolution_opportunity"
+                                                                             },
+                                                                             {
+                                                                                 "ref":  "38352abc-2cf7-4937-a58d-620f4a097c9a",
+                                                                                 "kind":  "evolution_opportunity"
+                                                                             }
+                                                                         ],
+                                                       "factual_summary":  "Evrim gözetmeni 2 sinyal taradı, 2 yeni fırsat açtı.",
+                                                       "detail_json":  {
+                                                                           "opened":  [
+                                                                                          "d0e55361-89c6-4861-82e6-aeed0a23c65e",
+                                                                                          "38352abc-2cf7-4937-a58d-620f4a097c9a"
+                                                                                      ],
+                                                                           "by_kind":  {
+                                                                                           "action_failure":  1,
+                                                                                           "research_failure":  1
+                                                                                       },
+                                                                           "signals":  2,
+                                                                           "already_tracked":  0
+                                                                       },
+                                                       "source":  "evolution_supervisor",
+                                                       "source_ref":  "scan:2026-09-07T15:03:10.836087+00:00"
+                                                   },
+                                                   {
+                                                       "event_id":  "2808d0a6-068d-42ce-8f5d-834dfacfee49",
+                                                       "occurred_at":  "2026-09-05T16:42:47.923884Z",
+                                                       "recorded_at":  "2026-09-05T16:42:47.941311Z",
+                                                       "event_type":  "evolution.owner_approval_required",
+                                                       "subsystem":  "evolution",
+                                                       "module":  "evolution.backlog",
+                                                       "version":  "1",
+                                                       "status":  "pending",
+                                                       "severity":  "notice",
+                                                       "action":  "opportunity.shadow_ready",
+                                                       "result":  null,
+                                                       "production_state":  "approval_required",
+                                                       "command_id":  null,
+                                                       "trace_id":  null,
+                                                       "research_job_id":  null,
+                                                       "browser_session_id":  null,
+                                                       "related_goal_id":  null,
+                                                       "related_module_id":  "a23fbfb9-dd25-4b2f-b94e-0a7e2eb4b82a",
+                                                       "evidence_refs":  [
+                                                                             {
+                                                                                 "ref":  "dc1b87ab-0135-4fc5-8f0c-19d139bf33cb",
+                                                                                 "kind":  "ledger_event"
+                                                                             },
+                                                                             {
+                                                                                 "ref":  "d9703588-2168-4eee-b53f-8149a19133ef",
+                                                                                 "kind":  "ledger_event"
+                                                                             }
+                                                                         ],
+                                                       "factual_summary":  "\u0027Acceptance Wording Guard\u0027 gölge çalıştırmaya hazır; yayına alınması için sahip onayı gerekiyor.",
+                                                       "detail_json":  {
+                                                                           "actor":  "lab",
+                                                                           "status":  "shadow_ready",
+                                                                           "composite":  0.624416,
+                                                                           "approved_by":  null,
+                                                                           "candidate_ref":  null,
+                                                                           "workspace_ref":  null
+                                                                       },
+                                                       "source":  "live",
+                                                       "source_ref":  "evolution_opportunities:a23fbfb9-dd25-4b2f-b94e-0a7e2eb4b82a:shadow_ready:approval_required"
+                                                   },
+                                                   {
+                                                       "event_id":  "c2234f32-8a97-4e79-8c5d-92f7d2936650",
+                                                       "occurred_at":  "2026-09-05T16:42:47.923884Z",
+                                                       "recorded_at":  "2026-09-05T16:42:47.934291Z",
+                                                       "event_type":  "evolution.shadow_ready",
+                                                       "subsystem":  "evolution",
+                                                       "module":  "evolution.backlog",
+                                                       "version":  "1",
+                                                       "status":  "completed",
+                                                       "severity":  "notice",
+                                                       "action":  "opportunity.shadow_ready",
+                                                       "result":  null,
+                                                       "production_state":  "shadow_ready",
+                                                       "command_id":  null,
+                                                       "trace_id":  null,
+                                                       "research_job_id":  null,
+                                                       "browser_session_id":  null,
+                                                       "related_goal_id":  null,
+                                                       "related_module_id":  "a23fbfb9-dd25-4b2f-b94e-0a7e2eb4b82a",
+                                                       "evidence_refs":  [
+                                                                             {
+                                                                                 "ref":  "dc1b87ab-0135-4fc5-8f0c-19d139bf33cb",
+                                                                                 "kind":  "ledger_event"
+                                                                             },
+                                                                             {
+                                                                                 "ref":  "d9703588-2168-4eee-b53f-8149a19133ef",
+                                                                                 "kind":  "ledger_event"
+                                                                             }
+                                                                         ],
+                                                       "factual_summary":  "Evrim fırsatı \u0027Acceptance Wording Guard\u0027 gölge çalıştırmaya hazır durumuna geçti (lab).",
+                                                       "detail_json":  {
+                                                                           "actor":  "lab",
+                                                                           "status":  "shadow_ready",
+                                                                           "composite":  0.624416,
+                                                                           "approved_by":  null,
+                                                                           "candidate_ref":  null,
+                                                                           "workspace_ref":  null
+                                                                       },
+                                                       "source":  "live",
+                                                       "source_ref":  "evolution_opportunities:a23fbfb9-dd25-4b2f-b94e-0a7e2eb4b82a:shadow_ready"
+                                                   },
+                                                   {
+                                                       "event_id":  "c24a7127-fc67-4ce3-90f3-99e0e6e8781b",
+                                                       "occurred_at":  "2026-09-05T16:42:47.778099Z",
+                                                       "recorded_at":  "2026-09-05T16:42:47.783627Z",
+                                                       "event_type":  "evolution.tests_passed",
+                                                       "subsystem":  "evolution",
+                                                       "module":  "evolution.backlog",
+                                                       "version":  "1",
+                                                       "status":  "completed",
+                                                       "severity":  "info",
+                                                       "action":  "opportunity.evaluating",
+                                                       "result":  null,
+                                                       "production_state":  "tested",
+                                                       "command_id":  null,
+                                                       "trace_id":  null,
+                                                       "research_job_id":  null,
+                                                       "browser_session_id":  null,
+                                                       "related_goal_id":  null,
+                                                       "related_module_id":  "a23fbfb9-dd25-4b2f-b94e-0a7e2eb4b82a",
+                                                       "evidence_refs":  [
+                                                                             {
+                                                                                 "ref":  "dc1b87ab-0135-4fc5-8f0c-19d139bf33cb",
+                                                                                 "kind":  "ledger_event"
+                                                                             },
+                                                                             {
+                                                                                 "ref":  "d9703588-2168-4eee-b53f-8149a19133ef",
+                                                                                 "kind":  "ledger_event"
+                                                                             }
+                                                                         ],
+                                                       "factual_summary":  "Evrim fırsatı \u0027Acceptance Wording Guard\u0027 değerlendirme durumuna geçti (lab).",
+                                                       "detail_json":  {
+                                                                           "actor":  "lab",
+                                                                           "status":  "evaluating",
+                                                                           "composite":  0.624416,
+                                                                           "approved_by":  null,
+                                                                           "candidate_ref":  null,
+                                                                           "workspace_ref":  null
+                                                                       },
+                                                       "source":  "live",
+                                                       "source_ref":  "evolution_opportunities:a23fbfb9-dd25-4b2f-b94e-0a7e2eb4b82a:evaluating"
+                                                   },
+                                                   {
+                                                       "event_id":  "9f228595-d05e-47d2-a586-170fe8fe85cd",
+                                                       "occurred_at":  "2026-09-05T16:42:47.627529Z",
+                                                       "recorded_at":  "2026-09-05T16:42:47.637537Z",
+                                                       "event_type":  "evolution.build_completed",
+                                                       "subsystem":  "evolution",
+                                                       "module":  "evolution.backlog",
+                                                       "version":  "1",
+                                                       "status":  "completed",
+                                                       "severity":  "info",
+                                                       "action":  "opportunity.testing",
+                                                       "result":  null,
+                                                       "production_state":  "built",
+                                                       "command_id":  null,
+                                                       "trace_id":  null,
+                                                       "research_job_id":  null,
+                                                       "browser_session_id":  null,
+                                                       "related_goal_id":  null,
+                                                       "related_module_id":  "a23fbfb9-dd25-4b2f-b94e-0a7e2eb4b82a",
+                                                       "evidence_refs":  [
+                                                                             {
+                                                                                 "ref":  "dc1b87ab-0135-4fc5-8f0c-19d139bf33cb",
+                                                                                 "kind":  "ledger_event"
+                                                                             },
+                                                                             {
+                                                                                 "ref":  "d9703588-2168-4eee-b53f-8149a19133ef",
+                                                                                 "kind":  "ledger_event"
+                                                                             }
+                                                                         ],
+                                                       "factual_summary":  "Evrim fırsatı \u0027Acceptance Wording Guard\u0027 test durumuna geçti (lab).",
+                                                       "detail_json":  {
+                                                                           "actor":  "lab",
+                                                                           "status":  "testing",
+                                                                           "composite":  0.624416,
+                                                                           "approved_by":  null,
+                                                                           "candidate_ref":  null,
+                                                                           "workspace_ref":  null
+                                                                       },
+                                                       "source":  "live",
+                                                       "source_ref":  "evolution_opportunities:a23fbfb9-dd25-4b2f-b94e-0a7e2eb4b82a:testing"
+                                                   },
+                                                   {
+                                                       "event_id":  "e87b70ba-8bd0-451e-9db3-86cd61292923",
+                                                       "occurred_at":  "2026-09-05T16:42:47.474031Z",
+                                                       "recorded_at":  "2026-09-05T16:42:47.482455Z",
+                                                       "event_type":  "evolution.build_started",
+                                                       "subsystem":  "evolution",
+                                                       "module":  "evolution.backlog",
+                                                       "version":  "1",
+                                                       "status":  "started",
+                                                       "severity":  "info",
+                                                       "action":  "opportunity.building",
+                                                       "result":  null,
+                                                       "production_state":  "designed",
+                                                       "command_id":  null,
+                                                       "trace_id":  null,
+                                                       "research_job_id":  null,
+                                                       "browser_session_id":  null,
+                                                       "related_goal_id":  null,
+                                                       "related_module_id":  "a23fbfb9-dd25-4b2f-b94e-0a7e2eb4b82a",
+                                                       "evidence_refs":  [
+                                                                             {
+                                                                                 "ref":  "dc1b87ab-0135-4fc5-8f0c-19d139bf33cb",
+                                                                                 "kind":  "ledger_event"
+                                                                             },
+                                                                             {
+                                                                                 "ref":  "d9703588-2168-4eee-b53f-8149a19133ef",
+                                                                                 "kind":  "ledger_event"
+                                                                             }
+                                                                         ],
+                                                       "factual_summary":  "Evrim fırsatı \u0027Acceptance Wording Guard\u0027 geliştirme durumuna geçti (lab).",
+                                                       "detail_json":  {
+                                                                           "actor":  "lab",
+                                                                           "status":  "building",
+                                                                           "composite":  0.624416,
+                                                                           "approved_by":  null,
+                                                                           "candidate_ref":  null,
+                                                                           "workspace_ref":  null
+                                                                       },
+                                                       "source":  "live",
+                                                       "source_ref":  "evolution_opportunities:a23fbfb9-dd25-4b2f-b94e-0a7e2eb4b82a:building"
+                                                   }
+                                               ]
+                                },
+                   "F_final":  {
+                                   "at":  "2026-09-07T15:06:21.3622592Z",
+                                   "health_status":  "ok",
+                                   "release":  {
+                                                   "version_model":  1,
+                                                   "component":  "cloud-core",
+                                                   "version":  "396deaedae7c25e0d17a64c915859222a4b2bd3e",
+                                                   "version_source":  "env",
+                                                   "app_version":  "0.1.0",
+                                                   "contracts":  {
+                                                                     "action":  12,
+                                                                     "ui_state":  3,
+                                                                     "ambient":  1,
+                                                                     "voice_qualification":  1
+                                                                 },
+                                                   "last_known_good":  "396deaedae7c25e0d17a64c915859222a4b2bd3e",
+                                                   "last_known_good_source":  "env",
+                                                   "environment":  "prod",
+                                                   "started_at":  "2026-09-07T15:05:47.472933Z",
+                                                   "uptime_s":  33.590305
+                                               },
+                                   "action_contract_version":  12,
+                                   "realtime_contract":  2,
+                                   "edge_active":  "blue",
+                                   "devices":  [
+                                                   {
+                                                       "device_id":  "",
+                                                       "name":  "",
+                                                       "presence":  "",
+                                                       "version":  "unknown",
+                                                       "capabilities":  [
+                                                                            ""
+                                                                        ],
+                                                       "heartbeat_status":  null
+                                                   }
+                                               ],
+                                   "alarm_count":  1,
+                                   "alarm_ids":  [
+                                                     ""
+                                                 ],
+                                   "routine_count":  1,
+                                   "incident_count":  1,
+                                   "opportunity_count":  1,
+                                   "ledger_summary":  {
+                                                          "since":  "2026-09-06T15:06:21.413517Z",
+                                                          "by_status":  {
+                                                                            "info":  23,
+                                                                            "failed":  2,
+                                                                            "verified":  7,
+                                                                            "completed":  89
+                                                                        },
+                                                          "by_subsystem":  {
+                                                                               "evolution":  5,
+                                                                               "voice":  45,
+                                                                               "research":  29,
+                                                                               "routine":  4,
+                                                                               "presence":  24,
+                                                                               "ledger":  14
+                                                                           },
+                                                          "latest":  {
+                                                                         "event_id":  "b00b42fd-e219-4c94-9a83-13bc4a29c22a",
+                                                                         "occurred_at":  "2026-09-07T15:06:20.679993Z",
+                                                                         "recorded_at":  "2026-09-07T15:06:20.681022Z",
+                                                                         "event_type":  "evolution.resumed",
+                                                                         "subsystem":  "evolution",
+                                                                         "module":  null,
+                                                                         "version":  "1",
+                                                                         "status":  "completed",
+                                                                         "severity":  "info",
+                                                                         "action":  "evolution_resumed",
+                                                                         "result":  "resumed",
+                                                                         "production_state":  "n/a",
+                                                                         "command_id":  null,
+                                                                         "trace_id":  null,
+                                                                         "research_job_id":  null,
+                                                                         "browser_session_id":  null,
+                                                                         "related_goal_id":  null,
+                                                                         "related_module_id":  null,
+                                                                         "evidence_refs":  [
+
+                                                                                           ],
+                                                                         "factual_summary":  "Kendi kendini geliştirme yeniden açıldı.",
+                                                                         "detail_json":  {
+                                                                                             "actor":  "rest",
+                                                                                             "paused":  false,
+                                                                                             "reason":  "m18-4 qualification"
+                                                                                         },
+                                                                         "source":  "rest",
+                                                                         "source_ref":  "evolution_pause:off:2026-09-07T15:06:20.679993+00:00"
+                                                                     }
+                                                      }
+                               },
+                   "F_release_current":  {
+                                             "version_model":  1,
+                                             "component":  "cloud-core",
+                                             "version":  "396deaedae7c25e0d17a64c915859222a4b2bd3e",
+                                             "version_source":  "env",
+                                             "app_version":  "0.1.0",
+                                             "contracts":  {
+                                                               "action":  12,
+                                                               "ui_state":  3,
+                                                               "ambient":  1,
+                                                               "voice_qualification":  1
+                                                           },
+                                             "last_known_good":  "396deaedae7c25e0d17a64c915859222a4b2bd3e",
+                                             "last_known_good_source":  "env",
+                                             "environment":  "prod",
+                                             "started_at":  "2026-09-07T15:05:47.472933Z",
+                                             "uptime_s":  34.061041
+                                         },
+                   "F_components":  {
+                                        "components":  [
+                                                           {
+                                                               "version_model":  1,
+                                                               "component":  "cloud-core",
+                                                               "version":  "396deaedae7c25e0d17a64c915859222a4b2bd3e",
+                                                               "version_source":  "env",
+                                                               "app_version":  "0.1.0",
+                                                               "contracts":  {
+                                                                                 "action":  12,
+                                                                                 "ui_state":  3,
+                                                                                 "ambient":  1,
+                                                                                 "voice_qualification":  1
+                                                                             },
+                                                               "last_known_good":  "396deaedae7c25e0d17a64c915859222a4b2bd3e",
+                                                               "last_known_good_source":  "env",
+                                                               "environment":  "prod",
+                                                               "started_at":  "2026-09-07T15:05:47.472933Z",
+                                                               "uptime_s":  34.116557,
+                                                               "observed":  "live"
+                                                           },
+                                                           {
+                                                               "component":  "windows-agent",
+                                                               "device_id":  "3f60fdb5-5022-48cf-bb3c-d7192466b701",
+                                                               "name":  "MAIL",
+                                                               "platform":  "windows",
+                                                               "version":  "0.1.0",
+                                                               "version_source":  "device_row",
+                                                               "capabilities":  [
+                                                                                    "desktop.open_application",
+                                                                                    "desktop.open_artifact",
+                                                                                    "desktop.alarm_start",
+                                                                                    "desktop.alarm_stop",
+                                                                                    "browser.chrome",
+                                                                                    "browser.session_open",
+                                                                                    "browser.session_close",
+                                                                                    "browser.worker_status",
+                                                                                    "browser.navigate",
+                                                                                    "browser.back",
+                                                                                    "browser.forward",
+                                                                                    "browser.tab_list",
+                                                                                    "browser.tab_new",
+                                                                                    "browser.tab_close",
+                                                                                    "browser.tab_select",
+                                                                                    "browser.inspect",
+                                                                                    "browser.find",
+                                                                                    "browser.click",
+                                                                                    "browser.fill",
+                                                                                    "browser.select_option",
+                                                                                    "browser.set_checked",
+                                                                                    "browser.scroll",
+                                                                                    "browser.wait",
+                                                                                    "browser.extract",
+                                                                                    "browser.snapshot",
+                                                                                    "browser.screenshot",
+                                                                                    "browser.download",
+                                                                                    "browser.search",
+                                                                                    "browser.fetch_evidence"
+                                                                                ],
+                                                               "connected":  true,
+                                                               "observed":  "device_row"
+                                                           },
+                                                           {
+                                                               "component":  "web",
+                                                               "version":  "unknown_from_server",
+                                                               "version_source":  "served_marker",
+                                                               "observed":  "browser_only",
+                                                               "note":  "the served \u003cmeta name=\"pagentos-core-build\"\u003e marker is known to the browser, not to the API"
+                                                           }
+                                                       ],
+                                        "primary":  "cloud-core"
+                                    },
+                   "F_slo":  {
+                                 "slo_version":  1,
+                                 "observed_at":  "2026-09-07T15:06:21.650970Z",
+                                 "process_uptime_s":  34.178037,
+                                 "windows":  {
+                                                 "24h":  {
+                                                             "releases":  0,
+                                                             "rollbacks":  0,
+                                                             "incidents":  0
+                                                         },
+                                                 "7d":  {
+                                                            "releases":  0,
+                                                            "rollbacks":  0,
+                                                            "incidents":  2
+                                                        }
+                                             },
+                                 "availability":  null,
+                                 "measurement":  "none",
+                                 "measurement_note":  "No probe history is recorded yet; the recovery supervisor polls health but keeps no samples the API can read. Release windows and incidents above are counted from the ledger; a fraction is not claimed."
+                             },
+                   "F_host":  "396deaedae7c25e0d17a64c915859222a4b2bd3e\r\n\r\n396deaedae7c25e0d17a64c915859222a4b2bd3e\r\n\r\nblue\r\n\r\nPAGENTOS_IMAGE_BLUE=396deaedae7c25e0d17a64c915859222a4b2bd3e\r\nPAGENTOS_RELEASE_BLUE=396deaedae7c25e0d17a64c915859222a4b2bd3e\r\nPAGENTOS_IMAGE_GREEN=396deaedae7c25e0d17a64c915859222a4b2bd3e\r\nPAGENTOS_RELEASE_GREEN=396deaedae7c25e0d17a64c915859222a4b2bd3e\r\nPAGENTOS_LAST_KNOWN_GOOD=396deaedae7c25e0d17a64c915859222a4b2bd3e\r\npagentos-prod-api-blue pagentos/cloud-core:396deaedae7c25e0d17a64c915859222a4b2bd3e Up 40 seconds (healthy)\r\npagentos-prod-edge nginx:1.27-alpine Up 3 minutes\r\npagentos-prod-postgres pgvector/pgvector:pg16 Up 5 days (healthy)\r\npagentos-prod-temporal temporalio/auto-setup:1.27.2 Up 5 days (healthy)\r\npagentos-prod-redis redis:7-alpine Up 5 days (healthy)\r\npagentos-prod-minio minio/minio:RELEASE.2025-04-22T22-12-26Z Up 5 days (healthy)\r\n"
+               },
+    "measurements":  {
+                         "B_first_cutover":  {
+                                                 "phase":  "B_first_cutover",
+                                                 "probes":  354,
+                                                 "dropped":  354,
+                                                 "first_failure_at":  "2026-09-07T15:01:43.0188207Z",
+                                                 "recovered_at":  null,
+                                                 "gap_seconds":  -1,
+                                                 "interval_ms":  250
+                                             },
+                         "C_controlled_failure":  {
+                                                      "phase":  "C_controlled_failure",
+                                                      "probes":  94,
+                                                      "dropped":  94,
+                                                      "first_failure_at":  "2026-09-07T15:04:57.6693146Z",
+                                                      "recovered_at":  null,
+                                                      "gap_seconds":  -1,
+                                                      "interval_ms":  250
+                                                  },
+                         "D_explicit_rollback":  {
+                                                     "phase":  "D_explicit_rollback",
+                                                     "probes":  37,
+                                                     "dropped":  37,
+                                                     "first_failure_at":  "2026-09-07T15:05:23.5055946Z",
+                                                     "recovered_at":  null,
+                                                     "gap_seconds":  -1,
+                                                     "interval_ms":  250
+                                                 },
+                         "D_roll_forward":  {
+                                                "phase":  "D_roll_forward",
+                                                "probes":  171,
+                                                "dropped":  171,
+                                                "first_failure_at":  "2026-09-07T15:05:34.0022590Z",
+                                                "recovered_at":  null,
+                                                "gap_seconds":  -1,
+                                                "interval_ms":  250
+                                            }
+                     },
+    "checks":  [
+                   {
+                       "name":  "the Cloud Core answers before the run",
+                       "pass":  true,
+                       "detail":  "release=none (pre-M18.4 build) contract=8"
+                   },
+                   {
+                       "name":  "first cutover exits 0",
+                       "pass":  true,
+                       "detail":  "release took 86 s"
+                   },
+                   {
+                       "name":  "first cutover measured",
+                       "pass":  true,
+                       "detail":  "probes=354 dropped=354 gap=-1s (a gap is expected on the FIRST cutover: the edge takes the socket)"
+                   },
+                   {
+                       "name":  "release reports HEAD",
+                       "pass":  true,
+                       "detail":  "served=396deaedae7c25e0d17a64c915859222a4b2bd3e"
+                   },
+                   {
+                       "name":  "edge names a colour",
+                       "pass":  true,
+                       "detail":  "active=blue"
+                   },
+                   {
+                       "name":  "alarms unchanged",
+                       "pass":  true,
+                       "detail":  "before=1 after=1"
+                   },
+                   {
+                       "name":  "routines unchanged",
+                       "pass":  true,
+                       "detail":  "before=1 after=1"
+                   },
+                   {
+                       "name":  "the Windows agent is online again through the edge",
+                       "pass":  false,
+                       "detail":  "after 90s"
+                   },
+                   {
+                       "name":  "the controlled failure rolled back",
+                       "pass":  true,
+                       "detail":  "the script switched, failed its own verification, switched back"
+                   },
+                   {
+                       "name":  "after the rollback the edge serves HEAD on the original colour",
+                       "pass":  true,
+                       "detail":  "active=blue"
+                   },
+                   {
+                       "name":  "controlled failure: dropped probes",
+                       "pass":  false,
+                       "detail":  "probes=94 dropped=94 gap=-1s"
+                   },
+                   {
+                       "name":  "explicit rollback switched the colour",
+                       "pass":  true,
+                       "detail":  "active=green served=396deaedae7c25e0d17a64c915859222a4b2bd3e"
+                   },
+                   {
+                       "name":  "explicit rollback: dropped probes",
+                       "pass":  false,
+                       "detail":  "probes=37 dropped=37 gap=-1s"
+                   },
+                   {
+                       "name":  "roll-forward landed HEAD on the other colour with no gap",
+                       "pass":  false,
+                       "detail":  "active=blue probes=171 dropped=171 gap=-1s"
+                   },
+                   {
+                       "name":  "the supervisor scanned production signals",
+                       "pass":  true,
+                       "detail":  "signals=2 opened=1 tracked=2"
+                   },
+                   {
+                       "name":  "paused: a scan opens nothing",
+                       "pass":  true,
+                       "detail":  "status=skipped_paused"
+                   },
+                   {
+                       "name":  "production stays available while paused",
+                       "pass":  true,
+                       "detail":  ""
+                   },
+                   {
+                       "name":  "resumed: the scan runs again",
+                       "pass":  true,
+                       "detail":  ""
+                   },
+                   {
+                       "name":  "final: release == HEAD, contract v12",
+                       "pass":  true,
+                       "detail":  "served=396deaedae7c25e0d17a64c915859222a4b2bd3e contract=12"
+                   },
+                   {
+                       "name":  "final: last-known-good exported",
+                       "pass":  true,
+                       "detail":  "lkg=396deaedae7c25e0d17a64c915859222a4b2bd3e"
+                   }
+               ],
+    "verdict":  "FAIL",
+    "updated_at":  "2026-09-07T15:06:22.0924940Z"
+}

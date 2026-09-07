@@ -44,6 +44,9 @@ param(
     [int]$WaitForHostMinutes = 240,
     [switch]$SkipControlledFailure,
     [switch]$SkipExplicitRollback,
+    # The first cutover happened already (it stops the legacy container; not repeatable):
+    # measure the repeatable phases only, against whatever colour is active now.
+    [switch]$SkipFirstCutover,
     [string]$EvidenceDir = ""
 )
 
@@ -136,6 +139,31 @@ function Get-Json { param([string]$Path) return Invoke-JsonUtf8 -Uri "$BaseUrl$P
 function Get-JsonOrNull { param([string]$Path) try { return Get-Json $Path } catch { return $null } }
 function Post-Json { param([string]$Path, $Body) $json = if ($null -eq $Body) { "{}" } else { ($Body | ConvertTo-Json -Depth 8 -Compress) }; return Invoke-JsonUtf8 -Method POST -Uri "$BaseUrl$Path" -Headers $headers -Body $json -TimeoutSec 120 }
 
+function Get-DeviceRows {
+    # Assign first, then iterate: a `return , @(...)` piped straight into ForEach-Object
+    # arrives as ONE item (the whole array) and every field reads empty - which is exactly
+    # what the first real run recorded (PS 5.1; see scripts/tests/owner-harness.tests.ps1).
+    param($Doc)
+    $rows = @(Get-ArrayProperty -InputObject $Doc -Name "devices")
+    $out = @()
+    foreach ($d in $rows) {
+        if ($null -eq $d) { continue }
+        $presence = Get-OptionalProperty -InputObject $d -Name "presence"
+        if ($null -eq $presence) { $presence = Get-OptionalProperty -InputObject $d -Name "status" }
+        $version = Get-OptionalProperty -InputObject $d -Name "software_version"
+        $caps = @(Get-ArrayProperty -InputObject $d -Name "capabilities")
+        $out += [ordered]@{
+            device_id        = [string](Get-OptionalProperty -InputObject $d -Name "device_id")
+            name             = [string](Get-OptionalProperty -InputObject $d -Name "name")
+            presence         = [string]$presence
+            version          = [string]$(if ($null -ne $version) { $version } else { "unknown" })
+            capability_count = $caps.Count
+            last_seen_at     = [string](Get-OptionalProperty -InputObject $d -Name "last_seen_at")
+        }
+    }
+    return , $out
+}
+
 function Get-Snapshot {
     $health = Get-JsonOrNull "/v1/system/health"
     $release = if ($null -ne $health) { Get-OptionalProperty -InputObject $health -Name "release" } else { $null }
@@ -156,15 +184,7 @@ function Get-Snapshot {
         action_contract_version = if ($null -ne $vr) { Get-OptionalProperty -InputObject $vr -Name "action_contract_version" } else { $null }
         realtime_contract       = if ($null -ne $vr) { Get-OptionalProperty -InputObject $vr -Name "contract_version" } else { $null }
         edge_active             = $edgeActive
-        devices                 = @(ConvertTo-Array -Value (Get-ArrayProperty -InputObject $devices -Name "devices") | ForEach-Object {
-            [ordered]@{
-                device_id = [string](Get-OptionalProperty -InputObject $_ -Name "device_id")
-                name      = [string](Get-OptionalProperty -InputObject $_ -Name "name")
-                presence  = [string]$(if ($null -ne (Get-OptionalProperty -InputObject $_ -Name "presence")) { Get-OptionalProperty -InputObject $_ -Name "presence" } else { Get-OptionalProperty -InputObject $_ -Name "status" })
-                version   = [string]$(if ($null -ne (Get-OptionalProperty -InputObject $_ -Name "software_version")) { Get-OptionalProperty -InputObject $_ -Name "software_version" } else { "unknown" })
-                capabilities = @(ConvertTo-Array -Value (Get-OptionalProperty -InputObject $_ -Name "capabilities") | ForEach-Object { [string]$_ })
-                heartbeat_status = Get-OptionalProperty -InputObject $_ -Name "heartbeat_status"
-            } })
+        devices                 = (Get-DeviceRows $devices)
         alarm_count             = @(ConvertTo-Array -Value (Get-ArrayProperty -InputObject $alarms -Name "alarms")).Count
         alarm_ids               = @(ConvertTo-Array -Value (Get-ArrayProperty -InputObject $alarms -Name "alarms") | ForEach-Object { [string](Get-OptionalProperty -InputObject $_ -Name "alarm_id") })
         routine_count           = @(ConvertTo-Array -Value (Get-ArrayProperty -InputObject $routines -Name "routines")).Count
@@ -178,17 +198,25 @@ function Get-Snapshot {
 
 $proberScript = @'
 param([string]$Url, [string]$LogPath, [string]$StopPath)
-$client = New-Object System.Net.Http.HttpClient
-$client.Timeout = [TimeSpan]::FromSeconds(3)
-$sw = [Diagnostics.Stopwatch]::StartNew()
+# HttpWebRequest, not HttpClient: Windows PowerShell 5.1 does not load System.Net.Http by
+# default, and a null client made every probe a RuntimeException on the first real run.
+[Net.ServicePointManager]::DefaultConnectionLimit = 8
 while (-not (Test-Path $StopPath)) {
     $t = (Get-Date).ToUniversalTime().ToString("o")
     $ok = $false; $code = 0; $err = ""
     try {
-        $resp = $client.GetAsync($Url).GetAwaiter().GetResult()
+        $req = [Net.HttpWebRequest]::Create($Url)
+        $req.Method = "GET"
+        $req.Timeout = 3000
+        $req.ReadWriteTimeout = 3000
+        $req.KeepAlive = $false
+        $resp = $req.GetResponse()
         $code = [int]$resp.StatusCode
-        $ok = $resp.IsSuccessStatusCode
-        $resp.Dispose()
+        $ok = ($code -ge 200 -and $code -lt 300)
+        $resp.Close()
+    } catch [Net.WebException] {
+        $err = "WebException:" + $_.Exception.Status
+        if ($null -ne $_.Exception.Response) { try { $code = [int]$_.Exception.Response.StatusCode } catch { } }
     } catch { $err = $_.Exception.GetType().Name }
     [IO.File]::AppendAllText($LogPath, ("{0}`t{1}`t{2}`t{3}`n" -f $t, $(if ($ok) { "ok" } else { "fail" }), $code, $err))
     Start-Sleep -Milliseconds 250
@@ -243,7 +271,13 @@ try {
     Add-Check "the Cloud Core answers before the run" ($before.health_status -eq "ok") "release=$(if ($before.release) { $before.release.version } else { 'none (pre-M18.4 build)' }) contract=$($before.action_contract_version)"
     Save-Evidence
 
-    Write-Host "== B: first blue/green cutover (release-cloud-core.ps1 -BlueGreen at HEAD)"
+    if ($SkipFirstCutover) {
+        Write-Host "== B: first cutover already done (skipped); verifying the current state"
+        $afterB = Get-Snapshot
+        $evidence.phases.B_release = [ordered]@{ skipped = $true; note = "the first cutover happened in an earlier run; see that run's evidence" }
+    }
+    else {
+    Write-Host "== B: blue/green release of HEAD (release-cloud-core.ps1 -BlueGreen)$(if ($null -eq $before.edge_active) { ' - the FIRST cutover' } else { '' })"
     $prober = Start-Prober -Name "B_first_cutover"
     $releaseStart = Get-Date
     $release = Join-Path $repoRoot "scripts\cloud\release-cloud-core.ps1"
@@ -257,8 +291,15 @@ try {
     $evidence.measurements.B_first_cutover = $mB
     $evidence.phases.B_release = [ordered]@{ exit = $releaseExit; seconds = [math]::Round(($releaseEnd - $releaseStart).TotalSeconds, 1); output_tail = (($releaseOut -split "`n") | Select-Object -Last 25) -join "`n" }
     Add-Check "first cutover exits 0" ($releaseExit -eq 0) "release took $([math]::Round(($releaseEnd - $releaseStart).TotalSeconds, 1)) s"
-    Add-Check "first cutover measured" $true "probes=$($mB.probes) dropped=$($mB.dropped) gap=$($mB.gap_seconds)s (a gap is expected on the FIRST cutover: the edge takes the socket)"
+    $firstCutover = ($null -eq $before.edge_active -or $before.edge_active -notin @("blue", "green"))
+    if ($firstCutover) {
+        Add-Check "first cutover measured" ($mB.probes -gt 0 -and $mB.gap_seconds -ge 0) "probes=$($mB.probes) dropped=$($mB.dropped) gap=$($mB.gap_seconds)s (a gap is expected on the FIRST cutover: the edge takes the socket)"
+    }
+    else {
+        Add-Check "blue/green release with no gap" ($mB.probes -gt 0 -and $mB.dropped -eq 0) "probes=$($mB.probes) dropped=$($mB.dropped) gap=$($mB.gap_seconds)s"
+    }
     $afterB = Get-Snapshot
+    }
     $evidence.phases.B_after = $afterB
     Add-Check "release reports HEAD" ($afterB.release -and $afterB.release.version -eq $evidence.head_sha) "served=$(if ($afterB.release) { $afterB.release.version } else { 'none' })"
     Add-Check "edge names a colour" ($afterB.edge_active -in @("blue", "green")) "active=$($afterB.edge_active)"
@@ -276,8 +317,24 @@ try {
         if ($online.Count -gt 0) { $deviceBack = $true; break }
         Start-Sleep -Seconds 5; $waited += 5
     }
-    Add-Check "the Windows agent is online again through the edge" $deviceBack "after ${waited}s"
+    Add-Check "the Windows agent is online through the edge" $deviceBack "after ${waited}s"
     Save-Evidence
+
+    function Test-DeviceOnline {
+        $snap = Get-Snapshot
+        return (@($snap.devices | Where-Object { $_.presence -eq "online" }).Count -gt 0)
+    }
+    function Record-Deployment {
+        param([string]$EventType, [string]$Summary, [string]$Ref)
+        try {
+            Post-Json "/v1/ledger/events" @{
+                event_type = $EventType; subsystem = "deployment"; action = "cloud_core_bluegreen"
+                factual_summary = $Summary; source_ref = $Ref; result = $evidence.head_sha
+                version = "1"; evidence_refs = @()
+            } | Out-Null
+        } catch { Write-Host "      (ledger row not recorded: $($_.Exception.Message))" }
+    }
+    if (-not $SkipFirstCutover) { Record-Deployment "deployment.cloud_core.released" "Cloud Core $($evidence.head_sha) canliya alindi (ilk blue/green gecisi, kenar + api-blue)." "bluegreen:first:$($evidence.head_sha):$stamp" }
 
     if (-not $SkipControlledFailure) {
         Write-Host "== C: controlled-failure rollback (post-switch verification pointed at an unreachable URL)"
@@ -291,6 +348,8 @@ try {
         $afterC = Get-Snapshot
         Add-Check "after the rollback the edge serves HEAD on the original colour" ($afterC.release -and $afterC.release.version -eq $evidence.head_sha -and $afterC.edge_active -eq $afterB.edge_active) "active=$($afterC.edge_active)"
         Add-Check "controlled failure: dropped probes" ($mC.dropped -eq 0) "probes=$($mC.probes) dropped=$($mC.dropped) gap=$($mC.gap_seconds)s"
+        Add-Check "controlled failure: the device stayed online" (Test-DeviceOnline)
+        Record-Deployment "deployment.cloud_core.rolled_back" "Kontrollu hata: kenar api-green'e gecti, dogrulama basarisiz oldu, api-blue'ya geri dondu." "bluegreen:controlled-failure:$stamp"
         Save-Evidence
     }
 
@@ -305,6 +364,10 @@ try {
         $afterD1 = Get-Snapshot
         Add-Check "explicit rollback switched the colour" ($d.Output -match "ROLLBACK OK" -and $afterD1.edge_active -ne $afterB.edge_active) "active=$($afterD1.edge_active) served=$(if ($afterD1.release) { $afterD1.release.version } else { 'none' })"
         Add-Check "explicit rollback: dropped probes" ($mD1.dropped -eq 0) "probes=$($mD1.probes) dropped=$($mD1.dropped) gap=$($mD1.gap_seconds)s"
+        $deviceAfterRollback = $false; $waitedD = 0
+        while (-not $deviceAfterRollback -and $waitedD -lt 60) { if (Test-DeviceOnline) { $deviceAfterRollback = $true; break }; Start-Sleep -Seconds 5; $waitedD += 5 }
+        Add-Check "explicit rollback: the device is online on the other colour" $deviceAfterRollback "after ${waitedD}s"
+        Record-Deployment "deployment.cloud_core.rolled_back" "Acik geri alma: kenar diger renge gecti ($($afterD1.edge_active))." "bluegreen:rollback:$stamp"
 
         $prober = Start-Prober -Name "D_roll_forward"
         $f = Invoke-Host "set -e; cd /opt/pagentos; rm -rf app.next; cp -a app app.next; PAGENTOS_DRAIN_S=20 bash app.next/scripts/cloud/release-cloud-core-bluegreen.sh $($evidence.head_sha) 2>&1; echo EXIT=`$?"
@@ -314,13 +377,18 @@ try {
         $evidence.phases.D_forward_output_tail = (($f.Output -split "`n") | Select-Object -Last 15) -join "`n"
         $afterD2 = Get-Snapshot
         Add-Check "roll-forward landed HEAD on the other colour with no gap" ($f.Output -match "RELEASE OK" -and $afterD2.release -and $afterD2.release.version -eq $evidence.head_sha -and $mD2.dropped -eq 0) "active=$($afterD2.edge_active) probes=$($mD2.probes) dropped=$($mD2.dropped) gap=$($mD2.gap_seconds)s"
+        $deviceAfterForward = $false; $waitedF = 0
+        while (-not $deviceAfterForward -and $waitedF -lt 60) { if (Test-DeviceOnline) { $deviceAfterForward = $true; break }; Start-Sleep -Seconds 5; $waitedF += 5 }
+        Add-Check "roll-forward: the device is online on the new colour" $deviceAfterForward "after ${waitedF}s"
+        Record-Deployment "deployment.cloud_core.released" "Ileri gecis: Cloud Core $($evidence.head_sha) $($afterD2.edge_active) renginde canli." "bluegreen:forward:$stamp"
         Save-Evidence
     }
 
     Write-Host "== E: supervisor + pause/resume on the real Cloud Core"
     $scan1 = Post-Json "/v1/evolution/supervisor/scan" $null
     $evidence.phases.E_scan_1 = $scan1
-    Add-Check "the supervisor scanned production signals" ([string](Get-OptionalProperty -InputObject $scan1 -Name "status") -eq "scanned") "signals=$(Get-OptionalProperty -InputObject $scan1 -Name 'signals') opened=$(@(ConvertTo-Array -Value (Get-OptionalProperty -InputObject $scan1 -Name 'opened')).Count) tracked=$(Get-OptionalProperty -InputObject $scan1 -Name 'already_tracked')"
+    $opened1 = @(Get-ArrayProperty -InputObject $scan1 -Name "opened")
+    Add-Check "the supervisor scanned production signals" ([string](Get-OptionalProperty -InputObject $scan1 -Name "status") -eq "scanned") "signals=$(Get-OptionalProperty -InputObject $scan1 -Name 'signals') opened=$($opened1.Count) tracked=$(Get-OptionalProperty -InputObject $scan1 -Name 'already_tracked')"
     $paused = Post-Json "/v1/evolution/supervisor/pause" @{ reason = "m18-4 qualification" }
     $scan2 = Post-Json "/v1/evolution/supervisor/scan" $null
     Add-Check "paused: a scan opens nothing" ((Get-OptionalProperty -InputObject $paused -Name "paused") -eq $true -and [string](Get-OptionalProperty -InputObject $scan2 -Name "status") -eq "skipped_paused") "status=$(Get-OptionalProperty -InputObject $scan2 -Name 'status')"

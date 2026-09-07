@@ -101,7 +101,11 @@ wait_for_colour() {
 }
 
 reload_edge() {
-    compose exec -T edge nginx -t >/dev/null 2>&1 || { echo "edge config test FAILED" >&2; return 1; }
+    local test_out
+    if ! test_out="$(compose exec -T edge nginx -t 2>&1)"; then
+        echo "edge config test FAILED: $(printf '%s' "$test_out" | tail -3 | tr '\n' ' ')" >&2
+        return 1
+    fi
     compose exec -T edge nginx -s reload
 }
 
@@ -157,10 +161,11 @@ do_rollback() {
         rm -f "$edge_dir/active.txt"
         return 0
     fi
-    compose up -d --no-deps --wait "api-$active" >/dev/null 2>&1 || true
+    compose up -d --no-deps --wait "api-$active" 2>&1 | tail -1 || true
     write_upstream "$active"
-    reload_edge || true
-    compose stop "api-$idle" >/dev/null 2>&1 || true
+    if reload_edge; then echo "ROLLBACK: edge -> api-$active" >&2; else echo "ROLLBACK: edge reload FAILED; the edge may still point at api-$idle, which is left RUNNING" >&2; return 0; fi
+    compose stop "api-$idle" 2>&1 | tail -1 || true
+    echo "ROLLBACK: api-$idle stopped" >&2
 }
 
 if [ "$mode" = "--rollback" ]; then
