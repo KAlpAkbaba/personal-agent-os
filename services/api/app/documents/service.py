@@ -450,6 +450,62 @@ class DocumentService:
 
     # ---------------------------------------------------------------- inspect
 
+    def _resolve_target_file(
+        self, db: Session, device_action: DeviceActionPort | None, target: str
+    ) -> tuple[str | None, str | None, dict[str, Any] | None]:
+        """(file_id, path, clarification) for a target, WITHOUT extracting content -
+        ``inspect``'s own resolution (spec §3: inspect reads STRUCTURE only, headers-only
+        ``file.inspect``, and must never trigger a ``document.extract`` the way
+        ``read``/``summarize``/``answer``/``compare`` do for a file not yet indexed)."""
+        target = (target or "current").strip()
+        if target in ("", "current"):
+            doc_entry = focus_module.current(db, FOCUS_KIND_DOCUMENT)
+            if doc_entry is not None:
+                row = self._index.get_by_doc_id(db, doc_entry.object_id)
+                if row is not None:
+                    return row.file_id, row.path, None
+            file_entry = focus_module.current(db, FOCUS_KIND_FILE)
+            if file_entry is None:
+                return None, None, _clarification(SPEECH_NO_DOCUMENT)
+            return file_entry.object_id, None, None
+        if target == "previous":
+            doc_entry = focus_module.previous(db, FOCUS_KIND_DOCUMENT)
+            if doc_entry is not None:
+                row = self._index.get_by_doc_id(db, doc_entry.object_id)
+                if row is not None:
+                    return row.file_id, row.path, None
+            file_entry = focus_module.previous(db, FOCUS_KIND_FILE)
+            if file_entry is None:
+                return None, None, _clarification(SPEECH_NO_PREVIOUS_DOCUMENT)
+            return file_entry.object_id, None, None
+        if device_action is None:
+            return None, None, _clarification(SPEECH_NO_DOCUMENT)
+        found = device_action.run(
+            capability=CAPABILITY_FILE_SEARCH,
+            payload={"pattern": target},
+            idempotency_key=f"document-inspect-search:{target}",
+            timeout_s=10.0,
+        )
+        files = list((found.result or {}).get("files") or []) if found.ok else []
+        if len(files) != 1:
+            return None, None, _clarification(SPEECH_NO_DOCUMENT)
+        return str(files[0].get("file_id")), None, None
+
+    def _inspect_speech(self, name: str, body: dict[str, Any]) -> str:
+        kind = body.get("kind")
+        if kind == "xlsx" and body.get("sheets"):
+            sheets = ", ".join(str(s) for s in body["sheets"])
+            return f"{name}: {sheets} sayfalarını içeriyor efendim."
+        if kind == "pptx" and body.get("slides"):
+            return f"{name}: {body['slides']} slayt var efendim."
+        if kind == "pdf" and body.get("pages"):
+            return f"{name}: {body['pages']} sayfa var efendim."
+        if body.get("title"):
+            return f"{name}: {body['title']}."
+        if body.get("lines"):
+            return f"{name}: {body['lines']} satır."
+        return f"{name} hakkında bilgi aldım efendim."
+
     def inspect(
         self,
         db: Session,
@@ -461,24 +517,78 @@ class DocumentService:
         device_id, missing = self._select_device(device_action)
         if missing is not None:
             return missing
-        row, clar = self._resolve_document(
-            db, device_action, device_id, target, extract_if_needed=True, session_id=session_id
+        # The fast path (ADR-0083 decision 3, "no background crawling"): an already
+        # extracted document answers a structure question from the index, no device
+        # call at all. Only tried for current/previous - ``_resolve_document``'s own
+        # "a spoken name" branch always extracts regardless of ``extract_if_needed``
+        # (right for read/summarize/answer/compare, wrong for inspect), so a named
+        # target skips straight to ``_resolve_target_file`` below.
+        row = None
+        if (target or "current").strip() in ("", "current", "previous"):
+            row, _clar = self._resolve_document(
+                db,
+                device_action,
+                device_id,
+                target,
+                extract_if_needed=False,
+                session_id=session_id,
+            )
+        if row is not None:
+            doc = self._doc_ref(db, row)
+            summary = answers_module.summarize(doc)
+            return self._receipt(
+                capability="document.inspect",
+                requested_state="inspected",
+                execution=EXECUTION_EXECUTED,
+                terminal=TERMINAL_VERIFIED,
+                server={"file_id": row.file_id},
+                speech=summary["speech"],
+                db=db,
+                session_id=session_id,
+                extra={"refs": summary["refs"], "structure": row.structure},
+            )
+        # Not indexed yet: resolve just the file identity - never ``document.extract``,
+        # only the lightweight ``file.inspect`` (headers only, no text; spec §2).
+        file_id, path, resolve_clar = self._resolve_target_file(db, device_action, target)
+        if resolve_clar is not None:
+            return resolve_clar
+        if device_action is None:
+            return self._capability_missing_receipt(
+                capability=CAPABILITY_FILE_INSPECT, session_id=session_id
+            )
+        payload: dict[str, Any] = {"file_id": file_id} if file_id else {"path": path}
+        result = device_action.run(
+            capability=CAPABILITY_FILE_INSPECT,
+            payload=payload,
+            idempotency_key=f"document-inspect:{file_id or path}",
+            timeout_s=15.0,
         )
-        if clar is not None:
-            return clar
-        assert row is not None
-        doc = self._doc_ref(db, row)
-        summary = answers_module.summarize(doc)
+        if not result.ok:
+            speech, error_class = _translate_error(result.error_class)
+            return self._receipt(
+                capability=CAPABILITY_FILE_INSPECT,
+                requested_state="inspected",
+                execution=EXECUTION_REFUSED,
+                terminal=TERMINAL_FAILED,
+                server={"error_class": result.error_class},
+                speech=speech,
+                db=db,
+                error_class=error_class,
+                session_id=session_id,
+            )
+        body = dict(result.result or {})
+        file_record = dict(body.get("file") or {})
+        name = str(file_record.get("name") or "")
         return self._receipt(
-            capability="document.inspect",
+            capability=CAPABILITY_FILE_INSPECT,
             requested_state="inspected",
             execution=EXECUTION_EXECUTED,
             terminal=TERMINAL_VERIFIED,
-            server={"file_id": row.file_id},
-            speech=summary["speech"],
+            server={"file_id": file_record.get("file_id")},
+            speech=self._inspect_speech(name, body),
             db=db,
             session_id=session_id,
-            extra={"refs": summary["refs"], "structure": row.structure},
+            extra={"refs": [], "structure": body},
         )
 
     # -------------------------------------------------------------- summarize

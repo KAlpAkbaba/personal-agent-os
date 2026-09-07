@@ -110,6 +110,40 @@ def test_document_answer_with_no_document_focused_is_a_clarification() -> None:
     assert h.device.calls == []
 
 
+# ------------------------------------------------------------------------ inspect
+
+
+def test_document_inspect_of_a_focused_but_unread_file_uses_file_inspect_not_extract() -> None:
+    """Spec §3: inspect reads STRUCTURE only ("İçeriği OKUMAZ, yapıyı söyler" - the
+    tool's own description) - a file focused but never extracted must be inspected
+    through the lightweight ``file.inspect`` capability, never a full
+    ``document.extract``, and the index must stay untouched (inspecting is not reading)."""
+    h = build_harness()
+    h.seed(CTX_FILE_FOCUSED)  # rapor.pdf focused as a FILE, never extracted
+    sid = h.new_session()
+    h.device.reset()
+    h.say(sid, "Bu dosyada ne var?")
+    call = h.tool(sid, "c-1", "document.inspect", {})
+
+    assert call["status"] == "succeeded", call
+    body = call["result"]
+    assert body["execution_status"] == "executed"
+    assert "rapor.pdf" in body["speech"]
+    assert "5" in body["speech"]  # rapor.pdf has 5 pages (truth.json)
+    assert h.device.capabilities_called() == ["file.inspect"]
+
+    with h.factory() as db:
+        from app.documents.index import DocumentIndex
+
+        inspected_file_id = body["observed_after"]["server"]["file_id"]
+        assert (
+            DocumentIndex().get_by_file_id(
+                db, device_id="device:default", file_id=inspected_file_id
+            )
+            is None
+        )
+
+
 # ---------------------------------------------------------------------- summarize
 
 
