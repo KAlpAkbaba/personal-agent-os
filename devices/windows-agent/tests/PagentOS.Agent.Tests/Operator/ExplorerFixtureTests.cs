@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using System.Threading;
 using PagentOS.Agent.Core.Commands;
 using PagentOS.Agent.Core.Protocol;
 using Xunit;
@@ -31,7 +32,9 @@ public sealed class ExplorerFixtureTests : IDisposable
 
         var window = (JsonObject)revealed["observed"]!["window"]!;
         Assert.Equal("explorer.exe", window["image"]!.GetValue<string>());
-        Assert.Equal(Path.GetFileName(dir), window["title"]!.GetValue<string>());
+        // Explorer titles the window with the folder name; an English Windows appends
+        // " - File Explorer" (the GitHub runner), a Turkish one " - Dosya Gezgini" or nothing.
+        Assert.StartsWith(Path.GetFileName(dir), window["title"]!.GetValue<string>(), StringComparison.Ordinal);
 
         var selection = revealed["observed"]!["selection"]!.AsArray().Select(s => s!.GetValue<string>()).ToList();
         Assert.Contains(selection, s => s.StartsWith("fixture", StringComparison.OrdinalIgnoreCase));
@@ -64,7 +67,24 @@ public sealed class ExplorerFixtureTests : IDisposable
         var windowId = opened["window_id"]!.GetValue<string>();
         var window = (JsonObject)opened["observed"]!["window"]!;
         Assert.Equal("notepad.exe", window["image"]!.GetValue<string>());
-        Assert.Contains("fixture", window["title"]!.GetValue<string>(), StringComparison.OrdinalIgnoreCase);
+        // The window can appear titled "Untitled - Notepad" a few hundred milliseconds
+        // before the file is loaded (seen on the GitHub runner): re-observe until the
+        // title names the file, bounded - the planner's OBSERVE AGAIN, not a guess.
+        var title = window["title"]!.GetValue<string>();
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (!title.Contains("fixture", StringComparison.OrdinalIgnoreCase) && DateTime.UtcNow < deadline)
+        {
+            Thread.Sleep(100);
+            var listed = _lab.Exec(OperatorCapabilityNames.WindowList, new JsonObject { ["pid"] = pid });
+            var match = listed["windows"]!.AsArray()
+                .Select(w => (JsonObject)w!)
+                .FirstOrDefault(w => w["window_id"]!.GetValue<string>() == windowId);
+            if (match is not null)
+            {
+                title = match["title"]!.GetValue<string>();
+            }
+        }
+        Assert.Contains("fixture", title, StringComparison.OrdinalIgnoreCase);
 
         // The document shows the fixture's text, read back over UI Automation.
         var (_, _, _, value) = _lab.ReadDocument(windowId);
