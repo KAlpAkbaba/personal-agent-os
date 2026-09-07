@@ -180,8 +180,10 @@ $t = $report.totals
 $a = $report.audio
 $m = $report.marks
 Write-Host ""
+$invariant = [System.Globalization.CultureInfo]::InvariantCulture
+$meanWer = if ($null -eq $report.mean_wer) { "-" } else { ([double]$report.mean_wer).ToString("0.0000", $invariant) }
 Write-Host ("   {0} cases: {1} matched, {2} degraded, {3} mismatched, {4} error; mean WER {5}" -f `
-    $t.cases, $t.matched, $t.degraded, $t.mismatched, $t.error, $report.mean_wer)
+    $t.cases, $t.matched, $t.degraded, $t.mismatched, $t.error, $meanWer)
 Write-Host ("   audio: {0} files, {1} ms total, mean {2} ms (min {3}, max {4}); TTS {5} -> STT {6}" -f `
     $a.cases_with_audio, $a.total_ms, $a.mean_ms, $a.min_ms, $a.max_ms, $report.providers.tts, $report.providers.stt)
 foreach ($name in @("audio_generation", "loopback_semantics", "physical_hearing")) {

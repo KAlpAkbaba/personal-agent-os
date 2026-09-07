@@ -66,6 +66,15 @@ def test_normalisation_unifies_digits_case_punctuation_and_diacritics() -> None:
     assert folded == ascii_only == "arastirma raporu"
 
 
+def test_normalisation_drops_a_recogniser_suffix_apostrophe() -> None:
+    """The first real run (2026-09-07): Whisper wrote "sekiz'e" / "on sekiz'de" / "otuz'a"
+    for the assistant's "sekize" / "on sekizde" / "otuza"; spelling, not meaning."""
+    expected, _ = loopback.normalize_for_comparison("Alarmı sekize kurdum, on sekizde çalacak.")
+    heard, _ = loopback.normalize_for_comparison("Alarmı sekiz'e kurdum, on sekiz'de çalacak.")
+    assert expected == heard == "alarmi sekize kurdum on sekizde calacak"
+    assert loopback.normalize_for_comparison("Core'daki merkez")[0] == "coredaki merkez"
+
+
 def test_content_words_skip_short_and_stop_words() -> None:
     _, tokens = loopback.normalize_for_comparison("Bunu şimdi araştırma için rapor et")
     assert loopback.content_words(tokens) == ("arastirma", "rapor")

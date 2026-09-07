@@ -121,10 +121,19 @@ def normalize_for_comparison(text: str) -> tuple[str, tuple[str, ...]]:
     (tr-TR numerals to words, Turkish casefold, punctuation and fillers gone), then
     diacritics folded so "araştırma" and an ASR's "arastirma" are one token.
 
+    Apostrophes are dropped as well: a recogniser writes the Turkish suffix after a
+    numeral or a name with one ("sekiz'e", "on sekiz'de", "Core'daki"), the assistant's
+    text mostly does not ("sekize"), and the router keeps them for its own matching - here
+    they are spelling, not meaning (the first real run charged them as word errors).
+
     Returns ``(joined, tokens)``; both sides of every comparison go through this.
     """
     joined, tokens, _fillers = normalize_transcript(text or "")
-    folded = tuple(strip_diacritics(t) for t in tokens if t)
+    folded = tuple(
+        stripped
+        for stripped in (strip_diacritics(t).replace("'", "") for t in tokens)
+        if stripped
+    )
     return " ".join(folded), folded
 
 

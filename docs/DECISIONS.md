@@ -6323,6 +6323,57 @@ Evidence: `tests/voice_corpus/`, `tests/unit/test_owner_utterance_corpus.py` (34
 fixes), `apps/web/tests/cockpit/voice-qualification.test.tsx`;
 `scripts/core/voice-routing-qualification.ps1`.
 
+### ADR-0080 addendum — the response half: the TTS → STT loopback proxy (2026-09-07, evening)
+
+The owner's master directive asks each milestone's synthetic corpus for a RESPONSE test as
+well: "assistant TTS → controlled virtual/loopback capture → STT → semantic comparison
+against the intended spoken response", on an isolated audio path, with honest classes.
+Decision and what was found:
+
+1. **The loop is a pure module over the provider seams**, `app/voice/loopback.py`
+   (`LoopbackCase`, `run_loopback(cases, tts, stt)` → `LoopbackReport`), so any §7 TTS and
+   §9 STT can be plugged in and the fakes prove the judgement offline. The "loopback
+   capture" is the byte path inside the process — the synthesised bytes go straight to the
+   recogniser. That is why LOOPBACK SPEECH SEMANTICS is `PROVEN_PROXY` always and PHYSICAL
+   OWNER HEARING `NOT_CLAIMED` always; AUDIO GENERATION is `PROVEN_AUTOMATED` only when a
+   real provider produced audio for every case of the run. Comparison: both texts through
+   the router's own `normalize_transcript` (numerals to words, Turkish casefold, punctuation
+   and fillers gone) with diacritics and apostrophes folded; WER ≤ 0.35 with every content
+   word present (4+ letters, not a stop word, within one edit or glued) = matched; ≤ 0.60 =
+   degraded; else mismatched; a provider failure = error, named, never a crash.
+2. **The corpus feeds it.** The harness now records each case's full speech and response
+   class; the sampler takes the `correct` cases whose class is ok / refused with speech,
+   deduplicates identical sentences (413 cases speak 44 distinct sentences — the variants
+   answer alike) and samples round-robin per category from a seeded shuffle, so a new
+   category (`evolution` today, `operator` next) is always represented.
+   `scripts/voice/tts-loopback-qualification.ps1` runs it with the real OpenAI providers
+   when the key is in the DPAPI store (an environment variable for the child, cleared
+   after, never printed), else the fakes; `-Post` records ONE `voice.tts_loopback` ledger
+   row (counts, marks, providers — never a sentence; the real route's forbidden-key scan
+   accepts it, tested). Budget: 40 by default, more than 120 refused without `-Force`.
+3. **Two provider defects surfaced before any audio moved**: `OpenAISTTProvider` had never
+   worked against the real endpoint (a raw body with the fields in the query string; the
+   endpoint is multipart/form-data — `ProviderRequest` gained `form`/`files`), and
+   `wav_duration_ms` assumed the fakes' 16 kHz header (OpenAI's WAV is 24 kHz with a LIST
+   chunk; it now reads the fmt chunk and measures a streamed WAV by the bytes present).
+   Both had tests that asserted the wrong shape; both tests now assert the real one.
+4. **The baseline** (`docs/evidence/tts-loopback-2026-09-07-190306.json`): tts-1 →
+   whisper-1, 40 sentences, 38 matched / 2 degraded / 0 mismatched / 0 error, mean WER
+   0.018, 226 s of audio. The first run (`…-185857.json`, WER 0.043) taught that a
+   recogniser writes Turkish suffix apostrophes after numerals ("sekiz'e") which the router
+   keeps for its own matching — folded in the comparison, regression test added. The two
+   degraded cases are product observations, not harness defects, and are left standing:
+   "Core'daki Onay Merkezi" is spoken as "kor…" (an English name inside Turkish), and the
+   version "0.1.0" read as "sıfır nokta bir nokta sıfır" is fragile in the TTS. Candidates
+   for the pronunciation dictionary (§5) and for the version-reading rule, not for the loop.
+
+Consequences: every milestone from M19 on runs this after its corpus (a `DEGRADED` or
+`REGRESSION_FOUND` summary is a finding to name, never to hide); the marks above are the
+only classes the response half may claim; the owner-hearing items stay the owner's.
+Named gaps: `-Post` against production needs a Cloud Core release carrying
+`voice.tts_loopback`; the corpus's `control` category has no speech (no tool, nothing to
+say) and so no loopback row; no per-provider A/B here (the §7 benchmark's job).
+
 
 ## ADR-0081 — M18.4 foundation: the Evolution Supervisor, the owner's voice over self-evolution, the version model, expand-only migrations and the blue/green Cloud Core release (2026-09-07)
 

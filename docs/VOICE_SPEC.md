@@ -152,6 +152,53 @@ Evaluate current Turkish voices including neural/MAI variants available at imple
 
 Evaluate current realtime audio for conversation and current TTS endpoint for narration.
 
+## 7a. TTS loopback proxy qualification (the response half of the synthetic corpus)
+
+The Owner Utterance Corpus (ADR-0080) proves what the owner's WORDS do. The loopback proxy
+proves the other direction for the same cases: that the assistant's spoken RESPONSE, once
+synthesised, still carries its meaning. Owner directive 2026-09-07:
+
+```text
+assistant speech text --TTS--> WAV bytes --isolated byte path--> STT --> transcript
+                                            |
+                          Turkish normalisation of both sides (the router's own rules:
+                          numerals to words, Turkish casefold, punctuation and fillers
+                          gone, diacritics folded)
+                                            |
+                          word error rate + content-word check -> matched / degraded /
+                          mismatched / error
+```
+
+Implementation: `services/api/app/voice/loopback.py` (pure, provider-agnostic: any
+`TTSProvider` and `STTProvider` of §7/§9), `python -m app.voice.loopback_cli`,
+`scripts/voice/tts-loopback-qualification.ps1` (the corpus report of the day, a
+deterministic category-balanced sample of the cases whose response class is ok / refused
+with non-empty speech - identical sentences synthesised once - the real OpenAI TTS and
+Whisper when the key is in the DPAPI store, else the deterministic fakes; evidence at
+`docs/evidence/tts-loopback-<stamp>.json`; `-Post` records ONE `voice.tts_loopback` ledger
+row with counts, marks and provider names, never a transcript). Budget: 40 cases by
+default, more than 120 refused without `-Force`; real runs cost money.
+
+Verdicts: `matched` = WER ≤ 0.35 and every content word (an expected token of 4+ letters
+that is not a stop word) present in the transcript within one edit or glued to a
+neighbour; `degraded` = WER ≤ 0.60 otherwise; `mismatched` above; `error` = a provider
+failure, named by stage and provider, never a crash of the run.
+
+What it proves, and the only classes it may claim:
+
+| Mark | Class | Meaning |
+|---|---|---|
+| AUDIO GENERATION | `PROVEN_AUTOMATED` | a real provider synthesised audio for every case in the run, each recorded by format, size and duration (`PROVEN_PROXY` when the deterministic fakes did; `NOT_PROVEN` when a real provider failed a case) |
+| LOOPBACK SPEECH SEMANTICS | `PROVEN_PROXY` | always: the bytes go straight from the synthesiser to the recogniser - no loudspeaker, no microphone, no room, no feedback loop. The match proves the spoken text survives synthesis and recognition, nothing more |
+| PHYSICAL OWNER HEARING | `NOT_CLAIMED` | always: only the owner's ear, on the owner's device, can prove it (docs/OWNER_ACTIONS.md audio items) |
+
+What it does not prove: intelligibility or naturalness to a human (§8 is the owner's blind
+A/B), the device audio path (WASAPI, the browser's playback, the speakers), pronunciation
+of owner-specific terms beyond what a recogniser can recover, or realtime latency (§2 is
+measured by `realtime_bench`). A recogniser's own errors count against the loop - a
+`degraded` verdict on a sentence the owner would understand is a known limit of a proxy,
+not a defect of the speech.
+
 ## 8. Owner-specific A/B test
 
 Create at least:
