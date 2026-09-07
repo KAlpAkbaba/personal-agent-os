@@ -260,6 +260,16 @@ def test_create_selects_by_capability_and_returns_the_contract(wired) -> None:
         "operator.shell",
         "operator.cancel",
         "operator.status",
+        # M20 (docs/M20_FILE_DOCUMENT_INTELLIGENCE_SPEC.md §3): File & Document
+        # Intelligence.
+        "file.search",
+        "document.read",
+        "document.summarize",
+        "document.answer",
+        "document.compare",
+        "document.inspect",
+        "document.common_points",
+        "document.previous",
     }
     research = next(t for t in data["tools"] if t["name"] == "research.start")
     assert research["long_running"] is True and research["preamble"] == RESEARCH_PREAMBLE_TR
