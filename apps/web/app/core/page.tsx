@@ -96,9 +96,9 @@ function MinimalCore() {
   const voiceState = voice.controller.state;
   const voiceLive = isLiveState(voiceState);
   const stageStyle = stage && stage.size > 0 ? { width: stage.size, height: stage.size } : undefined;
-  // A server this build is ahead of never publishes the alarm, display or
-  // operator states. Saying so is the difference between "nothing is set" and
-  // "this server cannot tell you whether anything is set".
+  // A server this build is ahead of never publishes the alarm, display,
+  // operator or document states. Saying so is the difference between "nothing
+  // is set" and "this server cannot tell you whether anything is set".
   const contractLag =
     truth.contractVersion !== null && truth.contractVersion < KNOWN_CONTRACT_VERSION
       ? contractLagNote(truth.contractVersion, KNOWN_CONTRACT_VERSION)

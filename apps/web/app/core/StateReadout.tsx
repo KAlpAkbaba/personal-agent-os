@@ -22,6 +22,7 @@ import {
   SEVERITY_LABEL,
   SOURCE_LABEL,
   capabilityNodesLine,
+  documentFactsLine,
   formatAge,
   formatProgress,
   kindDetail,
@@ -31,6 +32,7 @@ import {
   subsystemLabel,
 } from "../lib/uistate/labels";
 import { isOperatorState } from "../lib/uistate/contract";
+import { documentPartPhrase } from "../lib/uistate/documents";
 import { operatorPosition } from "../lib/uistate/operator";
 import type { VisualIntent } from "../lib/uistate/visual";
 import { isLive } from "../lib/uistate/visual";
@@ -164,6 +166,28 @@ export default function StateReadout({
       {intent.state === "operator.failed" && (
         <p className="core-count" data-operator-error-class={intent.operatorErrorClass ?? ""}>
           {operatorErrorLine(intent.operatorErrorClass)}
+        </p>
+      )}
+
+      {/*
+        M20: the document's published facts — the file the Core named, the
+        place inside it in the owner's words, the step — each the token the
+        publisher sent or the statement that none came. Present on the live
+        reading posture and on its last-known shape alike: what WAS being read
+        is still a fact. The compact caption already carries the same file and
+        place as `label`, so the long line is the full form's alone.
+      */}
+      {intent.document && !compact && (
+        <p
+          className="muted core-count"
+          data-document-facts
+          data-document-file={intent.document.file ?? ""}
+          data-document-path={intent.document.path ?? ""}
+          data-document-part={intent.document.part ?? ""}
+          data-document-place={documentPartPhrase(intent.document.part, intent.document.kind) ?? ""}
+          data-document-step={intent.document.step ?? ""}
+        >
+          {documentFactsLine(intent.document)}
         </p>
       )}
 
