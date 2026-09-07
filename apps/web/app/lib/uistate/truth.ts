@@ -24,6 +24,7 @@ import {
   ageMs,
   isAlarmLifecycleState,
   isCoreChannel,
+  isDocumentState,
   isOperatorState,
   isReleaseBandState,
   isSeverity,
@@ -278,6 +279,16 @@ export function displayClaim(truth: CoreTruth, now: number): Claim {
  */
 export function operatorClaim(truth: CoreTruth, now: number): Claim {
   return claimFor(newestWhere(truth, isOperatorState), now);
+}
+
+/**
+ * The document intelligence's own claim (v5): the newest `document.analysis`,
+ * and nothing else — by membership, for the operator's reason. Returned
+ * expired or not: the panel words the age, and an expired read is a read we
+ * stopped hearing about, not a document that stopped existing.
+ */
+export function documentClaim(truth: CoreTruth, now: number): Claim {
+  return claimFor(newestWhere(truth, isDocumentState), now);
 }
 
 /**

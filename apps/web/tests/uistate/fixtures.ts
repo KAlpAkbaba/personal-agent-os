@@ -425,6 +425,50 @@ export const OPERATOR_FAILED_TASK = (errorClass = "timeout") =>
     metadata: { error_class: errorClass },
   });
 
+// ------------------------------ v5: File & Document Intelligence (M20 §3)
+
+/**
+ * `document.analysis` as the M20 spec §3 has the Cloud Core publish it:
+ * subsystem `documents`, the task id, in metadata the file's NAME, the
+ * reference of the place inside it (the §2 scheme), the step, and — on an
+ * answer — the refs it cited as `[{ref, path, excerpt}]`. `path` rides beside
+ * `file` only when the Core named the file by path (two documents, one title).
+ */
+export const DOCUMENT_ANALYSIS = (
+  file: string | null = "rapor.pdf",
+  part: string | null = "p3",
+  step: string | null = "answer",
+  extra: Record<string, unknown> = {},
+) =>
+  event({
+    state: "document.analysis",
+    subsystem: "documents",
+    task_id: "doc-task-1",
+    status: "analysing",
+    metadata: {
+      ...(file === null ? {} : { file }),
+      ...(part === null ? {} : { part }),
+      ...(step === null ? {} : { step }),
+      ...(extra as Record<string, string | number | boolean>),
+    },
+  });
+
+/** The same event with the refs an answer cited, in the shape the bus carries them. */
+export const DOCUMENT_ANSWERED = (
+  refs: Array<{ ref: string; path?: string | null; excerpt?: string | null }> = [
+    { ref: "p3", path: "C:\\Users\\alpak\\Documents\\rapor.pdf", excerpt: "Üçüncü sayfada yer alan bu cümle referans testidir." },
+  ],
+  file = "rapor.pdf",
+  part = "p3",
+) => ({
+  ...DOCUMENT_ANALYSIS(file, part, "answer"),
+  refs: refs.map((r) => ({ ref: r.ref, path: r.path ?? null, excerpt: r.excerpt ?? null })),
+});
+
+/** A document event whose publisher sent no metadata at all. */
+export const DOCUMENT_ANALYSIS_BARE = () =>
+  event({ state: "document.analysis", subsystem: "documents", task_id: "doc-task-2" });
+
 /** The owner-authorised release path, mid-deployment (ADR-0055). */
 export const RELEASE_DEPLOYING = () =>
   event({

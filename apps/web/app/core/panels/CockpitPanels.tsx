@@ -45,9 +45,14 @@ import {
   focusSummary,
   identityLine,
 } from "../../lib/research/focus";
+import { documentPartPhrase, documentView, lastAnswerRefs, previousDocument } from "../../lib/uistate/documents";
 import {
+  DOCUMENT_EMPTY,
+  DOCUMENT_LABEL,
   OPERATOR_EMPTY,
   OPERATOR_LABEL,
+  documentFactsLine,
+  documentRefLine,
   formatAge,
   operatorErrorLine,
   operatorFactsLine,
@@ -56,7 +61,7 @@ import {
 } from "../../lib/uistate/labels";
 import { operatorPosition, operatorView } from "../../lib/uistate/operator";
 import type { CoreTruth } from "../../lib/uistate/truth";
-import { liveEventFor, operatorClaim, recentDescending } from "../../lib/uistate/truth";
+import { documentClaim, liveEventFor, operatorClaim, recentDescending } from "../../lib/uistate/truth";
 import Panel from "./Panel";
 
 function when(iso: string | null | undefined, now: number): string {
@@ -799,6 +804,128 @@ export function DigitalOperatorPanel({ truth, now }: { truth: CoreTruth; now: nu
           {view.lastKnown === "failed" && (
             <li data-operator-error-class={view.errorClass ?? ""}>
               <span className="muted">{operatorErrorLine(view.errorClass)}</span>
+            </li>
+          )}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+/**
+ * File & Document Intelligence (M20 spec §3): which of the owner's documents
+ * the Core is reading, which it read before, and what its last answer cited —
+ * from the same state feed the Core reads.
+ *
+ * Like the operator's panel, deliberately NOT a REST panel, and for a stronger
+ * reason: the owner's files live on the owner's machine, and this page must
+ * never fetch one. Everything here is a token the Cloud Core published on the
+ * bus — the file's NAME, its path only when the Core chose to name it by path,
+ * the place inside it in the owner's words, the step, and the refs of the
+ * last answer as `[{ref, path, excerpt}]`. No content is shown that the state
+ * did not carry, and no progress is drawn because none is published.
+ *
+ * Four outcomes: nothing ever published ("henüz bir belge okunmadı"); a live
+ * read with its facts; a read whose claim aged out ("son bilinen", with the
+ * age — not "finished": we stopped being told); and beneath any of the last
+ * three, the previous document the bus itself carried and the refs of the
+ * newest answer, each dated by its own event.
+ */
+export function DocumentsPanel({ truth, now }: { truth: CoreTruth; now: number }) {
+  const claim = documentClaim(truth, now);
+  const view = documentView(claim);
+  const told = view.lastKnown !== null;
+  const previous = previousDocument(truth, claim.event);
+  const answer = lastAnswerRefs(truth);
+  const badge = !told ? "0" : view.stage === "none" ? "son bilinen" : "inceleniyor";
+
+  return (
+    <section
+      className="panel"
+      data-panel="documents"
+      data-panel-empty={told ? "no" : "yes"}
+      data-document-stage={view.stage}
+      data-document-last-known={view.lastKnown ?? ""}
+    >
+      <h3 className="panel-title">
+        <span>Belgeler</span>
+        <span className="panel-count">{badge}</span>
+      </h3>
+      {!told ? (
+        <p className="panel-empty">{DOCUMENT_EMPTY}</p>
+      ) : (
+        <ul>
+          <li
+            data-document-current
+            data-document-file={view.file ?? ""}
+            data-document-path={view.path ?? ""}
+            data-document-part={view.part ?? ""}
+            data-document-step={view.step ?? ""}
+          >
+            <div className="event-row">
+              {/* The file's name as published; without one, the state and no name. */}
+              <span>
+                {view.stage === "none" ? "Son bilinen: " : ""}
+                {view.file ?? DOCUMENT_LABEL.analysing}
+              </span>
+              <span className="event-when">{formatAge(view.ageMs)}</span>
+            </div>
+            {/* The path is a published fact or absent; it is never derived from the name. */}
+            {view.path && (
+              <span className="muted" data-document-path-line>
+                {view.path}
+              </span>
+            )}
+            <span className="muted">
+              {documentFactsLine(view)}
+              {view.label && ` · ${view.label}`}
+            </span>
+          </li>
+          {view.stage === "none" && (
+            <li data-document-expired>
+              <span className="muted">
+                Bu belge için yeni bir bildirim gelmedi. İncelemenin bittiği bildirilmedi — yalnızca haber alınamadı.
+              </span>
+            </li>
+          )}
+          {previous && (
+            <li
+              data-document-previous
+              data-document-file={previous.facts.file ?? ""}
+              data-document-path={previous.facts.path ?? ""}
+            >
+              <div className="event-row">
+                <span>Önceki belge: {previous.facts.file}</span>
+                <span className="event-when">{when(previous.event.at, now)}</span>
+              </div>
+              {previous.facts.path && (
+                <span className="muted" data-document-path-line>
+                  {previous.facts.path}
+                </span>
+              )}
+              <span className="muted">
+                {documentPartPhrase(previous.facts.part, previous.facts.kind) ?? "yer bildirilmedi"}
+              </span>
+            </li>
+          )}
+          {answer && (
+            <li data-document-refs={answer.refs.length}>
+              <div className="event-row">
+                <span>Son yanıtın kaynakları</span>
+                <span className="event-when">{when(answer.event.at, now)}</span>
+              </div>
+              {/* dosya · yer · alıntı, each as the answer published it. */}
+              <ul>
+                {answer.refs.map((ref, index) => (
+                  <li
+                    key={`${ref.path ?? ""}#${ref.ref}#${index}`}
+                    data-document-ref={ref.ref}
+                    data-document-ref-path={ref.path ?? ""}
+                  >
+                    <span className="muted">{documentRefLine(ref)}</span>
+                  </li>
+                ))}
+              </ul>
             </li>
           )}
         </ul>

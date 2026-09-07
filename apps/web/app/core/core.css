@@ -647,6 +647,10 @@
 .palette-ready {
   --core-color: #ffd27a;
 }
+/* v5: the reading Core, parchment. Same value as CoreScene's PALETTE. */
+.palette-reading {
+  --core-color: #e3cfa0;
+}
 .palette-unknown {
   --core-color: #6b6250;
 }

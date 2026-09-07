@@ -86,6 +86,9 @@ const EXPECTED_KIND: Record<string, CoreVisualKind> = {
   "operator.running": "operator_running",
   "operator.verifying": "operator_verifying",
   "operator.failed": "operator_failed",
+  // v5 (M20): reading one of the owner's documents is the agent's own work —
+  // a core state with its own deliberate reading posture.
+  "document.analysis": "document_analysis",
 };
 
 describe("a visual state is entered only by its own event", () => {

@@ -49,6 +49,7 @@ import {
   AlarmsPanel,
   AmbientPanel,
   DigitalOperatorPanel,
+  DocumentsPanel,
   EvolutionPanel,
   EvolutionSupervisorPanel,
   GoalsPanel,
@@ -161,6 +162,10 @@ function Cockpit() {
               step, the capability, the window it observed — from the state
               feed the Core reads, on the Core's clock rather than this page's. */}
           <DigitalOperatorPanel truth={truth} now={now} />
+          {/* M20 §3: which of the owner's documents the Core is reading, which
+              it read before, and what its last answer cited — from the bus,
+              never from a file. The owner's files stay on the owner's machine. */}
+          <DocumentsPanel truth={truth} now={now} />
           <GoalsPanel state={data.goals} now={now} />
           <ResearchPanel
             state={data.research}

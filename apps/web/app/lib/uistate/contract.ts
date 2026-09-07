@@ -15,7 +15,7 @@
  */
 
 /** Contract version this client was written against (`CONTRACT_VERSION` in contract.py). */
-export const KNOWN_CONTRACT_VERSION = 4;
+export const KNOWN_CONTRACT_VERSION = 5;
 
 /**
  * The build marker of the Living Core (M18.3 §12, qualification A). Rendered server-side
@@ -31,12 +31,14 @@ export const CORE_BUILD_ID = "living-core-1";
  *
  * v3 is purely ADDITIVE over v2 (M18.3 §7): the event shape is unchanged and
  * the only difference is ten new state tokens. v4 is additive over v3 in the
- * same way (M19 spec §4): three `operator.*` tokens and one subsystem. A v2 or
- * v3 server therefore serves a strict subset of what this build knows, and
- * refusing to draw anything at all because the alarm or operator states have
- * not shipped yet would be a worse lie than saying so in one line. A server
- * NEWER than this build is a different matter — we do not know its vocabulary,
- * so it stays a mismatch.
+ * same way (M19 spec §4): three `operator.*` tokens and one subsystem. v5 is
+ * additive over v4 (M20 spec §3): one `document.analysis` token, one
+ * subsystem, and one bounded metadata shape (`refs`) that older publishers
+ * never send. A v2, v3 or v4 server therefore serves a strict subset of what
+ * this build knows, and refusing to draw anything at all because the alarm,
+ * operator or document states have not shipped yet would be a worse lie than
+ * saying so in one line. A server NEWER than this build is a different matter
+ * — we do not know its vocabulary, so it stays a mismatch.
  */
 export const MIN_SUPPORTED_CONTRACT_VERSION = 2;
 
@@ -136,6 +138,13 @@ export const UI_STATES = [
   "operator.running",
   "operator.verifying",
   "operator.failed",
+  // v5 (M20 spec §3) — File & Document Intelligence. Published while the Core
+  // reads, extracts, retrieves from or answers about one of the owner's
+  // documents, with `{file, part, step?, refs?}`: the file's NAME, the
+  // reference of the place inside it (`p3`, `s4`, `sheet:Ozet!A5:B5`, …), the
+  // step the Core is on, and — on an answer — the refs it cited. The agent's
+  // own work, so it stays on the agent channel and drives the core body.
+  "document.analysis",
 ] as const;
 
 export type KnownUiState = (typeof UI_STATES)[number];
@@ -203,6 +212,30 @@ export function isOperatorState(state: string): state is OperatorUiState {
 }
 
 /**
+ * The document intelligence's states (v5). One token: the spec publishes the
+ * whole read → extract → retrieve → answer loop as `document.analysis` and
+ * names the phase in `metadata.step`, so there is nothing else to enumerate.
+ * Kept as a list, like the operator's, so a second token lands here and
+ * nowhere else.
+ */
+export const DOCUMENT_STATES = ["document.analysis"] as const;
+
+export type DocumentUiState = (typeof DOCUMENT_STATES)[number];
+
+const DOCUMENT_STATE_SET: ReadonlySet<string> = new Set(DOCUMENT_STATES);
+
+/**
+ * True for a v5 document state this build knows how to draw.
+ *
+ * Membership, not prefix, for the operator's reason: a newer server's
+ * `document.indexing` must not be drawn as a reading Core on the strength of
+ * a word this build cannot read.
+ */
+export function isDocumentState(state: string): state is DocumentUiState {
+  return DOCUMENT_STATE_SET.has(state);
+}
+
+/**
  * States that belong to the release band's own vocabulary.
  *
  * `releaseClaim` reads exactly these rather than "the newest event on the
@@ -242,6 +275,9 @@ export const SUBSYSTEMS = [
   "ambient",
   // v4: the Digital Operator (M19 spec §4) publishes its task transitions.
   "operator",
+  // v5: the document intelligence (M20 spec §3) publishes `document.analysis`;
+  // its receipts and ledger rows carry the same subsystem name.
+  "documents",
 ] as const;
 
 export type Subsystem = (typeof SUBSYSTEMS)[number];
@@ -259,6 +295,27 @@ export function isSeverity(value: unknown): value is Severity {
  * this type exists so no consumer can accidentally type a transcript into it.
  */
 export type MetadataValue = number | boolean | string;
+
+/**
+ * One reference an answer cited (M20 spec §3): the place inside a document
+ * (`ref`, in the reference scheme of §2), the file it is in (`path`, by
+ * identity — the spec names the path whenever two documents share a title),
+ * and the excerpt the answer rests on. Each string is bounded like every
+ * other token on the bus; a ref without a `ref` is not a reference and is
+ * dropped at the boundary.
+ */
+export type DocumentRef = {
+  ref: string;
+  path: string | null;
+  excerpt: string | null;
+};
+
+/**
+ * How many refs one event may carry into the client. A client bound, not a
+ * contract figure: the retriever chooses top-k blocks and the spec does not
+ * fix k, so this only keeps a misbehaving publisher from filling the tail.
+ */
+export const MAX_DOCUMENT_REFS = 8;
 
 /**
  * One event exactly as `UiStateEvent.as_dict()` serialises it.
@@ -289,6 +346,14 @@ export type UiStateEvent = {
   session_id: string | null;
   label: string | null;
   metadata: Record<string, MetadataValue>;
+  /**
+   * v5: the refs a `document.analysis` answer cited, read from
+   * `metadata.refs` alone (M20 spec §3). Present only when the publisher sent
+   * at least one well-formed ref, so a v4 event parses byte for byte as it
+   * did before; every other list or object in metadata is still dropped as
+   * content-shaped.
+   */
+  refs?: DocumentRef[];
 };
 
 /** The body of `GET /v1/ui/state`. */
@@ -406,6 +471,10 @@ const STATE_KINDS: Record<KnownUiState, StateKind> = {
   "operator.running": "transient",
   "operator.verifying": "transient",
   "operator.failed": "steady",
+  // v5. Reading a document is work in flight: it decays on its own horizon
+  // (`DOCUMENT_STEP_TTL_MS`), and a Core that stopped hearing about it says
+  // last-known, never "finished" and never idle.
+  "document.analysis": "transient",
 };
 
 /**
@@ -420,6 +489,23 @@ const STATE_KINDS: Record<KnownUiState, StateKind> = {
  * own `ttl_s` beats this figure, as it beats every figure here.
  */
 export const OPERATOR_STEP_TTL_MS = 45_000;
+
+/**
+ * How long a document step may be claimed as current without a newer event.
+ *
+ * The same reasoning as the operator's horizon, because the same companion
+ * does the reading: `document.extract` runs on the device under the 30 s
+ * per-command cap (M20 spec §2 bounds a search at 10 s and an extraction at
+ * 64 KB / 200 pages) and the publisher speaks once per step, not on a
+ * heartbeat. Twelve seconds would report a healthy twenty-second PDF as lost.
+ * Still a horizon: a `document.analysis` from a minute ago is last-known,
+ * never a Core still reading. The publisher's own `ttl_s` beats this figure.
+ */
+export const DOCUMENT_STEP_TTL_MS: number = OPERATOR_STEP_TTL_MS;
+
+/** The Core's one wording for a document analysis with no published file: every label
+ *  and caption spells it from here, so a wording change lands once. */
+export const DOCUMENT_CAPTION_BARE = "Belge inceleniyor";
 
 /**
  * Per-state lifetimes for v3, in ms, exactly as `docs/M18_3_LIVING_CORE_WAKE_ALARM_SPEC.md`
@@ -444,6 +530,7 @@ const STATE_TTL_MS: Partial<Record<KnownUiState, number>> = {
   "display.off": 24 * 60 * 60_000,
   "operator.running": OPERATOR_STEP_TTL_MS,
   "operator.verifying": OPERATOR_STEP_TTL_MS,
+  "document.analysis": DOCUMENT_STEP_TTL_MS,
 };
 
 /**
@@ -522,6 +609,10 @@ export type StateChannel = "agent" | "lab" | "ambient" | "release" | "operator";
 export function stateChannel(state: string): StateChannel {
   if (state.startsWith("evolution.")) return "lab";
   if (state.startsWith("operator.")) return "operator";
+  // v5's `document.analysis` needs no channel of its own: reading the owner's
+  // document IS the agent working, and the cockpit asks "which document" by
+  // membership (`isDocumentState`), never off a channel. It falls through to
+  // `agent` below.
   // v3 adds `display.*` to the room: whether the screens are lit is a fact
   // about the owner's desk, never about the agent's activity.
   if (state.startsWith("eye.") || state.startsWith("owner.") || state.startsWith("display."))
@@ -589,8 +680,11 @@ export function parseEvent(raw: unknown): UiStateEvent | null {
       // objects/arrays are content-shaped; the publisher drops them and so do we
     }
   }
+  // v5: the one structured value the contract admits, under the one key.
+  const refs = parseDocumentRefs(rawMeta && typeof rawMeta === "object" ? (rawMeta as Record<string, unknown>).refs : undefined);
 
   return {
+    ...(refs.length ? { refs } : {}),
     event_id: typeof o.event_id === "string" ? o.event_id : "",
     sequence: asFiniteNumber(o.sequence) ?? 0,
     state,
@@ -607,6 +701,33 @@ export function parseEvent(raw: unknown): UiStateEvent | null {
     label: typeof o.label === "string" && o.label ? o.label.slice(0, MAX_LABEL_CHARS) : null,
     metadata,
   };
+}
+
+/** A bounded token from a raw ref field, or `null` for anything that is not a non-empty string. */
+function refString(value: unknown): string | null {
+  return typeof value === "string" && value ? value.slice(0, MAX_LABEL_CHARS) : null;
+}
+
+/**
+ * `metadata.refs` as `[{ref, path, excerpt}]`, defensively (M20 spec §3).
+ *
+ * The same posture as the rest of `parseEvent`: an entry that is not an object
+ * or has no `ref` is dropped rather than defaulted, every string is cut to the
+ * bus's token bound, and the list is capped. Nothing here can produce a ref
+ * the publisher did not send.
+ */
+export function parseDocumentRefs(raw: unknown): DocumentRef[] {
+  if (!Array.isArray(raw)) return [];
+  const refs: DocumentRef[] = [];
+  for (const item of raw) {
+    if (refs.length >= MAX_DOCUMENT_REFS) break;
+    if (!item || typeof item !== "object") continue;
+    const o = item as Record<string, unknown>;
+    const ref = refString(o.ref);
+    if (ref === null) continue;
+    refs.push({ ref, path: refString(o.path), excerpt: refString(o.excerpt) });
+  }
+  return refs;
 }
 
 export function parseResponse(raw: unknown): UiStateResponse | null {

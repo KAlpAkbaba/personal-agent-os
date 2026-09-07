@@ -91,6 +91,9 @@ const PALETTE: Record<PaletteToken, string> = {
   fault: "#e0623c",
   lab: "#d9a15c",
   ready: "#ffd27a",
+  // v5: a reading Core is parchment — pale, desaturated, calmer than any
+  // working amber, and still inside the gold family.
+  reading: "#e3cfa0",
   unknown: "#6b6250",
 };
 

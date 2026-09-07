@@ -103,6 +103,7 @@ sees.
 | OPERATOR_RUNNING (v4, M19) | 1.02 | open 0.5 | 0.45 | 0.3 | travellers 0.6 — the tool posture, a shade more open; caption = the published `step` | 0.35+e/2 |
 | OPERATOR_VERIFYING (v4) | 1 | 0.4 | 0.3 | 0.3 | travellers 0.3; inward 0.35 — the second OBSERVE coming back in | 0.3+e/2 |
 | OPERATOR_FAILED (v4) | 0.98 | 0.2 | 0.05 | none | none; the error offset ring, held (restraint 0.5); the published `error_class` in words | 0.22+e/2 |
+| DOCUMENT_ANALYSIS (v5, M20) | 1 | 0.25 | 0.2 | 0.15 | travellers 0.2; inward 0.3 — text coming in to be read; parchment palette `reading`; no pulse, no constellation, no progress; caption = the published `file` and the place in the owner's words | 0.28+e/2 |
 | EYE_ACTIVE | (unchanged) | | | | | one thin aperture ring, on any of the above |
 | untold / connecting / unauthorized | still | none | still | none | none | 0 |
 | last_known / unreachable | the shape it had, faded | as it was | still | none | none | ×0.3 |

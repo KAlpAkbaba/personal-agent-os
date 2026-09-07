@@ -104,15 +104,18 @@ const VOICE_TOOL_RUNNING: VoiceOverlay = {
 };
 
 describe("contract v4 is v3 plus the operator, and says so", () => {
-  it("is version 4 and still reads a v3 and a v2 server", () => {
-    expect(KNOWN_CONTRACT_VERSION).toBe(4);
+  it("still reads a v4, a v3 and a v2 server from the v5 build", () => {
+    // The build moved to v5 with M20 (document-states.test.ts holds that);
+    // what this test guards is that no older server became unreadable.
+    expect(KNOWN_CONTRACT_VERSION).toBeGreaterThanOrEqual(4);
     expect(MIN_SUPPORTED_CONTRACT_VERSION).toBe(2);
-    expect(contractCompatibility(4)).toBe("current");
+    expect(contractCompatibility(KNOWN_CONTRACT_VERSION)).toBe("current");
+    expect(contractCompatibility(4)).toBe("older_supported");
     expect(contractCompatibility(3)).toBe("older_supported");
     expect(contractCompatibility(2)).toBe("older_supported");
     // A server ahead of this build is a different problem: we do not know its
     // vocabulary, so nothing is drawn from it.
-    expect(contractCompatibility(5)).toBe("unsupported");
+    expect(contractCompatibility(KNOWN_CONTRACT_VERSION + 1)).toBe("unsupported");
     expect(contractCompatibility(1)).toBe("unsupported");
   });
 
