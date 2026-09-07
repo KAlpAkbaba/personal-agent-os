@@ -191,7 +191,7 @@ public sealed class ChromeOrphanReaper
         return reaped;
     }
 
-    private static string NormalizePath(string path)
+    public static string NormalizePath(string path)
     {
         var trimmed = path.Trim().Trim('"');
         try

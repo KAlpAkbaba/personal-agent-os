@@ -10,7 +10,9 @@ public static class ProtocolConstants
 
 public static class AgentInfo
 {
-    public const string SoftwareVersion = "0.1.0";
+    // 0.2.0 (M18.4): the M18.3 alarm/ambient capabilities, the staged worker update and
+    // the candidate manifest; a version the installer can tell apart from 0.1.0 on Cloud Core.
+    public const string SoftwareVersion = "0.2.0";
     public const string Platform = "windows";
 }
 

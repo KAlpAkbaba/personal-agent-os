@@ -57,11 +57,16 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
     public const int MaxStdoutLineBytes = 4 * BrowserCapabilities.MaxResultBytes;
 
     private const string AuditOrphanReaped = "browser_chrome_reaped";
+    private const string AuditWorkerSwapped = "browser_worker_swapped";
+    private const string AuditWorkerSwapFailed = "browser_worker_swap_failed";
 
-    private readonly BrowserWorkerOptions _options;
+    // Replaced as a whole by a staged update (SwapWorkerAsync); read through Volatile.
+    private BrowserWorkerOptions _options;
     private readonly ILogger _logger;
     private readonly AuditLog? _audit;
-    private readonly ChromeOrphanReaper _reaper;
+    private ChromeOrphanReaper _reaper;
+    private readonly SemaphoreSlim _swapLock = new(1, 1);
+    private int _swaps;
     private readonly BackoffPolicy _restartBackoff;
     private readonly TimeSpan _helloTimeout;
     private readonly TimeSpan _pingInterval;
@@ -105,9 +110,12 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
         _eagerRestartCeiling = Math.Max(1, eagerRestartCeiling ?? DefaultEagerRestartCeiling);
     }
 
-    public BrowserWorkerOptions Options => _options;
+    public BrowserWorkerOptions Options => Volatile.Read(ref _options);
 
-    public bool IsConfigured => _options.IsConfigured;
+    /// <summary>Staged updates that replaced the worker (M18.4 gap 4).</summary>
+    public int Swaps => Volatile.Read(ref _swaps);
+
+    public bool IsConfigured => Options.IsConfigured;
 
     /// <summary>The most recent worker hello (null until a worker has started).</summary>
     public BrowserWorkerHello? Hello { get; private set; }
@@ -479,7 +487,7 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
             // profile an orphan still holds opens a window in the orphan instead.
             ReapOrphans("before worker start");
 
-            var worker = Spawn();
+            var worker = Spawn(Options);
             _worker = worker;
             Interlocked.Increment(ref _starts);
             _logger.LogInformation(
@@ -569,14 +577,14 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
         }
     }
 
-    private WorkerProcess Spawn()
+    private WorkerProcess Spawn(BrowserWorkerOptions options)
     {
-        Directory.CreateDirectory(_options.DataDir);
-        Directory.CreateDirectory(_options.ProfileDir);
+        Directory.CreateDirectory(options.DataDir);
+        Directory.CreateDirectory(options.ProfileDir);
 
         var startInfo = new ProcessStartInfo
         {
-            FileName = _options.WorkerCommand!,
+            FileName = options.WorkerCommand!,
             UseShellExecute = false,
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
@@ -587,7 +595,7 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
             StandardOutputEncoding = new UTF8Encoding(false),
             StandardErrorEncoding = new UTF8Encoding(false),
         };
-        foreach (var argument in _options.BuildArgumentList())
+        foreach (var argument in options.BuildArgumentList())
         {
             startInfo.ArgumentList.Add(argument);
         }
@@ -610,7 +618,7 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
             Interlocked.Increment(ref _consecutiveFailures);
             throw new CapabilityException(
                 ErrorClasses.DependencyUnavailable,
-                $"cannot start the browser worker '{_options.WorkerCommand}': {ex.Message}",
+                $"cannot start the browser worker '{options.WorkerCommand}': {ex.Message}",
                 retryable: true);
         }
 
@@ -909,6 +917,294 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
         {
             _logger.LogDebug("browser worker liveness loop ended: {Reason}", ex.Message);
         }
+    }
+
+    /// <summary>
+    /// M18.4 gap 4 - the staged worker update. A candidate worker is started from
+    /// <paramref name="candidate"/> BESIDE the running one and must say hello, keep every
+    /// capability the current worker advertised (and browser availability), and match the
+    /// expected release when one is named. Only then does the current worker drain: its
+    /// in-flight requests finish (new requests wait on the start lock, bounded by their own
+    /// budgets), it must hold no open browser session, it is told to shut down (its sessions
+    /// close the way a companion stop closes them) and it retires; then new work routes to
+    /// the candidate. The candidate is never handed a request while the old worker lives -
+    /// one research profile, one Chrome - and the owner's own browser is never touched. A
+    /// candidate that fails is killed and the current worker keeps serving, untouched; a
+    /// current worker that does not drain within <paramref name="drainTimeout"/> keeps
+    /// serving too (outcome <c>busy</c>): in-flight owned work is preserved, the update is
+    /// simply retried later.
+    /// </summary>
+    public async Task<BrowserWorkerSwapResult> SwapWorkerAsync(
+        BrowserWorkerOptions candidate,
+        TimeSpan drainTimeout,
+        string? expectedVersion = null,
+        string? expectedPackageSha256 = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (!candidate.IsConfigured)
+        {
+            return BrowserWorkerSwapResult.Refused("the candidate names no worker command");
+        }
+
+        if (_stopping)
+        {
+            return BrowserWorkerSwapResult.Refused("the session companion is stopping");
+        }
+
+        await _swapLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var current = _worker;
+            var currentHello = current is { Alive: true } ? Hello : null;
+            var oldPid = current is { Alive: true } ? current.Pid : (int?)null;
+
+            // 1. The candidate, beside the current worker. It receives nothing yet.
+            WorkerProcess probe;
+            try
+            {
+                probe = Spawn(candidate);
+            }
+            catch (CapabilityException ex)
+            {
+                return SwapFailed(BrowserWorkerSwapResult.OutcomeCandidateFailed, oldPid, null, currentHello?.WorkerVersion, null, ex.Message);
+            }
+
+            BrowserWorkerHello hello;
+            try
+            {
+                hello = await probe.HelloTask.WaitAsync(_helloTimeout, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                DiscardCandidate(probe, "swap cancelled");
+                throw;
+            }
+            catch (Exception ex)
+            {
+                DiscardCandidate(probe, $"no usable hello: {ex.Message}");
+                return SwapFailed(BrowserWorkerSwapResult.OutcomeCandidateFailed, oldPid, probe.Pid, currentHello?.WorkerVersion, null, $"candidate worker (pid {probe.Pid}) did not announce itself: {ex.Message}");
+            }
+
+            var rejections = VerifyCandidateHello(hello, currentHello, expectedVersion, expectedPackageSha256);
+            if (rejections.Count > 0)
+            {
+                DiscardCandidate(probe, "rejected: " + string.Join("; ", rejections));
+                return SwapFailed(BrowserWorkerSwapResult.OutcomeCandidateRejected, oldPid, probe.Pid, currentHello?.WorkerVersion, hello.WorkerVersion, string.Join("; ", rejections));
+            }
+
+            // 2. The drain, under the start lock: a new request waits here (bounded by its
+            //    own budget) instead of landing on a worker that is about to retire.
+            await _startLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+            var drain = Stopwatch.StartNew();
+            var pendingAtStart = 0;
+            try
+            {
+                current = _worker;
+                if (current is { Alive: true })
+                {
+                    pendingAtStart = current.Pending.Count;
+                    var deadline = DateTimeOffset.UtcNow + drainTimeout;
+                    var idle = false;
+                    while (current.Alive)
+                    {
+                        if (current.Pending.IsEmpty && await WorkerHoldsNoSessionAsync(current, cancellationToken).ConfigureAwait(false))
+                        {
+                            idle = true;
+                            break;
+                        }
+
+                        if (DateTimeOffset.UtcNow >= deadline)
+                        {
+                            break;
+                        }
+
+                        await Task.Delay(50, cancellationToken).ConfigureAwait(false);
+                    }
+
+                    if (current.Alive && !idle)
+                    {
+                        DiscardCandidate(probe, "current worker busy");
+                        return SwapFailed(
+                            BrowserWorkerSwapResult.OutcomeBusy,
+                            current.Pid,
+                            probe.Pid,
+                            currentHello?.WorkerVersion,
+                            hello.WorkerVersion,
+                            $"the current worker (pid {current.Pid}) still had {current.Pending.Count} request(s) in flight or a browser session open after {drainTimeout.TotalSeconds:F0} s; it keeps serving",
+                            pendingAtStart,
+                            drain.ElapsedMilliseconds);
+                    }
+
+                    // 3. Retire the old worker: shutdown on stdin, a bounded wait, then kill.
+                    if (current.Alive)
+                    {
+                        current.ShutdownRequested = true;
+                        await current.TryWriteAsync(BrowserWorkerMessageTypes.NewShutdown(), CancellationToken.None).ConfigureAwait(false);
+                        try
+                        {
+                            await current.ExitTask!.WaitAsync(_shutdownGrace).ConfigureAwait(false);
+                        }
+                        catch (TimeoutException)
+                        {
+                            _logger.LogWarning("browser worker (pid={Pid}) ignored shutdown for {Seconds:F0} s during a staged update; killing it", current.Pid, _shutdownGrace.TotalSeconds);
+                            current.KillReason = $"ignored shutdown for {_shutdownGrace.TotalSeconds:F0} s (staged update)";
+                            current.Kill();
+                        }
+                    }
+                }
+
+                // 4. The candidate takes over. Options first (Spawn reads them for the next
+                //    restart), then the reaper if the profile moved, then the worker slot;
+                //    HandleExit on the old worker no longer matches the slot and leaves it alone.
+                Volatile.Write(ref _options, candidate);
+                if (!string.Equals(_reaper.ProfileDir, ChromeOrphanReaper.NormalizePath(candidate.ProfileDir), StringComparison.OrdinalIgnoreCase))
+                {
+                    _reaper = new ChromeOrphanReaper(candidate.ProfileDir, _logger);
+                }
+
+                _worker = probe;
+                Hello = hello;
+                Interlocked.Increment(ref _starts);
+                Interlocked.Increment(ref _swaps);
+                Interlocked.Exchange(ref _consecutiveFailures, 0);
+                if (current is not null)
+                {
+                    // The old worker's exit row, and its Chrome (by profile) reaped: the
+                    // candidate has not opened a browser - it has not had a request.
+                    HandleExit(current);
+                }
+
+                probe.LivenessTask = Task.Run(() => LivenessLoopAsync(probe), CancellationToken.None);
+                var result = new BrowserWorkerSwapResult(
+                    BrowserWorkerSwapResult.OutcomeSwapped,
+                    true,
+                    oldPid,
+                    probe.Pid,
+                    currentHello?.WorkerVersion,
+                    hello.WorkerVersion,
+                    pendingAtStart,
+                    drain.ElapsedMilliseconds,
+                    null);
+                _audit?.Write(
+                    AuditWorkerSwapped,
+                    status: "ok",
+                    detail: $"old_pid={oldPid?.ToString(CultureInfo.InvariantCulture) ?? "-"}; new_pid={probe.Pid}; old_version={currentHello?.WorkerVersion ?? "-"}; new_version={hello.WorkerVersion}; pending_at_drain_start={pendingAtStart}; drain_ms={drain.ElapsedMilliseconds}; capabilities={hello.Capabilities.Count}; module={hello.ModuleFile ?? "-"}; package_sha256={hello.PackageSha256 ?? "-"}");
+                _logger.LogInformation(
+                    "browser worker swapped: pid {OldPid} -> {NewPid}, version {OldVersion} -> {NewVersion}, drained {Pending} in-flight request(s) in {Drain} ms",
+                    oldPid,
+                    probe.Pid,
+                    currentHello?.WorkerVersion ?? "-",
+                    hello.WorkerVersion,
+                    pendingAtStart,
+                    drain.ElapsedMilliseconds);
+                return result;
+            }
+            finally
+            {
+                _startLock.Release();
+            }
+        }
+        finally
+        {
+            _swapLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// What a candidate must satisfy to replace the current worker: the capabilities the
+    /// companion has been answering for, browser availability, and the release the updater
+    /// expects (when named). Every failure is a sentence; an empty list is a pass.
+    /// </summary>
+    public static IReadOnlyList<string> VerifyCandidateHello(BrowserWorkerHello candidate, BrowserWorkerHello? current, string? expectedVersion, string? expectedPackageSha256)
+    {
+        var reasons = new List<string>();
+        if (candidate.Capabilities.Count == 0)
+        {
+            reasons.Add("the candidate advertises no capability");
+        }
+
+        if (current is not null)
+        {
+            var missing = current.Capabilities.Where(c => !candidate.Capabilities.Contains(c, StringComparer.Ordinal)).ToList();
+            if (missing.Count > 0)
+            {
+                reasons.Add($"the candidate drops capabilit{(missing.Count == 1 ? "y" : "ies")} the current worker serves: {string.Join(", ", missing)}");
+            }
+
+            if (current.BrowserAvailable && !candidate.BrowserAvailable)
+            {
+                reasons.Add("the candidate reports the browser unavailable while the current worker has it");
+            }
+        }
+
+        if (expectedVersion is not null && !string.Equals(candidate.WorkerVersion, expectedVersion, StringComparison.Ordinal))
+        {
+            reasons.Add($"the candidate is worker {candidate.WorkerVersion}, expected {expectedVersion}");
+        }
+
+        if (expectedPackageSha256 is not null && !string.Equals(candidate.PackageSha256, expectedPackageSha256, StringComparison.OrdinalIgnoreCase))
+        {
+            reasons.Add($"the candidate's package digest is {candidate.PackageSha256 ?? "absent"}, expected {expectedPackageSha256}");
+        }
+
+        return reasons;
+    }
+
+    /// <summary>
+    /// Ask the worker whether it holds an open browser session (<c>browser.worker_status</c>).
+    /// A worker that cannot be asked, or answers with a session count above zero, is not idle.
+    /// Owned media playing in a session is in-flight owned work: the swap waits for it.
+    /// </summary>
+    private async Task<bool> WorkerHoldsNoSessionAsync(WorkerProcess worker, CancellationToken cancellationToken)
+    {
+        var requestId = "swap-" + Guid.NewGuid().ToString("N");
+        try
+        {
+            var status = await ExecuteOnWorkerAsync(worker, requestId, BrowserCapabilities.WorkerStatus, new JsonObject(), TimeSpan.FromSeconds(5), cancellationToken).ConfigureAwait(false);
+            return CountSessions(status) == 0;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug("staged update: the current worker did not answer worker_status ({Reason}); treating it as not idle", ex.Message);
+            return false;
+        }
+        finally
+        {
+            worker.Pending.TryRemove(requestId, out _);
+        }
+    }
+
+    /// <summary>The session count a worker_status result carries: an array's length, a number, or 0 when absent.</summary>
+    public static int CountSessions(JsonObject status)
+    {
+        return status["sessions"] switch
+        {
+            JsonArray array => array.Count,
+            JsonValue value when value.TryGetValue<int>(out var count) => count,
+            _ => 0,
+        };
+    }
+
+    private void DiscardCandidate(WorkerProcess probe, string reason)
+    {
+        // Not HandleExit: that would reap Chrome by profile and count a failure against the
+        // CURRENT worker, which keeps serving. The candidate never had a request, so it has
+        // no browser of its own to reap.
+        probe.ShutdownRequested = true;
+        probe.KillReason = reason;
+        probe.Kill();
+        probe.DisposeQuietly();
+    }
+
+    private BrowserWorkerSwapResult SwapFailed(string outcome, int? oldPid, int? newPid, string? oldVersion, string? newVersion, string reason, int pendingAtStart = 0, long drainMs = 0)
+    {
+        _audit?.Write(AuditWorkerSwapFailed, status: outcome, detail: $"old_pid={oldPid?.ToString(CultureInfo.InvariantCulture) ?? "-"}; candidate_pid={newPid?.ToString(CultureInfo.InvariantCulture) ?? "-"}; reason={reason}");
+        _logger.LogWarning("browser worker staged update not applied ({Outcome}): {Reason}", outcome, reason);
+        return new BrowserWorkerSwapResult(outcome, false, oldPid, newPid, oldVersion, newVersion, pendingAtStart, drainMs, reason);
     }
 
     /// <summary>"shutdown" on stdin, a bounded wait, then Kill (with Chrome, the process tree).</summary>

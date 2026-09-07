@@ -58,6 +58,14 @@
     Explicit path to uv.exe. By default uv is resolved the way scripts\preflight.ps1
     resolves it (PATH, then the known install locations) — never assumed.
 
+.PARAMETER SkipCoreVerify
+    M18.4 gap 3: after the candidate started, the installer normally asks Cloud Core (with
+    the DPAPI-stored owner credential, never printed) whether the device is ONLINE and
+    reports the candidate's software version and capabilities; a candidate Cloud Core does
+    not see within -CoreVerifyTimeoutSeconds is rolled back to the previous trees by the
+    journaled engine. This switch skips that read (a machine without the credential, or an
+    offline install). Without the credential the read is reported as skipped, never faked.
+
 .EXAMPLE
     # From an elevated PowerShell, at the repository root:
     .\scripts\install-device-service.ps1 -BrokerRestUrl http://100.x.y.z:8001 -EnrollmentToken <token>
@@ -75,7 +83,9 @@ param(
     [switch]$SkipBrowser,
     [ValidateSet("chrome", "chromium")][string]$BrowserChannel = "chrome",
     [switch]$DisplayPower,
-    [string]$UvPath
+    [string]$UvPath,
+    [switch]$SkipCoreVerify,
+    [int]$CoreVerifyTimeoutSeconds = 90
 )
 
 $ErrorActionPreference = "Stop"
@@ -102,6 +112,8 @@ $agentRoot = Join-Path $repoRoot "devices\windows-agent"
 . (Join-Path $PSScriptRoot "lib\Deployment.ps1")
 . (Join-Path $PSScriptRoot "lib\AgentRuntime.ps1")
 . (Join-Path $PSScriptRoot "lib\InstallEvidence.ps1")
+# M18.4 gap 3: the candidate manifest and the heartbeat/capability verification on Cloud Core.
+. (Join-Path $PSScriptRoot "lib\AgentUpdate.ps1")
 
 function Assert-Elevated {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -559,11 +571,62 @@ $components = @()
 if (-not $SkipBuild) { $components += @("service", "companion") }
 if ($browserStaging) { $components += "browser" }
 
+# --- the candidate manifest (M18.4 gap 3): described at staging, verified before the swap ----
+#
+# The staged service binary describes itself (its `capabilities` verb: version, capability
+# manifest), every staged file is hashed, and the browser worker's release identity is
+# attached. The manifest is re-verified file by file immediately before the engine moves
+# anything: a candidate that changed, lost a file or names no version never becomes live.
+# After the swap the same manifest is what Cloud Core must see (below, in the health check).
+$candidateManifest = $null
+$candidateVerdict = $null
+if (@($components).Count -gt 0 -and -not $SkipBuild) {
+    $stagedServiceManifest = Get-InstalledAgentManifest -ServiceExe (Join-Path $stagedServiceDir "PagentOS.DeviceService.exe")
+    $candidateManifest = New-AgentCandidateManifest -StagingRoot (Join-Path $InstallRoot ".staging") -Components $components `
+        -ServiceManifest $stagedServiceManifest -BrowserRelease $(if ($browserStaging) { $browserStaging.Release } else { $null }) `
+        -RepoHead $(try { (& git -C $repoRoot rev-parse HEAD 2>$null | Select-Object -First 1) } catch { "" })
+    $candidateManifestPath = Write-AgentCandidateManifest -Manifest $candidateManifest -Path (Get-CandidateManifestPath -StagingRoot (Join-Path $InstallRoot ".staging"))
+    $requiredCapabilities = @("desktop.open_application")
+    if (-not $SkipBrowser) { $requiredCapabilities += "browser.chrome" }
+    $candidateVerdict = Test-AgentCandidateManifest -Manifest (Read-AgentCandidateManifest -Path $candidateManifestPath) -StagingRoot (Join-Path $InstallRoot ".staging") -RequireCapabilities $requiredCapabilities
+    Write-CandidateSummary -Manifest $candidateManifest -Verdict $candidateVerdict
+    if (-not $candidateVerdict.Ok) {
+        throw "the staged candidate does not verify against its manifest; nothing was swapped: $($candidateVerdict.Reasons -join '; ')"
+    }
+}
+
+# Cloud Core's view of the candidate needs an owner session and the device's id. Both are
+# read BEFORE the swap (the runtime is still up; the identity verb is load-only). No stored
+# credential means the read is skipped and said so - it is never faked.
+$coreVerify = $false
+$coreFetch = $null
+$coreDeviceId = $null
+if (-not $SkipCoreVerify -and $enrolled -and $null -ne $candidateManifest) {
+    $coreDeviceId = Get-AgentDeviceId -ServiceExe $serviceExe
+    $coreToken = Get-OwnerSessionToken -BaseUrl $BrokerRestUrl -Label "install-device-service"
+    if (-not $coreDeviceId) {
+        Write-Host "Cloud Core verification: SKIPPED (the installed service did not yield a device id)" -ForegroundColor Yellow
+    }
+    elseif (-not $coreToken) {
+        Write-Host "Cloud Core verification: SKIPPED (no stored owner credential; bootstrap-owner-credential.ps1 stores it, then rerun)" -ForegroundColor Yellow
+    }
+    else {
+        $coreFetch = New-CoreDeviceFetcher -BaseUrl $BrokerRestUrl -Token $coreToken
+        $coreVerify = $true
+        Write-Host "Cloud Core verification: ON (device $coreDeviceId must come back online as $($candidateManifest.software_version) with $(@($candidateManifest.capabilities).Count) capabilities within $CoreVerifyTimeoutSeconds s, else rollback)"
+    }
+    $coreToken = $null
+}
+elseif (-not $SkipCoreVerify -and -not $enrolled) {
+    Write-Host "Cloud Core verification: not applicable (the device is not enrolled yet)"
+}
+
 # Evidence, part 2: the staged bytes right before the swap (configuration written, nothing moved).
 $stagedHashes = if ($SkipBuild) { Get-ArtifactHashes -Root $InstallRoot } else { Get-ArtifactHashes -Root (Join-Path $InstallRoot ".staging") }
 
 $deployStartedAt = Get-Date
 $script:LiveWorkerProof = $null
+$script:CoreHeartbeatProof = $null
 # Every process running the worker module before the swap (the venv trampoline AND the base
 # interpreter it launches); after the swap none of them may be alive.
 $preWorkerPids = @(Select-BrowserWorkerProcess -Processes @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue) | ForEach-Object { [int]$_.ProcessId })
@@ -615,6 +678,19 @@ $testHealth = {
         }
         $script:LiveWorkerProof = $liveAudit
         Write-Host "live browser worker proven: pid $($liveAudit.Pid), worker $($liveAudit.WorkerVersion), module $($liveAudit.Module), started $($liveAudit.Ts.ToString('o'))"
+    }
+    if ($coreVerify) {
+        # M18.4 gap 3: the candidate is live only when Cloud Core sees it - online, with the
+        # version and the capabilities the manifest promised. Otherwise the engine rolls back.
+        $heartbeat = Test-AgentHeartbeatOnCore -FetchDevices $coreFetch -DeviceId $coreDeviceId `
+            -ExpectedVersion ([string]$candidateManifest.software_version) -ExpectedCapabilities @($candidateManifest.capabilities) `
+            -TimeoutSeconds $CoreVerifyTimeoutSeconds
+        if (-not $heartbeat.Ok) {
+            Write-Warning "health: Cloud Core does not see the candidate after $($heartbeat.Waited) s: $($heartbeat.Reasons -join '; ')"
+            return $false
+        }
+        $script:CoreHeartbeatProof = $heartbeat
+        Write-Host "Cloud Core sees the candidate: online, version $($heartbeat.Observed.software_version), $($heartbeat.Observed.capability_count) capabilities, last seen $($heartbeat.Observed.last_seen_at) (after $($heartbeat.Waited) s)"
     }
     return $true
 }

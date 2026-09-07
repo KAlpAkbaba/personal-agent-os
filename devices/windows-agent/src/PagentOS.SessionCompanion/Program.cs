@@ -318,6 +318,42 @@ public static class Program
             await browserHost.StartAsync(cts.Token).ConfigureAwait(false);
         }
 
+        // M18.4 gap 4: a staged worker update is a request file in the companion's data
+        // directory naming a candidate under the install root; the host swaps the worker
+        // after the current one drained (BrowserWorkerHost.SwapWorkerAsync) and the outcome
+        // is written beside the request. Polled, never watched: one check every few seconds
+        // costs nothing and cannot fire twice for one file.
+        Task? candidatePoll = null;
+        if (browserHost is not null)
+        {
+            var watcher = new BrowserCandidateWatcher(
+                browserHost,
+                dataDir,
+                BrowserCandidateWatcher.DeriveAllowedRoot(browserOptions.WorkerCommand!),
+                loggerFactory.CreateLogger("BrowserCandidate"),
+                audit);
+            logger.LogInformation("browser worker candidates: {Request} (candidates must live under {Root})", watcher.RequestPath, watcher.AllowedRoot);
+            candidatePoll = Task.Run(async () =>
+            {
+                while (!cts.IsCancellationRequested)
+                {
+                    try
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(5), cts.Token).ConfigureAwait(false);
+                        await watcher.PollOnceAsync(cts.Token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (cts.IsCancellationRequested)
+                    {
+                        return;
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning("browser worker candidate poll failed: {Reason}", ex.Message);
+                    }
+                }
+            });
+        }
+
         // M12 track C: the realtime voice client is ADDITIVE and OFF by default. It runs beside
         // the qualified pipe loop, never inside it, and a voice failure can only log — the
         // service/companion path the owner qualified does not depend on it in any way.

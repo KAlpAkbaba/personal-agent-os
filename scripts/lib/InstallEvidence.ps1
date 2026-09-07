@@ -125,21 +125,25 @@ function Get-InstalledAgentManifest {
     $caps = @()
     $browserEnabled = $false
     $ok = $false
+    $softwareVersion = $null
     if ($result.ExitCode -eq 0 -and $result.StdOut) {
         try {
             $doc = ($result.StdOut.Trim() -split "`n" | Where-Object { $_.Trim().StartsWith("{") } | Select-Object -Last 1) | ConvertFrom-Json
             $caps = @($doc.capabilities)
             $browserEnabled = [bool]$doc.browser_enabled
+            # M18.4 gap 3: a 0.2.0+ binary names the version it will announce; older ones do not.
+            if ($doc.PSObject.Properties.Name -contains "software_version" -and $doc.software_version) { $softwareVersion = [string]$doc.software_version }
             $ok = $true
         }
         catch { $ok = $false }
     }
     return [pscustomobject]@{
-        Ok             = $ok
-        Capabilities   = @($caps)
-        BrowserEnabled = $browserEnabled
-        ExitCode       = $result.ExitCode
-        StdErr         = [string]$result.StdErr
+        Ok              = $ok
+        Capabilities    = @($caps)
+        BrowserEnabled  = $browserEnabled
+        SoftwareVersion = $softwareVersion
+        ExitCode        = $result.ExitCode
+        StdErr          = [string]$result.StdErr
     }
 }
 

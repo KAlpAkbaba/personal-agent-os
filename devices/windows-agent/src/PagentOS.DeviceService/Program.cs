@@ -59,6 +59,9 @@ public static class Program
         var options = AgentServiceOptions.FromConfiguration(BuildConfiguration());
         var document = new System.Text.Json.Nodes.JsonObject
         {
+            // M18.4 gap 3: the version this binary will announce in its hello, so a staged
+            // candidate can be described BEFORE it runs and recognised on Cloud Core after.
+            ["software_version"] = AgentInfo.SoftwareVersion,
             ["browser_enabled"] = options.BrowserEnabled,
             ["capabilities"] = new System.Text.Json.Nodes.JsonArray(
                 [.. options.AdvertisedCapabilities.Select(c => (System.Text.Json.Nodes.JsonNode)c)]),

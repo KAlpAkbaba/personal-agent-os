@@ -38,6 +38,7 @@ public static class Program
     private static readonly object StdoutLock = new();
     private static readonly ConcurrentDictionary<string, CancellationTokenSource> InFlight = new(StringComparer.Ordinal);
     private static readonly ConcurrentDictionary<string, Task> SessionTails = new(StringComparer.Ordinal);
+    private static int OpenSessions;
 
     public static async Task<int> Main(string[] args)
     {
@@ -50,20 +51,36 @@ public static class Program
         var noHello = args.Contains("--no-hello");
         var noPong = args.Contains("--no-pong");
         var helloDelay = 0;
+        var workerVersion = "fake-1.0";
+        var openSessions = 0;
         for (var i = 0; i < args.Length - 1; i++)
         {
             if (args[i] == "--hello-delay-ms" && int.TryParse(args[i + 1], out var parsed))
             {
                 helloDelay = parsed;
             }
+
+            // M18.4 gap 4 (the staged update): what this worker calls itself, and how many
+            // browser sessions it claims to hold when asked for worker_status.
+            if (args[i] == "--worker-version")
+            {
+                workerVersion = args[i + 1];
+            }
+
+            if (args[i] == "--open-sessions" && int.TryParse(args[i + 1], out var sessions))
+            {
+                openSessions = sessions;
+            }
         }
+
+        OpenSessions = openSessions;
 
         await Console.Error.WriteLineAsync($"fake-worker: started pid={Environment.ProcessId} argv={string.Join(' ', args)}");
 
         var hello = new JsonObject
         {
             ["type"] = "hello",
-            ["worker_version"] = "fake-1.0",
+            ["worker_version"] = workerVersion,
             ["protocol_version"] = 1,
             ["capabilities"] = new JsonArray([.. BrowserCapabilities.Operations.Select(c => (JsonNode)c)]),
             ["browser"] = new JsonObject
@@ -193,6 +210,12 @@ public static class Program
             if (!BrowserCapabilities.IsOperation(capability))
             {
                 WriteLine(stdout, Failure(requestId, ErrorClasses.CapabilityMissing, $"unknown browser operation '{capability}'", retryable: false));
+                return;
+            }
+
+            if (capability == BrowserCapabilities.WorkerStatus && mode == "echo")
+            {
+                WriteLine(stdout, Success(requestId, new JsonObject { ["worker_version"] = "fake", ["sessions"] = OpenSessions }));
                 return;
             }
 
