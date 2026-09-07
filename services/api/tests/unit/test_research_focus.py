@@ -399,10 +399,8 @@ def test_a_deictic_follow_up_resolves_to_the_focused_run(wired, two_same_title, 
     assert _report_snapshot(runtime, b_task) == before
 
 
-def test_the_previous_research_is_reachable_and_then_becomes_current(
-    wired, two_same_title
-) -> None:
-    """"Bir önceki araştırmayı anlat." -> A. And then "bunu" means A, because the
+def test_the_previous_research_is_reachable_and_then_becomes_current(wired, two_same_title) -> None:
+    """ "Bir önceki araştırmayı anlat." -> A. And then "bunu" means A, because the
     conversation moved: a resolved reference IS a focus change (followup_reference)."""
     client, runtime, _sideband, _artifacts = wired
     (a_task, a_art), (b_task, _b_art) = two_same_title
@@ -477,9 +475,7 @@ def test_a_new_session_with_no_context_still_resolves_the_durable_focus(
 # ------------------------------------------------------------------ UI selects
 
 
-def test_the_ui_selection_sets_the_focus_and_a_deictic_follows_it(
-    wired, two_same_title
-) -> None:
+def test_the_ui_selection_sets_the_focus_and_a_deictic_follows_it(wired, two_same_title) -> None:
     client, _runtime, _sideband, _artifacts = wired
     (a_task, a_art), (b_task, _b_art) = two_same_title
 
@@ -737,7 +733,7 @@ def test_the_finding_detail_tool_reads_one_finding_of_the_focused_run(
 
 
 def test_no_answer_narrates_its_own_bookkeeping(wired, two_same_title) -> None:
-    """"kayıtlarımı kontrol edeceğim" was what the owner heard instead of an answer."""
+    """ "kayıtlarımı kontrol edeceğim" was what the owner heard instead of an answer."""
     client, _runtime, _sideband, _artifacts = wired
     sid = _create(client)
     spoken: list[str] = []
@@ -812,9 +808,7 @@ def _recorded(client, sid: str, call_id: str) -> dict:
     return next(c for c in activity["tool_calls"] if c["call_id"] == call_id)
 
 
-def test_a_clarification_is_its_own_terminal_status_never_a_success(
-    wired, two_same_title
-) -> None:
+def test_a_clarification_is_its_own_terminal_status_never_a_success(wired, two_same_title) -> None:
     """call_UdBzeEH85slFqbNQ: 'succeeded', no job, a question for a result. Never again."""
     client, runtime, _sideband, _artifacts = wired
     _clear_focus(runtime)
@@ -955,9 +949,9 @@ def test_one_turn_one_answer_whichever_tool_the_model_chose(wired, two_same_titl
     sid = _create(client)
     _say(client, sid, "Bunu teknik anlat.")
     direct = _tool(client, sid, "c-1", "research.explain", {"level": "technical"})["result"]
-    via_activity = _tool(
-        client, sid, "c-2", "activity.explain", {"question": "Teknik anlat."}
-    )["result"]
+    via_activity = _tool(client, sid, "c-2", "activity.explain", {"question": "Teknik anlat."})[
+        "result"
+    ]
 
     assert direct["research_job_id"] == b_task
     assert via_activity["research_job_id"] == b_task
@@ -1001,10 +995,8 @@ def test_the_previous_research_after_a_technical_answer_is_an_answer_not_a_curso
     assert client.get("/v1/research/focus").json()["current"]["research_job_id"] == a_task
 
 
-def test_a_question_about_the_system_itself_still_goes_to_the_ledger(
-    wired, two_same_title
-) -> None:
-    """"Son yaptıklarını anlat." carries a 'son' reference and content words; neither makes
+def test_a_question_about_the_system_itself_still_goes_to_the_ledger(wired, two_same_title) -> None:
+    """ "Son yaptıklarını anlat." carries a 'son' reference and content words; neither makes
     it a research turn. The ledger answers, exactly as before."""
     client, _runtime, _sideband, _artifacts = wired
 
@@ -1018,3 +1010,51 @@ def test_a_question_about_the_system_itself_still_goes_to_the_ledger(
     assert "answered_by" not in answer
     assert answer["speech"]
     assert answer["narration_session_id"] is not None
+
+
+def test_two_default_focus_writes_on_a_frozen_clock_stay_in_order(monkeypatch) -> None:
+    """A coarse wall clock (Windows) hands two writes the same instant; "most recent" must
+    still be the one written last, never a tiebreak on a random row id."""
+    from datetime import UTC, datetime
+
+    from app.research import focus as focus_module
+
+    frozen = datetime(2026, 9, 8, 12, 0, 0, tzinfo=UTC)
+
+    class _Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None):  # noqa: D102 - the clock stands still
+            return frozen if tz is None else frozen.astimezone(tz)
+
+    monkeypatch.setattr(focus_module, "datetime", _Frozen)
+    monkeypatch.setattr(focus_module, "_focus_last_selected_at", None)
+    first = focus_module._next_default_selected_at()
+    second = focus_module._next_default_selected_at()
+    third = focus_module._next_default_selected_at()
+    assert first == frozen
+    assert second > first and third > second
+    assert (third - first).total_seconds() < 0.001
+
+
+def test_two_writers_with_one_tied_explicit_moment_keep_the_later_act_current(
+    wired, two_same_title
+) -> None:
+    """The completion and the announcer both pass their own moment; on a coarse clock the
+    two tie. The stack orders focus ACTS: the second write must come out current, and its
+    recorded instant must be strictly after the first's."""
+    from app.research import focus as focus_module
+    from app.research.models import FOCUS_RESEARCH_JUST_COMPLETED, FOCUS_RESULT_JUST_SPOKEN
+
+    _client, runtime, _sideband, _artifacts = wired
+    (a_task, _a_art), (b_task, _b_art) = two_same_title
+    _clear_focus(runtime)
+    moment = datetime(2026, 9, 8, 12, 0, 0, tzinfo=UTC)
+    with runtime.session() as db:
+        focus_module.set_focus(db, a_task, source=FOCUS_RESEARCH_JUST_COMPLETED, now=moment)
+        focus_module.set_focus(db, b_task, source=FOCUS_RESULT_JUST_SPOKEN, now=moment)
+        db.commit()
+        current = focus_module.current_focus(db)
+        assert current is not None and current.research_job_id == b_task
+        assert current.source_of_focus == FOCUS_RESULT_JUST_SPOKEN
+        stack = focus_module.focus_stack(db, limit=2)
+        assert stack[0].selected_at > stack[1].selected_at

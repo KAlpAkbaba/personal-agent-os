@@ -27,12 +27,13 @@ exactly that pair — so a title is a label here and never a key.
 
 from __future__ import annotations
 
+import threading
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.logging import get_logger
@@ -181,9 +182,7 @@ def describe(
     plan_json = dict(getattr(run, "plan_json", None) or {})
     stats = report_json.get("stats") if isinstance(report_json.get("stats"), dict) else {}
 
-    topic = str(
-        report_json.get("topic") or plan_json.get("topic") or plan_json.get("input") or ""
-    )
+    topic = str(report_json.get("topic") or plan_json.get("topic") or plan_json.get("input") or "")
     status = run.stage
     completed_at: datetime | None = None
     task = _task(db, task_id)
@@ -220,7 +219,7 @@ def _task(db: Session, task_id: uuid.UUID) -> Any:
 
 
 def is_completed(db: Session, research_job_id: str | uuid.UUID) -> bool:
-    """"Completed" as the pipeline means it: stage ready AND a report body exists."""
+    """ "Completed" as the pipeline means it: stage ready AND a report body exists."""
     try:
         task_id = uuid.UUID(str(research_job_id))
     except ValueError:
@@ -233,6 +232,51 @@ def is_completed(db: Session, research_job_id: str | uuid.UUID) -> bool:
 
 
 # ------------------------------------------------------------------- set / read
+
+
+#: "Most recent" must never fall back to a tiebreak on a random UUID. Two focus writes
+#: from the SAME process (a research completing and the announcer speaking it; two calls
+#: in one test) can land on the identical ``datetime.now(UTC)`` reading on a coarse wall
+#: clock (Windows' default resolution is far coarser than a microsecond) and the stack's
+#: order then depends on row ids that are not chronological — measured as a flaky
+#: ``test_voice_research_followup`` binding on 2026-09-08. A caller with a real moment
+#: passes ``now=`` and bypasses this; only the default path is nudged (the same rule as
+#: ``app.operator.focus._next_default_selected_at``).
+_focus_clock_lock = threading.Lock()
+_focus_last_selected_at: datetime | None = None
+
+
+def _next_default_selected_at() -> datetime:
+    global _focus_last_selected_at
+    with _focus_clock_lock:
+        now = datetime.now(UTC)
+        if _focus_last_selected_at is not None and now <= _focus_last_selected_at:
+            now = _focus_last_selected_at + timedelta(microseconds=1)
+        _focus_last_selected_at = now
+        return now
+
+
+def _after_the_latest_row(db: Session, now: datetime) -> datetime:
+    """The stack orders focus ACTS, so a new row's instant is never at or before the
+    newest row's — even when the caller's own moment ties it. Both writers of one run
+    (the completion, then the announcer speaking the result) pass their own ``now`` a
+    few microseconds apart on a coarse clock and tied on the runner: the spoken focus
+    then lost to the earlier row on a row-id tiebreak (measured 2026-09-08)."""
+    try:
+        latest = db.execute(
+            select(func.max(ResearchFocusRow.selected_at)).where(
+                ResearchFocusRow.owner_id == OWNER_ID
+            )
+        ).scalar_one_or_none()
+    except Exception:  # noqa: BLE001 - a schema without the table: the caller's moment stands
+        return now
+    if latest is None:
+        return now
+    if latest.tzinfo is None:
+        latest = latest.replace(tzinfo=UTC)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=UTC)
+    return now if now > latest else latest + timedelta(microseconds=1)
 
 
 def set_focus(
@@ -256,7 +300,7 @@ def set_focus(
         task_id = uuid.UUID(str(research_job_id))
     except ValueError:
         return None
-    now = now or datetime.now(UTC)
+    now = _after_the_latest_row(db, now or _next_default_selected_at())
     entry = describe(db, task_id, source_of_focus=source, selected_at=now)
     if entry is None:
         return None
