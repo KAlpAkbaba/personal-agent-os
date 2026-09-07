@@ -27,6 +27,7 @@
  */
 
 import {
+  DOCUMENT_CAPTION_BARE,
   type DocumentRef,
   type Severity,
   type UiStateEvent,
@@ -259,7 +260,7 @@ export function documentIsAnalysing(view: DocumentView): boolean {
 // ------------------------------------------------------------- the caption
 
 /** The caption when the publisher named no file: the state, and nothing it did not say. */
-export const DOCUMENT_CAPTION_BARE = "Belge inceleniyor";
+export { DOCUMENT_CAPTION_BARE } from "./contract";
 
 /**
  * The caption the Core draws under a reading posture: the file's name, the

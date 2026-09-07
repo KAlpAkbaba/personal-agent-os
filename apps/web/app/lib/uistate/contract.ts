@@ -501,7 +501,11 @@ export const OPERATOR_STEP_TTL_MS = 45_000;
  * Still a horizon: a `document.analysis` from a minute ago is last-known,
  * never a Core still reading. The publisher's own `ttl_s` beats this figure.
  */
-export const DOCUMENT_STEP_TTL_MS = 45_000;
+export const DOCUMENT_STEP_TTL_MS: number = OPERATOR_STEP_TTL_MS;
+
+/** The Core's one wording for a document analysis with no published file: every label
+ *  and caption spells it from here, so a wording change lands once. */
+export const DOCUMENT_CAPTION_BARE = "Belge inceleniyor";
 
 /**
  * Per-state lifetimes for v3, in ms, exactly as `docs/M18_3_LIVING_CORE_WAKE_ALARM_SPEC.md`

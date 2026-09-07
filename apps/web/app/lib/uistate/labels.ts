@@ -9,6 +9,7 @@
  */
 
 import type { AlarmStage, DisplayState, EyeStatus, PresenceKind, ReleaseStage } from "./ambient";
+import { DOCUMENT_CAPTION_BARE } from "./contract";
 import type { DocumentRef, KnownUiState } from "./contract";
 import {
   type DocumentFacts,
@@ -44,7 +45,7 @@ export const KIND_LABEL: Record<CoreVisualKind, string> = {
   operator_running: "Operatör çalışıyor",
   operator_verifying: "Operatör doğruluyor",
   operator_failed: "Operatör başarısız",
-  document_analysis: "Belge inceleniyor",
+  document_analysis: DOCUMENT_CAPTION_BARE,
 };
 
 /**
@@ -225,7 +226,7 @@ export const STATE_LABEL: Record<KnownUiState, string> = {
   "operator.failed": "Operatör başarısız",
   // v5 — File & Document Intelligence (M20). "İnceleniyor", not "okundu": the
   // state is entered when the read starts, and nothing publishes its end.
-  "document.analysis": "Belge inceleniyor",
+  "document.analysis": DOCUMENT_CAPTION_BARE,
 };
 
 export function stateLabel(state: string): string {
@@ -465,7 +466,7 @@ export function operatorErrorLine(errorClass: string | null): string {
 // ------------------------------------------- v5: File & Document Intelligence
 
 export const DOCUMENT_LABEL: Record<DocumentStage, string> = {
-  analysing: "Belge inceleniyor",
+  analysing: DOCUMENT_CAPTION_BARE,
   none: "İncelenen bir belge yok",
 };
 
