@@ -226,4 +226,74 @@ async def run_pipeline(request: Request, body: PipelineRunBody) -> dict[str, Any
     return await _call(_run_pipeline, runtime, body)
 
 
+# --------------------------------------------------- M18.4: the closed loop
+
+
+class HealBody(BaseModel):
+    """The same workspace/port contract as POST /pipeline/run: the loop runs the REAL
+    pipeline on a staging and a production workspace under the self-healing root."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    component: str = Field(default="browser-agent-demo", max_length=128)
+    staging_workspace: str = Field(max_length=1024)
+    production_workspace: str = Field(max_length=1024)
+    staging_port: int = Field(ge=1024, le=65535)
+    production_port: int = Field(ge=1024, le=65535)
+    max_cycles: int = Field(default=3, ge=1, le=20)
+    failure_threshold: int = Field(default=2, ge=2, le=10)
+
+
+_EVOLUTION_HTTP_STATUS = {
+    "validation_error": 422,
+    "not_found": 404,
+    "authority_error": 403,
+    "illegal_transition": 409,
+}
+
+
+@router.post("/opportunities/{opportunity_id}/heal")
+async def heal_opportunity(
+    request: Request, opportunity_id: uuid.UUID, body: HealBody
+) -> dict[str, Any]:
+    """Drive ONE incident-born opportunity through the real self-healing pipeline, moving
+    it through its lifecycle as each gate lands (docs/M18_4_SELF_EVOLUTION_SPEC.md §5,
+    ADR-0081). Ends at owner_approval_required (LIVE is the owner's) or parked with the
+    failing gate in the reason. Lives here, not under /v1/evolution: the lab may not import
+    the deployer (the authority wall's import guard), so the side that deploys hosts the
+    loop and reads the lab's service."""
+    from app.evolution.errors import EvolutionError
+    from app.selfhealing.closed_loop import ClosedLoop
+
+    runtime = _runtime(request)
+    evolution = request.app.state.evolution
+
+    def run() -> dict[str, Any]:
+        loop = ClosedLoop(
+            evolution_service=evolution.evolution_service,
+            pipeline_factory=lambda on_step: build_pipeline(
+                runtime,
+                component=body.component,
+                staging_workspace=body.staging_workspace,
+                production_workspace=body.production_workspace,
+                staging_port=body.staging_port,
+                production_port=body.production_port,
+                max_cycles=body.max_cycles,
+                failure_threshold=body.failure_threshold,
+                on_step=on_step,
+            ),
+        )
+        return loop.heal(opportunity_id).as_dict()
+
+    try:
+        return await asyncio.to_thread(run)
+    except SelfHealingError as exc:
+        raise _http_error(exc) from exc
+    except EvolutionError as exc:
+        raise HTTPException(
+            status_code=_EVOLUTION_HTTP_STATUS.get(str(exc.error_class), 500),
+            detail={"error_class": str(exc.error_class), "message": str(exc)},
+        ) from exc
+
+
 __all__ = ["build_pipeline", "router"]

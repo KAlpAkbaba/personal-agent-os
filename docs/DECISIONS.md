@@ -6438,7 +6438,7 @@ The owner's follow-up directive ("M18.4 PRODUCTION QUALIFICATION — PROVE SELF-
 FOUNDATION FOR REAL") asked for the real pipeline behind an opportunity, not a scripted
 result. What landed:
 
-- **`app/evolution/closed_loop.py`** + `POST /v1/evolution/opportunities/{id}/heal`: an
+- **`app/selfhealing/closed_loop.py`** + `POST /v1/selfhealing/opportunities/{id}/heal`: an
   incident-born opportunity is driven through the M6 self-healing pipeline's REAL phases,
   and its lifecycle follows each gate as it lands — `load_incident` → researching,
   `analyze_issue` → design_ready, `patch` → building (an isolated work directory),
@@ -6453,6 +6453,10 @@ result. What landed:
   nothing is replayed after the fact, and the lifecycle table decides what is legal.
   `build_pipeline` in `app/selfhealing/routes.py` is now the ONE construction path for
   both routes.
+  The loop lives on the self-healing side of the authority wall: the lab's import guard
+  (`test_no_evolution_module_imports_a_deployment_release_or_secret_module`) refused the
+  first placement under `app/evolution` — correctly, since the pipeline deploys — so the
+  side that deploys hosts the loop and reads the lab's service, never the reverse.
 - **`tests/unit/test_evolution_closed_loop.py`**: real processes — the recovery
   supervisor (subprocess) promotes 1.0.0, detects broken 1.1.0 and rolls back; the report
   is ingested; the supervisor scan opens the P0 opportunity; `/heal` runs the real

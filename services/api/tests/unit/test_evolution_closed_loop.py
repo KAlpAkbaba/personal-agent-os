@@ -4,7 +4,7 @@
     target service, then a broken one, detects it under its health policy and rolls back
     -> the incident report is ingested through the REST surface
     -> the Evolution Supervisor's scan opens the P0 opportunity
-    -> POST /v1/evolution/opportunities/{id}/heal drives the real self-healing pipeline
+    -> POST /v1/selfhealing/opportunities/{id}/heal drives the real self-healing pipeline
        (reproduce, patch, regression, independent review, staging under the health
        policy, promote the component) and the opportunity's lifecycle follows each gate
     -> a second, deliberately broken candidate fails on staging: parked with its evidence,
@@ -29,12 +29,12 @@ from sqlalchemy.pool import StaticPool
 from app.artifacts.models import Artifact, Task, TaskRun
 from app.artifacts.runtime import ArtifactRuntime
 from app.config import Settings
-from app.evolution.closed_loop import ClosedLoop
 from app.evolution.models import Capability, CapabilityGap, EvolutionOpportunity, SkillVersion
 from app.evolution.runtime import EvolutionRuntime
 from app.ledger.models import ActivityEventRow
 from app.main import create_app
 from app.selfhealing.backends import DeterministicCodingBackend
+from app.selfhealing.closed_loop import ClosedLoop
 from app.selfhealing.models import Incident, Release
 from app.selfhealing.pipeline import SelfHealingPipeline, SupervisorDeployer
 from app.selfhealing.runtime import SelfHealingRuntime
@@ -146,7 +146,7 @@ def test_the_closed_loop_with_real_processes(wired) -> None:
 
     # the loop: the real pipeline, the lifecycle following each gate
     healed = client.post(
-        f"/v1/evolution/opportunities/{opportunity_id}/heal",
+        f"/v1/selfhealing/opportunities/{opportunity_id}/heal",
         json={
             "component": COMPONENT,
             "staging_workspace": str(staging_ws),
@@ -285,7 +285,7 @@ def test_the_closed_loop_with_real_processes(wired) -> None:
 def test_the_loop_refuses_what_is_not_an_incident_born_idea(wired) -> None:
     client, _, _ = wired
     unknown = client.post(
-        f"/v1/evolution/opportunities/{uuid.uuid4()}/heal",
+        f"/v1/selfhealing/opportunities/{uuid.uuid4()}/heal",
         json={
             "staging_workspace": "x",
             "production_workspace": "y",

@@ -18,6 +18,12 @@
                 (from research/design), with the failing step in the reason; the incident
                 stays recovered; the component's release stays untouched.
 
+This module lives on the SELF-HEALING side of the authority wall on purpose: the lab
+(``app/evolution``) may not import the deployer, and the import guard
+(``test_no_evolution_module_imports_a_deployment_release_or_secret_module``) enforces
+it. The loop therefore imports the lab's backlog vocabulary and service, never the other
+way round.
+
 Nothing here decides an outcome. The pipeline's steps arrive through its observer seam
 (``SelfHealingPipeline(on_step=...)``); the lifecycle table decides what is legal; the
 service's authority decides what the lab may do. The loop only translates one into the
@@ -37,7 +43,7 @@ from app.logging import get_logger
 from app.selfhealing.errors import SelfHealingError
 from app.selfhealing.pipeline import PipelineStep, SelfHealingPipeline
 
-logger = get_logger("app.evolution.closed_loop")
+logger = get_logger("app.selfhealing.closed_loop")
 
 CLOSED_LOOP_VERSION = 1
 
