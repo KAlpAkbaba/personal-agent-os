@@ -165,6 +165,36 @@ def test_summarize_is_kind_aware_and_always_returns_refs() -> None:
             assert expect_substring in result["speech"], (path, result["speech"])
 
 
+# --------------------------------------------------------------- spoken excerpt bound
+
+
+def test_answer_speech_bounds_a_huge_block_but_refs_excerpt_keeps_its_own_500_cap() -> None:
+    """Security review, LOW: ``answer()``'s ``speech`` used to embed a block's raw text
+    with no bound at all, while ``refs[].excerpt`` (``_ref_dict``) was already capped at
+    500. A 3 000+ character block must still produce a spoken excerpt cut at a word
+    boundary (never mid-word) with an honest "…", while the ref's own excerpt is
+    untouched by the new, narrower, spoken-only bound."""
+    long_text = "kocaman " + ("kelime " * 500) + "sonuncelime"
+    assert len(long_text) > 3000
+    doc = answers_module.DocRef(
+        file_id="file:huge",
+        doc_id="doc:huge",
+        path="dev/huge.pdf",
+        name="huge.pdf",
+        kind="pdf",
+        blocks=[{"ref": "p1", "kind": "page", "text": long_text}],
+    )
+    result = answers_module.answer(doc, "kocaman ne diyor")
+
+    assert result["found"] is True
+    spoken_excerpt = result["speech"].split(": ", 1)[1]
+    assert len(spoken_excerpt) <= 401  # 400 chars + the ellipsis character
+    assert spoken_excerpt.endswith("…")
+    assert not spoken_excerpt[:-1].endswith(" ")  # no dangling space before the ellipsis
+    assert len(result["refs"][0]["excerpt"]) == 500  # unaffected, its own pre-existing cap
+    assert result["refs"][0]["excerpt"] == long_text[:500]
+
+
 def test_place_phrase_speaks_every_reference_shape_in_the_owners_words() -> None:
     assert answers_module.place_phrase("p3", kind="pdf") == "3. sayfa"
     assert answers_module.place_phrase("p8", kind="docx") == "8. paragraf"
