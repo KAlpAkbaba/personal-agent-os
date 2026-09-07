@@ -17,7 +17,7 @@ Family `documents` — six capabilities, advertised only with `OperatorEnabled` 
 
 **Confinement.** Every path argument — search roots included — must resolve inside `AuthorisedRoots`, else error class `permission_denied`. Reparse points are never followed by a search. Names that carry secrets are never read: `.env*`, `*.pem`, `*.key`, `*.pfx`, `*.p12`, `id_rsa*`, `id_ed25519*`, `*.kdbx`, `secrets.json` → `permission_denied` (detail `secret_bearing_name`).
 
-**Bounds.** Search ≤ 200 results, ≤ 20 000 directory entries walked, 10 s; read ≤ 65 536 chars; extract ≤ 65 536 chars of block text (`truncated: true` beyond, never a silent cut); files ≤ 50 MiB for extraction; PDF ≤ 200 pages; XLSX ≤ 2 000 rows per sheet.
+**Bounds.** Search ≤ 200 results, ≤ 20 000 directory entries walked, 10 s; read ≤ 65 536 chars; extract ≤ 65 536 chars of block text (`truncated: true` beyond, never a silent cut); files ≤ 50 MiB for extraction; PDF ≤ 200 pages (a longer PDF is refused before any page is read — `unsupported_format`, detail `page_bound` — unless a `page_range` of ≤ 200 pages is named); XLSX ≤ 2 000 rows per sheet. Device-side decompression and read bounds (ADR-0083 addendum 3): an OOXML package ≤ 64 MiB inflated by its central directory, ≤ 10 000 parts, no part above 1 MiB over 100:1; a PDF ≤ 32 MiB per inflated stream and ≤ 256 MiB per document; text-like files read as a 4 MiB prefix (`truncated: true`), JSON read whole ≤ 8 MiB; a bound is `unsupported_format` (detail `decompression_bound | page_bound | too_large`) with the numbers named, never an out-of-memory.
 
 | capability | payload | result |
 |---|---|---|

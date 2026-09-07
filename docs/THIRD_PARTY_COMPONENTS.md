@@ -64,7 +64,7 @@ Selection depends on Turkish benchmark by use case.
 
 Role: the per-format providers behind `PagentOS.SessionCompanion/Documents/` (`IDocumentExtractor`); they run on the owner's machine only, inside the authorised roots, and never in Cloud Core. Both are pinned in `PagentOS.SessionCompanion.csproj`.
 
-- `DocumentFormat.OpenXml` **3.5.1** (MIT; Microsoft, https://github.com/dotnet/Open-XML-SDK) — DOCX / XLSX / PPTX. Parts are read through the SDK's package model; the zip is never walked by hand. Pulls `DocumentFormat.OpenXml.Framework` (same version, MIT).
-- `PdfPig` **0.1.16** (Apache-2.0; UglyToad, https://github.com/UglyToad/PdfPig) — PDF page text in content order (`ContentOrderTextExtractor`) and the information dictionary's title. Pulls its own `PdfPig.*` assemblies (same version, Apache-2.0); no native code.
+- `DocumentFormat.OpenXml` **3.5.1** (MIT; Microsoft, https://github.com/dotnet/Open-XML-SDK) — DOCX / XLSX / PPTX. Parts are read through the SDK's package model; the zip's central directory is read once by the companion (`System.IO.Compression.ZipArchive`, nothing inflated) to bound decompression before the SDK is entered (ADR-0083 addendum 3). Pulls `DocumentFormat.OpenXml.Framework` (same version, MIT).
+- `PdfPig` **0.1.16** (Apache-2.0; UglyToad, https://github.com/UglyToad/PdfPig) — PDF page text in content order (`ContentOrderTextExtractor`) and the information dictionary's title. Opened with the companion's `BoundedFilterProvider` through `ParsingOptions.FilterProvider`, which wraps the library's own Flate / LZW / RunLength filters with a streaming length count so no stream inflates past the companion's bounds. Pulls its own `PdfPig.*` assemblies (same version, Apache-2.0); no native code.
 
 Upgrade rule: bump the pin, run the documents lab (`dotnet test … --filter FullyQualifiedName~Documents`: every fixture against its expected extract), then the whole agent project.
