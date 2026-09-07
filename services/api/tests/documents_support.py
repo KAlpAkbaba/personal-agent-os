@@ -223,28 +223,55 @@ def _file_compare(payload: dict[str, Any]) -> DeviceRunResult:
     b_path = _find_path(payload.get("b") or {})
     if a_path is None or b_path is None:
         return DeviceRunResult(False, "not_found", "not_found")
-    from app.documents.answers import compare_blocks
 
-    comparison = compare_blocks(doc_ref(a_path), doc_ref(b_path))
     a_record, b_record = file_record(a_path), file_record(b_path)
     a_mtime = datetime.fromisoformat(a_record["mtime"].replace("Z", "+00:00"))
     b_mtime = datetime.fromisoformat(b_record["mtime"].replace("Z", "+00:00"))
+    a_kind = load_expected(a_path)["kind"]
+    b_kind = load_expected(b_path)["kind"]
+    common = {
+        "a": a_record,
+        "b": b_record,
+        # B minus A (DEVICE_PROTOCOL.md §6j) - both sides, never a signless magnitude.
+        "size_delta": b_record["size"] - a_record["size"],
+        "mtime_delta_s": round((b_mtime - a_mtime).total_seconds(), 3),
+        "truncated": False,
+    }
+    if a_kind != b_kind:
+        # DEVICE_PROTOCOL.md §6j: "different kinds -> kind: '<a>/<b>', empty lists,
+        # content identity only" - never a ref-by-ref block diff across two unrelated
+        # formats (a PDF has no "s4" to compare against a PPTX's).
+        return DeviceRunResult(
+            True,
+            result={
+                **common,
+                "same_content": False,
+                "kind": f"{a_kind}/{b_kind}",
+                "changed_refs": [],
+                "unchanged_refs": [],
+                "added_refs": [],
+                "removed_refs": [],
+                "summary": (
+                    f"{a_record['name']} bir {a_kind}, {b_record['name']} bir {b_kind} - "
+                    "karşılaştırılamaz."
+                ),
+            },
+        )
+
+    from app.documents.answers import compare_blocks
+
+    comparison = compare_blocks(doc_ref(a_path), doc_ref(b_path))
     return DeviceRunResult(
         True,
         result={
-            "a": a_record,
-            "b": b_record,
+            **common,
             "same_content": not comparison["changed_refs"] and not comparison["added_refs"],
-            # B minus A (DEVICE_PROTOCOL.md §6j) - both sides, never a signless magnitude.
-            "size_delta": b_record["size"] - a_record["size"],
-            "mtime_delta_s": round((b_mtime - a_mtime).total_seconds(), 3),
-            "kind": load_expected(a_path)["kind"],
+            "kind": a_kind,
             "changed_refs": comparison["changed_refs"],
             "unchanged_refs": comparison["unchanged_refs"],
             "added_refs": comparison["added_refs"],
             "removed_refs": comparison["removed_refs"],
             "summary": comparison["speech"],
-            "truncated": False,
         },
     )
 
