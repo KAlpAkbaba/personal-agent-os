@@ -37,7 +37,7 @@ from app.actions.receipt import (
     record_receipt,
 )
 from app.documents import answers as answers_module
-from app.documents.answers import DocRef
+from app.documents.answers import DocRef, spoken_file_name
 from app.documents.index import DocumentIndex
 from app.documents.models import DocumentIndexRow
 from app.ledger import service as ledger_service
@@ -265,7 +265,7 @@ class DocumentService:
                 label=str(f.get("name") or ""),
                 source="document_search",
             )
-            speech = f"{f.get('name')} dosyasını buldum efendim."
+            speech = f"{spoken_file_name(str(f.get('name') or ''))} dosyasını buldum efendim."
         else:
             names = {str(f.get("name")) for f in files}
             if len(names) == 1:
@@ -359,7 +359,7 @@ class DocumentService:
             detail={"file_id": row.file_id, "doc_id": row.doc_id},
         )
         self._publish(file_label=row.name, part=None)
-        speech = f"{row.name} dosyasını okudum efendim."
+        speech = f"{spoken_file_name(row.name)} dosyasını okudum efendim."
         return self._receipt(
             capability=CAPABILITY_DOCUMENT_EXTRACT,
             requested_state="read",
@@ -492,6 +492,7 @@ class DocumentService:
         return str(files[0].get("file_id")), None, None
 
     def _inspect_speech(self, name: str, body: dict[str, Any]) -> str:
+        name = spoken_file_name(name)
         kind = body.get("kind")
         if kind == "xlsx" and body.get("sheets"):
             sheets = ", ".join(str(s) for s in body["sheets"])
@@ -785,7 +786,7 @@ class DocumentService:
             focus_module.set_focus(
                 db, FOCUS_KIND_FILE, row.file_id, label=row.name, source="document_previous"
             )
-        speech = f"{name} belgesine döndüm efendim."
+        speech = f"{spoken_file_name(name)} belgesine döndüm efendim."
         return self._receipt(
             capability="document.previous",
             requested_state="switched",

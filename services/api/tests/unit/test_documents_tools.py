@@ -55,7 +55,7 @@ def test_document_read_extracts_a_focused_but_unread_file_and_indexes_it() -> No
     assert body["execution_status"] == "executed"
     assert body["file_id"] == file_id_for("rapor.pdf")
     assert body["doc_id"] == doc_id_for("rapor.pdf")
-    assert "rapor.pdf" in body["speech"]
+    assert "rapor" in body["speech"] and "rapor.pdf" not in body["speech"]
     assert h.device.capabilities_called() == ["document.extract"]
 
     with h.factory() as db:
@@ -128,7 +128,8 @@ def test_document_inspect_of_a_focused_but_unread_file_uses_file_inspect_not_ext
     assert call["status"] == "succeeded", call
     body = call["result"]
     assert body["execution_status"] == "executed"
-    assert "rapor.pdf" in body["speech"]
+    # The name is SAID without its extension (loopback finding: an extension is not a word).
+    assert "rapor" in body["speech"] and "rapor.pdf" not in body["speech"]
     assert "5" in body["speech"]  # rapor.pdf has 5 pages (truth.json)
     assert h.device.capabilities_called() == ["file.inspect"]
 
@@ -212,7 +213,7 @@ def test_document_previous_swaps_the_focus_stack() -> None:
 
     assert call["status"] == "succeeded", call
     body = call["result"]
-    assert "sunum-q3.pptx" in body["speech"]
+    assert "sunum q3" in body["speech"] and "pptx" not in body["speech"]
     assert h.device.calls == []
 
     with h.factory() as db:

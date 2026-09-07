@@ -57,9 +57,23 @@ def from_row(row: Any, *, ambiguous: bool = False) -> DocRef:
     )
 
 
+def spoken_file_name(name: str) -> str:
+    """How a file is SAID: the stem with hyphens and underscores as spaces, the extension
+    dropped — "butce-2026.xlsx" → "butce 2026", "sunum-q3.pptx" → "sunum q3". Receipts keep
+    the exact name; only speech uses this. The TTS → STT loopback proxy (evidence
+    tts-loopback-2026-09-07-230106) heard a spoken "xlsx" as "2026'ın" and "pptx belgesine"
+    as "Gülçpege'sine": an extension is not a word in any language the owner speaks, and
+    the sentence frame ("sayfalarını içeriyor", "slayt", "belgesine döndüm") already says
+    what kind of file it is."""
+    stem, dot, _ext = name.rpartition(".")
+    base = stem if dot and stem else name
+    return " ".join(base.replace("-", " ").replace("_", " ").split()) or name
+
+
 def file_label(doc: DocRef) -> str:
-    """The name an answer uses for this file — the path too when the title is shared."""
-    return f"{doc.name} ({doc.path})" if doc.ambiguous else doc.name
+    """The name an answer SAYS for this file — the path too when the title is shared."""
+    spoken = spoken_file_name(doc.name)
+    return f"{spoken} ({doc.path})" if doc.ambiguous else spoken
 
 
 def _ref_dict(doc: DocRef, block: dict[str, Any]) -> dict[str, Any]:
