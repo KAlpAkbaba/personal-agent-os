@@ -1,9 +1,17 @@
 #!/usr/bin/env bash
-# Host side of a ZERO-DOWNTIME Cloud Core release (docs/M18_4_SELF_EVOLUTION_SPEC.md §6):
-# two api colours behind the edge, the idle colour brought up on the new tree, verified,
-# switched to, the old colour drained and stopped. Rollback is the switch in reverse.
+# Host side of a ZERO-DOWNTIME Cloud Core release (docs/M18_4_SELF_EVOLUTION_SPEC.md §6;
+# ADR-0081 + addenda): two api colours behind the edge, the idle colour brought up on the
+# new tree, verified, handed the device sessions, switched to, the old colour drained and
+# stopped. Rollback is the switch in reverse.
 #
-#   release-cloud-core-bluegreen.sh SHA [--preflight] [--rollback]
+#   release-cloud-core-bluegreen.sh SHA [--preflight]
+#   release-cloud-core-bluegreen.sh SHA --rollback     switch to the other colour
+#   release-cloud-core-bluegreen.sh SHA --reconcile    after a crash/reboot: rebuild the
+#                                                      canonical state from the markers, the
+#                                                      env file and the containers; discard a
+#                                                      half-promoted candidate; never make one
+#                                                      live silently
+#   (--rollback / --reconcile also work as the only argument)
 #
 # Transaction, in order:
 #   env-file present + posture 600:root                                  66 / 72
@@ -17,21 +25,31 @@
 #   health on the idle colour (in-container; it has no published port)          75
 #   served realtime contract_version == the tree's CONTRACT_VERSION           73
 #   served release == SHA (the version model, spec §2)                          76
-#   edge present (first cutover: the legacy api is stopped, the edge started)
-#   switch the upstream to the idle colour + nginx reload                       77
+#   DEVICE HANDOFF (M18.4 gap 1): the device upstream -> idle colour, the active colour
+#     drains its device sessions (the agent reconnects through the edge within ~1 s),
+#     wait until the idle colour holds them                                       79
+#   switch the HTTP upstream to the idle colour + nginx reload                     77
 #   health THROUGH the edge shows release == SHA
 #   drain: keep the old colour up for PAGENTOS_DRAIN_S (default 60), then stop it
 #   record RELEASE, LAST_KNOWN_GOOD (the previous sha) and the active colour
-# Any failure after the switch switches back (the old colour is still up during the
-# drain; after it, the old colour is started again first). Any failure before the switch
-# stops the idle colour and restores the trees. The database is never downgraded.
+# A release is COMPLETE only when RELEASE names the active colour's sha; --reconcile
+# treats anything else as an interrupted promotion and returns to the last completed one.
+# Any failure after the switch switches back (devices first, then HTTP; the old colour is
+# still up during the drain; after it, the old colour is started again first). Any failure
+# before the switch stops the idle colour and restores the trees. The database is never
+# downgraded.
 #
 # Env overrides for tests: PAGENTOS_BASE (default /opt/pagentos), PAGENTOS_EDGE_DIR
-# (default $BASE/edge), PAGENTOS_HEALTH_URL, PAGENTOS_DRAIN_S, PAGENTOS_IMAGE_REPO.
+# (default /mnt/pagentos-data/edge), PAGENTOS_HEALTH_URL, PAGENTOS_DRAIN_S,
+# PAGENTOS_HANDOFF_WAIT_S, PAGENTOS_IMAGE_REPO, PAGENTOS_INTERRUPT_AT (a controlled crash
+# for the recovery proof: after_idle_up | after_device_handoff | after_switch | after_drain).
 set -eu
 
-sha=${1:?SHA}
-mode=${2:-release}
+first_arg=${1:?SHA, or --rollback / --reconcile}
+case "$first_arg" in
+    --rollback|--reconcile) sha="(none)"; mode="$first_arg";;
+    *) sha="$first_arg"; mode=${2:-release};;
+esac
 base=${PAGENTOS_BASE:-/opt/pagentos}
 envf="$base/.env"
 next="$base/app.next"
@@ -43,8 +61,10 @@ prev="$base/app.prev"
 edge_dir=${PAGENTOS_EDGE_DIR:-/mnt/pagentos-data/edge}
 health_url=${PAGENTOS_HEALTH_URL:-http://127.0.0.1:8001/v1/system/health}
 drain_s=${PAGENTOS_DRAIN_S:-60}
+handoff_wait_s=${PAGENTOS_HANDOFF_WAIT_S:-30}
 image_repo=${PAGENTOS_IMAGE_REPO:-pagentos/cloud-core}
 legacy_container=${PAGENTOS_API_CONTAINER:-pagentos-prod-api}
+interrupt_at=${PAGENTOS_INTERRUPT_AT:-}
 
 # ----------------------------------------------------------------- helpers
 
@@ -57,6 +77,8 @@ upsert_env() {
         printf '%s=%s\n' "$key" "$value" >> "$envf"
     fi
 }
+
+env_value() { grep "^$1=" "$envf" 2>/dev/null | head -1 | sed 's/^[^=]*=//' || true; }
 
 upper() { printf '%s' "$1" | tr '[:lower:]' '[:upper:]'; }
 
@@ -71,11 +93,16 @@ active_colour() {
 other_colour() { if [ "$1" = "blue" ]; then echo green; else echo blue; fi; }
 
 write_upstream() {
-    # write_upstream COLOUR: the one line the edge reads, plus the active marker.
+    # write_upstream HTTP_COLOUR DEVICES_COLOUR: the two lines the edge reads, atomically,
+    # plus the active marker (= the HTTP-authoritative colour).
+    local http=$1 devices=${2:-$1}
     mkdir -p "$edge_dir"
-    printf 'upstream pagentos_api { server api-%s:8001; }\n' "$1" > "$edge_dir/upstream.conf.next"
+    {
+        printf 'upstream pagentos_api { server api-%s:8001; }\n' "$http"
+        printf 'upstream pagentos_devices { server api-%s:8001; }\n' "$devices"
+    } > "$edge_dir/upstream.conf.next"
     mv "$edge_dir/upstream.conf.next" "$edge_dir/upstream.conf"
-    printf '%s\n' "$1" > "$edge_dir/active.txt"
+    printf '%s\n' "$http" > "$edge_dir/active.txt"
 }
 
 compose() { docker compose --profile bluegreen -f "$cur/infra/docker/docker-compose.prod.yml" --env-file "$envf" "$@"; }
@@ -84,6 +111,62 @@ in_container_health() {
     # in_container_health COLOUR: the colour's own health JSON, from inside the container
     # (the colours publish no port; only the edge does).
     compose exec -T "api-$1" python3 -c 'import sys, urllib.request; sys.stdout.write(urllib.request.urlopen("http://127.0.0.1:8001/v1/system/health", timeout=10).read().decode())'
+}
+
+service_running() {
+    # service_running SERVICE: compose says the service (api-blue, api-green, edge) runs.
+    compose ps --status running --services 2>/dev/null | grep -qx "$1"
+}
+
+sessions_of() {
+    # sessions_of COLOUR: the device sessions the colour holds (health.checks.broker).
+    local body
+    body="$(in_container_health "$1" 2>/dev/null || true)"
+    printf '%s' "$body" | grep -oE '"active_sessions":[[:space:]]*[0-9]+' | head -1 | grep -oE '[0-9]+$' || echo 0
+}
+
+post_loopback() {
+    # post_loopback COLOUR PATH: a loopback-only POST from inside the colour's container.
+    compose exec -T "api-$1" python3 -c "import sys, urllib.request; req = urllib.request.Request('http://127.0.0.1:8001$2', data=b'{}', method='POST', headers={'Content-Type': 'application/json'}); sys.stdout.write(urllib.request.urlopen(req, timeout=10).read().decode())" 2>/dev/null || true
+}
+
+drain_colour() { post_loopback "$1" /v1/devices/drain; }
+undrain_colour() { post_loopback "$1" /v1/devices/undrain; }
+
+wait_for_sessions() {
+    # wait_for_sessions COLOUR WANTED SECONDS: until the colour holds at least WANTED
+    # device sessions; prints "N/WANTED after Xs"; returns 1 when it never got there.
+    local colour=$1 wanted=$2 limit=$3 waited=0 have=0
+    while :; do
+        have="$(sessions_of "$colour")"
+        if [ "$have" -ge "$wanted" ]; then echo "$have/$wanted after ${waited}s"; return 0; fi
+        if [ "$waited" -ge "$limit" ]; then echo "$have/$wanted after ${waited}s"; return 1; fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+}
+
+handoff_devices() {
+    # handoff_devices FROM TO: device authority FROM -> TO. The device upstream names TO,
+    # the edge reloads, FROM hands its sessions over, and we wait until TO holds as many.
+    # The HTTP upstream is left where it is (the caller moves it afterwards).
+    local from=$1 to=$2 http had moved
+    http="$(active_colour)"
+    had="$(sessions_of "$from")"
+    undrain_colour "$to" >/dev/null
+    write_upstream "$http" "$to"
+    reload_edge || return 77
+    drain_colour "$from" >/dev/null
+    if [ "$had" -gt 0 ]; then
+        if moved="$(wait_for_sessions "$to" "$had" "$handoff_wait_s")"; then
+            echo "device handoff: $moved device session(s) on api-$to"
+        else
+            echo "device handoff INCOMPLETE: $moved device session(s) on api-$to; the new colour would be authoritative for devices it cannot reach" >&2
+            return 79
+        fi
+    else
+        echo "device handoff: no device session on api-$from; nothing to move"
+    fi
 }
 
 wait_for_colour() {
@@ -100,26 +183,55 @@ wait_for_colour() {
     return 1
 }
 
+install_edge_config() {
+    # install_edge_config [TREE]: the tree's nginx.conf becomes the edge's (atomic copy into
+    # the edge dir the container reads with -c). A missing tree file leaves the edge's alone.
+    local src="${1:-$cur}/infra/docker/edge/nginx.conf"
+    if [ -f "$src" ]; then
+        mkdir -p "$edge_dir"
+        cp "$src" "$edge_dir/nginx.conf.next"
+        mv "$edge_dir/nginx.conf.next" "$edge_dir/nginx.conf"
+    fi
+}
+
 reload_edge() {
     local test_out
-    if ! test_out="$(compose exec -T edge nginx -t 2>&1)"; then
+    if ! test_out="$(compose exec -T edge nginx -t -c /etc/nginx/edge/nginx.conf 2>&1)"; then
         echo "edge config test FAILED: $(printf '%s' "$test_out" | tail -3 | tr '\n' ' ')" >&2
         return 1
     fi
     compose exec -T edge nginx -s reload
 }
 
-json_field() {
-    # json_field NAME BODY: the first "name": <number|"string"> value, or empty.
-    printf '%s' "$2" | grep -oE "\"$1\":[[:space:]]*(\"[^\"]*\"|[0-9]+)" | head -1 | sed -E 's/^"[^"]*":[[:space:]]*//; s/^"//; s/"$//'
+ensure_edge() {
+    # ensure_edge: the edge container matches the tree's compose definition (compose
+    # recreates it only when the definition changed - that is one short gap, said out
+    # loud; an unchanged edge is left running) and runs the tree's nginx.conf.
+    local out
+    install_edge_config
+    out="$(compose up -d --no-deps --wait edge 2>&1 || true)"
+    if printf '%s' "$out" | grep -qi "recreat"; then
+        echo "edge RECREATED: its compose definition changed (one gap while the new container took the socket)"
+    fi
 }
 
-# --------------------------------------------------------------- preflight
+served_release() {
+    # served_release BODY: the release sha a health body names, or empty.
+    printf '%s' "$1" | grep -oE '"release":[[:space:]]*\{[^}]*' | grep -oE '"version":[[:space:]]*"[^"]*"' | head -1 | sed -E 's/.*"([^"]*)"$/\1/' || true
+}
 
-if [ ! -d "$next" ] && [ "$mode" != "--rollback" ]; then
-    echo "$next is missing; the driver extracts the tree there first" >&2
-    exit 65
-fi
+maybe_interrupt() {
+    # maybe_interrupt POINT: the controlled crash for the recovery proof - SIGKILL skips
+    # every trap, exactly like a host that lost power here. Test hook only.
+    if [ -n "$interrupt_at" ] && [ "$interrupt_at" = "$1" ]; then
+        echo "INTERRUPT: simulated crash at '$1' (PAGENTOS_INTERRUPT_AT)" >&2
+        kill -9 $$
+        sleep 5
+    fi
+}
+
+# ---------------------------------------------------------------- preflight
+
 if [ ! -f "$envf" ]; then
     echo "$envf missing; run the first deployment (deploy-cloud-core.sh) before a release" >&2
     exit 66
@@ -146,15 +258,131 @@ esac
 idle="$(other_colour "$active")"
 IDLE="$(upper "$idle")"
 
+# ---------------------------------------------------------------- reconcile
+
+if [ "$mode" = "--reconcile" ]; then
+    # After a crash or a reboot. Facts: the marker (the colour the edge was last pointed
+    # at), RELEASE (the sha of the last COMPLETED promotion), the env file (which sha each
+    # colour was released with), the containers, the colours' own health. Rule: the last
+    # completed promotion is canonical; a colour running a sha that RELEASE does not name
+    # is a half-promoted candidate and is drained and stopped, never made live by this
+    # path (a promotion is re-run through the release, which verifies it). Only when the
+    # canonical colour cannot come up does the other recorded colour take over, loudly
+    # (exit 81), so the host still answers.
+    cd "$base"
+    if [ "$first_cutover" = "1" ]; then
+        echo "reconcile: no active marker; no blue/green state to rebuild (legacy layout or first cutover pending)"
+        exit 0
+    fi
+    tries=0
+    until docker info >/dev/null 2>&1; do
+        tries=$((tries + 1))
+        if [ "$tries" -ge 30 ]; then echo "reconcile: docker does not answer; giving up" >&2; exit 80; fi
+        sleep "${PAGENTOS_WAIT_STEP_S:-3}"
+    done
+    marker="$active"
+    release_sha="$(cat "$base/RELEASE" 2>/dev/null | tr -d '[:space:]' || true)"
+    lkg_sha="$(cat "$base/LAST_KNOWN_GOOD" 2>/dev/null | tr -d '[:space:]' || true)"
+    sha_blue="$(env_value PAGENTOS_RELEASE_BLUE)"
+    sha_green="$(env_value PAGENTOS_RELEASE_GREEN)"
+    running=""
+    for c in blue green; do
+        if service_running "api-$c"; then running="$running api-$c"; fi
+    done
+    echo "reconcile: marker=$marker RELEASE=${release_sha:-none} LKG=${lkg_sha:-none} blue=${sha_blue:-none} green=${sha_green:-none} running=[${running# }]"
+    canonical="$marker"
+    marker_sha="$(env_value "PAGENTOS_RELEASE_$(upper "$marker")")"
+    if [ -n "$release_sha" ] && [ "$marker_sha" != "$release_sha" ]; then
+        other="$(other_colour "$marker")"
+        other_sha="$(env_value "PAGENTOS_RELEASE_$(upper "$other")")"
+        if [ "$other_sha" = "$release_sha" ]; then
+            canonical="$other"
+            echo "reconcile: the marker names api-$marker (${marker_sha:-no sha}) but the last COMPLETED promotion is $release_sha on api-$other: the promotion of api-$marker was interrupted; api-$other is canonical"
+        else
+            echo "reconcile: RELEASE ($release_sha) matches neither colour's recorded sha; the marker colour api-$marker (${marker_sha:-no sha}) stays canonical"
+        fi
+    fi
+    other="$(other_colour "$canonical")"
+    canonical_sha="$(env_value "PAGENTOS_RELEASE_$(upper "$canonical")")"
+    other_sha="$(env_value "PAGENTOS_RELEASE_$(upper "$other")")"
+    emergency=0
+    if ! service_running "api-$canonical"; then
+        if [ -n "$canonical_sha" ]; then
+            echo "reconcile: api-$canonical is not running; starting it from its recorded image ($canonical_sha)"
+            compose up -d --no-deps --wait "api-$canonical" 2>&1 | tail -1 || true
+        else
+            echo "reconcile: api-$canonical is not running and has no recorded release"
+        fi
+    fi
+    body=""
+    if [ -n "$canonical_sha" ] && body="$(wait_for_colour "$canonical")" && [ -n "$(served_release "$body")" ]; then
+        echo "reconcile: api-$canonical healthy (release $(served_release "$body")) -> canonical"
+    else
+        if [ -n "$other_sha" ]; then
+            echo "reconcile: api-$canonical will not come up; api-$other ($other_sha) is the only recorded alternative - taking over LOUDLY (not a completed promotion)" >&2
+            compose up -d --no-deps --wait "api-$other" 2>&1 | tail -1 || true
+            if body="$(wait_for_colour "$other")" && [ -n "$(served_release "$body")" ]; then
+                canonical="$other"; other="$(other_colour "$canonical")"; canonical_sha="$other_sha"; other_sha="$(env_value "PAGENTOS_RELEASE_$(upper "$other")")"
+                emergency=1
+            else
+                echo "reconcile: NEITHER colour answers; nothing is switched; operator attention required" >&2
+                exit 80
+            fi
+        else
+            echo "reconcile: api-$canonical will not come up and no other release is recorded; operator attention required" >&2
+            exit 80
+        fi
+    fi
+    undrain_colour "$canonical" >/dev/null
+    write_upstream "$canonical" "$canonical"
+    # the edge runs the CANONICAL tree's nginx.conf (app.prev when the crash had swapped it in)
+    if [ -n "$canonical_sha" ] && [ "$(cat "$prev/RELEASE" 2>/dev/null | tr -d '[:space:]')" = "$canonical_sha" ] && [ "$(cat "$cur/RELEASE" 2>/dev/null | tr -d '[:space:]')" != "$canonical_sha" ]; then
+        install_edge_config "$prev"
+    else
+        install_edge_config
+    fi
+    if service_running edge; then
+        reload_edge || { echo "reconcile: edge reload FAILED" >&2; exit 77; }
+    else
+        echo "reconcile: the edge is not running; starting it"
+        compose up -d --no-deps --wait edge 2>&1 | tail -1
+    fi
+    echo "reconcile: edge -> api-$canonical (both upstreams)"
+    if service_running "api-$other"; then
+        echo "reconcile: api-$other (${other_sha:-no sha}) runs without a completed promotion: a half-promoted candidate; draining and stopping it (it does not become live)"
+        drain_colour "$other" >/dev/null
+        sleep "${PAGENTOS_WAIT_STEP_S:-3}"
+        compose stop "api-$other" 2>&1 | tail -1 || true
+    fi
+    if [ -n "$canonical_sha" ]; then
+        echo "$canonical_sha" > "$base/RELEASE"
+    fi
+    # The tree: an interrupted release had already swapped app.next in. The canonical
+    # release's tree (app.prev, named by its own RELEASE file) comes back; the candidate's
+    # is kept aside as app.interrupted for inspection - the image itself is retained anyway.
+    if [ -n "$canonical_sha" ] && [ -d "$prev" ] && [ "$(cat "$cur/RELEASE" 2>/dev/null | tr -d '[:space:]')" != "$canonical_sha" ] && [ "$(cat "$prev/RELEASE" 2>/dev/null | tr -d '[:space:]')" = "$canonical_sha" ]; then
+        echo "reconcile: tree: app is the interrupted candidate's ($(cat "$cur/RELEASE" 2>/dev/null)); restoring the canonical tree from app.prev (candidate kept as app.interrupted)"
+        rm -rf "$base/app.interrupted"
+        mv "$cur" "$base/app.interrupted"
+        mv "$prev" "$cur"
+    fi
+    date -u +%Y-%m-%dT%H:%M:%SZ > "$base/LAST_RECONCILE"
+    if [ "$emergency" = "1" ]; then
+        echo "RECONCILE EMERGENCY: api-$canonical ($canonical_sha) is live because the canonical release could not start; not a completed promotion - review required" >&2
+        exit 81
+    fi
+    echo "RECONCILE OK: api-$canonical is canonical (release ${canonical_sha:-unknown}); markers, upstreams and containers agree"
+    exit 0
+fi
+
 # ----------------------------------------------------------------- rollback
 
 do_rollback() {
-    # Switch back to the colour that was active before this release started.
-    # First step: leave the tree. The script cd's into $cur/infra/docker for the build, and
-    # the controlled-failure run on the real host showed what happens when the rollback
-    # removes that directory from inside it: every docker compose call after the mv fails
-    # with "getwd: no such file or directory", the edge is never switched back, and the
-    # marker and nginx disagree. compose() uses absolute paths, so $base is a safe home.
+    # Switch back to the colour that was active before this release started. Devices
+    # first (the active colour takes them again, the idle colour drains), then HTTP.
+    # First step: leave the tree. compose() uses absolute paths, so $base is a safe home;
+    # removing the directory the script stands in made every compose call fail on the
+    # real host (getwd) and left the edge unswitched.
     cd "$base" || true
     echo "ROLLBACK: switching the edge back to api-$active" >&2
     if [ -d "$prev" ]; then
@@ -168,8 +396,16 @@ do_rollback() {
         return 0
     fi
     compose up -d --no-deps --wait "api-$active" 2>&1 | tail -1 || true
-    write_upstream "$active"
-    if reload_edge; then echo "ROLLBACK: edge -> api-$active" >&2; else echo "ROLLBACK: edge reload FAILED; the edge may still point at api-$idle, which is left RUNNING" >&2; return 0; fi
+    local had
+    had="$(sessions_of "$idle")"
+    undrain_colour "$active" >/dev/null
+    write_upstream "$active" "$active"
+    install_edge_config
+    if reload_edge; then echo "ROLLBACK: edge -> api-$active (both upstreams)" >&2; else echo "ROLLBACK: edge reload FAILED; the edge may still point at api-$idle, which is left RUNNING" >&2; return 0; fi
+    drain_colour "$idle" >/dev/null
+    if [ "$had" -gt 0 ]; then
+        echo "ROLLBACK: device sessions returning to api-$active: $(wait_for_sessions "$active" "$had" "$handoff_wait_s" || true)" >&2
+    fi
     compose stop "api-$idle" 2>&1 | tail -1 || true
     echo "ROLLBACK: api-$idle stopped" >&2
 }
@@ -179,17 +415,21 @@ if [ "$mode" = "--rollback" ]; then
         echo "nothing to roll back: no blue/green release has happened yet" >&2
         exit 65
     fi
+    cd "$base"
     prev_colour="$(other_colour "$active")"
     PREV="$(upper "$prev_colour")"
     # The colour we return to runs the sha the env file recorded for it when it was last
     # released; that sha becomes RELEASE, and the sha we leave becomes LAST_KNOWN_GOOD
     # (the bookkeeping must name what is actually running, not what a file remembers).
-    target_sha="$(grep "^PAGENTOS_RELEASE_$PREV=" "$envf" | head -1 | sed 's/^[^=]*=//' || true)"
+    target_sha="$(env_value "PAGENTOS_RELEASE_$PREV")"
     leaving_sha="$(cat "$base/RELEASE" 2>/dev/null || true)"
     echo "rolling back: edge -> api-$prev_colour (${target_sha:-sha unknown}; leaving ${leaving_sha:-unknown})"
     compose up -d --no-deps --wait "api-$prev_colour"
     body="$(wait_for_colour "$prev_colour")" || { echo "api-$prev_colour did not become healthy; the edge stays on api-$active" >&2; exit 75; }
-    write_upstream "$prev_colour"
+    install_edge_config
+    # devices first, then HTTP - the same handoff a release does
+    handoff_devices "$active" "$prev_colour" || { rc=$?; echo "device handoff to api-$prev_colour failed ($rc); restoring api-$active" >&2; undrain_colour "$active" >/dev/null; write_upstream "$active" "$active"; reload_edge || true; drain_colour "$prev_colour" >/dev/null; compose stop "api-$prev_colour" >/dev/null 2>&1 || true; exit "$rc"; }
+    write_upstream "$prev_colour" "$prev_colour"
     reload_edge
     compose stop "api-$active" >/dev/null 2>&1 || true
     [ -n "$target_sha" ] && echo "$target_sha" > "$base/RELEASE"
@@ -199,6 +439,12 @@ if [ "$mode" = "--rollback" ]; then
     exit 0
 fi
 
+# ------------------------------------------------------------------ release
+
+if [ ! -d "$next" ]; then
+    echo "$next is missing; the driver extracts the tree there first" >&2
+    exit 65
+fi
 echo "$sha" > "$next/RELEASE"
 compose_next=(docker compose --profile bluegreen -f "$next/infra/docker/docker-compose.prod.yml" --env-file "$envf")
 if ! "${compose_next[@]}" config -q; then
@@ -211,7 +457,7 @@ if [ "$first_cutover" = "1" ]; then
 else
     cutover_note=""
 fi
-echo "preflight: tree $sha extracted, compose valid, env posture $posture, active colour $cutover_note$active, idle $idle, drain ${drain_s}s"
+echo "preflight: tree $sha extracted, compose valid, env posture $posture, active colour $cutover_note$active, idle $idle, drain ${drain_s}s, device handoff wait ${handoff_wait_s}s"
 if [ "$mode" = "--preflight" ]; then
     rm -rf "$next"
     echo "preflight only; nothing changed"
@@ -227,14 +473,20 @@ on_exit() {
         else
             echo "ROLLBACK: the release failed before the switch; api-$active kept serving throughout" >&2
             cd "$base" || true
+            if [ "$first_cutover" != "1" ]; then
+                # the device handoff may have begun: the active colour takes devices again
+                undrain_colour "$active" >/dev/null 2>&1 || true
+                write_upstream "$active" "$active"
+                [ -d "$prev" ] && install_edge_config "$prev"
+                reload_edge >/dev/null 2>&1 || true
+                drain_colour "$idle" >/dev/null 2>&1 || true
+            fi
             compose stop "api-$idle" >/dev/null 2>&1 || true
             if [ -d "$prev" ]; then rm -rf "$cur"; mv "$prev" "$cur"; fi
         fi
     fi
 }
 trap on_exit EXIT
-
-# ------------------------------------------------------------------- build
 
 previous_sha="$(cat "$base/RELEASE" 2>/dev/null || true)"
 rm -rf "$prev"
@@ -255,6 +507,8 @@ compose run --rm --no-deps --entrypoint uv "api-$idle" run alembic upgrade head 
 
 echo "starting the idle colour api-$idle on $sha (api-$active keeps serving)..."
 compose up -d --no-deps --wait "api-$idle" 2>&1 | tail -2
+cd "$base"
+maybe_interrupt after_idle_up
 
 body="$(wait_for_colour "$idle")" || { echo "api-$idle never answered health" >&2; exit 75; }
 echo "health ok on api-$idle"
@@ -269,9 +523,8 @@ if [ -f "$version_file" ]; then
     fi
     echo "realtime contract_version $served_contract served (matches the tree)"
 fi
-served_release="$(printf '%s' "$body" | grep -oE '"release":[[:space:]]*\{[^}]*' | grep -oE '"version":[[:space:]]*"[^"]*"' | head -1 | sed -E 's/.*"([^"]*)"$/\1/' || true)"
-if [ "$served_release" != "$sha" ]; then
-    echo "api-$idle reports release '${served_release:-absent}', expected '$sha' (the version model is not wired)" >&2
+if [ "$(served_release "$body")" != "$sha" ]; then
+    echo "api-$idle reports release '$(served_release "$body")', expected '$sha' (the version model is not wired)" >&2
     exit 76
 fi
 echo "api-$idle reports release $sha"
@@ -281,17 +534,28 @@ echo "api-$idle reports release $sha"
 if [ "$first_cutover" = "1" ]; then
     echo "first cutover: stopping the legacy $legacy_container and starting the edge (one last gap)"
     docker stop "$legacy_container" >/dev/null 2>&1 || true
-    write_upstream "$idle"
+    install_edge_config
+    write_upstream "$idle" "$idle"
     compose up -d --no-deps --wait edge 2>&1 | tail -2
 else
-    write_upstream "$idle"
+    # 0. The edge runs this tree's configuration (a copy + reload, or a recreation when
+    #    its compose definition changed - before the switch, while api-$active serves).
+    ensure_edge
+    reload_edge || { echo "edge reload FAILED (new configuration)" >&2; exit 77; }
+    # 1. Device authority moves first: the idle colour must hold the device sessions
+    #    before it is given HTTP (and with it, device commands).
+    handoff_devices "$active" "$idle" || exit $?
+    maybe_interrupt after_device_handoff
+    # 2. HTTP authority follows.
+    write_upstream "$idle" "$idle"
     reload_edge || { echo "edge reload FAILED" >&2; exit 77; }
 fi
 switched=1
 echo "edge -> api-$idle"
+maybe_interrupt after_switch
 
 health="$(curl -fsS "$health_url")"
-edge_release="$(printf '%s' "$health" | grep -oE '"release":[[:space:]]*\{[^}]*' | grep -oE '"version":[[:space:]]*"[^"]*"' | head -1 | sed -E 's/.*"([^"]*)"$/\1/' || true)"
+edge_release="$(served_release "$health")"
 if [ "$edge_release" != "$sha" ]; then
     echo "through the edge the release is '${edge_release:-absent}', expected '$sha'" >&2
     exit 76
@@ -299,10 +563,11 @@ fi
 echo "health through the edge: release $sha"
 
 if [ "$first_cutover" != "1" ]; then
-    echo "draining api-$active for ${drain_s}s (in-flight requests, device reconnects, the voice session's next tool call)..."
+    echo "draining api-$active for ${drain_s}s (in-flight requests; device sessions already moved)..."
     sleep "$drain_s"
     compose stop "api-$active" 2>&1 | tail -1
     echo "api-$active stopped"
+    maybe_interrupt after_drain
 fi
 
 echo "$sha" > "$base/RELEASE"

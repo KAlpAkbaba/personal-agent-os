@@ -52,7 +52,11 @@ param(
     [switch]$DryRun,
     # M18.4 (ADR-0081): run the zero-downtime host script (two api colours behind the edge)
     # instead of the single-container recreate. Opt-in until the first cutover is proven.
-    [switch]$BlueGreen
+    [switch]$BlueGreen,
+    # Ship HEAD to <HostBase>/app.next and stop: no host transaction. The M18.4 qualification
+    # harness uses it to stage a real candidate tree before a controlled interruption
+    # (release-cloud-core-bluegreen.sh with PAGENTOS_INTERRUPT_AT), which it drives itself.
+    [switch]$StageOnly
 )
 
 Set-StrictMode -Version Latest
@@ -72,6 +76,11 @@ $exitMeanings = @{
     72  = "the host env file is not 600 root:root"
     73  = "the api came up serving an OLDER realtime contract than the tree declares; rolled back"
     74  = "a candidate voice (marin/cedar) was not echoed unchanged by the provider; rolled back"
+    75  = "the idle colour never answered health; rolled back"
+    76  = "the served release did not match the sha; rolled back"
+    77  = "the edge (nginx) reload failed; rolled back"
+    78  = "the active colour marker on the host is neither blue nor green"
+    79  = "the device sessions did not arrive on the new colour within PAGENTOS_HANDOFF_WAIT_S; rolled back (M18.4 gap 1)"
     127 = "the host tree has no scripts/cloud/release-cloud-core.sh (the archive did not extract)"
     255 = "ssh could not reach ${CloudUser}@${BrokerHost} (Tailscale up? key-based auth in BatchMode?)"
 }
@@ -83,7 +92,8 @@ function New-RemoteReleaseCommand {
         [Parameter(Mandatory = $true)][string]$RemoteTar,
         [Parameter(Mandatory = $true)][string]$Base,
         [switch]$PreflightOnly,
-        [switch]$BlueGreen
+        [switch]$BlueGreen,
+        [switch]$StageOnly
     )
     foreach ($p in @($RemoteTar, $Base)) {
         if ($p -cnotmatch '^/[A-Za-z0-9_./-]+$') { throw "unsafe remote path '$p'" }
@@ -95,9 +105,14 @@ function New-RemoteReleaseCommand {
         "rm -rf '$Base/app.next'",
         "mkdir -p '$Base/app.next'",
         "tar -xf '$RemoteTar' -C '$Base/app.next'",
-        "rm -f '$RemoteTar'",
-        "bash '$Base/app.next/scripts/cloud/$(if ($BlueGreen) { 'release-cloud-core-bluegreen.sh' } else { 'release-cloud-core.sh' })' $Sha$mode"
+        "rm -f '$RemoteTar'"
     )
+    if ($StageOnly) {
+        $lines += "echo 'staged $Sha at $Base/app.next (no host transaction)'"
+    }
+    else {
+        $lines += "bash '$Base/app.next/scripts/cloud/$(if ($BlueGreen) { 'release-cloud-core-bluegreen.sh' } else { 'release-cloud-core.sh' })' $Sha$mode"
+    }
     return ($lines -join '; ')
 }
 
@@ -121,10 +136,10 @@ try {
     }
     $localTar = Join-Path $env:TEMP "pagentos-release-$short.tar"
     $remoteTar = "/tmp/pagentos-release-$short.tar"
-    $remote = New-RemoteReleaseCommand -Sha $sha -RemoteTar $remoteTar -Base $HostBase -PreflightOnly:$Preflight -BlueGreen:$BlueGreen
+    $remote = New-RemoteReleaseCommand -Sha $sha -RemoteTar $remoteTar -Base $HostBase -PreflightOnly:$Preflight -BlueGreen:$BlueGreen -StageOnly:$StageOnly
     $target = "${CloudUser}@${BrokerHost}"
 
-    Write-Host "release-cloud-core: HEAD $short -> $target ($(if ($Preflight) { 'PREFLIGHT: validate only' } else { 'RELEASE' }))"
+    Write-Host "release-cloud-core: HEAD $short -> $target ($(if ($StageOnly) { 'STAGE ONLY: ship the tree, no transaction' } elseif ($Preflight) { 'PREFLIGHT: validate only' } else { 'RELEASE' }))"
     if ($DryRun) {
         Write-Host "DRY RUN - nothing archived, no scp/ssh. Would run:"
         Write-Host "  $GitPath archive --format=tar -o $localTar HEAD"
@@ -140,7 +155,7 @@ try {
     # not repeated - only the local verification/report runs. -VerifyOnly forces that
     # path; -Force repeats the release anyway.
     $alreadyReleased = $false
-    if (-not $Preflight) {
+    if (-not $Preflight -and -not $StageOnly) {
         $markerLines = @($null | & $SshPath -n -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=$SshConnectTimeoutSec -o ServerAliveInterval=15 -o ServerAliveCountMax=4 $target "cat '$HostBase/app/RELEASE' 2>/dev/null || true")
         $marker = if ($markerLines.Count -gt 0) { ([string]$markerLines[0]).Trim() } else { "" }
         if ($marker -eq $sha) { $alreadyReleased = $true }
@@ -180,6 +195,10 @@ try {
     }
     if ($Preflight) {
         Write-Host "preflight OK: the host can take $short; nothing was changed"
+        exit 0
+    }
+    if ($StageOnly) {
+        Write-Host "staged: $short is at $HostBase/app.next on $BrokerHost; nothing else was changed"
         exit 0
     }
 

@@ -179,10 +179,15 @@ services:
     image: nginx:1.27-alpine
     container_name: pagentos-prod-edge
     profiles: ["bluegreen"]
+    # The whole edge configuration lives on the persistent edge directory: nginx.conf (a
+    # copy of infra/docker/edge/nginx.conf that the release script refreshes on every
+    # release / rollback / reconcile), upstream.conf and active.txt (written by the same
+    # script). nginx is started on that copy (-c), so a configuration change is a copy plus
+    # `nginx -s reload` - never a recreation of the container. (A bind mount of the tree's
+    # file kept the OLD inode after the release swapped the tree: the running edge could
+    # not pick up a new nginx.conf at all - M18.4 gap 1.)
+    command: ["nginx", "-c", "/etc/nginx/edge/nginx.conf", "-g", "daemon off;"]
     volumes:
-      - ./edge/nginx.conf:/etc/nginx/nginx.conf:ro
-      # upstream.conf + active.txt, written by the release script; on the persistent
-      # volume so a reboot brings the same colour back (spec §14).
       - ${PAGENTOS_EDGE_DIR:-/mnt/pagentos-data/edge}:/etc/nginx/edge:ro
     ports:
       - "${PAGENTOS_BIND_IP:?the host's Tailscale IP; set in /opt/pagentos/.env}:8001:8001"

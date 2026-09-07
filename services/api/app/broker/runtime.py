@@ -11,6 +11,7 @@ import uuid
 from collections import Counter
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy.engine import Engine
@@ -40,6 +41,11 @@ class BrokerRuntime:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.connections: dict[uuid.UUID, DeviceConnection] = {}
+        #: M18.4 gap 1 (ADR-0081 addendum 3): a draining colour has handed its device
+        #: sessions to the other colour and accepts no new device connection. Set once by
+        #: ``drain``; the process is stopped soon after, so it is never cleared.
+        self.draining: bool = False
+        self.drained_at: datetime | None = None
         self.counters: Counter[str] = Counter()
         self._engine: Engine | None = None
         self._session_factory: sessionmaker[Session] | None = None
@@ -104,6 +110,40 @@ class BrokerRuntime:
             await connection.websocket.close(code=code)
 
     # -------------------------------------------------------------- lifecycle
+
+    async def drain(self, *, code: int = 1012) -> int:
+        """Hand every device session to the other colour: close each device WebSocket
+        with ``code`` (1012 = service restart, the agent reconnects within its first
+        backoff step, ~1 s), refuse new device connections from now on, and return how
+        many were closed. The edge must already send new device connections to the other
+        colour; the caller's ordering (release-cloud-core-bluegreen.sh) is what makes this
+        a handoff rather than a disconnect."""
+        self.draining = True
+        self.drained_at = datetime.now(UTC)
+        closed = 0
+        for device_id in list(self.connections):
+            connection = self.connections.get(device_id)
+            if connection is None:
+                continue
+            await self.close_device_connection(device_id, code=code)
+            # Presence goes now, not when the socket loop notices: the other colour is
+            # the authority from this point and this one must not report the device online.
+            self.unregister_connection(connection)
+            closed += 1
+        logger.info("broker_draining", closed=closed)
+        return closed
+
+    def undrain(self) -> bool:
+        """Take device connections again (the reverse of ``drain``): a rollback after the
+        device handoff, or a reconcile after an interrupted release, makes the colour that
+        had handed its sessions over authoritative again - it must accept the agent when
+        it returns through the edge. Returns whether the colour was draining."""
+        was = self.draining
+        self.draining = False
+        self.drained_at = None
+        if was:
+            logger.info("broker_undrained")
+        return was
 
     async def start(self) -> None:
         if self._sweeper_task is None or self._sweeper_task.done():
@@ -197,11 +237,14 @@ class BrokerRuntime:
             "latency_ms": 0.0,
             "sweeper_alive": alive,
             "active_sessions": len(self.connections),
+            "draining": self.draining,
         }
 
     def stats(self) -> dict[str, Any]:
         return {
             "active_sessions": len(self.connections),
+            "draining": self.draining,
+            "drained_at": self.drained_at.isoformat() if self.drained_at else None,
             "connected_device_ids": sorted(str(d) for d in self.connections),
             "sweeper_alive": self.sweeper_alive(),
             "counters": dict(self.counters),

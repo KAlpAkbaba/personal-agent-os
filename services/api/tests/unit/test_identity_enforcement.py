@@ -85,6 +85,13 @@ EXPECTED_OPEN = {
     # session and must never be handed one; the companion additionally checks the
     # origin and the sha256 the command named. Deliberately open, like enrollment.
     ("GET", "/v1/alarms/audio/{token}"),
+    # M18.4 gap 1 (ADR-0081 addendum 3): the device handoff between the two colours. The
+    # release script calls these from INSIDE the draining container, which holds no owner
+    # session and must not need one to finish a release; the routes are loopback-only
+    # (the same peer test as the identity bootstrap - tests/unit/test_broker_drain.py
+    # proves a tailnet peer gets 403). Deliberately not owner-gated.
+    ("POST", "/v1/devices/drain"),
+    ("POST", "/v1/devices/undrain"),
 }
 
 

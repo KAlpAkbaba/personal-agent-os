@@ -504,3 +504,57 @@ async def cancel_command(
 @router.get("/stats", dependencies=[Depends(require_owner_session)])
 async def get_stats(request: Request) -> dict[str, Any]:
     return _runtime(request).stats()
+
+
+# ------------------------------------------------- M18.4 gap 1: the device handoff
+
+#: The same loopback set the identity bootstrap uses: the release script calls this from
+#: inside the colour's own container. Fail closed on an unidentified peer.
+_LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost", "testclient"}
+
+
+def peer_is_loopback(host: str | None) -> bool:
+    return host in _LOOPBACK_HOSTS
+
+
+@router.post("/drain")
+async def drain_devices(request: Request) -> dict[str, Any]:
+    """Hand this colour's device sessions to the other colour (ADR-0081 addendum 3).
+
+    Loopback-only, deliberately not owner-gated: the caller is the release script inside
+    the draining container, which holds no owner session and must not need one to finish
+    a release. After this, the colour refuses new device connections; the edge already
+    routes them to the other colour, so the agent lands there within its first backoff
+    step. Idempotent: a second call closes nothing and says so.
+    """
+    client = request.client
+    if not peer_is_loopback(client.host if client else None):
+        raise HTTPException(status_code=403, detail="forbidden")
+    runtime = _runtime(request)
+    before = len(runtime.connections)
+    closed = await runtime.drain()
+    return {
+        "draining": True,
+        "closed": closed,
+        "active_sessions_before": before,
+        "active_sessions": len(runtime.connections),
+        "drained_at": runtime.drained_at.isoformat() if runtime.drained_at else None,
+    }
+
+
+@router.post("/undrain")
+async def undrain_devices(request: Request) -> dict[str, Any]:
+    """The reverse of ``drain`` (loopback-only, same caller): the colour takes device
+    connections again. A rollback after the device handoff and the post-crash reconcile
+    need it - a colour that stayed draining would refuse the agent it is now meant to hold.
+    """
+    client = request.client
+    if not peer_is_loopback(client.host if client else None):
+        raise HTTPException(status_code=403, detail="forbidden")
+    runtime = _runtime(request)
+    was_draining = runtime.undrain()
+    return {
+        "draining": False,
+        "was_draining": was_draining,
+        "active_sessions": len(runtime.connections),
+    }

@@ -248,6 +248,12 @@ async def device_connect(websocket: WebSocket) -> None:
     runtime: BrokerRuntime = websocket.app.state.broker
     settings = runtime.settings
     await websocket.accept()
+    if runtime.draining:
+        # A colour that has handed its device sessions over takes no new one: the agent's
+        # next attempt goes through the edge to the colour that now holds device authority.
+        with contextlib.suppress(Exception):
+            await websocket.close(code=1012)
+        return
 
     try:
         device, hello = await _handshake(websocket, runtime)

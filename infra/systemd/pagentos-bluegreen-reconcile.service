@@ -1,0 +1,30 @@
+# PagentOS Cloud Core: rebuild the blue/green state after a reboot or a crash
+# (M18.4 gap 2, ADR-0081 addendum 3). Runs once per boot, after docker is up, and calls
+# release-cloud-core-bluegreen.sh --reconcile, which makes the last COMPLETED promotion
+# canonical (marker, both edge upstreams, RELEASE, the tree) and drains and stops a
+# half-promoted candidate - it never makes one live silently.
+#
+# The script lives in the app tree that a release swaps; app.prev is the fallback when a
+# crash landed between the tree swap and the promotion. The env file and the markers are
+# under /opt/pagentos; the edge's upstream file under /mnt/pagentos-data/edge.
+#
+# Install (root):
+#   install -m 0644 /opt/pagentos/app/infra/systemd/pagentos-bluegreen-reconcile.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable pagentos-bluegreen-reconcile.service
+#   systemctl start pagentos-bluegreen-reconcile.service   # a dry run on a consistent host: RECONCILE OK
+#   journalctl -u pagentos-bluegreen-reconcile.service -n 30
+[Unit]
+Description=PagentOS Cloud Core blue/green reconcile (after boot or crash)
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=no
+TimeoutStartSec=600
+Environment=PAGENTOS_BASE=/opt/pagentos
+ExecStart=/bin/bash -c 'for tree in /opt/pagentos/app /opt/pagentos/app.prev; do script="$tree/scripts/cloud/release-cloud-core-bluegreen.sh"; if [ -f "$script" ]; then exec /bin/bash "$script" --reconcile; fi; done; echo "no release script under /opt/pagentos/app or app.prev" >&2; exit 1'
+
+[Install]
+WantedBy=multi-user.target
