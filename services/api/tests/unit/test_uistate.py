@@ -84,11 +84,14 @@ def test_the_vocabulary_is_the_one_the_owner_specified() -> None:
         "operator.running",
         "operator.verifying",
         "operator.failed",
+        # M20 (File & Document Intelligence spec §3, §7): the documents channel.
+        "document.analysis",
     }
     contract = ui_state_contract()
-    assert contract["contract_version"] == 4
+    assert contract["contract_version"] == 5
     assert "ambient" in contract["subsystems"]
     assert "operator" in contract["subsystems"]
+    assert "documents" in contract["subsystems"]
     assert "audio" in contract["metadata_rules"]["forbidden"]
 
 
