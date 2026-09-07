@@ -67,11 +67,13 @@ public sealed class BrowserWorkerSwapTests : IDisposable
         var oldPid = await PidOf(host);
         Assert.Equal("fake-1.0", host.Hello!.WorkerVersion);
 
-        // One request in flight on the current worker when the swap begins.
-        var inFlight = Exec(host, Payload("sleep", sleepMs: 1500));
+        // One request in flight on the current worker when the swap begins - long enough that
+        // a slow runner's candidate start (which precedes the drain) cannot outlast it.
+        var inFlight = Exec(host, Payload("sleep", sleepMs: 5000), timeoutS: 30);
         await Task.Delay(300);
+        Assert.False(inFlight.IsCompleted);
 
-        var swap = await host.SwapWorkerAsync(Candidate("--worker-version fake-2.0"), TimeSpan.FromSeconds(10), expectedVersion: "fake-2.0");
+        var swap = await host.SwapWorkerAsync(Candidate("--worker-version fake-2.0"), TimeSpan.FromSeconds(20), expectedVersion: "fake-2.0");
 
         Assert.True(swap.Swapped, swap.Reason);
         Assert.Equal(BrowserWorkerSwapResult.OutcomeSwapped, swap.Outcome);
@@ -80,7 +82,9 @@ public sealed class BrowserWorkerSwapTests : IDisposable
         Assert.Equal("fake-1.0", swap.OldVersion);
         Assert.Equal("fake-2.0", swap.NewVersion);
         Assert.Equal(1, swap.PendingAtDrainStart);
-        Assert.True(swap.DrainMs >= 1000, $"the drain waited for the in-flight request ({swap.DrainMs} ms)");
+        Assert.True(swap.DrainMs > 0, $"the drain waited for the in-flight request ({swap.DrainMs} ms)");
+        // The swap cannot have returned before the old worker's in-flight request finished.
+        Assert.True(inFlight.IsCompleted, "the old worker was retired only after its in-flight request completed");
 
         // The in-flight request completed on the OLD worker, not with dependency_unavailable.
         var result = await inFlight;
@@ -104,9 +108,9 @@ public sealed class BrowserWorkerSwapTests : IDisposable
         await host.StartAsync(CancellationToken.None);
         var oldPid = await PidOf(host);
 
-        var inFlight = Exec(host, Payload("sleep", sleepMs: 1500));
+        var inFlight = Exec(host, Payload("sleep", sleepMs: 4000), timeoutS: 30);
         await Task.Delay(200);
-        var swapTask = host.SwapWorkerAsync(Candidate("--worker-version fake-2.0"), TimeSpan.FromSeconds(10));
+        var swapTask = host.SwapWorkerAsync(Candidate("--worker-version fake-2.0"), TimeSpan.FromSeconds(20));
         await Task.Delay(400);
 
         // Arrives while the old worker is draining: it must not be answered by the old one.
@@ -125,11 +129,14 @@ public sealed class BrowserWorkerSwapTests : IDisposable
     [Fact]
     public async Task A_candidate_that_never_says_hello_is_discarded_and_the_current_worker_keeps_serving()
     {
-        await using var host = FakeWorkerLauncher.NewHost(_dir, _log, null, string.Empty, false, helloTimeout: TimeSpan.FromSeconds(2), pingInterval: TimeSpan.FromSeconds(60), eagerRestartCeiling: null);
+        // The candidate dies before its hello (exit 3 at once) - the same "no usable hello"
+        // path a silent candidate takes at the hello timeout, without a timer a loaded CI
+        // runner could miss (a 2 s hello timeout once failed the CURRENT worker's start there).
+        await using var host = NewHost();
         await host.StartAsync(CancellationToken.None);
         var oldPid = await PidOf(host);
 
-        var swap = await host.SwapWorkerAsync(Candidate("--no-hello"), TimeSpan.FromSeconds(5));
+        var swap = await host.SwapWorkerAsync(Candidate("--crash-before-hello"), TimeSpan.FromSeconds(5));
 
         Assert.False(swap.Swapped);
         Assert.Equal(BrowserWorkerSwapResult.OutcomeCandidateFailed, swap.Outcome);
@@ -148,7 +155,7 @@ public sealed class BrowserWorkerSwapTests : IDisposable
         await using var host = NewHost();
         await host.StartAsync(CancellationToken.None);
         var oldPid = await PidOf(host);
-        var inFlight = Exec(host, Payload("sleep", sleepMs: 800));
+        var inFlight = Exec(host, Payload("sleep", sleepMs: 800), timeoutS: 30);
 
         var swap = await host.SwapWorkerAsync(Candidate("--worker-version fake-2.0"), TimeSpan.FromSeconds(5), expectedVersion: "fake-3.0", expectedPackageSha256: "abc");
 

@@ -49,6 +49,13 @@ public static class Program
 
         var selfCheck = args.Contains("--self-check");
         var noHello = args.Contains("--no-hello");
+        // M18.4 gap 4: a candidate that dies before it can announce itself (exit 3 at once),
+        // so the host's rejection path is exercised without waiting out a hello timeout.
+        if (args.Contains("--crash-before-hello"))
+        {
+            await Console.Error.WriteLineAsync("fake-worker: crashing before hello");
+            return 3;
+        }
         var noPong = args.Contains("--no-pong");
         var helloDelay = 0;
         var workerVersion = "fake-1.0";

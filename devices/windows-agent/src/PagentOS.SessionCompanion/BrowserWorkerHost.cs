@@ -577,7 +577,7 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
         }
     }
 
-    private WorkerProcess Spawn(BrowserWorkerOptions options)
+    private WorkerProcess Spawn(BrowserWorkerOptions options, bool candidate = false)
     {
         Directory.CreateDirectory(options.DataDir);
         Directory.CreateDirectory(options.ProfileDir);
@@ -622,7 +622,7 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
                 retryable: true);
         }
 
-        var worker = new WorkerProcess(process);
+        var worker = new WorkerProcess(process) { IsCandidate = candidate };
         worker.ReaderTask = Task.Run(() => ReadStdoutAsync(worker), CancellationToken.None);
         worker.StderrTask = Task.Run(() => ReadStderrAsync(worker), CancellationToken.None);
         worker.ExitTask = Task.Run(async () =>
@@ -650,6 +650,24 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
         }
 
         var exitCode = worker.ExitCodeOrNull();
+        if (worker.IsCandidate)
+        {
+            // A staged-update candidate that died before it was promoted: nothing about the
+            // CURRENT worker changed. No failure counted, no eager restart, and no reaping
+            // by profile - the candidate never had a request, so it opened no browser, while
+            // the current worker may well have one on that very profile.
+            foreach (var pair in worker.Pending)
+            {
+                pair.Value.TrySetException(new CapabilityException(ErrorClasses.DependencyUnavailable, "the candidate browser worker exited", retryable: true));
+            }
+
+            worker.Pending.Clear();
+            worker.HelloFailed(new InvalidOperationException($"candidate browser worker exited with code {exitCode?.ToString(CultureInfo.InvariantCulture) ?? "?"} before hello"));
+            _logger.LogInformation("browser worker candidate (pid={Pid}) exited with code {Code} ({Reason}); the current worker is untouched", worker.Pid, exitCode, worker.KillReason ?? "exited on its own");
+            worker.DisposeQuietly();
+            return;
+        }
+
         var unexpected = !worker.ShutdownRequested && !_stopping;
         if (unexpected)
         {
@@ -962,7 +980,7 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
             WorkerProcess probe;
             try
             {
-                probe = Spawn(candidate);
+                probe = Spawn(candidate, candidate: true);
             }
             catch (CapabilityException ex)
             {
@@ -1062,6 +1080,7 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
                     _reaper = new ChromeOrphanReaper(candidate.ProfileDir, _logger);
                 }
 
+                probe.IsCandidate = false;
                 _worker = probe;
                 Hello = hello;
                 Interlocked.Increment(ref _starts);
@@ -1191,13 +1210,13 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
 
     private void DiscardCandidate(WorkerProcess probe, string reason)
     {
-        // Not HandleExit: that would reap Chrome by profile and count a failure against the
-        // CURRENT worker, which keeps serving. The candidate never had a request, so it has
-        // no browser of its own to reap.
+        // HandleExit's candidate branch: no failure counted against the CURRENT worker (which
+        // keeps serving), no eager restart, no reaping by profile - the candidate never had a
+        // request, so it has no browser of its own to reap.
         probe.ShutdownRequested = true;
         probe.KillReason = reason;
         probe.Kill();
-        probe.DisposeQuietly();
+        HandleExit(probe);
     }
 
     private BrowserWorkerSwapResult SwapFailed(string outcome, int? oldPid, int? newPid, string? oldVersion, string? newVersion, string reason, int pendingAtStart = 0, long drainMs = 0)
@@ -1312,6 +1331,9 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
 
         /// <summary>Why the companion killed this worker, when it did; null for a worker that exited on its own.</summary>
         public volatile string? KillReason;
+
+        /// <summary>A staged-update candidate not yet promoted (M18.4 gap 4): its exit is nobody's failure.</summary>
+        public volatile bool IsCandidate;
 
         public ConcurrentDictionary<string, TaskCompletionSource<JsonObject>> Pending { get; } = new(StringComparer.Ordinal);
 

@@ -17,7 +17,14 @@ public sealed record BenchOptions(
     int ProviderResponseMs = 600,
     double SimulatedPlaybackStopMs = 0,
     EndOfTurnMode EndOfTurn = EndOfTurnMode.Client,
-    int FeedIntervalMs = 1);
+    int FeedIntervalMs = 1,
+    // The orchestrator's tool-silence guard, measured on the REAL clock. Production keeps
+    // 4000 ms (VoiceClientOptions; OrchestratorTests prove it under a controlled clock). The
+    // bench's scripted tool phase is a few hundred milliseconds of simulated work, so 4000 ms
+    // here only ever tripped on a loaded CI runner (2026-09-07: the whole bench took 24 s
+    // instead of ~8 and reported tool_silence_exceeded:4000ms as a "defect" of nothing) -
+    // the bench's job is the metrics, not that guard; it gets a bound no runner can reach.
+    int ToolSilenceBoundMs = 15000);
 
 /// <summary>
 /// The offline bench (spec §8, "numbers for the gate"): the real orchestrator, the real
@@ -48,7 +55,7 @@ public sealed class OfflineVoiceBench(BenchOptions? options = null)
         leg.OnCommand = provider.OnCommandAsync;
 
         var orchestrator = new VoiceSessionOrchestrator(
-            new VoiceClientOptions { EndOfTurn = _options.EndOfTurn, ToolSilenceBoundMs = 4000 },
+            new VoiceClientOptions { EndOfTurn = _options.EndOfTurn, ToolSilenceBoundMs = _options.ToolSilenceBoundMs },
             catalog,
             devices,
             _ => leg,
