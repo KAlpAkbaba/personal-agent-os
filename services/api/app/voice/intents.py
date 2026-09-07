@@ -86,6 +86,20 @@ class Intent(StrEnum):
     AMBIENT_TEST_DISPLAY = "ambient_test_display"  # ekran uyku otomasyonunu test et
     AMBIENT_EXPLAIN = "ambient_explain"  # ekranları neden kapattın / ekran politikası ne
 
+    # M19 (docs/M19_DIGITAL_OPERATOR_SPEC.md §2, §3): the Digital Operator. Every one of
+    # these targets an interactive-family capability through app.operator/tools_operator -
+    # never a second desktop-control path (spec's invariant 1).
+    APP_OPEN = "app_open"  # Not Defteri'ni aç / Chrome'u aç / Tarayıcıyı aç
+    WINDOW_CLOSE = "window_close"  # bunu kapat / bu pencereyi kapat / öndeki pencereyi kapat
+    WINDOW_MAXIMIZE = "window_maximize"  # pencereyi büyüt
+    WINDOW_MINIMIZE = "window_minimize"  # bu pencereyi küçült
+    WINDOW_RESTORE = "window_restore"  # pencereyi eski haline getir
+    WINDOW_PREVIOUS = "window_previous"  # önceki pencereye dön / bir önceki pencereye geç
+    TYPE_TEXT = "type_text"  # buraya X yaz / bu kutuya X yaz / seçili yere X yaz
+    SHELL_QUERY = "shell_query"  # IP adresimi göster / bilgisayarın adı ne
+    OPERATOR_CANCEL = "operator_cancel"  # dur / iptal et, while a task is running
+    OPERATOR_STATUS = "operator_status"  # Ne yapıyorsun?, while a task is running
+
     NONE = "none"
 
 
@@ -127,6 +141,16 @@ CAPABILITY_BY_INTENT: dict[Intent, str] = {
     Intent.DISPLAY_WAKE: "display.wake",
     Intent.AMBIENT_POLICY_SET: "ambient.set_policy",
     Intent.AMBIENT_TEST_DISPLAY: "ambient.test_display",
+    # M19 (spec §2, §3): the window-control family shares one capability/tool - the
+    # PAYLOAD's ``action`` field is what differs, derived from the intent by the tool.
+    Intent.APP_OPEN: "operator.app_open",
+    Intent.WINDOW_CLOSE: "operator.window_control",
+    Intent.WINDOW_MAXIMIZE: "operator.window_control",
+    Intent.WINDOW_MINIMIZE: "operator.window_control",
+    Intent.WINDOW_RESTORE: "operator.window_control",
+    Intent.WINDOW_PREVIOUS: "operator.window_control",
+    Intent.TYPE_TEXT: "operator.type",
+    Intent.OPERATOR_CANCEL: "operator.cancel",
 }
 
 #: QUERY intents that name a tool rather than being answered conversationally (contract §2:
@@ -138,6 +162,9 @@ QUERY_TOOL_BY_INTENT: dict[Intent, str] = {
     # ADR-0079 §12: "why did / didn't you" and "what is the policy now" are answered from
     # the live decision, the presence assertion, the holdoffs and the ledger - a query.
     Intent.AMBIENT_EXPLAIN: "ambient.explain",
+    # M19 (spec §2, §3): neither mutates anything - a shell read and "what are you doing".
+    Intent.SHELL_QUERY: "operator.shell",
+    Intent.OPERATOR_STATUS: "operator.status",
 }
 
 
@@ -288,6 +315,21 @@ class ResolvedIntent:
     #: M18.4: for an EVOLUTION_* utterance, the action the owner's words asked for
     #: (pause | resume | cancel | hold); the tool applies THIS, never the model's argument.
     evolution_action: str | None = None
+    #: M19 (spec §3): for APP_OPEN, the allowlisted app id the owner's WORDS named
+    #: (app.operator.plans.resolve_app_alias) - the tool prefers THIS over the model's own
+    #: ``application`` argument, the same "owner's words win" rule ambient policy and the
+    #: snooze minutes already follow.
+    application: str | None = None
+    #: For TYPE_TEXT, the payload extracted from the phrase itself ("buraya X yaz" -> X),
+    #: or None when the owner named no text at all ("Şuraya yazar mısın?") - a clarification
+    #: is then the honest answer, not a guess.
+    text_to_type: str | None = None
+    #: For SHELL_QUERY, which reading was asked for: "ip" | "hostname".
+    shell_query: str | None = None
+    #: For the window-control family and TYPE_TEXT, which window the owner's words pointed
+    #: at as far as vocabulary alone can say: "current" | "previous" | None. The tool
+    #: resolves the actual window id through the durable focus stack either way.
+    window_ref: str | None = None
 
     def __post_init__(self) -> None:
         if not self.klass:
@@ -312,6 +354,10 @@ class ResolvedIntent:
             "policy_changes": dict(self.policy_changes) if self.policy_changes else None,
             "alarm_minutes": self.alarm_minutes,
             "evolution_action": self.evolution_action,
+            "application": self.application,
+            "text_to_type": self.text_to_type,
+            "shell_query": self.shell_query,
+            "window_ref": self.window_ref,
         }
 
     @property
@@ -968,6 +1014,163 @@ def _display_match(tokens: tuple[str, ...]) -> tuple[Intent, str] | None:
     return None
 
 
+# ------------------------------------------------------- M19: the Digital Operator
+#
+# Built on the SAME token/stem primitives as every intent above - there is deliberately no
+# second Turkish pattern table for these either. The app-name alias table lives in
+# app.operator.plans (a domain fact, not a routing table) and is imported lazily, the same
+# way _explain_kind imports app.explain.classify: app.operator does not import this module,
+# so there is no cycle, but a lazy import keeps this module's own load path free of a
+# domain package it does not otherwise need.
+
+_WINDOW_NOUN_STEMS: Final[tuple[str, ...]] = ("pencere",)
+_FRONT_WINDOW_STEMS: Final[tuple[str, ...]] = ("önde", "onde")  # "öndeki pencere"
+_MAXIMIZE_VERB_STEMS: Final[tuple[str, ...]] = ("büyüt", "buyut")
+_MINIMIZE_VERB_STEMS: Final[tuple[str, ...]] = ("küçült", "kuçult", "kucult")
+_RESTORE_HAL_STEMS: Final[tuple[str, ...]] = ("eski",)
+_RESTORE_YUKLE_STEMS: Final[tuple[str, ...]] = ("yükle", "yukle")
+
+
+def _operator_cancel_match(tokens: tuple[str, ...]) -> str | None:
+    """"Dur." / "İptal et." while a task is running (spec §3) - gated by the caller on
+    ``operator_running``, never on vocabulary alone: these words mean plenty else too."""
+    if tok := _stop_match(" ".join(tokens), tokens):
+        return tok
+    if tok := _has(tokens, "iptal"):
+        return tok
+    return None
+
+
+def _operator_status_match(tokens: tuple[str, ...]) -> str | None:
+    """"Ne yapıyorsun?" while a task is running (spec §3)."""
+    if _has_exact(tokens, "ne") and _has(tokens, "yapıyor", "yapiyor"):
+        return "ne yapıyorsun"
+    return None
+
+
+def _shell_query_match(tokens: tuple[str, ...]) -> tuple[str, str] | None:
+    """"IP adresimi göster" / "IP adresim ne?" -> ("ip", ...); "Bilgisayarın adı ne?" ->
+    ("hostname", ...) (spec §2's ``terminal.execute`` ``hostname``/``ipconfig``).
+
+    ``ıp`` alongside ``ip``: Turkish casefolding maps a plain ASCII "I" to the dotless
+    "ı" (``turkish_casefold``'s whole reason for existing - "ISI" must not become "isi"),
+    so the ASCII acronym "IP" written with a capital Latin I casefolds to "ıp", not "ip".
+    """
+    if _has_exact(tokens, "ip", "ıp"):
+        return "ip", "ip adresi"
+    if _has(tokens, "bilgisayar") and _has(tokens, "ad") and _has_exact(tokens, "ne", "nedir"):
+        return "hostname", "bilgisayarın adı"
+    return None
+
+
+def _window_control_match(tokens: tuple[str, ...]) -> tuple[Intent, str, str | None] | None:
+    """The window-control family (spec §2's ``window.*``), in priority order: "önceki
+    pencereye dön" first (it also carries the window noun the other branches key on), then
+    close/maximize/minimize/restore. Fires on the window noun OR a deictic/front-of-screen
+    pointer ("bunu", "öndeki") so "Bunu kapat" resolves without naming "pencere" at all -
+    but only ever alongside one of this family's own verbs, so it can never shadow the
+    eye/alarm/display "kapat" phrases already checked earlier in ``resolve_intent``."""
+    noun = _has(tokens, *_WINDOW_NOUN_STEMS)
+    pointer = noun or _has_exact(tokens, *_DEICTIC_WORDS) or _has(tokens, *_FRONT_WINDOW_STEMS)
+    if pointer is None:
+        return None
+    if (
+        noun is not None
+        and _has(tokens, *_PREVIOUS_STEMS)
+        and _has_exact(tokens, "dön", "don", "geç", "gec")
+    ):
+        return Intent.WINDOW_PREVIOUS, "önceki pencereye dön", "previous"
+    if _has_exact(tokens, *_CLOSE_VERB_FORMS):
+        return Intent.WINDOW_CLOSE, pointer, "current"
+    if _has(tokens, *_MAXIMIZE_VERB_STEMS):
+        return Intent.WINDOW_MAXIMIZE, pointer, "current"
+    if _has(tokens, *_MINIMIZE_VERB_STEMS):
+        return Intent.WINDOW_MINIMIZE, pointer, "current"
+    if _has(tokens, *_RESTORE_HAL_STEMS) and _has(tokens, "hal"):
+        return Intent.WINDOW_RESTORE, pointer, "current"
+    if _has(tokens, *_RESTORE_YUKLE_STEMS):
+        return Intent.WINDOW_RESTORE, pointer, "current"
+    return None
+
+
+#: "yaz" as a stem also matches "yazı"/"yazılım" - deliberately, the same way "gözlük"
+#: sharing "göz" is accepted for eye/camera (module docstring): every Turkish word that
+#: starts with "yaz" is at least plausibly about writing, and this only fires alongside a
+#: target phrase or a deictic pointer anyway.
+_WRITE_VERB_STEMS: Final[tuple[str, ...]] = ("yaz",)
+_WRITE_TARGET_STEMS: Final[tuple[str, ...]] = ("buraya", "şuraya", "suraya", "kutu", "yere", "alan")
+
+#: The target phrase to cut before reading the payload off the raw utterance (longest
+#: first, so "bu kutuya" is not shadowed by a shorter overlapping match).
+_WRITE_TARGET_PHRASES: Final[tuple[str, ...]] = (
+    "seçili yere",
+    "secili yere",
+    "bu kutuya",
+    "bu alana",
+    "bu yere",
+    "buraya",
+    "şuraya",
+    "suraya",
+)
+_WRITE_VERB_RE: Final[re.Pattern[str]] = re.compile(r"\byaz\w*\b")
+
+
+def _type_text_match(tokens: tuple[str, ...]) -> str | None:
+    if _has(tokens, *_WRITE_VERB_STEMS) is None:
+        return None
+    if _has(tokens, *_WRITE_TARGET_STEMS) or _has_exact(tokens, *_DEICTIC_WORDS):
+        return "yaz"
+    return None
+
+
+def _extract_type_text(utterance: str) -> str | None:
+    """The payload of a TYPE_TEXT utterance ("Buraya merhaba yaz." -> "merhaba"), read off
+    the raw text (never the filtered/lower-cased token list: the payload's own casing is
+    the owner's words). ``None`` when nothing was actually said to type ("Şuraya yazar
+    mısın?") - a clarification is then the honest answer, never a guess (spec §4)."""
+    if not utterance:
+        return None
+    lowered = turkish_casefold(utterance).strip()
+    match = _WRITE_VERB_RE.search(lowered)
+    if match is None:
+        return None
+    before = lowered[: match.start()].strip(" ,.'\"")
+    for phrase in _WRITE_TARGET_PHRASES:
+        if before.startswith(phrase):
+            before = before[len(phrase) :].strip(" ,.'\"")
+            break
+    return before or None
+
+
+#: docs/M19_DIGITAL_OPERATOR_SPEC.md §3: ``operator.type`` refuses a secret-looking
+#: request outright ("Buraya şifremi yaz" -> "Şifreleri ben yazmam"). One place names the
+#: words, so the tool never has to keep a second copy of this list.
+_SECRET_WORD_STEMS: Final[tuple[str, ...]] = ("şifre", "sifre", "parola", "password", "pin")
+
+
+def contains_secret_reference(text: str) -> bool:
+    """Whether ``text`` names a password/PIN-shaped secret (module docstring)."""
+    if not text:
+        return False
+    _, tokens, _ = normalize_transcript(text)
+    return _has(tokens, *_SECRET_WORD_STEMS) is not None
+
+
+def _app_open_match(tokens: tuple[str, ...]) -> tuple[str, str] | None:
+    """"Not Defteri'ni aç" / "Chrome'u aç" / "Tarayıcıyı aç" (spec §2's ``app.launch``
+    allowlist, spec §3's APP_OPEN). Requires an open-imperative verb (module: "açık" the
+    adjective/query stays a query) AND a name the allowlist alias table actually knows -
+    "Kapıyı aç" (open the door) names nothing on the list and resolves to nothing here."""
+    if not _has_exact(tokens, *_OPEN_VERB_FORMS):
+        return None
+    from app.operator.plans import resolve_app_alias
+
+    canonical = resolve_app_alias(tokens)
+    if canonical is None:
+        return None
+    return canonical, canonical
+
+
 # ------------------------------------------------- research interaction classes
 
 #: A research word in any Turkish inflection: "araştır", "araştırma", "araştırmayı",
@@ -1551,6 +1754,7 @@ def resolve_intent(
     narration: NarrationState | None = None,
     has_completed_research: bool = False,
     alarm_ringing: bool = False,
+    operator_running: bool = False,
 ) -> ResolvedIntent:
     """Resolve a transcript into an :class:`Intent` against the live state.
 
@@ -1566,8 +1770,13 @@ def resolve_intent(
     technical explanation of the last activity. The caller establishes it from the
     research runs/reports - the resolver stays pure.
 
-    ``alarm_ringing`` is the second and last: whether a wake alarm is ringing right now,
-    which is what makes a bare "Sustur." an ``ALARM_STOP`` (see ``_alarm_match``).
+    ``alarm_ringing`` is the second: whether a wake alarm is ringing right now, which is
+    what makes a bare "Sustur." an ``ALARM_STOP`` (see ``_alarm_match``).
+
+    ``operator_running`` is the third and last: whether a Digital Operator task is running
+    right now (spec §3), which is what makes a bare "Dur." / "İptal et." an
+    ``OPERATOR_CANCEL`` and "Ne yapıyorsun?" an ``OPERATOR_STATUS`` - the same
+    ringing-aware pattern ``alarm_ringing`` already gives the alarm family.
     """
     normalized, tokens, dropped = normalize_transcript(text)
     confidence = 1.0 if dropped == 0 else 0.9
@@ -1650,6 +1859,60 @@ def resolve_intent(
     if display_matched := _display_match(tokens):
         return ResolvedIntent(
             display_matched[0], scope=SCOPE_CONVERSATION, matched=display_matched[1], **base
+        )
+
+    # 0d. M19 (spec §3): the operator's Cancel/Status pair, gated on a task actually
+    #     running right now - never on vocabulary alone, the same discipline the alarm's
+    #     ringing-aware "Sustur." already established. Checked before the generic stop (1)
+    #     so "Dur." while a task runs is never read as a narration stop instead.
+    if operator_running:
+        if cancel_matched := _operator_cancel_match(tokens):
+            return ResolvedIntent(
+                Intent.OPERATOR_CANCEL, scope=SCOPE_CONVERSATION, matched=cancel_matched, **base
+            )
+        if status_matched := _operator_status_match(tokens):
+            return ResolvedIntent(
+                Intent.OPERATOR_STATUS, scope=SCOPE_CONVERSATION, matched=status_matched, **base
+            )
+
+    # 0e. M19 (spec §2, §3): the rest of the Digital Operator - a shell reading, the
+    #     window-control family, typing into the focused control, opening an application.
+    #     Each requires its own verb/noun combination (the per-function docstrings say
+    #     which), so none of these can shadow a phrase this resolver already owned.
+    if shell_matched := _shell_query_match(tokens):
+        return ResolvedIntent(
+            Intent.SHELL_QUERY,
+            scope=SCOPE_CONVERSATION,
+            matched=shell_matched[1],
+            shell_query=shell_matched[0],
+            **base,
+        )
+    if window_matched := _window_control_match(tokens):
+        window_intent, window_matched_text, window_ref = window_matched
+        return ResolvedIntent(
+            window_intent,
+            scope=SCOPE_CONVERSATION,
+            matched=window_matched_text,
+            window_ref=window_ref,
+            **base,
+        )
+    if type_matched := _type_text_match(tokens):
+        return ResolvedIntent(
+            Intent.TYPE_TEXT,
+            scope=SCOPE_CONVERSATION,
+            matched=type_matched,
+            text_to_type=_extract_type_text(text),
+            window_ref="current",
+            **base,
+        )
+    if app_matched := _app_open_match(tokens):
+        app_canonical, app_matched_text = app_matched
+        return ResolvedIntent(
+            Intent.APP_OPEN,
+            scope=SCOPE_CONVERSATION,
+            matched=app_matched_text,
+            application=app_canonical,
+            **base,
         )
 
     # 1. stop — top priority in any state, including TOOL_RUNNING progress.
@@ -2116,6 +2379,7 @@ __all__ = [
     "ResolvedIntent",
     "apply_to_narration",
     "classify_research_interaction",
+    "contains_secret_reference",
     "current_item_index",
     "is_filler",
     "klass_for",

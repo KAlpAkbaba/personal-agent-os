@@ -50,6 +50,7 @@ from app.voice.realtime_sessions import actions
 from app.voice.realtime_sessions.sideband import SB_NARRATION_CURSOR, SB_PLAN_CHANGED
 from app.voice.realtime_sessions.tools_ambient import register_ambient_tools
 from app.voice.realtime_sessions.tools_evolution import register_evolution_tools
+from app.voice.realtime_sessions.tools_operator import register_operator_tools
 
 logger = get_logger("app.voice.realtime_sessions.tools")
 
@@ -509,6 +510,13 @@ RESULT_NO_REPORT = "no_report"
 RESEARCH_EMPTY_ANSWER_TR = "Bu araştırma için anlatabileceğim bir sonuç bulamadım efendim."
 
 
+#: M19 (docs/M19_DIGITAL_OPERATOR_SPEC.md §3): the two operator tools whose result may be
+#: a clarification ("Hangi pencere?", "Ne yazmamı istersiniz?") rather than a receipt —
+#: not research-bound, so they need their own small extension of the ADR-0077 contract
+#: below (never a second copy of it).
+OPERATOR_CLARIFYING_TOOLS: frozenset[str] = frozenset({"operator.window_control", "operator.type"})
+
+
 def result_is_research_bound(tool_name: str, result: Any) -> bool:
     """Whether a handler's result falls under the research result contract (ADR-0077)."""
     if tool_name in RESEARCH_FOLLOWUP_TOOLS:
@@ -543,6 +551,13 @@ def terminal_status_for(tool_name: str, result: Any) -> tuple[str, str | None]:
     )
 
     if not result_is_research_bound(tool_name, result):
+        if (
+            tool_name in OPERATOR_CLARIFYING_TOOLS
+            and isinstance(result, dict)
+            and result.get("status") == RESULT_NEEDS_CLARIFICATION
+            and str(result.get("speech") or "").strip()
+        ):
+            return TOOL_STATUS_NEEDS_CLARIFICATION, None
         return TOOL_STATUS_SUCCEEDED, None
     status = str(result.get("status") or "")
     speech = str(result.get("speech") or "").strip()
@@ -1576,6 +1591,8 @@ def default_registry() -> ToolRegistry:
     register_ambient_tools(reg)
     # M18.4 (spec §4): the owner's voice over self-evolution. Same one-line discipline.
     register_evolution_tools(reg)
+    # M19 (docs/M19_DIGITAL_OPERATOR_SPEC.md §4): the Digital Operator's voice tools.
+    register_operator_tools(reg)
     return reg
 
 
