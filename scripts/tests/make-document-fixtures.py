@@ -14,7 +14,6 @@ answer and in the owner's ear.
 
 from __future__ import annotations
 
-import csv
 import hashlib
 import io
 import json
@@ -78,20 +77,20 @@ def make_docx(path: Path, clauses: list[tuple[str, str]], version_note: str) -> 
     blocks: list[dict] = []
     n = 0
 
-    def add(text: str, style: str | None, level: int | None) -> None:
+    def add(text: str, level: int | None) -> None:
         nonlocal n
         n += 1
         blocks.append({"ref": f"p{n}", "text": text, "kind": "heading" if level else "paragraph", **({"level": level} if level else {})})
 
     doc.add_heading("Hizmet Sözleşmesi", level=1)
-    add("Hizmet Sözleşmesi", "Heading 1", 1)
+    add("Hizmet Sözleşmesi", 1)
     doc.add_paragraph(version_note)
-    add(version_note, None, None)
+    add(version_note, None)
     for heading, text in clauses:
         doc.add_heading(heading, level=2)
-        add(heading, "Heading 2", 2)
+        add(heading, 2)
         doc.add_paragraph(text)
-        add(text, None, None)
+        add(text, None)
     table = doc.add_table(rows=3, cols=2)
     rows = [("Taraf", "İmza"), ("İşveren", "Alp Akbaba"), ("Yüklenici", "Örnek Yazılım A.Ş.")]
     for r, (a, b) in enumerate(rows):
