@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -137,19 +138,36 @@ def _matches_roots(path: str, roots: list[str] | None) -> bool:
     return True
 
 
+def _search_record(path: str) -> dict[str, Any]:
+    """A ``file.search`` hit: the same record :func:`file_record` builds, minus
+    ``sha256`` - DEVICE_PROTOCOL.md §6j is explicit that a search never opens a file, so
+    its records carry no content hash even when the file is small enough that a
+    single-file capability (``file.locate``, this fake's ``_file_inspect``/
+    ``_document_extract``) would have carried one."""
+    record = dict(file_record(path))
+    record.pop("sha256", None)
+    return record
+
+
 def _file_search(payload: dict[str, Any]) -> DeviceRunResult:
     pattern = payload.get("pattern")
     extensions = payload.get("extensions")
     roots = payload.get("roots")
     files = [
-        file_record(entry["path"])
+        _search_record(entry["path"])
         for entry in load_truth()["files"]
         if _matches_pattern(entry["path"].rsplit("/", 1)[-1], entry["path"], pattern)
         and _matches_extensions(entry["path"], extensions)
         and _matches_roots(entry["path"], roots)
     ]
     return DeviceRunResult(
-        True, result={"files": files, "truncated": False, "searched_roots": roots or []}
+        True,
+        result={
+            "files": files,
+            "truncated": False,
+            "searched_roots": roots or [],
+            "entries_walked": len(load_truth()["files"]),
+        },
     )
 
 
@@ -208,20 +226,25 @@ def _file_compare(payload: dict[str, Any]) -> DeviceRunResult:
     from app.documents.answers import compare_blocks
 
     comparison = compare_blocks(doc_ref(a_path), doc_ref(b_path))
+    a_record, b_record = file_record(a_path), file_record(b_path)
+    a_mtime = datetime.fromisoformat(a_record["mtime"].replace("Z", "+00:00"))
+    b_mtime = datetime.fromisoformat(b_record["mtime"].replace("Z", "+00:00"))
     return DeviceRunResult(
         True,
         result={
-            "a": file_record(a_path),
-            "b": file_record(b_path),
+            "a": a_record,
+            "b": b_record,
             "same_content": not comparison["changed_refs"] and not comparison["added_refs"],
-            "size_delta": 0,
-            "mtime_delta_s": 0,
+            # B minus A (DEVICE_PROTOCOL.md §6j) - both sides, never a signless magnitude.
+            "size_delta": b_record["size"] - a_record["size"],
+            "mtime_delta_s": round((b_mtime - a_mtime).total_seconds(), 3),
             "kind": load_expected(a_path)["kind"],
             "changed_refs": comparison["changed_refs"],
             "unchanged_refs": comparison["unchanged_refs"],
             "added_refs": comparison["added_refs"],
             "removed_refs": comparison["removed_refs"],
             "summary": comparison["speech"],
+            "truncated": False,
         },
     )
 
