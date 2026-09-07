@@ -51,6 +51,9 @@ from app.broker.models import AuditEvent, Device, DeviceCommand, DeviceSession, 
 from app.broker.runtime import BrokerRuntime, DeviceConnection
 from app.config import Settings
 from app.devices.status import DeviceStatusRegistry
+from app.documents.index import DocumentIndex
+from app.documents.models import DocumentIndexRow
+from app.documents.service import DocumentService
 from app.evolution.models import Capability, CapabilityGap, EvolutionOpportunity, SkillVersion
 from app.evolution.runtime import EvolutionRuntime
 from app.evolution.supervisor import is_paused
@@ -61,7 +64,12 @@ from app.ledger.models import ActivityEventRow, PendingBriefingRow
 from app.main import create_app
 from app.narration.models import NarrationSession, PronunciationEntry
 from app.operator import focus as operator_focus
-from app.operator.models import FOCUS_KIND_WINDOW, ObjectFocusRow
+from app.operator.models import (
+    FOCUS_KIND_DOCUMENT,
+    FOCUS_KIND_FILE,
+    FOCUS_KIND_WINDOW,
+    ObjectFocusRow,
+)
 from app.operator.service import OperatorService, register_operator_service
 from app.operator.task import STATUS_RUNNING, OperatorTask
 from app.presence.engine import PresenceFusionEngine, set_engine
@@ -87,14 +95,22 @@ from app.voice.realtime_sessions.runtime import RealtimeVoiceRuntime
 from app.voice.realtime_sessions.sideband import RecordingSideband
 from app.voice.simulator import SimulatedRealtimeProvider
 from tests.alarms_support import FakeDeviceAction, happy_device_results
+from tests.documents_support import document_capability_results, extract_result
 from tests.identity_support import IDENTITY_TABLES
 from tests.voice_corpus.corpus import (
     CTX_ALARM_RINGING,
     CTX_ALARM_SCHEDULED,
+    CTX_COMMON_POINTS_FOCUSED,
+    CTX_DOCUMENT_FOCUSED,
+    CTX_DOCX_FOCUSED,
     CTX_EYE_DISABLED,
+    CTX_FILE_FOCUSED,
     CTX_OPERATOR_RUNNING,
+    CTX_PPTX_FOCUSED,
     CTX_RESEARCH_FOCUS_B,
+    CTX_SECRET_FILE_FOCUSED,
     CTX_WINDOW_FOCUSED,
+    CTX_XLSX_FOCUSED,
     RESPONSE_CLARIFY,
     RESPONSE_CONTROL,
     RESPONSE_NONE,
@@ -136,6 +152,7 @@ TABLES = (
     Routine.__table__,
     RoutineFiring.__table__,
     ObjectFocusRow.__table__,
+    DocumentIndexRow.__table__,
 )
 
 #: The tools the harness may dispatch as "forbidden" because the product refuses them at
@@ -197,6 +214,7 @@ class Harness:
     sequence: WakeSequence
     holdoffs: HoldoffRegistry
     operator: OperatorService
+    documents: DocumentService
     ids: dict[str, str] = field(default_factory=dict)
 
     # ------------------------------------------------------------- relay
@@ -355,6 +373,62 @@ class Harness:
                     source="test_context",
                     now=base + timedelta(seconds=1),
                 )
+        elif context == CTX_DOCUMENT_FOCUSED:
+            # Exactly the pair the task brief names: rapor.pdf current, sunum-q3.pptx
+            # the previous (a genuine distinct earlier row, the same two-timestamp
+            # discipline CTX_WINDOW_FOCUSED already uses for "önceki pencereye dön").
+            with self.factory() as db:
+                base = datetime.now(UTC) - timedelta(seconds=5)
+                previous_row = self._index_document(db, "sunum-q3.pptx", now=base)
+                self._focus_document(db, previous_row, source="test_context", now=base)
+                current_row = self._index_document(db, "rapor.pdf", now=base + timedelta(seconds=1))
+                self._focus_document(
+                    db, current_row, source="test_context", now=base + timedelta(seconds=1)
+                )
+        elif context == CTX_DOCX_FOCUSED:
+            with self.factory() as db:
+                now = datetime.now(UTC)
+                row = self._index_document(db, "sozlesmeler/2026/sozlesme.docx", now=now)
+                self._focus_document(db, row, source="test_context", now=now)
+        elif context == CTX_XLSX_FOCUSED:
+            with self.factory() as db:
+                now = datetime.now(UTC)
+                row = self._index_document(db, "butce-2026.xlsx", now=now)
+                self._focus_document(db, row, source="test_context", now=now)
+        elif context == CTX_PPTX_FOCUSED:
+            with self.factory() as db:
+                now = datetime.now(UTC)
+                row = self._index_document(db, "sunum-q3.pptx", now=now)
+                self._focus_document(db, row, source="test_context", now=now)
+        elif context == CTX_FILE_FOCUSED:
+            # A FILE is focused (as if a search just found it) but never extracted: the
+            # spec §3 branch "current file not yet extracted -> extract it first".
+            from tests.documents_support import file_id_for, file_record
+
+            with self.factory() as db:
+                record = file_record("rapor.pdf")
+                operator_focus.set_focus(
+                    db,
+                    FOCUS_KIND_FILE,
+                    file_id_for("rapor.pdf"),
+                    label=record["name"],
+                    source="test_context",
+                )
+        elif context == CTX_COMMON_POINTS_FOCUSED:
+            # truth.json's own common_points fixture: butce-2026.xlsx, kod.py, notlar.md.
+            with self.factory() as db:
+                base = datetime.now(UTC) - timedelta(seconds=10)
+                for n, path in enumerate(("butce-2026.xlsx", "kod.py", "notlar.md")):
+                    self._index_document(db, path, now=base + timedelta(seconds=n))
+        elif context == CTX_SECRET_FILE_FOCUSED:
+            with self.factory() as db:
+                operator_focus.set_focus(
+                    db,
+                    FOCUS_KIND_FILE,
+                    "file:secret-sentinel",
+                    label=".env",
+                    source="test_context",
+                )
         elif context == CTX_OPERATOR_RUNNING:
             with self.factory() as db:
                 operator_focus.set_focus(
@@ -378,6 +452,23 @@ class Harness:
                     last_observed={"window": {"title": "Adsız - Not Defteri"}},
                 )
             )
+
+    # ------------------------------------------------------------- M20: documents
+
+    def _index_document(self, db, path: str, *, now: datetime) -> DocumentIndexRow:
+        """Pre-index a fixture straight from the oracle (tests/documents_support.py) —
+        no device call, exactly as if the owner had already read it once."""
+        return DocumentIndex().upsert(
+            db, device_id="device:default", extract=extract_result(path), now=now
+        )
+
+    def _focus_document(self, db, row: DocumentIndexRow, *, source: str, now: datetime) -> None:
+        operator_focus.set_focus(
+            db, FOCUS_KIND_DOCUMENT, row.doc_id, label=row.title or row.name, source=source, now=now
+        )
+        operator_focus.set_focus(
+            db, FOCUS_KIND_FILE, row.file_id, label=row.name, source=source, now=now
+        )
 
     def research_task_ids(self) -> set[str]:
         with self.factory() as db:
@@ -437,7 +528,7 @@ def build_harness() -> Harness:
     )
     app.state.voice_realtime = runtime
 
-    device = FakeDeviceAction(results=happy_device_results())
+    device = FakeDeviceAction(results={**happy_device_results(), **document_capability_results()})
     sequence = WakeSequence(device_action=device, tts=FakeTTSProvider())
     statuses = DeviceStatusRegistry()
     # The evolution engine gets its OWN in-memory database: on a StaticPool SQLite engine
@@ -464,6 +555,9 @@ def build_harness() -> Harness:
     # registration so the router's ringing-aware Cancel/Status pair can see it too.
     operator_service = OperatorService()
     register_operator_service(operator_service)
+    # M20 (docs/M20_FILE_DOCUMENT_INTELLIGENCE_SPEC.md §3): the SAME fake device, through
+    # the SAME live-source path - one document authority, never a second one.
+    document_service = DocumentService()
     runtime.register_live(
         wake_sequence=sequence,
         device_statuses=statuses,
@@ -472,6 +566,7 @@ def build_harness() -> Harness:
         settings=settings,
         device_action=device,
         operator=operator_service,
+        document_service=document_service,
     )
     holdoffs = HoldoffRegistry()
     set_holdoffs(holdoffs)
@@ -511,6 +606,7 @@ def build_harness() -> Harness:
         sequence=sequence,
         holdoffs=holdoffs,
         operator=operator_service,
+        documents=document_service,
     )
 
 

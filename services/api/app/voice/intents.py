@@ -100,6 +100,18 @@ class Intent(StrEnum):
     OPERATOR_CANCEL = "operator_cancel"  # dur / iptal et, while a task is running
     OPERATOR_STATUS = "operator_status"  # Ne yapıyorsun?, while a task is running
 
+    # M20 (docs/M20_FILE_DOCUMENT_INTELLIGENCE_SPEC.md §3): File & Document Intelligence.
+    # Every one of these targets app.documents through tools_documents - never a second
+    # file-reading path (ADR-0083 decision 1).
+    FILE_SEARCH = "file_search"  # bu klasördeki PDF'leri bul / masaüstündeki X'i bul
+    DOCUMENT_READ = "document_read"  # bu dosyayı oku
+    DOCUMENT_SUMMARIZE = "document_summarize"  # bunu özetle (bir belge odaktayken)
+    DOCUMENT_ANSWER = "document_answer"  # ödeme süresi kaç gün / üçüncü sayfada ne yazıyor
+    DOCUMENT_COMPARE = "document_compare"  # bir önceki belgeyle karşılaştır
+    DOCUMENT_INSPECT = "document_inspect"  # bu Excel'de ne var / kaç slayt var
+    DOCUMENT_COMMON_POINTS = "document_common_points"  # bunların ortak noktalarını çıkar
+    DOCUMENT_PREVIOUS = "document_previous"  # az önceki belgeye/sunuma dön
+
     NONE = "none"
 
 
@@ -165,6 +177,17 @@ QUERY_TOOL_BY_INTENT: dict[Intent, str] = {
     # M19 (spec §2, §3): neither mutates anything - a shell read and "what are you doing".
     Intent.SHELL_QUERY: "operator.shell",
     Intent.OPERATOR_STATUS: "operator.status",
+    # M20 (docs/M20_FILE_DOCUMENT_INTELLIGENCE_SPEC.md §3): reading and answering from a
+    # document mutates nothing the owner can see (the index is Cloud Core bookkeeping) -
+    # every one of these is a query, the same class operator.shell/status already get.
+    Intent.FILE_SEARCH: "file.search",
+    Intent.DOCUMENT_READ: "document.read",
+    Intent.DOCUMENT_SUMMARIZE: "document.summarize",
+    Intent.DOCUMENT_ANSWER: "document.answer",
+    Intent.DOCUMENT_COMPARE: "document.compare",
+    Intent.DOCUMENT_INSPECT: "document.inspect",
+    Intent.DOCUMENT_COMMON_POINTS: "document.common_points",
+    Intent.DOCUMENT_PREVIOUS: "document.previous",
 }
 
 
@@ -330,6 +353,21 @@ class ResolvedIntent:
     #: at as far as vocabulary alone can say: "current" | "previous" | None. The tool
     #: resolves the actual window id through the durable focus stack either way.
     window_ref: str | None = None
+    #: M20 (docs/M20_FILE_DOCUMENT_INTELLIGENCE_SPEC.md §3): for the document family,
+    #: which document the owner's WORDS pointed at: "current" | "previous" | None. The
+    #: tool resolves the actual document through the durable focus stack (app.operator.focus,
+    #: kind "document") either way - the same "owner's words win" rule window_ref follows.
+    document_ref: str | None = None
+    #: For DOCUMENT_ANSWER, the raw question (the owner's own words, never a paraphrase).
+    question: str | None = None
+    #: For FILE_SEARCH, the name fragment the owner's words named ("sözleşme", "bütçe"),
+    #: or None when none was said (a bare "bu klasördeki PDF'leri bul").
+    pattern: str | None = None
+    #: For FILE_SEARCH, the folder the owner's words named ("Masaüstü" -> "Desktop"), or
+    #: None when none was said.
+    folder: str | None = None
+    #: For FILE_SEARCH, the extensions the owner's words named ([".pdf"]), or None.
+    extensions: list[str] | None = None
 
     def __post_init__(self) -> None:
         if not self.klass:
@@ -358,6 +396,11 @@ class ResolvedIntent:
             "text_to_type": self.text_to_type,
             "shell_query": self.shell_query,
             "window_ref": self.window_ref,
+            "document_ref": self.document_ref,
+            "question": self.question,
+            "pattern": self.pattern,
+            "folder": self.folder,
+            "extensions": list(self.extensions) if self.extensions else None,
         }
 
     @property
@@ -1032,7 +1075,7 @@ _RESTORE_YUKLE_STEMS: Final[tuple[str, ...]] = ("yükle", "yukle")
 
 
 def _operator_cancel_match(tokens: tuple[str, ...]) -> str | None:
-    """"Dur." / "İptal et." while a task is running (spec §3) - gated by the caller on
+    """ "Dur." / "İptal et." while a task is running (spec §3) - gated by the caller on
     ``operator_running``, never on vocabulary alone: these words mean plenty else too."""
     if tok := _stop_match(" ".join(tokens), tokens):
         return tok
@@ -1042,14 +1085,14 @@ def _operator_cancel_match(tokens: tuple[str, ...]) -> str | None:
 
 
 def _operator_status_match(tokens: tuple[str, ...]) -> str | None:
-    """"Ne yapıyorsun?" while a task is running (spec §3)."""
+    """ "Ne yapıyorsun?" while a task is running (spec §3)."""
     if _has_exact(tokens, "ne") and _has(tokens, "yapıyor", "yapiyor"):
         return "ne yapıyorsun"
     return None
 
 
 def _shell_query_match(tokens: tuple[str, ...]) -> tuple[str, str] | None:
-    """"IP adresimi göster" / "IP adresim ne?" -> ("ip", ...); "Bilgisayarın adı ne?" ->
+    """ "IP adresimi göster" / "IP adresim ne?" -> ("ip", ...); "Bilgisayarın adı ne?" ->
     ("hostname", ...) (spec §2's ``terminal.execute`` ``hostname``/``ipconfig``).
 
     ``ıp`` alongside ``ip``: Turkish casefolding maps a plain ASCII "I" to the dotless
@@ -1157,7 +1200,7 @@ def contains_secret_reference(text: str) -> bool:
 
 
 def _app_open_match(tokens: tuple[str, ...]) -> tuple[str, str] | None:
-    """"Not Defteri'ni aç" / "Chrome'u aç" / "Tarayıcıyı aç" (spec §2's ``app.launch``
+    """ "Not Defteri'ni aç" / "Chrome'u aç" / "Tarayıcıyı aç" (spec §2's ``app.launch``
     allowlist, spec §3's APP_OPEN). Requires an open-imperative verb (module: "açık" the
     adjective/query stays a query) AND a name the allowlist alias table actually knows -
     "Kapıyı aç" (open the door) names nothing on the list and resolves to nothing here."""
@@ -1169,6 +1212,234 @@ def _app_open_match(tokens: tuple[str, ...]) -> tuple[str, str] | None:
     if canonical is None:
         return None
     return canonical, canonical
+
+
+# --------------------------------------------- M20: File & Document Intelligence
+#
+# Built on the SAME token/stem primitives as every intent above - no second Turkish
+# pattern table (module docstring's own rule). Folder/extension name aliases are a
+# domain fact of app.documents, not a routing table, and stay right here (small enough
+# that a lazy import would only add indirection); a wrong route here reaches no device
+# capability either way (ADR-0083 decision 7: there is no write/delete tool to misroute
+# into).
+#
+# "Bu dosyayı sil." names a document noun and a verb this table does not recognise
+# ("sil") - it resolves to every branch below returning None and falls through to
+# Intent.NONE, which dispatches no tool at all (module docstring's own rule for NONE).
+
+#: Whole-document-kind nouns ("bu EXCEL'de", "bu PDF'i") - deliberately NOT internal
+#: place nouns (sayfa/slayt/satır), which name a LOCATION inside a document and belong to
+#: DOCUMENT_ANSWER instead (a Turkish suffix is still a prefix match: "dosyayı" starts
+#: with "dosya").
+_DOCUMENT_NOUN_STEMS: Final[tuple[str, ...]] = (
+    "dosya",
+    "belge",
+    "pdf",
+    "sunum",
+    "excel",
+    "tablo",
+    "word",
+)
+#: Internal LOCATION nouns a content question names ("üçüncü sayfada", "bu satırda").
+_DOCUMENT_PLACE_STEMS: Final[tuple[str, ...]] = (
+    "sayfa",
+    "slayt",
+    "slayd",
+    "satır",
+    "satir",
+    "madde",
+    "paragraf",
+    "bölüm",
+    "bolum",
+    "anahtar",
+)
+_FOLDER_ALIASES: Final[dict[str, str]] = {
+    "masaüstü": "Desktop",
+    "masaustu": "Desktop",
+    "belgelerim": "Documents",
+    "belgelerimde": "Documents",
+    "indirilenler": "Downloads",
+}
+_EXTENSION_ALIASES: Final[dict[str, str]] = {
+    "pdf": ".pdf",
+    "excel": ".xlsx",
+    "xlsx": ".xlsx",
+    "word": ".docx",
+    "docx": ".docx",
+    "sunum": ".pptx",
+    "pptx": ".pptx",
+    "powerpoint": ".pptx",
+    "csv": ".csv",
+}
+_FIND_VERB_FORMS: Final[tuple[str, ...]] = ("bul", "bulsana", "bulur")
+#: Exact forms only - "ara" as a stem would also match "araştır"/"araştırma" (a totally
+#: unrelated word that happens to share a prefix; the eye/camera noun table above states
+#: the same rule for the same reason).
+_SEARCH_VERB_FORMS: Final[tuple[str, ...]] = ("ara", "arasana", "arar")
+_COMPARE_VERB_STEMS: Final[tuple[str, ...]] = ("karşılaştır", "karsilastir")
+_DOCUMENT_RETURN_VERB_FORMS: Final[tuple[str, ...]] = ("dön", "don", "geç", "gec")
+_READ_VERB_FORMS: Final[tuple[str, ...]] = ("oku", "okusana", "okur", "okuyabilir")
+_SUMMARIZE_STEMS: Final[tuple[str, ...]] = ("özet", "ozet")
+_COMMON_POINTS_STEM: Final = "ortak"
+_CONTENT_QUESTION_VERB_STEMS: Final[tuple[str, ...]] = ("yaz", "diyor", "yazılı", "yazili")
+
+
+def _document_search_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Bu klasördeki PDF'leri bul." / "Masaüstündeki sözleşmeyi bul." / "İndirilenler'de
+    bütçe dosyasını ara." (spec §3)."""
+    verb = _has_exact(tokens, *_FIND_VERB_FORMS, *_SEARCH_VERB_FORMS)
+    if verb is None:
+        return None
+    if _has(tokens, *_DOCUMENT_NOUN_STEMS) is None and not any(
+        tok.startswith(alias) for tok in tokens for alias in _FOLDER_ALIASES
+    ):
+        return None
+    return verb
+
+
+def _document_previous_word_match(tokens: tuple[str, ...]) -> str | None:
+    """Any "öncek..." token, WITHOUT ``_previous_match``'s research-only exception that
+    "az önceki" names the most recent (i.e. CURRENT) one rather than the one before it.
+    That exception exists because a research can "just finish" — there is no document
+    equivalent: spec §3's own example, "Az önceki sunuma geri dön.", means the previous
+    document, full stop."""
+    for tok in tokens:
+        if tok.startswith("öncek") or tok.startswith("oncek"):
+            return tok
+    return None
+
+
+def _document_previous_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Az önceki sunuma geri dön." / "Bir önceki belgeye dön." (spec §3) - checked BEFORE
+    compare, since "karşılaştır" never appears in these phrases and the reverse ordering
+    would be just as safe; kept this way to read in the same order as the phrase list."""
+    if _has(tokens, *_DOCUMENT_NOUN_STEMS) is None:
+        return None
+    if _document_previous_word_match(tokens) is None:
+        return None
+    if _has(tokens, *_DOCUMENT_RETURN_VERB_FORMS) is None:
+        return None
+    return "önceki belgeye dön"
+
+
+def _document_compare_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Bir önceki belgeyle karşılaştır." / "Önceki dosyayla karşılaştır." (spec §3) -
+    always current vs. previous (the only compare phrasing this milestone's corpus asks
+    for; a caller passing an explicit ``a``/``b`` argument overrides the default)."""
+    if _has(tokens, *_COMPARE_VERB_STEMS) is None:
+        return None
+    if _has(tokens, *_DOCUMENT_NOUN_STEMS) is None:
+        return None
+    return "karşılaştır"
+
+
+def _document_read_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Bu dosyayı oku." / "Bu belgeyi okur musun?" (spec §3)."""
+    if _has_exact(tokens, *_READ_VERB_FORMS) is None:
+        return None
+    if _has(tokens, *_DOCUMENT_NOUN_STEMS) is None:
+        return None
+    return "oku"
+
+
+def _document_summarize_match(tokens: tuple[str, ...], *, document_focused: bool) -> str | None:
+    """ "Bunu özetle." (a document already focused) / "Bu belgeyi özetle." / "Bu PDF'i
+    özetle." (spec §3). A bare deictic ("bunu") needs a document actually focused - with
+    none (and no document noun either), this is not this tool's business at all, and
+    falls through to the EXISTING research/narration SUMMARIZE behaviour lower down
+    (module docstring's own priority-order discipline: never guess, and never shadow a
+    behaviour this milestone was not asked to touch)."""
+    if _has(tokens, *_SUMMARIZE_STEMS) is None:
+        return None
+    if _has(tokens, *_DOCUMENT_NOUN_STEMS) is not None:
+        return "özetle"
+    if document_focused and _has_exact(tokens, *_DEICTIC_WORDS):
+        return "özetle"
+    return None
+
+
+def _document_common_points_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Bunların ortak noktalarını çıkar." (spec §3)."""
+    if _has(tokens, _COMMON_POINTS_STEM) is None:
+        return None
+    if _has(tokens, "nokta") is None:
+        return None
+    return "ortak noktalar"
+
+
+def _document_inspect_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Bu Excel'de ne var?" (what's in it) / "Bu sunumda kaç slayt var?" (a structural
+    count) (spec §3) - both answered from ``file.inspect``'s own structure, never from
+    retrieval."""
+    if _has(tokens, *_DOCUMENT_NOUN_STEMS) is None:
+        return None
+    if _has_exact(tokens, "ne") and _has_exact(tokens, "var"):
+        return "ne var"
+    if _has_exact(tokens, "kaç", "kac") and _has_exact(tokens, "var"):
+        return "kaç var"
+    return None
+
+
+def _document_answer_named_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Üçüncü sayfada ne yazıyor?" - an internal place noun plus a content question verb
+    (spec §3); distinct from DOCUMENT_INSPECT's whole-document nouns."""
+    if _has(tokens, *_DOCUMENT_PLACE_STEMS) is None:
+        return None
+    if _has_exact(tokens, "ne") and _has(tokens, *_CONTENT_QUESTION_VERB_STEMS):
+        return "ne yazıyor"
+    return None
+
+
+#: The question-shapes that make a bare content question (no document noun, no place
+#: noun at all - "Ödeme süresi kaç gün?") a DOCUMENT_ANSWER, but ONLY while a document is
+#: actually focused (``document_focused``) and the question is not already one this
+#: resolver's own EXPLAIN table recognises (``explain_kind``, computed once in
+#: ``resolve_intent`` and passed in here) - a system-activity question must keep meaning
+#: exactly what it always meant regardless of what happens to be focused.
+_GENERIC_QUESTION_WORDS: Final[tuple[str, ...]] = (
+    "mı",
+    "mi",
+    "mu",
+    "mü",
+    "kaç",
+    "kac",
+    "ne",
+    "nedir",
+    "nasıl",
+    "nasil",
+    "kim",
+)
+
+
+def _document_answer_generic_match(
+    tokens: tuple[str, ...], *, document_focused: bool, explain_kind: str | None
+) -> str | None:
+    if not document_focused or explain_kind is not None:
+        return None
+    if _has_exact(tokens, *_GENERIC_QUESTION_WORDS):
+        return "soru"
+    return None
+
+
+def _extract_document_folder(tokens: tuple[str, ...]) -> str | None:
+    for tok in tokens:
+        for alias, folder in _FOLDER_ALIASES.items():
+            if tok.startswith(alias):
+                return folder
+    return None
+
+
+def _extract_document_extensions(tokens: tuple[str, ...]) -> list[str] | None:
+    out: list[str] = []
+    for tok in tokens:
+        for alias, ext in _EXTENSION_ALIASES.items():
+            if tok.startswith(alias) and ext not in out:
+                out.append(ext)
+    return out or None
+
+
+#: ``_extract_document_pattern`` (below ``_DEICTIC_WORDS``, which it needs) resolves the
+#: search PATTERN a spoken name leaves behind (see ``_SEARCH_PATTERN_SKIP`` further down).
 
 
 # ------------------------------------------------- research interaction classes
@@ -1378,6 +1649,48 @@ _DEICTIC_WORDS: Final[tuple[str, ...]] = (
     "onun",
     "ondaki",
 )
+
+#: M20 (docs/M20_FILE_DOCUMENT_INTELLIGENCE_SPEC.md §3): words a search PATTERN must
+#: never be extracted from: this table's own vocabulary, the folder/extension aliases, a
+#: document noun, and ordinary Turkish function words - what is left over is the name
+#: fragment the owner actually said ("sözleşme", "bütçe"). Placed here (rather than beside
+#: the rest of the M20 helper table above) because it needs ``_DEICTIC_WORDS``, defined
+#: just above.
+_SEARCH_PATTERN_SKIP: Final[frozenset[str]] = frozenset(
+    {
+        *_DOCUMENT_NOUN_STEMS,
+        *_FOLDER_ALIASES,
+        *_EXTENSION_ALIASES,
+        *_FIND_VERB_FORMS,
+        *_SEARCH_VERB_FORMS,
+        *_DEICTIC_WORDS,
+        "klasördeki",
+        "klasörde",
+        "klasör",
+        "içindeki",
+        "icindeki",
+        "içinde",
+        "icinde",
+        "de",
+        "da",
+        "leri",
+        "ları",
+        "lari",
+    }
+)
+
+
+def _extract_document_pattern(tokens: tuple[str, ...]) -> str | None:
+    for tok in tokens:
+        if any(tok.startswith(w) for w in _SEARCH_PATTERN_SKIP):
+            continue
+        if tok in _NON_TOPIC_WORDS or tok in _NUMBER_WORDS:
+            continue
+        if len(tok) < 3:
+            continue
+        return tok
+    return None
+
 
 #: "son araştırma", "en son", "sonuncusu": the most recent one. Also the phrase a
 #: clarification answer uses to pick the newer candidate.
@@ -1755,6 +2068,7 @@ def resolve_intent(
     has_completed_research: bool = False,
     alarm_ringing: bool = False,
     operator_running: bool = False,
+    document_focused: bool = False,
 ) -> ResolvedIntent:
     """Resolve a transcript into an :class:`Intent` against the live state.
 
@@ -1773,10 +2087,16 @@ def resolve_intent(
     ``alarm_ringing`` is the second: whether a wake alarm is ringing right now, which is
     what makes a bare "Sustur." an ``ALARM_STOP`` (see ``_alarm_match``).
 
-    ``operator_running`` is the third and last: whether a Digital Operator task is running
-    right now (spec §3), which is what makes a bare "Dur." / "İptal et." an
-    ``OPERATOR_CANCEL`` and "Ne yapıyorsun?" an ``OPERATOR_STATUS`` - the same
-    ringing-aware pattern ``alarm_ringing`` already gives the alarm family.
+    ``operator_running`` is the third: whether a Digital Operator task is running right
+    now (spec §3), which is what makes a bare "Dur." / "İptal et." an ``OPERATOR_CANCEL``
+    and "Ne yapıyorsun?" an ``OPERATOR_STATUS`` - the same ringing-aware pattern
+    ``alarm_ringing`` already gives the alarm family.
+
+    ``document_focused`` is the fourth and last (docs/M20_FILE_DOCUMENT_INTELLIGENCE_SPEC.md
+    §3): whether a ``document`` object focus exists right now, which is what makes a bare
+    deictic ("Bunu özetle.", "Ödeme süresi kaç gün?") a document intent rather than falling
+    through to the plain SUMMARIZE control intent or NONE - the same
+    "context, never vocabulary alone" discipline the ringing/running flags already keep.
     """
     normalized, tokens, dropped = normalize_transcript(text)
     confidence = 1.0 if dropped == 0 else 0.9
@@ -1912,6 +2232,90 @@ def resolve_intent(
             scope=SCOPE_CONVERSATION,
             matched=app_matched_text,
             application=app_canonical,
+            **base,
+        )
+
+    # 0f. M20 (docs/M20_FILE_DOCUMENT_INTELLIGENCE_SPEC.md §3): File & Document
+    #     Intelligence. Checked here, alongside the rest of the M19/M20 device-reading
+    #     family and before the generic stop/presentation branches, for the same reason
+    #     app_open is: none of these words mean anything else this resolver already
+    #     claimed higher up, and DOCUMENT_SUMMARIZE must win over the plain SUMMARIZE
+    #     control intent whenever a document (not a research) is what "bunu" points at.
+    if previous_matched := _document_previous_match(tokens):
+        return ResolvedIntent(
+            Intent.DOCUMENT_PREVIOUS,
+            scope=SCOPE_CONVERSATION,
+            matched=previous_matched,
+            document_ref="previous",
+            **base,
+        )
+    if compare_matched := _document_compare_match(tokens):
+        return ResolvedIntent(
+            Intent.DOCUMENT_COMPARE,
+            scope=SCOPE_CONVERSATION,
+            matched=compare_matched,
+            document_ref="current",
+            **base,
+        )
+    if read_matched := _document_read_match(tokens):
+        return ResolvedIntent(
+            Intent.DOCUMENT_READ,
+            scope=SCOPE_CONVERSATION,
+            matched=read_matched,
+            document_ref="current",
+            **base,
+        )
+    if summarize_matched := _document_summarize_match(tokens, document_focused=document_focused):
+        return ResolvedIntent(
+            Intent.DOCUMENT_SUMMARIZE,
+            scope=SCOPE_CONVERSATION,
+            matched=summarize_matched,
+            document_ref="current",
+            **base,
+        )
+    if common_points_matched := _document_common_points_match(tokens):
+        return ResolvedIntent(
+            Intent.DOCUMENT_COMMON_POINTS,
+            scope=SCOPE_CONVERSATION,
+            matched=common_points_matched,
+            **base,
+        )
+    if inspect_matched := _document_inspect_match(tokens):
+        return ResolvedIntent(
+            Intent.DOCUMENT_INSPECT,
+            scope=SCOPE_CONVERSATION,
+            matched=inspect_matched,
+            document_ref="current",
+            **base,
+        )
+    if search_matched := _document_search_match(tokens):
+        return ResolvedIntent(
+            Intent.FILE_SEARCH,
+            scope=SCOPE_CONVERSATION,
+            matched=search_matched,
+            pattern=_extract_document_pattern(tokens),
+            folder=_extract_document_folder(tokens),
+            extensions=_extract_document_extensions(tokens),
+            **base,
+        )
+    if answer_matched := _document_answer_named_match(tokens):
+        return ResolvedIntent(
+            Intent.DOCUMENT_ANSWER,
+            scope=SCOPE_CONVERSATION,
+            matched=answer_matched,
+            document_ref="current",
+            question=text,
+            **base,
+        )
+    if generic_answer_matched := _document_answer_generic_match(
+        tokens, document_focused=document_focused, explain_kind=explain_kind
+    ):
+        return ResolvedIntent(
+            Intent.DOCUMENT_ANSWER,
+            scope=SCOPE_CONVERSATION,
+            matched=generic_answer_matched,
+            document_ref="current",
+            question=text,
             **base,
         )
 

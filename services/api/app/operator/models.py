@@ -30,7 +30,23 @@ from app.models import Base
 #: is a new literal here, never a new table (module docstring).
 FOCUS_KIND_WINDOW = "window"
 FOCUS_KIND_APP = "app"
-FOCUS_KINDS: tuple[str, ...] = (FOCUS_KIND_WINDOW, FOCUS_KIND_APP)
+#: M20 (docs/M20_FILE_DOCUMENT_INTELLIGENCE_SPEC.md §3, ADR-0083 decision 4): additive
+#: kinds for File & Document Intelligence's own focus by identity. ``file`` names a
+#: LOCATION the owner searched to (a single search hit, or the target of a read before it
+#: has been extracted); ``document`` names a CONTENT VERSION (set on every
+#: ``document.extract``); ``folder`` names a search root the owner pointed at by a folder
+#: pattern ("bu klasördeki PDF'leri bul"). Three independent stacks, the same
+#: current/previous discipline every other kind already gets from this module.
+FOCUS_KIND_FILE = "file"
+FOCUS_KIND_DOCUMENT = "document"
+FOCUS_KIND_FOLDER = "folder"
+FOCUS_KINDS: tuple[str, ...] = (
+    FOCUS_KIND_WINDOW,
+    FOCUS_KIND_APP,
+    FOCUS_KIND_FILE,
+    FOCUS_KIND_DOCUMENT,
+    FOCUS_KIND_FOLDER,
+)
 
 #: How many recent rows of ONE kind the stack keeps (bounded, per task brief: "a bounded
 #: stack of the last 20 per kind"). Applied on read/prune, never by a CHECK constraint.
@@ -41,9 +57,7 @@ class ObjectFocusRow(Base):
     """One entry of the owner's object focus stack, for one ``kind``."""
 
     __tablename__ = "object_focus"
-    __table_args__ = (
-        Index("ix_object_focus_kind_selected_at", "kind", "selected_at"),
-    )
+    __table_args__ = (Index("ix_object_focus_kind_selected_at", "kind", "selected_at"),)
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     #: Which realtime session (if any) was in the room when the focus moved. Informational
@@ -69,6 +83,9 @@ class ObjectFocusRow(Base):
 __all__ = [
     "FOCUS_KINDS",
     "FOCUS_KIND_APP",
+    "FOCUS_KIND_DOCUMENT",
+    "FOCUS_KIND_FILE",
+    "FOCUS_KIND_FOLDER",
     "FOCUS_KIND_WINDOW",
     "FOCUS_STACK_LIMIT",
     "ObjectFocusRow",

@@ -46,6 +46,34 @@ CTX_WINDOW_FOCUSED: Final = "window_focused"
 #: OPERATOR_STATUS - the same ringing-aware pattern CTX_ALARM_RINGING already gives.
 CTX_OPERATOR_RUNNING: Final = "operator_running"
 
+#: M20 (docs/M20_FILE_DOCUMENT_INTELLIGENCE_SPEC.md §5): the fixture contexts File &
+#: Document Intelligence needs, all pre-indexed straight from the oracle
+#: (tests/documents_support.py) — no device call, so a case using one of these starts with
+#: the document already known and only calls the device when the tool genuinely needs to
+#: (an extract that has not happened yet, a compare across two files).
+#: The current document is rapor.pdf (5 pages), the previous is sunum-q3.pptx (7 slides) —
+#: exactly the pair the task brief names.
+CTX_DOCUMENT_FOCUSED: Final = "document_focused"
+#: A payment contract (sozlesmeler/2026/sozlesme.docx) is the current document — for the
+#: content questions the pdf/pptx pair cannot answer ("Ödeme süresi kaç gün?").
+CTX_DOCX_FOCUSED: Final = "docx_focused"
+#: The budget spreadsheet is the current document — for "Bu Excel'de ne var?".
+CTX_XLSX_FOCUSED: Final = "xlsx_focused"
+#: The Q3 presentation is the current document — for "Bu sunumda kaç slayt var?".
+CTX_PPTX_FOCUSED: Final = "pptx_focused"
+#: A FILE is focused (found by an earlier search) but not yet read: exercises the actual
+#: ``document.extract`` device call, spec §3's "current file not yet extracted -> extract
+#: it first" branch.
+CTX_FILE_FOCUSED: Final = "file_focused"
+#: Three of the fixture's files are already indexed and recently used — exactly
+#: ``truth.json``'s own ``common_points`` fixture (butce-2026.xlsx, kod.py, notlar.md;
+#: common term "bütçe") — for ``document.common_points``'s default "recent" targets.
+CTX_COMMON_POINTS_FOCUSED: Final = "common_points_focused"
+#: A FILE focus naming a secret-bearing path the device refuses to read at all (spec §2:
+#: ``.env*`` etc -> ``permission_denied``) — never a real secret, never a real device;
+#: tests/documents_support.py's fake recognises the sentinel id and refuses honestly.
+CTX_SECRET_FILE_FOCUSED: Final = "secret_file_focused"
+
 #: Side-effect policies: the device capabilities a case MAY reach on the fake device.
 #: Anything else the fake device saw is a forbidden side effect.
 SIDE_EFFECTS_NONE: Final[frozenset[str]] = frozenset()
@@ -62,9 +90,7 @@ SIDE_EFFECTS_ALARM_CANCEL: Final[frozenset[str]] = frozenset({"desktop.alarm_dis
 #: M19 (docs/M19_DIGITAL_OPERATOR_SPEC.md §4): exactly the device capabilities each plan
 #: may reach on the fake device — anything else the harness sees is a forbidden side
 #: effect (the same policy the alarm/display families already use above).
-SIDE_EFFECTS_OPERATOR_APP_OPEN: Final[frozenset[str]] = frozenset(
-    {"app.launch", "window.current"}
-)
+SIDE_EFFECTS_OPERATOR_APP_OPEN: Final[frozenset[str]] = frozenset({"app.launch", "window.current"})
 SIDE_EFFECTS_OPERATOR_WINDOW_CLOSE: Final[frozenset[str]] = frozenset(
     {"window.close", "window.list"}
 )
@@ -76,6 +102,15 @@ SIDE_EFFECTS_OPERATOR_TYPE: Final[frozenset[str]] = frozenset(
     {"window.activate", "keyboard.type", "ui.inspect"}
 )
 SIDE_EFFECTS_OPERATOR_SHELL: Final[frozenset[str]] = frozenset({"terminal.execute"})
+
+#: M20 (docs/M20_FILE_DOCUMENT_INTELLIGENCE_SPEC.md §4): exactly the device capabilities
+#: each documents tool may reach on the fake device (tests/documents_support.py) — the
+#: same policy discipline every other family above already uses. A case whose document is
+#: already indexed (a CTX_*_FOCUSED fixture) reaches NO capability at all: the index IS
+#: the read, and "no background crawling" means a cached answer never re-reads.
+SIDE_EFFECTS_DOCUMENTS_SEARCH: Final[frozenset[str]] = frozenset({"file.search"})
+SIDE_EFFECTS_DOCUMENTS_READ: Final[frozenset[str]] = frozenset({"document.extract"})
+SIDE_EFFECTS_DOCUMENTS_COMPARE: Final[frozenset[str]] = frozenset({"file.compare"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -1151,6 +1186,305 @@ def _operator_cases() -> list[UtteranceCase]:
     ]
 
 
+# --------------------------------------------------- M20: File & Document Intelligence
+
+
+def _document_search_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        ("doc.search.1", "Bu klasördeki PDF'leri bul.", "canonical"),
+        ("doc.search.2", "Masaüstündeki sözleşme dosyasını bul.", "canonical"),
+        ("doc.search.3", "İndirilenler'de bütçe dosyasını ara.", "canonical"),
+        ("doc.search.4", "Masaüstünde sözleşme dosyasını bulur musun?", "paraphrase"),
+        ("doc.search.5", "İndirilenler klasöründe bütçe dosyasını arar mısın?", "paraphrase"),
+        ("doc.search.6", "Bu klasördeki PDF dosyalarını bulsana.", "paraphrase"),
+        ("doc.search.7", "masaüstündeki sözleşme dosyasını bul", "asr_noise"),
+        ("doc.search.8", "indirilenlerde butce dosyasini ara", "asr_noise"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="file_search",
+                    expected_tool="file.search",
+                    side_effects=SIDE_EFFECTS_DOCUMENTS_SEARCH,
+                    context=CTX_NONE,
+                    category="documents",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _document_read_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        ("doc.read.1", "Bu dosyayı oku.", "canonical"),
+        ("doc.read.2", "Bu belgeyi okur musun?", "paraphrase"),
+        ("doc.read.3", "Dosyayı okusana.", "paraphrase"),
+        ("doc.read.4", "bu dosyayı oku", "asr_noise"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="document_read",
+                    expected_tool="document.read",
+                    side_effects=SIDE_EFFECTS_DOCUMENTS_READ,
+                    context=CTX_FILE_FOCUSED,
+                    category="documents",
+                    source=source,
+                )
+            )
+        )
+    # Already indexed (the current document IS the file): a re-read never re-extracts.
+    cases.append(
+        UtteranceCase(
+            case_id="doc.read.cached",
+            utterance="Bu belgeyi tekrar oku.",
+            expected_intent="document_read",
+            expected_tool="document.read",
+            side_effects=SIDE_EFFECTS_NONE,
+            context=CTX_DOCUMENT_FOCUSED,
+            category="documents",
+            source="paraphrase",
+        )
+    )
+    return cases
+
+
+def _document_summarize_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        ("doc.summ.1", "Bunu özetle.", "canonical"),
+        ("doc.summ.2", "Bu belgeyi özetle.", "canonical"),
+        ("doc.summ.3", "Bu PDF'i özetle.", "canonical"),
+        ("doc.summ.4", "Bu belgeyi özetler misin?", "paraphrase"),
+        ("doc.summ.5", "Bu dosyayı kısaca özetle.", "paraphrase"),
+        ("doc.summ.6", "bu belgeyi özetle", "asr_noise"),
+        ("doc.summ.7", "bu pdfi ozetle", "asr_noise"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="document_summarize",
+                    expected_tool="document.summarize",
+                    side_effects=SIDE_EFFECTS_NONE,
+                    context=CTX_DOCUMENT_FOCUSED,
+                    category="documents",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _document_compare_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        ("doc.cmp.1", "Bir önceki belgeyle karşılaştır.", "canonical"),
+        ("doc.cmp.2", "Önceki dosyayla karşılaştır.", "canonical"),
+        ("doc.cmp.3", "Bunu bir önceki belgeyle karşılaştırır mısın?", "paraphrase"),
+        ("doc.cmp.4", "bir önceki belgeyle karşılaştır", "asr_noise"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="document_compare",
+                    expected_tool="document.compare",
+                    side_effects=SIDE_EFFECTS_DOCUMENTS_COMPARE,
+                    context=CTX_DOCUMENT_FOCUSED,
+                    category="documents",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _document_inspect_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, text, source, context in (
+        ("doc.insp.1", "Bu Excel'de ne var?", "canonical", CTX_XLSX_FOCUSED),
+        ("doc.insp.2", "Bu sunumda kaç slayt var?", "canonical", CTX_PPTX_FOCUSED),
+        ("doc.insp.3", "Bu tabloda ne var?", "paraphrase", CTX_XLSX_FOCUSED),
+        ("doc.insp.4", "Sunumda kaç slayt var?", "paraphrase", CTX_PPTX_FOCUSED),
+        ("doc.insp.5", "bu excelde ne var", "asr_noise", CTX_XLSX_FOCUSED),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="document_inspect",
+                    expected_tool="document.inspect",
+                    side_effects=SIDE_EFFECTS_NONE,
+                    context=context,
+                    category="documents",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _document_answer_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, text, source, context in (
+        ("doc.ans.1", "Üçüncü sayfada ne yazıyor?", "canonical", CTX_DOCUMENT_FOCUSED),
+        ("doc.ans.2", "Ödeme süresi kaç gün?", "canonical", CTX_DOCX_FOCUSED),
+        ("doc.ans.3", "Ödeme süresi ne kadar?", "paraphrase", CTX_DOCX_FOCUSED),
+        ("doc.ans.4", "Üçüncü sayfa ne diyor?", "paraphrase", CTX_DOCUMENT_FOCUSED),
+        ("doc.ans.5", "üçüncü sayfada ne yazıyor", "asr_noise", CTX_DOCUMENT_FOCUSED),
+        ("doc.ans.6", "odeme suresi kac gun", "asr_noise", CTX_DOCX_FOCUSED),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="document_answer",
+                    expected_tool="document.answer",
+                    side_effects=SIDE_EFFECTS_NONE,
+                    context=context,
+                    category="documents",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _document_common_points_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        ("doc.common.1", "Bunların ortak noktalarını çıkar.", "canonical"),
+        ("doc.common.2", "Ortak noktaları söyler misin?", "paraphrase"),
+        ("doc.common.3", "bunların ortak noktalarını çıkar", "asr_noise"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="document_common_points",
+                    expected_tool="document.common_points",
+                    side_effects=SIDE_EFFECTS_NONE,
+                    context=CTX_COMMON_POINTS_FOCUSED,
+                    category="documents",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _document_previous_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        ("doc.prev.1", "Az önceki sunuma geri dön.", "canonical"),
+        ("doc.prev.2", "Bir önceki belgeye dön.", "canonical"),
+        ("doc.prev.3", "Önceki belgeye geçer misin?", "paraphrase"),
+        ("doc.prev.4", "az önceki sunuma geri dön", "asr_noise"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="document_previous",
+                    expected_tool="document.previous",
+                    side_effects=SIDE_EFFECTS_NONE,
+                    context=CTX_DOCUMENT_FOCUSED,
+                    category="documents",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _document_negative_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    # No document focused at all: DOCUMENT_SUMMARIZE still resolves (the noun says so),
+    # and the SERVICE — not a guess — asks which one, exactly like the operator family's
+    # own "no window focused" clarifications.
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="doc.neg.no_focus",
+                utterance="Bu belgeyi özetle.",
+                expected_intent="document_summarize",
+                expected_tool="document.summarize",
+                expected_response=RESPONSE_CLARIFY,
+                side_effects=SIDE_EFFECTS_NONE,
+                context=CTX_NONE,
+                category="documents",
+                source="regression",
+            )
+        )
+    )
+    # "Bu dosyayı sil." reaches no tool and no device capability at all — there is no
+    # delete/move/write tool in M20 (ADR-0083 decision 7); the router resolves nothing.
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="doc.neg.delete",
+                utterance="Bu dosyayı sil.",
+                expected_intent="none",
+                expected_tool=None,
+                expected_response=RESPONSE_NONE,
+                side_effects=SIDE_EFFECTS_NONE,
+                context=CTX_FILE_FOCUSED,
+                category="documents",
+                source="canonical",
+                regression_issue_id="ADR-0083 decision 7",
+            )
+        )
+    )
+    # A secret-bearing path: the tool IS called, and the fake device refuses honestly
+    # (spec §2's confinement rule) — no content leaked, no guess at what the file holds.
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="doc.neg.secret",
+                utterance="Şifre dosyamı oku.",
+                expected_intent="document_read",
+                expected_tool="document.read",
+                expected_response=RESPONSE_REFUSED,
+                expected={"error_class": "permission_denied"},
+                side_effects=SIDE_EFFECTS_DOCUMENTS_READ,
+                context=CTX_SECRET_FILE_FOCUSED,
+                category="documents",
+                source="canonical",
+                regression_issue_id="M20 spec §2 confinement",
+            )
+        )
+    )
+    return cases
+
+
+def _documents_cases() -> list[UtteranceCase]:
+    return [
+        *_document_search_cases(),
+        *_document_read_cases(),
+        *_document_summarize_cases(),
+        *_document_compare_cases(),
+        *_document_inspect_cases(),
+        *_document_answer_cases(),
+        *_document_common_points_cases(),
+        *_document_previous_cases(),
+        *_document_negative_cases(),
+    ]
+
+
 def all_cases() -> list[UtteranceCase]:
     cases = [
         *_research_cases(),
@@ -1161,6 +1495,7 @@ def all_cases() -> list[UtteranceCase]:
         *_control_cases(),
         *_evolution_cases(),
         *_operator_cases(),
+        *_documents_cases(),
     ]
     ids = [c.case_id for c in cases]
     assert len(ids) == len(set(ids)), "duplicate case ids"
