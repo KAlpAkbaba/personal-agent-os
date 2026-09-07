@@ -14,8 +14,11 @@ namespace PagentOS.SessionCompanion.Documents;
 
 /// <summary>
 /// DOCX / XLSX / PPTX through the Open XML SDK (<c>DocumentFormat.OpenXml</c>, MIT; ADR-0083
-/// decision 1). Every part is reached through the SDK's package model — the zip is never
-/// walked by hand — and the references follow <c>truth.json.reference_scheme</c>:
+/// decision 1). Every part is reached through the SDK's package model — the zip's entries
+/// are never inflated by hand; only its central directory is read, by
+/// <see cref="ContainerGuard"/> in the dispatcher, before the SDK is entered, because the
+/// SDK materialises a part's whole DOM in one synchronous getter — and the references follow
+/// <c>truth.json.reference_scheme</c>:
 /// <list type="bullet">
 /// <item>DOCX: <c>p&lt;n&gt;</c> per non-empty paragraph in document order, <c>kind = heading|paragraph</c>
 /// with <c>level</c> from the paragraph's <c>Heading N</c> style; <c>t&lt;n&gt;</c> per table with

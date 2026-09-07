@@ -142,6 +142,12 @@ public static class DocumentErrors
     public const string UnknownKind = "unknown_kind";
     public const string ParseFailed = "parse_failed";
 
+    /// <summary>The container or a stream would inflate past <see cref="DocumentBounds"/>; the parser was not entered (ADR-0083 addendum 3).</summary>
+    public const string DecompressionBound = "decompression_bound";
+
+    /// <summary>A PDF with more pages than <see cref="PagentOS.Agent.Core.Protocol.DocumentCapabilityNames.MaxPdfPages"/> asked for without a <c>page_range</c>; no page was read.</summary>
+    public const string PageBound = "page_bound";
+
     public static CapabilityException Unsupported(string message, string detail)
         => new(ErrorClasses.UnsupportedFormat, message + $" [{detail}]", retryable: false, new Dictionary<string, object?> { [DetailKey] = detail });
 
