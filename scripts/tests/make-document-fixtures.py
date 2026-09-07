@@ -328,7 +328,7 @@ def main(out: Path) -> None:
         files.append(entry)
         (expected_dir / (rel.replace("/", "__") + ".extract.json")).write_text(
             json.dumps({"path": rel, "kind": kind, "match": match, "title": title, "structure": structure or {}, "blocks": blocks}, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
+            encoding="utf-8", newline="\n",
         )
 
     b = make_docx(out / "sozlesmeler/2025/sozlesme.docx", CLAUSES_V1, "Sürüm 1 (2025).")
