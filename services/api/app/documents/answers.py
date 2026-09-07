@@ -477,10 +477,16 @@ def common_points(docs: list[DocRef]) -> dict[str, Any]:
     common = set.intersection(*word_sets) if word_sets else set()
     # Drop overly short/incidental tokens (numbers already excluded by content_words).
     common = {t for t in common if len(t) >= 4}
+    # A spelling that still carries diacritics ("bütçe") is preferred over one that only
+    # coincidentally folded to plain ASCII (a filename like "butce-2026.xlsx") - "first
+    # doc wins" would let the wrong one stick whenever the plain form happens to appear
+    # in an earlier document's own name.
     display_by_norm: dict[str, str] = {}
     for _, display in vocabularies:
         for norm, spelled in display.items():
-            display_by_norm.setdefault(norm, spelled)
+            current = display_by_norm.get(norm)
+            if current is None or (current == norm and spelled != norm):
+                display_by_norm[norm] = spelled
     terms: dict[str, list[dict[str, Any]]] = {}
     for norm_term in sorted(common):
         display_term = display_by_norm.get(norm_term, norm_term)
