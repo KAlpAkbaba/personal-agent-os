@@ -9,7 +9,14 @@
  */
 
 import type { AlarmStage, DisplayState, EyeStatus, PresenceKind, ReleaseStage } from "./ambient";
-import type { KnownUiState } from "./contract";
+import type { DocumentRef, KnownUiState } from "./contract";
+import {
+  type DocumentFacts,
+  type DocumentStage,
+  documentPartPhrase,
+  documentStepLabel,
+  refKind,
+} from "./documents";
 import { type OperatorFacts, type OperatorStage, operatorPosition } from "./operator";
 import type { CoreVisualKind, VisualSource } from "./visual";
 
@@ -37,6 +44,7 @@ export const KIND_LABEL: Record<CoreVisualKind, string> = {
   operator_running: "Operatör çalışıyor",
   operator_verifying: "Operatör doğruluyor",
   operator_failed: "Operatör başarısız",
+  document_analysis: "Belge inceleniyor",
 };
 
 /**
@@ -75,6 +83,11 @@ export const KIND_DETAIL: Record<CoreVisualKind, string> = {
   operator_running: "Dijital operatör masaüstünde bir adımı uyguluyor. Sonuç henüz doğrulanmadı.",
   operator_verifying: "Adım uygulandı; sonuç yeniden gözlenerek son koşul denetleniyor.",
   operator_failed: "Bir operatör adımı son koşulunu karşılamadı ya da reddedildi. Yeni bir bildirim gelene kadar bu durum kalır.",
+  // M20: a document is being read on the owner's machine and answered from
+  // its refs. The file and the place are named only as published; how far
+  // along it is, nothing here knows.
+  document_analysis:
+    "Sahibin bir belgesi okunuyor; dosya ve içindeki yer yalnızca yayınlandığı kadar söylenir. İlerleme bildirilmez.",
 };
 
 /**
@@ -210,6 +223,9 @@ export const STATE_LABEL: Record<KnownUiState, string> = {
   "operator.running": "Operatör çalışıyor",
   "operator.verifying": "Operatör doğruluyor",
   "operator.failed": "Operatör başarısız",
+  // v5 — File & Document Intelligence (M20). "İnceleniyor", not "okundu": the
+  // state is entered when the read starts, and nothing publishes its end.
+  "document.analysis": "Belge inceleniyor",
 };
 
 export function stateLabel(state: string): string {
@@ -231,6 +247,7 @@ export const SUBSYSTEM_LABEL: Record<string, string> = {
   system: "Sistem",
   presence: "Varlık",
   operator: "Operatör",
+  documents: "Belgeler",
 };
 
 export function subsystemLabel(subsystem: string): string {
@@ -378,6 +395,7 @@ export function formatAlarmLevel(level: number | null): string {
 const CONTRACT_ADDITIONS: Record<number, string> = {
   3: "alarm ve ekran durumları",
   4: "dijital operatör durumları",
+  5: "belge inceleme durumu",
 };
 
 /**
@@ -442,4 +460,43 @@ export function operatorStepPhrase(facts: Pick<OperatorFacts, "step" | "stepInde
 /** The failure's class as published, or the fact that none was. */
 export function operatorErrorLine(errorClass: string | null): string {
   return errorClass ? `hata sınıfı: ${errorClass}` : "hata sınıfı bildirilmedi";
+}
+
+// ------------------------------------------- v5: File & Document Intelligence
+
+export const DOCUMENT_LABEL: Record<DocumentStage, string> = {
+  analysing: "Belge inceleniyor",
+  none: "İncelenen bir belge yok",
+};
+
+/** The panel's empty sentence: no document was ever published, which is not "no documents". */
+export const DOCUMENT_EMPTY = "Henüz bir belge okunmadı.";
+
+/**
+ * The published facts on one line, each one either what the publisher sent
+ * or the statement that it did not send it. "Yer bildirilmedi" is a real
+ * answer: a search or an inspect names a file and no place inside it.
+ */
+export function documentFactsLine(facts: DocumentFacts): string {
+  const place = documentPartPhrase(facts.part, facts.kind);
+  const step = documentStepLabel(facts.step);
+  return [
+    facts.file ? `dosya: ${facts.file}` : "dosya bildirilmedi",
+    place ? `yer: ${place}` : "yer bildirilmedi",
+    step ? `adım: ${step}` : "adım bildirilmedi",
+  ].join(" · ");
+}
+
+/**
+ * One cited reference as "dosya · yer · alıntı": the path the answer named
+ * (or the fact that it named none), the place in the owner's words — the
+ * kind read from the cited path, since the ref is about THAT file — and the
+ * excerpt the answer rests on, or the fact that none came with it.
+ */
+export function documentRefLine(ref: DocumentRef): string {
+  return [
+    ref.path ?? "dosya bildirilmedi",
+    documentPartPhrase(ref.ref, refKind(ref)) ?? ref.ref,
+    ref.excerpt ?? "alıntı bildirilmedi",
+  ].join(" · ");
 }

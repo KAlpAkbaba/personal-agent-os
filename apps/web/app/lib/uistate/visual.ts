@@ -45,6 +45,7 @@ import {
   eyeClaim,
   releaseClaim,
 } from "./truth";
+import { type DocumentFacts, documentCaption, documentFacts } from "./documents";
 import { operatorCaption, operatorFacts } from "./operator";
 import type { VoiceUiState } from "../voice/controller";
 
@@ -86,7 +87,14 @@ export type CoreVisualKind =
    */
   | "operator_running"
   | "operator_verifying"
-  | "operator_failed";
+  | "operator_failed"
+  /**
+   * v5 (M20): the Core reading one of the owner's documents — extracting,
+   * retrieving, answering from its refs. A reading posture: information
+   * drawn in, the structure calm, nothing that could be read as progress,
+   * with the published file and place as the caption.
+   */
+  | "document_analysis";
 
 /**
  * Which of the two evidence sources produced the intent (ADR-0061 §4).
@@ -111,6 +119,8 @@ export type PaletteToken =
   | "fault"
   | "lab"
   | "ready"
+  /** v5: the reading Core — a pale parchment gold, calmer than any working tone. */
+  | "reading"
   | "unknown";
 
 /**
@@ -333,6 +343,17 @@ export type VisualIntent = {
   /** The failure's class on `operator.failed` (`focus_mismatch`, `postcondition_failed`, …). */
   operatorErrorClass: string | null;
 
+  // ------------------------------------ v5: File & Document Intelligence (M20 §3)
+  /**
+   * The published facts about the document being read — the file's name,
+   * its path when the Core named it by path, the place inside it and the
+   * step — each `null` when the publisher sent none, and the whole thing
+   * `null` outside the `document_analysis` kind (kept on its last-known
+   * shape, because it describes what WAS being read). Words, not channels:
+   * nothing here moves the geometry, and `label` carries the caption.
+   */
+  document: DocumentFacts | null;
+
   palette: PaletteToken;
 };
 
@@ -415,6 +436,7 @@ function blank(kind: CoreVisualKind, palette: PaletteToken): VisualIntent {
     operatorCapability: null,
     operatorWindow: null,
     operatorErrorClass: null,
+    document: null,
     palette,
   };
 }
@@ -893,6 +915,33 @@ function forLiveState(event: UiStateEvent, claim: Claim): VisualIntent {
       };
     }
 
+    case "document.analysis": {
+      // The reading posture (M20 §3): the same visual language as a tool at
+      // work, turned inward and calmed — text is coming IN to be read, so the
+      // inward flow is the one channel that moves with intent; the shells sit
+      // closer than a plain tool's and the rings turn slowly. Deliberately no
+      // pulse, no constellation and no progress: a document of unknown length
+      // gets no bar, and nothing here could honestly say how far along the
+      // read is. The caption is the published file and place, else the bare
+      // statement that a document is being read.
+      const facts = documentFacts(event);
+      return {
+        ...base("document_analysis", "reading"),
+        label: documentCaption(facts),
+        scale: 1,
+        topology: 0.15,
+        inwardFlow: 0.3,
+        breathAmplitude: 0.03,
+        breathHz: 0.25,
+        energy: e,
+        glow: glowOf(0.28, e),
+        shellSpread: 0.25,
+        ringSpin: 0.2,
+        flowRate: 0.2,
+        document: facts,
+      };
+    }
+
     default:
       // Reached only by a contract state this table has not been taught. Both
       // gates upstream (`isKnownState`, and `coreClaim`'s agent/lab filter)
@@ -1005,8 +1054,10 @@ export function applyVoiceOverlay(bus: VisualIntent, voice: VoiceOverlay): Visua
   // tool, and the bus knows which step and which window. The more specific of
   // two true statements is the one to draw (M19 §4). Only a LIVE operator
   // body earns this — a last-known operator shape yields to the local
-  // observation like every other bus state does.
-  if (voice.state === "tool_running" && isOperatorActing(bus)) return bus;
+  // observation like every other bus state does. v5 extends the same rule to
+  // a live reading Core: a spoken "bunu özetle" runs a document tool, and the
+  // bus knows which file and which page (M20 §3).
+  if (voice.state === "tool_running" && (isOperatorActing(bus) || isDocumentReading(bus))) return bus;
   const local = (kind: CoreVisualKind, palette: PaletteToken): VisualIntent => ({
     ...blank(kind, palette),
     source: "voice",
@@ -1269,4 +1320,13 @@ export function isLabIntent(intent: VisualIntent): boolean {
  */
 export function isOperatorActing(intent: VisualIntent): boolean {
   return intent.kind === "operator_running" || intent.kind === "operator_verifying";
+}
+
+/**
+ * True while the Core body is a LIVE document read (v5). A reading shape that
+ * aged into last-known is not here: we stopped being told, which is not the
+ * same as still reading.
+ */
+export function isDocumentReading(intent: VisualIntent): boolean {
+  return intent.kind === "document_analysis";
 }
