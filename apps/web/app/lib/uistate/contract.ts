@@ -15,7 +15,7 @@
  */
 
 /** Contract version this client was written against (`CONTRACT_VERSION` in contract.py). */
-export const KNOWN_CONTRACT_VERSION = 3;
+export const KNOWN_CONTRACT_VERSION = 4;
 
 /**
  * The build marker of the Living Core (M18.3 §12, qualification A). Rendered server-side
@@ -30,11 +30,13 @@ export const CORE_BUILD_ID = "living-core-1";
  * The oldest server contract this build can still read honestly.
  *
  * v3 is purely ADDITIVE over v2 (M18.3 §7): the event shape is unchanged and
- * the only difference is ten new state tokens. A v2 server therefore serves a
- * strict subset of what this build knows, and refusing to draw anything at all
- * because the alarm states have not shipped yet would be a worse lie than
- * saying so in one line. A server NEWER than this build is a different matter —
- * we do not know its vocabulary, so it stays a mismatch.
+ * the only difference is ten new state tokens. v4 is additive over v3 in the
+ * same way (M19 spec §4): three `operator.*` tokens and one subsystem. A v2 or
+ * v3 server therefore serves a strict subset of what this build knows, and
+ * refusing to draw anything at all because the alarm or operator states have
+ * not shipped yet would be a worse lie than saying so in one line. A server
+ * NEWER than this build is a different matter — we do not know its vocabulary,
+ * so it stays a mismatch.
  */
 export const MIN_SUPPORTED_CONTRACT_VERSION = 2;
 
@@ -126,6 +128,14 @@ export const UI_STATES = [
   // what the agent is doing.
   "display.on",
   "display.off",
+  // v4 (M19 spec §4) — the Digital Operator acting on the owner's desktop
+  // through the companion. Published from real OperatorTask transitions with
+  // `{step, capability, window_title}` (and `error_class` on failure). Its
+  // own channel, and a CORE one: acting on the desktop is the agent's own
+  // work, not a fact about the room.
+  "operator.running",
+  "operator.verifying",
+  "operator.failed",
 ] as const;
 
 export type KnownUiState = (typeof UI_STATES)[number];
@@ -162,6 +172,34 @@ export type DisplayUiState = (typeof DISPLAY_STATES)[number];
 /** True for a `display.*` state. Ambient band only, by construction. */
 export function isDisplayState(state: string): boolean {
   return state.startsWith("display.");
+}
+
+/**
+ * The Digital Operator's states (v4), in the order a task passes through
+ * them: a step is being acted, its result is being re-observed and verified,
+ * or the task failed. There is deliberately no `operator.completed`: a task
+ * that finished is reported by the receipt and the ledger, and the Core is
+ * then whatever the agent publishes next.
+ */
+export const OPERATOR_STATES = [
+  "operator.running",
+  "operator.verifying",
+  "operator.failed",
+] as const;
+
+export type OperatorUiState = (typeof OPERATOR_STATES)[number];
+
+const OPERATOR_STATE_SET: ReadonlySet<string> = new Set(OPERATOR_STATES);
+
+/**
+ * True for a v4 operator state this build knows how to draw.
+ *
+ * Membership, not prefix: a newer server's `operator.cancelled` must not be
+ * drawn as a running operator on the strength of a word this build cannot
+ * read (it reaches the Core as `unknown_state`, which is the honest reading).
+ */
+export function isOperatorState(state: string): state is OperatorUiState {
+  return OPERATOR_STATE_SET.has(state);
 }
 
 /**
@@ -202,6 +240,8 @@ export const SUBSYSTEMS = [
   // policy engine publishes display power.
   "routine",
   "ambient",
+  // v4: the Digital Operator (M19 spec §4) publishes its task transitions.
+  "operator",
 ] as const;
 
 export type Subsystem = (typeof SUBSYSTEMS)[number];
@@ -359,7 +399,27 @@ const STATE_KINDS: Record<KnownUiState, StateKind> = {
   // The display is on or off until something changes it.
   "display.on": "steady",
   "display.off": "steady",
+  // v4. A step being acted or verified is work in flight and decays like any
+  // other transient (with its own horizon, `OPERATOR_STEP_TTL_MS`); a failed
+  // task holds until something newer is published, exactly as `agent.error`
+  // does — the owner is not told a failure went away because time passed.
+  "operator.running": "transient",
+  "operator.verifying": "transient",
+  "operator.failed": "steady",
 };
+
+/**
+ * How long an operator step may be claimed as current without a newer event.
+ *
+ * The publisher speaks once per task transition, not on a heartbeat, and the
+ * companion's per-command cap is 30 s (M19 spec §3; `app.launch` waits up to
+ * 15 s for a window to appear). The twelve-second transient horizon would
+ * report a healthy twenty-second step as lost, so the step's own horizon is
+ * the cap plus a margin. It is still a horizon: a `running` from a minute ago
+ * is drawn as last-known, never as a hand still on the mouse. The publisher's
+ * own `ttl_s` beats this figure, as it beats every figure here.
+ */
+export const OPERATOR_STEP_TTL_MS = 45_000;
 
 /**
  * Per-state lifetimes for v3, in ms, exactly as `docs/M18_3_LIVING_CORE_WAKE_ALARM_SPEC.md`
@@ -382,6 +442,8 @@ const STATE_TTL_MS: Partial<Record<KnownUiState, number>> = {
   "alarm.failed": 5 * 60_000,
   "display.on": 24 * 60 * 60_000,
   "display.off": 24 * 60 * 60_000,
+  "operator.running": OPERATOR_STEP_TTL_MS,
+  "operator.verifying": OPERATOR_STEP_TTL_MS,
 };
 
 /**
@@ -446,13 +508,20 @@ export function stateTtlMs(state: string, event?: UiStateEvent | null): number {
  * v2 put four different kinds of statement on one bus, and they must not
  * displace one another. `owner.likely_asleep` is a fact about the room; it is
  * not the agent going quiet, and publishing it must never blank a core that is
- * genuinely thinking. So the core body draws the `agent`/`lab` channels, and
- * ambient and release are drawn as their own bands with their own ages.
+ * genuinely thinking. So the core body draws the `agent`/`lab`/`operator`
+ * channels, and ambient and release are drawn as their own bands with their
+ * own ages.
+ *
+ * v4's `operator` is a core channel, not a band: the operator acting on the
+ * desktop IS the agent working, and the newest of the three core channels is
+ * what the body draws. It is named separately so the cockpit can ask "what is
+ * the operator doing" without reading it off the agent's own states.
  */
-export type StateChannel = "agent" | "lab" | "ambient" | "release";
+export type StateChannel = "agent" | "lab" | "ambient" | "release" | "operator";
 
 export function stateChannel(state: string): StateChannel {
   if (state.startsWith("evolution.")) return "lab";
+  if (state.startsWith("operator.")) return "operator";
   // v3 adds `display.*` to the room: whether the screens are lit is a fact
   // about the owner's desk, never about the agent's activity.
   if (state.startsWith("eye.") || state.startsWith("owner.") || state.startsWith("display."))
@@ -468,7 +537,7 @@ export function stateChannel(state: string): StateChannel {
 /** States that drive the core body itself. */
 export function isCoreChannel(state: string): boolean {
   const channel = stateChannel(state);
-  return channel === "agent" || channel === "lab";
+  return channel === "agent" || channel === "lab" || channel === "operator";
 }
 
 /** States published by the evolution lab. Never mixed with the agent's own. */

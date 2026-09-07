@@ -24,6 +24,7 @@ import {
   ageMs,
   isAlarmLifecycleState,
   isCoreChannel,
+  isOperatorState,
   isReleaseBandState,
   isSeverity,
   stateChannel,
@@ -267,25 +268,40 @@ export function displayClaim(truth: CoreTruth, now: number): Claim {
 }
 
 /**
+ * The Digital Operator's own claim (v4): the newest of its three lifecycle
+ * states, and nothing else.
+ *
+ * Membership rather than prefix, like `alarmClaim`: a token this build cannot
+ * read must not be reported to the cockpit as "the operator is running". The
+ * claim is returned expired or not — the panel words the age, and a held
+ * `operator.failed` stays until a newer operator event replaces it.
+ */
+export function operatorClaim(truth: CoreTruth, now: number): Claim {
+  return claimFor(newestWhere(truth, isOperatorState), now);
+}
+
+/**
  * What the core body may claim right now.
  *
  * Contract v2 put the room (`eye.*`, `owner.*`) and the release path on the same
  * bus as the agent's own activity, so the API's `current` is no longer the same
  * question as "what is the agent doing". A published `owner.likely_asleep` must
  * not blank a core that is genuinely thinking — the owner going to bed is not the
- * assistant stopping work — so the body reads the newest agent/lab event and the
- * other channels are drawn beside it, each with its own age.
+ * assistant stopping work — so the body reads the newest agent/lab/operator
+ * event and the other channels are drawn beside it, each with its own age.
+ *
+ * v4's operator channel joins the fold as a core channel: the operator acting
+ * on the desktop is the agent's own work. Being the newest core event is the
+ * only precedence there is — an `operator.failed` is replaced by the next
+ * `agent.idle`, as `agent.error` would be, and never outlives it.
  */
 export function coreClaim(truth: CoreTruth, now: number): Claim {
   const current = truth.current;
   if (current && isCoreChannel(current.state)) return claimFor(current, now);
-  const agent = newestOn(truth, "agent");
-  const lab = newestOn(truth, "lab");
-  const newest = !agent ? lab : !lab ? agent : lab.sequence > agent.sequence ? lab : agent;
-  // No agent/lab event at all is not the same as no event at all: the client has
+  // No core event at all is not the same as no event at all: the client has
   // been told something, just nothing about what the agent is doing. `null` here
   // renders as "untold", which is exactly that statement.
-  return claimFor(newest, now);
+  return claimFor(newestWhere(truth, isCoreChannel), now);
 }
 
 /** The still-claimable event on `channel`, or `null` once it has decayed. */

@@ -78,10 +78,11 @@ export function useCoreState(options: { enabled?: boolean } = {}): CoreStateHand
         // Unknown individual states are handled gracefully downstream; a whole
         // version bump is a different, louder thing.
         //
-        // An OLDER but supported server (v2 while this build is v3) is not this
-        // case: v3 only added states, so a v2 stream is a subset we can read.
-        // It is drawn normally and `truth.contractVersion` carries the lag so
-        // the strip can say which states will never arrive (M18.3 §7).
+        // An OLDER but supported server (v2 or v3 while this build is v4) is
+        // not this case: v3 and v4 only added states, so an older stream is a
+        // subset we can read. It is drawn normally and `truth.contractVersion`
+        // carries the lag so the strip can say which states will never arrive
+        // (M18.3 §7; M19 §4).
         failures.current = 0;
         setError(null);
         setTruth((t) => applyContractMismatch(t, response.contract_version));

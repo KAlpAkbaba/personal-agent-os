@@ -48,6 +48,7 @@ import { useCorePreferences } from "../usePreferences";
 import {
   AlarmsPanel,
   AmbientPanel,
+  DigitalOperatorPanel,
   EvolutionPanel,
   EvolutionSupervisorPanel,
   GoalsPanel,
@@ -156,6 +157,10 @@ function Cockpit() {
           <ShadowReadyPanel state={data.shadowReady} />
           {/* ADR-0081: what the supervisor found, what is being built, what is running. */}
           <EvolutionSupervisorPanel state={data.evolutionSupervisor} now={now} />
+          {/* M19 §4: what the operator is doing on the owner's desktop — the
+              step, the capability, the window it observed — from the state
+              feed the Core reads, on the Core's clock rather than this page's. */}
+          <DigitalOperatorPanel truth={truth} now={now} />
           <GoalsPanel state={data.goals} now={now} />
           <ResearchPanel
             state={data.research}

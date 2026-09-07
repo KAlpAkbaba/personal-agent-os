@@ -45,6 +45,7 @@ import {
   eyeClaim,
   releaseClaim,
 } from "./truth";
+import { operatorCaption, operatorFacts } from "./operator";
 import type { VoiceUiState } from "../voice/controller";
 
 export type CoreVisualKind =
@@ -74,7 +75,18 @@ export type CoreVisualKind =
   | "error"
   /** evolution.researching | designing | building | testing */
   | "evolution_working"
-  | "shadow_ready";
+  | "shadow_ready"
+  /**
+   * v4 (M19): the Digital Operator acting on the owner's desktop through the
+   * companion. The posture is the one the visual language reserves for tool
+   * execution — open shells, turning rings, the paths carrying traffic — with
+   * the published step as the caption. Three kinds rather than one, because
+   * "acting", "re-observing to verify" and "failed" are three different
+   * statements and the headline must name the one that was published.
+   */
+  | "operator_running"
+  | "operator_verifying"
+  | "operator_failed";
 
 /**
  * Which of the two evidence sources produced the intent (ADR-0061 §4).
@@ -303,6 +315,24 @@ export type VisualIntent = {
   /** True only when the publisher actually sent a level. */
   wakeLevelKnown: boolean;
 
+  // --------------------------------------- v4: the Digital Operator (M19 §4)
+  /**
+   * The published facts about the operator's current step, each `null` when
+   * the publisher sent none. Set only for the three `operator.*` kinds (and
+   * kept on their last-known shape, because they describe what it *was*
+   * doing). They are words, not channels: nothing here moves the geometry,
+   * and `label` already carries the step as the caption.
+   */
+  operatorStep: string | null;
+  /** The step's zero-based index and the plan's length, when the publisher sent numbers instead. */
+  operatorStepIndex: number | null;
+  operatorStepCount: number | null;
+  operatorCapability: string | null;
+  /** The window title the companion OBSERVED, never the one the plan expected. */
+  operatorWindow: string | null;
+  /** The failure's class on `operator.failed` (`focus_mismatch`, `postcondition_failed`, …). */
+  operatorErrorClass: string | null;
+
   palette: PaletteToken;
 };
 
@@ -379,6 +409,12 @@ function blank(kind: CoreVisualKind, palette: PaletteToken): VisualIntent {
     wakeSurge: 0,
     wakeLevel: null,
     wakeLevelKnown: false,
+    operatorStep: null,
+    operatorStepIndex: null,
+    operatorStepCount: null,
+    operatorCapability: null,
+    operatorWindow: null,
+    operatorErrorClass: null,
     palette,
   };
 }
@@ -775,6 +811,88 @@ function forLiveState(event: UiStateEvent, claim: Claim): VisualIntent {
         flowRate: 0.2,
       };
 
+    case "operator.running": {
+      // A hand on the owner's desktop (M19 §4): the tool-execution posture —
+      // the paths carry the most traffic of any state, the shells open, the
+      // rings turn — a shade more open than a plain tool because a step is
+      // being acted in the owner's own session. The caption is the step the
+      // planner named; without one, the publisher's label; never a guess.
+      const facts = operatorFacts(event);
+      return {
+        ...base("operator_running", "work"),
+        label: operatorCaption(event, facts),
+        scale: 1.02,
+        topology: 0.3,
+        breathAmplitude: 0.025,
+        breathHz: 0.4,
+        energy: e,
+        glow: glowOf(0.35, e),
+        shellSpread: 0.5,
+        ringSpin: 0.45,
+        flowRate: 0.6,
+        operatorStep: facts.step,
+        operatorStepIndex: facts.stepIndex,
+        operatorStepCount: facts.stepCount,
+        operatorCapability: facts.capability,
+        operatorWindow: facts.windowTitle,
+      };
+    }
+
+    case "operator.verifying": {
+      // The second OBSERVE: the result is coming back in to be checked against
+      // the postcondition. Still the working posture, but the flow turns
+      // inward and the traffic on the paths eases — verification is reading,
+      // not acting.
+      const facts = operatorFacts(event);
+      return {
+        ...base("operator_verifying", "work"),
+        label: operatorCaption(event, facts),
+        scale: 1,
+        topology: 0.3,
+        inwardFlow: 0.35,
+        breathAmplitude: 0.025,
+        breathHz: 0.4,
+        energy: e,
+        glow: glowOf(0.3, e),
+        shellSpread: 0.4,
+        ringSpin: 0.3,
+        flowRate: 0.3,
+        operatorStep: facts.step,
+        operatorStepIndex: facts.stepIndex,
+        operatorStepCount: facts.stepCount,
+        operatorCapability: facts.capability,
+        operatorWindow: facts.windowTitle,
+      };
+    }
+
+    case "operator.failed": {
+      // The failure posture, with the operator's own restraint: a step's
+      // postcondition did not hold (or the focus guard refused), so the task
+      // stopped acting. Same bounded, slow agitation as `agent.error`; nothing
+      // flows, because failure is not activity. The error class is a published
+      // token and is shown as one; the caption stays the step it was on.
+      const facts = operatorFacts(event);
+      return {
+        ...base("operator_failed", "fault"),
+        label: operatorCaption(event, facts),
+        scale: 0.98,
+        agitation: ERROR_AGITATION,
+        restraint: 0.5,
+        breathAmplitude: 0.02,
+        breathHz: ERROR_BREATH_HZ,
+        energy: e,
+        glow: glowOf(0.22, e),
+        shellSpread: 0.2,
+        ringSpin: 0.05,
+        operatorStep: facts.step,
+        operatorStepIndex: facts.stepIndex,
+        operatorStepCount: facts.stepCount,
+        operatorCapability: facts.capability,
+        operatorWindow: facts.windowTitle,
+        operatorErrorClass: facts.errorClass,
+      };
+    }
+
     default:
       // Reached only by a contract state this table has not been taught. Both
       // gates upstream (`isKnownState`, and `coreClaim`'s agent/lab filter)
@@ -882,6 +1000,13 @@ export function voiceOverlayApplies(voice: VoiceOverlay | null): boolean {
  */
 export function applyVoiceOverlay(bus: VisualIntent, voice: VoiceOverlay): VisualIntent {
   if (!VOICE_OVERLAY_STATES.has(voice.state)) return bus;
+  // The voice session's `tool_running` and the bus's `operator.running` are
+  // two accounts of the SAME moment: the tool that is running is the operator
+  // tool, and the bus knows which step and which window. The more specific of
+  // two true statements is the one to draw (M19 §4). Only a LIVE operator
+  // body earns this — a last-known operator shape yields to the local
+  // observation like every other bus state does.
+  if (voice.state === "tool_running" && isOperatorActing(bus)) return bus;
   const local = (kind: CoreVisualKind, palette: PaletteToken): VisualIntent => ({
     ...blank(kind, palette),
     source: "voice",
@@ -1135,4 +1260,13 @@ export function isLive(intent: VisualIntent): boolean {
  */
 export function isLabIntent(intent: VisualIntent): boolean {
   return intent.state !== null && isEvolutionState(intent.state);
+}
+
+/**
+ * True while the Core body is a LIVE operator step: acting, or re-observing
+ * to verify. `operator_failed` is deliberately not here (a failure is not
+ * activity), and neither is an operator shape that aged into last-known.
+ */
+export function isOperatorActing(intent: VisualIntent): boolean {
+  return intent.kind === "operator_running" || intent.kind === "operator_verifying";
 }

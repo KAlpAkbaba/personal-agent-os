@@ -10,6 +10,7 @@
 
 import type { AlarmStage, DisplayState, EyeStatus, PresenceKind, ReleaseStage } from "./ambient";
 import type { KnownUiState } from "./contract";
+import { type OperatorFacts, type OperatorStage, operatorPosition } from "./operator";
 import type { CoreVisualKind, VisualSource } from "./visual";
 
 /** Headline shown under the core. One short phrase, no invented detail. */
@@ -33,6 +34,9 @@ export const KIND_LABEL: Record<CoreVisualKind, string> = {
   error: "Hata",
   evolution_working: "Laboratuvar çalışıyor",
   shadow_ready: "Gölge aday hazır",
+  operator_running: "Operatör çalışıyor",
+  operator_verifying: "Operatör doğruluyor",
+  operator_failed: "Operatör başarısız",
 };
 
 /**
@@ -65,6 +69,12 @@ export const KIND_DETAIL: Record<CoreVisualKind, string> = {
   error: "Sahibin bilmesi gereken bir hata var.",
   evolution_working: "Evrim laboratuvarı bir aday üzerinde çalışıyor. Canlı değil.",
   shadow_ready: "Bir aday kapılarını geçti ve onay bekliyor. Canlıya alınmadı.",
+  // M19: every sentence here is about the loop the publisher reported, not
+  // about whether it worked. "Çalışıyor" is a step being sent; "doğruluyor"
+  // is the second observation; a click is never reported as having succeeded.
+  operator_running: "Dijital operatör masaüstünde bir adımı uyguluyor. Sonuç henüz doğrulanmadı.",
+  operator_verifying: "Adım uygulandı; sonuç yeniden gözlenerek son koşul denetleniyor.",
+  operator_failed: "Bir operatör adımı son koşulunu karşılamadı ya da reddedildi. Yeni bir bildirim gelene kadar bu durum kalır.",
 };
 
 /**
@@ -195,6 +205,11 @@ export const STATE_LABEL: Record<KnownUiState, string> = {
   // v3 — display power. Never "uyku": nothing in this milestone suspends a machine.
   "display.on": "Ekranlar açık",
   "display.off": "Ekranlar kapalı",
+  // v4 — the Digital Operator (M19). "Doğruluyor" is the second OBSERVE, said
+  // as its own state: a step that was sent is not a step that worked.
+  "operator.running": "Operatör çalışıyor",
+  "operator.verifying": "Operatör doğruluyor",
+  "operator.failed": "Operatör başarısız",
 };
 
 export function stateLabel(state: string): string {
@@ -215,6 +230,7 @@ export const SUBSYSTEM_LABEL: Record<string, string> = {
   ledger: "Defter",
   system: "Sistem",
   presence: "Varlık",
+  operator: "Operatör",
 };
 
 export function subsystemLabel(subsystem: string): string {
@@ -356,11 +372,74 @@ export function formatAlarmLevel(level: number | null): string {
 }
 
 /**
+ * What each contract version added, in the owner's words, so the lag note can
+ * name exactly the families an older server will never publish.
+ */
+const CONTRACT_ADDITIONS: Record<number, string> = {
+  3: "alarm ve ekran durumları",
+  4: "dijital operatör durumları",
+};
+
+/**
  * What the server's contract version means for what the owner will see.
  *
- * A v2 Cloud Core simply never publishes the alarm or display states, and the
- * absence of an alarm row would otherwise read as "no alarm is set".
+ * A v2 Cloud Core simply never publishes the alarm or display states, a v3
+ * one never the operator's, and the absence of a row would otherwise read as
+ * "no alarm is set" or "the operator never ran". The note names the families
+ * between the server's version and this build's, and nothing more.
  */
 export function contractLagNote(serverVersion: number, knownVersion: number): string {
-  return `Sunucu durum sözleşmesi v${serverVersion}; bu arayüz v${knownVersion}. Alarm ve ekran durumları bu sunucudan henüz yayınlanmıyor — yok demek değil.`;
+  const missing: string[] = [];
+  for (let v = serverVersion + 1; v <= knownVersion; v += 1) {
+    const family = CONTRACT_ADDITIONS[v];
+    if (family) missing.push(family);
+  }
+  const families = missing.length ? missing.join(", ") : "bu sürümün yeni durumları";
+  const sentence = families.charAt(0).toLocaleUpperCase("tr-TR") + families.slice(1);
+  return `Sunucu durum sözleşmesi v${serverVersion}; bu arayüz v${knownVersion}. ${sentence} bu sunucudan henüz yayınlanmıyor — yok demek değil.`;
+}
+
+// ------------------------------------------------ v4: the Digital Operator
+
+export const OPERATOR_LABEL: Record<OperatorStage, string> = {
+  running: "Operatör çalışıyor",
+  verifying: "Operatör doğruluyor",
+  failed: "Operatör başarısız",
+  none: "Süren bir operatör görevi yok",
+};
+
+/** The panel's empty sentence: nothing was ever published, which is not "idle". */
+export const OPERATOR_EMPTY = "Operatör henüz çalışmadı.";
+
+/**
+ * The published facts on one line, each one either the token the publisher
+ * sent or the statement that it did not send one. "Pencere bildirilmedi" is
+ * a real answer: the companion observed no window for this step, or the
+ * publisher did not say — and the difference from a title is the difference
+ * between a verified target and none.
+ */
+export function operatorFactsLine(facts: OperatorFacts): string {
+  return [
+    operatorStepPhrase(facts),
+    facts.capability ? `yetenek: ${facts.capability}` : "yetenek bildirilmedi",
+    facts.windowTitle ? `pencere: ${facts.windowTitle}` : "pencere bildirilmedi",
+  ].join(" · ");
+}
+
+/**
+ * The step as the publisher named it: "adım 1/3: open_notepad" when it sent
+ * both the name and the place, "adım: open_notepad" for the name alone,
+ * "adım 1/3" for the place alone, and the statement that none came.
+ */
+export function operatorStepPhrase(facts: Pick<OperatorFacts, "step" | "stepIndex" | "stepCount">): string {
+  const position = operatorPosition(facts);
+  if (facts.step && position) return `adım ${position}: ${facts.step}`;
+  if (facts.step) return `adım: ${facts.step}`;
+  if (position) return `adım ${position}`;
+  return "adım bildirilmedi";
+}
+
+/** The failure's class as published, or the fact that none was. */
+export function operatorErrorLine(errorClass: string | null): string {
+  return errorClass ? `hata sınıfı: ${errorClass}` : "hata sınıfı bildirilmedi";
 }

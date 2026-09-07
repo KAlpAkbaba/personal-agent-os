@@ -76,6 +76,10 @@ export type CockpitData = {
   voiceQualification: Loaded<VoiceQualification>;
   /** ADR-0081: the Evolution Supervisor's picture, from rows alone. */
   evolutionSupervisor: Loaded<EvolutionSupervisorStatus>;
+  // M19: there is deliberately no `operator` entry here. The Digital Operator
+  // publishes its transitions to the UI-state bus and has no status route;
+  // `DigitalOperatorPanel` reads `CoreTruth` (the Core's own feed and clock),
+  // like `RunningToolsPanel` and `StateStreamPanel` do.
 };
 
 const INITIAL: CockpitData = {

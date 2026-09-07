@@ -25,11 +25,24 @@ import {
   formatAge,
   formatProgress,
   kindDetail,
+  operatorErrorLine,
+  operatorFactsLine,
   stateLabel,
   subsystemLabel,
 } from "../lib/uistate/labels";
+import { isOperatorState } from "../lib/uistate/contract";
+import { operatorPosition } from "../lib/uistate/operator";
 import type { VisualIntent } from "../lib/uistate/visual";
 import { isLive } from "../lib/uistate/visual";
+
+/**
+ * True for the three operator states, live or on their last-known shape.
+ * Membership, not prefix: an `operator.*` word this build cannot read is drawn
+ * as `unknown_state` and gets no facts line it could not have read either.
+ */
+function isOperatorIntent(intent: VisualIntent): boolean {
+  return intent.state !== null && isOperatorState(intent.state);
+}
 
 export type StateReadoutProps = {
   intent: VisualIntent;
@@ -117,6 +130,40 @@ export default function StateReadout({
       {intent.source === "voice" && intent.kind === "speaking" && intent.intensity === null && (
         <p className="muted core-count" data-output-level="unmeasured">
           Çıkış seviyesi ölçülemedi.
+        </p>
+      )}
+
+      {/*
+        M19: the operator's published facts — the step, the capability sent, the
+        window the companion OBSERVED — and, on failure, the error class. Each
+        is the token the publisher sent or the statement that none came; the
+        error class is short enough to belong in the compact caption too.
+      */}
+      {isOperatorIntent(intent) && !compact && (
+        <p
+          className="muted core-count"
+          data-operator-facts
+          data-operator-step={intent.operatorStep ?? ""}
+          data-operator-position={operatorPosition({
+            stepIndex: intent.operatorStepIndex,
+            stepCount: intent.operatorStepCount,
+          }) ?? ""}
+          data-operator-capability={intent.operatorCapability ?? ""}
+          data-operator-window={intent.operatorWindow ?? ""}
+        >
+          {operatorFactsLine({
+            step: intent.operatorStep,
+            stepIndex: intent.operatorStepIndex,
+            stepCount: intent.operatorStepCount,
+            capability: intent.operatorCapability,
+            windowTitle: intent.operatorWindow,
+            errorClass: intent.operatorErrorClass,
+          })}
+        </p>
+      )}
+      {intent.state === "operator.failed" && (
+        <p className="core-count" data-operator-error-class={intent.operatorErrorClass ?? ""}>
+          {operatorErrorLine(intent.operatorErrorClass)}
         </p>
       )}
 
