@@ -231,11 +231,15 @@ param([string]$Url, [string]$LogPath, [string]$StopPath)
 while (-not (Test-Path $StopPath)) {
     $t = (Get-Date).ToUniversalTime().ToString("o")
     $ok = $false; $code = 0; $err = ""
+    # 10 s: "dropped" means no answer at all within ten seconds. A slower-than-usual answer
+    # (the host building an image: 3.3 s in runs 2 and 8) is a latency spike, kept per
+    # probe in the fourth column so the report can say how slow, not a gap.
+    $sw = [Diagnostics.Stopwatch]::StartNew()
     try {
         $req = [Net.HttpWebRequest]::Create($Url)
         $req.Method = "GET"
-        $req.Timeout = 3000
-        $req.ReadWriteTimeout = 3000
+        $req.Timeout = 10000
+        $req.ReadWriteTimeout = 10000
         $req.KeepAlive = $false
         $resp = $req.GetResponse()
         $code = [int]$resp.StatusCode
@@ -245,7 +249,8 @@ while (-not (Test-Path $StopPath)) {
         $err = "WebException:" + $_.Exception.Status
         if ($null -ne $_.Exception.Response) { try { $code = [int]$_.Exception.Response.StatusCode } catch { } }
     } catch { $err = $_.Exception.GetType().Name }
-    [IO.File]::AppendAllText($LogPath, ("{0}`t{1}`t{2}`t{3}`n" -f $t, $(if ($ok) { "ok" } else { "fail" }), $code, $err))
+    $sw.Stop()
+    [IO.File]::AppendAllText($LogPath, ("{0}`t{1}`t{2}`t{3}`t{4}`n" -f $t, $(if ($ok) { "ok" } else { "fail" }), $code, $err, $sw.ElapsedMilliseconds))
     Start-Sleep -Milliseconds 250
 }
 '@
@@ -340,6 +345,9 @@ function Stop-Prober {
     if (Test-Path $Prober.Log) { $rows = @(Get-Content $Prober.Log | Where-Object { $_ }) }
     $total = $rows.Count
     $failed = @($rows | Where-Object { $_ -match "`tfail`t" })
+    $latencies = @($rows | ForEach-Object { $cols = $_ -split "`t"; if ($cols.Count -ge 5 -and $cols[4] -match '^\d+$') { [int]$cols[4] } })
+    $maxLatency = if ($latencies.Count -gt 0) { ($latencies | Measure-Object -Maximum).Maximum } else { $null }
+    $slow = @($latencies | Where-Object { $_ -gt 3000 }).Count
     $gapS = 0.0; $firstFail = $null; $recoveredAt = $null
     if ($failed.Count -gt 0) {
         $firstFail = [datetime]::Parse(($failed[0] -split "`t")[0])
@@ -355,6 +363,9 @@ function Stop-Prober {
         recovered_at     = if ($recoveredAt) { $recoveredAt.ToUniversalTime().ToString("o") } else { $null }
         gap_seconds      = $gapS
         interval_ms      = 250
+        probe_timeout_ms = 10000
+        max_latency_ms   = $maxLatency
+        slow_probes_over_3s = $slow
         device_polls            = $device.device_polls
         device_offline_polls    = $device.device_offline_polls
         device_unknown_polls    = $device.device_unknown_polls
@@ -503,7 +514,7 @@ try {
         Add-Check "release (legacy): device presence gap bounded by the drain window" ($mB.device_polls -gt 0 -and $w -ge 0 -and $w -le 75) "polls=$($mB.device_polls) offline_polls=$($mB.device_offline_polls) window=$($w)s (limit 75 s = 60 s drain + reconnect)"
     }
     else {
-        Add-Check "blue/green release with no gap" ($mB.probes -gt 0 -and $mB.dropped -eq 0) "probes=$($mB.probes) dropped=$($mB.dropped) gap=$($mB.gap_seconds)s"
+        Add-Check "blue/green release with no gap" ($mB.probes -gt 0 -and $mB.dropped -eq 0) "probes=$($mB.probes) dropped=$($mB.dropped) gap=$($mB.gap_seconds)s max_latency=$($mB.max_latency_ms)ms slow(>3s)=$($mB.slow_probes_over_3s)"
         $handoffLine = (($releaseOut -split "`n") | Where-Object { $_ -match "device handoff:" } | Select-Object -First 1)
         Add-Check "release: the device sessions were handed to the new colour BEFORE it took HTTP" ($null -ne $handoffLine -and $handoffLine -match "device handoff: (\d+)/(\d+) after (\d+)s" -and [int]$Matches[1] -ge 1 -and [int]$Matches[1] -ge [int]$Matches[2]) "$(if ($handoffLine) { $handoffLine.Trim() } else { 'no handoff line in the release output' })"
         Add-DeviceGapCheck "release" $mB

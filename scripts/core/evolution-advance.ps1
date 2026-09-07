@@ -110,9 +110,14 @@ try {
             Write-Host "approved -> $(Get-OptionalProperty -InputObject $result -Name 'status')"
         }
         "Footprint" {
-            $result = Post-Json "/v1/evolution/opportunities/$Footprint/footprint" @{ changed_paths = @($ChangedPaths) }
+            # Invoked with -File from another process, a comma-separated list arrives as ONE
+            # string (PowerShell only splits arrays inside its own parser); the first real
+            # footprint on production was one comma-joined "path" that matched no rule and
+            # derived tier 2 for a tier-3 change. Split here; the route refuses commas too.
+            $paths = @($ChangedPaths | ForEach-Object { $_ -split "[,;]" } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+            $result = Post-Json "/v1/evolution/opportunities/$Footprint/footprint" @{ changed_paths = $paths }
             $detail = Get-OptionalProperty -InputObject $result -Name "detail"
-            Write-Host "footprint recorded: risk tier $(if ($null -ne $detail) { Get-OptionalProperty -InputObject $detail -Name 'risk_tier' } else { '?' }) over $(@($ChangedPaths).Count) path(s)"
+            Write-Host "footprint recorded: risk tier $(if ($null -ne $detail) { Get-OptionalProperty -InputObject $detail -Name 'risk_tier' } else { '?' }) over $(@($paths).Count) path(s)"
         }
         "Authorize" {
             $body = @{ confirm_high_risk = [bool]$ConfirmHighRisk }

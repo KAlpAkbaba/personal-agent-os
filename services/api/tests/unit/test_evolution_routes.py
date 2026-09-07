@@ -528,7 +528,10 @@ def test_policy_publishes_the_whole_contract(client: TestClient) -> None:
         "rollback_guarantees",
         "security_policy_kernel",
     }
-    assert policy["release_evidence_provider"] == "null"
+    # ADR-0081 addendum 3: the ledger is the source of release evidence (a real
+    # deployment.cloud_core.released row names the candidate's sha); the null provider
+    # left LIVE unreachable on production.
+    assert policy["release_evidence_provider"] == "ledger"
     assert policy["actors"] == ["owner", "system", "lab"]
 
 
@@ -572,6 +575,15 @@ def test_the_authorize_route_completes_the_chain_with_a_second_confirmation_for_
     assert footprint.status_code == 200, footprint.text
     assert footprint.json()["detail"]["risk_tier"] >= 3
     assert client.post(f"{base}/footprint", json={"changed_paths": []}).status_code == 422
+    # A comma-joined list as ONE path matched no rule and derived tier 2 on production
+    # (2026-09-07): a malformed footprint is refused before any tier is derived.
+    joined = client.post(
+        f"{base}/footprint",
+        json={"changed_paths": ["services/api/app/broker/runtime.py,infra/docker/edge/nginx.conf"]},
+    )
+    assert joined.status_code == 422, joined.text
+    assert "one path per item" in joined.text
+    assert client.get(base).json()["detail"]["risk_tier"] >= 3
 
     # Tier 3: the first call refuses and says why; the body cannot lower the tier.
     first = client.post(f"{base}/authorize", json={"note": "olur"})
@@ -592,9 +604,39 @@ def test_the_authorize_route_completes_the_chain_with_a_second_confirmation_for_
     assert frozen.status_code in (403, 409), frozen.text
 
     # And the production side opens from here, as from owner_approved.
-    qualifying = client.post(f"{base}/advance", json={"target": "qualifying", "actor": "system"})
+    sha = "1072d0d5fc3ded31518c6adc42c4fee9c3cb3dfd"
+    qualifying = client.post(
+        f"{base}/advance",
+        json={
+            "target": "qualifying",
+            "actor": "system",
+            "candidate_ref": f"pagentos/cloud-core:{sha}",
+        },
+    )
     assert qualifying.status_code == 200, qualifying.text
     assert qualifying.json()["status"] == "qualifying"
+
+    # DEPLOYING needs a REAL release record: no ledger row, no deployment (the exact
+    # refusal the first production lifecycle met, 2026-09-07).
+    refused = client.post(f"{base}/advance", json={"target": "deploying", "actor": "system"})
+    assert refused.status_code == 409, refused.text
+    assert "no release evidence" in refused.json()["detail"]["message"]
+
+    # The harness recorded the blue/green release of that sha: now it is release-ready.
+    insert_ledger_event(
+        client.app.state.evolution.session,
+        event_type="deployment.cloud_core.released",
+        result=sha,
+    )
+    deploying = client.post(f"{base}/advance", json={"target": "deploying", "actor": "system"})
+    assert deploying.status_code == 200, deploying.text
+    assert deploying.json()["detail"]["release_ref"].startswith("ledger_event:")
+    verifying = client.post(f"{base}/advance", json={"target": "verifying", "actor": "system"})
+    assert verifying.status_code == 200, verifying.text
+    live = client.post(f"{base}/advance", json={"target": "live", "actor": "system"})
+    assert live.status_code == 200, live.text
+    assert live.json()["status"] == "live"
+    assert live.json()["detail"]["release_ref"].startswith("ledger_event:")
 
 
 def test_the_authorize_route_requires_the_owner_session(client: TestClient) -> None:

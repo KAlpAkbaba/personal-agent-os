@@ -41,7 +41,7 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.evolution.audit import build_audit
 from app.evolution.authority import (
@@ -318,10 +318,30 @@ class ApproveBody(BaseModel):
     note: str | None = Field(default=None, max_length=512)
 
 
+#: One repository path: no commas, no whitespace, no quotes. A comma-joined list arriving
+#: as ONE "path" matched no risk rule and derived tier 2 for a tier-3 change on production
+#: (2026-09-07, the first real footprint over REST): a malformed footprint is refused, never
+#: assessed.
+_PATH_PATTERN = r"^[A-Za-z0-9_./@+~-]{1,512}$"
+
+
 class FootprintBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     changed_paths: list[str] = Field(min_length=1, max_length=512)
+
+    @field_validator("changed_paths")
+    @classmethod
+    def _paths_are_single_paths(cls, value: list[str]) -> list[str]:
+        import re
+
+        for path in value:
+            if not re.match(_PATH_PATTERN, path):
+                raise ValueError(
+                    f"not a single repository path: {path[:80]!r} (one path per item; "
+                    "no commas, no whitespace)"
+                )
+        return value
 
 
 class AuthorizeBody(BaseModel):

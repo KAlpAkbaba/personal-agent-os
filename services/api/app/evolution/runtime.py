@@ -47,6 +47,7 @@ from app.evolution.components import ComponentCatalog
 from app.evolution.gaps import CapabilityComposer, GapDetector, GapService
 from app.evolution.improvement import ImprovementDetector, SkillImprover
 from app.evolution.registry import CapabilityRegistry
+from app.evolution.release_evidence import LedgerReleaseEvidenceProvider
 from app.evolution.resources import ResourceBudget
 from app.evolution.review import IndependentSkillReviewer
 from app.evolution.sandbox import SandboxPolicy
@@ -145,13 +146,16 @@ class EvolutionRuntime:
         authority is minted per request from a verified owner session in
         ``app/evolution/routes.py`` and never stored here.
 
-        ``release_evidence`` is left at the null provider: this build has no
-        wired source of owner-approved release records, and the fail-safe
-        direction is that ``LIVE`` stays unreachable until the integrator
-        injects a real one.
+        ``release_evidence`` is the ledger (ADR-0081 addendum 3): an opportunity is
+        release-ready exactly when a ``deployment.cloud_core.released`` row names its
+        candidate's sha - rows the blue/green harness and driver record under the owner's
+        session after the switch was verified through the edge. Nothing a caller sends
+        can stand in for that row, so ``LIVE`` still points at a durable deployment.
         """
         if self._evolution_service is None:
-            self._evolution_service = EvolutionService(self.session)
+            self._evolution_service = EvolutionService(
+                self.session, release_evidence=LedgerReleaseEvidenceProvider(self.session)
+            )
         return self._evolution_service
 
     @property

@@ -86,7 +86,9 @@ def make_session_factory():
     return session_scope
 
 
-def insert_ledger_event(session_scope) -> str:
+def insert_ledger_event(
+    session_scope, *, event_type: str = "incident.opened", result: str | None = None
+) -> str:
     event_id = uuid.uuid4()
     with session_scope() as session:
         session.add(
@@ -94,11 +96,12 @@ def insert_ledger_event(session_scope) -> str:
                 event_id=event_id,
                 occurred_at=datetime.now(UTC),
                 recorded_at=datetime.now(UTC),
-                event_type="incident.opened",
+                event_type=event_type,
                 subsystem="cloud_core",
                 status="completed",
                 severity="warning",
-                action="incident.opened",
+                action=event_type,
+                result=result,
                 production_state="n/a",
                 evidence_refs=[],
                 factual_summary="Araştırma işi üç kez aynı hatayla düştü.",
