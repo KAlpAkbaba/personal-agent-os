@@ -46,7 +46,8 @@ public sealed class CompanionRuntime(
     DisplayPowerController? displayPower = null,
     AlarmArmController? alarmArms = null,
     ActivityStatusReporter? activityStatus = null,
-    GreetingPlayer? greeting = null)
+    GreetingPlayer? greeting = null,
+    Operator.OperatorCapabilities? operatorCapabilities = null)
 {
     private const int ConnectTimeoutMs = 2000;
 
@@ -109,14 +110,23 @@ public sealed class CompanionRuntime(
 
     /// <summary>
     /// The capabilities this companion announces in its hello: the desktop names and the M18
-    /// alarm pair always, the browser family only when a worker is configured (M13), and
-    /// <c>desktop.display_off</c> only when display power was enabled out loud (M18).
-    /// Advertising a name is a promise to answer it with something other than a hang.
+    /// alarm pair always, the browser family only when a worker is configured (M13),
+    /// <c>desktop.display_off</c> only when display power was enabled out loud (M18), and the
+    /// Digital Operator family only when it was enabled out loud (M19). Advertising a name is
+    /// a promise to answer it with something other than a hang.
     /// </summary>
     public IReadOnlyList<string> AdvertisedCapabilities
         => AgentCapabilities.Compose(
             browserWorker?.IsConfigured == true,
-            displayPower?.Enabled == true);
+            displayPower?.Enabled == true,
+            operatorCapabilities?.Enabled == true);
+
+    /// <summary>
+    /// The operator's budget for a request: what is LEFT of the service's wait, less the
+    /// same headroom the browser path keeps so the typed answer (timeout) arrives before the
+    /// service synthesises one.
+    /// </summary>
+    public static TimeSpan OperatorBudget(ExecRequest request, long nowUnixMs) => BrowserBudget(request, nowUnixMs);
 
     /// <summary>
     /// The default is the PRODUCTION posture: only a pipe owned by an account that can host
@@ -369,6 +379,7 @@ public sealed class CompanionRuntime(
             }
 
             if (AgentCapabilities.IsBrowser(request.Capability)
+                || AgentCapabilities.IsOperator(request.Capability)
                 || string.Equals(request.Capability, AgentCapabilities.DesktopPlayAudio, StringComparison.Ordinal))
             {
                 // M13: browser requests are long (a navigation, an extraction) and may run
@@ -378,6 +389,11 @@ public sealed class CompanionRuntime(
                 // M18.3 puts desktop.play_audio on the same path for the same reason: it
                 // blocks until the greeting has finished (up to 20 s), and a status request
                 // that arrived meanwhile must still be answered — the heartbeat depends on it.
+                //
+                // M19 puts the operator family here too: a launch waits up to 10 s for a
+                // window and a terminal command up to 30 s. The operator serialises its own
+                // actions (one pair of hands), so "concurrent" here only means the read loop
+                // and the heartbeat's status request are never behind a Notepad launch.
                 var task = Task.Run(async () =>
                 {
                     var browserResponse = await ExecuteLongRunningAsync(request, cancellationToken).ConfigureAwait(false);
@@ -426,6 +442,27 @@ public sealed class CompanionRuntime(
                     greetingResult["audio_id"]?.GetValue<string>(),
                     greetingResult["duration_ms"]?.GetValue<int>());
                 return new ExecResponse { RequestId = request.RequestId, Ok = true, Result = greetingResult };
+            }
+
+            if (AgentCapabilities.IsOperator(request.Capability))
+            {
+                // M19: not configured (or configured off) → capability_missing, exactly like
+                // a browser name on a companion without a worker. The service refuses the
+                // family too when its own OperatorEnabled is off; both gates must be open.
+                if (operatorCapabilities is null || !operatorCapabilities.Enabled)
+                {
+                    throw new CapabilityException(
+                        ErrorClasses.CapabilityMissing,
+                        $"capability '{request.Capability}' is not enabled on this companion (PAGENTOS_AGENT_OperatorEnabled=true enables the Digital Operator)",
+                        retryable: false);
+                }
+
+                var operatorBudget = OperatorBudget(request, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+                var operatorResult = await operatorCapabilities
+                    .ExecuteAsync(request.Capability, request.Payload, operatorBudget, cancellationToken)
+                    .ConfigureAwait(false);
+                logger.LogInformation("executed {Capability}: ok", request.Capability);
+                return new ExecResponse { RequestId = request.RequestId, Ok = true, Result = operatorResult };
             }
 
             if (browserWorker is null || !browserWorker.IsConfigured)
@@ -477,7 +514,7 @@ public sealed class CompanionRuntime(
             {
                 RequestId = request.RequestId,
                 Ok = false,
-                Error = ErrorObjects.Create(ErrorClasses.Cancelled, "companion connection closed while the browser request was running", retryable: true),
+                Error = ErrorObjects.Create(ErrorClasses.Cancelled, "companion connection closed while the request was running", retryable: true),
             };
         }
         catch (Exception ex)

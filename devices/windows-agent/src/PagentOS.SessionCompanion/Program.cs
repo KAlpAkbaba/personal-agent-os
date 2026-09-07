@@ -297,6 +297,25 @@ public static class Program
             () => alarm?.RingingAlarmId,
             alarmArms);
 
+        // M19 (M19_DIGITAL_OPERATOR_SPEC.md §2/§3): the Digital Operator. OFF unless asked for
+        // out loud on BOTH halves (this key and the service's), and built only then, so a
+        // companion that was not told to operate the desktop has no object that could.
+        var operatorOptions = Operator.OperatorOptions.FromConfiguration(configuration);
+        Operator.OperatorCapabilities? operatorCapabilities = null;
+        if (operatorOptions.Enabled && OperatingSystem.IsWindows())
+        {
+            operatorCapabilities = new Operator.OperatorCapabilities(operatorOptions, loggerFactory.CreateLogger("Operator"), audit);
+            logger.LogInformation(
+                "digital operator: ENABLED - {Count} capabilities; terminal allowlist=[{Allowlist}] roots=[{Roots}]",
+                AgentCapabilities.Operator.Count,
+                string.Join(" | ", operatorCapabilities.Terminal.Allowlist),
+                string.Join(";", operatorCapabilities.AuthorisedRoots));
+        }
+        else
+        {
+            logger.LogInformation("digital operator: disabled (PAGENTOS_AGENT_OperatorEnabled=true enables it); the operator family is not advertised");
+        }
+
         var runtime = new CompanionRuntime(
             pipeName,
             new AppLauncher(allowlist),
@@ -310,7 +329,8 @@ public static class Program
             displayPower: displayPower,
             alarmArms: alarmArms,
             activityStatus: activityStatus,
-            greeting: greeting);
+            greeting: greeting,
+            operatorCapabilities: operatorCapabilities);
         logger.LogInformation("capabilities advertised to the device service: {Capabilities}", string.Join(",", runtime.AdvertisedCapabilities));
 
         if (browserHost is not null && browserOptions.Eager)
