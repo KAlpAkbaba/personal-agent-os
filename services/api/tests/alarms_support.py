@@ -7,6 +7,7 @@ Nothing here opens a browser, plays audio, changes a volume or touches a display
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -48,10 +49,16 @@ class FakeDeviceAction:
 
     ``results`` maps a capability name to the ``DeviceRunResult`` it should return; anything
     unscripted succeeds with an empty result, which is deliberately the LEAST informative
-    success — a test that wants a verified read-back has to say so.
+    success — a test that wants a verified read-back has to say so. A mapped value may
+    instead be a ``Callable[[dict], DeviceRunResult]`` when a result must echo something
+    from its own payload (M19: ``window.activate`` echoing back the requested
+    ``window_id``, so a plan that resolves the PREVIOUS window's id gets a foreground
+    window matching THAT id back, not always the same canned one).
     """
 
-    results: dict[str, DeviceRunResult] = field(default_factory=dict)
+    results: dict[str, DeviceRunResult | Callable[[dict[str, Any]], DeviceRunResult]] = field(
+        default_factory=dict
+    )
     calls: list[dict[str, Any]] = field(default_factory=list)
 
     def run(
@@ -70,7 +77,8 @@ class FakeDeviceAction:
                 "timeout_s": timeout_s,
             }
         )
-        return self.results.get(capability, DeviceRunResult(True, result={}))
+        scripted = self.results.get(capability, DeviceRunResult(True, result={}))
+        return scripted(payload) if callable(scripted) else scripted
 
     def capabilities_called(self) -> list[str]:
         return [c["capability"] for c in self.calls]
@@ -101,6 +109,64 @@ def refused(reason: str, **extra: Any) -> DeviceRunResult:
     return DeviceRunResult(True, result={"refused": reason, "display_off": False, **extra})
 
 
+#: M19 (docs/M19_DIGITAL_OPERATOR_SPEC.md §2): the window ``app.launch`` produces and
+#: every window-observing capability re-observes, so a plan's postcondition VERIFIES by
+#: default the same way the alarm capabilities above do. ``window.list``'s happy default
+#: is EMPTY (the window already gone) because the only plan that calls it is
+#: ``close_window``'s second step, and its postcondition is "the window is gone".
+_OPERATOR_WINDOW: dict[str, Any] = {
+    "window_id": "w-1",
+    "pid": 4242,
+    "title": "Adsız - Not Defteri",
+    "state": "normal",
+    "foreground": True,
+}
+
+
+#: Every operator device capability the corpus/unit tests need, answered so a plan's
+#: postcondition VERIFIES by default. ``terminal.execute``'s canned stdout carries BOTH a
+#: hostname-shaped first line ("MAIL") and an IPv4-looking line, because the fake device is
+#: keyed on capability alone (never on payload) and one static answer has to satisfy both
+#: the "IP adresimi göster" and "Bilgisayarın adı ne?" postconditions
+#: (``app.operator.plans.shell_query``); the tool reads only the first line for the
+#: hostname's spoken value.
+def _activate_result(payload: dict[str, Any]) -> DeviceRunResult:
+    """Echoes back the requested ``window_id`` (M19: a plan that resolved the PREVIOUS
+    window's id must see THAT id come back foreground, not always "w-1")."""
+    window_id = str(payload.get("window_id") or "w-1")
+    return ok(window={**_OPERATOR_WINDOW, "window_id": window_id, "foreground": True})
+
+
+def happy_operator_device_results() -> dict[str, DeviceRunResult | Callable]:
+    return {
+        "app.launch": ok(pid=4242, window_id="w-1", title="Adsız - Not Defteri"),
+        "window.current": ok(window=dict(_OPERATOR_WINDOW)),
+        "window.list": ok(windows=[]),
+        "window.activate": _activate_result,
+        "window.maximize": ok(window={**_OPERATOR_WINDOW, "state": "maximized"}),
+        "window.minimize": ok(
+            window={**_OPERATOR_WINDOW, "state": "minimized", "foreground": False}
+        ),
+        "window.restore": ok(window={**_OPERATOR_WINDOW, "state": "normal"}),
+        "window.close": ok(closed=True),
+        "keyboard.type": ok(typed_chars=8, window_id="w-1"),
+        "ui.inspect": ok(
+            root={
+                "automation_id": "15",
+                "name": "Edit",
+                "control_type": "Edit",
+                "value": "merhaba",
+            }
+        ),
+        "terminal.execute": ok(
+            exit_code=0,
+            stdout="MAIL\r\nIPv4 Address. . . . . . . . . . . : 192.168.1.50\r\n",
+            stderr="",
+            duration_ms=12,
+        ),
+    }
+
+
 #: Every device capability a fully-successful wake sequence needs, answered so that each
 #: read-back VERIFIES. Tests override one key at a time to make a single step fail.
 def happy_device_results() -> dict[str, DeviceRunResult]:
@@ -117,6 +183,7 @@ def happy_device_results() -> dict[str, DeviceRunResult]:
         "browser.media_volume": ok(applied=True, level_to=0.6),
         "browser.media_status": ok(present=True, playing=True, ended=False),
         "browser.media_stop": ok(stopped=True, was_playing=True),
+        **happy_operator_device_results(),
     }
 
 
@@ -143,6 +210,7 @@ __all__ = [
     "build_session_factory",
     "failed",
     "happy_device_results",
+    "happy_operator_device_results",
     "ok",
     "refused",
 ]

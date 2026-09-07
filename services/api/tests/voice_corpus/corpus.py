@@ -37,6 +37,14 @@ CTX_RESEARCH_FOCUS_B: Final = "research_focus_b"  # A (older) and B (newer, focu
 CTX_ALARM_RINGING: Final = "alarm_ringing"
 CTX_ALARM_SCHEDULED: Final = "alarm_scheduled"
 CTX_EYE_DISABLED: Final = "eye_disabled"
+#: M19 (docs/M19_DIGITAL_OPERATOR_SPEC.md §5): a window ("w-1", and an older "w-0") is
+#: already the durable object focus - the window-control and type-text families resolve
+#: their target through it, never through a window id the model guessed.
+CTX_WINDOW_FOCUSED: Final = "window_focused"
+#: An operator task is genuinely mid-flight (the exact slot ``OperatorService.start_task``
+#: fills), so a bare "Dur."/"İptal et." routes to OPERATOR_CANCEL and "Ne yapıyorsun?" to
+#: OPERATOR_STATUS - the same ringing-aware pattern CTX_ALARM_RINGING already gives.
+CTX_OPERATOR_RUNNING: Final = "operator_running"
 
 #: Side-effect policies: the device capabilities a case MAY reach on the fake device.
 #: Anything else the fake device saw is a forbidden side effect.
@@ -50,6 +58,24 @@ SIDE_EFFECTS_ALARM_SNOOZE: Final[frozenset[str]] = frozenset(
     {"browser.media_stop", "desktop.alarm_stop", "desktop.alarm_disarm", "desktop.alarm_arm"}
 )
 SIDE_EFFECTS_ALARM_CANCEL: Final[frozenset[str]] = frozenset({"desktop.alarm_disarm"})
+
+#: M19 (docs/M19_DIGITAL_OPERATOR_SPEC.md §4): exactly the device capabilities each plan
+#: may reach on the fake device — anything else the harness sees is a forbidden side
+#: effect (the same policy the alarm/display families already use above).
+SIDE_EFFECTS_OPERATOR_APP_OPEN: Final[frozenset[str]] = frozenset(
+    {"app.launch", "window.current"}
+)
+SIDE_EFFECTS_OPERATOR_WINDOW_CLOSE: Final[frozenset[str]] = frozenset(
+    {"window.close", "window.list"}
+)
+SIDE_EFFECTS_OPERATOR_WINDOW_MAXIMIZE: Final[frozenset[str]] = frozenset({"window.maximize"})
+SIDE_EFFECTS_OPERATOR_WINDOW_MINIMIZE: Final[frozenset[str]] = frozenset({"window.minimize"})
+SIDE_EFFECTS_OPERATOR_WINDOW_RESTORE: Final[frozenset[str]] = frozenset({"window.restore"})
+SIDE_EFFECTS_OPERATOR_WINDOW_PREVIOUS: Final[frozenset[str]] = frozenset({"window.activate"})
+SIDE_EFFECTS_OPERATOR_TYPE: Final[frozenset[str]] = frozenset(
+    {"window.activate", "keyboard.type", "ui.inspect"}
+)
+SIDE_EFFECTS_OPERATOR_SHELL: Final[frozenset[str]] = frozenset({"terminal.execute"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -800,6 +826,331 @@ def _evolution_cases() -> list[UtteranceCase]:
     return cases
 
 
+# ----------------------------------------------------------- M19: the Digital Operator
+
+
+def _operator_app_open_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        ("op.app.1", "Not Defteri'ni aç.", "canonical"),
+        ("op.app.2", "Not defterini aç.", "paraphrase"),
+        ("op.app.3", "Chrome'u aç.", "canonical"),
+        ("op.app.4", "Chrome aç.", "paraphrase"),
+        ("op.app.5", "Tarayıcıyı aç.", "canonical"),
+        ("op.app.6", "Google Chrome'u açar mısın?", "paraphrase"),
+        ("op.app.7", "Tarayıcıyı bi aç.", "paraphrase"),
+        ("op.app.8", "Hesap makinesini aç.", "canonical"),
+        ("op.app.9", "PowerShell aç.", "canonical"),
+        ("op.app.10", "PowerShell'i aç.", "paraphrase"),
+        ("op.app.11", "Dosya gezginini aç.", "paraphrase"),
+        ("op.app.12", "Microsoft Edge'i aç.", "paraphrase"),
+        ("op.app.13", "Hesap makinesi aç.", "paraphrase"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="app_open",
+                    expected_tool="operator.app_open",
+                    side_effects=SIDE_EFFECTS_OPERATOR_APP_OPEN,
+                    category="operator",
+                    source=source,
+                )
+            )
+        )
+    # A name outside the allowlist is refused, naming it — never a guess at a path.
+    cases.append(
+        UtteranceCase(
+            case_id="op.app.unknown",
+            utterance="Winamp'ı aç.",
+            # The router only classifies APP_OPEN on a recognised alias (module docstring
+            # of app.operator.plans's allowlist) - an unknown name is left to the model to
+            # route by its own understanding, exactly like every other free-form tool
+            # choice this persona makes; the refusal this case proves is the TOOL's own.
+            expected_intent=None,
+            expected_tool="operator.app_open",
+            expected_response=RESPONSE_REFUSED,
+            expected={"error_class": "unknown_application"},
+            side_effects=SIDE_EFFECTS_NONE,
+            category="operator",
+            source="canonical",
+        )
+    )
+    return cases
+
+
+def _operator_window_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, text, action, side_effects, source in (
+        ("op.win.close.1", "Bunu kapat.", "close", SIDE_EFFECTS_OPERATOR_WINDOW_CLOSE, "canonical"),
+        (
+            "op.win.close.2",
+            "Şu pencereyi kapatsana.",
+            "close",
+            SIDE_EFFECTS_OPERATOR_WINDOW_CLOSE,
+            "paraphrase",
+        ),
+        (
+            "op.win.close.3",
+            "Öndeki pencereyi kapat.",
+            "close",
+            SIDE_EFFECTS_OPERATOR_WINDOW_CLOSE,
+            "paraphrase",
+        ),
+        (
+            "op.win.max.1",
+            "Pencereyi büyüt.",
+            "maximize",
+            SIDE_EFFECTS_OPERATOR_WINDOW_MAXIMIZE,
+            "canonical",
+        ),
+        (
+            "op.win.min.1",
+            "Bu pencereyi küçült.",
+            "minimize",
+            SIDE_EFFECTS_OPERATOR_WINDOW_MINIMIZE,
+            "canonical",
+        ),
+        (
+            "op.win.restore.1",
+            "Pencereyi eski haline getir.",
+            "restore",
+            SIDE_EFFECTS_OPERATOR_WINDOW_RESTORE,
+            "canonical",
+        ),
+        (
+            "op.win.restore.2",
+            "Pencereyi geri yükle.",
+            "restore",
+            SIDE_EFFECTS_OPERATOR_WINDOW_RESTORE,
+            "paraphrase",
+        ),
+        (
+            "op.win.prev.1",
+            "Önceki pencereye dön.",
+            "previous",
+            SIDE_EFFECTS_OPERATOR_WINDOW_PREVIOUS,
+            "canonical",
+        ),
+        (
+            "op.win.prev.2",
+            "Bir önceki pencereye geç.",
+            "previous",
+            SIDE_EFFECTS_OPERATOR_WINDOW_PREVIOUS,
+            "paraphrase",
+        ),
+    ):
+        intent = {
+            "close": "window_close",
+            "maximize": "window_maximize",
+            "minimize": "window_minimize",
+            "restore": "window_restore",
+            "previous": "window_previous",
+        }[action]
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent=intent,
+                    expected_tool="operator.window_control",
+                    side_effects=side_effects,
+                    context=CTX_WINDOW_FOCUSED,
+                    category="operator",
+                    source=source,
+                )
+            )
+        )
+    # "Bunu kapat" with no window ever focused asks which one, rather than guessing.
+    cases.append(
+        UtteranceCase(
+            case_id="op.win.noclose_context",
+            utterance="Bunu kapat.",
+            expected_intent="window_close",
+            expected_tool="operator.window_control",
+            expected_response=RESPONSE_CLARIFY,
+            side_effects=SIDE_EFFECTS_NONE,
+            context=CTX_NONE,
+            category="operator",
+            source="regression",
+        )
+    )
+    return cases
+
+
+def _operator_type_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        ("op.type.1", "Buraya merhaba yaz.", "canonical"),
+        ("op.type.2", "Bu kutuya merhaba yaz.", "paraphrase"),
+        ("op.type.3", "Seçili yere merhaba yaz.", "paraphrase"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="type_text",
+                    expected_tool="operator.type",
+                    side_effects=SIDE_EFFECTS_OPERATOR_TYPE,
+                    context=CTX_WINDOW_FOCUSED,
+                    category="operator",
+                    source=source,
+                )
+            )
+        )
+    # No payload at all: a clarification, never a guess at what to type.
+    cases.append(
+        UtteranceCase(
+            case_id="op.type.no_text",
+            utterance="Şuraya yazar mısın?",
+            expected_intent="type_text",
+            expected_tool="operator.type",
+            expected_response=RESPONSE_CLARIFY,
+            side_effects=SIDE_EFFECTS_NONE,
+            context=CTX_WINDOW_FOCUSED,
+            category="operator",
+            source="canonical",
+        )
+    )
+    # No window focused at all: also a clarification (asked before any device call).
+    cases.append(
+        UtteranceCase(
+            case_id="op.type.no_window",
+            utterance="Buraya merhaba yaz.",
+            expected_intent="type_text",
+            expected_tool="operator.type",
+            expected_response=RESPONSE_CLARIFY,
+            side_effects=SIDE_EFFECTS_NONE,
+            context=CTX_NONE,
+            category="operator",
+            source="regression",
+        )
+    )
+    # A password-shaped payload is refused outright — never typed, never a device call.
+    cases.append(
+        UtteranceCase(
+            case_id="op.type.secret",
+            utterance="Buraya şifremi yaz.",
+            expected_intent="type_text",
+            expected_tool="operator.type",
+            expected_response=RESPONSE_REFUSED,
+            expected={"error_class": "secret_refused"},
+            side_effects=SIDE_EFFECTS_NONE,
+            context=CTX_WINDOW_FOCUSED,
+            category="operator",
+            source="canonical",
+            regression_issue_id="M19 spec §1 invariant 2",
+        )
+    )
+    return cases
+
+
+def _operator_shell_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        ("op.shell.ip.1", "IP adresimi göster.", "canonical"),
+        ("op.shell.ip.2", "IP adresim ne?", "paraphrase"),
+        ("op.shell.host.1", "Bilgisayarın adı ne?", "canonical"),
+        ("op.shell.host.2", "Bilgisayarımın adı nedir?", "paraphrase"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="shell_query",
+                    expected_tool="operator.shell",
+                    side_effects=SIDE_EFFECTS_OPERATOR_SHELL,
+                    category="operator",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _operator_control_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    # "İptal..." is not wrapped in _with_variants: Python's locale-independent str.lower()
+    # maps the Turkish capital dotted İ (U+0130) to "i" + a COMBINING DOT ABOVE (U+0307)
+    # rather than a plain "i" (turkish_casefold, used everywhere resolve_intent actually
+    # normalizes speech, gets this right) - _variants()'s own lowercasing does not, so its
+    # generated ASR-noise variant carries an invisible extra codepoint no token match ever
+    # sees. Narrow, case-specific: kept out of the shared helper rather than changing
+    # behaviour every existing corpus case already relies on.
+    for case_id, text, source in (
+        ("op.cancel.1", "İptal et.", "canonical"),
+        ("op.cancel.3", "İptal.", "paraphrase"),
+    ):
+        cases.append(
+            UtteranceCase(
+                case_id=case_id,
+                utterance=text,
+                expected_intent="operator_cancel",
+                expected_tool="operator.cancel",
+                side_effects=SIDE_EFFECTS_NONE,
+                context=CTX_OPERATOR_RUNNING,
+                category="operator",
+                source=source,
+            )
+        )
+    for case_id, text, source in (("op.cancel.2", "Dur.", "canonical"),):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="operator_cancel",
+                    expected_tool="operator.cancel",
+                    side_effects=SIDE_EFFECTS_NONE,
+                    context=CTX_OPERATOR_RUNNING,
+                    category="operator",
+                    source=source,
+                )
+            )
+        )
+    cases.append(
+        UtteranceCase(
+            case_id="op.status.1",
+            utterance="Ne yapıyorsun?",
+            expected_intent="operator_status",
+            expected_tool="operator.status",
+            side_effects=SIDE_EFFECTS_NONE,
+            context=CTX_OPERATOR_RUNNING,
+            category="operator",
+            source="canonical",
+        )
+    )
+    # The SAME words with no task running keep their ordinary meaning (control-class
+    # STOP) — the gate is on live state, never on vocabulary alone.
+    cases.append(
+        UtteranceCase(
+            case_id="op.cancel.not_running",
+            utterance="Dur.",
+            expected_intent="stop",
+            expected_tool=None,
+            expected_response=RESPONSE_CONTROL,
+            side_effects=SIDE_EFFECTS_NONE,
+            context=CTX_NONE,
+            category="operator",
+            source="regression",
+        )
+    )
+    return cases
+
+
+def _operator_cases() -> list[UtteranceCase]:
+    return [
+        *_operator_app_open_cases(),
+        *_operator_window_cases(),
+        *_operator_type_cases(),
+        *_operator_shell_cases(),
+        *_operator_control_cases(),
+    ]
+
+
 def all_cases() -> list[UtteranceCase]:
     cases = [
         *_research_cases(),
@@ -809,6 +1160,7 @@ def all_cases() -> list[UtteranceCase]:
         *_eye_cases(),
         *_control_cases(),
         *_evolution_cases(),
+        *_operator_cases(),
     ]
     ids = [c.case_id for c in cases]
     assert len(ids) == len(set(ids)), "duplicate case ids"
@@ -821,7 +1173,17 @@ __all__ = [
     "CTX_ALARM_SCHEDULED",
     "CTX_EYE_DISABLED",
     "CTX_NONE",
+    "CTX_OPERATOR_RUNNING",
     "CTX_RESEARCH_FOCUS_B",
+    "CTX_WINDOW_FOCUSED",
+    "SIDE_EFFECTS_OPERATOR_APP_OPEN",
+    "SIDE_EFFECTS_OPERATOR_SHELL",
+    "SIDE_EFFECTS_OPERATOR_TYPE",
+    "SIDE_EFFECTS_OPERATOR_WINDOW_CLOSE",
+    "SIDE_EFFECTS_OPERATOR_WINDOW_MAXIMIZE",
+    "SIDE_EFFECTS_OPERATOR_WINDOW_MINIMIZE",
+    "SIDE_EFFECTS_OPERATOR_WINDOW_PREVIOUS",
+    "SIDE_EFFECTS_OPERATOR_WINDOW_RESTORE",
     "RESPONSE_CLARIFY",
     "RESPONSE_CONTROL",
     "RESPONSE_NONE",

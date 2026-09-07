@@ -60,6 +60,10 @@ from app.ledger import service as ledger_service
 from app.ledger.models import ActivityEventRow, PendingBriefingRow
 from app.main import create_app
 from app.narration.models import NarrationSession, PronunciationEntry
+from app.operator import focus as operator_focus
+from app.operator.models import FOCUS_KIND_WINDOW, ObjectFocusRow
+from app.operator.service import OperatorService, register_operator_service
+from app.operator.task import STATUS_RUNNING, OperatorTask
 from app.presence.engine import PresenceFusionEngine, set_engine
 from app.presence.eye import disable_eye, is_eye_enabled
 from app.presence.service import reset_heartbeat
@@ -88,7 +92,9 @@ from tests.voice_corpus.corpus import (
     CTX_ALARM_RINGING,
     CTX_ALARM_SCHEDULED,
     CTX_EYE_DISABLED,
+    CTX_OPERATOR_RUNNING,
     CTX_RESEARCH_FOCUS_B,
+    CTX_WINDOW_FOCUSED,
     RESPONSE_CLARIFY,
     RESPONSE_CONTROL,
     RESPONSE_NONE,
@@ -129,6 +135,7 @@ TABLES = (
     AmbientPolicyRow.__table__,
     Routine.__table__,
     RoutineFiring.__table__,
+    ObjectFocusRow.__table__,
 )
 
 #: The tools the harness may dispatch as "forbidden" because the product refuses them at
@@ -189,6 +196,7 @@ class Harness:
     device: FakeDeviceAction
     sequence: WakeSequence
     holdoffs: HoldoffRegistry
+    operator: OperatorService
     ids: dict[str, str] = field(default_factory=dict)
 
     # ------------------------------------------------------------- relay
@@ -325,6 +333,51 @@ class Harness:
             with self.factory() as db:
                 disable_eye(db, reason="corpus_context", action_id="corpus-eye-off")
                 db.commit()
+        elif context == CTX_WINDOW_FOCUSED:
+            # Two DISTINCT rows: "w-0" (an older window) then "w-1" (current), so both
+            # focus.current() -> "w-1" and focus.previous() -> "w-0" resolve to something
+            # real ("Önceki pencereye dön." needs a genuine previous window to activate).
+            with self.factory() as db:
+                base = datetime.now(UTC) - timedelta(seconds=5)
+                operator_focus.set_focus(
+                    db,
+                    FOCUS_KIND_WINDOW,
+                    "w-0",
+                    label="Hesap Makinesi",
+                    source="test_context",
+                    now=base,
+                )
+                operator_focus.set_focus(
+                    db,
+                    FOCUS_KIND_WINDOW,
+                    "w-1",
+                    label="Adsız - Not Defteri",
+                    source="test_context",
+                    now=base + timedelta(seconds=1),
+                )
+        elif context == CTX_OPERATOR_RUNNING:
+            with self.factory() as db:
+                operator_focus.set_focus(
+                    db,
+                    FOCUS_KIND_WINDOW,
+                    "w-1",
+                    label="Adsız - Not Defteri",
+                    source="test_context",
+                    now=datetime.now(UTC),
+                )
+            # A task genuinely mid-flight, in the exact slot start_task fills - the seam
+            # OperatorService.set_current_task documents, never a bypass of the loop.
+            self.operator.set_current_task(
+                OperatorTask(
+                    id=uuid.uuid4(),
+                    goal="open notepad",
+                    steps=[],
+                    plan_name="open_application",
+                    status=STATUS_RUNNING,
+                    current_step=0,
+                    last_observed={"window": {"title": "Adsız - Not Defteri"}},
+                )
+            )
 
     def research_task_ids(self) -> set[str]:
         with self.factory() as db:
@@ -404,12 +457,21 @@ def build_harness() -> Harness:
     ):
         table.create(evolution_engine)
     evolution = EvolutionRuntime(settings, engine=evolution_engine)
+    # M19 (docs/M19_DIGITAL_OPERATOR_SPEC.md §4): the SAME fake device port every operator
+    # tool reaches through ``ctx.live["device_action"]`` (production's is the SAME object
+    # the wake sequence holds; here it is the same ``device`` fake every other family
+    # already uses). ``register_operator_service`` mirrors ``create_app``'s module-wide
+    # registration so the router's ringing-aware Cancel/Status pair can see it too.
+    operator_service = OperatorService()
+    register_operator_service(operator_service)
     runtime.register_live(
         wake_sequence=sequence,
         device_statuses=statuses,
         evolution_runtime=evolution,
         evolution_service=evolution.evolution_service,
         settings=settings,
+        device_action=device,
+        operator=operator_service,
     )
     holdoffs = HoldoffRegistry()
     set_holdoffs(holdoffs)
@@ -425,7 +487,12 @@ def build_harness() -> Harness:
             name="ev-pc",
             platform="windows",
             public_key_spki_b64=_spki(),
-            capabilities=["browser.chrome", "desktop.alarm_arm", "desktop.display_wake"],
+            capabilities=[
+                "browser.chrome",
+                "desktop.alarm_arm",
+                "desktop.display_wake",
+                "app.launch",
+            ],
             trace_id=None,
         )
     broker.connections[enrolled.id] = DeviceConnection(
@@ -443,6 +510,7 @@ def build_harness() -> Harness:
         device=device,
         sequence=sequence,
         holdoffs=holdoffs,
+        operator=operator_service,
     )
 
 
@@ -498,6 +566,26 @@ def contract_arguments(case: UtteranceCase, tool: str, resolved: dict) -> dict:
         "voice.intent",
     ):
         args = {"utterance": text}
+    elif tool == "operator.app_open":
+        args = {"application": text}
+    elif tool == "operator.window_control":
+        action = {
+            "window_close": "close",
+            "window_maximize": "maximize",
+            "window_minimize": "minimize",
+            "window_restore": "restore",
+            "window_previous": "previous",
+        }.get(resolved.get("intent"))
+        args = {"action": action} if action else {}
+    elif tool == "operator.type":
+        # No default fallback to the WHOLE utterance: a real model passes only the text
+        # it actually extracted (nothing, for "Şuraya yazar mısın?"), never the sentence
+        # that asked it to write something. The turn's own text_to_type is what a
+        # succeeding case actually exercises; case.tool_arguments overrides when a case
+        # wants to prove the model's own argument specifically.
+        args = {}
+    elif tool == "operator.shell":
+        args = {"query": resolved.get("shell_query")} if resolved.get("shell_query") else {}
     args.update(case.tool_arguments)
     return args
 

@@ -253,6 +253,13 @@ def test_create_selects_by_capability_and_returns_the_contract(wired) -> None:
         "evolution.control",
         "evolution.status",
         "release.rollback",
+        # M19 (docs/M19_DIGITAL_OPERATOR_SPEC.md §3): the Digital Operator.
+        "operator.app_open",
+        "operator.window_control",
+        "operator.type",
+        "operator.shell",
+        "operator.cancel",
+        "operator.status",
     }
     research = next(t for t in data["tools"] if t["name"] == "research.start")
     assert research["long_running"] is True and research["preamble"] == RESEARCH_PREAMBLE_TR

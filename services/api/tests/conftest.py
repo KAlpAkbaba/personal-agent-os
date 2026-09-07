@@ -30,6 +30,22 @@ def _reset_browser_gateway_session_registry():
     reset_known_open_sessions()
 
 
+@pytest.fixture(autouse=True)
+def _reset_operator_service_registry():
+    """``app.operator.service``'s module-wide registry (mirrors
+    ``app.devices.commands.register_broker_runtime``) must not leak a "task running"
+    state across tests that never touch it (docs/M19_DIGITAL_OPERATOR_SPEC.md §4): a test
+    file with its own hand-rolled realtime runtime and no operator of its own must see
+    ``operator_running=False`` at the router, never whatever a PRECEDING test's operator
+    happened to be doing. A fixture that wants the real thing (the corpus harness,
+    ``test_operator_wiring.py``) registers its own after this reset runs."""
+    from app.operator.service import register_operator_service
+
+    register_operator_service(None)
+    yield
+    register_operator_service(None)
+
+
 @pytest.fixture()
 def owner_auth() -> Callable[..., object]:
     """M9: `owner_auth(app, client)` bootstraps identity and authenticates.
