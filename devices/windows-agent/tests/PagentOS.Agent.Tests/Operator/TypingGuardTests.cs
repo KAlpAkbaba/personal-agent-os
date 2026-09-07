@@ -84,26 +84,77 @@ public sealed class TypingGuardTests : IDisposable
     [LabFact]
     public void A_focus_change_mid_stream_stops_the_typing_and_the_front_window_receives_nothing()
     {
+        // The steal races the stream: at most MaxTypedChars (4096, the protocol cap) go out in
+        // 64-event batches, a few hundred milliseconds on this machine. On a loaded runner
+        // SetForegroundWindow once took longer than the whole stream - an attempt that lands
+        // AFTER the last batch proves nothing either way (the guard had nothing left to stop),
+        // so it is repeated with fresh windows, at most three times. Every assertion on the
+        // attempt that landed is exact; nothing is relaxed for the slow case.
+        string detail = "";
+        for (var attempt = 1; attempt <= 3; attempt++)
+        {
+            if (AttemptFocusChangeMidStream(out detail))
+            {
+                return;
+            }
+        }
+
+        Assert.Fail($"the focus steal never landed mid-stream in 3 attempts; last: {detail}");
+    }
+
+    /// <summary>
+    /// One attempt. <c>true</c> = the steal landed while the stream was running and every
+    /// assertion held; <c>false</c> = inconclusive (the stream ended before the steal landed:
+    /// A holds the whole text and nothing was refused). A landed steal that the guard did NOT
+    /// stop, or any misplaced character, fails the test outright.
+    /// </summary>
+    private bool AttemptFocusChangeMidStream(out string detail)
+    {
         var (_, a, _) = _lab.LaunchNotepad();
         var (_, b, _) = _lab.LaunchNotepad();
         _lab.Activate(a);
         var bHandle = _lab.Operator.Registry.Resolve(b).Handle;
 
-        // 3000 distinct-ish characters, no newlines: what A holds afterwards must be an exact
-        // prefix of this, and B must hold none of it.
-        var text = string.Concat(Enumerable.Range(0, 3000).Select(i => (char)('a' + (i % 26))));
+        // MaxTypedChars distinct-ish characters, no newlines: what A holds afterwards must be an
+        // exact prefix of this, and B must hold none of it.
+        var text = string.Concat(Enumerable.Range(0, OperatorCapabilityNames.MaxTypedChars).Select(i => (char)('a' + (i % 26))));
 
-        var typing = Task.Run(() => Assert.Throws<CapabilityException>(() => _lab.Exec(OperatorCapabilityNames.KeyboardType, new JsonObject { ["window_id"] = a, ["text"] = text })));
+        CapabilityException? refused = null;
+        var typing = Task.Run(() =>
+        {
+            try
+            {
+                _lab.Exec(OperatorCapabilityNames.KeyboardType, new JsonObject { ["window_id"] = a, ["text"] = text });
+            }
+            catch (CapabilityException ex)
+            {
+                refused = ex;
+            }
+        });
         Thread.Sleep(100);
         // From another thread, the way another application would: a plain SetForegroundWindow
         // (this process is entitled - it sent the last input event), NOT through the operator
         // (whose single-flight gate would wait for the typing to finish) and NOT through
         // WindowActions.Activate, whose AttachThreadInput dance merges and splits the input
         // queues and, measured here, drops input already queued for A - an artefact no real
-        // focus steal has.
-        Assert.True(BringToFront(bHandle), "Notepad B could not be brought to the front");
-        var ex = typing.GetAwaiter().GetResult();
+        // focus steal has. Bounded at 2 s, and abandoned as soon as the stream has ended.
+        var landed = BringToFront(bHandle, () => typing.IsCompleted);
+        var streamStillRunning = landed && !typing.IsCompleted;
+        typing.GetAwaiter().GetResult();
 
+        if (refused is null)
+        {
+            // Nothing was refused. Legitimate only when the whole text went to A before the
+            // steal took effect - then the attempt is inconclusive, never a pass.
+            var aAll = _lab.ReadDocument(a).Value;
+            var bAll = _lab.ReadDocument(b).Value;
+            Assert.True(aAll == text && bAll.Length == 0, $"the stream was not refused, yet A holds {aAll.Length} of {text.Length} chars and B holds {bAll.Length} [{bAll}] (steal landed: {landed}, stream running at the steal: {streamStillRunning}, foreground 0x{GetForegroundWindow():X})");
+            detail = $"inconclusive: the stream ended before the steal landed (landed={landed}, foreground 0x{GetForegroundWindow():X})";
+            return false;
+        }
+
+        var ex = refused;
+        Assert.True(landed, $"the guard refused although the steal never landed: {ex.Message}");
         Assert.Equal(ErrorClasses.FocusMismatch, ex.ErrorClass);
         Assert.True(ex.Retryable);
         var typed = Assert.IsType<int>(ex.Detail["typed_chars"]);
@@ -134,12 +185,14 @@ public sealed class TypingGuardTests : IDisposable
         Assert.True(bValue.Length <= uncertain, $"B received {bValue.Length} chars [{bValue}], more than uncertain_chars={uncertain}; A holds {aValue.Length} of typed_chars={typed}");
         Assert.True(aValue.Length >= confirmed, $"A holds {aValue.Length} chars, fewer than confirmed_chars={confirmed}; B holds {bValue.Length}");
         Assert.True(aValue + bValue == text[..typed], $"A ({aValue.Length}) + B ({bValue.Length}) is not the typed prefix ({typed}); A=[{aValue[^Math.Min(40, aValue.Length)..]}] B=[{bValue}]");
+        detail = "landed";
+        return true;
     }
 
-    private static bool BringToFront(IntPtr hwnd)
+    private static bool BringToFront(IntPtr hwnd, Func<bool> abandon)
     {
-        var deadline = DateTime.UtcNow.AddMilliseconds(500);
-        while (DateTime.UtcNow < deadline)
+        var deadline = DateTime.UtcNow.AddMilliseconds(2000);
+        while (DateTime.UtcNow < deadline && !abandon())
         {
             SetForegroundWindow(hwnd);
             if (GetForegroundWindow() == hwnd)
@@ -150,7 +203,7 @@ public sealed class TypingGuardTests : IDisposable
             Thread.Sleep(10);
         }
 
-        return false;
+        return GetForegroundWindow() == hwnd;
     }
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
