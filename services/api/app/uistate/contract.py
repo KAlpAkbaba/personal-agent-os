@@ -32,7 +32,10 @@ from typing import Any
 #: the ambient display channel (``display.on`` / ``display.off``), plus the ``ambient``
 #: subsystem. Same additive rule as v2: a v2 renderer keeps working and simply never sees
 #: the new states, and ``GET /v1/ui/state/contract`` reports the true version.
-CONTRACT_VERSION = 3
+#: v4 (M19 Digital Operator spec §4, §7) adds the operator's own channel
+#: (``operator.running`` / ``operator.verifying`` / ``operator.failed``), published from
+#: ``OperatorService`` transitions, plus the ``operator`` subsystem. Same additive rule.
+CONTRACT_VERSION = 4
 
 #: Metadata value bounds. Numbers are floats in [0, 1] except where noted; strings are
 #: short machine tokens, never prose.
@@ -120,6 +123,14 @@ class UiState(StrEnum):
     RELEASE_LIVE = "release.live"
     RELEASE_ROLLBACK = "release.rollback"
 
+    #: M19 (spec §4, §7): the Digital Operator's own channel, like ``alarm.*`` never
+    #: displacing a Core that is genuinely thinking or speaking. Published from
+    #: ``OperatorService`` transitions with metadata ``{step, capability, window_title}``,
+    #: never to animate a surge.
+    OPERATOR_RUNNING = "operator.running"
+    OPERATOR_VERIFYING = "operator.verifying"
+    OPERATOR_FAILED = "operator.failed"
+
 
 UI_STATES: tuple[str, ...] = tuple(s.value for s in UiState)
 
@@ -141,6 +152,8 @@ SUBSYSTEMS: tuple[str, ...] = (
     "routine",
     # M18.3: the ambient display policy publishes display.on/display.off (spec §7).
     "ambient",
+    # M19: the Digital Operator publishes operator.running/verifying/failed (spec §7).
+    "operator",
 )
 
 SEVERITIES: tuple[str, ...] = ("info", "notice", "warning", "critical")

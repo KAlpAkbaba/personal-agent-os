@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 import pytest
 
 from app.uistate import UI_STATES, UiState, UiStateEvent, ui_state_contract
+from app.uistate.contract import CONTRACT_VERSION
 from app.uistate.publisher import (
     TAIL_SIZE,
     UiStatePublisher,
@@ -79,10 +80,15 @@ def test_the_vocabulary_is_the_one_the_owner_specified() -> None:
         "alarm.failed",
         "display.on",
         "display.off",
+        # M19 (Digital Operator spec §4, §7): the operator's own channel.
+        "operator.running",
+        "operator.verifying",
+        "operator.failed",
     }
     contract = ui_state_contract()
-    assert contract["contract_version"] == 3
+    assert contract["contract_version"] == 4
     assert "ambient" in contract["subsystems"]
+    assert "operator" in contract["subsystems"]
     assert "audio" in contract["metadata_rules"]["forbidden"]
 
 
@@ -242,7 +248,7 @@ def test_the_ui_read_surface_is_owner_gated_and_replayable(wired) -> None:
         assert body["current"]["state"] == "agent.researching"
         assert body["current"]["progress"] == 0.4
         assert body["sequence"] == 1
-        assert client.get("/v1/ui/state/contract").json()["contract_version"] == 3
+        assert client.get("/v1/ui/state/contract").json()["contract_version"] == CONTRACT_VERSION
         publish(UiState.IDLE, subsystem="system")
         after = client.get("/v1/ui/state", params={"after_sequence": 1}).json()
         assert [e["state"] for e in after["events"]] == ["agent.idle"]
