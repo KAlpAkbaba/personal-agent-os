@@ -39,6 +39,9 @@
             "voice_provider_error",
             "security_scope_error",
             "browser_lifecycle_violation",
+            "focus_mismatch",
+            "permission_denied",
+            "postcondition_failed",
             "internal_bug"
           ]
         },
