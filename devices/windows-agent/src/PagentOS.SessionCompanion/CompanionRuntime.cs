@@ -54,7 +54,11 @@ public sealed class CompanionRuntime(
     /// Headroom the companion keeps under the service's own wait on a browser request, so
     /// the typed answer (timeout) arrives before the service gives up and synthesises one.
     /// </summary>
-    private static readonly TimeSpan BrowserTimeoutMargin = TimeSpan.FromMilliseconds(500);
+    // 1 s (was 500 ms): on a loaded CI runner the typed timeout produced at deadline - 500 ms
+    // still reached the service after its own deadline (2026-09-07, a docs-only commit's run),
+    // and the service synthesised the untyped "did not answer". A full second of headroom
+    // keeps the typed answer ahead of the caller's deadline even when a timer fires late.
+    private static readonly TimeSpan BrowserTimeoutMargin = TimeSpan.FromMilliseconds(1000);
     private static readonly TimeSpan BrowserMinimumBudget = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan InFlightDrainTimeout = TimeSpan.FromSeconds(3);
 
@@ -66,7 +70,8 @@ public sealed class CompanionRuntime(
     /// With a deadline on the request (<see cref="ExecRequest.DeadlineUtcMs"/>), the budget
     /// is measured from the service's clock, so pipe latency and this side's processing are
     /// not charged against the headroom - on a loaded CI runner they once ate the whole
-    /// 500 ms and the service synthesised an untyped timeout first (2026-09-04). Without a
+    /// 500 ms and the service synthesised an untyped timeout first (2026-09-04; again on
+    /// 2026-09-07, after which the headroom became a full second). Without a
     /// deadline (an older service) the budget is the requested duration, as before. The
     /// minimum-budget rule is unchanged: a request that is already almost out of time still
     /// gets one short attempt rather than a zero.

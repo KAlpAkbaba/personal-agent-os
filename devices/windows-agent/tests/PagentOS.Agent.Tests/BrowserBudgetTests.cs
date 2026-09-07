@@ -25,7 +25,7 @@ public sealed class BrowserBudgetTests
     public void Without_a_deadline_the_budget_is_the_requested_duration_minus_the_headroom()
     {
         var budget = CompanionRuntime.BrowserBudget(Request(2_000, 0), nowUnixMs: 1_000_000);
-        Assert.Equal(TimeSpan.FromMilliseconds(1_500), budget);
+        Assert.Equal(TimeSpan.FromMilliseconds(1_000), budget);
     }
 
     [Fact]
@@ -33,7 +33,7 @@ public sealed class BrowserBudgetTests
     {
         // the request was written 700 ms ago against a 5 s wait: 4 300 ms remain
         var budget = CompanionRuntime.BrowserBudget(Request(5_000, 1_000_000 + 4_300), nowUnixMs: 1_000_000);
-        Assert.Equal(TimeSpan.FromMilliseconds(3_800), budget);
+        Assert.Equal(TimeSpan.FromMilliseconds(3_300), budget);
         // 1 300 ms left of a 2 s wait: below the minimum after the headroom, so the 1 s floor
         var floor = CompanionRuntime.BrowserBudget(Request(2_000, 1_000_000 + 1_300), nowUnixMs: 1_000_000);
         Assert.Equal(TimeSpan.FromSeconds(1), floor);
@@ -43,7 +43,7 @@ public sealed class BrowserBudgetTests
     public void A_deadline_never_extends_the_requested_duration()
     {
         var budget = CompanionRuntime.BrowserBudget(Request(2_000, 1_000_000 + 10_000), nowUnixMs: 1_000_000);
-        Assert.Equal(TimeSpan.FromMilliseconds(1_500), budget);
+        Assert.Equal(TimeSpan.FromMilliseconds(1_000), budget);
     }
 
     [Fact]
