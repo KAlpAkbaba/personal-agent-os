@@ -943,7 +943,7 @@ public sealed class OperatorCapabilities
             throw new CapabilityException(ErrorClasses.PostconditionFailed, "no Explorer window appeared for the path within 5 s", retryable: true);
         }
 
-        var selection = WaitForSelection(window, Path.GetFileName(path), TimeSpan.FromSeconds(3), cancellationToken);
+        var selection = WaitForSelection(window, Path.GetFileName(path), TimeSpan.FromSeconds(5), cancellationToken);
         return new JsonObject
         {
             ["revealed"] = true,
@@ -1130,6 +1130,17 @@ public sealed class OperatorCapabilities
                     // returned an empty selection from its first list). Read every list,
                     // bounded, and take the one whose selection names the file.
                     var root = Inspector.RootForWindow(window.Handle);
+                    // First the whole window's selected items (SelectionItem.IsSelected): on the
+                    // GitHub runner's English Server the items view is not a List control at
+                    // all, and the lists that do exist select the breadcrumb ("pagentos-operator-
+                    // fixture") - the folder, not the file.
+                    var selectedAnywhere = Inspector.SelectedNames(root);
+                    if (selectedAnywhere.Any(s => s.StartsWith(stem, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        selection = selectedAnywhere;
+                        return true;
+                    }
+
                     var lists = root.FindAll(TreeScope.Descendants, new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.List));
                     var inspected = 0;
                     foreach (AutomationElement list in lists)
