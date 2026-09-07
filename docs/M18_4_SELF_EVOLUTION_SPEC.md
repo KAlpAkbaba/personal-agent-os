@@ -1,6 +1,6 @@
 # M18.4 — Continuous self-evolution, self-healing and the zero-downtime update foundation
 
-Status: FOUNDATION CLOSED 2026-09-07 night (ADR-0081 and its two addenda; QUALIFICATION Stage 16). Decision record: ADR-0081.
+Status: FOUNDATION CLOSED 2026-09-07 night; FINAL GAP CLOSURE 2026-09-07 late night (ADR-0081 and its three addenda; QUALIFICATION Stage 16). Decision record: ADR-0081.
 Predecessors this builds on and does not replace: `EVOLUTION_ENGINE_SPEC` (M7 pipeline,
 sandbox, review, registry), `RECOVERY_AND_SELF_HEALING.md` (M6 recovery supervisor,
 incidents, last-known-good), ADR-0055 (the authority kernel: LAB vs PRODUCTION),

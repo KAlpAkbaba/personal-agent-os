@@ -20,6 +20,8 @@
     .\scripts\core\evolution-advance.ps1 -Show 57674b6a-4a8d-4e8a-8ac7-5d0187aecc1e
     .\scripts\core\evolution-advance.ps1 -Advance <id> -Target researching -Actor owner -Reason "..." -WorkspaceRef "git:main@552a318"
     .\scripts\core\evolution-advance.ps1 -Approve <id> -Note "..."
+    .\scripts\core\evolution-advance.ps1 -Footprint <id> -ChangedPaths services/api/app/broker/runtime.py,infra/docker/edge/nginx.conf
+    .\scripts\core\evolution-advance.ps1 -Authorize <id> -ConfirmHighRisk -AuthorizeNote "..."
 #>
 [CmdletBinding(DefaultParameterSetName = "List")]
 param(
@@ -36,7 +38,15 @@ param(
     [Parameter(ParameterSetName = "Advance")][string]$WorkspaceRef = "",
     [Parameter(ParameterSetName = "Advance")][string]$CandidateRef = "",
     [Parameter(ParameterSetName = "Approve", Mandatory = $true)][string]$Approve,
-    [Parameter(ParameterSetName = "Approve")][string]$Note = ""
+    [Parameter(ParameterSetName = "Approve")][string]$Note = "",
+    # The candidate's footprint (the paths it touches) -> its derived risk tier; then the
+    # owner's authorisation (owner_approval_required -> owner_authorized), which a tier 3+
+    # candidate refuses once and accepts only with -ConfirmHighRisk (ADR-0055 §5).
+    [Parameter(ParameterSetName = "Footprint", Mandatory = $true)][string]$Footprint,
+    [Parameter(ParameterSetName = "Footprint", Mandatory = $true)][string[]]$ChangedPaths,
+    [Parameter(ParameterSetName = "Authorize", Mandatory = $true)][string]$Authorize,
+    [Parameter(ParameterSetName = "Authorize")][switch]$ConfirmHighRisk,
+    [Parameter(ParameterSetName = "Authorize")][string]$AuthorizeNote = ""
 )
 
 Set-StrictMode -Version Latest
@@ -98,6 +108,17 @@ try {
             if ($Note) { $body.note = $Note }
             $result = Post-Json "/v1/evolution/opportunities/$Approve/approve" $body
             Write-Host "approved -> $(Get-OptionalProperty -InputObject $result -Name 'status')"
+        }
+        "Footprint" {
+            $result = Post-Json "/v1/evolution/opportunities/$Footprint/footprint" @{ changed_paths = @($ChangedPaths) }
+            $detail = Get-OptionalProperty -InputObject $result -Name "detail"
+            Write-Host "footprint recorded: risk tier $(if ($null -ne $detail) { Get-OptionalProperty -InputObject $detail -Name 'risk_tier' } else { '?' }) over $(@($ChangedPaths).Count) path(s)"
+        }
+        "Authorize" {
+            $body = @{ confirm_high_risk = [bool]$ConfirmHighRisk }
+            if ($AuthorizeNote) { $body.note = $AuthorizeNote }
+            $result = Post-Json "/v1/evolution/opportunities/$Authorize/authorize" $body
+            Write-Host "authorized -> $(Get-OptionalProperty -InputObject $result -Name 'status')"
         }
     }
 }

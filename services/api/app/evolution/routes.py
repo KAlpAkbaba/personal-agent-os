@@ -318,6 +318,19 @@ class ApproveBody(BaseModel):
     note: str | None = Field(default=None, max_length=512)
 
 
+class FootprintBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    changed_paths: list[str] = Field(min_length=1, max_length=512)
+
+
+class AuthorizeBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    confirm_high_risk: bool = False
+    note: str | None = Field(default=None, max_length=512)
+
+
 @router.get("/opportunities")
 async def list_opportunities(
     request: Request,
@@ -419,6 +432,64 @@ async def approve_opportunity(
     approved = await _call(service.approve, opportunity_id, capability, note=body.note)
     logger.info("evolution_opportunity_approved", opportunity_id=str(opportunity_id))
     return approved
+
+
+@router.post("/opportunities/{opportunity_id}/footprint")
+async def record_footprint(
+    request: Request,
+    opportunity_id: uuid.UUID,
+    body: FootprintBody,
+) -> dict[str, Any]:
+    """Attach the candidate's DERIVED risk tier from the paths it touches (M18 §5).
+
+    Lab-scoped: the tier is computed from the path list and never accepted by hand.
+    Refused once the candidate has crossed the owner's line (the footprint the owner
+    reviews must be the one the tier came from).
+    """
+    service = _service(request)
+    updated = await _call(
+        service.record_release_footprint, opportunity_id, changed_paths=body.changed_paths
+    )
+    logger.info(
+        "evolution_release_footprint_recorded",
+        opportunity_id=str(opportunity_id),
+        risk_tier=(updated.get("detail") or {}).get("risk_tier"),
+    )
+    return updated
+
+
+@router.post("/opportunities/{opportunity_id}/authorize")
+async def authorize_opportunity(
+    request: Request,
+    opportunity_id: uuid.UUID,
+    body: AuthorizeBody,
+    session=Depends(require_owner_session),  # noqa: B008 - FastAPI dependency
+) -> dict[str, Any]:
+    """The owner action that completes the explicit chain into production:
+    ``owner_approval_required -> owner_authorized`` (ADR-0055 §5).
+
+    Like approve, the capability is derived from the verified owner session, never
+    from the body. A tier 3+ candidate refuses the first call and names the tier and
+    its reasons; only a second, deliberate call with ``confirm_high_risk`` proceeds.
+    Until M18.4's final gap closure this step existed in the service alone, so no client
+    could carry a tier-3 candidate past the owner's line - found by the first real
+    lifecycle on production (ADR-0081 addendum 3).
+    """
+    service = _service(request)
+    capability = mint_owner_capability(session)
+    authorized = await _call(
+        service.authorize,
+        opportunity_id,
+        capability,
+        confirm_high_risk=body.confirm_high_risk,
+        note=body.note,
+    )
+    logger.info(
+        "evolution_opportunity_authorized",
+        opportunity_id=str(opportunity_id),
+        second_confirmation=body.confirm_high_risk,
+    )
+    return authorized
 
 
 @router.get("/shadow-ready")

@@ -47,6 +47,14 @@ boundary it needs. Order matters only where written; D needs no audio and can go
 > -BlueGreen` (the owner harnesses still call the single-container path; switch them when
 > you next run one, or leave them - both work). Items 23b, 24, 25, 26 are unchanged and
 > still yours; the M18.3 agent capabilities still wait on item 26's elevated update.
+>
+> **M18.4 final gap closure, 2026-09-07 late night (ADR-0081 addendum 3).** Production runs
+> ae88edd on `api-green`. A release now hands the device sessions to the new colour BEFORE it
+> takes HTTP (your agent's presence gap on a switch is its own 1–2 s reconnect, measured;
+> the one release from the old colour had a named 61 s gap, once), a promotion killed
+> half-way is rebuilt to the last completed one at boot or on demand, and the agent /
+> browser-worker staged updates are built and tested (PROVEN_PROXY until your elevated
+> run, items 26/27). Nothing new needs you; M19 waits for your word.
 
 | | Item | Needs | Time |
 |---|---|---|---|

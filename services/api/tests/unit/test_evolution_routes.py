@@ -241,6 +241,8 @@ OPPORTUNITY_ENDPOINTS = [
     ("post", "/v1/evolution/opportunities"),
     ("get", "/v1/evolution/shadow-ready"),
     ("get", "/v1/evolution/policy"),
+    ("post", f"/v1/evolution/opportunities/{uuid.uuid4()}/footprint"),
+    ("post", f"/v1/evolution/opportunities/{uuid.uuid4()}/authorize"),
 ]
 
 
@@ -528,3 +530,76 @@ def test_policy_publishes_the_whole_contract(client: TestClient) -> None:
     }
     assert policy["release_evidence_provider"] == "null"
     assert policy["actors"] == ["owner", "system", "lab"]
+
+
+# ------------------------------------------- the owner's line, all the way across (M18.4)
+
+
+def test_the_authorize_route_completes_the_chain_with_a_second_confirmation_for_tier_3(
+    client: TestClient,
+) -> None:
+    """ADR-0081 addendum 3: the first real lifecycle on production stopped at
+    owner_approval_required because ``authorize`` lived in the service alone. Over REST:
+    the footprint derives the tier (never typed); a tier-3 candidate refuses the first
+    authorisation and names the tier; the deliberate second call crosses the line,
+    recorded against the verified owner session, never the body."""
+    opportunity = create_opportunity(client)
+    opportunity_id = opportunity["opportunity_id"]
+    drive_to_shadow_ready(client, opportunity_id)
+    base = f"/v1/evolution/opportunities/{opportunity_id}"
+
+    waiting = client.post(
+        f"{base}/advance", json={"target": "owner_approval_required", "actor": "lab"}
+    )
+    assert waiting.status_code == 200, waiting.text
+    assert waiting.json()["status"] == "owner_approval_required"
+
+    # No footprint yet: the tier was never derived, so nobody can authorise anything.
+    undeclared = client.post(f"{base}/authorize", json={"confirm_high_risk": True})
+    assert undeclared.status_code == 409, undeclared.text
+    assert "risk tier was never derived" in undeclared.json()["detail"]["message"]
+
+    # The footprint is the paths, the tier is derived: an app module is tier 3.
+    footprint = client.post(
+        f"{base}/footprint",
+        json={
+            "changed_paths": [
+                "services/api/app/broker/runtime.py",
+                "infra/docker/edge/nginx.conf",
+            ]
+        },
+    )
+    assert footprint.status_code == 200, footprint.text
+    assert footprint.json()["detail"]["risk_tier"] >= 3
+    assert client.post(f"{base}/footprint", json={"changed_paths": []}).status_code == 422
+
+    # Tier 3: the first call refuses and says why; the body cannot lower the tier.
+    first = client.post(f"{base}/authorize", json={"note": "olur"})
+    assert first.status_code == 403, first.text
+    assert first.json()["detail"]["error_class"] == "permission_denied"
+    assert "confirm_high_risk" in first.json()["detail"]["message"]
+    assert client.get(base).json()["status"] == "owner_approval_required"
+
+    # The deliberate second call crosses the line, against the verified session.
+    second = client.post(f"{base}/authorize", json={"confirm_high_risk": True, "note": "onay"})
+    assert second.status_code == 200, second.text
+    assert second.json()["status"] == "owner_authorized"
+    assert second.json()["approved_by"].startswith("owner_session:")
+    assert second.json()["detail"]["second_confirmation_given"] is True
+
+    # The footprint is frozen past the line: the tier the owner reviewed stays the tier.
+    frozen = client.post(f"{base}/footprint", json={"changed_paths": ["docs/README.md"]})
+    assert frozen.status_code in (403, 409), frozen.text
+
+    # And the production side opens from here, as from owner_approved.
+    qualifying = client.post(f"{base}/advance", json={"target": "qualifying", "actor": "system"})
+    assert qualifying.status_code == 200, qualifying.text
+    assert qualifying.json()["status"] == "qualifying"
+
+
+def test_the_authorize_route_requires_the_owner_session(client: TestClient) -> None:
+    opportunity = create_opportunity(client)
+    path = f"/v1/evolution/opportunities/{opportunity['opportunity_id']}/authorize"
+    assert client.post(path, json={}, headers={"Authorization": ""}).status_code == 401
+    assert client.post(path, json={}, headers={"Authorization": "Bearer nope"}).status_code == 401
+
