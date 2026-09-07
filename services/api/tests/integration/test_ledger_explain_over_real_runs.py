@@ -76,7 +76,17 @@ def test_backfill_is_idempotent_and_the_briefing_matches_the_ledger(settings: Se
         narration = db.get(NarrationSession, record.narration_session_id)
         assert narration is not None and narration.artifact_id == record.artifact_id
 
-    if latest is not None and latest["event_type"] == "research.completed":
+    if latest is not None and latest["event_type"] == "research.failed":
+        # A failed research is the newest activity (a workflow integration test that ran
+        # before this one on the shared dev database, or a real failed run): the engine
+        # says what it could not find and that the owner is needed, from that row.
+        assert "kaynak" in record.speech or "kanıt" in record.speech, record.speech
+        assert "Müdahalenizi gerektiren" in record.speech, record.speech
+        assert any(
+            r.get("kind") == "activity_event" and r.get("ref") == latest["event_id"]
+            for r in briefing.evidence_refs
+        )
+    elif latest is not None and latest["event_type"] == "research.completed":
         detail = latest.get("detail_json") or {}
         # ADR-0067 / ADR-0074: the outcome sentence is the research RESULT - a completed
         # run ("'<konu>' konusunda araştırmayı tamamladım"), an honestly thin one ("kısa

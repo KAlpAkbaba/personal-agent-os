@@ -20,6 +20,7 @@ import contextlib
 import threading
 import time
 import uuid
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -104,13 +105,13 @@ def _fake_command_factory(*, capability: str, payload: dict[str, Any], **_kwargs
                 # A page the quality gate accepts: on topic, dated, and long enough to
                 # judge. A one-line stub is not something a person would cite either.
                 "excerpt": _fake_page_body(payload["query"], "news", _story_index(payload["url"])),
-                "fetched_at": "2026-09-03T09:00:00Z",
+                "fetched_at": _iso(_FAKE_FETCHED_AT),
                 "extraction_method": "dom_text",
                 "page_kind": "ok",
                 "http_status": 200,
                 "metadata": {
                     "publisher": "Örnek Yayın",
-                    "published_at": "2026-09-03T07:00:00Z",
+                    "published_at": _iso(_FAKE_PUBLISHED_AT),
                 },
                 "injection_markers": 0,
             }
@@ -118,6 +119,19 @@ def _fake_command_factory(*, capability: str, payload: dict[str, Any], **_kwargs
     raise AssertionError(
         f"unexpected capability in integration fake: {capability}"
     )  # pragma: no cover
+
+
+#: The fake pages are dated RELATIVE to the run, inside the default three-day recency
+#: window (app.research.plan.DEFAULT_RECENCY_DAYS). They used to carry a fixed
+#: 2026-09-03 and became a time bomb on 2026-09-07: every candidate was rejected as
+#: outside_recency_window, the run ended failed, and the ledger test after it saw a
+#: failed research as the newest activity.
+_FAKE_PUBLISHED_AT = datetime.now(UTC).replace(microsecond=0) - timedelta(hours=26)
+_FAKE_FETCHED_AT = _FAKE_PUBLISHED_AT + timedelta(hours=2)
+
+
+def _iso(value: datetime) -> str:
+    return value.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _story_index(url: str) -> int:
