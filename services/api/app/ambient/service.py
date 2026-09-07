@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.alarms import service as alarms_service
@@ -31,6 +32,7 @@ from app.alarms.models import (
 from app.alarms.sequence import WakeSequence
 from app.ambient.holdoff import (
     SOURCE_ALARM_WAKE,
+    SOURCE_INPUT,
     SOURCE_OWNER_COMMAND,
     SOURCE_OWNER_RETURN,
     HoldoffRegistry,
@@ -43,13 +45,21 @@ from app.ambient.policy import (
     AmbientInputs,
     AmbientPolicy,
     Decision,
+    asleep_needed_s,
     decide,
     holdoff_seconds,
+    quiet_hours_state,
+    validate_quiet_hours,
 )
 from app.devices.status import DISPLAY_OFF, DeviceStatusRegistry, get_status_registry
 from app.ledger import service as ledger_service
+from app.ledger.models import ActivityEventRow
 from app.ledger.vocabulary import (
+    EVENT_TYPE_ACTION_RECEIPT,
+    EVENT_TYPE_ALARM_FIRING,
     EVENT_TYPE_AMBIENT_POLICY_CHANGED,
+    EVENT_TYPE_OWNER_INPUT_ACTIVE,
+    EVENT_TYPE_PRESENCE_STATE_CHANGED,
     SEVERITY_INFO,
     SUBSYSTEM_AMBIENT,
 )
@@ -105,6 +115,10 @@ _EDITABLE_FIELDS = (
     "alarm_holdoff_s",
     "return_holdoff_s",
     "quiet_hours",
+    # ADR-0079
+    "keep_on",
+    "asleep_after_outside_quiet_s",
+    "camera_unknown_grace_s",
 )
 
 
@@ -129,6 +143,10 @@ def set_policy(
         if field_name not in changes or changes[field_name] is None:
             continue
         value = changes[field_name]
+        if field_name == "quiet_hours":
+            # ADR-0079 §8: validated on the way in (ValueError to the caller), and ``{}``
+            # clears the window - the loop above treats None as "not named".
+            value = validate_quiet_hours(value)
         if getattr(row, field_name) != value:
             setattr(row, field_name, value)
             applied[field_name] = value
@@ -212,6 +230,7 @@ def collect_inputs(
     confidence = 0.0
     held_s = 0.0
     stale = True
+    perception_age_s: float | None = None
     try:
         from app.presence.engine import get_engine
 
@@ -222,6 +241,11 @@ def collect_inputs(
             confidence = assertion.effective_confidence(now=moment)
             held_s = assertion.held_for_s(now=moment)
             stale = assertion.is_stale(now=moment)
+        # ADR-0079 §3: when the camera last actually delivered, or None. Read from the
+        # engine's own buffer, never inferred from the assertion's age.
+        last_camera = engine.last_observation_at(source="camera")
+        if last_camera is not None:
+            perception_age_s = max(0.0, (moment - last_camera).total_seconds())
     except Exception as exc:  # noqa: BLE001 - see docstring
         logger.warning("ambient_presence_read_failed", error=type(exc).__name__)
 
@@ -259,6 +283,7 @@ def collect_inputs(
         alarm_active=alarm_active,
         next_alarm_at=next_alarm_at,
         holdoffs=live.holdoffs.active(now=moment) if live.holdoffs else (),
+        perception_age_s=perception_age_s,
     )
 
 
@@ -297,6 +322,10 @@ def tick(
     moment = now or utcnow()
     live = (runtimes or AmbientRuntimes()).resolved()
     policy = get_policy(session)
+    # ADR-0079 §11: the first tick of a process rebuilds the holdoffs a restart lost,
+    # from the ledger - so a Cloud Core restarted a minute after the owner touched the
+    # keyboard does not meet a stale AWAY with no reason to say no.
+    ensure_holdoffs_restored(session, holdoffs=live.holdoffs, now=moment)
 
     pending_test = _due_test(moment)
     if pending_test is not None and sequence is not None:
@@ -501,7 +530,12 @@ def note_alarm_wake(
     holdoffs: HoldoffRegistry | None = None,
     now: datetime | None = None,
 ) -> None:
-    """An alarm fired: hold off every automatic display-off (spec §2's holdoff sources)."""
+    """An alarm fired: hold off every automatic display-off (spec §2's holdoff sources).
+
+    Called by ``app.alarms.service.fire_alarm`` on the success path and by the local
+    fallback's reconcile (ADR-0079 §6 - the hardening run found this function with no
+    caller at all, so the alarm holdoff had never once started in production).
+    """
     policy = get_policy(session)
     (holdoffs or get_holdoffs()).start(
         SOURCE_ALARM_WAKE,
@@ -509,6 +543,191 @@ def note_alarm_wake(
         now=now,
         reason="alarm_fired",
     )
+
+
+def note_owner_display_command(
+    session: Session,
+    *,
+    holdoffs: HoldoffRegistry | None = None,
+    now: datetime | None = None,
+    reason: str = "display_command",
+) -> None:
+    """The owner explicitly woke the screens ("Ekranı aç."): nothing automatic darkens
+    them for the command holdoff (ADR-0079 §5). An automatic off thirty seconds after an
+    explicit wake would be the system arguing with a person."""
+    policy = get_policy(session)
+    (holdoffs or get_holdoffs()).start(
+        SOURCE_OWNER_COMMAND,
+        seconds=holdoff_seconds(policy)[SOURCE_OWNER_COMMAND],
+        now=now,
+        reason=reason,
+    )
+
+
+# ---------------------------------------------------------- holdoffs after a restart
+
+#: Whether THIS process has rebuilt its holdoffs from the ledger yet (ADR-0079 §11).
+_holdoffs_restored = False
+
+
+def _latest_row(
+    session: Session, event_type: str, *, actions: tuple[str, ...] | None = None
+) -> ActivityEventRow | None:
+    stmt = select(ActivityEventRow).where(ActivityEventRow.event_type == event_type)
+    if actions:
+        stmt = stmt.where(ActivityEventRow.action.in_(actions))
+    stmt = stmt.order_by(ActivityEventRow.occurred_at.desc()).limit(1)
+    return session.execute(stmt).scalars().first()
+
+
+def _aware(dt: datetime) -> datetime:
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+
+
+def restore_holdoffs(
+    session: Session,
+    *,
+    holdoffs: HoldoffRegistry | None = None,
+    now: datetime | None = None,
+) -> dict[str, str]:
+    """Rebuild the holdoffs a process restart lost, from durable evidence (ADR-0079 §11).
+
+    Each source has one durable witness: ``owner.input_active`` for input, the newest
+    ``ambient.policy_changed`` or a ``display.wake`` receipt for an owner command,
+    ``alarm.firing`` for an alarm wake, a ``presence.state_changed`` to ``returned`` for
+    the owner's return. A witness inside its window restarts that holdoff for the time
+    it has LEFT; an older one restarts nothing. Returns the sources restored and their
+    ends. Never raises: a ledger that cannot be read leaves the registry as it was,
+    which still fails safe (every other guard applies).
+    """
+    moment = now or utcnow()
+    registry = holdoffs or get_holdoffs()
+    restored: dict[str, str] = {}
+    try:
+        policy = get_policy(session)
+        durations = holdoff_seconds(policy)
+        witnesses: list[tuple[str, ActivityEventRow | None, str]] = [
+            (SOURCE_INPUT, _latest_row(session, EVENT_TYPE_OWNER_INPUT_ACTIVE), "input"),
+            (
+                SOURCE_OWNER_COMMAND,
+                _latest_row(session, EVENT_TYPE_AMBIENT_POLICY_CHANGED),
+                "policy_changed",
+            ),
+            (
+                SOURCE_OWNER_COMMAND,
+                _latest_row(session, EVENT_TYPE_ACTION_RECEIPT, actions=("display.wake",)),
+                "display_wake",
+            ),
+            (SOURCE_ALARM_WAKE, _latest_row(session, EVENT_TYPE_ALARM_FIRING), "alarm_fired"),
+        ]
+        returned = _latest_row(session, EVENT_TYPE_PRESENCE_STATE_CHANGED)
+        if returned is not None and (returned.detail_json or {}).get("to_state") == "returned":
+            witnesses.append((SOURCE_OWNER_RETURN, returned, "owner_returned"))
+        for source, row, why in witnesses:
+            if row is None or row.occurred_at is None:
+                continue
+            remaining = durations[source] - (moment - _aware(row.occurred_at)).total_seconds()
+            if remaining <= 0:
+                continue
+            holdoff = registry.start(
+                source, seconds=int(remaining), now=moment, reason=f"restored:{why}"
+            )
+            restored[source] = holdoff.until.astimezone(UTC).isoformat().replace("+00:00", "Z")
+    except Exception as exc:  # noqa: BLE001 - see docstring
+        logger.warning("ambient_holdoff_restore_failed", error=type(exc).__name__)
+    if restored:
+        logger.info("ambient_holdoffs_restored", sources=sorted(restored))
+    return restored
+
+
+def ensure_holdoffs_restored(
+    session: Session,
+    *,
+    holdoffs: HoldoffRegistry | None = None,
+    now: datetime | None = None,
+) -> dict[str, str]:
+    """``restore_holdoffs`` exactly once per process (the first ambient tick)."""
+    global _holdoffs_restored
+    if _holdoffs_restored:
+        return {}
+    _holdoffs_restored = True
+    return restore_holdoffs(session, holdoffs=holdoffs, now=now)
+
+
+def reset_holdoff_restore() -> None:
+    """Tests only: make the next tick restore again, as a fresh process would."""
+    global _holdoffs_restored
+    _holdoffs_restored = False
+
+
+# ------------------------------------------------------------- the explanation
+
+
+def _latest_display_receipt(session: Session) -> dict[str, Any] | None:
+    row = _latest_row(
+        session, EVENT_TYPE_ACTION_RECEIPT, actions=("display.off", "display.wake")
+    )
+    if row is None:
+        return None
+    detail = dict(row.detail_json or {})
+    server = (detail.get("observed_after") or {}).get("server") or {}
+    return {
+        "capability": row.action,
+        "reason": str(server.get("reason") or detail.get("reason") or ""),
+        "execution_status": detail.get("execution_status"),
+        "terminal_status": detail.get("terminal_status"),
+        "error_class": detail.get("error_class"),
+        "occurred_at": (
+            _aware(row.occurred_at).isoformat().replace("+00:00", "Z")
+            if row.occurred_at
+            else None
+        ),
+    }
+
+
+def explain(
+    session: Session,
+    *,
+    runtimes: AmbientRuntimes | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """"Ekranları neden kapattın?" / "Neden açık bıraktın?" / "Şu an ekran politikası
+    ne?" answered from the facts and nothing else (ADR-0079 §12): the live decision the
+    tick would make right now (the same pure ``decide``), the presence assertion behind
+    it, the active holdoffs, the latest keyboard/mouse activity the ledger holds and the
+    latest display receipt. The sentence is assembled by ``app.alarms.speech`` from
+    these fields; a fact that is absent is said to be absent, never guessed."""
+    moment = now or utcnow()
+    live = (runtimes or AmbientRuntimes()).resolved()
+    policy = get_policy(session)
+    inputs = collect_inputs(session, runtimes=live, now=moment)
+    decision = decide(inputs, policy, moment)
+    last_input = _latest_row(session, EVENT_TYPE_OWNER_INPUT_ACTIVE)
+    facts: dict[str, Any] = {
+        "display": display_state_summary(statuses=live.statuses),
+        "policy": policy.as_dict(),
+        "decision": decision.as_dict(),
+        "presence": {
+            "state": inputs.presence_state.value,
+            "confidence": round(inputs.presence_confidence, 3),
+            "held_s": round(inputs.presence_held_s, 1),
+            "stale": inputs.presence_stale,
+            "eye_enabled": inputs.eye_enabled,
+            "perception_age_s": inputs.perception_age_s,
+        },
+        "holdoffs": live.holdoffs.as_dict(now=moment) if live.holdoffs else {},
+        "quiet_hours": quiet_hours_state(policy, moment),
+        "asleep_needed_s": asleep_needed_s(policy, moment),
+        "last_input_at": (
+            _aware(last_input.occurred_at).isoformat().replace("+00:00", "Z")
+            if last_input is not None and last_input.occurred_at
+            else None
+        ),
+        "last_display_action": _latest_display_receipt(session),
+        "observed_at": moment.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+    }
+    facts["speech"] = alarm_speech.ambient_explain_speech(facts, now=moment)
+    return facts
 
 
 def device_status_dict(
@@ -536,12 +755,17 @@ __all__ = [
     "collect_inputs",
     "device_status_dict",
     "display_state_summary",
+    "ensure_holdoffs_restored",
+    "explain",
     "get_policy",
     "get_policy_row",
     "note_alarm_wake",
     "note_display_refusal",
+    "note_owner_display_command",
     "pending_display_test",
+    "reset_holdoff_restore",
     "reset_presence_watermark",
+    "restore_holdoffs",
     "schedule_display_test",
     "set_policy",
     "tick",

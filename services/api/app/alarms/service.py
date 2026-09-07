@@ -611,7 +611,21 @@ def fire_alarm(
         )
         _release(session, alarm, sequence=sequence, reason="audio_failed", now=moment)
         return FireDecision(False, "audio_failed", result)
+    # ADR-0079 §6: an alarm that fired holds off every automatic display-off for the
+    # alarm holdoff. Wired here, on the success path - the hardening run of 2026-09-07
+    # found ``note_alarm_wake`` with no caller, so the holdoff had never once started.
+    _note_alarm_wake(session, now=moment)
     return FireDecision(True, result.media_kind or "", result)
+
+
+def _note_alarm_wake(session: Session, *, now: datetime) -> None:
+    """Best effort, lazily imported: ``app.ambient.service`` imports this module."""
+    try:
+        from app.ambient.service import note_alarm_wake
+
+        note_alarm_wake(session, now=now)
+    except Exception as exc:  # noqa: BLE001 - a holdoff is protection, never a dependency
+        logger.warning("alarm_wake_holdoff_failed", error=type(exc).__name__)
 
 
 # --------------------------------------------------------------------------- tick
@@ -779,6 +793,8 @@ def reconcile_local_fired(
             detail={"media_kind": PLAYED_KIND_LOCAL_FALLBACK},
         )
         touched.append(alarm)
+        # ADR-0079 §6: the device's own ring is a wake too; the screens stay.
+        _note_alarm_wake(session, now=moment)
     return touched
 
 

@@ -217,10 +217,10 @@ def _receipts(session) -> list[ActivityEventRow]:
 # ----------------------------------------------------------------------- the manifest
 
 
-def test_the_registry_exposes_all_ten_tools() -> None:
+def test_the_registry_exposes_all_eleven_tools() -> None:
     names = set(default_registry().names())
     assert set(tools_ambient.AMBIENT_TOOL_NAMES) <= names
-    assert len(tools_ambient.AMBIENT_TOOL_NAMES) == 10
+    assert len(tools_ambient.AMBIENT_TOOL_NAMES) == 11  # ADR-0079 added ambient.explain
 
 
 def test_the_action_contract_version_carries_the_alarm_family() -> None:

@@ -65,6 +65,7 @@ TOOL_DISPLAY_WAKE: Final = "display.wake"
 TOOL_DISPLAY_STATUS: Final = "display.status"
 TOOL_AMBIENT_SET_POLICY: Final = "ambient.set_policy"
 TOOL_AMBIENT_TEST_DISPLAY: Final = "ambient.test_display"
+TOOL_AMBIENT_EXPLAIN: Final = "ambient.explain"
 
 AMBIENT_TOOL_NAMES: Final[tuple[str, ...]] = (
     TOOL_ALARM_CREATE,
@@ -77,6 +78,7 @@ AMBIENT_TOOL_NAMES: Final[tuple[str, ...]] = (
     TOOL_DISPLAY_STATUS,
     TOOL_AMBIENT_SET_POLICY,
     TOOL_AMBIENT_TEST_DISPLAY,
+    TOOL_AMBIENT_EXPLAIN,
 )
 
 #: Server-side error classes specific to this family (the naming style of
@@ -429,6 +431,9 @@ def display_wake(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
     step = sequence.display_wake(
         db, reason="owner_command", action_id=_action_id(ctx), now=ctx.now
     )
+    # ADR-0079 §5: an explicit wake starts the owner-command holdoff, so a stale AWAY
+    # cannot darken the screens the owner just asked for.
+    ambient_service.note_owner_display_command(db, now=ctx.now, reason="display_wake")
     speech = alarm_speech.display_wake_speech(
         terminal_status=step.receipt.terminal_status, error_class=step.error_class
     )
@@ -454,40 +459,132 @@ def display_status(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
 # ------------------------------------------------------------------------ ambient
 
 
-_POLICY_ARGUMENTS = ("auto_off", "off_when_asleep", "off_when_away", "wake_on_return")
+_POLICY_ARGUMENTS = (
+    "auto_off",
+    "off_when_asleep",
+    "off_when_away",
+    "wake_on_return",
+    "keep_on",
+)
+
+#: How long the turn's recorded utterance still speaks for a tool call (the same window
+#: ``app.voice.realtime_sessions.tools.RESEARCH_TURN_TTL_S`` gives a research turn).
+_POLICY_TURN_TTL_S = 600.0
+
+
+def _turn_policy_changes(ctx: ToolContext) -> dict[str, bool] | None:
+    """The policy fields the owner's WORDS set on this turn (ADR-0079 §7), from the record
+    the ONE router wrote on the session - never from the model's paraphrase."""
+    record = dict(ctx.context.get("last_utterance") or {})
+    raw_at = record.get("at")
+    if raw_at:
+        try:
+            at = datetime.fromisoformat(str(raw_at).replace("Z", "+00:00"))
+        except ValueError:
+            at = None
+        if at is not None:
+            if at.tzinfo is None:
+                at = at.replace(tzinfo=UTC)
+            if (ctx.now - at).total_seconds() > _POLICY_TURN_TTL_S:
+                return None
+    changes = record.get("policy_changes")
+    if not isinstance(changes, dict) or not changes:
+        return None
+    return {str(k): bool(v) for k, v in changes.items() if isinstance(v, bool)}
+
+
+#: The sentence for the FIRST preference the change touched, in the order that matters
+#: to the owner: keep-on outranks the switch, the switch outranks its halves.
+_POLICY_SPEECH: tuple[tuple[str, str, str], ...] = (
+    ("keep_on", alarm_speech.AMBIENT_KEEP_ON_TR, alarm_speech.AMBIENT_KEEP_ON_OFF_TR),
+    (
+        "auto_off_enabled",
+        alarm_speech.AMBIENT_AUTO_OFF_ON_TR,
+        alarm_speech.AMBIENT_AUTO_OFF_OFF_TR,
+    ),
+    (
+        "off_when_asleep",
+        alarm_speech.AMBIENT_OFF_WHEN_ASLEEP_ON_TR,
+        alarm_speech.AMBIENT_OFF_WHEN_ASLEEP_OFF_TR,
+    ),
+    (
+        "off_when_away",
+        alarm_speech.AMBIENT_OFF_WHEN_AWAY_ON_TR,
+        alarm_speech.AMBIENT_OFF_WHEN_AWAY_OFF_TR,
+    ),
+    (
+        "wake_on_return",
+        alarm_speech.AMBIENT_WAKE_ON_RETURN_ON_TR,
+        alarm_speech.AMBIENT_WAKE_ON_RETURN_OFF_TR,
+    ),
+)
+
+
+def _policy_speech(applied: dict[str, Any], requested: dict[str, Any]) -> str:
+    """What changed, in the owner's own terms; a repeat that changed nothing still
+    confirms the preference that stands ("Siz yokken ekranları kapatmayacağım")."""
+    for field_name, on_tr, off_tr in _POLICY_SPEECH:
+        if field_name in applied:
+            return on_tr if applied[field_name] else off_tr
+    for field_name, on_tr, off_tr in _POLICY_SPEECH:
+        if field_name in requested and field_name != "auto_off_enabled":
+            return on_tr if requested[field_name] else off_tr
+    if "auto_off_enabled" in requested:
+        return (
+            alarm_speech.AMBIENT_AUTO_OFF_ON_TR
+            if requested["auto_off_enabled"]
+            else alarm_speech.AMBIENT_AUTO_OFF_OFF_TR
+        )
+    return alarm_speech.AMBIENT_POLICY_UPDATED_TR
 
 
 def ambient_set_policy(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
-    """"Uyurken ekranları kapat." / "Otomatik ekran kapatmayı aç." (spec §3.8, §6)."""
+    """"Uyurken ekranları kapat." / "Otomatik ekran kapatmayı aç." (spec §3.8, §6).
+
+    ADR-0079 §7: when the turn's recorded utterance carries the fields the owner's words
+    set, THOSE are applied - the model's booleans are only used when no such record
+    exists (a client that reports no utterances). "Uyuduğumda ekranları kapatma." is
+    therefore never turned into an off by a mistranslated argument.
+    """
     db = _db(ctx, TOOL_AMBIENT_SET_POLICY)
-    changes: dict[str, Any] = {}
-    for name in _POLICY_ARGUMENTS:
-        value = arguments.get(name)
-        if isinstance(value, bool):
-            changes["auto_off_enabled" if name == "auto_off" else name] = value
+    derived = _turn_policy_changes(ctx)
+    changes: dict[str, Any] = dict(derived) if derived else {}
+    if not changes:
+        for name in _POLICY_ARGUMENTS:
+            value = arguments.get(name)
+            if isinstance(value, bool):
+                changes["auto_off_enabled" if name == "auto_off" else name] = value
     if not changes:
         raise VoiceError(
             VoiceErrorClass.VALIDATION_ERROR,
             f"ambient.set_policy needs at least one of {_POLICY_ARGUMENTS}",
         )
     policy, applied = ambient_service.set_policy(db, changes, source="voice", now=ctx.now)
-    if "auto_off_enabled" in applied:
-        speech = (
-            alarm_speech.AMBIENT_AUTO_OFF_ON_TR
-            if applied["auto_off_enabled"]
-            else alarm_speech.AMBIENT_AUTO_OFF_OFF_TR
-        )
-    else:
-        speech = alarm_speech.AMBIENT_POLICY_UPDATED_TR
+    speech = _policy_speech(applied, changes)
     return _receipt(
         ctx,
         capability=TOOL_AMBIENT_SET_POLICY,
         requested_state="updated",
         execution=EXECUTION_EXECUTED if applied else EXECUTION_NOOP,
         terminal=TERMINAL_VERIFIED if applied else TERMINAL_ALREADY,
-        server={"policy": policy.as_dict(), "changed": applied},
+        server={
+            "policy": policy.as_dict(),
+            "changed": applied,
+            "requested": changes,
+            "derived_from_turn": bool(derived),
+        },
         speech=speech,
     )
+
+
+def ambient_explain(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """"Ekranları neden kapattın?" / "Neden açık bıraktın?" / "Şu an ekran politikası ne?"
+    (ADR-0079 §12). A QUERY: the live decision, the presence assertion behind it, the
+    holdoffs, the latest input and the latest display receipt - and nothing invented."""
+    del arguments
+    db = _db(ctx, TOOL_AMBIENT_EXPLAIN)
+    facts = ambient_service.explain(db, now=ctx.now)
+    return {**facts, "routed": "ambient_policy"}
 
 
 def ambient_test_display(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -676,7 +773,10 @@ def register_ambient_tools(reg: ToolRegistry) -> ToolRegistry:
                 "Otomatik ekran kapatma ayarını değiştirir: 'uyurken ekranları kapat' "
                 "(off_when_asleep), 'ben yokken ekranları kapat' (off_when_away), "
                 "'otomatik ekran kapatmayı aç/kapat' (auto_off), 'ben geri geldiğimde "
-                "ekranı aç' (wake_on_return). Dönen 'speech' metnini aynen oku."
+                "ekranı aç' (wake_on_return), 'ekranı açık tut' (keep_on). Olumsuzlar da "
+                "ayardır: 'uyuduğumda ekranları kapatma', 'ben yokken ekranları kapatma'. "
+                "Sunucu sahibin sözlerinden ayarı kendisi çıkarır. Dönen 'speech' metnini "
+                "aynen oku."
             ),
             parameters={
                 "type": "object",
@@ -685,10 +785,24 @@ def register_ambient_tools(reg: ToolRegistry) -> ToolRegistry:
                     "off_when_asleep": {"type": "boolean"},
                     "off_when_away": {"type": "boolean"},
                     "wake_on_return": {"type": "boolean"},
+                    "keep_on": {"type": "boolean"},
                 },
                 "additionalProperties": False,
             },
             handler=ambient_set_policy,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name=TOOL_AMBIENT_EXPLAIN,
+            description=(
+                "Ekran otomasyonunu AÇIKLAR ('ekranları neden kapattın', 'neden açık "
+                "bıraktın', 'şu an ekran politikası ne'): canlı karar, varlık değerlendirmesi, "
+                "bekleme süreleri, son klavye kullanımı ve son ekran işlemi - hepsi kayıttan. "
+                "Dönen 'speech' metnini aynen oku; neden uydurma."
+            ),
+            parameters={"type": "object", "properties": {}, "additionalProperties": False},
+            handler=ambient_explain,
         )
     )
     reg.register(

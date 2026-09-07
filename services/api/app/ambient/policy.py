@@ -34,10 +34,11 @@ reachable from a plain unit test with no fixtures at all.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, Final
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from app.alarms.models import AmbientPolicyRow
+from app.alarms.models import DEFAULT_TIMEZONE, AmbientPolicyRow
 from app.ambient.holdoff import Holdoff
 from app.presence.states import PresenceState
 
@@ -55,6 +56,14 @@ REASON_NOT_HELD_LONG_ENOUGH: Final = "not_held_long_enough"
 REASON_NO_CONDITION_MET: Final = "no_condition_met"
 REASON_OWNER_TEST: Final = "owner_test"
 REASON_OWNER_RETURNED: Final = "owner_returned"
+#: ADR-0079 §7: "Ekranı açık tut." is in force.
+REASON_OWNER_KEEP_ON: Final = "owner_keep_on"
+#: ADR-0079 §3: the camera has not delivered inside the grace - degraded perception.
+REASON_PERCEPTION_STALE: Final = "perception_stale"
+
+QUIET_HOURS_UNSET: Final = "unset"
+QUIET_HOURS_INSIDE: Final = "inside"
+QUIET_HOURS_OUTSIDE: Final = "outside"
 
 #: Spec §3.9: an alarm ARMED to fire within this window is "alarm context" too — darkening
 #: the screens ninety seconds before a wake alarm would be undone by the alarm itself.
@@ -77,6 +86,17 @@ class AmbientPolicy:
     alarm_holdoff_s: int = 1800
     return_holdoff_s: int = 600
     quiet_hours: dict[str, Any] | None = None
+    #: ADR-0079 §7. "Ekranı açık tut.": an explicit preference that outranks every
+    #: inference, every holdoff and the policy's own switches until the owner lifts it.
+    keep_on: bool = False
+    #: ADR-0079 §8. LIKELY_ASLEEP must hold this long OUTSIDE the quiet hours; inside
+    #: them ``asleep_after_s`` applies. With no quiet hours configured, ``asleep_after_s``
+    #: applies everywhere, exactly as before.
+    asleep_after_outside_quiet_s: int = 1800
+    #: ADR-0079 §3. The newest camera observation behind the assertion may be at most
+    #: this old for an off decision. Older is ``perception_stale``: a camera that stopped
+    #: delivering is a degraded perception, never an owner who left or fell asleep.
+    camera_unknown_grace_s: int = 120
 
     @classmethod
     def from_row(cls, row: AmbientPolicyRow) -> AmbientPolicy:
@@ -93,6 +113,11 @@ class AmbientPolicy:
             alarm_holdoff_s=int(row.alarm_holdoff_s),
             return_holdoff_s=int(row.return_holdoff_s),
             quiet_hours=row.quiet_hours,
+            keep_on=bool(getattr(row, "keep_on", False)),
+            asleep_after_outside_quiet_s=int(
+                getattr(row, "asleep_after_outside_quiet_s", 1800) or 1800
+            ),
+            camera_unknown_grace_s=int(getattr(row, "camera_unknown_grace_s", 120) or 120),
         )
 
     def as_dict(self) -> dict[str, Any]:
@@ -109,6 +134,9 @@ class AmbientPolicy:
             "alarm_holdoff_s": self.alarm_holdoff_s,
             "return_holdoff_s": self.return_holdoff_s,
             "quiet_hours": self.quiet_hours,
+            "keep_on": self.keep_on,
+            "asleep_after_outside_quiet_s": self.asleep_after_outside_quiet_s,
+            "camera_unknown_grace_s": self.camera_unknown_grace_s,
         }
 
 
@@ -134,6 +162,10 @@ class AmbientInputs:
     #: When the soonest ARMED alarm is due, if any.
     next_alarm_at: datetime | None = None
     holdoffs: tuple[Holdoff, ...] = field(default_factory=tuple)
+    #: ADR-0079 §3: seconds since the newest CAMERA observation the fusion engine holds,
+    #: or None when it holds none. An assertion can still read AWAY on old frames; this is
+    #: what says whether the camera is actually delivering right now.
+    perception_age_s: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,11 +197,20 @@ def decide(inputs: AmbientInputs, policy: AmbientPolicy, now: datetime) -> Decis
         "held_s": round(inputs.presence_held_s, 1),
         "eye_enabled": inputs.eye_enabled,
         "display_on": inputs.display_on,
+        "perception_age_s": (
+            round(inputs.perception_age_s, 1) if inputs.perception_age_s is not None else None
+        ),
+        "quiet_hours": quiet_hours_state(policy, now),
     }
 
     # 1. The display must be known to be ON. `None` (nobody reported) is not "on".
     if inputs.display_on is not True:
         return Decision(ACTION_NONE, REASON_DISPLAY_NOT_ON, evidence)
+
+    # 1b. "Ekranı açık tut." - the owner's explicit preference outranks every inference,
+    #     every holdoff and the policy's own switches (ADR-0079 §7). Only the owner lifts it.
+    if policy.keep_on:
+        return Decision(ACTION_NONE, REASON_OWNER_KEEP_ON, {**evidence, "keep_on": True})
 
     # 2. Alarm context: something is waking the owner, or is about to.
     if inputs.alarm_active:
@@ -202,6 +243,20 @@ def decide(inputs: AmbientInputs, policy: AmbientPolicy, now: datetime) -> Decis
     if not inputs.eye_enabled:
         return Decision(ACTION_NONE, REASON_NO_PERCEPTION, evidence)
 
+    # 6b. The camera must have DELIVERED recently (ADR-0079 §3). The assertion may still
+    #     read AWAY or LIKELY_ASLEEP on the frames it last had; an eye that is enabled but
+    #     silent - permission lost, process dead, no usable frame - is a degraded
+    #     perception, and a degraded perception darkens nothing.
+    if (
+        inputs.perception_age_s is None
+        or inputs.perception_age_s > policy.camera_unknown_grace_s
+    ):
+        return Decision(
+            ACTION_NONE,
+            REASON_PERCEPTION_STALE,
+            {**evidence, "grace_s": policy.camera_unknown_grace_s},
+        )
+
     # 7. Sustained AWAY.
     if inputs.presence_state is PresenceState.AWAY and policy.off_when_away:
         if inputs.presence_held_s >= policy.away_after_s:
@@ -214,18 +269,24 @@ def decide(inputs: AmbientInputs, policy: AmbientPolicy, now: datetime) -> Decis
 
     # 8. Sustained AND confident LIKELY_ASLEEP. Both, because "likely" is the whole point:
     #    the system says LIKELY_ASLEEP with a confidence, never OWNER_IS_ASLEEP.
+    #    ADR-0079 §8: the sustain needed depends on the owner's quiet hours - the normal
+    #    threshold inside them, the longer one outside them, the normal one everywhere
+    #    when none are configured.
     if inputs.presence_state is PresenceState.LIKELY_ASLEEP and policy.off_when_asleep:
+        needed = asleep_needed_s(policy, now)
         if (
-            inputs.presence_held_s >= policy.asleep_after_s
+            inputs.presence_held_s >= needed
             and inputs.presence_confidence >= policy.asleep_min_confidence
         ):
-            return Decision(ACTION_DISPLAY_OFF, REASON_OWNER_LIKELY_ASLEEP, evidence)
+            return Decision(
+                ACTION_DISPLAY_OFF, REASON_OWNER_LIKELY_ASLEEP, {**evidence, "needed_s": needed}
+            )
         return Decision(
             ACTION_NONE,
             REASON_NOT_HELD_LONG_ENOUGH,
             {
                 **evidence,
-                "needed_s": policy.asleep_after_s,
+                "needed_s": needed,
                 "needed_confidence": policy.asleep_min_confidence,
             },
         )
@@ -250,6 +311,75 @@ def holdoff_seconds(policy: AmbientPolicy) -> dict[str, int]:
     }
 
 
+def _parse_hhmm(text: Any) -> int:
+    """"23:30" -> minutes since local midnight; anything else is a ValueError."""
+    raw = str(text).strip()
+    hours, _, minutes = raw.partition(":")
+    if not hours.isdigit() or not minutes.isdigit():
+        raise ValueError(f"not an HH:MM time: {text!r}")
+    hour, minute = int(hours), int(minutes)
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        raise ValueError(f"not an HH:MM time: {text!r}")
+    return hour * 60 + minute
+
+
+def validate_quiet_hours(value: Any) -> dict[str, Any] | None:
+    """The one accepted shape (ADR-0079 §8): ``{"start": "HH:MM", "end": "HH:MM",
+    "timezone"?: IANA}`` -> normalised dict; ``None`` / ``{}`` -> None (no window);
+    anything else raises ``ValueError`` so no caller can persist a window the decision
+    would then silently ignore."""
+    if value is None or value == {}:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("quiet_hours must be an object with start and end")
+    start = _parse_hhmm(value.get("start"))
+    end = _parse_hhmm(value.get("end"))
+    if start == end:
+        raise ValueError("quiet_hours start and end must differ")
+    timezone = str(value.get("timezone") or DEFAULT_TIMEZONE)
+    try:
+        ZoneInfo(timezone)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise ValueError(f"unknown timezone: {timezone!r}") from exc
+    return {
+        "start": f"{start // 60:02d}:{start % 60:02d}",
+        "end": f"{end // 60:02d}:{end % 60:02d}",
+        "timezone": timezone,
+    }
+
+
+def quiet_hours_state(policy: AmbientPolicy, now: datetime) -> str:
+    """unset | inside | outside, in the window's own timezone (ADR-0079 §8).
+
+    A window that cannot be read is UNSET, never INSIDE: a malformed setting must not
+    lower a threshold. Windows may cross midnight ("23:30"-"07:30").
+    """
+    window = policy.quiet_hours
+    if not isinstance(window, dict) or not window.get("start") or not window.get("end"):
+        return QUIET_HOURS_UNSET
+    try:
+        start = _parse_hhmm(window["start"])
+        end = _parse_hhmm(window["end"])
+        zone = ZoneInfo(str(window.get("timezone") or DEFAULT_TIMEZONE))
+    except (ValueError, KeyError, TypeError, ZoneInfoNotFoundError):
+        return QUIET_HOURS_UNSET
+    if start == end:
+        return QUIET_HOURS_UNSET
+    aware = now if now.tzinfo is not None else now.replace(tzinfo=UTC)
+    local = aware.astimezone(zone)
+    minute = local.hour * 60 + local.minute
+    inside = start <= minute < end if start < end else (minute >= start or minute < end)
+    return QUIET_HOURS_INSIDE if inside else QUIET_HOURS_OUTSIDE
+
+
+def asleep_needed_s(policy: AmbientPolicy, now: datetime) -> int:
+    """How long LIKELY_ASLEEP must hold right now (ADR-0079 §8): the normal threshold
+    inside the quiet hours or with none configured, the longer one outside them."""
+    if quiet_hours_state(policy, now) == QUIET_HOURS_OUTSIDE:
+        return max(int(policy.asleep_after_s), int(policy.asleep_after_outside_quiet_s))
+    return int(policy.asleep_after_s)
+
+
 def seconds_until(moment: datetime, now: datetime) -> float:
     return (moment - now).total_seconds()
 
@@ -269,15 +399,23 @@ __all__ = [
     "REASON_NO_PERCEPTION",
     "REASON_OWNER_AWAY",
     "REASON_OWNER_LIKELY_ASLEEP",
+    "QUIET_HOURS_INSIDE",
+    "QUIET_HOURS_OUTSIDE",
+    "QUIET_HOURS_UNSET",
+    "REASON_OWNER_KEEP_ON",
     "REASON_OWNER_RETURNED",
     "REASON_OWNER_TEST",
+    "REASON_PERCEPTION_STALE",
     "REASON_POLICY_DISABLED",
     "REASON_UNCERTAIN",
     "AmbientInputs",
     "AmbientPolicy",
     "Decision",
+    "asleep_needed_s",
     "decide",
     "holdoff_seconds",
+    "quiet_hours_state",
     "seconds_until",
+    "validate_quiet_hours",
     "within",
 ]

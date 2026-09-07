@@ -19,7 +19,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.alarms import speech as alarm_speech
@@ -57,6 +57,14 @@ class PolicyIn(BaseModel):
     command_holdoff_s: int | None = Field(default=None, ge=0, le=24 * 3600)
     alarm_holdoff_s: int | None = Field(default=None, ge=0, le=24 * 3600)
     return_holdoff_s: int | None = Field(default=None, ge=0, le=24 * 3600)
+    # ADR-0079
+    keep_on: bool | None = None
+    asleep_after_outside_quiet_s: int | None = Field(default=None, ge=60, le=24 * 3600)
+    camera_unknown_grace_s: int | None = Field(default=None, ge=10, le=3600)
+    #: {"start": "HH:MM", "end": "HH:MM", "timezone"?: IANA}; validated by the service.
+    quiet_hours: dict[str, Any] | None = None
+    #: True clears the quiet window (a PATCH cannot say "set this to nothing" otherwise).
+    clear_quiet_hours: bool = False
 
 
 class TestDisplayIn(BaseModel):
@@ -99,13 +107,18 @@ async def get_policy(request: Request) -> dict[str, Any]:
 async def put_policy(request: Request, body: PolicyIn) -> dict[str, Any]:
     artifacts = _artifacts(request)
     changes = body.model_dump(exclude_none=True)
+    if changes.pop("clear_quiet_hours", False):
+        changes["quiet_hours"] = {}
 
     def write() -> tuple[dict[str, Any], dict[str, Any]]:
         with artifacts.session() as session:
             _, applied = ambient_service.set_policy(session, changes, source="rest")
             return _policy_payload(session), applied
 
-    payload, applied = await asyncio.to_thread(write)
+    try:
+        payload, applied = await asyncio.to_thread(write)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if "auto_off_enabled" in applied:
         speech = (
             alarm_speech.AMBIENT_AUTO_OFF_ON_TR
@@ -115,6 +128,19 @@ async def put_policy(request: Request, body: PolicyIn) -> dict[str, Any]:
     else:
         speech = alarm_speech.AMBIENT_POLICY_UPDATED_TR
     return {**payload, "changed": applied, "speech": speech}
+
+
+@router.get("/explain")
+async def explain(request: Request) -> dict[str, Any]:
+    """"Ekranları neden kapattın?" as a document (ADR-0079 §12): the same facts the voice
+    tool speaks from, from the same ``decide`` the tick uses."""
+    artifacts = _artifacts(request)
+
+    def load() -> dict[str, Any]:
+        with artifacts.session() as session:
+            return ambient_service.explain(session)
+
+    return await asyncio.to_thread(load)
 
 
 @router.post("/test-display")

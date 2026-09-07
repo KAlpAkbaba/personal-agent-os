@@ -256,8 +256,18 @@ class AmbientPolicyRow(Base):
     command_holdoff_s: Mapped[int] = mapped_column(Integer, nullable=False, default=900)
     alarm_holdoff_s: Mapped[int] = mapped_column(Integer, nullable=False, default=1800)
     return_holdoff_s: Mapped[int] = mapped_column(Integer, nullable=False, default=600)
-    #: None, or {"start": "HH:MM", "end": "HH:MM"} — reserved, never used to force an off.
+    #: None, or {"start": "HH:MM", "end": "HH:MM", "timezone"?: IANA} (ADR-0079 §8): the
+    #: owner's quiet window. Inside it LIKELY_ASLEEP needs ``asleep_after_s``; outside it
+    #: ``asleep_after_outside_quiet_s``. Never used to force an off.
     quiet_hours: Mapped[dict[str, Any] | None] = mapped_column(JSONColumn, nullable=True)
+    #: ADR-0079 §7: "Ekranı açık tut." — outranks every inference and holdoff until lifted.
+    keep_on: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    #: ADR-0079 §8: how long LIKELY_ASLEEP must hold outside the quiet hours.
+    asleep_after_outside_quiet_s: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1800
+    )
+    #: ADR-0079 §3: the newest camera observation may be at most this old for an off.
+    camera_unknown_grace_s: Mapped[int] = mapped_column(Integer, nullable=False, default=120)
     #: The owner's approved wake song — {"url": ..., "title": ...} — the one item
     #: "seçtiğim müzik" / a remembered title resolves to (spec §3.8). Set only by the owner
     #: (a URL they named); never chosen by the system. None until the owner picks one.

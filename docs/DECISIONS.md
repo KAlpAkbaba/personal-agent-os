@@ -6105,3 +6105,91 @@ and `persona.py` (`when_spoken`), the spec table, `receipt.py` v10, the health p
 `test_alarms_wiring.py` (seven tests). What this ADR does NOT change: the sequence, the
 policy, the device protocol, or any receipt shape. What it does not prove: audibility —
 that remains the owner's evening test B.
+
+## ADR-0079 — Ambient display autonomy, hardened: explicit temporal policy, the owner's own words, holdoffs that survive a restart, and an explanation from the record (2026-09-07)
+
+Status: Accepted
+
+Context: the owner's directive of 2026-09-07 (afternoon): turn the displays off when they
+have been away for a while or appear to have fallen asleep, wake them at once on keyboard,
+mouse, return or alarm — and make the policy conservative, predictable and
+production-ready. ADR-0071 built the policy (`app/ambient`: a pure `decide`, four holdoffs,
+"uncertain means ON", wake on return, alarm context). Reading it against the directive
+found five gaps and one defect: `quiet_hours` was stored and never read; there was no
+explicit "keep the screens on" preference; the holdoff registry was in-memory only, so a
+Cloud Core restarted a minute after the owner touched the keyboard met a stale AWAY with
+one fewer reason to say no; an explicit "Ekranı aç." started no holdoff; nothing answered
+"why did you turn the screens off"; and `note_alarm_wake` — the alarm-wake holdoff — had
+no caller anywhere, so it had never once started in production.
+
+Decisions:
+
+1. **Explicit temporal policy, every value owner-configurable and persisted.** The row
+   gains `keep_on` (false), `asleep_after_outside_quiet_s` (1800) and
+   `camera_unknown_grace_s` (120) beside `away_after_s` (900), `asleep_after_s` (600),
+   `asleep_min_confidence` (0.7) and the four holdoffs (`input` 600, `command` 900,
+   `alarm_wake` 1800, `return` 600). Migration `0024_ambient_hardening`, server defaults.
+2. **Absence and sleep stay distinct, and neither comes from one frame.** AWAY needs
+   `away_after_s` of sustained absence; LIKELY_ASLEEP is the fusion engine's own escalation
+   of sustained RESTING (twenty minutes by default) and then needs `asleep_after_s` more,
+   at `asleep_min_confidence`. Long stillness is RESTING until the engine says otherwise.
+3. **A camera that stopped delivering is a degraded perception, never an absent owner.**
+   `collect_inputs` reads when the fusion engine last held a camera observation; `decide`
+   refuses an off when that is older than `camera_unknown_grace_s` (`perception_stale`).
+   Permission lost, process dead, no usable frame, the eye disabled — all of them stay ON.
+4. **Local input outranks passive perception.** Unchanged in mechanism (the heartbeat's
+   input reset writes `owner.input_active`, feeds an `input`-sourced PRESENT observation
+   into the fusion engine, and starts the input holdoff; the device refuses `display_off`
+   inside its own window; the OS wakes the display before any of us), now proven by the
+   scenario matrix with the eye both on and off.
+5. **Every wake starts a holdoff, and holdoffs survive a restart.** Input, an explicit
+   "Ekranı aç." (`note_owner_display_command`, new), the owner's return, and an alarm
+   (`note_alarm_wake`, now called from `fire_alarm` and from the local-fallback reconcile).
+   `restore_holdoffs` rebuilds them on the first tick of a process from the ledger's
+   witnesses (`owner.input_active`, `ambient.policy_changed`, a `display.wake` receipt,
+   `alarm.firing`, a `presence.state_changed` to `returned`) for the time each has left.
+6. **The alarm outranks the ambient off.** A ringing or imminent alarm is `alarm_context`;
+   after it, the alarm-wake holdoff holds the screens for `alarm_holdoff_s`. A failed
+   display wake never stops the audio (ADR-0071, unchanged).
+7. **The owner's words set the policy; the model's booleans do not.** The one router
+   derives `policy_changes` from the utterance (`ambient_policy_changes`): "Ben yokken
+   ekranları kapat / kapatma", "Uyuduğumda ekranları kapat / kapatma", "Otomatik ekran
+   yönetimini aç / kapat", "Ekranı açık tut / tutma", "Ben geri geldiğimde ekranı aç /
+   açma". The turn record carries them; `ambient.set_policy` applies THEM and uses the
+   model's arguments only when no turn record exists. `keep_on` outranks every inference,
+   every holdoff and the policy's own switches until the owner lifts it.
+8. **Quiet hours are schedule-aware, never a schedule.** `{"start", "end", "timezone"?}`
+   in the owner's timezone, crossing midnight; inside the window LIKELY_ASLEEP needs
+   `asleep_after_s`, outside it `asleep_after_outside_quiet_s`, with none configured the
+   normal threshold everywhere. A window that cannot be read is treated as unset.
+9. **Display off is not system sleep.** The device path stays structurally guarded
+   (ADR-0072); the cloud's own device vocabulary (`RECEIPT_BY_DEVICE_CALL`) is asserted to
+   contain no sleep, hibernate, shutdown, lock, log-off or reboot call.
+10. **Multi-monitor stays a set.** The cloud reads one observed display state per device
+    and never a topology; power is the only thing this policy touches.
+11. **Persistence.** The policy row survives everything; the holdoffs are rebuilt from the
+    ledger (5); the presence assertion is deliberately not persisted — a restarted process
+    is UNKNOWN, which is ON.
+12. **An explanation from the record.** `ambient.explain` (a query; `GET /v1/ambient/explain`)
+    answers "Ekranları neden kapattın?", "Neden açık bıraktın?", "Şu an ekran politikası
+    ne?" from the live `decide`, the presence assertion, the active holdoffs, the latest
+    `owner.input_active` and the latest display receipt — which now carries its `reason`
+    and no longer names a placeholder alarm as evidence. A missing fact is spoken as
+    missing ("Kayıtlarda otomatik bir ekran kapatma yok efendim."), never guessed.
+13. **The scenario matrix runs through the real policy layer.** `test_ambient_scenarios.py`
+    drives a real `PresenceFusionEngine` with structured camera observations, the real
+    status registry through `ingest_status`, the real holdoff registry and the real alarm
+    service, with the device as the only fake, for all fifteen owner-listed scenarios.
+14. **Contract v11.**
+
+Consequences: `app/ambient/policy.py` (keep-on, quiet hours, the camera grace),
+`service.py` (validation, `restore_holdoffs`, `note_owner_display_command`, `explain`),
+`app/alarms/service.py` (the wired alarm-wake holdoff), `sequence.py` (receipt reason,
+display-only receipts), `speech.py` (the preference sentences and the explanation),
+`intents.py` (`AMBIENT_EXPLAIN`, `ambient_policy_changes`, `ResolvedIntent.policy_changes`),
+`tools_ambient.py` (`ambient.explain`, turn-derived changes, `keep_on`), `routes.py`,
+migration 0024, and two new suites (`test_ambient_scenarios.py`, `test_ambient_hardening.py`).
+What is NOT here: a durable presence assertion (by design), an owner-facing editor for
+the thresholds beyond the REST and voice surfaces, and the physical run — row 14.12/14.14
+real evidence is the owner's item 26. AMBIENT DISPLAY ENGINEERING COMPLETE;
+READY_FOR_OWNER_PHYSICAL_TEST.

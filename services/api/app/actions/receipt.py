@@ -153,7 +153,15 @@ TERMINAL_CLAIMABLE: Final[frozenset[str]] = frozenset({TERMINAL_VERIFIED, TERMIN
 #: changes the alarm row on "Alarmı kapat." while the music keeps playing, and answers
 #: every "Ekranları kapat." with "no device runtime" - the tools were built and tested
 #: against injected fakes and never wired to the route.
-ACTION_CONTRACT_VERSION: Final = 10
+#: v11 (2026-09-07, M18.3 ambient hardening, ADR-0079): `ambient.explain` (a query that
+#: answers "why did / didn't you" and "what is the policy" from the live decision, the
+#: presence assertion, the holdoffs and the ledger), `keep_on` on `ambient.set_policy`,
+#: the owner's negations ("... kapatma") derived by the router and applied by the tool,
+#: quiet hours and a camera grace on the policy row (migration 0024), holdoffs rebuilt
+#: from the ledger after a restart, an explicit `display.wake` starting the command
+#: holdoff, and the alarm-wake holdoff actually started by `fire_alarm` (it had no
+#: caller on v10).
+ACTION_CONTRACT_VERSION: Final = 11
 
 FAKE_COMPLETION_PHRASES: Final[tuple[str, ...]] = (
     "yapmış gibi düşün",

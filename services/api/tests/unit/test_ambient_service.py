@@ -245,6 +245,8 @@ def _pretend_owner_is_away(monkeypatch) -> None:
             alarm_active=real.alarm_active,
             next_alarm_at=real.next_alarm_at,
             holdoffs=real.holdoffs,
+            # ADR-0079 §3: "camera-backed" now means the camera DELIVERED recently, too.
+            perception_age_s=5.0,
         )
 
     monkeypatch.setattr(service_mod, "collect_inputs", _collect)

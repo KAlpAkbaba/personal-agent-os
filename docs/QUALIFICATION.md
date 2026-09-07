@@ -630,6 +630,16 @@ device that rang its fallback after the cloud gave up (network down at the insta
 now recorded on reconcile rather than lost. The owner runs A/B/C remain the only
 `PROVEN_REAL` evidence: A is visual, B is audible, C is physical; nothing else is left.
 
+**Update 2026-09-07 (ADR-0079, ambient hardening).** Rows 14.12 and 14.14 are now backed by
+the fifteen-scenario matrix through the REAL policy layer (`test_ambient_scenarios.py`: a
+real fusion engine on structured camera observations, the real status registry through
+the heartbeat ingest, the real holdoffs, the real alarm service; the device the only fake)
+and by `test_ambient_hardening.py` (quiet hours in the owner's timezone, keep-on, the
+camera grace, holdoffs restored from the ledger after a restart, the explicit-wake and the
+alarm-wake holdoffs — the latter had never been wired — the owner's own words setting the
+policy over the model's booleans, and the explanation surface). AMBIENT DISPLAY
+ENGINEERING COMPLETE; the physical run (item 26) is `READY_FOR_OWNER_PHYSICAL_TEST`.
+
 | # | Criterion | Status | Evidence required |
 |---|---|---|---|
 | 14.1 | `/core` in Minimal mode is a full-viewport Living Core: the Core covers 60–80 % of the usable viewport by aspect ratio, near-black ground, no page scroll, controls as fading overlays, fullscreen only on the owner's gesture with a visible exit, a PWA manifest; the old small wireframe is gone | `PROVEN_PROXY` | **Proxy 2026-09-07** (ADR-0070, merged): `stageSizeFor` targets portrait 0.74 / square 0.78 / landscape 0.72 / ultrawide 0.66 and is clamped to 60–80 % (`tests/uistate/stage.test.ts`); Minimal mode is `position: fixed; inset: 0` with no page scroll; the six-control cluster fades to 25 % after 4 s through a pure reducer and returns on pointer/key/focus; fullscreen is one callback bound to one button with a labelled exit; the manifest is standalone with SVG icons; the served document carries `<meta name="pagentos-core-build" content="living-core-1">` (`core-build-marker.test.tsx`, pinned to the harness). Web gate: 776 tests, tsc, lint, build. Real: A — the owner sees it on their own screen. |

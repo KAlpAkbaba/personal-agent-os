@@ -191,7 +191,9 @@ def test_health_serves_the_realtime_contract_version() -> None:
     # speaks, and activity.explain on a research turn gives the report's answer.
     # 10 = M18.3 wiring defect (ADR-0078): the alarm/display tools reach the device - the
     # wake sequence and the status registry ride the runtime's live sources.
-    assert doc["checks"]["voice_realtime"]["action_contract_version"] == 10
+    # 11 = M18.3 ambient hardening (ADR-0079): ambient.explain, keep_on, quiet hours, the
+    # camera grace, restored holdoffs, the alarm-wake holdoff wired.
+    assert doc["checks"]["voice_realtime"]["action_contract_version"] == 11
     # The follow-up family rides the same manifest the owner harness reads.
     assert {"research.explain", "research.sources", "research.finding_detail"} <= set(
         doc["checks"]["voice_realtime"]["tools"]

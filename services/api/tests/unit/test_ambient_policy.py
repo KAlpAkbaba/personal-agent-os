@@ -58,6 +58,9 @@ def _inputs(**overrides) -> AmbientInputs:
         "alarm_active": False,
         "next_alarm_at": None,
         "holdoffs": (),
+        # ADR-0079 §3: the camera delivered five seconds ago - part of a world in which an
+        # off is legitimate; a silent camera is one of the uncertainties below.
+        "perception_age_s": 5.0,
     }
     base.update(overrides)
     return AmbientInputs(**base)

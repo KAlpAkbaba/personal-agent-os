@@ -20,10 +20,12 @@ Nothing here reads the database, the clock or a device. A caller passes what it 
 
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Final
+from datetime import UTC, datetime
+from typing import Any, Final
+from zoneinfo import ZoneInfo
 
 from app.actions.receipt import TERMINAL_ALREADY, TERMINAL_VERIFIED
+from app.alarms.models import DEFAULT_TIMEZONE
 from app.narration.numbers import cardinal
 
 # ------------------------------------------------------------------ the clock
@@ -164,6 +166,18 @@ DISPLAY_STATUS_UNKNOWN_TR: Final = "Ekranların durumunu okuyamıyorum efendim."
 AMBIENT_AUTO_OFF_ON_TR: Final = "Otomatik ekran kapatmayı açtım efendim."
 AMBIENT_AUTO_OFF_OFF_TR: Final = "Otomatik ekran kapatmayı kapattım efendim."
 AMBIENT_POLICY_UPDATED_TR: Final = "Ekran ayarını güncelledim efendim."
+# ADR-0079 §7: one sentence per preference the owner can state out loud.
+AMBIENT_KEEP_ON_TR: Final = "Ekranları açık tutacağım efendim; otomatik kapatma devre dışı."
+AMBIENT_KEEP_ON_OFF_TR: Final = "Ekranları açık tutma tercihini kaldırdım efendim."
+AMBIENT_OFF_WHEN_AWAY_ON_TR: Final = "Siz yokken ekranları kapatacağım efendim."
+AMBIENT_OFF_WHEN_AWAY_OFF_TR: Final = "Siz yokken ekranları kapatmayacağım efendim."
+AMBIENT_OFF_WHEN_ASLEEP_ON_TR: Final = "Uyuduğunuzda ekranları kapatacağım efendim."
+AMBIENT_OFF_WHEN_ASLEEP_OFF_TR: Final = "Uyuduğunuzda ekranları kapatmayacağım efendim."
+AMBIENT_WAKE_ON_RETURN_ON_TR: Final = "Geri geldiğinizde ekranları açacağım efendim."
+AMBIENT_WAKE_ON_RETURN_OFF_TR: Final = (
+    "Geri geldiğinizde ekranları kendiliğinden açmayacağım efendim."
+)
+AMBIENT_EXPLAIN_NO_OFF_TR: Final = "Kayıtlarda otomatik bir ekran kapatma yok efendim."
 AMBIENT_TEST_STARTED_TR: Final = (
     "Ekran testini başlattım efendim; {seconds} saniye sonra ekranlar kapanacak, bir tuşa "
     "basınca açılacak."
@@ -201,6 +215,15 @@ SPEECH_TEMPLATES: Final[tuple[str, ...]] = (
     AMBIENT_AUTO_OFF_OFF_TR,
     AMBIENT_POLICY_UPDATED_TR,
     AMBIENT_TEST_STARTED_TR,
+    AMBIENT_KEEP_ON_TR,
+    AMBIENT_KEEP_ON_OFF_TR,
+    AMBIENT_OFF_WHEN_AWAY_ON_TR,
+    AMBIENT_OFF_WHEN_AWAY_OFF_TR,
+    AMBIENT_OFF_WHEN_ASLEEP_ON_TR,
+    AMBIENT_OFF_WHEN_ASLEEP_OFF_TR,
+    AMBIENT_WAKE_ON_RETURN_ON_TR,
+    AMBIENT_WAKE_ON_RETURN_OFF_TR,
+    AMBIENT_EXPLAIN_NO_OFF_TR,
     GREETING_MORNING,
     GREETING_DAY,
     GREETING_EVENING,
@@ -317,6 +340,169 @@ def display_wake_speech(*, terminal_status: str, error_class: str | None = None)
     if error_class == "no_capable_device":
         return DISPLAY_OFF_NO_DEVICE_TR
     return DISPLAY_WAKE_FAILED_TR
+
+
+#: The presence vocabulary, addressed to the owner (ADR-0079 §12).
+_PRESENCE_TR: Final[dict[str, str]] = {
+    "present": "buradasınız",
+    "away": "yoksunuz",
+    "returned": "az önce döndünüz",
+    "awake": "uyanıksınız",
+    "resting": "dinleniyorsunuz",
+    "likely_asleep": "uyuyor olabilirsiniz",
+    "unknown": "varlığınız belirsiz",
+}
+
+#: Why the decision is what it is - one clause per reason ``app.ambient.policy`` can
+#: give. A reason outside this table is spoken by its token, never invented.
+_DECISION_REASON_TR: Final[dict[str, str]] = {
+    "display_not_on": "ekranlar zaten kapalı ya da durumu bilinmiyor",
+    "owner_keep_on": "'ekranı açık tut' dediniz",
+    "alarm_context": "bir alarm çalıyor ya da çalmak üzere",
+    "holdoff:input": "az önce klavye ya da fare kullanıldı",
+    "holdoff:owner_command": "az önce ekranla ilgili bir komut verdiniz",
+    "holdoff:alarm_wake": "alarm az önce çaldı",
+    "holdoff:owner_return": "az önce geri döndünüz",
+    "policy_disabled": "otomatik ekran kapatma kapalı",
+    "uncertain": "varlık durumu belirsiz ya da gözlem eski",
+    "no_perception": "göz kapalı, kameradan çıkarım yapılmıyor",
+    "perception_stale": "kamera bir süredir görüntü vermiyor",
+    "owner_away": "yokluğunuz eşiği doldurdu",
+    "owner_likely_asleep": "uyuyor olma eşiği doldu",
+    "not_held_long_enough": "durum henüz yeterince uzun sürmedi",
+    "no_condition_met": "kapatmayı gerektiren bir durum yok",
+}
+
+_RECEIPT_REASON_TR: Final[dict[str, str]] = {
+    "owner_away": "siz yoktunuz",
+    "owner_likely_asleep": "uyuyor görünüyordunuz",
+    "owner_command": "siz istediniz",
+    "owner_test": "ekran testi",
+    "owner_returned": "geri döndünüz",
+    "alarm": "alarm",
+}
+
+
+def _hhmm(iso: Any, *, timezone: str = DEFAULT_TIMEZONE) -> str:
+    try:
+        parsed = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return ""
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(ZoneInfo(timezone)).strftime("%H:%M")
+
+
+def _minutes_tr(seconds: float) -> str:
+    minutes = int(round(float(seconds) / 60.0))
+    if minutes < 1:
+        return "bir dakikadan az"
+    return f"{cardinal(minutes)} dakika"
+
+
+def ambient_explain_speech(facts: dict[str, Any], *, now: datetime | None = None) -> str:
+    """The answer to "Ekranları neden kapattın?" / "Neden açık bıraktın?" / "Şu an ekran
+    politikası ne?" (ADR-0079 §12), from ``app.ambient.service.explain``'s facts.
+
+    Every clause names a field; a field that is missing produces a sentence saying so
+    ("kayıtlarda ... yok"), never a plausible reason. Short: the owner asked one thing.
+    """
+    del now
+    policy = dict(facts.get("policy") or {})
+    decision = dict(facts.get("decision") or {})
+    presence = dict(facts.get("presence") or {})
+    timezone = str((policy.get("quiet_hours") or {}).get("timezone") or DEFAULT_TIMEZONE)
+    parts: list[str] = []
+
+    display = facts.get("display")
+    if display == "on":
+        parts.append("Ekranlar şu an açık efendim.")
+    elif display == "off":
+        parts.append("Ekranlar şu an kapalı efendim.")
+    else:
+        parts.append("Ekranların durumunu cihazdan okuyamıyorum efendim.")
+
+    if policy.get("keep_on"):
+        parts.append("'Ekranı açık tut' tercihi geçerli; otomatik kapatma devre dışı.")
+    elif policy.get("auto_off_enabled"):
+        halves: list[str] = []
+        if policy.get("off_when_away"):
+            halves.append(f"siz yokken {_minutes_tr(policy.get('away_after_s', 0))} sonra")
+        if policy.get("off_when_asleep"):
+            halves.append(
+                f"uyuduğunuzda {_minutes_tr(facts.get('asleep_needed_s', 0))} sonra"
+            )
+        parts.append(
+            "Otomatik ekran kapatma açık"
+            + (": " + ", ".join(halves) if halves else ", ancak iki koşul da kapalı")
+            + "."
+        )
+    else:
+        parts.append("Otomatik ekran kapatma kapalı.")
+
+    state = str(presence.get("state") or "unknown")
+    state_tr = _PRESENCE_TR.get(state, state)
+    if state == "unknown":
+        parts.append("Şu anki değerlendirme: varlığınız belirsiz.")
+    else:
+        confidence = int(round(float(presence.get("confidence") or 0.0) * 100))
+        parts.append(
+            f"Şu anki değerlendirme: {state_tr}, güven yüzde {cardinal(confidence)}, "
+            f"{_minutes_tr(presence.get('held_s') or 0.0)}dır."
+        )
+    if not presence.get("eye_enabled"):
+        parts.append("Göz kapalı; kameradan çıkarım yapılmıyor.")
+
+    reason = str(decision.get("reason") or "")
+    reason_tr = _DECISION_REASON_TR.get(reason, reason)
+    evidence = dict(decision.get("evidence") or {})
+    if decision.get("action") == "display.off":
+        parts.append(f"Şu an kapatma koşulu sağlanıyor: {reason_tr}.")
+    elif reason.startswith("holdoff:") and evidence.get("holdoff_until"):
+        parts.append(
+            f"Ekranlar açık kalıyor çünkü {reason_tr}; "
+            f"{_hhmm(evidence['holdoff_until'], timezone=timezone)}'e kadar otomatik "
+            "kapatma beklemede."
+        )
+    elif reason == "not_held_long_enough" and evidence.get("needed_s") is not None:
+        parts.append(
+            f"Ekranlar açık kalıyor çünkü {reason_tr}: "
+            f"{_minutes_tr(evidence.get('held_s') or 0.0)} sürdü, eşik "
+            f"{_minutes_tr(evidence.get('needed_s') or 0.0)}."
+        )
+    elif reason:
+        parts.append(f"Ekranlar açık kalıyor çünkü {reason_tr}.")
+
+    last_input = facts.get("last_input_at")
+    if last_input:
+        parts.append(f"Son klavye ya da fare kullanımı {_hhmm(last_input, timezone=timezone)}.")
+    else:
+        parts.append("Kayıtlı bir klavye ya da fare kullanımı yok.")
+
+    last = facts.get("last_display_action")
+    if isinstance(last, dict) and last.get("capability"):
+        verb = "kapattım" if last["capability"] == "display.off" else "açtım"
+        why = _RECEIPT_REASON_TR.get(str(last.get("reason") or ""), "")
+        when = _hhmm(last.get("occurred_at"), timezone=timezone)
+        if last.get("terminal_status") in ("verified", "already"):
+            parts.append(
+                f"Ekranları en son {when}'de {verb}" + (f" ({why})" if why else "") + "."
+            )
+        else:
+            parts.append(
+                f"En son ekran işlemi {when}'de doğrulanmadı"
+                + (f" ({last.get('error_class')})" if last.get("error_class") else "")
+                + "."
+            )
+    else:
+        parts.append(AMBIENT_EXPLAIN_NO_OFF_TR)
+
+    quiet = facts.get("quiet_hours")
+    window = policy.get("quiet_hours") or {}
+    if quiet in ("inside", "outside") and window.get("start") and window.get("end"):
+        where = "içindeyiz" if quiet == "inside" else "dışındayız"
+        parts.append(f"Sessiz saatler {window['start']}-{window['end']}; şu an {where}.")
+    return " ".join(parts)
 
 
 def display_status_speech(state: str | None) -> str:

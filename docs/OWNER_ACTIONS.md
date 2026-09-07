@@ -86,6 +86,17 @@ The automatic, presence-based off (away for fifteen minutes, or asleep for ten w
 confidence) stays OFF until you turn it on by voice (`Otomatik ekran kapatmayı aç.`); its
 own longer observation comes when you want it.
 
+**Hardened 2026-09-07 (ADR-0079; AMBIENT DISPLAY ENGINEERING COMPLETE).** The policy now
+understands your own sentences, including the negations — `Ben yokken ekranları kapat /
+kapatma.`, `Uyuduğumda ekranları kapat / kapatma.`, `Otomatik ekran yönetimini aç / kapat.`,
+`Ekranı açık tut.` (outranks everything until you lift it with `Ekranı açık tutma.`), `Ben
+geri geldiğimde ekranı aç.` — and answers `Ekranları neden kapattın?`, `Neden açık
+bıraktın?` and `Şu an ekran politikası ne?` from the record. Quiet hours (e.g. 23:30–07:30)
+can be set over `PUT /v1/ambient/policy`; outside them "asleep" needs three times the
+evidence. A camera that stops delivering, a stale state, an alarm, or any recent keyboard,
+mouse, command or return holds the screens on — and those holdoffs now survive a Cloud
+Core restart. Nothing here needs sound; this item stays the one physical check.
+
 ### 24. Look at the Living Core — **M18.3 qualification A — `READY_FOR_OWNER_VISUAL_TEST` (web only: no release, no install; gates green 2026-09-07 - 810 web tests, tsc, lint, production build; the in-app preview here sits behind your login, so nobody has seen the WebGL scene but you)**
 
 The small wireframe is gone. `/core` is now a full-viewport gold and amber Core: nine

@@ -320,6 +320,21 @@ class WakeSequence:
         else:
             execution = EXECUTION_EXECUTED
 
+        # A display step issued by the ambient policy or by an owner command carries no
+        # alarm at all (``_display_only_alarm``): its receipt must not name one as evidence.
+        # ADR-0079 §12: the step's REASON rides on the receipt, so "Ekranları neden
+        # kapattın?" is answered from the row that recorded the darkening.
+        display_only = bool(getattr(alarm, "_display_only", False))
+        server: dict[str, Any] = {"device_capability": capability}
+        if not display_only:
+            server["alarm_id"] = str(alarm.id)
+            server["alarm_state"] = alarm.state
+        if payload.get("reason"):
+            server["reason"] = str(payload["reason"])
+        evidence: list[dict[str, Any]] = []
+        if not display_only:
+            evidence.append({"kind": "wake_alarm", "ref": str(alarm.id)})
+        evidence.append({"kind": "device_capability", "ref": capability})
         receipt = ActionReceipt(
             action_id=idempotency_key,
             capability=receipt_capability,
@@ -327,18 +342,11 @@ class WakeSequence:
             execution_status=execution,
             terminal_status=terminal,
             observed_after={
-                "server": {
-                    "alarm_id": str(alarm.id),
-                    "alarm_state": alarm.state,
-                    "device_capability": capability,
-                },
+                "server": server,
                 # Everything below came FROM the device: its own read-back, verbatim.
                 "local": dict(result.result),
             },
-            evidence_refs=[
-                {"kind": "wake_alarm", "ref": str(alarm.id)},
-                {"kind": "device_capability", "ref": capability},
-            ],
+            evidence_refs=evidence,
             error_class=error_class,
             speech=speech,
             started_at=started,
@@ -903,6 +911,9 @@ def _display_only_alarm() -> WakeAlarm:
     row = WakeAlarm()
     row.id = uuid.uuid4()
     row.state = "SCHEDULED"
+    # ADR-0079: the receipt builder reads this to leave the alarm fields and the
+    # ``wake_alarm`` evidence off a receipt that has no alarm behind it.
+    row._display_only = True  # type: ignore[attr-defined]
     return row
 
 

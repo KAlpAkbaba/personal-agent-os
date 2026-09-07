@@ -248,20 +248,28 @@ lists the new tools; the M18.3 harness gates on the version.
 owner turns it on by voice or the C qualification does), `off_when_away=True`,
 `off_when_asleep=True`, `wake_on_return=True`, `away_after_s=900`, `asleep_after_s=600`,
 `asleep_min_confidence=0.7`, `input_holdoff_s=600`, `command_holdoff_s=900`,
-`alarm_holdoff_s=1800`, `return_holdoff_s=600`, `quiet_hours=None`.
+`alarm_holdoff_s=1800`, `return_holdoff_s=600`, `quiet_hours=None`; ADR-0079 adds
+`keep_on=False` ("Ekranı açık tut." — outranks everything until lifted),
+`asleep_after_outside_quiet_s=1800` (LIKELY_ASLEEP outside the quiet hours) and
+`camera_unknown_grace_s=120` (the newest camera observation may be at most this old for
+an off). `quiet_hours` is `{"start": "HH:MM", "end": "HH:MM", "timezone"?}`.
 
 `decide(inputs, policy, now) -> Decision(action: "display.off"|"none", reason, evidence)`,
 pure and exhaustively tested:
 
 ```
 display already off / unknown state          -> none (display_not_on)
+policy.keep_on                               -> none (owner_keep_on)         [ADR-0079]
 alarm ringing/playing/greeting or armed < 15 min -> none (alarm_context)
 any holdoff active                           -> none (holdoff:<source>)
 policy.auto_off_enabled false                -> none (policy_disabled)
 presence UNKNOWN or stale                    -> none (uncertain)  [never off from uncertainty]
 eye disabled                                 -> none (no_perception)  [camera off => no inference]
+newest camera observation older than camera_unknown_grace_s
+                                             -> none (perception_stale)  [ADR-0079: a silent camera is not an absent owner]
 AWAY held >= away_after_s and off_when_away  -> display.off (owner_away)
-LIKELY_ASLEEP held >= asleep_after_s and confidence >= asleep_min_confidence and off_when_asleep
+LIKELY_ASLEEP held >= asleep_after_s (inside the quiet hours, or none configured) /
+    asleep_after_outside_quiet_s (outside them) and confidence >= asleep_min_confidence and off_when_asleep
                                              -> display.off (owner_likely_asleep)
 otherwise                                    -> none
 ```
@@ -270,6 +278,20 @@ A `display.off` decision runs the action contract (`ActionReceipt` capability `d
 reason `owner_away|owner_likely_asleep`) over `desktop.display_off` and starts NO holdoff
 (a refusal from the device — `recent_input` — starts the input holdoff). `wake_on_return`:
 `owner.returned` while the display is off → `display.wake` (reason `owner_returned`).
+
+ADR-0079 (hardening): every wake starts a holdoff — input (`input_holdoff_s`), an explicit
+`display.wake` by voice (`command_holdoff_s`), the owner's return (`return_holdoff_s`) and an
+alarm firing (`alarm_holdoff_s`, started by `fire_alarm` and by the local-fallback
+reconcile) — and the first tick of a process rebuilds the holdoffs a restart lost from the
+ledger's witnesses for the time each has left. The owner's words set the policy: the router
+derives `policy_changes` ("ben yokken ekranları kapat / kapatma", "uyuduğumda ekranları
+kapat / kapatma", "otomatik ekran yönetimini aç / kapat", "ekranı açık tut / tutma", "ben
+geri geldiğimde ekranı aç / açma") and `ambient.set_policy` applies them over the model's
+booleans. `ambient.explain` (`GET /v1/ambient/explain`) answers "Ekranları neden kapattın?",
+"Neden açık bıraktın?", "Şu an ekran politikası ne?" from the live decision, the presence
+assertion, the holdoffs, the latest `owner.input_active` and the latest display receipt
+(which carries its `reason`). The fifteen-scenario matrix runs through the real policy layer
+in `tests/unit/test_ambient_scenarios.py`.
 
 ## 4. Browser worker media operations (Track B, `services/browser`, contract v1.2)
 

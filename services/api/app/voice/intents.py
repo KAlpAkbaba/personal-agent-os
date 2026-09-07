@@ -78,6 +78,7 @@ class Intent(StrEnum):
     DISPLAY_QUERY = "display_query"  # ekranlar açık mı?
     AMBIENT_POLICY_SET = "ambient_policy_set"  # uyurken ekranları kapat / ben yokken ...
     AMBIENT_TEST_DISPLAY = "ambient_test_display"  # ekran uyku otomasyonunu test et
+    AMBIENT_EXPLAIN = "ambient_explain"  # ekranları neden kapattın / ekran politikası ne
 
     NONE = "none"
 
@@ -123,6 +124,9 @@ CAPABILITY_BY_INTENT: dict[Intent, str] = {
 QUERY_TOOL_BY_INTENT: dict[Intent, str] = {
     Intent.ALARM_QUERY: "alarm.status",
     Intent.DISPLAY_QUERY: "display.status",
+    # ADR-0079 §12: "why did / didn't you" and "what is the policy now" are answered from
+    # the live decision, the presence assertion, the holdoffs and the ledger - a query.
+    Intent.AMBIENT_EXPLAIN: "ambient.explain",
 }
 
 
@@ -262,6 +266,10 @@ class ResolvedIntent:
     klass: str = ""
     #: The canonical capability an ACTION targets ("eye.disable"); None for the rest.
     capability: str | None = None
+    #: ADR-0079 §7: for an AMBIENT_POLICY_SET utterance, the policy fields the owner's
+    #: WORDS set (``ambient_policy_changes``) - derived in the one router, recorded on the
+    #: turn, and preferred by the tool over whatever booleans the model passed.
+    policy_changes: dict[str, bool] | None = None
 
     def __post_init__(self) -> None:
         if not self.klass:
@@ -283,6 +291,7 @@ class ResolvedIntent:
             "query_kind": self.query_kind,
             "research_class": self.research_class,
             "research_reference": self.research_reference,
+            "policy_changes": dict(self.policy_changes) if self.policy_changes else None,
         }
 
     @property
@@ -619,18 +628,110 @@ def _alarm_match(tokens: tuple[str, ...]) -> tuple[Intent, str] | None:
     return None
 
 
+#: ADR-0079 §7: the negations that turn a standing preference OFF ("... kapatma").
+_POLICY_NEGATION_FORMS: Final[tuple[str, ...]] = (
+    "kapatma",
+    "kapama",
+    "kapatmayın",
+    "kapatmayin",
+    "kapatmasın",
+    "kapatmasin",
+)
+_WAKE_NEGATION_FORMS: Final[tuple[str, ...]] = ("açma", "acma", "açmayın", "acmayin")
+_KEEP_VERB_FORMS: Final[tuple[str, ...]] = (
+    "tut",
+    "tutsana",
+    "tutar",
+    "tutma",
+    "tutmayın",
+    "tutmayin",
+)
+_KEEP_NEGATION_FORMS: Final[tuple[str, ...]] = ("tutma", "tutmayın", "tutmayin")
+_ASLEEP_STEMS: Final[tuple[str, ...]] = ("uyurken", "uyuyorken", "uyudu", "uyuyunca")
+_AWAY_FORMS: Final[tuple[str, ...]] = ("yokken", "olmadığımda", "olmadigimda", "yokum")
+_RETURN_STEMS: Final[tuple[str, ...]] = ("geldiğimde", "geldigimde", "döndüğümde", "dondugumde")
+_AUTO_ON_FORMS: Final[tuple[str, ...]] = (
+    "aç",
+    "açsana",
+    "ac",
+    "başlat",
+    "baslat",
+    "etkinleştir",
+    "etkinlestir",
+)
+_AUTO_OFF_FORMS: Final[tuple[str, ...]] = ("kapat", "kapatsana", "kapa", "durdur")
+
+
+def ambient_policy_changes(tokens: tuple[str, ...]) -> dict[str, bool] | None:
+    """The policy fields the owner's WORDS set (ADR-0079 §7), or None.
+
+    Deterministic and in the one router, so "Uyuduğumda ekranları kapatma." cannot be
+    recorded as a request to darken anything: the negation is read here, not trusted to
+    the model's choice of booleans. Enabling a half ("uyurken kapat", "yokken kapat")
+    also enables the automation, because that is what the sentence asks for; disabling
+    a half leaves the switch alone. "Ekranı açık tut." is its own preference and
+    outranks the rest (``keep_on``); "açık tutma" lifts it.
+    """
+    changes: dict[str, bool] = {}
+    if (
+        _screen_noun(tokens) is not None
+        and _has_exact(tokens, *_KEEP_VERB_FORMS)
+        and _has_exact(tokens, "açık", "acik")
+    ):
+        return {"keep_on": not bool(_has_exact(tokens, *_KEEP_NEGATION_FORMS))}
+    negated = bool(_has_exact(tokens, *_POLICY_NEGATION_FORMS))
+    if _has(tokens, *_ASLEEP_STEMS):
+        changes["off_when_asleep"] = not negated
+        if not negated:
+            changes["auto_off_enabled"] = True
+    if _has_exact(tokens, *_AWAY_FORMS):
+        changes["off_when_away"] = not negated
+        if not negated:
+            changes["auto_off_enabled"] = True
+    if _has(tokens, *_RETURN_STEMS):
+        changes["wake_on_return"] = not bool(_has_exact(tokens, *_WAKE_NEGATION_FORMS))
+    if _has(tokens, "otomatik") and not changes:
+        if _has_exact(tokens, *_AUTO_ON_FORMS):
+            changes["auto_off_enabled"] = True
+        elif _has_exact(tokens, *_AUTO_OFF_FORMS) or _has(tokens, "devre"):
+            changes["auto_off_enabled"] = False
+    return changes or None
+
+
+def _ambient_explain_match(tokens: tuple[str, ...]) -> str | None:
+    """"Ekranları neden kapattın?", "Neden açık bıraktın?", "Şu an ekran politikası ne?"
+    (ADR-0079 §12). "neden" alone is not enough - "Neden önemli?" is a research
+    follow-up - so the question must name the screen, the leaving-on, or the policy."""
+    why = _has_exact(tokens, "neden", "niye", "niçin", "nicin")
+    if why and (_screen_noun(tokens) or _has(tokens, "bırak", "birak")):
+        return why
+    if _screen_noun(tokens) and _has(tokens, "politika"):
+        return "politika"
+    if (
+        _screen_noun(tokens)
+        and _has(tokens, "otomasyon", "yönetim", "yonetim")
+        and _is_question(tokens)
+    ):
+        return "otomasyon"
+    return None
+
+
 def _ambient_policy_match(tokens: tuple[str, ...]) -> tuple[Intent, str] | None:
     """The policy phrases of spec §6. Checked BEFORE the bare display commands, because
     "uyurken ekranları kapat" is a standing preference and "ekranları kapat" is a command
     for right now — one word apart, and the difference is whether the screens go dark in
     two seconds or in twenty minutes."""
+    if explained := _ambient_explain_match(tokens):
+        return Intent.AMBIENT_EXPLAIN, explained
     if _screen_noun(tokens) is None and not _has(tokens, "otomatik"):
         return None
     if _has(tokens, "test") and _has(tokens, "ekran"):
         return Intent.AMBIENT_TEST_DISPLAY, "ekran testi"
-    if _has(tokens, "uyurken", "uyuyorken", "uyudu"):
+    if _has_exact(tokens, *_KEEP_VERB_FORMS) and _has_exact(tokens, "açık", "acik"):
+        return Intent.AMBIENT_POLICY_SET, "açık tut"
+    if _has(tokens, *_ASLEEP_STEMS):
         return Intent.AMBIENT_POLICY_SET, "uyurken"
-    if _has_exact(tokens, "yokken", "olmadığımda", "olmadigimda"):
+    if _has_exact(tokens, *_AWAY_FORMS):
         return Intent.AMBIENT_POLICY_SET, "yokken"
     if _has(tokens, "otomatik"):
         return Intent.AMBIENT_POLICY_SET, "otomatik"
@@ -1279,7 +1380,15 @@ def resolve_intent(
     #     ekranları kapat" is a standing preference, "ekranları kapat" is a command for now.
     if ambient_matched := _ambient_policy_match(tokens):
         return ResolvedIntent(
-            ambient_matched[0], scope=SCOPE_CONVERSATION, matched=ambient_matched[1], **base
+            ambient_matched[0],
+            scope=SCOPE_CONVERSATION,
+            matched=ambient_matched[1],
+            policy_changes=(
+                ambient_policy_changes(tokens)
+                if ambient_matched[0] is Intent.AMBIENT_POLICY_SET
+                else None
+            ),
+            **base,
         )
     if alarm_matched := _alarm_match(tokens):
         return ResolvedIntent(

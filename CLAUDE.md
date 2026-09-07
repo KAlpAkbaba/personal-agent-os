@@ -22,6 +22,14 @@ Before architecture changes, read `PROJECT_CONSTITUTION.md`, then the relevant d
 
 ## Engineering operating mode
 
+The binding form of this section is `docs/DEVELOPMENT_POLICY.md` (permanent, owner
+directive 2026-09-07): every request is a tracked work item run through UNDERSTAND →
+DESIGN → IMPLEMENT → TEST → REVIEW → FIX → RETEST → INTEGRATE → QUALIFY → DEPLOY if
+authorised → VERIFY RUNTIME → CLOSE; bugs found on the way are part of the same task;
+every real bug gets a regression test; integration through the real application object
+is part of done; owner-only steps are marked `READY_FOR_OWNER` and never block the rest;
+every work item ends with the completion report the policy names.
+
 1. Understand the current milestone and acceptance criteria.
 2. Decompose work into testable tasks.
 3. Delegate specialist work to `.claude/agents/` proactively.

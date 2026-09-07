@@ -1141,6 +1141,9 @@ def record_client_events(
                 "klass": intent.klass,
                 "query_kind": intent.query_kind,
                 "research_class": intent.research_class,
+                # ADR-0079 §7: the policy fields the owner's words set, so the tool
+                # applies what was SAID rather than what the model chose to pass.
+                "policy_changes": intent.policy_changes,
                 # ADR-0076. The research SHAPE, decided without the "does a completed
                 # research exist?" precondition (that precondition is what let a deictic
                 # follow-up on an empty history become a crawl), and WHICH research the
