@@ -612,6 +612,24 @@ absorbed here: 14.7 is the media row and 14.11–14.14 are the display rows, eac
 real evidence. The rule of Stage 12 holds: a `PROVEN_REAL` cell names the durable record
 first (receipts, ledger rows, routine firings, the device audit), never a yes/no from the owner.
 
+**Update 2026-09-07 (ADR-0078, end-to-end proxy).** Rows 14.5, 14.6, 14.9, 14.10, 14.11,
+14.16 and 14.18 are now proven through the REAL application object in one run
+(`services/api/tests/unit/test_alarms_wiring.py`): created by voice through the relay
+(the canonical router classifies the words, the receipt speaks, the rows are durable and
+in Europe/Istanbul), armed on the device by the `RoutineClock`'s own tick, fired at the
+instant through the routine engine (once; a second process's tick fires nothing), the
+display woken before the media, the alarm profile opened, the media verified, the ramp,
+one receipt per physical step, the greeting on a later tick with duck and restore and a
+single-use audio token redeemable exactly once through the open route, `Alarmı kapat.`
+by voice stopping the medium that is playing, the test alarm cleaning itself up, the
+session record saying so; `display.off` / `display.status` by voice reaching the device
+and the registry. Writing it surfaced two production defects the component suites could
+not see (the wake sequence was never on the route's live sources; the model's
+`when_text` argument was refused by the relay's blocklist) - both fixed, contract v10. A
+device that rang its fallback after the cloud gave up (network down at the instant) is
+now recorded on reconcile rather than lost. The owner runs A/B/C remain the only
+`PROVEN_REAL` evidence: A is visual, B is audible, C is physical; nothing else is left.
+
 | # | Criterion | Status | Evidence required |
 |---|---|---|---|
 | 14.1 | `/core` in Minimal mode is a full-viewport Living Core: the Core covers 60–80 % of the usable viewport by aspect ratio, near-black ground, no page scroll, controls as fading overlays, fullscreen only on the owner's gesture with a visible exit, a PWA manifest; the old small wireframe is gone | `PROVEN_PROXY` | **Proxy 2026-09-07** (ADR-0070, merged): `stageSizeFor` targets portrait 0.74 / square 0.78 / landscape 0.72 / ultrawide 0.66 and is clamped to 60–80 % (`tests/uistate/stage.test.ts`); Minimal mode is `position: fixed; inset: 0` with no page scroll; the six-control cluster fades to 25 % after 4 s through a pure reducer and returns on pointer/key/focus; fullscreen is one callback bound to one button with a labelled exit; the manifest is standalone with SVG icons; the served document carries `<meta name="pagentos-core-build" content="living-core-1">` (`core-build-marker.test.tsx`, pinned to the harness). Web gate: 776 tests, tsc, lint, build. Real: A — the owner sees it on their own screen. |

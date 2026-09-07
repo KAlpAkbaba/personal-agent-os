@@ -155,6 +155,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         audio_store=get_audio_store(),
         broker_audio_origin=settings.alarm_audio_origin,
     )
+    # docs/DECISIONS.md ADR-0078: the alarm/display voice tools read the wake sequence
+    # and the device-status registry from ToolContext.live (tools_ambient._sequence,
+    # display_status). They are registered HERE, where they are built, on the same
+    # objects app.state exposes below - a tool call and a route must never see two.
+    voice_realtime.register_live(
+        wake_sequence=wake_sequence, device_statuses=get_status_registry()
+    )
 
     def _build_routine_dispatcher() -> ActionDispatcher:
         return ActionDispatcher(

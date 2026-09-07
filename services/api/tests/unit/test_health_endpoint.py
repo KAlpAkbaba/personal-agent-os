@@ -189,7 +189,9 @@ def test_health_serves_the_realtime_contract_version() -> None:
     # 9 = M18.2 final narrow defect (ADR-0077): the tool result contract - a clarification
     # is its own terminal status, a succeeded research answer always names its target and
     # speaks, and activity.explain on a research turn gives the report's answer.
-    assert doc["checks"]["voice_realtime"]["action_contract_version"] == 9
+    # 10 = M18.3 wiring defect (ADR-0078): the alarm/display tools reach the device - the
+    # wake sequence and the status registry ride the runtime's live sources.
+    assert doc["checks"]["voice_realtime"]["action_contract_version"] == 10
     # The follow-up family rides the same manifest the owner harness reads.
     assert {"research.explain", "research.sources", "research.finding_detail"} <= set(
         doc["checks"]["voice_realtime"]["tools"]

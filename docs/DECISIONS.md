@@ -6042,3 +6042,66 @@ move, a ledger question left to the ledger, the record's projection). What this 
 NOT change: which research the resolver picks (ADR-0076), the guard against a second crawl
 (ADR-0075), the research result itself (ADR-0074), or the statuses of any tool outside
 the research family.
+
+## ADR-0078 — The alarm path is proven through the application object, and two wiring defects it surfaced (2026-09-07)
+
+Status: Accepted
+
+Context: the owner's day plan of 2026-09-07 asked for the durable wake alarm to be proven
+end to end without the owner's ears. The M18.3 suites prove every component against
+injected fakes — the voice tools with a `ToolContext.live` the test built, the clock with
+three counters, the sequence with a scripted device, the routine engine with a fake
+dispatcher. Writing the one test that drives the owner's evening through the surfaces
+production uses (the realtime relay for the words and the model's tool call, the
+`RoutineClock`'s own `tick_once`, the routine engine, the `WakeAlarmRunner`, the wake
+sequence, the ledger, with only the device answering from a script) failed twice before
+it passed, and both failures were production defects:
+
+1. **The wake sequence was never on the route.** `RealtimeVoiceRuntime.live_sources()`
+   handed a tool the broker, the artifacts and the voice runtime — and nothing else.
+   `tools_ambient` reads `ctx.live["wake_sequence"]` and `ctx.live["device_statuses"]`;
+   the unit tests set them by hand. On contract v9 in production, "Alarmı kapat." marked
+   the alarm STOPPED while the music went on (`stop_alarm(sequence=None)` skips the
+   physical stop and the disarm), "Ekranları kapat." / "Ekranları aç." answered "no device
+   runtime" every time, and "Ekranlar açık mı?" answered from an empty registry.
+2. **The model could not even create an alarm.** `alarm.create`'s schema named its
+   argument `when_text`, and the relay refuses any tool argument whose key contains
+   `text` (`service.FORBIDDEN_KEY_PARTS`: transcripts and credentials never ride a tool
+   call, under any spelling). A real model call would have been a 422 before the handler
+   ran; the handler's tests passed it the key directly.
+
+Both are the recurring defect class this repository has now named three times: a component
+built, tested and never wired. Integration-point tests must assert the wiring, not the
+component.
+
+Decisions:
+
+1. **Live runtimes are registered where they are built.** `RealtimeVoiceRuntime`
+   gains `register_live(**sources)`; `create_app` registers `wake_sequence` and
+   `device_statuses` (the same objects `app.state` exposes) the moment it has built them.
+   `live_sources()` merges them in, so a tool call and a route can never see two.
+2. **The voice argument is `when_spoken`.** The REST body (`POST /v1/alarms`) keeps
+   `when_text`; it never passes the relay. The tool schema, the handler, the persona and
+   the spec table say `when_spoken`.
+3. **Two structural guards.** `test_the_app_hands_the_wake_sequence_and_the_status_registry_to_the_voice_tools`
+   reads the live sources off the real `create_app` product; `test_no_tool_schema_names_an_argument_the_relay_refuses`
+   walks every schema in the registry, every nesting level, against the one blocklist.
+4. **One end-to-end run, kept.** `tests/unit/test_alarms_wiring.py` is the owner's
+   evening as a test: created by voice (the canonical router classifies the words, the
+   receipt speaks, the rows are durable and in Europe/Istanbul), armed on the device by
+   the clock, fired at the instant through the routine engine (once — a second process's
+   tick at the same instant fires nothing), the display woken before the media, the alarm
+   profile opened, the media verified, the ramp, one receipt per physical step under
+   ADR-0071's vocabulary, the greeting on a later tick with duck and restore and a
+   single-use audio token redeemable exactly once through the open route, "Alarmı kapat."
+   by voice stopping the medium that is actually playing, the test alarm cleaning itself
+   up, and the session record saying so. The negative is kept beside it: with no wake
+   sequence on the live sources the row changes and no device is told.
+5. **Contract v10.** `ACTION_CONTRACT_VERSION` 9 → 10, so the owner harnesses release the
+   Cloud Core once before any owner run of B or C.
+
+Consequences: `runtime.py` (`register_live`), `main.py` (the registration), `tools_ambient.py`
+and `persona.py` (`when_spoken`), the spec table, `receipt.py` v10, the health pin, and
+`test_alarms_wiring.py` (seven tests). What this ADR does NOT change: the sequence, the
+policy, the device protocol, or any receipt shape. What it does not prove: audibility —
+that remains the owner's evening test B.

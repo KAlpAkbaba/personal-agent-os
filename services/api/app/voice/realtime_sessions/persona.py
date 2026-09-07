@@ -183,7 +183,7 @@ ACTION_GROUNDING_TR = (
 #:
 #: * the owner is ASLEEP when most of this runs, so a wrong time is not recoverable by
 #:   asking again — the model must never compute a clock time itself, and hands the
-#:   utterance to `alarm.create` verbatim in `when_text`;
+#:   utterance to `alarm.create` verbatim in `when_spoken`;
 #: * "alarmı kapat" is said by someone who has just been woken, so it is a tool call and
 #:   never a conversational acknowledgement;
 #: * a display command that the DEVICE refused ("az önce klavye kullanıldı") is not a
@@ -194,7 +194,7 @@ ALARM_DISPLAY_GROUNDING_TR = (
     "'Yarın sabah yedi buçukta beni uyandır', 'saat sekize alarm kur', 'her hafta içi "
     "yedi on beşte beni uyandır', 'doksan saniye sonra test alarmı kur' denince alarm.create "
     "aracını çağırırsın. Saati SEN hesaplamazsın: sahibin söylediği zaman ifadesini "
-    "'when_text' alanına aynen verirsin, saati sistem çözer. Müzik istenirse bağlantıyı "
+    "'when_spoken' alanına aynen verirsin, saati sistem çözer. Müzik istenirse bağlantıyı "
     "'media.url', adı 'media.title' olarak verirsin; bağlantı yoksa uydurmazsın. "
     "'Alarmı kapat', 'alarmı durdur', 'alarmı sustur' denince alarm.stop; 'beş dakika "
     "ertele', 'on dakika ertele' denince alarm.snooze; 'alarmı iptal et' denince "

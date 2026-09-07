@@ -146,7 +146,14 @@ TERMINAL_CLAIMABLE: Final[frozenset[str]] = frozenset({TERMINAL_VERIFIED, TERMIN
 #: `answered_by: research.explain` - one authoritative answer per turn whichever tool the
 #: model chose. A deployed v8 records a clarification as a succeeded call with no target
 #: and lets `activity.explain` narrate the ledger's telemetry instead of the report.
-ACTION_CONTRACT_VERSION: Final = 9
+#: v10 (2026-09-07, M18.3 wiring defect, ADR-0078): the alarm/display voice tools
+#: (`alarm.stop/snooze/cancel`, `display.off/wake/status`) now actually reach the device:
+#: the realtime runtime's live sources carry the process's wake sequence and device-status
+#: registry (`RealtimeVoiceRuntime.register_live`, called by create_app). A deployed v9
+#: changes the alarm row on "Alarmı kapat." while the music keeps playing, and answers
+#: every "Ekranları kapat." with "no device runtime" - the tools were built and tested
+#: against injected fakes and never wired to the route.
+ACTION_CONTRACT_VERSION: Final = 10
 
 FAKE_COMPLETION_PHRASES: Final[tuple[str, ...]] = (
     "yapmış gibi düşün",

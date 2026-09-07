@@ -222,7 +222,7 @@ Tools (all return `ActionReceipt`-shaped results with `speech`; queries return
 
 | tool | class | arguments | notes |
 |---|---|---|---|
-| `alarm.create` | ACTION | `when: {relative_seconds?, date?("tomorrow"|ISO), time?("HH:MM"), weekdays?[0..6]}`, `when_text?`, `media?: {url?, title?, remembered?}`, `test?: bool`, `label?` | `when_text` parsed deterministically in the owner tz by `app/alarms/tr_time.py`; a title without URL and no remembered match → alarm created with the tone and `speech` asks for the link; recurring + ambiguous media → `needs_media_confirmation` refusal, nothing created |
+| `alarm.create` | ACTION | `when: {relative_seconds?, date?("tomorrow"|ISO), time?("HH:MM"), weekdays?[0..6]}`, `when_spoken?`, `media?: {url?, title?, remembered?}`, `test?: bool`, `label?` | `when_spoken` parsed deterministically in the owner tz by `app/alarms/tr_time.py`; a title without URL and no remembered match → alarm created with the tone and `speech` asks for the link; recurring + ambiguous media → `needs_media_confirmation` refusal, nothing created |
 | `alarm.cancel` | ACTION | `alarm_id?` (default: the next scheduled) | |
 | `alarm.snooze` | ACTION | `minutes?` (default 5) | only while PLAYING/GREETING/FIRING |
 | `alarm.stop` | ACTION | `alarm_id?` | idempotent |

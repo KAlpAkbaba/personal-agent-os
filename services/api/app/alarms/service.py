@@ -738,7 +738,31 @@ def reconcile_local_fired(
             alarm = get_alarm(session, uuid.UUID(str(raw)))
         except (ValueError, AttributeError, TypeError):
             continue
-        if alarm is None or alarm.state in ALARM_TERMINAL_STATES:
+        if alarm is None:
+            continue
+        if alarm.state in ALARM_TERMINAL_STATES:
+            # The cloud already closed this alarm - it gave up on an unreachable device
+            # (FAILED), or the owner cancelled it and the disarm never arrived - and the
+            # device rang its fallback anyway. The state stays terminal (nothing is
+            # resurrected, nothing rings twice), but the FACT is recorded, once: a wake-up
+            # that happened must not vanish from the record because the cloud was not
+            # there to see it (owner day plan 2026-09-07 §11: no silent loss).
+            _record_ledger(
+                session,
+                event_type=EVENT_TYPE_ALARM_LOCAL_FALLBACK_RANG,
+                alarm=alarm,
+                action="alarm_local_fallback_rang",
+                factual_summary=(
+                    f"Cihaz kendi yedek alarmını çaldı: {alarm.local_time} "
+                    f"(bulut kaydı {alarm.state.lower()} durumundaydı)"
+                ),
+                source_ref=f"alarms:{alarm.id}:local_fallback:{_occurrence(alarm)}",
+                detail={
+                    "media_kind": PLAYED_KIND_LOCAL_FALLBACK,
+                    "state_at_reconcile": alarm.state,
+                    "terminal_reason": alarm.terminal_reason,
+                },
+            )
             continue
         if alarm.state not in ALARM_ACTIVE_STATES:
             transition(session, alarm, STATE_FIRING, now=moment, reason="local_fallback")

@@ -114,6 +114,10 @@ class RealtimeVoiceRuntime:
         # RealtimeVoiceRuntime(...) construction (no artifacts=...) still works; a
         # session without one simply cannot serve research.start (DEPENDENCY_UNAVAILABLE).
         self._artifacts: Any = artifacts
+        # docs/DECISIONS.md ADR-0078: process-wide runtimes that are built AFTER this one
+        # (the wake sequence, the device-status registry) and that the alarm/display
+        # tools read from ToolContext.live. Registered by create_app; see register_live.
+        self._live_extras: dict[str, Any] = {}
         if sideband is not None:
             self._sideband: SidebandPusher = sideband
         elif broker is not None:
@@ -138,7 +142,23 @@ class RealtimeVoiceRuntime:
             "health": None,
             "artifacts_runtime": self._artifacts,
             "voice_runtime": self,
+            # ADR-0078: the wake sequence and the device-status registry, once
+            # create_app has registered them. Without these every alarm.stop / snooze /
+            # cancel by voice changed the row while the sound went on, and display.off /
+            # wake / status answered "no device runtime" - the unit tests injected them
+            # straight into ToolContext.live and never noticed the route did not.
+            **self._live_extras,
         }
+
+    def register_live(self, **sources: Any) -> None:
+        """Add process-wide runtimes to what every tool call's ``ToolContext.live`` carries
+        (docs/M18_ACTION_CONTRACT.md §4, ADR-0078).
+
+        ``create_app`` registers the wake sequence and the device-status registry here the
+        moment it has built them; a test registers its fakes the same way - which is the
+        point: the tools then read exactly what production reads, through the one path.
+        """
+        self._live_extras.update(sources)
 
     # ------------------------------------------------------------------ db
 

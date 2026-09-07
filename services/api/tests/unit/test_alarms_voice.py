@@ -245,7 +245,7 @@ def test_every_new_tool_description_tells_the_model_to_read_speech_verbatim() ->
 
 
 def test_alarm_create_from_the_owners_own_words(ctx, session) -> None:
-    result = tools_ambient.alarm_create(ctx, {"when_text": "Yarın sabah 07:30'da beni uyandır."})
+    result = tools_ambient.alarm_create(ctx, {"when_spoken": "Yarın sabah 07:30'da beni uyandır."})
     assert result["execution_status"] == EXECUTION_EXECUTED
     assert result["terminal_status"] == TERMINAL_VERIFIED
     assert result["speech"] == "Alarmı yarın yedi otuza kurdum efendim."
@@ -255,7 +255,7 @@ def test_alarm_create_from_the_owners_own_words(ctx, session) -> None:
 
 def test_alarm_create_test_mode_says_so(ctx) -> None:
     result = tools_ambient.alarm_create(
-        ctx, {"when_text": "90 saniye sonra test alarmı kur.", "test": True}
+        ctx, {"when_spoken": "90 saniye sonra test alarmı kur.", "test": True}
     )
     assert result["speech"] == "Test alarmını doksan saniye sonraya kurdum efendim."
     assert result["alarm"]["is_test"] is True
@@ -263,7 +263,7 @@ def test_alarm_create_test_mode_says_so(ctx) -> None:
 
 
 def test_alarm_create_refuses_an_unparseable_time_rather_than_guessing(ctx, session) -> None:
-    result = tools_ambient.alarm_create(ctx, {"when_text": "Beni bir ara uyandır."})
+    result = tools_ambient.alarm_create(ctx, {"when_spoken": "Beni bir ara uyandır."})
     assert result["execution_status"] == EXECUTION_REFUSED
     assert result["terminal_status"] == TERMINAL_FAILED
     assert result["error_class"] == tools_ambient.ERROR_WHEN_UNPARSED
@@ -279,7 +279,7 @@ def test_a_recurring_alarm_with_unnamed_media_is_refused_and_nothing_is_created(
     result = tools_ambient.alarm_create(
         ctx,
         {
-            "when_text": "Her hafta içi 07:15'te beni bu şarkıyla uyandır.",
+            "when_spoken": "Her hafta içi 07:15'te beni bu şarkıyla uyandır.",
             "media": {"title": "bu şarkı"},
         },
     )
@@ -295,7 +295,7 @@ def test_a_one_shot_alarm_with_unnamed_media_is_created_with_the_tone_and_asks(
     """The owner still wakes up tomorrow; the speech asks for the link."""
     result = tools_ambient.alarm_create(
         ctx,
-        {"when_text": "Yarın sabah 07:30'da beni uyandır.", "media": {"title": "Hans Zimmer"}},
+        {"when_spoken": "Yarın sabah 07:30'da beni uyandır.", "media": {"title": "Hans Zimmer"}},
     )
     assert result["execution_status"] == EXECUTION_EXECUTED
     assert result["speech"] == alarm_speech.ALARM_CREATE_NEEDS_MEDIA_TR
@@ -305,7 +305,7 @@ def test_a_one_shot_alarm_with_unnamed_media_is_created_with_the_tone_and_asks(
 def test_alarm_create_keeps_the_owners_url_byte_for_byte(ctx, session) -> None:
     url = "https://www.youtube.com/watch?v=ZZZ&t=30s"
     tools_ambient.alarm_create(
-        ctx, {"when_text": "Yarın 07:30'da uyandır.", "media": {"url": url}}
+        ctx, {"when_spoken": "Yarın 07:30'da uyandır.", "media": {"url": url}}
     )
     assert alarms_service.list_alarms(session)[0].resolved_media_identity["url"] == url
 
@@ -315,7 +315,7 @@ def test_alarm_create_keeps_the_owners_url_byte_for_byte(ctx, session) -> None:
 
 def test_alarm_status_is_a_query_with_no_receipt(ctx, session) -> None:
     assert tools_ambient.alarm_status(ctx, {})["speech"] == "Kurulu alarm yok efendim."
-    tools_ambient.alarm_create(ctx, {"when_text": "Yarın sabah 07:30'da beni uyandır."})
+    tools_ambient.alarm_create(ctx, {"when_spoken": "Yarın sabah 07:30'da beni uyandır."})
     result = tools_ambient.alarm_status(ctx, {})
     assert result["speech"] == "Sabah alarmınız yedi otuzda efendim."
     assert "execution_status" not in result
@@ -323,7 +323,7 @@ def test_alarm_status_is_a_query_with_no_receipt(ctx, session) -> None:
 
 
 def test_alarm_cancel_defaults_to_the_next_alarm(ctx, session) -> None:
-    tools_ambient.alarm_create(ctx, {"when_text": "Yarın sabah 07:30'da beni uyandır."})
+    tools_ambient.alarm_create(ctx, {"when_spoken": "Yarın sabah 07:30'da beni uyandır."})
     result = tools_ambient.alarm_cancel(ctx, {})
     assert result["speech"] == alarm_speech.ALARM_CANCELLED_TR
     assert alarms_service.list_alarms(session, include_terminal=True)[0].state == STATE_CANCELLED
@@ -492,8 +492,8 @@ def test_no_tool_ever_returns_a_banned_completion_phrase(ctx, session, device) -
     would be the 2026-09-06 defect again with a wake alarm behind it."""
     device.results["desktop.display_off"] = refused("recent_input")
     said = [
-        tools_ambient.alarm_create(ctx, {"when_text": "Yarın 07:30'da uyandır."})["speech"],
-        tools_ambient.alarm_create(ctx, {"when_text": "belirsiz"})["speech"],
+        tools_ambient.alarm_create(ctx, {"when_spoken": "Yarın 07:30'da uyandır."})["speech"],
+        tools_ambient.alarm_create(ctx, {"when_spoken": "belirsiz"})["speech"],
         tools_ambient.alarm_status(ctx, {})["speech"],
         tools_ambient.alarm_stop(ctx, {})["speech"],
         tools_ambient.alarm_snooze(ctx, {})["speech"],
@@ -531,7 +531,7 @@ def test_the_persona_tells_the_model_not_to_compute_the_time_itself() -> None:
     asking again."""
     from app.voice.realtime_sessions.persona import ALARM_DISPLAY_GROUNDING_TR
 
-    assert "when_text" in ALARM_DISPLAY_GROUNDING_TR
+    assert "when_spoken" in ALARM_DISPLAY_GROUNDING_TR
     assert "SEN hesaplamazsın" in ALARM_DISPLAY_GROUNDING_TR
 
 
@@ -549,4 +549,4 @@ def test_a_tool_without_a_database_fails_loudly(sequence) -> None:
         live={"wake_sequence": sequence},
     )
     with pytest.raises(VoiceError):
-        tools_ambient.alarm_create(ctx, {"when_text": "Yarın 07:30'da uyandır."})
+        tools_ambient.alarm_create(ctx, {"when_spoken": "Yarın 07:30'da uyandır."})

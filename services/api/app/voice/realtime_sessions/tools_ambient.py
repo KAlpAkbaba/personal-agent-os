@@ -166,16 +166,16 @@ def alarm_create(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
     timezone = str(arguments.get("timezone") or DEFAULT_TIMEZONE)[:64]
     is_test = bool(arguments.get("test"))
     media = arguments.get("media") if isinstance(arguments.get("media"), dict) else None
-    when_text = arguments.get("when_text")
+    when_spoken = arguments.get("when_spoken")
     when = arguments.get("when") if isinstance(arguments.get("when"), dict) else None
 
     try:
-        if isinstance(when_text, str) and when_text.strip():
-            parsed = parse_when_text(when_text, now=ctx.now, timezone=timezone)
+        if isinstance(when_spoken, str) and when_spoken.strip():
+            parsed = parse_when_text(when_spoken, now=ctx.now, timezone=timezone)
         elif when:
             parsed = parse_when_struct(when, now=ctx.now, timezone=timezone)
         else:
-            raise UnparsedWhen("no 'when' or 'when_text' given")
+            raise UnparsedWhen("no 'when' or 'when_spoken' given")
     except UnparsedWhen as exc:
         return _receipt(
             ctx,
@@ -552,14 +552,14 @@ def register_ambient_tools(reg: ToolRegistry) -> ToolRegistry:
                 "Uyandırma alarmı KURAR: 'yarın sabah 07:30'da beni uyandır', 'saat 08:00'e "
                 "alarm kur', 'her hafta içi 07:15'te beni uyandır', '90 saniye sonra test "
                 "alarmı kur' denince HER ZAMAN bu araç çağrılır. Saati sen hesaplama; "
-                "sahibin söylediği zaman ifadesini 'when_text' alanına aynen ver. "
+                "sahibin söylediği zaman ifadesini 'when_spoken' alanına aynen ver. "
                 "Müzik istenirse bağlantıyı 'media.url', adı 'media.title' olarak ver. "
                 "Dönen 'speech' metnini aynen oku."
             ),
             parameters={
                 "type": "object",
                 "properties": {
-                    "when_text": {"type": "string", "maxLength": 300},
+                    "when_spoken": {"type": "string", "maxLength": 300},
                     "when": _WHEN_SCHEMA,
                     "media": _MEDIA_SCHEMA,
                     "test": {"type": "boolean"},

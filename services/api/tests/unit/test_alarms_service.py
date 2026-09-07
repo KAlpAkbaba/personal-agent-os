@@ -519,11 +519,56 @@ def test_a_locally_fired_alarm_is_reconciled_not_rung_again(session, device):
     assert "alarm.local_fallback_rang" in events
 
 
-def test_reconciling_an_unknown_or_terminal_alarm_is_a_no_op(session, sequence):
+def test_reconciling_an_unknown_or_terminal_alarm_changes_no_state(session, sequence):
     alarm = _create(session)
     alarms_service.cancel_alarm(session, alarm.id, sequence=sequence)
     assert alarms_service.reconcile_local_fired(session, [str(alarm.id)], now=NOW) == []
     assert alarms_service.reconcile_local_fired(session, ["not-a-uuid"], now=NOW) == []
+    session.refresh(alarm)
+    assert alarm.state == STATE_CANCELLED
+
+
+def test_a_device_that_rang_after_the_cloud_gave_up_is_recorded_not_lost(session):
+    """Owner day plan 2026-09-07 §11: the network is down at the instant.
+
+    The cloud reaches nothing - both audio paths fail, the alarm is FAILED and released -
+    while the device's own armed fallback rings on time. When the heartbeat returns and
+    names the alarm, the state stays terminal (nothing rings twice, nothing is
+    resurrected) but the ledger says the wake-up happened, once.
+    """
+    unreachable = FakeDeviceAction(
+        results={cap: failed("dependency_unavailable") for cap in happy_device_results()}
+    )
+    sequence = WakeSequence(device_action=unreachable, tts=None)
+    alarm = _create(
+        session,
+        when=parse_when_struct({"relative_seconds": 5}, now=NOW),
+        media={"url": "https://youtube.com/watch?v=x"},
+    )
+    decision = _fire_now(session, sequence, alarm, NOW + timedelta(seconds=10))
+    assert decision.fired is False and decision.reason == "audio_failed"
+    session.refresh(alarm)
+    assert alarm.state == STATE_FAILED
+
+    # The heartbeat comes back and names the alarm the device rang itself - twice, because
+    # the device repeats it until the cloud has seen it.
+    for _ in range(2):
+        touched = alarms_service.reconcile_local_fired(
+            session, [str(alarm.id)], now=NOW + timedelta(seconds=90)
+        )
+        assert touched == []
+    session.refresh(alarm)
+    assert alarm.state == STATE_FAILED
+    rang = [
+        r
+        for r in session.query(ActivityEventRow).all()
+        if r.event_type == "alarm.local_fallback_rang"
+    ]
+    assert len(rang) == 1
+    assert rang[0].detail_json["state_at_reconcile"] == STATE_FAILED
+    assert rang[0].detail_json["media_kind"] == PLAYED_KIND_LOCAL_FALLBACK
+    assert "yedek alarm" in rang[0].factual_summary
+    assert unreachable.count("desktop.alarm_start") == 1  # the cloud tried the tone once
 
 
 # ------------------------------------------------------------------------ queries

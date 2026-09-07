@@ -21,6 +21,20 @@ Status vocabulary matches `docs/QUALIFICATION.md`: `PROVEN_REAL`, `PROVEN_PROXY`
 
 ## Now
 
+**Evening sequence, 2026-09-07 — the shortest run that closes what only you can judge.**
+Everything automatable in M18.2 and M18.3 was finished and gated during the day (ADR-0077,
+ADR-0078; contract v10 on main). Four short items remain, each labelled with the one human
+boundary it needs. Order matters only where written; D needs no audio and can go first.
+
+| | Item | Needs | Time |
+|---|---|---|---|
+| A | 23b — click one research, `Bunu teknik anlat.`, `Bir önceki araştırmayı anlat.` | `READY_FOR_OWNER_AUDIO_TEST` (releases the Cloud Core once, to v10) | ~2 min |
+| B | 24 — look at the Living Core on your own screen | `READY_FOR_OWNER_VISUAL_TEST` | ~2 min |
+| C | 25 — `90 saniye sonra ... test alarmı kur.`, YouTube, `Günaydın efendim`, `Alarmı kapat.` | `READY_FOR_OWNER_AUDIO_TEST` (+ one UAC prompt for the agent update if 26 did not run first) | ~3 min |
+| D | 26 — displays off, one key wakes them | `READY_FOR_OWNER_PHYSICAL_TEST` (one UAC prompt: the agent update with `-DisplayPower`; no audio) | ~3 min |
+
+Not repeated: research runs, the Eye, presence transitions - all proven on 2026-09-06.
+
 **M18 is closed — nothing is required of you.** The presence-only run passed
 (`OWNER M18 PRESENCE: PASS`: present 0.56 → away 0.41 → present 0.68, the eye closed at
 the end), and with it every M18 capability the owner runs could prove is `PROVEN_REAL` from
@@ -32,7 +46,7 @@ is implemented and merged (ADR-0065); item 22 is your look at it, when you like.
 
 ---
 
-### 25. The wake alarm, end to end — **M18.3 qualification B, ready after item 23b (one Cloud Core release and one elevated agent update, both inside the run)**
+### 25. The wake alarm, end to end — **M18.3 qualification B — `READY_FOR_OWNER_AUDIO_TEST` (one Cloud Core release and one elevated agent update, both inside the run; the whole path is proven end to end without ears, ADR-0078 — only the audibility is yours)**
 
 Say one sentence and be woken ninety seconds later. Pick the YouTube music first: pass its
 URL to the command, and the run registers it as your wake song (the system never chooses
@@ -54,7 +68,7 @@ record — created, armed on the device, fired by the clock at the instant, the 
 wake receipt, the media really playing (or the tone, named truthfully), the ramp, the
 greeting with its duck and restore, the stop, the cleanup — and finishes by itself.
 
-### 26. Displays off, one key wakes them — **M18.3 qualification C, ready after item 25 (display control must be enabled on the agent by item 25's update)**
+### 26. Displays off, one key wakes them — **M18.3 qualification C — `READY_FOR_OWNER_PHYSICAL_TEST` (no audio; the script prints the one elevated agent update itself when display control is not yet on, so this can run before item 25)**
 
 ```powershell
 .\scripts\core\owner-m18-3-display.ps1 -OutFile m18-3-display-1.json
@@ -72,7 +86,7 @@ The automatic, presence-based off (away for fifteen minutes, or asleep for ten w
 confidence) stays OFF until you turn it on by voice (`Otomatik ekran kapatmayı aç.`); its
 own longer observation comes when you want it.
 
-### 24. Look at the Living Core — **M18.3 qualification A, ready (web only: no release, no install)**
+### 24. Look at the Living Core — **M18.3 qualification A — `READY_FOR_OWNER_VISUAL_TEST` (web only: no release, no install; gates green 2026-09-07 - 810 web tests, tsc, lint, production build; the in-app preview here sits behind your login, so nobody has seen the WebGL scene but you)**
 
 The small wireframe is gone. `/core` is now a full-viewport gold and amber Core: nine
 layers (an outer field, two shells, three orbital rings turning at different rates and
@@ -96,7 +110,7 @@ and optionally a short research. Scale, depth, colour and motion are yours to ju
 script records only that the Core really listened and really spoke, and finishes by itself.
 Tell me what you would change — the reference you mentioned is welcome as inspiration.
 
-### 23b. Point at one research, then two sentences — **M18.2 follow-up, READY (the research focus, ADR-0076, and the result contract, ADR-0077, are on main; the command releases the Cloud Core once, before the check)**
+### 23b. Point at one research, then two sentences — **M18.2 follow-up — `READY_FOR_OWNER_AUDIO_TEST` (M18.2 engineering is complete: the focus, the resolver and the result contract are on main and gated; the command releases the Cloud Core once, before the check)**
 
 **Updated 2026-09-07 after your fourth run.** Your record proved the crawling, the titles
 and the focus; the defect was narrower and it is fixed at its mechanism (ADR-0077). What
