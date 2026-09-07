@@ -98,3 +98,8 @@ apps/web/next-env.d.ts
 # Next 16 writes agent-rule notes into the app on `next dev`; not this repository's docs.
 apps/web/AGENTS.md
 apps/web/CLAUDE.md
+
+# The nightly Owner Utterance Suite report (scripts\core\voice-routing-qualification.ps1)
+# and the loopback proxy's input: a run record with every case's speech, kept as a CI
+# artifact and posted to the Cloud Core, never source (2026-09-07).
+/state/reports/

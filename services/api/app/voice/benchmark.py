@@ -52,6 +52,11 @@ def _levenshtein(a: list[str] | str, b: list[str] | str) -> int:
     return prev[-1]
 
 
+def levenshtein(a: list[str] | str, b: list[str] | str) -> int:
+    """Edit distance over tokens (lists) or characters (strings); stdlib only."""
+    return _levenshtein(a, b)
+
+
 def word_error_rate(reference: str, hypothesis: str) -> float:
     ref = reference.split()
     if not ref:
