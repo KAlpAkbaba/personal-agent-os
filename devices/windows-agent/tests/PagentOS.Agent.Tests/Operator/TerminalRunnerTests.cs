@@ -69,7 +69,11 @@ public sealed class TerminalRunnerTests
         Assert.Equal("Get-Process -Name *", runner.Authorise("Get-Process -Name notepad"));
         Assert.Equal("Get-ComputerInfo -Property *", runner.Authorise("Get-ComputerInfo -Property OsName"));
         Assert.Equal("Get-ChildItem <path>", runner.Authorise($"Get-ChildItem \"{Path.GetTempPath()}\""));
-        Assert.Equal("Get-ChildItem <path>", runner.Authorise($"Get-ChildItem {Path.Combine(Path.GetTempPath(), "sub")}"));
+        var (fixture, _) = OperatorLab.Fixture();
+        Assert.Equal("Get-ChildItem <path>", runner.Authorise($"Get-ChildItem {fixture}"));
+        // A path that does not exist cannot be resolved, and an unresolvable path is never
+        // "under a root" (ADR-0082 addendum 2, finding 1) - even when it reads as if it were.
+        Assert.Null(runner.Authorise($"Get-ChildItem {Path.Combine(Path.GetTempPath(), "pagentos-does-not-exist-" + Guid.NewGuid().ToString("N"))}"));
         Assert.Null(runner.Authorise($"Get-ChildItem {Path.Combine(Path.GetTempPath(), "..", "..")}"));
         Assert.Equal("Start-Sleep *", runner.Authorise("Start-Sleep 20"));
 

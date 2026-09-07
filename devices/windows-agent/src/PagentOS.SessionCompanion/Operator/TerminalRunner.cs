@@ -19,8 +19,9 @@ namespace PagentOS.SessionCompanion.Operator;
 /// <para>Pattern grammar: whitespace-separated tokens; a literal token must match
 /// case-insensitively; <c>*</c> matches exactly one token of anything (still free of
 /// composition characters); <c>&lt;path&gt;</c> matches one token that is an absolute path
-/// under one of the owner's authorised roots. Token counts must agree, so <c>hostname</c>
-/// does not admit <c>hostname anything</c>.</para>
+/// which RESOLVES (every junction and link followed) to a place under one of the owner's
+/// authorised roots. Token counts must agree, so <c>hostname</c> does not admit
+/// <c>hostname anything</c>.</para>
 /// </summary>
 public sealed class TerminalRunner
 {
@@ -46,7 +47,7 @@ public sealed class TerminalRunner
     private static readonly char[] CompositionCharacters = [';', '|', '&', '$', '(', ')', '{', '}', '<', '>', '`', '\r', '\n', '\0'];
 
     private readonly IReadOnlyList<string[]> _patterns;
-    private readonly IReadOnlyList<string> _roots;
+    private readonly AuthorisedRoots _roots;
     private readonly ILogger _logger;
     private readonly string _powershell;
     private int _processesStarted;
@@ -54,7 +55,7 @@ public sealed class TerminalRunner
     public TerminalRunner(IReadOnlyList<string> allowlist, IReadOnlyList<string> authorisedRoots, ILogger logger, string? powershellPath = null)
     {
         _patterns = [.. allowlist.Select(Tokenize).Where(t => t.Length > 0).Select(t => t.ToArray())];
-        _roots = [.. authorisedRoots.Select(NormaliseRoot)];
+        _roots = new AuthorisedRoots(authorisedRoots);
         _logger = logger;
         _powershell = powershellPath ?? DefaultPowerShellPath();
     }
@@ -64,7 +65,11 @@ public sealed class TerminalRunner
 
     public IReadOnlyList<string> Allowlist => [.. _patterns.Select(p => string.Join(' ', p))];
 
-    public IReadOnlyList<string> AuthorisedRoots => _roots;
+    /// <summary>The roots as configured (normalised), for messages and the log; the check itself goes through <see cref="Roots"/>.</summary>
+    public IReadOnlyList<string> AuthorisedRoots => _roots.Configured;
+
+    /// <summary>The resolve-then-contain check every path in this module goes through: the terminal's <c>&lt;path&gt;</c> token, <c>file.*</c>, an application's path argument.</summary>
+    public AuthorisedRoots Roots => _roots;
 
     /// <summary>Windows PowerShell 5.1 by absolute path — the spawned-shell PATH is not to be relied on.</summary>
     public static string DefaultPowerShellPath()
@@ -237,26 +242,13 @@ public sealed class TerminalRunner
         return [.. tokens];
     }
 
-    /// <summary>Whether a path is inside one of the authorised roots (after normalisation; a symlink is not followed, a traversal is collapsed).</summary>
-    public bool IsUnderAuthorisedRoot(string path)
-    {
-        string full;
-        try
-        {
-            if (!Path.IsPathRooted(path))
-            {
-                return false;
-            }
-
-            full = Path.GetFullPath(path);
-        }
-        catch (Exception)
-        {
-            return false;
-        }
-
-        return _roots.Any(root => full.StartsWith(root, StringComparison.OrdinalIgnoreCase));
-    }
+    /// <summary>
+    /// Whether what <paramref name="path"/> really opens is inside one of the authorised roots
+    /// (<see cref="AuthorisedRoots.Confine"/>: resolved through every junction and link first,
+    /// then compared with the roots' resolved forms). A path that does not exist or cannot be
+    /// resolved is NOT under a root — never a lexical fallback.
+    /// </summary>
+    public bool IsUnderAuthorisedRoot(string path) => _roots.Contains(path);
 
     private bool Matches(string[] pattern, string[] tokens)
     {
@@ -291,12 +283,6 @@ public sealed class TerminalRunner
         }
 
         return true;
-    }
-
-    private static string NormaliseRoot(string root)
-    {
-        var full = Path.GetFullPath(root);
-        return full.EndsWith(Path.DirectorySeparatorChar) ? full : full + Path.DirectorySeparatorChar;
     }
 
     private static async Task<(string Text, bool Truncated)> ReadBoundedAsync(StreamReader reader, CancellationToken cancellationToken)

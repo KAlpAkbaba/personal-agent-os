@@ -51,11 +51,11 @@ public sealed class OperatorLab : IDisposable
     private readonly List<string> _windowsToClose = new();
     private readonly HashSet<int> _ownPids = new();
 
-    public OperatorLab(IInputSynthesizer? input = null, bool enabled = true)
+    public OperatorLab(IInputSynthesizer? input = null, bool enabled = true, IReadOnlyList<string>? roots = null, IReadOnlyDictionary<string, string>? applications = null)
     {
         Log = new ListLogger();
-        Options = new OperatorOptions(enabled, TestAllowlist, [Path.GetTempPath(), Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)]);
-        Operator = new OperatorCapabilities(Options, Log, input: input);
+        Options = new OperatorOptions(enabled, TestAllowlist, roots ?? [Path.GetTempPath(), Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)]);
+        Operator = new OperatorCapabilities(Options, Log, input: input, applications: applications);
     }
 
     public OperatorCapabilities Operator { get; }
