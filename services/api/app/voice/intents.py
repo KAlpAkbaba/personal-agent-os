@@ -1297,13 +1297,25 @@ def _document_search_match(tokens: tuple[str, ...]) -> str | None:
     return verb
 
 
+def _document_previous_word_match(tokens: tuple[str, ...]) -> str | None:
+    """Any "öncek..." token, WITHOUT ``_previous_match``'s research-only exception that
+    "az önceki" names the most recent (i.e. CURRENT) one rather than the one before it.
+    That exception exists because a research can "just finish" — there is no document
+    equivalent: spec §3's own example, "Az önceki sunuma geri dön.", means the previous
+    document, full stop."""
+    for tok in tokens:
+        if tok.startswith("öncek") or tok.startswith("oncek"):
+            return tok
+    return None
+
+
 def _document_previous_match(tokens: tuple[str, ...]) -> str | None:
     """ "Az önceki sunuma geri dön." / "Bir önceki belgeye dön." (spec §3) - checked BEFORE
     compare, since "karşılaştır" never appears in these phrases and the reverse ordering
     would be just as safe; kept this way to read in the same order as the phrase list."""
     if _has(tokens, *_DOCUMENT_NOUN_STEMS) is None:
         return None
-    if _previous_match(tokens) is None:
+    if _document_previous_word_match(tokens) is None:
         return None
     if _has(tokens, *_DOCUMENT_RETURN_VERB_FORMS) is None:
         return None
