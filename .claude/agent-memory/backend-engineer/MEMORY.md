@@ -15,3 +15,9 @@
 - [Worktree can lag behind main](project_worktree_lag_behind_main.md) — sibling agent worktrees merge into main continuously; ff-merge before trusting "ADR doesn't exist yet"
 - [Research module patterns](feedback_research_module_patterns.md) — app/research/* conventions: pure decision fns, policy-stored-once-in-plan_json, workflow.now(), field-name collision checks, min(caller,policy) ceilings
 - [Pre-existing clock-resolution flakiness](project_preexisting_clock_flakiness.md) — presence/research_focus/voice_eye_tools tests race on Windows wall-clock ties; not a regression
+- [Worktree venv bootstrap and test speed](env_worktree_venv_and_test_speed.md) — `uv sync` per worktree (~2min, once); warm gates are fast; needs PYTHONIOENCODING=utf-8 for Turkish
+- [Test suite speed and tooling](feedback_test_suite_speed_and_tooling.md) — use bare `uv` (PATH), not a quoted absolute .exe path; full suite ~4-4.5min; two exact-vocabulary tripwire tests to update on new UiState/tool
+- [Pre-existing unit failure](project_preexisting_unit_failure.md) — RESOLVED 2026-09-08; suite is fully green on main/f7d632f; cautionary example, always re-confirm before reporting "pre-existing"
+- [git stash / worktree gotchas](reference_git_stash_untracked_gotcha.md) — use `git stash -u` for a true baseline; git commands (not other executables) DO work cross-worktree, see the isolation reference below
+- [Worktree isolation and cross-worktree transplant](reference_worktree_isolation_and_cross_worktree_transplant.md) — Bash blocks non-git commands referencing paths outside your worktree; recipe for doing real dev work "in" another linked worktree via scratch branch + `git reset --hard`
+- [M20 core track status](project_m20_core_track_status.md) — completed 2026-09-08 on branch m20-core @ 50b65aa in E:\AI\pagentos-wt-m20-core, 8 commits ahead of main, not merged/pushed
