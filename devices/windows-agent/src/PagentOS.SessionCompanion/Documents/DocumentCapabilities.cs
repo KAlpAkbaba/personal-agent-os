@@ -24,8 +24,16 @@ namespace PagentOS.SessionCompanion.Documents;
 /// (search, locate, inspect, read, extract, compare fill it) and an unknown one is <c>not_found</c>;</item>
 /// <item>a secret-bearing name (<see cref="SecretNames"/>) is <c>permission_denied</c> / <c>secret_bearing_name</c>;</item>
 /// <item>the size is read from the directory entry and a file over
-/// <see cref="DocumentCapabilityNames.MaxFileBytes"/> is <c>unsupported_format</c> / <c>too_large</c> — unopened.</item>
+/// <see cref="DocumentCapabilityNames.MaxFileBytes"/> is <c>unsupported_format</c> / <c>too_large</c> — unopened;</item>
+/// <item>what the file would make the companion DO is bounded before the parser is entered
+/// (<see cref="DocumentBounds"/>, ADR-0083 addendum 3): an OOXML package's central directory
+/// is read by <see cref="ContainerGuard"/> and a decompression bomb is
+/// <c>unsupported_format</c> / <c>decompression_bound</c> with the SDK never opened; a PDF's
+/// streams inflate only through <see cref="BoundedFilterProvider"/>; a text-like file is read
+/// as a bounded prefix through one handle whose length is the size that counts.</item>
 /// </list>
+/// The secret-name rule is applied to the NAME THE CALLER SPELLED before anything is looked
+/// up, so a secret-bearing name answers the same whether or not the file exists.
 /// Every bound answers <c>truncated: true</c>, never a silent cut; a format that cannot be
 /// parsed answers <c>unsupported_format</c> with the reason, never an empty success; every
 /// result passes the browser family's forbidden-key scan before it leaves the companion.
@@ -238,6 +246,7 @@ public sealed class DocumentCapabilities
         var extractor = ExtractorFor(target.Kind);
         if (extractor is not null)
         {
+            RequireBoundedContainer(target);
             foreach (var (key, value) in extractor.Inspect(target.Path, target.Kind, cancellationToken))
             {
                 result[key] = value?.DeepClone();
@@ -252,6 +261,10 @@ public sealed class DocumentCapabilities
             {
                 result["encoding"] = decoded.Encoding;
                 result["lines"] = TextFileReader.SplitLines(decoded.Text).Count;
+                if (decoded.Truncated)
+                {
+                    result["truncated"] = true;
+                }
             }
         }
 
@@ -278,6 +291,8 @@ public sealed class DocumentCapabilities
             throw DocumentErrors.Unsupported($"'{target.Record.Name}' does not decode as text ({decoded.Encoding})", DocumentErrors.NotText);
         }
 
+        // total_chars counts what was decoded: the whole file up to the prefix bound; when the
+        // file went on, truncated says so even for a window that reached the prefix's end.
         var total = decoded.Text.Length;
         var start = Math.Min(offset, total);
         var count = Math.Min(length, total - start);
@@ -286,7 +301,7 @@ public sealed class DocumentCapabilities
             ["file"] = target.Record.ToJson(),
             ["text"] = decoded.Text.Substring(start, count),
             ["encoding"] = decoded.Encoding,
-            ["truncated"] = start + count < total,
+            ["truncated"] = decoded.Truncated || start + count < total,
             ["total_chars"] = total,
             ["offset"] = start,
         };
@@ -331,6 +346,7 @@ public sealed class DocumentCapabilities
         RequireReadable(target);
         var extractor = ExtractorFor(target.Kind)
                         ?? throw DocumentErrors.Unsupported($"no extractor is configured for kind '{target.Kind}'", DocumentErrors.UnknownKind);
+        RequireBoundedContainer(target);
         target.DocId ??= FileIdentity.DocId(target.Path);
         return extractor.Extract(target.Path, target.Kind, request, cancellationToken);
     }
@@ -415,6 +431,7 @@ public sealed class DocumentCapabilities
             }
 
             DocumentCompare.Lines(aText.Text, bText.Text).WriteTo(result);
+            result["truncated"] = aText.Truncated || bText.Truncated;
             return result;
         }
 
@@ -425,6 +442,10 @@ public sealed class DocumentCapabilities
             return result;
         }
 
+        // Both containers are bounded before either is extracted: a bomb on side B is refused
+        // before side A's work is done, and neither SDK is entered for a refused pair.
+        RequireBoundedContainer(a);
+        RequireBoundedContainer(b);
         var request = new ExtractRequest();
         var aBlocks = ExtractDocument(a, request, cancellationToken);
         var bBlocks = ExtractDocument(b, request, cancellationToken);
@@ -502,7 +523,10 @@ public sealed class DocumentCapabilities
     /// typed refusal that never echoes the argument. A missing file whose PARENT resolves
     /// inside the roots is <c>not_found</c> (the parent, not the spelling, proves it is inside);
     /// everything else — outside, through a junction that leaves the roots, unresolvable — is
-    /// <c>permission_denied</c>, so an answer never says whether an outside path exists.
+    /// <c>permission_denied</c>, so an answer never says whether an outside path exists. A
+    /// secret-bearing NAME is refused first, lexically, before anything is looked up, so
+    /// <c>.env</c> answers <c>secret_bearing_name</c> whether or not it exists — the
+    /// <c>not_found</c> branch below never sees one (the M20 review's existence oracle).
     /// </summary>
     private string ConfineFile(string raw, string where)
     {
@@ -511,22 +535,27 @@ public sealed class DocumentCapabilities
             throw DocumentErrors.Invalid($"{where}.path must be absolute");
         }
 
+        string? parent = null;
+        string? name = null;
+        try
+        {
+            var full = System.IO.Path.GetFullPath(raw);
+            parent = System.IO.Path.GetDirectoryName(full);
+            name = System.IO.Path.GetFileName(full);
+        }
+        catch (Exception)
+        {
+            // Unresolvable spelling: refused below.
+        }
+
+        if (!string.IsNullOrEmpty(name) && SecretNames.IsSecretBearing(name))
+        {
+            throw DocumentErrors.Denied($"'{name}' is a secret-bearing name and is never read", SecretNames.Detail);
+        }
+
         var resolved = Roots.Confine(raw);
         if (resolved is null)
         {
-            string? parent = null;
-            string? name = null;
-            try
-            {
-                var full = System.IO.Path.GetFullPath(raw);
-                parent = System.IO.Path.GetDirectoryName(full);
-                name = System.IO.Path.GetFileName(full);
-            }
-            catch (Exception)
-            {
-                // Unresolvable spelling: refused below.
-            }
-
             if (parent is not null && !string.IsNullOrEmpty(name) && Roots.Confine(parent) is { } parentResolved)
             {
                 var candidate = System.IO.Path.Combine(parentResolved, name);
@@ -558,6 +587,15 @@ public sealed class DocumentCapabilities
             throw DocumentErrors.Unsupported(
                 $"'{target.Record.Name}' is {target.Record.Size} bytes, over the {DocumentCapabilityNames.MaxFileBytes / (1024 * 1024)} MiB bound; it was not opened",
                 DocumentErrors.TooLarge);
+        }
+    }
+
+    /// <summary>The decompression bound for a package kind (<see cref="ContainerGuard"/>): read from the zip's central directory, before the extractor — and its SDK — is entered.</summary>
+    private static void RequireBoundedContainer(Target target)
+    {
+        if (FileKinds.IsPackage(target.Kind))
+        {
+            ContainerGuard.RequireBoundedPackage(target.Path, target.Kind);
         }
     }
 

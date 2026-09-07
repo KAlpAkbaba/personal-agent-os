@@ -54,6 +54,9 @@ public static class FileKinds
     /// <summary>The kinds that need a parser (a package or a PDF), never returned raw.</summary>
     public static bool IsBinaryDocument(string kind) => kind is Docx or Xlsx or Pptx or Pdf;
 
+    /// <summary>The OOXML kinds — zip containers whose central directory <see cref="ContainerGuard"/> bounds before the SDK opens them.</summary>
+    public static bool IsPackage(string kind) => kind is Docx or Xlsx or Pptx;
+
     /// <summary><c>structure.language</c> for a source file, by extension.</summary>
     public static string Language(string extension) => extension.ToLowerInvariant() switch
     {

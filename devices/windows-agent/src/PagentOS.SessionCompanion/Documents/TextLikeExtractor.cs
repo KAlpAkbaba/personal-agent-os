@@ -19,7 +19,11 @@ namespace PagentOS.SessionCompanion.Documents;
 /// from <c>def|class|function|public …(</c> lines; <c>structure.lines/language</c>.</item>
 /// <item><c>txt</c>: <c>p&lt;n&gt;</c> per blank-line paragraph.</item>
 /// </list>
-/// A file whose bytes do not sniff as text is <c>unsupported_format</c>.
+/// A file whose bytes do not sniff as text is <c>unsupported_format</c>. Every kind but JSON
+/// is read as a bounded prefix (<see cref="DocumentBounds.MaxTextPrefixBytes"/>; the result
+/// says <c>truncated: true</c> and the structure counts what the prefix held); JSON needs the
+/// whole document for its top-level keys, so it is read whole up to
+/// <see cref="DocumentBounds.MaxJsonBytes"/> and refused beyond (<c>too_large</c>).
 /// </summary>
 public sealed class TextLikeExtractor : IDocumentExtractor
 {
@@ -57,6 +61,12 @@ public sealed class TextLikeExtractor : IDocumentExtractor
             {
                 headers["title"] = MarkdownTitle(lines);
             }
+
+            if (decoded.Truncated)
+            {
+                // The line count is the prefix's; the header says so rather than guessing the rest.
+                headers["truncated"] = true;
+            }
         }
 
         return headers;
@@ -64,13 +74,25 @@ public sealed class TextLikeExtractor : IDocumentExtractor
 
     public ExtractResult Extract(string path, string kind, ExtractRequest request, CancellationToken cancellationToken)
     {
-        var decoded = TextFileReader.Read(path);
+        var decoded = TextFileReader.Read(path, kind == FileKinds.Json ? DocumentBounds.MaxJsonBytes : DocumentBounds.MaxTextPrefixBytes);
         if (!decoded.IsText)
         {
             throw DocumentErrors.Unsupported($"'{Path.GetFileName(path)}' does not decode as text ({decoded.Encoding}); it is not a {kind} file", DocumentErrors.NotText);
         }
 
+        if (kind == FileKinds.Json && decoded.Truncated)
+        {
+            throw DocumentErrors.Unsupported(
+                $"'{Path.GetFileName(path)}' is {decoded.TotalBytes} bytes of JSON, over the {DocumentBounds.Mebibytes(DocumentBounds.MaxJsonBytes)} bound a JSON document is read whole under; it was not parsed",
+                DocumentErrors.TooLarge);
+        }
+
         var collector = new BlockCollector(request.MaxChars);
+        if (decoded.Truncated)
+        {
+            collector.MarkTruncated();
+        }
+
         cancellationToken.ThrowIfCancellationRequested();
         return kind switch
         {
@@ -315,10 +337,11 @@ public sealed class TextLikeExtractor : IDocumentExtractor
                         var keys = new JsonArray();
                         foreach (var property in root.EnumerateObject())
                         {
+                            // structure.keys is the whole document's, whatever the block budget kept.
                             keys.Add(property.Name);
-                            if (!collector.Add(new DocumentBlock($"$.{property.Name}", "key", Compact(property.Value))))
+                            if (!collector.Full)
                             {
-                                break;
+                                collector.Add(new DocumentBlock($"$.{property.Name}", "key", Compact(property.Value)));
                             }
                         }
 
