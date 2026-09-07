@@ -150,6 +150,12 @@ IDLE="$(upper "$idle")"
 
 do_rollback() {
     # Switch back to the colour that was active before this release started.
+    # First step: leave the tree. The script cd's into $cur/infra/docker for the build, and
+    # the controlled-failure run on the real host showed what happens when the rollback
+    # removes that directory from inside it: every docker compose call after the mv fails
+    # with "getwd: no such file or directory", the edge is never switched back, and the
+    # marker and nginx disagree. compose() uses absolute paths, so $base is a safe home.
+    cd "$base" || true
     echo "ROLLBACK: switching the edge back to api-$active" >&2
     if [ -d "$prev" ]; then
         rm -rf "$cur"
@@ -220,6 +226,7 @@ on_exit() {
             do_rollback
         else
             echo "ROLLBACK: the release failed before the switch; api-$active kept serving throughout" >&2
+            cd "$base" || true
             compose stop "api-$idle" >/dev/null 2>&1 || true
             if [ -d "$prev" ]; then rm -rf "$cur"; mv "$prev" "$cur"; fi
         fi

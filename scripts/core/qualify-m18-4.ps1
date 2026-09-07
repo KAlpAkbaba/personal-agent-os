@@ -144,14 +144,17 @@ function Get-DeviceRows {
     # arrives as ONE item (the whole array) and every field reads empty - which is exactly
     # what the first real run recorded (PS 5.1; see scripts/tests/owner-harness.tests.ps1).
     param($Doc)
-    $rows = @(Get-ArrayProperty -InputObject $Doc -Name "devices")
+    # A BARE call, assigned: `@(Get-ArrayProperty ...)` wraps the returned array as ONE
+    # element (measured on the live listing: count 1, type Object[]); the bare assignment
+    # receives the elements. The first two real runs recorded empty device rows for this.
+    $rows = Get-ArrayProperty -InputObject $Doc -Name "devices"
     $out = @()
     foreach ($d in $rows) {
         if ($null -eq $d) { continue }
         $presence = Get-OptionalProperty -InputObject $d -Name "presence"
         if ($null -eq $presence) { $presence = Get-OptionalProperty -InputObject $d -Name "status" }
         $version = Get-OptionalProperty -InputObject $d -Name "software_version"
-        $caps = @(Get-ArrayProperty -InputObject $d -Name "capabilities")
+        $caps = Get-ArrayProperty -InputObject $d -Name "capabilities"
         $out += [ordered]@{
             device_id        = [string](Get-OptionalProperty -InputObject $d -Name "device_id")
             name             = [string](Get-OptionalProperty -InputObject $d -Name "name")
@@ -387,7 +390,7 @@ try {
     Write-Host "== E: supervisor + pause/resume on the real Cloud Core"
     $scan1 = Post-Json "/v1/evolution/supervisor/scan" $null
     $evidence.phases.E_scan_1 = $scan1
-    $opened1 = @(Get-ArrayProperty -InputObject $scan1 -Name "opened")
+    $opened1 = Get-ArrayProperty -InputObject $scan1 -Name "opened"
     Add-Check "the supervisor scanned production signals" ([string](Get-OptionalProperty -InputObject $scan1 -Name "status") -eq "scanned") "signals=$(Get-OptionalProperty -InputObject $scan1 -Name 'signals') opened=$($opened1.Count) tracked=$(Get-OptionalProperty -InputObject $scan1 -Name 'already_tracked')"
     $paused = Post-Json "/v1/evolution/supervisor/pause" @{ reason = "m18-4 qualification" }
     $scan2 = Post-Json "/v1/evolution/supervisor/scan" $null

@@ -49,6 +49,10 @@ $posix = { param($p) $p = ($p -replace '\\', '/'); if ($p -match '^([A-Za-z]):(.
 # FAKE_SERVED_RELEASE (override what a colour reports), FAKE_CONTRACT_VERSION.
 $docker = @(
     '#!/usr/bin/env bash',
+    '# The real docker refuses to run from a deleted working directory ("getwd: no such file',
+    '# or directory") - which is exactly what the controlled-failure rollback hit on the host',
+    '# when the script rolled the tree back from inside it. The fake refuses the same way.',
+    'if ! cd . 2>/dev/null; then echo "error in parsing compose-spec.json: getwd: no such file or directory" >&2; exit 1; fi',
     'echo "docker $*" >> "$FAKE_STATE/calls.log"',
     'colour_of() { printf "%s" "$1" | grep -oE "api-(blue|green)" | head -1 | sed "s/api-//"; }',
     'released_for() {',
