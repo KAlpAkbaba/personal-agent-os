@@ -399,6 +399,9 @@ try {
         foreach ($point in @("after_idle_up", "after_switch")) {
             $staged = Invoke-StageHead
             Add-Check "G/$point`: HEAD staged as the candidate" ($staged.Exit -eq 0 -and $staged.Output -match "staged: ") (($staged.Output -split "`n") | Where-Object { $_ -match "staged" } | Select-Object -Last 1)
+            # A stable copy of HEAD's scripts for the reconcile: the crash may leave /opt/pagentos/app
+            # on either tree (run 4 ran the OLD tree's script, which has no --reconcile, exit 65).
+            [void](Invoke-Host "rm -rf /opt/pagentos/qual-head && cp -a /opt/pagentos/app.next /opt/pagentos/qual-head")
             $prober = Start-Prober -Name "G_${point}_crash"
             $crash = Invoke-Host "cd /opt/pagentos && PAGENTOS_INTERRUPT_AT=$point PAGENTOS_WAIT_STEP_S=3 PAGENTOS_DRAIN_S=5 bash app.next/scripts/cloud/release-cloud-core-bluegreen.sh $($evidence.head_sha) 2>&1; echo EXIT=`$?"
             Start-Sleep -Seconds 3
@@ -421,7 +424,7 @@ try {
                 Add-Check "G/$point`: both colours run; the edge already serves the candidate, RELEASE not yet written" ($bothUp -and $mid.edge_active -eq $otherColour -and $servedMid -eq $evidence.head_sha -and $ps.Output -match "RELEASE=$servedBefore") "active=$($mid.edge_active) served=$servedMid"
             }
             $prober = Start-Prober -Name "G_${point}_reconcile"
-            $rec = Invoke-Host "cd /opt/pagentos && PAGENTOS_WAIT_STEP_S=3 bash app/scripts/cloud/release-cloud-core-bluegreen.sh --reconcile 2>&1; echo EXIT=`$?"
+            $rec = Invoke-Host "cd /opt/pagentos && PAGENTOS_WAIT_STEP_S=3 bash qual-head/scripts/cloud/release-cloud-core-bluegreen.sh --reconcile 2>&1; echo EXIT=`$?"
             Start-Sleep -Seconds 3
             $mRec = Stop-Prober $prober
             $evidence.measurements["G_${point}_reconcile"] = $mRec
@@ -448,6 +451,7 @@ try {
             Add-Check "G/$point`: the device is online on the canonical colour after the reconcile" $deviceBackG "after ${waitedG}s; presence gap during reconcile: $($mRec.device_offline_window_s)s"
             Save-Evidence
         }
+        [void](Invoke-Host "rm -rf /opt/pagentos/qual-head /opt/pagentos/app.interrupted")
     }
     elseif (-not $SkipInterruption) {
         Write-Host "== G: skipped (first cutover pending or -SkipFirstCutover)"
@@ -472,7 +476,7 @@ try {
     $mB = Stop-Prober $prober
     $evidence.measurements.B_first_cutover = $mB
     $evidence.phases.B_release = [ordered]@{ exit = $releaseExit; seconds = [math]::Round(($releaseEnd - $releaseStart).TotalSeconds, 1); output_tail = (($releaseOut -split "`n") | Select-Object -Last 25) -join "`n" }
-    Add-Check "first cutover exits 0" ($releaseExit -eq 0) "release took $([math]::Round(($releaseEnd - $releaseStart).TotalSeconds, 1)) s"
+    Add-Check "$(if ($null -eq $before.edge_active) { 'first cutover' } else { 'release' }) exits 0" ($releaseExit -eq 0) "release took $([math]::Round(($releaseEnd - $releaseStart).TotalSeconds, 1)) s"
     $firstCutover = ($null -eq $before.edge_active -or $before.edge_active -notin @("blue", "green"))
     if ($firstCutover) {
         Add-Check "first cutover measured" ($mB.probes -gt 0 -and $mB.gap_seconds -ge 0) "probes=$($mB.probes) dropped=$($mB.dropped) gap=$($mB.gap_seconds)s (a gap is expected on the FIRST cutover: the edge takes the socket)"

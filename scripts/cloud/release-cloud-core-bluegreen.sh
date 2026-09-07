@@ -200,7 +200,10 @@ reload_edge() {
         echo "edge config test FAILED: $(printf '%s' "$test_out" | tail -3 | tr '\n' ' ')" >&2
         return 1
     fi
-    compose exec -T edge nginx -s reload
+    # -c on the signal too: nginx finds the master's pid file through the configuration it
+    # is given, and the edge's (pid /tmp/nginx.pid) is not the image default's. Without it
+    # the reload looked for /run/nginx.pid and failed on the real host (run 4, 2026-09-07).
+    compose exec -T edge nginx -s reload -c /etc/nginx/edge/nginx.conf
 }
 
 ensure_edge() {
