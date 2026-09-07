@@ -71,9 +71,18 @@ public sealed record AgentServiceOptions
     /// </summary>
     public bool DisplayPowerEnabled { get; init; }
 
+    /// <summary>
+    /// M19 (M19_DIGITAL_OPERATOR_SPEC.md §2): advertise and route the Digital Operator family
+    /// (<c>app.*</c>, <c>window.*</c>, <c>keyboard.*</c>, <c>pointer.*</c>, <c>ui.*</c>,
+    /// <c>screen.*</c>, <c>file.*</c>, <c>terminal.*</c>). Off by default until the M19 gate is
+    /// green on this machine; the installer's <c>-Operator</c> switch turns it on. The
+    /// companion has the same key and answers <c>capability_missing</c> without it.
+    /// </summary>
+    public bool OperatorEnabled { get; init; }
+
     /// <summary>The capability manifest this service advertises at enrollment and in every WS hello.</summary>
     public IReadOnlyList<string> AdvertisedCapabilities
-        => Agent.Core.Protocol.AgentCapabilities.Compose(BrowserEnabled, DisplayPowerEnabled);
+        => Agent.Core.Protocol.AgentCapabilities.Compose(BrowserEnabled, DisplayPowerEnabled, OperatorEnabled);
 
     public double BackoffBaseSeconds { get; init; } = 1.0;
 
@@ -141,6 +150,7 @@ public sealed record AgentServiceOptions
             HeartbeatIntervalOverrideS = heartbeatOverride,
             BrowserEnabled = ParseBool(configuration["BrowserEnabled"]),
             DisplayPowerEnabled = ParseBool(configuration["DisplayPowerEnabled"]),
+            OperatorEnabled = ParseBool(configuration["OperatorEnabled"]),
             BackoffBaseSeconds = configuration.GetValue("BackoffBaseSeconds", 1.0),
             BackoffMaxSeconds = configuration.GetValue("BackoffMaxSeconds", 60.0),
         };

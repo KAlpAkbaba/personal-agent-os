@@ -40,6 +40,14 @@ ERROR_CLASSES = (
     # M13 (ADR-0050 item 14): the device refuses to create a second Chrome/window/tab beyond
     # the research-browser budget instead of spawning it; never retryable.
     "browser_lifecycle_violation",
+    # M19 (M19_DIGITAL_OPERATOR_SPEC.md §1-§2): the Digital Operator's three device answers.
+    # focus_mismatch — the foreground window is not the one the plan observed (retryable, the
+    # planner re-resolves); permission_denied — outside the owner's allowlist/roots, refused
+    # before any process exists; postcondition_failed — acted, but the re-observed world does
+    # not show the requested state.
+    "focus_mismatch",
+    "permission_denied",
+    "postcondition_failed",
     "internal_bug",
 )
 

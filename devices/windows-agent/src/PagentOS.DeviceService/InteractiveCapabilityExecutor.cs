@@ -22,21 +22,32 @@ namespace PagentOS.DeviceService;
 /// consulted, so an unknown operation never crosses the pipe. Per-command cap 120 s (§3),
 /// because a real navigation plus extraction on a slow site is legitimately longer than
 /// opening Notepad.</item>
+/// <item>the Digital Operator family (M19, M19_DIGITAL_OPERATOR_SPEC.md §2) — routed only
+/// when <c>OperatorEnabled</c> is configured, otherwise <c>capability_missing</c> before the
+/// companion is consulted. Per-command cap 30 s (<c>app.launch</c> 15 s): every member acts
+/// and re-observes within seconds, and a terminal command has its own 30 s ceiling.</item>
 /// </list>
 /// The "no companion connected → <c>dependency_unavailable</c>, retryable" rule belongs to
-/// the pipe server and applies to both families.
+/// the pipe server and applies to every family.
 /// </summary>
 public sealed class InteractiveCapabilityExecutor(
     ICompanionCapabilityTransport pipeServer,
     TimeProvider? timeProvider = null,
     bool browserEnabled = false,
     bool displayPowerEnabled = false,
-    string? brokerRestUrl = null) : ICapabilityExecutor
+    string? brokerRestUrl = null,
+    bool operatorEnabled = false) : ICapabilityExecutor
 {
     private static readonly TimeSpan MinTimeout = TimeSpan.FromSeconds(1);
 
     /// <summary>The M1 cap for the desktop family.</summary>
     public static readonly TimeSpan DesktopTimeoutCap = TimeSpan.FromSeconds(60);
+
+    /// <summary>The M19 cap for the operator family (§3).</summary>
+    public static readonly TimeSpan OperatorTimeoutCap = OperatorCapabilityNames.CommandTimeoutCap;
+
+    /// <summary>The M19 cap for <c>app.launch</c> alone: a 10 s window wait plus headroom.</summary>
+    public static readonly TimeSpan OperatorLaunchTimeoutCap = OperatorCapabilityNames.LaunchTimeoutCap;
 
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
 
@@ -52,6 +63,13 @@ public sealed class InteractiveCapabilityExecutor(
     public bool DisplayPowerEnabled { get; } = displayPowerEnabled;
 
     /// <summary>
+    /// Whether the Digital Operator family is routed at all (service option
+    /// <c>OperatorEnabled</c>, default false). Off is the M19 v1 posture until the lab gate is
+    /// green on the owner's machine and the installer is run with <c>-Operator</c>.
+    /// </summary>
+    public bool OperatorEnabled { get; } = operatorEnabled;
+
+    /// <summary>
     /// M18.3 (§6h): the ONE origin <c>desktop.play_audio</c> may fetch from — the broker REST
     /// base this device is enrolled against, reduced to scheme, host and port. Null when the
     /// service has no broker URL configured, in which case every <c>play_audio</c> is refused:
@@ -62,7 +80,19 @@ public sealed class InteractiveCapabilityExecutor(
 
     /// <summary>Per-family cap on the time one command may hold the companion.</summary>
     public static TimeSpan TimeoutCapFor(string capability)
-        => AgentCapabilities.IsBrowser(capability) ? BrowserCapabilities.CommandTimeoutCap : DesktopTimeoutCap;
+    {
+        if (AgentCapabilities.IsBrowser(capability))
+        {
+            return BrowserCapabilities.CommandTimeoutCap;
+        }
+
+        if (string.Equals(capability, OperatorCapabilityNames.AppLaunch, StringComparison.Ordinal))
+        {
+            return OperatorLaunchTimeoutCap;
+        }
+
+        return AgentCapabilities.IsOperator(capability) ? OperatorTimeoutCap : DesktopTimeoutCap;
+    }
 
     /// <summary>
     /// The pipe timeout for a command: the time until its expiry, clamped to [1 s, family cap].
@@ -121,6 +151,19 @@ public sealed class InteractiveCapabilityExecutor(
             // Before the pipe, not after: the companion is the thing that would fetch and play
             // the URL, so the check has to happen on the side that has not been asked to yet.
             ValidateAudioOrigin(command.Payload, AudioOrigin);
+        }
+        else if (AgentCapabilities.IsOperator(command.Capability))
+        {
+            if (!OperatorEnabled)
+            {
+                // Same rule as display-off: not advertised, and refused here as well so a
+                // command aimed straight at the device cannot drive the owner's desktop
+                // before the family was switched on out loud.
+                throw new CapabilityException(
+                    ErrorClasses.CapabilityMissing,
+                    $"capability '{command.Capability}' is not enabled on this device (OperatorEnabled=false)",
+                    retryable: false);
+            }
         }
         else if (!AgentCapabilities.IsInteractive(command.Capability))
         {

@@ -120,15 +120,24 @@ public static class AgentCapabilities
     public static IReadOnlyList<string> Browser => BrowserCapabilities.All;
 
     /// <summary>
-    /// The manifest this device actually advertises: the desktop names, the alarm pair and
-    /// the M18.3 ambient group always, display power and the browser family only when each is
-    /// configured. Order is stable (desktop, alarm, ambient, display, browser) so a manifest
-    /// diff between two versions reads as an addition rather than a reshuffle.
+    /// The Digital Operator family (M19, M19_DIGITAL_OPERATOR_SPEC.md §2): apps, windows,
+    /// keyboard, pointer, UI Automation, screen, files and the governed terminal. Advertised
+    /// only behind <c>OperatorEnabled</c>; every member is interactive and executed by the
+    /// companion under the focus guard.
     /// </summary>
-    public static IReadOnlyList<string> Compose(bool browserEnabled, bool displayPowerEnabled = false)
+    public static IReadOnlyList<string> Operator => OperatorCapabilityNames.All;
+
+    /// <summary>
+    /// The manifest this device actually advertises: the desktop names, the alarm pair and
+    /// the M18.3 ambient group always, display power, the browser family and the operator
+    /// family only when each is configured. Order is stable (desktop, alarm, ambient,
+    /// display, browser, operator) so a manifest diff between two versions reads as an
+    /// addition rather than a reshuffle.
+    /// </summary>
+    public static IReadOnlyList<string> Compose(bool browserEnabled, bool displayPowerEnabled = false, bool operatorEnabled = false)
     {
         var names = new List<string>(
-            Desktop.Count + Alarm.Count + Ambient.Count + DisplayPower.Count + BrowserCapabilities.All.Count);
+            Desktop.Count + Alarm.Count + Ambient.Count + DisplayPower.Count + BrowserCapabilities.All.Count + OperatorCapabilityNames.All.Count);
         names.AddRange(Desktop);
         names.AddRange(Alarm);
         names.AddRange(Ambient);
@@ -142,6 +151,11 @@ public static class AgentCapabilities
             names.AddRange(BrowserCapabilities.All);
         }
 
+        if (operatorEnabled)
+        {
+            names.AddRange(OperatorCapabilityNames.All);
+        }
+
         return names;
     }
 
@@ -153,6 +167,9 @@ public static class AgentCapabilities
 
     public static bool IsDisplayPower(string capability) => DisplayPower.Contains(capability, StringComparer.Ordinal);
 
+    /// <summary>M19: a member of the Digital Operator family (never the browser family, which has its own worker).</summary>
+    public static bool IsOperator(string capability) => OperatorCapabilityNames.IsMember(capability);
+
     /// <summary>
     /// Every name the Session Companion executes in the owner's interactive session. The
     /// Device Service routes exactly this set over the pipe and refuses everything else
@@ -160,9 +177,95 @@ public static class AgentCapabilities
     /// added here — never by being spelled <c>desktop.</c>-something.
     /// </summary>
     public static bool IsInteractive(string capability)
-        => IsDesktop(capability) || IsAlarm(capability) || IsAmbient(capability) || IsDisplayPower(capability);
+        => IsDesktop(capability) || IsAlarm(capability) || IsAmbient(capability) || IsDisplayPower(capability) || IsOperator(capability);
 
     public static bool IsBrowser(string capability) => BrowserCapabilities.IsFamilyMember(capability);
+}
+
+/// <summary>
+/// M19_DIGITAL_OPERATOR_SPEC.md §2 — the Digital Operator names. The wire contract with Cloud
+/// Core's <c>OperatorTask</c>; change the document first. Unlike the browser family there is no
+/// family marker: every name here is an operation the companion executes itself, in the
+/// owner's session, and re-observes afterwards.
+/// </summary>
+public static class OperatorCapabilityNames
+{
+    public const string AppLaunch = "app.launch";
+    public const string AppList = "app.list";
+    public const string AppActivate = "app.activate";
+    public const string AppClose = "app.close";
+
+    public const string WindowList = "window.list";
+    public const string WindowCurrent = "window.current";
+    public const string WindowActivate = "window.activate";
+    public const string WindowMinimize = "window.minimize";
+    public const string WindowMaximize = "window.maximize";
+    public const string WindowRestore = "window.restore";
+    public const string WindowMove = "window.move";
+    public const string WindowResize = "window.resize";
+    public const string WindowClose = "window.close";
+
+    public const string KeyboardType = "keyboard.type";
+    public const string KeyboardKey = "keyboard.key";
+    public const string KeyboardShortcut = "keyboard.shortcut";
+
+    public const string PointerMove = "pointer.move";
+    public const string PointerClick = "pointer.click";
+    public const string PointerDoubleClick = "pointer.double_click";
+    public const string PointerRightClick = "pointer.right_click";
+    public const string PointerScroll = "pointer.scroll";
+
+    public const string UiInspect = "ui.inspect";
+    public const string UiInvoke = "ui.invoke";
+    public const string UiSetValue = "ui.set_value";
+    public const string UiSelect = "ui.select";
+
+    public const string ScreenCapture = "screen.capture";
+    public const string ScreenInspect = "screen.inspect";
+
+    public const string FileOpen = "file.open";
+    public const string FileReveal = "file.reveal";
+
+    public const string TerminalOpen = "terminal.open";
+    public const string TerminalExecute = "terminal.execute";
+    public const string TerminalStatus = "terminal.status";
+
+    /// <summary>Every operator name, in the order of the specification's table.</summary>
+    public static readonly IReadOnlyList<string> All =
+    [
+        AppLaunch, AppList, AppActivate, AppClose,
+        WindowList, WindowCurrent, WindowActivate, WindowMinimize, WindowMaximize, WindowRestore,
+        WindowMove, WindowResize, WindowClose,
+        KeyboardType, KeyboardKey, KeyboardShortcut,
+        PointerMove, PointerClick, PointerDoubleClick, PointerRightClick, PointerScroll,
+        UiInspect, UiInvoke, UiSetValue, UiSelect,
+        ScreenCapture, ScreenInspect,
+        FileOpen, FileReveal,
+        TerminalOpen, TerminalExecute, TerminalStatus,
+    ];
+
+    /// <summary>The names that synthesise input and therefore run under the focus guard (§1, invariant 2).</summary>
+    public static readonly IReadOnlyList<string> Guarded =
+    [
+        KeyboardType, KeyboardKey, KeyboardShortcut,
+        PointerMove, PointerClick, PointerDoubleClick, PointerRightClick, PointerScroll,
+    ];
+
+    /// <summary>§3: the service's per-command cap for the family.</summary>
+    public static readonly TimeSpan CommandTimeoutCap = TimeSpan.FromSeconds(30);
+
+    /// <summary>§3: <c>app.launch</c> waits at most 10 s for a window, so its cap is shorter than the family's.</summary>
+    public static readonly TimeSpan LaunchTimeoutCap = TimeSpan.FromSeconds(15);
+
+    /// <summary>§2: the longest text one <c>keyboard.type</c> may carry.</summary>
+    public const int MaxTypedChars = 4096;
+
+    /// <summary>§2: the largest <c>screen.capture</c> result, PNG bytes before base64.</summary>
+    public const int MaxCaptureBytes = 2 * 1024 * 1024;
+
+    public static bool IsMember(string capability) => All.Contains(capability, StringComparer.Ordinal);
+
+    public static bool IsGuarded(string capability) => Guarded.Contains(capability, StringComparer.Ordinal);
 }
 
 /// <summary>
@@ -324,12 +427,34 @@ public static class ErrorClasses
     /// </summary>
     public const string BrowserLifecycleViolation = "browser_lifecycle_violation";
 
+    /// <summary>
+    /// M19 (M19_DIGITAL_OPERATOR_SPEC.md §1, invariant 2): the window in front at the moment
+    /// of acting is not the window the plan observed. Retryable — the planner re-resolves —
+    /// and never a retry into whatever is in front; the message names both windows.
+    /// </summary>
+    public const string FocusMismatch = "focus_mismatch";
+
+    /// <summary>
+    /// M19: the request is outside what the owner authorised on this device — a terminal
+    /// command that is not allowlisted, a path outside the authorised roots. Never retryable
+    /// and answered before any process exists.
+    /// </summary>
+    public const string PermissionDenied = "permission_denied";
+
+    /// <summary>
+    /// M19: the action was performed but the re-observed world does not show the requested
+    /// state (a window asked to maximise that is still normal). The result is a truthful
+    /// failure rather than a success inferred from the call having returned.
+    /// </summary>
+    public const string PostconditionFailed = "postcondition_failed";
+
     public static readonly IReadOnlySet<string> All = new HashSet<string>(StringComparer.Ordinal)
     {
         ValidationError, AuthError, DeviceOffline, CapabilityMissing, DependencyUnavailable,
         ProviderRateLimited, ProviderError, UiTargetNotFound, UiStateChanged, Timeout,
         CommandExpired, Cancelled, RetryExhausted, ArtifactRenderError, VoiceProviderError,
         SecurityScopeError, InternalBug, BrowserLifecycleViolation,
+        FocusMismatch, PermissionDenied, PostconditionFailed,
     };
 }
 

@@ -63,6 +63,7 @@ public static class Program
             // candidate can be described BEFORE it runs and recognised on Cloud Core after.
             ["software_version"] = AgentInfo.SoftwareVersion,
             ["browser_enabled"] = options.BrowserEnabled,
+            ["operator_enabled"] = options.OperatorEnabled,
             ["capabilities"] = new System.Text.Json.Nodes.JsonArray(
                 [.. options.AdvertisedCapabilities.Select(c => (System.Text.Json.Nodes.JsonNode)c)]),
         };
@@ -367,7 +368,9 @@ public static class Program
                 browserEnabled: options.BrowserEnabled,
                 displayPowerEnabled: options.DisplayPowerEnabled,
                 // M18.3 (§6h): the only origin desktop.play_audio may fetch from.
-                brokerRestUrl: options.BrokerRestUrl));
+                brokerRestUrl: options.BrokerRestUrl,
+                // M19: the Digital Operator family, behind OperatorEnabled.
+                operatorEnabled: options.OperatorEnabled));
         builder.Services.AddSingleton(provider => new CommandDispatcher(
             provider.GetRequiredService<IdempotencyStore>(),
             provider.GetRequiredService<ICapabilityExecutor>(),
@@ -425,9 +428,10 @@ public static class Program
             admission.ExpectedSessionId?.ToString() ?? "any interactive",
             admission.ExpectedImagePath ?? "not pinned");
         logger.LogInformation(
-            "capabilities advertised: {Capabilities} (browser family {BrowserState})",
+            "capabilities advertised: {Capabilities} (browser family {BrowserState}, operator family {OperatorState})",
             string.Join(",", options.AdvertisedCapabilities),
-            options.BrowserEnabled ? "enabled" : "disabled");
+            options.BrowserEnabled ? "enabled" : "disabled",
+            options.OperatorEnabled ? "enabled" : "disabled");
         await host.RunAsync().ConfigureAwait(false);
         return 0;
     }
