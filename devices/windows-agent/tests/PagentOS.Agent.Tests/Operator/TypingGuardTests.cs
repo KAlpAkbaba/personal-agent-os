@@ -113,6 +113,7 @@ public sealed class TypingGuardTests : IDisposable
         var (_, a, _) = _lab.LaunchNotepad();
         var (_, b, _) = _lab.LaunchNotepad();
         _lab.Activate(a);
+        var aHandle = _lab.Operator.Registry.Resolve(a).Handle;
         var bHandle = _lab.Operator.Registry.Resolve(b).Handle;
 
         // MaxTypedChars distinct-ish characters, no newlines: what A holds afterwards must be an
@@ -138,7 +139,12 @@ public sealed class TypingGuardTests : IDisposable
         // WindowActions.Activate, whose AttachThreadInput dance merges and splits the input
         // queues and, measured here, drops input already queued for A - an artefact no real
         // focus steal has. Bounded at 2 s, and abandoned as soon as the stream has ended.
-        var landed = BringToFront(bHandle, () => typing.IsCompleted);
+        // What counts as landed is that A is no longer in front: on the GitHub runner's
+        // desktop SetForegroundWindow took the foreground away from A and left NO window in
+        // front for the rest of the stream (a real shape of focus loss: the guard must stop
+        // for it too), on a workstation B comes to the front.
+        var front = StealForeground(bHandle, aHandle, () => typing.IsCompleted);
+        var landed = front != aHandle;
         var streamStillRunning = landed && !typing.IsCompleted;
         typing.GetAwaiter().GetResult();
 
@@ -154,7 +160,6 @@ public sealed class TypingGuardTests : IDisposable
         }
 
         var ex = refused;
-        Assert.True(landed, $"the guard refused although the steal never landed: {ex.Message}");
         Assert.Equal(ErrorClasses.FocusMismatch, ex.ErrorClass);
         Assert.True(ex.Retryable);
         var typed = Assert.IsType<int>(ex.Detail["typed_chars"]);
@@ -166,12 +171,19 @@ public sealed class TypingGuardTests : IDisposable
         Assert.Equal(typed - uncertain, confirmed);
         Assert.Contains($"typed_chars={typed} of {text.Length}", ex.Message, StringComparison.Ordinal);
         Assert.True(ex.Message.Contains(a, StringComparison.Ordinal), $"A ({a}) not named: {ex.Message}");
-        Assert.True(ex.Message.Contains(b, StringComparison.Ordinal), $"B ({b}) not named: {ex.Message}");
+        // The refusal names what was in front instead: B, or nothing. A third window would be
+        // a real anomaly and fails here.
+        var frontWasB = ex.Message.Contains(b, StringComparison.Ordinal);
+        var frontWasNone = ex.Message.Contains("(no foreground window)", StringComparison.Ordinal);
+        Assert.True(frontWasB || frontWasNone, $"neither B ({b}) nor 'no foreground window' named: {ex.Message}");
 
         // Read both back. Everything handed over before the change is in A, except possibly
         // the last batch, which Windows assigned to whichever thread retrieved it - the
         // measured bound the refusal names as uncertain_chars. Nothing sent after the change
-        // exists anywhere: A + B is EXACTLY the typed prefix, and B is at most one batch.
+        // exists anywhere. With B in front, A + B is EXACTLY the typed prefix and B is at most
+        // one batch; with NO window in front the system had no queue for that last batch and
+        // may have discarded it: A is then a prefix of the typed prefix, never shorter than
+        // confirmed_chars, and B holds nothing.
         var deadline = DateTime.UtcNow.AddSeconds(4);
         string aValue, bValue;
         do
@@ -184,26 +196,41 @@ public sealed class TypingGuardTests : IDisposable
 
         Assert.True(bValue.Length <= uncertain, $"B received {bValue.Length} chars [{bValue}], more than uncertain_chars={uncertain}; A holds {aValue.Length} of typed_chars={typed}");
         Assert.True(aValue.Length >= confirmed, $"A holds {aValue.Length} chars, fewer than confirmed_chars={confirmed}; B holds {bValue.Length}");
-        Assert.True(aValue + bValue == text[..typed], $"A ({aValue.Length}) + B ({bValue.Length}) is not the typed prefix ({typed}); A=[{aValue[^Math.Min(40, aValue.Length)..]}] B=[{bValue}]");
-        detail = "landed";
+        if (frontWasB)
+        {
+            Assert.True(aValue + bValue == text[..typed], $"A ({aValue.Length}) + B ({bValue.Length}) is not the typed prefix ({typed}); A=[{aValue[^Math.Min(40, aValue.Length)..]}] B=[{bValue}]");
+        }
+        else
+        {
+            Assert.True(bValue.Length == 0, $"no window was in front, yet B holds {bValue.Length} chars [{bValue}]");
+            Assert.True(aValue.Length <= typed && text[..typed].StartsWith(aValue, StringComparison.Ordinal), $"A ({aValue.Length}) is not a prefix of the typed prefix ({typed}); A=[{aValue[^Math.Min(40, aValue.Length)..]}]");
+        }
+
+        detail = frontWasB ? "landed: B in front" : "landed: no window in front";
         return true;
     }
 
-    private static bool BringToFront(IntPtr hwnd, Func<bool> abandon)
+    /// <summary>
+    /// Asks for <paramref name="hwnd"/> in front until A (<paramref name="from"/>) is no longer
+    /// the foreground window, the stream ends, or 2 s pass. Returns the foreground observed at
+    /// that moment: B, <see cref="IntPtr.Zero"/> (no window in front), or A when it never moved.
+    /// </summary>
+    private static IntPtr StealForeground(IntPtr hwnd, IntPtr from, Func<bool> abandon)
     {
         var deadline = DateTime.UtcNow.AddMilliseconds(2000);
         while (DateTime.UtcNow < deadline && !abandon())
         {
             SetForegroundWindow(hwnd);
-            if (GetForegroundWindow() == hwnd)
+            var front = GetForegroundWindow();
+            if (front != from)
             {
-                return true;
+                return front;
             }
 
             Thread.Sleep(10);
         }
 
-        return GetForegroundWindow() == hwnd;
+        return GetForegroundWindow();
     }
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
