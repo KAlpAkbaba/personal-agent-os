@@ -1124,15 +1124,35 @@ public sealed class OperatorCapabilities
             {
                 try
                 {
+                    // Explorer holds several List controls (the navigation pane, quick
+                    // access, the items view); which one comes first differs between
+                    // Windows editions and languages (the GitHub runner's English Server
+                    // returned an empty selection from its first list). Read every list,
+                    // bounded, and take the one whose selection names the file.
                     var root = Inspector.RootForWindow(window.Handle);
-                    var list = root.FindFirst(TreeScope.Descendants, new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.List));
-                    if (list is null)
+                    var lists = root.FindAll(TreeScope.Descendants, new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.List));
+                    var inspected = 0;
+                    foreach (AutomationElement list in lists)
                     {
-                        return false;
+                        if (++inspected > 8)
+                        {
+                            break;
+                        }
+
+                        var names = Inspector.SelectedNames(list);
+                        if (names.Any(s => s.StartsWith(stem, StringComparison.OrdinalIgnoreCase)))
+                        {
+                            selection = names;
+                            return true;
+                        }
+
+                        if (selection.Count == 0 && names.Count > 0)
+                        {
+                            selection = names;
+                        }
                     }
 
-                    selection = Inspector.SelectedNames(list);
-                    return selection.Any(s => s.StartsWith(stem, StringComparison.OrdinalIgnoreCase));
+                    return false;
                 }
                 catch (CapabilityException)
                 {

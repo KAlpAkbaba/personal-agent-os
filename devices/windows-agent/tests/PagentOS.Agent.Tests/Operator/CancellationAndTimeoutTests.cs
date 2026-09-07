@@ -32,7 +32,10 @@ public sealed class CancellationAndTimeoutTests : IDisposable
         stopwatch.Stop();
         Assert.Equal(ErrorClasses.Cancelled, ex.ErrorClass);
         Assert.True(ex.Retryable);
-        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(8), $"cancel took {stopwatch.Elapsed}");
+        // The bound includes PowerShell's own start (7-8 s cold on the GitHub runner, where
+        // an 8 s bound once failed at 8.53 s); the property is "well under the 20 s sleep
+        // and the 30 s cap", so the bound is 15 s.
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(15), $"cancel took {stopwatch.Elapsed}");
     }
 
     [Fact]
