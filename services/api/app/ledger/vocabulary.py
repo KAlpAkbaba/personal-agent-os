@@ -55,6 +55,12 @@ SUBSYSTEM_AMBIENT = "ambient"
 #: the operator actually do to my machine?" is answerable without separating it from
 #: routine/ambient rows that happen to share a device call.
 SUBSYSTEM_OPERATOR = "operator"
+#: M20 File & Document Intelligence (docs/M20_FILE_DOCUMENT_INTELLIGENCE_SPEC.md §3): the
+#: owner's local documents, indexed and answered with exact provenance. Its own subsystem
+#: so "what did the system read on my machine, and what did it tell me?" is answerable
+#: without separating document rows from operator/routine rows that happen to share a
+#: device call.
+SUBSYSTEM_DOCUMENTS = "documents"
 
 SUBSYSTEMS: Final[tuple[str, ...]] = (
     SUBSYSTEM_RESEARCH,
@@ -73,6 +79,7 @@ SUBSYSTEMS: Final[tuple[str, ...]] = (
     SUBSYSTEM_ROUTINE,
     SUBSYSTEM_AMBIENT,
     SUBSYSTEM_OPERATOR,
+    SUBSYSTEM_DOCUMENTS,
 )
 
 # ------------------------------------------------------------------ statuses
@@ -277,6 +284,12 @@ EVENT_TYPE_OPERATOR_TASK_STARTED = "operator.task.started"
 EVENT_TYPE_OPERATOR_TASK_COMPLETED = "operator.task.completed"
 EVENT_TYPE_OPERATOR_TASK_FAILED = "operator.task.failed"
 EVENT_TYPE_OPERATOR_TASK_CANCELLED = "operator.task.cancelled"
+#: M20 File & Document Intelligence (spec §3): one row per document interaction the owner
+#: initiated — never on a schedule, per the module's "no background crawling" rule.
+EVENT_TYPE_DOCUMENT_SEARCHED = "document.search"
+EVENT_TYPE_DOCUMENT_READ = "document.read"
+EVENT_TYPE_DOCUMENT_ANSWERED = "document.answer"
+EVENT_TYPE_DOCUMENT_COMPARED = "document.compare"
 
 EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_RESEARCH_PLANNED,
@@ -347,6 +360,10 @@ EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_OPERATOR_TASK_COMPLETED,
     EVENT_TYPE_OPERATOR_TASK_FAILED,
     EVENT_TYPE_OPERATOR_TASK_CANCELLED,
+    EVENT_TYPE_DOCUMENT_SEARCHED,
+    EVENT_TYPE_DOCUMENT_READ,
+    EVENT_TYPE_DOCUMENT_ANSWERED,
+    EVENT_TYPE_DOCUMENT_COMPARED,
 )
 
 #: ``alarm.<state_lowercase>`` for every state in ``app.alarms.models.ALARM_STATES``

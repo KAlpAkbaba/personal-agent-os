@@ -35,7 +35,11 @@ from typing import Any
 #: v4 (M19 Digital Operator spec §4, §7) adds the operator's own channel
 #: (``operator.running`` / ``operator.verifying`` / ``operator.failed``), published from
 #: ``OperatorService`` transitions, plus the ``operator`` subsystem. Same additive rule.
-CONTRACT_VERSION = 4
+#: v5 (M20 File & Document Intelligence spec §3) adds ``document.analysis``, published
+#: around every device call and answer with metadata ``{file, part}``, plus the
+#: ``documents`` subsystem. Same additive rule: a v4 renderer keeps working and simply
+#: never sees it.
+CONTRACT_VERSION = 5
 
 #: Metadata value bounds. Numbers are floats in [0, 1] except where noted; strings are
 #: short machine tokens, never prose.
@@ -131,6 +135,12 @@ class UiState(StrEnum):
     OPERATOR_VERIFYING = "operator.verifying"
     OPERATOR_FAILED = "operator.failed"
 
+    #: M20 (spec §3, §7): the File & Document Intelligence channel. Published around
+    #: every device call and answer, metadata ``{file, part}`` (``part`` one of
+    #: "summary"/"answer" when the state is about a specific kind of result) — never to
+    #: animate a surge, the same rule every other channel here follows.
+    DOCUMENT_ANALYSIS = "document.analysis"
+
 
 UI_STATES: tuple[str, ...] = tuple(s.value for s in UiState)
 
@@ -154,6 +164,8 @@ SUBSYSTEMS: tuple[str, ...] = (
     "ambient",
     # M19: the Digital Operator publishes operator.running/verifying/failed (spec §7).
     "operator",
+    # M20: File & Document Intelligence publishes document.analysis (spec §7).
+    "documents",
 )
 
 SEVERITIES: tuple[str, ...] = ("info", "notice", "warning", "critical")

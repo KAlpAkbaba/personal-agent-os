@@ -31,6 +31,7 @@ from app.db import build_engine, build_session_factory
 from app.devices.commands import DeviceCommandClient, register_broker_runtime
 from app.devices.routes import router as devices_router
 from app.devices.status import get_status_registry
+from app.documents.service import DocumentService
 from app.evolution.routes import router as evolution_router
 from app.evolution.runtime import EvolutionRuntime
 from app.experience.routes import router as experience_router
@@ -170,6 +171,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # ask "is a task running?" from record_client_events, which builds no ToolContext.
     operator_service = OperatorService()
     register_operator_service(operator_service)
+    # M20 (docs/M20_FILE_DOCUMENT_INTELLIGENCE_SPEC.md §3): File & Document Intelligence's
+    # own service, reading the SAME device port every other family holds — one desktop/
+    # file authority, never a second path. No process-wide registry of its own (unlike
+    # OperatorService): nothing outside a tool call needs to ask "is a read running?".
+    document_service = DocumentService()
     voice_realtime.register_live(
         wake_sequence=wake_sequence,
         device_statuses=get_status_registry(),
@@ -180,6 +186,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         settings=settings,
         device_action=device_action,
         operator=operator_service,
+        document_service=document_service,
     )
 
     def _build_routine_dispatcher() -> ActionDispatcher:
@@ -334,6 +341,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.device_statuses = get_status_registry()
     app.state.alarm_audio_store = get_audio_store()
     app.state.operator_service = operator_service
+    app.state.document_service = document_service
     # Scoped CORS: the web shell is a separate origin from the API. Allow only
     # the configured loopback/private web origins (never "*"); M0 review #3.
     app.add_middleware(

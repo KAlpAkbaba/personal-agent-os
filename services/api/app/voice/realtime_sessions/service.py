@@ -844,9 +844,7 @@ def _focus_on_spoken_result(
 
     if not focus_module.is_completed(db, task_id):
         return  # a failed or insufficient run is nothing to point at
-    focus_module.set_focus(
-        db, task_id, source=FOCUS_RESULT_JUST_SPOKEN, session_id=row.id, now=now
-    )
+    focus_module.set_focus(db, task_id, source=FOCUS_RESULT_JUST_SPOKEN, session_id=row.id, now=now)
 
 
 def complete_tool_call(
@@ -1106,6 +1104,10 @@ def record_client_events(
     #: ringing-aware fact for the operator's own Cancel/Status pair. A process-wide
     #: registry (app.operator.service), not a DB read: the running task is in-memory.
     operator_running_known: bool | None = None
+    #: M20 (docs/M20_FILE_DOCUMENT_INTELLIGENCE_SPEC.md §3): whether a ``document`` object
+    #: focus exists right now - the same lazy, once-per-request discipline as the three
+    #: flags above, read from the durable focus stack rather than a device/process registry.
+    document_focused_known: bool | None = None
     accepted = 0
     sideband_payloads: list[tuple[str, dict[str, Any]]] = []
     for ev in events:
@@ -1143,6 +1145,16 @@ def record_client_events(
                     operator_running_known = bool(svc is not None and svc.is_running())
                 except Exception:  # noqa: BLE001 - a process with no operator runtime
                     operator_running_known = False
+            if document_focused_known is None:
+                from app.operator import focus as document_focus_module
+                from app.operator.models import FOCUS_KIND_DOCUMENT
+
+                try:
+                    document_focused_known = (
+                        document_focus_module.current(db, FOCUS_KIND_DOCUMENT) is not None
+                    )
+                except Exception:  # noqa: BLE001 - a deployment without the focus table
+                    document_focused_known = False
             intent: ResolvedIntent = resolve_intent(
                 text,
                 session_state=RealtimeState(fsm) if fsm else None,
@@ -1150,6 +1162,7 @@ def record_client_events(
                 has_completed_research=research_context_known,
                 alarm_ringing=alarm_ringing_known,
                 operator_running=operator_running_known,
+                document_focused=document_focused_known,
             )
             ctx["last_intent"] = intent.intent.value
             # ADR-0075: the LATEST resolved utterance of this session, kept on the
@@ -1178,6 +1191,13 @@ def record_client_events(
                 "text_to_type": intent.text_to_type,
                 "shell_query": intent.shell_query,
                 "window_ref": intent.window_ref,
+                # M20 (spec §3): the document fields the owner's WORDS carried, for the
+                # same "owner's words win over the model's argument" reason.
+                "document_ref": intent.document_ref,
+                "question": intent.question,
+                "pattern": intent.pattern,
+                "folder": intent.folder,
+                "extensions": intent.extensions,
                 # ADR-0076. The research SHAPE, decided without the "does a completed
                 # research exist?" precondition (that precondition is what let a deictic
                 # follow-up on an empty history become a crawl), and WHICH research the
@@ -1188,9 +1208,7 @@ def record_client_events(
                 "research_shape": classify_research_shape(
                     intent.tokens, query_kind=intent.query_kind
                 ),
-                "reference": (
-                    intent.reference.as_dict() if intent.reference is not None else None
-                ),
+                "reference": (intent.reference.as_dict() if intent.reference is not None else None),
             }
             resolved.append(
                 {"t_ms": t_ms, "turn": turn, **intent.to_dict(), "normalized_text": None}

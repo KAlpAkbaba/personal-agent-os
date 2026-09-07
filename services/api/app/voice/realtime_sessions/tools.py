@@ -49,6 +49,10 @@ from app.voice.realtime import RealtimeState
 from app.voice.realtime_sessions import actions
 from app.voice.realtime_sessions.sideband import SB_NARRATION_CURSOR, SB_PLAN_CHANGED
 from app.voice.realtime_sessions.tools_ambient import register_ambient_tools
+from app.voice.realtime_sessions.tools_documents import (
+    DOCUMENT_TOOL_NAMES,
+    register_documents_tools,
+)
 from app.voice.realtime_sessions.tools_evolution import register_evolution_tools
 from app.voice.realtime_sessions.tools_operator import register_operator_tools
 
@@ -516,6 +520,12 @@ RESEARCH_EMPTY_ANSWER_TR = "Bu araştırma için anlatabileceğim bir sonuç bul
 #: below (never a second copy of it).
 OPERATOR_CLARIFYING_TOOLS: frozenset[str] = frozenset({"operator.window_control", "operator.type"})
 
+#: M20 (docs/M20_FILE_DOCUMENT_INTELLIGENCE_SPEC.md §3): every document tool may answer
+#: "Hangi belge?" / "Dönebileceğim önceki bir belge yok efendim." rather than a receipt —
+#: the same non-research extension of the ADR-0077 contract the operator family already
+#: gets, never a second copy of it.
+DOCUMENT_CLARIFYING_TOOLS: frozenset[str] = frozenset(DOCUMENT_TOOL_NAMES)
+
 
 def result_is_research_bound(tool_name: str, result: Any) -> bool:
     """Whether a handler's result falls under the research result contract (ADR-0077)."""
@@ -552,7 +562,7 @@ def terminal_status_for(tool_name: str, result: Any) -> tuple[str, str | None]:
 
     if not result_is_research_bound(tool_name, result):
         if (
-            tool_name in OPERATOR_CLARIFYING_TOOLS
+            tool_name in OPERATOR_CLARIFYING_TOOLS | DOCUMENT_CLARIFYING_TOOLS
             and isinstance(result, dict)
             and result.get("status") == RESULT_NEEDS_CLARIFICATION
             and str(result.get("speech") or "").strip()
@@ -786,7 +796,7 @@ def _followup(
 
 
 def research_explain(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
-    """"Bunu anlat." / "Teknik anlat." — answered from the FOCUSED research's own report.
+    """ "Bunu anlat." / "Teknik anlat." — answered from the FOCUSED research's own report.
 
     The level is the model's only argument, and even it is a presentation choice; which
     research is never one. Nothing here starts, resumes or re-runs anything.
@@ -811,14 +821,14 @@ def research_explain(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, A
 
 
 def research_sources(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
-    """"Bunun kaynaklarını söyle." — the publishers behind THAT report."""
+    """ "Bunun kaynaklarını söyle." — the publishers behind THAT report."""
     from app.research.answers import sources_speech
 
     return _followup(ctx, lambda report, _resolution: sources_speech(report))
 
 
 def research_finding_detail(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
-    """"Birinci bulguyu detaylandır." — one finding of the focused research, in full."""
+    """ "Birinci bulguyu detaylandır." — one finding of the focused research, in full."""
     from app.research.answers import finding_detail_speech
 
     raw = arguments.get("index")
@@ -1167,9 +1177,7 @@ def activity_explain(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, A
                 resolved.tokens, query_kind=resolved.query_kind
             ),
             "query_kind": resolved.query_kind,
-            "reference": (
-                resolved.reference.as_dict() if resolved.reference is not None else None
-            ),
+            "reference": (resolved.reference.as_dict() if resolved.reference is not None else None),
             "intent": resolved.intent.value,
         }
     else:
@@ -1593,6 +1601,8 @@ def default_registry() -> ToolRegistry:
     register_evolution_tools(reg)
     # M19 (docs/M19_DIGITAL_OPERATOR_SPEC.md §4): the Digital Operator's voice tools.
     register_operator_tools(reg)
+    # M20 (docs/M20_FILE_DOCUMENT_INTELLIGENCE_SPEC.md §4): File & Document Intelligence.
+    register_documents_tools(reg)
     return reg
 
 
