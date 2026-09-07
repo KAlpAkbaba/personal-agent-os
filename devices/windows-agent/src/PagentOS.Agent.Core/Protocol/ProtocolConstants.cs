@@ -12,7 +12,9 @@ public static class AgentInfo
 {
     // 0.2.0 (M18.4): the M18.3 alarm/ambient capabilities, the staged worker update and
     // the candidate manifest; a version the installer can tell apart from 0.1.0 on Cloud Core.
-    public const string SoftwareVersion = "0.2.0";
+    // 0.3.0 (M20, ADR-0083): the documents family (file.search/locate/inspect/read/compare,
+    // document.extract) behind the operator gate, and the error classes it needs.
+    public const string SoftwareVersion = "0.3.0";
     public const string Platform = "windows";
 }
 
@@ -128,16 +130,28 @@ public static class AgentCapabilities
     public static IReadOnlyList<string> Operator => OperatorCapabilityNames.All;
 
     /// <summary>
+    /// The documents family (M20, M20_FILE_DOCUMENT_INTELLIGENCE_SPEC.md §2, ADR-0083):
+    /// search, locate, inspect, read and compare files inside the authorised roots and
+    /// extract a document's text and structure with the references an answer cites. It is
+    /// advertised behind the SAME gate as the operator family (<c>OperatorEnabled</c> on both
+    /// halves) because it is the same trust decision: the companion may touch the owner's
+    /// files. Read-only by construction — there is no delete, move or write name.
+    /// </summary>
+    public static IReadOnlyList<string> Documents => DocumentCapabilityNames.All;
+
+    /// <summary>
     /// The manifest this device actually advertises: the desktop names, the alarm pair and
     /// the M18.3 ambient group always, display power, the browser family and the operator
-    /// family only when each is configured. Order is stable (desktop, alarm, ambient,
-    /// display, browser, operator) so a manifest diff between two versions reads as an
-    /// addition rather than a reshuffle.
+    /// family (with the documents family that shares its gate) only when each is
+    /// configured. Order is stable (desktop, alarm, ambient, display, browser, operator,
+    /// documents) so a manifest diff between two versions reads as an addition rather than
+    /// a reshuffle.
     /// </summary>
     public static IReadOnlyList<string> Compose(bool browserEnabled, bool displayPowerEnabled = false, bool operatorEnabled = false)
     {
         var names = new List<string>(
-            Desktop.Count + Alarm.Count + Ambient.Count + DisplayPower.Count + BrowserCapabilities.All.Count + OperatorCapabilityNames.All.Count);
+            Desktop.Count + Alarm.Count + Ambient.Count + DisplayPower.Count + BrowserCapabilities.All.Count
+            + OperatorCapabilityNames.All.Count + DocumentCapabilityNames.All.Count);
         names.AddRange(Desktop);
         names.AddRange(Alarm);
         names.AddRange(Ambient);
@@ -154,6 +168,7 @@ public static class AgentCapabilities
         if (operatorEnabled)
         {
             names.AddRange(OperatorCapabilityNames.All);
+            names.AddRange(DocumentCapabilityNames.All);
         }
 
         return names;
@@ -170,6 +185,9 @@ public static class AgentCapabilities
     /// <summary>M19: a member of the Digital Operator family (never the browser family, which has its own worker).</summary>
     public static bool IsOperator(string capability) => OperatorCapabilityNames.IsMember(capability);
 
+    /// <summary>M20: a member of the documents family — routed like the operator family, gated by the same flag, never a member of it.</summary>
+    public static bool IsDocuments(string capability) => DocumentCapabilityNames.IsMember(capability);
+
     /// <summary>
     /// Every name the Session Companion executes in the owner's interactive session. The
     /// Device Service routes exactly this set over the pipe and refuses everything else
@@ -177,7 +195,7 @@ public static class AgentCapabilities
     /// added here — never by being spelled <c>desktop.</c>-something.
     /// </summary>
     public static bool IsInteractive(string capability)
-        => IsDesktop(capability) || IsAlarm(capability) || IsAmbient(capability) || IsDisplayPower(capability) || IsOperator(capability);
+        => IsDesktop(capability) || IsAlarm(capability) || IsAmbient(capability) || IsDisplayPower(capability) || IsOperator(capability) || IsDocuments(capability);
 
     public static bool IsBrowser(string capability) => BrowserCapabilities.IsFamilyMember(capability);
 }
@@ -266,6 +284,62 @@ public static class OperatorCapabilityNames
     public static bool IsMember(string capability) => All.Contains(capability, StringComparer.Ordinal);
 
     public static bool IsGuarded(string capability) => Guarded.Contains(capability, StringComparer.Ordinal);
+}
+
+/// <summary>
+/// M20_FILE_DOCUMENT_INTELLIGENCE_SPEC.md §2 — the documents family. The wire contract with
+/// Cloud Core's document intelligence (<c>app/documents/</c>) and the fixtures' oracle
+/// (<c>services/api/tests/fixtures/documents/</c>); change the document first. Every name is
+/// an operation the companion executes itself inside the owner's authorised roots; the
+/// bounds below are the spec's, and a result that hits one says <c>truncated: true</c> rather
+/// than cutting silently.
+/// </summary>
+public static class DocumentCapabilityNames
+{
+    public const string FileSearch = "file.search";
+    public const string FileLocate = "file.locate";
+    public const string FileInspect = "file.inspect";
+    public const string FileRead = "file.read";
+    public const string FileCompare = "file.compare";
+    public const string DocumentExtract = "document.extract";
+
+    /// <summary>Every documents name, in the order of the specification's table.</summary>
+    public static readonly IReadOnlyList<string> All =
+    [
+        FileSearch, FileLocate, FileInspect, FileRead, FileCompare, DocumentExtract,
+    ];
+
+    /// <summary>§2: <c>file.search</c> answers at most this many records.</summary>
+    public const int MaxSearchResults = 200;
+
+    /// <summary>§2: <c>file.search</c> looks at no more than this many directory entries.</summary>
+    public const int MaxSearchEntries = 20_000;
+
+    /// <summary>§2: <c>file.search</c> stops after this long, whatever it has found.</summary>
+    public static readonly TimeSpan SearchTimeout = TimeSpan.FromSeconds(10);
+
+    /// <summary>§2: <c>file.read</c> returns at most this many characters per call.</summary>
+    public const int MaxReadChars = 65_536;
+
+    /// <summary>§2: <c>document.extract</c> carries at most this many characters of block text.</summary>
+    public const int MaxExtractChars = 65_536;
+
+    /// <summary>§2: a file larger than this is not opened for reading or extraction.</summary>
+    public const long MaxFileBytes = 50L * 1024 * 1024;
+
+    /// <summary>§2: a record carries <c>sha256</c> only when the file is at most this large.</summary>
+    public const long Sha256SizeLimit = 8L * 1024 * 1024;
+
+    /// <summary>§2: a PDF is extracted up to this many pages.</summary>
+    public const int MaxPdfPages = 200;
+
+    /// <summary>§2: a worksheet is extracted up to this many rows.</summary>
+    public const int MaxSheetRows = 2_000;
+
+    /// <summary>The service's per-command cap for the family: the search bound plus extraction headroom, the same 30 s as the operator family.</summary>
+    public static readonly TimeSpan CommandTimeoutCap = TimeSpan.FromSeconds(30);
+
+    public static bool IsMember(string capability) => All.Contains(capability, StringComparer.Ordinal);
 }
 
 /// <summary>
@@ -448,6 +522,23 @@ public static class ErrorClasses
     /// </summary>
     public const string PostconditionFailed = "postcondition_failed";
 
+    /// <summary>
+    /// M20 (M20_FILE_DOCUMENT_INTELLIGENCE_SPEC.md §2): the device cannot parse the file as
+    /// the kind its name says — a corrupt OOXML package, an encrypted PDF, a binary asked
+    /// for as text, a file over the size bound. Never retryable, and the message names the
+    /// reason; a format the device cannot read is never an empty success.
+    /// </summary>
+    public const string UnsupportedFormat = "unsupported_format";
+
+    /// <summary>
+    /// M20: the file the request names is not there — a <c>file_id</c> this companion never
+    /// issued (or issued for a file since deleted), a path inside the roots that does not
+    /// exist. Never retryable by itself; the planner searches again. Distinct from
+    /// <c>permission_denied</c>, which is what a path OUTSIDE the roots gets whether or not
+    /// it exists, so an answer never reveals anything about the outside.
+    /// </summary>
+    public const string NotFound = "not_found";
+
     public static readonly IReadOnlySet<string> All = new HashSet<string>(StringComparer.Ordinal)
     {
         ValidationError, AuthError, DeviceOffline, CapabilityMissing, DependencyUnavailable,
@@ -455,6 +546,7 @@ public static class ErrorClasses
         CommandExpired, Cancelled, RetryExhausted, ArtifactRenderError, VoiceProviderError,
         SecurityScopeError, InternalBug, BrowserLifecycleViolation,
         FocusMismatch, PermissionDenied, PostconditionFailed,
+        UnsupportedFormat, NotFound,
     };
 }
 

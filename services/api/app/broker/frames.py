@@ -48,6 +48,13 @@ ERROR_CLASSES = (
     "focus_mismatch",
     "permission_denied",
     "postcondition_failed",
+    # M20 (M20_FILE_DOCUMENT_INTELLIGENCE_SPEC.md §2, ADR-0083): the documents family's two
+    # device answers. unsupported_format — the device cannot parse the file as its kind (a
+    # corrupt package, an encrypted PDF, a binary asked for as text, over the size bound);
+    # never an empty success. not_found — a file_id the companion never issued or a path
+    # inside the roots that is not there (outside the roots stays permission_denied).
+    "unsupported_format",
+    "not_found",
     "internal_bug",
 )
 
