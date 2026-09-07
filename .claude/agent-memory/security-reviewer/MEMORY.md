@@ -1,4 +1,4 @@
-# Memory Index
+﻿# Memory Index
 
 - [M1 device broker security review](m1-device-broker-security-review.md) — summary + pointer to full findings for the M1 device broker/Windows agent review (2026-08-31)
 - [M1 pipe identity gap](project-m1-pipe-identity-gap.md) — named-pipe ACL/naming breaks once Device Service becomes a real Windows Service (SYSTEM); recheck at that milestone
@@ -10,7 +10,6 @@
 - [M9 identity/API auth security review](m9-identity-security-review.md) — pointer to M9 findings (2026-09-01); Medium: announcer stamps announced_at before delivery (can lose a push on crash); Medium: require_scope never wired into any route
 - [M12 voice Arbor/noise security review](m12-voice-arbor-noise-security-review.md) — pointer to M12 findings (2026-09-02); no Critical/High; Low: fail-open voice validation via getattr duck-typing if a future provider lacks require_supported_voice
 - [M19 Digital Operator security review](m19-digital-operator-security-review.md) — pointer to M19 findings (2026-09-07); High: OperatorRoots junction escape (file.open/reveal, terminal Get-ChildItem); Medium: focus-guard batch race on long keyboard.type, unrestricted app.launch args
-- [M20 File & Document Intelligence security review](m20-file-document-intelligence-review.md) — pointer to M20 device-half findings (2026-09-08); High: OOXML decompression bomb crashes Session Companion via OOM (verified live, DOCX/XLSX/PPTX); Low: secret-name existence oracle, text-extraction memory amplification
+- [M20 File & Document Intelligence security review (device half)](m20-file-document-intelligence-review.md) — pointer to M20 device-half findings (2026-09-08); High: OOXML decompression bomb crashes Session Companion via OOM (verified live, DOCX/XLSX/PPTX); Low: secret-name existence oracle, text-extraction memory amplification
+- [M20 File & Document Intelligence security review (cloud+web half)](m20-cloud-web-document-intelligence-review.md) — pointer to M20 Cloud Core/web findings (2026-09-08); no Critical/High; Medium: no Cloud-Core-side validation of folder/pattern device args (device-only confinement)
 - [Junction escape recurring pattern](junction-escape-recurring-pattern.md) — feedback: leaf-only is_symlink() checks miss Windows junctions on ancestor dirs; verify with a real junction, not reasoning. Seen in M3, M8 and M19 (OperatorRoots); M20's AuthorisedRoots reuse confirmed sound.
-- [Junction escape recurring pattern](junction-escape-recurring-pattern.md) — feedback: leaf-only is_symlink() checks miss Windows junctions on ancestor dirs; verify with a real junction, not reasoning. Seen in M3, M8 and M19 (OperatorRoots).
-- [Junction escape recurring pattern](junction-escape-recurring-pattern.md) — feedback: leaf-only is_symlink() checks miss Windows junctions on ancestor dirs; verify with a real junction, not reasoning. Seen in M3 and M8.
