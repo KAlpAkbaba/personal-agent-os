@@ -1,0 +1,1716 @@
+{
+    "run_id":  "m18-4-2026-09-07-172512",
+    "started_at":  "2026-09-07T17:25:12.3498292Z",
+    "cloud":  "http://100.90.158.26:8001",
+    "head_sha":  "e003e41d2b1a432f6e31e00ffd54cc4f8cc94875",
+    "phases":  {
+                   "A_before":  {
+                                    "at":  "2026-09-07T17:25:13.8739791Z",
+                                    "health_status":  "ok",
+                                    "release":  {
+                                                    "version_model":  1,
+                                                    "component":  "cloud-core",
+                                                    "version":  "c1093028cd416f5fc32def72dd25abdb371e83af",
+                                                    "version_source":  "env",
+                                                    "app_version":  "0.1.0",
+                                                    "contracts":  {
+                                                                      "action":  12,
+                                                                      "ui_state":  3,
+                                                                      "ambient":  1,
+                                                                      "voice_qualification":  1
+                                                                  },
+                                                    "last_known_good":  "c1093028cd416f5fc32def72dd25abdb371e83af",
+                                                    "last_known_good_source":  "env",
+                                                    "environment":  "prod",
+                                                    "started_at":  "2026-09-07T15:25:18.048342Z",
+                                                    "uptime_s":  7195.500648
+                                                },
+                                    "action_contract_version":  12,
+                                    "realtime_contract":  2,
+                                    "edge_active":  "blue",
+                                    "devices":  [
+                                                    {
+                                                        "device_id":  "3f60fdb5-5022-48cf-bb3c-d7192466b701",
+                                                        "name":  "MAIL",
+                                                        "presence":  "online",
+                                                        "version":  "unknown",
+                                                        "capability_count":  29,
+                                                        "last_seen_at":  "2026-09-07T17:25:04.094009Z"
+                                                    }
+                                                ],
+                                    "alarm_count":  1,
+                                    "alarm_ids":  [
+                                                      ""
+                                                  ],
+                                    "routine_count":  1,
+                                    "incident_count":  1,
+                                    "opportunity_count":  1,
+                                    "ledger_summary":  {
+                                                           "since":  "2026-09-06T17:25:13.988678Z",
+                                                           "by_status":  {
+                                                                             "started":  2,
+                                                                             "info":  23,
+                                                                             "failed":  2,
+                                                                             "completed":  102
+                                                                         },
+                                                           "by_subsystem":  {
+                                                                                "deployment":  16,
+                                                                                "evolution":  21,
+                                                                                "voice":  32,
+                                                                                "research":  29,
+                                                                                "ledger":  31
+                                                                            },
+                                                           "latest":  {
+                                                                          "event_id":  "be9667c8-9f54-43e8-86d1-e10d2fbaa4b1",
+                                                                          "occurred_at":  "2026-09-07T17:13:58.484136Z",
+                                                                          "recorded_at":  "2026-09-07T17:13:58.485548Z",
+                                                                          "event_type":  "evolution.resumed",
+                                                                          "subsystem":  "evolution",
+                                                                          "module":  null,
+                                                                          "version":  "1",
+                                                                          "status":  "completed",
+                                                                          "severity":  "info",
+                                                                          "action":  "evolution_resumed",
+                                                                          "result":  "resumed",
+                                                                          "production_state":  "n/a",
+                                                                          "command_id":  null,
+                                                                          "trace_id":  null,
+                                                                          "research_job_id":  null,
+                                                                          "browser_session_id":  null,
+                                                                          "related_goal_id":  null,
+                                                                          "related_module_id":  null,
+                                                                          "evidence_refs":  [
+
+                                                                                            ],
+                                                                          "factual_summary":  "Kendi kendini geliştirme yeniden açıldı.",
+                                                                          "detail_json":  {
+                                                                                              "actor":  "rest",
+                                                                                              "paused":  false,
+                                                                                              "reason":  "m18-4 qualification"
+                                                                                          },
+                                                                          "source":  "rest",
+                                                                          "source_ref":  "evolution_pause:off:2026-09-07T17:13:58.484136+00:00"
+                                                                      }
+                                                       }
+                                },
+                   "G_after_idle_up_crash_output_tail":  "#16 unpacking to docker.io/pagentos/cloud-core:e003e41d2b1a432f6e31e00ffd54cc4f8cc94875 2.6s done\r\n#16 DONE 2.7s\r\napplying migrations (expand-only)...\r\nINFO  [alembic.runtime.migration] Context impl PostgresqlImpl.\r\nINFO  [alembic.runtime.migration] Will assume transactional DDL.\r\nstarting the idle colour api-green on e003e41d2b1a432f6e31e00ffd54cc4f8cc94875 (api-blue keeps serving)...\r\n Container pagentos-prod-api-green Waiting \r\n Container pagentos-prod-api-green Healthy \r\nINTERRUPT: simulated crash at \u0027after_idle_up\u0027 (PAGENTOS_INTERRUPT_AT)\r\nssh.exe : /bin/bash: line 1: 865873 Killed                  PAGENTOS_INTERRUPT_AT=after_idle_up PAGENTOS_WAIT_STEP_S=3 \r\nPAGENTOS_DRAIN_S=5 bash app.next/scripts/cloud/release-cloud-core-bluegreen.sh e003e41d2b1a432f6e31e00ffd54cc4f8cc94875\r\n 2\u003e\u00261\r\nAt E:\\AI\\PersonalAgentOS_Claude_Autonomous_Build_Package_v1\\scripts\\core\\qualify-m18-4.ps1:132 char:16\r\n+ ...      $out = \u0026 $ssh -n -o BatchMode=yes -o ConnectTimeout=20 -o Server ...\r\n+                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\r\n    + CategoryInfo          : NotSpecified: (/bin/bash: line...4f8cc94875 2\u003e\u00261:String) [], RemoteException\r\n    + FullyQualifiedErrorId : NativeCommandError\r\n \r\nEXIT=137\r\n",
+                   "G_after_idle_up_host_after_crash":  "pagentos-prod-api-green Up 14 seconds (healthy)\r\npagentos-prod-edge Up 49 minutes\r\npagentos-prod-api-blue Up 2 hours (healthy)\r\n\r\nblue\r\nupstream pagentos_api { server api-blue:8001; }\r\nupstream pagentos_devices { server api-blue:8001; }\r\nRELEASE=c1093028cd416f5fc32def72dd25abdb371e83af\r\n",
+                   "G_after_idle_up_snapshot_after_crash":  {
+                                                                "at":  "2026-09-07T17:25:59.8070970Z",
+                                                                "health_status":  "ok",
+                                                                "release":  {
+                                                                                "version_model":  1,
+                                                                                "component":  "cloud-core",
+                                                                                "version":  "c1093028cd416f5fc32def72dd25abdb371e83af",
+                                                                                "version_source":  "env",
+                                                                                "app_version":  "0.1.0",
+                                                                                "contracts":  {
+                                                                                                  "action":  12,
+                                                                                                  "ui_state":  3,
+                                                                                                  "ambient":  1,
+                                                                                                  "voice_qualification":  1
+                                                                                              },
+                                                                                "last_known_good":  "c1093028cd416f5fc32def72dd25abdb371e83af",
+                                                                                "last_known_good_source":  "env",
+                                                                                "environment":  "prod",
+                                                                                "started_at":  "2026-09-07T15:25:18.048342Z",
+                                                                                "uptime_s":  7241.483882
+                                                                            },
+                                                                "action_contract_version":  12,
+                                                                "realtime_contract":  2,
+                                                                "edge_active":  "blue",
+                                                                "devices":  [
+                                                                                {
+                                                                                    "device_id":  "3f60fdb5-5022-48cf-bb3c-d7192466b701",
+                                                                                    "name":  "MAIL",
+                                                                                    "presence":  "online",
+                                                                                    "version":  "unknown",
+                                                                                    "capability_count":  29,
+                                                                                    "last_seen_at":  "2026-09-07T17:25:54.162052Z"
+                                                                                }
+                                                                            ],
+                                                                "alarm_count":  1,
+                                                                "alarm_ids":  [
+                                                                                  ""
+                                                                              ],
+                                                                "routine_count":  1,
+                                                                "incident_count":  1,
+                                                                "opportunity_count":  1,
+                                                                "ledger_summary":  {
+                                                                                       "since":  "2026-09-06T17:25:59.928909Z",
+                                                                                       "by_status":  {
+                                                                                                         "started":  2,
+                                                                                                         "info":  23,
+                                                                                                         "failed":  2,
+                                                                                                         "completed":  103
+                                                                                                     },
+                                                                                       "by_subsystem":  {
+                                                                                                            "deployment":  16,
+                                                                                                            "evolution":  21,
+                                                                                                            "voice":  32,
+                                                                                                            "research":  29,
+                                                                                                            "ledger":  32
+                                                                                                        },
+                                                                                       "latest":  {
+                                                                                                      "event_id":  "e784d499-b759-4d38-97c5-4e08ebf8c6da",
+                                                                                                      "occurred_at":  "2026-09-07T17:25:52.628609Z",
+                                                                                                      "recorded_at":  "2026-09-07T17:25:52.642925Z",
+                                                                                                      "event_type":  "ledger.backfill",
+                                                                                                      "subsystem":  "ledger",
+                                                                                                      "module":  null,
+                                                                                                      "version":  null,
+                                                                                                      "status":  "completed",
+                                                                                                      "severity":  "info",
+                                                                                                      "action":  "backfill_run",
+                                                                                                      "result":  null,
+                                                                                                      "production_state":  "n/a",
+                                                                                                      "command_id":  null,
+                                                                                                      "trace_id":  null,
+                                                                                                      "research_job_id":  null,
+                                                                                                      "browser_session_id":  null,
+                                                                                                      "related_goal_id":  null,
+                                                                                                      "related_module_id":  null,
+                                                                                                      "evidence_refs":  [
+
+                                                                                                                        ],
+                                                                                                      "factual_summary":  "Kayıt defteri 0 yeni olay ekledi.",
+                                                                                                      "detail_json":  {
+                                                                                                                          "created":  {
+
+                                                                                                                                      },
+                                                                                                                          "skipped":  {
+                                                                                                                                          "voice_session":  66,
+                                                                                                                                          "research_failed":  4,
+                                                                                                                                          "research_completed":  6,
+                                                                                                                                          "research_quality_gate":  21
+                                                                                                                                      },
+                                                                                                                          "examined":  {
+                                                                                                                                           "voice_session":  66,
+                                                                                                                                           "research_failed":  4,
+                                                                                                                                           "research_completed":  6,
+                                                                                                                                           "research_quality_gate":  21
+                                                                                                                                       },
+                                                                                                                          "total_created":  0
+                                                                                                                      },
+                                                                                                      "source":  "live",
+                                                                                                      "source_ref":  "ledger_backfill:2026-09-07T17:25:52.628609+00:00"
+                                                                                                  }
+                                                                                   }
+                                                            },
+                   "G_after_idle_up_reconcile_output":  "reconcile: marker=blue RELEASE=c1093028cd416f5fc32def72dd25abdb371e83af LKG=c1093028cd416f5fc32def72dd25abdb371e83af blue=c1093028cd416f5fc32def72dd25abdb371e83af green=e003e41d2b1a432f6e31e00ffd54cc4f8cc94875 running=[api-blue api-green]\r\nreconcile: api-blue healthy (release c1093028cd416f5fc32def72dd25abdb371e83af) -\u003e canonical\r\n2026/09/07 17:26:05 [notice] 297#297: signal process started\r\nreconcile: edge -\u003e api-blue (both upstreams)\r\nreconcile: api-green (e003e41d2b1a432f6e31e00ffd54cc4f8cc94875) runs without a completed promotion: a half-promoted candidate; draining and stopping it (it does not become live)\r\n Container pagentos-prod-api-green Stopped \r\nreconcile: tree: app is the interrupted candidate\u0027s (e003e41d2b1a432f6e31e00ffd54cc4f8cc94875); restoring the canonical tree from app.prev (candidate kept as app.interrupted)\r\nRECONCILE OK: api-blue is canonical (release c1093028cd416f5fc32def72dd25abdb371e83af); markers, upstreams and containers agree\r\nEXIT=0\r\n",
+                   "G_after_idle_up_snapshot_after_reconcile":  {
+                                                                    "at":  "2026-09-07T17:26:13.1038117Z",
+                                                                    "health_status":  "ok",
+                                                                    "release":  {
+                                                                                    "version_model":  1,
+                                                                                    "component":  "cloud-core",
+                                                                                    "version":  "c1093028cd416f5fc32def72dd25abdb371e83af",
+                                                                                    "version_source":  "env",
+                                                                                    "app_version":  "0.1.0",
+                                                                                    "contracts":  {
+                                                                                                      "action":  12,
+                                                                                                      "ui_state":  3,
+                                                                                                      "ambient":  1,
+                                                                                                      "voice_qualification":  1
+                                                                                                  },
+                                                                                    "last_known_good":  "c1093028cd416f5fc32def72dd25abdb371e83af",
+                                                                                    "last_known_good_source":  "env",
+                                                                                    "environment":  "prod",
+                                                                                    "started_at":  "2026-09-07T15:25:18.048342Z",
+                                                                                    "uptime_s":  7254.782162
+                                                                                },
+                                                                    "action_contract_version":  12,
+                                                                    "realtime_contract":  2,
+                                                                    "edge_active":  "blue",
+                                                                    "devices":  [
+                                                                                    {
+                                                                                        "device_id":  "3f60fdb5-5022-48cf-bb3c-d7192466b701",
+                                                                                        "name":  "MAIL",
+                                                                                        "presence":  "online",
+                                                                                        "version":  "unknown",
+                                                                                        "capability_count":  29,
+                                                                                        "last_seen_at":  "2026-09-07T17:26:04.149585Z"
+                                                                                    }
+                                                                                ],
+                                                                    "alarm_count":  1,
+                                                                    "alarm_ids":  [
+                                                                                      ""
+                                                                                  ],
+                                                                    "routine_count":  1,
+                                                                    "incident_count":  1,
+                                                                    "opportunity_count":  1,
+                                                                    "ledger_summary":  {
+                                                                                           "since":  "2026-09-06T17:26:13.228060Z",
+                                                                                           "by_status":  {
+                                                                                                             "started":  2,
+                                                                                                             "info":  23,
+                                                                                                             "failed":  2,
+                                                                                                             "completed":  103
+                                                                                                         },
+                                                                                           "by_subsystem":  {
+                                                                                                                "deployment":  16,
+                                                                                                                "evolution":  21,
+                                                                                                                "voice":  32,
+                                                                                                                "research":  29,
+                                                                                                                "ledger":  32
+                                                                                                            },
+                                                                                           "latest":  {
+                                                                                                          "event_id":  "e784d499-b759-4d38-97c5-4e08ebf8c6da",
+                                                                                                          "occurred_at":  "2026-09-07T17:25:52.628609Z",
+                                                                                                          "recorded_at":  "2026-09-07T17:25:52.642925Z",
+                                                                                                          "event_type":  "ledger.backfill",
+                                                                                                          "subsystem":  "ledger",
+                                                                                                          "module":  null,
+                                                                                                          "version":  null,
+                                                                                                          "status":  "completed",
+                                                                                                          "severity":  "info",
+                                                                                                          "action":  "backfill_run",
+                                                                                                          "result":  null,
+                                                                                                          "production_state":  "n/a",
+                                                                                                          "command_id":  null,
+                                                                                                          "trace_id":  null,
+                                                                                                          "research_job_id":  null,
+                                                                                                          "browser_session_id":  null,
+                                                                                                          "related_goal_id":  null,
+                                                                                                          "related_module_id":  null,
+                                                                                                          "evidence_refs":  [
+
+                                                                                                                            ],
+                                                                                                          "factual_summary":  "Kayıt defteri 0 yeni olay ekledi.",
+                                                                                                          "detail_json":  {
+                                                                                                                              "created":  {
+
+                                                                                                                                          },
+                                                                                                                              "skipped":  {
+                                                                                                                                              "voice_session":  66,
+                                                                                                                                              "research_failed":  4,
+                                                                                                                                              "research_completed":  6,
+                                                                                                                                              "research_quality_gate":  21
+                                                                                                                                          },
+                                                                                                                              "examined":  {
+                                                                                                                                               "voice_session":  66,
+                                                                                                                                               "research_failed":  4,
+                                                                                                                                               "research_completed":  6,
+                                                                                                                                               "research_quality_gate":  21
+                                                                                                                                           },
+                                                                                                                              "total_created":  0
+                                                                                                                          },
+                                                                                                          "source":  "live",
+                                                                                                          "source_ref":  "ledger_backfill:2026-09-07T17:25:52.628609+00:00"
+                                                                                                      }
+                                                                                       }
+                                                                },
+                   "G_after_idle_up_host_after_reconcile":  "pagentos-prod-api-blue Up 2 hours (healthy)\r\n\r\nc1093028cd416f5fc32def72dd25abdb371e83af\r\nc1093028cd416f5fc32def72dd25abdb371e83af\r\n/opt/pagentos/app.interrupted\r\n2026-09-07T17:26:09Z\r\n",
+                   "G_after_switch_crash_output_tail":  "health ok on api-green\r\nrealtime contract_version 2 served (matches the tree)\r\napi-green reports release e003e41d2b1a432f6e31e00ffd54cc4f8cc94875\r\n2026/09/07 17:26:46 [notice] 310#310: signal process started\r\n2026/09/07 17:26:48 [notice] 323#323: signal process started\r\ndevice handoff UNAVAILABLE: api-blue has no drain route (a release before M18.4 gap 1); LEGACY switch: the device moves when api-blue stops, a presence gap of up to 5s is expected\r\n2026/09/07 17:26:48 [notice] 336#336: signal process started\r\nedge -\u003e api-green\r\nINTERRUPT: simulated crash at \u0027after_switch\u0027 (PAGENTOS_INTERRUPT_AT)\r\nssh.exe : /bin/bash: line 1: 868253 Killed                  PAGENTOS_INTERRUPT_AT=after_switch PAGENTOS_WAIT_STEP_S=3 P\r\nAGENTOS_DRAIN_S=5 bash app.next/scripts/cloud/release-cloud-core-bluegreen.sh e003e41d2b1a432f6e31e00ffd54cc4f8cc94875 \r\n2\u003e\u00261\r\nAt E:\\AI\\PersonalAgentOS_Claude_Autonomous_Build_Package_v1\\scripts\\core\\qualify-m18-4.ps1:132 char:16\r\n+ ...      $out = \u0026 $ssh -n -o BatchMode=yes -o ConnectTimeout=20 -o Server ...\r\n+                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\r\n    + CategoryInfo          : NotSpecified: (/bin/bash: line...4f8cc94875 2\u003e\u00261:String) [], RemoteException\r\n    + FullyQualifiedErrorId : NativeCommandError\r\n \r\nEXIT=137\r\n",
+                   "G_after_switch_host_after_crash":  "pagentos-prod-api-green Up 13 seconds (healthy)\r\npagentos-prod-edge Up 50 minutes\r\npagentos-prod-api-blue Up 2 hours (healthy)\r\n\r\ngreen\r\nupstream pagentos_api { server api-green:8001; }\r\nupstream pagentos_devices { server api-green:8001; }\r\nRELEASE=c1093028cd416f5fc32def72dd25abdb371e83af\r\n",
+                   "G_after_switch_snapshot_after_crash":  {
+                                                               "at":  "2026-09-07T17:26:53.9090510Z",
+                                                               "health_status":  "ok",
+                                                               "release":  {
+                                                                               "version_model":  1,
+                                                                               "component":  "cloud-core",
+                                                                               "version":  "e003e41d2b1a432f6e31e00ffd54cc4f8cc94875",
+                                                                               "version_source":  "env",
+                                                                               "app_version":  "0.1.0",
+                                                                               "contracts":  {
+                                                                                                 "action":  12,
+                                                                                                 "ui_state":  3,
+                                                                                                 "ambient":  1,
+                                                                                                 "voice_qualification":  1
+                                                                                             },
+                                                                               "last_known_good":  "c1093028cd416f5fc32def72dd25abdb371e83af",
+                                                                               "last_known_good_source":  "env",
+                                                                               "environment":  "prod",
+                                                                               "started_at":  "2026-09-07T17:26:41.853577Z",
+                                                                               "uptime_s":  11.403054
+                                                                           },
+                                                               "action_contract_version":  12,
+                                                               "realtime_contract":  2,
+                                                               "edge_active":  "green",
+                                                               "devices":  [
+                                                                               {
+                                                                                   "device_id":  "3f60fdb5-5022-48cf-bb3c-d7192466b701",
+                                                                                   "name":  "MAIL",
+                                                                                   "presence":  "stale",
+                                                                                   "version":  "unknown",
+                                                                                   "capability_count":  29,
+                                                                                   "last_seen_at":  "2026-09-07T17:26:44.166781Z"
+                                                                               }
+                                                                           ],
+                                                               "alarm_count":  1,
+                                                               "alarm_ids":  [
+                                                                                 ""
+                                                                             ],
+                                                               "routine_count":  1,
+                                                               "incident_count":  1,
+                                                               "opportunity_count":  1,
+                                                               "ledger_summary":  {
+                                                                                      "since":  "2026-09-06T17:26:54.028828Z",
+                                                                                      "by_status":  {
+                                                                                                        "started":  2,
+                                                                                                        "info":  23,
+                                                                                                        "failed":  2,
+                                                                                                        "completed":  104
+                                                                                                    },
+                                                                                      "by_subsystem":  {
+                                                                                                           "deployment":  16,
+                                                                                                           "evolution":  21,
+                                                                                                           "voice":  32,
+                                                                                                           "research":  29,
+                                                                                                           "ledger":  33
+                                                                                                       },
+                                                                                      "latest":  {
+                                                                                                     "event_id":  "88ab51b4-c819-4c69-91bd-fa7fc070c554",
+                                                                                                     "occurred_at":  "2026-09-07T17:26:43.678186Z",
+                                                                                                     "recorded_at":  "2026-09-07T17:26:43.699928Z",
+                                                                                                     "event_type":  "ledger.backfill",
+                                                                                                     "subsystem":  "ledger",
+                                                                                                     "module":  null,
+                                                                                                     "version":  null,
+                                                                                                     "status":  "completed",
+                                                                                                     "severity":  "info",
+                                                                                                     "action":  "backfill_run",
+                                                                                                     "result":  null,
+                                                                                                     "production_state":  "n/a",
+                                                                                                     "command_id":  null,
+                                                                                                     "trace_id":  null,
+                                                                                                     "research_job_id":  null,
+                                                                                                     "browser_session_id":  null,
+                                                                                                     "related_goal_id":  null,
+                                                                                                     "related_module_id":  null,
+                                                                                                     "evidence_refs":  [
+
+                                                                                                                       ],
+                                                                                                     "factual_summary":  "Kayıt defteri 0 yeni olay ekledi.",
+                                                                                                     "detail_json":  {
+                                                                                                                         "created":  {
+
+                                                                                                                                     },
+                                                                                                                         "skipped":  {
+                                                                                                                                         "voice_session":  66,
+                                                                                                                                         "research_failed":  4,
+                                                                                                                                         "research_completed":  6,
+                                                                                                                                         "research_quality_gate":  21
+                                                                                                                                     },
+                                                                                                                         "examined":  {
+                                                                                                                                          "voice_session":  66,
+                                                                                                                                          "research_failed":  4,
+                                                                                                                                          "research_completed":  6,
+                                                                                                                                          "research_quality_gate":  21
+                                                                                                                                      },
+                                                                                                                         "total_created":  0
+                                                                                                                     },
+                                                                                                     "source":  "live",
+                                                                                                     "source_ref":  "ledger_backfill:2026-09-07T17:26:43.678186+00:00"
+                                                                                                 }
+                                                                                  }
+                                                           },
+                   "G_after_switch_legacy_switch":  true,
+                   "G_after_switch_reconcile_output":  "reconcile: marker=green RELEASE=c1093028cd416f5fc32def72dd25abdb371e83af LKG=c1093028cd416f5fc32def72dd25abdb371e83af blue=c1093028cd416f5fc32def72dd25abdb371e83af green=e003e41d2b1a432f6e31e00ffd54cc4f8cc94875 running=[api-blue api-green]\r\nreconcile: the marker names api-green (e003e41d2b1a432f6e31e00ffd54cc4f8cc94875) but the last COMPLETED promotion is c1093028cd416f5fc32def72dd25abdb371e83af on api-blue: the promotion of api-green was interrupted; api-blue is canonical\r\nreconcile: api-blue healthy (release c1093028cd416f5fc32def72dd25abdb371e83af) -\u003e canonical\r\n2026/09/07 17:26:59 [notice] 348#348: signal process started\r\nreconcile: edge -\u003e api-blue (both upstreams)\r\nreconcile: api-green (e003e41d2b1a432f6e31e00ffd54cc4f8cc94875) runs without a completed promotion: a half-promoted candidate; draining and stopping it (it does not become live)\r\n Container pagentos-prod-api-green Stopped \r\nreconcile: tree: app is the interrupted candidate\u0027s (e003e41d2b1a432f6e31e00ffd54cc4f8cc94875); restoring the canonical tree from app.prev (candidate kept as app.interrupted)\r\nRECONCILE OK: api-blue is canonical (release c1093028cd416f5fc32def72dd25abdb371e83af); markers, upstreams and containers agree\r\nEXIT=0\r\n",
+                   "G_after_switch_snapshot_after_reconcile":  {
+                                                                   "at":  "2026-09-07T17:27:07.4865169Z",
+                                                                   "health_status":  "ok",
+                                                                   "release":  {
+                                                                                   "version_model":  1,
+                                                                                   "component":  "cloud-core",
+                                                                                   "version":  "c1093028cd416f5fc32def72dd25abdb371e83af",
+                                                                                   "version_source":  "env",
+                                                                                   "app_version":  "0.1.0",
+                                                                                   "contracts":  {
+                                                                                                     "action":  12,
+                                                                                                     "ui_state":  3,
+                                                                                                     "ambient":  1,
+                                                                                                     "voice_qualification":  1
+                                                                                                 },
+                                                                                   "last_known_good":  "c1093028cd416f5fc32def72dd25abdb371e83af",
+                                                                                   "last_known_good_source":  "env",
+                                                                                   "environment":  "prod",
+                                                                                   "started_at":  "2026-09-07T15:25:18.048342Z",
+                                                                                   "uptime_s":  7309.168251
+                                                                               },
+                                                                   "action_contract_version":  12,
+                                                                   "realtime_contract":  2,
+                                                                   "edge_active":  "blue",
+                                                                   "devices":  [
+                                                                                   {
+                                                                                       "device_id":  "3f60fdb5-5022-48cf-bb3c-d7192466b701",
+                                                                                       "name":  "MAIL",
+                                                                                       "presence":  "online",
+                                                                                       "version":  "unknown",
+                                                                                       "capability_count":  29,
+                                                                                       "last_seen_at":  "2026-09-07T17:27:04.192577Z"
+                                                                                   }
+                                                                               ],
+                                                                   "alarm_count":  1,
+                                                                   "alarm_ids":  [
+                                                                                     ""
+                                                                                 ],
+                                                                   "routine_count":  1,
+                                                                   "incident_count":  1,
+                                                                   "opportunity_count":  1,
+                                                                   "ledger_summary":  {
+                                                                                          "since":  "2026-09-06T17:27:07.611659Z",
+                                                                                          "by_status":  {
+                                                                                                            "started":  2,
+                                                                                                            "info":  23,
+                                                                                                            "failed":  2,
+                                                                                                            "completed":  104
+                                                                                                        },
+                                                                                          "by_subsystem":  {
+                                                                                                               "deployment":  16,
+                                                                                                               "evolution":  21,
+                                                                                                               "voice":  32,
+                                                                                                               "research":  29,
+                                                                                                               "ledger":  33
+                                                                                                           },
+                                                                                          "latest":  {
+                                                                                                         "event_id":  "88ab51b4-c819-4c69-91bd-fa7fc070c554",
+                                                                                                         "occurred_at":  "2026-09-07T17:26:43.678186Z",
+                                                                                                         "recorded_at":  "2026-09-07T17:26:43.699928Z",
+                                                                                                         "event_type":  "ledger.backfill",
+                                                                                                         "subsystem":  "ledger",
+                                                                                                         "module":  null,
+                                                                                                         "version":  null,
+                                                                                                         "status":  "completed",
+                                                                                                         "severity":  "info",
+                                                                                                         "action":  "backfill_run",
+                                                                                                         "result":  null,
+                                                                                                         "production_state":  "n/a",
+                                                                                                         "command_id":  null,
+                                                                                                         "trace_id":  null,
+                                                                                                         "research_job_id":  null,
+                                                                                                         "browser_session_id":  null,
+                                                                                                         "related_goal_id":  null,
+                                                                                                         "related_module_id":  null,
+                                                                                                         "evidence_refs":  [
+
+                                                                                                                           ],
+                                                                                                         "factual_summary":  "Kayıt defteri 0 yeni olay ekledi.",
+                                                                                                         "detail_json":  {
+                                                                                                                             "created":  {
+
+                                                                                                                                         },
+                                                                                                                             "skipped":  {
+                                                                                                                                             "voice_session":  66,
+                                                                                                                                             "research_failed":  4,
+                                                                                                                                             "research_completed":  6,
+                                                                                                                                             "research_quality_gate":  21
+                                                                                                                                         },
+                                                                                                                             "examined":  {
+                                                                                                                                              "voice_session":  66,
+                                                                                                                                              "research_failed":  4,
+                                                                                                                                              "research_completed":  6,
+                                                                                                                                              "research_quality_gate":  21
+                                                                                                                                          },
+                                                                                                                             "total_created":  0
+                                                                                                                         },
+                                                                                                         "source":  "live",
+                                                                                                         "source_ref":  "ledger_backfill:2026-09-07T17:26:43.678186+00:00"
+                                                                                                     }
+                                                                                      }
+                                                               },
+                   "G_after_switch_host_after_reconcile":  "pagentos-prod-api-blue Up 2 hours (healthy)\r\n\r\nc1093028cd416f5fc32def72dd25abdb371e83af\r\nc1093028cd416f5fc32def72dd25abdb371e83af\r\n/opt/pagentos/app.interrupted\r\n2026-09-07T17:27:03Z\r\n",
+                   "B_release":  {
+                                     "exit":  1,
+                                     "seconds":  31.9,
+                                     "output_tail":  "+ ... eleaseOut = \u0026 $powershell -NoProfile -NonInteractive -ExecutionPolicy ...\r\n+                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\r\n    + CategoryInfo          : NotSpecified: (2026/09/07 17:2...process started:String) [], RemoteException\r\n    + FullyQualifiedErrorId : NativeCommandError\r\n \r\n2026/09/07 17:27:41 [notice] 374#374: signal process started\r\n  host: device handoff UNAVAILABLE: api-blue has no drain route (a release before M18.4 gap 1); LEGACY switch: the device moves when api-blue stops, a presence gap of up to 60s is expected\r\n2026/09/07 17:27:42 [notice] 386#386: signal process started\r\n  host: edge -\u003e api-green\r\nthrough the edge the release is \u0027c1093028cd416f5fc32def72dd25abdb371e83af\u0027, expected \u0027e003e41d2b1a432f6e31e00ffd54cc4f8\r\ncc94875\u0027\r\nROLLBACK: switching the edge back to api-blue\r\n  host:  Container pagentos-prod-api-blue Healthy \r\n2026/09/07 17:27:43 [notice] 399#399: signal process started\r\nROLLBACK: edge -\u003e api-blue (both upstreams)\r\nROLLBACK: api-green stopped\r\n  host:  Container pagentos-prod-api-green Stopped \r\nrelease FAILED (exit 76): the served release did not match the sha; rolled back\r\nAt E:\\AI\\PersonalAgentOS_Claude_Autonomous_Build_Package_v1\\scripts\\cloud\\release-cloud-core.ps1:194 char:9\r\n+         throw \"release FAILED (exit $exit): $why\"\r\n+         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\r\n    + CategoryInfo          : OperationStopped: (release FAILED ...ha; rolled back:String) [], RuntimeException\r\n    + FullyQualifiedErrorId : release FAILED (exit 76): the served release did not match the sha; rolled back\r\n \r\n"
+                                 },
+                   "B_legacy_switch":  true,
+                   "B_after":  {
+                                   "at":  "2026-09-07T17:27:50.8330463Z",
+                                   "health_status":  "ok",
+                                   "release":  {
+                                                   "version_model":  1,
+                                                   "component":  "cloud-core",
+                                                   "version":  "c1093028cd416f5fc32def72dd25abdb371e83af",
+                                                   "version_source":  "env",
+                                                   "app_version":  "0.1.0",
+                                                   "contracts":  {
+                                                                     "action":  12,
+                                                                     "ui_state":  3,
+                                                                     "ambient":  1,
+                                                                     "voice_qualification":  1
+                                                                 },
+                                                   "last_known_good":  "c1093028cd416f5fc32def72dd25abdb371e83af",
+                                                   "last_known_good_source":  "env",
+                                                   "environment":  "prod",
+                                                   "started_at":  "2026-09-07T15:25:18.048342Z",
+                                                   "uptime_s":  7352.508246
+                                               },
+                                   "action_contract_version":  12,
+                                   "realtime_contract":  2,
+                                   "edge_active":  "blue",
+                                   "devices":  [
+                                                   {
+                                                       "device_id":  "3f60fdb5-5022-48cf-bb3c-d7192466b701",
+                                                       "name":  "MAIL",
+                                                       "presence":  "online",
+                                                       "version":  "unknown",
+                                                       "capability_count":  29,
+                                                       "last_seen_at":  "2026-09-07T17:27:44.223930Z"
+                                                   }
+                                               ],
+                                   "alarm_count":  1,
+                                   "alarm_ids":  [
+                                                     ""
+                                                 ],
+                                   "routine_count":  1,
+                                   "incident_count":  1,
+                                   "opportunity_count":  1,
+                                   "ledger_summary":  {
+                                                          "since":  "2026-09-06T17:27:50.959093Z",
+                                                          "by_status":  {
+                                                                            "started":  2,
+                                                                            "info":  23,
+                                                                            "failed":  2,
+                                                                            "completed":  105
+                                                                        },
+                                                          "by_subsystem":  {
+                                                                               "deployment":  16,
+                                                                               "evolution":  21,
+                                                                               "voice":  32,
+                                                                               "research":  29,
+                                                                               "ledger":  34
+                                                                           },
+                                                          "latest":  {
+                                                                         "event_id":  "ff18968c-c44d-4dde-b2ac-4140439373d8",
+                                                                         "occurred_at":  "2026-09-07T17:27:36.362034Z",
+                                                                         "recorded_at":  "2026-09-07T17:27:36.376984Z",
+                                                                         "event_type":  "ledger.backfill",
+                                                                         "subsystem":  "ledger",
+                                                                         "module":  null,
+                                                                         "version":  null,
+                                                                         "status":  "completed",
+                                                                         "severity":  "info",
+                                                                         "action":  "backfill_run",
+                                                                         "result":  null,
+                                                                         "production_state":  "n/a",
+                                                                         "command_id":  null,
+                                                                         "trace_id":  null,
+                                                                         "research_job_id":  null,
+                                                                         "browser_session_id":  null,
+                                                                         "related_goal_id":  null,
+                                                                         "related_module_id":  null,
+                                                                         "evidence_refs":  [
+
+                                                                                           ],
+                                                                         "factual_summary":  "Kayıt defteri 0 yeni olay ekledi.",
+                                                                         "detail_json":  {
+                                                                                             "created":  {
+
+                                                                                                         },
+                                                                                             "skipped":  {
+                                                                                                             "voice_session":  66,
+                                                                                                             "research_failed":  4,
+                                                                                                             "research_completed":  6,
+                                                                                                             "research_quality_gate":  21
+                                                                                                         },
+                                                                                             "examined":  {
+                                                                                                              "voice_session":  66,
+                                                                                                              "research_failed":  4,
+                                                                                                              "research_completed":  6,
+                                                                                                              "research_quality_gate":  21
+                                                                                                          },
+                                                                                             "total_created":  0
+                                                                                         },
+                                                                         "source":  "live",
+                                                                         "source_ref":  "ledger_backfill:2026-09-07T17:27:36.362034+00:00"
+                                                                     }
+                                                      }
+                               },
+                   "B_host":  "c1093028cd416f5fc32def72dd25abdb371e83af\r\n\r\nc1093028cd416f5fc32def72dd25abdb371e83af\r\n\r\nblue\r\n\r\npagentos-prod-edge Up 51 minutes\r\npagentos-prod-api-blue Up 2 hours (healthy)\r\npagentos-prod-postgres Up 5 days (healthy)\r\npagentos-prod-temporal Up 5 days (healthy)\r\npagentos-prod-redis Up 5 days (healthy)\r\npagentos-prod-minio Up 5 days (healthy)\r\n",
+                   "C_output_tail":  "preflight: tree e003e41d2b1a432f6e31e00ffd54cc4f8cc94875 extracted, compose valid, env posture 600:root, active colour blue, idle green, drain 5s\r\ntree swapped: /opt/pagentos/app is e003e41d2b1a432f6e31e00ffd54cc4f8cc94875 (previous kept at /opt/pagentos/app.prev)\r\nbuilding pagentos/cloud-core:e003e41d2b1a432f6e31e00ffd54cc4f8cc94875 ...\r\n#16 unpacking to docker.io/pagentos/cloud-core:e003e41d2b1a432f6e31e00ffd54cc4f8cc94875 0.0s done\r\n#16 DONE 0.1s\r\napplying migrations (expand-only)...\r\nINFO  [alembic.runtime.migration] Context impl PostgresqlImpl.\r\nINFO  [alembic.runtime.migration] Will assume transactional DDL.\r\nstarting the idle colour api-green on e003e41d2b1a432f6e31e00ffd54cc4f8cc94875 (api-blue keeps serving)...\r\n Container pagentos-prod-api-green Waiting \r\n Container pagentos-prod-api-green Healthy \r\nhealth ok on api-green\r\nrealtime contract_version 2 served (matches the tree)\r\napi-green reports release e003e41d2b1a432f6e31e00ffd54cc4f8cc94875\r\n2026/09/07 17:28:13 [notice] 412#412: signal process started\r\n2026/09/07 17:28:13 [error] 412#412: invalid PID number \"\" in \"/run/nginx.pid\"\r\nnginx: [error] invalid PID number \"\" in \"/run/nginx.pid\"\r\nedge reload FAILED\r\nROLLBACK: the release failed before the switch; api-blue kept serving throughout\r\n",
+                   "D_rollback_output_tail":  "rolling back: edge -\u003e api-blue (c1093028cd416f5fc32def72dd25abdb371e83af; leaving c1093028cd416f5fc32def72dd25abdb371e83af)\r\n Container pagentos-prod-api-blue Running \r\n Container pagentos-prod-api-blue Waiting \r\n Container pagentos-prod-api-blue Healthy \r\n2026/09/07 17:28:26 [notice] 424#424: signal process started\r\n2026/09/07 17:28:26 [error] 424#424: invalid PID number \"\" in \"/run/nginx.pid\"\r\nnginx: [error] invalid PID number \"\" in \"/run/nginx.pid\"\r\nEXIT=1\r\n",
+                   "D_forward_output_tail":  "applying migrations (expand-only)...\r\nINFO  [alembic.runtime.migration] Context impl PostgresqlImpl.\r\nINFO  [alembic.runtime.migration] Will assume transactional DDL.\r\nstarting the idle colour api-green on e003e41d2b1a432f6e31e00ffd54cc4f8cc94875 (api-blue keeps serving)...\r\n Container pagentos-prod-api-green Waiting \r\n Container pagentos-prod-api-green Healthy \r\nhealth ok on api-green\r\nrealtime contract_version 2 served (matches the tree)\r\napi-green reports release e003e41d2b1a432f6e31e00ffd54cc4f8cc94875\r\n2026/09/07 17:28:47 [notice] 436#436: signal process started\r\n2026/09/07 17:28:47 [error] 436#436: invalid PID number \"\" in \"/run/nginx.pid\"\r\nnginx: [error] invalid PID number \"\" in \"/run/nginx.pid\"\r\nedge reload FAILED\r\nROLLBACK: the release failed before the switch; api-blue kept serving throughout\r\n",
+                   "E_scan_1":  {
+                                    "status":  "scanned",
+                                    "at":  "2026-09-07T17:28:54.591387Z",
+                                    "signals":  2,
+                                    "opened":  [
+
+                                               ],
+                                    "already_tracked":  2,
+                                    "by_kind":  {
+                                                    "action_failure":  1,
+                                                    "research_failure":  1
+                                                },
+                                    "error":  null
+                                },
+                   "E_status":  {
+                                    "supervisor_version":  1,
+                                    "paused":  false,
+                                    "enabled":  true,
+                                    "last_scan_at":  "2026-09-07T17:28:55.150257Z",
+                                    "last_scan":  {
+                                                      "status":  "scanned",
+                                                      "at":  "2026-09-07T17:28:55.150257Z",
+                                                      "signals":  2,
+                                                      "opened":  [
+
+                                                                 ],
+                                                      "already_tracked":  2,
+                                                      "by_kind":  {
+                                                                      "action_failure":  1,
+                                                                      "research_failure":  1
+                                                                  },
+                                                      "error":  null
+                                                  },
+                                    "open_by_priority":  {
+                                                             "P0":  0,
+                                                             "P1":  1,
+                                                             "P2":  2,
+                                                             "P3":  0,
+                                                             "unclassified":  1
+                                                         },
+                                    "building":  [
+                                                     {
+                                                         "opportunity_id":  "57674b6a-4a8d-4e8a-8ac7-5d0187aecc1e",
+                                                         "title":  "Blue/green: device sessions move to the new colour only when the old colour stops",
+                                                         "status":  "evaluating",
+                                                         "priority":  "P2",
+                                                         "promotion_class":  "OWNER_APPROVAL_REQUIRED",
+                                                         "updated_at":  "2026-09-07T17:25:22.474920+00:00"
+                                                     }
+                                                 ],
+                                    "pending_candidates":  [
+                                                               {
+                                                                   "opportunity_id":  "a23fbfb9-dd25-4b2f-b94e-0a7e2eb4b82a",
+                                                                   "title":  "Acceptance Wording Guard",
+                                                                   "status":  "shadow_ready",
+                                                                   "priority":  null,
+                                                                   "promotion_class":  null,
+                                                                   "updated_at":  "2026-09-05T16:42:47.923884+00:00"
+                                                               }
+                                                           ],
+                                    "release_failures":  [
+
+                                                         ],
+                                    "last_fix":  null,
+                                    "running":  {
+                                                    "version_model":  1,
+                                                    "component":  "cloud-core",
+                                                    "version":  "c1093028cd416f5fc32def72dd25abdb371e83af",
+                                                    "version_source":  "env",
+                                                    "app_version":  "0.1.0",
+                                                    "contracts":  {
+                                                                      "action":  12,
+                                                                      "ui_state":  3,
+                                                                      "ambient":  1,
+                                                                      "voice_qualification":  1
+                                                                  },
+                                                    "last_known_good":  "c1093028cd416f5fc32def72dd25abdb371e83af",
+                                                    "last_known_good_source":  "env",
+                                                    "environment":  "prod",
+                                                    "started_at":  "2026-09-07T15:25:18.048342Z",
+                                                    "uptime_s":  7417.177236
+                                                },
+                                    "observed_at":  "2026-09-07T17:28:55.225619Z"
+                                },
+                   "E_ledger":  {
+                                    "events":  [
+                                                   {
+                                                       "event_id":  "26b05b85-aaef-497f-ba41-8b4a1ecdc041",
+                                                       "occurred_at":  "2026-09-07T17:28:55.022662Z",
+                                                       "recorded_at":  "2026-09-07T17:28:55.024314Z",
+                                                       "event_type":  "evolution.resumed",
+                                                       "subsystem":  "evolution",
+                                                       "module":  null,
+                                                       "version":  "1",
+                                                       "status":  "completed",
+                                                       "severity":  "info",
+                                                       "action":  "evolution_resumed",
+                                                       "result":  "resumed",
+                                                       "production_state":  "n/a",
+                                                       "command_id":  null,
+                                                       "trace_id":  null,
+                                                       "research_job_id":  null,
+                                                       "browser_session_id":  null,
+                                                       "related_goal_id":  null,
+                                                       "related_module_id":  null,
+                                                       "evidence_refs":  [
+
+                                                                         ],
+                                                       "factual_summary":  "Kendi kendini geliştirme yeniden açıldı.",
+                                                       "detail_json":  {
+                                                                           "actor":  "rest",
+                                                                           "paused":  false,
+                                                                           "reason":  "m18-4 qualification"
+                                                                       },
+                                                       "source":  "rest",
+                                                       "source_ref":  "evolution_pause:off:2026-09-07T17:28:55.022662+00:00"
+                                                   },
+                                                   {
+                                                       "event_id":  "8b2d2711-6233-41db-ae81-b97502da7127",
+                                                       "occurred_at":  "2026-09-07T17:28:54.710318Z",
+                                                       "recorded_at":  "2026-09-07T17:28:54.711453Z",
+                                                       "event_type":  "evolution.paused",
+                                                       "subsystem":  "evolution",
+                                                       "module":  null,
+                                                       "version":  "1",
+                                                       "status":  "completed",
+                                                       "severity":  "info",
+                                                       "action":  "evolution_paused",
+                                                       "result":  "paused",
+                                                       "production_state":  "n/a",
+                                                       "command_id":  null,
+                                                       "trace_id":  null,
+                                                       "research_job_id":  null,
+                                                       "browser_session_id":  null,
+                                                       "related_goal_id":  null,
+                                                       "related_module_id":  null,
+                                                       "evidence_refs":  [
+
+                                                                         ],
+                                                       "factual_summary":  "Kendi kendini geliştirme duraklatıldı.",
+                                                       "detail_json":  {
+                                                                           "actor":  "rest",
+                                                                           "paused":  true,
+                                                                           "reason":  "m18-4 qualification"
+                                                                       },
+                                                       "source":  "rest",
+                                                       "source_ref":  "evolution_pause:on:2026-09-07T17:28:54.710318+00:00"
+                                                   },
+                                                   {
+                                                       "event_id":  "be9667c8-9f54-43e8-86d1-e10d2fbaa4b1",
+                                                       "occurred_at":  "2026-09-07T17:13:58.484136Z",
+                                                       "recorded_at":  "2026-09-07T17:13:58.485548Z",
+                                                       "event_type":  "evolution.resumed",
+                                                       "subsystem":  "evolution",
+                                                       "module":  null,
+                                                       "version":  "1",
+                                                       "status":  "completed",
+                                                       "severity":  "info",
+                                                       "action":  "evolution_resumed",
+                                                       "result":  "resumed",
+                                                       "production_state":  "n/a",
+                                                       "command_id":  null,
+                                                       "trace_id":  null,
+                                                       "research_job_id":  null,
+                                                       "browser_session_id":  null,
+                                                       "related_goal_id":  null,
+                                                       "related_module_id":  null,
+                                                       "evidence_refs":  [
+
+                                                                         ],
+                                                       "factual_summary":  "Kendi kendini geliştirme yeniden açıldı.",
+                                                       "detail_json":  {
+                                                                           "actor":  "rest",
+                                                                           "paused":  false,
+                                                                           "reason":  "m18-4 qualification"
+                                                                       },
+                                                       "source":  "rest",
+                                                       "source_ref":  "evolution_pause:off:2026-09-07T17:13:58.484136+00:00"
+                                                   },
+                                                   {
+                                                       "event_id":  "b3d6971b-2020-4918-9e61-afd1f97cd6cb",
+                                                       "occurred_at":  "2026-09-07T17:13:58.169108Z",
+                                                       "recorded_at":  "2026-09-07T17:13:58.170676Z",
+                                                       "event_type":  "evolution.paused",
+                                                       "subsystem":  "evolution",
+                                                       "module":  null,
+                                                       "version":  "1",
+                                                       "status":  "completed",
+                                                       "severity":  "info",
+                                                       "action":  "evolution_paused",
+                                                       "result":  "paused",
+                                                       "production_state":  "n/a",
+                                                       "command_id":  null,
+                                                       "trace_id":  null,
+                                                       "research_job_id":  null,
+                                                       "browser_session_id":  null,
+                                                       "related_goal_id":  null,
+                                                       "related_module_id":  null,
+                                                       "evidence_refs":  [
+
+                                                                         ],
+                                                       "factual_summary":  "Kendi kendini geliştirme duraklatıldı.",
+                                                       "detail_json":  {
+                                                                           "actor":  "rest",
+                                                                           "paused":  true,
+                                                                           "reason":  "m18-4 qualification"
+                                                                       },
+                                                       "source":  "rest",
+                                                       "source_ref":  "evolution_pause:on:2026-09-07T17:13:58.169108+00:00"
+                                                   },
+                                                   {
+                                                       "event_id":  "f35d5c26-e14e-44f1-aaf4-7fc38c22a738",
+                                                       "occurred_at":  "2026-09-07T16:44:34.297282Z",
+                                                       "recorded_at":  "2026-09-07T16:44:34.302695Z",
+                                                       "event_type":  "evolution.tests_passed",
+                                                       "subsystem":  "evolution",
+                                                       "module":  "evolution.backlog",
+                                                       "version":  "1",
+                                                       "status":  "completed",
+                                                       "severity":  "info",
+                                                       "action":  "opportunity.evaluating",
+                                                       "result":  null,
+                                                       "production_state":  "tested",
+                                                       "command_id":  null,
+                                                       "trace_id":  null,
+                                                       "research_job_id":  null,
+                                                       "browser_session_id":  null,
+                                                       "related_goal_id":  null,
+                                                       "related_module_id":  "57674b6a-4a8d-4e8a-8ac7-5d0187aecc1e",
+                                                       "evidence_refs":  [
+                                                                             {
+                                                                                 "ref":  "736f225e-90c7-499d-9bf9-0d68298ec201",
+                                                                                 "kind":  "ledger_event",
+                                                                                 "note":  "deployment.cloud_core.released"
+                                                                             },
+                                                                             {
+                                                                                 "ref":  "6314c4f8-5f67-4485-b899-cbc24658c638",
+                                                                                 "kind":  "ledger_event",
+                                                                                 "note":  "deployment.cloud_core.rolled_back"
+                                                                             },
+                                                                             {
+                                                                                 "ref":  "cfc44a99-b0c6-4297-bd2c-f5508ff59352",
+                                                                                 "kind":  "ledger_event",
+                                                                                 "note":  "deployment.cloud_core.rolled_back"
+                                                                             },
+                                                                             {
+                                                                                 "ref":  "77be3ee8-5f8f-4e4e-984a-5eac1aeb8fb9",
+                                                                                 "kind":  "ledger_event",
+                                                                                 "note":  "deployment.cloud_core.released"
+                                                                             }
+                                                                         ],
+                                                       "factual_summary":  "Evrim fırsatı \u0027Blue/green: device sessions move to the new colour only when the old colour stops\u0027 değerlendirme durumuna geçti (owner).",
+                                                       "detail_json":  {
+                                                                           "actor":  "owner",
+                                                                           "reason":  "Gates: CI run 34143157871 green on 552a318 (API lint+unit, integration, agent build+tests, browser, web, secret hygiene, recovery supervisor). Production run 4 (docs/evidence/m18-4-qualification-2026-09-07-163343.json): the handoff was never reached - nginx -s reload without -c failed on the recreated edge (real bug, exit 77, api-blue kept serving, 0 device offline polls); fixed in a5bd0e8 (reload -c), suite 42/42, CI pending on 9c9faff.",
+                                                                           "status":  "evaluating",
+                                                                           "composite":  0.393305,
+                                                                           "approved_by":  null,
+                                                                           "candidate_ref":  "pagentos/cloud-core:a5bd0e8",
+                                                                           "workspace_ref":  "git:main@a5bd0e8"
+                                                                       },
+                                                       "source":  "live",
+                                                       "source_ref":  "evolution_opportunities:57674b6a-4a8d-4e8a-8ac7-5d0187aecc1e:evaluating"
+                                                   },
+                                                   {
+                                                       "event_id":  "b1ce644d-c9e7-479c-8feb-daae3ad38b00",
+                                                       "occurred_at":  "2026-09-07T16:44:33.665111Z",
+                                                       "recorded_at":  "2026-09-07T16:44:33.673562Z",
+                                                       "event_type":  "evolution.build_completed",
+                                                       "subsystem":  "evolution",
+                                                       "module":  "evolution.backlog",
+                                                       "version":  "1",
+                                                       "status":  "completed",
+                                                       "severity":  "info",
+                                                       "action":  "opportunity.testing",
+                                                       "result":  null,
+                                                       "production_state":  "built",
+                                                       "command_id":  null,
+                                                       "trace_id":  null,
+                                                       "research_job_id":  null,
+                                                       "browser_session_id":  null,
+                                                       "related_goal_id":  null,
+                                                       "related_module_id":  "57674b6a-4a8d-4e8a-8ac7-5d0187aecc1e",
+                                                       "evidence_refs":  [
+                                                                             {
+                                                                                 "ref":  "736f225e-90c7-499d-9bf9-0d68298ec201",
+                                                                                 "kind":  "ledger_event",
+                                                                                 "note":  "deployment.cloud_core.released"
+                                                                             },
+                                                                             {
+                                                                                 "ref":  "6314c4f8-5f67-4485-b899-cbc24658c638",
+                                                                                 "kind":  "ledger_event",
+                                                                                 "note":  "deployment.cloud_core.rolled_back"
+                                                                             },
+                                                                             {
+                                                                                 "ref":  "cfc44a99-b0c6-4297-bd2c-f5508ff59352",
+                                                                                 "kind":  "ledger_event",
+                                                                                 "note":  "deployment.cloud_core.rolled_back"
+                                                                             },
+                                                                             {
+                                                                                 "ref":  "77be3ee8-5f8f-4e4e-984a-5eac1aeb8fb9",
+                                                                                 "kind":  "ledger_event",
+                                                                                 "note":  "deployment.cloud_core.released"
+                                                                             }
+                                                                         ],
+                                                       "factual_summary":  "Evrim fırsatı \u0027Blue/green: device sessions move to the new colour only when the old colour stops\u0027 test durumuna geçti (owner).",
+                                                       "detail_json":  {
+                                                                           "actor":  "owner",
+                                                                           "reason":  "Regression tests: tests/unit/test_broker_drain.py (drain closes 1012 + presence dropped + idempotent; loopback guard 403; draining colour refuses connects 1012; undrain reverses); cloud-release-bluegreen.tests.ps1 42/42 (handoff order, stuck handoff 79 -\u003e rollback, rollback devices-first, interruptions + reconcile); API unit 1844 pass; identity enforcement allowlist updated.",
+                                                                           "status":  "testing",
+                                                                           "composite":  0.393305,
+                                                                           "approved_by":  null,
+                                                                           "candidate_ref":  "pagentos/cloud-core:552a318e2283cafe10afa537fc15e928aefcf9c5",
+                                                                           "workspace_ref":  "git:main@552a318"
+                                                                       },
+                                                       "source":  "live",
+                                                       "source_ref":  "evolution_opportunities:57674b6a-4a8d-4e8a-8ac7-5d0187aecc1e:testing"
+                                                   },
+                                                   {
+                                                       "event_id":  "dd06b6cc-2419-4782-a88b-391bb3c73aae",
+                                                       "occurred_at":  "2026-09-07T16:44:33.075851Z",
+                                                       "recorded_at":  "2026-09-07T16:44:33.084177Z",
+                                                       "event_type":  "evolution.build_started",
+                                                       "subsystem":  "evolution",
+                                                       "module":  "evolution.backlog",
+                                                       "version":  "1",
+                                                       "status":  "started",
+                                                       "severity":  "info",
+                                                       "action":  "opportunity.building",
+                                                       "result":  null,
+                                                       "production_state":  "designed",
+                                                       "command_id":  null,
+                                                       "trace_id":  null,
+                                                       "research_job_id":  null,
+                                                       "browser_session_id":  null,
+                                                       "related_goal_id":  null,
+                                                       "related_module_id":  "57674b6a-4a8d-4e8a-8ac7-5d0187aecc1e",
+                                                       "evidence_refs":  [
+                                                                             {
+                                                                                 "ref":  "736f225e-90c7-499d-9bf9-0d68298ec201",
+                                                                                 "kind":  "ledger_event",
+                                                                                 "note":  "deployment.cloud_core.released"
+                                                                             },
+                                                                             {
+                                                                                 "ref":  "6314c4f8-5f67-4485-b899-cbc24658c638",
+                                                                                 "kind":  "ledger_event",
+                                                                                 "note":  "deployment.cloud_core.rolled_back"
+                                                                             },
+                                                                             {
+                                                                                 "ref":  "cfc44a99-b0c6-4297-bd2c-f5508ff59352",
+                                                                                 "kind":  "ledger_event",
+                                                                                 "note":  "deployment.cloud_core.rolled_back"
+                                                                             },
+                                                                             {
+                                                                                 "ref":  "77be3ee8-5f8f-4e4e-984a-5eac1aeb8fb9",
+                                                                                 "kind":  "ledger_event",
+                                                                                 "note":  "deployment.cloud_core.released"
+                                                                             }
+                                                                         ],
+                                                       "factual_summary":  "Evrim fırsatı \u0027Blue/green: device sessions move to the new colour only when the old colour stops\u0027 geliştirme durumuna geçti (owner).",
+                                                       "detail_json":  {
+                                                                           "actor":  "owner",
+                                                                           "reason":  "Built on main: services/api/app/broker/{runtime,routes,ws}.py (drain/undrain, health.draining), infra/docker/edge/nginx.conf, infra/docker/docker-compose.prod.yml (edge config on the persistent dir, -c), scripts/cloud/release-cloud-core-bluegreen.sh (handoff_devices, ensure_edge, --reconcile), release-cloud-core.ps1 -StageOnly.",
+                                                                           "status":  "building",
+                                                                           "composite":  0.393305,
+                                                                           "approved_by":  null,
+                                                                           "candidate_ref":  "pagentos/cloud-core:552a318e2283cafe10afa537fc15e928aefcf9c5",
+                                                                           "workspace_ref":  "git:main@552a318"
+                                                                       },
+                                                       "source":  "live",
+                                                       "source_ref":  "evolution_opportunities:57674b6a-4a8d-4e8a-8ac7-5d0187aecc1e:building"
+                                                   },
+                                                   {
+                                                       "event_id":  "e4b62152-1d6b-4f45-9fe9-fd42be86a0f3",
+                                                       "occurred_at":  "2026-09-07T16:44:32.434778Z",
+                                                       "recorded_at":  "2026-09-07T16:44:32.442249Z",
+                                                       "event_type":  "evolution.module_designed",
+                                                       "subsystem":  "evolution",
+                                                       "module":  "evolution.backlog",
+                                                       "version":  "1",
+                                                       "status":  "completed",
+                                                       "severity":  "info",
+                                                       "action":  "opportunity.design_ready",
+                                                       "result":  null,
+                                                       "production_state":  "designed",
+                                                       "command_id":  null,
+                                                       "trace_id":  null,
+                                                       "research_job_id":  null,
+                                                       "browser_session_id":  null,
+                                                       "related_goal_id":  null,
+                                                       "related_module_id":  "57674b6a-4a8d-4e8a-8ac7-5d0187aecc1e",
+                                                       "evidence_refs":  [
+                                                                             {
+                                                                                 "ref":  "736f225e-90c7-499d-9bf9-0d68298ec201",
+                                                                                 "kind":  "ledger_event",
+                                                                                 "note":  "deployment.cloud_core.released"
+                                                                             },
+                                                                             {
+                                                                                 "ref":  "6314c4f8-5f67-4485-b899-cbc24658c638",
+                                                                                 "kind":  "ledger_event",
+                                                                                 "note":  "deployment.cloud_core.rolled_back"
+                                                                             },
+                                                                             {
+                                                                                 "ref":  "cfc44a99-b0c6-4297-bd2c-f5508ff59352",
+                                                                                 "kind":  "ledger_event",
+                                                                                 "note":  "deployment.cloud_core.rolled_back"
+                                                                             },
+                                                                             {
+                                                                                 "ref":  "77be3ee8-5f8f-4e4e-984a-5eac1aeb8fb9",
+                                                                                 "kind":  "ledger_event",
+                                                                                 "note":  "deployment.cloud_core.released"
+                                                                             }
+                                                                         ],
+                                                       "factual_summary":  "Evrim fırsatı \u0027Blue/green: device sessions move to the new colour only when the old colour stops\u0027 tasarım hazır durumuna geçti (owner).",
+                                                       "detail_json":  {
+                                                                           "actor":  "owner",
+                                                                           "reason":  "Design: two edge upstreams (pagentos_api, pagentos_devices for /v1/devices/connect); the release moves DEVICE authority first - device upstream to the idle colour, the active colour drains (POST /v1/devices/drain, loopback-only: sockets closed 1012, presence dropped, new connects refused), wait until the idle colour\u0027s health shows the sessions (exit 79 -\u003e rollback), then HTTP; rollback/--rollback reverse it (undrain first).",
+                                                                           "status":  "design_ready",
+                                                                           "composite":  0.393305,
+                                                                           "approved_by":  null,
+                                                                           "candidate_ref":  null,
+                                                                           "workspace_ref":  "git:main@6a1374d"
+                                                                       },
+                                                       "source":  "live",
+                                                       "source_ref":  "evolution_opportunities:57674b6a-4a8d-4e8a-8ac7-5d0187aecc1e:design_ready"
+                                                   },
+                                                   {
+                                                       "event_id":  "88de447d-a556-478a-919f-d25ae84c4ebd",
+                                                       "occurred_at":  "2026-09-07T16:44:31.841921Z",
+                                                       "recorded_at":  "2026-09-07T16:44:31.852127Z",
+                                                       "event_type":  "evolution.researching",
+                                                       "subsystem":  "evolution",
+                                                       "module":  "evolution.backlog",
+                                                       "version":  "1",
+                                                       "status":  "started",
+                                                       "severity":  "info",
+                                                       "action":  "opportunity.researching",
+                                                       "result":  null,
+                                                       "production_state":  "idea",
+                                                       "command_id":  null,
+                                                       "trace_id":  null,
+                                                       "research_job_id":  null,
+                                                       "browser_session_id":  null,
+                                                       "related_goal_id":  null,
+                                                       "related_module_id":  "57674b6a-4a8d-4e8a-8ac7-5d0187aecc1e",
+                                                       "evidence_refs":  [
+                                                                             {
+                                                                                 "ref":  "736f225e-90c7-499d-9bf9-0d68298ec201",
+                                                                                 "kind":  "ledger_event",
+                                                                                 "note":  "deployment.cloud_core.released"
+                                                                             },
+                                                                             {
+                                                                                 "ref":  "6314c4f8-5f67-4485-b899-cbc24658c638",
+                                                                                 "kind":  "ledger_event",
+                                                                                 "note":  "deployment.cloud_core.rolled_back"
+                                                                             },
+                                                                             {
+                                                                                 "ref":  "cfc44a99-b0c6-4297-bd2c-f5508ff59352",
+                                                                                 "kind":  "ledger_event",
+                                                                                 "note":  "deployment.cloud_core.rolled_back"
+                                                                             },
+                                                                             {
+                                                                                 "ref":  "77be3ee8-5f8f-4e4e-984a-5eac1aeb8fb9",
+                                                                                 "kind":  "ledger_event",
+                                                                                 "note":  "deployment.cloud_core.released"
+                                                                             }
+                                                                         ],
+                                                       "factual_summary":  "Evrim fırsatı \u0027Blue/green: device sessions move to the new colour only when the old colour stops\u0027 araştırma durumuna geçti (owner).",
+                                                       "detail_json":  {
+                                                                           "actor":  "owner",
+                                                                           "reason":  "Owner directive M18.4 FINAL GAP CLOSURE, gap 1: fix through the canonical production architecture (no health override). Read: broker runtime/ws/routes, edge nginx.conf, release-cloud-core-bluegreen.sh, the agent\u0027s reconnect backoff (first retry within 1 s after a server close).",
+                                                                           "status":  "researching",
+                                                                           "composite":  0.393305,
+                                                                           "approved_by":  null,
+                                                                           "candidate_ref":  null,
+                                                                           "workspace_ref":  "git:main@6a1374d"
+                                                                       },
+                                                       "source":  "live",
+                                                       "source_ref":  "evolution_opportunities:57674b6a-4a8d-4e8a-8ac7-5d0187aecc1e:researching"
+                                                   },
+                                                   {
+                                                       "event_id":  "65c3afc2-1f1a-42f2-9558-65f97c7cfbd4",
+                                                       "occurred_at":  "2026-09-07T16:38:01.484493Z",
+                                                       "recorded_at":  "2026-09-07T16:38:01.486025Z",
+                                                       "event_type":  "evolution.resumed",
+                                                       "subsystem":  "evolution",
+                                                       "module":  null,
+                                                       "version":  "1",
+                                                       "status":  "completed",
+                                                       "severity":  "info",
+                                                       "action":  "evolution_resumed",
+                                                       "result":  "resumed",
+                                                       "production_state":  "n/a",
+                                                       "command_id":  null,
+                                                       "trace_id":  null,
+                                                       "research_job_id":  null,
+                                                       "browser_session_id":  null,
+                                                       "related_goal_id":  null,
+                                                       "related_module_id":  null,
+                                                       "evidence_refs":  [
+
+                                                                         ],
+                                                       "factual_summary":  "Kendi kendini geliştirme yeniden açıldı.",
+                                                       "detail_json":  {
+                                                                           "actor":  "rest",
+                                                                           "paused":  false,
+                                                                           "reason":  "m18-4 qualification"
+                                                                       },
+                                                       "source":  "rest",
+                                                       "source_ref":  "evolution_pause:off:2026-09-07T16:38:01.484493+00:00"
+                                                   }
+                                               ]
+                                },
+                   "H_systemd_unit":  "",
+                   "F_final":  {
+                                   "at":  "2026-09-07T17:28:56.7488741Z",
+                                   "health_status":  "ok",
+                                   "release":  {
+                                                   "version_model":  1,
+                                                   "component":  "cloud-core",
+                                                   "version":  "c1093028cd416f5fc32def72dd25abdb371e83af",
+                                                   "version_source":  "env",
+                                                   "app_version":  "0.1.0",
+                                                   "contracts":  {
+                                                                     "action":  12,
+                                                                     "ui_state":  3,
+                                                                     "ambient":  1,
+                                                                     "voice_qualification":  1
+                                                                 },
+                                                   "last_known_good":  "c1093028cd416f5fc32def72dd25abdb371e83af",
+                                                   "last_known_good_source":  "env",
+                                                   "environment":  "prod",
+                                                   "started_at":  "2026-09-07T15:25:18.048342Z",
+                                                   "uptime_s":  7418.485342
+                                               },
+                                   "action_contract_version":  12,
+                                   "realtime_contract":  2,
+                                   "edge_active":  "green",
+                                   "devices":  [
+                                                   {
+                                                       "device_id":  "3f60fdb5-5022-48cf-bb3c-d7192466b701",
+                                                       "name":  "MAIL",
+                                                       "presence":  "online",
+                                                       "version":  "unknown",
+                                                       "capability_count":  29,
+                                                       "last_seen_at":  "2026-09-07T17:28:54.261348Z"
+                                                   }
+                                               ],
+                                   "alarm_count":  1,
+                                   "alarm_ids":  [
+                                                     ""
+                                                 ],
+                                   "routine_count":  1,
+                                   "incident_count":  1,
+                                   "opportunity_count":  1,
+                                   "ledger_summary":  {
+                                                          "since":  "2026-09-06T17:28:56.872103Z",
+                                                          "by_status":  {
+                                                                            "started":  2,
+                                                                            "info":  23,
+                                                                            "failed":  2,
+                                                                            "completed":  113
+                                                                        },
+                                                          "by_subsystem":  {
+                                                                               "deployment":  20,
+                                                                               "evolution":  23,
+                                                                               "voice":  32,
+                                                                               "research":  29,
+                                                                               "ledger":  36
+                                                                           },
+                                                          "latest":  {
+                                                                         "event_id":  "26b05b85-aaef-497f-ba41-8b4a1ecdc041",
+                                                                         "occurred_at":  "2026-09-07T17:28:55.022662Z",
+                                                                         "recorded_at":  "2026-09-07T17:28:55.024314Z",
+                                                                         "event_type":  "evolution.resumed",
+                                                                         "subsystem":  "evolution",
+                                                                         "module":  null,
+                                                                         "version":  "1",
+                                                                         "status":  "completed",
+                                                                         "severity":  "info",
+                                                                         "action":  "evolution_resumed",
+                                                                         "result":  "resumed",
+                                                                         "production_state":  "n/a",
+                                                                         "command_id":  null,
+                                                                         "trace_id":  null,
+                                                                         "research_job_id":  null,
+                                                                         "browser_session_id":  null,
+                                                                         "related_goal_id":  null,
+                                                                         "related_module_id":  null,
+                                                                         "evidence_refs":  [
+
+                                                                                           ],
+                                                                         "factual_summary":  "Kendi kendini geliştirme yeniden açıldı.",
+                                                                         "detail_json":  {
+                                                                                             "actor":  "rest",
+                                                                                             "paused":  false,
+                                                                                             "reason":  "m18-4 qualification"
+                                                                                         },
+                                                                         "source":  "rest",
+                                                                         "source_ref":  "evolution_pause:off:2026-09-07T17:28:55.022662+00:00"
+                                                                     }
+                                                      }
+                               },
+                   "F_release_current":  {
+                                             "version_model":  1,
+                                             "component":  "cloud-core",
+                                             "version":  "c1093028cd416f5fc32def72dd25abdb371e83af",
+                                             "version_source":  "env",
+                                             "app_version":  "0.1.0",
+                                             "contracts":  {
+                                                               "action":  12,
+                                                               "ui_state":  3,
+                                                               "ambient":  1,
+                                                               "voice_qualification":  1
+                                                           },
+                                             "last_known_good":  "c1093028cd416f5fc32def72dd25abdb371e83af",
+                                             "last_known_good_source":  "env",
+                                             "environment":  "prod",
+                                             "started_at":  "2026-09-07T15:25:18.048342Z",
+                                             "uptime_s":  7418.944637
+                                         },
+                   "F_components":  {
+                                        "components":  [
+                                                           {
+                                                               "version_model":  1,
+                                                               "component":  "cloud-core",
+                                                               "version":  "c1093028cd416f5fc32def72dd25abdb371e83af",
+                                                               "version_source":  "env",
+                                                               "app_version":  "0.1.0",
+                                                               "contracts":  {
+                                                                                 "action":  12,
+                                                                                 "ui_state":  3,
+                                                                                 "ambient":  1,
+                                                                                 "voice_qualification":  1
+                                                                             },
+                                                               "last_known_good":  "c1093028cd416f5fc32def72dd25abdb371e83af",
+                                                               "last_known_good_source":  "env",
+                                                               "environment":  "prod",
+                                                               "started_at":  "2026-09-07T15:25:18.048342Z",
+                                                               "uptime_s":  7419.005849,
+                                                               "observed":  "live"
+                                                           },
+                                                           {
+                                                               "component":  "windows-agent",
+                                                               "device_id":  "3f60fdb5-5022-48cf-bb3c-d7192466b701",
+                                                               "name":  "MAIL",
+                                                               "platform":  "windows",
+                                                               "version":  "0.1.0",
+                                                               "version_source":  "device_row",
+                                                               "capabilities":  [
+                                                                                    "desktop.open_application",
+                                                                                    "desktop.open_artifact",
+                                                                                    "desktop.alarm_start",
+                                                                                    "desktop.alarm_stop",
+                                                                                    "browser.chrome",
+                                                                                    "browser.session_open",
+                                                                                    "browser.session_close",
+                                                                                    "browser.worker_status",
+                                                                                    "browser.navigate",
+                                                                                    "browser.back",
+                                                                                    "browser.forward",
+                                                                                    "browser.tab_list",
+                                                                                    "browser.tab_new",
+                                                                                    "browser.tab_close",
+                                                                                    "browser.tab_select",
+                                                                                    "browser.inspect",
+                                                                                    "browser.find",
+                                                                                    "browser.click",
+                                                                                    "browser.fill",
+                                                                                    "browser.select_option",
+                                                                                    "browser.set_checked",
+                                                                                    "browser.scroll",
+                                                                                    "browser.wait",
+                                                                                    "browser.extract",
+                                                                                    "browser.snapshot",
+                                                                                    "browser.screenshot",
+                                                                                    "browser.download",
+                                                                                    "browser.search",
+                                                                                    "browser.fetch_evidence"
+                                                                                ],
+                                                               "connected":  true,
+                                                               "observed":  "device_row"
+                                                           },
+                                                           {
+                                                               "component":  "web",
+                                                               "version":  "unknown_from_server",
+                                                               "version_source":  "served_marker",
+                                                               "observed":  "browser_only",
+                                                               "note":  "the served \u003cmeta name=\"pagentos-core-build\"\u003e marker is known to the browser, not to the API"
+                                                           }
+                                                       ],
+                                        "primary":  "cloud-core"
+                                    },
+                   "F_slo":  {
+                                 "slo_version":  1,
+                                 "observed_at":  "2026-09-07T17:28:57.109926Z",
+                                 "process_uptime_s":  7419.061584,
+                                 "windows":  {
+                                                 "24h":  {
+                                                             "releases":  10,
+                                                             "rollbacks":  10,
+                                                             "incidents":  0
+                                                         },
+                                                 "7d":  {
+                                                            "releases":  10,
+                                                            "rollbacks":  10,
+                                                            "incidents":  2
+                                                        }
+                                             },
+                                 "availability":  null,
+                                 "measurement":  "none",
+                                 "measurement_note":  "No probe history is recorded yet; the recovery supervisor polls health but keeps no samples the API can read. Release windows and incidents above are counted from the ledger; a fraction is not claimed."
+                             },
+                   "F_host":  "c1093028cd416f5fc32def72dd25abdb371e83af\r\n\r\nc1093028cd416f5fc32def72dd25abdb371e83af\r\n\r\ngreen\r\n\r\nPAGENTOS_IMAGE_BLUE=c1093028cd416f5fc32def72dd25abdb371e83af\r\nPAGENTOS_RELEASE_BLUE=c1093028cd416f5fc32def72dd25abdb371e83af\r\nPAGENTOS_IMAGE_GREEN=e003e41d2b1a432f6e31e00ffd54cc4f8cc94875\r\nPAGENTOS_RELEASE_GREEN=e003e41d2b1a432f6e31e00ffd54cc4f8cc94875\r\nPAGENTOS_LAST_KNOWN_GOOD=c1093028cd416f5fc32def72dd25abdb371e83af\r\npagentos-prod-edge nginx:1.27-alpine Up 52 minutes\r\npagentos-prod-api-blue 5596e9e03541 Up 2 hours (healthy)\r\npagentos-prod-postgres pgvector/pgvector:pg16 Up 5 days (healthy)\r\npagentos-prod-temporal temporalio/auto-setup:1.27.2 Up 5 days (healthy)\r\npagentos-prod-redis redis:7-alpine Up 5 days (healthy)\r\npagentos-prod-minio minio/minio:RELEASE.2025-04-22T22-12-26Z Up 5 days (healthy)\r\n"
+               },
+    "measurements":  {
+                         "G_after_idle_up_crash":  {
+                                                       "phase":  "G_after_idle_up_crash",
+                                                       "probes":  66,
+                                                       "dropped":  0,
+                                                       "first_failure_at":  null,
+                                                       "recovered_at":  null,
+                                                       "gap_seconds":  0,
+                                                       "interval_ms":  250,
+                                                       "device_polls":  23,
+                                                       "device_offline_polls":  0,
+                                                       "device_unknown_polls":  0,
+                                                       "device_first_offline_at":  null,
+                                                       "device_back_at":  null,
+                                                       "device_offline_window_s":  0
+                                                   },
+                         "G_after_idle_up_reconcile":  {
+                                                           "phase":  "G_after_idle_up_reconcile",
+                                                           "probes":  32,
+                                                           "dropped":  0,
+                                                           "first_failure_at":  null,
+                                                           "recovered_at":  null,
+                                                           "gap_seconds":  0,
+                                                           "interval_ms":  250,
+                                                           "device_polls":  11,
+                                                           "device_offline_polls":  0,
+                                                           "device_unknown_polls":  0,
+                                                           "device_first_offline_at":  null,
+                                                           "device_back_at":  null,
+                                                           "device_offline_window_s":  0
+                                                       },
+                         "G_after_switch_crash":  {
+                                                      "phase":  "G_after_switch_crash",
+                                                      "probes":  55,
+                                                      "dropped":  0,
+                                                      "first_failure_at":  null,
+                                                      "recovered_at":  null,
+                                                      "gap_seconds":  0,
+                                                      "interval_ms":  250,
+                                                      "device_polls":  19,
+                                                      "device_offline_polls":  2,
+                                                      "device_unknown_polls":  0,
+                                                      "device_first_offline_at":  "2026-09-07T17:26:49.5213601Z",
+                                                      "device_back_at":  null,
+                                                      "device_offline_window_s":  -1
+                                                  },
+                         "G_after_switch_reconcile":  {
+                                                          "phase":  "G_after_switch_reconcile",
+                                                          "probes":  32,
+                                                          "dropped":  0,
+                                                          "first_failure_at":  null,
+                                                          "recovered_at":  null,
+                                                          "gap_seconds":  0,
+                                                          "interval_ms":  250,
+                                                          "device_polls":  11,
+                                                          "device_offline_polls":  5,
+                                                          "device_unknown_polls":  0,
+                                                          "device_first_offline_at":  "2026-09-07T17:26:54.0969387Z",
+                                                          "device_back_at":  "2026-09-07T17:26:59.9306076Z",
+                                                          "device_offline_window_s":  5.83
+                                                      },
+                         "B_first_cutover":  {
+                                                 "phase":  "B_first_cutover",
+                                                 "probes":  93,
+                                                 "dropped":  0,
+                                                 "first_failure_at":  null,
+                                                 "recovered_at":  null,
+                                                 "gap_seconds":  0,
+                                                 "interval_ms":  250,
+                                                 "device_polls":  34,
+                                                 "device_offline_polls":  2,
+                                                 "device_unknown_polls":  0,
+                                                 "device_first_offline_at":  "2026-09-07T17:27:42.3488243Z",
+                                                 "device_back_at":  "2026-09-07T17:27:44.5950240Z",
+                                                 "device_offline_window_s":  2.25
+                                             },
+                         "C_controlled_failure":  {
+                                                      "phase":  "C_controlled_failure",
+                                                      "probes":  67,
+                                                      "dropped":  0,
+                                                      "first_failure_at":  null,
+                                                      "recovered_at":  null,
+                                                      "gap_seconds":  0,
+                                                      "interval_ms":  250,
+                                                      "device_polls":  24,
+                                                      "device_offline_polls":  0,
+                                                      "device_unknown_polls":  0,
+                                                      "device_first_offline_at":  null,
+                                                      "device_back_at":  null,
+                                                      "device_offline_window_s":  0
+                                                  },
+                         "D_explicit_rollback":  {
+                                                     "phase":  "D_explicit_rollback",
+                                                     "probes":  26,
+                                                     "dropped":  0,
+                                                     "first_failure_at":  null,
+                                                     "recovered_at":  null,
+                                                     "gap_seconds":  0,
+                                                     "interval_ms":  250,
+                                                     "device_polls":  9,
+                                                     "device_offline_polls":  0,
+                                                     "device_unknown_polls":  0,
+                                                     "device_first_offline_at":  null,
+                                                     "device_back_at":  null,
+                                                     "device_offline_window_s":  0
+                                                 },
+                         "D_roll_forward":  {
+                                                "phase":  "D_roll_forward",
+                                                "probes":  52,
+                                                "dropped":  0,
+                                                "first_failure_at":  null,
+                                                "recovered_at":  null,
+                                                "gap_seconds":  0,
+                                                "interval_ms":  250,
+                                                "device_polls":  18,
+                                                "device_offline_polls":  0,
+                                                "device_unknown_polls":  0,
+                                                "device_first_offline_at":  null,
+                                                "device_back_at":  null,
+                                                "device_offline_window_s":  0
+                                            }
+                     },
+    "checks":  [
+                   {
+                       "name":  "the Cloud Core answers before the run",
+                       "pass":  true,
+                       "detail":  "release=c1093028cd416f5fc32def72dd25abdb371e83af contract=12"
+                   },
+                   {
+                       "name":  "G/after_idle_up: HEAD staged as the candidate",
+                       "pass":  true,
+                       "detail":  "staged: e003e41 is at /opt/pagentos/app.next on pagentos-core; nothing else was changed\r"
+                   },
+                   {
+                       "name":  "G/after_idle_up: the host script was killed mid-promotion",
+                       "pass":  true,
+                       "detail":  "exit=137"
+                   },
+                   {
+                       "name":  "G/after_idle_up: both colours run; the edge still serves the previous release",
+                       "pass":  true,
+                       "detail":  "active=blue served=c1093028cd416f5fc32def72dd25abdb371e83af"
+                   },
+                   {
+                       "name":  "G/after_idle_up: reconcile made the last COMPLETED promotion canonical",
+                       "pass":  true,
+                       "detail":  "active=blue served=c1093028cd416f5fc32def72dd25abdb371e83af"
+                   },
+                   {
+                       "name":  "G/after_idle_up: the half-promoted candidate was drained and stopped, never live",
+                       "pass":  true,
+                       "detail":  ""
+                   },
+                   {
+                       "name":  "G/after_idle_up: the canonical tree is back (app/RELEASE == served)",
+                       "pass":  true,
+                       "detail":  ""
+                   },
+                   {
+                       "name":  "G/after_idle_up: no dropped probes across crash + reconcile",
+                       "pass":  true,
+                       "detail":  "crash: probes=66 dropped=0; reconcile: probes=32 dropped=0 gap=0s"
+                   },
+                   {
+                       "name":  "G/after_idle_up: the device is online on the canonical colour after the reconcile",
+                       "pass":  true,
+                       "detail":  "after 0s; presence gap during reconcile: 0s"
+                   },
+                   {
+                       "name":  "G/after_switch: HEAD staged as the candidate",
+                       "pass":  true,
+                       "detail":  "staged: e003e41 is at /opt/pagentos/app.next on pagentos-core; nothing else was changed\r"
+                   },
+                   {
+                       "name":  "G/after_switch: the host script was killed mid-promotion",
+                       "pass":  true,
+                       "detail":  "exit=137"
+                   },
+                   {
+                       "name":  "G/after_switch: both colours run; the edge already serves the candidate, RELEASE not yet written",
+                       "pass":  true,
+                       "detail":  "active=green served=e003e41d2b1a432f6e31e00ffd54cc4f8cc94875"
+                   },
+                   {
+                       "name":  "G/after_switch: reconcile made the last COMPLETED promotion canonical",
+                       "pass":  true,
+                       "detail":  "active=blue served=c1093028cd416f5fc32def72dd25abdb371e83af"
+                   },
+                   {
+                       "name":  "G/after_switch: the half-promoted candidate was drained and stopped, never live",
+                       "pass":  true,
+                       "detail":  ""
+                   },
+                   {
+                       "name":  "G/after_switch: the canonical tree is back (app/RELEASE == served)",
+                       "pass":  true,
+                       "detail":  ""
+                   },
+                   {
+                       "name":  "G/after_switch: no dropped probes across crash + reconcile",
+                       "pass":  true,
+                       "detail":  "crash: probes=55 dropped=0; reconcile: probes=32 dropped=0 gap=0s"
+                   },
+                   {
+                       "name":  "G/after_switch: the device is online on the canonical colour after the reconcile",
+                       "pass":  true,
+                       "detail":  "after 0s; presence gap during reconcile: 5.83s"
+                   },
+                   {
+                       "name":  "release exits 0",
+                       "pass":  false,
+                       "detail":  "release took 31.9 s"
+                   },
+                   {
+                       "name":  "blue/green release with no gap",
+                       "pass":  true,
+                       "detail":  "probes=93 dropped=0 gap=0s"
+                   },
+                   {
+                       "name":  "release: LEGACY switch (the live colour predates the drain route; the device moved when it stopped)",
+                       "pass":  true,
+                       "detail":  "the first release past M18.4 gap 1 cannot hand devices over; the next release from this colour will"
+                   },
+                   {
+                       "name":  "release (legacy): device presence gap bounded by the drain window",
+                       "pass":  true,
+                       "detail":  "polls=34 offline_polls=2 window=2.25s (limit 75 s = 60 s drain + reconnect)"
+                   },
+                   {
+                       "name":  "release reports HEAD",
+                       "pass":  false,
+                       "detail":  "served=c1093028cd416f5fc32def72dd25abdb371e83af"
+                   },
+                   {
+                       "name":  "edge names a colour",
+                       "pass":  true,
+                       "detail":  "active=blue"
+                   },
+                   {
+                       "name":  "alarms unchanged",
+                       "pass":  true,
+                       "detail":  "before=1 after=1"
+                   },
+                   {
+                       "name":  "routines unchanged",
+                       "pass":  true,
+                       "detail":  "before=1 after=1"
+                   },
+                   {
+                       "name":  "the Windows agent is online through the edge",
+                       "pass":  true,
+                       "detail":  "after 0s"
+                   },
+                   {
+                       "name":  "the controlled failure rolled back",
+                       "pass":  false,
+                       "detail":  "the script switched, failed its own verification, switched back"
+                   },
+                   {
+                       "name":  "after the rollback the edge serves HEAD on the original colour",
+                       "pass":  false,
+                       "detail":  "active=green"
+                   },
+                   {
+                       "name":  "controlled failure: dropped probes",
+                       "pass":  true,
+                       "detail":  "probes=67 dropped=0 gap=0s"
+                   },
+                   {
+                       "name":  "controlled failure: the device stayed online",
+                       "pass":  true,
+                       "detail":  ""
+                   },
+                   {
+                       "name":  "controlled failure: the rollback took the device sessions back first",
+                       "pass":  false,
+                       "detail":  "no line"
+                   },
+                   {
+                       "name":  "controlled failure: device presence gap",
+                       "pass":  true,
+                       "detail":  "polls=24 offline_polls=0 window=0s (limit 15 s; the agent\u0027s own reconnect)"
+                   },
+                   {
+                       "name":  "explicit rollback switched the colour",
+                       "pass":  false,
+                       "detail":  "active=blue served=c1093028cd416f5fc32def72dd25abdb371e83af"
+                   },
+                   {
+                       "name":  "explicit rollback: dropped probes",
+                       "pass":  true,
+                       "detail":  "probes=26 dropped=0 gap=0s"
+                   },
+                   {
+                       "name":  "explicit rollback: the device is online on the other colour",
+                       "pass":  true,
+                       "detail":  "after 0s"
+                   },
+                   {
+                       "name":  "explicit rollback: devices first (the handoff line)",
+                       "pass":  false,
+                       "detail":  "no line"
+                   },
+                   {
+                       "name":  "explicit rollback: device presence gap",
+                       "pass":  true,
+                       "detail":  "polls=9 offline_polls=0 window=0s (limit 15 s; the agent\u0027s own reconnect)"
+                   },
+                   {
+                       "name":  "roll-forward landed HEAD on the other colour with no gap",
+                       "pass":  false,
+                       "detail":  "active=green probes=52 dropped=0 gap=0s"
+                   },
+                   {
+                       "name":  "roll-forward: the device is online on the new colour",
+                       "pass":  true,
+                       "detail":  "after 0s"
+                   },
+                   {
+                       "name":  "roll-forward: devices first (the handoff line)",
+                       "pass":  false,
+                       "detail":  "no line"
+                   },
+                   {
+                       "name":  "roll-forward: device presence gap",
+                       "pass":  true,
+                       "detail":  "polls=18 offline_polls=0 window=0s (limit 15 s; the agent\u0027s own reconnect)"
+                   },
+                   {
+                       "name":  "the supervisor scanned production signals",
+                       "pass":  true,
+                       "detail":  "signals=2 opened=0 tracked=2"
+                   },
+                   {
+                       "name":  "paused: a scan opens nothing",
+                       "pass":  true,
+                       "detail":  "status=skipped_paused"
+                   },
+                   {
+                       "name":  "production stays available while paused",
+                       "pass":  true,
+                       "detail":  ""
+                   },
+                   {
+                       "name":  "resumed: the scan runs again",
+                       "pass":  true,
+                       "detail":  ""
+                   },
+                   {
+                       "name":  "H: the reconcile unit is enabled and ran RECONCILE OK from its journal",
+                       "pass":  false,
+                       "detail":  ""
+                   },
+                   {
+                       "name":  "H: the unit\u0027s reconcile changed nothing on a consistent host",
+                       "pass":  true,
+                       "detail":  ""
+                   },
+                   {
+                       "name":  "H: production unchanged after the unit ran",
+                       "pass":  false,
+                       "detail":  "served=c1093028cd416f5fc32def72dd25abdb371e83af"
+                   },
+                   {
+                       "name":  "final: release == HEAD, contract v12",
+                       "pass":  false,
+                       "detail":  "served=c1093028cd416f5fc32def72dd25abdb371e83af contract=12"
+                   },
+                   {
+                       "name":  "final: last-known-good exported",
+                       "pass":  true,
+                       "detail":  "lkg=c1093028cd416f5fc32def72dd25abdb371e83af"
+                   }
+               ],
+    "verdict":  "FAIL",
+    "updated_at":  "2026-09-07T17:28:57.4432392Z"
+}

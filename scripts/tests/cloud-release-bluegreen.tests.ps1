@@ -164,7 +164,7 @@ function Reset-Host {
 
 function Invoke-Release {
     param([string]$Sha = "2222222222222222222222222222222222222222", [string]$Mode = "", [hashtable]$Env = @{})
-    $cmd = "PAGENTOS_ALLOW_NONROOT_ENV=1 PAGENTOS_BASE='$(& $u $hostBase)' PAGENTOS_EDGE_DIR='$(& $u (Join-Path $hostBase 'edge'))' PAGENTOS_HEALTH_URL=http://fake/health PAGENTOS_DRAIN_S=0 PAGENTOS_WAIT_STEP_S=0 PAGENTOS_HANDOFF_WAIT_S=1 " +
+    $cmd = "PAGENTOS_ALLOW_NONROOT_ENV=1 PAGENTOS_BASE='$(& $u $hostBase)' PAGENTOS_EDGE_DIR='$(& $u (Join-Path $hostBase 'edge'))' PAGENTOS_HEALTH_URL=http://fake/health PAGENTOS_DRAIN_S=0 PAGENTOS_WAIT_STEP_S=0 PAGENTOS_HANDOFF_WAIT_S=1 PAGENTOS_EDGE_SETTLE_TRIES=2 PAGENTOS_EDGE_SETTLE_STEP_S=0 " +
            "FAKE_STATE='$(& $u (Join-Path $hostBase 'state'))' FAKE_ENV='$(& $u (Join-Path $hostBase '.env'))' FAKE_EDGE='$(& $u (Join-Path $hostBase 'edge'))' " +
            (($Env.GetEnumerator() | ForEach-Object { "$($_.Key)='$($_.Value)' " }) -join "") +
            "PATH='$(& $posix $fakeBin):'`"`$PATH`" bash '$(& $u $hostScript)' $Sha $Mode 2>&1"
@@ -230,7 +230,7 @@ try {
         Assert-True ($r.Output -match "device handoff: 1/1 after 0s device session\(s\) on api-green" -and (Get-Sessions "green") -eq 1 -and (Get-Sessions "blue") -eq 0) "the device sessions moved to the new colour BEFORE it took HTTP, and the script waited for them"
         Assert-True (-not ($calls -match " stop api-blue" | Where-Object { [array]::IndexOf($calls, $_) -lt $iReload }) -and -not ($calls -match "force-recreate") -and -not ($calls -match "postgres|redis|minio|temporal")) "the active colour is never stopped before the switch; nothing is force-recreated; dependencies are never named"
         Assert-True ((Test-Up "green") -and -not (Test-Up "blue")) "afterwards only the new colour runs"
-        Assert-True ($r.Output -match "health ok on api-green" -and $r.Output -match "api-green reports release $sha" -and $r.Output -match "health through the edge: release $sha") "the idle colour and the edge both report the new release before it counts"
+        Assert-True ($r.Output -match "health ok on api-green" -and $r.Output -match "api-green reports release $sha" -and $r.Output -match "health through the edge: release $sha \(settled after 0 retries\)") "the idle colour and the edge both report the new release before it counts (the edge probe is a bounded wait for the reload to settle)"
         Assert-True ((Get-Content (Join-Path $hostBase "edge\nginx.conf") -Raw) -match "new edge config" -and ($calls -match " up -d --no-deps --wait edge$").Count -eq 1 -and -not ($r.Output -match "edge RECREATED")) "the tree's nginx.conf is installed into the edge dir and the edge is brought up-to-date (unchanged: not recreated) before the handoff"
 
         Reset-Host
@@ -273,7 +273,7 @@ try {
         Reset-Host
         $ra = Invoke-Release -Env @{ FAKE_EDGE_RELEASE = "9999999999999999999999999999999999999999" }
         if ($env:PAGENTOS_BG_VERBOSE) { Write-Host $ra.Output }
-        Assert-True ($ra.Exit -eq 76 -and $ra.Output -match "ROLLBACK: switching the edge back to api-blue" -and (Test-UpstreamBoth "blue") -and (Get-Active) -eq "blue" -and (Test-Up "blue")) "a failure after the switch switches the edge back to the old colour, which is still up"
+        Assert-True ($ra.Exit -eq 76 -and $ra.Output -match "expected '$sha' \(after 2 probes\)" -and $ra.Output -match "ROLLBACK: switching the edge back to api-blue" -and (Test-UpstreamBoth "blue") -and (Get-Active) -eq "blue" -and (Test-Up "blue")) "a failure after the switch (the edge never settles on the sha within the bounded wait) switches the edge back to the old colour, which is still up"
         Assert-True ($ra.Output -match "ROLLBACK: device sessions returning to api-blue: 1/1" -and (Get-Sessions "blue") -eq 1 -and -not (Test-Draining "blue") -and -not (Test-Up "green")) "...the old colour takes the device sessions back (undrained, devices first), then the new colour is stopped"
 
         Reset-Host -Active "green"

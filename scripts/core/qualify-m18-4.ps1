@@ -452,7 +452,7 @@ try {
             Add-Check "G/$point`: the device is online on the canonical colour after the reconcile" $deviceBackG "after ${waitedG}s; presence gap during reconcile: $($mRec.device_offline_window_s)s"
             Save-Evidence
         }
-        [void](Invoke-Host "rm -rf /opt/pagentos/qual-head /opt/pagentos/app.interrupted")
+        [void](Invoke-Host "rm -rf /opt/pagentos/app.interrupted")
     }
     elseif (-not $SkipInterruption) {
         Write-Host "== G: skipped (first cutover pending or -SkipFirstCutover)"
@@ -549,7 +549,11 @@ try {
     if (-not $SkipControlledFailure) {
         Write-Host "== C: controlled-failure rollback (post-switch verification pointed at an unreachable URL)"
         $prober = Start-Prober -Name "C_controlled_failure"
-        $c = Invoke-Host "set -e; cd /opt/pagentos; rm -rf app.next; cp -a app app.next; PAGENTOS_HEALTH_URL=http://127.0.0.1:8001/v1/system/health-does-not-exist PAGENTOS_DRAIN_S=5 bash app.next/scripts/cloud/release-cloud-core-bluegreen.sh $($evidence.head_sha) 2>&1; echo EXIT=`$?"
+        # HEAD's script, from the stable copy when phase G left one (a failed B leaves the OLD
+        # tree live; its script predates --reconcile and the -c reload and once left the edge
+        # files naming a stopped colour); the tree under test is still the live one.
+        $hostScript = 'if [ -f qual-head/scripts/cloud/release-cloud-core-bluegreen.sh ]; then echo qual-head/scripts/cloud/release-cloud-core-bluegreen.sh; else echo app/scripts/cloud/release-cloud-core-bluegreen.sh; fi'
+        $c = Invoke-Host "set -e; cd /opt/pagentos; rm -rf app.next; cp -a app app.next; s=`$($hostScript); PAGENTOS_HEALTH_URL=http://127.0.0.1:8001/v1/system/health-does-not-exist PAGENTOS_DRAIN_S=5 bash `$s $($evidence.head_sha) 2>&1; echo EXIT=`$?"
         Start-Sleep -Seconds 5
         $mC = Stop-Prober $prober
         $evidence.measurements.C_controlled_failure = $mC
@@ -568,7 +572,8 @@ try {
     if (-not $SkipExplicitRollback) {
         Write-Host "== D: explicit rollback to the other colour, then the roll-forward"
         $prober = Start-Prober -Name "D_explicit_rollback"
-        $d = Invoke-Host "cd /opt/pagentos && PAGENTOS_WAIT_STEP_S=3 bash app/scripts/cloud/release-cloud-core-bluegreen.sh $($evidence.head_sha) --rollback 2>&1; echo EXIT=`$?"
+        $hostScript = 'if [ -f qual-head/scripts/cloud/release-cloud-core-bluegreen.sh ]; then echo qual-head/scripts/cloud/release-cloud-core-bluegreen.sh; else echo app/scripts/cloud/release-cloud-core-bluegreen.sh; fi'
+        $d = Invoke-Host "cd /opt/pagentos && s=`$($hostScript) && PAGENTOS_WAIT_STEP_S=3 bash `$s $($evidence.head_sha) --rollback 2>&1; echo EXIT=`$?"
         Start-Sleep -Seconds 5
         $mD1 = Stop-Prober $prober
         $evidence.measurements.D_explicit_rollback = $mD1
@@ -584,7 +589,7 @@ try {
         Record-Deployment "deployment.cloud_core.rolled_back" "Acik geri alma: kenar diger renge gecti ($($afterD1.edge_active))." "bluegreen:rollback:$stamp"
 
         $prober = Start-Prober -Name "D_roll_forward"
-        $f = Invoke-Host "set -e; cd /opt/pagentos; rm -rf app.next; cp -a app app.next; PAGENTOS_DRAIN_S=20 bash app.next/scripts/cloud/release-cloud-core-bluegreen.sh $($evidence.head_sha) 2>&1; echo EXIT=`$?"
+        $f = Invoke-Host "set -e; cd /opt/pagentos; rm -rf app.next; cp -a app app.next; s=`$($hostScript); PAGENTOS_DRAIN_S=20 bash `$s $($evidence.head_sha) 2>&1; echo EXIT=`$?"
         Start-Sleep -Seconds 5
         $mD2 = Stop-Prober $prober
         $evidence.measurements.D_roll_forward = $mD2
@@ -658,4 +663,5 @@ finally {
     Get-ChildItem -Path $proberDir -Filter "*.stop" -ErrorAction SilentlyContinue | Out-Null
     foreach ($f in Get-ChildItem -Path $proberDir -Filter "*.tsv" -ErrorAction SilentlyContinue) { Copy-Item -LiteralPath $f.FullName -Destination (Join-Path $EvidenceDir "m18-4-probes-$stamp-$($f.BaseName).tsv") -ErrorAction SilentlyContinue }
     $env:PAGENTOS_QUAL_TOKEN = $null
+    try { [void](Invoke-Host "rm -rf /opt/pagentos/qual-head") } catch { }
 }

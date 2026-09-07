@@ -580,13 +580,24 @@ switched=1
 echo "edge -> api-$idle"
 maybe_interrupt after_switch
 
-health="$(curl -fsS "$health_url")"
-edge_release="$(served_release "$health")"
+# `nginx -s reload` only SENDS the signal: the master parses the new configuration and
+# starts new workers a moment later, and a probe fired in that moment still reaches the
+# old colour (run 6, 2026-09-07: "through the edge the release is c109302" one second after
+# the switch, then a needless rollback). Bounded wait for the edge to answer with the sha.
+tries=0
+edge_release=""
+while [ "$tries" -lt "${PAGENTOS_EDGE_SETTLE_TRIES:-20}" ]; do
+    health="$(curl -fsS "$health_url" 2>/dev/null || true)"
+    edge_release="$(served_release "$health")"
+    if [ "$edge_release" = "$sha" ]; then break; fi
+    tries=$((tries + 1))
+    sleep "${PAGENTOS_EDGE_SETTLE_STEP_S:-0.5}"
+done
 if [ "$edge_release" != "$sha" ]; then
-    echo "through the edge the release is '${edge_release:-absent}', expected '$sha'" >&2
+    echo "through the edge the release is '${edge_release:-absent}', expected '$sha' (after $tries probes)" >&2
     exit 76
 fi
-echo "health through the edge: release $sha"
+echo "health through the edge: release $sha (settled after $tries retr$( [ "$tries" = "1" ] && echo y || echo ies))"
 
 if [ "$first_cutover" != "1" ]; then
     if [ "$handoff_legacy" = "1" ]; then
