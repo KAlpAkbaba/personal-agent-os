@@ -13,18 +13,31 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, Index, String, Uuid
+from sqlalchemy import Boolean, DateTime, Index, Integer, String, Uuid
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import JSON
 
 from app.models import Base
 
-#: mail_drafts.state (spec §3): a draft is reversible right up until it is SENT.
+#: mail_drafts.state (spec §3, ADR-0084 addendum 2): a draft is reversible right up until
+#: it is SENT. ``prepared`` -> ``read_back`` (the explicit read-back act, never PREPARE
+#: itself — H1) -> ``sending`` (the atomic compare-and-swap, H2, before any provider call)
+#: -> ``sent`` (success) or back to ``read_back`` with ``last_error`` set (a provider
+#: failure — L1) -> ``discarded`` (from ``prepared`` or ``read_back``, never from
+#: ``sending``/``sent``).
 DRAFT_STATE_PREPARED = "prepared"
+DRAFT_STATE_READ_BACK = "read_back"
+DRAFT_STATE_SENDING = "sending"
 DRAFT_STATE_SENT = "sent"
 DRAFT_STATE_DISCARDED = "discarded"
-DRAFT_STATES: tuple[str, ...] = (DRAFT_STATE_PREPARED, DRAFT_STATE_SENT, DRAFT_STATE_DISCARDED)
+DRAFT_STATES: tuple[str, ...] = (
+    DRAFT_STATE_PREPARED,
+    DRAFT_STATE_READ_BACK,
+    DRAFT_STATE_SENDING,
+    DRAFT_STATE_SENT,
+    DRAFT_STATE_DISCARDED,
+)
 
 DRAFT_KIND_REPLY = "reply"
 DRAFT_KIND_NEW = "new"
@@ -78,11 +91,27 @@ class MailDraftRow(Base):
     body: Mapped[str] = mapped_column(String(20000), nullable=False, default="")
     in_reply_to: Mapped[str | None] = mapped_column(String(500), nullable=True)
     state: Mapped[str] = mapped_column(String(16), nullable=False, default=DRAFT_STATE_PREPARED)
-    #: Set every time the draft's own content was spoken back to the owner verbatim
-    #: (``draft_reply``/``draft_new``/``edit_draft``/``read_draft``) — the gate's own
-    #: precondition (docs/M21_MAIL_CALENDAR_SPEC.md §1, ADR-0084 decision 1).
+    #: Set ONLY by the explicit read-back act (``mail.read_draft``, or the Cockpit's
+    #: pending listing presenting the row) — never at prepare time (H1, ADR-0084
+    #: addendum 2; docs/M21_MAIL_CALENDAR_SPEC.md §1).
     read_back_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: The session that performed the read-back — a voice realtime session id, or
+    #: ``"rest:<owner session id>"`` for the Cockpit. A confirmation from a DIFFERENT
+    #: voice session is never bound to this read-back (ADDENDUM 2).
+    read_back_session_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    #: The voice turn the read-back was spoken on — ``None`` for a REST-presented
+    #: read-back (there is no turn on that surface). A confirmation's own turn must be
+    #: strictly LATER than this one (ADDENDUM 2).
+    read_back_turn: Mapped[int | None] = mapped_column(Integer, nullable=True)
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: ``"rest:<session id>"`` or ``"voice:<session id>:<turn>"`` — who actually confirmed
+    #: this, in the caller's own words, never reconstructed after the fact (ADDENDUM 2).
+    confirmed_by: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    #: The exception class name from the last failed provider send (L1) — never the
+    #: exception's own message (which may carry provider connection details), and never
+    #: silently discarded: a failed send always reverts to ``read_back`` with this set,
+    #: rather than leaving the row stuck in ``sending``.
+    last_error: Mapped[str | None] = mapped_column(String(200), nullable=True)
     sent_message_id: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -95,6 +124,8 @@ __all__ = [
     "DRAFT_STATES",
     "DRAFT_STATE_DISCARDED",
     "DRAFT_STATE_PREPARED",
+    "DRAFT_STATE_READ_BACK",
+    "DRAFT_STATE_SENDING",
     "DRAFT_STATE_SENT",
     "MailDraftRow",
     "MailIndexRow",

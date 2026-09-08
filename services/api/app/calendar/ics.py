@@ -28,6 +28,26 @@ from dateutil.rrule import rrulestr
 #: VTIMEZONE resolves here, never to the host's own (unrelated) local zone.
 DEFAULT_TIMEZONE = "Europe/Istanbul"
 
+#: M2 (security review): spec §2's own bound on how wide a window agenda/free_slots may
+#: answer — declared here (the ONE place expansion happens) and re-exported from
+#: ``app.calendar.providers`` for backward compatibility. Previously declared in
+#: ``providers.py`` and never actually enforced anywhere; :func:`clamp_window` is what
+#: enforces it now.
+MAX_WINDOW_DAYS = 62
+#: Per-event and per-window occurrence caps: a subscribed calendar with one absurd
+#: recurring event must not be able to make an agenda answer unboundedly large.
+MAX_OCCURRENCES_PER_EVENT = 1000
+MAX_OCCURRENCES_PER_WINDOW = 10000
+#: The DoS ``expand_events`` used to be open to (M2, verified live): a `FREQ=SECONDLY`
+#: event anchored decades before the requested window forces ``dateutil.rrule`` to
+#: materialise every intervening occurrence one at a time before ever reaching the
+#: window — the library has no way to jump ahead for an arbitrary rule. Neither
+#: ``rrule.between()`` nor ``rrule.xafter()`` change this (both iterate from DTSTART
+#: internally too); the only way to bound the WORK rather than just the RESULT is to cap
+#: the raw number of occurrences dateutil is allowed to generate while searching,
+#: independent of how many of them actually land inside ``[start, end)``.
+MAX_RRULE_RAW_SCAN = 200_000
+
 
 @dataclass(frozen=True, slots=True)
 class VEvent:
@@ -216,22 +236,49 @@ def _occ_key(dt: datetime) -> tuple[int, int, int, int, int, int]:
     return (u.year, u.month, u.day, u.hour, u.minute, u.second)
 
 
-def expand_events(events: list[VEvent], *, start: datetime, end: datetime) -> list[Occurrence]:
-    """Every occurrence of every event overlapping ``[start, end)``, earliest first.
+def clamp_window(start: datetime, end: datetime) -> tuple[datetime, datetime, bool]:
+    """M2 (security review): enforce :data:`MAX_WINDOW_DAYS` — a caller asking for more
+    than that gets the SAME answer clamped to it (the third element is ``True`` when this
+    actually narrowed the window), never an unbounded expansion. A negative or zero-width
+    request (``end <= start``) is left alone; there is nothing to clamp and the caller's
+    own validation (or the empty result it naturally produces) is the honest answer."""
+    if end <= start:
+        return start, end, False
+    limit = start + timedelta(days=MAX_WINDOW_DAYS)
+    if end > limit:
+        return start, limit, True
+    return start, end, False
+
+
+def _expand_with_caps(
+    events: list[VEvent], *, start: datetime, end: datetime
+) -> tuple[list[Occurrence], bool]:
+    """The shared core :func:`expand_events`/:func:`expand_events_report` both call.
 
     A non-recurring event is one occurrence, checked directly; a recurring event is
-    walked through ``dateutil.rrule`` from its own DTSTART, stopping the walk itself once
-    an occurrence starts at or after ``end`` (never truncated by a COUNT/UNTIL the rule did
-    not actually carry — an unbounded rule is bounded by the window instead).
+    walked through ``dateutil.rrule`` from its own DTSTART, stopping the walk once an
+    occurrence starts at or after ``end`` (never truncated by a COUNT/UNTIL the rule did
+    not actually carry — an unbounded rule is bounded by the window instead) — AND (M2)
+    bounded by three independent caps, since the window alone does not bound the WORK
+    when an event's own DTSTART sits far before it (see :data:`MAX_RRULE_RAW_SCAN`'s own
+    docstring): the raw number of occurrences dateutil is allowed to generate while
+    searching for this one event (``MAX_RRULE_RAW_SCAN``), the number actually kept for
+    one event (``MAX_OCCURRENCES_PER_EVENT``), and the total kept across every event in
+    this call (``MAX_OCCURRENCES_PER_WINDOW``).
     """
     out: list[Occurrence] = []
+    truncated = False
     for ev in events:
         duration = ev.dtend - ev.dtstart
         if ev.rrule:
             rule_text = ev.rrule if ev.rrule.upper().startswith("RRULE:") else f"RRULE:{ev.rrule}"
             rule = rrulestr(rule_text, dtstart=ev.dtstart)
             exdate_keys = {_occ_key(d) for d in ev.exdates}
-            for occ_start in rule:
+            per_event = 0
+            for scanned, occ_start in enumerate(rule, start=1):
+                if scanned > MAX_RRULE_RAW_SCAN:
+                    truncated = True
+                    break
                 if occ_start >= end:
                     break
                 occ_end = occ_start + duration
@@ -248,6 +295,13 @@ def expand_events(events: list[VEvent], *, start: datetime, end: datetime) -> li
                         all_day=ev.all_day,
                     )
                 )
+                per_event += 1
+                if per_event >= MAX_OCCURRENCES_PER_EVENT:
+                    truncated = True
+                    break
+                if len(out) >= MAX_OCCURRENCES_PER_WINDOW:
+                    truncated = True
+                    break
         else:
             if ev.dtend <= start or ev.dtstart >= end:
                 continue
@@ -260,8 +314,28 @@ def expand_events(events: list[VEvent], *, start: datetime, end: datetime) -> li
                     all_day=ev.all_day,
                 )
             )
+        if len(out) >= MAX_OCCURRENCES_PER_WINDOW:
+            truncated = True
+            break
     out.sort(key=lambda o: o.start)
-    return out
+    return out, truncated
+
+
+def expand_events(events: list[VEvent], *, start: datetime, end: datetime) -> list[Occurrence]:
+    """Every occurrence of every event overlapping ``[start, end)``, earliest first —
+    bounded (M2, module docstring); see :func:`expand_events_report` for a caller that
+    also wants to know whether the caps actually bit."""
+    occurrences, _truncated = _expand_with_caps(events, start=start, end=end)
+    return occurrences
+
+
+def expand_events_report(
+    events: list[VEvent], *, start: datetime, end: datetime
+) -> tuple[list[Occurrence], bool]:
+    """Same as :func:`expand_events`, plus whether any of the M2 caps actually
+    truncated the result — ``app.calendar.providers`` folds this into a
+    ``truncated: true`` a caller can surface (a receipt, a speech line)."""
+    return _expand_with_caps(events, start=start, end=end)
 
 
 def build_vevent(
@@ -303,10 +377,16 @@ def build_vevent(
 
 __all__ = [
     "DEFAULT_TIMEZONE",
+    "MAX_OCCURRENCES_PER_EVENT",
+    "MAX_OCCURRENCES_PER_WINDOW",
+    "MAX_RRULE_RAW_SCAN",
+    "MAX_WINDOW_DAYS",
     "Occurrence",
     "VEvent",
     "build_vevent",
+    "clamp_window",
     "expand_events",
+    "expand_events_report",
     "parse_calendar",
     "parse_datetime",
 ]

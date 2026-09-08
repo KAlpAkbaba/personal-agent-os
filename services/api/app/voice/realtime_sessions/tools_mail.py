@@ -19,8 +19,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Final
 
+from app.actions.confirmation_gate import CONFIRM_SOURCE_VOICE, Confirmation
 from app.mail.service import MailService
 from app.voice.errors import VoiceError, VoiceErrorClass
+from app.voice.intents import Intent
 
 if TYPE_CHECKING:
     from app.voice.realtime_sessions.tools import ToolContext, ToolRegistry
@@ -158,11 +160,18 @@ def mail_edit_draft(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, An
 
 
 def mail_read_draft(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
-    """ "Cevabı oku." (spec §3)."""
+    """ "Cevabı oku." (spec §3) — the EXPLICIT read-back act (H1): binds
+    ``read_back_session_id``/``read_back_turn`` to THIS session/turn so a later
+    confirmation can be checked against them (``app.actions.confirmation_gate``)."""
     del arguments
     db = _require_db(ctx, TOOL_MAIL_READ_DRAFT)
     service = _service(ctx, TOOL_MAIL_READ_DRAFT)
-    return service.read_draft(db, session_id=str(ctx.session_id))
+    turn = _turn_record(ctx).get("turn")
+    return service.read_draft(
+        db,
+        session_id=str(ctx.session_id),
+        turn=turn if isinstance(turn, int) else None,
+    )
 
 
 # ---------------------------------------------------------- EXTERNAL MUTATION tools
@@ -171,13 +180,34 @@ def mail_read_draft(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, An
 def mail_send(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
     """ "Gönder." (spec §3) — reaches the real ``MailSender`` ONLY after the confirmation
     gate says yes; with nothing prepared, or the gate refusing, the sender is never
-    touched (module docstring)."""
+    touched (module docstring).
+
+    H1 (ADR-0084 addendum 2): the gate does not trust that this handler was called at
+    all as proof of the owner's word — a model can call any tool it likes on its own
+    initiative, or steered by a hostile document it just read. The claim this call makes
+    is built HERE, from the ONE router's own resolution of the CURRENT turn
+    (``ctx.context["last_utterance"]``), never from the mere fact of being dispatched:
+    ``owner_intent_ok`` is true only when the router itself resolved this turn to
+    ``MAIL_SEND`` — the same field the persona is instructed never to call this tool
+    without (module docstring's own ASLA)."""
     del arguments
     db = _require_db(ctx, TOOL_MAIL_SEND)
     service = _service(ctx, TOOL_MAIL_SEND)
     settings = ctx.live.get("settings")
     host_flag = bool(getattr(settings, "mail_send_enabled", False))
-    return service.send(db, host_flag_enabled=host_flag, session_id=str(ctx.session_id))
+    turn = _turn_record(ctx)
+    confirmation = Confirmation(
+        source=CONFIRM_SOURCE_VOICE,
+        session_id=str(ctx.session_id),
+        turn=turn.get("turn") if isinstance(turn.get("turn"), int) else None,
+        owner_intent_ok=turn.get("intent") == Intent.MAIL_SEND,
+    )
+    return service.send(
+        db,
+        host_flag_enabled=host_flag,
+        session_id=str(ctx.session_id),
+        confirmation=confirmation,
+    )
 
 
 def mail_discard(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:

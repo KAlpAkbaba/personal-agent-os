@@ -482,6 +482,17 @@ class Harness:
             with self.factory() as db:
                 self.mail.read(db, target="Ali")
                 self.mail.draft_reply(db, body="Yarın 10'da uygunum.", target="current")
+                # H1 (ADR-0084 addendum 2): PREPARE alone no longer counts as "read back"
+                # - the router's own draft_pending flag (app.voice.realtime_sessions.
+                # service) requires the row to actually be in DRAFT_STATE_READ_BACK, so a
+                # context named "already read back" now has to genuinely perform that
+                # act. A sentinel session/turn is fine here: this stamps the ROUTER-level
+                # "something is pending" signal (state alone, not session-bound); a case
+                # that goes on to actually CONFIRM must still read it back for REAL, in
+                # ITS OWN session, through the real tool (see mc.send.confirmed's
+                # ``pre_turn`` in tests/voice_corpus/corpus.py) — the confirmation gate's
+                # own session/turn binding is never satisfied by this seed alone.
+                self.mail.read_draft(db, session_id="seed:draft_read_back", turn=0)
         elif context == CTX_EVENT_FOCUSED:
             with self.factory() as db:
                 operator_focus.set_focus(
@@ -499,6 +510,8 @@ class Harness:
                     start=datetime(2026, 9, 15, 11, 0, tzinfo=UTC),
                     end=datetime(2026, 9, 15, 12, 0, tzinfo=UTC),
                 )
+                # See CTX_DRAFT_READ_BACK's identical comment just above.
+                self.calendar.read_proposal(db, session_id="seed:proposal_read_back", turn=0)
 
     # ------------------------------------------------------------- M21: mail/calendar
 

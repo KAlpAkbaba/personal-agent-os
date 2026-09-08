@@ -1,6 +1,9 @@
 """Calendar REST surface for the Cockpit's approval pair (docs/M21_MAIL_CALENDAR_SPEC.md §3).
 
-- GET  /v1/calendar/proposals/pending          the prepared proposals awaiting the owner
+- GET  /v1/calendar/proposals/pending          the prepared proposals awaiting the owner —
+                                                the listing itself is the read-back
+                                                (ADR-0084 addendum 2; see
+                                                ``app.mail.routes``'s identical discipline).
 - POST /v1/calendar/proposals/{id}/confirm     runs the SAME gate as the voice confirmation
 - POST /v1/calendar/proposals/{id}/discard
 
@@ -11,12 +14,18 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 
-from app.calendar.models import PROPOSAL_STATE_PREPARED, CalendarProposalRow
+from app.actions.confirmation_gate import CONFIRM_SOURCE_REST, Confirmation
+from app.calendar.models import (
+    PROPOSAL_STATE_PREPARED,
+    PROPOSAL_STATE_READ_BACK,
+    CalendarProposalRow,
+)
 from app.calendar.service import CalendarService
 from app.identity.dependencies import require_owner_session
 
@@ -55,18 +64,34 @@ def _proposal_dict(row: CalendarProposalRow) -> dict[str, Any]:
 @router.get("/proposals/pending")
 async def list_pending_proposals(request: Request) -> dict[str, Any]:
     artifacts = _artifacts(request)
+    owner_session_id = str(request.state.owner_session.session_id)
 
     def load() -> list[dict[str, Any]]:
         with artifacts.session() as db:
             rows = (
                 db.execute(
                     select(CalendarProposalRow)
-                    .where(CalendarProposalRow.state == PROPOSAL_STATE_PREPARED)
+                    .where(
+                        CalendarProposalRow.state.in_(
+                            (PROPOSAL_STATE_PREPARED, PROPOSAL_STATE_READ_BACK)
+                        )
+                    )
                     .order_by(CalendarProposalRow.created_at.desc())
                 )
                 .scalars()
                 .all()
             )
+            # The Cockpit's own listing IS the read-back for this surface (module
+            # docstring, ADR-0084 addendum 2).
+            now = datetime.now(UTC)
+            for row in rows:
+                if row.state == PROPOSAL_STATE_PREPARED:
+                    row.state = PROPOSAL_STATE_READ_BACK
+                    row.read_back_at = now
+                    row.read_back_session_id = f"{CONFIRM_SOURCE_REST}:{owner_session_id}"
+                    row.read_back_turn = None
+                    row.updated_at = now
+            db.commit()
             return [_proposal_dict(r) for r in rows]
 
     proposals = await asyncio.to_thread(load)
@@ -78,15 +103,19 @@ async def confirm_proposal(proposal_id: uuid.UUID, request: Request) -> dict[str
     service = _service(request)
     artifacts = _artifacts(request)
     settings = request.app.state.settings
+    owner_session_id = str(request.state.owner_session.session_id)
 
     def run() -> dict[str, Any]:
         with artifacts.session() as db:
             if db.get(CalendarProposalRow, proposal_id) is None:
                 raise HTTPException(status_code=404, detail="proposal not found")
+            confirmation = Confirmation(source=CONFIRM_SOURCE_REST, session_id=owner_session_id)
             return service.commit(
                 db,
                 proposal_id=str(proposal_id),
                 host_flag_enabled=bool(settings.calendar_write_enabled),
+                session_id=owner_session_id,
+                confirmation=confirmation,
             )
 
     return await asyncio.to_thread(run)

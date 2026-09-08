@@ -14,12 +14,16 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.actions.confirmation_gate import GATE_NOT_READ_BACK
-from app.calendar.models import PROPOSAL_STATE_PREPARED, CalendarProposalRow
+from app.actions.confirmation_gate import CONFIRM_SOURCE_REST, GATE_NOT_READ_BACK
+from app.calendar.models import (
+    PROPOSAL_STATE_PREPARED,
+    PROPOSAL_STATE_READ_BACK,
+    CalendarProposalRow,
+)
 from app.calendar.service import CalendarService
 from app.config import Settings
 from app.ledger.models import ActivityEventRow
-from app.mail.models import DRAFT_STATE_PREPARED, MailDraftRow
+from app.mail.models import DRAFT_STATE_PREPARED, DRAFT_STATE_READ_BACK, MailDraftRow
 from app.mail.service import MailService
 from app.main import create_app
 from app.operator.models import ObjectFocusRow
@@ -95,7 +99,7 @@ def client(app_and_client) -> TestClient:
     return test_client
 
 
-def _prepared_draft(factory, *, read_back_at) -> str:
+def _prepared_draft(factory, *, read_back_at, state: str = DRAFT_STATE_PREPARED) -> str:
     now = datetime.now(UTC)
     with factory() as db:
         row = MailDraftRow(
@@ -106,8 +110,9 @@ def _prepared_draft(factory, *, read_back_at) -> str:
             subject="Toplantı",
             body="Yarın gelemiyorum.",
             in_reply_to=None,
-            state=DRAFT_STATE_PREPARED,
+            state=state,
             read_back_at=read_back_at,
+            read_back_session_id=f"{CONFIRM_SOURCE_REST}:owner" if read_back_at else None,
             created_at=now,
             updated_at=now,
         )
@@ -116,7 +121,7 @@ def _prepared_draft(factory, *, read_back_at) -> str:
         return str(row.id)
 
 
-def _prepared_proposal(factory, *, read_back_at) -> str:
+def _prepared_proposal(factory, *, read_back_at, state: str = PROPOSAL_STATE_PREPARED) -> str:
     now = datetime.now(UTC)
     with factory() as db:
         row = CalendarProposalRow(
@@ -128,8 +133,9 @@ def _prepared_proposal(factory, *, read_back_at) -> str:
             end=now + timedelta(hours=3),
             location=None,
             conflicts_json=[],
-            state=PROPOSAL_STATE_PREPARED,
+            state=state,
             read_back_at=read_back_at,
+            read_back_session_id=f"{CONFIRM_SOURCE_REST}:owner" if read_back_at else None,
             created_at=now,
             updated_at=now,
         )
@@ -179,7 +185,7 @@ def test_confirm_sends_exactly_once_through_the_fake_sender(
 ) -> None:
     app, _ = app_and_client
     read_back = datetime.now(UTC) - timedelta(seconds=1)
-    draft_id = _prepared_draft(factory, read_back_at=read_back)
+    draft_id = _prepared_draft(factory, read_back_at=read_back, state=DRAFT_STATE_READ_BACK)
     response = client.post(f"/v1/mail/drafts/{draft_id}/confirm")
     assert response.status_code == 200
     assert response.json()["execution_status"] == "executed"
@@ -200,6 +206,25 @@ def test_discard_marks_the_draft_discarded(client, factory) -> None:
 def test_confirm_unknown_draft_is_404(client) -> None:
     response = client.post(f"/v1/mail/drafts/{uuid.uuid4()}/confirm")
     assert response.status_code == 404
+
+
+def test_pending_listing_is_the_read_back_and_a_confirm_then_succeeds(
+    client, factory, app_and_client
+) -> None:
+    """ADR-0084 addendum 2: a draft that was never voice-read-back can still be
+    confirmed through the Cockpit, because THIS surface's own listing IS the read-back
+    (module docstring) — never a stuck ``not_read_back`` for a draft the owner is
+    literally looking at on screen."""
+    app, _ = app_and_client
+    draft_id = _prepared_draft(factory, read_back_at=None, state=DRAFT_STATE_PREPARED)
+    pending = client.get("/v1/mail/drafts/pending").json()["drafts"]
+    row = next(d for d in pending if d["id"] == draft_id)
+    assert row["state"] == "read_back"
+    assert row["read_back_at"] is not None
+
+    response = client.post(f"/v1/mail/drafts/{draft_id}/confirm")
+    assert response.json()["execution_status"] == "executed"
+    assert len(app.state.mail_service._sender.sent) == 1  # type: ignore[attr-defined]
 
 
 # --------------------------------------------------------------------------- calendar
@@ -224,7 +249,9 @@ def test_calendar_confirm_runs_the_same_gate(client, factory) -> None:
 def test_calendar_confirm_commits_exactly_once(client, factory, app_and_client) -> None:
     app, _ = app_and_client
     read_back = datetime.now(UTC) - timedelta(seconds=1)
-    proposal_id = _prepared_proposal(factory, read_back_at=read_back)
+    proposal_id = _prepared_proposal(
+        factory, read_back_at=read_back, state=PROPOSAL_STATE_READ_BACK
+    )
     response = client.post(f"/v1/calendar/proposals/{proposal_id}/confirm")
     assert response.status_code == 200
     assert response.json()["execution_status"] == "executed"
@@ -245,3 +272,20 @@ def test_calendar_discard_marks_the_proposal_discarded(client, factory) -> None:
 def test_calendar_confirm_unknown_proposal_is_404(client) -> None:
     response = client.post(f"/v1/calendar/proposals/{uuid.uuid4()}/confirm")
     assert response.status_code == 404
+
+
+def test_pending_proposal_listing_is_the_read_back_and_a_confirm_then_succeeds(
+    client, factory, app_and_client
+) -> None:
+    """The calendar side of ``test_pending_listing_is_the_read_back_and_a_confirm_then_
+    succeeds`` above."""
+    app, _ = app_and_client
+    proposal_id = _prepared_proposal(factory, read_back_at=None, state=PROPOSAL_STATE_PREPARED)
+    pending = client.get("/v1/calendar/proposals/pending").json()["proposals"]
+    row = next(p for p in pending if p["id"] == proposal_id)
+    assert row["state"] == "read_back"
+    assert row["read_back_at"] is not None
+
+    response = client.post(f"/v1/calendar/proposals/{proposal_id}/confirm")
+    assert response.json()["execution_status"] == "executed"
+    assert len(app.state.calendar_service._writer.created) == 1  # type: ignore[attr-defined]

@@ -16,9 +16,11 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final
 from zoneinfo import ZoneInfo
 
+from app.actions.confirmation_gate import CONFIRM_SOURCE_VOICE, Confirmation
 from app.calendar import tr_time
 from app.calendar.service import CalendarService
 from app.voice.errors import VoiceError, VoiceErrorClass
+from app.voice.intents import Intent
 
 if TYPE_CHECKING:
     from app.voice.realtime_sessions.tools import ToolContext, ToolRegistry
@@ -171,11 +173,17 @@ def calendar_propose(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, A
 
 
 def calendar_read_proposal(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
-    """ "Öneriyi oku." (spec §3)."""
+    """ "Öneriyi oku." (spec §3) — the EXPLICIT read-back act (H1); see
+    ``app.voice.realtime_sessions.tools_mail.mail_read_draft``'s docstring."""
     del arguments
     db = _require_db(ctx, TOOL_CALENDAR_READ_PROPOSAL)
     service = _service(ctx, TOOL_CALENDAR_READ_PROPOSAL)
-    return service.read_proposal(db, session_id=str(ctx.session_id))
+    turn = _turn_record(ctx).get("turn")
+    return service.read_proposal(
+        db,
+        session_id=str(ctx.session_id),
+        turn=turn if isinstance(turn, int) else None,
+    )
 
 
 # ---------------------------------------------------------- EXTERNAL MUTATION tools
@@ -183,13 +191,27 @@ def calendar_read_proposal(ctx: ToolContext, arguments: dict[str, Any]) -> dict[
 
 def calendar_commit(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
     """ "Onayla." / "Tamam, ekle." (spec §3) — reaches the real ``CalendarWriter`` ONLY
-    after the confirmation gate says yes."""
+    after the confirmation gate says yes. H1 (ADR-0084 addendum 2): see
+    ``app.voice.realtime_sessions.tools_mail.mail_send``'s docstring — the same
+    router-resolved, never handler-assumed, owner-intent check."""
     del arguments
     db = _require_db(ctx, TOOL_CALENDAR_COMMIT)
     service = _service(ctx, TOOL_CALENDAR_COMMIT)
     settings = ctx.live.get("settings")
     host_flag = bool(getattr(settings, "calendar_write_enabled", False))
-    return service.commit(db, host_flag_enabled=host_flag, session_id=str(ctx.session_id))
+    turn = _turn_record(ctx)
+    confirmation = Confirmation(
+        source=CONFIRM_SOURCE_VOICE,
+        session_id=str(ctx.session_id),
+        turn=turn.get("turn") if isinstance(turn.get("turn"), int) else None,
+        owner_intent_ok=turn.get("intent") == Intent.CALENDAR_COMMIT,
+    )
+    return service.commit(
+        db,
+        host_flag_enabled=host_flag,
+        session_id=str(ctx.session_id),
+        confirmation=confirmation,
+    )
 
 
 def calendar_discard(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:

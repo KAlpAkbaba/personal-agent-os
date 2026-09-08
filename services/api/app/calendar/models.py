@@ -10,18 +10,27 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, Index, String, Uuid
+from sqlalchemy import Boolean, DateTime, Index, Integer, String, Uuid
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import JSON
 
 from app.models import Base
 
+#: calendar_proposals.state (spec §3, ADR-0084 addendum 2) — the same lifecycle
+#: ``app.mail.models`` documents for a draft: ``prepared`` -> ``read_back`` (the explicit
+#: read-back act, never PREPARE itself — H1) -> ``committing`` (the atomic
+#: compare-and-swap, H2) -> ``committed`` (success) or back to ``read_back`` with
+#: ``last_error`` (a provider failure — L1) -> ``discarded``.
 PROPOSAL_STATE_PREPARED = "prepared"
+PROPOSAL_STATE_READ_BACK = "read_back"
+PROPOSAL_STATE_COMMITTING = "committing"
 PROPOSAL_STATE_COMMITTED = "committed"
 PROPOSAL_STATE_DISCARDED = "discarded"
 PROPOSAL_STATES: tuple[str, ...] = (
     PROPOSAL_STATE_PREPARED,
+    PROPOSAL_STATE_READ_BACK,
+    PROPOSAL_STATE_COMMITTING,
     PROPOSAL_STATE_COMMITTED,
     PROPOSAL_STATE_DISCARDED,
 )
@@ -70,8 +79,22 @@ class CalendarProposalRow(Base):
         JSON().with_variant(JSONB(), "postgresql"), nullable=False, default=list
     )
     state: Mapped[str] = mapped_column(String(16), nullable=False, default=PROPOSAL_STATE_PREPARED)
+    #: Set ONLY by the explicit read-back act (``calendar.read_proposal``, or the
+    #: Cockpit's pending listing presenting the row) — never at prepare time (H1,
+    #: ADR-0084 addendum 2).
     read_back_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: The session that performed the read-back — a voice realtime session id, or
+    #: ``"rest:<owner session id>"`` for the Cockpit (ADDENDUM 2).
+    read_back_session_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    #: The voice turn the read-back was spoken on — ``None`` for a REST-presented
+    #: read-back (ADDENDUM 2).
+    read_back_turn: Mapped[int | None] = mapped_column(Integer, nullable=True)
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: ``"rest:<session id>"`` or ``"voice:<session id>:<turn>"`` (ADDENDUM 2).
+    confirmed_by: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    #: The exception class name from the last failed provider create/update (L1) — never
+    #: silently discarded: a failed commit always reverts to ``read_back`` with this set.
+    last_error: Mapped[str | None] = mapped_column(String(200), nullable=True)
     committed_event_uid: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -83,8 +106,10 @@ __all__ = [
     "PROPOSAL_KIND_RESCHEDULE",
     "PROPOSAL_STATES",
     "PROPOSAL_STATE_COMMITTED",
+    "PROPOSAL_STATE_COMMITTING",
     "PROPOSAL_STATE_DISCARDED",
     "PROPOSAL_STATE_PREPARED",
+    "PROPOSAL_STATE_READ_BACK",
     "CalendarIndexRow",
     "CalendarProposalRow",
 ]

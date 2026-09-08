@@ -14,16 +14,22 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.actions.confirmation_gate import (
+    CONFIRM_SOURCE_REST,
+    CONFIRM_SOURCE_VOICE,
     GATE_ACCOUNT_MISSING,
     GATE_ALREADY_SENT,
+    GATE_CONFIRMATION_NOT_OWNER,
     GATE_NO_CONFIRMATION,
     GATE_NOT_READ_BACK,
     GATE_SEND_DISABLED,
+    Confirmation,
 )
 from app.ledger.models import ActivityEventRow
 from app.mail.models import (
     DRAFT_STATE_DISCARDED,
     DRAFT_STATE_PREPARED,
+    DRAFT_STATE_READ_BACK,
+    DRAFT_STATE_SENT,
     MailDraftRow,
     MailIndexRow,
 )
@@ -162,13 +168,34 @@ def test_draft_reply_composes_the_exact_reply_headers(db) -> None:
     assert draft["in_reply_to"] == want["in_reply_to"]
     assert result["references"] == want["references"]
     assert draft["state"] == DRAFT_STATE_PREPARED
+    # H1 (ADR-0084 addendum 2): PREPARE never stamps a read-back on its own any more -
+    # only the explicit `mail.read_draft` act does (proven below).
+    assert draft["read_back_at"] is None
+
+
+def test_read_draft_is_the_explicit_read_back_act(db) -> None:
+    service = _service()
+    service.read(db, target="Ali")
+    prepared = service.draft_reply(db, body="Yarın 10'da uygunum.", target="current")
+    assert prepared["draft"]["read_back_at"] is None
+    read_back = service.read_draft(db, session_id="sess-1", turn=3)
+    assert read_back["execution_status"] == "executed"
+    draft = read_back["draft"]
+    assert draft["state"] == DRAFT_STATE_READ_BACK
     assert draft["read_back_at"] is not None
 
 
 # ---------------------------------------------------------------------- the gate
 
 
-def _prepared_draft(db, *, read_back_at=None) -> MailDraftRow:
+def _prepared_draft(
+    db,
+    *,
+    state: str = DRAFT_STATE_PREPARED,
+    read_back_at=None,
+    read_back_session_id: str | None = None,
+    read_back_turn: int | None = None,
+) -> MailDraftRow:
     now = datetime.now(UTC)
     row = MailDraftRow(
         id=uuid.uuid4(),
@@ -178,8 +205,10 @@ def _prepared_draft(db, *, read_back_at=None) -> MailDraftRow:
         subject="Toplantı",
         body="Yarın gelemiyorum.",
         in_reply_to=None,
-        state=DRAFT_STATE_PREPARED,
+        state=state,
         read_back_at=read_back_at,
+        read_back_session_id=read_back_session_id,
+        read_back_turn=read_back_turn,
         created_at=now,
         updated_at=now,
     )
@@ -193,57 +222,176 @@ def _prepared_draft(db, *, read_back_at=None) -> MailDraftRow:
     return row
 
 
+def _voice_confirmation(*, session_id="sess-1", turn=2, owner_intent_ok=True) -> Confirmation:
+    return Confirmation(
+        source=CONFIRM_SOURCE_VOICE, session_id=session_id, turn=turn, owner_intent_ok=owner_intent_ok
+    )
+
+
 def test_send_refuses_not_read_back(db) -> None:
     service = _service()
-    _prepared_draft(db, read_back_at=None)
-    result = service.send(db, host_flag_enabled=True)
+    _prepared_draft(db, state=DRAFT_STATE_PREPARED, read_back_at=None)
+    result = service.send(db, host_flag_enabled=True, confirmation=_voice_confirmation())
     assert result["execution_status"] == "refused"
     assert result["error_class"] == GATE_NOT_READ_BACK
     assert service._sender.sent == []  # type: ignore[attr-defined]
 
 
-def test_send_refuses_no_confirmation_when_read_back_is_in_the_future(db) -> None:
+def test_send_refuses_no_confirmation_when_none_is_given(db) -> None:
     service = _service()
-    _prepared_draft(db, read_back_at=datetime.now(UTC) + timedelta(hours=1))
-    result = service.send(db, host_flag_enabled=True)
+    _prepared_draft(
+        db,
+        state=DRAFT_STATE_READ_BACK,
+        read_back_at=datetime.now(UTC),
+        read_back_session_id="sess-1",
+        read_back_turn=1,
+    )
+    result = service.send(db, host_flag_enabled=True, confirmation=None)
     assert result["error_class"] == GATE_NO_CONFIRMATION
+    assert service._sender.sent == []  # type: ignore[attr-defined]
+
+
+def test_send_refuses_no_confirmation_when_the_turn_is_not_after_the_read_back(db) -> None:
+    """ADR-0084 addendum 2 condition (c): the confirmation's own turn must be STRICTLY
+    LATER than the read-back's — the same turn (or an earlier one) is refused."""
+    service = _service()
+    _prepared_draft(
+        db,
+        state=DRAFT_STATE_READ_BACK,
+        read_back_at=datetime.now(UTC),
+        read_back_session_id="sess-1",
+        read_back_turn=2,
+    )
+    result = service.send(
+        db,
+        host_flag_enabled=True,
+        confirmation=_voice_confirmation(session_id="sess-1", turn=2, owner_intent_ok=True),
+    )
+    assert result["error_class"] == GATE_NO_CONFIRMATION
+    assert service._sender.sent == []  # type: ignore[attr-defined]
+
+
+def test_send_refuses_confirmation_not_owner_when_the_router_never_resolved_mail_send(db) -> None:
+    """H1: the tool being CALLED is never proof of the owner's word - only the router
+    having resolved THIS turn to MAIL_SEND is (a model-issued send with no owner turn)."""
+    service = _service()
+    _prepared_draft(
+        db,
+        state=DRAFT_STATE_READ_BACK,
+        read_back_at=datetime.now(UTC),
+        read_back_session_id="sess-1",
+        read_back_turn=1,
+    )
+    result = service.send(
+        db,
+        host_flag_enabled=True,
+        confirmation=_voice_confirmation(session_id="sess-1", turn=2, owner_intent_ok=False),
+    )
+    assert result["error_class"] == GATE_CONFIRMATION_NOT_OWNER
+    assert service._sender.sent == []  # type: ignore[attr-defined]
+
+
+def test_send_refuses_not_read_back_when_the_confirmation_is_a_different_session(db) -> None:
+    """A voice confirmation from a session that never heard THIS draft's read-back is
+    refused the same way an unread draft is - never a guess that the owner remembers a
+    different conversation."""
+    service = _service()
+    _prepared_draft(
+        db,
+        state=DRAFT_STATE_READ_BACK,
+        read_back_at=datetime.now(UTC),
+        read_back_session_id="sess-old",
+        read_back_turn=1,
+    )
+    result = service.send(
+        db,
+        host_flag_enabled=True,
+        confirmation=_voice_confirmation(session_id="sess-new", turn=1, owner_intent_ok=True),
+    )
+    assert result["error_class"] == GATE_NOT_READ_BACK
     assert service._sender.sent == []  # type: ignore[attr-defined]
 
 
 def test_send_refuses_send_disabled(db) -> None:
     service = _service()
-    _prepared_draft(db, read_back_at=datetime.now(UTC) - timedelta(seconds=1))
-    result = service.send(db, host_flag_enabled=False)
+    _prepared_draft(
+        db,
+        state=DRAFT_STATE_READ_BACK,
+        read_back_at=datetime.now(UTC),
+        read_back_session_id="sess-1",
+        read_back_turn=1,
+    )
+    result = service.send(db, host_flag_enabled=False, confirmation=_voice_confirmation())
     assert result["error_class"] == GATE_SEND_DISABLED
     assert service._sender.sent == []  # type: ignore[attr-defined]
 
 
 def test_send_refuses_account_missing(db) -> None:
     service = MailService(None, None)
-    _prepared_draft(db, read_back_at=datetime.now(UTC) - timedelta(seconds=1))
-    result = service.send(db, host_flag_enabled=True)
+    _prepared_draft(
+        db,
+        state=DRAFT_STATE_READ_BACK,
+        read_back_at=datetime.now(UTC),
+        read_back_session_id="sess-1",
+        read_back_turn=1,
+    )
+    result = service.send(db, host_flag_enabled=True, confirmation=_voice_confirmation())
     assert result["error_class"] == GATE_ACCOUNT_MISSING
 
 
 def test_send_succeeds_exactly_once_and_a_second_confirmation_refuses(db) -> None:
     service = _service()
-    _prepared_draft(db, read_back_at=datetime.now(UTC) - timedelta(seconds=1))
-    first = service.send(db, host_flag_enabled=True)
+    _prepared_draft(
+        db,
+        state=DRAFT_STATE_READ_BACK,
+        read_back_at=datetime.now(UTC),
+        read_back_session_id="sess-1",
+        read_back_turn=1,
+    )
+    first = service.send(db, host_flag_enabled=True, confirmation=_voice_confirmation())
     assert first["execution_status"] == "executed"
+    assert first["draft"]["state"] == DRAFT_STATE_SENT
     assert len(service._sender.sent) == 1  # type: ignore[attr-defined]
 
-    second = service.send(db, host_flag_enabled=True)
+    second = service.send(
+        db, host_flag_enabled=True, confirmation=_voice_confirmation(turn=3)
+    )
     assert second["execution_status"] == "refused"
     assert second["error_class"] == GATE_ALREADY_SENT
     assert len(service._sender.sent) == 1  # type: ignore[attr-defined] # never sent twice
 
 
+def test_rest_confirmation_needs_no_turn_and_succeeds_once(db) -> None:
+    """The Cockpit's own authenticated act IS the confirmation on the REST surface -
+    no turn to check (module docstring, ADR-0084 addendum 2)."""
+    service = _service()
+    _prepared_draft(
+        db,
+        state=DRAFT_STATE_READ_BACK,
+        read_back_at=datetime.now(UTC),
+        read_back_session_id="rest:owner-session-1",
+        read_back_turn=None,
+    )
+    confirmation = Confirmation(source=CONFIRM_SOURCE_REST, session_id="owner-session-1")
+    result = service.send(db, host_flag_enabled=True, confirmation=confirmation)
+    assert result["execution_status"] == "executed"
+    assert result["draft"]["confirmed_by"] == "rest:owner-session-1"
+
+
 def test_discard_prevents_a_later_send(db) -> None:
     service = _service()
-    row = _prepared_draft(db, read_back_at=datetime.now(UTC) - timedelta(seconds=1))
+    row = _prepared_draft(
+        db,
+        state=DRAFT_STATE_READ_BACK,
+        read_back_at=datetime.now(UTC),
+        read_back_session_id="sess-1",
+        read_back_turn=1,
+    )
     discarded = service.discard(db, draft_id=str(row.id))
     assert discarded["draft"]["state"] == DRAFT_STATE_DISCARDED
-    later = service.send(db, draft_id=str(row.id), host_flag_enabled=True)
+    later = service.send(
+        db, draft_id=str(row.id), host_flag_enabled=True, confirmation=_voice_confirmation()
+    )
     assert later["error_class"] == GATE_ALREADY_SENT
     assert service._sender.sent == []  # type: ignore[attr-defined]
 
@@ -284,7 +432,11 @@ def test_no_password_ever_reaches_a_receipt_or_ledger_row(db) -> None:
         service.read(db, target="current")
         draft = service.draft_new(db, to="ali.yilmaz@example.com", subject="Selam", body="Merhaba")
         draft_id = draft["draft"]["id"]
-        service.send(db, draft_id=draft_id, host_flag_enabled=True)
+        service.read_draft(db, session_id="sess-1", turn=1)
+        confirmation = Confirmation(
+            source=CONFIRM_SOURCE_VOICE, session_id="sess-1", turn=2, owner_intent_ok=True
+        )
+        service.send(db, draft_id=draft_id, host_flag_enabled=True, confirmation=confirmation)
 
         rows = db.execute(select(ActivityEventRow)).scalars().all()
         assert len(rows) > 0

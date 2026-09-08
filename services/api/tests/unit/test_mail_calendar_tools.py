@@ -92,6 +92,11 @@ def test_propose_read_commit_is_exactly_one_fake_create() -> None:
     assert proposed["status"] == "succeeded", proposed
     assert proposed["result"]["proposal"]["summary"] == "Diş hekimi"
 
+    # H1 (ADR-0084 addendum 2): PREPARE never counts as read back on its own any more -
+    # the real read-back act, in THIS session, is what the confirmation below binds to.
+    read_back = h.tool(sid, "c-1b", "calendar.read_proposal", {})
+    assert read_back["status"] == "succeeded", read_back
+
     h.say(sid, "Onayla.", turn=2)
     committed = h.tool(sid, "c-2", "calendar.commit", {})
     assert committed["status"] == "succeeded", committed
