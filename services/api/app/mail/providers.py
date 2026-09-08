@@ -358,10 +358,15 @@ class ImapMailProvider:
     def _fetch_uids(
         self, conn: imaplib.IMAP4, folder: str, criteria: list[str], *, limit: int
     ) -> list[MailMessage]:
-        typ, _ = conn.select(folder, readonly=True)
+        # imaplib's own ``_command`` ascii-encodes any ``str`` argument and raises on a
+        # non-ASCII one (a Turkish folder name, "Gönderilmiş"; a Turkish search term) —
+        # passing UTF-8 BYTES instead skips that encode step entirely (imaplib appends
+        # bytes args verbatim), which is exactly ``SEARCH CHARSET UTF-8``'s own promise.
+        typ, _ = conn.select(folder.encode("utf-8"), readonly=True)
         if typ != "OK":
             return []
-        typ, data = conn.uid("SEARCH", "CHARSET", "UTF-8", *criteria)
+        encoded_criteria = [c.encode("utf-8") if isinstance(c, str) else c for c in criteria]
+        typ, data = conn.uid("SEARCH", "CHARSET", "UTF-8", *encoded_criteria)
         if typ != "OK" or not data or not data[0]:
             return []
         uids = data[0].split()
