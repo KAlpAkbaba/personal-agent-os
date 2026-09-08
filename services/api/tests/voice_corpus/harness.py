@@ -118,6 +118,7 @@ from tests.voice_corpus.corpus import (
     CTX_ALARM_SCHEDULED,
     CTX_ARTIFACT_FOCUSED,
     CTX_COMMON_POINTS_FOCUSED,
+    CTX_DOCUMENT_ARTIFACT_FOCUSED,
     CTX_DOCUMENT_FOCUSED,
     CTX_DOCX_FOCUSED,
     CTX_DRAFT_READ_BACK,
@@ -504,6 +505,63 @@ class Harness:
                                 }
                             ],
                             "spoken_numbers": [12000, 45000],
+                        }
+                    ),
+                )
+                operator_focus.set_focus(
+                    db,
+                    FOCUS_KIND_ARTIFACT,
+                    str(current.artifact_id),
+                    label=current.title,
+                    source="test_context",
+                )
+            self.ids["artifact:current"] = str(current.artifact_id)
+            self.ids["artifact:previous"] = str(older.artifact_id)
+        elif context == CTX_DOCUMENT_ARTIFACT_FOCUSED:
+            # The same discipline with the kinds swapped: an older spreadsheet, then a
+            # current DOCUMENT — the artifact "Bunu PDF yap" can honestly turn into a PDF.
+            artifacts_runtime = self.runtime.artifacts
+            with self.factory() as db:
+                older = artifact_factory.create(
+                    db,
+                    artifacts_runtime.store,
+                    spec=ArtifactSpec.model_validate(
+                        {
+                            "kind": "spreadsheet",
+                            "title": "Bütçe 2026",
+                            "sheets": [
+                                {
+                                    "name": "Özet",
+                                    "columns": ["Kalem", "Tutar"],
+                                    "rows": [["Kira", 12000], ["Maaş", 45000]],
+                                }
+                            ],
+                            "spoken_numbers": [12000, 45000],
+                        }
+                    ),
+                )
+                operator_focus.set_focus(
+                    db,
+                    FOCUS_KIND_ARTIFACT,
+                    str(older.artifact_id),
+                    label=older.title,
+                    source="test_context",
+                )
+                current = artifact_factory.create(
+                    db,
+                    artifacts_runtime.store,
+                    spec=ArtifactSpec.model_validate(
+                        {
+                            "kind": "document",
+                            "title": "Toplantı Notları",
+                            "sections": [
+                                {
+                                    "heading": "Giriş",
+                                    "level": 1,
+                                    "paragraphs": ["Toplantının notları."],
+                                }
+                            ],
+                            "spoken_numbers": [],
                         }
                     ),
                 )
@@ -904,6 +962,17 @@ def _format_from_utterance(text: str) -> str | None:
     return None
 
 
+def _letter(index: int) -> str:
+    """A label with no digit in it: the spec's never-invented rule counts every digit the
+    owner did not say, so the persona's own labels are letters (A, B, C, ... AA)."""
+    letters = ""
+    index += 1
+    while index:
+        index, rem = divmod(index - 1, 26)
+        letters = chr(ord("A") + rem) + letters
+    return letters
+
+
 def _default_artifact_spec(kind: str, title: str, numbers: list[float] | None) -> dict:
     """A spec the persona would plausibly send for ``kind`` — its own structural
     numbers are exactly ``numbers`` (a router-derived subset by construction), so a
@@ -911,14 +980,14 @@ def _default_artifact_spec(kind: str, title: str, numbers: list[float] | None) -
     wants to prove the REFUSAL overrides ``spec`` entirely via ``tool_arguments``."""
     values = list(numbers or [])
     if kind == "spreadsheet":
-        rows = [[f"Kalem {i + 1}", n] for i, n in enumerate(values)] or [["Kalem 1", 0]]
+        rows = [[f"Kalem {_letter(i)}", n] for i, n in enumerate(values)] or [["Kalem", "—"]]
         return {
             "kind": kind,
             "title": title,
             "sheets": [{"name": "Özet", "columns": ["Kalem", "Tutar"], "rows": rows}],
         }
     if kind == "dataset":
-        rows = [[f"Satır {i + 1}", n] for i, n in enumerate(values)] or [["Satır 1", 0]]
+        rows = [[f"Satır {_letter(i)}", n] for i, n in enumerate(values)] or [["Satır", "—"]]
         return {"kind": kind, "title": title, "columns": ["Ad", "Değer"], "rows": rows}
     if kind == "presentation":
         bullets = [str(n) for n in values] or ["İçerik"]
@@ -1110,6 +1179,13 @@ def run_case(case: UtteranceCase, *, harness: Harness | None = None) -> CaseResu
                 result.problems.append(
                     f"expected succeeded, got {call['status']} {body.get('error_class')}"
                 )
+            elif body.get("execution_status") == "refused" or body.get("status") == "refused":
+                # A refusal receipt is a succeeded CALL (the M18 contract) — an OK case
+                # that quietly receives one was never proven. Measured on 2026-09-08: the
+                # persona's own "Kalem 1" label tripped the never-invented rule and several
+                # art.create cases passed while refused.
+                why = body.get("error_class") or body.get("reason") or speech[:60]
+                result.problems.append(f"expected an executed receipt, got a refusal: {why!r}")
             if not speech and case.expected_tool not in ("state.now",):
                 result.problems.append("no speech on the result")
         if speech and contains_fake_completion(speech):
@@ -1187,9 +1263,11 @@ def run_case(case: UtteranceCase, *, harness: Harness | None = None) -> CaseResu
             if forbidden in _REFUSAL_PROVEN_BY_DISPATCH:
                 # mail.send/calendar.commit take no arguments at all (their own schema);
                 # only research.start's own forbidden-dispatch check needs a topic.
-                forbidden_args = {} if forbidden in ("mail.send", "calendar.commit") else {
-                    "topic": case.utterance
-                }
+                forbidden_args = (
+                    {}
+                    if forbidden in ("mail.send", "calendar.commit")
+                    else {"topic": case.utterance}
+                )
                 blocked = h.tool(sid, f"forbidden-{forbidden}", forbidden, forbidden_args)
                 blocked_body = blocked.get("result") or {}
                 # A research.start refusal is a SUCCEEDED call whose own result carries

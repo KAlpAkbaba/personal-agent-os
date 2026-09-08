@@ -96,6 +96,10 @@ CTX_PROPOSAL_READ_BACK: Final = "proposal_read_back"
 #: same two-timestamp discipline CTX_WINDOW_FOCUSED already uses for "önceki pencereye
 #: dön" (see tests/voice_corpus/harness.py's own ``seed``).
 CTX_ARTIFACT_FOCUSED: Final = "artifact_focused"
+#: The current artifact is a DOCUMENT (an older spreadsheet behind it): the kinds decide the
+#: formats (spec §1), so "Bunu PDF yap" needs a document in focus — a spreadsheet answers
+#: "Bu dosya PDF olamaz" honestly, which the strengthened harness now refuses to count as done.
+CTX_DOCUMENT_ARTIFACT_FOCUSED: Final = "document_artifact_focused"
 
 #: Side-effect policies: the device capabilities a case MAY reach on the fake device.
 #: Anything else the fake device saw is a forbidden side effect.
@@ -2072,10 +2076,15 @@ def _artifact_create_cases() -> list[UtteranceCase]:
 
 def _artifact_render_cases() -> list[UtteranceCase]:
     cases: list[UtteranceCase] = []
-    for case_id, text, source in (
-        ("art.render.pdf", "Bunu PDF yap.", "canonical"),
-        ("art.render.excel", "Bunu Excel yap.", "canonical"),
-        ("art.render.para", "Bunu PDF olarak da hazırlar mısın?", "paraphrase"),
+    for case_id, text, context, source in (
+        ("art.render.pdf", "Bunu PDF yap.", CTX_DOCUMENT_ARTIFACT_FOCUSED, "canonical"),
+        ("art.render.excel", "Bunu Excel yap.", CTX_ARTIFACT_FOCUSED, "canonical"),
+        (
+            "art.render.para",
+            "Bunu PDF olarak da hazırlar mısın?",
+            CTX_DOCUMENT_ARTIFACT_FOCUSED,
+            "paraphrase",
+        ),
     ):
         cases.extend(
             _with_variants(
@@ -2085,7 +2094,7 @@ def _artifact_render_cases() -> list[UtteranceCase]:
                     expected_intent="artifact_create",
                     expected_tool="artifact.render",
                     side_effects=SIDE_EFFECTS_NONE,
-                    context=CTX_ARTIFACT_FOCUSED,
+                    context=context,
                     category="artifacts",
                     source=source,
                 )
@@ -2292,8 +2301,7 @@ def _artifact_negative_cases() -> list[UtteranceCase]:
             context=CTX_NONE,
             category="artifacts",
             source="regression",
-            regression_issue_id="ADR-0085 addendum 6 (LOW): never write a secret into "
-            "an artifact",
+            regression_issue_id="ADR-0085 addendum 6 (LOW): never write a secret into an artifact",
         )
     )
     return cases
