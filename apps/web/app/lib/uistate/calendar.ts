@@ -104,6 +104,7 @@ export function calendarRangeIsToday(range: string | null): boolean {
 export const CALENDAR_PROPOSAL_CAPTION: Record<CalendarProposalState, string> = {
   prepared: "Öneri hazır",
   read_back: "Öneri okundu — onay bekliyor",
+  committing: "Takvime işleniyor",
   committed: "Takvime işlendi",
   discarded: "Öneriden vazgeçildi",
 };
@@ -112,6 +113,7 @@ export const CALENDAR_PROPOSAL_CAPTION: Record<CalendarProposalState, string> = 
 export const CALENDAR_PROPOSAL_STATE_LABEL: Record<CalendarProposalState, string> = {
   prepared: "hazır",
   read_back: "okundu",
+  committing: "işleniyor",
   committed: "işlendi",
   discarded: "vazgeçildi",
 };

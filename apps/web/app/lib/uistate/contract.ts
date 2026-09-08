@@ -293,7 +293,7 @@ export function isCalendarState(state: string): state is CalendarUiState {
  * discarded. A token outside this list is a word this build cannot read and
  * is shown as the plain state, never as one of these.
  */
-export const MAIL_DRAFT_STATES = ["prepared", "read_back", "sent", "discarded"] as const;
+export const MAIL_DRAFT_STATES = ["prepared", "read_back", "sending", "sent", "discarded"] as const;
 
 export type MailDraftState = (typeof MAIL_DRAFT_STATES)[number];
 
@@ -304,7 +304,7 @@ export function isMailDraftState(value: unknown): value is MailDraftState {
 }
 
 /** A proposal's lifecycle in `metadata.proposal_state`: the draft's, with `committed` for `sent`. */
-export const CALENDAR_PROPOSAL_STATES = ["prepared", "read_back", "committed", "discarded"] as const;
+export const CALENDAR_PROPOSAL_STATES = ["prepared", "read_back", "committing", "committed", "discarded"] as const;
 
 export type CalendarProposalState = (typeof CALENDAR_PROPOSAL_STATES)[number];
 

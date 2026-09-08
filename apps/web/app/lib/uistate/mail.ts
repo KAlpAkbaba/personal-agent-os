@@ -88,6 +88,7 @@ export const MAIL_CAPTION_INBOX = "Gelen kutusu okunuyor";
 export const MAIL_DRAFT_CAPTION: Record<MailDraftState, string> = {
   prepared: "Taslak hazır — okunmayı bekliyor",
   read_back: "Taslak okundu — onay bekliyor",
+  sending: "Gönderiliyor",
   sent: "Gönderildi",
   discarded: "Taslaktan vazgeçildi",
 };
@@ -96,6 +97,7 @@ export const MAIL_DRAFT_CAPTION: Record<MailDraftState, string> = {
 export const MAIL_DRAFT_STATE_LABEL: Record<MailDraftState, string> = {
   prepared: "hazır",
   read_back: "okundu",
+  sending: "gönderiliyor",
   sent: "gönderildi",
   discarded: "vazgeçildi",
 };

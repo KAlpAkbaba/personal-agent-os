@@ -192,8 +192,8 @@ describe("contract v6 is v5 plus the mail and calendar states, and says so", () 
   });
 
   it("types the draft and proposal lifecycles, and admits nothing outside them", () => {
-    expect(MAIL_DRAFT_STATES).toEqual(["prepared", "read_back", "sent", "discarded"]);
-    expect(CALENDAR_PROPOSAL_STATES).toEqual(["prepared", "read_back", "committed", "discarded"]);
+    expect(MAIL_DRAFT_STATES).toEqual(["prepared", "read_back", "sending", "sent", "discarded"]);
+    expect(CALENDAR_PROPOSAL_STATES).toEqual(["prepared", "read_back", "committing", "committed", "discarded"]);
     for (const s of MAIL_DRAFT_STATES) expect(isMailDraftState(s), s).toBe(true);
     for (const s of CALENDAR_PROPOSAL_STATES) expect(isCalendarProposalState(s), s).toBe(true);
     expect(isMailDraftState("committed")).toBe(false);
@@ -255,6 +255,7 @@ describe("contract v6 is v5 plus the mail and calendar states, and says so", () 
     expect(MAIL_DRAFT_CAPTION).toEqual({
       prepared: "Taslak hazır — okunmayı bekliyor",
       read_back: "Taslak okundu — onay bekliyor",
+      sending: "Gönderiliyor",
       sent: "Gönderildi",
       discarded: "Taslaktan vazgeçildi",
     });
@@ -262,6 +263,7 @@ describe("contract v6 is v5 plus the mail and calendar states, and says so", () 
     expect(CALENDAR_PROPOSAL_CAPTION).toEqual({
       prepared: "Öneri hazır",
       read_back: "Öneri okundu — onay bekliyor",
+      committing: "Takvime işleniyor",
       committed: "Takvime işlendi",
       discarded: "Öneriden vazgeçildi",
     });
@@ -754,5 +756,26 @@ describe("the voice overlay and the mail and calendar postures", () => {
     const overStale = applyVoiceOverlay(stale, VOICE_TOOL_RUNNING);
     expect(overStale.kind).toBe("tool_running");
     expect(overStale.source).toBe("voice");
+  });
+});
+
+describe("the transient states the Cloud Core's atomic transition publishes (ADR-0084 addendum 2)", () => {
+  it("captions them as work in progress, never as done", async () => {
+    const { MAIL_DRAFT_CAPTION } = await import("../../app/lib/uistate/mail");
+    const { CALENDAR_PROPOSAL_CAPTION } = await import("../../app/lib/uistate/calendar");
+    expect(MAIL_DRAFT_CAPTION.sending).toBe("Gönderiliyor");
+    expect(CALENDAR_PROPOSAL_CAPTION.committing).toBe("Takvime işleniyor");
+    expect(MAIL_DRAFT_CAPTION.sending).not.toBe(MAIL_DRAFT_CAPTION.sent);
+  });
+
+  it("keeps the approval pair disabled while the Core acts, with the reason in words", async () => {
+    const { approvalGate, APPROVAL_REASON_IN_FLIGHT } = await import("../../app/lib/cockpit/approval-rows");
+    const gate = approvalGate({ state: "sending", read_back_at: "2026-09-08T00:00:00Z" }, null);
+    expect(gate.enabled).toBe(false);
+    expect(gate.reasonKind).toBe("in_flight");
+    expect(gate.reason).toBe(APPROVAL_REASON_IN_FLIGHT);
+    const committing = approvalGate({ state: "committing", read_back_at: null }, null);
+    expect(committing.enabled).toBe(false);
+    expect(committing.reasonKind).toBe("in_flight");
   });
 });

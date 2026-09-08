@@ -16,6 +16,8 @@ export type ApprovalRow = { state: string | null; read_back_at: string | null };
 
 /** The states past which a row is no longer the owner's to decide. */
 const SETTLED_STATES: ReadonlySet<string> = new Set(["sent", "committed", "discarded"]);
+/** The Cloud Core is acting on the owner's word right now (its atomic transition, ADR-0084 addendum 2): nobody presses anything. */
+const IN_FLIGHT_STATES: ReadonlySet<string> = new Set(["sending", "committing"]);
 
 /** True while the row is still the owner's to decide. A row with no state came from the pending route, so it is pending. */
 export function rowPending(state: string | null): boolean {
@@ -31,15 +33,17 @@ export type ApprovalGate = {
   enabled: boolean;
   /** Why the pair is disabled, in the owner's words; `null` when it is enabled or the row is settled. */
   reason: string | null;
-  reasonKind: "not_read_back" | "busy" | "settled" | null;
+  reasonKind: "not_read_back" | "busy" | "in_flight" | "settled" | null;
 };
 
 export const APPROVAL_REASON_NOT_READ_BACK = "Önce sesli okunması gerekir; bu kayıt henüz okunmadı.";
 export const APPROVAL_REASON_BUSY = "Bir istek yanıt bekliyor.";
+export const APPROVAL_REASON_IN_FLIGHT = "Core şu anda işliyor.";
 
 /** Whether the pair under `row` may be pressed right now, and if not, why. */
 export function approvalGate(row: ApprovalRow, busy: ApprovalBusy | null): ApprovalGate {
   if (!rowPending(row.state)) return { enabled: false, reason: null, reasonKind: "settled" };
+  if (row.state !== null && IN_FLIGHT_STATES.has(row.state)) return { enabled: false, reason: APPROVAL_REASON_IN_FLIGHT, reasonKind: "in_flight" };
   if (!rowReadBack(row)) return { enabled: false, reason: APPROVAL_REASON_NOT_READ_BACK, reasonKind: "not_read_back" };
   if (busy !== null) return { enabled: false, reason: APPROVAL_REASON_BUSY, reasonKind: "busy" };
   return { enabled: true, reason: null, reasonKind: null };
