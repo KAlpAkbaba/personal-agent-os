@@ -959,6 +959,25 @@
   color: var(--text);
 }
 
+/* -------------------------------------------------- Uygulamalar (M23 §6) */
+
+/* The link a RUNNING project gets — `http://127.0.0.1:<port>/`, for the
+   owner's own browser, never fetched by this page — and the three chips
+   that ask the Cloud Core for the device's bounded process: accented only
+   when they may actually be pressed, disabled with the reason in words
+   otherwise. */
+.app-link {
+  color: var(--accent);
+  font-size: 0.78rem;
+  white-space: nowrap;
+  margin-left: 0.5rem;
+}
+
+.approval-pair .core-chip[data-app-action]:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
 /* ---------------------------------------------------- reduced motion */
 
 /*

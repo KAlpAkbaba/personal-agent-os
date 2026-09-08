@@ -52,6 +52,7 @@ import {
   fetchWorld,
 } from "./api";
 import { type PendingDraft, type PendingProposal, fetchPendingDrafts, fetchPendingProposals } from "./approvals";
+import { type AppProjectRow, fetchApps } from "./apps";
 import { type ArtifactRow, fetchArtifacts } from "./artifacts";
 
 const POLL_VISIBLE_MS = 15_000;
@@ -96,6 +97,14 @@ export type CockpitData = {
    * making itself (rendering, checking) is on the bus, not here.
    */
   artifacts: Loaded<ArtifactRow[]>;
+  /**
+   * M23 §6: the projects the App Factory made, from `/v1/apps`, each with
+   * its state, the port its bounded process is bound to while it runs, and
+   * the counts its last test run gave. The Cloud Core half lands on a
+   * parallel track; until it does the route answers "absent", which the
+   * panel says in words. The building itself is on the bus, not here.
+   */
+  apps: Loaded<AppProjectRow[]>;
 };
 
 const INITIAL: CockpitData = {
@@ -118,6 +127,7 @@ const INITIAL: CockpitData = {
   mailDrafts: { kind: "loading" },
   calendarProposals: { kind: "loading" },
   artifacts: { kind: "loading" },
+  apps: { kind: "loading" },
 };
 
 export function useCockpitData(enabled = true): { data: CockpitData; refresh: () => void } {
@@ -149,6 +159,7 @@ export function useCockpitData(enabled = true): { data: CockpitData; refresh: ()
         mailDrafts,
         calendarProposals,
         artifacts,
+        apps,
       ] = await Promise.all([
         fetchResearchTasks(),
         // Same refresh, no extra timer: the focus changes when the list does.
@@ -170,6 +181,7 @@ export function useCockpitData(enabled = true): { data: CockpitData; refresh: ()
         fetchPendingDrafts(),
         fetchPendingProposals(),
         fetchArtifacts(),
+        fetchApps(),
       ]);
       if (stopped.current) return;
       setData({
@@ -192,6 +204,7 @@ export function useCockpitData(enabled = true): { data: CockpitData; refresh: ()
         mailDrafts,
         calendarProposals,
         artifacts,
+        apps,
       });
     } finally {
       inFlight.current = false;
