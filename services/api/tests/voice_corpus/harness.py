@@ -69,8 +69,10 @@ from app.documents.service import DocumentService
 from app.evolution.models import Capability, CapabilityGap, EvolutionOpportunity, SkillVersion
 from app.evolution.runtime import EvolutionRuntime
 from app.evolution.supervisor import is_paused
+from app.genesis.catalogue import GenesisInterfaceCatalogue, set_catalogue
 from app.genesis.models import GenesisRun
 from app.genesis.runtime import GenesisRuntime
+from app.genesis.service import register_genesis_service
 from app.identity.root import InMemoryCredentialRoot
 from app.identity.runtime import IdentityRuntime
 from app.ledger import service as ledger_service
@@ -821,6 +823,11 @@ def build_harness() -> Harness:
     evolution.work_root = Path(tempfile.mkdtemp(prefix="genesis-work-"))
     genesis = GenesisRuntime(evolution)
     app.state.genesis = genesis
+    register_genesis_service(genesis.service)
+    # M24: a fresh, EMPTY catalogue per harness build — production starts empty too
+    # (module docstring); the "genesis" corpus category's own seed() populates it with
+    # the fixture's spoken name once its fixture app is actually listening.
+    set_catalogue(GenesisInterfaceCatalogue())
     # M19 (docs/M19_DIGITAL_OPERATOR_SPEC.md §4): the SAME fake device port every operator
     # tool reaches through ``ctx.live["device_action"]`` (production's is the SAME object
     # the wake sequence holds; here it is the same ``device`` fake every other family
@@ -864,6 +871,7 @@ def build_harness() -> Harness:
         calendar_service=calendar_service,
         app_factory_service=app_factory_service,
         browser_gateway=browser_gateway,
+        genesis_service=genesis.service,
     )
     holdoffs = HoldoffRegistry()
     set_holdoffs(holdoffs)

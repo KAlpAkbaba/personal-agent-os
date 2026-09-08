@@ -754,6 +754,24 @@ class GenesisService:
     def get(self, run_id: uuid.UUID) -> dict[str, Any]:
         return self._run_dict(self._require(run_id))
 
+    def find_awaiting_approval(self, session_id: str) -> dict[str, Any] | None:
+        """The run THIS voice/REST session parked at ``awaiting_approval``, if
+        any — never resolved from a caller-supplied run id (spec §5/§9:
+        ``capability.approve``/``capability.cancel`` trust the durable
+        session-bound state, never the model's own argument, the same
+        "owner's words win, resolved through durable state" rule the M21
+        mail/calendar confirmation gate follows for its own prepared
+        draft/proposal)."""
+        with self._session_factory() as session:
+            row = session.execute(
+                select(GenesisRun)
+                .where(GenesisRun.state == "awaiting_approval")
+                .where(GenesisRun.session_id == session_id)
+                .order_by(GenesisRun.created_at.desc())
+                .limit(1)
+            ).scalar_one_or_none()
+            return _run_dict(row) if row is not None else None
+
     # ---------------------------------------------------------------- bounds
 
     def _find_active_run(self, capability_id: str) -> GenesisRun | None:
@@ -999,4 +1017,32 @@ def _run_dict(run: GenesisRun) -> dict[str, Any]:
     }
 
 
-__all__ = ["MAX_RUNS_PER_HOUR_PER_INTERFACE", "MAX_RUN_DURATION_S", "GenesisService"]
+# ------------------------------------------------------------- process registry
+#
+# Mirrors app.operator.service.register_operator_service/get_operator_service: the ONE
+# router's turn handler (app.voice.realtime_sessions.service) needs to know whether a
+# genesis run is awaiting approval in THIS session BEFORE it can decide what a bare
+# "Onaylıyorum."/"Vazgeç." means (app.voice.intents.resolve_intent's own
+# genesis_awaiting_approval parameter) — a process-wide singleton, not a DB read the
+# handler builds a whole service around, the same reason the operator's OWN running-task
+# check uses one.
+
+_genesis_service: GenesisService | None = None
+
+
+def register_genesis_service(service: GenesisService | None) -> None:
+    global _genesis_service
+    _genesis_service = service
+
+
+def get_genesis_service() -> GenesisService | None:
+    return _genesis_service
+
+
+__all__ = [
+    "MAX_RUNS_PER_HOUR_PER_INTERFACE",
+    "MAX_RUN_DURATION_S",
+    "GenesisService",
+    "get_genesis_service",
+    "register_genesis_service",
+]

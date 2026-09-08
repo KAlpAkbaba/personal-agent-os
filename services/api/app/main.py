@@ -44,6 +44,7 @@ from app.evolution.runtime import EvolutionRuntime
 from app.experience.routes import router as experience_router
 from app.genesis.routes import router as genesis_router
 from app.genesis.runtime import GenesisRuntime
+from app.genesis.service import register_genesis_service
 from app.goals.routes import router as goals_router
 from app.health import run_health_checks
 from app.identity.routes import router as identity_router
@@ -120,6 +121,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     selfhealing = SelfHealingRuntime(settings)
     evolution = EvolutionRuntime(settings)
     genesis = GenesisRuntime(evolution)
+    # M24 (docs/M24_CAPABILITY_GENESIS_SPEC.md §6): the module-wide registry the ONE
+    # router's turn handler reads to decide what a bare "Onaylıyorum."/"Vazgeç." means —
+    # the same discipline app.operator.service.register_operator_service follows for the
+    # ringing-aware Cancel/Status pair.
+    register_genesis_service(genesis.service)
     security = SecurityRuntime(settings)
     identity = IdentityRuntime(settings)
     mobile = MobileRuntime(settings)
@@ -225,6 +231,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         calendar_service=calendar_service,
         app_factory_service=app_factory_service,
         browser_gateway=browser_gateway,
+        # M24 (docs/M24_CAPABILITY_GENESIS_SPEC.md §6): capability.* reads the SAME
+        # GenesisService the REST surface (app/genesis/routes.py) drives.
+        genesis_service=genesis.service,
     )
 
     def _build_routine_dispatcher() -> ActionDispatcher:

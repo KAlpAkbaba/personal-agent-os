@@ -163,6 +163,18 @@ class Intent(StrEnum):
     APP_FACTORY_OPEN = "app_factory_open"  # Uygulamayı aç
     APP_FACTORY_LIST = "app_factory_list"  # Hangi uygulamaları yaptın?
 
+    # M24 (docs/M24_CAPABILITY_GENESIS_SPEC.md §6): Capability Genesis. Every one of
+    # these targets app.genesis through tools_genesis - never a second
+    # capability-acquisition path (ADR-0087). The TARGET (which local application) and
+    # the OPERATION (which of its controls) are both resolved from the owner's own
+    # words against app.genesis.catalogue.GenesisInterfaceCatalogue, the same
+    # "app.operator.plans.resolve_app_alias" shape APP_OPEN already uses for its own
+    # allowlist - never a second name-resolution table.
+    CAPABILITY_REQUEST = "capability_request"  # Sayaç kutusunu bir artır / Test lambasını aç
+    CAPABILITY_STATUS = "capability_status"  # Yeni yetenek ne durumda? / Onu yapabiliyor musun?
+    CAPABILITY_APPROVE = "capability_approve"  # Onaylıyorum / Bu uygulamayı yetkilendir
+    CAPABILITY_CANCEL = "capability_cancel"  # Vazgeç, yapma
+
     NONE = "none"
 
 
@@ -239,6 +251,13 @@ CAPABILITY_BY_INTENT: dict[Intent, str] = {
     Intent.APP_FACTORY_TEST: "app.test",
     Intent.APP_FACTORY_STOP: "app.stop",
     Intent.APP_FACTORY_OPEN: "app.open",
+    # M24 (spec §6): a genesis request/approval/cancellation is a real mutation
+    # (a candidate is built, tested, rolled out, registered and used, or a
+    # mutating operation actually runs against the owner's local application)
+    # - the same receipt class alarm.create/mail.send/app.create already get.
+    Intent.CAPABILITY_REQUEST: "capability.request",
+    Intent.CAPABILITY_APPROVE: "capability.approve",
+    Intent.CAPABILITY_CANCEL: "capability.cancel",
 }
 
 #: QUERY intents that name a tool rather than being answered conversationally (contract §2:
@@ -282,6 +301,9 @@ QUERY_TOOL_BY_INTENT: dict[Intent, str] = {
     # owner can see - the same query class artifact.list/validate already get.
     Intent.APP_FACTORY_STATUS: "app.status",
     Intent.APP_FACTORY_LIST: "app.list",
+    # M24 (spec §6): a status read-back mutates nothing the owner can see - the same
+    # query class artifact.list/app.status already get.
+    Intent.CAPABILITY_STATUS: "capability.status",
 }
 
 
@@ -513,6 +535,20 @@ class ResolvedIntent:
     #: when none was said - the model still names its own ``commands``, and this is
     #: preferred only when non-empty.
     app_commands: list[str] | None = None
+    #: M24 (docs/M24_CAPABILITY_GENESIS_SPEC.md §6): for the Capability Genesis
+    #: family, the interface the owner's WORDS named, resolved against
+    #: app.genesis.catalogue.GenesisInterfaceCatalogue - the interface's own
+    #: name and its researchable /spec url, or both None when the words named
+    #: no KNOWN local application at all (a target outside the catalogue is
+    #: refused at the tool layer before any research happens, spec §7's own
+    #: negative case - never a guess at what "google" might mean).
+    capability_target_name: str | None = None
+    capability_target_url: str | None = None
+    #: For CAPABILITY_REQUEST, the operation id the owner's WORDS named among
+    #: the resolved target's own operation aliases ("bir artır" -> "increment"),
+    #: or None when no known verb matched - the tool then asks which operation,
+    #: never guesses one.
+    capability_operation: str | None = None
 
     def __post_init__(self) -> None:
         if not self.klass:
@@ -2260,6 +2296,89 @@ def _appfactory_create_match(tokens: tuple[str, ...]) -> str | None:
     return None
 
 
+# --------------------------------------------------- M24: Capability Genesis
+#
+# Built on the SAME token/stem primitives as every intent above - no second Turkish
+# pattern table (module docstring's own rule). The TARGET is resolved against
+# app.genesis.catalogue.GenesisInterfaceCatalogue (empty in production; the fixtures'
+# own spoken names in tests/the voice corpus), the SAME "resolve a name against a small
+# registry" shape ``_app_open_match``'s own ``resolve_app_alias`` import already uses for
+# M19's OS-application allowlist - imported lazily so this module carries no import-time
+# dependency on app.genesis. CAPABILITY_REQUEST/STATUS need no gate beyond that catalogue
+# lookup (an utterance about anything else names no catalogue phrase at all, so these can
+# never fire against the existing corpus, which registers none). CAPABILITY_APPROVE/
+# CANCEL overlap real vocabulary two OTHER families already claim UNCONDITIONALLY
+# ("onaylıyorum" - CALENDAR_COMMIT; "vazgeç" - DISCARD/EVOLUTION_CANCEL), so they are
+# gated on ``genesis_awaiting_approval`` (the CALLER's one live fact, established from
+# ``GenesisService.find_awaiting_approval`` the same lazy once-per-request way
+# ``draft_pending``/``proposal_pending`` are) and checked BEFORE the M21 mail/calendar
+# block below — with the flag false (every case in the existing corpus), neither matcher
+# is even consulted and both words fall through to their EXISTING targets unchanged.
+
+_CAPABILITY_STATUS_NOUN_STEMS: Final[tuple[str, ...]] = ("yetenek",)
+_CAPABILITY_STATUS_QUESTION_FORMS: Final[tuple[str, ...]] = (
+    "durumda",
+    "durumu",
+    "yapabiliyor",
+    "yapabiliyorsun",
+    "yapabildin",
+)
+_CAPABILITY_APPROVE_FORMS: Final[tuple[str, ...]] = ("onaylıyorum", "onayliyorum")
+_CAPABILITY_AUTHORIZE_VERB_FORMS: Final[tuple[str, ...]] = (
+    "yetkilendir",
+    "yetkilendiriyorum",
+    "yetkilendirsene",
+)
+_CAPABILITY_CANCEL_STEMS: Final[tuple[str, ...]] = ("vazgeç", "vazgec")
+
+
+def _capability_catalogue_entry(tokens: tuple[str, ...]) -> Any | None:
+    from app.genesis.catalogue import get_catalogue
+
+    return get_catalogue().resolve(tokens)
+
+
+def _capability_request_match(
+    tokens: tuple[str, ...],
+) -> tuple[Any, str | None, str] | None:
+    """ "Sayaç kutusunu bir artır.", "Test lambasını aç.", "Sayaç kaç?" (spec §6) — a
+    known target (the catalogue) is REQUIRED; the operation is best-effort (the
+    resolved target's own verb aliases), None when no known verb matched at all (the
+    tool then asks which operation, never guesses one)."""
+    entry = _capability_catalogue_entry(tokens)
+    if entry is None:
+        return None
+    operation_id = entry.resolve_operation(tokens)
+    return entry, operation_id, "capability request"
+
+
+def _capability_status_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Yeni yetenek ne durumda?", "Onu yapabiliyor musun artık?" (spec §6)."""
+    if _has(tokens, *_CAPABILITY_STATUS_NOUN_STEMS):
+        if _has_exact(tokens, *_CAPABILITY_STATUS_QUESTION_FORMS):
+            return "yetenek ne durumda"
+        return None
+    if _has_exact(tokens, "artık", "artik") and _has(tokens, "yapabil"):
+        return "yapabiliyor musun artık"
+    return None
+
+
+def _capability_approve_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Onaylıyorum.", "Bu uygulamayı yetkilendir." (spec §6) — gated by the CALLER on
+    ``genesis_awaiting_approval`` (module comment above)."""
+    if _has_exact(tokens, *_CAPABILITY_APPROVE_FORMS):
+        return "onaylıyorum"
+    if _has_exact(tokens, *_CAPABILITY_AUTHORIZE_VERB_FORMS):
+        return "yetkilendir"
+    return None
+
+
+def _capability_cancel_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Vazgeç, yapma." (spec §6) — gated by the CALLER on ``genesis_awaiting_approval``
+    (module comment above)."""
+    return _has(tokens, *_CAPABILITY_CANCEL_STEMS)
+
+
 # ------------------------------------------------- research interaction classes
 
 #: A research word in any Turkish inflection: "araştır", "araştırma", "araştırmayı",
@@ -2890,6 +3009,7 @@ def resolve_intent(
     event_focused: bool = False,
     draft_pending: bool = False,
     proposal_pending: bool = False,
+    genesis_awaiting_approval: bool = False,
 ) -> ResolvedIntent:
     """Resolve a transcript into an :class:`Intent` against the live state.
 
@@ -2928,6 +3048,12 @@ def resolve_intent(
     ("Neyi göndereyim?"/"Neyi onaylayayım?") or nothing at all. The caller establishes all
     three from the durable focus stack and the drafts/proposals tables; the resolver stays
     pure.
+
+    ``genesis_awaiting_approval`` is M24's own one fact (docs/M24_CAPABILITY_GENESIS_SPEC.md
+    §6, ADR-0087): whether a ``GenesisRun`` is parked ``awaiting_approval`` in THIS
+    session right now — the same "one precondition turns a bare confirmation word into a
+    real tool call" shape ``draft_pending``/``proposal_pending`` already give MAIL_SEND/
+    CALENDAR_COMMIT, established by the caller from ``GenesisService.find_awaiting_approval``.
     """
     normalized, tokens, dropped = normalize_transcript(text)
     confidence = 1.0 if dropped == 0 else 0.9
@@ -3149,6 +3275,39 @@ def resolve_intent(
             matched=generic_answer_matched,
             document_ref="current",
             question=text,
+            **base,
+        )
+
+    # 0f-2. M24 (docs/M24_CAPABILITY_GENESIS_SPEC.md §6): Capability Genesis, checked
+    #       BEFORE the M21 block below because CAPABILITY_APPROVE/CANCEL overlap real
+    #       vocabulary CALENDAR_COMMIT/DISCARD already claim unconditionally
+    #       ("onaylıyorum"/"vazgeç") — gated on ``genesis_awaiting_approval`` so neither
+    #       matcher is even consulted, and both words fall through UNCHANGED to their
+    #       existing targets, when no genesis run is actually parked in this session
+    #       (module comment above the matchers). CAPABILITY_REQUEST/STATUS need no gate:
+    #       a catalogue miss (the overwhelming majority — the catalogue is empty outside
+    #       tests) means neither can ever fire.
+    if genesis_awaiting_approval and (approve_matched := _capability_approve_match(tokens)):
+        return ResolvedIntent(
+            Intent.CAPABILITY_APPROVE, scope=SCOPE_CONVERSATION, matched=approve_matched, **base
+        )
+    if genesis_awaiting_approval and (cancel_matched := _capability_cancel_match(tokens)):
+        return ResolvedIntent(
+            Intent.CAPABILITY_CANCEL, scope=SCOPE_CONVERSATION, matched=cancel_matched, **base
+        )
+    if status_matched := _capability_status_match(tokens):
+        return ResolvedIntent(
+            Intent.CAPABILITY_STATUS, scope=SCOPE_CONVERSATION, matched=status_matched, **base
+        )
+    if request_matched := _capability_request_match(tokens):
+        entry, operation_id, matched_label = request_matched
+        return ResolvedIntent(
+            Intent.CAPABILITY_REQUEST,
+            scope=SCOPE_CONVERSATION,
+            matched=matched_label,
+            capability_target_name=entry.name,
+            capability_target_url=entry.url,
+            capability_operation=operation_id,
             **base,
         )
 
