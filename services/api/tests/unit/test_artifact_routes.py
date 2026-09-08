@@ -23,6 +23,7 @@ from app.artifacts.models import (
     Task,
     TaskRun,
 )
+from app.artifacts.render_fetch_store import RenderFetchStore
 from app.artifacts.runtime import ArtifactRuntime
 from app.config import Settings
 from app.main import create_app
@@ -231,6 +232,10 @@ def _client_with_device(device):
     artifacts._store = InMemoryObjectStore()
     app.state.artifacts = artifacts
     app.state.device_action = device
+    # A fresh store per test client (mirrors test_alarms_routes.py's
+    # ``app.state.alarm_audio_store = AudioStore()``): the process-wide default would
+    # otherwise leak tokens/entries across tests in this file.
+    app.state.artifact_render_fetch_store = RenderFetchStore()
     test_client = TestClient(app)
     authenticate(app, test_client, settings=settings)
     return test_client
@@ -315,4 +320,181 @@ def test_open_artifact_requires_owner_session() -> None:
     app.state.identity.service.bootstrap()
     unauthenticated = TestClient(app)
     resp = unauthenticated.post(f"/v1/artifacts/{uuid.uuid4()}/open")
+    assert resp.status_code == 401
+
+
+# --------------------------------------------------- device render-fetch token route
+#
+# ADR-0085 addendum 5 (closing the gap addendum 4 decision 5 recorded): the device's
+# file.fetch (DEVICE_PROTOCOL.md §6k step 6) carries no owner token, cookie or header of
+# its own. ``POST .../open`` now mints a single-use render-fetch token instead of pointing
+# the device at the bearer-gated M13 download route, and
+# ``GET /v1/artifacts/renders/fetch/{token}`` is the ONLY thing that token can redeem
+# against.
+
+
+def test_open_artifact_url_is_a_device_fetch_token_the_device_can_actually_redeem() -> None:
+    """The URL the device is handed lives under ``/v1/artifacts/`` on THIS request's own
+    origin (never a configured one — ADR-0069's rule), names the exact sha256/size of the
+    render, and a caller with NO Authorization header at all (standing in for the
+    companion, which carries none of its own) can redeem it for the exact bytes."""
+    import hashlib
+    from urllib.parse import urlparse
+
+    from tests.alarms_support import FakeDeviceAction
+    from tests.artifacts_support import file_fetch_ok
+
+    device = FakeDeviceAction(results={"file.fetch": file_fetch_ok})
+    client = _client_with_device(device)
+    created = client.post("/v1/artifacts/factory", json={"spec": _spec_json(BUDGET)}).json()
+    artifact_id = created["artifact_id"]
+
+    resp = client.post(f"/v1/artifacts/{artifact_id}/open", json={"format": "xlsx"})
+    assert resp.status_code == 200, resp.text
+
+    payload = device.payload_for("file.fetch")
+    url = payload["url"]
+    parsed = urlparse(url)
+    assert parsed.path.startswith("/v1/artifacts/")
+    assert parsed.path.startswith("/v1/artifacts/renders/fetch/")
+    assert url.startswith(str(client.base_url).rstrip("/"))
+    # Never the bearer-gated M13 download route -- that route cannot authenticate a
+    # device with no session.
+    assert "/renders/xlsx" not in parsed.path
+
+    xlsx_meta = next(r for r in created["renders"] if r["format"] == "xlsx")
+    assert payload["sha256"] == xlsx_meta["content_hash"]
+    assert payload["size"] == xlsx_meta["size_bytes"]
+
+    # A bare, unauthenticated client -- no Authorization header, no cookie -- stands in
+    # for the device's own GET (DEVICE_PROTOCOL.md §6k step 6).
+    device_client = TestClient(client.app)
+    fetched = device_client.get(parsed.path)
+    assert fetched.status_code == 200
+    assert fetched.headers["content-type"] == xlsx_meta["mime_type"]
+    assert fetched.headers["content-length"] == str(xlsx_meta["size_bytes"])
+    assert fetched.headers["cache-control"] == "no-store"
+    assert hashlib.sha256(fetched.content).hexdigest() == payload["sha256"]
+    assert len(fetched.content) == payload["size"]
+
+
+def test_render_fetch_token_is_redeemable_exactly_once() -> None:
+    from urllib.parse import urlparse
+
+    from tests.alarms_support import FakeDeviceAction
+    from tests.artifacts_support import file_fetch_ok
+
+    device = FakeDeviceAction(results={"file.fetch": file_fetch_ok})
+    client = _client_with_device(device)
+    created = client.post("/v1/artifacts/factory", json={"spec": _spec_json(BUDGET)}).json()
+    client.post(f"/v1/artifacts/{created['artifact_id']}/open", json={"format": "xlsx"})
+    path = urlparse(device.payload_for("file.fetch")["url"]).path
+
+    device_client = TestClient(client.app)
+    first = device_client.get(path)
+    assert first.status_code == 200
+
+    # Spent. A token captured from a log after the fact is already useless.
+    second = device_client.get(path)
+    assert second.status_code == 404
+
+
+def test_render_fetch_token_route_404s_for_an_unknown_token() -> None:
+    client = _client_with_device(None)
+    resp = client.get("/v1/artifacts/renders/fetch/definitely-not-a-token")
+    assert resp.status_code == 404
+
+
+def test_render_fetch_token_route_404s_for_an_expired_token() -> None:
+    import uuid
+    from datetime import UTC, datetime, timedelta
+
+    client = _client_with_device(None)
+    created = client.post("/v1/artifacts/factory", json={"spec": _spec_json(BUDGET)}).json()
+    render = next(r for r in created["renders"] if r["format"] == "xlsx")
+
+    store: RenderFetchStore = client.app.state.artifact_render_fetch_store
+    long_ago = datetime.now(UTC) - timedelta(hours=1)
+    handle = store.put(
+        artifact_id=uuid.UUID(created["artifact_id"]),
+        fmt="xlsx",
+        content_hash=render["content_hash"],
+        now=long_ago,
+    )
+    resp = client.get(handle.path())
+    assert resp.status_code == 404
+
+
+def test_render_fetch_token_route_404s_for_a_tampered_token() -> None:
+    from tests.alarms_support import FakeDeviceAction
+    from tests.artifacts_support import file_fetch_ok
+
+    device = FakeDeviceAction(results={"file.fetch": file_fetch_ok})
+    client = _client_with_device(device)
+    created = client.post("/v1/artifacts/factory", json={"spec": _spec_json(BUDGET)}).json()
+    client.post(f"/v1/artifacts/{created['artifact_id']}/open", json={"format": "xlsx"})
+    url = device.payload_for("file.fetch")["url"]
+    path = url[url.index("/v1/artifacts/") :]
+    tampered = path[:-1] + ("a" if path[-1] != "a" else "b")
+
+    device_client = TestClient(client.app)
+    assert device_client.get(tampered).status_code == 404
+    # The real token is untouched and still spends normally -- tampering with a copy
+    # never invalidates the original.
+    assert device_client.get(path).status_code == 200
+
+
+def test_render_fetch_route_needs_no_owner_session_even_when_one_exists() -> None:
+    """The device carries no session; an authenticated caller must not be the only one
+    who can redeem the token (mirrors the alarm greeting-audio precedent)."""
+    from tests.alarms_support import FakeDeviceAction
+    from tests.artifacts_support import file_fetch_ok
+
+    device = FakeDeviceAction(results={"file.fetch": file_fetch_ok})
+    client = _client_with_device(device)
+    created = client.post("/v1/artifacts/factory", json={"spec": _spec_json(BUDGET)}).json()
+    client.post(f"/v1/artifacts/{created['artifact_id']}/open", json={"format": "xlsx"})
+    url = device.payload_for("file.fetch")["url"]
+    path = url[url.index("/v1/artifacts/") :]
+
+    # ``client`` already carries a bearer token (tests.identity_support.authenticate);
+    # the route must accept the request on its own authority, not because of it.
+    assert client.get(path).status_code == 200
+
+
+def test_render_fetch_route_never_appears_in_the_open_ledger_or_receipt() -> None:
+    """ADR-0085 addendum 5: the token must never surface in a receipt, a ledger row, a
+    log line or UI metadata -- only inside the URL handed to the device port, which the
+    receipt never repeats."""
+    from tests.alarms_support import FakeDeviceAction
+    from tests.artifacts_support import file_fetch_ok
+
+    device = FakeDeviceAction(results={"file.fetch": file_fetch_ok})
+    client = _client_with_device(device)
+    created = client.post("/v1/artifacts/factory", json={"spec": _spec_json(BUDGET)}).json()
+    resp = client.post(f"/v1/artifacts/{created['artifact_id']}/open", json={"format": "xlsx"})
+    body = resp.json()
+
+    url = device.payload_for("file.fetch")["url"]
+    token = url.rsplit("/", 1)[-1]
+    assert token not in json.dumps(body)
+
+
+def test_get_render_route_still_requires_an_owner_session() -> None:
+    """The ordinary bearer-gated download route is unchanged by the device token route
+    added alongside it -- a caller with no session still gets 401, never the bytes."""
+    import uuid
+
+    from app.identity.root import InMemoryCredentialRoot
+    from app.identity.runtime import IdentityRuntime
+    from tests.identity_support import make_identity_engine
+
+    settings = Settings(_env_file=None)
+    app = create_app(settings)
+    app.state.identity = IdentityRuntime(
+        settings, engine=make_identity_engine(), root=InMemoryCredentialRoot()
+    )
+    app.state.identity.service.bootstrap()
+    unauthenticated = TestClient(app)
+    resp = unauthenticated.get(f"/v1/artifacts/{uuid.uuid4()}/renders/xlsx")
     assert resp.status_code == 401

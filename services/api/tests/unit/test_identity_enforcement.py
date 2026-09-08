@@ -101,6 +101,15 @@ EXPECTED_OPEN = {
     # session and must never be handed one; the companion additionally checks the
     # origin and the sha256 the command named. Deliberately open, like enrollment.
     ("GET", "/v1/alarms/audio/{token}"),
+    # M22 (docs/M22_ARTIFACT_FACTORY_SPEC.md §4, ADR-0085 addendum 5): the device's
+    # file.fetch (DEVICE_PROTOCOL.md §6k step 6) carries no owner token, cookie or header
+    # of its own -- a single-use, ten-minute, 256-bit token minted by
+    # app.artifacts.open_service (app.artifacts.render_fetch_store) is the authority
+    # instead, naming exactly one (artifact, format, content_hash). Unknown, expired,
+    # already-redeemed and content-hash-mismatched tokens are all the same bare 404 with
+    # no body -- the artifact id is never named. Deliberately open, like the greeting
+    # audio route above, which this mirrors.
+    ("GET", "/v1/artifacts/renders/fetch/{token}"),
     # M18.4 gap 1 (ADR-0081 addendum 3): the device handoff between the two colours. The
     # release script calls these from INSIDE the draining container, which holds no owner
     # session and must not need one to finish a release; the routes are loopback-only

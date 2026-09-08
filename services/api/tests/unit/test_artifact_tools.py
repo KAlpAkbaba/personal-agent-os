@@ -304,3 +304,70 @@ def test_artifact_open_with_no_device_action_is_a_capability_missing_receipt() -
     assert response["execution_status"] == "refused"
     assert response["error_class"] == "capability_missing"
     assert "dosya getiremiyor" in response["speech"]
+
+
+# --------------------------------------------------------------- ADR-0085 addendum 5
+
+
+def test_artifact_open_token_never_leaks_into_the_ledger_or_the_receipt() -> None:
+    """ADR-0085 addendum 5: the single-use render-fetch token minted for the device's
+    ``file.fetch`` must never appear in a receipt, a ledger row, a log line or UI
+    metadata — a test greps for it (the task's own non-negotiable). This is the SAME
+    tool-handler seam as the ``capability_missing`` test above, with a real device
+    (``FakeDeviceAction``) present so a token is actually minted."""
+    import json as json_module
+
+    from sqlalchemy import select
+
+    from app.ledger.models import ActivityEventRow
+    from tests.alarms_support import FakeDeviceAction
+    from tests.artifacts_support import file_fetch_ok
+
+    engine = create_engine(
+        "sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False}
+    )
+    for table in (
+        Artifact.__table__,
+        ArtifactVersion.__table__,
+        ArtifactRender.__table__,
+        ObjectFocusRow.__table__,
+        ActivityEventRow.__table__,
+    ):
+        table.create(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    settings = Settings(_env_file=None)
+    runtime = ArtifactRuntime(settings)
+    runtime._engine = engine
+    runtime._session_factory = factory
+    runtime._store = InMemoryObjectStore()
+    device = FakeDeviceAction(results={"file.fetch": file_fetch_ok})
+
+    with factory() as db:
+        spec = ArtifactSpec.model_validate(_spec_json(BUDGET_SPEC))
+        result = artifact_factory.create(db, runtime.store, spec=spec)
+        focus_module.set_focus(
+            db, FOCUS_KIND_ARTIFACT, str(result.artifact_id), label=spec.title, source="test"
+        )
+
+        ctx = ToolContext(
+            session_id=uuid4(),
+            owner_session_id=uuid4(),
+            device_id=None,
+            client_kind="desktop",
+            context={},
+            db=db,
+            now=datetime.now(UTC),
+            live={"artifacts_runtime": runtime, "device_action": device},
+        )
+        response = artifact_open(ctx, {})
+
+        payload = device.payload_for("file.fetch")
+        token = payload["url"].rsplit("/", 1)[-1]
+        assert token and len(token) >= 32  # a real token was actually minted
+
+        rows = db.execute(select(ActivityEventRow)).scalars().all()
+        ledger_blob = json_module.dumps([r.detail_json for r in rows])
+
+    assert response["execution_status"] == "executed"
+    assert token not in json_module.dumps(response)
+    assert token not in ledger_blob
