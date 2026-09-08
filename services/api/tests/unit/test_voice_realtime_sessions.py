@@ -314,6 +314,15 @@ def test_create_selects_by_capability_and_returns_the_contract(wired) -> None:
         "scene.camera",
         "scene.render",
         "scene.inspect",
+        # M26 (docs/M26_EXECUTIVE_AUTONOMY_SPEC.md §5): Executive Autonomy.
+        "executive.start",
+        "executive.status",
+        "executive.explain",
+        "executive.pause",
+        "executive.resume",
+        "executive.retry",
+        "executive.amend",
+        "executive.cancel",
     }
     research = next(t for t in data["tools"] if t["name"] == "research.start")
     assert research["long_running"] is True and research["preamble"] == RESEARCH_PREAMBLE_TR
