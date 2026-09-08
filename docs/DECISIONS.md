@@ -6823,7 +6823,7 @@ Decision 4 says "only the Cloud Core's own origin — the origin the device dial
 
 Proven on this machine (`FileFetchTests`, 35 tests): the 200 KB DOCX kept and re-inspected by the M20 extractor; the `.txt` variant opened in Notepad through the real `file.open` and its window observed; a foreign origin, an off-path URL, a wrong hash, a short body, a `Content-Length` over the bound (unread), a chunked stream aborted between 50 MiB and the 80 MiB the server had, a redirect (its target saw no request), twenty-two bad names, and a collision that kept both files and skipped a squatting directory; the origin carried over a real pipe by the challenge and left unset by an older-style server.
 
-### ADR-0085 addendum 1 — the web face as built (2026-09-08, track C, `apps/web` only)
+### ADR-0085 addendum 2 — the web face as built (2026-09-08, track C, `apps/web` only)
 
 Reversible choices made on the web track without asking, recorded here per `CLAUDE.md`; the Cloud Core track (B) may adjust the wire spellings and the web reads them defensively either way.
 
