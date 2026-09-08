@@ -25,6 +25,6 @@
 - [M21 security review closeout](project_m21_security_review_closeout.md) — completed 2026-09-08 on branch m21-secfix @ 950b23a in E:\AI\pagentos-wt-m21-secfix, all 5 findings fixed, not merged/pushed
 - [RFC822/RRULE DoS bounds](feedback_rfc822_rrule_dos_bounds.md) — nested-MIME RecursionError trips inside message_from_bytes itself, not walk(); dateutil.rrule has no jump-ahead, cap the raw scan; clamp only the public entry point
 - [M22 core-voice track status](project_m22_core_voice_track_status.md) — completed 2026-09-08 on branch m22-core-voice, full suite + 916-case corpus green; known gap: device file.fetch can't auth against the owner-session-gated render-download route
-- [M26 Cloud Core status](project_m26_cloud_core_status.md) — completed 2026-09-08 @ 9b6dec0, executive.* backend + voice + 120-case corpus green; full-repo `pytest tests/unit` result unknown at session end, re-check first
+- [M26 Cloud Core status](project_m26_cloud_core_status.md) — completed 2026-09-08 @ b406bc8; full-repo suite confirmed 6751 passed/2 skipped/2 expected-fail after one real miss fixed; re-confirm full-green next session first
 - [Temporal worker-restart test hang](feedback_temporal_worker_restart_test_hang.md) — killing/replacing a Worker against the time-skipping env hangs two different ways; test idempotent replay + fresh-handle reattachment instead
 - [Executive workflow scheduling gap](feedback_executive_workflow_scheduling_gap.md) — gate step readiness on dependency SETTLED, never VERIFIED, or any failure deadlocks everything downstream forever
