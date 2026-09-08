@@ -115,6 +115,24 @@ class CapabilityDispatcher:
         if self.sandbox is not None:
             skill_root = self.sandbox.ensure_within(skill_root, label="registered skill root")
         manifest = read_manifest(skill_root / "manifest.yaml")
+        # M24 (ADR-0087 spec §4, a HARD rule in code, not policy text): a
+        # capability whose declared side effect is mutate_external is never
+        # dispatched while its authority_class still reads
+        # mutating_unauthorized — that combination means the manifest itself
+        # says "this changes something outside the process and nothing has
+        # verified the asset is owner-authorized". Every other manifest shape
+        # (no side_effect_class at all, side_effect_class=read/none, or
+        # authority_class read_only/mutating_authorized_asset) is unaffected.
+        if (
+            manifest.get("side_effect_class") == "mutate_external"
+            and manifest.get("authority_class") == "mutating_unauthorized"
+        ):
+            raise EvolutionError(
+                EvolutionErrorClass.PERMISSION_DENIED,
+                f"capability {capability_id!r} mutates an external asset without owner "
+                "authorization; refusing to dispatch",
+                details={"capability_id": capability_id},
+            )
         skill_name = manifest.get("skill")
         entrypoint = manifest.get("entrypoint")
         if not skill_name or entrypoint != "run":

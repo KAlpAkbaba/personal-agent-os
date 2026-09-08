@@ -46,6 +46,12 @@ class EvolutionErrorClass(StrEnum):
     REGISTRATION_REFUSED = "registration_refused"
     # Executing a registered capability failed at runtime.
     DISPATCH_FAILED = "dispatch_failed"
+    # M24 (ADR-0087): a response conformed to nothing (off-schema, or the
+    # evidence_contract's read-back did not satisfy the declared postcondition).
+    POSTCONDITION_FAILED = "postcondition_failed"
+    # M24: a genesis run's own bound was exceeded (>1 active run per capability,
+    # >10 minutes end to end, >3 runs/hour per interface).
+    RATE_LIMITED = "rate_limited"
     # Anything unexpected.
     INTERNAL_BUG = "internal_bug"
 
