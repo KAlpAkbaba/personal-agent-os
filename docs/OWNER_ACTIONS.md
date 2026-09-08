@@ -21,40 +21,31 @@ Status vocabulary matches `docs/QUALIFICATION.md`: `PROVEN_REAL`, `PROVEN_PROXY`
 
 ## Now
 
-**Evening sequence, 2026-09-07 — the shortest run that closes what only you can judge.**
-Everything automatable in M18.2 and M18.3 was finished and gated during the day (ADR-0077,
-ADR-0078; contract v10 on main). Four short items remain, each labelled with the one human
-boundary it needs. Order matters only where written; D needs no audio and can go first.
+**Where things stand, 2026-09-08 evening.** M19 through M25 are built, gated and on
+production: the Cloud Core serves release `20db267` with UI contract v10, and 3D creation
+(Blender real, Unity honest about its licence) joined documents, mail/calendar, artifacts,
+apps and capability genesis. Nothing below is waiting on the agent — each item is a boundary
+only you can cross, and each says exactly what it turns from PROVEN_PROXY into PROVEN_REAL.
 
-> **Voice routing is PROVEN_AUTOMATED (2026-09-07 evening, ADR-0080).** 345 synthetic
-> owner utterances now run through the real transcription boundary, the one router and
-> the real tools every night (`scripts/core/voice-routing-qualification.ps1`), with zero
-> wrong routes and zero forbidden side effects; the nine routing defects the first run
-> found are fixed and pinned. What A and C still need from you is the audibility alone.
-> The Cockpit's "Ses yönlendirme sınaması" panel shows the recorded state.
->
-> **M18.4 foundation landed the same evening (ADR-0081).** The Evolution Supervisor now
-> turns incidents and recurring failures into prioritised opportunities on the clock; you
-> can say `Kendi kendini geliştirmeyi duraklat/aç`, `Bu geliştirmeyi iptal et`, `Bunu
-> canlıya alma`, and ask `Şu an ne geliştiriyorsun?` / `Hangi sürüm çalışıyor?` /
-> `Bekleyen aday sürüm var mı?`; the Cockpit has an "Evrim gözetmeni" panel. Nothing
-> here needs you.
->
-> **Production is blue/green since 2026-09-07 night (ADR-0081 addendum 2).** Your one Tailscale
-> SSH check unblocked three qualification runs: the first cutover (4.1 s gap, once), then two
-> releases and four rollbacks with zero dropped probes through the edge. Production runs
-> c109302 (contract v12) on `api-blue`; every release from here is `release-cloud-core.ps1
-> -BlueGreen` (the owner harnesses still call the single-container path; switch them when
-> you next run one, or leave them - both work). Items 23b, 24, 25, 26 are unchanged and
-> still yours; the M18.3 agent capabilities still wait on item 26's elevated update.
->
-> **M18.4 final gap closure, 2026-09-07 late night (ADR-0081 addendum 3).** Production runs
-> ae88edd on `api-green`. A release now hands the device sessions to the new colour BEFORE it
-> takes HTTP (your agent's presence gap on a switch is its own 1–2 s reconnect, measured;
-> the one release from the old colour had a named 61 s gap, once), a promotion killed
-> half-way is rebuilt to the last completed one at boot or on demand, and the agent /
-> browser-worker staged updates are built and tested (PROVEN_PROXY until your elevated
-> run, items 26/27). Nothing new needs you; M19 waits for your word.
+**The four that unlock the most, in the order I would do them:**
+
+1. **Item 28** — the elevated agent update. This is the big one now. The deployed Windows
+   agent still advertises 29 capabilities and none of the 3D ones, so a scene cannot be
+   started from production at all, and the same update carries the Digital Operator and
+   documents families. One UAC prompt.
+2. **Item 29** — OpenAI credits. Every voice synthesis has answered HTTP 429 since
+   2026-09-07, so the TTS loopback is the one proof I cannot run; it is `NOT_YET_PROVEN`
+   in four milestone gates for that single reason.
+3. **Item 32** — sign in to Unity Hub. Two minutes in a browser. The Unity driver, the
+   device runtime and the lab all exist and run the real editor today; the licence is the
+   only thing between `PROVEN_PROXY` and `PROVEN_REAL`, and no code changes when it lands.
+4. **Item 33** — a JDK (or Android Studio). Nothing needs it until M28, but it takes ten
+   minutes and the Android half of that milestone is written against a toolchain that
+   cannot run without Java.
+
+Items 30 (a mail account and calendar on the host) and the audio/visual checks below remain
+as they were. The earlier evening sequence (23b, 24, 25, 26) is still worth running when you
+have a quiet ten minutes with audio, but nothing is blocked on it.
 
 | | Item | Needs | Time |
 |---|---|---|---|
