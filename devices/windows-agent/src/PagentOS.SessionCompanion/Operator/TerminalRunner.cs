@@ -21,18 +21,27 @@ namespace PagentOS.SessionCompanion.Operator;
 /// composition characters); <c>&lt;path&gt;</c> matches one token that is an absolute path
 /// which RESOLVES (every junction and link followed) to a place under one of the owner's
 /// authorised roots. Token counts must agree, so <c>hostname</c> does not admit
-/// <c>hostname anything</c>.</para>
+/// <c>hostname anything</c>. <c>&lt;project-entry&gt;</c> (M23, M23_APP_FACTORY_SPEC.md §4)
+/// matches one token that is the absolute path of a scaffolded project's own entry file:
+/// it must RESOLVE under the Projects root, inside a folder that carries the project marker,
+/// and be the file that folder's manifest names as <c>entry</c> — so the ONE project-scoped
+/// entry, <c>node &lt;project-entry&gt; --help</c>, runs an app the assistant made and
+/// nothing else the owner keeps.</para>
 /// </summary>
 public sealed class TerminalRunner
 {
     public const string PathToken = "<path>";
     public const string AnyToken = "*";
+    public const string ProjectEntryToken = "<project-entry>";
     public const int DefaultTimeoutSeconds = 30;
     public const int MaxTimeoutSeconds = 30;
     public const int MaxCommandChars = 512;
     public const int MaxOutputChars = 32 * 1024;
 
-    /// <summary>The owner's default allowlist (§2): read-only, and nothing that reaches beyond the authorised roots.</summary>
+    /// <summary>M23 (§4): the one project-scoped entry — a scaffolded project's own entry file, read-only, its help text.</summary>
+    public const string ProjectHelpEntry = "node <project-entry> --help";
+
+    /// <summary>The owner's default allowlist (§2): read-only, and nothing that reaches beyond the authorised roots — plus, since M23, the one project-scoped entry.</summary>
     public static readonly IReadOnlyList<string> DefaultAllowlist =
     [
         "hostname",
@@ -42,6 +51,7 @@ public sealed class TerminalRunner
         "Get-ComputerInfo -Property *",
         "Get-Process -Name *",
         "Get-ChildItem <path>",
+        ProjectHelpEntry,
     ];
 
     private static readonly char[] CompositionCharacters = [';', '|', '&', '$', '(', ')', '{', '}', '<', '>', '`', '\r', '\n', '\0'];
@@ -50,14 +60,17 @@ public sealed class TerminalRunner
     private readonly AuthorisedRoots _roots;
     private readonly ILogger _logger;
     private readonly string _powershell;
+    private readonly Func<string, bool>? _isProjectEntry;
     private int _processesStarted;
 
-    public TerminalRunner(IReadOnlyList<string> allowlist, IReadOnlyList<string> authorisedRoots, ILogger logger, string? powershellPath = null)
+    /// <param name="isProjectEntry">M23: decides whether a token is a scaffolded project's entry file (<see cref="Projects.ProjectRoots.IsEntry"/>); null means the <c>&lt;project-entry&gt;</c> token admits nothing.</param>
+    public TerminalRunner(IReadOnlyList<string> allowlist, IReadOnlyList<string> authorisedRoots, ILogger logger, string? powershellPath = null, Func<string, bool>? isProjectEntry = null)
     {
         _patterns = [.. allowlist.Select(Tokenize).Where(t => t.Length > 0).Select(t => t.ToArray())];
         _roots = new AuthorisedRoots(authorisedRoots);
         _logger = logger;
         _powershell = powershellPath ?? DefaultPowerShellPath();
+        _isProjectEntry = isProjectEntry;
     }
 
     /// <summary>Processes this runner has started, ever — a test asserts a refusal leaves this at zero.</summary>
@@ -269,6 +282,18 @@ public sealed class TerminalRunner
             if (expected.Equals(PathToken, StringComparison.OrdinalIgnoreCase))
             {
                 if (!IsUnderAuthorisedRoot(actual))
+                {
+                    return false;
+                }
+
+                continue;
+            }
+
+            if (expected.Equals(ProjectEntryToken, StringComparison.OrdinalIgnoreCase))
+            {
+                // A project's entry is under the Projects root, which is an authorised root;
+                // the project check is the stricter one and is asked on top, never instead.
+                if (!IsUnderAuthorisedRoot(actual) || _isProjectEntry?.Invoke(actual) != true)
                 {
                     return false;
                 }

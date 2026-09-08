@@ -36,16 +36,19 @@ public sealed class DocumentAdvertisementTests
         Assert.DoesNotContain(without, AgentCapabilities.IsDocuments);
         Assert.DoesNotContain(without, AgentCapabilities.IsOperator);
 
+        // M23 appends the projects family (5) after the documents family under the same flag;
+        // the documents family itself is exactly where it was, right after the operator's 32.
         var with = AgentCapabilities.Compose(browserEnabled: true, displayPowerEnabled: true, operatorEnabled: true);
-        Assert.Equal(AgentCapabilities.Documents, with.TakeLast(AgentCapabilities.Documents.Count));
-        Assert.Equal(AgentCapabilities.Operator, with.SkipLast(AgentCapabilities.Documents.Count).TakeLast(AgentCapabilities.Operator.Count));
+        var projects = AgentCapabilities.Projects.Count;
+        Assert.Equal(AgentCapabilities.Documents, with.SkipLast(projects).TakeLast(AgentCapabilities.Documents.Count));
+        Assert.Equal(AgentCapabilities.Operator, with.SkipLast(AgentCapabilities.Documents.Count + projects).TakeLast(AgentCapabilities.Operator.Count));
         Assert.Equal(with.Count, with.Distinct(StringComparer.Ordinal).Count());
-        Assert.Equal(without.Count + 32 + 7, with.Count);
+        Assert.Equal(without.Count + 32 + 7 + 5, with.Count);
 
-        // The deployed 0.1.0 / 0.2.0 baseline — no operator — is untouched by M20 and M22.
+        // The deployed 0.1.0 / 0.2.0 baseline — no operator — is untouched by M20, M22 and M23.
         Assert.Equal(AgentCapabilities.Compose(browserEnabled: false), AgentCapabilities.Compose(browserEnabled: false, displayPowerEnabled: false, operatorEnabled: false));
         Assert.Equal(AgentCapabilities.Desktop, AgentCapabilities.All);
-        Assert.Equal("0.4.0", AgentInfo.SoftwareVersion);
+        Assert.Equal("0.5.0", AgentInfo.SoftwareVersion);
     }
 
     [Fact]

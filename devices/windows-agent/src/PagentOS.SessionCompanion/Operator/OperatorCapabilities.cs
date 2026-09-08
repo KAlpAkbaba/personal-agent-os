@@ -84,7 +84,9 @@ public sealed class OperatorCapabilities
         Registry = new WindowRegistry();
         Guard = new FocusGuard(Registry);
         Inspector = new UiAutomationInspector();
-        Terminal = terminal ?? new TerminalRunner(options.TerminalAllowlist, options.AuthorisedRoots, logger);
+        // M23: the terminal's one project-scoped entry asks the Projects root whether a path is
+        // a scaffolded project's own entry file (marker + manifest), on top of the roots check.
+        Terminal = terminal ?? new TerminalRunner(options.TerminalAllowlist, options.AuthorisedRoots, logger, isProjectEntry: new Projects.ProjectRoots(options).IsEntry);
         _applications = new Dictionary<string, string>(applications ?? DefaultApplications(), StringComparer.OrdinalIgnoreCase);
     }
 
