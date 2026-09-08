@@ -15,12 +15,15 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from app.actions.confirmation_gate import CONFIRM_SOURCE_VOICE, Confirmation
-from app.evolution.errors import EvolutionError
+from app.evolution.authorization import StaticAuthorizationProvider
+from app.evolution.errors import EvolutionError, EvolutionErrorClass
+from app.evolution.task_resumption import DispatchResult
 from app.genesis.models import GenesisRun
 from app.genesis.service import MAX_RUNS_PER_HOUR_PER_INTERFACE
 from tests.fixtures.genesis import counterbox_app
@@ -29,10 +32,12 @@ from tests.unit.genesis_stack import authorized, make_stack
 
 def test_app_down_fails_with_dependency_unavailable(tmp_path):
     stack = make_stack(tmp_path)
-    # A URL nothing listens on: loopback, an arbitrary high port.
+    # A URL nothing listens on: loopback, an arbitrary high port. High, not port 1 —
+    # the reserved/privileged-port rule from the security review would refuse that
+    # before the fetch, and this case is about the fetch finding nothing there.
     result = stack.service.request(
         interface_name="ghostbox",
-        interface_url="http://127.0.0.1:1/spec",
+        interface_url="http://127.0.0.1:64998/spec",
         operation_id="read",
     )
     assert result["state"] == "failed"
@@ -315,3 +320,126 @@ def test_ten_minute_bound_is_enforced(tmp_path):
     assert str(excinfo.value.error_class) == "rate_limited"
     # A run well inside the bound is unaffected.
     stack.service._enforce_time_bound(datetime.now(UTC))  # noqa: SLF001 - no raise
+
+
+# ---------------------------------------------------- the second layer of the same gate
+
+
+def test_verify_refuses_an_empty_comparison_even_if_a_description_slipped_through(tmp_path):
+    """The parse-time bound (``app.genesis.interface``) refuses a read-back that shares
+    no field with a mutation, so this shape cannot reach the service through the front
+    door. The check itself refuses it anyway: "verified" may never mean "nothing
+    disagreed" over nothing - the vacuous gate this project refuses everywhere else.
+    Reached by calling the check directly with two disjoint outputs, the only way left."""
+    stack = make_stack(tmp_path)
+    service = stack.service
+    run = SimpleNamespace(state="used", evidence_json={})
+    service._transition = lambda *a, **k: None  # type: ignore[method-assign]
+    service._patch_evidence = lambda *a, **k: None  # type: ignore[method-assign]
+    # The read-back is a DIFFERENT operation, so the service really dispatches it; the
+    # stub answers with a payload sharing no field with the mutation's own output.
+    service.dispatcher = SimpleNamespace(  # type: ignore[assignment]
+        dispatch=lambda capability_id, arguments: DispatchResult(
+            capability_id=capability_id,
+            version="0.1.0",
+            skill_version_id=str(uuid.uuid4()),
+            output={"z": 100},
+        )
+    )
+    spec = SimpleNamespace(operation=SimpleNamespace(id="bump"))
+    interface = SimpleNamespace(name="disjointbox", evidence={"read_back": "peek"})
+    with pytest.raises(EvolutionError) as excinfo:
+        service._verify(
+            run,  # type: ignore[arg-type]
+            spec,  # type: ignore[arg-type]
+            interface,  # type: ignore[arg-type]
+            DispatchResult(
+                capability_id="disjointbox.bump",
+                version="0.1.0",
+                skill_version_id=str(uuid.uuid4()),
+                output={"w": 7},
+            ),
+        )
+    assert excinfo.value.error_class == EvolutionErrorClass.POSTCONDITION_FAILED
+    assert "verified nothing" in str(excinfo.value)
+
+
+# ------------------------------------------- the authorization gate (security review)
+
+
+def test_an_asset_enrolled_with_no_grants_authorizes_no_mutation(tmp_path):
+    """The M24 security review's HIGH, in the reviewer's own shape: an asset the owner
+    enrolled with ZERO permissions used to authorise a brand-new external mutation,
+    because the service asked only whether a row existed and never whether it COVERED
+    the grant the adapter declares. It must park at awaiting_approval instead."""
+    stack = make_stack(
+        tmp_path, mutation_authorization=StaticAuthorizationProvider({"counterbox": {}})
+    )
+    with counterbox_app.serve() as server:
+        result = stack.service.request(
+            interface_name="counterbox",
+            interface_url=server.spec_url,
+            operation_id="increment",
+            arguments={"by": 5},
+            session_id="s-1",
+        )
+    assert result["state"] == "awaiting_approval"
+    assert result["authority_class"] == "mutating_unauthorized"
+
+
+def test_a_grant_that_does_not_cover_the_network_permission_authorizes_nothing(tmp_path):
+    """A grant for some OTHER host is still not a grant for this one."""
+    stack = make_stack(
+        tmp_path,
+        mutation_authorization=StaticAuthorizationProvider(
+            {"counterbox": {"network_permissions": ["10.0.0.7"]}}
+        ),
+    )
+    with counterbox_app.serve() as server:
+        result = stack.service.request(
+            interface_name="counterbox",
+            interface_url=server.spec_url,
+            operation_id="increment",
+            arguments={"by": 5},
+            session_id="s-1",
+        )
+    assert result["state"] == "awaiting_approval"
+    assert result["authority_class"] == "mutating_unauthorized"
+
+
+def test_a_description_may_not_rename_itself_into_another_assets_authority(tmp_path):
+    """The reviewer's PoC in its purest form: the fetched document's own ``name`` is not
+    the asset reference. A description that calls itself something other than the
+    interface the owner registered is refused outright, and nothing registers."""
+    stack = make_stack(tmp_path, mutation_authorization=authorized("mailserver"))
+    with counterbox_app.serve() as server:
+        result = stack.service.request(
+            interface_name="mailserver",  # what the caller and the catalogue say
+            interface_url=server.spec_url,  # a document that calls itself "counterbox"
+            operation_id="increment",
+            arguments={"by": 5},
+            session_id="s-1",
+        )
+    assert result["state"] == "failed"
+    assert result["error_class"] == "validation_error"
+    assert stack.registry.resolve("mailserver.increment") is None
+
+
+def test_two_racing_approvals_claim_the_run_once(tmp_path):
+    """The M21 lesson restated for M24 (security review, MEDIUM): reading the state,
+    checking it in Python and writing it back later let two approvals both pass and both
+    dispatch. The conditional UPDATE means exactly one claims the run."""
+    stack = make_stack(tmp_path)
+    with counterbox_app.serve() as server:
+        parked = stack.service.request(
+            interface_name="counterbox",
+            interface_url=server.spec_url,
+            operation_id="increment",
+            arguments={"by": 1},
+            session_id="s-1",
+            turn=1,
+        )
+        assert parked["state"] == "awaiting_approval"
+        run_id = uuid.UUID(parked["id"])
+        assert stack.service._claim_approval(run_id, "s-1") is True
+        assert stack.service._claim_approval(run_id, "s-2") is False

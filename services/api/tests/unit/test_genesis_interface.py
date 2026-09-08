@@ -17,6 +17,7 @@ from app.genesis.interface import (
     FETCH_MAX_BYTES,
     MAX_FIELDS,
     MAX_OPERATIONS,
+    RESERVED_LOOPBACK_PORTS,
     InterfaceDescription,
     fetch_interface,
 )
@@ -71,10 +72,90 @@ class TestParse:
         assert desc.evidence == {"read_back": "read"}
         assert desc.read_back_operation.id == "read"
 
+    def test_read_back_sharing_no_field_with_a_mutation_is_refused(self):
+        """The independent verification pass (2026-09-08) drove a description whose
+        read-back shared no output field with its mutation: the service's field-by-field
+        comparison then had nothing to compare and the run still reported ``verified``.
+        Such a description is refused here, before anything is designed."""
+        raw = {
+            **VALID,
+            "operations": [
+                _op(
+                    1,
+                    id="read",
+                    path="/z",
+                    output_schema={"fields": {"z": "integer"}, "required": ["z"]},
+                ),
+                _op(
+                    2,
+                    id="bump",
+                    method="POST",
+                    path="/w",
+                    output_schema={"fields": {"w": "integer"}, "required": ["w"]},
+                    side_effect="mutate",
+                    idempotent=False,
+                ),
+            ],
+            "evidence": {"read_back": "read"},
+        }
+        with pytest.raises(EvolutionError) as excinfo:
+            InterfaceDescription.parse(raw)
+        assert excinfo.value.error_class == EvolutionErrorClass.VALIDATION_ERROR
+        assert "could never witness" in str(excinfo.value)
+
+    def test_read_back_sharing_one_field_with_every_mutation_is_accepted(self):
+        """The bound is 'at least one shared field per mutating operation', not
+        'identical schemas': a read-back may report more than the mutation does."""
+        raw = {
+            **VALID,
+            "operations": [
+                _op(
+                    1,
+                    id="read",
+                    path="/z",
+                    output_schema={
+                        "fields": {"value": "integer", "extra": "string"},
+                        "required": ["value"],
+                    },
+                ),
+                _op(
+                    2,
+                    id="bump",
+                    method="POST",
+                    path="/w",
+                    output_schema={"fields": {"value": "integer"}, "required": ["value"]},
+                    side_effect="mutate",
+                    idempotent=False,
+                ),
+            ],
+            "evidence": {"read_back": "read"},
+        }
+        assert InterfaceDescription.parse(raw).read_back_operation.id == "read"
+
     def test_localhost_base_url_also_valid(self):
-        raw = {**VALID, "base_url": "http://localhost:8080"}
+        # 18080, not 8080: the security review's reserved-port rule refuses the ports
+        # this system's own services use, and the broker's is one of them. The fact
+        # under test is unchanged — "localhost" is a legal loopback host.
+        raw = {**VALID, "base_url": "http://localhost:18080"}
         desc = InterfaceDescription.parse(raw)
-        assert desc.base_url == "http://localhost:8080"
+        assert desc.base_url == "http://localhost:18080"
+
+    @pytest.mark.parametrize("port", sorted(RESERVED_LOOPBACK_PORTS))
+    def test_a_port_this_system_serves_is_refused(self, port):
+        """A description may not point the generated adapter at the Cloud Core, the
+        broker, the object store or a database on this machine — the single-hardcoded-URL
+        property of a generated module says an adapter reaches ONE origin, and this is
+        what decides which (M24 security review, 2026-09-08)."""
+        with pytest.raises(EvolutionError) as excinfo:
+            InterfaceDescription.parse({**VALID, "base_url": f"http://127.0.0.1:{port}"})
+        assert excinfo.value.error_class == EvolutionErrorClass.VALIDATION_ERROR
+        assert "own services use it" in str(excinfo.value)
+
+    @pytest.mark.parametrize("port", [1, 22, 80, 443, 1023])
+    def test_a_privileged_port_is_refused(self, port):
+        with pytest.raises(EvolutionError) as excinfo:
+            InterfaceDescription.parse({**VALID, "base_url": f"http://127.0.0.1:{port}"})
+        assert excinfo.value.error_class == EvolutionErrorClass.VALIDATION_ERROR
 
     @pytest.mark.parametrize(
         "base_url",
@@ -188,14 +269,20 @@ class TestParse:
         with pytest.raises(EvolutionError):
             InterfaceDescription.parse(raw)
 
-    def test_id_template_segment_supported(self):
+    def test_id_template_segment_is_refused(self):
+        """It was accepted here and never substituted by the generator, so a description
+        using it produced an adapter that asked for a literal "{id}" segment and failed
+        at run time. Refused at parse now, where the reason can be said (M24 security
+        review, 2026-09-08, Low)."""
         raw = {
             **VALID,
             "operations": [_op(0, path="/counter/{id}")],
             "evidence": {"read_back": "op0"},
         }
-        desc = InterfaceDescription.parse(raw)
-        assert desc.operations[0].path == "/counter/{id}"
+        with pytest.raises(EvolutionError) as excinfo:
+            InterfaceDescription.parse(raw)
+        assert excinfo.value.error_class == EvolutionErrorClass.VALIDATION_ERROR
+        assert "never substituted" in str(excinfo.value)
 
 
 # ------------------------------------------------------------------- fetch
@@ -282,6 +369,9 @@ def test_fetch_interface_refuses_non_loopback_host():
 
 
 def test_fetch_interface_no_listener_is_dependency_unavailable():
+    # A high, unused port rather than port 1: the reserved/privileged-port rule would
+    # now refuse the latter at parse, and this case is about the FETCH finding nothing
+    # listening — it has to reach the socket to prove that.
     with pytest.raises(EvolutionError) as excinfo:
-        fetch_interface("http://127.0.0.1:1/spec")
+        fetch_interface("http://127.0.0.1:64999/spec")
     assert excinfo.value.error_class == EvolutionErrorClass.DEPENDENCY_UNAVAILABLE

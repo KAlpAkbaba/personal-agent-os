@@ -53,7 +53,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.actions.confirmation_gate import Confirmation, check_gate
@@ -385,8 +385,31 @@ class GenesisService:
         side_effect_class = "read" if op.side_effect == "read" else "mutate_external"
         mutation_authorized = False
         if side_effect_class == "mutate_external":
-            verified = self.mutation_authorization.verify(spec.interface.name)
-            mutation_authorized = verified is not None
+            # The asset reference is the name the OWNER registered — the catalogue entry
+            # this run was asked for, carried in the capability id — never the fetched
+            # document's own ``name`` field. An application that calls itself
+            # "mailserver" must not thereby inherit the authority the owner granted a
+            # real mailserver (M24 security review, 2026-09-08, verified with a live
+            # PoC). A document whose self-reported name disagrees with the registered
+            # one is refused outright rather than quietly resolved either way.
+            asset_ref = run.capability_id.rsplit(".", 1)[0]
+            if spec.interface.name != asset_ref:
+                raise EvolutionError(
+                    EvolutionErrorClass.VALIDATION_ERROR,
+                    "the description names itself differently from the interface the "
+                    "owner registered",
+                    details={"registered": asset_ref, "self_reported": spec.interface.name},
+                )
+            verified = self.mutation_authorization.verify(asset_ref)
+            if verified is not None:
+                # Authorization is what ``covers()`` says it is, never merely "a row
+                # exists": an asset enrolled with no grants authorises nothing, and the
+                # one grant this adapter needs is the narrow network permission it
+                # declares in its own manifest (``app.genesis.adapter``).
+                approved, unauthorized = verified.covers({"network_permissions": [spec.host]})
+                mutation_authorized = approved
+                if not approved:
+                    self._patch_evidence(run, {"unauthorized_grants": unauthorized})
         authority_class = (
             "read_only"
             if side_effect_class == "read"
@@ -621,6 +644,20 @@ class GenesisService:
             read_back_capability_id = f"{interface.name}.{read_back_id}"
             read_back_output = self.dispatcher.dispatch(read_back_capability_id, {}).output
         shared_fields = set(dispatched.output) & set(read_back_output)
+        if not shared_fields:
+            # Never "verified" on an empty comparison (see the parse-time refusal in
+            # ``app.genesis.interface``): a read-back that shares no field with what the
+            # mutation reported has witnessed nothing, and saying otherwise would be the
+            # vacuous gate this project refuses everywhere else.
+            raise EvolutionError(
+                EvolutionErrorClass.POSTCONDITION_FAILED,
+                "genesis read-back shares no field with the mutation's own reported "
+                "result, so it verified nothing",
+                details={
+                    "dispatched_fields": sorted(dispatched.output),
+                    "read_back_fields": sorted(read_back_output),
+                },
+            )
         mismatched = {
             name: (dispatched.output[name], read_back_output[name])
             for name in shared_fields
@@ -671,6 +708,16 @@ class GenesisService:
                 EvolutionErrorClass.PERMISSION_DENIED,
                 f"genesis approval refused: {gate.reason}",
                 details={"reason": gate.reason},
+            )
+        # Claim the run atomically BEFORE any provider work: reading the state,
+        # checking it in Python and writing it back later let two racing approvals (a
+        # double-tapped "Onayla", or REST and voice at once) both pass the check and both
+        # dispatch the mutation. One conditional UPDATE decides — the same CAS the M21
+        # confirmation gate uses (ADR-0084) — and the loser is told, never served.
+        if not self._claim_approval(run.id, confirmation.session_id):
+            raise EvolutionError(
+                EvolutionErrorClass.VALIDATION_ERROR,
+                f"genesis run {run_id} was already claimed by another approval",
             )
         run.approval_ref = confirmation.session_id
         interface = self._reload_interface(run)
@@ -938,6 +985,23 @@ class GenesisService:
         "error_message",
         "updated_at",
     )
+
+    def _claim_approval(self, run_id: uuid.UUID, session_id: str | None) -> bool:
+        """Atomically claim ONE awaiting_approval run for ONE approval. True only for the
+        caller whose UPDATE actually matched a row; every later caller gets False and is
+        refused rather than served (the M21 CAS discipline, ADR-0084)."""
+        with self._session_factory() as session:
+            result = session.execute(
+                update(GenesisRun)
+                .where(
+                    GenesisRun.id == run_id,
+                    GenesisRun.state == "awaiting_approval",
+                    GenesisRun.approval_ref.is_(None),
+                )
+                .values(approval_ref=session_id or "approved", updated_at=datetime.now(UTC))
+            )
+            session.commit()
+            return bool(result.rowcount)
 
     def _commit(self, run: GenesisRun) -> None:
         with self._session_factory() as session:

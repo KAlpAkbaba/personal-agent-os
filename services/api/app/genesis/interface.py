@@ -33,7 +33,8 @@ from app.evolution.errors import EvolutionError, EvolutionErrorClass
 NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 # An operation id: a python-identifier-shaped token (spec §2 `operations[].id`).
 OPERATION_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
-# A path segment: a lowercase token, OR the one supported template `{id}`.
+# A path segment: a lowercase token. (`{id}` was once accepted here and never
+# substituted by the generator; it is refused at parse now.)
 PATH_SEGMENT_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 # A schema field name (spec §2: object of string|integer|boolean|number fields).
 FIELD_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
@@ -46,7 +47,30 @@ LOOPBACK_HOSTS: tuple[str, ...] = ("127.0.0.1", "localhost")
 MAX_OPERATIONS = 16
 MAX_FIELDS = 16
 MAX_TOTAL_BYTES = 8 * 1024
-MIN_PORT, MAX_PORT = 1, 65535
+#: The lowest port a described application may live on. Privileged ports below 1024
+#: belong to system services, and an owner's small test application never needs one:
+#: refusing them keeps a description from pointing the generated adapter at something
+#: the owner did not write (M24 security review, 2026-09-08).
+MIN_PORT, MAX_PORT = 1024, 65535
+
+#: Loopback ports this system's OWN services listen on. A description naming one of them
+#: would turn a generated adapter into a client of the Cloud Core (or the broker, or the
+#: object store) speaking from inside the machine — the one loopback origin an adapter
+#: must never be pointed at, however honest the rest of its description looks. The
+#: single-hardcoded-URL property of the generated module confines an adapter to ONE
+#: origin; this is what decides WHICH.
+RESERVED_LOOPBACK_PORTS: frozenset[int] = frozenset(
+    {
+        8000,  # the API in development
+        8001,  # the Cloud Core through the tailnet address
+        8080,  # the device broker's local surface
+        9000,  # MinIO / the object store
+        15432,  # PostgreSQL (compose)
+        16379,  # Redis (compose)
+        17233,  # Temporal (compose)
+        19000,  # MinIO (compose)
+    }
+)
 
 FETCH_TIMEOUT_S = 5.0
 FETCH_MAX_BYTES = 64 * 1024
@@ -217,7 +241,11 @@ def _parse_operation_path(raw: Any, *, field: str) -> str:
         raise _fail(field, "must be composed of non-empty '/'-separated segments")
     for segment in segments:
         if segment == "{id}":
-            continue
+            # An earlier draft accepted this template and the generator never substituted
+            # it, so a description using it produced an adapter that asked the
+            # application for a literal "{id}" segment and failed at run time. Refused
+            # here, where the reason can be said (M24 security review, 2026-09-08, Low).
+            raise _fail(field, "must not use the {id} template: it is never substituted")
         if not PATH_SEGMENT_RE.match(segment):
             raise _fail(field, f"segment {segment!r} is not a valid path token")
     return raw
@@ -243,7 +271,9 @@ def _parse_base_url(raw: Any, *, field: str = "base_url") -> str:
         raise _fail(field, "must name 127.0.0.1 or localhost only (M24 scope)")
     port = parts.port
     if port is None or not (MIN_PORT <= port <= MAX_PORT):
-        raise _fail(field, "must carry an explicit, valid port")
+        raise _fail(field, f"must carry an explicit port between {MIN_PORT} and {MAX_PORT}")
+    if port in RESERVED_LOOPBACK_PORTS:
+        raise _fail(field, f"must not name port {port}: this system's own services use it")
     return f"http://{hostname}:{port}"
 
 
@@ -318,6 +348,23 @@ class InterfaceDescription:
         read_back_op = operations[seen_ids.index(read_back_id)]
         if read_back_op.side_effect != "read":
             raise _fail("evidence.read_back", "must name a read (non-mutating) operation")
+        # The read-back has to be able to WITNESS the mutation it verifies: the service
+        # compares the two outputs field by field, so an evidence operation sharing no
+        # field name with a mutating operation's output would make that comparison
+        # vacuous - "nothing disagreed", over nothing. Found by the independent
+        # verification pass on 2026-09-08 with a description shaped exactly that way;
+        # refused here, before anything is designed, and refused again at the check
+        # itself (``app.genesis.service.GenesisService._verify``).
+        read_back_fields = {f.name for f in read_back_op.output_schema.fields}
+        for op in operations:
+            if op.side_effect != "mutate":
+                continue
+            if not (read_back_fields & {f.name for f in op.output_schema.fields}):
+                raise _fail(
+                    "evidence.read_back",
+                    f"shares no output field with the mutating operation {op.id!r}, so it "
+                    "could never witness it",
+                )
         return cls(
             source=dict(source or {"kind": "inline"}),
             name=name,
