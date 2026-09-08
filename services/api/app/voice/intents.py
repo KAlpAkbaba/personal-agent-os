@@ -148,6 +148,21 @@ class Intent(StrEnum):
     ARTIFACT_LIST = "artifact_list"  # Neler ürettin?
     ARTIFACT_VALIDATE = "artifact_validate"  # Bu dosya doğru mu?
 
+    # M23 (docs/M23_APP_FACTORY_SPEC.md §5): the App Factory. Every one of these targets
+    # app.appfactory through tools_apps - never a second app-building path (ADR-0086).
+    # NAMED ``APP_FACTORY_*`` rather than the spec's own ``APP_*`` (its tool names, e.g.
+    # ``app.open``, are kept exactly as named) because ``Intent.APP_OPEN`` already exists
+    # (M19: launching a named OS application, "Chrome'u aç") - a genuinely different
+    # utterance shape ("Uygulamayı aç" names no real app) that must not share an enum
+    # member with a capability meaning something else entirely.
+    APP_FACTORY_CREATE = "app_factory_create"  # Bana bir görev takip uygulaması yap
+    APP_FACTORY_RUN = "app_factory_run"  # Uygulamayı çalıştır
+    APP_FACTORY_TEST = "app_factory_test"  # Testleri çalıştır
+    APP_FACTORY_STOP = "app_factory_stop"  # Uygulamayı durdur
+    APP_FACTORY_STATUS = "app_factory_status"  # Uygulama çalışıyor mu?
+    APP_FACTORY_OPEN = "app_factory_open"  # Uygulamayı aç
+    APP_FACTORY_LIST = "app_factory_list"  # Hangi uygulamaları yaptın?
+
     NONE = "none"
 
 
@@ -216,6 +231,14 @@ CAPABILITY_BY_INTENT: dict[Intent, str] = {
     # both real mutations, the same class alarm.create/mail.draft already get.
     Intent.ARTIFACT_CREATE: "artifact.create",
     Intent.ARTIFACT_OPEN: "artifact.open",
+    # M23 (spec §5): scaffolding, running, testing, stopping and opening a project on the
+    # owner's machine are all real mutations, the same class artifact.create/open already
+    # get.
+    Intent.APP_FACTORY_CREATE: "app.create",
+    Intent.APP_FACTORY_RUN: "app.run",
+    Intent.APP_FACTORY_TEST: "app.test",
+    Intent.APP_FACTORY_STOP: "app.stop",
+    Intent.APP_FACTORY_OPEN: "app.open",
 }
 
 #: QUERY intents that name a tool rather than being answered conversationally (contract §2:
@@ -255,6 +278,10 @@ QUERY_TOOL_BY_INTENT: dict[Intent, str] = {
     # document/mail families already get for the identical reason.
     Intent.ARTIFACT_LIST: "artifact.list",
     Intent.ARTIFACT_VALIDATE: "artifact.validate",
+    # M23 (spec §5): a status read-back and listing what was made mutate nothing the
+    # owner can see - the same query class artifact.list/validate already get.
+    Intent.APP_FACTORY_STATUS: "app.status",
+    Intent.APP_FACTORY_LIST: "app.list",
 }
 
 
@@ -465,6 +492,27 @@ class ResolvedIntent:
     #: model's own ``spec`` argument against (the "never invented" rule) - None when no
     #: number was said at all.
     spoken_numbers: list[float] | None = None
+    #: M23 (docs/M23_APP_FACTORY_SPEC.md §5): for the App Factory family, which project
+    #: the owner's WORDS pointed at: "current" | None. ``None`` means the words named
+    #: neither and the tool falls back to its own default ("current") - the same
+    #: "owner's words win only when they actually said something" rule
+    #: ``artifact_ref``/``document_ref`` already follow.
+    app_ref: str | None = None
+    #: For APP_FACTORY_CREATE, the built-in template word the owner's WORDS carried
+    #: ("görev takip" -> "task-tracker", "web sayfası" -> "static-page", "komut satırı"/
+    #: "cli" -> "cli-tool"), or None when no template word was said at all - the model
+    #: still names its own template, and this is only a best-effort convenience the tool
+    #: prefers when non-empty (the same rule ``artifact_kind`` already follows).
+    app_template: str | None = None
+    #: For APP_FACTORY_CREATE, the name the owner's WORDS carried ("adı Notlarım" ->
+    #: "Notlarım"), or None when no name was said - the model still names its own
+    #: ``name`` argument, and this is preferred only when non-empty.
+    app_name: str | None = None
+    #: For APP_FACTORY_CREATE against a "cli-tool" template, every command NAME the
+    #: owner's WORDS carried ("selamla ve say komutları" -> ["selamla", "say"]), or None
+    #: when none was said - the model still names its own ``commands``, and this is
+    #: preferred only when non-empty.
+    app_commands: list[str] | None = None
 
     def __post_init__(self) -> None:
         if not self.klass:
@@ -1997,6 +2045,221 @@ def _artifact_ref_for(matched: str) -> str | None:
     return "previous" if matched == "önceki aç" else None
 
 
+# ------------------------------------------------------------- M23: the App Factory
+#
+# Built on the SAME token/stem primitives as every intent above - no second Turkish
+# pattern table (module docstring's own rule). Every one of these is gated on the
+# "uygulama"/"proje" noun stem (spec §5's own vocabulary), the SAME "every family
+# requires its own noun" discipline that keeps WINDOW_CLOSE/ALARM_STOP/DISPLAY_OFF from
+# colliding on a bare "kapat" - so nothing here can be reached by an utterance about a
+# window, an alarm, a display or an artifact. Template/name literals are spelled here
+# directly (never imported from app.appfactory.spec) - the same "no cross-module import
+# for a string literal" choice _ARTIFACT_KIND_STEMS already makes for its own kind words.
+
+_APP_NOUN_STEMS: Final[tuple[str, ...]] = ("uygulam", "proje")
+_APP_CREATE_VERB_STEMS: Final[tuple[str, ...]] = (
+    "yap",
+    "yapsana",
+    "yapar",
+    "oluştur",
+    "olustur",
+    "oluşturur",
+    "olusturur",
+    "hazırla",
+    "hazirla",
+)
+_APP_RUN_VERB_FORMS: Final[tuple[str, ...]] = (
+    "çalıştır",
+    "calistir",
+    "çalıştırsana",
+    "calistirsana",
+    "çalıştırır",
+    "calistirir",
+    "başlat",
+    "baslat",
+    "başlatır",
+    "baslatir",
+    "başlatsana",
+    "baslatsana",
+)
+_APP_TEST_NOUN_STEMS: Final[tuple[str, ...]] = ("test",)
+_APP_STOP_VERB_FORMS: Final[tuple[str, ...]] = (
+    "durdur",
+    "kapat",
+    "durdursana",
+    "kapatsana",
+    "durdurur",
+    "kapatır",
+    "kapatir",
+)
+_APP_STATUS_VERB_FORMS: Final[tuple[str, ...]] = ("çalışıyor", "calisiyor")
+_APP_OPEN_VERB_FORMS: Final[tuple[str, ...]] = (
+    "aç",
+    "açsana",
+    "açar",
+    "ac",
+    "acsana",
+    "acar",
+)
+_APP_LIST_QUESTION_WORDS: Final[tuple[str, ...]] = ("hangi", "neler", "ne")
+_APP_LIST_VERB_FORMS: Final[tuple[str, ...]] = (
+    "yaptın",
+    "yaptin",
+    "oluşturdun",
+    "olusturdun",
+    "ürettin",
+    "urettin",
+)
+_APP_QUESTION_PARTICLES: Final[tuple[str, ...]] = ("mu", "mü", "mı", "mi")
+
+_APP_NAME_RE = re.compile(
+    r"\bad[ıi]\b\s*:?\s*(.+?)[.!?]?$|\bismi\b\s*:?\s*(.+?)[.!?]?$", re.IGNORECASE
+)
+
+
+def _appfactory_template_from_tokens(tokens: tuple[str, ...]) -> str | None:
+    """"görev takip" -> "task-tracker", "web sayfası" -> "static-page", "komut satırı"/
+    "cli" -> "cli-tool" (spec §5's own three built-in templates) - a best-effort
+    convenience the tool prefers only when non-empty, never a substitute for the
+    model's own ``template`` argument (the same rule ``_artifact_kind_from_tokens``
+    already follows)."""
+    if _has(tokens, "görev", "gorev") and _has(tokens, "takip"):
+        return "task-tracker"
+    if _has_exact(tokens, "web") and _has(tokens, "sayfa"):
+        return "static-page"
+    if (_has(tokens, "komut") and _has(tokens, "satır", "satir")) or _has_exact(tokens, "cli"):
+        return "cli-tool"
+    return None
+
+
+def _extract_app_name(utterance: str) -> str | None:
+    """The text after "adı"/"ismi" ("... adı Notlarım." -> "Notlarım") - a best-effort
+    convenience the tool prefers only when non-empty, the same "owner's words win"
+    discipline ``_extract_artifact_title`` already follows. Read off the RAW utterance
+    (never the casefolded tokens) so the name keeps the owner's own capitalisation."""
+    if not utterance:
+        return None
+    match = _APP_NAME_RE.search(utterance)
+    if not match:
+        return None
+    name = (match.group(1) or match.group(2) or "").strip(" ,.'\"")
+    return name or None
+
+
+_APP_COMMANDS_RE = re.compile(r"(.+?)\s+komut(?:lar[ıi])?\b", re.IGNORECASE)
+
+
+def _extract_app_commands(utterance: str) -> list[str] | None:
+    """For a "cli-tool" template, every command name the owner's WORDS carried
+    ("... yap: selamla ve say komutları." -> ["selamla", "say"]) - read from the
+    segment after any leading colon (the same "the part after ':' names the specifics"
+    convention artifact title/number extraction already uses), split on "ve"/",", each
+    part reduced to a plain identifier (never a substitute for the model's own
+    ``commands`` argument - a best-effort convenience only)."""
+    if not utterance:
+        return None
+    segment = utterance.split(":", 1)
+    segment = segment[1] if len(segment) > 1 else segment[0]
+    match = _APP_COMMANDS_RE.search(segment)
+    if not match:
+        return None
+    parts = re.split(r"\s*,\s*|\s+ve\s+", match.group(1).strip())
+    commands: list[str] = []
+    for part in parts:
+        token = re.sub(r"[^a-zA-Z0-9_-]", "", turkish_casefold(part.strip()))
+        if token:
+            commands.append(token)
+    return commands or None
+
+
+def _appfactory_list_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Hangi uygulamaları yaptın?" (spec §5) - an INTERROGATIVE past-tense form of the
+    create verb, checked FIRST so it can never collide with the imperative create match
+    (the same "list before create" ordering ``_artifact_list_match`` already documents),
+    and before ``_artifact_list_match`` so "hangi ... yaptın" about an APP is never read
+    as a question about an artifact."""
+    if _has(tokens, *_APP_NOUN_STEMS) is None:
+        return None
+    if _has_exact(tokens, *_APP_LIST_QUESTION_WORDS) is None:
+        return None
+    if _has_exact(tokens, *_APP_LIST_VERB_FORMS) is None:
+        return None
+    return "hangi uygulamaları yaptın"
+
+
+def _appfactory_status_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Uygulama çalışıyor mu?" (spec §5) - the present-continuous form plus a question
+    particle; never the imperative "çalıştır" (a different word entirely, so no
+    collision with ``_appfactory_run_match``)."""
+    if _has(tokens, *_APP_NOUN_STEMS) is None:
+        return None
+    if _has_exact(tokens, *_APP_STATUS_VERB_FORMS) is None:
+        return None
+    if _has_exact(tokens, *_APP_QUESTION_PARTICLES) is None:
+        return None
+    return "uygulama çalışıyor mu"
+
+
+def _appfactory_test_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Testleri çalıştır." (spec §5) - the "test" noun plus a run-shaped verb; gated on
+    ``test`` rather than the app noun, since the canonical phrasing names no app at all
+    (the durable ``project`` focus resolves which one)."""
+    if _has(tokens, *_APP_TEST_NOUN_STEMS) is None:
+        return None
+    if _has_exact(tokens, *_APP_RUN_VERB_FORMS) is None and _has_exact(
+        tokens, *_APP_CREATE_VERB_STEMS
+    ) is None:
+        return None
+    return "testleri çalıştır"
+
+
+def _appfactory_stop_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Uygulamayı durdur." (spec §5) - gated on the app noun so a window/alarm/display
+    "kapat" is never claimed here (module comment)."""
+    if _has(tokens, *_APP_NOUN_STEMS) is None:
+        return None
+    if _has_exact(tokens, *_APP_STOP_VERB_FORMS) is None:
+        return None
+    return "uygulamayı durdur"
+
+
+def _appfactory_open_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Uygulamayı aç." (spec §5) - gated on the app noun, so it can never be reached by
+    M19's own APP_OPEN vocabulary (a named allowlisted application, checked earlier and
+    requiring a real alias match - "uygulama" resolves to no alias at all)."""
+    if _has(tokens, *_APP_NOUN_STEMS) is None:
+        return None
+    if _has_exact(tokens, *_APP_OPEN_VERB_FORMS) is None:
+        return None
+    return "uygulamayı aç"
+
+
+def _appfactory_run_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Uygulamayı çalıştır." (spec §5) - gated on the app noun plus a run-shaped verb;
+    checked AFTER the test/stop/open/status matches above so none of their own more
+    specific vocabulary is ever swallowed by this more general one."""
+    if _has(tokens, *_APP_NOUN_STEMS) is None:
+        return None
+    if _has_exact(tokens, *_APP_RUN_VERB_FORMS) is None:
+        return None
+    return "uygulamayı çalıştır"
+
+
+def _appfactory_create_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Bana bir görev takip uygulaması yap." / "Komut satırı aracı yap." (spec §5) - the
+    app noun OR a template phrase, plus the create verb. A template phrase alone (no
+    "uygulama" word at all, e.g. "Komut satırı aracı yap") is enough: the template
+    itself is the unambiguous signal, the same way a kind word alone is enough for
+    ``_artifact_create_match``."""
+    if _has_exact(tokens, *_APP_CREATE_VERB_STEMS) is None:
+        return None
+    if _has(tokens, *_APP_NOUN_STEMS):
+        return "uygulama yap"
+    if _appfactory_template_from_tokens(tokens) is not None:
+        return "yap"
+    return None
+
+
 # ------------------------------------------------- research interaction classes
 
 #: A research word in any Turkish inflection: "araştır", "araştırma", "araştırmayı",
@@ -2989,6 +3252,72 @@ def resolve_intent(
     if mail_inbox_matched := _mail_inbox_match(tokens):
         return ResolvedIntent(
             Intent.MAIL_INBOX, scope=SCOPE_CONVERSATION, matched=mail_inbox_matched, **base
+        )
+
+    # 0g-2. M23 (docs/M23_APP_FACTORY_SPEC.md §5): the App Factory. Checked BEFORE the
+    #       M22 artifact block below because ARTIFACT_LIST's own vocabulary ("hangi" +
+    #       "yaptın") would otherwise also match "Hangi uygulamaları yaptın?" - every
+    #       matcher here is gated on the "uygulama"/"proje" noun (module comment above
+    #       ``_APP_NOUN_STEMS``), so nothing above or below this block loses any ground:
+    #       an utterance about an artifact never carries that noun, and an utterance
+    #       about an app never reaches the artifact block at all once this one claims it.
+    #       Order mirrors the artifact block's own reasoning: LIST (interrogative) before
+    #       STATUS/TEST/STOP/OPEN (each own their own exact vocabulary) before RUN (the
+    #       most general "app noun + a run-shaped verb") before CREATE (checked last so
+    #       none of the above's more specific phrasing is ever swallowed by it).
+    if app_list_matched := _appfactory_list_match(tokens):
+        return ResolvedIntent(
+            Intent.APP_FACTORY_LIST, scope=SCOPE_CONVERSATION, matched=app_list_matched, **base
+        )
+    if app_status_matched := _appfactory_status_match(tokens):
+        return ResolvedIntent(
+            Intent.APP_FACTORY_STATUS,
+            scope=SCOPE_CONVERSATION,
+            matched=app_status_matched,
+            app_ref="current",
+            **base,
+        )
+    if app_test_matched := _appfactory_test_match(tokens):
+        return ResolvedIntent(
+            Intent.APP_FACTORY_TEST,
+            scope=SCOPE_CONVERSATION,
+            matched=app_test_matched,
+            app_ref="current",
+            **base,
+        )
+    if app_stop_matched := _appfactory_stop_match(tokens):
+        return ResolvedIntent(
+            Intent.APP_FACTORY_STOP,
+            scope=SCOPE_CONVERSATION,
+            matched=app_stop_matched,
+            app_ref="current",
+            **base,
+        )
+    if app_open_matched := _appfactory_open_match(tokens):
+        return ResolvedIntent(
+            Intent.APP_FACTORY_OPEN,
+            scope=SCOPE_CONVERSATION,
+            matched=app_open_matched,
+            app_ref="current",
+            **base,
+        )
+    if app_run_matched := _appfactory_run_match(tokens):
+        return ResolvedIntent(
+            Intent.APP_FACTORY_RUN,
+            scope=SCOPE_CONVERSATION,
+            matched=app_run_matched,
+            app_ref="current",
+            **base,
+        )
+    if app_create_matched := _appfactory_create_match(tokens):
+        return ResolvedIntent(
+            Intent.APP_FACTORY_CREATE,
+            scope=SCOPE_CONVERSATION,
+            matched=app_create_matched,
+            app_template=_appfactory_template_from_tokens(tokens),
+            app_name=_extract_app_name(text),
+            app_commands=_extract_app_commands(text),
+            **base,
         )
 
     # 0h. M22 (docs/M22_ARTIFACT_FACTORY_SPEC.md §5): the Artifact Factory, alongside the

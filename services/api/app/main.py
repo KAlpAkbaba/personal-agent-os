@@ -21,6 +21,7 @@ from app.alarms.routes import router as alarms_router
 from app.alarms.routine_port import WakeAlarmRunner
 from app.alarms.sequence import WakeSequence
 from app.ambient.routes import router as ambient_router
+from app.appfactory.service import AppFactoryService
 from app.artifacts.render_fetch_store import get_render_fetch_store
 from app.artifacts.routes import device_router as artifacts_device_router
 from app.artifacts.routes import router as artifacts_router
@@ -60,6 +61,7 @@ from app.operator.service import OperatorService, register_operator_service
 from app.presence.routes import router as presence_router
 from app.release.routes import router as release_router
 from app.release.version import release_model
+from app.research.browser_gateway import UnwiredBrowserGateway
 from app.research.embedded_worker import EmbeddedWorkerRuntime
 from app.research.health import research_health
 from app.research.routes import router as research_router
@@ -192,6 +194,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     calendar_service = CalendarService(
         build_calendar_provider(settings), build_calendar_writer(settings)
     )
+    # M23 (docs/M23_APP_FACTORY_SPEC.md §1-§4, ADR-0086): the App Factory's own service,
+    # reading the SAME device port every other family holds — one desktop authority,
+    # never a second path. The browser gateway is the M13 seam
+    # (``app.research.browser_gateway.BrowserGateway``); the real dispatch path over
+    # ``browser.*`` device commands is not wired for a synchronous voice tool call yet
+    # (ADR-0035 — the research pipeline dispatches it through Temporal instead), so
+    # ``UnwiredBrowserGateway`` is registered here: inert, raises before any I/O, exactly
+    # like ``document_service``'s own honest ``capability_missing`` when no device runtime
+    # exists at all. ``app.appfactory.service`` catches that failure and returns a
+    # truthful refused receipt rather than crashing the tool call.
+    app_factory_service = AppFactoryService()
+    browser_gateway = UnwiredBrowserGateway()
     voice_realtime.register_live(
         wake_sequence=wake_sequence,
         device_statuses=get_status_registry(),
@@ -205,6 +219,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         document_service=document_service,
         mail_service=mail_service,
         calendar_service=calendar_service,
+        app_factory_service=app_factory_service,
+        browser_gateway=browser_gateway,
     )
 
     def _build_routine_dispatcher() -> ActionDispatcher:
@@ -366,6 +382,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.document_service = document_service
     app.state.mail_service = mail_service
     app.state.calendar_service = calendar_service
+    app.state.app_factory_service = app_factory_service
     # M22 (docs/M22_ARTIFACT_FACTORY_SPEC.md §4): POST /v1/artifacts/{id}/open reaches
     # the device through the SAME BrokerDeviceAction object the wake sequence, the
     # operator and the documents/mail/calendar families already hold above — one device

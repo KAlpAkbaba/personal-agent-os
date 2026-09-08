@@ -36,6 +36,8 @@ from app.alarms.sequence import WakeSequence
 from app.alarms.tr_time import parse_when_struct
 from app.ambient import service as ambient_service
 from app.ambient.holdoff import HoldoffRegistry, set_holdoffs
+from app.appfactory.models import AppProjectRow
+from app.appfactory.service import AppFactoryService
 from app.artifacts import factory as artifact_factory
 from app.artifacts import service as artifact_service
 from app.artifacts.models import (
@@ -90,6 +92,7 @@ from app.presence.engine import PresenceFusionEngine, set_engine
 from app.presence.eye import disable_eye, is_eye_enabled
 from app.presence.service import reset_heartbeat
 from app.research import runs_service
+from app.research.browser_gateway import FakeBrowserGateway
 from app.research.models import (
     STAGE_READY,
     ResearchCandidateRow,
@@ -109,6 +112,7 @@ from app.voice.realtime_sessions.runtime import RealtimeVoiceRuntime
 from app.voice.realtime_sessions.sideband import RecordingSideband
 from app.voice.simulator import SimulatedRealtimeProvider
 from tests.alarms_support import FakeDeviceAction, happy_device_results
+from tests.appfactory_support import appfactory_capability_results
 from tests.artifacts_support import artifact_capability_results
 from tests.documents_support import document_capability_results, extract_result
 from tests.identity_support import IDENTITY_TABLES
@@ -116,6 +120,8 @@ from tests.mail_calendar_support import build_fake_calendar_provider, build_fake
 from tests.voice_corpus.corpus import (
     CTX_ALARM_RINGING,
     CTX_ALARM_SCHEDULED,
+    CTX_APP_RUNNING,
+    CTX_APP_SCAFFOLDED,
     CTX_ARTIFACT_FOCUSED,
     CTX_COMMON_POINTS_FOCUSED,
     CTX_DOCUMENT_ARTIFACT_FOCUSED,
@@ -179,6 +185,7 @@ TABLES = (
     MailDraftRow.__table__,
     CalendarIndexRow.__table__,
     CalendarProposalRow.__table__,
+    AppProjectRow.__table__,
 )
 
 #: The tools the harness may dispatch as "forbidden" because the product refuses them at
@@ -247,6 +254,8 @@ class Harness:
     documents: DocumentService
     mail: MailService
     calendar: CalendarService
+    app_factory: AppFactoryService
+    browser_gateway: FakeBrowserGateway
     ids: dict[str, str] = field(default_factory=dict)
 
     # ------------------------------------------------------------- relay
@@ -636,6 +645,26 @@ class Harness:
                 )
                 # See CTX_DRAFT_READ_BACK's identical comment just above.
                 self.calendar.read_proposal(db, session_id="seed:proposal_read_back", turn=0)
+        elif context in (CTX_APP_SCAFFOLDED, CTX_APP_RUNNING):
+            # M23 (docs/M23_APP_FACTORY_SPEC.md §5): a REAL app_projects row, made
+            # through the real AppFactoryService.create against the fake device (the
+            # same "genuine fixture, not a sentinel" discipline CTX_ARTIFACT_FOCUSED
+            # already uses) — sets the current ``project`` focus as a side effect
+            # (AppFactoryService.create's own focus_module.set_focus call).
+            with self.factory() as db:
+                created = self.app_factory.create(
+                    db,
+                    self.device,
+                    spec={"name": "Yapılacaklar", "kind": "web_static", "template": "task-tracker"},
+                    session_id="seed:app_scaffolded",
+                )
+                assert created["execution_status"] == "executed", created
+                self.ids["app:project"] = created["project_id"]
+                if context == CTX_APP_RUNNING:
+                    ran = self.app_factory.run(
+                        db, self.device, target="current", session_id="seed:app_running"
+                    )
+                    assert ran["execution_status"] == "executed", ran
 
     # ------------------------------------------------------------- M21: mail/calendar
 
@@ -741,6 +770,7 @@ def build_harness() -> Harness:
             **happy_device_results(),
             **document_capability_results(),
             **artifact_capability_results(),
+            **appfactory_capability_results(),
         }
     )
     sequence = WakeSequence(device_action=device, tts=FakeTTSProvider())
@@ -785,6 +815,13 @@ def build_harness() -> Harness:
     calendar_service = CalendarService(calendar_provider, calendar_writer)
     app.state.mail_service = mail_service
     app.state.calendar_service = calendar_service
+    # M23 (docs/M23_APP_FACTORY_SPEC.md §1-§4): the App Factory's own service, reading
+    # the SAME fake device port every other family holds, plus the M13 fake browser
+    # gateway (task brief: "the M13 fake gateway in unit tests") for ``app.open``/
+    # exercising a running web project.
+    app_factory_service = AppFactoryService()
+    browser_gateway = FakeBrowserGateway()
+    app.state.app_factory_service = app_factory_service
     runtime.register_live(
         wake_sequence=sequence,
         device_statuses=statuses,
@@ -796,6 +833,8 @@ def build_harness() -> Harness:
         document_service=document_service,
         mail_service=mail_service,
         calendar_service=calendar_service,
+        app_factory_service=app_factory_service,
+        browser_gateway=browser_gateway,
     )
     holdoffs = HoldoffRegistry()
     set_holdoffs(holdoffs)
@@ -838,6 +877,8 @@ def build_harness() -> Harness:
         documents=document_service,
         mail=mail_service,
         calendar=calendar_service,
+        app_factory=app_factory_service,
+        browser_gateway=browser_gateway,
     )
 
 
@@ -927,9 +968,14 @@ def contract_arguments(case: UtteranceCase, tool: str, resolved: dict) -> dict:
     elif tool == "artifact.render":
         fmt = _format_from_utterance(text)
         args = {"format": fmt} if fmt else {}
-    # artifact.validate / artifact.open / artifact.list need no default argument at
-    # all — every one of them resolves its target from the durable focus state, never
-    # from a wire argument (the same rule mail.inbox/mail.read/... already follow).
+    elif tool == "app.create":
+        template = resolved.get("app_template") or "task-tracker"
+        name = resolved.get("app_name") or "Adsız Uygulama"
+        args = {"template": template, "name": name}
+    # artifact.validate / artifact.open / artifact.list / app.run / app.test / app.stop /
+    # app.status / app.open / app.list need no default argument at all — every one of
+    # them resolves its target from the durable focus state, never from a wire argument
+    # (the same rule mail.inbox/mail.read/... already follow).
     args.update(case.tool_arguments)
     return args
 

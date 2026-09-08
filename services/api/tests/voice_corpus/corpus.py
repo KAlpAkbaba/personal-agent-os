@@ -101,6 +101,16 @@ CTX_ARTIFACT_FOCUSED: Final = "artifact_focused"
 #: "Bu dosya PDF olamaz" honestly, which the strengthened harness now refuses to count as done.
 CTX_DOCUMENT_ARTIFACT_FOCUSED: Final = "document_artifact_focused"
 
+#: M23 (docs/M23_APP_FACTORY_SPEC.md §5): a REAL ``app_projects`` row, scaffolded through
+#: the real ``AppFactoryService.create`` against the fake device (the same "genuine
+#: fixture, not a sentinel" discipline CTX_ARTIFACT_FOCUSED already uses) — a task-tracker,
+#: current object focus (kind ``project``), so "testleri çalıştır" / "uygulamayı çalıştır"
+#: resolve to something real.
+CTX_APP_SCAFFOLDED: Final = "app_scaffolded"
+#: The same project, additionally RUN (state ``running``, a ``run_port``) — for
+#: "uygulamayı durdur" / "uygulama çalışıyor mu?" / "uygulamayı aç".
+CTX_APP_RUNNING: Final = "app_running"
+
 #: Side-effect policies: the device capabilities a case MAY reach on the fake device.
 #: Anything else the fake device saw is a forbidden side effect.
 SIDE_EFFECTS_NONE: Final[frozenset[str]] = frozenset()
@@ -155,6 +165,17 @@ SIDE_EFFECTS_CALENDAR_COMMIT: Final[frozenset[str]] = frozenset({"calendar.commi
 #: create/render/validate/list touch no device at all (the factory renders in-process
 #: against the in-memory object store).
 SIDE_EFFECTS_ARTIFACT_OPEN: Final[frozenset[str]] = frozenset({"file.fetch"})
+
+#: M23 (docs/M23_APP_FACTORY_SPEC.md §5): exactly the device capabilities each app-
+#: factory tool may reach on the fake device — the same policy discipline every family
+#: above uses. ``app.status``/``app.list`` reach no device at all when the seeded
+#: project is not running / for a listing (``AppFactoryService`` reads the row).
+SIDE_EFFECTS_APP_CREATE: Final[frozenset[str]] = frozenset({"project.scaffold"})
+SIDE_EFFECTS_APP_RUN: Final[frozenset[str]] = frozenset({"project.run"})
+SIDE_EFFECTS_APP_TEST: Final[frozenset[str]] = frozenset({"project.test"})
+SIDE_EFFECTS_APP_STOP: Final[frozenset[str]] = frozenset({"project.stop"})
+SIDE_EFFECTS_APP_STATUS: Final[frozenset[str]] = frozenset({"project.status"})
+SIDE_EFFECTS_APP_OPEN: Final[frozenset[str]] = frozenset({"file.reveal"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -2318,6 +2339,320 @@ def _artifact_cases() -> list[UtteranceCase]:
     ]
 
 
+def _app_create_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        ("app.create.tracker", "Bana bir görev takip uygulaması yap.", "canonical"),
+        (
+            "app.create.page",
+            "Küçük bir web sayfası uygulaması oluştur: adı Notlarım.",
+            "canonical",
+        ),
+        (
+            "app.create.cli",
+            "Komut satırı aracı yap: selamla ve say komutları.",
+            "canonical",
+        ),
+        ("app.create.tracker.para", "Bana bir görev takip uygulaması yapar mısın?", "paraphrase"),
+        ("app.create.tracker.para2", "Görev takip uygulaması hazırla.", "paraphrase"),
+        (
+            "app.create.page.para",
+            "Küçük bir web sayfası uygulaması yapsana: adı Not Panom.",
+            "paraphrase",
+        ),
+        ("app.create.cli.para", "Bir komut satırı aracı oluşturur musun?", "paraphrase"),
+        (
+            "app.create.tracker.named",
+            "Bana adı Yapılacaklar olan bir görev takip uygulaması yap.",
+            "canonical",
+        ),
+        ("app.create.tracker.asr", "bana bir gorev takip uygulamasi yap", "asr_noise"),
+        (
+            "app.create.page.asr",
+            "kucuk bir web sayfasi uygulamasi olustur adi notlarim",
+            "asr_noise",
+        ),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="app_factory_create",
+                    expected_tool="app.create",
+                    side_effects=SIDE_EFFECTS_APP_CREATE,
+                    context=CTX_NONE,
+                    category="apps",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _app_run_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        ("app.run.canonical", "Uygulamayı çalıştır.", "canonical"),
+        ("app.run.para", "Uygulamayı başlatır mısın?", "paraphrase"),
+        ("app.run.para2", "Uygulamayı başlatsana.", "paraphrase"),
+        ("app.run.asr", "uygulamayi calistir", "asr_noise"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="app_factory_run",
+                    expected_tool="app.run",
+                    side_effects=SIDE_EFFECTS_APP_RUN,
+                    context=CTX_APP_SCAFFOLDED,
+                    category="apps",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _app_test_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        ("app.test.canonical", "Testleri çalıştır.", "canonical"),
+        ("app.test.para", "Uygulamanın testlerini çalıştırır mısın?", "paraphrase"),
+        ("app.test.para2", "Testleri çalıştırsana.", "paraphrase"),
+        ("app.test.asr", "testleri calistir", "asr_noise"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="app_factory_test",
+                    expected_tool="app.test",
+                    side_effects=SIDE_EFFECTS_APP_TEST,
+                    context=CTX_APP_SCAFFOLDED,
+                    category="apps",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _app_stop_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        ("app.stop.canonical", "Uygulamayı durdur.", "canonical"),
+        ("app.stop.para", "Uygulamayı durdurur musun?", "paraphrase"),
+        ("app.stop.para2", "Uygulamayı kapatsana.", "paraphrase"),
+        ("app.stop.asr", "uygulamayi durdur", "asr_noise"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="app_factory_stop",
+                    expected_tool="app.stop",
+                    side_effects=SIDE_EFFECTS_APP_STOP,
+                    context=CTX_APP_RUNNING,
+                    category="apps",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _app_status_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        ("app.status.canonical", "Uygulama çalışıyor mu?", "canonical"),
+        ("app.status.para", "Uygulama hâlâ çalışıyor mu acaba?", "paraphrase"),
+        ("app.status.asr", "uygulama calisiyor mu", "asr_noise"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="app_factory_status",
+                    expected_tool="app.status",
+                    side_effects=SIDE_EFFECTS_APP_STATUS,
+                    context=CTX_APP_RUNNING,
+                    category="apps",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _app_open_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        ("app.open.canonical", "Uygulamayı aç.", "canonical"),
+        ("app.open.para", "Uygulamayı açar mısın?", "paraphrase"),
+        ("app.open.asr", "uygulamayi ac", "asr_noise"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="app_factory_open",
+                    expected_tool="app.open",
+                    side_effects=SIDE_EFFECTS_APP_OPEN,
+                    context=CTX_APP_RUNNING,
+                    category="apps",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _app_list_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, text, context, source in (
+        ("app.list.nothing", "Hangi uygulamaları yaptın?", CTX_NONE, "canonical"),
+        (
+            "app.list.something",
+            "Bugüne kadar hangi uygulamaları yaptın?",
+            CTX_APP_SCAFFOLDED,
+            "paraphrase",
+        ),
+        ("app.list.which", "Hangi uygulamaları oluşturdun?", CTX_APP_SCAFFOLDED, "paraphrase"),
+        ("app.list.asr", "hangi uygulamalari yaptin", CTX_NONE, "asr_noise"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="app_factory_list",
+                    expected_tool="app.list",
+                    side_effects=SIDE_EFFECTS_NONE,
+                    context=context,
+                    category="apps",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _app_negative_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    # "Projeyi sil." reaches no tool at all (ADR-0086 decision 5 names no delete tool) -
+    # even with a real project focused, the router resolves nothing.
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="app.neg.delete",
+                utterance="Projeyi sil.",
+                expected_intent="none",
+                expected_tool=None,
+                expected_response=RESPONSE_NONE,
+                side_effects=SIDE_EFFECTS_NONE,
+                context=CTX_APP_SCAFFOLDED,
+                category="apps",
+                source="canonical",
+                regression_issue_id="M23 spec §5: no delete tool",
+            )
+        )
+    )
+    # A name that is already a path is refused BEFORE the device is ever asked (spec's
+    # own negative: "a name with a path (..\\x, C:\\x) -> refused").
+    cases.append(
+        UtteranceCase(
+            case_id="app.neg.path_in_name_dotdot",
+            utterance="Bana bir görev takip uygulaması yap: adı ..\\x.",
+            expected_intent="app_factory_create",
+            expected_tool="app.create",
+            expected_response=RESPONSE_REFUSED,
+            expected={"error_class": "validation_error"},
+            tool_arguments={"template": "task-tracker", "name": "..\\x"},
+            side_effects=SIDE_EFFECTS_NONE,
+            context=CTX_NONE,
+            category="apps",
+            source="regression",
+            regression_issue_id="M23 spec: a project name naming a path is refused "
+            "before the device",
+        )
+    )
+    cases.append(
+        UtteranceCase(
+            case_id="app.neg.path_in_name_drive",
+            utterance="Bana bir görev takip uygulaması yap: adı C:\\x.",
+            expected_intent="app_factory_create",
+            expected_tool="app.create",
+            expected_response=RESPONSE_REFUSED,
+            expected={"error_class": "validation_error"},
+            tool_arguments={"template": "task-tracker", "name": "C:\\x"},
+            side_effects=SIDE_EFFECTS_NONE,
+            context=CTX_NONE,
+            category="apps",
+            source="regression",
+            regression_issue_id="M23 spec: a project name naming a path is refused "
+            "before the device",
+        )
+    )
+    # "Uygulamayı çalıştır." with nothing EVER scaffolded -> an honest clarification,
+    # never a guess and never a crash (spec's own negative).
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="app.neg.run_nothing_scaffolded",
+                utterance="Uygulamayı çalıştır.",
+                expected_intent="app_factory_run",
+                expected_tool="app.run",
+                expected_response=RESPONSE_CLARIFY,
+                side_effects=SIDE_EFFECTS_NONE,
+                context=CTX_NONE,
+                category="apps",
+                source="regression",
+                regression_issue_id="M23 spec §5: nothing scaffolded -> clarification",
+            )
+        )
+    )
+    # "Bunu teknik anlat." stays exactly what M18.2/M21/M22 already made it - the SAME
+    # assertion mc.neg.technical_unchanged / art.neg.technical_unchanged make, kept here
+    # too so the apps category proves it on its own (task brief: "unchanged").
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="app.neg.technical_unchanged",
+                utterance="Bunu teknik anlat.",
+                expected_intent="technical",
+                expected_tool="research.explain",
+                expected_target="current",
+                expected={"level": "technical"},
+                forbidden_tools=("research.start",),
+                context=CTX_RESEARCH_FOCUS_B,
+                category="apps",
+                source="regression",
+                regression_issue_id="M23 must not touch the M18.2 technical-explain path",
+            )
+        )
+    )
+    return cases
+
+
+def _app_cases() -> list[UtteranceCase]:
+    return [
+        *_app_create_cases(),
+        *_app_run_cases(),
+        *_app_test_cases(),
+        *_app_stop_cases(),
+        *_app_status_cases(),
+        *_app_open_cases(),
+        *_app_list_cases(),
+        *_app_negative_cases(),
+    ]
+
+
 def all_cases() -> list[UtteranceCase]:
     cases = [
         *_research_cases(),
@@ -2331,6 +2666,7 @@ def all_cases() -> list[UtteranceCase]:
         *_documents_cases(),
         *_mail_calendar_cases(),
         *_artifact_cases(),
+        *_app_cases(),
     ]
     ids = [c.case_id for c in cases]
     assert len(ids) == len(set(ids)), "duplicate case ids"

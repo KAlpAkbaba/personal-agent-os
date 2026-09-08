@@ -1,0 +1,951 @@
+"""``AppFactoryService`` (docs/M23_APP_FACTORY_SPEC.md §1-§4, ADR-0086): the owner's rule
+in one line — "an app the assistant made exists when it has been scaffolded into a real
+project on the owner's machine, run there in a bounded process, exercised through the
+browser, and its own tests have passed".
+
+Mirrors ``app.documents.service.DocumentService``'s own device-calling shape (device
+selection by capability, an ``ActionReceipt`` per call, a ledger row, a bounded
+``app.factory`` UI-state event) — the same "write -> read-back -> speak" discipline every
+mutating capability in this codebase follows (docs/M18_ACTION_CONTRACT.md §5.5).
+
+Generation + validation (``app.appfactory.generator`` / ``.validation``) run BEFORE any
+device is asked or any ``app_projects`` row is written — a spec that fails either never
+reaches the device, and no row exists to clean up.
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import UTC, datetime
+from typing import Any
+
+from pydantic import ValidationError
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.actions.receipt import (
+    EXECUTION_EXECUTED,
+    EXECUTION_NOOP,
+    EXECUTION_REFUSED,
+    TERMINAL_ALREADY,
+    TERMINAL_FAILED,
+    TERMINAL_VERIFIED,
+    ActionReceipt,
+    record_receipt,
+)
+from app.appfactory.generator import AppGenerator, AppGeneratorError, DeterministicAppGenerator
+from app.appfactory.models import (
+    STATE_FAILED,
+    STATE_PLANNED,
+    STATE_RUNNING,
+    STATE_SCAFFOLDED,
+    STATE_STOPPED,
+    STATE_TESTED,
+    AppProjectRow,
+)
+from app.appfactory.oracles import load_oracle
+from app.appfactory.spec import KIND_WEB_API, KIND_WEB_STATIC, AppSpec
+from app.appfactory.validation import AppValidationError, validate
+from app.ledger import service as ledger_service
+from app.ledger.vocabulary import (
+    EVENT_TYPE_APP_PROJECT_CREATED,
+    EVENT_TYPE_APP_PROJECT_EXERCISED,
+    EVENT_TYPE_APP_PROJECT_FAILED,
+    EVENT_TYPE_APP_PROJECT_LISTED,
+    EVENT_TYPE_APP_PROJECT_RUN,
+    EVENT_TYPE_APP_PROJECT_SCAFFOLDED,
+    EVENT_TYPE_APP_PROJECT_STOPPED,
+    EVENT_TYPE_APP_PROJECT_TESTED,
+    SUBSYSTEM_APPFACTORY,
+)
+from app.logging import get_logger
+from app.operator import focus as focus_module
+from app.operator.models import FOCUS_KIND_PROJECT
+from app.research.browser_gateway import BrowserGateway, FetchQuery
+from app.routines.dispatch import DeviceActionPort
+from app.uistate import UiState
+from app.uistate import publish as publish_ui_state
+
+logger = get_logger("app.appfactory.service")
+
+CAPABILITY_PROJECT_SCAFFOLD = "project.scaffold"
+CAPABILITY_PROJECT_RUN = "project.run"
+CAPABILITY_PROJECT_STATUS = "project.status"
+CAPABILITY_PROJECT_STOP = "project.stop"
+CAPABILITY_PROJECT_TEST = "project.test"
+CAPABILITY_FILE_REVEAL = "file.reveal"
+
+#: The manifest run command KEY every runnable built-in template scaffolds (module
+#: docstring of ``app.appfactory.validation``: the device payload names a KEY, never a
+#: command line). Only ``web_static``/``web_api`` kinds are runnable at all.
+RUN_COMMAND_KEY = "serve"
+TEST_COMMAND_KEY = "unit"
+
+SPEECH_NO_DEVICE = "Bu bilgisayarda uygulama oluşturma yetkisi yok efendim."
+SPEECH_NO_PROJECT = "Hangi uygulama efendim?"
+SPEECH_NOT_SCAFFOLDED = "Önce bir uygulama oluşturmalıyım efendim."
+SPEECH_NOT_RUNNABLE = "Bu tür bir uygulama tarayıcıda çalıştırılmaz efendim."
+SPEECH_NOT_RUNNING = "Önce uygulamayı çalıştırmalıyım efendim."
+
+ERROR_CAPABILITY_MISSING = "capability_missing"
+ERROR_INVALID_ARGUMENT = "invalid_argument"
+ERROR_VALIDATION = "validation_error"
+
+_RUNNABLE_KINDS = (KIND_WEB_STATIC, KIND_WEB_API)
+
+#: Two projects running at once (device table, spec §3) is the DEVICE's own bound; this
+#: constant only names the truthful refusal word this service echoes when a device
+#: reports it (never enforced twice — the device is the single source of truth for how
+#: many of its own jobs are alive).
+ERROR_TOO_MANY_RUNNING = "too_many_running"
+
+
+def _translate_error(error_class: str) -> tuple[str, str]:
+    table = {
+        "no_capable_device": (SPEECH_NO_DEVICE, ERROR_CAPABILITY_MISSING),
+        "permission_denied": ("Bu işlem izin verilen alanın dışında efendim.", "permission_denied"),
+        "validation_error": ("Bu isteği işleyemedim efendim.", ERROR_VALIDATION),
+        "timeout": ("Zaman aşımına uğradım efendim.", "timeout"),
+        ERROR_TOO_MANY_RUNNING: (
+            "Aynı anda en fazla iki uygulama çalıştırabilirim efendim.",
+            ERROR_TOO_MANY_RUNNING,
+        ),
+    }
+    return table.get(
+        error_class, (f"Bunu yapamadım efendim ({error_class}).", error_class or "device_error")
+    )
+
+
+class AppFactoryService:
+    def __init__(self, generator: AppGenerator | None = None) -> None:
+        self._generator = generator or DeterministicAppGenerator()
+
+    # ------------------------------------------------------------- device plumbing
+
+    def _select_device(
+        self, device_action: DeviceActionPort | None
+    ) -> tuple[str | None, dict[str, Any] | None]:
+        if device_action is None:
+            return None, self._capability_missing_receipt()
+        # The same stable logical bucket app.documents.service._select_device uses:
+        # the real BrokerDeviceAction selects the physical device internally per call.
+        return "device:default", None
+
+    def _capability_missing_receipt(
+        self, *, capability: str = "project", session_id: str | None = None
+    ) -> dict[str, Any]:
+        return self._receipt(
+            capability=capability,
+            requested_state="none",
+            execution=EXECUTION_REFUSED,
+            terminal=TERMINAL_FAILED,
+            server={"reason": "no_device_runtime"},
+            speech=SPEECH_NO_DEVICE,
+            error_class=ERROR_CAPABILITY_MISSING,
+            session_id=session_id,
+        )
+
+    def _receipt(
+        self,
+        *,
+        capability: str,
+        requested_state: str,
+        execution: str,
+        terminal: str,
+        server: dict[str, Any],
+        speech: str,
+        db: Session | None = None,
+        error_class: str | None = None,
+        session_id: str | None = None,
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        now = datetime.now(UTC)
+        receipt = ActionReceipt(
+            action_id=str(uuid.uuid4()),
+            capability=capability,
+            requested_state=requested_state,
+            execution_status=execution,
+            terminal_status=terminal,
+            observed_after={"server": server, "local": {}},
+            evidence_refs=[],
+            error_class=error_class,
+            speech=speech,
+            started_at=now,
+            completed_at=now,
+            session_id=session_id,
+            observed_at=now,
+        )
+        if db is not None:
+            record_receipt(db, receipt, SUBSYSTEM_APPFACTORY)
+        out = receipt.as_dict()
+        if extra:
+            out.update(extra)
+        return out
+
+    def _ledger(
+        self,
+        db: Session | None,
+        *,
+        event_type: str,
+        action: str,
+        summary: str,
+        detail: dict[str, Any],
+    ) -> None:
+        if db is None:
+            return
+        try:
+            ledger_service.record(
+                db,
+                ledger_service.ActivityEvent(
+                    event_type=event_type,
+                    subsystem=SUBSYSTEM_APPFACTORY,
+                    action=action,
+                    factual_summary=summary,
+                    occurred_at=datetime.now(UTC),
+                    detail_json=detail,
+                    source="live",
+                    source_ref=f"{action}:{uuid.uuid4()}",
+                ),
+            )
+        except Exception:  # noqa: BLE001 - evidence, never a dependency of the action
+            logger.warning("appfactory_ledger_failed", action=action)
+
+    def _publish(self, *, project_name: str, state: str, port: int | None = None) -> None:
+        metadata: dict[str, Any] = {"project": project_name[:64], "state": state}
+        if port is not None:
+            metadata["port"] = port
+        publish_ui_state(
+            UiState.APP_FACTORY,
+            subsystem=SUBSYSTEM_APPFACTORY,
+            label=project_name[:64],
+            metadata=metadata,
+        )
+
+    # ----------------------------------------------------------------- resolution
+
+    def resolve_project(self, db: Session, target: str | None) -> AppProjectRow | None:
+        """"current" (or None) -> the durable ``project`` focus; a literal project id
+        string -> that row directly; anything else -> the most recently created row (a
+        convenience fallback the same "owner's words win, else best effort" discipline
+        ``app.documents.service`` follows for a bare "bu dosya" with no explicit id)."""
+        if target and target not in ("current", "previous"):
+            try:
+                row = db.get(AppProjectRow, uuid.UUID(target))
+                if row is not None:
+                    return row
+            except (ValueError, TypeError):
+                pass
+        kind = FOCUS_KIND_PROJECT
+        entry = (
+            focus_module.previous(db, kind)
+            if target == "previous"
+            else focus_module.current(db, kind)
+        )
+        if entry is not None:
+            try:
+                row = db.get(AppProjectRow, uuid.UUID(entry.object_id))
+                if row is not None:
+                    return row
+            except (ValueError, TypeError):
+                pass
+        # Fallback: the most recently created project at all (mirrors "current" when no
+        # focus row exists yet, e.g. right after a fresh create in a test harness).
+        return db.execute(
+            select(AppProjectRow).order_by(AppProjectRow.created_at.desc()).limit(1)
+        ).scalar_one_or_none()
+
+    # ---------------------------------------------------------------------- create
+
+    def create(
+        self,
+        db: Session,
+        device_action: DeviceActionPort | None,
+        *,
+        spec: dict[str, Any],
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        device_id, missing = self._select_device(device_action)
+        if missing is not None:
+            return missing
+
+        try:
+            app_spec = AppSpec.model_validate(spec)
+        except ValidationError as exc:
+            return self._receipt(
+                capability="app.create",
+                requested_state="scaffolded",
+                execution=EXECUTION_REFUSED,
+                terminal=TERMINAL_FAILED,
+                server={"reason": "invalid_spec"},
+                speech="Bu uygulama tarifini işleyemedim efendim.",
+                db=db,
+                error_class=ERROR_VALIDATION,
+                session_id=session_id,
+                extra={"error_class": ERROR_VALIDATION, "detail": str(exc)[:500]},
+            )
+
+        try:
+            files = self._generator.generate(app_spec)
+        except AppGeneratorError as exc:
+            return self._receipt(
+                capability="app.create",
+                requested_state="scaffolded",
+                execution=EXECUTION_REFUSED,
+                terminal=TERMINAL_FAILED,
+                server={"reason": "generation_failed"},
+                speech="Bu uygulamayı oluşturamadım efendim.",
+                db=db,
+                error_class=ERROR_VALIDATION,
+                session_id=session_id,
+                extra={"error_class": ERROR_VALIDATION, "detail": str(exc)[:500]},
+            )
+
+        try:
+            _report, manifest = validate(files)
+        except AppValidationError as exc:
+            return self._receipt(
+                capability="app.create",
+                requested_state="scaffolded",
+                execution=EXECUTION_REFUSED,
+                terminal=TERMINAL_FAILED,
+                server={"reason": exc.code},
+                speech="Bu uygulamayı güvenlik denetiminden geçiremedim efendim.",
+                db=db,
+                error_class=ERROR_VALIDATION,
+                session_id=session_id,
+                extra={"error_class": ERROR_VALIDATION, "detail": str(exc)[:500], "code": exc.code},
+            )
+
+        project_id = uuid.uuid4()
+        now = datetime.now(UTC)
+        row = AppProjectRow(
+            id=project_id,
+            name=app_spec.name,
+            kind=app_spec.kind,
+            template=app_spec.template,
+            spec_json=app_spec.model_dump(mode="json"),
+            device_id=device_id or "device:default",
+            state=STATE_PLANNED,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(row)
+        db.commit()
+        self._ledger(
+            db,
+            event_type=EVENT_TYPE_APP_PROJECT_CREATED,
+            action="app.project.create",
+            summary=f"app.project.create -> {app_spec.name} ({app_spec.template})",
+            detail={"project_id": str(project_id), "template": app_spec.template},
+        )
+
+        result = device_action.run(  # type: ignore[union-attr]
+            capability=CAPABILITY_PROJECT_SCAFFOLD,
+            payload={
+                "project_id": str(project_id),
+                "slug": app_spec.slug(),
+                "files": [{"path": f.path, "text": f.text} for f in files.files],
+                "manifest": manifest,
+            },
+            idempotency_key=f"appfactory-scaffold:{project_id}",
+            timeout_s=30.0,
+        )
+        if not result.ok:
+            row.state = STATE_FAILED
+            row.updated_at = datetime.now(UTC)
+            db.commit()
+            speech, error_class = _translate_error(result.error_class)
+            self._ledger(
+                db,
+                event_type=EVENT_TYPE_APP_PROJECT_FAILED,
+                action="app.project.scaffold",
+                summary=f"app.project.scaffold -> failed ({result.error_class})",
+                detail={"project_id": str(project_id), "error_class": result.error_class},
+            )
+            return self._receipt(
+                capability="app.create",
+                requested_state="scaffolded",
+                execution=EXECUTION_REFUSED,
+                terminal=TERMINAL_FAILED,
+                server={"error_class": result.error_class},
+                speech=speech,
+                db=db,
+                error_class=error_class,
+                session_id=session_id,
+                extra={"project_id": str(project_id)},
+            )
+
+        root_path = str((result.result or {}).get("root_path") or "")
+        row.root_path = root_path or None
+        row.state = STATE_SCAFFOLDED
+        row.updated_at = datetime.now(UTC)
+        db.commit()
+        focus_module.set_focus(
+            db, FOCUS_KIND_PROJECT, str(project_id), label=app_spec.name, source="app_create"
+        )
+        self._ledger(
+            db,
+            event_type=EVENT_TYPE_APP_PROJECT_SCAFFOLDED,
+            action="app.project.scaffold",
+            summary=f"app.project.scaffold -> {app_spec.name} at {root_path}",
+            detail={"project_id": str(project_id), "root_path": root_path},
+        )
+        self._publish(project_name=app_spec.name, state=STATE_SCAFFOLDED)
+        return self._receipt(
+            capability="app.create",
+            requested_state="scaffolded",
+            execution=EXECUTION_EXECUTED,
+            terminal=TERMINAL_VERIFIED,
+            server={"root_path": root_path},
+            speech=f"{app_spec.name} uygulamasını oluşturdum efendim.",
+            db=db,
+            session_id=session_id,
+            extra={
+                "project_id": str(project_id),
+                "state": STATE_SCAFFOLDED,
+                "root_path": root_path,
+            },
+        )
+
+    # ------------------------------------------------------------------------ run
+
+    def run(
+        self,
+        db: Session,
+        device_action: DeviceActionPort | None,
+        *,
+        target: str | None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        device_id, missing = self._select_device(device_action)
+        if missing is not None:
+            return missing
+        project = self.resolve_project(db, target)
+        if project is None:
+            return self._clarification(SPEECH_NO_PROJECT)
+        if project.root_path is None:
+            return self._invalid_argument(
+                capability="app.run",
+                requested_state="running",
+                speech=SPEECH_NOT_SCAFFOLDED,
+                db=db,
+                session_id=session_id,
+            )
+        if project.kind not in _RUNNABLE_KINDS:
+            return self._invalid_argument(
+                capability="app.run", requested_state="running", speech=SPEECH_NOT_RUNNABLE, db=db,
+                session_id=session_id,
+            )
+
+        result = device_action.run(  # type: ignore[union-attr]
+            capability=CAPABILITY_PROJECT_RUN,
+            payload={"project_id": str(project.id), "command_key": RUN_COMMAND_KEY},
+            idempotency_key=f"appfactory-run:{project.id}:{uuid.uuid4()}",
+            timeout_s=30.0,
+        )
+        if not result.ok:
+            speech, error_class = _translate_error(result.error_class)
+            return self._receipt(
+                capability="app.run",
+                requested_state="running",
+                execution=EXECUTION_REFUSED,
+                terminal=TERMINAL_FAILED,
+                server={"error_class": result.error_class},
+                speech=speech,
+                db=db,
+                error_class=error_class,
+                session_id=session_id,
+                extra={"project_id": str(project.id)},
+            )
+
+        port = (result.result or {}).get("port")
+        project.run_port = int(port) if port is not None else None
+        project.state = STATE_RUNNING
+        project.updated_at = datetime.now(UTC)
+        db.commit()
+        self._ledger(
+            db,
+            event_type=EVENT_TYPE_APP_PROJECT_RUN,
+            action="app.project.run",
+            summary=f"app.project.run -> {project.name} on port {port}",
+            detail={"project_id": str(project.id), "port": port},
+        )
+        self._publish(project_name=project.name, state=STATE_RUNNING, port=project.run_port)
+        return self._receipt(
+            capability="app.run",
+            requested_state="running",
+            execution=EXECUTION_EXECUTED,
+            terminal=TERMINAL_VERIFIED,
+            server={"port": port},
+            speech=f"{project.name} uygulamasını {port} portunda çalıştırdım efendim.",
+            db=db,
+            session_id=session_id,
+            extra={"project_id": str(project.id), "state": STATE_RUNNING, "port": project.run_port},
+        )
+
+    # ------------------------------------------------------------------- exercise
+
+    def exercise(
+        self,
+        db: Session,
+        browser_gateway: BrowserGateway | None,
+        *,
+        target: str | None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Opens the running project's URL through the EXISTING M13 ``BrowserGateway``
+        (no new browser path, ADR-0086 decision 4) and records the template's oracle
+        alongside what was actually opened. ``BrowserGateway.fetch_evidence`` proves the
+        app is reachable and serving content; the oracle's own selector/interaction
+        assertions ("add a task, see it, toggle it, reload") are recorded here as what a
+        REAL DOM-capable worker independently proves — the device lab's job (spec §6,
+        track B). This service never claims a DOM assertion it cannot itself observe."""
+        project = self.resolve_project(db, target)
+        if project is None:
+            return self._clarification(SPEECH_NO_PROJECT)
+        if project.kind not in _RUNNABLE_KINDS:
+            return self._invalid_argument(
+                capability="app.open", requested_state="opened", speech=SPEECH_NOT_RUNNABLE, db=db,
+                session_id=session_id,
+            )
+        if not project.run_port:
+            # ``run_port`` (never ``state``) is the truth of "is a process up right
+            # now": ``test()`` moves ``state`` on to "tested"/"failed" as a lifecycle
+            # milestone without touching a still-running process's own port.
+            return self._invalid_argument(
+                capability="app.open", requested_state="opened", speech=SPEECH_NOT_RUNNING, db=db,
+                session_id=session_id,
+            )
+        if browser_gateway is None:
+            return self._capability_missing_receipt(capability="app.open", session_id=session_id)
+
+        url = f"http://127.0.0.1:{project.run_port}/"
+        oracle = load_oracle(project.template)
+        try:
+            records = browser_gateway.fetch_evidence(
+                [FetchQuery(query=url, source_class="app_factory", max_results=1)]
+            )
+        except Exception as exc:  # noqa: BLE001 - the gateway's own failure, not ours
+            return self._receipt(
+                capability="app.open",
+                requested_state="opened",
+                execution=EXECUTION_REFUSED,
+                terminal=TERMINAL_FAILED,
+                server={"reason": "browser_error"},
+                speech="Uygulamayı tarayıcıda açamadım efendim.",
+                db=db,
+                error_class="device_error",
+                session_id=session_id,
+                extra={"project_id": str(project.id), "detail": str(exc)[:300]},
+            )
+        opened = bool(records and records[0].excerpt)
+        if not opened:
+            return self._receipt(
+                capability="app.open",
+                requested_state="opened",
+                execution=EXECUTION_REFUSED,
+                terminal=TERMINAL_FAILED,
+                server={"reason": "empty_response"},
+                speech="Uygulamayı tarayıcıda açamadım efendim.",
+                db=db,
+                error_class="device_error",
+                session_id=session_id,
+                extra={"project_id": str(project.id)},
+            )
+        self._ledger(
+            db,
+            event_type=EVENT_TYPE_APP_PROJECT_EXERCISED,
+            action="app.project.exercise",
+            summary=f"app.project.exercise -> {project.name} opened at {url}",
+            detail={"project_id": str(project.id), "url": url, "oracle": oracle.get("template")},
+        )
+        return self._receipt(
+            capability="app.open",
+            requested_state="opened",
+            execution=EXECUTION_EXECUTED,
+            terminal=TERMINAL_VERIFIED,
+            server={"url": url},
+            speech=f"{project.name} uygulamasını tarayıcıda açtım efendim.",
+            db=db,
+            session_id=session_id,
+            extra={"project_id": str(project.id), "url": url, "oracle": oracle},
+        )
+
+    # ----------------------------------------------------------------------- test
+
+    def test(
+        self,
+        db: Session,
+        device_action: DeviceActionPort | None,
+        *,
+        target: str | None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        device_id, missing = self._select_device(device_action)
+        if missing is not None:
+            return missing
+        project = self.resolve_project(db, target)
+        if project is None:
+            return self._clarification(SPEECH_NO_PROJECT)
+        if project.root_path is None:
+            return self._invalid_argument(
+                capability="app.test",
+                requested_state="tested",
+                speech=SPEECH_NOT_SCAFFOLDED,
+                db=db,
+                session_id=session_id,
+            )
+
+        result = device_action.run(  # type: ignore[union-attr]
+            capability=CAPABILITY_PROJECT_TEST,
+            payload={"project_id": str(project.id), "command_key": TEST_COMMAND_KEY},
+            idempotency_key=f"appfactory-test:{project.id}:{uuid.uuid4()}",
+            timeout_s=60.0,
+        )
+        if not result.ok:
+            speech, error_class = _translate_error(result.error_class)
+            return self._receipt(
+                capability="app.test",
+                requested_state="tested",
+                execution=EXECUTION_REFUSED,
+                terminal=TERMINAL_FAILED,
+                server={"error_class": result.error_class},
+                speech=speech,
+                db=db,
+                error_class=error_class,
+                session_id=session_id,
+                extra={"project_id": str(project.id)},
+            )
+
+        report = dict(result.result or {})
+        passed = int(report.get("passed") or 0)
+        failed = int(report.get("failed") or 0)
+        exit_code = int(report.get("exit_code") or 0)
+        ok = exit_code == 0 and failed == 0
+        project.test_report_json = report
+        project.state = STATE_TESTED if ok else STATE_FAILED
+        project.updated_at = datetime.now(UTC)
+        db.commit()
+        self._ledger(
+            db,
+            event_type=EVENT_TYPE_APP_PROJECT_TESTED if ok else EVENT_TYPE_APP_PROJECT_FAILED,
+            action="app.project.test",
+            summary=f"app.project.test -> {project.name}: {passed} passed, {failed} failed",
+            detail={"project_id": str(project.id), "passed": passed, "failed": failed},
+        )
+        self._publish(project_name=project.name, state=project.state)
+        if ok:
+            speech = f"{project.name} testleri geçti efendim: {passed} test."
+        else:
+            tail = str(report.get("report_tail") or "")[:200]
+            speech = (
+                f"{project.name} testleri başarısız efendim: {failed} test başarısız. {tail}"
+            ).strip()
+        return self._receipt(
+            capability="app.test",
+            requested_state="tested",
+            execution=EXECUTION_EXECUTED,
+            terminal=TERMINAL_VERIFIED,
+            server={"passed": passed, "failed": failed, "exit_code": exit_code},
+            speech=speech,
+            db=db,
+            session_id=session_id,
+            extra={
+                "project_id": str(project.id),
+                "state": project.state,
+                "passed": passed,
+                "failed": failed,
+            },
+        )
+
+    # ----------------------------------------------------------------------- stop
+
+    def stop(
+        self,
+        db: Session,
+        device_action: DeviceActionPort | None,
+        *,
+        target: str | None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        device_id, missing = self._select_device(device_action)
+        if missing is not None:
+            return missing
+        project = self.resolve_project(db, target)
+        if project is None:
+            return self._clarification(SPEECH_NO_PROJECT)
+        if not project.run_port:
+            # ``run_port`` (never ``state``) is the truth of "is a process up right
+            # now" — see ``open()``'s identical comment.
+            return self._receipt(
+                capability="app.stop",
+                requested_state="stopped",
+                execution=EXECUTION_NOOP,
+                terminal=TERMINAL_ALREADY,
+                server={"state": project.state},
+                speech=f"{project.name} zaten çalışmıyor efendim.",
+                db=db,
+                session_id=session_id,
+                extra={"project_id": str(project.id), "state": project.state},
+            )
+
+        result = device_action.run(  # type: ignore[union-attr]
+            capability=CAPABILITY_PROJECT_STOP,
+            payload={"project_id": str(project.id)},
+            idempotency_key=f"appfactory-stop:{project.id}:{uuid.uuid4()}",
+            timeout_s=15.0,
+        )
+        if not result.ok:
+            speech, error_class = _translate_error(result.error_class)
+            return self._receipt(
+                capability="app.stop",
+                requested_state="stopped",
+                execution=EXECUTION_REFUSED,
+                terminal=TERMINAL_FAILED,
+                server={"error_class": result.error_class},
+                speech=speech,
+                db=db,
+                error_class=error_class,
+                session_id=session_id,
+                extra={"project_id": str(project.id)},
+            )
+
+        project.state = STATE_STOPPED
+        project.run_port = None
+        project.updated_at = datetime.now(UTC)
+        db.commit()
+        self._ledger(
+            db,
+            event_type=EVENT_TYPE_APP_PROJECT_STOPPED,
+            action="app.project.stop",
+            summary=f"app.project.stop -> {project.name}",
+            detail={"project_id": str(project.id)},
+        )
+        self._publish(project_name=project.name, state=STATE_STOPPED)
+        return self._receipt(
+            capability="app.stop",
+            requested_state="stopped",
+            execution=EXECUTION_EXECUTED,
+            terminal=TERMINAL_VERIFIED,
+            server={"stopped": True},
+            speech=f"{project.name} uygulamasını durdurdum efendim.",
+            db=db,
+            session_id=session_id,
+            extra={"project_id": str(project.id), "state": STATE_STOPPED},
+        )
+
+    # --------------------------------------------------------------------- status
+
+    def status(
+        self,
+        db: Session,
+        device_action: DeviceActionPort | None,
+        *,
+        target: str | None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        project = self.resolve_project(db, target)
+        if project is None:
+            return self._clarification(SPEECH_NO_PROJECT)
+
+        # ``run_port`` (never ``state``) is the truth of "is a process up right now" —
+        # see ``open()``'s identical comment: ``test()`` moves ``state`` on to
+        # "tested"/"failed" as a lifecycle milestone without touching a still-running
+        # process's own port.
+        live_state = project.state
+        live_port = project.run_port
+        live_running = bool(project.run_port)
+        if device_action is not None and project.run_port:
+            result = device_action.run(
+                capability=CAPABILITY_PROJECT_STATUS,
+                payload={"project_id": str(project.id)},
+                idempotency_key=f"appfactory-status:{project.id}:{uuid.uuid4()}",
+                timeout_s=10.0,
+            )
+            if result.ok:
+                body = result.result or {}
+                live_state = str(body.get("state") or live_state)
+                live_port = body.get("port", live_port)
+                live_running = live_state == STATE_RUNNING and bool(live_port)
+
+        if live_running:
+            speech = f"{project.name} çalışıyor efendim, port {live_port}."
+        elif live_state == STATE_TESTED:
+            speech = f"{project.name} oluşturuldu ve testleri geçti efendim, şu an çalışmıyor."
+        elif live_state == STATE_SCAFFOLDED:
+            speech = f"{project.name} oluşturuldu efendim, şu an çalışmıyor."
+        elif live_state == STATE_FAILED:
+            speech = f"{project.name} son işlemde başarısız oldu efendim."
+        else:
+            speech = f"{project.name} şu an çalışmıyor efendim."
+
+        return self._receipt(
+            capability="app.status",
+            requested_state="reported",
+            execution=EXECUTION_EXECUTED,
+            terminal=TERMINAL_VERIFIED,
+            server={"state": live_state, "port": live_port},
+            speech=speech,
+            db=db,
+            session_id=session_id,
+            extra={"project_id": str(project.id), "state": live_state, "port": live_port},
+        )
+
+    # ----------------------------------------------------------------------- open
+
+    def open(
+        self,
+        db: Session,
+        device_action: DeviceActionPort | None,
+        browser_gateway: BrowserGateway | None,
+        *,
+        target: str | None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        device_id, missing = self._select_device(device_action)
+        if missing is not None:
+            return missing
+        project = self.resolve_project(db, target)
+        if project is None:
+            return self._clarification(SPEECH_NO_PROJECT)
+        if project.root_path is None:
+            return self._invalid_argument(
+                capability="app.open",
+                requested_state="opened",
+                speech=SPEECH_NOT_SCAFFOLDED,
+                db=db,
+                session_id=session_id,
+            )
+
+        result = device_action.run(  # type: ignore[union-attr]
+            capability=CAPABILITY_FILE_REVEAL,
+            payload={"path": project.root_path},
+            idempotency_key=f"appfactory-reveal:{project.id}:{uuid.uuid4()}",
+            timeout_s=15.0,
+        )
+        revealed = bool(result.ok and (result.result or {}).get("revealed"))
+
+        browser_opened = False
+        if project.kind in _RUNNABLE_KINDS and project.run_port:
+            if browser_gateway is not None:
+                try:
+                    records = browser_gateway.fetch_evidence(
+                        [
+                            FetchQuery(
+                                query=f"http://127.0.0.1:{project.run_port}/",
+                                source_class="app_factory",
+                                max_results=1,
+                            )
+                        ]
+                    )
+                    browser_opened = bool(records and records[0].excerpt)
+                except Exception:  # noqa: BLE001 - best-effort; the reveal already ran
+                    browser_opened = False
+
+        if not revealed:
+            speech, error_class = _translate_error(result.error_class)
+            return self._receipt(
+                capability="app.open",
+                requested_state="opened",
+                execution=EXECUTION_REFUSED,
+                terminal=TERMINAL_FAILED,
+                server={"error_class": result.error_class},
+                speech=speech,
+                db=db,
+                error_class=error_class,
+                session_id=session_id,
+                extra={"project_id": str(project.id)},
+            )
+
+        speech = f"{project.name} klasörünü açtım efendim."
+        if browser_opened:
+            speech += " Tarayıcıda da açtım."
+        self._ledger(
+            db,
+            event_type=EVENT_TYPE_APP_PROJECT_EXERCISED,
+            action="app.project.open",
+            summary=f"app.project.open -> {project.name}",
+            detail={"project_id": str(project.id), "browser_opened": browser_opened},
+        )
+        return self._receipt(
+            capability="app.open",
+            requested_state="opened",
+            execution=EXECUTION_EXECUTED,
+            terminal=TERMINAL_VERIFIED,
+            server={"revealed": revealed, "browser_opened": browser_opened},
+            speech=speech,
+            db=db,
+            session_id=session_id,
+            extra={"project_id": str(project.id), "browser_opened": browser_opened},
+        )
+
+    # ----------------------------------------------------------------------- list
+
+    def list(self, db: Session, *, session_id: str | None = None) -> dict[str, Any]:
+        rows = list(
+            db.execute(select(AppProjectRow).order_by(AppProjectRow.created_at.desc()).limit(20))
+            .scalars()
+            .all()
+        )
+        self._ledger(
+            db,
+            event_type=EVENT_TYPE_APP_PROJECT_LISTED,
+            action="app.project.list",
+            summary=f"app.project.list -> {len(rows)} proje",
+            detail={"count": len(rows)},
+        )
+        if not rows:
+            speech = "Henüz bir uygulama yapmadım efendim."
+        else:
+            names = ", ".join(f"{r.name} ({r.state})" for r in rows)
+            speech = f"Şunları yaptım efendim: {names}."
+        projects = [
+            {
+                "project_id": str(r.id),
+                "name": r.name,
+                "template": r.template,
+                "state": r.state,
+                "port": r.run_port,
+            }
+            for r in rows
+        ]
+        return self._receipt(
+            capability="app.list",
+            requested_state="listed",
+            execution=EXECUTION_EXECUTED,
+            terminal=TERMINAL_VERIFIED,
+            server={"count": len(rows)},
+            speech=speech,
+            db=db,
+            session_id=session_id,
+            extra={"projects": projects},
+        )
+
+    # ----------------------------------------------------------------------- misc
+
+    def _clarification(self, speech: str) -> dict[str, Any]:
+        return {"status": "needs_clarification", "speech": speech, "candidates": []}
+
+    def _invalid_argument(
+        self,
+        *,
+        capability: str,
+        requested_state: str,
+        speech: str,
+        db: Session,
+        session_id: str | None,
+    ) -> dict[str, Any]:
+        return self._receipt(
+            capability=capability,
+            requested_state=requested_state,
+            execution=EXECUTION_REFUSED,
+            terminal=TERMINAL_FAILED,
+            server={"reason": ERROR_INVALID_ARGUMENT},
+            speech=speech,
+            db=db,
+            error_class=ERROR_INVALID_ARGUMENT,
+            session_id=session_id,
+        )
+
+
+__all__ = ["AppFactoryService", "RUN_COMMAND_KEY", "TEST_COMMAND_KEY"]

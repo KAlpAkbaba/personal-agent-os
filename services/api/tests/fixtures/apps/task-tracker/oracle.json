@@ -1,0 +1,21 @@
+{
+  "template": "task-tracker",
+  "url_path": "/",
+  "initial_assertions": [
+    {"selector": "#app-title", "exists": true},
+    {"selector": "#task-form", "exists": true},
+    {"selector": "#new-task-input", "exists": true},
+    {"selector": "#add-task-button", "exists": true},
+    {"selector": "#task-list", "exists": true}
+  ],
+  "interaction_steps": [
+    {"action": "fill", "selector": "#new-task-input", "value": "Sütü al"},
+    {"action": "click", "selector": "#add-task-button"},
+    {"action": "assert_text", "selector": "#task-list", "contains": "Sütü al"},
+    {"action": "click", "selector": ".task-item .toggle-done"},
+    {"action": "assert_class", "selector": ".task-item", "class": "done"},
+    {"action": "reload"},
+    {"action": "assert_text", "selector": "#task-list", "contains": "Sütü al"},
+    {"action": "assert_class", "selector": ".task-item", "class": "done"}
+  ]
+}

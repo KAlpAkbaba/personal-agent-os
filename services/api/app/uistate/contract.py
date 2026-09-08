@@ -50,7 +50,12 @@ from typing import Any
 #: was asked, with metadata ``{title?, format?, verdict?, failing_ref?}`` (verdict one of
 #: ``rendering | valid | invalid``), plus the ``artifacts`` subsystem. Same additive rule: a
 #: v6 renderer keeps working and simply never sees it.
-CONTRACT_VERSION = 7
+#: v8 (M23 App Factory spec §2, §7, ADR-0086) adds ``app.factory``, published around every
+#: project lifecycle transition (scaffold/run/exercise/test/stop), with metadata
+#: ``{project?, state?, port?}`` (``state`` one of the ``app_projects`` states), plus the
+#: ``appfactory`` subsystem. Same additive rule: a v7 renderer keeps working and simply
+#: never sees it.
+CONTRACT_VERSION = 8
 
 #: Metadata value bounds. Numbers are floats in [0, 1] except where noted; strings are
 #: short machine tokens, never prose.
@@ -168,6 +173,12 @@ class UiState(StrEnum):
     #: with ``metadata.verdict`` naming where it is (``rendering | valid | invalid``).
     ARTIFACT_FACTORY = "artifact.factory"
 
+    #: M23 (spec §2, §7): the App Factory's channel. Published around every project
+    #: lifecycle transition (scaffold, run, exercise, test, stop) — never to animate a
+    #: surge, the same rule every other channel here follows. Metadata is identity only:
+    #: which project, its state, and the port while running.
+    APP_FACTORY = "app.factory"
+
 
 UI_STATES: tuple[str, ...] = tuple(s.value for s in UiState)
 
@@ -198,6 +209,8 @@ SUBSYSTEMS: tuple[str, ...] = (
     "calendar",
     # M22: the Artifact Factory publishes artifact.factory (spec §7).
     "artifacts",
+    # M23: the App Factory publishes app.factory (spec §7).
+    "appfactory",
 )
 
 SEVERITIES: tuple[str, ...] = ("info", "notice", "warning", "critical")

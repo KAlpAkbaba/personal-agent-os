@@ -58,6 +58,12 @@ FOCUS_KIND_PROPOSAL = "proposal"
 #: resolves to the artifact just made, and "önceki" works the same current/previous way
 #: every other kind above already gets from this module.
 FOCUS_KIND_ARTIFACT = "artifact"
+#: M23 (docs/M23_APP_FACTORY_SPEC.md §1, ADR-0086): the App Factory's own focus by
+#: identity. ``project`` names one ``app_projects`` row (never a run/port — those are
+#: read from the row itself) so "Testleri çalıştır" after "Bana bir görev takip
+#: uygulaması yap" resolves to the project just made, and "önceki" works the same
+#: current/previous way every other kind above already gets from this module.
+FOCUS_KIND_PROJECT = "project"
 FOCUS_KINDS: tuple[str, ...] = (
     FOCUS_KIND_WINDOW,
     FOCUS_KIND_APP,
@@ -70,6 +76,7 @@ FOCUS_KINDS: tuple[str, ...] = (
     FOCUS_KIND_EVENT,
     FOCUS_KIND_PROPOSAL,
     FOCUS_KIND_ARTIFACT,
+    FOCUS_KIND_PROJECT,
 )
 
 #: How many recent rows of ONE kind the stack keeps (bounded, per task brief: "a bounded
@@ -114,6 +121,7 @@ __all__ = [
     "FOCUS_KIND_FILE",
     "FOCUS_KIND_FOLDER",
     "FOCUS_KIND_MESSAGE",
+    "FOCUS_KIND_PROJECT",
     "FOCUS_KIND_PROPOSAL",
     "FOCUS_KIND_THREAD",
     "FOCUS_KIND_WINDOW",
