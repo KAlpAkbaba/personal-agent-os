@@ -1626,15 +1626,16 @@ function AppControls({ row, control }: { row: AppProjectRow; control: AppsContro
   const handlers: Record<AppAction, (id: string) => void> = { run: control.onRun, stop: control.onStop, test: control.onTest };
   const gates = APP_ACTIONS.map((action) => ({ action, gate: appActionGate(row, action, control.busy) }));
   const inFlight = control.busy !== null && control.busy.id === row.app_id;
-  // One sentence per distinct reason: three chips disabled for the one
-  // in-flight call say it once.
-  const reasons = Array.from(
-    new Map(
-      gates
-        .filter(({ gate }) => gate.reason !== null)
-        .map(({ action, gate }) => [gate.reason as string, { action, kind: gate.reasonKind ?? "" }]),
-    ),
-  );
+  // One sentence per distinct reason, naming every chip it refuses: a planned
+  // project's "Çalıştır" and "Testleri çalıştır" share one sentence, and three
+  // chips disabled for the one in-flight call say it once.
+  const reasons = new Map<string, { actions: AppAction[]; kind: string }>();
+  for (const { action, gate } of gates) {
+    if (gate.reason === null) continue;
+    const entry = reasons.get(gate.reason) ?? { actions: [], kind: gate.reasonKind ?? "" };
+    entry.actions.push(action);
+    reasons.set(gate.reason, entry);
+  }
   return (
     <div
       className="approval-pair"
@@ -1656,9 +1657,9 @@ function AppControls({ row, control }: { row: AppProjectRow; control: AppsContro
           {APP_ACTION_LABEL[action]}
         </button>
       ))}
-      {reasons.map(([reason, { action, kind }]) => (
-        <span key={reason} className="approval-reason" data-app-reason={kind} data-app-reason-for={action}>
-          {kind === "busy" ? reason : `${APP_ACTION_LABEL[action]}: ${reason}`}
+      {Array.from(reasons, ([reason, { actions, kind }]) => (
+        <span key={reason} className="approval-reason" data-app-reason={kind} data-app-reason-for={actions.join(",")}>
+          {kind === "busy" ? reason : `${actions.map((a) => APP_ACTION_LABEL[a]).join(", ")}: ${reason}`}
         </span>
       ))}
     </div>

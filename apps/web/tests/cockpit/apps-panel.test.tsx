@@ -315,10 +315,12 @@ describe("the Uygulamalar panel", () => {
     expect(html).toContain('data-app-action="run" data-app-target="p1" data-app-enabled="no"');
     expect(html).toContain('data-app-action="test" data-app-target="p1" data-app-enabled="no"');
     expect(html).toContain('data-app-action="stop" data-app-target="p1" data-app-enabled="no"');
-    expect(html).toContain('data-app-reason="not_scaffolded"');
-    expect(html).toContain(APP_REASON_NOT_SCAFFOLDED);
-    expect(html).toContain(APP_REASON_NOT_RUNNING);
-    // One sentence per distinct reason, not one per chip.
+    expect(html).toContain('data-app-reason="not_scaffolded" data-app-reason-for="run,test"');
+    expect(html).toContain('data-app-reason="not_running" data-app-reason-for="stop"');
+    // One sentence per distinct reason, not one per chip — and it names every chip it refuses
+    // (review finding: the first cut named only the last of them).
+    expect(html).toContain(`Çalıştır, Testleri çalıştır: ${APP_REASON_NOT_SCAFFOLDED}`);
+    expect(html).toContain(`Durdur: ${APP_REASON_NOT_RUNNING}`);
     expect((html.match(new RegExp(APP_REASON_NOT_SCAFFOLDED.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")) ?? []).length).toBe(1);
   });
 
@@ -393,9 +395,12 @@ describe("the Uygulamalar panel", () => {
         expect(html).toContain(`data-app-action="${action}" data-app-target="${id}" data-app-enabled="no" disabled=""`);
       }
     }
-    expect(html).toContain('data-app-reason="busy"');
+    expect(html).toContain('data-app-reason="busy" data-app-reason-for="run,stop,test"');
     expect(html).toContain(APP_REASON_BUSY);
     expect(html).not.toContain(`Durdur: ${APP_REASON_BUSY}`);
+    expect(html).not.toContain(`Çalıştır, Durdur, Testleri çalıştır: ${APP_REASON_BUSY}`);
+    // Said once per project, not once per chip.
+    expect((html.match(/data-app-reason="busy"/g) ?? []).length).toBe(2);
     // The link is not gated by the chips: a running app is still running.
     expect(html).toContain('data-app-link="p1"');
   });
