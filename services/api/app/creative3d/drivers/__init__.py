@@ -2,7 +2,8 @@
 M25_CREATIVE_3D_SPEC.md §3, ADR-0088 decision 2).
 
 ``blender_driver.py`` — runs inside Blender's own Python
-(``blender.exe -b [scene.blend] --python blender_driver.py -- <plan.json> <out.json>``).
+(``blender.exe --factory-startup -b [scene.blend] --python blender_driver.py --
+<plan.json> <out.json>``).
 ``SceneDriver.cs`` — a Unity Editor script (``PagentOS.SceneDriver.Run``), copied into
 the fixture project at scaffold time and invoked through
 ``Unity.exe -batchmode -nographics -quit -executeMethod PagentOS.SceneDriver.Run``.

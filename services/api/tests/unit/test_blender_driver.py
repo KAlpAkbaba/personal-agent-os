@@ -40,11 +40,13 @@ def driver():
 
 
 def test_parse_argv_takes_the_tail_after_the_blender_separator(driver) -> None:
+    # The real command, both of its forms (DEVICE_PROTOCOL.md §6m).
     plan_path, out_path = driver.parse_argv(
         [
             "blender",
+            "--factory-startup",
             "-b",
-            "file.blend",
+            "scene.blend",
             "--python",
             "blender_driver.py",
             "--",
@@ -53,6 +55,9 @@ def test_parse_argv_takes_the_tail_after_the_blender_separator(driver) -> None:
         ]
     )
     assert (plan_path, out_path) == ("plan.json", "out.json")
+    assert driver.parse_argv(
+        ["blender", "--factory-startup", "-b", "--python", "d.py", "--", "p.json", "o.json"]
+    ) == ("p.json", "o.json")
 
 
 def test_parse_argv_without_a_separator_takes_the_whole_list(driver) -> None:
@@ -275,7 +280,14 @@ def test_main_writes_out_json_and_a_blend_file(driver, tmp_path) -> None:
     assert out_path.exists()
     inspection = json.loads(out_path.read_text(encoding="utf-8"))
     assert inspection["errors"] == []
-    assert (tmp_path / "demo.blend").exists()
+    # Always "scene.blend", never the plan's own scene word ("demo" here). The name is half
+    # of the command the device's allowlist matches token for token (DEVICE_PROTOCOL.md
+    # §6m), so a driver saving under another name left every later run with nothing to open
+    # — measured on 2026-09-08 by running the Cloud Core's own command against the real
+    # editor, where the second run exited 1.
+    assert (tmp_path / driver.SCENE_FILE_NAME).exists()
+    assert driver.SCENE_FILE_NAME == "scene.blend"
+    assert not (tmp_path / "demo.blend").exists()
 
 
 def test_write_out_json_bounds_a_runaway_inspection(driver, tmp_path) -> None:

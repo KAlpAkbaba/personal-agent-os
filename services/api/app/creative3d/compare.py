@@ -26,6 +26,11 @@ from app.creative3d.spec import ScenePlan
 #: Tolerances (spec §4). Location/scale/colour tolerances are generous enough to
 #: survive float round-tripping through JSON and Blender's own unit conversions
 #: (degrees<->radians for rotation) without hiding a real mismatch.
+#: The reason a comparison gives when the plan asked for nothing checkable. Never a
+#: match (that is the M24 defect this module refuses) and never a disagreement either:
+#: the caller is expected to tell the two apart.
+NO_CONSTRAINTS = "no_constraints"
+
 LOCATION_TOLERANCE = 0.01
 ROTATION_TOLERANCE_DEG = 1.0
 SCALE_TOLERANCE = 0.01
@@ -143,6 +148,11 @@ def _angle_between_deg(a: tuple[float, float, float], b: tuple[float, float, flo
     return math.degrees(math.acos(cos_theta))
 
 
+#: The spec's own render bound, measured here by the independent reader.
+RENDER_MAX_WIDTH = 1920
+RENDER_MAX_HEIGHT = 1080
+
+
 def check_render(png_bytes: bytes | None) -> Mismatch | None:
     """``PIL`` opens the render and measures that it is not uniform (spec §4) — an
     INDEPENDENT reader, never trusting the driver's own claim that it rendered
@@ -163,12 +173,24 @@ def check_render(png_bytes: bytes | None) -> Mismatch | None:
 
         with Image.open(io.BytesIO(png_bytes)) as img:
             img.load()
+            width, height = img.size
             grey = img.convert("L")
             stat = ImageStat.Stat(grey)
             stddev = stat.stddev[0]
     except Exception as exc:  # noqa: BLE001 - an unreadable "render" is a mismatch, not a crash
         return Mismatch(
             "render", "render", "a decodable PNG", None, f"PIL could not open it: {exc}"
+        )
+    if width > RENDER_MAX_WIDTH or height > RENDER_MAX_HEIGHT:
+        # The spec bounds the render; the independent reader is where that bound is
+        # actually measured, rather than trusted from the plan the driver was handed
+        # (M25 security review, 2026-09-08, Low).
+        return Mismatch(
+            "render",
+            "render.size",
+            f"<= {RENDER_MAX_WIDTH}x{RENDER_MAX_HEIGHT}",
+            f"{width}x{height}",
+            "the render is larger than the bound",
         )
     if stddev < RENDER_NONUNIFORM_STDDEV_MIN:
         return Mismatch(
@@ -204,15 +226,22 @@ def compare(
 
     expected_by_object: dict[str, dict[str, Any]] = {}
     camera_aim: dict[str, str] = {}
+    #: Where each object's rotation was last stated outright, and where it was last aimed.
+    #: An aim supersedes a rotation stated BEFORE it; a rotation stated AFTER an aim is the
+    #: plan's last word and stays a constraint (M25 security review, 2026-09-08: dropping it
+    #: unconditionally hid a driver that silently ignored a later explicit rotation).
+    rotation_at_index: dict[str, int] = {}
+    aimed_at_index: dict[str, int] = {}
     light_energy: dict[str, float] = {}
     last_render_op = None
 
-    for op in plan.operations:
+    for index, op in enumerate(plan.operations):
         if op.op == "add_primitive":
             entry = expected_by_object.setdefault(op.name, {})
             entry["location"] = op.location
             entry["scale"] = op.scale
             entry["rotation"] = op.rotation
+            rotation_at_index[op.name] = index
         elif op.op == "transform":
             entry = expected_by_object.setdefault(op.name, {})
             if op.location is not None:
@@ -221,11 +250,13 @@ def compare(
                 entry["scale"] = op.scale
             if op.rotation is not None:
                 entry["rotation"] = op.rotation
+                rotation_at_index[op.name] = index
         elif op.op == "set_material":
             entry = expected_by_object.setdefault(op.name, {})
             entry["material_color"] = op.color
         elif op.op == "set_camera" and op.look_at is not None:
             camera_aim[op.name] = op.look_at
+            aimed_at_index[op.name] = index
         elif op.op == "set_light":
             light_energy[op.name] = op.energy
         elif op.op == "render":
@@ -239,7 +270,12 @@ def compare(
     # a look_at determines it instead. Checked instead, and independently, by the
     # camera_aim loop below (found the same way as the fold itself: running the real
     # Blender lab, scripts/tests/blender-scene-lab.py).
-    for cam_name in camera_aim:
+    for cam_name, aim_index in aimed_at_index.items():
+        stated = rotation_at_index.get(cam_name)
+        if stated is not None and stated > aim_index:
+            # The plan aimed the camera and THEN stated a rotation outright: the later word
+            # is the constraint, and the aim is checked beside it.
+            continue
         expected_by_object.get(cam_name, {}).pop("rotation", None)
 
     for name, expected in expected_by_object.items():
@@ -369,7 +405,7 @@ def compare(
             )
 
     if checked == 0:
-        return CompareResult(ok=False, checked=0, mismatches=(), reason="no_constraints")
+        return CompareResult(ok=False, checked=0, mismatches=(), reason=NO_CONSTRAINTS)
 
     return CompareResult(ok=not mismatches, checked=checked, mismatches=tuple(mismatches))
 
@@ -377,6 +413,7 @@ def compare(
 __all__ = [
     "CAMERA_AIM_TOLERANCE_DEG",
     "COLOR_TOLERANCE",
+    "NO_CONSTRAINTS",
     "LOCATION_TOLERANCE",
     "RENDER_MIN_BYTES",
     "RENDER_NONUNIFORM_STDDEV_MIN",

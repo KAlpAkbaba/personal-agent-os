@@ -265,3 +265,125 @@ def test_compare_empty_plan_is_also_a_mismatch() -> None:
     result = compare(plan, _matching_inspection())
     assert not result.ok
     assert result.reason == "no_constraints"
+
+
+# ------------------------------------------------- what the M25 security review found
+
+
+def test_a_rotation_stated_after_an_aim_is_still_a_constraint() -> None:
+    """The aim supersedes a rotation stated BEFORE it — that is the fold the Blender lab
+    earned. It must not swallow a rotation the plan states AFTER the aim: the review showed
+    a driver silently dropping that instruction was invisible whenever the leftover default
+    happened to satisfy the aim tolerance."""
+    plan = ScenePlan.model_validate(
+        {
+            "tool": "blender",
+            "project": "lab",
+            "scene": "demo",
+            "operations": [
+                {"op": "create_scene"},
+                {
+                    "op": "add_primitive",
+                    "kind": "camera",
+                    "name": "Kamera",
+                    "location": [0.0, -6.0, 3.0],
+                },
+                {"op": "add_primitive", "kind": "cube", "name": "Kup", "location": [0.0, 0.0, 0.0]},
+                {"op": "set_camera", "name": "Kamera", "look_at": "Kup"},
+                {"op": "transform", "name": "Kamera", "rotation": [45.0, 0.0, 0.0]},
+            ],
+        }
+    )
+    inspection = {
+        "camera": "Kamera",
+        "objects": [
+            {
+                "name": "Kamera",
+                "type": "CAMERA",
+                "location": [0.0, -6.0, 3.0],
+                "rotation": [0.0, 0.0, 0.0],
+                "scale": [1.0, 1.0, 1.0],
+            },
+            {
+                "name": "Kup",
+                "type": "MESH",
+                "location": [0.0, 0.0, 0.0],
+                "rotation": [0.0, 0.0, 0.0],
+                "scale": [1.0, 1.0, 1.0],
+            },
+        ],
+        "lights": [],
+    }
+    result = compare(plan, inspection)
+    assert result.ok is False
+    assert any(
+        m.object_name == "Kamera" and m.field.startswith("rotation") for m in result.mismatches
+    )
+
+
+def test_an_aim_after_a_rotation_still_supersedes_it() -> None:
+    """And the fold itself still holds: a rotation stated BEFORE the aim is the aim's to
+    decide, so an add-then-aim plan is not flagged for the primitive's default rotation."""
+    plan = ScenePlan.model_validate(
+        {
+            "tool": "blender",
+            "project": "lab",
+            "scene": "demo",
+            "operations": [
+                {"op": "create_scene"},
+                {
+                    "op": "add_primitive",
+                    "kind": "camera",
+                    "name": "Kamera",
+                    "location": [0.0, -6.0, 3.0],
+                },
+                {"op": "add_primitive", "kind": "cube", "name": "Kup", "location": [0.0, 0.0, 0.0]},
+                {"op": "transform", "name": "Kamera", "rotation": [10.0, 0.0, 0.0]},
+                {"op": "set_camera", "name": "Kamera", "look_at": "Kup"},
+            ],
+        }
+    )
+    inspection = {
+        "camera": "Kamera",
+        "objects": [
+            {
+                "name": "Kamera",
+                "type": "CAMERA",
+                "location": [0.0, -6.0, 3.0],
+                "rotation": [-1.0472, 0.0, 0.0],
+                "scale": [1.0, 1.0, 1.0],
+            },
+            {
+                "name": "Kup",
+                "type": "MESH",
+                "location": [0.0, 0.0, 0.0],
+                "rotation": [0.0, 0.0, 0.0],
+                "scale": [1.0, 1.0, 1.0],
+            },
+        ],
+        "lights": [],
+    }
+    result = compare(plan, inspection)
+    assert not any(
+        m.object_name == "Kamera" and m.field.startswith("rotation") for m in result.mismatches
+    )
+
+
+def test_a_render_larger_than_the_bound_is_a_mismatch() -> None:
+    """The spec bounds the render; the independent reader is where that is measured, not
+    trusted from the plan the driver was handed (the review's second Low)."""
+    import io
+
+    from PIL import Image
+
+    from app.creative3d.compare import RENDER_MAX_WIDTH, check_render
+
+    img = Image.new("RGB", (RENDER_MAX_WIDTH + 8, 64))
+    for x in range(img.width):  # not uniform, so only the size can fail it
+        for y in range(img.height):
+            img.putpixel((x, y), (x % 256, y % 256, (x + y) % 256))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    mismatch = check_render(buf.getvalue())
+    assert mismatch is not None
+    assert mismatch.field == "render.size"

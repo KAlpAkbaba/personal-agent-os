@@ -381,6 +381,8 @@ EVENT_TYPE_SCENE_APPLIED = "scene.apply"
 EVENT_TYPE_SCENE_RENDERED = "scene.render"
 EVENT_TYPE_SCENE_INSPECTED = "scene.inspect"
 EVENT_TYPE_SCENE_FAILED = "scene.failed"
+#: M25: the run finished and the tool's own read-back disagreed with the plan.
+EVENT_TYPE_SCENE_MISMATCH = "scene.mismatch"
 EVENT_TYPE_SCENE_UNITY_UNAVAILABLE = "scene.unity_unavailable"
 EVENT_TYPE_SCENE_LISTED = "scene.list"
 
@@ -496,6 +498,7 @@ EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_SCENE_APPLIED,
     EVENT_TYPE_SCENE_RENDERED,
     EVENT_TYPE_SCENE_INSPECTED,
+    EVENT_TYPE_SCENE_MISMATCH,
     EVENT_TYPE_SCENE_FAILED,
     EVENT_TYPE_SCENE_UNITY_UNAVAILABLE,
     EVENT_TYPE_SCENE_LISTED,

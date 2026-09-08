@@ -16,7 +16,7 @@ public enum ProjectRuntime
     Node,
     Npm,
 
-    /// <summary>M25: <c>blender.exe -b</c>, headless, running the shipped Python driver on a plan. A BATCH runtime: it ends by itself and the run waits for it.</summary>
+    /// <summary>M25: <c>blender.exe --factory-startup -b</c>, headless, from the factory settings, running the shipped Python driver on a plan. A BATCH runtime: it ends by itself and the run waits for it.</summary>
     Blender,
 
     /// <summary>M25: <c>Unity.exe -batchmode -nographics -quit</c>, running the shipped editor driver. A BATCH runtime.</summary>
@@ -74,7 +74,7 @@ public sealed record ProjectCommand(string Key, ProjectRuntime Runtime, IReadOnl
 /// and ONLY there (<see cref="ProjectScope.ThreeD"/>) — may draw on two more shapes, matched
 /// the same way, token for token, never by a string prefix:
 /// <list type="bullet">
-/// <item><c>blender -b &lt;scene.blend&gt; --python &lt;driver.py&gt; -- &lt;plan.json&gt;
+/// <item><c>blender --factory-startup -b [&lt;scene.blend&gt;] --python &lt;driver.py&gt; -- &lt;plan.json&gt;
 /// &lt;out.json&gt;</c> — every path relative and inside the project;</item>
 /// <item><c>unity -batchmode -nographics -quit -projectPath &lt;root&gt; -executeMethod
 /// PagentOS.SceneDriver.Run -planPath &lt;plan.json&gt; -outPath &lt;out.json&gt; -logFile
@@ -359,26 +359,42 @@ public sealed class ProjectManifest
             case SceneCapabilityNames.UnityProgram when scope != ProjectScope.ThreeD:
                 throw Refuse(key, text, $"the 3D runtimes run only under the 3D root ('{SceneCapabilityNames.Root3dFolderName}'), never in a project of the Projects root");
 
-            // blender -b <scene.blend> --python <driver.py> -- <plan.json> <out.json>
-            //    0     1       2           3         4      5      6           7
-            case SceneCapabilityNames.BlenderProgram when tokens.Length == 8
-                && tokens[1] == "-b"
-                && tokens[3] == "--python"
-                && tokens[5] == "--":
+            // blender --factory-startup -b [<scene.blend>] --python <driver.py> -- <plan.json> <out.json>
+            //    0            1             2        3(opt)        n      n+1     n+2   n+3        n+4
+            //
+            // `--factory-startup` is not optional and not a stand-in: opening a saved
+            // `.blend` without it loads the OWNER'S installed Blender add-ons into the run
+            // — third-party code inside a bounded job, and measured on 2026-09-08 to hang
+            // the editor outright when one of them starts a watchdog thread. The scene file
+            // after `-b` IS optional: a project's first run has none to open, because a
+            // `.blend` that does not exist cannot be opened and `project.scaffold` writes
+            // text only. The driver saves `scene.blend`; every later run names it.
+            case SceneCapabilityNames.BlenderProgram when (tokens.Length is 8 or 9)
+                && tokens[1] == SceneCapabilityNames.BlenderFactoryStart
+                && tokens[2] == "-b"
+                && tokens[tokens.Length - 5] == "--python"
+                && tokens[tokens.Length - 3] == "--":
                 {
-                    var scene = InsideProject(key, text, tokens[2], SceneCapabilityNames.BlendExtension, "the scene file");
-                    var driver = InsideProject(key, text, tokens[4], SceneCapabilityNames.DriverExtension, "the driver");
-                    var plan = InsideProject(key, text, tokens[6], SceneCapabilityNames.JsonExtension, "the plan");
-                    var inspection = InsideProject(key, text, tokens[7], SceneCapabilityNames.JsonExtension, "the inspection");
+                    var hasScene = tokens.Length == 9;
+                    var scene = hasScene
+                        ? InsideProject(key, text, tokens[3], SceneCapabilityNames.BlendExtension, "the scene file")
+                        : null;
+                    var driver = InsideProject(key, text, tokens[tokens.Length - 4], SceneCapabilityNames.DriverExtension, "the driver");
+                    var plan = InsideProject(key, text, tokens[tokens.Length - 2], SceneCapabilityNames.JsonExtension, "the plan");
+                    var inspection = InsideProject(key, text, tokens[tokens.Length - 1], SceneCapabilityNames.JsonExtension, "the inspection");
+                    string[] arguments = scene is null
+                        ? [SceneCapabilityNames.BlenderFactoryStart, "-b", "--python", driver, "--", plan, inspection]
+                        : [SceneCapabilityNames.BlenderFactoryStart, "-b", scene, "--python", driver, "--", plan, inspection];
+                    var sceneText = scene is null ? string.Empty : $" {scene}";
                     return new ProjectCommand(
                         key,
                         ProjectRuntime.Blender,
-                        ["-b", scene, "--python", driver, "--", plan, inspection],
-                        $"{SceneCapabilityNames.BlenderProgram} -b {scene} --python {driver} -- {plan} {inspection}");
+                        arguments,
+                        $"{SceneCapabilityNames.BlenderProgram} {SceneCapabilityNames.BlenderFactoryStart} -b{sceneText} --python {driver} -- {plan} {inspection}");
                 }
 
             case SceneCapabilityNames.BlenderProgram:
-                throw Refuse(key, text, $"the only blender form is '{SceneCapabilityNames.BlenderProgram} -b <scene{SceneCapabilityNames.BlendExtension}> --python <driver{SceneCapabilityNames.DriverExtension}> -- <plan{SceneCapabilityNames.JsonExtension}> <out{SceneCapabilityNames.JsonExtension}>', every path relative and inside the project");
+                throw Refuse(key, text, $"the only blender form is '{SceneCapabilityNames.BlenderProgram} {SceneCapabilityNames.BlenderFactoryStart} -b [<scene{SceneCapabilityNames.BlendExtension}>] --python <driver{SceneCapabilityNames.DriverExtension}> -- <plan{SceneCapabilityNames.JsonExtension}> <out{SceneCapabilityNames.JsonExtension}>', every path relative and inside the project, and the factory settings never optional");
 
             case SceneCapabilityNames.UnityProgram when tokens.Length == 14
                 && tokens[1] == "-batchmode"

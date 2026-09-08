@@ -3,7 +3,8 @@
 A FIXED repository file, sha256-pinned in ``manifest.json`` and asserted by
 ``tests/unit/test_blender_driver.py``. Runs inside Blender's own Python:
 
-    blender.exe -b [scene.blend] --python blender_driver.py -- <plan.json> <out.json>
+    blender.exe --factory-startup -b [scene.blend] --python blender_driver.py --
+        <plan.json> <out.json>
 
 Reads a ``ScenePlan`` (``app.creative3d.spec.ScenePlan.plan_json()`` — canonical JSON,
 never Python generated from prose), executes every operation through ``bpy``, saves the
@@ -310,6 +311,10 @@ def apply_operations(plan: dict[str, Any], out_dir: str) -> dict[str, Any]:
     return build_inspection(errors, render_info)
 
 
+#: The one scene file a project holds; the device's command names it literally.
+SCENE_FILE_NAME = "scene.blend"
+
+
 def save_blend(blend_path: str) -> None:
     bpy.ops.wm.save_as_mainfile(filepath=blend_path)
 
@@ -333,8 +338,14 @@ def main(argv: list[str]) -> int:
     plan = load_plan(plan_path)
     out_dir = str(Path(out_path).resolve().parent)
     inspection = apply_operations(plan, out_dir)
-    scene_slug = str(plan.get("scene") or "scene")
-    blend_path = str(Path(out_dir) / f"{scene_slug}.blend")
+    # ALWAYS "scene.blend", never the plan's own scene word: the name is half of the
+    # command the device's allowlist matches token for token (DEVICE_PROTOCOL.md 6m,
+    # `blender --factory-startup -b scene.blend ...`), so a driver saving under another name
+    # left every later run with nothing to open. Measured 2026-09-08 by running the Cloud
+    # Core's own command against the real editor
+    # (scripts/tests/blender-service-command-lab.py): the first run saved `servis.blend` and
+    # the second exited 1. One project, one scene file.
+    blend_path = str(Path(out_dir) / SCENE_FILE_NAME)
     try:
         save_blend(blend_path)
     except Exception as exc:  # noqa: BLE001 - recorded, never fatal to the inspection

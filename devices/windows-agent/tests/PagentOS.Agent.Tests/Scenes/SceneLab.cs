@@ -357,9 +357,14 @@ public sealed class SceneLab : IDisposable
         ("Assets/PagentOS/Editor/SceneDriver.cs", UnityDriverScript()),
     ];
 
-    /// <summary>The Blender command the allowlist admits, spelled the way a manifest spells it.</summary>
-    public static string BlenderCommand(string driver = DriverFileName, string scene = SceneFileName, string plan = PlanFileName, string output = SceneCapabilityNames.InspectionFileName)
-        => $"{SceneCapabilityNames.BlenderProgram} -b {scene} --python {driver} -- {plan} {output}";
+    /// <summary>
+    /// The Blender command the allowlist admits, spelled the way a manifest spells it.
+    /// <c>--factory-startup</c> is always there: it keeps the owner's installed add-ons out
+    /// of the run. Pass <paramref name="scene"/> as null for a project's FIRST run, which
+    /// has no scene file to open yet.
+    /// </summary>
+    public static string BlenderCommand(string driver = DriverFileName, string? scene = SceneFileName, string plan = PlanFileName, string output = SceneCapabilityNames.InspectionFileName)
+        => $"{SceneCapabilityNames.BlenderProgram} {SceneCapabilityNames.BlenderFactoryStart} -b{(scene is null ? string.Empty : " " + scene)} --python {driver} -- {plan} {output}";
 
     /// <summary>The Unity command the allowlist admits.</summary>
     public static string UnityCommand(string plan = PlanFileName, string output = SceneCapabilityNames.InspectionFileName, string log = UnityLogFileName, string method = SceneCapabilityNames.UnityDriverMethod)

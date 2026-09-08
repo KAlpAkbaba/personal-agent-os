@@ -3,9 +3,9 @@
   "note": "sha256 pins for the FIXED driver files (docs/M25_CREATIVE_3D_SPEC.md §3, ADR-0088 decision 2). asserted by tests/unit/test_blender_driver.py::test_manifest_pins_match_the_files_on_disk. never edited without also updating the pin: a driver that changed silently is exactly the tampering this pin exists to catch.",
   "drivers": {
     "blender_driver.py": {
-      "sha256": "0e2ce126970d8feb4f6cbaeaae90213200a4a6627a4014a1210e272a6a5d0748",
+      "sha256": "afb2f710ce2f8c92e2eb39a043c8570e8c3e007c2b9e58a823cbb3755030ada6",
       "runtime": "blender",
-      "invocation": "blender.exe -b [scene.blend] --python blender_driver.py -- <plan.json> <out.json>"
+      "invocation": "blender.exe --factory-startup -b [scene.blend] --python blender_driver.py -- <plan.json> <out.json>"
     },
     "SceneDriver.cs": {
       "sha256": "45048d12cd9717a81c65b6e6a7933f49960b5d1145304d321cb019321f290619",

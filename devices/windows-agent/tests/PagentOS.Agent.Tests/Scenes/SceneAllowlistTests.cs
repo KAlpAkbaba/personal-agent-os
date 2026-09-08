@@ -53,7 +53,7 @@ public sealed class SceneAllowlistTests
         Assert.Equal(ProjectRuntime.Blender, blenderCommand.Runtime);
         Assert.True(blenderCommand.IsBatch);
         Assert.Equal(
-            ["-b", SceneLab.SceneFileName, "--python", SceneLab.DriverFileName, "--", SceneLab.PlanFileName, SceneCapabilityNames.InspectionFileName],
+            [SceneCapabilityNames.BlenderFactoryStart, "-b", SceneLab.SceneFileName, "--python", SceneLab.DriverFileName, "--", SceneLab.PlanFileName, SceneCapabilityNames.InspectionFileName],
             blenderCommand.Arguments);
         // A batch manifest may carry no port at all: nothing binds one.
         Assert.Equal(ProjectManifest.NoPort, blenderManifest.Port);
@@ -75,24 +75,77 @@ public sealed class SceneAllowlistTests
         Assert.Equal(0, counter.Calls);
     }
 
+    [Fact]
+    public void The_first_run_names_no_scene_file_because_there_is_none_to_open_yet()
+    {
+        // A `.blend` that does not exist cannot be opened — Blender refuses the `-b` file
+        // and never runs the script (measured 2026-09-08) — and `project.scaffold` writes
+        // text only, so no binary starter scene can be placed. So the scene file after `-b`
+        // is optional and a creation command is eight tokens; the driver saves
+        // `scene.blend` and every later run names it (M25 security review: the Cloud Core
+        // could not otherwise create a scene at all).
+        var counter = new CountingStart();
+        using var lab = new SceneLab(start: counter.Start);
+
+        var folder = lab.Scaffold3d("scene-first", "ilk", SceneLab.BlenderCommand(scene: null));
+        var manifest = ProjectManifest.Parse(ProjectRoots.ReadMarker(folder)!.Manifest, null, ProjectScope.ThreeD);
+        var parsed = manifest.Run["scene"];
+
+        Assert.Equal(ProjectRuntime.Blender, parsed.Runtime);
+        Assert.Equal(
+            [SceneCapabilityNames.BlenderFactoryStart, "-b", "--python", SceneLab.DriverFileName, "--", SceneLab.PlanFileName, SceneCapabilityNames.InspectionFileName],
+            parsed.Arguments);
+        Assert.Equal(0, counter.Calls);
+    }
+
+    [Theory]
+    [InlineData("--factory-startups")]
+    [InlineData("--factory")]
+    [InlineData("-factory-startup")]
+    [InlineData("--background")]
+    [InlineData("--python-expr")]
+    [InlineData("--enable-autoexec")]
+    public void Only_that_exact_word_opens_a_blender_run(string instead)
+    {
+        // The first flag is one literal token, not a family of flags, and not optional:
+        // without it Blender loads the OWNER'S installed add-ons into the run (measured
+        // 2026-09-08 — one of them hung the editor outright with a watchdog thread that
+        // never stops). Both positions are covered: in place of the flag, and squeezed in
+        // where the scene file goes.
+        var counter = new CountingStart();
+        using var lab = new SceneLab(start: counter.Start);
+        var tail = $"--python {SceneLab.DriverFileName} -- {SceneLab.PlanFileName} {SceneCapabilityNames.InspectionFileName}";
+
+        Assert.ThrowsAny<Exception>(() => lab.Scaffold3d("scene-bad", "kotu", $"blender {instead} -b {tail}"));
+        Assert.ThrowsAny<Exception>(() => lab.Scaffold3d("scene-bad2", "kotu2", $"blender -b {instead} {tail}"));
+        Assert.Equal(0, counter.Calls);
+    }
+
     public static TheoryData<string, string> HostileCommands() => new()
     {
         // ---- Blender: a path that is not inside the project
-        { "an absolute scene file", @"blender -b C:\Users\Public\scene.blend --python scene_driver.py -- plan.json out.json" },
-        { "a scene file above the project", "blender -b ../../owner/scene.blend --python scene_driver.py -- plan.json out.json" },
-        { "a driver above the project", "blender -b scene.blend --python ../driver.py -- plan.json out.json" },
-        { "an absolute out path", @"blender -b scene.blend --python scene_driver.py -- plan.json C:\out.json" },
-        { "a plan above the project", "blender -b scene.blend --python scene_driver.py -- ../plan.json out.json" },
+        { "an absolute scene file", @"blender --factory-startup -b C:\Users\Public\scene.blend --python scene_driver.py -- plan.json out.json" },
+        { "a scene file above the project", "blender --factory-startup -b ../../owner/scene.blend --python scene_driver.py -- plan.json out.json" },
+        { "a driver above the project", "blender --factory-startup -b scene.blend --python ../driver.py -- plan.json out.json" },
+        { "an absolute out path", @"blender --factory-startup -b scene.blend --python scene_driver.py -- plan.json C:\out.json" },
+        { "a plan above the project", "blender --factory-startup -b scene.blend --python scene_driver.py -- ../plan.json out.json" },
 
         // ---- Blender: the shape itself
-        { "no -b (a window, not a headless run)", "blender scene.blend --python scene_driver.py -- plan.json out.json" },
-        { "no -- separator", "blender -b scene.blend --python scene_driver.py plan.json out.json" },
-        { "one token too many", "blender -b scene.blend --python scene_driver.py -- plan.json out.json extra.json" },
-        { "-P instead of --python", "blender -b scene.blend -P scene_driver.py -- plan.json out.json" },
-        { "a driver that is not python", "blender -b scene.blend --python driver.exe -- plan.json out.json" },
-        { "a scene file that is not a .blend", "blender -b scene.txt --python scene_driver.py -- plan.json out.json" },
-        { "a plan that is not json", "blender -b scene.blend --python scene_driver.py -- plan.txt out.json" },
-        { "a shell composition", "blender -b scene.blend --python scene_driver.py -- plan.json out.json & whoami" },
+        { "no -b (a window, not a headless run)", "blender --factory-startup scene.blend --python scene_driver.py -- plan.json out.json" },
+        { "no -- separator", "blender --factory-startup -b scene.blend --python scene_driver.py plan.json out.json" },
+        { "one token too many", "blender --factory-startup -b scene.blend --python scene_driver.py -- plan.json out.json extra.json" },
+        { "-P instead of --python", "blender --factory-startup -b scene.blend -P scene_driver.py -- plan.json out.json" },
+        { "a driver that is not python", "blender --factory-startup -b scene.blend --python driver.exe -- plan.json out.json" },
+        { "a scene file that is not a .blend", "blender --factory-startup -b scene.txt --python scene_driver.py -- plan.json out.json" },
+        { "a plan that is not json", "blender --factory-startup -b scene.blend --python scene_driver.py -- plan.txt out.json" },
+        { "a shell composition", "blender --factory-startup -b scene.blend --python scene_driver.py -- plan.json out.json & whoami" },
+        // The factory settings are never optional: without them the run loads the owner's
+        // own installed Blender add-ons (measured 2026-09-08 — third-party code inside a
+        // bounded job, and one of them hung the editor with a watchdog thread that never
+        // stops, so the run burned its whole bound).
+        { "no --factory-startup at all", "blender -b scene.blend --python scene_driver.py -- plan.json out.json" },
+        { "the factory flag after the scene", "blender -b scene.blend --factory-startup --python scene_driver.py -- plan.json out.json" },
+        { "the factory flag last", "blender -b scene.blend --python scene_driver.py -- plan.json out.json --factory-startup" },
 
         // ---- Unity
         { "another -executeMethod", "unity -batchmode -nographics -quit -projectPath <root> -executeMethod System.Diagnostics.Process.Start -planPath plan.json -outPath out.json -logFile unity.log" },

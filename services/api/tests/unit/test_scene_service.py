@@ -15,10 +15,19 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.creative3d.models import (
     STATE_APPLIED,
     STATE_DEPENDENCY_UNAVAILABLE,
+    STATE_MISMATCH,
     STATE_RENDERED,
     SceneRow,
 )
-from app.creative3d.service import MAX_ACTIVE_SCENES, SceneService
+from app.creative3d.service import (
+    MAX_ACTIVE_SCENES,
+    PROJECT_ROOT_3D,
+    RUN_COMMAND_KEY,
+    DriverPinMismatch,
+    SceneService,
+    driver_text,
+    run_command,
+)
 from app.ledger.models import ActivityEventRow
 from app.object_store import InMemoryObjectStore
 from app.operator import focus as focus_module
@@ -264,3 +273,155 @@ def test_status_and_list(db: Session, device: FakeDeviceAction, service: SceneSe
     assert listing["execution_status"] == "executed"
     assert len(listing["scenes"]) == 1
     assert listing["scenes"][0]["scene_id"] == scene_id
+
+
+# ------------------------------------------------- what the M25 security review found
+
+
+def test_run_command_is_the_argv_the_device_allowlist_requires() -> None:
+    """The service used to send the bare word "blender"/"unity" as the run command, so
+    `project.scaffold` would have refused at the first device call, every time — and the
+    unit tests missed it because the fake device echoed success without reading the command
+    text. These are the exact token shapes DEVICE_PROTOCOL.md §6m matches, and this test is
+    the Python half of that one contract."""
+    # `--factory-startup` is the FIRST flag of both forms and is never optional: without it
+    # Blender loads the owner's own installed add-ons into the run, and on the owner's
+    # machine one of them starts a watchdog thread that never stops, so the editor never
+    # exits (measured 2026-09-08 by running this very command against the real editor). The
+    # scene file is what varies: absent on a project's first run, because a `.blend` that
+    # does not exist cannot be opened and `project.scaffold` writes text only.
+    first = run_command("blender", existing_scene=False).split()
+    assert first[0:4] == ["blender", "--factory-startup", "-b", "--python"]
+    assert first[4].endswith(".py")
+    assert first[5] == "--"
+    assert first[6].endswith(".json") and first[7].endswith(".json")
+    assert len(first) == 8
+
+    later = run_command("blender", existing_scene=True).split()
+    assert later[0:3] == ["blender", "--factory-startup", "-b"]
+    assert later[3] == "scene.blend"
+    assert later[4] == "--python" and later[6] == "--"
+    assert len(later) == 9
+    # The one token that must never be dropped between the two forms.
+    assert "--factory-startup" in later and "--factory-startup" in first
+
+    unity = run_command("unity", existing_scene=True).split()
+    assert unity[0:8] == [
+        "unity",
+        "-batchmode",
+        "-nographics",
+        "-quit",
+        "-projectPath",
+        "<root>",
+        "-executeMethod",
+        "PagentOS.SceneDriver.Run",
+    ]
+    assert unity[8] == "-planPath" and unity[10] == "-outPath" and unity[12] == "-logFile"
+    assert len(unity) == 14
+
+
+def test_the_scaffold_asks_for_the_3d_root_and_sends_the_real_command(
+    db: Session, device: FakeDeviceAction, service: SceneService
+) -> None:
+    """Two halves of the same defect: the 3D editors are refused outside the 3D root, and
+    the manifest must carry the real argv rather than the tool's name."""
+    service.create(db, device, plan=BLENDER_CREATE_PLAN, session_id="s-1")
+    payload = device.payload_for("project.scaffold")
+    assert payload is not None
+    assert payload["root"] == PROJECT_ROOT_3D
+    command = payload["manifest"]["run"][RUN_COMMAND_KEY["blender"]]
+    assert command != "blender"
+    assert command == run_command("blender", existing_scene=False)
+    assert {f["path"] for f in payload["files"]} == {"plan.json", "blender_driver.py"}
+
+
+def test_a_driver_whose_bytes_do_not_match_its_pin_is_never_shipped(monkeypatch) -> None:
+    """The pin lived only in a test: a driver edited after merge would have been shipped to
+    the device and run with nothing noticing."""
+    import app.creative3d.service as service_module
+
+    original = service_module._DRIVERS_DIR
+
+    class _Tampered:
+        def __truediv__(self, name: str):
+            class _F:
+                @staticmethod
+                def read_bytes() -> bytes:
+                    return b"# not the pinned driver\n"
+
+                @staticmethod
+                def read_text(encoding: str = "utf-8") -> str:
+                    return (original / name).read_text(encoding=encoding)
+
+            return _F() if name.endswith(".py") else original / name
+
+    monkeypatch.setattr(service_module, "_DRIVERS_DIR", _Tampered())
+    with pytest.raises(DriverPinMismatch):
+        driver_text("blender")
+
+
+def test_a_read_back_that_disagrees_is_never_reported_as_verified(
+    db: Session, device: FakeDeviceAction, service: SceneService
+) -> None:
+    """The review's own PoC: a plan that transforms an object which was never created used
+    to answer "executed / verified" and speak a success sentence, while the tool's own
+    inspection proved the object absent. The comparison decides the state now."""
+    plan = {
+        "tool": "blender",
+        "project": "lab",
+        "scene": "demo",
+        "operations": [
+            {"op": "create_scene"},
+            {"op": "transform", "name": "Kup", "location": [1.0, 0.0, 0.0]},
+        ],
+    }
+    result = service.create(db, device, plan=plan, session_id="s-1")
+    assert result["execution_status"] == "executed"
+    assert result["terminal_status"] == "unverified"
+    assert result["state"] == STATE_MISMATCH
+    assert result["compare"]["ok"] is False
+    assert "Uyuşmazlık" in result["speech"]
+    assert "Kup" in result["speech"]
+    row = db.get(SceneRow, uuid.UUID(result["scene_id"]))
+    assert row is not None and row.state == STATE_MISMATCH
+    events = db.query(ActivityEventRow).all()
+    assert any(e.event_type == "scene.mismatch" for e in events)
+
+
+def test_a_matching_read_back_is_still_verified(
+    db: Session, device: FakeDeviceAction, service: SceneService
+) -> None:
+    """The other side of the same branch, so the fix cannot have turned every run into a
+    mismatch."""
+    result = service.create(db, device, plan=BLENDER_CREATE_PLAN, session_id="s-1")
+    assert result["terminal_status"] == "verified"
+    assert result["state"] == STATE_APPLIED
+    assert result["compare"]["ok"] is True
+
+
+def test_a_plan_with_nothing_to_check_is_neither_verified_nor_a_mismatch(
+    db: Session, device: FakeDeviceAction, service: SceneService
+) -> None:
+    """An empty scene asks for nothing checkable, and `compare()` says so with `ok=False`
+    and `no_constraints` — on purpose, because claiming a match over an empty comparison is
+    the M24 defect this loop refuses. But the run succeeded at exactly what was asked, so
+    calling it a disagreement is the review's own finding pointing the other way. Found by
+    the route test driving "Blender'da yeni sahne aç." through the real application object,
+    after the first version of that fix made every `not ok` a mismatch."""
+    plan = {
+        "tool": "blender",
+        "project": "lab",
+        "scene": "bos",
+        "operations": [{"op": "create_scene"}],
+    }
+    result = service.create(db, device, plan=plan, session_id="s-1")
+    assert result["execution_status"] == "executed"
+    # Not a mismatch: nothing disagreed.
+    assert result["state"] == STATE_APPLIED
+    assert not any(e.event_type == "scene.mismatch" for e in db.query(ActivityEventRow).all())
+    assert "Uyuşmazlık" not in result["speech"]
+    # And not verified either: nothing was read back to verify.
+    assert result["terminal_status"] == "unverified"
+    assert result["compare"]["ok"] is False
+    assert result["compare"]["reason"] == "no_constraints"
+    assert "Doğrulanacak bir şey yoktu" in result["speech"]

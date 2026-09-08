@@ -73,9 +73,12 @@ def run_driver(blender_exe: Path, plan_path: Path, out_path: Path) -> subprocess
     argv = [
         str(blender_exe),
         "-b",
-        # Skip the owner's own preferences/addons (any of which could attempt a slow
-        # network call, e.g. an update check) and any startup sound device probe —
-        # a lab run must never depend on what happens to be installed/configured.
+        # Skip the owner's own preferences and add-ons, and any startup sound device
+        # probe — a lab run must never depend on what happens to be installed. Measured
+        # 2026-09-08, when the service-command lab dropped this flag to open a saved
+        # `.blend`: the owner's "API RC" add-on starts a watchdog thread that never stops,
+        # so Blender never exits and the run burns its whole bound. That is why the flag is
+        # now the first token of the command the device allowlists, not just a lab habit.
         "--factory-startup",
         "-noaudio",
         "--python",

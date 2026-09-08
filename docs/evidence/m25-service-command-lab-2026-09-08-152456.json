@@ -1,0 +1,72 @@
+{
+  "kind": "m25_service_command_lab",
+  "measured_at": "2026-09-08T15:24:54.429752+00:00",
+  "blender_exe": "C:\\Program Files\\Blender Foundation\\Blender 4.5\\blender.exe",
+  "why": "the command app.creative3d.service.run_command() builds, run against the real editor — the path the M25 security review found had never been exercised",
+  "runs": [
+    {
+      "command": "blender --factory-startup -b --python blender_driver.py -- plan.json out.json",
+      "argv_tail": [
+        "--factory-startup",
+        "-b",
+        "--python",
+        "blender_driver.py",
+        "--",
+        "plan.json",
+        "out.json"
+      ],
+      "exit_code": 0,
+      "seconds": 1.09,
+      "stderr_tail": [],
+      "label": "create",
+      "manifest_key": "blender_run",
+      "ok": true,
+      "scene_saved": true,
+      "objects": [
+        "Gunes",
+        "Kamera",
+        "Kure"
+      ],
+      "render_bytes": 58323,
+      "compare": {
+        "ok": true,
+        "checked": 10,
+        "mismatches": []
+      }
+    },
+    {
+      "command": "blender --factory-startup -b scene.blend --python blender_driver.py -- plan.json out.json",
+      "argv_tail": [
+        "--factory-startup",
+        "-b",
+        "scene.blend",
+        "--python",
+        "blender_driver.py",
+        "--",
+        "plan.json",
+        "out.json"
+      ],
+      "exit_code": 0,
+      "seconds": 1.16,
+      "stderr_tail": [],
+      "label": "apply",
+      "manifest_key": "blender_run",
+      "ok": true,
+      "scene_saved": true,
+      "objects": [
+        "Gunes",
+        "Kamera",
+        "Kup",
+        "Kure"
+      ],
+      "render_bytes": 59519,
+      "compare": {
+        "ok": true,
+        "checked": 5,
+        "mismatches": []
+      }
+    }
+  ],
+  "verdict": "PASS",
+  "failures": 0
+}

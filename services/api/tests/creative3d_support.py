@@ -267,6 +267,11 @@ _BASE_ROOT = "C:/Users/owner/Documents/PagentOS Projects/3d"
 #: test proves the receipt carries the REAL refusal text, never a made-up one.
 UNITY_LICENSE_MESSAGE = "No valid Unity Editor license found. Please activate your license."
 
+#: The 3D root the scaffold must ask for; the editors are refused anywhere else
+#: (DEVICE_PROTOCOL.md §6m). Spelled here rather than imported so the fake states the
+#: expectation itself rather than agreeing with whatever the service happens to send.
+PROJECT_ROOT_3D_NAME = "3d"
+
 
 class FakeCreative3DDevice:
     """A stateful fake of the ``project.scaffold`` / ``project.run`` / ``scene.inspect``
@@ -315,7 +320,34 @@ class FakeCreative3DDevice:
         plan_text = next(f["text"] for f in files if f.get("path") == "plan.json")
         import json
 
-        self._plans[project_id] = json.loads(plan_text)
+        plan = json.loads(plan_text)
+
+        # The real device refuses here, before a byte is written, when the manifest's run
+        # command is not one it admits token for token — and this fake used to accept
+        # anything, which is how a service sending the bare word "blender" survived a full
+        # green suite (the M25 security review, 2026-09-08). The command must be one of the
+        # two `run_command()` builds for this tool: the creation form and the apply form.
+        from app.creative3d.service import RUN_COMMAND_KEY, run_command
+
+        tool = str(plan.get("tool") or "blender")
+        manifest = payload.get("manifest") or {}
+        if str(payload.get("root") or "") != PROJECT_ROOT_3D_NAME:
+            return DeviceRunResult(
+                False, "permission_denied", "the 3D runtimes run only under the 3D root"
+            )
+        command = (manifest.get("run") or {}).get(RUN_COMMAND_KEY[tool])
+        admitted = {
+            run_command(tool, existing_scene=False),
+            run_command(tool, existing_scene=True),
+        }
+        if command not in admitted:
+            return DeviceRunResult(
+                False,
+                "permission_denied",
+                f"manifest command {command!r} is not in the runtime allowlist; nothing was run",
+            )
+
+        self._plans[project_id] = plan
         return DeviceRunResult(
             True, result={"root_path": f"{_BASE_ROOT}/{slug}", "files_written": len(files)}
         )

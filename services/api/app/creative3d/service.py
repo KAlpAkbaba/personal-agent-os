@@ -41,6 +41,8 @@ Nothing here touches the filesystem while ``create_app`` builds the application 
 from __future__ import annotations
 
 import base64
+import hashlib
+import json
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -54,15 +56,18 @@ from app.actions.receipt import (
     EXECUTION_EXECUTED,
     EXECUTION_REFUSED,
     TERMINAL_FAILED,
+    TERMINAL_UNVERIFIED,
     TERMINAL_VERIFIED,
     ActionReceipt,
     record_receipt,
 )
+from app.creative3d.compare import NO_CONSTRAINTS as COMPARE_NO_CONSTRAINTS
 from app.creative3d.compare import CompareResult, check_render, compare
 from app.creative3d.models import (
     STATE_APPLIED,
     STATE_DEPENDENCY_UNAVAILABLE,
     STATE_FAILED,
+    STATE_MISMATCH,
     STATE_PLANNED,
     STATE_RENDERED,
     STATE_SCAFFOLDED,
@@ -76,6 +81,7 @@ from app.ledger.vocabulary import (
     EVENT_TYPE_SCENE_FAILED,
     EVENT_TYPE_SCENE_INSPECTED,
     EVENT_TYPE_SCENE_LISTED,
+    EVENT_TYPE_SCENE_MISMATCH,
     EVENT_TYPE_SCENE_RENDERED,
     EVENT_TYPE_SCENE_UNITY_UNAVAILABLE,
     SUBSYSTEM_CREATIVE3D,
@@ -95,15 +101,104 @@ CAPABILITY_PROJECT_RUN = "project.run"
 CAPABILITY_SCENE_INSPECT = "scene.inspect"
 
 RUN_COMMAND_KEY: dict[str, str] = {"blender": "blender_run", "unity": "unity_run"}
+
+#: The file names inside a 3D project. They are part of the command the device matches
+#: token for token (DEVICE_PROTOCOL.md §6m), so they are spelled ONCE here and nowhere else.
+SCENE_FILE = "scene.blend"
+PLAN_FILE = "plan.json"
+INSPECTION_FILE = "out.json"
+UNITY_LOG_FILE = "unity.log"
+UNITY_DRIVER_METHOD = "PagentOS.SceneDriver.Run"
+#: The device replaces this with the project folder at run time.
+ROOT_PLACEHOLDER = "<root>"
+#: EVERY Blender run starts from the factory settings. Two reasons, both measured on
+#: 2026-09-08 by running the Cloud Core's own command against the real editor:
+#: opening a saved `.blend` without it loads the OWNER'S installed add-ons into the run —
+#: third-party code inside a run this milestone bounds, and on this machine one of them
+#: ("API RC") starts a watchdog thread that never stops, so Blender never exits; and a
+#: `.blend` that does not exist cannot be opened at all, while `project.scaffold` writes
+#: text only, so a project's first run has no scene to name. The scene file is therefore
+#: OPTIONAL after `-b`: absent on the first run, `scene.blend` on every later one.
+BLENDER_FACTORY_START = "--factory-startup"
+#: The 3D root the scaffold asks for; the two editors are refused anywhere else.
+PROJECT_ROOT_3D = "3d"
+
+#: How long the Cloud Core waits for a batch run, per tool — never less than the device's
+#: own bound for it, so a legitimate long run is not reported as a timeout that never was.
+RUN_WAIT_SECONDS: dict[str, float] = {"blender": 330.0, "unity": 660.0}
+
+
 DRIVER_PATH_BY_TOOL: dict[str, str] = {
     "blender": "blender_driver.py",
     "unity": "Assets/PagentOS/Editor/SceneDriver.cs",
 }
 _DRIVERS_DIR = Path(__file__).resolve().parent / "drivers"
 
+
+def run_command(tool: str, *, existing_scene: bool) -> str:
+    """The one command the device's allowlist admits for this tool (DEVICE_PROTOCOL.md
+    §6m). Built here rather than typed by anyone: the device matches it token for token and
+    refuses at `project.scaffold`, before a byte is written, so this function and that
+    allowlist are one contract."""
+    if tool == "blender":
+        driver = DRIVER_PATH_BY_TOOL["blender"]
+        scene = f" {SCENE_FILE}" if existing_scene else ""
+        return (
+            f"blender {BLENDER_FACTORY_START} -b{scene} --python {driver} "
+            f"-- {PLAN_FILE} {INSPECTION_FILE}"
+        )
+    return (
+        f"unity -batchmode -nographics -quit -projectPath {ROOT_PLACEHOLDER} "
+        f"-executeMethod {UNITY_DRIVER_METHOD} -planPath {PLAN_FILE} "
+        f"-outPath {INSPECTION_FILE} -logFile {UNITY_LOG_FILE}"
+    )
+
+
+def driver_text(tool: str) -> str:
+    """The driver's bytes, with its pinned hash verified first. The pin lived only in a
+    test until the M25 security review (2026-09-08): a driver edited after merge — a bad
+    deploy, a tampered artifact, a local change — would have been shipped to the device and
+    run without anything noticing."""
+    name = DRIVER_PATH_BY_TOOL[tool].split("/")[-1]
+    path = _DRIVERS_DIR / name
+    data = path.read_bytes()
+    pins = json.loads((_DRIVERS_DIR / "manifest.json").read_text(encoding="utf-8"))
+    expected = (pins.get("drivers") or {}).get(name) or pins.get(name)
+    if isinstance(expected, dict):
+        expected = expected.get("sha256")
+    actual = hashlib.sha256(data).hexdigest()
+    if expected and actual != expected:
+        raise DriverPinMismatch(
+            f"the {tool} driver on disk does not match its pinned hash "
+            f"(expected {expected[:12]}…, found {actual[:12]}…)"
+        )
+    return data.decode("utf-8")
+
+
+class DriverPinMismatch(RuntimeError):
+    """A driver whose bytes do not match `drivers/manifest.json` is never shipped."""
+
+
 SPEECH_NO_DEVICE = "Bu bilgisayarda sahne oluşturma yetkisi yok efendim."
 SPEECH_NO_SCENE = "Hangi sahne efendim?"
 SPEECH_INVALID_PLAN = "Bu sahne isteğini işleyemedim efendim."
+#: A plan that asks for nothing checkable (an empty scene) is not verified and is not a
+#: disagreement — the owner is told which of the two it is, rather than either word.
+SPEECH_NOTHING_TO_CHECK = "Doğrulanacak bir şey yoktu efendim."
+
+
+def _mismatch_speech(plan: ScenePlan, result: CompareResult) -> str:
+    """What the owner hears when the tool's own read-back disagrees with the plan: the
+    object and the field it disagreed about, never a success sentence (spec §4; the M25
+    security review, 2026-09-08)."""
+    first = result.mismatches[0] if result.mismatches else None
+    if first is None:
+        return f"{plan.scene}: istediğim gibi olmadı efendim."
+    detail = f"{first.object_name} · {first.field}: {first.expected} istedim, {first.actual} var"
+    more = len(result.mismatches) - 1
+    tail = f"; {more} uyuşmazlık daha" if more > 0 else ""
+    return f"Uyuşmazlık efendim — {detail}{tail}."
+
 
 ERROR_CAPABILITY_MISSING = "capability_missing"
 ERROR_INVALID_ARGUMENT = "invalid_argument"
@@ -355,22 +450,48 @@ class SceneService:
     ) -> dict[str, Any] | None:
         """Runs ``project.scaffold`` then ``project.run`` for ``plan``. Returns an
         early-refusal receipt on failure, or ``None`` to continue to ``scene.inspect``."""
-        driver_text = (_DRIVERS_DIR / DRIVER_PATH_BY_TOOL[plan.tool].split("/")[-1]).read_text(
-            encoding="utf-8"
-        )
+        try:
+            driver_source = driver_text(plan.tool)
+        except DriverPinMismatch as exc:
+            row.state = STATE_FAILED
+            row.error_class = ERROR_VALIDATION
+            row.error_message = str(exc)
+            row.updated_at = datetime.now(UTC)
+            db.commit()
+            return self._receipt(
+                capability="scene.scaffold",
+                requested_state="scaffolded",
+                execution=EXECUTION_REFUSED,
+                terminal=TERMINAL_FAILED,
+                server={"reason": "driver_pin_mismatch"},
+                speech="Sürücü dosyası değişmiş efendim; çalıştırmadım.",
+                db=db,
+                error_class=ERROR_VALIDATION,
+                session_id=session_id,
+                extra={"scene_id": str(row.id)},
+            )
         slug = f"{plan.project}-{plan.scene}"[:64]
+        # A scene file exists only after a run has saved one.
+        existing_scene = bool(row.inspection_json)
         scaffold_result = device_action.run(
             capability=CAPABILITY_PROJECT_SCAFFOLD,
             payload={
                 "project_id": str(row.id),
                 "slug": slug,
+                # The two editors run under the 3D root and are refused anywhere else
+                # (DEVICE_PROTOCOL.md §6m), so the scaffold has to ask for it by name.
+                "root": PROJECT_ROOT_3D,
                 "files": [
-                    {"path": "plan.json", "text": plan.plan_json()},
-                    {"path": DRIVER_PATH_BY_TOOL[plan.tool], "text": driver_text},
+                    {"path": PLAN_FILE, "text": plan.plan_json()},
+                    {"path": DRIVER_PATH_BY_TOOL[plan.tool], "text": driver_source},
                 ],
                 "manifest": {
                     "entry": DRIVER_PATH_BY_TOOL[plan.tool],
-                    "run": {RUN_COMMAND_KEY[plan.tool]: plan.tool},
+                    "run": {
+                        RUN_COMMAND_KEY[plan.tool]: run_command(
+                            plan.tool, existing_scene=existing_scene
+                        )
+                    },
                 },
             },
             idempotency_key=f"creative3d-scaffold:{row.id}",
@@ -412,7 +533,10 @@ class SceneService:
             capability=CAPABILITY_PROJECT_RUN,
             payload={"project_id": str(row.id), "command_key": RUN_COMMAND_KEY[plan.tool]},
             idempotency_key=f"creative3d-run:{row.id}:{uuid.uuid4()}",
-            timeout_s=300.0,
+            # The device allows a 3D batch run up to its own ceiling (Unity 10 min, plus
+            # the service's headroom — DEVICE_PROTOCOL.md §6m); waiting less here would
+            # report a timeout the device never had (M25 security review, Low).
+            timeout_s=RUN_WAIT_SECONDS[plan.tool],
         )
         if not run_result.ok:
             if plan.tool == TOOL_UNITY and run_result.error_class == "dependency_unavailable":
@@ -544,7 +668,23 @@ class SceneService:
         row.plan_json = plan.as_dict()
         row.inspection_json = inspection
         row.compare_json = cmp_result.as_dict()
-        row.state = STATE_RENDERED if row.render_object_key else STATE_APPLIED
+        # The comparison decides the state, and with it what the owner is told. A run
+        # whose read-back DISAGREES is a MISMATCH: the work happened, and it is not what
+        # was asked for. Saying "verified" here regardless is what the M25 security review
+        # caught on 2026-09-08 - a plan moving an object that was never created answered
+        # "Kup taşındı" while the inspection proved it absent.
+        #
+        # A run with NOTHING to check is a third case, not the second one. `compare()`
+        # answers `ok=False` for an empty comparison too (`no_constraints`), deliberately,
+        # because a match claimed over nothing is the M24 defect this loop refuses. But
+        # creating an empty scene asks for nothing checkable and succeeds at it; calling
+        # that a disagreement is the same dishonesty pointing the other way. It stays
+        # applied, and it is still never called verified.
+        nothing_to_check = cmp_result.reason == COMPARE_NO_CONSTRAINTS
+        if cmp_result.ok or nothing_to_check:
+            row.state = STATE_RENDERED if row.render_object_key else STATE_APPLIED
+        else:
+            row.state = STATE_MISMATCH
         row.updated_at = datetime.now(UTC)
         db.commit()
         focus_module.set_focus(
@@ -554,25 +694,44 @@ class SceneService:
             label=f"{plan.project}/{plan.scene}",
             source="scene_dispatch",
         )
-        speech = self._describe(plan, inspection)
         object_count = len(inspection.get("objects") or [])
+        if cmp_result.ok:
+            speech = self._describe(plan, inspection)
+        elif nothing_to_check:
+            speech = self._describe(plan, inspection) + " " + SPEECH_NOTHING_TO_CHECK
+        else:
+            speech = _mismatch_speech(plan, cmp_result)
         self._publish(tool=plan.tool, scene=plan.scene, state=row.state, objects=object_count)
-        event_type = (
-            EVENT_TYPE_SCENE_RENDERED if row.state == STATE_RENDERED else EVENT_TYPE_SCENE_APPLIED
-        )
+        if row.state == STATE_MISMATCH:
+            event_type = EVENT_TYPE_SCENE_MISMATCH
+        elif row.state == STATE_RENDERED:
+            event_type = EVENT_TYPE_SCENE_RENDERED
+        else:
+            event_type = EVENT_TYPE_SCENE_APPLIED
         self._ledger(
             db,
             event_type=event_type,
             action=capability,
             summary=f"{capability} -> {plan.project}/{plan.scene} ({object_count} objects)",
-            detail={"scene_id": str(row.id), "objects": object_count, "compare_ok": cmp_result.ok},
+            detail={
+                "scene_id": str(row.id),
+                "objects": object_count,
+                "compare_ok": cmp_result.ok,
+                "mismatches": [m.as_dict() for m in cmp_result.mismatches[:8]],
+            },
         )
         return self._receipt(
             capability=capability,
             requested_state=row.state,
             execution=EXECUTION_EXECUTED,
-            terminal=TERMINAL_VERIFIED,
-            server={"objects": object_count, "compare_ok": cmp_result.ok},
+            # Verified means a read-back agreed with something. Neither a disagreement
+            # nor an empty comparison earns that word.
+            terminal=TERMINAL_VERIFIED if cmp_result.ok else TERMINAL_UNVERIFIED,
+            server={
+                "objects": object_count,
+                "compare_ok": cmp_result.ok,
+                "compare_reason": cmp_result.reason,
+            },
             speech=speech,
             db=db,
             session_id=session_id,

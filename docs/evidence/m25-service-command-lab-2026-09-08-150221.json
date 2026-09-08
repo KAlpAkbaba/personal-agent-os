@@ -1,0 +1,66 @@
+{
+  "kind": "m25_service_command_lab",
+  "measured_at": "2026-09-08T15:02:18.036002+00:00",
+  "blender_exe": "C:\\Program Files\\Blender Foundation\\Blender 4.5\\blender.exe",
+  "why": "the command app.creative3d.service.run_command() builds, run against the real editor — the path the M25 security review found had never been exercised",
+  "runs": [
+    {
+      "command": "blender -b --factory-startup --python blender_driver.py -- plan.json out.json",
+      "argv_tail": [
+        "-b",
+        "--factory-startup",
+        "--python",
+        "blender_driver.py",
+        "--",
+        "plan.json",
+        "out.json"
+      ],
+      "exit_code": 0,
+      "seconds": 1.27,
+      "stderr_tail": [],
+      "label": "create",
+      "manifest_key": "blender_run",
+      "ok": false,
+      "scene_saved": false,
+      "objects": [
+        "Gunes",
+        "Kamera",
+        "Kure"
+      ],
+      "render_bytes": 44790,
+      "compare": {
+        "ok": false,
+        "checked": 10,
+        "mismatches": [
+          {
+            "object": "render",
+            "field": "render.stddev",
+            "expected": ">= 1.0",
+            "actual": 0.4992,
+            "detail": "the image is (near) uniform — a blank/failed render"
+          }
+        ]
+      }
+    },
+    {
+      "command": "blender -b scene.blend --python blender_driver.py -- plan.json out.json",
+      "argv_tail": [
+        "-b",
+        "scene.blend",
+        "--python",
+        "blender_driver.py",
+        "--",
+        "plan.json",
+        "out.json"
+      ],
+      "exit_code": 1,
+      "seconds": 1.82,
+      "stderr_tail": [],
+      "label": "apply",
+      "manifest_key": "blender_run",
+      "ok": false
+    }
+  ],
+  "verdict": "FAIL",
+  "failures": 2
+}

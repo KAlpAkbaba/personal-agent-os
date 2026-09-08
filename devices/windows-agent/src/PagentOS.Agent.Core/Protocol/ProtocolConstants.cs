@@ -516,6 +516,11 @@ public static class SceneCapabilityNames
     public const string UnityDriverMethod = "PagentOS.SceneDriver.Run";
 
     /// <summary>The extension the Blender shape's scene file must carry.</summary>
+    /// <summary>M25: what stands in the scene-file position on the FIRST run, when there is
+    /// no <c>.blend</c> to open yet. It also keeps the owner's own Blender preferences and
+    /// startup file out of the run.</summary>
+    public const string BlenderFactoryStart = "--factory-startup";
+
     public const string BlendExtension = ".blend";
 
     /// <summary>The extension the Blender shape's driver must carry (a fixed repository file, never model-authored).</summary>

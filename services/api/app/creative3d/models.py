@@ -37,6 +37,10 @@ STATE_SCAFFOLDED = "scaffolded"
 STATE_APPLIED = "applied"
 STATE_RENDERED = "rendered"
 STATE_FAILED = "failed"
+#: The tool did the work and its own read-back disagrees with what the plan asked for. Not
+#: a failure of the run and not a success either — the owner is told which object and which
+#: field (M25 security review, 2026-09-08: the receipt used to say "verified" regardless).
+STATE_MISMATCH = "mismatch"
 #: The honest Unity mark (spec §1, §6, ADR-0088 decision 5): the licensing client
 #: refused, never a crash, never "done" — kept as its OWN state so a row that landed
 #: here is never confused with a genuine ``failed`` (a plan/driver problem).
@@ -48,6 +52,7 @@ SCENE_STATES: tuple[str, ...] = (
     STATE_APPLIED,
     STATE_RENDERED,
     STATE_FAILED,
+    STATE_MISMATCH,
     STATE_DEPENDENCY_UNAVAILABLE,
 )
 
