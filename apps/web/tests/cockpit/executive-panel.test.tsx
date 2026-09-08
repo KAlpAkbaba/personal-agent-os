@@ -100,7 +100,6 @@ function row(overrides: Partial<ExecutiveRunRow> = {}): ExecutiveRunRow {
     step: "s3",
     done: 2,
     total: 5,
-    explain: null,
     missing: [],
     created_at: iso(-90_000),
     updated_at: iso(-30_000),
@@ -406,10 +405,8 @@ describe("the Görevler panel", () => {
   it("prints the current step's sentence exactly as the route sent it, and nothing when neither route sent one", () => {
     const withDetail = panel(ok([RUNNING()]), [AGENT_IDLE()], controlOf(), T0, detailsOf({ r1: "Üçüncü adım: kaynaklar getiriliyor, tarayıcı yanıtı bekleniyor." }));
     expect(withDetail).toContain('data-executive-explain="true">Üçüncü adım: kaynaklar getiriliyor, tarayıcı yanıtı bekleniyor.</span>');
-    // The list route's own field stands in where the detail route said nothing.
-    const fromList = panel(ok([row({ explain: "Listeden gelen cümle." })]));
-    expect(fromList).toContain('data-executive-explain="true">Listeden gelen cümle.</span>');
-    // Neither said anything: nothing is written, and nothing is invented.
+    // The run's own route is the only source: the list carries no sentence, so a run the
+    // detail hook has not answered for yet writes nothing rather than inventing a line.
     expect(panel(ok([RUNNING()]))).not.toContain("data-executive-explain");
     // A detail that could not be fetched is said, and the rows stay.
     const noticed = panel(ok([RUNNING()]), [AGENT_IDLE()], controlOf(), T0, detailsOf({}, "Ayrıntı alınamadı (r1): HTTP 503"));
@@ -664,19 +661,20 @@ describe("the routes and the shapes they answer with", () => {
     expect(parsed?.goal).toBe("Bu mail zincirini analiz et");
     expect(parsed?.state).toBe("running");
     expect(parsed?.done).toBe(1);
-    expect(parsed?.explain).toBe("İkinci adım: ilgili dosyalar aranıyor.");
+    // `explain` is not a row field: it belongs to the run's own route, and the row type
+    // no longer declares a field the list route never sends.
+    expect("explain" in (parsed ?? {})).toBe(false);
     expect(parseExecutiveRow({ state: "running" })).toBeNull();
     expect(parseExecutiveRow(null)).toBeNull();
     // A count that is not a whole non-negative number is no count.
     expect(parseExecutiveRow({ run_id: "r1", done: 1.5, total: "4" })?.done).toBeNull();
     expect(parseExecutiveRow({ run_id: "r1", done: 1.5, total: "4" })?.total).toBeNull();
-    // The alternative names the route may use for the same facts.
-    const alt = parseExecutiveRow({ id: "r2", current_step: "s7", steps_done: 3, steps_total: 6, title: "iş" });
-    expect(alt?.run_id).toBe("r2");
-    expect(alt?.step).toBe("s7");
-    expect(alt?.done).toBe(3);
-    expect(alt?.total).toBe(6);
-    expect(alt?.goal).toBe("iş");
+    // The route's OWN words and no others. This used to accept `id`/`current_step`/
+    // `steps_done` as well, which is how the two halves of M26 appeared to agree while the
+    // list route was still sending a different set: a fallback hides a rename instead of
+    // failing on it. A row in the old spelling is not a run at all now, and the Python
+    // guard (`test_executive_row_shape.py`) goes red before it could ever be served.
+    expect(parseExecutiveRow({ id: "r2", current_step: "s7", steps_done: 3, steps_total: 6 })).toBeNull();
   });
 
   it("reads the missing steps from either shape, and drops an entry that names no step", () => {
@@ -700,11 +698,10 @@ describe("the routes and the shapes they answer with", () => {
       explain: "Üçüncü adım: rapor yazılıyor.",
       missing: [{ step: "s4", reason: null }],
     });
-    expect(parseExecutiveDetail({ run: { run_id: "r1", explanation: "İkinci adım." } })).toEqual({
-      run_id: "r1",
-      explain: "İkinci adım.",
-      missing: [],
-    });
+    // The detail route answers with the run's fields at the top level, and this reads
+    // exactly that: a nested `run` object or an `explanation` spelling is a shape nobody
+    // sends, and guessing at it is what let the two halves drift unnoticed.
+    expect(parseExecutiveDetail({ run: { run_id: "r1", explanation: "İkinci adım." } })).toBeNull();
     expect(parseExecutiveDetail({ explain: "bir cümle" })).toBeNull();
     expect(parseExecutiveDetail(null)).toBeNull();
     // A run is re-asked when the list says it moved, and not otherwise.

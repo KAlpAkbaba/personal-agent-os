@@ -258,17 +258,41 @@ def _status_speech(run: ExecutiveRunRow) -> str:
     return "Durumu bilmiyorum efendim."
 
 
-def get_status(db: Session, run_id: uuid.UUID) -> dict[str, Any]:
-    run = _get_run(db, run_id)
+def missing_steps(run: ExecutiveRunRow) -> list[dict[str, str | None]]:
+    """The steps that did not verify, and why — the thing a `partial` run must be able to
+    NAME rather than summarise (spec §6). The row has held this since the workflow wrote
+    it; it was simply never sent to anyone."""
+    reasons = run.partial_reasons_json or {}
+    return [{"step": step_id, "reason": why} for step_id, why in reasons.items()]
+
+
+def run_dict(run: ExecutiveRunRow) -> dict[str, Any]:
+    """The ONE shape every client reads: the list route, the detail route and the Cockpit
+    panel. The field names are the bus's own words (`run_id`, `step`, `done`, `total`), so
+    one fact has one name wherever it is read.
+
+    They did not, at first. The list route sent `id`/`current_step`/`steps_done`/
+    `steps_total` while the detail route sent `run_id` for the same field, and the panel
+    absorbed both with a `??` fallback chain — which is how M25's `/v1/scenes` row and its
+    panel ended up in different languages while every suite stayed green. A cushion is not
+    an agreement; `test_executive_row_shape.py` holds this to the panel's own source now.
+    """
     return {
         "run_id": str(run.id),
         "goal": run.goal,
         "state": run.state,
-        "current_step": run.current_step,
-        "steps_done": run.steps_done,
-        "steps_total": run.steps_total,
-        "speech": _status_speech(run),
+        "step": run.current_step,
+        "done": run.steps_done,
+        "total": run.steps_total,
+        "missing": missing_steps(run),
+        "created_at": run.created_at.isoformat() if run.created_at else None,
+        "updated_at": run.updated_at.isoformat() if run.updated_at else None,
     }
+
+
+def get_status(db: Session, run_id: uuid.UUID) -> dict[str, Any]:
+    run = _get_run(db, run_id)
+    return {**run_dict(run), "speech": _status_speech(run)}
 
 
 def get_explain(db: Session, run_id: uuid.UUID) -> dict[str, Any]:

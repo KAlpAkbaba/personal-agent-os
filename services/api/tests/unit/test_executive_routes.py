@@ -49,7 +49,10 @@ def _start_run(h: Harness, directive: str) -> str:
     ):
         resp = h.client.post("/v1/executive/runs", json={"directive": directive})
     assert resp.status_code == 200, resp.text
-    return resp.json()["id"]
+    # The row names the run `run_id` — the bus's own word for the same fact, and the one
+    # the Cockpit panel reads. It said `id` here and `run_id` on the detail route until
+    # the two halves were read against each other.
+    return resp.json()["run_id"]
 
 
 _RESEARCH_DIRECTIVE = (
@@ -69,7 +72,7 @@ def test_start_creates_a_running_run(h: Harness) -> None:
     assert resp.status_code == 200
     body = resp.json()
     assert body["state"] == "running"
-    assert body["steps_total"] == 5
+    assert body["total"] == 5
     assert len(body["steps"]) == 5
 
 
@@ -95,7 +98,7 @@ def test_get_unknown_run_is_404(h: Harness) -> None:
 def test_list_returns_the_started_run(h: Harness) -> None:
     run_id = _start_run(h, _RESEARCH_DIRECTIVE)
     resp = h.client.get("/v1/executive/runs")
-    assert [r["id"] for r in resp.json()["runs"]] == [run_id]
+    assert [r["run_id"] for r in resp.json()["runs"]] == [run_id]
 
 
 def test_explain_names_the_current_step(h: Harness) -> None:
@@ -192,7 +195,7 @@ def test_amend_adds_a_step(h: Harness) -> None:
         resp = h.client.post(f"/v1/executive/runs/{run_id}/amend", json={"step": new_step})
     assert resp.status_code == 200, resp.text
     status_resp = h.client.get(f"/v1/executive/runs/{run_id}")
-    assert status_resp.json()["steps_total"] == 6
+    assert status_resp.json()["total"] == 6
 
 
 def test_two_active_runs_is_the_bound(h: Harness) -> None:

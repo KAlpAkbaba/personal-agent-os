@@ -49,17 +49,9 @@ async def _temporal_client(request: Request) -> Client:
 
 
 def _run_dict(run: ExecutiveRunRow) -> dict[str, Any]:
-    return {
-        "id": str(run.id),
-        "goal": run.goal,
-        "state": run.state,
-        "current_step": run.current_step,
-        "steps_done": run.steps_done,
-        "steps_total": run.steps_total,
-        "source": run.source,
-        "created_at": run.created_at.isoformat() if run.created_at else None,
-        "updated_at": run.updated_at.isoformat() if run.updated_at else None,
-    }
+    """The list route's row is the service's own shape plus how the run was started —
+    one builder, so the list and the detail can never describe a run differently."""
+    return {**executive_service.run_dict(run), "source": run.source}
 
 
 def _error_response(exc: ExecutiveServiceError) -> HTTPException:
@@ -111,6 +103,9 @@ async def get_run(request: Request, run_id: uuid.UUID) -> dict[str, Any]:
     try:
         with artifacts.session() as db:
             status = executive_service.get_status(db, run_id)
+            # The panel draws the current step's sentence from the detail route rather than
+            # asking a second one for it (spec §6); the route that knows the run says it.
+            status["explain"] = executive_service.get_explain(db, run_id).get("speech")
             steps = executive_service.list_steps(db, run_id)
             status["steps"] = [
                 {

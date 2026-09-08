@@ -97,9 +97,7 @@ export type ExecutiveRunRow = {
   done: number | null;
   /** How many steps the graph has, when the row counted. */
   total: number | null;
-  /** The current step in one sentence, when the LIST route carried one. */
-  explain: string | null;
-  /** The steps that did not verify, when the list route named them. */
+  /** The steps that did not verify, as the route named them; empty when none did. */
   missing: ExecutiveMissingStep[];
   created_at: string | null;
   updated_at: string | null;
@@ -180,17 +178,19 @@ export function parseMissingSteps(raw: unknown): ExecutiveMissingStep[] {
 export function parseExecutiveRow(raw: unknown): ExecutiveRunRow | null {
   if (!raw || typeof raw !== "object") return null;
   const o = raw as Record<string, unknown>;
-  const id = str(o.run_id) ?? str(o.id);
+  // The names are the route's, exactly — no `??` chain of plausible spellings. A
+  // fallback makes a mismatch invisible, which is how the two halves of M25's scene row
+  // ended up in different languages with every suite green.
+  const id = str(o.run_id);
   if (id === null) return null;
   return {
     run_id: id,
-    goal: str(o.goal) ?? str(o.title),
+    goal: str(o.goal),
     state: str(o.state),
-    step: str(o.step) ?? str(o.current_step),
-    done: count(o.done) ?? count(o.steps_done),
-    total: count(o.total) ?? count(o.steps_total),
-    explain: sentence(o.explain) ?? sentence(o.explanation),
-    missing: parseMissingSteps(o.missing ?? o.missing_steps ?? o.unverified),
+    step: str(o.step),
+    done: count(o.done),
+    total: count(o.total),
+    missing: parseMissingSteps(o.missing),
     created_at: str(o.created_at),
     updated_at: str(o.updated_at),
   };
@@ -200,13 +200,12 @@ export function parseExecutiveRow(raw: unknown): ExecutiveRunRow | null {
 export function parseExecutiveDetail(raw: unknown): ExecutiveRunDetail | null {
   if (!raw || typeof raw !== "object") return null;
   const body = raw as Record<string, unknown>;
-  const inner = body.run && typeof body.run === "object" ? (body.run as Record<string, unknown>) : body;
-  const id = str(inner.run_id) ?? str(inner.id) ?? str(body.run_id);
+  const id = str(body.run_id);
   if (id === null) return null;
   return {
     run_id: id,
-    explain: sentence(body.explain) ?? sentence(inner.explain) ?? sentence(inner.explanation),
-    missing: parseMissingSteps(body.missing ?? inner.missing ?? inner.missing_steps ?? inner.unverified),
+    explain: sentence(body.explain),
+    missing: parseMissingSteps(body.missing),
   };
 }
 

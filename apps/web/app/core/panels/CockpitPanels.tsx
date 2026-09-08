@@ -2375,9 +2375,11 @@ function ExecutiveRowItem({
 }) {
   const partial = executiveRowIsPartial(row);
   const failed = executiveRowIsFailed(row);
-  // The run's own route answers the `explain` query; the list route's field
-  // stands in where it carried one. Nothing is written when neither did.
-  const explain = details.detailFor(row.run_id)?.explain ?? row.explain;
+  // The run's own route is the ONLY source for this sentence. It belongs to the run
+  // being looked at, and the list is capped at 50 rows, so carrying it per row would buy
+  // an N+1 on every Cockpit poll; the detail hook already asks only for the runs still
+  // going (at most two, by the spec's own bound). Nothing is written when it said nothing.
+  const explain = details.detailFor(row.run_id)?.explain ?? null;
   return (
     <li
       data-executive-run={row.run_id}
