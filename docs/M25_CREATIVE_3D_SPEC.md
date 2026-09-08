@@ -1,6 +1,6 @@
 # M25 — Unity / Blender / 3D Creation
 
-Status: ACTIVE (owner master directive 2026-09-07, M25 section; kickoff 2026-09-08 after the M24 gate). Decision record: ADR-0088.
+Status: CLOSED 2026-09-08 (ADR-0088 + addendum 1; QUALIFICATION Stage 23; Blender PROVEN_REAL, Unity PROVEN_PROXY until owner item 32; Cloud Core release: `PROVEN_REAL` (the release and the surface)). Decision record: ADR-0088.
 Predecessors: M19 Digital Operator (`AuthorisedRoots`, the allowlisted terminal, `object_focus`), M23 App Factory (a bounded Job Object child under a `Projects` root, the fixed command allowlist, the ProjectFiles policy, "free text never lands in code"), M22 (structured specs validated by independent readers), M13 (the object store for renders).
 
 The owner's rule, in one line: **the assistant creates and changes 3D scenes through the tools' own scripting interfaces, proves every change by reading the scene back from the tool and rendering it, and never claims control of an application it cannot actually drive.**
