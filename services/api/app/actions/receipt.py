@@ -466,6 +466,22 @@ def record_receipt(db: Session, receipt: ActionReceipt, subsystem: str) -> Any |
             ),
         )
     except Exception as exc:  # noqa: BLE001 - see docstring
+        # BUG FOUND 2026-09-08 (docs/DECISIONS.md ADR-0090): a failed flush here (e.g. a
+        # non-JSON-serialisable value reaching `detail_json`) left the CALLER's session in
+        # SQLAlchemy's "rolled back, needs an explicit rollback()" state, so every
+        # subsequent operation on that same session — including the caller's own,
+        # unrelated commits later in the same request — raised `PendingRollbackError`.
+        # That directly contradicts this function's own docstring ("never a dependency of
+        # it"): a best-effort ledger note must not be able to break the session for real
+        # work that comes after it. Regression: app/weather/tests/... exercised this via
+        # `WeatherService.current`, whose own fix (never pass a raw ``datetime`` into a
+        # JSON field) is the root cause; this rollback is the independent hardening so the
+        # NEXT such mistake, whatever writes it, degrades to "no ledger row" instead of
+        # "the session is unusable".
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001 - rollback itself must never raise past here
+            pass
         logger.warning(
             "action_receipt_ledger_failed",
             capability=receipt.capability,

@@ -218,6 +218,20 @@ class Intent(StrEnum):
     EXEC_AMEND = "exec_amend"  # Sunumu da ekle / Excel'i de hazırla
     EXEC_CANCEL = "exec_cancel"  # Bunu iptal et / Vazgeç
 
+    # docs/DECISIONS.md ADR-0090: Owner Location Context, Live Weather and the Morning
+    # Briefing. WEATHER_QUERY covers both an explicit place ("İstanbul'da hava nasıl?")
+    # and the owner's current/default location ("Hava nasıl?") — the router extracts the
+    # place from the WORDS (weather_place below) exactly as APP_OPEN/ARTIFACT_CREATE
+    # extract theirs; the tool asks app.location for everything else, never a second
+    # place parser at the tool layer.
+    WEATHER_QUERY = "weather_query"  # Hava nasıl? / İstanbul'da hava nasıl? / Kaç derece?
+    LOCATION_DEFAULT_SET = "location_default_set"  # Varsayılan hava durumu konumumu ... yap.
+    LOCATION_DEFAULT_QUERY = "location_default_query"  # Varsayılan konumum ne?
+    LOCATION_SOURCE_QUERY = "location_source_query"  # Konumumu nereden biliyorsun? / güncel mi?
+    MORNING_BRIEFING = "morning_briefing"  # Günaydın. / Sabah özetimi ver. / ... bekliyor?
+    SYSTEM_STATUS_QUERY = "system_status_query"  # Sistem durumu nasıl?
+    OVERNIGHT_WORK_QUERY = "overnight_work_query"  # Gece neler yaptın?
+
     NONE = "none"
 
 
@@ -321,6 +335,12 @@ CAPABILITY_BY_INTENT: dict[Intent, str] = {
     Intent.EXEC_RETRY: "executive.retry",
     Intent.EXEC_AMEND: "executive.amend",
     Intent.EXEC_CANCEL: "executive.cancel",
+    # ADR-0090: setting the owner's durable default weather location is a real (local)
+    # mutation — the same receipt class alarm.create/mail.draft already get. Reading it
+    # back, asking where a location came from, and asking for the weather/system status/
+    # overnight summary/briefing all read something without changing it, so each is a
+    # QUERY_TOOL_BY_INTENT entry instead, below.
+    Intent.LOCATION_DEFAULT_SET: "location.set_default",
 }
 
 #: QUERY intents that name a tool rather than being answered conversationally (contract §2:
@@ -376,6 +396,15 @@ QUERY_TOOL_BY_INTENT: dict[Intent, str] = {
     # family's own status/explain entry above already gets.
     Intent.EXEC_STATUS: "executive.status",
     Intent.EXEC_EXPLAIN: "executive.explain",
+    # ADR-0090: weather/location/briefing reads — none mutate anything the owner can
+    # see, the same query class every family above already gets for the identical
+    # reason.
+    Intent.WEATHER_QUERY: "weather.current",
+    Intent.LOCATION_DEFAULT_QUERY: "location.get_default",
+    Intent.LOCATION_SOURCE_QUERY: "weather.last_evidence",
+    Intent.MORNING_BRIEFING: "briefing.morning",
+    Intent.SYSTEM_STATUS_QUERY: "briefing.system_status",
+    Intent.OVERNIGHT_WORK_QUERY: "briefing.overnight_work",
 }
 
 
@@ -663,6 +692,18 @@ class ResolvedIntent:
     #: -> "presentation", "excel'i de hazırla" -> "spreadsheet"), or None when the
     #: words named neither - the tool then asks which, never guesses.
     exec_amend_kind: str | None = None
+    #: ADR-0090: for WEATHER_QUERY, the place the owner's WORDS named ("İstanbul'da hava
+    #: nasıl?" -> "İstanbul"), resolved against a small built-in Turkish city gazetteer
+    #: (``_CITY_STEMS``) — or None when no place was said ("Hava nasıl?"), in which case
+    #: ``app.location.service.LocationService.resolve`` decides the place, never this
+    #: resolver. Tier 1 of the resolution order (task brief §1) is exactly "a place named
+    #: in the request" — this field IS that place.
+    weather_place: str | None = None
+    #: For LOCATION_DEFAULT_SET, the place the owner's WORDS named ("Varsayılan hava
+    #: durumu konumumu İstanbul yap." -> "İstanbul") against the same gazetteer, or None
+    #: when the words named none at all — the tool then asks which, never guesses a
+    #: default (task brief §1: "Do NOT invent one").
+    location_default_city: str | None = None
 
     def __post_init__(self) -> None:
         if not self.klass:
@@ -1781,7 +1822,15 @@ _MAIL_SEND_NEGATION_FORMS: Final[tuple[str, ...]] = (
     "gondermeyin",
 )
 _DISCARD_STEMS: Final[tuple[str, ...]] = ("vazgeç", "vazgec")
-_SUBJECT_NOUN_STEMS: Final[tuple[str, ...]] = ("konu",)
+#: BUG FOUND 2026-09-08 (docs/DECISIONS.md ADR-0090, building the Owner Location Context
+#: capability): the bare stem "konu" (subject/topic) also matches "konum"/"konumu"/
+#: "konumumu" (location) through ``_has``'s prefix rule — "Varsayılan hava durumu
+#: konumumu İstanbul yap." was being read as ``_mail_edit_draft_match``'s "konuyu ... yap"
+#: shape and never reached LOCATION_DEFAULT_SET at all. Closed by matching the CLOSED set
+#: of inflected forms "konu" actually takes as "subject/topic" ("konuyu", "konusu",
+#: "konusunu") rather than a 4-letter prefix that also happens to start "konum" and
+#: "konuş-" (to speak).
+_SUBJECT_NOUN_FORMS: Final[tuple[str, ...]] = ("konu", "konuyu", "konusu", "konusunu")
 _SET_SUBJECT_VERB_FORMS: Final[tuple[str, ...]] = ("yap", "yapsana", "yapar")
 
 
@@ -1865,8 +1914,10 @@ def _mail_draft_new_match(tokens: tuple[str, ...]) -> str | None:
 
 def _mail_edit_draft_match(tokens: tuple[str, ...]) -> str | None:
     """ "Konuyu 'Plan onayı' yap." (spec §3) — the new subject text is the model's own
-    argument; this only recognises the SHAPE."""
-    if _has(tokens, *_SUBJECT_NOUN_STEMS) is None:
+    argument; this only recognises the SHAPE. Matches exact inflected forms of "konu"
+    (never a bare prefix — see ``_SUBJECT_NOUN_FORMS``'s own comment: a prefix also
+    matches "konum" / "konuş-")."""
+    if _has_exact(tokens, *_SUBJECT_NOUN_FORMS) is None:
         return None
     if _has_exact(tokens, *_SET_SUBJECT_VERB_FORMS) is None:
         return None
@@ -1900,6 +1951,182 @@ def _discard_word_match(tokens: tuple[str, ...]) -> str | None:
     if _mail_send_negation_match(tokens):
         return "gönderme"
     return _has(tokens, *_DISCARD_STEMS)
+
+
+# ---------------------------------------------------------------------------------------
+# ADR-0090: Owner Location Context, Live Weather, Morning Briefing. A small BUILT-IN
+# gazetteer, never a geocoding call at the router layer (the resolver's own tier 1 needs
+# only the WORD the owner said; ``app.location.service`` and ``app.weather.providers``
+# do any real geocoding). Every city carries three stems where its name contains a
+# capital-I-sensitive letter — the SAME "bare / diacritic / diacritic-stripped ASR
+# variant" lesson ADR-0089 addendum 1 already paid for with "taslağı": "İstanbul"
+# casefolds (``turkish_casefold``) to "istanbul", but an ASR transcript that typed the
+# ASCII capital "I" instead of the Turkish dotted "İ" casefolds to "ıstanbul" instead —
+# a silent miss neither form alone would catch.
+_CITY_STEMS: Final[dict[str, str]] = {
+    "istanbul": "İstanbul",
+    "ıstanbul": "İstanbul",
+    "ankara": "Ankara",
+    "izmir": "İzmir",
+    "ızmir": "İzmir",
+    "bursa": "Bursa",
+    "antalya": "Antalya",
+    "adana": "Adana",
+    "konya": "Konya",
+    "gaziantep": "Gaziantep",
+    "trabzon": "Trabzon",
+    "eskişehir": "Eskişehir",
+    "eskisehir": "Eskişehir",
+}
+
+
+def _extract_place(tokens: tuple[str, ...]) -> str | None:
+    """The first known city the owner's WORDS named (task brief's resolution tier 1),
+    or None — a best-effort, closed-vocabulary lookup, never a guess at an unlisted
+    place (an unrecognised city name falls through to ``app.location``'s own tiers, the
+    same "the tool then asks / falls back, never invents" rule every other extractor in
+    this module follows)."""
+    for tok in tokens:
+        bare = tok.rstrip("'")
+        for stem, canonical in _CITY_STEMS.items():
+            if bare == stem or bare.startswith(stem):
+                return canonical
+    return None
+
+
+_WEATHER_NOUN_STEMS: Final[tuple[str, ...]] = ("hava",)
+_TEMPERATURE_NOUN_STEMS: Final[tuple[str, ...]] = ("derece", "sıcaklık", "sicaklik")
+_PRECIPITATION_NOUN_STEMS: Final[tuple[str, ...]] = (
+    "yağmur",
+    "yagmur",
+    "kar",
+    "güneş",
+    "gunes",
+    "bulut",
+)
+_WEATHER_QUESTION_FORMS: Final[tuple[str, ...]] = ("nasıl", "nasil")
+_HOW_MUCH_FORMS: Final[tuple[str, ...]] = ("kaç", "kac")
+
+
+def _weather_query_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Hava nasıl?" / "İstanbul'da hava nasıl?" / "Şu an bulunduğum yerde kaç derece?" /
+    "Ankara'da yarın yağmur var mı?" (task brief §4). The PLACE, if any, is extracted
+    separately (``_extract_place``, ``weather_place`` below) — this only decides whether
+    the utterance is a weather question at all. Deliberately does not match a bare "hava"
+    without one of these question forms, so a statement like "Bugün hava güzel" (the exact
+    case this module already documents as a non-briefing, see ``_INTENT_CORROBORATION``'s
+    own comment) is never read as a query."""
+    if _has(tokens, *_WEATHER_NOUN_STEMS) and _has_exact(tokens, *_WEATHER_QUESTION_FORMS):
+        return "hava nasıl"
+    if _has(tokens, *_TEMPERATURE_NOUN_STEMS) and _has_exact(tokens, *_HOW_MUCH_FORMS):
+        return "kaç derece"
+    if _has(tokens, *_PRECIPITATION_NOUN_STEMS) and _has_exact(
+        tokens, *_FREE_QUESTION_SUFFIX_FORMS
+    ):
+        return "yağmur var mı"
+    return None
+
+
+_DEFAULT_LOCATION_STEMS: Final[tuple[str, ...]] = ("varsayılan", "varsayilan")
+_LOCATION_NOUN_STEMS: Final[tuple[str, ...]] = ("konum",)
+_LOCATION_SET_VERB_FORMS: Final[tuple[str, ...]] = ("yap", "ayarla", "değiştir", "degistir")
+
+
+def _location_default_set_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Varsayılan hava durumu konumumu İstanbul yap." (task brief §4)."""
+    if _has(tokens, *_DEFAULT_LOCATION_STEMS) is None:
+        return None
+    if _has(tokens, *_LOCATION_NOUN_STEMS) is None:
+        return None
+    if _has_exact(tokens, *_LOCATION_SET_VERB_FORMS) is None:
+        return None
+    return "varsayılan konum ayarla"
+
+
+def _location_default_query_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Varsayılan konumum ne?" (task brief §4) — checked by the CALLER only after
+    ``_location_default_set_match`` fails, so "... İstanbul yap" (which also carries
+    "varsayılan"/"konum") is never read as a query for lacking the word "ne"."""
+    if _has(tokens, *_DEFAULT_LOCATION_STEMS) is None:
+        return None
+    if _has(tokens, *_LOCATION_NOUN_STEMS) is None:
+        return None
+    if _has_exact(tokens, "ne", "hangisi"):
+        return "varsayılan konum ne"
+    return None
+
+
+def _location_source_query_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Şu an konumumu nereden biliyorsun?" / "Hangi konumu kullanıyorsun?" /
+    "Konumum güncel mi?" (task brief §4) — all answered from the SAME evidence
+    (``app.weather.service.WeatherService.last_evidence``), task brief §2."""
+    if _has(tokens, *_LOCATION_NOUN_STEMS) is None:
+        return None
+    if _has_exact(tokens, "nereden") and _has(tokens, "bili"):
+        return "konum nereden biliyorsun"
+    if _has_exact(tokens, "hangi") and _has(tokens, "kullan"):
+        return "hangi konum"
+    if _has_exact(tokens, "güncel", "guncel"):
+        return "konum güncel mi"
+    # task brief §2's own example: "Hangi konumun havasını söyledin?" - a location
+    # question phrased through the weather word, still about location provenance
+    # (weather.last_evidence carries exactly that), never WEATHER_QUERY.
+    if _has_exact(tokens, "hangi") and _has(tokens, "hava"):
+        return "hangi konumun havası"
+    return None
+
+
+_GREETING_WORDS: Final[tuple[str, ...]] = ("günaydın", "gunaydin")
+_MORNING_STEMS: Final[tuple[str, ...]] = ("sabah",)
+_BRIEFING_NOUN_STEMS: Final[tuple[str, ...]] = ("özet", "ozet")
+
+
+def _morning_briefing_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Günaydın." / "Sabah özetimi ver." / "Bugün beni neler bekliyor?" / "Sabah
+    durumunu anlat." (task brief §4) — the combined briefing, distinct from the narrower
+    ``_system_status_query_match``/``_overnight_work_query_match`` below (task brief §5:
+    "weather vs system status vs combined briefing... deterministic and distinct")."""
+    if _has_exact(tokens, *_GREETING_WORDS):
+        return "günaydın"
+    if (
+        _has(tokens, *_MORNING_STEMS)
+        and _has(tokens, *_BRIEFING_NOUN_STEMS)
+        and _has_exact(tokens, "ver")
+    ):
+        return "sabah özeti ver"
+    if _has(tokens, *_MORNING_STEMS) and _has(tokens, "durum") and _has_exact(tokens, "anlat"):
+        return "sabah durumu anlat"
+    if _has_exact(tokens, "bugün", "bugun") and _has(tokens, "bekli"):
+        return "bugün beni neler bekliyor"
+    return None
+
+
+def _system_status_query_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Sistem durumu nasıl?" / "Sistemin durumu ne durumda?" (task brief §4) —
+    "sistem" is the disambiguator against the plain "durum" words the M17/M26
+    activity-explain vocabulary already claims elsewhere in this resolver. Matched by
+    STEM ("sistem"/"sistemin"/"sistemi"), not exact word, the same "Turkish suffixes
+    vary" reasoning every other stem table in this module already follows."""
+    if _has(tokens, "sistem") is None:
+        return None
+    # "durumu" (the noun, object of "sistem") is required in ADDITION to a question
+    # form - never "durumda" alone, which the pre-existing EXPLAIN/world_state phrase
+    # "Sistemin şu anda ne durumda?" already owns (test_voice_intents.py's own
+    # contract table) and must keep owning.
+    if _has_exact(tokens, "durumu") and _has_exact(tokens, *_WEATHER_QUESTION_FORMS, "nedir"):
+        return "sistem durumu nasıl"
+    return None
+
+
+def _overnight_work_query_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Gece neler yaptın?" / "Gece boyunca ne yaptın?" (task brief §4) — "ne"/"neler"
+    both accepted (a bare "ne" is otherwise too generic on its own, but paired with
+    "gece" AND a "yap" verb it names nothing this resolver already claims elsewhere)."""
+    if _has(tokens, "gece") is None:
+        return None
+    if _has_exact(tokens, "ne", "neler") and _has(tokens, "yap"):
+        return "gece neler yaptın"
+    return None
 
 
 #: M21 calendar vocabulary. ``_CALENDAR_NOUN_STEMS`` deliberately excludes the alarm's own
@@ -4117,6 +4344,68 @@ def resolve_intent(
     if mail_inbox_matched := _mail_inbox_match(tokens):
         return ResolvedIntent(
             Intent.MAIL_INBOX, scope=SCOPE_CONVERSATION, matched=mail_inbox_matched, **base
+        )
+
+    # 0g-1a. ADR-0090: Owner Location Context, Live Weather, Morning Briefing. Checked
+    #        here, alongside the rest of the device/account-reading family, for the same
+    #        reason the mail/calendar block above is here: none of this vocabulary
+    #        ("hava", "konum", "sabah", "sistem", "gece") means anything else this
+    #        resolver already claimed higher up. LOCATION_DEFAULT_SET is checked before
+    #        LOCATION_DEFAULT_QUERY because both share "varsayılan"+"konum" and only the
+    #        SET phrasing also carries a verb ("yap"/"ayarla"); WEATHER_QUERY is checked
+    #        before the narrower SYSTEM_STATUS/OVERNIGHT_WORK queries only because their
+    #        vocabularies are disjoint ("hava"/"derece"/"yağmur" vs "sistem"/"gece"), not
+    #        because either could swallow the other.
+    if location_set_matched := _location_default_set_match(tokens):
+        return ResolvedIntent(
+            Intent.LOCATION_DEFAULT_SET,
+            scope=SCOPE_CONVERSATION,
+            matched=location_set_matched,
+            location_default_city=_extract_place(tokens),
+            **base,
+        )
+    if location_default_matched := _location_default_query_match(tokens):
+        return ResolvedIntent(
+            Intent.LOCATION_DEFAULT_QUERY,
+            scope=SCOPE_CONVERSATION,
+            matched=location_default_matched,
+            **base,
+        )
+    if location_source_matched := _location_source_query_match(tokens):
+        return ResolvedIntent(
+            Intent.LOCATION_SOURCE_QUERY,
+            scope=SCOPE_CONVERSATION,
+            matched=location_source_matched,
+            **base,
+        )
+    if weather_matched := _weather_query_match(tokens):
+        return ResolvedIntent(
+            Intent.WEATHER_QUERY,
+            scope=SCOPE_CONVERSATION,
+            matched=weather_matched,
+            weather_place=_extract_place(tokens),
+            **base,
+        )
+    if system_status_matched := _system_status_query_match(tokens):
+        return ResolvedIntent(
+            Intent.SYSTEM_STATUS_QUERY,
+            scope=SCOPE_CONVERSATION,
+            matched=system_status_matched,
+            **base,
+        )
+    if overnight_matched := _overnight_work_query_match(tokens):
+        return ResolvedIntent(
+            Intent.OVERNIGHT_WORK_QUERY,
+            scope=SCOPE_CONVERSATION,
+            matched=overnight_matched,
+            **base,
+        )
+    if morning_matched := _morning_briefing_match(tokens):
+        return ResolvedIntent(
+            Intent.MORNING_BRIEFING,
+            scope=SCOPE_CONVERSATION,
+            matched=morning_matched,
+            **base,
         )
 
     # 0g-2. M23 (docs/M23_APP_FACTORY_SPEC.md §5): the App Factory. Checked BEFORE the

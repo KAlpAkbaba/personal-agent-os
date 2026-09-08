@@ -323,6 +323,14 @@ def test_create_selects_by_capability_and_returns_the_contract(wired) -> None:
         "executive.retry",
         "executive.amend",
         "executive.cancel",
+        # ADR-0090: Owner Location Context, Live Weather, Morning Briefing.
+        "weather.current",
+        "weather.last_evidence",
+        "location.get_default",
+        "location.set_default",
+        "briefing.morning",
+        "briefing.system_status",
+        "briefing.overnight_work",
     }
     research = next(t for t in data["tools"] if t["name"] == "research.start")
     assert research["long_running"] is True and research["preamble"] == RESEARCH_PREAMBLE_TR

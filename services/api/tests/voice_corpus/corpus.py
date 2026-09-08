@@ -3774,6 +3774,284 @@ def _executive_cases() -> list[UtteranceCase]:
     ]
 
 
+#: docs/DECISIONS.md ADR-0090: Owner Location Context, Live Weather, Morning Briefing.
+#: This whole category is ONE function (``_weather_briefing_cases``), kept apart from
+#: every other track's own cases in this shared file (module docstring: "two other
+#: tracks are adding cases to that file too") so a merge never has to reconcile edits
+#: inside a shared function body — only ``all_cases()``'s own one added line.
+def _weather_query_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, utterance, source in (
+        ("weather.bare.1", "Hava nasıl?", "canonical"),
+        ("weather.bare.2", "Bugün hava nasıl olacak?", "paraphrase"),
+        ("weather.bare.3", "Hava şu an nasıl?", "paraphrase"),
+        ("weather.bare.4", "Burada hava nasıl?", "canonical"),
+        ("weather.bare.5", "Bulunduğum yerde hava nasıl?", "canonical"),
+        ("weather.bare.6", "burda hava nasıl", "asr_noise"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=utterance,
+                    expected_intent="weather_query",
+                    expected_tool="weather.current",
+                    expected_response=RESPONSE_OK,
+                    side_effects=SIDE_EFFECTS_NONE,
+                    context=CTX_NONE,
+                    category="weather",
+                    source=source,
+                )
+            )
+        )
+    for case_id, utterance, source in (
+        ("weather.place.istanbul.1", "İstanbul'da hava nasıl?", "canonical"),
+        ("weather.place.istanbul.2", "istanbulda hava nasil", "asr_noise"),
+        ("weather.place.istanbul.3", "İstanbul'da hava durumu nasıl acaba?", "paraphrase"),
+        ("weather.place.ankara.1", "Ankara'da yarın yağmur var mı?", "canonical"),
+        ("weather.place.ankara.2", "ankarada yarin hava nasil", "asr_noise"),
+    ):
+        cases.append(
+            UtteranceCase(
+                case_id=case_id,
+                utterance=utterance,
+                expected_intent="weather_query",
+                expected_tool="weather.current",
+                expected_response=RESPONSE_OK,
+                side_effects=SIDE_EFFECTS_NONE,
+                context=CTX_NONE,
+                category="weather",
+                source=source,
+            )
+        )
+    for case_id, utterance, source in (
+        ("weather.temp.1", "Şu an bulunduğum yerde kaç derece?", "canonical"),
+        ("weather.temp.2", "Kaç derece var dışarıda?", "paraphrase"),
+        ("weather.precip.1", "bulundugum yerde yagmur var mi", "asr_noise"),
+        ("weather.precip.2", "Yağmur yağacak mı?", "paraphrase"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=utterance,
+                    expected_intent="weather_query",
+                    expected_tool="weather.current",
+                    expected_response=RESPONSE_OK,
+                    side_effects=SIDE_EFFECTS_NONE,
+                    context=CTX_NONE,
+                    category="weather",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _location_default_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, utterance, source in (
+        ("location.default.set.1", "Varsayılan hava durumu konumumu İstanbul yap.", "canonical"),
+        ("location.default.set.2", "Varsayılan konumumu Ankara olarak ayarla.", "paraphrase"),
+        (
+            "location.default.set.3",
+            "varsayilan hava durumu konumumu istanbul yap",
+            "asr_noise",
+        ),
+    ):
+        cases.append(
+            UtteranceCase(
+                case_id=case_id,
+                utterance=utterance,
+                expected_intent="location_default_set",
+                expected_tool="location.set_default",
+                expected_response=RESPONSE_OK,
+                side_effects=SIDE_EFFECTS_NONE,
+                context=CTX_NONE,
+                category="weather",
+                source=source,
+            )
+        )
+    # No city named at all — the tool asks, never invents one (task brief §1: "Do NOT
+    # invent one").
+    cases.append(
+        UtteranceCase(
+            case_id="location.default.set.no_city",
+            utterance="Varsayılan konumu ayarla.",
+            expected_intent="location_default_set",
+            expected_tool="location.set_default",
+            expected_response=RESPONSE_CLARIFY,
+            side_effects=SIDE_EFFECTS_NONE,
+            context=CTX_NONE,
+            category="weather",
+            source="canonical",
+        )
+    )
+    for case_id, utterance, source in (
+        ("location.default.query.1", "Varsayılan konumum ne?", "canonical"),
+        ("location.default.query.2", "Varsayılan hava durumu konumum hangisi?", "paraphrase"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=utterance,
+                    expected_intent="location_default_query",
+                    expected_tool="location.get_default",
+                    expected_response=RESPONSE_OK,
+                    side_effects=SIDE_EFFECTS_NONE,
+                    context=CTX_NONE,
+                    category="weather",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _location_source_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, utterance, source in (
+        ("location.source.1", "Şu an konumumu nereden biliyorsun?", "canonical"),
+        ("location.source.2", "Hangi konumu kullanıyorsun?", "canonical"),
+        ("location.source.3", "Konumum güncel mi?", "canonical"),
+        ("location.source.4", "Hangi konumun havasını söyledin?", "paraphrase"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=utterance,
+                    expected_intent="location_source_query",
+                    expected_tool="weather.last_evidence",
+                    expected_response=RESPONSE_OK,
+                    side_effects=SIDE_EFFECTS_NONE,
+                    context=CTX_NONE,
+                    category="weather",
+                    source=source,
+                    # weather.last_evidence answers truthfully from THE RECORD (task
+                    # brief §2) - a fresh session has no prior query to report, so one
+                    # real weather.current call comes first, in the SAME session.
+                    preceding_turns=(("Hava nasıl?", "weather.current"),),
+                )
+            )
+        )
+    return cases
+
+
+def _briefing_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, utterance, source in (
+        ("briefing.morning.1", "Günaydın.", "canonical"),
+        ("briefing.morning.2", "Sabah özetimi ver.", "canonical"),
+        ("briefing.morning.3", "Bugün beni neler bekliyor?", "canonical"),
+        ("briefing.morning.4", "Sabah durumunu anlat.", "canonical"),
+        ("briefing.morning.5", "Günaydın, bana özet verir misin?", "paraphrase"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=utterance,
+                    expected_intent="morning_briefing",
+                    expected_tool="briefing.morning",
+                    expected_response=RESPONSE_OK,
+                    side_effects=SIDE_EFFECTS_NONE,
+                    context=CTX_NONE,
+                    category="weather",
+                    source=source,
+                )
+            )
+        )
+    for case_id, utterance, source in (
+        ("briefing.system_status.1", "Sistem durumu nasıl?", "canonical"),
+        ("briefing.system_status.2", "Sistemin durumu nedir?", "paraphrase"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=utterance,
+                    expected_intent="system_status_query",
+                    expected_tool="briefing.system_status",
+                    expected_response=RESPONSE_OK,
+                    side_effects=SIDE_EFFECTS_NONE,
+                    context=CTX_NONE,
+                    category="weather",
+                    source=source,
+                )
+            )
+        )
+    for case_id, utterance, source in (
+        ("briefing.overnight.1", "Gece neler yaptın?", "canonical"),
+        ("briefing.overnight.2", "Gece boyunca ne yaptın?", "paraphrase"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=utterance,
+                    expected_intent="overnight_work_query",
+                    expected_tool="briefing.overnight_work",
+                    expected_response=RESPONSE_OK,
+                    side_effects=SIDE_EFFECTS_NONE,
+                    context=CTX_NONE,
+                    category="weather",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _weather_briefing_negative_cases() -> list[UtteranceCase]:
+    """Task brief §4/§6: "Negative assertions are mandatory" — a bare mention of the
+    domain word ("hava", "konum", "durum", "gece", "derece") without the question/action
+    shape must resolve to nothing this family owns, so the routing stays deterministic
+    and distinct (task brief §5)."""
+    cases: list[UtteranceCase] = []
+    for case_id, utterance in (
+        ("weather.negative.statement", "Bugün hava güzel."),
+        ("weather.negative.derece_statement", "On derece soğudu."),
+        ("location.negative.statement", "Konumum İstanbul."),
+        ("briefing.negative.durum_alone", "Durumu anlat."),
+        ("briefing.negative.gece_alone", "İyi geceler."),
+    ):
+        cases.append(
+            UtteranceCase(
+                case_id=case_id,
+                utterance=utterance,
+                expected_intent="none",
+                expected_tool=None,
+                expected_response=RESPONSE_NONE,
+                forbidden_tools=(
+                    "weather.current",
+                    "location.get_default",
+                    "location.set_default",
+                    "weather.last_evidence",
+                    "briefing.morning",
+                    "briefing.system_status",
+                    "briefing.overnight_work",
+                ),
+                side_effects=SIDE_EFFECTS_NONE,
+                context=CTX_NONE,
+                category="weather",
+                source="regression",
+            )
+        )
+    return cases
+
+
+def _weather_briefing_cases() -> list[UtteranceCase]:
+    return [
+        *_weather_query_cases(),
+        *_location_default_cases(),
+        *_location_source_cases(),
+        *_briefing_cases(),
+        *_weather_briefing_negative_cases(),
+    ]
+
+
 def all_cases() -> list[UtteranceCase]:
     cases = [
         *_research_cases(),
@@ -3791,6 +4069,7 @@ def all_cases() -> list[UtteranceCase]:
         *_capability_cases(),
         *_scene_cases(),
         *_executive_cases(),
+        *_weather_briefing_cases(),
     ]
     ids = [c.case_id for c in cases]
     assert len(ids) == len(set(ids)), "duplicate case ids"
