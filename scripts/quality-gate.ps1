@@ -248,6 +248,17 @@ if (-not $Fast) {
     Assert-ExitCode "installer evidence tests"
   }
 
+  Invoke-Step "Staged-update candidate + Cloud Core verification tests (PS 5.1)" {
+    # 2026-09-08: the staged-update code (candidate manifest, Cloud Core heartbeat check)
+    # had a test suite that NO GATE RAN. It passed against a device row it had invented,
+    # while production returned a different shape, and a healthy 0.6.0 candidate was rolled
+    # back. The suite is a gate now; the shape it uses is held by
+    # services/api/tests/unit/test_device_identity_contract.py from the other side.
+    $script = Join-Path $repoRoot "scripts\tests\agent-update.tests.ps1"
+    & (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -NoProfile -File $script
+    Assert-ExitCode "agent staged-update tests"
+  }
+
   Invoke-Step "Recovery supervisor tests" {
     if (-not $uv) { throw "uv not found" }
     Push-Location (Join-Path $repoRoot "services\recovery-supervisor")
@@ -377,6 +388,17 @@ if (-not $Fast) {
     $script = Join-Path $repoRoot "scripts\tests\identity-restore.tests.ps1"
     & (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -NoProfile -File $script
     Assert-ExitCode "identity restoration tests"
+  }
+
+  Invoke-Step "Staged-update qualification (real candidate binary, sandbox engine)" {
+    # Runs AFTER the agent build, like the identity restoration step: the REAL
+    # DeviceService answers its own capabilities verb, the REAL journaled engine performs
+    # the swap/commit/rollback in a sandbox, and the REAL Cloud Core verifier reads a
+    # device row in the shape Cloud Core actually returns. Nothing here touches the live
+    # install, the SCM, the running service or the owner's session.
+    $script = Join-Path $repoRoot "scripts\qualify-staged-update.ps1"
+    & (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -NoProfile -File $script
+    Assert-ExitCode "staged-update qualification"
   }
 
   if ($E2E) {

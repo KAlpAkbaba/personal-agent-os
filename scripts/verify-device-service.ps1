@@ -305,6 +305,9 @@ else {
 $serviceExePath = Join-Path $InstallRoot "service\PagentOS.DeviceService.exe"
 $advertised = $null
 $browserEnabled = $null
+# 2026-09-08: "which version is installed" must be answerable from this report alone, and
+# with ONE number - the version the agent will ANNOUNCE and the stamp on its binary together.
+$installedIdentity = "identity not answered (a binary older than the identity contract)"
 if (Test-Path -LiteralPath $serviceExePath) {
     try {
         $capsResult = Invoke-NativeProcess -FilePath $serviceExePath -Arguments @("capabilities") -TimeoutSeconds 30 -WorkingDirectory (Split-Path -Parent $serviceExePath)
@@ -312,6 +315,13 @@ if (Test-Path -LiteralPath $serviceExePath) {
             $capsDoc = ConvertFrom-Json ($capsResult.StdOut.Trim() -split "`r?`n" | Select-Object -Last 1)
             $advertised = @($capsDoc.capabilities)
             $browserEnabled = [bool]$capsDoc.browser_enabled
+            $capsNames = @($capsDoc.PSObject.Properties.Name)
+            if ($capsNames -contains "software_version") {
+                $component = if ($capsNames -contains "component") { [string]$capsDoc.component } else { "unnamed" }
+                $stamp = if ($capsNames -contains "assembly_version") { [string]$capsDoc.assembly_version } else { "unstamped" }
+                $fingerprint = if ($capsNames -contains "capability_manifest_version") { [string]$capsDoc.capability_manifest_version } else { "unfingerprinted" }
+                $installedIdentity = "component $component version $([string]$capsDoc.software_version) (binary $stamp, capability manifest $fingerprint)"
+            }
         }
     } catch { }
 }
@@ -323,7 +333,7 @@ if ($null -eq $advertised) {
 else {
     $hasFamily = ($advertised -contains "browser.chrome")
     $browserOps = @($advertised | Where-Object { $_ -like "browser.*" -and $_ -ne "browser.chrome" })
-    $listing = "BrowserEnabled=$browserEnabled; advertised: $($advertised -join ', ')"
+    $listing = "$installedIdentity; BrowserEnabled=$browserEnabled; advertised: $($advertised -join ', ')"
     if ($browserEnabled -ne $hasFamily) {
         Add-Result "6b.2" "Advertised capability manifest agrees with the worker" "NOT_YET_PROVEN" "family marker/BrowserEnabled disagree; $listing"
     }

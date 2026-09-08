@@ -5,5 +5,14 @@
     <LangVersion>latest</LangVersion>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!--
+      ONE canonical version identity (2026-09-08 incident). This is the same number as
+      PagentOS.Agent.Core.Protocol.AgentInfo.SoftwareVersion, which is what the agent
+      announces in its `hello` and prints from its `capabilities` verb; AgentIdentityTests
+      asserts the two are equal, so a build whose file version disagrees with the version
+      the device announces cannot ship. Bump BOTH, or the agent tests fail.
+    -->
+    <Version>0.6.0</Version>
+    <Product>Personal Agent OS Windows Agent</Product>
   </PropertyGroup>
 </Project>

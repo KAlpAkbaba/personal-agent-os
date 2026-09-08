@@ -15,3 +15,4 @@
 - [M22 file.fetch facts](project_m22_file_fetch.md) — the dialled origin rides the pipe challenge, DocumentLab seams (fetchCap, Fetch), File.Move works under a FileShare.Delete handle, xUnit1031 is an error, Edit tool literalises \u escapes, stall timings
 - [M23 projects family facts](project_m23_projects_family.md) — marker carries the manifest, <port>/<root> placeholders, forbidden-key file-path trap for track A, HasExited-vs-object-signal teardown race, log-handle and port-release races
 - [M25 scenes / 3D device facts](project_m25_scenes_3d.md) — Blender refuses a missing .blend, Unity resolves -projectPath against the CWD and logs only to -logFile (exit 198 today), the marker round-trip and ResolveFinal traps, two pre-existing flaky tests
+- [Device identity chain](project_device_identity_chain.md) — AgentInfo -> hello -> device row -> installer verifier, the 40/39/29 capability arithmetic, and the two traps behind the 2026-09-08 rollback

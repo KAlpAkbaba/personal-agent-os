@@ -209,6 +209,60 @@ try {
         Assert-Equal -Expected 2 -Actual $legacy.ExitCode -Because "exit code surfaced"
         Assert-True -Condition (-not (Get-InstalledAgentManifest -ServiceExe (Join-Path $script:Sandbox "missing.exe")).Ok) -Because "missing binary is not Ok"
     }
+
+    Test-Case "the reader parses the whole candidate identity, and an older binary without it is still described" {
+        $current = Join-Path $script:Sandbox "current-service.cmd"
+        [System.IO.File]::WriteAllText($current, "@echo off`r`nif ""%1""==""capabilities"" (echo {""software_version"":""0.6.0"",""component"":""device-service"",""assembly_version"":""0.6.0"",""capability_manifest_version"":""5cc3d9fbd9f7"",""display_power_enabled"":true,""browser_enabled"":true,""capabilities"":[""desktop.open_application"",""desktop.display_off""]}& exit /b 0)`r`nexit /b 2`r`n")
+        $m = Get-InstalledAgentManifest -ServiceExe $current
+        Assert-Equal -Expected "0.6.0" -Actual $m.SoftwareVersion -Because "the announced version"
+        Assert-Equal -Expected "device-service" -Actual $m.Component -Because "which half announced it"
+        Assert-Equal -Expected "0.6.0" -Actual $m.AssemblyVersion -Because "the binary's own stamp"
+        Assert-Equal -Expected "5cc3d9fbd9f7" -Actual $m.CapabilityManifestVersion -Because "the capability vocabulary fingerprint"
+        Assert-True -Condition $m.DisplayPowerEnabled -Because "-DisplayPower must be observable from the installed binary, not only from the config file"
+
+        # The binary a rollback restores predates all of it; describing it must not throw.
+        $older = Join-Path $script:Sandbox "older-service.cmd"
+        [System.IO.File]::WriteAllText($older, "@echo off`r`nif ""%1""==""capabilities"" (echo {""browser_enabled"":true,""capabilities"":[""desktop.open_application""]}& exit /b 0)`r`nexit /b 2`r`n")
+        $old = Get-InstalledAgentManifest -ServiceExe $older
+        Assert-True -Condition $old.Ok -Because "an older binary still answers"
+        Assert-True -Condition ($null -eq $old.Component -and $null -eq $old.AssemblyVersion) -Because "and reports no identity, truthfully, instead of throwing"
+        Assert-True -Condition (-not $old.DisplayPowerEnabled) -Because "an unknown flag is false, not an error"
+    }
+
+    Write-Host ""
+    Write-Host "rollback health is the PREVIOUS release's contract (2026-09-08 incident)"
+
+    Test-Case "the installer gives the engine a SEPARATE rollback health predicate" {
+        $installer = [System.IO.File]::ReadAllText((Join-Path $repoRoot "scripts\install-device-service.ps1"))
+        Assert-True -Condition ($installer -match '-TestRollbackHealth\s+\$testRollbackHealth') `
+            -Because "the engine must judge the restored previous release by its own predicate"
+        $block = [regex]::Match($installer, '(?s)\$testRollbackHealth = \{.*?\n\}').Value
+        Assert-True -Condition ($block.Length -gt 0) -Because "the predicate must exist"
+        Assert-True -Condition ($block -notmatch 'Assert-InstalledAgentSupportsM13') `
+            -Because "the CANDIDATE's browser contract must never be asserted against the release being restored - that is what produced 'lacks: browser.media_play ...' about a correct rollback"
+        Assert-True -Condition ($block -notmatch 'Test-AgentHeartbeatOnCore') `
+            -Because "and the CANDIDATE's version must never be demanded of the previous release on Cloud Core"
+        Assert-True -Condition ($block -match 'desktop\.open_application') `
+            -Because "the previous release is still judged: it must answer its verb and advertise the baseline name"
+        Assert-True -Condition ($block -match 'Test-AgentRuntimeHealth') `
+            -Because "and its service, companion and pipe must actually be up"
+    }
+
+    Test-Case "the candidate's own health still asserts the full browser contract, unweakened" {
+        $installer = [System.IO.File]::ReadAllText((Join-Path $repoRoot "scripts\install-device-service.ps1"))
+        $start = $installer.IndexOf('$testHealth = {')
+        $end = $installer.IndexOf('$testRollbackHealth = {')
+        Assert-True -Condition ($start -ge 0 -and $end -gt $start) -Because "both predicates must exist, the candidate's first"
+        $health = $installer.Substring($start, $end - $start)
+        Assert-True -Condition ($health -match 'Assert-InstalledAgentSupportsM13') -Because "the candidate is held to the current contract"
+        Assert-True -Condition ($health -match 'Test-AgentHeartbeatOnCore') -Because "and to Cloud Core seeing it"
+        # Forbidden fixes, pinned: the four media names stay required, verification stays on.
+        $evidence = [System.IO.File]::ReadAllText((Join-Path $repoRoot "scripts\lib\InstallEvidence.ps1"))
+        foreach ($name in @("browser.media_play", "browser.media_volume", "browser.media_status", "browser.media_stop")) {
+            Assert-True -Condition ($evidence -match [regex]::Escape($name)) `
+                -Because "$name must stay in the installed-agent verification (the wake-alarm media architecture is built on exactly these)"
+        }
+    }
 }
 finally {
     Remove-Item -LiteralPath $script:Sandbox -Recurse -Force -ErrorAction SilentlyContinue

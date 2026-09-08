@@ -154,6 +154,69 @@ try {
         Assert-Equal -Expected "rolled_back" -Actual (Read-DeployJournal -Root $root).phase -Because "journal records the rollback"
     }
 
+    Test-Case "the restored PREVIOUS release is judged by the baseline predicate, not the candidate's contract" {
+        # 2026-09-08 incident, second failure. TestHealth asserts the CANDIDATE's contract -
+        # its capability manifest, its version on Cloud Core. The engine then ran that same
+        # predicate against the RESTORED PREVIOUS release, which predates all of it by
+        # definition, and journalled "restored but NOT healthy - investigate" about a correct
+        # rollback. The owner's log showed "the installed service ... lacks: browser.media_play,
+        # browser.media_volume, browser.media_status, browser.media_stop" - a capability
+        # regression that did not exist.
+        $root = New-DeployRoot -Name "rollback-baseline"
+        $script:candidateChecks = 0
+        $script:baselineChecks = 0
+        # Fails for the candidate AND would fail for the previous release - the candidate's
+        # contract is not satisfiable by the old binaries, which is the whole point.
+        $candidateHealth = { $script:candidateChecks++; return $false }
+        $baselineHealth = { $script:baselineChecks++; return $true }
+        try {
+            Invoke-AgentDeployment -Root $root -Components @("service", "companion") `
+                -StopRuntime $noop -StartRuntime $noop -TestHealth $candidateHealth `
+                -TestRollbackHealth $baselineHealth | Out-Null
+            throw "should have thrown"
+        }
+        catch {
+            Assert-True -Condition ($_.Exception.Message -match "did not become healthy") -Because "got: $($_.Exception.Message)"
+        }
+
+        Assert-Equal -Expected "old" -Actual (Get-Content (Join-Path $root "service\marker.txt")) -Because "the previous release is live again"
+        Assert-Equal -Expected 1 -Actual $script:candidateChecks -Because "the candidate's contract is asked EXACTLY once, about the candidate"
+        Assert-Equal -Expected 1 -Actual $script:baselineChecks -Because "the restored release is judged by the baseline predicate instead"
+        $journal = Read-DeployJournal -Root $root
+        Assert-Equal -Expected "rolled_back" -Actual $journal.phase -Because "still a rollback"
+        $rolled = @($journal.history | Where-Object { $_.phase -eq "rolled_back" })[-1]
+        Assert-True -Condition ($rolled.detail -match "restored and healthy") `
+            -Because "a correct rollback must journal 'restored and healthy', not 'NOT healthy - investigate'; got: $($rolled.detail)"
+    }
+
+    Test-Case "a rollback whose restored release really is broken still says so" {
+        # The fix must not turn the rollback health check into a rubber stamp.
+        $root = New-DeployRoot -Name "rollback-broken"
+        try {
+            Invoke-AgentDeployment -Root $root -Components @("service", "companion") `
+                -StopRuntime $noop -StartRuntime $noop -TestHealth { $false } `
+                -TestRollbackHealth { $false } | Out-Null
+            throw "should have thrown"
+        }
+        catch { }
+        $journal = Read-DeployJournal -Root $root
+        $rolled = @($journal.history | Where-Object { $_.phase -eq "rolled_back" })[-1]
+        Assert-True -Condition ($rolled.detail -match "NOT healthy - investigate") `
+            -Because "a genuinely unhealthy restored release must still be reported; got: $($rolled.detail)"
+    }
+
+    Test-Case "without a baseline predicate the engine behaves exactly as before" {
+        $root = New-DeployRoot -Name "rollback-default"
+        $script:checks = 0
+        try {
+            Invoke-AgentDeployment -Root $root -Components @("service", "companion") `
+                -StopRuntime $noop -StartRuntime $noop -TestHealth { $script:checks++; return $false } | Out-Null
+            throw "should have thrown"
+        }
+        catch { }
+        Assert-Equal -Expected 2 -Actual $script:checks -Because "TestHealth is still the fallback for callers that pass no baseline"
+    }
+
     Test-Case "failure right after the first directory swap -> previous restored" {
         $root = New-DeployRoot -Name "midswap"
         # StartRuntime throws: the failure lands after candidate_promoted + acl phase.

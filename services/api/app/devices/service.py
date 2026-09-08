@@ -89,6 +89,12 @@ def to_view(
         status=device.status,
         presence=presence,
         capabilities=tuple(device.capabilities_json or []),
+        # The canonical version identity (app.devices.types.DEVICE_IDENTITY_KEYS):
+        # exactly the value `apply_hello` last stored, surfaced at the TOP of the
+        # row rather than only inside `health`. The 2026-09-08 rollback of a
+        # healthy 0.6.0 candidate happened because the installer read the top
+        # level and found nothing there.
+        software_version=device.software_version,
         enrolled_at=_aware(device.enrolled_at) or now,
         last_seen_at=_aware(device.last_seen_at),
         aliases=tuple(metadata.get("aliases") or []),

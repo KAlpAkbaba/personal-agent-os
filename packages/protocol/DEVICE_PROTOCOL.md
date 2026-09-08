@@ -496,7 +496,9 @@ Since M9 every endpoint below requires `Authorization: Bearer <owner-session-tok
 
 - `POST /v1/devices/enrollment-tokens` → one-time token (owner session + loopback peer)
 - `POST /v1/devices/enroll` (enrollment token only — see §2)
-- `GET /v1/devices` — includes `status: online|offline|revoked`, `last_seen_at`
+- `GET /v1/devices` — includes `status: online|offline|revoked`, `presence: online|stale|offline`, `last_seen_at`, and the **canonical device identity** (`app.devices.types.DEVICE_IDENTITY_KEYS`) at the TOP of each row: `device_id`, `presence`, `software_version`, `capabilities`, `capability_count`, `last_seen_at`. `software_version` is the value the agent announced in its last `hello` (§4) — `null`, never `""`, when no agent has ever connected. The same value is repeated inside `health` for the Cockpit; there is one value, in two readable places, never two values.
+
+  This is a contract, not a convenience: the Windows installer's staged-update verifier decides whether a promoted candidate lives or is rolled back by reading `software_version` off this row. On 2026-09-08 that key did not exist here, the verifier read `""` for a live and correct 0.6.0 candidate, and a healthy release was rolled back after 92.6 s. `services/api/tests/unit/test_device_identity_contract.py` now holds this row's shape and the verifier's reader against each other, in both directions.
 - `POST /v1/devices/{device_id}/commands` `{capability, payload, idempotency_key?, timeout_s?}` → `202 {command_id,status}` (immediately durable; never long-polls execution)
 - `GET /v1/devices/{device_id}/commands/{command_id}` → full status/result/error
 - `POST /v1/devices/{device_id}/commands/{command_id}/cancel`

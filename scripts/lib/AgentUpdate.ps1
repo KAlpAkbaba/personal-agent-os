@@ -80,10 +80,15 @@ function New-AgentCandidateManifest {
     if (-not $ServiceManifest.Ok) {
         throw "the staged service does not answer its capabilities verb (exit $($ServiceManifest.ExitCode)); refusing to describe a candidate that cannot describe itself. stderr: $($ServiceManifest.StdErr)"
     }
-    $version = ""
-    if ($ServiceManifest.PSObject.Properties.Name -contains "SoftwareVersion" -and $ServiceManifest.SoftwareVersion) {
-        $version = [string]$ServiceManifest.SoftwareVersion
+    $manifestNames = @($ServiceManifest.PSObject.Properties.Name)
+    $identity = [ordered]@{}
+    # SoftwareVersion / Component / AssemblyVersion / CapabilityManifestVersion, each read
+    # defensively: the staged binary always has them, an older one does not, and this must
+    # describe both truthfully rather than throw under StrictMode.
+    foreach ($field in @("SoftwareVersion", "Component", "AssemblyVersion", "CapabilityManifestVersion")) {
+        $identity[$field] = if (($manifestNames -contains $field) -and $ServiceManifest.$field) { [string]$ServiceManifest.$field } else { "" }
     }
+    $version = $identity["SoftwareVersion"]
     # PowerShell variables are case-insensitive: a local `$components` here would BE the
     # `$Components` parameter (the first run of the tests iterated the table's own name).
     $componentTable = [ordered]@{}
@@ -106,8 +111,15 @@ function New-AgentCandidateManifest {
     return [ordered]@{
         schema           = $script:CandidateManifestSchema
         created_at       = (Get-Date).ToUniversalTime().ToString("o")
+        # The candidate's identity, from the staged binary's own `capabilities` verb plus the
+        # checkout it was published from. Together with `capabilities` this is the whole
+        # answer to "what is this candidate": component, software version, build identity,
+        # capability-manifest fingerprint (2026-09-08 incident).
         repo_head        = $RepoHead
         software_version = $version
+        component        = $identity["Component"]
+        assembly_version = $identity["AssemblyVersion"]
+        capability_manifest_version = $identity["CapabilityManifestVersion"]
         browser_enabled  = [bool]$ServiceManifest.BrowserEnabled
         capabilities     = @($ServiceManifest.Capabilities | ForEach-Object { [string]$_ })
         components       = $componentTable
@@ -165,24 +177,48 @@ function Test-AgentCandidateManifest {
     .PARAMETER RequireCapabilities
         Names the candidate must advertise (the installer passes the desktop marker and, when
         the browser was provisioned, the browser family).
+    .PARAMETER RequireIdentity
+        Also require the full candidate identity (component, assembly version agreeing with
+        the announced version, capability-manifest fingerprint). The installer always passes
+        it — it builds the candidate from this checkout, so a candidate that cannot name
+        itself is a build problem, not an old device.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]$Manifest,
         [Parameter(Mandatory = $true)][string]$StagingRoot,
-        [string[]]$RequireCapabilities = @()
+        [string[]]$RequireCapabilities = @(),
+        [switch]$RequireIdentity
     )
     $reasons = @()
     $version = [string](Get-ManifestMember $Manifest "software_version")
     if (-not $version) { $reasons += "the candidate names no software version" }
     elseif ($version -notmatch '^\d+\.\d+\.\d+') { $reasons += "the candidate's software version '$version' is not a version" }
+    # ONE canonical version identity (2026-09-08): the version the candidate will ANNOUNCE
+    # and the version its binary was STAMPED with must be the same number. Two of them is
+    # how "which version is actually running" stops being answerable.
+    $assemblyVersion = [string](Get-ManifestMember $Manifest "assembly_version")
+    if ($RequireIdentity) {
+        if (-not $assemblyVersion) { $reasons += "the candidate carries no assembly version (a binary older than the identity contract cannot be a candidate)" }
+        elseif ($version -and $assemblyVersion -ne $version) { $reasons += "the candidate would announce $version but its binary is stamped $assemblyVersion; there must be one version identity" }
+        if (-not (Get-ManifestMember $Manifest "component")) { $reasons += "the candidate does not name which component it is" }
+        if (-not (Get-ManifestMember $Manifest "capability_manifest_version")) { $reasons += "the candidate carries no capability manifest fingerprint" }
+    }
     $capabilities = @(Get-ManifestMember $Manifest "capabilities" | ForEach-Object { [string]$_ })
     if ($capabilities.Count -eq 0) { $reasons += "the candidate advertises no capability" }
     foreach ($required in $RequireCapabilities) {
         if ($capabilities -notcontains $required) { $reasons += "the candidate does not advertise $required" }
     }
     $components = Get-ManifestMember $Manifest "components"
-    if ($null -eq $components) { $reasons += "the manifest lists no component"; return [pscustomobject]@{ Ok = $false; Reasons = @($reasons); Version = $version; Capabilities = $capabilities } }
+    if ($null -eq $components) {
+        $reasons += "the manifest lists no component"
+        return [pscustomobject]@{
+            Ok = $false; Reasons = @($reasons); Version = $version; Capabilities = $capabilities
+            Component = [string](Get-ManifestMember $Manifest "component")
+            AssemblyVersion = $assemblyVersion
+            CapabilityManifestVersion = [string](Get-ManifestMember $Manifest "capability_manifest_version")
+        }
+    }
     $componentNames = @(if ($components -is [System.Collections.IDictionary]) { $components.Keys } else { $components.PSObject.Properties.Name })
     foreach ($name in $componentNames) {
         $entry = Get-ManifestMember $components $name
@@ -212,6 +248,9 @@ function Test-AgentCandidateManifest {
         Reasons      = @($reasons)
         Version      = $version
         Capabilities = $capabilities
+        Component                 = [string](Get-ManifestMember $Manifest "component")
+        AssemblyVersion           = $assemblyVersion
+        CapabilityManifestVersion = [string](Get-ManifestMember $Manifest "capability_manifest_version")
     }
 }
 
@@ -278,6 +317,37 @@ function Get-DeviceRowFromListing {
     return $null
 }
 
+function Get-DeviceRowSoftwareVersion {
+    <#
+    .SYNOPSIS
+        The canonical software version of a /v1/devices row, or "" when the row carries
+        none at all.
+    .DESCRIPTION
+        2026-09-08 incident. This function read `software_version` off the device row; the
+        row has never carried that key. The version was reachable only through
+        `health.software_version`, so a LIVE, CORRECT 0.6.0 candidate was reported as
+        announcing "" and the deployment engine rolled it back after 92.6 s.
+
+        Cloud Core now emits the canonical key at the top of the row
+        (`app.devices.types.DEVICE_IDENTITY_KEYS`). The nested location is still read as a
+        FALLBACK, so this installer keeps working against a Cloud Core that has not been
+        deployed yet - and both readings are explicit, so neither half can drift silently
+        again (services/api/tests/unit/test_device_identity_contract.py binds them).
+
+        "" means the row named no version anywhere. That is a contract fault, never a pass.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)]$Row)
+    $version = [string](Get-ManifestMember $Row "software_version")
+    if ($version) { return $version }
+    $health = Get-ManifestMember $Row "health"
+    if ($null -ne $health) {
+        $nested = [string](Get-ManifestMember $health "software_version")
+        if ($nested) { return $nested }
+    }
+    return ""
+}
+
 function Test-AgentHeartbeatOnCore {
     <#
     .SYNOPSIS
@@ -320,14 +390,20 @@ function Test-AgentHeartbeatOnCore {
         elseif ($null -ne $row) {
             $presence = [string](Get-ManifestMember $row "presence")
             if (-not $presence) { $presence = [string](Get-ManifestMember $row "status") }
-            $version = [string](Get-ManifestMember $row "software_version")
+            $version = Get-DeviceRowSoftwareVersion -Row $row
             $caps = @(Get-ManifestMember $row "capabilities" | ForEach-Object { [string]$_ })
             $observed.presence = $presence
             $observed.software_version = $version
             $observed.capability_count = $caps.Count
             $observed.last_seen_at = [string](Get-ManifestMember $row "last_seen_at")
             if ($presence -ne "online") { $reasons += "the device is '$presence', not online" }
-            if ($version -ne $ExpectedVersion) { $reasons += "the device reports software version '$version', the candidate is $ExpectedVersion" }
+            if (-not $version) {
+                # Never a pass, and never confused with "it announced the wrong version":
+                # an absent version identity is a Cloud Core contract fault, and saying so
+                # is what would have sent the 2026-09-08 investigation to the right file.
+                $reasons += "Cloud Core's device row carries no software version at all (neither row.software_version nor row.health.software_version); the candidate is $ExpectedVersion - this is a Cloud Core contract fault, not a candidate fault"
+            }
+            elseif ($version -ne $ExpectedVersion) { $reasons += "the device reports software version '$version', the candidate is $ExpectedVersion" }
             $missing = @($ExpectedCapabilities | Where-Object { $caps -notcontains $_ })
             if ($missing.Count -gt 0) { $reasons += "the device does not advertise: $($missing -join ', ')" }
         }
@@ -351,7 +427,11 @@ function Write-CandidateSummary {
         if ($name -eq "browser") { $parts += "browser worker $(Get-ManifestMember $entry 'worker_version') package $(([string](Get-ManifestMember $entry 'package_sha256')).Substring(0,12))" }
         else { $parts += "$name $(Get-ManifestMember $entry 'file_count') files" }
     }
-    Write-Host "candidate: version $($Verdict.Version), $(@($Verdict.Capabilities).Count) capabilities; $($parts -join '; ')"
+    $identityLine = "candidate: component $(if ($Verdict.Component) { $Verdict.Component } else { 'UNNAMED' }), version $($Verdict.Version)"
+    if ($Verdict.AssemblyVersion) { $identityLine += " (binary stamped $($Verdict.AssemblyVersion))" }
+    if ($Verdict.CapabilityManifestVersion) { $identityLine += ", capability manifest $($Verdict.CapabilityManifestVersion)" }
+    $identityLine += ", $(@($Verdict.Capabilities).Count) capabilities; $($parts -join '; ')"
+    Write-Host $identityLine
     if ($Verdict.Ok) { Write-Host "candidate manifest verified file by file (nothing changed since staging)" -ForegroundColor Green }
     else { foreach ($reason in $Verdict.Reasons) { Write-Host "candidate: $reason" -ForegroundColor Red } }
 }
