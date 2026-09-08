@@ -13,11 +13,12 @@ build, test, review and roll this out exactly like a pure-transform skill.
 
 Generality (spec §3's own prohibition on a fixture-keyed shortcut): every
 value that reaches ``src/<skill>.py`` comes from the PARSED
-``InterfaceDescription`` — never from a literal named after ``counterbox`` or
-``lampbox`` — and is re-validated at the splice point with the exact same
+``InterfaceDescription`` — never from a literal naming any ONE test
+application — and is re-validated at the splice point with the exact same
 regexes ``app.genesis.interface`` used at the choke point (belt AND braces,
 ADR-0024's own lesson). ``test_genesis_no_shortcut_guard.py`` asserts this
-module's own source carries none of the fixtures' names/paths/operation ids.
+module's own source carries none of any fixture application's own
+names/paths/operation ids.
 
 ``run(payload)`` performs exactly ONE ``urllib.request`` call: no query
 string, no template beyond the operation's own path, a 5 s timeout, no

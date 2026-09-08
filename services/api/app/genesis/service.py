@@ -14,7 +14,7 @@ reused verbatim is ``EvolutionPipeline.run()`` itself: that orchestrator is
 built around ``SkillSpec``/``DeterministicSkillGenerator``, whose ``operation``
 field is a closed allowlist of pure string transforms (``slugify``,
 ``word_count`` …) — incompatible by construction with an operation id derived
-from a researched interface (``increment``, ``toggle`` …). This module is the
+from a researched interface. This module is the
 SAME orchestration, stage for stage, driven by ``AdapterSpec`` /
 ``HttpAdapterGenerator`` instead.
 
@@ -354,12 +354,30 @@ class GenesisService:
                 skill_version_id, "release gates failed: " + ", ".join(evaluation.failed_gates)
             )
             raise EvolutionError(
-                EvolutionErrorClass.DEPENDENCY_UNAVAILABLE
-                if "generated_tests_failed" in evaluation.failed_gates
-                else EvolutionErrorClass.EVALUATION_FAILED,
+                self._classify_evaluation_failure(evaluation),
                 "genesis adapter failed its release gates: " + ", ".join(evaluation.failed_gates),
             )
         self._patch_evidence(run, {"evaluation": evaluation.score.to_dict()})
+
+    @staticmethod
+    def _classify_evaluation_failure(evaluation: Any) -> EvolutionErrorClass:
+        """spec §7's failure matrix: the app down -> ``dependency_unavailable``,
+        an off-schema response -> ``postcondition_failed``. The generated
+        test/eval scripts embed the ADAPTER's OWN ``AdapterError.error_class``
+        verbatim in every failure string (``adapter.py``'s rendered
+        ``_render_tests``/``_render_evals``), so the taxonomy the adapter
+        itself observed survives into what the evaluator reports."""
+        blob = " ".join(
+            [
+                *(evaluation.tests.get("failures") or []),
+                *(str(c) for c in (evaluation.evals.get("failed_cases") or [])),
+            ]
+        )
+        if "postcondition_failed" in blob:
+            return EvolutionErrorClass.POSTCONDITION_FAILED
+        if "dependency_unavailable" in blob or "generated_tests_failed" in evaluation.failed_gates:
+            return EvolutionErrorClass.DEPENDENCY_UNAVAILABLE
+        return EvolutionErrorClass.EVALUATION_FAILED
 
     def _classify(self, run: GenesisRun, spec: AdapterSpec) -> tuple[str, str, bool]:
         self._transition(run, "classifying")
