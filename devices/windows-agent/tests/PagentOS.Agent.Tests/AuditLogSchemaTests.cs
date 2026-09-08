@@ -116,4 +116,64 @@ public sealed class AuditLogSchemaTests : IDisposable
         audit.Write("command_received", commandId: "cmd-1", traceId: "t-1", capability: "desktop.open_application");
         Assert.Equal(0, audit.FailedWrites);
     }
+
+    // The row that was lost on the runner (CI run 34204979854, 2026-09-08): a reader holding
+    // the file with FileShare.Read for a moment - File.ReadAllText, an editor, a log shipper -
+    // made the single append fail with a sharing violation, and the trail simply lacked the
+    // row. The writer now waits the reader out.
+    [Fact]
+    public async Task A_reader_holding_the_file_for_a_moment_does_not_lose_the_row()
+    {
+        var path = Path.Combine(_dir, "held", "agent-audit.jsonl");
+        var audit = new AuditLog(path);
+        audit.Write("first", status: "ok");
+
+        var released = new TaskCompletionSource();
+        var holder = Task.Run(async () =>
+        {
+            // Exactly what File.ReadAllText does: open for read, share read only.
+            using var reader = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            released.SetResult();
+            await Task.Delay(150);
+        });
+        await released.Task;
+
+        audit.Write("second", status: "ok");
+        await holder;
+
+        Assert.Equal(0, audit.FailedWrites);
+        var lines = File.ReadAllLines(path);
+        Assert.Equal(2, lines.Length);
+        Assert.Contains("\"event\":\"second\"", lines[1], StringComparison.Ordinal);
+    }
+
+    // The retry is bounded: a reader that never lets go still costs one counted failure, not
+    // a hung audited code path.
+    [Fact]
+    public async Task A_reader_that_never_lets_go_costs_one_counted_failure_not_a_hang()
+    {
+        var path = Path.Combine(_dir, "stuck", "agent-audit.jsonl");
+        var audit = new AuditLog(path);
+        audit.Write("first", status: "ok");
+
+        using var reader = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        await Task.Run(() => audit.Write("second", status: "ok"));
+        clock.Stop();
+
+        Assert.Equal(1, audit.FailedWrites);
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(5), $"the bounded retry took {clock.Elapsed}");
+    }
+
+    // A tailer that opens the file the cooperative way never blocks the trail at all.
+    [Fact]
+    public void A_cooperative_reader_never_blocks_a_write()
+    {
+        var path = Path.Combine(_dir, "shared", "agent-audit.jsonl");
+        var audit = new AuditLog(path);
+        audit.Write("first", status: "ok");
+        using var reader = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        audit.Write("second", status: "ok");
+        Assert.Equal(0, audit.FailedWrites);
+    }
 }

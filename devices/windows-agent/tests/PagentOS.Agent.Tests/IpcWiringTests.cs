@@ -233,7 +233,7 @@ public class IpcWiringTests
             var auditBy = DateTime.UtcNow.AddSeconds(15);
             while (DateTime.UtcNow < auditBy)
             {
-                content = File.Exists(auditPath) ? File.ReadAllText(auditPath) : string.Empty;
+                content = ReadSharing(auditPath);
                 if (content.Contains("ipc_companion_admitted", StringComparison.Ordinal))
                 {
                     break;
@@ -252,6 +252,23 @@ public class IpcWiringTests
             await server.StopAsync(CancellationToken.None);
             TryDelete(dir);
         }
+    }
+
+    /// <summary>
+    /// Reads the trail without denying the writer: File.ReadAllText shares Read only, so the
+    /// audit append raced this poll on the runner (CI run 34204979854) - the AuditLog now
+    /// retries such a collision, and the test reads the cooperative way as well.
+    /// </summary>
+    private static string ReadSharing(string path)
+    {
+        if (!File.Exists(path))
+        {
+            return string.Empty;
+        }
+
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream, new UTF8Encoding(false));
+        return reader.ReadToEnd();
     }
 
     // ----------------------------------------- the pipe DACL, proven from the REAL handle

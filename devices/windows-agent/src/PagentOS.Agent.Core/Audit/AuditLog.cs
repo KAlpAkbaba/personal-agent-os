@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json.Nodes;
 
 namespace PagentOS.Agent.Core.Audit;
@@ -9,6 +10,18 @@ namespace PagentOS.Agent.Core.Audit;
 public sealed class AuditLog
 {
     private const int MaxDetailLength = 4096;
+
+    // A reader that opened the file with FileShare.Read (File.ReadAllText, an editor, a log
+    // shipper) makes the writer's open fail with a sharing violation for as long as it holds
+    // the handle. Measured on the runner 2026-09-08 (CI run 34204979854): the IPC test's
+    // 50 ms poll collided with the single "ipc_companion_admitted" write and the row was lost
+    // for good - counted, but never retried. A row is retried across a short window before it
+    // is counted as failed; the total budget stays small so a broken path still degrades fast.
+    private const int SharingRetries = 20;
+    private const int SharingRetryDelayMs = 25;
+    private const int ErrorSharingViolation = 32;
+    private const int ErrorLockViolation = 33;
+    private static readonly UTF8Encoding Utf8NoBom = new(false);
 
     private readonly object _sync = new();
     private readonly string _path;
@@ -60,7 +73,7 @@ public sealed class AuditLog
         {
             lock (_sync)
             {
-                File.AppendAllText(_path, line + Environment.NewLine);
+                AppendWithRetry(line + Environment.NewLine);
             }
         }
         catch (Exception ex)
@@ -84,6 +97,36 @@ public sealed class AuditLog
 
     private long _failedWrites;
     private string? _lastFailureMessage;
+
+    /// <summary>
+    /// Appends one row, sharing the file with readers and writers (a tailer that opens it with
+    /// ReadWrite never blocks the trail) and retrying a sharing/lock violation raised by a
+    /// reader that opened it more restrictively. Any other failure surfaces at once.
+    /// </summary>
+    private void AppendWithRetry(string text)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                using var stream = new FileStream(
+                    _path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
+                using var writer = new StreamWriter(stream, Utf8NoBom);
+                writer.Write(text);
+                return;
+            }
+            catch (IOException ex) when (attempt < SharingRetries && IsSharingViolation(ex))
+            {
+                Thread.Sleep(SharingRetryDelayMs);
+            }
+        }
+    }
+
+    private static bool IsSharingViolation(IOException ex)
+    {
+        var code = ex.HResult & 0xFFFF;
+        return code is ErrorSharingViolation or ErrorLockViolation;
+    }
 
     /// <summary>Audit rows that could not be written since this instance was created. Never resets.</summary>
     public long FailedWrites => Interlocked.Read(ref _failedWrites);
