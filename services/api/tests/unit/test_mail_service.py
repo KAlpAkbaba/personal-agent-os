@@ -118,11 +118,12 @@ def test_thread_matches_the_oracle_order(db) -> None:
 
 def test_html_only_body_reduced_to_text_matches_the_oracle(db) -> None:
     service = _service()
-    result = service.search(db, "Eylül 2026 elektrik")
-    message = next(m for m in result["messages"] if "faturanız" in m["subject"])
-    # search() gives summaries; read the full body through read().
-    full = service.read(db, target=message["message_id"])
+    # "1.284,50" names only the original invoice's amount (uid 105, HTML-only body) — its
+    # own reply (uid 106, "Faturayı aldım, teşekkürler.") never repeats the figure, so this
+    # resolves to the ONE message whose html_to_text reduction is under test.
+    full = service.read(db, target="1.284,50")
     assert TRUTH["html_only_body_contains"] in full["message"]["body_text"]
+    assert full["message"]["message_id"] == "<m105@fixture.example>"
 
 
 def test_draft_reply_composes_the_exact_reply_headers(db) -> None:
