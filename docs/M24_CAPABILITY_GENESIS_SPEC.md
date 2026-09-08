@@ -1,6 +1,6 @@
 # M24 — Capability Genesis
 
-Status: ACTIVE (owner master directive 2026-09-07, M24 section; kickoff 2026-09-08 after the M23 gate). Decision record: ADR-0087.
+Status: CLOSED 2026-09-08 (ADR-0087 + addenda; QUALIFICATION Stage 22; Cloud Core release: `PROVEN_REAL` (the release and the surface) / the genesis run itself `PROVEN_AUTOMATED`). Decision record: ADR-0087.
 Predecessors: M7 Evolution Engine (`app/evolution`: the capability registry, the gap decision tree with its audited trail, the self-extension pipeline candidate → sandbox → validated → shadow → canary → active, the `DeterministicSkillGenerator` for the CONTROLLED class of pure transforms, the isolated-subprocess `CapabilityDispatcher`, `TaskResumer`), M18.4 (the Evolution Supervisor, the authority kernel, the Approval Center with `authorize` + `confirm_high_risk`, the release ledger, the owner's voice `evolution.control` / `evolution.status`, UiState `evolution.*`), M19 `object_focus`, M23 (the App Factory's `ProjectFiles` policy and bounded runner).
 
 The owner's rule, in one line: **when the assistant lacks a capability it says so, builds one where that is safe, proves it on the thing it was built for, and only then says it has it — and it never fakes the proof with a shortcut written for the test.**
