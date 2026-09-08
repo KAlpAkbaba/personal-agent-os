@@ -42,6 +42,35 @@ def test_draft_reply_read_send_is_exactly_one_fake_send() -> None:
     assert len(h.mail._sender.sent) == 1  # type: ignore[attr-defined]
 
 
+def test_gonder_in_a_new_session_for_a_draft_read_back_in_the_old_one_never_sends() -> None:
+    """M21 security review, ADR-0084 addendum 2 — the second of the two negatives the
+    brief names: the read-back happened for real, through the real tool, in session A;
+    a DIFFERENT session B then says "Gönder." for the very same draft (the corpus's
+    generic per-case single-session shape cannot express this, hence a dedicated test
+    here rather than a declarative UtteranceCase). Session B never heard this draft read
+    back to IT — the confirmation gate refuses the same way an unread draft would,
+    never a guess that the owner remembers a different conversation."""
+    h = build_harness()
+    h.seed(CTX_DRAFT_READ_BACK)  # focuses Ali's latest message + prepares a reply draft
+    session_a = h.new_session()
+    read_back = h.tool(session_a, "c-1", "mail.read_draft", {})
+    assert read_back["status"] == "succeeded", read_back
+
+    session_b = h.new_session()
+    h.say(session_b, "Gönder.", turn=1)
+    sent = h.tool(session_b, "c-2", "mail.send", {})
+    assert sent["result"]["execution_status"] == "refused"
+    assert sent["result"]["error_class"] in ("not_read_back", "confirmation_not_owner")
+    assert h.mail._sender.sent == []  # type: ignore[attr-defined]
+
+    # The draft is still exactly where session A left it - read back, never sent - so
+    # session A itself can still legitimately confirm it afterward.
+    h.say(session_a, "Gönder.", turn=2)
+    sent_for_real = h.tool(session_a, "c-3", "mail.send", {})
+    assert sent_for_real["result"]["execution_status"] == "executed"
+    assert len(h.mail._sender.sent) == 1  # type: ignore[attr-defined]
+
+
 def test_draft_new_names_the_recipient_and_never_sends_on_its_own() -> None:
     h = build_harness()
     sid = h.new_session()
@@ -91,6 +120,11 @@ def test_propose_read_commit_is_exactly_one_fake_create() -> None:
     )
     assert proposed["status"] == "succeeded", proposed
     assert proposed["result"]["proposal"]["summary"] == "Diş hekimi"
+
+    # H1 (ADR-0084 addendum 2): PREPARE never counts as read back on its own any more -
+    # the real read-back act, in THIS session, is what the confirmation below binds to.
+    read_back = h.tool(sid, "c-1b", "calendar.read_proposal", {})
+    assert read_back["status"] == "succeeded", read_back
 
     h.say(sid, "Onayla.", turn=2)
     committed = h.tool(sid, "c-2", "calendar.commit", {})

@@ -16,15 +16,20 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.actions.confirmation_gate import (
+    CONFIRM_SOURCE_REST,
+    CONFIRM_SOURCE_VOICE,
     GATE_ACCOUNT_MISSING,
     GATE_ALREADY_SENT,
+    GATE_CONFIRMATION_NOT_OWNER,
     GATE_NO_CONFIRMATION,
     GATE_NOT_READ_BACK,
     GATE_SEND_DISABLED,
+    Confirmation,
 )
 from app.calendar.models import (
     PROPOSAL_STATE_DISCARDED,
     PROPOSAL_STATE_PREPARED,
+    PROPOSAL_STATE_READ_BACK,
     CalendarIndexRow,
     CalendarProposalRow,
 )
@@ -112,7 +117,9 @@ def test_propose_new_friday_1500_matches_the_oracle_conflicts(db) -> None:
     conflicts = [c["uid"] for c in result["proposal"]["conflicts"]]
     assert conflicts == want["conflicts"]
     assert result["proposal"]["state"] == PROPOSAL_STATE_PREPARED
-    assert result["proposal"]["read_back_at"] is not None
+    # H1 (ADR-0084 addendum 2): PREPARE never stamps a read-back on its own any more -
+    # only the explicit `calendar.read_proposal` act does.
+    assert result["proposal"]["read_back_at"] is None
 
 
 def test_propose_reschedule_dentist_matches_the_oracle(db) -> None:
@@ -145,7 +152,14 @@ def test_conflict_pair_is_named_both_ways(db) -> None:
 # ---------------------------------------------------------------------- the gate
 
 
-def _prepared_proposal(db, *, read_back_at=None) -> CalendarProposalRow:
+def _prepared_proposal(
+    db,
+    *,
+    state: str = PROPOSAL_STATE_PREPARED,
+    read_back_at=None,
+    read_back_session_id: str | None = None,
+    read_back_turn: int | None = None,
+) -> CalendarProposalRow:
     now = datetime.now(UTC)
     row = CalendarProposalRow(
         id=uuid.uuid4(),
@@ -156,8 +170,10 @@ def _prepared_proposal(db, *, read_back_at=None) -> CalendarProposalRow:
         end=NOW + timedelta(hours=3),
         location=None,
         conflicts_json=[],
-        state=PROPOSAL_STATE_PREPARED,
+        state=state,
         read_back_at=read_back_at,
+        read_back_session_id=read_back_session_id,
+        read_back_turn=read_back_turn,
         created_at=now,
         updated_at=now,
     )
@@ -168,55 +184,180 @@ def _prepared_proposal(db, *, read_back_at=None) -> CalendarProposalRow:
     return row
 
 
+def _voice_confirmation(*, session_id="sess-1", turn=2, owner_intent_ok=True) -> Confirmation:
+    return Confirmation(
+        source=CONFIRM_SOURCE_VOICE,
+        session_id=session_id,
+        turn=turn,
+        owner_intent_ok=owner_intent_ok,
+    )
+
+
+def test_read_proposal_is_the_explicit_read_back_act(db) -> None:
+    service = _service()
+    prepared = service.propose(
+        db, summary="Kontrol", start=NOW + timedelta(hours=2), end=NOW + timedelta(hours=3)
+    )
+    assert prepared["proposal"]["read_back_at"] is None
+    read_back = service.read_proposal(db, session_id="sess-1", turn=3)
+    assert read_back["execution_status"] == "executed"
+    proposal = read_back["proposal"]
+    assert proposal["state"] == PROPOSAL_STATE_READ_BACK
+    assert proposal["read_back_at"] is not None
+
+
 def test_commit_refuses_not_read_back(db) -> None:
     service = _service()
-    _prepared_proposal(db, read_back_at=None)
-    result = service.commit(db, host_flag_enabled=True)
+    _prepared_proposal(db, state=PROPOSAL_STATE_PREPARED, read_back_at=None)
+    result = service.commit(db, host_flag_enabled=True, confirmation=_voice_confirmation())
     assert result["error_class"] == GATE_NOT_READ_BACK
     assert service._writer.created == []  # type: ignore[attr-defined]
 
 
-def test_commit_refuses_no_confirmation_when_read_back_is_in_the_future(db) -> None:
+def test_commit_refuses_no_confirmation_when_none_is_given(db) -> None:
     service = _service()
-    _prepared_proposal(db, read_back_at=datetime.now(UTC) + timedelta(hours=1))
-    result = service.commit(db, host_flag_enabled=True)
+    _prepared_proposal(
+        db,
+        state=PROPOSAL_STATE_READ_BACK,
+        read_back_at=datetime.now(UTC),
+        read_back_session_id="sess-1",
+        read_back_turn=1,
+    )
+    result = service.commit(db, host_flag_enabled=True, confirmation=None)
     assert result["error_class"] == GATE_NO_CONFIRMATION
+    assert service._writer.created == []  # type: ignore[attr-defined]
+
+
+def test_commit_refuses_no_confirmation_when_the_turn_is_not_after_the_read_back(db) -> None:
+    service = _service()
+    _prepared_proposal(
+        db,
+        state=PROPOSAL_STATE_READ_BACK,
+        read_back_at=datetime.now(UTC),
+        read_back_session_id="sess-1",
+        read_back_turn=2,
+    )
+    result = service.commit(
+        db,
+        host_flag_enabled=True,
+        confirmation=_voice_confirmation(session_id="sess-1", turn=2, owner_intent_ok=True),
+    )
+    assert result["error_class"] == GATE_NO_CONFIRMATION
+    assert service._writer.created == []  # type: ignore[attr-defined]
+
+
+def test_commit_refuses_confirmation_not_owner_when_the_router_never_resolved_commit(db) -> None:
+    service = _service()
+    _prepared_proposal(
+        db,
+        state=PROPOSAL_STATE_READ_BACK,
+        read_back_at=datetime.now(UTC),
+        read_back_session_id="sess-1",
+        read_back_turn=1,
+    )
+    result = service.commit(
+        db,
+        host_flag_enabled=True,
+        confirmation=_voice_confirmation(session_id="sess-1", turn=2, owner_intent_ok=False),
+    )
+    assert result["error_class"] == GATE_CONFIRMATION_NOT_OWNER
+    assert service._writer.created == []  # type: ignore[attr-defined]
+
+
+def test_commit_refuses_not_read_back_when_the_confirmation_is_a_different_session(db) -> None:
+    service = _service()
+    _prepared_proposal(
+        db,
+        state=PROPOSAL_STATE_READ_BACK,
+        read_back_at=datetime.now(UTC),
+        read_back_session_id="sess-old",
+        read_back_turn=1,
+    )
+    result = service.commit(
+        db,
+        host_flag_enabled=True,
+        confirmation=_voice_confirmation(session_id="sess-new", turn=1, owner_intent_ok=True),
+    )
+    assert result["error_class"] == GATE_NOT_READ_BACK
     assert service._writer.created == []  # type: ignore[attr-defined]
 
 
 def test_commit_refuses_send_disabled(db) -> None:
     service = _service()
-    _prepared_proposal(db, read_back_at=datetime.now(UTC) - timedelta(seconds=1))
-    result = service.commit(db, host_flag_enabled=False)
+    _prepared_proposal(
+        db,
+        state=PROPOSAL_STATE_READ_BACK,
+        read_back_at=datetime.now(UTC),
+        read_back_session_id="sess-1",
+        read_back_turn=1,
+    )
+    result = service.commit(db, host_flag_enabled=False, confirmation=_voice_confirmation())
     assert result["error_class"] == GATE_SEND_DISABLED
     assert service._writer.created == []  # type: ignore[attr-defined]
 
 
 def test_commit_refuses_account_missing(db) -> None:
     service = CalendarService(None, None)
-    _prepared_proposal(db, read_back_at=datetime.now(UTC) - timedelta(seconds=1))
-    result = service.commit(db, host_flag_enabled=True)
+    _prepared_proposal(
+        db,
+        state=PROPOSAL_STATE_READ_BACK,
+        read_back_at=datetime.now(UTC),
+        read_back_session_id="sess-1",
+        read_back_turn=1,
+    )
+    result = service.commit(db, host_flag_enabled=True, confirmation=_voice_confirmation())
     assert result["error_class"] == GATE_ACCOUNT_MISSING
 
 
 def test_commit_succeeds_exactly_once_and_a_second_confirmation_refuses(db) -> None:
     service = _service()
-    _prepared_proposal(db, read_back_at=datetime.now(UTC) - timedelta(seconds=1))
-    first = service.commit(db, host_flag_enabled=True)
+    _prepared_proposal(
+        db,
+        state=PROPOSAL_STATE_READ_BACK,
+        read_back_at=datetime.now(UTC),
+        read_back_session_id="sess-1",
+        read_back_turn=1,
+    )
+    first = service.commit(db, host_flag_enabled=True, confirmation=_voice_confirmation())
     assert first["execution_status"] == "executed"
     assert len(service._writer.created) == 1  # type: ignore[attr-defined]
 
-    second = service.commit(db, host_flag_enabled=True)
+    second = service.commit(
+        db, host_flag_enabled=True, confirmation=_voice_confirmation(turn=3)
+    )
     assert second["error_class"] == GATE_ALREADY_SENT
     assert len(service._writer.created) == 1  # type: ignore[attr-defined]
 
 
+def test_rest_confirmation_needs_no_turn_and_succeeds_once(db) -> None:
+    service = _service()
+    _prepared_proposal(
+        db,
+        state=PROPOSAL_STATE_READ_BACK,
+        read_back_at=datetime.now(UTC),
+        read_back_session_id="rest:owner-session-1",
+        read_back_turn=None,
+    )
+    confirmation = Confirmation(source=CONFIRM_SOURCE_REST, session_id="owner-session-1")
+    result = service.commit(db, host_flag_enabled=True, confirmation=confirmation)
+    assert result["execution_status"] == "executed"
+    assert result["proposal"]["confirmed_by"] == "rest:owner-session-1"
+
+
 def test_discard_prevents_a_later_commit(db) -> None:
     service = _service()
-    row = _prepared_proposal(db, read_back_at=datetime.now(UTC) - timedelta(seconds=1))
+    row = _prepared_proposal(
+        db,
+        state=PROPOSAL_STATE_READ_BACK,
+        read_back_at=datetime.now(UTC),
+        read_back_session_id="sess-1",
+        read_back_turn=1,
+    )
     discarded = service.discard(db, proposal_id=str(row.id))
     assert discarded["proposal"]["state"] == PROPOSAL_STATE_DISCARDED
-    later = service.commit(db, proposal_id=str(row.id), host_flag_enabled=True)
+    later = service.commit(
+        db, proposal_id=str(row.id), host_flag_enabled=True, confirmation=_voice_confirmation()
+    )
     assert later["error_class"] == GATE_ALREADY_SENT
     assert service._writer.created == []  # type: ignore[attr-defined]
 
@@ -254,8 +395,15 @@ def test_no_password_ever_reaches_a_receipt_or_ledger_row(db, monkeypatch) -> No
     proposal = service.propose(
         db, summary="Kontrol", start=NOW + timedelta(hours=5), end=NOW + timedelta(hours=6)
     )
+    service.read_proposal(db, session_id="sess-1", turn=1)
+    confirmation = Confirmation(
+        source=CONFIRM_SOURCE_VOICE, session_id="sess-1", turn=2, owner_intent_ok=True
+    )
     service.commit(
-        db, proposal_id=proposal["proposal"]["id"], host_flag_enabled=True
+        db,
+        proposal_id=proposal["proposal"]["id"],
+        host_flag_enabled=True,
+        confirmation=confirmation,
     )
 
     rows = db.execute(select(ActivityEventRow)).scalars().all()
@@ -263,3 +411,84 @@ def test_no_password_ever_reaches_a_receipt_or_ledger_row(db, monkeypatch) -> No
     for row in rows:
         blob = f"{row.factual_summary} {row.detail_json}"
         assert SECRET_PASSWORD not in blob
+
+
+# ------------------------------------------------------------- H2 (security review)
+
+
+def test_two_concurrent_confirmations_race_the_atomic_transition_and_only_one_commits(
+    tmp_path,
+) -> None:
+    """H2, the calendar side of ``test_mail_service.py``'s identical proof — see its
+    docstring for why a FILE-backed SQLite database (real per-thread connections, SQLite's
+    OWN file locking doing the serialising) is what makes this a genuine race rather than
+    a single shared connection's own thread-safety question."""
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    db_path = tmp_path / "concurrent_commit.sqlite3"
+    engine = create_engine(f"sqlite:///{db_path}", connect_args={"timeout": 30})
+    for table in (
+        CalendarIndexRow.__table__,
+        CalendarProposalRow.__table__,
+        ObjectFocusRow.__table__,
+        ActivityEventRow.__table__,
+    ):
+        table.create(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+
+    now = datetime.now(UTC)
+    with factory() as setup_db:
+        row = CalendarProposalRow(
+            id=uuid.uuid4(),
+            kind="create",
+            event_uid=None,
+            summary="Yeni toplantı",
+            start=NOW + timedelta(hours=2),
+            end=NOW + timedelta(hours=3),
+            location=None,
+            conflicts_json=[],
+            state=PROPOSAL_STATE_READ_BACK,
+            read_back_at=now,
+            read_back_session_id="sess-1",
+            read_back_turn=1,
+            created_at=now,
+            updated_at=now,
+        )
+        setup_db.add(row)
+        setup_db.commit()
+        proposal_id = str(row.id)
+
+    service = _service()
+    barrier = threading.Barrier(2)
+    results: list[dict] = [{}, {}]
+
+    def worker(slot: int) -> None:
+        confirmation = Confirmation(
+            source=CONFIRM_SOURCE_VOICE, session_id="sess-1", turn=2, owner_intent_ok=True
+        )
+        with factory() as thread_db:
+            barrier.wait(timeout=5)
+            results[slot] = service.commit(
+                thread_db,
+                proposal_id=proposal_id,
+                host_flag_enabled=True,
+                confirmation=confirmation,
+            )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(worker, 0), pool.submit(worker, 1)]
+        for future in futures:
+            future.result(timeout=10)
+
+    executed = [r for r in results if r["execution_status"] == "executed"]
+    refused = [r for r in results if r["execution_status"] == "refused"]
+    assert len(executed) == 1, results
+    assert len(refused) == 1, results
+    assert refused[0]["error_class"] == GATE_ALREADY_SENT
+    assert len(service._writer.created) == 1  # type: ignore[attr-defined]
+
+    with factory() as verify_db:
+        final = verify_db.get(CalendarProposalRow, uuid.UUID(proposal_id))
+        assert final.state == "committed"
+    engine.dispose()

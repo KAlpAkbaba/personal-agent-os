@@ -19,10 +19,14 @@ from typing import Any, Protocol
 
 import httpx
 
-from app.calendar.ics import Occurrence, build_vevent, expand_events, parse_calendar
-
-#: spec §2: free_slots/agenda answer a bounded window; a CalDAV REPORT is similarly capped.
-MAX_WINDOW_DAYS = 62
+from app.calendar.ics import (
+    MAX_WINDOW_DAYS,  # M2: canonical value now lives in app.calendar.ics; re-exported here
+    Occurrence,
+    build_vevent,
+    clamp_window,
+    expand_events_report,
+    parse_calendar,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,6 +128,12 @@ class CalDavCalendarProvider:
         self._base_url = base_url.rstrip("/")
         self._auth = (username, password)
         self._timeout = timeout
+        #: M2 (security review): whether the LAST events()/free_slots() call had its
+        #: window narrowed to MAX_WINDOW_DAYS, and whether the RRULE expansion caps
+        #: (app.calendar.ics) actually bit — read by app.calendar.service right after the
+        #: call and folded into the receipt (``window_clamped``/``truncated``).
+        self.last_window_clamped = False
+        self.last_truncated = False
 
     def _client(self) -> httpx.Client:
         return httpx.Client(base_url=self._base_url, auth=self._auth, timeout=self._timeout)
@@ -139,6 +149,9 @@ class CalDavCalendarProvider:
             return [self._base_url]
 
     def _report(self, start: datetime, end: datetime) -> list[Occurrence]:
+        """The raw fetch+expand — NOT window-clamped itself (``get_event`` below needs a
+        wide internal lookup window regardless of the spec §2 agenda/free_slots bound);
+        clamping happens in the PUBLIC ``events``/``free_slots`` entry points instead."""
         body = (
             '<?xml version="1.0" encoding="utf-8" ?>'
             '<C:calendar-query xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">'
@@ -158,10 +171,14 @@ class CalDavCalendarProvider:
             )
             response.raise_for_status()
             events = parse_calendar(response.text)
-            return expand_events(events, start=start, end=end)
+            occurrences, truncated = expand_events_report(events, start=start, end=end)
+            self.last_truncated = truncated
+            return occurrences
 
     def events(self, start: datetime, end: datetime) -> list[Occurrence]:
-        return self._report(start, end)
+        clamped_start, clamped_end, clamped = clamp_window(start, end)
+        self.last_window_clamped = clamped
+        return self._report(clamped_start, clamped_end)
 
     def get_event(self, uid: str) -> Occurrence | None:
         from datetime import timedelta
@@ -176,8 +193,12 @@ class CalDavCalendarProvider:
     def free_slots(
         self, start: datetime, end: datetime, duration_minutes: int
     ) -> list[tuple[datetime, datetime]]:
-        busy = self._report(start, end)
-        return compute_free_slots(busy, start=start, end=end, duration_minutes=duration_minutes)
+        clamped_start, clamped_end, clamped = clamp_window(start, end)
+        self.last_window_clamped = clamped
+        busy = self._report(clamped_start, clamped_end)
+        return compute_free_slots(
+            busy, start=clamped_start, end=clamped_end, duration_minutes=duration_minutes
+        )
 
     def create(self, proposal: ProposalInput) -> str:
         event_uid = proposal.event_uid or f"pagentos-{uuid.uuid4()}@pagentos"
@@ -227,6 +248,9 @@ class IcsUrlCalendarProvider:
     def __init__(self, *, url: str, timeout: float = 15.0) -> None:
         self._url = url
         self._timeout = timeout
+        #: M2 (security review) — see ``CalDavCalendarProvider``'s identical fields.
+        self.last_window_clamped = False
+        self.last_truncated = False
 
     def _events(self) -> list:
         response = httpx.get(self._url, timeout=self._timeout)
@@ -236,14 +260,23 @@ class IcsUrlCalendarProvider:
     def calendars(self) -> list[str]:
         return [self._url]
 
+    def _expand(self, start: datetime, end: datetime) -> list[Occurrence]:
+        """The raw expand — NOT window-clamped (``get_event`` needs a wide internal
+        lookup window); clamping happens in the PUBLIC ``events``/``free_slots`` below."""
+        occurrences, truncated = expand_events_report(self._events(), start=start, end=end)
+        self.last_truncated = truncated
+        return occurrences
+
     def events(self, start: datetime, end: datetime) -> list[Occurrence]:
-        return expand_events(self._events(), start=start, end=end)
+        clamped_start, clamped_end, clamped = clamp_window(start, end)
+        self.last_window_clamped = clamped
+        return self._expand(clamped_start, clamped_end)
 
     def get_event(self, uid: str) -> Occurrence | None:
         from datetime import timedelta
 
         now = datetime.now(start_timezone())
-        for occ in self.events(now - timedelta(days=365), now + timedelta(days=365)):
+        for occ in self._expand(now - timedelta(days=365), now + timedelta(days=365)):
             if occ.uid == uid:
                 return occ
         return None
@@ -251,8 +284,12 @@ class IcsUrlCalendarProvider:
     def free_slots(
         self, start: datetime, end: datetime, duration_minutes: int
     ) -> list[tuple[datetime, datetime]]:
-        busy = self.events(start, end)
-        return compute_free_slots(busy, start=start, end=end, duration_minutes=duration_minutes)
+        clamped_start, clamped_end, clamped = clamp_window(start, end)
+        self.last_window_clamped = clamped
+        busy = self._expand(clamped_start, clamped_end)
+        return compute_free_slots(
+            busy, start=clamped_start, end=clamped_end, duration_minutes=duration_minutes
+        )
 
 
 # --------------------------------------------------------------------------- fakes
@@ -266,18 +303,30 @@ class FakeCalendarProvider:
 
     def __init__(self, fixture_path: Path) -> None:
         self._events = parse_calendar(fixture_path.read_text(encoding="utf-8"))
+        #: M2 (security review) — see ``CalDavCalendarProvider``'s identical fields.
+        self.last_window_clamped = False
+        self.last_truncated = False
 
     def calendars(self) -> list[str]:
         return ["fixture"]
 
+    def _expand(self, start: datetime, end: datetime) -> list[Occurrence]:
+        """The raw expand — NOT window-clamped (``get_event`` needs a wide internal
+        lookup window); clamping happens in the PUBLIC ``events``/``free_slots`` below."""
+        occurrences, truncated = expand_events_report(self._events, start=start, end=end)
+        self.last_truncated = truncated
+        return occurrences
+
     def events(self, start: datetime, end: datetime) -> list[Occurrence]:
-        return expand_events(self._events, start=start, end=end)
+        clamped_start, clamped_end, clamped = clamp_window(start, end)
+        self.last_window_clamped = clamped
+        return self._expand(clamped_start, clamped_end)
 
     def get_event(self, uid: str) -> Occurrence | None:
         from datetime import timedelta
 
         now = datetime.now(start_timezone())
-        for occ in self.events(now - timedelta(days=730), now + timedelta(days=730)):
+        for occ in self._expand(now - timedelta(days=730), now + timedelta(days=730)):
             if occ.uid == uid:
                 return occ
         return None
@@ -285,8 +334,12 @@ class FakeCalendarProvider:
     def free_slots(
         self, start: datetime, end: datetime, duration_minutes: int
     ) -> list[tuple[datetime, datetime]]:
-        busy = self.events(start, end)
-        return compute_free_slots(busy, start=start, end=end, duration_minutes=duration_minutes)
+        clamped_start, clamped_end, clamped = clamp_window(start, end)
+        self.last_window_clamped = clamped
+        busy = self._expand(clamped_start, clamped_end)
+        return compute_free_slots(
+            busy, start=clamped_start, end=clamped_end, duration_minutes=duration_minutes
+        )
 
 
 @dataclass

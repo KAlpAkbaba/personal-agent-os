@@ -16,13 +16,14 @@ from __future__ import annotations
 
 import imaplib
 import json
+import re
 import smtplib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from email import message_from_bytes, policy
 from email.header import decode_header
 from email.message import EmailMessage
-from email.utils import make_msgid, parsedate_to_datetime
+from email.utils import make_msgid, parseaddr, parsedate_to_datetime
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Protocol
@@ -30,6 +31,14 @@ from typing import Any, Protocol
 #: spec §2 bounds: at most 50 messages per list/search, a body bounded to 32 KB.
 MAX_LIST_MESSAGES = 50
 MAX_BODY_BYTES = 32 * 1024
+#: M1 (security review): ``email.message.Message.walk()`` recurses one Python stack frame
+#: per MIME nesting level with no bound of its own - a ~3000-level nested multipart
+#: message raised ``RecursionError`` there, taking the whole folder's fetch/search/thread
+#: loop down with it (verified live). ``_iter_parts_bounded`` below is an ITERATIVE
+#: (explicit-stack) drop-in for ``walk()`` that never recurses and gives up past these
+#: bounds rather than growing the call stack without limit.
+MIME_MAX_DEPTH = 32
+MIME_MAX_PARTS = 200
 
 
 # --------------------------------------------------------------------------- shapes
@@ -163,6 +172,45 @@ def html_to_text(html: str) -> str:
     return parser.text()
 
 
+#: L1 (security review): a folded header's continuation ("\r\n " per RFC 5322 §2.2.3) is
+#: a legitimate long-header device; a bare CR/LF with no fold is not — either way, once
+#: this parser hands a value back it must never itself carry a line break a caller could
+#: mistake for a header boundary (a reply draft's own "To:" built from a poisoned
+#: "From:", the ValueError ``smtplib``/``email`` raise on a header containing one).
+_HEADER_LINE_BREAKS = re.compile(r"[\r\n]+")
+
+
+def _sanitize_header(value: str) -> str:
+    """Unfold to a single space (module constant's own docstring) and drop any NUL —
+    the ONE place every header value this module hands back passes through, so a
+    header-injection attempt surviving into a later mutation is neutralised at the read,
+    not hoped to be caught at every later write site."""
+    return _HEADER_LINE_BREAKS.sub(" ", value.replace("\x00", "")).strip()
+
+
+#: L1 (security review): a bounded, deliberately permissive address shape check — this is
+#: NOT full RFC 5322 address grammar (that is `email.utils.parseaddr`'s own job below), it
+#: only rejects what would make a recipient dangerous to a header/SMTP envelope: no
+#: whitespace, no control character, exactly one ``@`` with something on both sides, a
+#: length ``smtplib``/RFC 5321 would accept.
+_ADDRESS_SHAPE = re.compile(r"^[^\s@\x00-\x1f]+@[^\s@\x00-\x1f]+\.[^\s@\x00-\x1f]+$")
+_MAX_ADDRESS_LEN = 320  # RFC 5321 §4.5.3.1.3
+
+
+def is_valid_email_address(value: str) -> bool:
+    """``email.utils.parseaddr`` (module docstring's own reference) plus a bounded shape
+    check — used when a draft is CREATED (``app.mail.service.MailService.draft_reply``/
+    ``draft_new``) so a recipient a hostile "From:" header injected (L1: CR/LF folded
+    into an address the reply's ``to`` inherited) is refused before it is ever assembled
+    into an outgoing message, rather than discovered only when ``smtplib`` raises."""
+    if not value or len(value) > _MAX_ADDRESS_LEN:
+        return False
+    _, addr = parseaddr(value)
+    if not addr or addr != value.strip():
+        return False
+    return bool(_ADDRESS_SHAPE.match(addr))
+
+
 def _decode_header_value(raw: str | None) -> str:
     """RFC 2047 header decoding (spec §2) — "=?UTF-8?B?...?=" -> the real Turkish text."""
     if not raw:
@@ -170,7 +218,7 @@ def _decode_header_value(raw: str | None) -> str:
     try:
         parts = decode_header(raw)
     except Exception:  # noqa: BLE001 - a malformed header degrades to its raw text
-        return raw
+        return _sanitize_header(raw)
     out: list[str] = []
     for text, charset in parts:
         if isinstance(text, bytes):
@@ -180,7 +228,7 @@ def _decode_header_value(raw: str | None) -> str:
                 out.append(text.decode("utf-8", errors="replace"))
         else:
             out.append(text)
-    return "".join(out)
+    return _sanitize_header("".join(out))
 
 
 def _bounded(text: str, limit: int = MAX_BODY_BYTES) -> str:
@@ -188,6 +236,35 @@ def _bounded(text: str, limit: int = MAX_BODY_BYTES) -> str:
     if len(encoded) <= limit:
         return text
     return encoded[:limit].decode("utf-8", errors="ignore")
+
+
+def _iter_parts_bounded(
+    msg: EmailMessage | Any,
+    *,
+    max_depth: int = MIME_MAX_DEPTH,
+    max_parts: int = MIME_MAX_PARTS,
+) -> list[Any]:
+    """A bounded, ITERATIVE drop-in for ``Message.walk()`` (M1, module constants' own
+    docstring): same pre-order (parent before children, siblings in order) DFS
+    ``Message.walk()`` performs, but with an explicit stack instead of a Python call per
+    nesting level, so no message can ever grow the interpreter's own call stack. A part
+    beyond ``max_depth`` is yielded but not descended into (its own children are never
+    visited); the walk stops entirely once ``max_parts`` parts have been visited — a
+    hostile ~3000-level nested multipart message costs at most ``max_parts`` bits of work,
+    never a ``RecursionError`` that takes the whole fetch/search/thread loop down with it.
+    """
+    parts: list[Any] = []
+    stack: list[tuple[Any, int]] = [(msg, 0)]
+    while stack and len(parts) < max_parts:
+        part, depth = stack.pop()
+        parts.append(part)
+        if depth >= max_depth:
+            continue
+        if part.is_multipart():
+            children = part.get_payload()
+            if isinstance(children, list):
+                stack.extend((child, depth + 1) for child in reversed(children))
+    return parts
 
 
 def message_from_rfc822(raw: bytes, *, uid: str, folder: str, unread: bool) -> MailMessage:
@@ -222,7 +299,7 @@ def message_from_rfc822(raw: bytes, *, uid: str, folder: str, unread: bool) -> M
     if msg.is_multipart():
         plain_part = None
         html_part = None
-        for part in msg.walk():
+        for part in _iter_parts_bounded(msg):
             disposition = str(part.get("Content-Disposition") or "")
             content_type = part.get_content_type()
             if "attachment" in disposition or (
@@ -319,6 +396,15 @@ class ImapMailProvider:
         self._password = password
         self._use_ssl = use_ssl
         self._timeout = timeout
+        #: M1 (security review): how many messages the LAST list_messages/search/thread
+        #: call skipped because they failed to parse — never raised, never silently
+        #: dropped either: ``app.mail.service.MailService`` reads this right after calling
+        #: a read method and folds it into the receipt/speech ("N ileti okunamadı"). A
+        #: plain instance attribute rather than a return-value change because
+        #: ``MailProvider`` is a ``Protocol`` every fake also implements; changing the
+        #: return shape would ripple through every caller for a count that is zero on the
+        #: overwhelmingly common path.
+        self.last_unparseable_count = 0
 
     def _connect(self) -> imaplib.IMAP4:
         conn: imaplib.IMAP4
@@ -384,12 +470,22 @@ class ImapMailProvider:
                     flags_blob += part[0]
                     raw_bytes = part[1]
             unread = b"\\Seen" not in flags_blob
-            out.append(message_from_rfc822(raw_bytes, uid=uid, folder=folder, unread=unread))
+            # M1 (security review): one message's parse is isolated from every other's —
+            # a single poisoned message (pathological MIME nesting, a malformed header)
+            # must never take the rest of the folder down with it. Skipped and counted,
+            # never silently dropped: ``self.last_unparseable_count`` (reset by the public
+            # caller) is what ``MailService`` folds into the receipt/speech.
+            try:
+                out.append(message_from_rfc822(raw_bytes, uid=uid, folder=folder, unread=unread))
+            except Exception:  # noqa: BLE001 - isolate one bad message, never the folder
+                self.last_unparseable_count += 1
+                continue
         return out
 
     def list_messages(
         self, folder: str, *, limit: int = MAX_LIST_MESSAGES, since: datetime | None = None
     ) -> list[MailMessage]:
+        self.last_unparseable_count = 0
         conn = self._connect()
         try:
             criteria = ["ALL"] if since is None else [f'SINCE "{since.strftime("%d-%b-%Y")}"']
@@ -401,6 +497,7 @@ class ImapMailProvider:
                 pass
 
     def search(self, query: str, *, limit: int = MAX_LIST_MESSAGES) -> list[MailMessage]:
+        self.last_unparseable_count = 0
         conn = self._connect()
         try:
             out: list[MailMessage] = []
@@ -421,6 +518,7 @@ class ImapMailProvider:
                 pass
 
     def get_message(self, message_id: str) -> MailMessage | None:
+        self.last_unparseable_count = 0
         conn = self._connect()
         try:
             for folder in self.folders() or ["INBOX"]:
@@ -437,6 +535,7 @@ class ImapMailProvider:
                 pass
 
     def thread(self, message_id: str) -> list[MailMessage]:
+        self.last_unparseable_count = 0
         anchor = self.get_message(message_id)
         if anchor is None:
             return []
@@ -671,6 +770,8 @@ def build_mail_sender(settings: Any) -> MailSender | None:
 __all__ = [
     "MAX_BODY_BYTES",
     "MAX_LIST_MESSAGES",
+    "MIME_MAX_DEPTH",
+    "MIME_MAX_PARTS",
     "DraftInput",
     "FakeMailProvider",
     "FakeMailSender",
@@ -683,5 +784,6 @@ __all__ = [
     "build_mail_provider",
     "build_mail_sender",
     "html_to_text",
+    "is_valid_email_address",
     "message_from_rfc822",
 ]

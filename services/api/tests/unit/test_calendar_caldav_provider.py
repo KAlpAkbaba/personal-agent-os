@@ -35,14 +35,40 @@ def test_events_sends_a_report_calendar_query_and_parses_the_response(monkeypatc
     provider = CalDavCalendarProvider(
         base_url="https://caldav.example/calendars/owner", username="owner", password="secret"
     )
-    occs = provider.events(datetime(2026, 1, 1, tzinfo=UTC), datetime(2027, 1, 1, tzinfo=UTC))
+    # A window UNDER MAX_WINDOW_DAYS (M2, security review) that still covers every
+    # fixture event (all anchored around September 2026) — a full CALENDAR YEAR window
+    # would now be clamped (the spec §2 bound this test must not itself violate), which
+    # is exactly what `test_window_wider_than_the_cap_is_clamped_and_still_parses` below
+    # proves on purpose; this test's own job is only "REPORT sent, response parsed".
+    occs = provider.events(datetime(2026, 9, 1, tzinfo=UTC), datetime(2026, 10, 15, tzinfo=UTC))
     assert seen["method"] == "REPORT"
     assert "calendar-query" in str(seen["body"])
     assert "time-range" in str(seen["body"])
     assert seen["depth"] == "1"
+    assert not provider.last_window_clamped
     assert len(occs) == len(parse_calendar(CALENDAR_PATH.read_text(encoding="utf-8"))) or len(
         occs
     ) >= 7
+
+
+def test_window_wider_than_the_cap_is_clamped_and_still_parses(monkeypatch) -> None:
+    """M2 (security review): a caller asking for a whole year gets the SAME REPORT
+    answered, but the RESULT is clamped to ``MAX_WINDOW_DAYS`` from the window's own
+    start — never an unbounded expansion, and the provider names the clamp so
+    ``CalendarService`` can fold it into the receipt."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=CALENDAR_PATH.read_text(encoding="utf-8"))
+
+    _mock_httpx(monkeypatch, handler)
+    provider = CalDavCalendarProvider(
+        base_url="https://caldav.example/calendars/owner", username="owner", password="secret"
+    )
+    occs = provider.events(datetime(2026, 1, 1, tzinfo=UTC), datetime(2027, 1, 1, tzinfo=UTC))
+    assert provider.last_window_clamped
+    # The fixture's events sit in September 2026 - past a 62-day window from Jan 1 -
+    # so the clamped answer is correctly empty, never a crash or an unclamped full year.
+    assert occs == []
 
 
 def test_create_puts_a_vevent_and_returns_its_uid(monkeypatch) -> None:

@@ -20,18 +20,24 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy import update as sa_update
 from sqlalchemy.orm import Session
 
 from app.actions.confirmation_gate import (
+    CONFIRM_SOURCE_REST,
+    CONFIRM_SOURCE_VOICE,
     GATE_ACCOUNT_MISSING,
     GATE_ALREADY_SENT,
+    GATE_CONFIRMATION_NOT_OWNER,
     GATE_NO_CONFIRMATION,
     GATE_NOT_READ_BACK,
     GATE_SEND_DISABLED,
+    Confirmation,
     check_gate,
 )
 from app.actions.receipt import (
     EXECUTION_EXECUTED,
+    EXECUTION_FAILED,
     EXECUTION_REFUSED,
     TERMINAL_FAILED,
     TERMINAL_VERIFIED,
@@ -52,11 +58,19 @@ from app.mail.models import (
     DRAFT_KIND_REPLY,
     DRAFT_STATE_DISCARDED,
     DRAFT_STATE_PREPARED,
+    DRAFT_STATE_READ_BACK,
+    DRAFT_STATE_SENDING,
     DRAFT_STATE_SENT,
     MailDraftRow,
     MailIndexRow,
 )
-from app.mail.providers import DraftInput, MailMessage, MailProvider, MailSender
+from app.mail.providers import (
+    DraftInput,
+    MailMessage,
+    MailProvider,
+    MailSender,
+    is_valid_email_address,
+)
 from app.operator import focus as focus_module
 from app.operator.models import FOCUS_KIND_DRAFT, FOCUS_KIND_MESSAGE, FOCUS_KIND_THREAD
 from app.uistate import UiState
@@ -71,14 +85,33 @@ SPEECH_NO_DRAFT = "Önce bir taslak hazırlamam gerekiyor efendim."
 SPEECH_NOT_FOUND = "Aradığınızı bulamadım efendim."
 SPEECH_SECRET_REFUSED = "Şifreleri mailleyemem efendim."
 ERROR_SECRET_REFUSED = "secret_refused"
+#: L1, ADR-0084 addendum 2: a provider-side send failure (a bad recipient the stdlib
+#: refused, a connection drop, ...) reverts the row to ``read_back`` rather than leaving
+#: it stuck ``sending`` — this is the typed receipt that names it, never a stuck draft
+#: with no receipt at all.
+ERROR_SEND_FAILED = "send_failed"
+#: L1: a recipient that is not a plausible address (a folded/injected header's own
+#: remnant; a bare display name with no ``@``) is refused when the draft is CREATED —
+#: never discovered only when the real sender raises.
+ERROR_INVALID_RECIPIENT = "invalid_recipient"
+SPEECH_INVALID_RECIPIENT = "Bu alıcı adresi geçerli görünmüyor efendim."
 
 _GATE_SPEECH: dict[str, str] = {
     GATE_ACCOUNT_MISSING: SPEECH_ACCOUNT_MISSING,
     GATE_NOT_READ_BACK: "Önce taslağı okumam gerekiyor efendim.",
     GATE_NO_CONFIRMATION: "Önce taslağı okumam gerekiyor efendim.",
+    GATE_CONFIRMATION_NOT_OWNER: "Önce taslağı okumam gerekiyor efendim.",
     GATE_ALREADY_SENT: "Bu taslak zaten gönderilmiş efendim.",
     GATE_SEND_DISABLED: "Mail gönderme şu anda kapalı efendim.",
 }
+
+
+def confirmed_by_label(confirmation: Confirmation) -> str:
+    """``"rest:<session>"`` / ``"voice:<session>:<turn>"`` — the exact literal ADR-0084
+    addendum 2 names, stamped on the row at the moment a confirmation actually succeeds."""
+    if confirmation.source == CONFIRM_SOURCE_REST:
+        return f"{CONFIRM_SOURCE_REST}:{confirmation.session_id}"
+    return f"{CONFIRM_SOURCE_VOICE}:{confirmation.session_id}:{confirmation.turn}"
 
 
 def _now() -> datetime:
@@ -103,7 +136,11 @@ def _draft_dict(row: MailDraftRow) -> dict[str, Any]:
         "in_reply_to": row.in_reply_to,
         "state": row.state,
         "read_back_at": row.read_back_at.isoformat() if row.read_back_at else None,
+        "read_back_session_id": row.read_back_session_id,
+        "read_back_turn": row.read_back_turn,
         "confirmed_at": row.confirmed_at.isoformat() if row.confirmed_at else None,
+        "confirmed_by": row.confirmed_by,
+        "last_error": row.last_error,
         "sent_message_id": row.sent_message_id,
     }
 
@@ -256,12 +293,22 @@ class MailService:
 
     # ------------------------------------------------------------------- READ
 
+    def _unparseable_count(self) -> int:
+        """M1 (security review): how many messages the provider's LAST read call
+        skipped because they failed to parse — 0 for every provider that does not track
+        this (the fixture-backed fakes, which never fail to parse their own fixture)."""
+        return int(getattr(self._provider, "last_unparseable_count", 0) or 0)
+
+    def _unparseable_suffix(self, count: int) -> str:
+        return f" {count} ileti okunamadı." if count else ""
+
     def inbox_summary(
         self, db: Session, *, folder: str = "INBOX", session_id: str | None = None
     ) -> dict[str, Any]:
         if self._provider is None:
             return self._account_missing(capability="mail.inbox", session_id=session_id, db=db)
         messages = self._provider.list_messages(folder, limit=50)
+        unparseable = self._unparseable_count()
         now = _now()
         for m in messages:
             self._index_upsert(db, m, now=now)
@@ -278,6 +325,7 @@ class MailService:
             speech = "Okunmamış mailiniz yok efendim."
         else:
             speech = f"{folder} klasöründe {len(unread)} okunmamış mailiniz var efendim."
+        speech += self._unparseable_suffix(unparseable)
         return self._receipt(
             capability="mail.inbox",
             requested_state="read",
@@ -291,6 +339,7 @@ class MailService:
                 "folder": folder,
                 "count": len(messages),
                 "unread": len(unread),
+                "unparseable": unparseable,
                 "messages": [m.as_summary() for m in messages],
             },
         )
@@ -299,6 +348,7 @@ class MailService:
         if self._provider is None:
             return self._account_missing(capability="mail.search", session_id=session_id, db=db)
         results = self._provider.search(query, limit=50)
+        unparseable = self._unparseable_count()
         now = _now()
         for m in results:
             self._index_upsert(db, m, now=now)
@@ -322,12 +372,13 @@ class MailService:
                 + ", ".join(m.subject for m in results[:5])
                 + "."
             )
+        speech += self._unparseable_suffix(unparseable)
         return self._receipt(
             capability="mail.search",
             requested_state="searched",
             execution=EXECUTION_EXECUTED,
             terminal=TERMINAL_VERIFIED,
-            server={"count": len(results)},
+            server={"count": len(results), "unparseable": unparseable},
             speech=speech,
             db=db,
             session_id=session_id,
@@ -421,6 +472,7 @@ class MailService:
             }
         assert message is not None
         messages = self._provider.thread(message.message_id)
+        unparseable = self._unparseable_count()
         now = _now()
         for m in messages:
             self._index_upsert(db, m, now=now)
@@ -443,12 +495,13 @@ class MailService:
         self._publish(folder=message.folder, subject=message.thread_key)
         parts = [f"{m.from_name or m.from_email}: {m.body_text}" for m in messages]
         speech = f"'{message.thread_key}' konuşması, {len(messages)} mesaj. " + " ".join(parts)
+        speech += self._unparseable_suffix(unparseable)
         return self._receipt(
             capability="mail.thread",
             requested_state="read",
             execution=EXECUTION_EXECUTED,
             terminal=TERMINAL_VERIFIED,
-            server={"count": len(messages)},
+            server={"count": len(messages), "unparseable": unparseable},
             speech=speech,
             db=db,
             session_id=session_id,
@@ -477,6 +530,23 @@ class MailService:
             session_id=session_id,
         )
 
+    def _invalid_recipient(
+        self, db: Session, *, capability: str, session_id: str | None
+    ) -> dict[str, Any]:
+        """L1: refused at DRAFT-creation time, before anything is ever assembled toward
+        a real sender — never discovered only when ``smtplib`` raises."""
+        return self._receipt(
+            capability=capability,
+            requested_state="prepared",
+            execution=EXECUTION_REFUSED,
+            terminal=TERMINAL_FAILED,
+            server={"reason": ERROR_INVALID_RECIPIENT},
+            speech=SPEECH_INVALID_RECIPIENT,
+            db=db,
+            error_class=ERROR_INVALID_RECIPIENT,
+            session_id=session_id,
+        )
+
     def draft_reply(
         self, db: Session, *, body: str, target: str = "current", session_id: str | None = None
     ) -> dict[str, Any]:
@@ -492,6 +562,8 @@ class MailService:
                 "candidates": [],
             }
         assert message is not None
+        if not is_valid_email_address(message.from_email):
+            return self._invalid_recipient(db, capability="mail.draft", session_id=session_id)
         now = _now()
         subject = message.subject
         if not subject.lower().startswith("re:"):
@@ -506,7 +578,7 @@ class MailService:
             body=body,
             in_reply_to=message.message_id,
             state=DRAFT_STATE_PREPARED,
-            read_back_at=now,
+            read_back_at=None,
             created_at=now,
             updated_at=now,
         )
@@ -543,6 +615,8 @@ class MailService:
             return self._secret_refused(db, capability="mail.draft", session_id=session_id)
         if self._provider is None:
             return self._account_missing(capability="mail.draft", session_id=session_id, db=db)
+        if not is_valid_email_address(to):
+            return self._invalid_recipient(db, capability="mail.draft", session_id=session_id)
         now = _now()
         row = MailDraftRow(
             id=uuid.uuid4(),
@@ -553,7 +627,7 @@ class MailService:
             body=body,
             in_reply_to=None,
             state=DRAFT_STATE_PREPARED,
-            read_back_at=now,
+            read_back_at=None,
             created_at=now,
             updated_at=now,
         )
@@ -598,8 +672,10 @@ class MailService:
     ) -> dict[str, Any]:
         if contains_secret_reference(body or "") or contains_secret_reference(subject or ""):
             return self._secret_refused(db, capability="mail.edit_draft", session_id=session_id)
+        if to is not None and not is_valid_email_address(to):
+            return self._invalid_recipient(db, capability="mail.edit_draft", session_id=session_id)
         row = self._current_draft(db)
-        if row is None or row.state != DRAFT_STATE_PREPARED:
+        if row is None or row.state not in (DRAFT_STATE_PREPARED, DRAFT_STATE_READ_BACK):
             return {"status": "needs_clarification", "speech": SPEECH_NO_DRAFT, "candidates": []}
         if subject is not None:
             row.subject = subject
@@ -608,9 +684,15 @@ class MailService:
         if to is not None:
             row.to_json = [to]
         now = _now()
-        # An edit changes the content the owner heard, so the read-back is re-taken HERE
-        # (module docstring): a stale confirmation from before the edit must not apply.
-        row.read_back_at = now
+        # An edit changes the content the owner heard, so any EARLIER read-back is
+        # invalidated HERE (module docstring; H1, ADR-0084 addendum 2): the row drops
+        # back to ``prepared`` and a fresh, explicit read-back act is required before any
+        # confirmation can bind to it again — never silently re-stamped as already read
+        # back, which is exactly the vacuous-gate bug the security review found.
+        row.state = DRAFT_STATE_PREPARED
+        row.read_back_at = None
+        row.read_back_session_id = None
+        row.read_back_turn = None
         row.updated_at = now
         db.commit()
         db.refresh(row)
@@ -635,12 +717,27 @@ class MailService:
             extra={"draft": _draft_dict(row)},
         )
 
-    def read_draft(self, db: Session, *, session_id: str | None = None) -> dict[str, Any]:
+    def read_draft(
+        self,
+        db: Session,
+        *,
+        session_id: str | None = None,
+        turn: int | None = None,
+    ) -> dict[str, Any]:
+        """The EXPLICIT read-back act (module docstring, H1): this is the ONE place
+        ``read_back_at``/``read_back_session_id``/``read_back_turn`` are set on a draft
+        that is not already gone (sent/discarded) — never at prepare time. ``session_id``/
+        ``turn`` bind the read-back to the exact voice turn it happened on, so a LATER
+        confirmation can be checked against the SAME session and a STRICTLY LATER turn
+        (``app.actions.confirmation_gate``) rather than trusting a bare clock reading."""
         row = self._current_draft(db)
-        if row is None:
+        if row is None or row.state not in (DRAFT_STATE_PREPARED, DRAFT_STATE_READ_BACK):
             return {"status": "needs_clarification", "speech": SPEECH_NO_DRAFT, "candidates": []}
         now = _now()
+        row.state = DRAFT_STATE_READ_BACK
         row.read_back_at = now
+        row.read_back_session_id = session_id
+        row.read_back_turn = turn
         db.commit()
         db.refresh(row)
         self._ledger(
@@ -672,16 +769,29 @@ class MailService:
         draft_id: str | None = None,
         host_flag_enabled: bool,
         session_id: str | None = None,
+        confirmation: Confirmation | None = None,
     ) -> dict[str, Any]:
+        """EXTERNAL MUTATION (spec §1). ``confirmation`` is how THIS call claims to be
+        the owner's word (module docstring; ``app.mail.routes.confirm_draft`` builds a
+        REST one, ``app.voice.realtime_sessions.tools_mail.mail_send`` a voice one) — the
+        gate (H1) judges the claim, never trusts it. Once the gate says yes, the state
+        transition ``read_back`` -> ``sending`` is an atomic compare-and-swap (H2): two
+        concurrent confirmations both reaching this point race on ONE UPDATE, and only the
+        winner's ``rowcount`` is 1 — the loser gets the same ``already_sent`` receipt a
+        genuinely-already-sent draft gets, and the real sender is called at most once no
+        matter how many callers got past the gate check above at the same instant.
+        """
         row = db.get(MailDraftRow, uuid.UUID(draft_id)) if draft_id else self._current_draft(db)
         if row is None:
             return {"status": "needs_clarification", "speech": "Neyi göndereyim?", "candidates": []}
-        now = _now()
         result = check_gate(
             state=row.state,
             prepared_state=DRAFT_STATE_PREPARED,
+            read_back_state=DRAFT_STATE_READ_BACK,
             read_back_at=row.read_back_at,
-            confirmed_at=now,
+            read_back_session_id=row.read_back_session_id,
+            read_back_turn=row.read_back_turn,
+            confirmation=confirmation,
             host_flag_enabled=host_flag_enabled,
             provider_available=self._account_configured,
         )
@@ -720,6 +830,44 @@ class MailService:
                 session_id=session_id,
                 error_class=GATE_SEND_DISABLED,
             )
+        assert confirmation is not None  # the gate above already required one to pass
+        now = _now()
+        confirmed_by = confirmed_by_label(confirmation)
+        cas = db.execute(
+            sa_update(MailDraftRow)
+            .where(MailDraftRow.id == row.id, MailDraftRow.state == DRAFT_STATE_READ_BACK)
+            .values(
+                state=DRAFT_STATE_SENDING,
+                confirmed_at=now,
+                confirmed_by=confirmed_by,
+                updated_at=now,
+            )
+        )
+        db.commit()
+        if cas.rowcount != 1:
+            # H2: lost the race - a concurrent confirmation (or a replay of this very one)
+            # already moved the row past read_back between the check above and this
+            # UPDATE. The real sender is never touched; the caller gets the SAME receipt
+            # a genuinely-already-sent draft gets, never a second send.
+            self._ledger(
+                db,
+                event_type=EVENT_TYPE_MAIL_SENT,
+                action="mail.send",
+                summary="mail.send refused (already_sent, lost the race)",
+                detail={"draft_id": str(row.id), "reason": GATE_ALREADY_SENT},
+            )
+            return self._receipt(
+                capability="mail.send",
+                requested_state="sent",
+                execution=EXECUTION_REFUSED,
+                terminal=TERMINAL_FAILED,
+                server={"draft_id": str(row.id), "reason": GATE_ALREADY_SENT},
+                speech=_GATE_SPEECH[GATE_ALREADY_SENT],
+                db=db,
+                session_id=session_id,
+                error_class=GATE_ALREADY_SENT,
+            )
+        db.refresh(row)
         draft_input = DraftInput(
             kind=row.kind,
             to=tuple(row.to_json or []),
@@ -729,9 +877,42 @@ class MailService:
             in_reply_to=row.in_reply_to,
             references=tuple(),
         )
-        sent_message_id = self._sender.send(draft_input)
+        try:
+            sent_message_id = self._sender.send(draft_input)
+        except Exception as exc:  # noqa: BLE001 - L1: a provider failure reverts, never crashes
+            failed_at = _now()
+            db.execute(
+                sa_update(MailDraftRow)
+                .where(MailDraftRow.id == row.id)
+                .values(
+                    state=DRAFT_STATE_READ_BACK,
+                    last_error=type(exc).__name__,
+                    updated_at=failed_at,
+                )
+            )
+            db.commit()
+            db.refresh(row)
+            logger.warning("mail_send_failed", draft_id=str(row.id), error_class=type(exc).__name__)
+            self._ledger(
+                db,
+                event_type=EVENT_TYPE_MAIL_SENT,
+                action="mail.send",
+                summary=f"mail.send failed ({type(exc).__name__})",
+                detail={"draft_id": str(row.id), "error_class": type(exc).__name__},
+            )
+            return self._receipt(
+                capability="mail.send",
+                requested_state="sent",
+                execution=EXECUTION_FAILED,
+                terminal=TERMINAL_FAILED,
+                server={"draft_id": str(row.id), "reason": ERROR_SEND_FAILED},
+                speech="Maili gönderemedim efendim; taslak duruyor.",
+                db=db,
+                session_id=session_id,
+                error_class=ERROR_SEND_FAILED,
+                extra={"draft": _draft_dict(row)},
+            )
         row.state = DRAFT_STATE_SENT
-        row.confirmed_at = now
         row.sent_message_id = sent_message_id
         row.updated_at = now
         db.commit()
@@ -788,4 +969,13 @@ class MailService:
         )
 
 
-__all__ = ["MailService", "SPEECH_ACCOUNT_MISSING", "SPEECH_NO_DRAFT", "SPEECH_NO_MESSAGE"]
+__all__ = [
+    "ERROR_INVALID_RECIPIENT",
+    "ERROR_SEND_FAILED",
+    "MailService",
+    "SPEECH_ACCOUNT_MISSING",
+    "SPEECH_INVALID_RECIPIENT",
+    "SPEECH_NO_DRAFT",
+    "SPEECH_NO_MESSAGE",
+    "confirmed_by_label",
+]

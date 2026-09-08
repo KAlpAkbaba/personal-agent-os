@@ -16,18 +16,24 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from sqlalchemy import update as sa_update
 from sqlalchemy.orm import Session
 
 from app.actions.confirmation_gate import (
+    CONFIRM_SOURCE_REST,
+    CONFIRM_SOURCE_VOICE,
     GATE_ACCOUNT_MISSING,
     GATE_ALREADY_SENT,
+    GATE_CONFIRMATION_NOT_OWNER,
     GATE_NO_CONFIRMATION,
     GATE_NOT_READ_BACK,
     GATE_SEND_DISABLED,
+    Confirmation,
     check_gate,
 )
 from app.actions.receipt import (
     EXECUTION_EXECUTED,
+    EXECUTION_FAILED,
     EXECUTION_REFUSED,
     TERMINAL_FAILED,
     TERMINAL_VERIFIED,
@@ -39,8 +45,10 @@ from app.calendar.models import (
     PROPOSAL_KIND_CREATE,
     PROPOSAL_KIND_RESCHEDULE,
     PROPOSAL_STATE_COMMITTED,
+    PROPOSAL_STATE_COMMITTING,
     PROPOSAL_STATE_DISCARDED,
     PROPOSAL_STATE_PREPARED,
+    PROPOSAL_STATE_READ_BACK,
     CalendarProposalRow,
 )
 from app.calendar.providers import (
@@ -69,14 +77,26 @@ SPEECH_ACCOUNT_MISSING = "Tanımlı bir takvim yok efendim."
 SPEECH_NO_EVENT = "Hangi etkinlik?"
 SPEECH_NO_PROPOSAL = "Önce bir öneri hazırlamam gerekiyor efendim."
 SPEECH_NOT_FOUND = "Aradığınızı bulamadım efendim."
+#: L1-equivalent for calendar (ADR-0084 addendum 2): a provider-side commit failure
+#: reverts to ``read_back`` rather than leaving the row stuck ``committing``.
+ERROR_COMMIT_FAILED = "commit_failed"
 
 _GATE_SPEECH: dict[str, str] = {
     GATE_ACCOUNT_MISSING: SPEECH_ACCOUNT_MISSING,
     GATE_NOT_READ_BACK: "Önce öneriyi okumam gerekiyor efendim.",
     GATE_NO_CONFIRMATION: "Önce öneriyi okumam gerekiyor efendim.",
+    GATE_CONFIRMATION_NOT_OWNER: "Önce öneriyi okumam gerekiyor efendim.",
     GATE_ALREADY_SENT: "Bu öneri zaten uygulanmış efendim.",
     GATE_SEND_DISABLED: "Takvim değişikliği şu anda kapalı efendim.",
 }
+
+
+def confirmed_by_label(confirmation: Confirmation) -> str:
+    """``"rest:<session>"`` / ``"voice:<session>:<turn>"`` (ADR-0084 addendum 2) — the
+    same literal format ``app.mail.service.confirmed_by_label`` stamps."""
+    if confirmation.source == CONFIRM_SOURCE_REST:
+        return f"{CONFIRM_SOURCE_REST}:{confirmation.session_id}"
+    return f"{CONFIRM_SOURCE_VOICE}:{confirmation.session_id}:{confirmation.turn}"
 
 
 #: The owner's own zone (spec §2's product default) — every ``start``/``end`` is stored
@@ -128,7 +148,11 @@ def _proposal_dict(row: CalendarProposalRow) -> dict[str, Any]:
         "conflicts": list(row.conflicts_json or []),
         "state": row.state,
         "read_back_at": _local(row.read_back_at).isoformat() if row.read_back_at else None,
+        "read_back_session_id": row.read_back_session_id,
+        "read_back_turn": row.read_back_turn,
         "confirmed_at": _local(row.confirmed_at).isoformat() if row.confirmed_at else None,
+        "confirmed_by": row.confirmed_by,
+        "last_error": row.last_error,
         "committed_event_uid": row.committed_event_uid,
     }
 
@@ -257,6 +281,23 @@ class CalendarService:
 
     # ------------------------------------------------------------------- READ
 
+    def _window_notes(self) -> tuple[bool, bool]:
+        """M2 (security review): whether the LAST ``events``/``free_slots`` call had its
+        window narrowed to ``MAX_WINDOW_DAYS`` and/or an RRULE expansion cap actually bit
+        — ``False``/``False`` for a provider that does not track this (every fake)."""
+        clamped = bool(getattr(self._provider, "last_window_clamped", False))
+        truncated = bool(getattr(self._provider, "last_truncated", False))
+        return clamped, truncated
+
+    def _window_suffix(self, *, clamped: bool, truncated: bool) -> str:
+        if clamped and truncated:
+            return " Aralığı sınırladım ve bazı tekrarlar kesildi efendim."
+        if clamped:
+            return " Aralığı sınırladım efendim."
+        if truncated:
+            return " Bazı tekrarlar kesildi efendim."
+        return ""
+
     def agenda(
         self,
         db: Session,
@@ -269,6 +310,7 @@ class CalendarService:
         if self._provider is None:
             return self._account_missing(capability="calendar.agenda", session_id=session_id, db=db)
         occs = self._provider.events(start, end)
+        clamped, truncated = self._window_notes()
         self._ledger(
             db,
             event_type=EVENT_TYPE_CALENDAR_READ,
@@ -282,12 +324,13 @@ class CalendarService:
         else:
             names = ", ".join(f"{o.summary} ({o.start.strftime('%H:%M')})" for o in occs)
             speech = f"{len(occs)} etkinliğiniz var efendim: {names}."
+        speech += self._window_suffix(clamped=clamped, truncated=truncated)
         return self._receipt(
             capability="calendar.agenda",
             requested_state="read",
             execution=EXECUTION_EXECUTED,
             terminal=TERMINAL_VERIFIED,
-            server={"count": len(occs)},
+            server={"count": len(occs), "window_clamped": clamped, "truncated": truncated},
             speech=speech,
             db=db,
             session_id=session_id,
@@ -308,6 +351,7 @@ class CalendarService:
                 capability="calendar.find_slot", session_id=session_id, db=db
             )
         slots = self._provider.free_slots(start, end, duration_minutes)
+        clamped, truncated = self._window_notes()
         self._ledger(
             db,
             event_type=EVENT_TYPE_CALENDAR_READ,
@@ -321,12 +365,13 @@ class CalendarService:
         else:
             s0, e0 = slots[0]
             speech = f"{s0.strftime('%H:%M')} - {e0.strftime('%H:%M')} arası uygunsunuz efendim."
+        speech += self._window_suffix(clamped=clamped, truncated=truncated)
         return self._receipt(
             capability="calendar.find_slot",
             requested_state="read",
             execution=EXECUTION_EXECUTED,
             terminal=TERMINAL_VERIFIED,
-            server={"count": len(slots)},
+            server={"count": len(slots), "window_clamped": clamped, "truncated": truncated},
             speech=speech,
             db=db,
             session_id=session_id,
@@ -380,7 +425,7 @@ class CalendarService:
             location=location,
             conflicts_json=conflicts,
             state=PROPOSAL_STATE_PREPARED,
-            read_back_at=now,
+            read_back_at=None,
             created_at=now,
             updated_at=now,
         )
@@ -445,7 +490,7 @@ class CalendarService:
             location=None,
             conflicts_json=conflicts,
             state=PROPOSAL_STATE_PREPARED,
-            read_back_at=now,
+            read_back_at=None,
             created_at=now,
             updated_at=now,
         )
@@ -489,7 +534,7 @@ class CalendarService:
         session_id: str | None = None,
     ) -> dict[str, Any]:
         row = self._current_proposal(db)
-        if row is None or row.state != PROPOSAL_STATE_PREPARED:
+        if row is None or row.state not in (PROPOSAL_STATE_PREPARED, PROPOSAL_STATE_READ_BACK):
             return {"status": "needs_clarification", "speech": SPEECH_NO_PROPOSAL, "candidates": []}
         if start is not None:
             row.start = _utc(start)
@@ -508,7 +553,12 @@ class CalendarService:
             )
         row.conflicts_json = conflicts
         now = _now()
-        row.read_back_at = now
+        # H1, ADR-0084 addendum 2: an edit invalidates any earlier read-back (the owner
+        # heard the OLD content) - back to prepared, a fresh explicit read-back required.
+        row.state = PROPOSAL_STATE_PREPARED
+        row.read_back_at = None
+        row.read_back_session_id = None
+        row.read_back_turn = None
         row.updated_at = now
         db.commit()
         db.refresh(row)
@@ -533,12 +583,23 @@ class CalendarService:
             extra={"proposal": _proposal_dict(row)},
         )
 
-    def read_proposal(self, db: Session, *, session_id: str | None = None) -> dict[str, Any]:
+    def read_proposal(
+        self,
+        db: Session,
+        *,
+        session_id: str | None = None,
+        turn: int | None = None,
+    ) -> dict[str, Any]:
+        """The EXPLICIT read-back act (H1) — see ``app.mail.service.MailService.
+        read_draft``'s docstring; the same session/turn binding, mirrored here."""
         row = self._current_proposal(db)
-        if row is None:
+        if row is None or row.state not in (PROPOSAL_STATE_PREPARED, PROPOSAL_STATE_READ_BACK):
             return {"status": "needs_clarification", "speech": SPEECH_NO_PROPOSAL, "candidates": []}
         now = _now()
+        row.state = PROPOSAL_STATE_READ_BACK
         row.read_back_at = now
+        row.read_back_session_id = session_id
+        row.read_back_turn = turn
         db.commit()
         db.refresh(row)
         self._ledger(
@@ -570,7 +631,10 @@ class CalendarService:
         proposal_id: str | None = None,
         host_flag_enabled: bool,
         session_id: str | None = None,
+        confirmation: Confirmation | None = None,
     ) -> dict[str, Any]:
+        """EXTERNAL MUTATION (spec §1) — see ``app.mail.service.MailService.send``'s
+        docstring for the gate/CAS/failure-handling discipline mirrored here exactly."""
         row = (
             db.get(CalendarProposalRow, uuid.UUID(proposal_id))
             if proposal_id
@@ -582,12 +646,14 @@ class CalendarService:
                 "speech": "Neyi onaylayayım?",
                 "candidates": [],
             }
-        now = _now()
         result = check_gate(
             state=row.state,
             prepared_state=PROPOSAL_STATE_PREPARED,
+            read_back_state=PROPOSAL_STATE_READ_BACK,
             read_back_at=row.read_back_at,
-            confirmed_at=now,
+            read_back_session_id=row.read_back_session_id,
+            read_back_turn=row.read_back_turn,
+            confirmation=confirmation,
             host_flag_enabled=host_flag_enabled,
             provider_available=self._account_configured,
         )
@@ -623,6 +689,44 @@ class CalendarService:
                 session_id=session_id,
                 error_class=GATE_SEND_DISABLED,
             )
+        assert confirmation is not None  # the gate above already required one to pass
+        now = _now()
+        confirmed_by = confirmed_by_label(confirmation)
+        cas = db.execute(
+            sa_update(CalendarProposalRow)
+            .where(
+                CalendarProposalRow.id == row.id,
+                CalendarProposalRow.state == PROPOSAL_STATE_READ_BACK,
+            )
+            .values(
+                state=PROPOSAL_STATE_COMMITTING,
+                confirmed_at=now,
+                confirmed_by=confirmed_by,
+                updated_at=now,
+            )
+        )
+        db.commit()
+        if cas.rowcount != 1:
+            # H2: lost the race - same receipt a genuinely-already-committed proposal gets.
+            self._ledger(
+                db,
+                event_type=EVENT_TYPE_CALENDAR_COMMITTED,
+                action="calendar.commit",
+                summary="calendar.commit refused (already_sent, lost the race)",
+                detail={"proposal_id": str(row.id), "reason": GATE_ALREADY_SENT},
+            )
+            return self._receipt(
+                capability="calendar.commit",
+                requested_state="committed",
+                execution=EXECUTION_REFUSED,
+                terminal=TERMINAL_FAILED,
+                server={"proposal_id": str(row.id), "reason": GATE_ALREADY_SENT},
+                speech=_GATE_SPEECH[GATE_ALREADY_SENT],
+                db=db,
+                session_id=session_id,
+                error_class=GATE_ALREADY_SENT,
+            )
+        db.refresh(row)
         proposal_input = ProposalInput(
             kind=row.kind,
             event_uid=row.event_uid,
@@ -631,12 +735,47 @@ class CalendarService:
             end=_aware(row.end),
             location=row.location,
         )
-        if row.kind == PROPOSAL_KIND_RESCHEDULE and row.event_uid:
-            event_uid = self._writer.update(row.event_uid, proposal_input)
-        else:
-            event_uid = self._writer.create(proposal_input)
+        try:
+            if row.kind == PROPOSAL_KIND_RESCHEDULE and row.event_uid:
+                event_uid = self._writer.update(row.event_uid, proposal_input)
+            else:
+                event_uid = self._writer.create(proposal_input)
+        except Exception as exc:  # noqa: BLE001 - L1-equivalent: revert, never crash
+            failed_at = _now()
+            db.execute(
+                sa_update(CalendarProposalRow)
+                .where(CalendarProposalRow.id == row.id)
+                .values(
+                    state=PROPOSAL_STATE_READ_BACK,
+                    last_error=type(exc).__name__,
+                    updated_at=failed_at,
+                )
+            )
+            db.commit()
+            db.refresh(row)
+            logger.warning(
+                "calendar_commit_failed", proposal_id=str(row.id), error_class=type(exc).__name__
+            )
+            self._ledger(
+                db,
+                event_type=EVENT_TYPE_CALENDAR_COMMITTED,
+                action="calendar.commit",
+                summary=f"calendar.commit failed ({type(exc).__name__})",
+                detail={"proposal_id": str(row.id), "error_class": type(exc).__name__},
+            )
+            return self._receipt(
+                capability="calendar.commit",
+                requested_state="committed",
+                execution=EXECUTION_FAILED,
+                terminal=TERMINAL_FAILED,
+                server={"proposal_id": str(row.id), "reason": ERROR_COMMIT_FAILED},
+                speech="Takvime işleyemedim efendim; öneri duruyor.",
+                db=db,
+                session_id=session_id,
+                error_class=ERROR_COMMIT_FAILED,
+                extra={"proposal": _proposal_dict(row)},
+            )
         row.state = PROPOSAL_STATE_COMMITTED
-        row.confirmed_at = now
         row.committed_event_uid = event_uid
         row.updated_at = now
         db.commit()
@@ -697,4 +836,11 @@ class CalendarService:
         )
 
 
-__all__ = ["CalendarService", "SPEECH_ACCOUNT_MISSING", "SPEECH_NO_EVENT", "SPEECH_NO_PROPOSAL"]
+__all__ = [
+    "ERROR_COMMIT_FAILED",
+    "CalendarService",
+    "SPEECH_ACCOUNT_MISSING",
+    "SPEECH_NO_EVENT",
+    "SPEECH_NO_PROPOSAL",
+    "confirmed_by_label",
+]

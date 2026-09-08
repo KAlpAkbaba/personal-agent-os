@@ -1177,7 +1177,7 @@ def record_client_events(
             if draft_pending_known is None:
                 import uuid as _uuid
 
-                from app.mail.models import DRAFT_STATE_PREPARED, MailDraftRow
+                from app.mail.models import DRAFT_STATE_READ_BACK, MailDraftRow
                 from app.operator import focus as draft_focus_module
                 from app.operator.models import FOCUS_KIND_DRAFT
 
@@ -1188,15 +1188,20 @@ def record_client_events(
                         if entry is not None
                         else None
                     )
+                    # M21 spec §3 / ADR-0084 addendum 2 (H1): "pending" here means
+                    # "read back to the owner in THIS session" (intents.py's own
+                    # docstring) - a merely-PREPARED draft has not been read back yet, so
+                    # a bare "Gönder." must still fall through to a clarification rather
+                    # than resolve to MAIL_SEND.
                     draft_pending_known = (
-                        draft_row is not None and draft_row.state == DRAFT_STATE_PREPARED
+                        draft_row is not None and draft_row.state == DRAFT_STATE_READ_BACK
                     )
                 except Exception:  # noqa: BLE001 - a deployment without the mail tables
                     draft_pending_known = False
             if proposal_pending_known is None:
                 import uuid as _uuid
 
-                from app.calendar.models import PROPOSAL_STATE_PREPARED, CalendarProposalRow
+                from app.calendar.models import PROPOSAL_STATE_READ_BACK, CalendarProposalRow
                 from app.operator import focus as proposal_focus_module
                 from app.operator.models import FOCUS_KIND_PROPOSAL
 
@@ -1207,8 +1212,10 @@ def record_client_events(
                         if entry is not None
                         else None
                     )
+                    # Same rule as the draft's own flag above: "pending" means read back
+                    # to the owner in THIS session, not merely prepared (H1).
                     proposal_pending_known = (
-                        proposal_row is not None and proposal_row.state == PROPOSAL_STATE_PREPARED
+                        proposal_row is not None and proposal_row.state == PROPOSAL_STATE_READ_BACK
                     )
                 except Exception:  # noqa: BLE001 - a deployment without the calendar tables
                     proposal_pending_known = False
