@@ -303,3 +303,15 @@ def test_second_identical_request_while_active_returns_same_run_no_second_run(tm
     )
     assert result["id"] == str(active_id)
     assert result["state"] == "testing"
+
+
+def test_ten_minute_bound_is_enforced(tmp_path):
+    """spec §5: "≤ 10 minutes end to end" — a run started long enough ago is
+    refused at the next stage boundary, never allowed to keep building."""
+    stack = make_stack(tmp_path)
+    ten_minutes_ago = datetime.now(UTC) - timedelta(minutes=11)
+    with pytest.raises(EvolutionError) as excinfo:
+        stack.service._enforce_time_bound(ten_minutes_ago)  # noqa: SLF001 - the bound itself
+    assert str(excinfo.value.error_class) == "rate_limited"
+    # A run well inside the bound is unaffected.
+    stack.service._enforce_time_bound(datetime.now(UTC))  # noqa: SLF001 - no raise
