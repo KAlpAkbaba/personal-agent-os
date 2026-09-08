@@ -1543,11 +1543,14 @@ _SET_SUBJECT_VERB_FORMS: Final[tuple[str, ...]] = ("yap", "yapsana", "yapar")
 
 
 def _mail_inbox_match(tokens: tuple[str, ...]) -> str | None:
-    """ "Gelen kutumda ne var?" / "Okunmamış maillerim var mı?" (spec §3)."""
+    """ "Gelen kutumda ne var?" / "Okunmamış maillerim var mı?" / "Gelen kutumu kontrol
+    eder misin?" (spec §3)."""
     if _has(tokens, *_INBOX_NOUN_STEMS) and _has_exact(tokens, "ne") and _has_exact(tokens, "var"):
         return "kutuda ne var"
     if _has(tokens, *_UNREAD_STEMS) and _has(tokens, *_MAIL_NOUN_STEMS):
         return "okunmamış mail"
+    if _has(tokens, *_INBOX_NOUN_STEMS) and _has(tokens, "kontrol"):
+        return "kutuyu kontrol et"
     return None
 
 
@@ -1603,12 +1606,18 @@ def _mail_draft_reply_match(tokens: tuple[str, ...]) -> str | None:
 
 
 def _mail_draft_new_match(tokens: tuple[str, ...]) -> str | None:
-    """ "Yeni mail: Ayşe'ye, konu toplantı, yarın gelemiyorum." (spec §3)."""
-    if _has(tokens, *_MAIL_NEW_STEMS) is None:
-        return None
+    """ "Yeni mail: Ayşe'ye, konu toplantı, yarın gelemiyorum." / "Ali'ye mail gönder."
+    (spec §3) — the second shape names the mail noun ALONGSIDE "gönder" with nothing
+    prepared yet, which is a request to COMPOSE, never a confirmation to send something
+    that does not exist (``_mail_send_match``'s own docstring: a bare "Gönder." never
+    names the mail noun at all, which is what keeps the two shapes apart)."""
     if _has(tokens, *_MAIL_NOUN_STEMS) is None:
         return None
-    return "yeni mail"
+    if _has(tokens, *_MAIL_NEW_STEMS):
+        return "yeni mail"
+    if _has_exact(tokens, *_MAIL_SEND_VERB_FORMS):
+        return "mail gönder"
+    return None
 
 
 def _mail_edit_draft_match(tokens: tuple[str, ...]) -> str | None:
@@ -1622,10 +1631,15 @@ def _mail_edit_draft_match(tokens: tuple[str, ...]) -> str | None:
 
 
 def _mail_send_match(tokens: tuple[str, ...]) -> str | None:
-    """ "Gönder." (spec §3) — gated by the CALLER on ``draft_pending`` (a prepared draft
-    read back this session), never on vocabulary alone: without one, this must resolve to
-    a clarification, not a guess at what to send."""
+    """ "Gönder." (spec §3) — a BARE confirmation never names the mail noun itself (the
+    owner does not say "maili gönder" to confirm what was just read back to them; that
+    shape is ``_mail_draft_new_match``'s own "Ali'ye mail gönder", a fresh compose
+    request). Matches on vocabulary alone otherwise — with nothing prepared, the tool
+    this names still runs and answers with an honest clarification from its own service
+    layer (module comment above resolve_intent's own M21 block), never a guess here."""
     if _has_exact(tokens, *_MAIL_SEND_NEGATION_FORMS):
+        return None
+    if _has(tokens, *_MAIL_NOUN_STEMS):
         return None
     return _has_exact(tokens, *_MAIL_SEND_VERB_FORMS)
 
