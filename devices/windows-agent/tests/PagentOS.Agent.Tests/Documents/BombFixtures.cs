@@ -221,8 +221,13 @@ public static class BombFixtures
     /// attempt. The working set of that attempt is reported beside it; it moves both ways
     /// with the rest of the process and is the number the review asked to see, not the
     /// number the assertion rests on.
+    ///
+    /// The default rose from three attempts to six on 2026-09-08: the reasoning above needs
+    /// ONE attempt to land in a quiet window, and this assembly grew from 596 tests to 748,
+    /// so three attempts stopped being enough and a bounded read failed for its neighbours'
+    /// allocations rather than its own.
     /// </summary>
-    public static (double WorkingSetMiB, double AllocatedMiB) Measure(Action work, int attempts = 3)
+    public static (double WorkingSetMiB, double AllocatedMiB) Measure(Action work, int attempts = 6)
     {
         var workingSet = 0.0;
         var allocated = double.MaxValue;

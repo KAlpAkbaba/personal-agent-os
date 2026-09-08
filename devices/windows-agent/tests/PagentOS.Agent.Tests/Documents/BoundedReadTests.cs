@@ -36,8 +36,12 @@ public sealed class BoundedReadTests(ITestOutputHelper output) : IDisposable
         // ASCII, so the decoded prefix is exactly the byte bound: the decode stopped at 4 MiB, not at the file's end.
         Assert.Equal(DocumentBounds.MaxTextPrefixBytes, read["total_chars"]!.GetValue<int>());
         Assert.StartsWith("ad;tutar;tarih\n", read["text"]!.GetValue<string>(), StringComparison.Ordinal);
-        // The prefix costs 4 MiB of bytes and 8 MiB of UTF-16; the whole file would cost 6 + 12.
-        Assert.True(allocatedMiB < 16, $"allocated {allocatedMiB:F1} MiB (working set +{workingSetMiB:F1} MiB)");
+        // The prefix costs 4 MiB of bytes and 8 MiB of UTF-16 = 12 MiB inherent; materialising
+        // the whole file — the failure this bound exists to catch — costs 6 + 12 on top of that,
+        // so about 30. The bound sits at 24: still decisive against materialisation, with room
+        // for the process-wide counter to catch a neighbour's allocation (2026-09-08: at 16 it
+        // failed for its neighbours' work rather than its own, on the runner and locally).
+        Assert.True(allocatedMiB < 24, $"allocated {allocatedMiB:F1} MiB (working set +{workingSetMiB:F1} MiB)");
 
         // A window that reaches the prefix's end is still truncated: the file went on.
         var tail = _lab.Exec(DocumentCapabilityNames.FileRead, new JsonObject { ["path"] = csv, ["offset"] = DocumentBounds.MaxTextPrefixBytes - 10 });
@@ -87,7 +91,7 @@ public sealed class BoundedReadTests(ITestOutputHelper output) : IDisposable
         Assert.True(read["truncated"]!.GetValue<bool>());
         Assert.Null(read["file"]!["sha256"]);
         // Reading the whole file would allocate 40 MiB of bytes and 80 MiB of UTF-16.
-        Assert.True(allocatedMiB < 16, $"allocated {allocatedMiB:F1} MiB (working set +{workingSetMiB:F1} MiB)");
+        Assert.True(allocatedMiB < 24, $"allocated {allocatedMiB:F1} MiB (working set +{workingSetMiB:F1} MiB)");
     }
 
     [Fact]
