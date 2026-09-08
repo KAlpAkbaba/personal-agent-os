@@ -70,7 +70,7 @@ public sealed class UiAutomationInspector
         {
             return AutomationElement.FromHandle(hwnd);
         }
-        catch (ElementNotAvailableException)
+        catch (Exception ex) when (IsElementGone(ex))
         {
             throw new CapabilityException(ErrorClasses.UiStateChanged, "the window is no longer available to UI Automation", retryable: true);
         }
@@ -138,7 +138,7 @@ public sealed class UiAutomationInspector
 
             return found ?? throw new CapabilityException(ErrorClasses.UiTargetNotFound, $"no element matches {query} in this window", retryable: true);
         }
-        catch (ElementNotAvailableException)
+        catch (Exception ex) when (IsElementGone(ex))
         {
             throw new CapabilityException(ErrorClasses.UiStateChanged, "the window changed while it was being searched", retryable: true);
         }
@@ -149,31 +149,36 @@ public sealed class UiAutomationInspector
     {
         budget ??= new WalkBudget(MaxNodes);
         budget.Take();
-        AutomationElement.AutomationElementInformation info;
+        // EVERY getter below reaches UI Automation for itself: `element.Current` is only a
+        // struct handed back cheaply, and `info.Name`, `info.ControlType` and the rest each
+        // make their own call. Guarding the `.Current` access alone therefore guarded nothing
+        // (measured: CI runs 34230759954 and 34234146012 both threw out of a getter, not out
+        // of `.Current`), so the whole read is one guarded region. An element that went away
+        // is reported in the shape every caller here already handles -
+        // `OperatorCapabilities.UiInvoke` catches exactly this after an invoke that closed its
+        // own dialog - never as a catastrophic COM failure.
+        JsonObject node;
+        bool isPassword;
         try
         {
-            info = element.Current;
+            var info = element.Current;
+            node = new JsonObject
+            {
+                ["automation_id"] = info.AutomationId ?? string.Empty,
+                ["name"] = info.Name ?? string.Empty,
+                ["control_type"] = ControlTypeName(info.ControlType),
+                ["class_name"] = info.ClassName ?? string.Empty,
+                ["enabled"] = info.IsEnabled,
+                ["bounds"] = BoundsOf(info.BoundingRectangle),
+            };
+            isPassword = info.IsPassword;
         }
         catch (Exception ex) when (IsElementGone(ex))
         {
-            // The element went away between the walk finding it and this read - the ordinary
-            // case when a dialog is being dismissed. Say it in the shape every caller here
-            // already handles (``OperatorCapabilities.UiInvoke`` catches exactly this after
-            // an invoke that closed its own dialog), never as a catastrophic COM failure.
             throw new ElementNotAvailableException();
         }
 
-        var node = new JsonObject
-        {
-            ["automation_id"] = info.AutomationId ?? string.Empty,
-            ["name"] = info.Name ?? string.Empty,
-            ["control_type"] = ControlTypeName(info.ControlType),
-            ["class_name"] = info.ClassName ?? string.Empty,
-            ["enabled"] = info.IsEnabled,
-            ["bounds"] = BoundsOf(info.BoundingRectangle),
-        };
-
-        if (info.IsPassword)
+        if (isPassword)
         {
             // Never read: the value of a password field is exactly the thing this module
             // must not carry. The key says "masked", not what was masked.
@@ -221,7 +226,7 @@ public sealed class UiAutomationInspector
                     {
                         children.Add(Describe(child, includeChildren: true, depth - 1, budget));
                     }
-                    catch (ElementNotAvailableException)
+                    catch (Exception ex) when (IsElementGone(ex))
                     {
                         // A child that closed while we walked its siblings is simply not in
                         // the description; the rest of the window is still worth reporting.
@@ -307,7 +312,7 @@ public sealed class UiAutomationInspector
                 return "expand_collapse";
             }
         }
-        catch (ElementNotAvailableException)
+        catch (Exception ex) when (IsElementGone(ex))
         {
             // The invoke closed the window (a dialog button): that is a success from the
             // invoker's point of view; the caller re-observes and says so.
@@ -412,7 +417,7 @@ public sealed class UiAutomationInspector
 
             return names;
         }
-        catch (ElementNotAvailableException)
+        catch (Exception ex) when (IsElementGone(ex))
         {
             return [];
         }
@@ -450,7 +455,7 @@ public sealed class UiAutomationInspector
                 texts.Add(SafeName(text));
             }
         }
-        catch (ElementNotAvailableException)
+        catch (Exception ex) when (IsElementGone(ex))
         {
             // Dialog closed under us; report what was read.
         }
@@ -505,7 +510,7 @@ public sealed class UiAutomationInspector
         {
             return element.Current.Name ?? string.Empty;
         }
-        catch (ElementNotAvailableException)
+        catch (Exception ex) when (IsElementGone(ex))
         {
             return string.Empty;
         }
