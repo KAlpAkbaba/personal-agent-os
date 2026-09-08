@@ -5462,6 +5462,75 @@ it does, is for the owner to accept the consent once by hand in that profile's o
 (the profile is persistent and keeps it), never for the worker to click it. Cloud Core's
 dispatch allowlist and the `media.play` receipt are Track C's.
 
+### ADR-0073 addendum 1 — the tone-instead-of-the-song defect: a normal alarm now defaults to the approved wake song (2026-09-08)
+
+**Context.** Owner report, 2026-09-08: "The wake alarm produces the internal beep. That must
+not be the normal wake experience. Owner-selected YouTube music is PRIMARY; the local tone
+is EMERGENCY FALLBACK ONLY." Measured against production release `20db267`: the design this
+ADR describes is correct end to end (`app/alarms/sequence.py::fire`, YouTube-primary /
+tone-fallback, verified by the media element per decision 4 above) — the defect was one
+function upstream of it, `app/alarms/service.py::_media_source`, whose final branch
+returned `{"kind": "tone"}, None` whenever the owner named NO media on the utterance at all
+(the ordinary case: "Yarın 07:30'da beni uyandır." names no song). The approved wake song
+(`set_wake_song` / `PUT /v1/alarms/wake-song`, spec §3.8) was consulted only when a
+title/`remembered` value was named — never for the "named nothing" path, which is every
+plain morning alarm. `GET /v1/alarms/wake-song` on production returns `{"wake_song": null}`
+(the owner has never set one), which is why the owner's own qualification alarm at
+2026-09-08 20:04Z played `media_kind: "tone_fallback"`.
+
+**Decision.**
+1. **`_media_source` resolves the "named nothing" case exactly like the "named a
+   remembered title" case already did**: when a wake song is approved, that URL is the
+   `resolved_media_identity`; when none is approved, the tone stays, unchanged from before.
+   `media_source` (what the owner asked for) is deliberately left as `{"kind": "tone"}` in
+   both the old and new behaviour — `MEDIA_SOURCE_KINDS` (`youtube`/`tone`/`remembered`) has
+   no vocabulary word for "asked for nothing", and `MediaIn` (`CreateAlarmRequest`'s wire
+   shape) has no field for an OWNER-EXPLICIT "I want the tone" today. Both facts are
+   recorded here rather than papered over: this fix cannot distinguish "the owner said
+   nothing" from "the owner explicitly wants the tone tonight", because the wire protocol
+   cannot express the second one. Adding such a field was judged out of this fix's scope —
+   nobody asked for it, and inventing one is exactly the kind of unrequested surface this
+   codebase's own discipline (`CLAUDE.md`) warns against; it is named here as a real,
+   still-open gap for whichever milestone next touches `MediaIn`.
+2. **Never a silent fallback (spec §1.5 item 5, restated by the owner as "record why"):**
+   `WakeSequence.fire` now writes a `media_failure_reason` onto the alarm's own
+   `detail_json` — and therefore onto `GET /v1/alarms/{id}` via `alarm_dict` — whenever a
+   YouTube attempt was genuinely made and did not play (challenge, autoplay block, no media
+   element, an unverified `media.play`, a session that would not open). It is deliberately
+   NOT set when the alarm never asked for media at all (nothing failed; there is nothing to
+   explain — the same "no receipt for a thing nobody asked for" rule `_start_media`'s own
+   docstring already states for the receipt layer). Cleared on every snooze, so the field
+   never describes a ring that has not happened yet. This was previously visible only
+   buried in per-step `ActionReceipt` rows in the ledger (real, but not what
+   `GET /v1/alarms/{id}` — the one place named in the owner's own directive — could answer
+   from).
+3. **What "verified" means for `browser.media_play` was already correct and is now pinned
+   down by a named helper** (`_media_step_fully_succeeded`) rather than left implicit in the
+   fallback branching: `browser.session_open` succeeding, or `media.play` merely returning
+   `playing: true`, is never treated as proof of playback — only `verified: true` (the
+   element's own `currentTime` read-back, decision 4 above) is. No behaviour changed here;
+   this addendum states the invariant by name and pins it with a regression test, because
+   the owner's directive asked specifically whether this system was upgrading a weaker
+   signal to a stronger claim, and the answer, checked, is no.
+4. **Qualified with a harmless corpus URL, never the owner's real song**
+   (`https://www.youtube.com/watch?v=CorpusApprovedWakeSong`, `tests/voice_corpus/corpus.py`
+   and the unit suites) — owner action `SET_OWNER_DEFAULT_WAKE_MUSIC_URL`
+   (`docs/OWNER_ACTIONS.md` item 34) is where the real URL goes, by the owner's own hand,
+   exactly as `set_wake_song`'s existing rule already requires.
+
+**Consequences.** A normal "Yarın 07:30'da beni uyandır." now plays the owner's approved
+wake song once one is set, with the tone staying exactly what it was for an owner who never
+sets one. **Named gap, not fixed here**: there is still no way to ask, by voice or by
+`POST /v1/alarms`, for the tone WHILE an approved wake song exists (item A's own finding,
+not invented by this fix) — the wire protocol has no "explicit tone" field, and building
+one was judged out of scope. **Also found, not this defect but adjacent, both closed with
+their own regression tests**: `cancel_alarm` never calls `stop_playback` — measured safe,
+because the alarm state machine (`app/alarms/state.py`) makes `CANCELLED` reachable only
+from `SCHEDULED`/`ARMED`/`SNOOZED`, never from an active/ringing state, so there is
+structurally nothing playing to stop when a cancel can legally happen; and the existing
+`max_play_seconds` completion test only ever exercised the tone path, so a YouTube media
+session left open past `COMPLETED` would have gone unnoticed — now covered explicitly.
+
 ## ADR-0074 — A short research is allowed to be thin, never empty by accident (2026-09-07)
 
 Status: Accepted

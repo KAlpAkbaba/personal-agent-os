@@ -125,6 +125,30 @@ evidence. A camera that stops delivering, a stale state, an alarm, or any recent
 mouse, command or return holds the screens on — and those holdoffs now survive a Cloud
 Core restart. Nothing here needs sound; this item stays the one physical check.
 
+### 34. SET_OWNER_DEFAULT_WAKE_MUSIC_URL — put your real wake song behind every plain alarm — **`READY_FOR_OWNER` (no production release yet; the fix is gated on its own worktree branch — see `docs/DECISIONS.md` for the branch and commit once it merges)**
+
+Fixed 2026-09-08 (your own words: "the wake alarm produces the internal beep [...]
+Owner-selected YouTube music is PRIMARY; the local tone is EMERGENCY FALLBACK ONLY"): a
+plain "Yarın 07:30'da beni uyandır." with no song named now plays your APPROVED wake song
+if one is set, and only the tone when none is. Nothing here invented a song on your
+behalf — `PUT /v1/alarms/wake-song` is still the one place that happens, and it is still
+only ever a URL you gave. Two ways to set it, neither run by the agent:
+
+```powershell
+# Either: durably, on its own, with your real URL —
+Invoke-RestMethod -Method Put -Uri "https://<core>/v1/alarms/wake-song" `
+  -Body (@{url = "https://www.youtube.com/watch?v=..."; title = "..."} | ConvertTo-Json) `
+  -ContentType "application/json" -WebSession $ownerSession
+
+# Or: as a side effect of running item 25's qualification with -MusicUrl (the script
+# already calls the same route — see scripts/core/owner-m18-3-alarm.ps1 lines ~293-297).
+```
+
+Until you set one, every plain alarm keeps ringing the tone exactly as before — this item
+only turns the fix from PROVEN_PROXY (the harmless corpus test URL
+`https://www.youtube.com/watch?v=CorpusApprovedWakeSong` — never invented as YOUR song)
+into something you can hear for real. Not urgent, not blocking anything else below it.
+
 ### 24. Look at the Living Core — **M18.3 qualification A — `READY_FOR_OWNER_VISUAL_TEST` (web only: no release, no install; gates green 2026-09-07 - 810 web tests, tsc, lint, production build; the in-app preview here sits behind your login, so nobody has seen the WebGL scene but you)**
 
 The small wireframe is gone. `/core` is now a full-viewport gold and amber Core: nine

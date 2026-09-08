@@ -36,6 +36,15 @@ CTX_NONE: Final = "none"
 CTX_RESEARCH_FOCUS_B: Final = "research_focus_b"  # A (older) and B (newer, focused), one title
 CTX_ALARM_RINGING: Final = "alarm_ringing"
 CTX_ALARM_SCHEDULED: Final = "alarm_scheduled"
+#: 2026-09-08 wake-song defect fix: the owner has already approved a wake song
+#: (``alarms_service.set_wake_song``) — the one precondition a plain "Yarın 07:30'da beni
+#: uyandır." (no media named) needs to resolve to something real rather than the tone, the
+#: same "genuine fixture, not a sentinel" discipline every other CTX_*_FOCUSED context
+#: already uses.
+CTX_ALARM_WAKE_SONG_SET: Final = "alarm_wake_song_set"
+#: The harmless test URL the harness approves under ``CTX_ALARM_WAKE_SONG_SET`` (directive
+#: item H: never the owner's real song). A corpus-only fixture id, never a real video.
+CTX_ALARM_WAKE_SONG_URL: Final = "https://www.youtube.com/watch?v=CorpusApprovedWakeSong"
 CTX_EYE_DISABLED: Final = "eye_disabled"
 #: M19 (docs/M19_DIGITAL_OPERATOR_SPEC.md §5): a window ("w-1", and an older "w-0") is
 #: already the durable object focus - the window-control and type-text families resolve
@@ -644,6 +653,163 @@ def _alarm_control_cases() -> list[UtteranceCase]:
                 context=CTX_ALARM_SCHEDULED,
                 category="alarm",
                 source=source,
+            )
+        )
+    return cases
+
+
+def _alarm_wake_song_cases() -> list[UtteranceCase]:
+    """The 2026-09-08 wake-song defect fix, as corpus cases — its own function (directive
+    item G) so a parallel track's alarm work does not collide with this one in the same
+    function body.
+
+    Every fact below was MEASURED against ``app/voice/intents.py::resolve_intent`` and
+    ``app/alarms/tr_time.py::parse_when_text`` on this checkout with a small probe script,
+    not assumed from the phrase's wording — the directive's own rule ("no test asserts
+    something the code cannot fail") applies to what a case EXPECTS, not only to what it
+    asserts:
+
+    1. "Yarın 07:30'da beni uyandır." (spec §6's own canonical phrase, already a
+       registered case elsewhere under ``CTX_NONE`` — reused here under a NEW case id,
+       under ``CTX_ALARM_WAKE_SONG_SET``) is the one that actually exercises the fix
+       itself: no media named on the utterance, an approved wake song in context,
+       ``resolved_media_identity`` must be the song, never the tone.
+    2. "Yarın bununla uyandır." names no clock time at all — ``parse_when_text`` genuinely
+       raises ``no clock time or offset found`` for it, so the REAL, honest outcome is the
+       SAME refusal "Yarın alarm kur." already gets (``a.unparsed.2``): ``when_unparsed``,
+       nothing created. Kept under ``CTX_ALARM_WAKE_SONG_SET`` on purpose — an approved
+       wake song existing must not make the system start GUESSING a time it was never
+       given (the fix must never trade one invented value for another).
+    3. Every phrase about the wake song ITSELF — setting it ("Bu şarkıyı alarm müziğim
+       yap.", "Alarm müziğim bu olsun.", "Alarm müziğimi değiştir.") or asking what it is
+       ("Alarm müziğim ne?") — resolves to NO intent at all today: there is no voice tool
+       for ``PUT/GET /v1/alarms/wake-song`` (only the owner-session REST route exists,
+       ``app/alarms/routes.py``). Same for "Sabah yedi buçukta bu şarkıyı çal.": "çal"
+       ("play") is not one of the alarm family's recognised verbs
+       (``_SET_VERB_FORMS``/``_WAKE_VERB_STEMS``), so an otherwise perfectly natural way to
+       ask for a musical alarm falls through too. These are real gaps (recorded in the
+       task's completion report, not silently "fixed" here by inventing a tool nobody
+       asked to build) — the cases pin down that they fail SAFELY: no phantom alarm, no
+       research route, no unrelated browser action, exactly the ``doc.neg.delete`` pattern
+       (``tests/voice_corpus/corpus.py``'s own precedent for "the router resolves nothing,
+       on purpose").
+    """
+    cases: list[UtteranceCase] = []
+    explicit_url = "https://www.youtube.com/watch?v=CorpusWakeSongA"
+
+    # 1. The fix itself: no media named, an approved wake song in context.
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="a.wakesong.default",
+                utterance="Yarın 07:30'da beni uyandır.",
+                expected_intent="alarm_create",
+                expected_tool="alarm.create",
+                expected={"local_time": "07:30", "resolved_media_url": CTX_ALARM_WAKE_SONG_URL},
+                forbidden_tools=("research.start",),
+                context=CTX_ALARM_WAKE_SONG_SET,
+                category="alarm",
+                source="canonical",
+                regression_issue_id="owner report 2026-09-08: tone instead of the approved song",
+            )
+        )
+    )
+    # 1b. The same context must not turn an unparseable time into a guess — the fix only
+    #     ever fills in MEDIA, never invents a "when" the owner did not say.
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="a.wakesong.deictic_no_time",
+                utterance="Yarın bununla uyandır.",
+                expected_intent="alarm_create",
+                expected_tool="alarm.create",
+                expected_response=RESPONSE_REFUSED,
+                expected={"error_class": "when_unparsed"},
+                context=CTX_ALARM_WAKE_SONG_SET,
+                category="alarm",
+                source="canonical",
+                regression_issue_id=(
+                    "no clock time in the utterance; must stay refused, never guessed"
+                ),
+            )
+        )
+    )
+
+    # 2. An explicit URL still wins (spec's own rule, unchanged by the fix) — across the
+    #    time forms the directive names: 07:30 / 7.30 / yedi buçuk / yedi otuz.
+    time_forms = [
+        ("a.wakesong.url.1", "Yarın 7:30'da bu YouTube linkiyle beni uyandır.", "07:30"),
+        ("a.wakesong.url.2", "Yarın 7.30'da bu YouTube linkiyle beni uyandır.", "07:30"),
+        ("a.wakesong.url.3", "Yarın yedi buçukta bu YouTube linkiyle beni uyandır.", "07:30"),
+        ("a.wakesong.url.4", "Yarın yedi otuzda bu YouTube linkiyle beni uyandır.", "07:30"),
+    ]
+    for case_id, text, local_time in time_forms:
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="alarm_create",
+                    expected_tool="alarm.create",
+                    expected={"local_time": local_time, "resolved_media_url": explicit_url},
+                    forbidden_tools=("research.start",),
+                    tool_arguments={"media": {"url": explicit_url}},
+                    context=CTX_NONE,
+                    category="alarm",
+                    source="canonical",
+                )
+            )
+        )
+
+    # 3. No voice path exists for the wake song itself — every one of these must resolve
+    #    to NOTHING, never a phantom alarm, a research call or a stray media action.
+    no_tool_phrases = [
+        ("a.wakesong.set.1", "Bu şarkıyı alarm müziğim yap."),
+        ("a.wakesong.set.2", "Alarm müziğim bu olsun."),
+        ("a.wakesong.set.3", "Alarm müziğimi değiştir."),
+        ("a.wakesong.query.1", "Alarm müziğim ne?"),
+    ]
+    for case_id, text in no_tool_phrases:
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="none",
+                    expected_tool=None,
+                    expected_response=RESPONSE_NONE,
+                    side_effects=SIDE_EFFECTS_NONE,
+                    context=CTX_NONE,
+                    category="alarm",
+                    source="canonical",
+                    regression_issue_id="no voice tool for the wake song, only the REST route",
+                )
+            )
+        )
+
+    # "çal" ("play") names music but is not a recognised alarm verb — every time form the
+    # directive names, so the gap is pinned down consistently rather than by accident.
+    play_verb_times = [
+        ("a.wakesong.playverb.1", "Sabah 07:30'da bu şarkıyı çal."),
+        ("a.wakesong.playverb.2", "Sabah 7.30'da bu şarkıyı çal."),
+        ("a.wakesong.playverb.3", "Sabah yedi buçukta bu şarkıyı çal."),
+        ("a.wakesong.playverb.4", "Sabah yedi otuzda bu şarkıyı çal."),
+    ]
+    for case_id, text in play_verb_times:
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="none",
+                    expected_tool=None,
+                    expected_response=RESPONSE_NONE,
+                    side_effects=SIDE_EFFECTS_NONE,
+                    context=CTX_NONE,
+                    category="alarm",
+                    source="canonical",
+                    regression_issue_id="'çal' is not a recognised alarm-create verb",
+                )
             )
         )
     return cases
@@ -3779,6 +3945,7 @@ def all_cases() -> list[UtteranceCase]:
         *_research_cases(),
         *_alarm_create_cases(),
         *_alarm_control_cases(),
+        *_alarm_wake_song_cases(),
         *_display_cases(),
         *_eye_cases(),
         *_control_cases(),
@@ -3801,6 +3968,8 @@ __all__ = [
     "CORPUS_VERSION",
     "CTX_ALARM_RINGING",
     "CTX_ALARM_SCHEDULED",
+    "CTX_ALARM_WAKE_SONG_SET",
+    "CTX_ALARM_WAKE_SONG_URL",
     "CTX_COUNTERBOX_RUNNING",
     "CTX_EYE_DISABLED",
     "CTX_LAMPBOX_RUNNING",

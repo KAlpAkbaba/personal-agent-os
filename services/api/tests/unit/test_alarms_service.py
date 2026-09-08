@@ -489,6 +489,81 @@ def test_a_test_alarm_cleans_itself_up_on_every_terminal_state(
     assert len(cleaned) == 1
 
 
+def test_a_youtube_alarm_completing_its_bound_actually_stops_the_media_session(
+    session, sequence, device
+):
+    """Directive 2026-09-08 item F: the restore/stop must happen on the bounded
+    ``max_play_seconds`` completion too, proven against a YOUTUBE alarm specifically — the
+    existing completion test only ever used the tone, so a media session left open past
+    completion (an alarm quietly playing music forever after the app called it COMPLETED)
+    would have gone unnoticed."""
+    alarm = _create(
+        session,
+        when=parse_when_struct({"relative_seconds": 5}, now=NOW),
+        is_test=True,
+        media={"url": "https://youtube.com/watch?v=x"},
+    )
+    fired_at = NOW + timedelta(seconds=10)
+    _fire_now(session, sequence, alarm, fired_at)
+    session.refresh(alarm)
+    assert alarm.media_kind == PLAYED_KIND_YOUTUBE
+    device.reset()
+
+    expired_at = fired_at + timedelta(seconds=TEST_MAX_PLAY_SECONDS + 1)
+    alarms_service.tick(session, sequence=sequence, now=expired_at)
+    alarms_service.tick(session, sequence=sequence, now=expired_at + timedelta(seconds=1))
+    session.refresh(alarm)
+    assert alarm.state == STATE_COMPLETED
+    assert device.count("browser.media_stop") == 1
+    assert alarm.media_session_id is None
+
+
+def test_snoozing_a_youtube_alarm_stops_the_media_session_not_just_the_row(
+    session, sequence, device
+):
+    """The same fact (item F), through ``alarm.snooze`` rather than the timer: the owner's
+    music must not keep playing under a snooze that has already re-armed the alarm for
+    later."""
+    alarm = _create(
+        session,
+        when=parse_when_struct({"relative_seconds": 5}, now=NOW),
+        media={"url": "https://youtube.com/watch?v=x"},
+    )
+    fired_at = NOW + timedelta(seconds=10)
+    _fire_now(session, sequence, alarm, fired_at)
+    session.refresh(alarm)
+    assert alarm.media_kind == PLAYED_KIND_YOUTUBE
+    device.reset()
+
+    alarms_service.snooze_alarm(session, alarm.id, minutes=5, sequence=sequence, now=fired_at)
+    session.refresh(alarm)
+    assert alarm.state == STATE_ARMED
+    assert device.count("browser.media_stop") == 1
+    assert alarm.media_session_id is None
+
+
+def test_a_snooze_clears_a_stale_media_failure_reason_from_the_previous_ring(
+    session, sequence, device
+):
+    """``GET /v1/alarms/{id}`` must never explain a ring that has not happened yet: a
+    media failure recorded on the ring just snoozed away must not still be there once the
+    alarm is armed again for later."""
+    device.results["browser.media_play"] = failed("challenge")
+    alarm = _create(
+        session,
+        when=parse_when_struct({"relative_seconds": 5}, now=NOW),
+        media={"url": "https://youtube.com/watch?v=x"},
+    )
+    fired_at = NOW + timedelta(seconds=10)
+    _fire_now(session, sequence, alarm, fired_at)
+    session.refresh(alarm)
+    assert alarms_service.alarm_dict(alarm)["media_failure_reason"]
+
+    alarms_service.snooze_alarm(session, alarm.id, minutes=5, sequence=sequence, now=fired_at)
+    session.refresh(alarm)
+    assert alarms_service.alarm_dict(alarm)["media_failure_reason"] is None
+
+
 def test_a_recurring_alarm_is_rescheduled_rather_than_left_terminal(session, sequence):
     when = parse_when_text("Her hafta içi 07:15'te beni uyandır.", now=NOW)
     alarm = _create(session, when=when)

@@ -223,6 +223,24 @@ def _error_class_for(result: DeviceRunResult) -> str | None:
     return result.error_class or ERROR_CAPABILITY_MISSING
 
 
+def _media_step_fully_succeeded(step: StepOutcome) -> bool:
+    """Whether ``step`` is genuine evidence of playback, not merely a transport success.
+
+    ``StepOutcome.ok`` alone is not enough for ``browser.media_play``: a device call that
+    returned 200 but never verified ``currentTime`` advancing is ``ok`` (its terminal
+    status is ``unverified``, not ``failed`` — the same read-back discipline every step
+    here follows) yet is exactly the outcome ``_start_media`` treats as a failed play
+    (item D: "browser.session_open succeeding is NOT proof that music is playing"). Every
+    other step (``browser.session_open``, ``browser.media_volume``) has no such extra
+    requirement — ``ok`` is enough.
+    """
+    if not step.ok:
+        return False
+    if step.capability == CAPABILITY_BROWSER_MEDIA_PLAY:
+        return step.result.get("verified") is True
+    return True
+
+
 class WakeSequence:
     """Runs the physical steps of a wake alarm and writes a receipt for each.
 
@@ -480,11 +498,32 @@ class WakeSequence:
         # 3. Audio. The owner's media first, the device's own tone as the fallback.
         _to(STATE_MEDIA_STARTING)
         media_kind: str | None = None
+        media_failure_reason: str | None = None
         media_steps, media_ok = self._start_media(db, alarm, firing_id=firing_id, now=moment)
         steps.extend(media_steps)
         if media_ok:
             media_kind = PLAYED_KIND_YOUTUBE
         else:
+            if media_steps:
+                # The owner's media was genuinely attempted (``media_steps`` is empty when
+                # nothing was ever asked for, ``_start_media``'s own docstring) and it did
+                # not play. Directive 2026-09-08 item C ("never silently fall back. Record
+                # why."): this is the one fact ``GET /v1/alarms/{id}`` must be able to
+                # answer "neden zil çaldı, müzik değil?" from — never only a receipt buried
+                # in the ledger. A step can be ``ok`` at the transport level yet still be
+                # the reason the music did not play (an unverified ``media.play`` — see
+                # ``_start_media``'s own comment on why ``verified`` is what is trusted,
+                # not ``playing``), so every step that is not a full success contributes,
+                # reading its OWN reported reason first (the browser's "challenge" /
+                # "autoplay_blocked" / ... travels in the result payload, not on the step).
+                pieces = [
+                    piece
+                    for s in media_steps
+                    if not _media_step_fully_succeeded(s)
+                    for piece in (s.error_class or s.reason or str(s.result.get("reason") or ""),)
+                    if piece
+                ]
+                media_failure_reason = "; ".join(pieces) or "media_unverified"
             tone_step = self._start_tone(db, alarm, firing_id=firing_id, now=moment)
             steps.append(tone_step)
             if tone_step.ok:
@@ -503,7 +542,16 @@ class WakeSequence:
         alarm.greeting_due_at = moment + timedelta(
             seconds=ramp_seconds + GREETING_DELAY_AFTER_RAMP_S
         )
-        _to(STATE_PLAYING, media_kind=media_kind)
+        # Durable and readable (item C): cleared on a fresh success, set on a genuine
+        # fallback — never left over from a previous occurrence's ring.
+        detail = {k: v for k, v in (alarm.detail_json or {}).items() if k != "media_failure_reason"}
+        if media_failure_reason:
+            detail["media_failure_reason"] = media_failure_reason
+        alarm.detail_json = detail
+        playing_detail: dict[str, Any] = {"media_kind": media_kind}
+        if media_failure_reason:
+            playing_detail["media_failure_reason"] = media_failure_reason
+        _to(STATE_PLAYING, **playing_detail)
         return FireResult(state=STATE_PLAYING, media_kind=media_kind, steps=steps)
 
     def _start_media(

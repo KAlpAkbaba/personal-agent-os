@@ -131,6 +131,8 @@ from tests.mail_calendar_support import build_fake_calendar_provider, build_fake
 from tests.voice_corpus.corpus import (
     CTX_ALARM_RINGING,
     CTX_ALARM_SCHEDULED,
+    CTX_ALARM_WAKE_SONG_SET,
+    CTX_ALARM_WAKE_SONG_URL,
     CTX_APP_RUNNING,
     CTX_APP_SCAFFOLDED,
     CTX_ARTIFACT_FOCUSED,
@@ -414,6 +416,14 @@ class Harness:
                     assert decision.fired, decision
             self.ids["alarm"] = str(alarm_id)
             self.device.reset()
+        elif context == CTX_ALARM_WAKE_SONG_SET:
+            # 2026-09-08 wake-song defect fix: the owner has already approved a wake song
+            # once (``PUT /v1/alarms/wake-song``) — the precondition a PLAIN alarm-create
+            # phrase (no media named) needs to resolve to the song rather than the tone.
+            with self.factory() as db:
+                alarms_service.set_wake_song(
+                    db, url=CTX_ALARM_WAKE_SONG_URL, title="Corpus Wake Song"
+                )
         elif context == CTX_EYE_DISABLED:
             with self.factory() as db:
                 disable_eye(db, reason="corpus_context", action_id="corpus-eye-off")
@@ -1486,6 +1496,15 @@ def run_case(case: UtteranceCase, *, harness: Harness | None = None) -> CaseResu
                 result.problems.append("weekdays mismatch")
             elif key == "is_test" and (body.get("alarm") or {}).get("is_test") is not want:
                 result.problems.append("is_test mismatch")
+            elif key == "resolved_media_url":
+                # 2026-09-08 wake-song defect fix: the exact URL that will actually play —
+                # never invented, never rewritten (directive item G, "assert ... the exact
+                # URL").
+                got_url = ((body.get("alarm") or {}).get("resolved_media_identity") or {}).get(
+                    "url"
+                )
+                if got_url != want:
+                    result.problems.append(f"resolved_media_url {got_url!r} != {want!r}")
             elif key == "routed" and body.get("routed") != want:
                 result.problems.append(f"routed {body.get('routed')!r} != {want!r}")
             elif key == "routed_not" and body.get("routed") == want:
