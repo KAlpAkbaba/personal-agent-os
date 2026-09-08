@@ -7,6 +7,8 @@ re-validated, no free text in generated source outside ``repr``/``json.dumps``
 from __future__ import annotations
 
 import ast
+import json
+from pathlib import Path
 
 from app.evolution.errors import EvolutionError
 from app.evolution.evaluation import run_skill_script
@@ -25,6 +27,12 @@ def _spec(raw, operation_id, **kwargs):
     )
 
 
+_EXPECTED_LAYOUT_PATH = (
+    Path(__file__).resolve().parents[1] / "fixtures" / "genesis" / "expected_layout.json"
+)
+EXPECTED_LAYOUT = json.loads(_EXPECTED_LAYOUT_PATH.read_text(encoding="utf-8"))
+
+
 def test_renders_the_full_layout_for_both_fixtures(tmp_path):
     for raw, op in ((COUNTERBOX_RAW, "increment"), (LAMPBOX_RAW, "set")):
         spec = _spec(raw, op)
@@ -36,6 +44,28 @@ def test_renders_the_full_layout_for_both_fixtures(tmp_path):
         assert layout.test_path.is_file()
         assert layout.eval_path.is_file()
         assert layout.cases_path.is_file()
+
+
+def test_rendered_layout_matches_the_declared_expected_layout(tmp_path):
+    """``tests/fixtures/genesis/expected_layout.json`` names the files the
+    adapter must render — a template with ``{skill}`` filled from the actual
+    skill name, checked here so a future change to the layout must update the
+    declaration or fail this test, never drift silently."""
+    spec = _spec(COUNTERBOX_RAW, "increment")
+    layout = HttpAdapterGenerator().generate(spec, tmp_path)
+    skill = spec.skill_name
+
+    def _names(paths: list[str]) -> set[str]:
+        return {p.format(skill=skill) for p in paths}
+
+    assert {p.name for p in (layout.manifest_path, layout.readme_path)} == _names(
+        EXPECTED_LAYOUT["root_files"]
+    )
+    assert {layout.module_path.name} == _names(EXPECTED_LAYOUT["src_files"])
+    assert {layout.test_path.name} == _names(EXPECTED_LAYOUT["tests_files"])
+    assert {layout.eval_path.name, layout.cases_path.name} == _names(
+        EXPECTED_LAYOUT["evals_files"]
+    )
 
 
 def test_generation_is_deterministic(tmp_path):
