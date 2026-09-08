@@ -101,7 +101,9 @@ def calendar_agenda(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, An
     when_spoken = str(arguments.get("when_spoken") or "bugün")
     start, end = _day_bounds(ctx, when_spoken)
     label = "today" if start.date() == _local_now(ctx).date() else start.date().isoformat()
-    return service.agenda(db, start=start, end=end, range_label=label, session_id=str(ctx.session_id))
+    return service.agenda(
+        db, start=start, end=end, range_label=label, session_id=str(ctx.session_id)
+    )
 
 
 def calendar_find_slot(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -153,7 +155,9 @@ def calendar_propose(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, A
     day = tr_time.resolve_date(now, hint)
     clock = tr_time.extract_clock(when_spoken)
     hour, minute = clock or (now.hour, 0)
-    start = datetime.combine(day, datetime.min.time(), tzinfo=_ZONE).replace(hour=hour, minute=minute)
+    start = datetime.combine(day, datetime.min.time(), tzinfo=_ZONE).replace(
+        hour=hour, minute=minute
+    )
     duration = arguments.get("duration_minutes")
     duration_minutes = (
         int(duration)
@@ -266,7 +270,9 @@ def register_calendar_tools(reg: ToolRegistry) -> ToolRegistry:
     reg.register(
         ToolSpec(
             name=TOOL_CALENDAR_READ_PROPOSAL,
-            description="ODAKTAKİ ÖNERİYİ aynen okur: 'Öneriyi oku'. Dönen 'speech' metnini aynen oku.",
+            description=(
+                "ODAKTAKİ ÖNERİYİ aynen okur: 'Öneriyi oku'. Dönen 'speech' metnini aynen oku."
+            ),
             parameters={"type": "object", "properties": {}, "additionalProperties": False},
             handler=calendar_read_proposal,
         )

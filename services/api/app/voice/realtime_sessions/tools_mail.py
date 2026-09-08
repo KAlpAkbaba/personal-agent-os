@@ -301,7 +301,9 @@ def register_mail_tools(reg: ToolRegistry) -> ToolRegistry:
     reg.register(
         ToolSpec(
             name=TOOL_MAIL_READ_DRAFT,
-            description="ODAKTAKİ TASLAĞI aynen okur: 'Cevabı oku'. Dönen 'speech' metnini aynen oku.",
+            description=(
+                "ODAKTAKİ TASLAĞI aynen okur: 'Cevabı oku'. Dönen 'speech' metnini aynen oku."
+            ),
             parameters={"type": "object", "properties": {}, "additionalProperties": False},
             handler=mail_read_draft,
         )

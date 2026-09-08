@@ -21,8 +21,13 @@ from app.actions.confirmation_gate import (
     GATE_SEND_DISABLED,
 )
 from app.ledger.models import ActivityEventRow
-from app.mail.models import DRAFT_STATE_DISCARDED, DRAFT_STATE_PREPARED, DRAFT_STATE_SENT, MailDraftRow, MailIndexRow
-from app.mail.providers import DraftInput, ImapMailProvider, SmtpMailSender
+from app.mail.models import (
+    DRAFT_STATE_DISCARDED,
+    DRAFT_STATE_PREPARED,
+    MailDraftRow,
+    MailIndexRow,
+)
+from app.mail.providers import ImapMailProvider, SmtpMailSender
 from app.mail.service import MailService
 from app.operator.models import ObjectFocusRow
 from tests.mail_calendar_support import (
@@ -42,7 +47,12 @@ def db():
     engine = create_engine(
         "sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False}
     )
-    for table in (MailIndexRow.__table__, MailDraftRow.__table__, ObjectFocusRow.__table__, ActivityEventRow.__table__):
+    for table in (
+        MailIndexRow.__table__,
+        MailDraftRow.__table__,
+        ObjectFocusRow.__table__,
+        ActivityEventRow.__table__,
+    ):
         table.create(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
     with factory() as session:
@@ -64,7 +74,10 @@ def test_every_method_answers_account_missing_with_no_provider(db) -> None:
     assert service.read(db)["error_class"] == "account_missing"
     assert service.thread(db)["error_class"] == "account_missing"
     assert service.draft_reply(db, body="x")["error_class"] == "account_missing"
-    assert service.draft_new(db, to="a@b.com", subject="s", body="x")["error_class"] == "account_missing"
+    assert (
+        service.draft_new(db, to="a@b.com", subject="s", body="x")["error_class"]
+        == "account_missing"
+    )
     for r in (
         service.inbox_summary(db)["speech"],
         service.read(db)["speech"],
@@ -81,7 +94,11 @@ def test_inbox_summary_matches_the_oracle(db) -> None:
     assert result["execution_status"] == "executed"
     assert result["count"] == TRUTH["counts"]["INBOX"]
     assert result["unread"] == TRUTH["unread_inbox"]
-    got_unread_uids = sorted(int(m["message_id"].split("@")[0].removeprefix("<m")) for m in result["messages"] if m["unread"])
+    got_unread_uids = sorted(
+        int(m["message_id"].split("@")[0].removeprefix("<m"))
+        for m in result["messages"]
+        if m["unread"]
+    )
     assert got_unread_uids == sorted(TRUTH["unread_inbox_uids"])
 
 

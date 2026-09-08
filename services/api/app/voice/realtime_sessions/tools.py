@@ -49,11 +49,11 @@ from app.voice.realtime import RealtimeState
 from app.voice.realtime_sessions import actions
 from app.voice.realtime_sessions.sideband import SB_NARRATION_CURSOR, SB_PLAN_CHANGED
 from app.voice.realtime_sessions.tools_ambient import register_ambient_tools
+from app.voice.realtime_sessions.tools_calendar import register_calendar_tools
 from app.voice.realtime_sessions.tools_documents import (
     DOCUMENT_TOOL_NAMES,
     register_documents_tools,
 )
-from app.voice.realtime_sessions.tools_calendar import register_calendar_tools
 from app.voice.realtime_sessions.tools_evolution import register_evolution_tools
 from app.voice.realtime_sessions.tools_mail import register_mail_tools
 from app.voice.realtime_sessions.tools_operator import register_operator_tools

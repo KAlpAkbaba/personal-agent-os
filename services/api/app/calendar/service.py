@@ -18,8 +18,6 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
-from app.calendar.ics import DEFAULT_TIMEZONE
-
 from app.actions.confirmation_gate import (
     GATE_ACCOUNT_MISSING,
     GATE_ALREADY_SENT,
@@ -36,6 +34,7 @@ from app.actions.receipt import (
     ActionReceipt,
     record_receipt,
 )
+from app.calendar.ics import DEFAULT_TIMEZONE
 from app.calendar.models import (
     PROPOSAL_KIND_CREATE,
     PROPOSAL_KIND_RESCHEDULE,

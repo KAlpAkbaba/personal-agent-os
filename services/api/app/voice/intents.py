@@ -2649,7 +2649,9 @@ def resolve_intent(
             Intent.MAIL_SEND, scope=SCOPE_CONVERSATION, matched=send_matched, **base
         )
     if discard_matched := _discard_word_match(tokens):
-        capability = "calendar.discard" if (proposal_pending and not draft_pending) else "mail.discard"
+        capability = (
+            "calendar.discard" if (proposal_pending and not draft_pending) else "mail.discard"
+        )
         return ResolvedIntent(
             Intent.DISCARD,
             scope=SCOPE_CONVERSATION,
