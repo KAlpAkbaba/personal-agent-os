@@ -14,8 +14,11 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
+
+from app.calendar.ics import DEFAULT_TIMEZONE
 
 from app.actions.confirmation_gate import (
     GATE_ACCOUNT_MISSING,
@@ -77,12 +80,41 @@ _GATE_SPEECH: dict[str, str] = {
 }
 
 
+#: The owner's own zone (spec §2's product default) — every ``start``/``end`` is stored
+#: as a genuine UTC instant (see ``_utc``) and converted back to THIS zone at every
+#: display/serialisation boundary, so a value is never shown in whatever zone happened to
+#: survive a round trip.
+_ISTANBUL = ZoneInfo(DEFAULT_TIMEZONE)
+
+
 def _now() -> datetime:
     return datetime.now(UTC)
 
 
+def _aware(value: datetime) -> datetime:
+    """SQLite has no native timezone-aware column type — a ``DateTime(timezone=True))``
+    value round-trips through it NAIVE even though Postgres (production) keeps the real
+    offset. Every ``start``/``end``/``read_back_at``/``confirmed_at`` this service writes
+    is always a genuine UTC instant (``_utc`` below converts before assignment), so a
+    naive value read back is safely assumed UTC — the same rule
+    ``app.actions.confirmation_gate._aware`` already applies to the gate's own two
+    timestamps."""
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def _utc(value: datetime) -> datetime:
+    """The canonical STORED form for any timestamp column this service writes."""
+    return value.astimezone(UTC)
+
+
+def _local(value: datetime) -> datetime:
+    """The canonical DISPLAYED form: the owner's own zone, from a genuine (or
+    round-trip-recovered) UTC instant."""
+    return _aware(value).astimezone(_ISTANBUL)
+
+
 def _fmt_time(dt: datetime) -> str:
-    return dt.strftime("%d %B %Y %H:%M")
+    return _local(dt).strftime("%d %B %Y %H:%M")
 
 
 def _proposal_dict(row: CalendarProposalRow) -> dict[str, Any]:
@@ -91,13 +123,13 @@ def _proposal_dict(row: CalendarProposalRow) -> dict[str, Any]:
         "kind": row.kind,
         "event_uid": row.event_uid,
         "summary": row.summary,
-        "start": row.start.isoformat(),
-        "end": row.end.isoformat(),
+        "start": _local(row.start).isoformat(),
+        "end": _local(row.end).isoformat(),
         "location": row.location,
         "conflicts": list(row.conflicts_json or []),
         "state": row.state,
-        "read_back_at": row.read_back_at.isoformat() if row.read_back_at else None,
-        "confirmed_at": row.confirmed_at.isoformat() if row.confirmed_at else None,
+        "read_back_at": _local(row.read_back_at).isoformat() if row.read_back_at else None,
+        "confirmed_at": _local(row.confirmed_at).isoformat() if row.confirmed_at else None,
         "committed_event_uid": row.committed_event_uid,
     }
 
@@ -105,7 +137,7 @@ def _proposal_dict(row: CalendarProposalRow) -> dict[str, Any]:
 def _proposal_speech(row: CalendarProposalRow) -> str:
     verb = "taşımayı" if row.kind == PROPOSAL_KIND_RESCHEDULE else "eklemeyi"
     base = (
-        f"{row.summary}, {_fmt_time(row.start)} - {row.end.strftime('%H:%M')} olarak "
+        f"{row.summary}, {_fmt_time(row.start)} - {_local(row.end).strftime('%H:%M')} olarak "
         f"{verb} öneriyorum."
     )
     conflicts = list(row.conflicts_json or [])
@@ -344,8 +376,8 @@ class CalendarService:
             kind=PROPOSAL_KIND_CREATE,
             event_uid=None,
             summary=summary,
-            start=start,
-            end=end,
+            start=_utc(start),
+            end=_utc(end),
             location=location,
             conflicts_json=conflicts,
             state=PROPOSAL_STATE_PREPARED,
@@ -409,8 +441,8 @@ class CalendarService:
             kind=PROPOSAL_KIND_RESCHEDULE,
             event_uid=uid,
             summary=occ.summary,
-            start=new_start,
-            end=new_end,
+            start=_utc(new_start),
+            end=_utc(new_end),
             location=None,
             conflicts_json=conflicts,
             state=PROPOSAL_STATE_PREPARED,
@@ -461,18 +493,19 @@ class CalendarService:
         if row is None or row.state != PROPOSAL_STATE_PREPARED:
             return {"status": "needs_clarification", "speech": SPEECH_NO_PROPOSAL, "candidates": []}
         if start is not None:
-            row.start = start
+            row.start = _utc(start)
         if end is not None:
-            row.end = end
+            row.end = _utc(end)
         if summary is not None:
             row.summary = summary
+        row_start, row_end = _aware(row.start), _aware(row.end)
         conflicts: list[dict[str, str]] = []
         if self._provider is not None:
-            window_start = row.start - timedelta(hours=6)
-            window_end = row.end + timedelta(hours=6)
+            window_start = row_start - timedelta(hours=6)
+            window_end = row_end + timedelta(hours=6)
             busy = self._provider.events(window_start, window_end)
             conflicts = find_conflicts(
-                busy, start=row.start, end=row.end, exclude_uid=row.event_uid
+                busy, start=row_start, end=row_end, exclude_uid=row.event_uid
             )
         row.conflicts_json = conflicts
         now = _now()
@@ -595,8 +628,8 @@ class CalendarService:
             kind=row.kind,
             event_uid=row.event_uid,
             summary=row.summary,
-            start=row.start,
-            end=row.end,
+            start=_aware(row.start),
+            end=_aware(row.end),
             location=row.location,
         )
         if row.kind == PROPOSAL_KIND_RESCHEDULE and row.event_uid:
