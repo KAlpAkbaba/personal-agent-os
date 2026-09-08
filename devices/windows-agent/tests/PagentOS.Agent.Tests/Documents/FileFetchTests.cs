@@ -620,6 +620,12 @@ public sealed class FileFetchTests : IDisposable
 
         Assert.Equal(2, lab.Fetch.InFlight);
 
+        // InFlight counts the slot taken, the peer counts sockets it has ACCEPTED: on a loaded
+        // runner the listener's continuation can lag the handshake, so the peer's count is read
+        // only once it has seen both (CI run 34202322471 read 0 while both were connecting).
+        // The fact under test is the third one below: refused with no socket of its own.
+        Assert.Equal(2, raw.WaitForConnections(2, TimeSpan.FromSeconds(5)));
+
         var busy = lab.ExpectFailure(DocumentCapabilityNames.FileFetch, stall);
         Assert.Equal(ErrorClasses.DependencyUnavailable, busy.ErrorClass);
         Assert.True(busy.Retryable);
@@ -1226,6 +1232,18 @@ internal sealed class RawOrigin : IDisposable
     public int Connections => Volatile.Read(ref _connections);
 
     public int BytesSentOnStall => Volatile.Read(ref _bytesSentOnStall);
+
+    /// <summary>The accepted-socket count once it has reached <paramref name="count"/>, or whatever it is at the deadline.</summary>
+    public int WaitForConnections(int count, TimeSpan wait)
+    {
+        var deadline = DateTime.UtcNow + wait;
+        while (Connections < count && DateTime.UtcNow < deadline)
+        {
+            Thread.Sleep(20);
+        }
+
+        return Connections;
+    }
 
     /// <summary>How long after each stall began the peer closed the connection, once at least <paramref name="count"/> have.</summary>
     public IReadOnlyList<TimeSpan> WaitForPeerClose(int count, TimeSpan wait)
