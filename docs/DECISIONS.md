@@ -7112,6 +7112,106 @@ Decision 3's own wording ("one idempotent activity per step keyed by `(run, step
 
 **Residual gaps, stated plainly (not proven by this branch):** end-to-end reattachment by an actually-killed-and-restarted OS process (proven at the SDK/Temporal-replay boundary, per decision 5, not via a real process kill); the model-proposed-graph path (`ClaudeExecutivePlanner`) stays inert, per the spec's own instruction; a full production run of shapes (b)/(c) needs the owner's folder/mail account (ADR-0089's own named gap, unchanged); `artifacts.render`'s own kind handler is implemented against the closed vocabulary but no planner shape in this track emits it (no base case exercises it beyond its own unit-adjacent coverage via the activity dispatch table).
 
+### ADR-0089 addendum 2 — what the security review found, and one claim of mine it refuted (2026-09-09)
+
+The independent review ran against the merged milestone before its gate, with live proofs
+against the real objects rather than arguments from the code. Two real defects, one honest
+narrowing of an earlier claim, and one correction of something I had asserted in this
+session.
+
+1. **HIGH — an exception the activity could not classify killed the whole run, and the owner
+   was told the work was still going.** `run_step_activity` caught only `StepError`. Every
+   kind handler raises that for the failures it knows about and none catches anything else,
+   so an unclassified exception escaped the activity, `asyncio.gather` in
+   `ExecutiveWorkflow.run` had no guard, and the Temporal execution terminated. Because the
+   workflow deliberately holds no state, nothing ever wrote the row again: the step stayed
+   `running`, the run stayed `running`, and `explain` kept answering "şu an bunu yapıyorum
+   efendim" indefinitely. That is not a false `completed` — it is a false *still working*,
+   the same dishonesty inverted, and arguably worse because nothing ever settles to make it
+   visible. It also held one of only two run slots forever, and the single escape (`cancel`)
+   ran compensations across every already-VERIFIED sibling step, destroying honest work to
+   recover from an unrelated crash.
+
+   The trigger the reviewer found is ordinary, not exotic: a research summary longer than
+   `ArtifactSpec`'s 20,000-character bound raises pydantic's `ValidationError`, which is
+   exactly what "son üç gündeki gelişmeleri araştır, rapor hazırla" can produce. The review
+   also noted several handlers doing unguarded `uuid.UUID(str(...))` on service output, any
+   of which would take the identical path.
+
+   Closed in two layers, because there were two failures. The activity now classifies what
+   it cannot name (`ERROR_INTERNAL`, never retryable — an unclassified failure is not
+   evidence of a transient one — carrying the exception's own type so the receipt says what
+   happened). And the workflow no longer lets one activity's death escape its loop: a step
+   whose activity failed outright is settled through the same `_finalize` every other step
+   uses, so the run still reaches an honest `partial`/`failed`.
+
+2. **MEDIUM — the two-run bound was a count-then-insert race, proven live.** Two threads on
+   their own connections both passed the check and both committed, leaving three active runs
+   against a bound of two. The same shape as M24's approval CAS gap, and reachable by one
+   owner with a Cockpit tab and a voice turn. The count is now re-checked after the row is
+   in the transaction, which holds on both engines this repo runs.
+
+   The regression test for it was itself vacuous on the first attempt, and that is worth
+   recording: it used in-memory SQLite, which SQLAlchemy pools per THREAD, so the two racers
+   had two separate empty databases and could not contend at all. It passed with the fix
+   removed. It uses a file database now and was verified to go red without the fix — the
+   same discipline this milestone's contract guards are held to.
+
+3. **LOW — the restart-mid-run proof is narrower than decision 5 claimed.**
+   `test_worker_restart_mid_run_resumes_from_history` awaits the workflow to completion
+   FIRST and only then re-derives a handle, so it never queries or signals a reattached
+   handle while the run is genuinely in flight. Fetching a completed workflow's result by id
+   is SDK behaviour, not a property this workflow earned. Decision 5's framing — that the
+   two substitutes jointly cover the durability property — is hereby narrowed: idempotent
+   replay at the activity layer is proven directly and stands; mid-run reattachment is NOT
+   proven, and the residual-gaps note in addendum 1 understated it. The finding above makes
+   this sharper rather than softer: an in-flight workflow really can die, and until the two
+   fixes above it died with no recovery path that did not destroy verified work.
+
+4. **A claim of mine, refuted.** Earlier in this session I stated that a REST list can
+   observe a run in the `planned` state, in the window between the row's commit and the
+   workflow attaching. That is wrong on this build: `start_run_db` constructs the row with
+   `state=STATE_RUNNING` explicitly, and it is the only production construction site, so the
+   `planned` branch in `start_run_workflow`'s `persist()` is unreachable and the web's
+   `planned` posture is defensive rather than live. Decision 2's own wording ("never durably
+   visible as planned") was right and my measurement was not. The word stays in the wire
+   vocabulary because the row's column default is still `planned` and a future construction
+   path would land there, but nothing today can show it to an owner.
+
+5. **A defect the FIX introduced, found by a hang.** Worth recording because it was worse
+   than the finding it came from. The new `except Exception` branch was inserted between
+   `except StepError as exc: error = exc` and the retry decision that used to follow it
+   inside that same block — so the StepError branch was left with no `break`, no
+   `attempt += 1` and no retry check at all, and every classified step failure re-dispatched
+   the step in an unbounded hot loop. In a unit test that is one process at 100% CPU; in
+   production it is a real service called for ever. It was found the worst possible way:
+   `tests/unit/test_executive_activities.py` stopped producing output partway through, with
+   no message and no line number, and the whole suite hung behind it.
+
+   Two changes, not one. The retry decision now lives AFTER the try/except and serves both
+   classifications, which is the shape that cannot have this bug. And
+   `test_executive_review_findings.py` gained the bounded assertion that was missing: the
+   activity is driven with a scripted dispatch through `asyncio.wait_for`, so "runs for
+   ever" is a failed assertion in ten seconds rather than a stalled run, and the attempt
+   COUNT is asserted against the step's own `max_attempts` for a non-retryable class, a
+   retryable one, and a bound of one. Both were verified to go red against the broken loop.
+   The lesson is the one this repo keeps paying for from the other direction: a test that
+   catches a bug by hanging has not caught it.
+
+**Verified sound by the review, for the gate to cite**: no path reaches a send, payment,
+delete, publish or settings change — `high_risk` is defined and mapped to zero kinds, and
+`validate_graph` asserts its absence positively rather than relying on omission; the mail and
+calendar handlers call only `draft_reply` / `propose` / `discard`, and `app/executive` never
+references `MailService.send` or `CalendarService.commit` at all. `validate_graph` refuses
+same-or-later-step references including through `amend` (which re-validates the whole graph),
+and a planner cannot set its own `risk_class`, `compensation` or evidence — they come from
+the kind's fixed profile. `_evidence_meets_minimum` is never satisfied by an absent or empty
+comparison. Both cross-file contract guards were confirmed to BITE by breaking them. Every
+REST route is owner-gated and listed. The migration is expand-only. The planner reads only
+the owner's own directive text, so fetched web, mail and document content can never decide
+which steps exist. And the web renders executive fields as plain bounded strings with no
+`dangerouslySetInnerHTML` anywhere.
+
 ## ADR-0090 — the device identity chain, and what a rollback is allowed to say about the release it restores (2026-09-09)
 
 **Context — a production incident, 2026-09-08.** The owner ran

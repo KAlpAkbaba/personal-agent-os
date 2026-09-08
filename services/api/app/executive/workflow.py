@@ -31,7 +31,7 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
-    from app.executive.activities import run_step_activity
+    from app.executive.activities import run_step_activity, settle_crashed_step_activity
     from app.executive.refs import parse_reference
     from app.executive.spec import MAX_RUN_WALL_CLOCK_S, MAX_TIMEOUT_S
 
@@ -51,6 +51,26 @@ def _step_dependencies(step: dict[str, Any]) -> set[str]:
         if ref is not None:
             deps.add(ref[0])
     return deps
+
+
+def _crash_reason(exc: BaseException) -> str:
+    """The most specific honest description of why a step's activity died.
+
+    Temporal wraps whatever an activity raised in an ``ActivityError`` whose own str is
+    "Activity task failed" - true, and useless on a receipt the owner reads. What actually
+    happened is at the end of the cause chain: an ``ApplicationError`` carrying the
+    original exception's class name in its ``type``, or a timeout/cancellation of its own.
+    So walk to the root and name THAT, which is the difference between "the step did not
+    return" and "ValueError: something nobody classified".
+    """
+    root = exc
+    for _ in range(5):  # bounded: a malformed chain must not spin the workflow
+        if root.__cause__ is None:
+            break
+        root = root.__cause__
+    declared = getattr(root, "type", None)
+    name = declared if isinstance(declared, str) and declared else type(root).__name__
+    return f"{name}: {root}"[:400]
 
 
 def _retry_policy(step: dict[str, Any]) -> RetryPolicy:
@@ -242,9 +262,27 @@ class ExecutiveWorkflow:
             # interpret — it is already durably the STEP ROW's own state, written by
             # the activity; this workflow only needs to know the step SETTLED, so
             # something else can now be scheduled.
-            await asyncio.gather(
-                *(self._run_one(request.run_id, sid, steps[sid].timeout_s) for sid in batch)
+            # `return_exceptions=True` so ONE step's activity failure cannot end the
+            # run. It could, before the M26 security review: an unclassified exception
+            # escaped `run_step_activity`, propagated out of this gather, and terminated
+            # the whole execution - leaving the row saying `running` forever, holding one
+            # of the two run slots, and telling the owner the work was still going. The
+            # activity now classifies those itself (`ERROR_INTERNAL`); this is the second
+            # wall, for an activity that dies for a reason neither layer predicted. The
+            # step's own row is settled by `_settle_crashed_step` so the run still reaches
+            # an honest terminal state instead of waiting on a step nobody will finish.
+            outcomes = await asyncio.gather(
+                *(self._run_one(request.run_id, sid, steps[sid].timeout_s) for sid in batch),
+                return_exceptions=True,
             )
+            for sid, outcome in zip(batch, outcomes, strict=True):
+                if isinstance(outcome, BaseException):
+                    await workflow.execute_activity(
+                        settle_crashed_step_activity,
+                        args=[request.run_id, sid, _crash_reason(outcome)],
+                        start_to_close_timeout=timedelta(seconds=30),
+                        retry_policy=RetryPolicy(maximum_attempts=3),
+                    )
             for sid in batch:
                 settled.add(sid)
             self._current_step = None

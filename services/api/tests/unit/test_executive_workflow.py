@@ -50,15 +50,31 @@ def _graph(*steps: dict, goal: str = "test") -> dict:
 #: a callable(attempt_count) -> dict. Reset per test via the ``behaviors`` fixture.
 _BEHAVIORS: dict[str, object] = {}
 _CALL_COUNTS: dict[str, int] = {}
+#: Every crashed-step settle the workflow asked for, in order.
+_CRASH_SETTLES: list[tuple[str, str]] = []
 
 
 @pytest.fixture(autouse=True)
 def behaviors():
     _BEHAVIORS.clear()
     _CALL_COUNTS.clear()
+    _CRASH_SETTLES.clear()
     yield _BEHAVIORS
     _BEHAVIORS.clear()
     _CALL_COUNTS.clear()
+    _CRASH_SETTLES.clear()
+
+
+@activity.defn(name="executive_settle_crashed_step")
+async def fake_settle_crashed_step(run_id: str, step_id: str, reason: str) -> dict:
+    """The settler the workflow reaches for when a step's own activity died outright.
+
+    Records the call so a test can assert the run still settled rather than waiting forever
+    on a step nobody will finish — the M26 security review's HIGH, where an unclassified
+    exception ended the whole execution and left the row saying `running`.
+    """
+    _CRASH_SETTLES.append((step_id, reason))
+    return {"state": "failed", "error_class": "internal_error", "evidence": None}
 
 
 @activity.defn(name="executive_run_step")
@@ -81,8 +97,16 @@ async def fake_run_step(run_id: str, step_id: str) -> dict:
 
 async def _env_worker():
     env = await WorkflowEnvironment.start_time_skipping()
+    # BOTH activities the workflow can call. The settler is the M26 security review's
+    # second wall — a step whose activity died outright is settled so the run still reaches
+    # a terminal state — and an unregistered activity is not a wall, it is a wait: the
+    # workflow asks, nothing claims the task, and the test hangs. Which is exactly what
+    # happened the first time this was wired up.
     worker = Worker(
-        env.client, task_queue=TASK_QUEUE, workflows=[ExecutiveWorkflow], activities=[fake_run_step]
+        env.client,
+        task_queue=TASK_QUEUE,
+        workflows=[ExecutiveWorkflow],
+        activities=[fake_run_step, fake_settle_crashed_step],
     )
     return env, worker
 
@@ -328,3 +352,40 @@ async def test_run_ends_at_its_wall_clock_bound_if_never_cancelled() -> None:
         result = await handle.result()
     assert result["cancelled"] is False
     assert result["settled"] == ["s1"]
+
+
+@pytest.mark.asyncio
+async def test_a_step_whose_activity_dies_outright_does_not_end_the_run() -> None:
+    """The M26 security review's HIGH, at the layer where it actually happened.
+
+    An exception `run_step_activity` could not classify used to escape the activity, and
+    `asyncio.gather` let it terminate the whole Temporal execution. The workflow holds no
+    state by design, so nothing ever wrote the row again: the step stayed `running`, the run
+    stayed `running`, and the owner was told the work was still in progress - indefinitely,
+    while one of only two run slots stayed occupied.
+
+    Here `s1`'s activity raises something the fake cannot classify while an independent
+    `s2` in the SAME batch succeeds. What must hold: the workflow finishes, `s2`'s success
+    is not lost with it, and `s1` is settled rather than left for nobody to finish."""
+
+    def explode(_attempt: int) -> dict:
+        raise ValueError("something nobody classified")
+
+    _BEHAVIORS["s1"] = explode
+    _BEHAVIORS["s2"] = "verified"
+    env, worker = await _env_worker()
+    async with env, worker:
+        _rid, handle = await _start(env, _graph(_step("s1"), _step("s2"), goal="iki bagimsiz adim"))
+        result = await handle.result()
+
+    # The run reached its own end rather than dying with the step.
+    assert set(result["settled"]) == {"s1", "s2"}
+    # The sibling's real work survived.
+    assert _CALL_COUNTS.get("s2") == 1
+    # And the crashed step was settled, with its reason carried, so the row can reach a
+    # terminal state instead of saying `running` for ever.
+    assert [sid for sid, _ in _CRASH_SETTLES] == ["s1"]
+    # And it is settled with the ROOT cause, not Temporal's "Activity task failed"
+    # wrapper: a receipt that cannot say what happened is barely better than none.
+    assert "ValueError" in _CRASH_SETTLES[0][1], _CRASH_SETTLES
+    assert "something nobody classified" in _CRASH_SETTLES[0][1], _CRASH_SETTLES

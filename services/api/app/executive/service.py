@@ -87,6 +87,14 @@ def list_steps(db: Session, run_id: uuid.UUID) -> list[ExecutiveStepRow]:
     )
 
 
+def _too_many_active_runs() -> ExecutiveServiceError:
+    """One refusal, one sentence, raised from both sides of the bound check."""
+    return ExecutiveServiceError(
+        "too_many_active_runs",
+        "Aynı anda en fazla iki iş yürütebilirim efendim; önce birini bitirin ya da iptal edin.",
+    )
+
+
 def _count_active_runs(db: Session) -> int:
     return db.execute(
         select(func.count())
@@ -112,12 +120,10 @@ def start_run_db(
     :class:`ExecutiveServiceError` for every refusal — a directive matching none of the
     three shapes, or the active-run bound — never starts a workflow for a graph that was
     refused."""
+    # Checked twice, and the second one is the one that makes the bound TRUE. This
+    # first check only saves the planning work when the answer is already no.
     if _count_active_runs(db) >= MAX_ACTIVE_RUNS:
-        raise ExecutiveServiceError(
-            "too_many_active_runs",
-            "Aynı anda en fazla iki iş yürütebilirim efendim; önce birini bitirin ya da "
-            "iptal edin.",
-        )
+        raise _too_many_active_runs()
     try:
         graph = RuleBasedExecutivePlanner().plan(directive, folder=folder)
     except PlanningClarificationNeeded as exc:
@@ -145,6 +151,16 @@ def start_run_db(
     )
     db.add(run)
     db.flush()
+    # THE CHECK THAT COUNTS. Before the M26 security review there was only the one above,
+    # and between it and this insert nothing held the count still: the reviewer ran two
+    # threads on their own connections, both saw one active run, both inserted, and the
+    # database ended with three against a bound of two. Counting again now that this
+    # transaction's own row is flushed closes it on both engines — SQLite serializes write
+    # transactions, and on Postgres each concurrent inserter counts its own row plus every
+    # committed one, so the loser sees the bound broken and refuses rather than committing.
+    if _count_active_runs(db) > MAX_ACTIVE_RUNS:
+        db.rollback()
+        raise _too_many_active_runs()
     for step in graph.steps:
         db.add(
             ExecutiveStepRow(

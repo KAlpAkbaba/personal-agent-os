@@ -121,6 +121,11 @@ from app.uistate import UiState
 from app.uistate import publish as publish_ui_state
 from app.uistate.contract import SCENE_STEP_VERIFIED
 
+#: The step failed for a reason this code did not anticipate — never retried, because an
+#: unclassified failure is not evidence of a transient one, and always recorded with the
+#: exception's own type so the receipt says what happened rather than "something went wrong".
+ERROR_INTERNAL = "internal_error"
+
 
 class StepError(Exception):
     """A step failed for a classified reason. ``error_class`` drives BOTH the retry
@@ -1050,19 +1055,64 @@ async def run_step_activity(run_id: str, step_id: str) -> dict[str, Any]:
             break
         except StepError as exc:
             error = exc
-            retryable = exc.error_class in only_on
-            if not retryable or attempt >= max_attempts:
-                break
-            if activity.in_activity():  # false in a direct/unit-test call (no worker)
-                activity.heartbeat(f"retry {attempt}/{max_attempts}: {exc.error_class}")
-            await asyncio.sleep(backoff_s)
-            await asyncio.to_thread(_bump_attempt, run_uuid, step_id)
-            attempt += 1
+        except Exception as exc:  # noqa: BLE001 - see below; this is the point of the block
+            # A failure this code did not anticipate is still a failed STEP, never a dead
+            # RUN. Before the M26 security review this escaped the activity entirely: the
+            # workflow died mid-flight, and because the workflow holds no state the row was
+            # left saying "running" forever while the owner was told the work was still in
+            # progress. A real one was found in minutes — a research summary over
+            # ArtifactSpec's 20,000-character bound raises pydantic's ValidationError, not
+            # a StepError, and "son üç gündeki gelişmeleri araştır, rapor hazırla" is
+            # exactly how you get one.
+            #
+            # Classified here rather than in each handler on purpose: the same review found
+            # several handlers doing unguarded `uuid.UUID(str(...))` on service output, so a
+            # per-handler fix would only cover the ones someone remembered.
+            error = StepError(ERROR_INTERNAL, f"{type(exc).__name__}: {exc}"[:400])
+
+        # ONE retry decision, for BOTH classifications, deliberately outside the except
+        # blocks. The first version of this fix left it inside `except StepError` and put
+        # the new branch above it, so a classified failure had no `break` at all and this
+        # loop re-dispatched the step for ever at 100% CPU - a worse bug than the one being
+        # fixed, since it would have hammered a real service. `internal_error` can never be
+        # retryable here (it is not in RETRYABLE_ERROR_CLASSES, which is what `only_on` is
+        # validated against), so an unclassified failure still settles on its first attempt.
+        retryable = error.error_class in only_on
+        if not retryable or attempt >= max_attempts:
+            break
+        if activity.in_activity():  # false in a direct/unit-test call (no worker)
+            activity.heartbeat(f"retry {attempt}/{max_attempts}: {error.error_class}")
+        await asyncio.sleep(backoff_s)
+        await asyncio.to_thread(_bump_attempt, run_uuid, step_id)
+        attempt += 1
 
     return await asyncio.to_thread(_finalize, run_uuid, step_id, evidence=evidence, error=error)
 
 
-EXECUTIVE_ACTIVITIES = [run_step_activity]
+@activity.defn(name="executive_settle_crashed_step")
+async def settle_crashed_step_activity(run_id: str, step_id: str, reason: str) -> dict[str, Any]:
+    """Settle a step whose own activity died outright, so the RUN can still end honestly.
+
+    `run_step_activity` classifies every exception it meets, so nothing should reach here.
+    That is exactly what the previous version of this code believed — it caught only
+    `StepError`, an unclassified exception escaped, and the M26 security review proved the
+    whole workflow execution died with it, leaving the row saying `running` forever. A step
+    nobody will ever finish is worse than a step that failed: the owner is told work is in
+    progress that stopped minutes ago.
+
+    Settled through `_finalize`, the one place a step row is written, rather than a second
+    path that could drift from it.
+    """
+    return await asyncio.to_thread(
+        _finalize,
+        uuid.UUID(run_id),
+        step_id,
+        evidence=None,
+        error=StepError(ERROR_INTERNAL, f"the step's activity did not return: {reason}"[:400]),
+    )
+
+
+EXECUTIVE_ACTIVITIES = [run_step_activity, settle_crashed_step_activity]
 
 __all__ = [
     "EXECUTIVE_ACTIVITIES",
