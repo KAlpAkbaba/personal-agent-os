@@ -32,6 +32,7 @@ import {
   isMailState,
   isOperatorState,
   isReleaseBandState,
+  isSceneState,
   isSeverity,
   stateChannel,
   stateTtlMs,
@@ -342,6 +343,17 @@ export function appClaim(truth: CoreTruth, now: number): Claim {
  */
 export function genesisClaim(truth: CoreTruth, now: number): Claim {
   return claimFor(newestWhere(truth, isGenesisState), now);
+}
+
+/**
+ * 3D creation's own claim (v10): the newest `scene.activity`, by
+ * membership. Returned expired or not, for the genesis claim's reason: the
+ * panel words the age, and an expired scene event is one we stopped hearing
+ * about — the scenes themselves are rows on `/v1/scenes`, which do not
+ * expire, and the render image the Cockpit shows comes from such a row.
+ */
+export function sceneClaim(truth: CoreTruth, now: number): Claim {
+  return claimFor(newestWhere(truth, isSceneState), now);
 }
 
 /**

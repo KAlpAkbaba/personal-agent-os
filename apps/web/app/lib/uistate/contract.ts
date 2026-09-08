@@ -15,7 +15,7 @@
  */
 
 /** Contract version this client was written against (`CONTRACT_VERSION` in contract.py). */
-export const KNOWN_CONTRACT_VERSION = 9;
+export const KNOWN_CONTRACT_VERSION = 10;
 
 /**
  * The build marker of the Living Core (M18.3 §12, qualification A). Rendered server-side
@@ -44,12 +44,15 @@ export const CORE_BUILD_ID = "living-core-1";
  * value (`tests: {passed, failed}`) that older publishers never send. v9 is
  * additive over v8 (M24 spec §8): one token, `capability.genesis`, one
  * subsystem, and metadata of four short tokens (`capability`, `state`,
- * `approval_required`, `error_class`). A v2 to v8 server therefore serves a
+ * `approval_required`, `error_class`). v10 is additive over v9 (M25 spec §6):
+ * one token, `scene.activity`, one subsystem, and metadata of three short
+ * tokens (`tool`, `scene`, `state`) and one bounded count (`objects`) that
+ * older publishers never send. A v2 to v9 server therefore serves a
  * strict subset of what this build knows, and refusing to draw anything at
- * all because the alarm, operator, document, mail, calendar, artifact, app
- * or genesis states have not shipped yet would be a worse lie than saying
- * so in one line. A server NEWER than this build is a different matter — we
- * do not know its vocabulary, so it stays a mismatch.
+ * all because the alarm, operator, document, mail, calendar, artifact, app,
+ * genesis or scene states have not shipped yet would be a worse lie than
+ * saying so in one line. A server NEWER than this build is a different
+ * matter — we do not know its vocabulary, so it stays a mismatch.
  */
 export const MIN_SUPPORTED_CONTRACT_VERSION = 2;
 
@@ -194,6 +197,18 @@ export const UI_STATES = [
   // capability EXISTS when the run says `verified`, never before, and
   // nothing here says so on its own (ADR-0087).
   "capability.genesis",
+  // v10 (M25 spec §6) — 3D creation. Published while a scene is built,
+  // changed, rendered or read back through the tool's OWN scripting
+  // interface (`blender.exe -b --python …`, `Unity.exe -batchmode
+  // -executeMethod …`), with `{tool?, scene?, state?, objects?}`: which of
+  // the two tools is being driven, the scene the plan names, the step the
+  // run is on in the §4 names, and how many objects the INSPECTION read
+  // back. The agent's own work, so it stays on the agent channel; a scene
+  // is "doğrulandı" when the read-back matched the plan and never before,
+  // a mismatch is named rather than dressed as done, and a tool that
+  // cannot be driven at all (Unity without an entitlement, ADR-0088 §5) is
+  // `unavailable` — a settled, honest posture, not an error.
+  "scene.activity",
 ] as const;
 
 export type KnownUiState = (typeof UI_STATES)[number];
@@ -497,6 +512,114 @@ export function isGenesisRunState(value: unknown): value is GenesisRunState {
   return typeof value === "string" && GENESIS_RUN_STATE_SET.has(value);
 }
 
+/** The one 3D token (v10). Spelled here so every reader names the same wire word. */
+export const SCENE_ACTIVITY = "scene.activity";
+
+/**
+ * The 3D family's states (v10). One token: the spec publishes the whole
+ * plan → create → render → inspect → compare loop as `scene.activity` and
+ * names the step in `metadata.state`, so — as with the genesis token —
+ * there is nothing else to enumerate. Kept as a list so a second token
+ * lands here and nowhere else.
+ */
+export const SCENE_STATES = [SCENE_ACTIVITY] as const;
+
+export type SceneUiState = (typeof SCENE_STATES)[number];
+
+const SCENE_STATE_SET: ReadonlySet<string> = new Set(SCENE_STATES);
+
+/**
+ * True for a v10 scene state this build knows how to draw. Membership, not
+ * prefix: a newer server's `scene.deleted` must not be drawn as a scene
+ * being made on the strength of a word this build cannot read.
+ */
+export function isSceneState(state: string): state is SceneUiState {
+  return SCENE_STATE_SET.has(state);
+}
+
+/**
+ * The two tools M25 drives, and the only two words `metadata.tool` may
+ * carry (M25 spec §2: `tool ∈ {blender, unity}`). A third word is one this
+ * build cannot read: it is printed verbatim as a published fact and never
+ * translated into one of these, because "Blender" and "Unity" are claims
+ * about which program is being driven.
+ */
+export const SCENE_TOOLS = ["blender", "unity"] as const;
+
+export type SceneTool = (typeof SCENE_TOOLS)[number];
+
+const SCENE_TOOL_SET: ReadonlySet<string> = new Set(SCENE_TOOLS);
+
+export function isSceneTool(value: unknown): value is SceneTool {
+  return typeof value === "string" && SCENE_TOOL_SET.has(value);
+}
+
+/**
+ * The step one scene run is on as the publisher names it in
+ * `metadata.state` (M25 spec §4's closed loop, plus the two honest
+ * terminal words):
+ *
+ *   creating    — the plan's `create_scene` is running in the tool
+ *   applying    — the plan's other operations are being applied
+ *   rendering   — a still is being rendered
+ *   inspecting  — the tool is being READ BACK (`out.json`)
+ *   verified    — the read-back matched the plan's constraints
+ *   mismatch    — the read-back did NOT match; the object is named
+ *   unavailable — the tool could not be driven at all (ADR-0088 §5)
+ *   failed      — the run stopped
+ *
+ * A token outside this list is a word this build cannot read and is shown
+ * as the plain state, never as one of these — and above all never as
+ * `verified`.
+ */
+export const SCENE_RUN_STATES = [
+  "creating",
+  "applying",
+  "rendering",
+  "inspecting",
+  "verified",
+  "mismatch",
+  "unavailable",
+  "failed",
+] as const;
+
+export type SceneRunState = (typeof SCENE_RUN_STATES)[number];
+
+const SCENE_RUN_STATE_SET: ReadonlySet<string> = new Set(SCENE_RUN_STATES);
+
+export function isSceneRunState(value: unknown): value is SceneRunState {
+  return typeof value === "string" && SCENE_RUN_STATE_SET.has(value);
+}
+
+/**
+ * How many objects the INSPECTION read back: a whole, non-negative number
+ * or `null`. Never rounded into being — a count nobody published is not a
+ * count, and `0` is a real answer (an empty scene), which is why it is not
+ * folded into `null`.
+ */
+export function asObjectCount(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+/**
+ * The metadata a `scene.activity` event may carry (M25 spec §6). Every key
+ * is optional on the wire and every value is a short token or a bounded
+ * count the bus already admits; nothing here is a scene plan, a `.blend`
+ * path, a driver log or the render's bytes — the scene is a row on
+ * `/v1/scenes`, which the Cockpit reads from the list route, and the render
+ * is fetched from the owner-session-gated render route, never from the bus.
+ */
+export type SceneActivityMetadata = {
+  /** Which of the two tools is being driven; absent when the publisher did not say. */
+  tool?: SceneTool;
+  /** The scene the plan names (`Kure`), as the run names it. */
+  scene?: string;
+  /** The step the run is on in the §4 names. Absent while the publisher has nothing to say yet. */
+  state?: SceneRunState;
+  /** How many objects the inspection read back, when one was read. */
+  objects?: number;
+};
+
 /**
  * A draft's lifecycle as the publisher names it in `metadata.draft_state`
  * (M21 spec §3 with the read-back step made explicit): prepared by the
@@ -668,6 +791,10 @@ export const SUBSYSTEMS = [
   // v9: Capability Genesis (M24 spec §6, §8) publishes `capability.genesis`;
   // its receipts and ledger rows (`genesis.<state>`) carry the same name.
   "genesis",
+  // v10: 3D creation (M25 spec §5, §6) publishes `scene.activity`; its
+  // receipts, its voice corpus category and its ledger rows carry the same
+  // name.
+  "creative3d",
 ] as const;
 
 export type Subsystem = (typeof SUBSYSTEMS)[number];
@@ -903,6 +1030,14 @@ const STATE_KINDS: Record<KnownUiState, StateKind> = {
   // and the publisher's `ttl_s` may lengthen the claim. The claim never
   // falls to "finished", "verified" or idle.
   "capability.genesis": "transient",
+  // v10. Driving Blender or Unity in batch mode is work in flight on the
+  // same footing (`SCENE_TTL_MS`), and a headless render is the longest of
+  // any of them. A `verified` or an `unavailable` is a standing fact about
+  // a scene, but the bus claim is about the MOMENT it was published: the
+  // scene itself is a ROW on `/v1/scenes`, which does not expire, and the
+  // Cockpit's render image comes from that row. The claim never falls to
+  // "finished", "doğrulandı" or idle.
+  "scene.activity": "transient",
 };
 
 /**
@@ -1062,6 +1197,84 @@ export const GENESIS_STATE_LABEL: Record<GenesisRunState, string> = {
 };
 
 /**
+ * How long a scene step may be claimed as current without a newer event.
+ *
+ * The longest horizon in this file, and for the plainest reason: the run is
+ * a whole editor started in batch mode on the owner's machine. M25 spec §3
+ * bounds a Unity run at ten minutes, and even a Workbench still through
+ * `blender.exe -b` outlasts the 45 s device round trip the operator's
+ * horizon was cut for. Two minutes is long enough that a healthy render is
+ * not reported as lost and short enough that a `rendering` from a coffee
+ * break is not drawn as a tool still working. Still a horizon: what the run
+ * said a while ago is last-known — the scene itself is a ROW on
+ * `/v1/scenes`, and the Cockpit's image comes from that row. The
+ * publisher's own `ttl_s` beats this figure, as it beats every figure here.
+ */
+export const SCENE_TTL_MS = 120_000;
+
+/**
+ * The Core's one wording for a scene event whose metadata named nothing
+ * this build can read (v10): the plain name of the token, and nothing it
+ * did not say. Deliberately no verb: a run may be creating, rendering,
+ * verified, mismatched or unavailable, and the bare line must be true of
+ * every one of them.
+ */
+export const SCENE_CAPTION_BARE = "3B sahne";
+
+/**
+ * The step in the owner's words, spelled once for the caption, the facts
+ * line and the Cockpit's rows alike (M25 spec §4). "Doğrulandı" is said
+ * only when the publisher said `verified` — a render that was written is
+ * not a scene that was read back — and `unavailable` is worded as a plain
+ * inability ("yapılamadı"), never as a fault.
+ */
+export const SCENE_STATE_LABEL: Record<SceneRunState, string> = {
+  creating: "sahne kuruluyor",
+  applying: "değişiklikler uygulanıyor",
+  rendering: "render alınıyor",
+  inspecting: "sahne okunuyor",
+  verified: "doğrulandı",
+  mismatch: "uyuşmazlık",
+  unavailable: "yapılamadı",
+  failed: "başarısız",
+};
+
+/** The tool as the owner names it, for a line that talks ABOUT the tool. */
+export const SCENE_TOOL_LABEL: Record<SceneTool, string> = {
+  blender: "Blender",
+  unity: "Unity",
+};
+
+/**
+ * The tool as the owner names it when it is the PLACE something happens —
+ * "Blender'da sahne kuruluyor". The two forms are the spec's own (M25 §5's
+ * utterances "Blender'da yeni sahne aç", "Unity'de boş bir sahne oluştur"),
+ * and they are written out rather than derived, because a suffix rule
+ * guessed from a program's name is not Turkish grammar.
+ */
+export const SCENE_TOOL_LOCATIVE: Record<SceneTool, string> = {
+  blender: "Blender'da",
+  unity: "Unity'de",
+};
+
+/**
+ * Why Unity cannot be driven, in the owner's words — ADR-0088 §5's own
+ * wording ("Unity lisansı yok: yapılamadı") and the one reason M25 measured
+ * for an `unavailable` (spec §1: the editor exits 198, "No valid Unity
+ * Editor license found", until owner item 32).
+ *
+ * Said ONLY beside an `unavailable` whose publisher named the tool `unity`.
+ * An `unavailable` for any other tool, or for a tool nobody named, is
+ * "yapılamadı" alone: this build does not know why, and inventing a licence
+ * for a Blender that is merely not installed would be the renderer making
+ * up a reason.
+ */
+export const SCENE_UNITY_LICENCE = "lisans yok";
+
+/** How many object names one inspection may carry into a row. A client bound, like `MAX_DOCUMENT_REFS`. */
+export const MAX_SCENE_OBJECTS = 32;
+
+/**
  * Per-state lifetimes for v3, in ms, exactly as `docs/M18_3_LIVING_CORE_WAKE_ALARM_SPEC.md`
  * §7 states them.
  *
@@ -1090,6 +1303,7 @@ const STATE_TTL_MS: Partial<Record<KnownUiState, number>> = {
   "artifact.factory": ARTIFACT_FACTORY_TTL_MS,
   "app.factory": APP_FACTORY_TTL_MS,
   "capability.genesis": GENESIS_TTL_MS,
+  "scene.activity": SCENE_TTL_MS,
 };
 
 /**
@@ -1179,6 +1393,8 @@ export function stateChannel(state: string): StateChannel {
   // v9's `capability.genesis` follows through `isGenesisState`: acquiring
   // a capability the owner's request needs is the agent's own work — not
   // the lab's channel, although the lab's pipeline does the building.
+  // v10's `scene.activity` follows through `isSceneState`: driving Blender
+  // or Unity for the owner is the agent working, not a fact about the room.
   // v3 adds `display.*` to the room: whether the screens are lit is a fact
   // about the owner's desk, never about the agent's activity.
   if (state.startsWith("eye.") || state.startsWith("owner.") || state.startsWith("display."))
