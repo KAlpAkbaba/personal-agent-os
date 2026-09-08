@@ -1360,6 +1360,10 @@ def record_client_events(
                     intent.tokens, query_kind=intent.query_kind
                 ),
                 "reference": (intent.reference.as_dict() if intent.reference is not None else None),
+                # M27 (docs/M27_LATEST_NEWS_MODE_SPEC.md §6): the news-source
+                # channel-name hint the owner's WORDS carried, for the same
+                # "owner's words win over the model's argument" reason.
+                "news_source_ref": intent.news_source_ref,
             }
             resolved.append(
                 {"t_ms": t_ms, "turn": turn, **intent.to_dict(), "normalized_text": None}

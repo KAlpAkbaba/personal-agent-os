@@ -57,7 +57,20 @@ SESSION_KINDS: frozenset[str] = frozenset({RESEARCH_SESSION_KIND, MEDIA_SESSION_
 RESEARCH_PROFILE = "research"
 ISOLATED_PROFILE = "isolated"
 ALARM_PROFILE = "alarm"
-PROFILES: frozenset[str] = frozenset({RESEARCH_PROFILE, ISOLATED_PROFILE, ALARM_PROFILE})
+#: v1.3 (Latest News Mode): a THIRD dedicated persistent profile. News playback opens a
+#: real YouTube watch page and reuses the same proven ``media_play``/``media_status``/
+#: ``media_stop`` verification the alarm surface already has (a raw ``<video>`` element,
+#: consent-wall/challenge classification and all) - but it must never share the alarm's
+#: profile (a news video must never be able to interrupt or replace the wake song) and
+#: must never share the research profile (M13's one-owner-per-profile lifecycle guard
+#: would otherwise make a live research run and a spoken "haberleri aç" fight over the
+#: same browser). ``session_kind="media"`` is allowed on this profile the same way it is
+#: on ``alarm`` (the guard below only ties ``alarm`` to requiring ``media``, and only
+#: refuses ``media`` on ``research`` - a media session on ``news`` was never excluded).
+NEWS_PROFILE = "news"
+PROFILES: frozenset[str] = frozenset(
+    {RESEARCH_PROFILE, ISOLATED_PROFILE, ALARM_PROFILE, NEWS_PROFILE}
+)
 
 #: Chrome switch applied ONLY to a media session's own dedicated window.
 #: It is a preference for our own window and is not an anti-bot measure: it
@@ -147,26 +160,50 @@ def alarm_profile_dir_for(research_profile_dir: Path) -> Path:
     return research_profile_dir.parent / f"{research_profile_dir.name}-alarm"
 
 
-def require_distinct_alarm_profile(alarm_dir: Path, research_dir: Path) -> None:
-    """Refuse an alarm profile that is (or is inside) the research profile."""
+def news_profile_dir_for(research_profile_dir: Path) -> Path:
+    """The news profile directory: a second sibling of the research profile,
+    ``<...>/profile`` -> ``<...>/profile-news`` (the same derivation
+    :func:`alarm_profile_dir_for` uses for its own sibling, so the three
+    persistent profiles can never collapse onto one directory by a
+    configuration mistake)."""
+    return research_profile_dir.parent / f"{research_profile_dir.name}-news"
+
+
+def _require_distinct(candidate: Path, candidate_label: str, other: Path, other_label: str) -> None:
+    """Refuse ``candidate`` when it is (or is inside, or contains) ``other``."""
     try:
-        alarm_resolved = alarm_dir.resolve()
-        research_resolved = research_dir.resolve()
+        candidate_resolved = candidate.resolve()
+        other_resolved = other.resolve()
     except OSError:  # unresolvable path: judge what we were given
-        alarm_resolved, research_resolved = alarm_dir, research_dir
-    same = alarm_resolved == research_resolved
+        candidate_resolved, other_resolved = candidate, other
+    same = candidate_resolved == other_resolved
     nested = not same and (
-        alarm_resolved.is_relative_to(research_resolved)
-        or research_resolved.is_relative_to(alarm_resolved)
+        candidate_resolved.is_relative_to(other_resolved)
+        or other_resolved.is_relative_to(candidate_resolved)
     )
     if same or nested:
         raise BrowserError(
             ErrorClass.VALIDATION_ERROR,
-            "the alarm profile directory must be separate from the research profile "
-            f"({alarm_resolved} vs {research_resolved})",
+            f"the {candidate_label} profile directory must be separate from the "
+            f"{other_label} profile ({candidate_resolved} vs {other_resolved})",
             retryable=False,
-            evidence={"alarm_profile_dir": str(alarm_resolved)},
+            evidence={f"{candidate_label}_profile_dir": str(candidate_resolved)},
         )
+
+
+def require_distinct_alarm_profile(alarm_dir: Path, research_dir: Path) -> None:
+    """Refuse an alarm profile that is (or is inside) the research profile."""
+    _require_distinct(alarm_dir, "alarm", research_dir, "research")
+
+
+def require_distinct_news_profile(news_dir: Path, research_dir: Path, alarm_dir: Path) -> None:
+    """Refuse a news profile that collides with EITHER other persistent profile: a news
+    video must never be able to land in the research browser (the M13 one-owner-per-
+    profile lifecycle guard would otherwise make research and news fight over the same
+    Chrome) or in the alarm browser (a news video must never be able to interrupt or
+    replace the owner's wake song)."""
+    _require_distinct(news_dir, "news", research_dir, "research")
+    _require_distinct(news_dir, "news", alarm_dir, "alarm")
 
 
 def media_launch_args(session_kind: str) -> list[str]:
@@ -468,6 +505,7 @@ __all__ = [
     "MEDIA_READ_JS",
     "MEDIA_SESSION_KIND",
     "MIN_VERIFY_SECONDS",
+    "NEWS_PROFILE",
     "PROFILES",
     "RAMP_AWAIT_CEILING_S",
     "RAMP_HANDLE_PROPERTY",
@@ -484,10 +522,12 @@ __all__ = [
     "classify_play_error",
     "detect_media_interstitial",
     "media_launch_args",
+    "news_profile_dir_for",
     "parse_level",
     "parse_ramp_seconds",
     "parse_verify_seconds",
     "ramp_step_count",
     "require_distinct_alarm_profile",
+    "require_distinct_news_profile",
     "verified_from_readings",
 ]

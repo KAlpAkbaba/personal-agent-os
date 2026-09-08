@@ -7042,3 +7042,88 @@ Decision 3's own wording ("one idempotent activity per step keyed by `(run, step
 7. **Two real bugs found and fixed during voice-corpus authoring**, both regression-tested: a step id template (`f"amend{uuid4().hex[:4]}"`) silently exceeded `Step.id`'s 8-char bound, so every `executive.amend` call failed validation; and a diacritic-stripped ASR variant of "taslağı" (drama-free lowercasing, not `turkish_casefold`) matched neither of the two word-form stems first written for it — both are now three-form stems (bare / diacritic / diacritic-stripped), the same discipline this file's own eye/camera word-form comments already document elsewhere.
 
 **Residual gaps, stated plainly (not proven by this branch):** end-to-end reattachment by an actually-killed-and-restarted OS process (proven at the SDK/Temporal-replay boundary, per decision 5, not via a real process kill); the model-proposed-graph path (`ClaudeExecutivePlanner`) stays inert, per the spec's own instruction; a full production run of shapes (b)/(c) needs the owner's folder/mail account (ADR-0089's own named gap, unchanged); `artifacts.render`'s own kind handler is implemented against the closed vocabulary but no planner shape in this track emits it (no base case exercises it beyond its own unit-adjacent coverage via the activity dispatch table).
+
+## ADR-0090 — M27 Latest News Mode: a durable, never-guessed channel identity; a real resolver; a third browser profile; two distinct operations (2026-09-08)
+
+**Context.** The owner asked for a "Latest News Mode": open the latest eligible video from a
+configured channel, or get a spoken current-events summary — two operations the owner's own
+phrase list keeps sharply distinct ("Haberleri aç." must never start a bare research crawl,
+must never touch the alarm's wake media, must never open a random search result;
+"Haberleri özetle." must never play anything). The task brief's own central warning: "Show
+Ana Haber" and a similarly-named channel are not interchangeable, and a wrong guess would
+look right for months. Spec: `docs/M27_LATEST_NEWS_MODE_SPEC.md`.
+
+**Decision.**
+1. **A channel identity is a database fact, established exactly once, from an authoritative
+   signal only** (spec §1, §2): `app.news.identity.resolve_channel_identity` accepts a bare
+   canonical id, a `/channel/UC…` URL (the id is IN the URL), or a `/@handle` URL resolved
+   through an injected live page-fetcher reading the channel's own canonical metadata — and
+   NOTHING else. A bare display name never resolves, even when the owner pastes it into the
+   "channel" field directly. A source that cannot be resolved this way is persisted
+   `needs_identity` and stays usable for editing, never for resolution or playback, until an
+   owner-given URL fixes it (`docs/OWNER_ACTIONS.md` item 34, for "Show Ana Haber" itself).
+2. **"Latest" is decided by real publish timestamps alone, content-policy-aware, never
+   search rank** (spec §3): `latest_any_news` (no filtering — the owner configured that
+   knowingly), `latest_full_broadcast`/`latest_main_news` (Shorts and promotional content
+   excluded outright; an explicit bulletin-marker match preferred; a safer non-short,
+   non-promo fallback used and MARKED ambiguous, never silently presented as confident) —
+   four fixture scenarios (plain-latest, newest-is-a-Short, newest-is-a-promo,
+   near-duplicate-titles), each checked against every policy value, are the resolver's own
+   specification and pinned as `tests/unit/test_news_resolver.py`.
+3. **A THIRD dedicated persistent browser profile, `news`** (spec §5;
+   `packages/protocol/BROWSER_CAPABILITIES.md` v1.3), reusing the EXISTING M18.3 alarm-media
+   operations verbatim rather than a new device capability — checked distinct from BOTH the
+   research profile (device/profile contention with a live research run) and the alarm
+   profile (a news video must never be able to interrupt or replace the owner's wake song)
+   at worker startup. `browser.session_open` succeeding is never read as proof of playback;
+   only `browser.media_play`'s own `verified` field classifies a context `playing`.
+4. **Summary mode delegates to the EXISTING M13 research pipeline; it is not a second
+   engine** (spec §6): `news.summarize` builds a Turkish topic and calls
+   `research_service.start_browser_research`/`start_browser_research_workflow` directly —
+   the same device selection, synthesis and provenance a spoken "araştır" already gets — and
+   contains no device dispatch of its own kind at all, structurally enforcing the "never
+   plays anything" negative.
+5. **Deterministic routing, requiring the "haber" noun stem** (spec §7): `NEWS_OPEN` /
+   `NEWS_SUMMARIZE` (ACTION, real mutations) and `NEWS_QUERY_LATEST` (QUERY, mutates
+   nothing) are checked in the ONE router BEFORE the generic SUMMARIZE/DOCUMENT_SUMMARIZE
+   branches (so "haberleri özetle" cannot be stolen by either) and require "haber" (so a
+   bare "aç"/"özetle" stays DISPLAY_WAKE/EYE_ENABLE/the generic controls, never NEWS_*). A
+   channel-name HINT extracted from the owner's own words (`news_source_ref`, stem-prefix
+   matched against every verb inflection so a future-tense "açacaksın" is excluded too) is
+   preferred over the model's own argument, fuzzy-matched against CONFIGURED sources only —
+   never itself a channel-identity resolution, only "which already-known source did the
+   owner mean" (the same class of question `operator.app_open`'s alias table already
+   answers, never the class decision 1 governs).
+6. **The live path prefers the channel's own official feed** (spec §4): `YouTubeFeedProvider`
+   reads YouTube's public per-channel Atom feed over `httpx` — no API key, no browser, real
+   `published` timestamps. The Videos-listing and DOM-extraction tiers named in the task
+   brief's own preference order are NOT implemented (an honest gap: both need the governed
+   browser worker driving a real page, unqualifiable end to end in this offline development
+   environment) — `NewsUploadProvider` is the seam a later track fills in without touching
+   the resolver.
+7. **The one read-only live qualification (spec §4) targets a channel the identity rule can
+   actually stand behind** — NASA's real, public YouTube channel, whose id is drawn from the
+   channel's OWN self-reported canonical link in its own feed, never the owner's ambiguous
+   "Show Ana Haber" request. 15 real candidates, real distinct timestamps,
+   `answered_by=channel_feed`, `@pytest.mark.live`, never run by default CI.
+
+**A real bug this milestone's own tests found (decision-relevant, not merely a fix).** Every
+`app.news.*` service function originally called `db.flush()` where the codebase's convention
+(every mutating service, e.g. `app.research.runs_service`, `app.appfactory.service`) is
+`db.commit()` — a route or a voice-tool call opens its OWN session per request
+(`ArtifactRuntime.session()`: yield then close, no commit), so a write left only flushed is
+silently rolled back the moment that session closes. Every unit test passed regardless (a
+single long-lived session reads its own uncommitted write within the same transaction,
+masking the defect completely); the voice corpus caught it running through the REAL relay,
+two separate sessions apart. Fixed everywhere; `TestCrossSessionPersistence` regression
+tests added to all three affected `tests/unit/test_news_*.py` files, deliberately closing
+the writing session before reading in a separate one — the only shape that would catch a
+recurrence, and now the standing pattern this repo's future service modules should be
+written against from the start rather than discovered against.
+
+**Consequences.** A spoken "haberleri aç" plays a real, resolved, honestly-classified video
+on its own browser; "haberleri özetle" never touches a browser at all. Named gaps: the
+owner's own "Show Ana Haber" stays `needs_identity` until the one URL is given
+(`docs/OWNER_ACTIONS.md` item 34); the DOM/Videos-listing discovery tiers are unimplemented;
+`news.close` has no deterministic voice phrase yet (the task's own list named
+open/summarize/query only) and is reachable by explicit tool call alone.

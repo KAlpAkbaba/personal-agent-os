@@ -64,6 +64,7 @@ from app.middleware import TraceIdMiddleware
 from app.mobile.routes import router as mobile_router
 from app.mobile.runtime import MobileRuntime
 from app.narration.routes import router as narration_router
+from app.news.routes import router as news_router
 from app.operator.service import OperatorService, register_operator_service
 from app.presence.routes import router as presence_router
 from app.release.routes import router as release_router
@@ -486,6 +487,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # M26 (docs/M26_EXECUTIVE_AUTONOMY_SPEC.md §6): executive.* reads the SAME
     # ExecutiveService the voice tools (app.executive.tools_executive) drive.
     app.include_router(executive_router)
+    # M27 (docs/M27_LATEST_NEWS_MODE_SPEC.md §7): news.* reads the SAME device_action/
+    # broker/artifacts runtime every other family above already reads — one device
+    # authority, never a second path.
+    app.include_router(news_router)
 
     @app.get("/v1/system/health")
     async def system_health() -> dict[str, Any]:

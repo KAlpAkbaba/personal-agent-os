@@ -91,6 +91,12 @@ SUBSYSTEM_GENESIS = "genesis"
 #: answerable without separating it from the M23 App Factory rows a scene's own device
 #: calls (project.scaffold/project.run) happen to share.
 SUBSYSTEM_CREATIVE3D = "creative3d"
+#: M27 Latest News Mode (docs/M27_LATEST_NEWS_MODE_SPEC.md): a video the resolver
+#: selected and opened on the browser worker's own ``news`` profile, or a summary run
+#: delegated to research. Its own subsystem so "what news did it open/summarize for me,
+#: and from which channel?" is answerable without separating it from the M13 research
+#: rows a summary's own device calls happen to share.
+SUBSYSTEM_NEWS = "news"
 
 SUBSYSTEMS: Final[tuple[str, ...]] = (
     SUBSYSTEM_RESEARCH,
@@ -116,6 +122,7 @@ SUBSYSTEMS: Final[tuple[str, ...]] = (
     SUBSYSTEM_APPFACTORY,
     SUBSYSTEM_GENESIS,
     SUBSYSTEM_CREATIVE3D,
+    SUBSYSTEM_NEWS,
 )
 
 # ------------------------------------------------------------------ statuses
@@ -386,6 +393,16 @@ EVENT_TYPE_SCENE_MISMATCH = "scene.mismatch"
 EVENT_TYPE_SCENE_UNITY_UNAVAILABLE = "scene.unity_unavailable"
 EVENT_TYPE_SCENE_LISTED = "scene.list"
 
+# M27 Latest News Mode (docs/M27_LATEST_NEWS_MODE_SPEC.md §5, §6): one row per real
+# event a spoken "haberleri aç"/"haberleri özetle" produces — never a fake activity
+# (DEVELOPMENT_POLICY.md item 8).
+EVENT_TYPE_NEWS_RESOLVED = "news.resolved"
+EVENT_TYPE_NEWS_OPENED = "news.opened"
+EVENT_TYPE_NEWS_PLAYBACK_UNVERIFIED = "news.playback_unverified"
+EVENT_TYPE_NEWS_PLAYBACK_FAILED = "news.playback_failed"
+EVENT_TYPE_NEWS_CLOSED = "news.closed"
+EVENT_TYPE_NEWS_SUMMARIZED = "news.summarized"
+
 EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_RESEARCH_PLANNED,
     EVENT_TYPE_RESEARCH_COMPLETED,
@@ -502,6 +519,12 @@ EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_SCENE_FAILED,
     EVENT_TYPE_SCENE_UNITY_UNAVAILABLE,
     EVENT_TYPE_SCENE_LISTED,
+    EVENT_TYPE_NEWS_RESOLVED,
+    EVENT_TYPE_NEWS_OPENED,
+    EVENT_TYPE_NEWS_PLAYBACK_UNVERIFIED,
+    EVENT_TYPE_NEWS_PLAYBACK_FAILED,
+    EVENT_TYPE_NEWS_CLOSED,
+    EVENT_TYPE_NEWS_SUMMARIZED,
 )
 
 #: "genesis.<state>" for every state in app.genesis.models.GENESIS_STATES — the

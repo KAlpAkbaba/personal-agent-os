@@ -1,6 +1,6 @@
 # Browser capabilities over the device protocol (M13, ADR-0050)
 
-Status: contract **v1.2** — binding for `services/api` (Cloud Core), `devices/windows-agent`
+Status: contract **v1.3** — binding for `services/api` (Cloud Core), `devices/windows-agent`
 (Session Companion) and `services/browser` (Browser Worker). Change it here first.
 
 - v1 (M13, ADR-0050): the family, sessions, risk classes, the error taxonomy, §3's payloads.
@@ -12,6 +12,13 @@ Status: contract **v1.2** — binding for `services/api` (Cloud Core), `devices/
   result is unchanged. The worker advertises `contracts["browser.media"] = 1`; a consumer
   checks it BEFORE planning a media wake, so an agent installed before M18.3 produces a named
   contract mismatch and the local tone fallback rather than a failure inside a firing alarm.
+- **v1.3 (2026-09-08, Latest News Mode): a THIRD persistent profile, `news`** (§2). No new
+  operation names: news playback reuses the existing `media_play`/`media_volume`/
+  `media_status`/`media_stop` family verbatim with `profile: "news"` instead of `"alarm"` —
+  the same verified-not-assumed playback proof, on a browser that can never collide with
+  either the research profile (device selection contention) or the alarm profile (a news
+  video must never be able to interrupt or replace the owner's wake song). Additive: every
+  v1.2 name, payload and result is unchanged; `profile` simply gains a third valid value.
 
 The Windows Browser Agent is reached over the SAME proven device/broker command path as
 `desktop.open_application` (DEVICE_PROTOCOL.md §5): one command envelope, one
@@ -76,10 +83,12 @@ id). A session is one Playwright context in one Chrome instance with its own tab
 ```
 
 - `profile`: `research` (the dedicated PagentOS agent profile, persistent, never the owner's
-  `User Data`), `alarm` (v1.2 — a SECOND dedicated persistent profile, for alarm media only)
-  or `isolated` (fresh non-persistent context). The owner's real Chrome session
-  is NOT reachable through this contract in v1; it stays behind `BrowserEnrollment` +
-  `owner_authorized_for_research` (ADR-0035 §4) and a later contract version.
+  `User Data`), `alarm` (v1.2 — a SECOND dedicated persistent profile, for alarm media only),
+  `news` (v1.3 — a THIRD dedicated persistent profile, for Latest News Mode playback only;
+  `session_id` convention `news-<news_media_context_id>`) or `isolated` (fresh non-persistent
+  context). The owner's real Chrome session is NOT reachable through this contract in v1; it
+  stays behind `BrowserEnrollment` + `owner_authorized_for_research` (ADR-0035 §4) and a
+  later contract version.
 - `session_kind` (v1.2, optional, default `research`): `research` — everything v1.1 did,
   unchanged — or `media`, the alarm surface (§3b).
 - `policy.allowed_risk_classes`: the classes this session may execute (§4). A research session
