@@ -9,9 +9,10 @@ Design notes:
   READY-without-auto-read guarantee at the API layer.
 """
 
+import asyncio
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
@@ -26,6 +27,7 @@ from app.artifacts.models import (
     ArtifactVersion,
     Task,
 )
+from app.artifacts.render_fetch_store import RenderFetchStore, get_render_fetch_store
 from app.artifacts.renderers import (
     DEFAULT_RENDER_FORMATS,
     EXTENSIONS,
@@ -55,6 +57,15 @@ router = APIRouter(
     prefix="/v1",
     dependencies=[Depends(require_owner_session)],
 )
+
+#: The token-authenticated exception (ADR-0085 addendum 5), the same pattern
+#: ``app.alarms.routes.audio_router`` already establishes for the greeting WAV: a
+#: separate router with NO ``require_owner_session`` dependency, because the fetcher is
+#: a device holding no owner session — the single-use render-fetch token minted by
+#: ``app.artifacts.open_service`` (via ``app.artifacts.render_fetch_store``) IS the
+#: authority. Declared as its own router so the exemption is a visible, single line
+#: rather than a per-route flag someone could copy by accident.
+device_router = APIRouter(prefix="/v1/artifacts", tags=["artifacts"])
 
 WIRED_PROVIDERS = {DeterministicResearchProvider.name}
 
@@ -498,6 +509,11 @@ async def open_artifact_route(
     device_action = getattr(request.app.state, "device_action", None)
     fmt = body.format.lower() if body is not None and body.format else None
     base_url = str(request.base_url)
+    # Same store the device-facing redemption route below reads (``_render_fetch_store``)
+    # — minting and redeeming must agree on ONE store object, and a test overriding
+    # ``app.state.artifact_render_fetch_store`` (e.g. a short TTL) affects both sides of
+    # the same round trip, the way overriding ``device_action`` already does.
+    fetch_store = _render_fetch_store(request)
     import asyncio
 
     def do_open() -> open_service.OpenOutcome:
@@ -508,6 +524,7 @@ async def open_artifact_route(
                 artifact_id=artifact_id,
                 fmt=fmt,
                 base_url=base_url,
+                render_fetch_store=fetch_store,
             )
 
     outcome = await asyncio.to_thread(do_open)
@@ -529,5 +546,72 @@ async def open_artifact_route(
     }
 
 
+# ------------------------------------------------------------ device render fetch
+
+
+def _render_fetch_store(request: Request) -> RenderFetchStore:
+    return (
+        getattr(request.app.state, "artifact_render_fetch_store", None)
+        or get_render_fetch_store()
+    )
+
+
+@device_router.get("/renders/fetch/{token}")
+async def fetch_render_by_token(
+    request: Request, token: Annotated[str, Field(max_length=128)]
+) -> Response:
+    """Redeem a one-time render-fetch token minted by ``app.artifacts.open_service`` for
+    the device's ``file.fetch`` (DEVICE_PROTOCOL.md §6k step 6: the device's GET carries
+    no owner token, cookie or header of its own — ADR-0085 addendum 5, closing the gap
+    addendum 4 decision 5 recorded). The ordinary owner-session-gated
+    ``GET /v1/artifacts/{id}/renders/{fmt}`` above is unchanged and keeps serving the
+    web/Cockpit; this route exists ONLY for a token minted for exactly one render.
+
+    Unknown, expired, already-redeemed and content-hash-mismatched tokens are all the
+    SAME bare 404 with no body — deliberately indistinguishable, like
+    ``app.alarms.routes.get_greeting_audio``'s greeting-token redemption, so a probe
+    learns nothing and the artifact id is never named in the response, a log line or a
+    ledger row.
+    """
+    runtime = _runtime(request)
+    store = _render_fetch_store(request)
+
+    def redeem() -> tuple[bytes, str] | None:
+        target = store.take(token)
+        if target is None:
+            return None
+        with runtime.session() as session:
+            artifact = service.get_artifact(session, target.artifact_id)
+            if artifact is None:
+                return None
+            version = service.get_current_version(session, artifact.id)
+            if version is None:
+                return None
+            row = service.get_render(session, version.id, target.fmt)
+            # Pinned at mint time (artifact id + format + content hash): a render that no
+            # longer matches what the token named is refused rather than served — never
+            # trust the token's own claim once the current row disagrees with it.
+            if row is None or row.content_hash != target.content_hash:
+                return None
+            try:
+                data = runtime.store.get(row.object_key)
+            except KeyError:
+                return None
+            return data, row.mime_type
+
+    result = await asyncio.to_thread(redeem)
+    if result is None:
+        # Bare 404, no body: never the artifact id, the format or WHICH of the refusal
+        # reasons applied (module docstring above) — the shape addendum 2 item 5 already
+        # documents web callers reading as "not available", never a hint to a prober.
+        raise HTTPException(status_code=404)
+    data, mime = result
+    return Response(
+        content=data,
+        media_type=mime,
+        headers={"Cache-Control": "no-store", "Content-Length": str(len(data))},
+    )
+
+
 # Re-export for wiring/tests.
-__all__ = ["router", "DEFAULT_RENDER_FORMATS"]
+__all__ = ["router", "device_router", "DEFAULT_RENDER_FORMATS"]
