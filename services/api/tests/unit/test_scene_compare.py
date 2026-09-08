@@ -128,9 +128,56 @@ def _matching_inspection() -> dict:
 
 
 def test_compare_matches_a_correct_inspection() -> None:
+    """Also the regression for a real bug the Blender lab found (2026-09-08):
+    ``_sphere_plan()``'s camera is added with its own default rotation (0,0,0) and
+    THEN aimed with ``set_camera ... look_at`` — before the fix, compare() checked
+    the stale add_primitive rotation against the camera's real (aimed) rotation and
+    reported a false mismatch on every correct plan that ever aims a camera it just
+    created."""
     result = compare(_sphere_plan(), _matching_inspection())
     assert result.ok, result.mismatches
     assert result.checked > 0
+
+
+def test_compare_folds_a_later_transform_over_an_earlier_add_primitive() -> None:
+    """Regression (found running the real Blender lab, scripts/tests/blender-scene-
+    lab.py, 2026-09-08): a plan that adds an object at its default scale and then
+    transforms it must be checked against where it ENDS UP, never flagged for no
+    longer matching add_primitive's own original scale — the M25 lesson mirrored
+    from the M24 "never a vacuous gate" one: don't re-litigate a superseded
+    constraint either."""
+    plan = ScenePlan.model_validate(
+        {
+            "tool": "blender",
+            "project": "lab",
+            "scene": "demo",
+            "operations": [
+                {"op": "create_scene"},
+                {"op": "add_primitive", "kind": "cube", "name": "Kup", "location": [0.0, 0.0, 0.0]},
+                {"op": "transform", "name": "Kup", "scale": [1.5, 1.5, 1.5]},
+            ],
+        }
+    )
+    inspection = {
+        "objects": [
+            {
+                "name": "Kup",
+                "type": "MESH",
+                "location": [0.0, 0.0, 0.0],
+                "rotation": [0.0, 0.0, 0.0],
+                "scale": [1.5, 1.5, 1.5],
+            }
+        ],
+        "camera": None,
+        "lights": [],
+        "render": None,
+        "errors": [],
+    }
+    result = compare(plan, inspection)
+    assert result.ok, result.mismatches
+    # The stale expectation (scale 1.0, add_primitive's own default) must never be
+    # what gets checked - only ONE scale constraint per object, the folded one.
+    assert not [m for m in result.mismatches if m.field == "scale.x"]
 
 
 def test_compare_reports_a_mismatch_naming_the_object_and_axis() -> None:
