@@ -13,7 +13,7 @@ namespace PagentOS.SessionCompanion.Projects;
 public sealed record ProjectFile(string Path, string Text);
 
 /// <summary>A validated <c>project.scaffold</c> payload.</summary>
-public sealed record ScaffoldRequest(string ProjectId, string Slug, IReadOnlyList<ProjectFile> Files, ProjectManifest Manifest);
+public sealed record ScaffoldRequest(string ProjectId, string Slug, IReadOnlyList<ProjectFile> Files, ProjectManifest Manifest, ProjectScope Scope = ProjectScope.Web);
 
 /// <summary>What a scaffold wrote: the resolved project folder and the SHA-256 of every file's bytes, by path.</summary>
 public sealed record ScaffoldOutcome(string Folder, IReadOnlyList<(string Path, string Sha256)> Files);
@@ -139,6 +139,7 @@ public static class ProjectScaffold
     /// <summary>Validates the whole payload — ids, slug, files, manifest — before a byte is written.</summary>
     public static ScaffoldRequest Parse(JsonObject payload)
     {
+        var scope = ReadScope(payload);
         var projectId = RequireString(payload, "project_id", ProjectRoots.MaxProjectIdChars);
         ProjectRoots.RequireProjectId(projectId);
         var slug = RequireString(payload, "slug", ProjectCapabilityNames.MaxSlugChars);
@@ -192,8 +193,31 @@ public static class ProjectScaffold
             throw DocumentErrors.Invalid("payload.manifest is required and must be an object");
         }
 
-        var manifest = ProjectManifest.Parse(manifestJson, seen);
-        return new ScaffoldRequest(projectId, slug, files, manifest);
+        var manifest = ProjectManifest.Parse(manifestJson, seen, scope);
+        return new ScaffoldRequest(projectId, slug, files, manifest, scope);
+    }
+
+    /// <summary>
+    /// M25: which root the payload asks for — <c>root: "projects"</c> (the default, M23's
+    /// Projects root) or <c>root: "3d"</c> (the 3D root, the only place the two editors run).
+    /// It is a CLOSED vocabulary of two words, never a path: the destination directory is the
+    /// companion's configuration, and the payload only chooses between the two it holds.
+    /// </summary>
+    public static ProjectScope ReadScope(JsonObject payload)
+    {
+        var node = payload["root"];
+        if (node is null)
+        {
+            return ProjectScope.Web;
+        }
+
+        var value = node.GetValueKind() == JsonValueKind.String ? node.GetValue<string>() : null;
+        return value switch
+        {
+            "projects" => ProjectScope.Web,
+            SceneCapabilityNames.Root3dFolderName => ProjectScope.ThreeD,
+            _ => throw DocumentErrors.Invalid($"payload.root must be 'projects' or '{SceneCapabilityNames.Root3dFolderName}'"),
+        };
     }
 
     /// <summary>Writes the validated set under <c>Projects\&lt;slug&gt;</c> and returns the folder and the hashes.</summary>

@@ -20,7 +20,10 @@ public static class AgentInfo
     // 0.5.0 (M23, ADR-0086): the projects family (project.scaffold/run/status/stop/test) —
     // source written into the one Projects root, a run as the companion's own child in a
     // bounded Windows Job Object — behind the same operator gate.
-    public const string SoftwareVersion = "0.5.0";
+    // 0.6.0 (M25, ADR-0088): the two 3D runtimes on the projects family's manifest allowlist
+    // (Blender headless and Unity batch mode, under the 3D root only) and scene.inspect —
+    // the tool's own read-back and its render — behind the same operator gate.
+    public const string SoftwareVersion = "0.6.0";
     public const string Platform = "windows";
 }
 
@@ -159,18 +162,30 @@ public static class AgentCapabilities
     public static IReadOnlyList<string> Projects => ProjectCapabilityNames.All;
 
     /// <summary>
+    /// The scenes family (M25, M25_CREATIVE_3D_SPEC.md §3/§7, ADR-0088 decision 3): one name,
+    /// <c>scene.inspect</c> — the tool's own read-back of a 3D project (the bounded
+    /// <c>out.json</c> a driver wrote) and the render it declares, hash-checked. It rides the
+    /// projects family's object and its 3D root, is advertised behind the SAME
+    /// <c>OperatorEnabled</c> gate, and is appended after the projects family so the manifest
+    /// reads as an addition. There is no scene creator on the device: a scene is created by
+    /// <c>project.run</c> of an allowlisted 3D runtime, and this name only reads back.
+    /// </summary>
+    public static IReadOnlyList<string> Scenes => SceneCapabilityNames.All;
+
+    /// <summary>
     /// The manifest this device actually advertises: the desktop names, the alarm pair and
     /// the M18.3 ambient group always, display power, the browser family and the operator
-    /// family (with the documents and projects families that share its gate) only when each
-    /// is configured. Order is stable (desktop, alarm, ambient, display, browser, operator,
-    /// documents, projects) so a manifest diff between two versions reads as an addition
-    /// rather than a reshuffle.
+    /// family (with the documents, projects and scenes families that share its gate) only when
+    /// each is configured. Order is stable (desktop, alarm, ambient, display, browser,
+    /// operator, documents, projects, scenes) so a manifest diff between two versions reads as
+    /// an addition rather than a reshuffle.
     /// </summary>
     public static IReadOnlyList<string> Compose(bool browserEnabled, bool displayPowerEnabled = false, bool operatorEnabled = false)
     {
         var names = new List<string>(
             Desktop.Count + Alarm.Count + Ambient.Count + DisplayPower.Count + BrowserCapabilities.All.Count
-            + OperatorCapabilityNames.All.Count + DocumentCapabilityNames.All.Count + ProjectCapabilityNames.All.Count);
+            + OperatorCapabilityNames.All.Count + DocumentCapabilityNames.All.Count + ProjectCapabilityNames.All.Count
+            + SceneCapabilityNames.All.Count);
         names.AddRange(Desktop);
         names.AddRange(Alarm);
         names.AddRange(Ambient);
@@ -189,6 +204,7 @@ public static class AgentCapabilities
             names.AddRange(OperatorCapabilityNames.All);
             names.AddRange(DocumentCapabilityNames.All);
             names.AddRange(ProjectCapabilityNames.All);
+            names.AddRange(SceneCapabilityNames.All);
         }
 
         return names;
@@ -211,6 +227,9 @@ public static class AgentCapabilities
     /// <summary>M23: a member of the projects family — routed like the operator family, gated by the same flag, never a member of it.</summary>
     public static bool IsProjects(string capability) => ProjectCapabilityNames.IsMember(capability);
 
+    /// <summary>M25: a member of the scenes family — routed like the projects family, gated by the same flag, executed by the same companion object, never a member of the projects family.</summary>
+    public static bool IsScenes(string capability) => SceneCapabilityNames.IsMember(capability);
+
     /// <summary>
     /// Every name the Session Companion executes in the owner's interactive session. The
     /// Device Service routes exactly this set over the pipe and refuses everything else
@@ -218,7 +237,7 @@ public static class AgentCapabilities
     /// added here — never by being spelled <c>desktop.</c>-something.
     /// </summary>
     public static bool IsInteractive(string capability)
-        => IsDesktop(capability) || IsAlarm(capability) || IsAmbient(capability) || IsDisplayPower(capability) || IsOperator(capability) || IsDocuments(capability) || IsProjects(capability);
+        => IsDesktop(capability) || IsAlarm(capability) || IsAmbient(capability) || IsDisplayPower(capability) || IsOperator(capability) || IsDocuments(capability) || IsProjects(capability) || IsScenes(capability);
 
     public static bool IsBrowser(string capability) => BrowserCapabilities.IsFamilyMember(capability);
 }
@@ -440,11 +459,103 @@ public static class ProjectCapabilityNames
     /// <summary>§3: <c>project.stop</c> waits at most this long for the job's processes to be gone.</summary>
     public static readonly TimeSpan StopWait = TimeSpan.FromSeconds(5);
 
-    /// <summary>The service's per-command cap for scaffold, run, status and stop — the operator family's 30 s (a run answers once the port does, within <see cref="PortWait"/>).</summary>
+    /// <summary>The service's per-command cap for scaffold, status and stop — the operator family's 30 s.</summary>
     public static readonly TimeSpan CommandTimeoutCap = TimeSpan.FromSeconds(30);
 
     /// <summary>The service's cap for <c>project.test</c> alone: the test bound plus headroom for the typed answer.</summary>
     public static readonly TimeSpan TestCommandTimeoutCap = TestTimeout + TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// M25: the service's cap for <c>project.run</c> alone. A web run still answers within
+    /// <see cref="PortWait"/> — the cap is a ceiling, not a wait — but a 3D run is a BATCH run
+    /// the companion waits out (<see cref="SceneCapabilityNames.UnityRunLimit"/> is the
+    /// longest), so the ceiling has to be the longest runtime's bound plus headroom for the
+    /// typed answer, or the service would synthesise a timeout while Unity was still working.
+    /// </summary>
+    public static readonly TimeSpan RunCommandTimeoutCap = SceneCapabilityNames.UnityRunLimit + TimeSpan.FromSeconds(30);
+
+    public static bool IsMember(string capability) => All.Contains(capability, StringComparer.Ordinal);
+}
+
+/// <summary>
+/// M25_CREATIVE_3D_SPEC.md §3/§6/§7 and ADR-0088 decision 3 — the scenes family and the two
+/// 3D runtimes the projects family's manifest allowlist gains. The wire contract with Cloud
+/// Core's <c>app/creative3d</c>; change <c>packages/protocol/DEVICE_PROTOCOL.md</c> §6m first.
+///
+/// The owner's rule made structural: the assistant drives Blender and Unity through THEIR OWN
+/// scripting interfaces, headless, as bounded children under the 3D root — never a window,
+/// never the owner's own projects — and it reports only what the tool wrote back.
+/// </summary>
+public static class SceneCapabilityNames
+{
+    /// <summary>Return the driver's inspection (<c>out.json</c>) and the render it declares, for one 3D project.</summary>
+    public const string Inspect = "scene.inspect";
+
+    /// <summary>Every scenes name, in the order of the specification's table.</summary>
+    public static readonly IReadOnlyList<string> All = [Inspect];
+
+    /// <summary>§1: the folder under the Projects root that holds the 3D projects, and NOTHING the owner made.</summary>
+    public const string Root3dFolderName = "3d";
+
+    /// <summary>§3: the file a driver writes its read-back into, at the project root.</summary>
+    public const string InspectionFileName = "out.json";
+
+    /// <summary>§7: the inspection is bounded — a file larger than this is <c>postcondition_failed</c>, not parsed.</summary>
+    public const long MaxInspectionBytes = 256L * 1024;
+
+    /// <summary>§7: the render <c>scene.inspect</c> carries back as base64 is bounded too.</summary>
+    public const long MaxRenderBytes = 512L * 1024;
+
+    /// <summary>The first token of the Blender shape (resolved to the installed <c>blender.exe</c> — detected, never searched for on PATH).</summary>
+    public const string BlenderProgram = "blender";
+
+    /// <summary>The first token of the Unity shape (resolved to the Hub's installed editor).</summary>
+    public const string UnityProgram = "unity";
+
+    /// <summary>§3: the ONE method a Unity batch run may execute — the shipped driver's entry point.</summary>
+    public const string UnityDriverMethod = "PagentOS.SceneDriver.Run";
+
+    /// <summary>The extension the Blender shape's scene file must carry.</summary>
+    public const string BlendExtension = ".blend";
+
+    /// <summary>The extension the Blender shape's driver must carry (a fixed repository file, never model-authored).</summary>
+    public const string DriverExtension = ".py";
+
+    /// <summary>The extension the plan and the inspection must carry: the plan is DATA.</summary>
+    public const string JsonExtension = ".json";
+
+    /// <summary>The extension Unity's <c>-logFile</c> must carry.</summary>
+    public const string LogExtension = ".log";
+
+    /// <summary>§3: a Blender batch run is ended by its job after this long.</summary>
+    public static readonly TimeSpan BlenderRunLimit = TimeSpan.FromMinutes(5);
+
+    /// <summary>§3: a Blender job's committed-memory bound.</summary>
+    public const long BlenderMemoryLimitBytes = 2L * 1024 * 1024 * 1024;
+
+    /// <summary>§3: a Unity batch run is ended by its job after this long.</summary>
+    public static readonly TimeSpan UnityRunLimit = TimeSpan.FromMinutes(10);
+
+    /// <summary>§3: a Unity job's committed-memory bound (the editor is not small).</summary>
+    public const long UnityMemoryLimitBytes = 4L * 1024 * 1024 * 1024;
+
+    /// <summary>
+    /// The exit code the Unity editor uses for "no licence" — measured on the owner's machine
+    /// 2026-09-08 (<c>docs/evidence/m25-tool-detection-2026-09-08.json</c>, and again at
+    /// 13:24Z). It is reported as <c>dependency_unavailable</c>, never <c>device_error</c>:
+    /// the editor is installed and was started; it is the entitlement that is missing, and the
+    /// Cloud Core must be able to say that in the owner's own words.
+    /// </summary>
+    public const int UnityNoLicenceExitCode = 198;
+
+    /// <summary>The licensing client's own line, matched in Unity's log file (case-insensitively).</summary>
+    public const string UnityNoLicenceMarker = "No valid Unity Editor license found";
+
+    /// <summary>The detail a licence refusal carries.</summary>
+    public const string UnityNoLicenceDetail = "unity_licence";
+
+    /// <summary>The service's per-command cap for the family: reading a bounded file and a bounded PNG is the operator family's 30 s.</summary>
+    public static readonly TimeSpan CommandTimeoutCap = TimeSpan.FromSeconds(30);
 
     public static bool IsMember(string capability) => All.Contains(capability, StringComparer.Ordinal);
 }

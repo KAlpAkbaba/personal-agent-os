@@ -33,11 +33,14 @@ public sealed class ProjectAdvertisementTests
         Assert.DoesNotContain(without, AgentCapabilities.IsProjects);
 
         var with = AgentCapabilities.Compose(browserEnabled: true, displayPowerEnabled: true, operatorEnabled: true);
-        Assert.Equal(AgentCapabilities.Projects, with.TakeLast(5));
-        Assert.Equal(AgentCapabilities.Documents, with.SkipLast(5).TakeLast(7));
-        Assert.Equal(without.Count + 32 + 7 + 5, with.Count);
+        // M25 appended the scenes family after the projects family; the projects names keep
+        // their order and their place, one step in from the end.
+        Assert.Equal(AgentCapabilities.Scenes, with.TakeLast(1));
+        Assert.Equal(AgentCapabilities.Projects, with.SkipLast(1).TakeLast(5));
+        Assert.Equal(AgentCapabilities.Documents, with.SkipLast(6).TakeLast(7));
+        Assert.Equal(without.Count + 32 + 7 + 5 + 1, with.Count);
         Assert.Equal(with.Count, with.Distinct(StringComparer.Ordinal).Count());
-        Assert.Equal("0.5.0", AgentInfo.SoftwareVersion);
+        Assert.Equal("0.6.0", AgentInfo.SoftwareVersion);
         Assert.Equal(AgentCapabilities.Compose(browserEnabled: false), AgentCapabilities.Compose(browserEnabled: false, displayPowerEnabled: false, operatorEnabled: false));
     }
 
@@ -66,7 +69,9 @@ public sealed class ProjectAdvertisementTests
     public async Task The_service_caps_the_family_and_refuses_it_before_the_pipe_when_operator_is_off()
     {
         Assert.Equal(TimeSpan.FromSeconds(30), InteractiveCapabilityExecutor.TimeoutCapFor(ProjectCapabilityNames.ProjectScaffold));
-        Assert.Equal(TimeSpan.FromSeconds(30), InteractiveCapabilityExecutor.TimeoutCapFor(ProjectCapabilityNames.ProjectRun));
+        // M25: project.run's ceiling is the longest 3D batch bound plus headroom (a web run
+        // still answers within its 20 s port wait; the cap is a ceiling, not a wait).
+        Assert.Equal(SceneCapabilityNames.UnityRunLimit + TimeSpan.FromSeconds(30), InteractiveCapabilityExecutor.TimeoutCapFor(ProjectCapabilityNames.ProjectRun));
         Assert.Equal(TimeSpan.FromSeconds(30), InteractiveCapabilityExecutor.TimeoutCapFor(ProjectCapabilityNames.ProjectStatus));
         Assert.Equal(TimeSpan.FromSeconds(30), InteractiveCapabilityExecutor.TimeoutCapFor(ProjectCapabilityNames.ProjectStop));
         Assert.Equal(TimeSpan.FromMinutes(5) + TimeSpan.FromSeconds(30), InteractiveCapabilityExecutor.TimeoutCapFor(ProjectCapabilityNames.ProjectTest));

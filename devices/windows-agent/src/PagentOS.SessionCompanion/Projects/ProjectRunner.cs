@@ -13,14 +13,21 @@ using PagentOS.SessionCompanion.Operator;
 
 namespace PagentOS.SessionCompanion.Projects;
 
-/// <summary>The project a run or a test belongs to: its id, slug, resolved folder and validated manifest.</summary>
-public sealed record ProjectContext(string ProjectId, string Slug, string Folder, ProjectManifest Manifest);
+/// <summary>The project a run or a test belongs to: its id, slug, resolved folder, validated manifest and (M25) which root it was found under.</summary>
+public sealed record ProjectContext(string ProjectId, string Slug, string Folder, ProjectManifest Manifest, ProjectScope Scope = ProjectScope.Web);
 
 /// <summary>What <c>project.test</c> observed: the exit code, the counts parsed from the runner's output (null when it printed none), the log's tail.</summary>
 public sealed record TestOutcome(int ExitCode, int? Passed, int? Failed, string ReportTail, bool Truncated, long DurationMs, string LogPath);
 
 /// <summary>What <c>project.stop</c> observed.</summary>
 public sealed record StopOutcome(bool WasRunning, int? Pid, bool Exited);
+
+/// <summary>
+/// M25: what a BATCH <c>project.run</c> observed — Blender headless or Unity in batch mode.
+/// These runtimes do their work and end, so the answer is the exit itself: the code, how long
+/// it took, and the tail of what the tool said (for Unity, its <c>-logFile</c> too).
+/// </summary>
+public sealed record BatchOutcome(ProjectRuntime Runtime, int ExitCode, double Seconds, string LogTail, bool Truncated, string LogPath, int Pid);
 
 /// <summary>
 /// A run the companion owns: the process, the job it lives in, its bounded log. States:
@@ -212,7 +219,9 @@ public sealed class ProjectRunner : IDisposable
     /// <param name="testTimeout">The most a test may take; default <see cref="ProjectCapabilityNames.TestTimeout"/>.</param>
     /// <param name="portWait">How long a run may take to answer on its port; default <see cref="ProjectCapabilityNames.PortWait"/>.</param>
     /// <param name="maxRunning">Concurrent runs (and, separately, concurrent tests); default <see cref="ProjectCapabilityNames.MaxRunningProjects"/>.</param>
-    public ProjectRunner(ILogger logger, Func<ProcessStartInfo, Process?>? start = null, TimeSpan? lifetime = null, TimeSpan? testTimeout = null, TimeSpan? portWait = null, int? maxRunning = null)
+    /// <param name="blenderLimit">M25: the wall-clock bound on a Blender batch run; default <see cref="SceneCapabilityNames.BlenderRunLimit"/> (a lab shortens it to prove the job ends the child).</param>
+    /// <param name="unityLimit">M25: the wall-clock bound on a Unity batch run; default <see cref="SceneCapabilityNames.UnityRunLimit"/>.</param>
+    public ProjectRunner(ILogger logger, Func<ProcessStartInfo, Process?>? start = null, TimeSpan? lifetime = null, TimeSpan? testTimeout = null, TimeSpan? portWait = null, int? maxRunning = null, TimeSpan? blenderLimit = null, TimeSpan? unityLimit = null)
     {
         _logger = logger;
         _start = start ?? Process.Start;
@@ -220,7 +229,24 @@ public sealed class ProjectRunner : IDisposable
         TestTimeout = testTimeout ?? ProjectCapabilityNames.TestTimeout;
         PortWait = portWait ?? ProjectCapabilityNames.PortWait;
         MaxRunning = maxRunning ?? ProjectCapabilityNames.MaxRunningProjects;
+        BlenderLimit = blenderLimit ?? SceneCapabilityNames.BlenderRunLimit;
+        UnityLimit = unityLimit ?? SceneCapabilityNames.UnityRunLimit;
     }
+
+    /// <summary>M25: the most a Blender batch run may take before its job is ended.</summary>
+    public TimeSpan BlenderLimit { get; }
+
+    /// <summary>M25: the most a Unity batch run may take before its job is ended.</summary>
+    public TimeSpan UnityLimit { get; }
+
+    /// <summary>The wall-clock bound for a batch runtime.</summary>
+    public TimeSpan LimitFor(ProjectRuntime runtime)
+        => runtime switch
+        {
+            ProjectRuntime.Blender => BlenderLimit,
+            ProjectRuntime.Unity => UnityLimit,
+            _ => TestTimeout,
+        };
 
     public TimeSpan Lifetime { get; }
 
@@ -356,6 +382,12 @@ public sealed class ProjectRunner : IDisposable
                     return (node, [npmCli]);
                 }
 
+            case ProjectRuntime.Blender:
+            case ProjectRuntime.Unity:
+                // M25: DETECTED, never searched for on PATH (SceneTools). "blender" means the
+                // installed Blender, not whatever is called blender.exe earliest on PATH.
+                return (Scenes.SceneTools.Require(runtime).Executable, []);
+
             default:
                 throw new CapabilityException(ErrorClasses.InternalBug, $"unknown runtime {runtime}", retryable: false);
         }
@@ -396,7 +428,7 @@ public sealed class ProjectRunner : IDisposable
             RequirePortFree(port);
             var startInfo = BuildStartInfo(executable, [.. prefix, .. command.Materialise(project.Folder)], project.Folder);
             run.Log.Open();
-            StartContained(run, startInfo);
+            StartContained(run, startInfo, command.Runtime);
             _logger.LogInformation("project.run {Slug} pid={Pid} port={Port} command={Key} log={Log}", project.Slug, run.Pid, port, command.Key, logPath);
 
             _ = WatchExitAsync(run);
@@ -411,9 +443,9 @@ public sealed class ProjectRunner : IDisposable
         }
     }
 
-    private void StartContained(ProjectRun run, ProcessStartInfo startInfo)
+    private void StartContained(ProjectRun run, ProcessStartInfo startInfo, ProjectRuntime runtime)
     {
-        var job = JobObject.CreateBounded();
+        var job = JobObject.CreateBounded(runtime);
         Process? process = null;
         try
         {
@@ -629,6 +661,205 @@ public sealed class ProjectRunner : IDisposable
         }
     }
 
+    // ============================================== project.run, the 3D runtimes (M25)
+
+    /// <summary>
+    /// M25 (M25_CREATIVE_3D_SPEC.md §3, ADR-0088 decision 3): a BATCH run — Blender headless
+    /// or Unity in batch mode. Everything about the containment is M23's (the same job flags,
+    /// the same scrubbed environment, the same bounded log, the same slot); what differs is
+    /// the shape of the wait: these processes do their work and END, so there is no port to
+    /// bind, nothing to probe, and <c>project.run</c> WAITS for the exit and answers with it.
+    /// A run that outstays its runtime's bound has its job ended and answers <c>timeout</c>.
+    ///
+    /// The log tail is the child's stdout and stderr, plus — for Unity, which writes
+    /// everything to its <c>-logFile</c> and almost nothing to stdout — the tail of that file,
+    /// so the licensing client's own words reach the caller.
+    /// </summary>
+    public async Task<BatchOutcome> RunBatchAsync(ProjectContext project, ProjectCommand command, TimeSpan budget, CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        var (executable, prefix) = ResolveRuntime(command.Runtime);
+        var arguments = (IReadOnlyList<string>)[.. prefix, .. command.Materialise(project.Folder)];
+        var logPath = Path.Combine(project.Folder, ProjectRoots.StateFolderName, RunLogName);
+        var run = new ProjectRun(project, command.Key, ProjectManifest.NoPort, logPath, new BoundedLog(logPath, ProjectCapabilityNames.MaxLogBytes, TailChars));
+
+        lock (_lock)
+        {
+            if (_runs.TryGetValue(project.ProjectId, out var existing) && existing.IsActive)
+            {
+                throw new CapabilityException(ErrorClasses.DependencyUnavailable, $"'{project.Slug}' is already {existing.State} (pid {existing.Pid}); stop it first", retryable: true, new Dictionary<string, object?> { [DocumentErrors.DetailKey] = "already_running" });
+            }
+
+            var active = _runs.Values.Count(r => r.IsActive);
+            if (active >= MaxRunning)
+            {
+                throw new CapabilityException(ErrorClasses.DependencyUnavailable, $"{active} projects are running, the most this companion runs at once ({MaxRunning}); stop one first", retryable: true, new Dictionary<string, object?> { [DocumentErrors.DetailKey] = "projects_busy" });
+            }
+
+            _runs[project.ProjectId] = run;
+        }
+
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            var startInfo = BuildStartInfo(executable, arguments, project.Folder);
+            run.Log.Open();
+            StartContained(run, startInfo, command.Runtime);
+            _logger.LogInformation("project.run (batch {Runtime}) {Slug} pid={Pid} command={Key} log={Log}", command.Runtime, project.Slug, run.Pid, command.Key, logPath);
+
+            var wait = LimitFor(command.Runtime);
+            if (budget > TimeSpan.Zero && budget < wait)
+            {
+                wait = budget;
+            }
+
+            var process = run.Process!;
+            try
+            {
+                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                timeoutCts.CancelAfter(wait);
+                await process.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                Stop(run, cancellationToken.IsCancellationRequested ? "cancelled" : "lifetime");
+                await WaitForExitAsync(process, ProjectCapabilityNames.StopWait).ConfigureAwait(false);
+                await run.Log.CompleteAsync().ConfigureAwait(false);
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+
+                var tail = ComposeTail(run.LogTail, command, arguments, project.Folder);
+                throw new CapabilityException(
+                    ErrorClasses.Timeout,
+                    $"'{project.Slug}' ran past {wait.TotalSeconds:F0} s under {command.Runtime}; the job was ended; log tail: {Trim(tail, 1200)}",
+                    retryable: true,
+                    new Dictionary<string, object?> { ["log_tail"] = tail, ["pid"] = run.Pid });
+            }
+
+            stopwatch.Stop();
+            var exitCode = TryExitCode(process) ?? -1;
+            run.TryMarkExited(exitCode);
+            run.Lifetime.Cancel();
+
+            // The entry process is gone; whatever it left in the job (Unity starts a licensing
+            // client and a package manager) goes with it BEFORE the pumps are drained — a
+            // grandchild that inherited the pipe would otherwise keep the tail open.
+            run.Job?.Terminate();
+            await run.Log.CompleteAsync().ConfigureAwait(false);
+
+            var logTail = ComposeTail(run.LogTail, command, arguments, project.Folder);
+            _logger.LogInformation("project.run (batch {Runtime}) {Slug} exit={Exit} seconds={Seconds}", command.Runtime, project.Slug, exitCode, stopwatch.Elapsed.TotalSeconds);
+            RequireLicence(command.Runtime, project.Slug, exitCode, logTail);
+            return new BatchOutcome(command.Runtime, exitCode, stopwatch.Elapsed.TotalSeconds, logTail, run.LogTruncated, logPath, run.Pid);
+        }
+        catch (Exception)
+        {
+            Release(run);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// M25: a Unity that exited 198, or whose log carries the licensing client's own refusal,
+    /// is <c>dependency_unavailable</c> — never <c>device_error</c> and never a plain
+    /// <c>exit_code</c>. The editor is installed and it started; what is missing is an
+    /// entitlement only the owner can obtain (a Unity Hub sign-in), and the Cloud Core must be
+    /// able to say exactly that. The refusal carries the licensing client's line as
+    /// <c>detail_line</c> so the receipt quotes the tool rather than paraphrasing it.
+    /// </summary>
+    private static void RequireLicence(ProjectRuntime runtime, string slug, int exitCode, string logTail)
+    {
+        if (runtime != ProjectRuntime.Unity)
+        {
+            return;
+        }
+
+        var marked = FindLine(logTail, SceneCapabilityNames.UnityNoLicenceMarker);
+        if (exitCode != SceneCapabilityNames.UnityNoLicenceExitCode && marked is null)
+        {
+            return;
+        }
+
+        var line = marked ?? $"the Unity editor exited {SceneCapabilityNames.UnityNoLicenceExitCode}";
+        throw new CapabilityException(
+            ErrorClasses.DependencyUnavailable,
+            $"the Unity editor is installed but has no valid licence for batch mode, so '{slug}' could not be built: {line}",
+            retryable: false,
+            new Dictionary<string, object?>
+            {
+                [DocumentErrors.DetailKey] = SceneCapabilityNames.UnityNoLicenceDetail,
+                ["detail_line"] = line,
+                ["exit_code"] = exitCode,
+                ["log_tail"] = logTail,
+            });
+    }
+
+    /// <summary>The last line of <paramref name="text"/> that contains <paramref name="marker"/> (case-insensitively), trimmed; null when there is none.</summary>
+    public static string? FindLine(string text, string marker)
+    {
+        string? found = null;
+        foreach (var line in text.Split('\n'))
+        {
+            if (line.Contains(marker, StringComparison.OrdinalIgnoreCase))
+            {
+                found = line.Trim('\r', ' ', '\t');
+            }
+        }
+
+        return found;
+    }
+
+    /// <summary>
+    /// The tail a batch run reports: what the child wrote to stdout/stderr, and — when the
+    /// command named a <c>-logFile</c> — the tail of that file too. Unity writes everything
+    /// there and next to nothing to stdout, so without this the licence refusal would be
+    /// invisible to the caller.
+    /// </summary>
+    private static string ComposeTail(string streams, ProjectCommand command, IReadOnlyList<string> arguments, string workingDirectory)
+    {
+        if (command.Runtime != ProjectRuntime.Unity)
+        {
+            return streams;
+        }
+
+        var index = arguments.ToList().IndexOf("-logFile");
+        if (index < 0 || index + 1 >= arguments.Count)
+        {
+            return streams;
+        }
+
+        // The -logFile argument is RELATIVE (the allowlist admits nothing else) and the
+        // child's working directory is the project folder, so that is where it landed.
+        var fileTail = ReadTail(Path.Combine(workingDirectory, arguments[index + 1]), TailChars);
+        if (string.IsNullOrEmpty(fileTail))
+        {
+            return streams;
+        }
+
+        return string.IsNullOrWhiteSpace(streams) ? fileTail : streams + "\n" + fileTail;
+    }
+
+    /// <summary>The last <paramref name="chars"/> characters of a file, read through a share-everything handle (the editor may still hold it); empty when it cannot be read.</summary>
+    private static string ReadTail(string path, int chars)
+    {
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            var bytes = Math.Min(stream.Length, chars * 2L);
+            stream.Seek(-bytes, SeekOrigin.End);
+            using var reader = new StreamReader(stream, Encoding.UTF8);
+            var text = reader.ReadToEnd();
+            return text.Length <= chars ? text : text[^chars..];
+        }
+        catch (Exception)
+        {
+            // No log file, or one nobody may read: the streams are the tail.
+            return string.Empty;
+        }
+    }
+
     // ================================================================== project.stop
 
     public async Task<StopOutcome> StopAsync(string projectId, CancellationToken cancellationToken)
@@ -722,7 +953,7 @@ public sealed class ProjectRunner : IDisposable
         var stopwatch = Stopwatch.StartNew();
         var logPath = Path.Combine(project.Folder, ProjectRoots.StateFolderName, TestLogName);
         using var log = new BoundedLog(logPath, ProjectCapabilityNames.MaxLogBytes, TailChars);
-        using var job = JobObject.CreateBounded();
+        using var job = JobObject.CreateBounded(command.Runtime);
         Process? process = null;
         try
         {

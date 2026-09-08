@@ -337,10 +337,25 @@ public static class Program
                 ProjectCapabilityNames.CpuTimeLimit.TotalMinutes,
                 ProjectCapabilityNames.RunLifetime.TotalMinutes,
                 ProjectCapabilityNames.MaxRunningProjects);
+
+            // M25 (M25_CREATIVE_3D_SPEC.md §3/§7, ADR-0088): the two 3D runtimes and
+            // scene.inspect ride the same object and the same flag. The tools are DETECTED
+            // here so the log says, before anything is asked of them, which editors this
+            // machine actually has — and a missing one is dependency_unavailable, never a
+            // claim of control.
+            logger.LogInformation(
+                "scenes: ENABLED - {Count} capability; 3d root={Root3d}; blender bounded to {BlenderMemory} MiB / {BlenderMinutes:F0} min, unity to {UnityMemory} MiB / {UnityMinutes:F0} min; tools: {Tools}",
+                AgentCapabilities.Scenes.Count,
+                projectCapabilities.ProjectsRoot3d ?? "(no Documents folder: every 3D run is refused)",
+                SceneCapabilityNames.BlenderMemoryLimitBytes / (1024 * 1024),
+                SceneCapabilityNames.BlenderRunLimit.TotalMinutes,
+                SceneCapabilityNames.UnityMemoryLimitBytes / (1024 * 1024),
+                SceneCapabilityNames.UnityRunLimit.TotalMinutes,
+                Scenes.SceneTools.Describe());
         }
         else
         {
-            logger.LogInformation("digital operator: disabled (PAGENTOS_AGENT_OperatorEnabled=true enables it); the operator, documents and projects families are not advertised");
+            logger.LogInformation("digital operator: disabled (PAGENTOS_AGENT_OperatorEnabled=true enables it); the operator, documents, projects and scenes families are not advertised");
         }
 
         var runtime = new CompanionRuntime(
