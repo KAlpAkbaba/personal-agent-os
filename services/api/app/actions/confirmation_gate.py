@@ -25,7 +25,7 @@ must not invent a sixth.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 
 GATE_NOT_READ_BACK = "not_read_back"
 GATE_NO_CONFIRMATION = "no_confirmation"
@@ -48,6 +48,15 @@ class GateResult:
     reason: str | None = None
 
 
+def _aware(value: datetime) -> datetime:
+    """SQLite has no native timezone-aware column type — a ``DateTime(timezone=True)``
+    value round-trips through it naive even though Postgres (production) keeps the
+    offset. Assume UTC for a naive value rather than let the comparison below raise, the
+    same defensive rule ``app.operator.focus._iso`` already applies to a focus row's own
+    timestamp."""
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
 def check_gate(
     *,
     state: str,
@@ -65,7 +74,7 @@ def check_gate(
         return GateResult(False, GATE_ALREADY_SENT)
     if read_back_at is None:
         return GateResult(False, GATE_NOT_READ_BACK)
-    if confirmed_at <= read_back_at:
+    if _aware(confirmed_at) <= _aware(read_back_at):
         return GateResult(False, GATE_NO_CONFIRMATION)
     if not host_flag_enabled:
         return GateResult(False, GATE_SEND_DISABLED)
