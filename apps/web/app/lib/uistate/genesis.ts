@@ -96,7 +96,16 @@ export function genesisFacts(event: UiStateEvent | null): GenesisFacts {
 export type GenesisPosture = "building" | "waiting" | "settled" | "failed";
 
 /** The states after which nothing is being built: the capability is available, used or verified. */
-export const GENESIS_SETTLED_STATES: readonly GenesisRunState[] = ["available", "used", "verified"];
+//: A cancelled run is settled, not building: the OWNER stopped it. Without the word here
+//: the Core drew a run they had given up on as one still being made, because an unreadable
+//: state falls through to the building posture (found 2026-09-08 by asking M25's question
+//: of every earlier family).
+export const GENESIS_SETTLED_STATES: readonly GenesisRunState[] = [
+  "available",
+  "used",
+  "verified",
+  "cancelled",
+];
 
 const GENESIS_SETTLED_SET: ReadonlySet<string> = new Set(GENESIS_SETTLED_STATES);
 

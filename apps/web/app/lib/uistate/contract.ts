@@ -502,6 +502,7 @@ export const GENESIS_RUN_STATES = [
   "used",
   "verified",
   "failed",
+  "cancelled",
 ] as const;
 
 export type GenesisRunState = (typeof GENESIS_RUN_STATES)[number];
@@ -1195,6 +1196,7 @@ export const GENESIS_STATE_LABEL: Record<GenesisRunState, string> = {
   used: "kullanıldı",
   verified: "doğrulandı",
   failed: "başarısız",
+  cancelled: "vazgeçildi",
 };
 
 /**

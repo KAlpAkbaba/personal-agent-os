@@ -450,7 +450,10 @@ describe("the rows", () => {
     expect(rowIsAwaiting({ state: "AWAITING_APPROVAL" })).toBe(false);
     expect(rowIsAwaiting({ state: "approved" })).toBe(false);
     for (const state of GENESIS_RUN_STATES) {
-      const active = !["available", "used", "verified", "failed"].includes(state);
+      // A cancelled run is settled: the owner gave it up, so "Vazgeç" has nothing left to
+      // ask. Until 2026-09-08 this build could not read the word at all and drew such a
+      // run as one still being built.
+      const active = !["available", "used", "verified", "failed", "cancelled"].includes(state);
       expect(rowIsActive({ state }), state).toBe(active);
     }
     expect(rowIsActive({ state: null })).toBe(false);
@@ -462,7 +465,7 @@ describe("the rows", () => {
     for (const state of ["capability_missing", "researching", "designing", "building", "testing", "classifying", "rolling_out", "registering"]) {
       expect(genesisRowActions({ state }), state).toEqual(["cancel"]);
     }
-    for (const state of ["available", "used", "verified", "failed", "approved", null]) {
+    for (const state of ["available", "used", "verified", "failed", "cancelled", "approved", null]) {
       expect(genesisRowActions({ state }), String(state)).toEqual([]);
     }
     expect(GENESIS_ACTION_LABEL).toEqual({ approve: "Onayla", cancel: "Vazgeç" });

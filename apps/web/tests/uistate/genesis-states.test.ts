@@ -181,6 +181,7 @@ const EXPECTED_CAPTION: Record<(typeof GENESIS_RUN_STATES)[number], string> = {
   used: "counterbox.increment kullanıldı",
   verified: "counterbox.increment doğrulandı",
   failed: "counterbox.increment başarısız",
+  cancelled: "counterbox.increment vazgeçildi",
 };
 
 // ------------------------------------------------------------ the contract
@@ -228,7 +229,13 @@ describe("contract v9 is v8 plus the genesis state, and says so", () => {
     expect(UI_STATES.indexOf("capability.genesis")).toBeGreaterThan(UI_STATES.indexOf("app.factory"));
   });
 
-  it("types the thirteen run states in the spec's order, and admits nothing outside them", () => {
+  it("types the fourteen run states in the spec's order, and admits nothing outside them", () => {
+    // FOURTEEN. This list said thirteen and asserted that "cancelled" was NOT a run state,
+    // while `GenesisRun` has carried that state since M24 and `_transition` publishes it
+    // whenever the owner says "Vazgeç" — so the Core drew a run they had given up on as
+    // one still being built, because an unreadable state falls through to the building
+    // posture. A test that pinned a belief the publisher had already contradicted; found
+    // 2026-09-08 by asking M25's contract question of every earlier family.
     expect(GENESIS_RUN_STATES).toEqual([
       "capability_missing",
       "researching",
@@ -243,11 +250,11 @@ describe("contract v9 is v8 plus the genesis state, and says so", () => {
       "used",
       "verified",
       "failed",
+      "cancelled",
     ]);
     for (const s of GENESIS_RUN_STATES) expect(isGenesisRunState(s), s).toBe(true);
     expect(isGenesisRunState("approved")).toBe(false);
     expect(isGenesisRunState("VERIFIED")).toBe(false);
-    expect(isGenesisRunState("cancelled")).toBe(false);
     expect(isGenesisRunState(true)).toBe(false);
     expect(isGenesisRunState(null)).toBe(false);
   });
@@ -300,6 +307,7 @@ describe("contract v9 is v8 plus the genesis state, and says so", () => {
       used: "kullanıldı",
       verified: "doğrulandı",
       failed: "başarısız",
+      cancelled: "vazgeçildi",
     });
     // "Doğrulandı" and "kullanılabilir" are words for exactly one state each.
     expect(Object.values(GENESIS_STATE_LABEL).filter((w) => w === "doğrulandı")).toHaveLength(1);
@@ -423,7 +431,7 @@ describe("genesis: facts, view and caption from published metadata only", () => 
     expect(genesisFacts(CAPABILITY_GENESIS(CAP, "classifying", null, false)).approvalRequired).toBe(false);
   });
 
-  it("captions every one of the thirteen states in the spec's words from the published facts", () => {
+  it("captions every one of the fourteen states in the spec's words from the published facts", () => {
     for (const state of GENESIS_RUN_STATES) {
       expect(genesisCaption(genesisFacts(CAPABILITY_GENESIS(CAP, state))), state).toBe(EXPECTED_CAPTION[state]);
     }
@@ -440,7 +448,12 @@ describe("genesis: facts, view and caption from published metadata only", () => 
     expect(genesisCaption(genesisFacts(CAPABILITY_GENESIS("Sayaç kutusu", "verified")))).toBe("Sayaç kutusu doğrulandı");
     // The four preparing states say the word FOR the capability; the rest say it OF it.
     expect(GENESIS_PREPARING_STATES).toEqual(["capability_missing", "researching", "designing", "building"]);
-    expect(GENESIS_SETTLED_STATES).toEqual(["available", "used", "verified"]);
+    // A run the OWNER cancelled is settled, not building — it was drawn as still being
+    // made until 2026-09-08, because this build could not read the word at all.
+    expect(GENESIS_SETTLED_STATES).toEqual(["available", "used", "verified", "cancelled"]);
+    expect(genesisCaption(genesisFacts(CAPABILITY_GENESIS("Sayaç kutusu", "cancelled")))).toBe(
+      "Sayaç kutusu vazgeçildi",
+    );
   });
 
   it("words a failure with its error class, and without one when none was published — never as done", () => {
@@ -527,6 +540,7 @@ describe("genesis: facts, view and caption from published metadata only", () => 
       used: "settled",
       verified: "settled",
       failed: "failed",
+      cancelled: "settled",
     };
     for (const state of GENESIS_RUN_STATES) expect(genesisPosture(state), state).toBe(expected[state]);
     // No state, or a word we cannot read, is building: nothing settled has been said.

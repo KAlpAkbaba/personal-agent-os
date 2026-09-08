@@ -373,7 +373,11 @@ describe("contract v10 is v9 plus the scene state, and says so", () => {
 
   it("leaves every v9 token, kind, horizon and word exactly as it was", () => {
     expect(GENESIS_STATES).toEqual(["capability.genesis"]);
-    expect(GENESIS_RUN_STATES).toEqual([
+    // Append-only means no earlier word is removed, renamed or reordered — not that the
+    // list may never grow. `cancelled` was appended after the backend turned out to have
+    // published it since M24 (a v9 correction, not a v10 change); a v9 renderer still
+    // reads every word it knew.
+    expect(GENESIS_RUN_STATES.slice(0, 13)).toEqual([
       "capability_missing",
       "researching",
       "designing",
