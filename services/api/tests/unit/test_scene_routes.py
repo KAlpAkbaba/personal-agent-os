@@ -73,7 +73,9 @@ def test_post_render_reaches_the_same_device_port_and_stores_a_png() -> None:
     h.say(sid, "Bir küre ekle.")
     h.tool(sid, "c-2", "scene.add", {"kind": "sphere", "name": "Kure"})
     h.say(sid, "Bir kamera ekle.", turn=2)
-    h.tool(sid, "c-3", "scene.add", {"kind": "camera", "name": "Kamera", "location": [0.0, -5.0, 0.0]})
+    h.tool(
+        sid, "c-3", "scene.add", {"kind": "camera", "name": "Kamera", "location": [0.0, -5.0, 0.0]}
+    )
     h.say(sid, "Kamerayı nesneye çevir.", turn=3)
     h.tool(sid, "c-4", "scene.camera", {"name": "Kamera", "look_at": "Kure"})
 

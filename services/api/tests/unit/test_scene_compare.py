@@ -96,7 +96,9 @@ def _sphere_plan(**camera_kwargs) -> ScenePlan:
     ]
     if camera_kwargs.get("look_at", True):
         ops.append({"op": "set_camera", "name": "Kamera", "look_at": "Kure"})
-    return ScenePlan.model_validate({"tool": "blender", "project": "lab", "scene": "demo", "operations": ops})
+    return ScenePlan.model_validate(
+        {"tool": "blender", "project": "lab", "scene": "demo", "operations": ops}
+    )
 
 
 def _matching_inspection() -> dict:
@@ -181,7 +183,13 @@ def test_compare_render_present_and_nontrivial() -> None:
             "operations": [{"op": "render", "width": 64, "height": 48}],
         }
     )
-    inspection = {"objects": [], "camera": None, "lights": [], "render": {"path": "x"}, "errors": []}
+    inspection = {
+        "objects": [],
+        "camera": None,
+        "lights": [],
+        "render": {"path": "x"},
+        "errors": [],
+    }
     result = compare(plan, inspection, render_bytes=_png_bytes(64, 48, uniform=False))
     assert result.ok
 
@@ -195,14 +203,18 @@ def test_compare_never_reports_a_match_over_an_empty_comparison() -> None:
     plan = ScenePlan.model_validate(
         {"tool": "blender", "project": "lab", "scene": "demo", "operations": [{"op": "inspect"}]}
     )
-    result = compare(plan, {"objects": [], "camera": None, "lights": [], "render": None, "errors": []})
+    result = compare(
+        plan, {"objects": [], "camera": None, "lights": [], "render": None, "errors": []}
+    )
     assert not result.ok
     assert result.checked == 0
     assert result.reason == "no_constraints"
 
 
 def test_compare_empty_plan_is_also_a_mismatch() -> None:
-    plan = ScenePlan.model_validate({"tool": "blender", "project": "lab", "scene": "demo", "operations": []})
+    plan = ScenePlan.model_validate(
+        {"tool": "blender", "project": "lab", "scene": "demo", "operations": []}
+    )
     result = compare(plan, _matching_inspection())
     assert not result.ok
     assert result.reason == "no_constraints"

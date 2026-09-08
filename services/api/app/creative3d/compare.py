@@ -86,8 +86,11 @@ def _find_object(inspection: dict[str, Any], name: str) -> dict[str, Any] | None
 
 
 def _vec_mismatches(
-    object_name: str, field_prefix: str, expected: tuple[float, float, float],
-    actual: list[float] | None, tolerance: float
+    object_name: str,
+    field_prefix: str,
+    expected: tuple[float, float, float],
+    actual: list[float] | None,
+    tolerance: float,
 ) -> list[Mismatch]:
     out: list[Mismatch] = []
     if actual is None or len(actual) != 3:
@@ -149,7 +152,11 @@ def check_render(png_bytes: bytes | None) -> Mismatch | None:
         return Mismatch("render", "render", "present", None, "no render bytes provided")
     if len(png_bytes) < RENDER_MIN_BYTES:
         return Mismatch(
-            "render", "render.bytes", f">= {RENDER_MIN_BYTES}", len(png_bytes), "too small to be real"
+            "render",
+            "render.bytes",
+            f">= {RENDER_MIN_BYTES}",
+            len(png_bytes),
+            "too small to be real",
         )
     try:
         from PIL import Image, ImageStat
@@ -160,7 +167,9 @@ def check_render(png_bytes: bytes | None) -> Mismatch | None:
             stat = ImageStat.Stat(grey)
             stddev = stat.stddev[0]
     except Exception as exc:  # noqa: BLE001 - an unreadable "render" is a mismatch, not a crash
-        return Mismatch("render", "render", "a decodable PNG", None, f"PIL could not open it: {exc}")
+        return Mismatch(
+            "render", "render", "a decodable PNG", None, f"PIL could not open it: {exc}"
+        )
     if stddev < RENDER_NONUNIFORM_STDDEV_MIN:
         return Mismatch(
             "render",
@@ -172,133 +181,192 @@ def check_render(png_bytes: bytes | None) -> Mismatch | None:
     return None
 
 
-def compare(plan: ScenePlan, inspection: dict[str, Any], *, render_bytes: bytes | None = None) -> CompareResult:
+def compare(
+    plan: ScenePlan, inspection: dict[str, Any], *, render_bytes: bytes | None = None
+) -> CompareResult:
     """Every requested constraint the plan named, checked against the inspection —
     NEVER against the plan's own numbers restated. ``checked`` counts how many
     individual constraints were actually evaluated; ``ok`` is true only when
     ``checked > 0`` and every one of them passed (module docstring: never a match
-    over an empty comparison)."""
+    over an empty comparison).
+
+    Per-object constraints are FOLDED across the whole plan before anything is
+    compared: a later ``transform``/``add_primitive`` for the same object wins over
+    an earlier one for the same field, so a plan that adds an object and then moves
+    it is checked against where it ends up, never flagged for not still being where
+    it started. Found the real way, running the real Blender lab
+    (``scripts/tests/blender-scene-lab.py``): an add-then-transform plan on a real
+    driver reported a "mismatch" for a scale the plan itself had asked to change —
+    the comparison was re-litigating a constraint its own later operation had
+    superseded, not a real defect in the driver."""
     mismatches: list[Mismatch] = []
     checked = 0
 
+    expected_by_object: dict[str, dict[str, Any]] = {}
+    camera_aim: dict[str, str] = {}
+    light_energy: dict[str, float] = {}
+    last_render_op = None
+
     for op in plan.operations:
         if op.op == "add_primitive":
-            checked += 1
-            obj = _find_object(inspection, op.name)
-            if obj is None:
-                mismatches.append(
-                    Mismatch(op.name, "presence", "present", "absent", "object not found in inspection")
-                )
-                continue
-            mismatches.extend(
-                _vec_mismatches(op.name, "location", op.location, obj.get("location"), LOCATION_TOLERANCE)
-            )
-            mismatches.extend(
-                _vec_mismatches(op.name, "scale", op.scale, obj.get("scale"), SCALE_TOLERANCE)
-            )
-            checked += 2
+            entry = expected_by_object.setdefault(op.name, {})
+            entry["location"] = op.location
+            entry["scale"] = op.scale
+            entry["rotation"] = op.rotation
         elif op.op == "transform":
-            obj = _find_object(inspection, op.name)
-            if obj is None:
-                checked += 1
-                mismatches.append(
-                    Mismatch(op.name, "presence", "present", "absent", "object not found in inspection")
-                )
-                continue
+            entry = expected_by_object.setdefault(op.name, {})
             if op.location is not None:
-                checked += 1
-                mismatches.extend(
-                    _vec_mismatches(op.name, "location", op.location, obj.get("location"), LOCATION_TOLERANCE)
-                )
+                entry["location"] = op.location
             if op.scale is not None:
-                checked += 1
-                mismatches.extend(
-                    _vec_mismatches(op.name, "scale", op.scale, obj.get("scale"), SCALE_TOLERANCE)
-                )
+                entry["scale"] = op.scale
             if op.rotation is not None:
-                checked += 1
-                mismatches.extend(
-                    _vec_mismatches(
-                        op.name, "rotation", op.rotation, obj.get("rotation"), ROTATION_TOLERANCE_DEG
-                    )
-                )
+                entry["rotation"] = op.rotation
         elif op.op == "set_material":
+            entry = expected_by_object.setdefault(op.name, {})
+            entry["material_color"] = op.color
+        elif op.op == "set_camera" and op.look_at is not None:
+            camera_aim[op.name] = op.look_at
+        elif op.op == "set_light":
+            light_energy[op.name] = op.energy
+        elif op.op == "render":
+            last_render_op = op
+
+    # A ``set_camera ... look_at`` supersedes whatever rotation ``add_primitive``/
+    # ``transform`` last stated for that SAME object, exactly the way a later
+    # ``transform`` already supersedes an earlier one above — the aim is what the
+    # plan actually asked for; the literal numeric rotation ``add_primitive``'s own
+    # default (or an earlier explicit one) named is no longer a real constraint once
+    # a look_at determines it instead. Checked instead, and independently, by the
+    # camera_aim loop below (found the same way as the fold itself: running the real
+    # Blender lab, scripts/tests/blender-scene-lab.py).
+    for cam_name in camera_aim:
+        expected_by_object.get(cam_name, {}).pop("rotation", None)
+
+    for name, expected in expected_by_object.items():
+        obj = _find_object(inspection, name)
+        if obj is None:
             checked += 1
-            obj = _find_object(inspection, op.name)
-            actual_color = obj.get("material_color") if obj else None
+            mismatches.append(
+                Mismatch(name, "presence", "present", "absent", "object not found in inspection")
+            )
+            continue
+        if "location" in expected:
+            checked += 1
+            mismatches.extend(
+                _vec_mismatches(
+                    name, "location", expected["location"], obj.get("location"), LOCATION_TOLERANCE
+                )
+            )
+        if "scale" in expected:
+            checked += 1
+            mismatches.extend(
+                _vec_mismatches(name, "scale", expected["scale"], obj.get("scale"), SCALE_TOLERANCE)
+            )
+        if "rotation" in expected:
+            checked += 1
+            mismatches.extend(
+                _vec_mismatches(
+                    name,
+                    "rotation",
+                    expected["rotation"],
+                    obj.get("rotation"),
+                    ROTATION_TOLERANCE_DEG,
+                )
+            )
+        if "material_color" in expected:
+            checked += 1
+            expected_color = expected["material_color"]
+            actual_color = obj.get("material_color")
             if actual_color is None or len(actual_color) != 4:
                 mismatches.append(
-                    Mismatch(op.name, "material_color", list(op.color), actual_color, "no material colour in inspection")
+                    Mismatch(
+                        name,
+                        "material_color",
+                        list(expected_color),
+                        actual_color,
+                        "no material colour in inspection",
+                    )
                 )
             else:
-                for channel, exp_c, act_c in zip(("r", "g", "b", "a"), op.color, actual_color, strict=True):
+                for channel, exp_c, act_c in zip(
+                    ("r", "g", "b", "a"), expected_color, actual_color, strict=True
+                ):
                     if abs(float(exp_c) - float(act_c)) > COLOR_TOLERANCE:
                         mismatches.append(
                             Mismatch(
-                                op.name,
+                                name,
                                 f"material_color.{channel}",
                                 exp_c,
                                 act_c,
                                 f"|{exp_c} - {act_c}| > {COLOR_TOLERANCE}",
                             )
                         )
-        elif op.op == "set_camera" and op.look_at is not None:
-            checked += 1
-            cam = _find_object(inspection, op.name)
-            target = _find_object(inspection, op.look_at)
-            if cam is None or target is None:
-                mismatches.append(
-                    Mismatch(
-                        op.name,
-                        "camera_aim",
-                        op.look_at,
-                        None,
-                        "camera or look_at target not found in inspection",
-                    )
+
+    for cam_name, look_at in camera_aim.items():
+        checked += 1
+        cam = _find_object(inspection, cam_name)
+        target = _find_object(inspection, look_at)
+        if cam is None or target is None:
+            mismatches.append(
+                Mismatch(
+                    cam_name,
+                    "camera_aim",
+                    look_at,
+                    None,
+                    "camera or look_at target not found in inspection",
                 )
-                continue
-            cam_rot = cam.get("rotation")
-            cam_loc = cam.get("location")
-            target_loc = target.get("location")
-            if not cam_rot or not cam_loc or not target_loc:
-                mismatches.append(
-                    Mismatch(op.name, "camera_aim", op.look_at, None, "missing location/rotation in inspection")
-                )
-                continue
-            actual_forward = forward_vector((cam_rot[0], cam_rot[1], cam_rot[2]))
-            wanted = (
-                target_loc[0] - cam_loc[0],
-                target_loc[1] - cam_loc[1],
-                target_loc[2] - cam_loc[2],
             )
-            angle = _angle_between_deg(actual_forward, wanted)
-            if angle > CAMERA_AIM_TOLERANCE_DEG:
-                mismatches.append(
-                    Mismatch(
-                        op.name,
-                        "camera_aim.angle_deg",
-                        f"<= {CAMERA_AIM_TOLERANCE_DEG}",
-                        round(angle, 3),
-                        f"camera not aimed at {op.look_at!r}",
-                    )
+            continue
+        cam_rot = cam.get("rotation")
+        cam_loc = cam.get("location")
+        target_loc = target.get("location")
+        if not cam_rot or not cam_loc or not target_loc:
+            mismatches.append(
+                Mismatch(
+                    cam_name, "camera_aim", look_at, None, "missing location/rotation in inspection"
                 )
-        elif op.op == "set_light":
-            checked += 1
-            lights = {light.get("name"): light for light in inspection.get("lights") or []}
-            actual = lights.get(op.name)
-            if actual is None:
-                mismatches.append(Mismatch(op.name, "energy", op.energy, None, "light not found in inspection"))
-            elif abs(float(actual.get("energy", 0.0)) - op.energy) > max(1.0, op.energy * 0.05):
-                mismatches.append(Mismatch(op.name, "energy", op.energy, actual.get("energy"), "energy mismatch"))
-        elif op.op == "render":
-            checked += 1
-            render_mismatch = check_render(render_bytes)
-            if render_mismatch is not None:
-                mismatches.append(render_mismatch)
-            elif inspection.get("render") is None:
-                mismatches.append(
-                    Mismatch("render", "render", "present", None, "driver reported no render info")
+            )
+            continue
+        actual_forward = forward_vector((cam_rot[0], cam_rot[1], cam_rot[2]))
+        wanted = (
+            target_loc[0] - cam_loc[0],
+            target_loc[1] - cam_loc[1],
+            target_loc[2] - cam_loc[2],
+        )
+        angle = _angle_between_deg(actual_forward, wanted)
+        if angle > CAMERA_AIM_TOLERANCE_DEG:
+            mismatches.append(
+                Mismatch(
+                    cam_name,
+                    "camera_aim.angle_deg",
+                    f"<= {CAMERA_AIM_TOLERANCE_DEG}",
+                    round(angle, 3),
+                    f"camera not aimed at {look_at!r}",
                 )
+            )
+
+    for light_name, energy in light_energy.items():
+        checked += 1
+        lights = {light.get("name"): light for light in inspection.get("lights") or []}
+        actual = lights.get(light_name)
+        if actual is None:
+            mismatches.append(
+                Mismatch(light_name, "energy", energy, None, "light not found in inspection")
+            )
+        elif abs(float(actual.get("energy", 0.0)) - energy) > max(1.0, energy * 0.05):
+            mismatches.append(
+                Mismatch(light_name, "energy", energy, actual.get("energy"), "energy mismatch")
+            )
+
+    if last_render_op is not None:
+        checked += 1
+        render_mismatch = check_render(render_bytes)
+        if render_mismatch is not None:
+            mismatches.append(render_mismatch)
+        elif inspection.get("render") is None:
+            mismatches.append(
+                Mismatch("render", "render", "present", None, "driver reported no render info")
+            )
 
     if checked == 0:
         return CompareResult(ok=False, checked=0, mismatches=(), reason="no_constraints")

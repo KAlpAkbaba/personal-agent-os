@@ -41,7 +41,16 @@ def driver():
 
 def test_parse_argv_takes_the_tail_after_the_blender_separator(driver) -> None:
     plan_path, out_path = driver.parse_argv(
-        ["blender", "-b", "file.blend", "--python", "blender_driver.py", "--", "plan.json", "out.json"]
+        [
+            "blender",
+            "-b",
+            "file.blend",
+            "--python",
+            "blender_driver.py",
+            "--",
+            "plan.json",
+            "out.json",
+        ]
     )
     assert (plan_path, out_path) == ("plan.json", "out.json")
 
@@ -156,7 +165,9 @@ def test_apply_operations_builds_the_expected_inspection(driver, tmp_path) -> No
 
 def test_transform_moves_an_existing_object(driver, tmp_path) -> None:
     plan = _basic_plan()
-    plan["operations"].append({"op": "transform", "name": "Kure", "location": [1.0, 2.0, 3.0], "scale": [2.0, 2.0, 2.0]})
+    plan["operations"].append(
+        {"op": "transform", "name": "Kure", "location": [1.0, 2.0, 3.0], "scale": [2.0, 2.0, 2.0]}
+    )
     inspection = driver.apply_operations(plan, str(tmp_path))
     kure = next(o for o in inspection["objects"] if o["name"] == "Kure")
     assert kure["location"] == [1.0, 2.0, 3.0]
@@ -175,7 +186,12 @@ def test_transform_of_unknown_object_is_an_error_not_a_crash(driver, tmp_path) -
 
 
 def test_unknown_operation_recorded_as_an_error(driver, tmp_path) -> None:
-    plan = {"tool": "blender", "project": "lab", "scene": "demo", "operations": [{"op": "delete_everything"}]}
+    plan = {
+        "tool": "blender",
+        "project": "lab",
+        "scene": "demo",
+        "operations": [{"op": "delete_everything"}],
+    }
     inspection = driver.apply_operations(plan, str(tmp_path))
     assert any("unknown operation" in e for e in inspection["errors"])
 
@@ -185,12 +201,19 @@ def test_create_scene_clears_prior_objects(driver, tmp_path) -> None:
         "tool": "blender",
         "project": "lab",
         "scene": "demo",
-        "operations": [{"op": "add_primitive", "kind": "cube", "name": "Kup", "location": [0, 0, 0]}],
+        "operations": [
+            {"op": "add_primitive", "kind": "cube", "name": "Kup", "location": [0, 0, 0]}
+        ],
     }
     driver.apply_operations(plan1, str(tmp_path))
     assert len(list(driver.bpy.data.objects)) == 1
 
-    plan2 = {"tool": "blender", "project": "lab", "scene": "demo", "operations": [{"op": "create_scene"}]}
+    plan2 = {
+        "tool": "blender",
+        "project": "lab",
+        "scene": "demo",
+        "operations": [{"op": "create_scene"}],
+    }
     inspection = driver.apply_operations(plan2, str(tmp_path))
     assert inspection["objects"] == []
     assert len(list(driver.bpy.data.objects)) == 0
@@ -258,10 +281,22 @@ def test_main_writes_out_json_and_a_blend_file(driver, tmp_path) -> None:
 def test_write_out_json_bounds_a_runaway_inspection(driver, tmp_path) -> None:
     out_path = tmp_path / "out.json"
     huge_objects = [
-        {"name": f"o{i}", "type": "MESH", "location": [0, 0, 0], "rotation": [0, 0, 0], "scale": [1, 1, 1]}
+        {
+            "name": f"o{i}",
+            "type": "MESH",
+            "location": [0, 0, 0],
+            "rotation": [0, 0, 0],
+            "scale": [1, 1, 1],
+        }
         for i in range(5000)
     ]
-    inspection = {"objects": huge_objects, "camera": None, "lights": [], "render": None, "errors": []}
+    inspection = {
+        "objects": huge_objects,
+        "camera": None,
+        "lights": [],
+        "render": None,
+        "errors": [],
+    }
     driver.write_out_json(str(out_path), inspection)
     written = json.loads(out_path.read_text(encoding="utf-8"))
     assert len(out_path.read_bytes()) <= driver.MAX_OUT_JSON_BYTES

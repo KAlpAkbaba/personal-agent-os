@@ -14,15 +14,13 @@ production reads its real one. This module does that, once per stage of the life
 
 from __future__ import annotations
 
-import uuid
-
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.config import Settings
-from app.creative3d.models import STATE_APPLIED, STATE_DEPENDENCY_UNAVAILABLE
+from app.creative3d.models import STATE_APPLIED
 from app.main import create_app
 from app.routines.dispatch import DeviceRunResult
 from tests.alarms_support import FakeDeviceAction, happy_device_results
@@ -43,7 +41,9 @@ def _client(*, unity_available: bool = False):
     app = create_app(settings)
 
     fake_device = FakeCreative3DDevice(unity_available=unity_available)
-    device = FakeDeviceAction(results={**happy_device_results(), **fake_device.capability_results()})
+    device = FakeDeviceAction(
+        results={**happy_device_results(), **fake_device.capability_results()}
+    )
 
     from app.voice.realtime_sessions.runtime import RealtimeVoiceRuntime
 
@@ -119,7 +119,12 @@ def test_unity_licence_refusal_through_the_real_application_object() -> None:
         f"/v1/voice/realtime/sessions/{session_id}/events",
         json={
             "events": [
-                {"kind": "utterance", "t_ms": 1000, "turn": 1, "text": "Unity'de boş bir sahne oluştur."}
+                {
+                    "kind": "utterance",
+                    "t_ms": 1000,
+                    "turn": 1,
+                    "text": "Unity'de boş bir sahne oluştur.",
+                }
             ]
         },
     )

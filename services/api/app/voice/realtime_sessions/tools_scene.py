@@ -54,7 +54,9 @@ SPEECH_NO_TOOL = "Hangi araçla efendim: Blender mi, Unity mi?"
 def _service(ctx: ToolContext, tool: str) -> SceneService:
     service = ctx.live.get("creative3d_service")
     if service is None:
-        raise VoiceError(VoiceErrorClass.DEPENDENCY_UNAVAILABLE, f"{tool} needs the 3D creation service")
+        raise VoiceError(
+            VoiceErrorClass.DEPENDENCY_UNAVAILABLE, f"{tool} needs the 3D creation service"
+        )
     return service
 
 
@@ -153,13 +155,15 @@ def scene_add(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
     turn = _turn_record(ctx)
     turn_kind = turn.get("scene_kind")
     kind = turn_kind if isinstance(turn_kind, str) and turn_kind else arguments.get("kind")
-    if kind not in (
-        "cube", "sphere", "cylinder", "plane", "light_sun", "light_point", "camera"
-    ):
+    if kind not in ("cube", "sphere", "cylinder", "plane", "light_sun", "light_point", "camera"):
         return service.clarification(
             "Ne eklemek istiyorsun: küp, küre, silindir, düzlem, ışık ya da kamera mı?"
         )
-    name = str(arguments.get("name")) if isinstance(arguments.get("name"), str) and arguments.get("name") else f"{kind}_1"
+    name = (
+        str(arguments.get("name"))
+        if isinstance(arguments.get("name"), str) and arguments.get("name")
+        else f"{kind}_1"
+    )
     op: dict[str, Any] = {"op": "add_primitive", "kind": kind, "name": name}
     if isinstance(arguments.get("location"), list) and len(arguments["location"]) == 3:
         op["location"] = arguments["location"]
@@ -268,7 +272,11 @@ def scene_camera(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
     db = _require_db(ctx, TOOL_SCENE_CAMERA)
     service = _service(ctx, TOOL_SCENE_CAMERA)
     device_action = ctx.live.get("device_action")
-    name = str(arguments.get("name")) if isinstance(arguments.get("name"), str) and arguments.get("name") else "Kamera"
+    name = (
+        str(arguments.get("name"))
+        if isinstance(arguments.get("name"), str) and arguments.get("name")
+        else "Kamera"
+    )
     look_at = arguments.get("look_at")
     if not isinstance(look_at, str) or not look_at:
         return service.clarification("Kamerayı hangi nesneye çevireyim efendim?")
@@ -293,7 +301,11 @@ def scene_render(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
     device_action = ctx.live.get("device_action")
     width = int(arguments["width"]) if isinstance(arguments.get("width"), int | float) else 320
     height = int(arguments["height"]) if isinstance(arguments.get("height"), int | float) else 240
-    engine = arguments.get("engine") if arguments.get("engine") in ("workbench", "eevee") else "workbench"
+    engine = (
+        arguments.get("engine")
+        if arguments.get("engine") in ("workbench", "eevee")
+        else "workbench"
+    )
     return service.render(
         db,
         device_action,
@@ -357,11 +369,22 @@ def register_scene_tools(reg: ToolRegistry) -> ToolRegistry:
                     "kind": {
                         "type": "string",
                         "enum": [
-                            "cube", "sphere", "cylinder", "plane", "light_sun", "light_point", "camera"
+                            "cube",
+                            "sphere",
+                            "cylinder",
+                            "plane",
+                            "light_sun",
+                            "light_point",
+                            "camera",
                         ],
                     },
                     "name": {"type": "string", "maxLength": 64},
-                    "location": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+                    "location": {
+                        "type": "array",
+                        "items": {"type": "number"},
+                        "minItems": 3,
+                        "maxItems": 3,
+                    },
                     "target": {"type": "string", "maxLength": 200},
                 },
                 "additionalProperties": False,
@@ -380,9 +403,24 @@ def register_scene_tools(reg: ToolRegistry) -> ToolRegistry:
                 "type": "object",
                 "properties": {
                     "name": {"type": "string", "maxLength": 64},
-                    "location": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
-                    "rotation": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
-                    "scale": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+                    "location": {
+                        "type": "array",
+                        "items": {"type": "number"},
+                        "minItems": 3,
+                        "maxItems": 3,
+                    },
+                    "rotation": {
+                        "type": "array",
+                        "items": {"type": "number"},
+                        "minItems": 3,
+                        "maxItems": 3,
+                    },
+                    "scale": {
+                        "type": "array",
+                        "items": {"type": "number"},
+                        "minItems": 3,
+                        "maxItems": 3,
+                    },
                     "target": {"type": "string", "maxLength": 200},
                 },
                 "additionalProperties": False,
@@ -401,7 +439,12 @@ def register_scene_tools(reg: ToolRegistry) -> ToolRegistry:
                 "type": "object",
                 "properties": {
                     "name": {"type": "string", "maxLength": 64},
-                    "color": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4},
+                    "color": {
+                        "type": "array",
+                        "items": {"type": "number"},
+                        "minItems": 4,
+                        "maxItems": 4,
+                    },
                     "metallic": {"type": "number"},
                     "roughness": {"type": "number"},
                     "target": {"type": "string", "maxLength": 200},

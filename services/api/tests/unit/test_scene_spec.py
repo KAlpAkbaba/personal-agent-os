@@ -39,7 +39,9 @@ def test_plan_json_is_canonical_and_deterministic() -> None:
     assert json.loads(first) == json.loads(json.dumps(plan.model_dump(mode="json")))
 
 
-@pytest.mark.parametrize("bad_project", ["../x", "C:\\x", "E:\\hologram\\HologramVehicleTest", "LAB", "lab fixture", ""])
+@pytest.mark.parametrize(
+    "bad_project", ["../x", "C:\\x", "E:\\hologram\\HologramVehicleTest", "LAB", "lab fixture", ""]
+)
 def test_a_path_shaped_project_is_refused(bad_project: str) -> None:
     plan = dict(VALID_PLAN)
     plan["project"] = bad_project

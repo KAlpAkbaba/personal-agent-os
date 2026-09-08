@@ -258,7 +258,9 @@ def build_inspection(errors: list[str], render_info: dict[str, Any] | None) -> d
         if materials:
             mat = materials[0]
             if mat is not None:
-                entry["material_color"] = _round(getattr(mat, "diffuse_color", (0.8, 0.8, 0.8, 1.0)))
+                entry["material_color"] = _round(
+                    getattr(mat, "diffuse_color", (0.8, 0.8, 0.8, 1.0))
+                )
         objects.append(entry)
         if obj_type == "CAMERA":
             camera_name = obj.name

@@ -134,7 +134,7 @@ class _FakeContext:
 
 
 class _FakeOpsMesh:
-    def __init__(self, data: "_FakeData", context: _FakeContext) -> None:
+    def __init__(self, data: _FakeData, context: _FakeContext) -> None:
         self._data = data
         self._context = context
 
@@ -161,7 +161,7 @@ class _FakeOpsMesh:
 
 
 class _FakeOpsObject:
-    def __init__(self, data: "_FakeData", context: _FakeContext) -> None:
+    def __init__(self, data: _FakeData, context: _FakeContext) -> None:
         self._data = data
         self._context = context
 
@@ -212,7 +212,7 @@ class _FakeOpsWm:
 
 
 class _FakeOps:
-    def __init__(self, data: "_FakeData", context: _FakeContext) -> None:
+    def __init__(self, data: _FakeData, context: _FakeContext) -> None:
         self.mesh = _FakeOpsMesh(data, context)
         self.object = _FakeOpsObject(data, context)
         self.render = _FakeOpsRender(context)
@@ -366,7 +366,9 @@ class FakeCreative3DDevice:
         render = inspection.get("render")
         if render and render.get("path"):
             try:
-                render_png_base64 = base64.b64encode(Path(render["path"]).read_bytes()).decode("ascii")
+                render_png_base64 = base64.b64encode(Path(render["path"]).read_bytes()).decode(
+                    "ascii"
+                )
             except OSError:
                 render_png_base64 = None
         return DeviceRunResult(
@@ -397,7 +399,11 @@ def _apply_plan_to_unity_state(state: dict[str, Any], plan: dict[str, Any]) -> N
         elif kind == "add_primitive":
             name = op["name"]
             obj_kind = op["kind"]
-            obj_type = "CAMERA" if obj_kind == "camera" else ("LIGHT" if obj_kind.startswith("light_") else "MESH")
+            obj_type = (
+                "CAMERA"
+                if obj_kind == "camera"
+                else ("LIGHT" if obj_kind.startswith("light_") else "MESH")
+            )
             state["objects"][name] = {
                 "name": name,
                 "type": obj_type,
@@ -440,7 +446,9 @@ def creative3d_capability_results(
     """Convenience wrapper for the common case: a fresh :class:`FakeCreative3DDevice`.
     Prefer constructing :class:`FakeCreative3DDevice` directly when a test needs to
     inspect its state afterward."""
-    return FakeCreative3DDevice(unity_available=unity_available, render_dir=render_dir).capability_results()
+    return FakeCreative3DDevice(
+        unity_available=unity_available, render_dir=render_dir
+    ).capability_results()
 
 
 __all__ = [

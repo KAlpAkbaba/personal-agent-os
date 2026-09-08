@@ -204,7 +204,13 @@ class SceneService:
         return out
 
     def _ledger(
-        self, db: Session | None, *, event_type: str, action: str, summary: str, detail: dict[str, Any]
+        self,
+        db: Session | None,
+        *,
+        event_type: str,
+        action: str,
+        summary: str,
+        detail: dict[str, Any],
     ) -> None:
         if db is None:
             return
@@ -225,9 +231,7 @@ class SceneService:
         except Exception:  # noqa: BLE001 - evidence, never a dependency of the action
             logger.warning("creative3d_ledger_failed", action=action)
 
-    def _publish(
-        self, *, tool: str, scene: str, state: str, objects: int | None = None
-    ) -> None:
+    def _publish(self, *, tool: str, scene: str, state: str, objects: int | None = None) -> None:
         metadata: dict[str, Any] = {"tool": tool, "scene": scene[:64], "state": state}
         if objects is not None:
             metadata["objects"] = objects
@@ -251,7 +255,13 @@ class SceneService:
         return self._clarification(speech)
 
     def _invalid_argument(
-        self, *, capability: str, requested_state: str, speech: str, db: Session, session_id: str | None
+        self,
+        *,
+        capability: str,
+        requested_state: str,
+        speech: str,
+        db: Session,
+        session_id: str | None,
     ) -> dict[str, Any]:
         return self._receipt(
             capability=capability,
@@ -303,7 +313,10 @@ class SceneService:
         meaningful = [op for op in plan.operations if op.op != "inspect"]
         last = meaningful[-1] if meaningful else None
         if last is None or last.op == "create_scene":
-            return f"{plan.tool.capitalize()} içinde yeni bir sahne oluşturdum efendim: {plan.project}/{plan.scene}."
+            return (
+                f"{plan.tool.capitalize()} içinde yeni bir sahne oluşturdum efendim: "
+                f"{plan.project}/{plan.scene}."
+            )
         if last.op == "add_primitive":
             obj = next((o for o in objects if o.get("name") == last.name), None)
             loc = obj.get("location") if obj else list(last.location)
@@ -364,7 +377,9 @@ class SceneService:
             timeout_s=30.0,
         )
         if not scaffold_result.ok:
-            speech, error_class = _translate_error(scaffold_result.error_class, scaffold_result.message)
+            speech, error_class = _translate_error(
+                scaffold_result.error_class, scaffold_result.message
+            )
             row.state = STATE_FAILED
             row.error_class = error_class
             row.error_message = scaffold_result.message
@@ -466,7 +481,11 @@ class SceneService:
             timeout_s=30.0,
         )
         if not result.ok:
-            return {"objects": [], "camera": None, "lights": [], "render": None, "errors": []}, None, result
+            return (
+                {"objects": [], "camera": None, "lights": [], "render": None, "errors": []},
+                None,
+                result,
+            )
         payload = result.result or {}
         inspection = dict(payload.get("inspection") or {})
         png_b64 = payload.get("render_png_base64")
@@ -501,7 +520,9 @@ class SceneService:
     ) -> dict[str, Any]:
         inspection, render_bytes, inspect_result = self._inspect_device(device_action, row)
         if not inspect_result.ok:
-            speech, error_class = _translate_error(inspect_result.error_class, inspect_result.message)
+            speech, error_class = _translate_error(
+                inspect_result.error_class, inspect_result.message
+            )
             row.state = STATE_FAILED
             row.error_class = error_class
             row.updated_at = datetime.now(UTC)
@@ -527,12 +548,18 @@ class SceneService:
         row.updated_at = datetime.now(UTC)
         db.commit()
         focus_module.set_focus(
-            db, FOCUS_KIND_SCENE, str(row.id), label=f"{plan.project}/{plan.scene}", source="scene_dispatch"
+            db,
+            FOCUS_KIND_SCENE,
+            str(row.id),
+            label=f"{plan.project}/{plan.scene}",
+            source="scene_dispatch",
         )
         speech = self._describe(plan, inspection)
         object_count = len(inspection.get("objects") or [])
         self._publish(tool=plan.tool, scene=plan.scene, state=row.state, objects=object_count)
-        event_type = EVENT_TYPE_SCENE_RENDERED if row.state == STATE_RENDERED else EVENT_TYPE_SCENE_APPLIED
+        event_type = (
+            EVENT_TYPE_SCENE_RENDERED if row.state == STATE_RENDERED else EVENT_TYPE_SCENE_APPLIED
+        )
         self._ledger(
             db,
             event_type=event_type,
@@ -589,11 +616,17 @@ class SceneService:
                 extra={"error_class": ERROR_VALIDATION, "detail": str(exc)[:500]},
             )
 
-        active = db.execute(
-            select(SceneRow).where(
-                SceneRow.state.in_((STATE_PLANNED, STATE_SCAFFOLDED, STATE_APPLIED, STATE_RENDERED))
+        active = (
+            db.execute(
+                select(SceneRow).where(
+                    SceneRow.state.in_(
+                        (STATE_PLANNED, STATE_SCAFFOLDED, STATE_APPLIED, STATE_RENDERED)
+                    )
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         if len(active) >= MAX_ACTIVE_SCENES:
             return self._invalid_argument(
                 capability="scene.create",
@@ -631,7 +664,12 @@ class SceneService:
         if refusal is not None:
             return refusal
         return self._finish(
-            db, row, scene_plan, capability="scene.create", session_id=session_id, device_action=device_action
+            db,
+            row,
+            scene_plan,
+            capability="scene.create",
+            session_id=session_id,
+            device_action=device_action,
         )
 
     # ------------------------------------------------------------------------- apply
@@ -656,12 +694,21 @@ class SceneService:
         if row.state == STATE_DEPENDENCY_UNAVAILABLE:
             speech = f"Unity lisansı yok: yapamadım efendim. ({row.error_message or ''})".strip()
             return self._invalid_argument(
-                capability=capability, requested_state="applied", speech=speech, db=db, session_id=session_id
+                capability=capability,
+                requested_state="applied",
+                speech=speech,
+                db=db,
+                session_id=session_id,
             )
 
         try:
             scene_plan = ScenePlan.model_validate(
-                {"tool": row.tool, "project": row.project, "scene": row.scene, "operations": operations}
+                {
+                    "tool": row.tool,
+                    "project": row.project,
+                    "scene": row.scene,
+                    "operations": operations,
+                }
             )
         except ValidationError as exc:
             return self._receipt(
@@ -674,14 +721,23 @@ class SceneService:
                 db=db,
                 error_class=ERROR_VALIDATION,
                 session_id=session_id,
-                extra={"error_class": ERROR_VALIDATION, "detail": str(exc)[:500], "scene_id": str(row.id)},
+                extra={
+                    "error_class": ERROR_VALIDATION,
+                    "detail": str(exc)[:500],
+                    "scene_id": str(row.id),
+                },
             )
 
         refusal = self._scaffold_and_run(db, device_action, row, scene_plan, session_id)
         if refusal is not None:
             return refusal
         return self._finish(
-            db, row, scene_plan, capability=capability, session_id=session_id, device_action=device_action
+            db,
+            row,
+            scene_plan,
+            capability=capability,
+            session_id=session_id,
+            device_action=device_action,
         )
 
     # ------------------------------------------------------------------------ render
@@ -731,16 +787,11 @@ class SceneService:
                 db=db,
                 session_id=session_id,
             )
-        try:
-            scene_plan = ScenePlan.model_validate(
-                {"tool": row.tool, "project": row.project, "scene": row.scene, "operations": [{"op": "inspect"}]}
-            )
-        except ValidationError:  # pragma: no cover - row's own fields were validated at creation
-            scene_plan = None
-
         inspection, render_bytes, inspect_result = self._inspect_device(device_action, row)
         if not inspect_result.ok:
-            speech, error_class = _translate_error(inspect_result.error_class, inspect_result.message)
+            speech, error_class = _translate_error(
+                inspect_result.error_class, inspect_result.message
+            )
             return self._receipt(
                 capability="scene.inspect",
                 requested_state="inspected",
@@ -784,12 +835,16 @@ class SceneService:
 
     # ------------------------------------------------------------------------ status
 
-    def status(self, db: Session, *, target: str | None, session_id: str | None = None) -> dict[str, Any]:
+    def status(
+        self, db: Session, *, target: str | None, session_id: str | None = None
+    ) -> dict[str, Any]:
         row = self.resolve_scene(db, target)
         if row is None:
             return self._clarification(SPEECH_NO_SCENE)
         objects = len((row.inspection_json or {}).get("objects") or [])
-        speech = f"{row.project}/{row.scene} sahnesi {row.state} durumunda efendim; {objects} nesne."
+        speech = (
+            f"{row.project}/{row.scene} sahnesi {row.state} durumunda efendim; {objects} nesne."
+        )
         return self._receipt(
             capability="scene.status",
             requested_state=row.state,
@@ -806,7 +861,9 @@ class SceneService:
 
     def list(self, db: Session, *, session_id: str | None = None) -> dict[str, Any]:
         rows = list(
-            db.execute(select(SceneRow).order_by(SceneRow.created_at.desc()).limit(20)).scalars().all()
+            db.execute(select(SceneRow).order_by(SceneRow.created_at.desc()).limit(20))
+            .scalars()
+            .all()
         )
         self._ledger(
             db,

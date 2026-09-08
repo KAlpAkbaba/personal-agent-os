@@ -136,7 +136,10 @@ def _respond(receipt: dict[str, Any], scene_id: uuid.UUID) -> dict[str, Any]:
         status_code = 404 if error_class == "not_found" else 422
         raise HTTPException(
             status_code=status_code,
-            detail={"code": error_class or execution or "refused", "message": receipt.get("speech")},
+            detail={
+                "code": error_class or execution or "refused",
+                "message": receipt.get("speech"),
+            },
         )
     return {
         "scene_id": str(scene_id),

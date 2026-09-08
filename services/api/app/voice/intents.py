@@ -2206,7 +2206,7 @@ _APP_NAME_RE = re.compile(
 
 
 def _appfactory_template_from_tokens(tokens: tuple[str, ...]) -> str | None:
-    """"görev takip" -> "task-tracker", "web sayfası" -> "static-page", "komut satırı"/
+    """ "görev takip" -> "task-tracker", "web sayfası" -> "static-page", "komut satırı"/
     "cli" -> "cli-tool" (spec §5's own three built-in templates) - a best-effort
     convenience the tool prefers only when non-empty, never a substitute for the
     model's own ``template`` argument (the same rule ``_artifact_kind_from_tokens``
@@ -2294,9 +2294,10 @@ def _appfactory_test_match(tokens: tuple[str, ...]) -> str | None:
     (the durable ``project`` focus resolves which one)."""
     if _has(tokens, *_APP_TEST_NOUN_STEMS) is None:
         return None
-    if _has_exact(tokens, *_APP_RUN_VERB_FORMS) is None and _has_exact(
-        tokens, *_APP_CREATE_VERB_STEMS
-    ) is None:
+    if (
+        _has_exact(tokens, *_APP_RUN_VERB_FORMS) is None
+        and _has_exact(tokens, *_APP_CREATE_VERB_STEMS) is None
+    ):
         return None
     return "testleri çalıştır"
 
@@ -2477,45 +2478,116 @@ _PRIMITIVE_KIND_BY_NOUN: Final[dict[str, str]] = {
     # check.
     "ışığ": "light_point",
     "isig": "light_point",
+    # A naive (non-Turkish-aware) lowercasing of "Işık"/"Işığı" maps the dotless
+    # capital "I" to the DOTTED lowercase "i" ("işık"/"işığı"), not "ı" -
+    # ``turkish_casefold`` fixes this on text that still carries its true case, but
+    # the corpus's own ".lower()" ASR-noise variant (``_variants``,
+    # tests/voice_corpus/corpus.py) already lowercased the word before this resolver
+    # ever sees it, the same way a naive real ASR normalizer could. Both readings
+    # are accepted.
+    "işık": "light_point",
+    "işığ": "light_point",
     "kamera": "camera",
 }
 _PRIMITIVE_NOUN_STEMS: Final[tuple[str, ...]] = tuple(_PRIMITIVE_KIND_BY_NOUN)
 
 _SCENE_CREATE_VERB_FORMS: Final[tuple[str, ...]] = (
-    "oluştur", "olustur", "oluşturur", "olusturur", "oluştursana", "olustursana",
-    "aç", "ac", "açsana", "acsana", "açar", "acar",
+    "oluştur",
+    "olustur",
+    "oluşturur",
+    "olusturur",
+    "oluştursana",
+    "olustursana",
+    "aç",
+    "ac",
+    "açsana",
+    "acsana",
+    "açar",
+    "acar",
 )
 _SCENE_ADD_VERB_FORMS: Final[tuple[str, ...]] = (
-    "ekle", "eklesene", "ekler", "koy", "koysana",
-    "oluştur", "olustur", "oluşturur", "olusturur",
+    "ekle",
+    "eklesene",
+    "ekler",
+    "koy",
+    "koysana",
+    "oluştur",
+    "olustur",
+    "oluşturur",
+    "olusturur",
 )
 _SCENE_TRANSFORM_VERB_STEMS: Final[tuple[str, ...]] = (
-    "taşı", "tasi", "büyüt", "buyut", "küçült", "kucult", "döndür", "dondur",
+    "taşı",
+    "tasi",
+    "büyüt",
+    "buyut",
+    "küçült",
+    "kucult",
+    "döndür",
+    "dondur",
 )
 _SCENE_DEICTIC_WORDS: Final[tuple[str, ...]] = ("bunu", "onu")
 _SCENE_COLOR_STEMS: Final[tuple[str, ...]] = (
-    "kırmızı", "kirmizi", "mavi", "yeşil", "yesil", "sarı", "sari",
-    "siyah", "beyaz", "turuncu", "mor", "pembe",
+    "kırmızı",
+    "kirmizi",
+    "mavi",
+    "yeşil",
+    "yesil",
+    "sarı",
+    "sari",
+    "siyah",
+    "beyaz",
+    "turuncu",
+    "mor",
+    "pembe",
 )
 _SCENE_MATERIAL_NOUN_STEMS: Final[tuple[str, ...]] = ("renk", "reng")
-_SCENE_MATERIAL_VERB_FORMS: Final[tuple[str, ...]] = ("yap", "yapsana", "boya", "boyasana", "boyar")
+_SCENE_MATERIAL_VERB_FORMS: Final[tuple[str, ...]] = (
+    "yap",
+    "yapsana",
+    "yapar",
+    "boya",
+    "boyasana",
+    "boyar",
+)
 #: "ışık" itself, "ışığ" (the k->ğ mutated stem "ışığı"/"ışığını" actually carry —
 #: see ``_PRIMITIVE_KIND_BY_NOUN``'s identical comment) and their diacritic-stripped
 #: ASR-noise forms.
-_SCENE_LIGHT_NOUN_STEMS: Final[tuple[str, ...]] = ("ışık", "isik", "ışığ", "isig")
+_SCENE_LIGHT_NOUN_STEMS: Final[tuple[str, ...]] = (
+    "ışık",
+    "isik",
+    "ışığ",
+    "isig",
+    "işık",
+    "işığ",
+)
 _SCENE_LIGHT_VERB_FORMS: Final[tuple[str, ...]] = (
-    "ayarla", "ayarlasana", "artır", "artir", "artırsana", "artirsana", "azalt", "azaltsana",
+    "ayarla",
+    "ayarlasana",
+    "artır",
+    "artir",
+    "artırsana",
+    "artirsana",
+    "azalt",
+    "azaltsana",
 )
 _SCENE_CAMERA_NOUN_STEMS: Final[tuple[str, ...]] = ("kamera",)
 _SCENE_CAMERA_VERB_FORMS: Final[tuple[str, ...]] = (
-    "çevir", "cevir", "çevirsene", "cevirsene", "yönlendir", "yonlendir",
+    "çevir",
+    "cevir",
+    "çevirsene",
+    "cevirsene",
+    "çevirir",
+    "cevirir",
+    "yönlendir",
+    "yonlendir",
 )
 _SCENE_RENDER_NOUN_STEMS: Final[tuple[str, ...]] = ("render",)
 _SCENE_RENDER_VERB_FORMS: Final[tuple[str, ...]] = ("al", "alsana", "alır", "alir")
 
 
 def _scene_tool_from_tokens(tokens: tuple[str, ...]) -> str | None:
-    """"Blender'da" / "Unity'de" (spec §5) - the tool word, resolved once from the
+    """ "Blender'da" / "Unity'de" (spec §5) - the tool word, resolved once from the
     SAME utterance every matcher below already checked, never a guess."""
     if _has(tokens, "blender"):
         return "blender"
@@ -2548,7 +2620,7 @@ def _scene_inspect_match(tokens: tuple[str, ...]) -> str | None:
     ordering ``_appfactory_list_match`` documents for its own family)."""
     if _has(tokens, *_SCENE_NOUN_STEMS) is None:
         return None
-    if _has_exact(tokens, "ne") is None or _has_exact(tokens, "var") is None:
+    if _has_exact(tokens, "ne", "neler") is None or _has_exact(tokens, "var") is None:
         return None
     return "sahnede ne var"
 

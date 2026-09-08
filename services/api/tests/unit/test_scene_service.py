@@ -122,7 +122,9 @@ def test_apply_adds_a_primitive_onto_the_existing_scene(
         db,
         device,
         target=scene_id,
-        operations=[{"op": "add_primitive", "kind": "cube", "name": "Kup", "location": [1.0, 1.0, 1.0]}],
+        operations=[
+            {"op": "add_primitive", "kind": "cube", "name": "Kup", "location": [1.0, 1.0, 1.0]}
+        ],
         capability="scene.add",
     )
     assert result["execution_status"] == "executed", result
@@ -150,10 +152,20 @@ def test_render_produces_a_stored_nontrivial_png(
         db,
         device,
         target=scene_id,
-        operations=[{"op": "add_primitive", "kind": "camera", "name": "Kamera", "location": [0.0, -5.0, 0.0]}],
+        operations=[
+            {
+                "op": "add_primitive",
+                "kind": "camera",
+                "name": "Kamera",
+                "location": [0.0, -5.0, 0.0],
+            }
+        ],
     )
     service.apply(
-        db, device, target=scene_id, operations=[{"op": "set_camera", "name": "Kamera", "look_at": "Kure"}]
+        db,
+        device,
+        target=scene_id,
+        operations=[{"op": "set_camera", "name": "Kamera", "look_at": "Kure"}],
     )
     result = service.render(db, device, target=scene_id, width=64, height=48)
     assert result["execution_status"] == "executed", result

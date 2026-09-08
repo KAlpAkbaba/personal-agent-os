@@ -116,7 +116,9 @@ def test_scene_render_produces_a_nontrivial_stored_png() -> None:
     h.say(sid, "Bir küre ekle.", turn=2)
     h.tool(sid, "c-2", "scene.add", {"kind": "sphere", "name": "Kure"})
     h.say(sid, "Bir kamera ekle.", turn=3)
-    h.tool(sid, "c-3", "scene.add", {"kind": "camera", "name": "Kamera", "location": [0.0, -5.0, 0.0]})
+    h.tool(
+        sid, "c-3", "scene.add", {"kind": "camera", "name": "Kamera", "location": [0.0, -5.0, 0.0]}
+    )
     h.say(sid, "Kamerayı nesneye çevir.", turn=4)
     h.tool(sid, "c-4", "scene.camera", {"name": "Kamera", "look_at": "Kure"})
     h.say(sid, "Render al.", turn=5)

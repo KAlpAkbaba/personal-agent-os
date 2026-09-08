@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Annotated, Any, Literal, Union
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -113,9 +113,7 @@ class CreateScene(_StrictModel):
 
 class AddPrimitive(_StrictModel):
     op: Literal["add_primitive"] = "add_primitive"
-    kind: Literal[
-        "cube", "sphere", "cylinder", "plane", "light_sun", "light_point", "camera"
-    ]
+    kind: Literal["cube", "sphere", "cylinder", "plane", "light_sun", "light_point", "camera"]
     name: str = Field(min_length=1, max_length=64)
     location: Vec3 = (0.0, 0.0, 0.0)
     rotation: Vec3 = (0.0, 0.0, 0.0)
@@ -174,17 +172,15 @@ class Inspect(_StrictModel):
 
 
 Operation = Annotated[
-    Union[
-        CreateScene,
-        AddPrimitive,
-        Transform,
-        SetMaterial,
-        SetCamera,
-        SetLight,
-        AttachScript,
-        Render,
-        Inspect,
-    ],
+    CreateScene
+    | AddPrimitive
+    | Transform
+    | SetMaterial
+    | SetCamera
+    | SetLight
+    | AttachScript
+    | Render
+    | Inspect,
     Field(discriminator="op"),
 ]
 
@@ -238,7 +234,7 @@ class ScenePlan(_StrictModel):
     def _names_closed_alphabet(self) -> ScenePlan:
         for op in self.operations:
             if op.op in _NAME_BEARING_OPS:
-                name = getattr(op, "name")
+                name = op.name
                 if not _NAME_RE.match(name):
                     raise ValueError(
                         f"{op.op}.name {name!r} is not a plain identifier "
@@ -246,9 +242,7 @@ class ScenePlan(_StrictModel):
                     )
             look_at = getattr(op, "look_at", None)
             if look_at is not None and not _NAME_RE.match(look_at):
-                raise ValueError(
-                    f"set_camera.look_at {look_at!r} is not a plain identifier"
-                )
+                raise ValueError(f"set_camera.look_at {look_at!r} is not a plain identifier")
         return self
 
     @model_validator(mode="after")
@@ -295,9 +289,7 @@ class ScenePlan(_StrictModel):
     def plan_json(self) -> str:
         """Canonical JSON: sorted keys, no incidental whitespace — the exact bytes a
         driver reads and the exact bytes any evidence hash is taken over."""
-        return json.dumps(
-            self.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
-        )
+        return json.dumps(self.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
 
     @classmethod
     def from_plan_json(cls, text: str) -> ScenePlan:

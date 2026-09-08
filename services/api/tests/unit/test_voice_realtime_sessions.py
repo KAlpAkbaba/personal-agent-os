@@ -305,6 +305,15 @@ def test_create_selects_by_capability_and_returns_the_contract(wired) -> None:
         "capability.status",
         "capability.approve",
         "capability.cancel",
+        # M25 (docs/M25_CREATIVE_3D_SPEC.md §5): 3D Creation.
+        "scene.create",
+        "scene.add",
+        "scene.transform",
+        "scene.material",
+        "scene.light",
+        "scene.camera",
+        "scene.render",
+        "scene.inspect",
     }
     research = next(t for t in data["tools"] if t["name"] == "research.start")
     assert research["long_running"] is True and research["preamble"] == RESEARCH_PREAMBLE_TR
