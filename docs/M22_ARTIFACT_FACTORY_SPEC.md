@@ -1,6 +1,6 @@
 # M22 — Artifact Factory
 
-Status: ACTIVE (owner master directive 2026-09-07, M22 section; kickoff 2026-09-08 after the M21 gate). Decision record: ADR-0085.
+Status: ENGINEERING CLOSED 2026-09-08 (ADR-0085; QUALIFICATION Stage 20; Cloud Core release pending (item 31: the Tailscale SSH check; queued behind the armed M21 release 571ddb2)). Decision record: ADR-0085.
 Predecessors: M13 artifacts (`app/artifacts`: canonical Markdown → PDF/DOCX/HTML/TXT through the `Renderer` Protocol, `artifacts` / `artifact_versions` / `artifact_renders` tables, the object store, `POST /v1/artifacts/{id}/renders`), M20 documents (the reference scheme `p<n>` / `sheet:<name>!A<r>:B<r>` / `s<n>`, the device's `document.extract` and `file.open`), M19 `object_focus`.
 
 The owner's rule, in one line: **an artifact the assistant made is not done when it is written — it is done when it has been reopened by an independent parser and found to say what was asked, and the owner can open it with a word.**

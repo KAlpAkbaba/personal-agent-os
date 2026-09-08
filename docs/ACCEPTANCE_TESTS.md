@@ -673,6 +673,30 @@ Real acceptance: the Cloud Core half released through blue/green (Stage 19.10); 
 read-only run over the owner's account is READY_FOR_OWNER once the account is on the host
 (item 30); nothing is ever sent for real by the autonomous system.
 
+## M22 Artifact Factory
+
+Spec: `docs/M22_ARTIFACT_FACTORY_SPEC.md` (ADR-0085). Deterministic gates, every CI run:
+
+- **the renders are real and reopened.** every fixture spec × format rendered and reopened by an
+  independent reader against `truth.json` (`test_artifact_renderers.py`, `test_artifact_validation.py`);
+  a lying renderer caught with the failing ref; determinism (two renders, one hash); hostile
+  inputs bounded;
+- **the factory tells the truth.** create → renders → validations, an invalid render kept as
+  `invalid` and named (`test_artifact_factory.py`, `test_artifact_routes.py`, `test_artifact_tools.py`
+  through the real app object, `test_artifact_wiring.py`);
+- **the device fetches only its own Cloud Core.** the `file.fetch` lab against a local origin: a
+  wrong origin, a wrong hash, an oversize body, an off-origin redirect, a bad name — each refused
+  with nothing left behind; the right one fetched, verified and opened
+  (`devices/windows-agent/tests/.../Documents/FileFetchTests.cs`);
+- **the owner's voice.** the corpus category `artifacts` with the spoken-numbers rule
+  (`test_owner_utterance_corpus.py`);
+- **the Core tells the truth.** the v7 `artifact.factory` state and the Üretilenler panel from
+  published metadata only (`artifact-states.test.ts`, `artifacts-panel.test.tsx`).
+
+Real acceptance: the Cloud Core half released through blue/green (Stage 20.8); the device half
+machine-proven here and on the runner, reaching the deployed agent with the owner's elevated
+update (item 28).
+
 ## M19b Multi-device / roaming owner qualification
 
 Real-only acceptance on at least two owner-authorised physical computers (PC-A, PC-B) and
