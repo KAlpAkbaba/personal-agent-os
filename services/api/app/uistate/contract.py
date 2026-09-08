@@ -60,7 +60,13 @@ from typing import Any
 #: ``{capability?, state?, approval_required?, error_class?}`` (``state`` one of the
 #: ``genesis_runs`` states), plus the ``genesis`` subsystem. Same additive rule: a v8
 #: renderer keeps working and simply never sees it.
-CONTRACT_VERSION = 9
+#: v10 (M25 3D Creation spec §5, §6, ADR-0088) adds ``scene.activity``, published
+#: around every scene lifecycle transition (create/apply/render/inspect) with metadata
+#: ``{tool?, scene?, state?, objects?}`` (``state`` one of the ``scenes`` states,
+#: ``objects`` the object count from the last inspection) — never to animate a surge,
+#: the same rule every other channel here follows — plus the ``creative3d`` subsystem.
+#: Same additive rule: a v9 renderer keeps working and simply never sees it.
+CONTRACT_VERSION = 10
 
 #: Metadata value bounds. Numbers are floats in [0, 1] except where noted; strings are
 #: short machine tokens, never prose.
@@ -191,6 +197,13 @@ class UiState(StrEnum):
     #: when it failed.
     CAPABILITY_GENESIS = "capability.genesis"
 
+    #: M25 (spec §5, §6): 3D Creation's channel. Published around every scene
+    #: lifecycle transition (create, apply, render, inspect) — never to animate a
+    #: surge, the same rule every other channel here follows. Metadata is identity
+    #: only: which tool/scene, its state, and the object count from the last
+    #: inspection.
+    SCENE_ACTIVITY = "scene.activity"
+
 
 UI_STATES: tuple[str, ...] = tuple(s.value for s in UiState)
 
@@ -225,6 +238,8 @@ SUBSYSTEMS: tuple[str, ...] = (
     "appfactory",
     # M24: Capability Genesis publishes capability.genesis (spec §7).
     "genesis",
+    # M25: 3D Creation publishes scene.activity (spec §6).
+    "creative3d",
 )
 
 SEVERITIES: tuple[str, ...] = ("info", "notice", "warning", "critical")

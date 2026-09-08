@@ -34,6 +34,12 @@ dependencies = [
     # accident rather than by declaration -- pinned here explicitly so it can never be
     # dropped by an unrelated dependency's own version bump.
     "defusedxml>=0.7",
+    # M25 3D Creation (ADR-0088 decision 4): the closed loop's own independent reader —
+    # app.creative3d.compare opens a Blender/Unity render with PIL and measures
+    # non-uniformity before ever calling it "rendered". Already present TRANSITIVELY
+    # (pulled in by python-docx/python-pptx), pinned here explicitly for the same reason
+    # defusedxml is above: never left to an unrelated dependency's own version bump.
+    "pillow>=10.0",
 ]
 
 [dependency-groups]

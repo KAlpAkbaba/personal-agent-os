@@ -85,6 +85,12 @@ SUBSYSTEM_APPFACTORY = "appfactory"
 #: mutation really happened?" is answerable without separating it from the M7/M18.4
 #: evolution rows a genesis run's own pipeline stages also touch.
 SUBSYSTEM_GENESIS = "genesis"
+#: M25 3D Creation (docs/M25_CREATIVE_3D_SPEC.md, ADR-0088): scenes the assistant built,
+#: changed and rendered in Blender/Unity on the owner's machine, proved by reading the
+#: scene back from the tool. Its own subsystem so "what did it build in 3D for me?" is
+#: answerable without separating it from the M23 App Factory rows a scene's own device
+#: calls (project.scaffold/project.run) happen to share.
+SUBSYSTEM_CREATIVE3D = "creative3d"
 
 SUBSYSTEMS: Final[tuple[str, ...]] = (
     SUBSYSTEM_RESEARCH,
@@ -109,6 +115,7 @@ SUBSYSTEMS: Final[tuple[str, ...]] = (
     SUBSYSTEM_ARTIFACTS,
     SUBSYSTEM_APPFACTORY,
     SUBSYSTEM_GENESIS,
+    SUBSYSTEM_CREATIVE3D,
 )
 
 # ------------------------------------------------------------------ statuses
@@ -367,6 +374,15 @@ EVENT_TYPE_GENESIS_USED = "genesis.used"
 EVENT_TYPE_GENESIS_VERIFIED = "genesis.verified"
 EVENT_TYPE_GENESIS_FAILED = "genesis.failed"
 EVENT_TYPE_GENESIS_CANCELLED = "genesis.cancelled"
+#: M25 3D Creation (spec §2, §4, ADR-0088): one row per scene lifecycle transition —
+#: the same "one row per transition" discipline app.project.* rows already give M23.
+EVENT_TYPE_SCENE_CREATED = "scene.create"
+EVENT_TYPE_SCENE_APPLIED = "scene.apply"
+EVENT_TYPE_SCENE_RENDERED = "scene.render"
+EVENT_TYPE_SCENE_INSPECTED = "scene.inspect"
+EVENT_TYPE_SCENE_FAILED = "scene.failed"
+EVENT_TYPE_SCENE_UNITY_UNAVAILABLE = "scene.unity_unavailable"
+EVENT_TYPE_SCENE_LISTED = "scene.list"
 
 EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_RESEARCH_PLANNED,
@@ -476,6 +492,13 @@ EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_GENESIS_VERIFIED,
     EVENT_TYPE_GENESIS_FAILED,
     EVENT_TYPE_GENESIS_CANCELLED,
+    EVENT_TYPE_SCENE_CREATED,
+    EVENT_TYPE_SCENE_APPLIED,
+    EVENT_TYPE_SCENE_RENDERED,
+    EVENT_TYPE_SCENE_INSPECTED,
+    EVENT_TYPE_SCENE_FAILED,
+    EVENT_TYPE_SCENE_UNITY_UNAVAILABLE,
+    EVENT_TYPE_SCENE_LISTED,
 )
 
 #: "genesis.<state>" for every state in app.genesis.models.GENESIS_STATES — the
