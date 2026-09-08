@@ -174,7 +174,9 @@ def test_confirm_runs_the_same_gate_and_refuses_without_a_read_back(client, fact
     assert body["error_class"] == GATE_NOT_READ_BACK
 
 
-def test_confirm_sends_exactly_once_through_the_fake_sender(client, factory, app_and_client) -> None:
+def test_confirm_sends_exactly_once_through_the_fake_sender(
+    client, factory, app_and_client
+) -> None:
     app, _ = app_and_client
     read_back = datetime.now(UTC) - timedelta(seconds=1)
     draft_id = _prepared_draft(factory, read_back_at=read_back)

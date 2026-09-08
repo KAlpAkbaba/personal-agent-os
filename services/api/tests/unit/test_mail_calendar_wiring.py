@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from app.calendar.service import CalendarService
 from app.config import Settings
-from app.main import create_app
 from app.mail.service import MailService
+from app.main import create_app
 
 VENDOR_KEY = "unit-test-vendor-key-sentinel-must-never-leave-the-server"
 
