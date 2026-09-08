@@ -16,6 +16,7 @@ using PagentOS.DeviceService;
 using PagentOS.SessionCompanion;
 using PagentOS.SessionCompanion.Documents;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace PagentOS.Agent.Tests.Documents;
 
@@ -27,10 +28,14 @@ namespace PagentOS.Agent.Tests.Documents;
 /// behind in the run's Downloads root: a foreign origin, a wrong hash, a Content-Length over
 /// the bound, a chunked body that keeps sending past it (the abort is counted on the server),
 /// a redirect off-origin, a name that is not a plain file name, a collision. The happy path
-/// keeps a 200 KB DOCX, verified, and — on a host with a desktop — opens a .txt variant in
-/// Notepad through the operator's real <c>file.open</c> and observes its window. Nothing here
-/// touches the owner's real Downloads folder: the lab's root is
-/// <c>%TEMP%\pagentos-operator-fixture\documents\&lt;run-id&gt;\Downloads</c>.
+/// keeps a 200 KB DOCX, verified, marked as from the web, and — on a host with a desktop —
+/// opens a .txt variant in Notepad through the operator's real <c>file.open</c> and observes
+/// its window. Since ADR-0085 addendum 3 a raw <see cref="RawOrigin"/> (a <c>TcpListener</c>,
+/// no HTTP stack) also stands in for a peer that sends its headers and ten bytes and then
+/// goes quiet: the fetch is <c>timeout</c> within the cap, the connection is dropped, the
+/// thread and the slot are free for the next fetch, and a third fetch beside two stalled ones
+/// is refused as busy. Nothing here touches the owner's real Downloads folder: the lab's root
+/// is <c>%TEMP%\pagentos-operator-fixture\documents\&lt;run-id&gt;\Downloads</c>.
 /// </summary>
 [Collection(DocumentLabCollection.Name)]
 public sealed class FileFetchTests : IDisposable
@@ -40,9 +45,11 @@ public sealed class FileFetchTests : IDisposable
 
     private readonly LocalOrigin _origin = new();
     private readonly DocumentLab _lab;
+    private readonly ITestOutputHelper _output;
 
-    public FileFetchTests()
+    public FileFetchTests(ITestOutputHelper output)
     {
+        _output = output;
         _lab = new DocumentLab(fetchOrigin: _origin.Origin);
     }
 
@@ -138,6 +145,11 @@ public sealed class FileFetchTests : IDisposable
         Assert.True(File.Exists(path));
         Assert.Equal(docx, File.ReadAllBytes(path));
         Assert.Equal(["sözleşme-2026.docx"], DownloadsEntries());
+
+        // The kept file carries the Mark-of-the-Web (Internet zone, nothing else — no URL).
+        Assert.True(result["mark_of_the_web"]!.GetValue<bool>());
+        Assert.Equal(FileFetch.ZoneIdentifierContent, File.ReadAllText(path + ":" + FileFetch.ZoneIdentifierStream));
+        Assert.Equal("[ZoneTransfer]\r\nZoneId=3\r\n", File.ReadAllText(path + ":Zone.Identifier"));
 
         // The record is the family's own (resolved path, location identity, content hash).
         var record = (JsonObject)result["file"]!;
@@ -418,6 +430,33 @@ public sealed class FileFetchTests : IDisposable
     [InlineData("secrets.json")]
     [InlineData(".pagentos-fetch-abc.part")]
     [InlineData(" ")]
+    // ADR-0085 addendum 3: the macro-enabled Office family and the launchers the first list missed.
+    [InlineData("makro.docm")]
+    [InlineData("sablon.dotm")]
+    [InlineData("butce.xlsm")]
+    [InlineData("butce.xlsb")]
+    [InlineData("sablon.xltm")]
+    [InlineData("eklenti.xlam")]
+    [InlineData("sunum.pptm")]
+    [InlineData("sablon.potm")]
+    [InlineData("eklenti.ppam")]
+    [InlineData("slayt.sldm")]
+    [InlineData("MAKRO.DOCM")]
+    [InlineData("link.url")]
+    [InlineData("app.jar")]
+    [InlineData("eski.pif")]
+    // Unicode format characters (Cf) and C1 controls: invisible, or reordering what Explorer shows.
+    [InlineData("fdp.\u202Etxt.docx")]
+    [InlineData("x\u200E.txt")]
+    [InlineData("x\u200F.txt")]
+    [InlineData("x\u202A.txt")]
+    [InlineData("x\u202D.txt")]
+    [InlineData("x\u2066.txt")]
+    [InlineData("x\u2069.txt")]
+    [InlineData("x\u200B.txt")]
+    [InlineData("x\uFEFF.txt")]
+    [InlineData("x\u0085.txt")]
+    [InlineData("x\u009F.txt")]
     public void A_name_that_is_not_a_plain_file_name_is_validation_error_before_any_request(string name)
     {
         var bytes = Encoding.UTF8.GetBytes("x");
@@ -449,6 +488,17 @@ public sealed class FileFetchTests : IDisposable
         // trailing space would otherwise be dropped by Windows itself); a trailing dot is refused.
         Assert.Equal("x.txt", FileFetch.ValidateName(" x.txt "));
         Assert.Equal("Bütçe Tablosu (Eylül).xlsx", FileFetch.ValidateName("Bütçe Tablosu (Eylül).xlsx"));
+        Assert.Equal("Şirket — Rapor №3 (Ağustos).pdf", FileFetch.ValidateName("Şirket — Rapor №3 (Ağustos).pdf"));
+        Assert.Equal("日本語の文書.docx", FileFetch.ValidateName("日本語の文書.docx"));
+        Assert.Equal("emoji 📄.txt", FileFetch.ValidateName("emoji 📄.txt"));
+
+        // A lone surrogate is not a well-formed name; a supplementary-plane format character (a tag) is a format character.
+        var lone = Assert.Throws<CapabilityException>(() => FileFetch.ValidateName("x\uD800.txt"));
+        Assert.Equal(ErrorClasses.ValidationError, lone.ErrorClass);
+        var tag = Assert.Throws<CapabilityException>(() => FileFetch.ValidateName("x\U000E0001.txt"));
+        Assert.Contains("format characters", tag.Message, StringComparison.Ordinal);
+        Assert.True(FileFetch.HasInvisibleOrDirectionalCharacter("a\u202Eb"));
+        Assert.False(FileFetch.HasInvisibleOrDirectionalCharacter("Bütçe 📄.xlsx"));
 
         foreach (var (mutate, field) in new (Action<JsonObject>, string)[]
         {
@@ -497,6 +547,7 @@ public sealed class FileFetchTests : IDisposable
         Assert.Equal(first, File.ReadAllBytes(one["path"]!.GetValue<string>()));
         Assert.Equal(second, File.ReadAllBytes(two["path"]!.GetValue<string>()));
         Assert.NotEqual(one["file"]!["file_id"]!.GetValue<string>(), two["file"]!["file_id"]!.GetValue<string>());
+        Assert.Equal(FileFetch.ZoneIdentifierContent, File.ReadAllText(two["path"]!.GetValue<string>() + ":Zone.Identifier"));
 
         // A directory squatting the next name is an existing entry too: skipped, never opened.
         Directory.CreateDirectory(Path.Combine(_lab.Downloads, "rapor (3).txt"));
@@ -505,6 +556,222 @@ public sealed class FileFetchTests : IDisposable
         Assert.True(Directory.Exists(Path.Combine(_lab.Downloads, "rapor (3).txt")));
 
         Assert.Equal(["rapor (2).txt", "rapor (3).txt", "rapor (4).txt", "rapor.txt"], DownloadsEntries().OrderBy(n => n, StringComparer.Ordinal));
+    }
+
+    // ------------------------------------------------------------- (i) a stalled origin (ADR-0085 addendum 3, High)
+
+    /// <summary>The stalled route's Content-Length, which the payload's size must match so the headers pass.</summary>
+    private static byte[] StalledBody() => new byte[RawOrigin.StallContentLength];
+
+    [Fact]
+    public void A_peer_that_sends_headers_and_ten_bytes_then_goes_quiet_is_timeout_within_the_cap_nothing_is_kept_and_the_next_fetch_works()
+    {
+        using var raw = new RawOrigin();
+        var cap = TimeSpan.FromSeconds(3);
+        using var lab = new DocumentLab(fetchOrigin: raw.Origin, fetchCap: cap);
+        Assert.Equal(cap, lab.Fetch.Cap);
+        Assert.Equal(DocumentCapabilityNames.CommandTimeoutCap, _lab.Fetch.Cap);
+
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var stalled = lab.ExpectFailure(DocumentCapabilityNames.FileFetch, Payload(raw.Origin + RawOrigin.StallPath + Signature, "durgun.bin", StalledBody()));
+        clock.Stop();
+
+        Assert.Equal(ErrorClasses.Timeout, stalled.ErrorClass);
+        Assert.True(stalled.Retryable);
+        Assert.Contains("3 s cap", stalled.Message, StringComparison.Ordinal);
+        Assert.Contains("nothing was kept", stalled.Message, StringComparison.Ordinal);
+        Assert.InRange(clock.Elapsed, cap - TimeSpan.FromMilliseconds(500), cap + TimeSpan.FromSeconds(5));
+        Assert.Empty(Directory.GetFileSystemEntries(lab.Downloads));
+        Assert.Equal(1, raw.Connections);
+        Assert.Equal(10, raw.BytesSentOnStall);
+
+        // The companion dropped the connection — the peer saw the close — and the slot is free.
+        var closedAfter = Assert.Single(raw.WaitForPeerClose(1, TimeSpan.FromSeconds(5)));
+        Assert.True(closedAfter < cap + TimeSpan.FromSeconds(5), $"the peer saw no close for {closedAfter}");
+        Assert.Equal(0, lab.Fetch.InFlight);
+        _output.WriteLine($"stalled origin, cap {cap.TotalSeconds:F0} s: timeout answered after {clock.Elapsed.TotalMilliseconds:F0} ms; the peer saw the close {closedAfter.TotalMilliseconds:F0} ms after it stalled");
+
+        // A real render right after, from the same origin: the thread was freed.
+        clock.Restart();
+        var kept = lab.Exec(DocumentCapabilityNames.FileFetch, Payload(raw.Origin + RawOrigin.OkPath + Signature, "sonra.txt", RawOrigin.OkBytes));
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(5));
+        Assert.True(kept["verified"]!.GetValue<bool>());
+        Assert.Equal(RawOrigin.OkBytes, File.ReadAllBytes(kept["path"]!.GetValue<string>()));
+        Assert.Equal(["sonra.txt"], Directory.GetFileSystemEntries(lab.Downloads).Select(e => Path.GetFileName(e)));
+        Assert.Equal(2, raw.Connections);
+    }
+
+    [Fact]
+    public async Task A_third_fetch_beside_two_stalled_ones_is_refused_as_busy_before_any_request_and_the_slots_come_back()
+    {
+        using var raw = new RawOrigin();
+        var cap = TimeSpan.FromSeconds(4);
+        using var lab = new DocumentLab(fetchOrigin: raw.Origin, fetchCap: cap);
+        var stall = Payload(raw.Origin + RawOrigin.StallPath + Signature, "durgun.bin", StalledBody());
+        Assert.Equal(2, FileFetch.MaxConcurrent);
+
+        var first = Task.Run(() => lab.ExpectFailure(DocumentCapabilityNames.FileFetch, stall));
+        var second = Task.Run(() => lab.ExpectFailure(DocumentCapabilityNames.FileFetch, stall));
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (lab.Fetch.InFlight < 2 && DateTime.UtcNow < deadline)
+        {
+            Thread.Sleep(20);
+        }
+
+        Assert.Equal(2, lab.Fetch.InFlight);
+
+        var busy = lab.ExpectFailure(DocumentCapabilityNames.FileFetch, stall);
+        Assert.Equal(ErrorClasses.DependencyUnavailable, busy.ErrorClass);
+        Assert.True(busy.Retryable);
+        Assert.Equal(FileFetch.BusyDetail, busy.Detail[DocumentErrors.DetailKey]);
+        Assert.Contains("2 downloads in flight", busy.Message, StringComparison.Ordinal);
+        Assert.Contains("nothing was requested", busy.Message, StringComparison.Ordinal);
+        Assert.Equal(2, raw.Connections);
+
+        // Both stalled fetches time out on their own cap; nothing is left; the slots are back.
+        var outcomes = await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Equal(ErrorClasses.Timeout, outcomes[0].ErrorClass);
+        Assert.Equal(ErrorClasses.Timeout, outcomes[1].ErrorClass);
+        var closes = raw.WaitForPeerClose(2, TimeSpan.FromSeconds(5));
+        Assert.Equal(2, closes.Count);
+        Assert.Equal(0, lab.Fetch.InFlight);
+        _output.WriteLine($"two stalled fetches, cap {cap.TotalSeconds:F0} s: the peer saw the closes after {string.Join(" / ", closes.Select(c => c.TotalMilliseconds.ToString("F0", System.Globalization.CultureInfo.InvariantCulture)))} ms");
+        Assert.Empty(Directory.GetFileSystemEntries(lab.Downloads));
+
+        var kept = lab.Exec(DocumentCapabilityNames.FileFetch, Payload(raw.Origin + RawOrigin.OkPath + Signature, "sonra.txt", RawOrigin.OkBytes));
+        Assert.True(File.Exists(kept["path"]!.GetValue<string>()));
+    }
+
+    // ------------------------------------------------------------- (j) the bytes between the hash and the name (ADR-0085 addendum 3, Medium)
+
+    [Fact]
+    public void A_file_altered_under_its_final_name_before_the_final_check_is_refused_and_removed()
+    {
+        var docx = PaddedDocx(170 * 1024);
+        _origin.ServeBytes(RenderPath, docx);
+
+        // Same length, one byte flipped in place — what a same-user process could do in the
+        // moment between the rename and the re-check.
+        string? seen = null;
+        _lab.Fetch.BeforeFinalVerify = path =>
+        {
+            seen = path;
+            using var file = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+            file.Position = 100;
+            file.WriteByte((byte)(docx[100] ^ 0xFF));
+        };
+        var flipped = _lab.ExpectFailure(DocumentCapabilityNames.FileFetch, Payload(RenderUrl(), "takas.docx", docx));
+        Assert.Equal(ErrorClasses.PostconditionFailed, flipped.ErrorClass);
+        Assert.False(flipped.Retryable);
+        Assert.Equal(FileFetch.Sha256MismatchAfterMove, flipped.Detail[DocumentErrors.DetailKey]);
+        Assert.Contains("final name", flipped.Message, StringComparison.Ordinal);
+        Assert.Contains("nothing was kept", flipped.Message, StringComparison.Ordinal);
+        Assert.Equal(Path.Combine(_lab.Downloads, "takas.docx"), seen, ignoreCase: true);
+        Assert.Empty(DownloadsEntries());
+
+        // Replaced wholesale under the name.
+        _lab.Fetch.BeforeFinalVerify = path =>
+        {
+            File.Delete(path);
+            File.WriteAllBytes(path, Encoding.UTF8.GetBytes("başka bir şey"));
+        };
+        var replaced = _lab.ExpectFailure(DocumentCapabilityNames.FileFetch, Payload(RenderUrl(), "takas.docx", docx));
+        Assert.Equal(ErrorClasses.PostconditionFailed, replaced.ErrorClass);
+        Assert.Equal(FileFetch.Sha256MismatchAfterMove, replaced.Detail[DocumentErrors.DetailKey]);
+        Assert.Empty(DownloadsEntries());
+
+        // Held open by something else past the retries: removed, its own detail.
+        _lab.Fetch.BeforeFinalVerify = path =>
+        {
+            var holder = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            _ = Task.Delay(TimeSpan.FromSeconds(3)).ContinueWith(_ => holder.Dispose(), TaskScheduler.Default);
+        };
+        var held = _lab.ExpectFailure(DocumentCapabilityNames.FileFetch, Payload(RenderUrl(), "takas.docx", docx));
+        Assert.Equal(ErrorClasses.PostconditionFailed, held.ErrorClass);
+        Assert.Equal(FileFetch.UnverifiableAfterMove, held.Detail[DocumentErrors.DetailKey]);
+        Thread.Sleep(3500);
+        Assert.Empty(DownloadsEntries());
+
+        // The seam observing without altering changes nothing: the file is kept and reported.
+        _lab.Fetch.BeforeFinalVerify = path => seen = path;
+        var kept = _lab.Exec(DocumentCapabilityNames.FileFetch, Payload(RenderUrl(), "takas.docx", docx));
+        Assert.Equal(kept["path"]!.GetValue<string>(), seen, ignoreCase: true);
+        Assert.Equal(docx, File.ReadAllBytes(kept["path"]!.GetValue<string>()));
+        Assert.Equal(["takas.docx"], DownloadsEntries());
+        _lab.Fetch.BeforeFinalVerify = null;
+        Assert.Equal(4, _origin.RequestCount(RenderPath));
+    }
+
+    [Fact]
+    public async Task The_temp_file_cannot_be_opened_by_anyone_else_while_it_streams_and_the_handle_is_held_across_the_rename()
+    {
+        var docx = PaddedDocx(170 * 1024);
+        using var gate = new ManualResetEventSlim(false);
+        _origin.ServeGated("/v1/artifacts/gated", docx, docx.Length / 2, gate);
+
+        var fetch = Task.Run(() => _lab.Exec(DocumentCapabilityNames.FileFetch, Payload(_origin.Origin + "/v1/artifacts/gated", "kapili.docx", docx)));
+        string? part = null;
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (part is null && DateTime.UtcNow < deadline)
+        {
+            part = Directory.GetFiles(_lab.Downloads, FileFetch.TempPrefix + "*" + FileFetch.TempSuffix).FirstOrDefault();
+            Thread.Sleep(20);
+        }
+
+        Assert.NotNull(part);
+        // Mid-stream: no write, no read, by anyone — only the companion's own handle. A
+        // co-resident process could at most delete or rename the .part (what the rename needs).
+        Assert.Throws<IOException>(() => new FileStream(part, FileMode.Open, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete).Dispose());
+        Assert.Throws<IOException>(() => new FileStream(part, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete).Dispose());
+        Assert.False(fetch.IsCompleted);
+
+        gate.Set();
+        var result = await fetch.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Equal(docx, File.ReadAllBytes(result["path"]!.GetValue<string>()));
+        Assert.Equal(["kapili.docx"], DownloadsEntries());
+    }
+
+    // ------------------------------------------------------------- (k) executables on both halves, the pinned handler
+
+    [Fact]
+    public void The_macro_enabled_office_family_and_the_launchers_are_executable_for_file_open_too()
+    {
+        foreach (var extension in new[] { ".docm", ".dotm", ".xlsm", ".xlsb", ".xltm", ".xlam", ".pptm", ".potm", ".ppam", ".sldm", ".url", ".jar", ".pif" })
+        {
+            Assert.Contains(extension, PagentOS.SessionCompanion.Operator.OperatorCapabilities.ExecutableExtensions);
+        }
+
+        foreach (var document in new[] { ".docx", ".xlsx", ".pptx", ".pdf", ".txt", ".md", ".csv", ".html" })
+        {
+            Assert.DoesNotContain(document, PagentOS.SessionCompanion.Operator.OperatorCapabilities.ExecutableExtensions);
+        }
+
+        using var lab = new DocumentLab(withOperator: true, fetchOrigin: _origin.Origin);
+        foreach (var name in new[] { "makro.docm", "butce.xlsm", "kisayol.url", "eski.pif" })
+        {
+            var planted = Path.Combine(lab.Downloads, name);
+            File.WriteAllBytes(planted, [0x50, 0x4B, 0x03, 0x04]);
+            var refused = Assert.Throws<CapabilityException>(() => lab.Operator!.ExecuteAsync(
+                OperatorCapabilityNames.FileOpen, new JsonObject { ["path"] = planted }, TimeSpan.FromSeconds(10), CancellationToken.None).GetAwaiter().GetResult());
+            Assert.Equal(ErrorClasses.PermissionDenied, refused.ErrorClass);
+            Assert.Contains("executable", refused.Message, StringComparison.Ordinal);
+        }
+
+        Assert.Empty(lab.Operator!.StartedPids);
+    }
+
+    [Fact]
+    public void The_pinned_handler_follows_no_redirect_keeps_no_cookie_uses_no_proxy_and_decompresses_nothing()
+    {
+        using var handler = FileFetch.NewPinnedHandler();
+        Assert.False(handler.AllowAutoRedirect);
+        Assert.False(handler.UseCookies);
+        Assert.False(handler.UseProxy);
+        Assert.Null(handler.Proxy);
+        Assert.Equal(DecompressionMethods.None, handler.AutomaticDecompression);
+        using var client = FileFetch.NewPinnedClient();
+        Assert.Equal(Timeout.InfiniteTimeSpan, client.Timeout);
+        Assert.Empty(client.DefaultRequestHeaders);
     }
 
     // ------------------------------------------------------------- (h) advertisement, the service gate, the pipe
@@ -784,6 +1051,19 @@ internal sealed class LocalOrigin : IDisposable
     public void ServeStatus(string path, int status)
         => _routes[path] = ctx => ctx.Response.StatusCode = status;
 
+    /// <summary>A Content-Length body sent in two halves: the first <paramref name="firstHalf"/> bytes, then a wait on <paramref name="gate"/>, then the rest.</summary>
+    public void ServeGated(string path, byte[] bytes, int firstHalf, ManualResetEventSlim gate)
+        => _routes[path] = ctx =>
+        {
+            ctx.Response.ContentLength64 = bytes.Length;
+            ctx.Response.ContentType = "application/octet-stream";
+            ctx.Response.OutputStream.Write(bytes, 0, firstHalf);
+            ctx.Response.OutputStream.Flush();
+            gate.Wait(TimeSpan.FromSeconds(30));
+            ctx.Response.OutputStream.Write(bytes, firstHalf, bytes.Length - firstHalf);
+            Count(path, bytes.Length);
+        };
+
     /// <summary>Bytes handed to the connection for <paramref name="path"/>, once its handler has stopped (the client aborted, or it finished).</summary>
     public long WaitForServingToStop(string path, TimeSpan wait)
     {
@@ -906,5 +1186,176 @@ internal sealed class LocalOrigin : IDisposable
         catch (Exception)
         {
         }
+    }
+}
+
+/// <summary>
+/// A peer with no HTTP stack at all (ADR-0085 addendum 3, the High finding): a
+/// <c>TcpListener</c> on 127.0.0.1 that answers <see cref="StallPath"/> with
+/// <c>HTTP/1.1 200</c>, <c>Content-Length: 1000000</c> and ten bytes, then says nothing more
+/// until the client closes — the connection a synchronous read would sit in for as long as
+/// the peer liked. It records when the peer (the companion) closed, measured from the stall.
+/// <see cref="OkPath"/> answers a small complete body so the same origin can prove the next
+/// fetch works.
+/// </summary>
+internal sealed class RawOrigin : IDisposable
+{
+    public const string StallPath = "/v1/artifacts/stall";
+    public const string OkPath = "/v1/artifacts/ok";
+    public const int StallContentLength = 1_000_000;
+
+    public static readonly byte[] OkBytes = Encoding.UTF8.GetBytes("tamamlandı — the next fetch after a stalled one\r\n");
+
+    private readonly TcpListener _listener;
+    private readonly CancellationTokenSource _cts = new();
+    private readonly Task _loop;
+    private readonly ConcurrentQueue<TimeSpan> _peerClosedAfter = new();
+    private int _connections;
+    private int _bytesSentOnStall;
+
+    public RawOrigin()
+    {
+        _listener = new TcpListener(IPAddress.Loopback, 0);
+        _listener.Start();
+        Origin = $"http://127.0.0.1:{((IPEndPoint)_listener.LocalEndpoint).Port}";
+        _loop = Task.Run(LoopAsync);
+    }
+
+    public string Origin { get; }
+
+    public int Connections => Volatile.Read(ref _connections);
+
+    public int BytesSentOnStall => Volatile.Read(ref _bytesSentOnStall);
+
+    /// <summary>How long after each stall began the peer closed the connection, once at least <paramref name="count"/> have.</summary>
+    public IReadOnlyList<TimeSpan> WaitForPeerClose(int count, TimeSpan wait)
+    {
+        var deadline = DateTime.UtcNow + wait;
+        while (_peerClosedAfter.Count < count && DateTime.UtcNow < deadline)
+        {
+            Thread.Sleep(20);
+        }
+
+        return [.. _peerClosedAfter];
+    }
+
+    private async Task LoopAsync()
+    {
+        while (!_cts.IsCancellationRequested)
+        {
+            TcpClient client;
+            try
+            {
+                client = await _listener.AcceptTcpClientAsync(_cts.Token);
+            }
+            catch (Exception)
+            {
+                return;
+            }
+
+            Interlocked.Increment(ref _connections);
+            _ = Task.Run(() => HandleAsync(client));
+        }
+    }
+
+    private async Task HandleAsync(TcpClient client)
+    {
+        using (client)
+        {
+            try
+            {
+                var stream = client.GetStream();
+                var head = await ReadHeadAsync(stream);
+                var path = head.Split(' ', 3) is [_, var target, ..] ? target.Split('?', 2)[0] : "";
+                if (path == StallPath)
+                {
+                    var headers = Encoding.ASCII.GetBytes($"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {StallContentLength}\r\n\r\n");
+                    await stream.WriteAsync(headers, _cts.Token);
+                    var ten = new byte[10];
+                    await stream.WriteAsync(ten, _cts.Token);
+                    await stream.FlushAsync(_cts.Token);
+                    Interlocked.Add(ref _bytesSentOnStall, ten.Length);
+
+                    // Silence. The only thing that ends this is the peer closing (a read
+                    // returning 0 or failing) or the origin being disposed.
+                    var since = System.Diagnostics.Stopwatch.StartNew();
+                    var sink = new byte[64];
+                    try
+                    {
+                        while (await stream.ReadAsync(sink, _cts.Token) > 0)
+                        {
+                        }
+                    }
+                    catch (Exception) when (!_cts.IsCancellationRequested)
+                    {
+                    }
+
+                    if (!_cts.IsCancellationRequested)
+                    {
+                        _peerClosedAfter.Enqueue(since.Elapsed);
+                    }
+                }
+                else if (path == OkPath)
+                {
+                    var headers = Encoding.ASCII.GetBytes($"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {OkBytes.Length}\r\nConnection: close\r\n\r\n");
+                    await stream.WriteAsync(headers, _cts.Token);
+                    await stream.WriteAsync(OkBytes, _cts.Token);
+                    await stream.FlushAsync(_cts.Token);
+                }
+                else
+                {
+                    await stream.WriteAsync(Encoding.ASCII.GetBytes("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"), _cts.Token);
+                }
+            }
+            catch (Exception)
+            {
+                // The peer went away or the origin is being disposed.
+            }
+        }
+    }
+
+    private async Task<string> ReadHeadAsync(NetworkStream stream)
+    {
+        var buffer = new byte[8192];
+        var total = 0;
+        while (total < buffer.Length)
+        {
+            var read = await stream.ReadAsync(buffer.AsMemory(total), _cts.Token);
+            if (read == 0)
+            {
+                break;
+            }
+
+            total += read;
+            var text = Encoding.ASCII.GetString(buffer, 0, total);
+            if (text.Contains("\r\n\r\n", StringComparison.Ordinal))
+            {
+                return text;
+            }
+        }
+
+        return Encoding.ASCII.GetString(buffer, 0, total);
+    }
+
+    public void Dispose()
+    {
+        _cts.Cancel();
+        try
+        {
+            _listener.Stop();
+        }
+        catch (Exception)
+        {
+        }
+
+        try
+        {
+            _loop.Wait(TimeSpan.FromSeconds(2));
+        }
+        catch (Exception)
+        {
+        }
+
+        _cts.Dispose();
     }
 }

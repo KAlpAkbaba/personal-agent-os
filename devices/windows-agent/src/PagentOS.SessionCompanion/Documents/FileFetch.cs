@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Net;
 using System.Runtime.Versioning;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using PagentOS.Agent.Core.Commands;
@@ -19,36 +20,56 @@ namespace PagentOS.SessionCompanion.Documents;
 /// <param name="Application">The allowlisted application name to hand <c>file.open</c>, when <paramref name="Open"/>.</param>
 public sealed record FetchRequest(Uri Url, string Name, string Sha256, long Size, bool Open, string? Application);
 
-/// <summary>What <see cref="FileFetch.Run"/> kept: the RESOLVED final path and how many bytes arrived.</summary>
-public sealed record FetchOutcome(string Path, long Bytes);
+/// <summary>What <see cref="FileFetch.RunAsync"/> kept: the RESOLVED final path, how many bytes arrived, and whether the Mark-of-the-Web stream was written.</summary>
+public sealed record FetchOutcome(string Path, long Bytes, bool MarkOfTheWeb);
 
 /// <summary>
 /// The download half of <c>file.fetch</c> (M22_ARTIFACT_FACTORY_SPEC.md §4, ADR-0085
-/// decision 4, DEVICE_PROTOCOL.md §6k): one Cloud Core render, from the origin the device
-/// dialled and nowhere else, into the Downloads root, verified before it is kept.
+/// decision 4 and addendum 3, DEVICE_PROTOCOL.md §6k): one Cloud Core render, from the origin
+/// the device dialled and nowhere else, into the Downloads root, verified before it is kept
+/// and verified again once it has its name.
 /// <list type="number">
 /// <item><b>Where it comes from.</b> The URL's scheme, host and port must equal the origin the
 /// Device Service handed this companion in the pipe challenge, its path must start with
 /// <see cref="DocumentCapabilityNames.FetchPathPrefix"/>, and a redirect is never followed
 /// (<see cref="HttpClientHandler.AllowAutoRedirect"/> is off; a 3xx is
 /// <c>dependency_unavailable</c>). The request carries exactly what the URL carries — the
-/// Cloud Core signs the URL; this side adds no owner token, no cookie, no header of its own.</item>
+/// Cloud Core signs the URL; this side adds no owner token, no cookie, no header of its own —
+/// and goes straight to the origin: no system or environment proxy is consulted
+/// (<see cref="HttpClientHandler.UseProxy"/> is off).</item>
 /// <item><b>How big it is.</b> <c>payload.size</c> (≤ 50 MiB) is the bound: a
 /// <c>Content-Length</c> that disagrees is refused before a byte is read, and the body is
 /// counted while it streams — one byte past the bound aborts the connection and removes the
 /// partial file (<c>validation_error</c>). A body that ends short is <c>postcondition_failed</c>.</item>
+/// <item><b>How long it may take.</b> Every read of the body is asynchronous and carries the
+/// cap token (<see cref="Cap"/>, the family's 30 s by default, linked to the caller's budget),
+/// so a peer that sends its headers and then goes quiet cannot hold a thread or the partial
+/// file past the cap: the read is abandoned, the connection dropped, the temp file deleted and
+/// the answer is <c>timeout</c> (retryable). At most <see cref="MaxConcurrent"/> downloads are
+/// in flight per companion; one more is refused before any request
+/// (<c>dependency_unavailable</c>, retryable, detail <see cref="BusyDetail"/>).</item>
 /// <item><b>That it is the render Cloud Core described.</b> The SHA-256 is computed while
 /// streaming and compared to <c>payload.sha256</c> BEFORE the temp file is renamed to its
-/// final name; a mismatch deletes it and answers <c>postcondition_failed</c>. Nothing with the
-/// requested name ever exists unless it has the requested hash.</item>
+/// final name; a mismatch deletes it and answers <c>postcondition_failed</c>. The temp file's
+/// handle is exclusive for reading and writing (only deletion is shared, which is what the
+/// rename needs) and is held ACROSS the rename, so no other process can write the bytes
+/// between the hash and the name. Then the final path is re-opened exclusively and hashed
+/// again: a file that no longer has the requested hash — swapped under the name by whatever
+/// runs as the owner — is deleted and the answer is <c>postcondition_failed</c> with detail
+/// <see cref="Sha256MismatchAfterMove"/>. Nothing with the requested name is ever reported
+/// unless it has the requested hash at the moment it is reported.</item>
 /// <item><b>Where it lands.</b> Only inside the Downloads root, which is itself resolved and
 /// contained by <see cref="AuthorisedRoots"/> (resolve-then-contain, ADR-0082 addendum 2):
 /// <c>payload.name</c> must be a plain file name (no separators, no <c>..</c>, no drive, no
-/// reserved device name, no control characters, ≤ 120 characters, never a secret-bearing or
-/// executable name); the bytes go to a temp name beside it (<c>CreateNew</c>, so a planted
-/// reparse point is never opened) and are moved to the final name with <c>overwrite: false</c>
-/// — an existing file is never replaced, the new one gets <c> (2)</c>, <c> (3)</c>… What is
-/// reported is the final path the file system resolved, checked to be inside the roots again.</item>
+/// reserved device name, no control or Unicode format characters, ≤ 120 characters, never a
+/// secret-bearing or executable name — the macro-enabled Office family included); the bytes
+/// go to a temp name beside it (<c>CreateNew</c>, so a planted reparse point is never opened)
+/// and are moved to the final name with <c>overwrite: false</c> — an existing file is never
+/// replaced, the new one gets <c> (2)</c>, <c> (3)</c>… Every kept file carries the NTFS
+/// Mark-of-the-Web (<c>Zone.Identifier</c>, <c>ZoneId=3</c>), so Office opens it in Protected
+/// View and the shell asks before running anything from it, as it would for a browser
+/// download. What is reported is the final path the file system resolved, checked to be
+/// inside the roots again.</item>
 /// </list>
 /// Every refusal names the payload field it is about and never repeats the URL's host — a
 /// foreign origin is "beklenen köken değil" and nothing more.
@@ -62,8 +83,24 @@ public sealed class FileFetch : IDisposable
     public const int ReadBufferBytes = 64 * 1024;
     public const int MaxCollisionSuffix = 1000;
 
+    /// <summary>ADR-0085 addendum 3: how many downloads one companion has in flight at most; the next is <see cref="BusyDetail"/>.</summary>
+    public const int MaxConcurrent = 2;
+
     /// <summary>The detail a hash mismatch carries for an in-process caller.</summary>
     public const string Sha256Mismatch = "sha256_mismatch";
+
+    /// <summary>The detail when the file under its final name no longer has the hash the temp file had (it was swapped between the rename and the re-check); the file was deleted.</summary>
+    public const string Sha256MismatchAfterMove = "sha256_mismatch_after_move";
+
+    /// <summary>The detail when the kept file could not be re-opened exclusively for the re-check within a second (something else holds it); the file was deleted.</summary>
+    public const string UnverifiableAfterMove = "unverifiable_after_move";
+
+    /// <summary>The detail when <see cref="MaxConcurrent"/> downloads are already in flight.</summary>
+    public const string BusyDetail = "fetch_busy";
+
+    /// <summary>The Mark-of-the-Web stream name and content: Internet zone (3), nothing else — no referrer, no host URL (the signed URL stays out of the file system).</summary>
+    public const string ZoneIdentifierStream = "Zone.Identifier";
+    public const string ZoneIdentifierContent = "[ZoneTransfer]\r\nZoneId=3\r\n";
 
     private static readonly HashSet<string> ReservedDeviceNames = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -76,28 +113,46 @@ public sealed class FileFetch : IDisposable
 
     private readonly HttpClient _http;
     private readonly bool _ownsHttp;
+    private readonly SemaphoreSlim _slots = new(MaxConcurrent, MaxConcurrent);
 
     /// <summary>
-    /// With no client given, a pinned one: no redirects, no cookies, no automatic decompression
-    /// (the bytes counted and hashed are the bytes on the wire), no client-side timeout of its
-    /// own — the documents budget and the family's 30 s cap are the clock.
+    /// With no client given, a pinned one: no redirects, no cookies, no proxy, no automatic
+    /// decompression (the bytes counted and hashed are the bytes on the wire), no client-side
+    /// timeout of its own — <paramref name="cap"/> (the family's 30 s by default) linked to the
+    /// documents budget is the clock.
     /// </summary>
-    public FileFetch(HttpClient? http = null)
+    public FileFetch(HttpClient? http = null, TimeSpan? cap = null)
     {
         _ownsHttp = http is null;
         _http = http ?? NewPinnedClient();
+        Cap = cap ?? DocumentCapabilityNames.CommandTimeoutCap;
     }
 
-    public static HttpClient NewPinnedClient()
-    {
-        var handler = new HttpClientHandler
+    /// <summary>The longest one download may take, headers to last byte; the family's cap unless a lab shortens it.</summary>
+    public TimeSpan Cap { get; }
+
+    /// <summary>How many downloads are in flight right now (a lab reads it; the gate is <see cref="MaxConcurrent"/>).</summary>
+    public int InFlight => MaxConcurrent - _slots.CurrentCount;
+
+    /// <summary>
+    /// Test seam (ADR-0085 addendum 3): runs with the FINAL path after the rename and before the
+    /// re-verification, when the streaming handle has been released — the one moment a
+    /// same-user process could swap the bytes under the name. A lab alters the file here and
+    /// proves the re-check refuses and removes it. Null in production.
+    /// </summary>
+    public Action<string>? BeforeFinalVerify { get; set; }
+
+    public static HttpClientHandler NewPinnedHandler()
+        => new()
         {
             AllowAutoRedirect = false,
             UseCookies = false,
+            UseProxy = false,
             AutomaticDecompression = DecompressionMethods.None,
         };
-        return new HttpClient(handler, disposeHandler: true) { Timeout = Timeout.InfiniteTimeSpan };
-    }
+
+    public static HttpClient NewPinnedClient()
+        => new(NewPinnedHandler(), disposeHandler: true) { Timeout = Timeout.InfiniteTimeSpan };
 
     // ================================================================== payload → request
 
@@ -150,12 +205,15 @@ public sealed class FileFetch : IDisposable
     /// <summary>
     /// A plain file name or a <c>validation_error</c> that names <c>payload.name</c>: trimmed;
     /// 1 … 120 characters; none of the file system's invalid characters (which include both
-    /// separators, the drive colon, wildcards and every control character); no <c>..</c>
-    /// anywhere; not <c>.</c>; no trailing dot or space (Windows would strip it and the file
-    /// would not be the name that was asked for); not a reserved device name with or without
-    /// an extension; not a secret-bearing name (<see cref="SecretNames"/>); not an executable
-    /// extension (<see cref="OperatorCapabilities.ExecutableExtensions"/>); not this class's
-    /// own temp-name prefix.
+    /// separators, the drive colon, wildcards and the C0 control characters); no C1 control
+    /// character and no Unicode format character (category Cf — the bidirectional overrides
+    /// and isolates, the zero-width marks, the tags — which are invisible or reorder what
+    /// Explorer shows, so <c>fdp.‮txt.docx</c> would display as a PDF); well-formed
+    /// UTF-16; no <c>..</c> anywhere; not <c>.</c>; no trailing dot or space (Windows would
+    /// strip it and the file would not be the name that was asked for); not a reserved device
+    /// name with or without an extension; not a secret-bearing name (<see cref="SecretNames"/>);
+    /// not an executable extension (<see cref="OperatorCapabilities.ExecutableExtensions"/>,
+    /// the macro-enabled Office family included); not this class's own temp-name prefix.
     /// </summary>
     public static string ValidateName(string raw)
     {
@@ -173,6 +231,11 @@ public sealed class FileFetch : IDisposable
         if (name.IndexOfAny(InvalidNameChars) >= 0 || name.Contains('/') || name.Contains('\\') || name.Contains(':'))
         {
             throw DocumentErrors.Invalid("payload.name must be a plain file name: no separators, no drive, no wildcards, no control characters");
+        }
+
+        if (HasInvisibleOrDirectionalCharacter(name))
+        {
+            throw DocumentErrors.Invalid("payload.name must be a plain file name: no control characters and no Unicode format characters (bidirectional overrides, zero-width marks and the like, which change what the name looks like)");
         }
 
         if (name.Contains("..", StringComparison.Ordinal) || name == ".")
@@ -203,27 +266,74 @@ public sealed class FileFetch : IDisposable
 
         if (OperatorCapabilities.ExecutableExtensions.Contains(Path.GetExtension(name)))
         {
-            throw DocumentErrors.Invalid("payload.name has an executable extension; file.fetch writes documents, never programs");
+            throw DocumentErrors.Invalid("payload.name has an executable extension (a program, a script, a launcher or a macro-enabled Office file); file.fetch writes documents, never programs");
         }
 
         return name;
+    }
+
+    /// <summary>Any C0/C1 control (Cc), any format character (Cf), or a lone surrogate.</summary>
+    public static bool HasInvisibleOrDirectionalCharacter(string name)
+    {
+        var index = 0;
+        while (index < name.Length)
+        {
+            if (!Rune.TryGetRuneAt(name, index, out var rune))
+            {
+                return true;
+            }
+
+            var category = Rune.GetUnicodeCategory(rune);
+            if (category is UnicodeCategory.Control or UnicodeCategory.Format)
+            {
+                return true;
+            }
+
+            index += rune.Utf16SequenceLength;
+        }
+
+        return false;
     }
 
     // ================================================================== the download
 
     /// <summary>
     /// Download into <paramref name="downloadsDirectory"/> (already the RESOLVED, contained
-    /// Downloads root) and keep the file only once it has the requested size and hash. Runs
-    /// synchronously on the caller's thread (the documents dispatcher's pool thread); the
-    /// token is the documents budget, and the family's cap applies on top of it.
+    /// Downloads root) and keep the file only once it has the requested size and hash — and
+    /// still has it under its final name. Asynchronous end to end: every network read and
+    /// every file write carries the token, which is the documents budget linked with
+    /// <see cref="Cap"/>; a cancellation from either deletes the partial file (the cap's is
+    /// answered as <c>timeout</c>, the caller's is rethrown for the dispatcher's <c>cancelled</c>).
     /// </summary>
-    public FetchOutcome Run(FetchRequest request, string downloadsDirectory, AuthorisedRoots roots, CancellationToken cancellationToken)
+    public async Task<FetchOutcome> RunAsync(FetchRequest request, string downloadsDirectory, AuthorisedRoots roots, CancellationToken cancellationToken)
+    {
+        if (!_slots.Wait(0, CancellationToken.None))
+        {
+            throw new CapabilityException(
+                ErrorClasses.DependencyUnavailable,
+                $"file.fetch already has {MaxConcurrent} downloads in flight on this companion; nothing was requested [{BusyDetail}]",
+                retryable: true,
+                new Dictionary<string, object?> { [DocumentErrors.DetailKey] = BusyDetail });
+        }
+
+        try
+        {
+            return await RunSlotAsync(request, downloadsDirectory, roots, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _slots.Release();
+        }
+    }
+
+    private async Task<FetchOutcome> RunSlotAsync(FetchRequest request, string downloadsDirectory, AuthorisedRoots roots, CancellationToken cancellationToken)
     {
         using var capCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        capCts.CancelAfter(DocumentCapabilityNames.CommandTimeoutCap);
+        capCts.CancelAfter(Cap);
         var token = capCts.Token;
 
         var tempPath = Path.Combine(downloadsDirectory, TempPrefix + Guid.NewGuid().ToString("N") + TempSuffix);
+        string? finalPath = null;
         try
         {
             using var message = new HttpRequestMessage(HttpMethod.Get, request.Url);
@@ -232,7 +342,7 @@ public sealed class FileFetch : IDisposable
             HttpResponseMessage response;
             try
             {
-                response = _http.Send(message, HttpCompletionOption.ResponseHeadersRead, token);
+                response = await _http.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -247,7 +357,10 @@ public sealed class FileFetch : IDisposable
                 throw Unavailable("payload.url could not be fetched; nothing was kept", retryable: true);
             }
 
+            // The temp file's handle: exclusive for reading and writing, shared only for
+            // deletion (a rename needs that), held from the first byte across the rename.
             using (response)
+            using (var file = new FileStream(tempPath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.Delete, ReadBufferBytes, FileOptions.Asynchronous | FileOptions.SequentialScan))
             {
                 var status = (int)response.StatusCode;
                 if (status is >= 300 and < 400)
@@ -265,7 +378,7 @@ public sealed class FileFetch : IDisposable
                     throw DocumentErrors.Invalid($"payload.url declares Content-Length {declared} bytes but payload.size says {request.Size}; nothing was read");
                 }
 
-                var (bytes, actual) = StreamToTemp(response, tempPath, request.Size, token);
+                var (bytes, actual) = await StreamToTempAsync(response, file, request.Size, token).ConfigureAwait(false);
                 if (bytes != request.Size)
                 {
                     throw Postcondition($"the download ended after {bytes} bytes but payload.size says {request.Size}; nothing was kept", detail: null);
@@ -275,23 +388,31 @@ public sealed class FileFetch : IDisposable
                 {
                     throw Postcondition("the bytes that arrived do not have payload.sha256; the file was removed and nothing was kept", Sha256Mismatch);
                 }
+
+                // The rename happens while the handle is still open: nothing else can have
+                // written a byte between the hash above and the name below.
+                finalPath = MoveToFinalName(tempPath, downloadsDirectory, request.Name);
             }
 
-            var final = MoveToFinalName(tempPath, downloadsDirectory, request.Name);
-            var resolved = roots.Confine(final);
+            BeforeFinalVerify?.Invoke(finalPath);
+            VerifyFinal(finalPath, request.Sha256, request.Size);
+            var marked = TryMarkOfTheWeb(finalPath);
+
+            var resolved = roots.Confine(finalPath);
             if (resolved is null
                 || !string.Equals(Path.GetDirectoryName(resolved), downloadsDirectory, StringComparison.OrdinalIgnoreCase))
             {
-                TryDelete(final);
+                TryDelete(finalPath);
                 throw DocumentErrors.Denied("payload.name did not resolve to a file inside the Downloads root after the write; it was removed");
             }
 
-            return new FetchOutcome(resolved, request.Size);
+            return new FetchOutcome(resolved, request.Size, marked);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             TryDelete(tempPath);
-            throw new CapabilityException(ErrorClasses.Timeout, $"payload.url did not finish downloading within the {DocumentCapabilityNames.CommandTimeoutCap.TotalSeconds:F0} s cap; nothing was kept", retryable: true);
+            TryDelete(finalPath);
+            throw new CapabilityException(ErrorClasses.Timeout, $"payload.url did not finish downloading within the {Cap.TotalSeconds:F0} s cap; the connection was dropped and nothing was kept", retryable: true);
         }
         catch (Exception)
         {
@@ -301,17 +422,17 @@ public sealed class FileFetch : IDisposable
     }
 
     /// <summary>
-    /// The body to the temp file, counted and hashed as it streams. The bound is enforced on
-    /// every read: the chunk that crosses <paramref name="bound"/> is not written, the response
-    /// is disposed (the connection closes under the server, mid-body) and the partial file is
-    /// the caller's to delete.
+    /// The body into <paramref name="file"/>, counted and hashed as it streams. Every read
+    /// awaits with the token, so a peer that stops sending is abandoned at the cap rather
+    /// than waited for. The bound is enforced on every read: the chunk that crosses
+    /// <paramref name="bound"/> is not written, the response is disposed (the connection
+    /// closes under the server, mid-body) and the partial file is the caller's to delete.
     /// </summary>
-    private static (long Bytes, string Sha256) StreamToTemp(HttpResponseMessage response, string tempPath, long bound, CancellationToken cancellationToken)
+    private static async Task<(long Bytes, string Sha256)> StreamToTempAsync(HttpResponseMessage response, FileStream file, long bound, CancellationToken cancellationToken)
     {
         long count = 0;
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        using var file = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, ReadBufferBytes, FileOptions.SequentialScan);
-        using var body = response.Content.ReadAsStream(cancellationToken);
+        using var body = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         var buffer = new byte[ReadBufferBytes];
         while (true)
         {
@@ -319,11 +440,17 @@ public sealed class FileFetch : IDisposable
             int read;
             try
             {
-                read = body.Read(buffer, 0, buffer.Length);
+                read = await body.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
                 throw;
+            }
+            catch (Exception ex) when (cancellationToken.IsCancellationRequested && (ex is IOException or HttpRequestException or ObjectDisposedException))
+            {
+                // The cap fired while the transport was mid-read; some transports report that
+                // as an aborted connection rather than a cancellation.
+                throw new OperationCanceledException(cancellationToken);
             }
             catch (Exception ex) when (ex is IOException or HttpRequestException or System.Net.Sockets.SocketException or ObjectDisposedException)
             {
@@ -341,10 +468,11 @@ public sealed class FileFetch : IDisposable
                 throw DocumentErrors.Invalid($"payload.url kept sending past payload.size ({bound} bytes); the download was aborted at {count} bytes and nothing was kept");
             }
 
-            file.Write(buffer, 0, read);
+            await file.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
             hash.AppendData(buffer, 0, read);
         }
 
+        await file.FlushAsync(cancellationToken).ConfigureAwait(false);
         file.Flush(flushToDisk: true);
         return (count, Convert.ToHexStringLower(hash.GetHashAndReset()));
     }
@@ -352,7 +480,8 @@ public sealed class FileFetch : IDisposable
     /// <summary>
     /// <c>name</c>, else <c>stem (2).ext</c>, <c>stem (3).ext</c>… — never over an existing
     /// entry of any kind (<c>overwrite: false</c>; a reparse point planted under the name is an
-    /// existing entry too and is simply skipped, never opened).
+    /// existing entry too and is simply skipped, never opened). Called while the temp file's
+    /// handle is still open (shared for deletion, which is what the rename uses).
     /// </summary>
     private static string MoveToFinalName(string tempPath, string directory, string name)
     {
@@ -381,11 +510,73 @@ public sealed class FileFetch : IDisposable
         throw Unavailable($"payload.name and its first {MaxCollisionSuffix} suffixed variants all exist in the Downloads root; nothing was kept", retryable: false);
     }
 
-    private static void TryDelete(string path)
+    /// <summary>
+    /// The re-check under the final name: opened exclusively (no sharing at all — if
+    /// something else holds it, a few short retries, then the file is deleted and the answer
+    /// is <see cref="UnverifiableAfterMove"/>), its length and SHA-256 compared with what was
+    /// asked for; a mismatch deletes it and answers <see cref="Sha256MismatchAfterMove"/>.
+    /// </summary>
+    private static void VerifyFinal(string finalPath, string expectedSha256, long expectedSize)
+    {
+        FileStream? file = null;
+        for (var attempt = 0; file is null; attempt++)
+        {
+            try
+            {
+                file = new FileStream(finalPath, FileMode.Open, FileAccess.Read, FileShare.None, ReadBufferBytes, FileOptions.SequentialScan);
+            }
+            catch (IOException) when (attempt < 10 && File.Exists(finalPath))
+            {
+                Thread.Sleep(100);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                TryDelete(finalPath);
+                throw Postcondition("the kept file could not be re-opened exclusively for its final check; it was removed and nothing was kept", UnverifiableAfterMove);
+            }
+        }
+
+        string actual;
+        long length;
+        using (file)
+        {
+            length = file.Length;
+            actual = Convert.ToHexStringLower(SHA256.HashData(file));
+        }
+
+        if (length != expectedSize || !string.Equals(actual, expectedSha256, StringComparison.Ordinal))
+        {
+            TryDelete(finalPath);
+            throw Postcondition("the file under its final name no longer has payload.sha256 (it was altered between the rename and the final check); it was removed and nothing was kept", Sha256MismatchAfterMove);
+        }
+    }
+
+    /// <summary>
+    /// The Mark-of-the-Web on the kept file: the <c>Zone.Identifier</c> alternate data stream
+    /// with <c>ZoneId=3</c> (Internet). Best effort — a volume without alternate streams
+    /// (FAT, exFAT) cannot carry one, and the outcome says so — but on NTFS, where the owner's
+    /// Downloads folder lives, it is what makes Office open the file in Protected View.
+    /// </summary>
+    private static bool TryMarkOfTheWeb(string finalPath)
     {
         try
         {
-            if (File.Exists(path))
+            using var stream = new FileStream(finalPath + ":" + ZoneIdentifierStream, FileMode.Create, FileAccess.Write, FileShare.None);
+            var bytes = Encoding.ASCII.GetBytes(ZoneIdentifierContent);
+            stream.Write(bytes, 0, bytes.Length);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            return false;
+        }
+    }
+
+    private static void TryDelete(string? path)
+    {
+        try
+        {
+            if (path is not null && File.Exists(path))
             {
                 File.Delete(path);
             }
@@ -504,5 +695,7 @@ public sealed class FileFetch : IDisposable
         {
             _http.Dispose();
         }
+
+        _slots.Dispose();
     }
 }

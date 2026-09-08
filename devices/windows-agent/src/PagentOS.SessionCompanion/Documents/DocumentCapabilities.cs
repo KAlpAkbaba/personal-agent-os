@@ -41,7 +41,8 @@ namespace PagentOS.SessionCompanion.Documents;
 /// M22, <c>file.fetch</c> (<see cref="FileFetch"/>, DEVICE_PROTOCOL.md §6k), which brings a
 /// Cloud Core render into the Downloads root as a NEW file from the origin the device dialled
 /// (<see cref="FetchOrigin"/>, told by the Device Service in the pipe challenge), verified
-/// before it is kept, and never over an existing file.
+/// before it is kept and again under its final name, marked as from the web, never over an
+/// existing file, at most two at a time.
 /// </summary>
 [SupportedOSPlatform("windows")]
 public sealed class DocumentCapabilities
@@ -128,7 +129,11 @@ public sealed class DocumentCapabilities
 
         try
         {
-            var result = await Task.Run(() => Dispatch(capability, payload, budget, budgetCts.Token), CancellationToken.None).ConfigureAwait(false);
+            // file.fetch is asynchronous end to end (its network reads carry the token, ADR-0085
+            // addendum 3) and is awaited directly; the read-only names run on a pool thread.
+            var result = string.Equals(capability, DocumentCapabilityNames.FileFetch, StringComparison.Ordinal)
+                ? await FetchAsync(payload, budget, budgetCts.Token).ConfigureAwait(false)
+                : await Task.Run(() => Dispatch(capability, payload, budget, budgetCts.Token), CancellationToken.None).ConfigureAwait(false);
             var forbidden = BrowserWorkerHost.FindForbiddenKey(result, path: "result");
             if (forbidden is not null)
             {
@@ -177,7 +182,6 @@ public sealed class DocumentCapabilities
             DocumentCapabilityNames.FileRead => Read(payload),
             DocumentCapabilityNames.FileCompare => Compare(payload, cancellationToken),
             DocumentCapabilityNames.DocumentExtract => Extract(payload, cancellationToken),
-            DocumentCapabilityNames.FileFetch => Fetch(payload, budget, cancellationToken),
             _ => throw new CapabilityException(ErrorClasses.CapabilityMissing, $"'{capability}' has no dispatch entry", retryable: false),
         };
 
@@ -187,14 +191,16 @@ public sealed class DocumentCapabilities
     /// §6k, in this order: the payload's shape (<c>validation_error</c>, before any request);
     /// <c>open</c> needs the operator (<c>capability_missing</c>); the URL's origin and path
     /// (<c>permission_denied</c>); the Downloads root RESOLVED and CONTAINED by the roots
-    /// (<c>permission_denied</c>); then <see cref="FileFetch.Run"/> — size bound while
-    /// streaming, hash before the rename, an existing file never replaced. The kept file gets a
-    /// record (and a <c>file_id</c> this companion will resolve again); <c>open: true</c> then
-    /// runs the operator's real <c>file.open</c> on the resolved path and the result carries
-    /// its observation as <c>opened</c> — a failure to open is reported inside <c>opened</c>
-    /// (<c>{opened: false, error: {…}}</c>), because the fetch itself did succeed.
+    /// (<c>permission_denied</c>); then <see cref="FileFetch.RunAsync"/> — at most two in
+    /// flight, size bound while streaming, every read under the cap, hash before the rename
+    /// and again under the final name, Mark-of-the-Web on the kept file, an existing file never
+    /// replaced. The kept file gets a record (and a <c>file_id</c> this companion will resolve
+    /// again); <c>open: true</c> then runs the operator's real <c>file.open</c> on the resolved
+    /// path and the result carries its observation as <c>opened</c> — a failure to open is
+    /// reported inside <c>opened</c> (<c>{opened: false, error: {…}}</c>), because the fetch
+    /// itself did succeed.
     /// </summary>
-    private JsonObject Fetch(JsonObject payload, TimeSpan budget, CancellationToken cancellationToken)
+    private async Task<JsonObject> FetchAsync(JsonObject payload, TimeSpan budget, CancellationToken cancellationToken)
     {
         var started = Stopwatch.StartNew();
         var request = FileFetch.Parse(payload);
@@ -212,10 +218,10 @@ public sealed class DocumentCapabilities
             throw DocumentErrors.Denied($"the Downloads root does not resolve to a directory inside the owner's authorised roots ({string.Join(";", AuthorisedRootsConfigured)}); nothing was fetched");
         }
 
-        var outcome = _fetch.Run(request, directory, Roots, cancellationToken);
+        var outcome = await _fetch.RunAsync(request, directory, Roots, cancellationToken).ConfigureAwait(false);
         var record = FileRecord.From(outcome.Path, hashContent: true);
         _known[record.FileId] = outcome.Path;
-        _logger.LogInformation("file.fetch kept {Bytes} bytes from {Origin} (sha256 verified) in {Ms} ms", outcome.Bytes, FetchOrigin, started.ElapsedMilliseconds);
+        _logger.LogInformation("file.fetch kept {Bytes} bytes from {Origin} (sha256 verified twice, mark-of-the-web {Marked}) in {Ms} ms", outcome.Bytes, FetchOrigin, outcome.MarkOfTheWeb, started.ElapsedMilliseconds);
 
         var result = new JsonObject
         {
@@ -224,18 +230,19 @@ public sealed class DocumentCapabilities
             ["verified"] = true,
             ["sha256"] = request.Sha256,
             ["bytes"] = outcome.Bytes,
+            ["mark_of_the_web"] = outcome.MarkOfTheWeb,
         };
 
         if (request.Open)
         {
-            result["opened"] = OpenFetched(outcome.Path, request.Application, budget, started.Elapsed, cancellationToken);
+            result["opened"] = await OpenFetchedAsync(outcome.Path, request.Application, budget, started.Elapsed, cancellationToken).ConfigureAwait(false);
         }
 
         return result;
     }
 
     /// <summary>The operator's own <c>file.open</c> (its confinement, its argument policy, its window wait), on the rest of this request's budget.</summary>
-    private JsonObject OpenFetched(string path, string? application, TimeSpan budget, TimeSpan elapsed, CancellationToken cancellationToken)
+    private async Task<JsonObject> OpenFetchedAsync(string path, string? application, TimeSpan budget, TimeSpan elapsed, CancellationToken cancellationToken)
     {
         var payload = new JsonObject { ["path"] = path };
         if (application is not null)
@@ -251,7 +258,7 @@ public sealed class DocumentCapabilities
 
         try
         {
-            return _operator!.ExecuteAsync(OperatorCapabilityNames.FileOpen, payload, remaining, cancellationToken).GetAwaiter().GetResult();
+            return await _operator!.ExecuteAsync(OperatorCapabilityNames.FileOpen, payload, remaining, cancellationToken).ConfigureAwait(false);
         }
         catch (CapabilityException ex) when (!cancellationToken.IsCancellationRequested)
         {

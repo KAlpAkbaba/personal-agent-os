@@ -51,6 +51,11 @@ public sealed class OperatorCapabilities
     public static readonly IReadOnlySet<string> ExecutableExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
         ".exe", ".bat", ".cmd", ".com", ".scr", ".ps1", ".psm1", ".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh", ".msi", ".msp", ".lnk", ".hta", ".reg", ".cpl", ".inf",
+        // ADR-0085 addendum 3: the launchers the first list missed, and the macro-enabled
+        // Office family — a document that carries code is a program for this purpose, on
+        // file.open and on file.fetch alike.
+        ".pif", ".url", ".jar",
+        ".docm", ".dotm", ".xlsm", ".xlsb", ".xltm", ".xlam", ".pptm", ".potm", ".ppam", ".sldm",
     };
 
     private readonly OperatorOptions _options;
