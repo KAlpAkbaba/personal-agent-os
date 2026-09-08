@@ -1,0 +1,55 @@
+{
+  "kind": "m25_tool_detection",
+  "measured_at": "2026-09-08T09:55:00Z",
+  "machine": "the owner's Windows 10 machine",
+  "blender": {
+    "path": "C:/Program Files/Blender Foundation/Blender 4.5/blender.exe",
+    "version": "4.5.4 LTS (hash b3efe983cc58)",
+    "headless": "blender -b --python <script> -- <out.png>",
+    "smoke": {
+      "objects": [
+        "Kamera",
+        "Kure",
+        "Sun"
+      ],
+      "camera": "Kamera",
+      "engine": "BLENDER_WORKBENCH",
+      "render_bytes": 4725,
+      "render_sha256": "2dcacb1e8d7055a4150bf4992bb4a440eeec0aa59056977f18d0631ad8172852",
+      "resolution": "160x120"
+    },
+    "verdict": "REAL: headless Python scene build + still render works"
+  },
+  "unity": {
+    "path": "C:/Program Files/Unity/Hub/Editor/6000.5.0f1/Editor/Unity.exe",
+    "version": "6000.5.0f1_88b47c5e7076",
+    "hub": "3.18.3",
+    "license_file": "%LOCALAPPDATA%/Unity/licenses/UnityEntitlementLicense.xml (2026-06-26)",
+    "smoke": {
+      "command": "Unity.exe -batchmode -nographics -quit -createProject <fresh dir> -logFile <log>",
+      "exit_code": 198,
+      "seconds": 5,
+      "project_created": false,
+      "log_lines": [
+        "[Licensing::Module] Trying to connect to existing licensing client channel...",
+        "[Licensing::IpcConnector] Channel LicenseClient-alpak doesn't exist",
+        "[Licensing::Module] Successfully launched the LicensingClient (PId: 32584)",
+        "[Licensing::Module] Licensing is not yet initialized.",
+        "[Licensing::IpcConnector] Successfully connected to: \"LicenseClient-alpak\" at \"2026-09-08T09:55:41.5584357Z\"",
+        "[Licensing::Client] Code 10 while verifying Licensing Client signature (process Id: 32584, path: \"C:/Program Files/Unity/Hub/Editor/6000.5.0f1/Editor/Data/Resources/Licensing/Client/Unity.Licensing.Client.exe\")",
+        "[Licensing::Module] LicensingClient has failed validation; ignoring",
+        "[Licensing::Client] Handshaking with LicensingClient:",
+        "[Licensing::Module] Successfully connected to LicensingClient on channel: \"LicenseClient-alpak\" (connect: 2.91s, validation: 0.33s, handshake: 0.27s)",
+        "[Licensing::IpcConnector] Successfully connected to: \"LicenseClient-alpak-notifications\" at \"2026-09-08T09:55:42.1623903Z\"",
+        "[Licensing::Module] Connected to LicensingClient (PId: 32584, launch time: 0.03, total connection time: 3.51s)",
+        "[Licensing::Module] Error: Access token is unavailable; failed to update"
+      ]
+    },
+    "verdict": "NOT DRIVABLE TODAY: no valid editor license for batch mode (entitlement 404, com.unity.editor.headless not found) - owner item 32: sign in to Unity Hub"
+  },
+  "other": {
+    "godot": "not installed",
+    "bpy_in_system_python": false,
+    "owner_real_unity_project_never_touched": "E:/hologram/HologramVehicleTest"
+  }
+}
