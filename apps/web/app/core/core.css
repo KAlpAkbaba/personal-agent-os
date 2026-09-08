@@ -655,6 +655,10 @@
 .palette-planning {
   --core-color: #d4c48e;
 }
+/* v7: the making Core, wheat amber. Same value as CoreScene's PALETTE. */
+.palette-making {
+  --core-color: #e6b877;
+}
 .palette-unknown {
   --core-color: #6b6250;
 }

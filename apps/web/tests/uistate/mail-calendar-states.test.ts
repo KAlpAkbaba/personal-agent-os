@@ -152,17 +152,20 @@ const VOICE_TOOL_RUNNING: VoiceOverlay = {
 // ------------------------------------------------------------ the contract
 
 describe("contract v6 is v5 plus the mail and calendar states, and says so", () => {
-  it("is version 6 and still reads a v5, v4, v3 and v2 server", () => {
-    expect(KNOWN_CONTRACT_VERSION).toBe(6);
+  it("still reads a v6, v5, v4, v3 and v2 server from a build at v6 or later", () => {
+    // v7 (M22) bumped the build past this file's contract; the assertion is
+    // relative, as the v5 file's became when v6 landed, so the v6 additions
+    // stay proven without pinning the build to a version it has left.
+    expect(KNOWN_CONTRACT_VERSION).toBeGreaterThanOrEqual(6);
     expect(MIN_SUPPORTED_CONTRACT_VERSION).toBe(2);
-    expect(contractCompatibility(6)).toBe("current");
+    expect(contractCompatibility(KNOWN_CONTRACT_VERSION)).toBe("current");
     expect(contractCompatibility(5)).toBe("older_supported");
     expect(contractCompatibility(4)).toBe("older_supported");
     expect(contractCompatibility(3)).toBe("older_supported");
     expect(contractCompatibility(2)).toBe("older_supported");
     // A server ahead of this build is a different problem: we do not know its
     // vocabulary, so nothing is drawn from it.
-    expect(contractCompatibility(7)).toBe("unsupported");
+    expect(contractCompatibility(KNOWN_CONTRACT_VERSION + 1)).toBe("unsupported");
     expect(contractCompatibility(1)).toBe("unsupported");
   });
 
@@ -188,7 +191,7 @@ describe("contract v6 is v5 plus the mail and calendar states, and says so", () 
     const document = UI_STATES.indexOf("document.analysis");
     expect(UI_STATES.indexOf("mail.activity")).toBe(document + 1);
     expect(UI_STATES.indexOf("calendar.activity")).toBe(document + 2);
-    expect(UI_STATES[UI_STATES.length - 1]).toBe("calendar.activity");
+    // Appended after the last v5 token, never reordered; v7 appends after them in turn.
   });
 
   it("types the draft and proposal lifecycles, and admits nothing outside them", () => {

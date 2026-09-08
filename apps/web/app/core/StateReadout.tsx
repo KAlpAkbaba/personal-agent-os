@@ -21,6 +21,7 @@ import {
   KIND_LABEL,
   SEVERITY_LABEL,
   SOURCE_LABEL,
+  artifactFactsLine,
   calendarFactsLine,
   capabilityNodesLine,
   documentFactsLine,
@@ -224,6 +225,27 @@ export default function StateReadout({
           data-calendar-conflicts={intent.calendar.conflicts ?? ""}
         >
           {calendarFactsLine(intent.calendar)}
+        </p>
+      )}
+
+      {/*
+        M22: the factory's published facts — the title, the format, the
+        verdict, and on `invalid` the ref that failed — each the token the
+        publisher sent or the statement that none came; present on the live
+        making posture and on its last-known shape alike. The compact caption
+        already carries the same sentence as `label`, so the long line is the
+        full form's alone. No bar: a render of unknown length gets none.
+      */}
+      {intent.artifact && !compact && (
+        <p
+          className="muted core-count"
+          data-artifact-facts
+          data-artifact-title={intent.artifact.title ?? ""}
+          data-artifact-format={intent.artifact.format ?? ""}
+          data-artifact-verdict={intent.artifact.verdictToken ?? ""}
+          data-artifact-failing-ref={intent.artifact.failingRef ?? ""}
+        >
+          {artifactFactsLine(intent.artifact)}
         </p>
       )}
 

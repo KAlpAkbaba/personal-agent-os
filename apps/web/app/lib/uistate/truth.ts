@@ -23,6 +23,7 @@ import {
   type UiStateResponse,
   ageMs,
   isAlarmLifecycleState,
+  isArtifactState,
   isCalendarState,
   isCoreChannel,
   isDocumentState,
@@ -306,6 +307,16 @@ export function mailClaim(truth: CoreTruth, now: number): Claim {
 /** The calendar channel's own claim (v6): the newest `calendar.activity`, by membership. */
 export function calendarClaim(truth: CoreTruth, now: number): Claim {
   return claimFor(newestWhere(truth, isCalendarState), now);
+}
+
+/**
+ * The Artifact Factory's own claim (v7): the newest `artifact.factory`, by
+ * membership. Returned expired or not: the panel words the age, and an
+ * expired factory event is one we stopped hearing about — the renders
+ * themselves are rows the list route holds, which do not expire.
+ */
+export function artifactClaim(truth: CoreTruth, now: number): Claim {
+  return claimFor(newestWhere(truth, isArtifactState), now);
 }
 
 /**

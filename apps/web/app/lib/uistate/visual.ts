@@ -45,6 +45,7 @@ import {
   eyeClaim,
   releaseClaim,
 } from "./truth";
+import { type ArtifactFacts, artifactCaption, artifactFacts } from "./artifacts";
 import { type CalendarFacts, calendarCaption, calendarFacts } from "./calendar";
 import { type DocumentFacts, documentCaption, documentFacts } from "./documents";
 import { type MailFacts, mailCaption, mailFacts } from "./mail";
@@ -111,7 +112,17 @@ export type CoreVisualKind =
    * rings barely turning, nothing flowing inward — arranging, not ingesting
    * — with the range, the proposal's step and its conflicts as the caption.
    */
-  | "calendar_activity";
+  | "calendar_activity"
+  /**
+   * v7 (M22): the Core making a file for the owner — rendering it, then
+   * reopening it with an independent parser to check it against what was
+   * asked. A making posture: a faint lattice being laid, the paths carrying
+   * traffic OUT into a file while the factory writes, still once a verdict
+   * was named; calm, nothing that could be read as progress, and the title,
+   * the format and the verdict as the caption. An invalid render is worded
+   * as invalid with its failing ref — never dressed as done.
+   */
+  | "artifact_factory";
 
 /**
  * Which of the two evidence sources produced the intent (ADR-0061 §4).
@@ -140,6 +151,8 @@ export type PaletteToken =
   | "reading"
   /** v6: the planning Core — straw, the parchment's duller neighbour. */
   | "planning"
+  /** v7: the making Core — wheat amber, a shade warmer than parchment: a page being made, not read. */
+  | "making"
   | "unknown";
 
 /**
@@ -384,6 +397,15 @@ export type VisualIntent = {
   /** The same for the calendar: the range, the event, the proposal's step and its conflicts. */
   calendar: CalendarFacts | null;
 
+  // -------------------------------------------- v7: the Artifact Factory (M22 §6)
+  /**
+   * The published facts about the file being made — the title, the format,
+   * the verdict, the failing ref — each `null` when the publisher sent none,
+   * and the whole thing `null` outside the `artifact_factory` kind (kept on
+   * its last-known shape). Words, not channels.
+   */
+  artifact: ArtifactFacts | null;
+
   palette: PaletteToken;
 };
 
@@ -469,6 +491,7 @@ function blank(kind: CoreVisualKind, palette: PaletteToken): VisualIntent {
     document: null,
     mail: null,
     calendar: null,
+    artifact: null,
     palette,
   };
 }
@@ -1025,6 +1048,38 @@ function forLiveState(event: UiStateEvent, claim: Claim): VisualIntent {
       };
     }
 
+    case "artifact.factory": {
+      // The making posture (M22 §6): a file is being written OUT for the
+      // owner, so — unlike every reading kind — nothing flows inward; the
+      // paths carry traffic while the factory renders, a faint lattice is
+      // the structure being laid, the shells sit a little open and the
+      // rings turn slowly. Once the publisher named a verdict the writing
+      // is over and the paths go still: `valid` glows a shade brighter (the
+      // parser found what was asked), `invalid` is held under restraint
+      // (kept, named, not presented as done) with no agitation — a failed
+      // validation is a fact about a file, not a fault in the agent. No
+      // pulse, no constellation, no progress: a render of unknown length
+      // gets no bar. The caption is the title, the format and the verdict.
+      const facts = artifactFacts(event);
+      const verdict = facts.verdict;
+      const settled = verdict === "valid" || verdict === "invalid";
+      return {
+        ...base("artifact_factory", "making"),
+        label: artifactCaption(facts),
+        scale: 1.04,
+        topology: 0.2,
+        breathAmplitude: 0.03,
+        breathHz: 0.24,
+        energy: e,
+        glow: glowOf(verdict === "valid" ? 0.4 : verdict === "invalid" ? 0.22 : 0.3, e),
+        shellSpread: 0.3,
+        ringSpin: settled ? IDLE_RING_SPIN : 0.18,
+        flowRate: settled ? 0 : 0.3,
+        restraint: verdict === "invalid" ? 0.5 : 0,
+        artifact: facts,
+      };
+    }
+
     default:
       // Reached only by a contract state this table has not been taught. Both
       // gates upstream (`isKnownState`, and `coreClaim`'s agent/lab filter)
@@ -1141,10 +1196,16 @@ export function applyVoiceOverlay(bus: VisualIntent, voice: VoiceOverlay): Visua
   // a live reading Core: a spoken "bunu özetle" runs a document tool, and the
   // bus knows which file and which page (M20 §3). v6 extends it to mail and
   // the calendar: "gelen kutumu oku" runs a mail tool, and the bus knows the
-  // folder and the draft (M21 §3).
+  // folder and the draft (M21 §3). v7 extends it to the factory: "bana bir
+  // bütçe tablosu yap" runs `artifact.create`, and the bus knows the title
+  // and the verdict (M22 §6).
   if (
     voice.state === "tool_running" &&
-    (isOperatorActing(bus) || isDocumentReading(bus) || isMailReading(bus) || isCalendarPlanning(bus))
+    (isOperatorActing(bus) ||
+      isDocumentReading(bus) ||
+      isMailReading(bus) ||
+      isCalendarPlanning(bus) ||
+      isArtifactMaking(bus))
   )
     return bus;
   const local = (kind: CoreVisualKind, palette: PaletteToken): VisualIntent => ({
@@ -1428,4 +1489,9 @@ export function isMailReading(intent: VisualIntent): boolean {
 /** True while the Core body is a LIVE calendar activity (v6); a last-known calendar shape is not. */
 export function isCalendarPlanning(intent: VisualIntent): boolean {
   return intent.kind === "calendar_activity";
+}
+
+/** True while the Core body is a LIVE factory event (v7); a last-known making shape is not. */
+export function isArtifactMaking(intent: VisualIntent): boolean {
+  return intent.kind === "artifact_factory";
 }
