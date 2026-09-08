@@ -31,7 +31,9 @@ import { useCallback, useMemo, useState } from "react";
 
 import OwnerGate from "../../components/OwnerGate";
 import { approvalClient } from "../../lib/cockpit/approvals";
+import { artifactClient, downloadRender } from "../../lib/cockpit/artifacts";
 import { useApprovalPair } from "../../lib/cockpit/useApprovalPair";
+import { useArtifactOpen } from "../../lib/cockpit/useArtifactOpen";
 import { useCockpitData } from "../../lib/cockpit/useCockpitData";
 import { selectResearchFocus } from "../../lib/research/api";
 import { UnauthorizedError } from "../../lib/session";
@@ -58,6 +60,7 @@ import { useCorePreferences } from "../usePreferences";
 import {
   AlarmsPanel,
   AmbientPanel,
+  ArtifactsPanel,
   CalendarPanel,
   DigitalOperatorPanel,
   DocumentsPanel,
@@ -106,6 +109,21 @@ function Cockpit() {
   // answer reloads the pending lists so the panels show what the Cloud Core
   // now holds rather than what this page assumed it did.
   const approvals = useApprovalPair(approvalClient, refreshPanels);
+
+  // M22 §4: "Aç" asks the Cloud Core to fetch and open an artifact on the
+  // device, one at a time, and every answer reloads the list; a download
+  // fetches the render's bytes through the owner session (M13's pattern)
+  // and hands the browser a blob — a failure is said in words, and the link
+  // itself stays.
+  const artifactOpen = useArtifactOpen(artifactClient, refreshPanels);
+  const [downloadNotice, setDownloadNotice] = useState<string | null>(null);
+  const download = useCallback((artifactId: string, format: string) => {
+    setDownloadNotice(null);
+    void downloadRender(artifactId, format).catch((err: unknown) => {
+      if (err instanceof UnauthorizedError) return;
+      setDownloadNotice(`İndirilemedi (${format.toUpperCase()}): ${err instanceof Error ? err.message : String(err)}`);
+    });
+  }, []);
 
   // The tab's one voice session (ADR-0061): its real states overlay the bus
   // body, labelled as this device's own observation.
@@ -188,6 +206,17 @@ function Cockpit() {
               it read before, and what its last answer cited — from the bus,
               never from a file. The owner's files stay on the owner's machine. */}
           <DocumentsPanel truth={truth} now={now} />
+          {/* M22 §4: what the factory made — each render with the verdict
+              the independent parser gave it, a download per valid render on
+              the owner-session-gated route, and "Aç" for the device. */}
+          <ArtifactsPanel
+            artifacts={data.artifacts}
+            truth={truth}
+            now={now}
+            open={artifactOpen}
+            onDownload={download}
+            notice={downloadNotice}
+          />
           <GoalsPanel state={data.goals} now={now} />
           <ResearchPanel
             state={data.research}

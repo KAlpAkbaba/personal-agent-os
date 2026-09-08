@@ -942,6 +942,23 @@
   color: var(--muted);
 }
 
+/* -------------------------------------------------- Üretilenler (M22 §4) */
+
+/* A download link per VALID render, and the "Aç" chip that asks the Cloud
+   Core to fetch and open one on the device: accented only when it may
+   actually be pressed, disabled with its reason in words otherwise. */
+.artifact-download {
+  color: var(--accent);
+  font-size: 0.78rem;
+  white-space: nowrap;
+  margin-left: 0.5rem;
+}
+
+.approval-pair .core-chip[data-artifact-action="open"]:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
 /* ---------------------------------------------------- reduced motion */
 
 /*
