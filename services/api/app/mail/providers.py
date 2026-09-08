@@ -22,7 +22,7 @@ from datetime import UTC, datetime
 from email import message_from_bytes, policy
 from email.header import decode_header
 from email.message import EmailMessage
-from email.utils import parsedate_to_datetime
+from email.utils import make_msgid, parsedate_to_datetime
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Protocol
@@ -503,6 +503,11 @@ class SmtpMailSender:
             msg["In-Reply-To"] = draft.in_reply_to
         if draft.references:
             msg["References"] = " ".join(draft.references)
+        # A real server may assign its own; generating one here (RFC 5322 §3.6.4, via the
+        # stdlib) means ``MailService.send`` always has SOMETHING to record as the sent
+        # message's identity, never an empty string standing in for "unknown".
+        domain = (self._mail_from.rsplit("@", 1)[-1]) or "pagentos.local"
+        msg["Message-ID"] = make_msgid(domain=domain)
         msg.set_content(draft.body, charset="utf-8")
 
         conn = smtplib.SMTP(self._host, self._port, timeout=self._timeout)
