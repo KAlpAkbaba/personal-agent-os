@@ -113,6 +113,13 @@ const EXPECTED_KIND: Record<string, CoreVisualKind> = {
   // rendering posture, a reading posture, and a settled `unavailable` for a
   // tool that could not be driven at all.
   "scene.activity": "scene_activity",
+  // v11 (M26): carrying a multi-step job for the owner — planning it,
+  // running its steps across the families, holding it where the owner
+  // paused it and ending it honestly — is the agent's own work: a core
+  // state with its own deliberate running posture, a held posture for a
+  // paused run, a settled `completed` and a `partial` that says what is
+  // missing rather than rounding up to done.
+  "executive.run": "executive_run",
 };
 
 describe("a visual state is entered only by its own event", () => {

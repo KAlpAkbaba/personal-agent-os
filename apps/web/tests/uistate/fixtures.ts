@@ -672,6 +672,44 @@ export const SCENE_ACTIVITY = (
 export const SCENE_ACTIVITY_BARE = () =>
   event({ state: "scene.activity", subsystem: "creative3d", task_id: "scene-task-2" });
 
+// ------------------------------------------ v11: Executive Autonomy (M26 §6)
+
+/**
+ * `executive.run` as the M26 spec §6 has the Cloud Core publish it at
+ * every transition of ONE durable run, from the `executive_runs` /
+ * `executive_steps` rows: subsystem `executive`, the task id, and in
+ * metadata the run's short id, the step id it is on (`s3`), the run's
+ * state (`planned` | `running` | `paused` | `completed` | `partial` |
+ * `cancelled` | `failed`) and how many of the graph's steps have finished
+ * out of how many there are.
+ */
+export const EXECUTIVE_RUN = (
+  run: string | null = "r1",
+  state: string | null = "running",
+  step: string | null = "s3",
+  done: number | null = null,
+  total: number | null = null,
+  extra: Record<string, unknown> = {},
+) =>
+  event({
+    state: "executive.run",
+    subsystem: "executive",
+    task_id: "exec-task-1",
+    status: state ?? "executive",
+    metadata: {
+      ...(run === null ? {} : { run }),
+      ...(step === null ? {} : { step }),
+      ...(state === null ? {} : { state }),
+      ...(done === null ? {} : { done }),
+      ...(total === null ? {} : { total }),
+      ...(extra as Record<string, string | number | boolean>),
+    },
+  });
+
+/** An executive event whose publisher sent no metadata at all. */
+export const EXECUTIVE_RUN_BARE = () =>
+  event({ state: "executive.run", subsystem: "executive", task_id: "exec-task-2" });
+
 /** The owner-authorised release path, mid-deployment (ADR-0055). */
 export const RELEASE_DEPLOYING = () =>
   event({

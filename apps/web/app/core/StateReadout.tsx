@@ -26,6 +26,7 @@ import {
   calendarFactsLine,
   capabilityNodesLine,
   documentFactsLine,
+  executiveFactsLine,
   formatAge,
   formatProgress,
   genesisFactsLine,
@@ -40,6 +41,7 @@ import {
 import { appIsServing } from "../lib/uistate/apps";
 import { isOperatorState } from "../lib/uistate/contract";
 import { documentPartPhrase } from "../lib/uistate/documents";
+import { executivePosture } from "../lib/uistate/executive";
 import { genesisPosture } from "../lib/uistate/genesis";
 import { operatorPosition } from "../lib/uistate/operator";
 import { scenePosture, sceneToolWord } from "../lib/uistate/scenes";
@@ -102,6 +104,11 @@ export default function StateReadout({
       // alınıyor" from "sahne okunuyor", and above all an `unavailable` from
       // a failure, in the compact form too. Absent for every other kind.
       data-scene-posture={intent.scene ? scenePosture(intent.scene.state) : undefined}
+      // M26: which of the seven postures the executive body takes, from the
+      // published state alone — on the root so a harness can tell
+      // "duraklatıldı" from "başarısız", and "kısmen bitti" from
+      // "tamamlandı", in the compact form too. Absent for every other kind.
+      data-executive-posture={intent.executive ? executivePosture(intent.executive.state) : undefined}
     >
       <h2 className="core-headline">{KIND_LABEL[intent.kind]}</h2>
 
@@ -343,6 +350,32 @@ export default function StateReadout({
           data-scene-unavailable={scenePosture(intent.scene.state) === "unavailable" ? "yes" : "no"}
         >
           {sceneFactsLine(intent.scene)}
+        </p>
+      )}
+
+      {/*
+        M26: the run's published facts — its id, the step it is on, its
+        state and the two step counts — each the token the publisher sent or
+        the statement that none came; present on the live posture and on its
+        last-known shape alike. `data-executive-paused` marks the one state
+        the Core draws as the owner having stopped the run, so a harness can
+        tell it from a failure without reading the geometry (M26 §3). A bar
+        appears above only when BOTH counts came. No control here either —
+        "Duraklat / Devam / İptal" are the Cockpit's, built from the row on
+        the list route.
+      */}
+      {intent.executive && !compact && (
+        <p
+          className="muted core-count"
+          data-executive-facts
+          data-executive-run={intent.executive.run ?? ""}
+          data-executive-step={intent.executive.step ?? ""}
+          data-executive-state={intent.executive.stateToken ?? ""}
+          data-executive-done={intent.executive.done ?? ""}
+          data-executive-total={intent.executive.total ?? ""}
+          data-executive-paused={executivePosture(intent.executive.state) === "paused" ? "yes" : "no"}
+        >
+          {executiveFactsLine(intent.executive)}
         </p>
       )}
 

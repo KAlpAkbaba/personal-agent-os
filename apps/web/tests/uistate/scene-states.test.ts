@@ -191,16 +191,22 @@ function factsOf(overrides: Partial<SceneFacts> = {}): SceneFacts {
 // ------------------------------------------------------------ the contract
 
 describe("contract v10 is v9 plus the scene state, and says so", () => {
-  it("is version 10 and still reads a v9, v8, v7, v6, v5, v4, v3 and v2 server", () => {
-    expect(KNOWN_CONTRACT_VERSION).toBe(10);
+  it("still reads a v10, v9, v8, v7, v6, v5, v4, v3 and v2 server from a build at v10 or later", () => {
+    // v11 (M26) bumped the build past this file's contract; the assertion is
+    // relative, as the v9 file's became when v10 landed, so the v10 additions
+    // stay proven without pinning the build to a version it has left.
+    expect(KNOWN_CONTRACT_VERSION).toBeGreaterThanOrEqual(10);
     expect(MIN_SUPPORTED_CONTRACT_VERSION).toBe(2);
-    expect(contractCompatibility(10)).toBe("current");
+    expect(contractCompatibility(KNOWN_CONTRACT_VERSION)).toBe("current");
+    // v10 itself: current on a v10 build, a readable subset on any later one.
+    const built: number = KNOWN_CONTRACT_VERSION;
+    expect(contractCompatibility(10)).toBe(built === 10 ? "current" : "older_supported");
     for (const older of [9, 8, 7, 6, 5, 4, 3, 2]) {
       expect(contractCompatibility(older), `v${older}`).toBe("older_supported");
     }
     // A server ahead of this build is a different problem: we do not know its
     // vocabulary, so nothing is drawn from it.
-    expect(contractCompatibility(11)).toBe("unsupported");
+    expect(contractCompatibility(KNOWN_CONTRACT_VERSION + 1)).toBe("unsupported");
     expect(contractCompatibility(1)).toBe("unsupported");
   });
 
@@ -224,7 +230,10 @@ describe("contract v10 is v9 plus the scene state, and says so", () => {
 
   it("appends the token after v9's, never reordering", () => {
     expect(UI_STATES.indexOf("scene.activity")).toBe(UI_STATES.indexOf("capability.genesis") + 1);
-    expect(UI_STATES[UI_STATES.length - 1]).toBe("scene.activity");
+    // Appended after the last v9 token, never reordered; v11 appends after it
+    // in turn, so the assertion is about the ORDER rather than about being
+    // last — exactly what "append only" means.
+    expect(UI_STATES.indexOf("scene.activity")).toBeGreaterThan(UI_STATES.indexOf("capability.genesis"));
     // Every earlier token keeps the place it had.
     expect(UI_STATES.indexOf("capability.genesis")).toBe(UI_STATES.indexOf("app.factory") + 1);
     expect(UI_STATES.indexOf("app.factory")).toBe(UI_STATES.indexOf("artifact.factory") + 1);

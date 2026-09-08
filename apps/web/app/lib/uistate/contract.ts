@@ -15,7 +15,7 @@
  */
 
 /** Contract version this client was written against (`CONTRACT_VERSION` in contract.py). */
-export const KNOWN_CONTRACT_VERSION = 10;
+export const KNOWN_CONTRACT_VERSION = 11;
 
 /**
  * The build marker of the Living Core (M18.3 §12, qualification A). Rendered server-side
@@ -47,12 +47,17 @@ export const CORE_BUILD_ID = "living-core-1";
  * `approval_required`, `error_class`). v10 is additive over v9 (M25 spec §6):
  * one token, `scene.activity`, one subsystem, and metadata of three short
  * tokens (`tool`, `scene`, `state`) and one bounded count (`objects`) that
- * older publishers never send. A v2 to v9 server therefore serves a
+ * older publishers never send. v11 is additive over v10 (M26 spec §6): one
+ * token, `executive.run`, one subsystem, and metadata of two short tokens
+ * (`run`, `step`), one state word and two bounded counts (`done`, `total`)
+ * that older publishers never send — no earlier token, kind, horizon, label
+ * or assertion changed with it, so a v10 renderer reads a v11 server exactly
+ * as it read a v10 one. A v2 to v10 server therefore serves a
  * strict subset of what this build knows, and refusing to draw anything at
  * all because the alarm, operator, document, mail, calendar, artifact, app,
- * genesis or scene states have not shipped yet would be a worse lie than
- * saying so in one line. A server NEWER than this build is a different
- * matter — we do not know its vocabulary, so it stays a mismatch.
+ * genesis, scene or executive states have not shipped yet would be a worse
+ * lie than saying so in one line. A server NEWER than this build is a
+ * different matter — we do not know its vocabulary, so it stays a mismatch.
  */
 export const MIN_SUPPORTED_CONTRACT_VERSION = 2;
 
@@ -209,6 +214,18 @@ export const UI_STATES = [
   // cannot be driven at all (Unity without an entitlement, ADR-0088 §5) is
   // `unavailable` — a settled, honest posture, not an error.
   "scene.activity",
+  // v11 (M26 spec §6) — Executive Autonomy. Published at every transition of
+  // ONE durable run of a task graph, from the `executive_runs` /
+  // `executive_steps` rows alone, with `{run, step, state, done, total}`:
+  // the run's short id, the step id it is on (`s3`), the run's state in the
+  // §3 names, and how many of the graph's steps have finished out of how
+  // many there are. Carrying a multi-step job for the owner is the agent's
+  // own work, so it stays on the agent channel; a run is "tamamlandı" only
+  // when the publisher said `completed`, a `partial` run NAMES what is
+  // missing instead of rounding up to done (ADR-0089 §3), and a `paused`
+  // run is drawn still and calm rather than as an error — the owner stopped
+  // it, and it has not ended: "Devam" is still the other answer.
+  "executive.run",
 ] as const;
 
 export type KnownUiState = (typeof UI_STATES)[number];
@@ -622,6 +639,101 @@ export type SceneActivityMetadata = {
   objects?: number;
 };
 
+/** The one executive token (v11). Spelled here so every reader names the same wire word. */
+export const EXECUTIVE_RUN = "executive.run";
+
+/**
+ * Executive Autonomy's states (v11). One token: the spec publishes the
+ * whole plan → run → pause → resume → end loop as `executive.run` and names
+ * the run's state in `metadata.state`, so — as with the genesis and scene
+ * tokens — there is nothing else to enumerate. Kept as a list so a second
+ * token lands here and nowhere else.
+ */
+export const EXECUTIVE_STATES = [EXECUTIVE_RUN] as const;
+
+export type ExecutiveUiState = (typeof EXECUTIVE_STATES)[number];
+
+const EXECUTIVE_STATE_SET: ReadonlySet<string> = new Set(EXECUTIVE_STATES);
+
+/**
+ * True for a v11 executive state this build knows how to draw. Membership,
+ * not prefix: a newer server's `executive.step` must not be drawn as a run
+ * on the strength of a word this build cannot read.
+ */
+export function isExecutiveState(state: string): state is ExecutiveUiState {
+  return EXECUTIVE_STATE_SET.has(state);
+}
+
+/**
+ * One run's state as the publisher names it in `metadata.state` (M26 spec
+ * §3's run states, in the order a run passes through them):
+ *
+ *   planned   — the graph was validated; no step has started
+ *   running   — a step is being run
+ *   paused    — the owner said "Bekle": the running activity finished and no
+ *               new one starts. Settled and calm, NOT an error
+ *   completed — every step verified against its postcondition's evidence
+ *   partial   — the run ended with steps that did not verify; the spec
+ *               requires those to be NAMED and the synthesis to run over
+ *               what exists (§3). Its own state, never rounded up to done
+ *   cancelled — the owner stopped it; compensations ran, the rest is
+ *               `cancelled`. Settled
+ *   failed    — the run stopped on a failure
+ *
+ * A token outside this list is a word this build cannot read: it settles
+ * nothing, is shown as the plain token, and is above all never "tamamlandı".
+ * The list is held to the publisher's own in BOTH directions by a test on
+ * each side (`services/api` reads this file; `tests/uistate/executive-states.test.ts`
+ * reads the list here) — the M24/M25 defect was two halves that each proved
+ * their own belief while the words drifted apart.
+ */
+export const EXECUTIVE_RUN_STATES = ["planned", "running", "paused", "completed", "partial", "cancelled", "failed"] as const;
+
+export type ExecutiveRunState = (typeof EXECUTIVE_RUN_STATES)[number];
+
+const EXECUTIVE_RUN_STATE_SET: ReadonlySet<string> = new Set(EXECUTIVE_RUN_STATES);
+
+/**
+ * True for one of the seven words above. Membership, never a prefix: a
+ * publisher's `completed_with_errors` shares six letters with `completed`
+ * and means the opposite of what the owner would read into it.
+ */
+export function isExecutiveRunState(value: unknown): value is ExecutiveRunState {
+  return typeof value === "string" && EXECUTIVE_RUN_STATE_SET.has(value);
+}
+
+/**
+ * How many of a run's steps are finished, or how many there are: a whole,
+ * non-negative number or `null`. Never rounded into being — a count nobody
+ * published is not a count, and `0` is a real answer (a run whose first step
+ * has not finished), which is why it is not folded into `null`.
+ */
+export function asStepCount(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+/**
+ * The metadata an `executive.run` event may carry (M26 spec §6). Every key
+ * is optional on the wire and every value is a short token or a bounded
+ * count the bus already admits; nothing here is a goal's text, a step's
+ * output, a draft or an evidence ref — the run is a row on
+ * `/v1/executive/runs`, which the Cockpit reads from the list route, and
+ * the current step's explanation comes from the run's own route, never from
+ * the bus.
+ */
+export type ExecutiveRunMetadata = {
+  /** The run's short id, as the publisher names it. */
+  run?: string;
+  /** The step id the run is on (`s3`); absent while no step is current. */
+  step?: string;
+  /** The run's state in the §3 names. Absent while the publisher has nothing to say yet. */
+  state?: ExecutiveRunState;
+  /** How many steps have finished, when the publisher counted. */
+  done?: number;
+  /** How many steps the graph has, when the publisher counted. */
+  total?: number;
+};
+
 /**
  * A draft's lifecycle as the publisher names it in `metadata.draft_state`
  * (M21 spec §3 with the read-back step made explicit): prepared by the
@@ -797,6 +909,10 @@ export const SUBSYSTEMS = [
   // receipts, its voice corpus category and its ledger rows carry the same
   // name.
   "creative3d",
+  // v11: Executive Autonomy (M26 spec §5, §6) publishes `executive.run`; its
+  // receipts, its voice corpus category and its ledger rows carry the same
+  // name.
+  "executive",
 ] as const;
 
 export type Subsystem = (typeof SUBSYSTEMS)[number];
@@ -1040,6 +1156,19 @@ const STATE_KINDS: Record<KnownUiState, StateKind> = {
   // Cockpit's render image comes from that row. The claim never falls to
   // "finished", "doğrulandı" or idle.
   "scene.activity": "transient",
+  // v11. A durable run is the one family this table's `operation` kind was
+  // written for: "a stage of a long, watched operation", where minutes
+  // between transitions are normal. The publisher speaks once per step
+  // transition and a single step may take its whole `timeout_s` (≤ 15 min,
+  // M26 spec §1), so the twelve-second transient horizon would report a
+  // healthy research step as lost. It still expires on `EXECUTIVE_TTL_MS`
+  // below: a `running` from an hour ago is not a run that is running now.
+  // A `paused`, `completed` or `partial` is a standing fact about a run,
+  // but the bus claim is about the MOMENT it was published — the run itself
+  // is a ROW on `/v1/executive/runs`, which does not expire and is where
+  // "Duraklat / Devam / İptal" live. The claim never falls to "tamamlandı"
+  // or idle.
+  "executive.run": "operation",
 };
 
 /**
@@ -1279,6 +1408,58 @@ export const SCENE_UNITY_LICENCE = "lisans yok";
 export const MAX_SCENE_OBJECTS = 32;
 
 /**
+ * How long a run's state may be claimed as current without a newer event.
+ *
+ * Sixteen minutes, and the figure is about the GAP BETWEEN TWO EVENTS, not
+ * about the length of a run. The publisher speaks once per step transition,
+ * never on a heartbeat (M26 spec §3), so the longest silence a healthy run
+ * can produce is one step's own wall clock: `timeout_s ≤ 900` per step (§1)
+ * and every activity's timeout ≤ 15 min (§4). Fifteen minutes plus a
+ * minute of margin for the row write and the poll therefore covers the
+ * worst legitimate gap, and nothing longer is legitimate.
+ *
+ * The run's own ceiling — ≤ 60 min wall clock (§4) — is deliberately NOT
+ * the horizon: it is how long a run may live, not how long one claim about
+ * it stays true, and a 60-minute horizon would keep drawing "çalışıyor"
+ * for three quarters of an hour after a Cloud Core died mid-run. M25's two
+ * minutes would do the opposite and call a healthy ten-minute research step
+ * lost. Still a horizon: what the run said a while ago is last-known — the
+ * run itself is a ROW on `/v1/executive/runs`, which does not expire, and
+ * the Cockpit's chips come from that row. The publisher's own `ttl_s` beats
+ * this figure, as it beats every figure here.
+ */
+export const EXECUTIVE_TTL_MS = 960_000;
+
+/**
+ * The Core's one wording for an executive event whose metadata named
+ * nothing this build can read (v11): the plain name of the token, and
+ * nothing it did not say. Deliberately no verb: a run may be planned,
+ * running, paused, completed, partly done, cancelled or failed, and the
+ * bare line must be true of every one of them.
+ */
+export const EXECUTIVE_CAPTION_BARE = "Çok adımlı iş";
+
+/**
+ * The run's state in the owner's words, spelled once for the caption, the
+ * facts line and the Cockpit's rows alike (M26 spec §3, §5).
+ *
+ * "Tamamlandı" is said for exactly one state, `completed`, and no other
+ * word here contains it — `partial` is the spec's own "kısmen bitti"
+ * (§5's receipt) rather than anything ending in "tamamlandı", because a run
+ * that could not do part of what was asked must not read as one that
+ * finished. `paused` is worded as the owner's own act, never as a fault.
+ */
+export const EXECUTIVE_RUN_STATE_LABEL: Record<ExecutiveRunState, string> = {
+  planned: "planlandı",
+  running: "çalışıyor",
+  paused: "duraklatıldı",
+  completed: "tamamlandı",
+  partial: "kısmen bitti",
+  cancelled: "iptal edildi",
+  failed: "başarısız",
+};
+
+/**
  * Per-state lifetimes for v3, in ms, exactly as `docs/M18_3_LIVING_CORE_WAKE_ALARM_SPEC.md`
  * §7 states them.
  *
@@ -1308,6 +1489,7 @@ const STATE_TTL_MS: Partial<Record<KnownUiState, number>> = {
   "app.factory": APP_FACTORY_TTL_MS,
   "capability.genesis": GENESIS_TTL_MS,
   "scene.activity": SCENE_TTL_MS,
+  "executive.run": EXECUTIVE_TTL_MS,
 };
 
 /**
@@ -1399,6 +1581,9 @@ export function stateChannel(state: string): StateChannel {
   // the lab's channel, although the lab's pipeline does the building.
   // v10's `scene.activity` follows through `isSceneState`: driving Blender
   // or Unity for the owner is the agent working, not a fact about the room.
+  // v11's `executive.run` follows through `isExecutiveState`: carrying a
+  // multi-step job to an end IS the agent working, and the cockpit asks
+  // "which run" by membership rather than off a channel of its own.
   // v3 adds `display.*` to the room: whether the screens are lit is a fact
   // about the owner's desk, never about the agent's activity.
   if (state.startsWith("eye.") || state.startsWith("owner.") || state.startsWith("display."))

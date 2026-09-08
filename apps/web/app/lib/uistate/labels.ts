@@ -16,6 +16,7 @@ import {
   ARTIFACT_VERDICT_LABEL,
   CALENDAR_CAPTION_BARE,
   DOCUMENT_CAPTION_BARE,
+  EXECUTIVE_CAPTION_BARE,
   GENESIS_CAPTION_BARE,
   GENESIS_STATE_LABEL,
   MAIL_CAPTION_BARE,
@@ -31,6 +32,13 @@ import {
   sceneStatePhrase,
   sceneToolWord,
 } from "./scenes";
+import {
+  EXECUTIVE_RUN_STATE_LABEL,
+  type ExecutiveFacts,
+  type ExecutiveStage,
+  executiveStatePhrase,
+  executiveStepsPhrase,
+} from "./executive";
 import { type ArtifactFacts, type ArtifactStage, artifactFormatLabel } from "./artifacts";
 import {
   CALENDAR_PROPOSAL_STATE_LABEL,
@@ -81,6 +89,7 @@ export const KIND_LABEL: Record<CoreVisualKind, string> = {
   app_factory: APP_CAPTION_BARE,
   capability_genesis: GENESIS_CAPTION_BARE,
   scene_activity: SCENE_CAPTION_BARE,
+  executive_run: EXECUTIVE_CAPTION_BARE,
 };
 
 /**
@@ -158,6 +167,14 @@ export const KIND_DETAIL: Record<CoreVisualKind, string> = {
   // than claimed (§5) — nothing here controls a mouse in an editor.
   scene_activity:
     "Sahip için bir 3B sahne, aracın kendi betik arayüzüyle kuruluyor, değiştiriliyor, render alınıyor ya da araçtan geri okunuyor; araç, sahne, adım ve nesne sayısı yalnızca yayınlandığı kadar söylenir. Geri okunup istenenle karşılaştırılmamış bir sahne doğrulanmış sayılmaz; sürülemeyen bir araç için denetim kurulmaz, yapılamadığı söylenir. İlerleme bildirilmez.",
+  // M26: a multi-step job the owner asked for is being carried across the
+  // families — planned, run step by step, paused and resumed on the owner's
+  // word, and ended honestly. The sentence says what "done" means for a run
+  // (ADR-0089 §3: only `completed` is "tamamlandı", a partial run names what
+  // is missing) and that the owner keeps every lever — and that no step of
+  // one can send, pay, delete or publish anything (§4).
+  executive_run:
+    "Sahibin istediği çok adımlı bir iş yürütülüyor: adımlar sırayla çalıştırılıyor, sahip istediği an duraklatabiliyor, sürdürebiliyor ya da iptal edebiliyor; iş, adım ve adım sayısı yalnızca yayınlandığı kadar söylenir. Yalnızca her adımı doğrulanmış bir iş tamamlandı sayılır; eksik kalan iş kısmen bitti denip nesi eksik olduğu söylenir. Hiçbir adım sahip onayı olmadan posta göndermez, ödeme yapmaz, silmez, yayımlamaz.",
 };
 
 /**
@@ -316,6 +333,10 @@ export const STATE_LABEL: Record<KnownUiState, string> = {
   // whole loop from "sahne kuruluyor" to "doğrulandı", and the step is said
   // only from its published metadata.
   "scene.activity": SCENE_CAPTION_BARE,
+  // v11 — Executive Autonomy (M26). No verb, for the same reason: one token
+  // covers a run from "planlandı" to "tamamlandı", and the state is said
+  // only from its published metadata.
+  "executive.run": EXECUTIVE_CAPTION_BARE,
 };
 
 export function stateLabel(state: string): string {
@@ -344,6 +365,7 @@ export const SUBSYSTEM_LABEL: Record<string, string> = {
   apps: "Uygulamalar",
   genesis: "Yeni yetenek",
   creative3d: "3B sahne",
+  executive: "Görevler",
 };
 
 export function subsystemLabel(subsystem: string): string {
@@ -497,6 +519,7 @@ const CONTRACT_ADDITIONS: Record<number, string> = {
   8: "uygulama üretim durumu",
   9: "yeni yetenek durumu",
   10: "3B sahne durumu",
+  11: "çok adımlı iş durumu",
 };
 
 /**
@@ -864,4 +887,65 @@ export function sceneStateLine(
   object: string | null = null,
 ): string {
   return sceneStatePhrase(facts, object) ?? sceneStateWord(facts.stateToken);
+}
+
+// -------------------------------------------------- v11: Executive Autonomy
+
+export const EXECUTIVE_LABEL: Record<ExecutiveStage, string> = {
+  active: EXECUTIVE_CAPTION_BARE,
+  none: "Süren bir iş bildirilmedi",
+};
+
+/**
+ * The Görevler panel's empty sentence — the spec's own words (M26 §6): the
+ * list route answered, and holds no run.
+ */
+export const EXECUTIVE_EMPTY = "Devam eden bir iş yok.";
+
+/** The Görevler panel's line when the bus never carried a run event: not "no runs", "nothing reported". */
+export const EXECUTIVE_UNTOLD = "Çok adımlı iş etkinliği bildirilmedi.";
+
+/** Said beside a partial run whose step counts nobody published: the one state where "how much got done" is the question. */
+export const EXECUTIVE_STEPS_UNTOLD = "adım sayısı bildirilmedi";
+
+/** Said for a partial run whose missing steps the route did not name: what is missing is unknown, not nothing. */
+export const EXECUTIVE_MISSING_UNTOLD = "eksik adımlar bildirilmedi";
+
+/**
+ * A run state token as one word: the spec's word for the seven this build
+ * knows, the token verbatim for one it does not (still a published fact),
+ * and the statement that none came.
+ */
+export function executiveStateWord(token: string | null): string {
+  if (token === null) return "durum bildirilmedi";
+  return (EXECUTIVE_RUN_STATE_LABEL as Record<string, string>)[token] ?? token;
+}
+
+/**
+ * The published run facts on one line, each one either what the publisher
+ * sent or the statement that it did not send it: "iş: r1 · adım: s3 ·
+ * durum: çalışıyor · 3/5 adım". The counts are printed only when BOTH came,
+ * and their absence is said only beside `partial` — the one state whose
+ * whole meaning is how much of the job exists. A `running` that counted
+ * nothing has nothing to say about totals, and saying so there would be
+ * noise rather than a fact.
+ */
+export function executiveFactsLine(facts: ExecutiveFacts): string {
+  const parts = [
+    facts.run ? `iş: ${facts.run}` : "iş bildirilmedi",
+    facts.step ? `adım: ${facts.step}` : "adım bildirilmedi",
+    facts.stateToken ? `durum: ${executiveStateWord(facts.stateToken)}` : "durum bildirilmedi",
+  ];
+  const steps = executiveStepsPhrase(facts.done, facts.total);
+  if (steps) parts.push(steps);
+  else if (facts.state === "partial") parts.push(EXECUTIVE_STEPS_UNTOLD);
+  return parts.join(" · ");
+}
+
+/** The state with what the publisher attached to it, for a row or a caption, or the statement that none came. */
+export function executiveStateLine(
+  facts: Pick<ExecutiveFacts, "state" | "stateToken">,
+  missing: readonly string[] = [],
+): string {
+  return executiveStatePhrase(facts, missing) ?? executiveStateWord(facts.stateToken);
 }

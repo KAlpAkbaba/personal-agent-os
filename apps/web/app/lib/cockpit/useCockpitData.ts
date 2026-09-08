@@ -54,6 +54,7 @@ import {
 import { type PendingDraft, type PendingProposal, fetchPendingDrafts, fetchPendingProposals } from "./approvals";
 import { type AppProjectRow, fetchApps } from "./apps";
 import { type ArtifactRow, fetchArtifacts } from "./artifacts";
+import { type ExecutiveRunRow, fetchExecutiveRuns } from "./executive";
 import { type GenesisRunRow, fetchGenesisRuns } from "./genesis";
 import { type SceneRow, fetchScenes } from "./scenes";
 
@@ -123,6 +124,15 @@ export type CockpitData = {
    * themselves are on the bus, not here.
    */
   scenes: Loaded<SceneRow[]>;
+  /**
+   * M26 §6: the executive runs, from `/v1/executive/runs`, each with the
+   * owner's words for it, its state, the step it is on and how many of its
+   * steps are done. The Cloud Core half lands on a parallel track (ADR-0089
+   * §8); until it does the route answers "absent", which the panel says in
+   * words. The run's transitions are on the bus, and the current step's
+   * explanation is the run's OWN route — neither is here.
+   */
+  executiveRuns: Loaded<ExecutiveRunRow[]>;
 };
 
 const INITIAL: CockpitData = {
@@ -148,6 +158,7 @@ const INITIAL: CockpitData = {
   apps: { kind: "loading" },
   genesisRuns: { kind: "loading" },
   scenes: { kind: "loading" },
+  executiveRuns: { kind: "loading" },
 };
 
 export function useCockpitData(enabled = true): { data: CockpitData; refresh: () => void } {
@@ -182,6 +193,7 @@ export function useCockpitData(enabled = true): { data: CockpitData; refresh: ()
         apps,
         genesisRuns,
         scenes,
+        executiveRuns,
       ] = await Promise.all([
         fetchResearchTasks(),
         // Same refresh, no extra timer: the focus changes when the list does.
@@ -206,6 +218,7 @@ export function useCockpitData(enabled = true): { data: CockpitData; refresh: ()
         fetchApps(),
         fetchGenesisRuns(),
         fetchScenes(),
+        fetchExecutiveRuns(),
       ]);
       if (stopped.current) return;
       setData({
@@ -231,6 +244,7 @@ export function useCockpitData(enabled = true): { data: CockpitData; refresh: ()
         apps,
         genesisRuns,
         scenes,
+        executiveRuns,
       });
     } finally {
       inFlight.current = false;
