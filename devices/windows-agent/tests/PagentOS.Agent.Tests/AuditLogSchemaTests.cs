@@ -128,17 +128,27 @@ public sealed class AuditLogSchemaTests : IDisposable
         var audit = new AuditLog(path);
         audit.Write("first", status: "ok");
 
-        var released = new TaskCompletionSource();
+        // The reader is released on a SIGNAL, never after a fixed sleep. An earlier version
+        // held the file for 150 ms and assumed the writer's bounded retry would outlast it;
+        // on a loaded runner the sleep overshot the whole retry budget and the row really was
+        // lost (CI run 34232628964). The product bound stays deliberately tight — an audited
+        // code path may not be blocked for long — so the TEST is what must be deterministic.
+        var opened = new TaskCompletionSource();
+        var release = new TaskCompletionSource();
         var holder = Task.Run(async () =>
         {
             // Exactly what File.ReadAllText does: open for read, share read only.
             using var reader = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-            released.SetResult();
-            await Task.Delay(150);
+            opened.SetResult();
+            await release.Task;
         });
-        await released.Task;
+        await opened.Task;
 
-        audit.Write("second", status: "ok");
+        var write = Task.Run(() => audit.Write("second", status: "ok"));
+        // Let the writer meet the sharing violation and enter its retry loop, then let go.
+        await Task.Delay(30);
+        release.SetResult();
+        await write;
         await holder;
 
         Assert.Equal(0, audit.FailedWrites);
