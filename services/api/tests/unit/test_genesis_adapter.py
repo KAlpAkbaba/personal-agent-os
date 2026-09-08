@@ -63,9 +63,7 @@ def test_rendered_layout_matches_the_declared_expected_layout(tmp_path):
     )
     assert {layout.module_path.name} == _names(EXPECTED_LAYOUT["src_files"])
     assert {layout.test_path.name} == _names(EXPECTED_LAYOUT["tests_files"])
-    assert {layout.eval_path.name, layout.cases_path.name} == _names(
-        EXPECTED_LAYOUT["evals_files"]
-    )
+    assert {layout.eval_path.name, layout.cases_path.name} == _names(EXPECTED_LAYOUT["evals_files"])
 
 
 def test_generation_is_deterministic(tmp_path):
