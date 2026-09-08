@@ -137,6 +137,17 @@ class Intent(StrEnum):
     CALENDAR_COMMIT = "calendar_commit"  # Onayla. / Tamam, ekle. (only with a proposal read back)
     DISCARD = "discard"  # Gönderme. / Vazgeç. — whichever of draft/proposal is pending
 
+    # M22 (docs/M22_ARTIFACT_FACTORY_SPEC.md §5): the Artifact Factory. Every one of
+    # these targets app.artifacts through tools_artifacts - never a second file-making
+    # path. ARTIFACT_CREATE also carries a deictic format request against an artifact
+    # that already exists ("Bunu PDF yap") - the router names only kind/title/numbers;
+    # the model's own tool choice (artifact.create vs artifact.render) is not this
+    # enum's business (contract §2 fixes the INTENT, never which tool answers it).
+    ARTIFACT_CREATE = "artifact_create"  # Bana bir bütçe tablosu yap / Bunu PDF yap
+    ARTIFACT_OPEN = "artifact_open"  # Bunu aç / Son ürettiğin dosyayı aç
+    ARTIFACT_LIST = "artifact_list"  # Neler ürettin?
+    ARTIFACT_VALIDATE = "artifact_validate"  # Bu dosya doğru mu?
+
     NONE = "none"
 
 
@@ -201,6 +212,10 @@ CAPABILITY_BY_INTENT: dict[Intent, str] = {
     Intent.CALENDAR_PROPOSE: "calendar.propose",
     Intent.CALENDAR_READ_PROPOSAL: "calendar.read_proposal",
     Intent.CALENDAR_COMMIT: "calendar.commit",
+    # M22 (spec §5): making a file and fetching+opening one on the owner's machine are
+    # both real mutations, the same class alarm.create/mail.draft already get.
+    Intent.ARTIFACT_CREATE: "artifact.create",
+    Intent.ARTIFACT_OPEN: "artifact.open",
 }
 
 #: QUERY intents that name a tool rather than being answered conversationally (contract §2:
@@ -235,6 +250,11 @@ QUERY_TOOL_BY_INTENT: dict[Intent, str] = {
     Intent.MAIL_THREAD: "mail.thread",
     Intent.CALENDAR_AGENDA: "calendar.agenda",
     Intent.CALENDAR_FIND_SLOT: "calendar.find_slot",
+    # M22 (spec §5): listing what was made and re-checking it mutate nothing the owner
+    # can see (re-validation writes bookkeeping only) - the same query class the
+    # document/mail families already get for the identical reason.
+    Intent.ARTIFACT_LIST: "artifact.list",
+    Intent.ARTIFACT_VALIDATE: "artifact.validate",
 }
 
 
@@ -424,6 +444,27 @@ class ResolvedIntent:
     #: For the calendar reschedule shape ("Bunu bir saat ertele"), the event the owner's
     #: WORDS pointed at: "current" | None.
     calendar_ref: str | None = None
+    #: M22 (docs/M22_ARTIFACT_FACTORY_SPEC.md §5): for the artifact family, which
+    #: artifact the owner's WORDS pointed at: "current" | "previous" | None. ``None``
+    #: means the words named neither and the tool falls back to its own default
+    #: ("current") - the same "owner's words win only when they actually said
+    #: something" rule ``document_ref``/``mail_ref`` already follow.
+    artifact_ref: str | None = None
+    #: For ARTIFACT_CREATE, the kind word the owner's WORDS carried ("tablo" ->
+    #: "spreadsheet", "belge"/"word" -> "document", "sunum"/"slayt" -> "presentation",
+    #: "liste"/"csv" -> "dataset", "sayfa" -> "page"), or None when no kind word was
+    #: said at all ("Bunu PDF yap" against an artifact that already exists).
+    artifact_kind: str | None = None
+    #: For ARTIFACT_CREATE, the title the owner's WORDS carried (the text between any
+    #: leading filler and the create verb, minus the kind word itself), or None when
+    #: nothing recognisable remains - a best-effort convenience the tool prefers only
+    #: when non-empty, never a substitute for the model's own title.
+    artifact_title: str | None = None
+    #: For ARTIFACT_CREATE, every number the owner's WORDS actually said ("kira 12000,
+    #: maaş 45000" -> [12000.0, 45000.0]), the closed set ``ArtifactSpec`` validates the
+    #: model's own ``spec`` argument against (the "never invented" rule) - None when no
+    #: number was said at all.
+    spoken_numbers: list[float] | None = None
 
     def __post_init__(self) -> None:
         if not self.klass:
@@ -459,6 +500,10 @@ class ResolvedIntent:
             "extensions": list(self.extensions) if self.extensions else None,
             "mail_ref": self.mail_ref,
             "calendar_ref": self.calendar_ref,
+            "artifact_ref": self.artifact_ref,
+            "artifact_kind": self.artifact_kind,
+            "artifact_title": self.artifact_title,
+            "spoken_numbers": list(self.spoken_numbers) if self.spoken_numbers else None,
         }
 
     @property
@@ -1751,6 +1796,207 @@ def _calendar_commit_match(tokens: tuple[str, ...]) -> str | None:
     return None
 
 
+# --------------------------------------------------------- M22: the Artifact Factory
+#
+# Built on the SAME token/stem primitives as every intent above — no second Turkish
+# pattern table (module docstring's own rule). The router extracts only the
+# DETERMINISTIC part (spec §5): which kind word was said, the title text around it, and
+# every bare number ("kalem tutar" pairs read the same way the free-text scan already
+# reads "yüzde 8 arttı" -> 8.0 in app.artifacts.spec). The cognitive backend fills the
+# rest of the ``spec`` argument; this module never builds one.
+
+_ARTIFACT_CREATE_VERB_STEMS: Final[tuple[str, ...]] = (
+    "yap",
+    "yapsana",
+    "yapar",
+    "hazırla",
+    "hazirla",
+    "hazırlar",
+    "hazirlar",
+    "oluştur",
+    "olustur",
+    "oluşturur",
+    "olusturur",
+    "üret",
+    "uret",
+    "üretir",
+    "uretir",
+)
+#: Interrogative forms of the SAME verb stems ("ürettin", "oluşturdun", "yaptın") — these
+#: must never match the create verb (a past-tense question is not an imperative), so
+#: ARTIFACT_LIST is checked FIRST and these exact forms are excluded from the create
+#: check below by requiring a PRESENT/IMPERATIVE form the interrogative never takes.
+_ARTIFACT_OPEN_VERB_FORMS: Final[tuple[str, ...]] = (
+    "aç",
+    "açsana",
+    "açar",
+    "açabilir",
+    "açıver",
+    "ac",
+    "acsana",
+    "acar",
+    "acabilir",
+    "aciver",
+)
+_ARTIFACT_DEICTIC_WORDS: Final[tuple[str, ...]] = ("bunu", "şunu", "sunu", "onu")
+_ARTIFACT_PREVIOUS_WORDS: Final[tuple[str, ...]] = ("önceki", "onceki")
+_ARTIFACT_LAST_PRODUCED_STEMS: Final[tuple[str, ...]] = (
+    "üretti",
+    "uretti",
+    "oluştur",
+    "olustur",
+    "yap",
+)
+_ARTIFACT_FILE_NOUN_STEMS: Final[tuple[str, ...]] = ("dosya", "çıktı", "cikti", "belge")
+_ARTIFACT_LIST_QUESTION_WORDS: Final[tuple[str, ...]] = ("neler", "ne", "hangi")
+_ARTIFACT_LIST_VERB_FORMS: Final[tuple[str, ...]] = (
+    "ürettin",
+    "urettin",
+    "oluşturdun",
+    "olusturdun",
+    "yaptın",
+    "yaptin",
+)
+_ARTIFACT_VALIDATE_WORD_STEMS: Final[tuple[str, ...]] = ("doğru", "dogru")
+_ARTIFACT_QUESTION_PARTICLES: Final[tuple[str, ...]] = ("mu", "mü", "mı", "mi")
+
+#: kind-noun stem -> ``ArtifactSpec`` kind (module: "tablo"/"excel" -> spreadsheet,
+#: "belge"/"word"/"doküman" -> document, "sunum"/"slayt" -> presentation, "liste"/"csv"
+#: -> dataset, "sayfa" -> page). Order is the FIRST matching token in the utterance, not
+#: this tuple's own order.
+_ARTIFACT_KIND_STEMS: Final[tuple[tuple[str, str], ...]] = (
+    ("tablo", "spreadsheet"),
+    ("excel", "spreadsheet"),
+    ("belge", "document"),
+    ("dokuman", "document"),
+    ("doküman", "document"),
+    ("word", "document"),
+    ("sunum", "presentation"),
+    ("slayt", "presentation"),
+    ("liste", "dataset"),
+    ("csv", "dataset"),
+    ("sayfa", "page"),
+)
+
+_ARTIFACT_TITLE_LEADING_FILLERS: Final[frozenset[str]] = frozenset(
+    {"bana", "bir", "lütfen", "lutfen", "şunu", "sunu"}
+)
+
+_ARTIFACT_TITLE_VERB_RE = re.compile(
+    r"(yap\w*|hazırla\w*|hazirla\w*|oluştur\w*|olustur\w*|üret\w*|uret\w*)", re.IGNORECASE
+)
+
+
+def _artifact_kind_from_tokens(tokens: tuple[str, ...]) -> str | None:
+    for tok in tokens:
+        for stem, kind in _ARTIFACT_KIND_STEMS:
+            if tok.startswith(stem):
+                return kind
+    return None
+
+
+def _extract_artifact_title(utterance: str) -> str | None:
+    """The text between any leading filler and the create verb, minus a trailing kind
+    word ("Bana bir bütçe TABLOSU yap" -> "bütçe") - a best-effort convenience the tool
+    prefers only when non-empty (module docstring: the model still names its own title,
+    and either may win when this finds nothing worth carrying)."""
+    if not utterance:
+        return None
+    head = utterance.split(":", 1)[0]
+    match = _ARTIFACT_TITLE_VERB_RE.search(head)
+    before = head[: match.start()] if match else head
+    before = before.strip(" ,.'\"")
+    words = [w for w in before.split() if w]
+    while words and turkish_casefold(words[0]) in _ARTIFACT_TITLE_LEADING_FILLERS:
+        words.pop(0)
+    if words and any(
+        turkish_casefold(words[-1]).startswith(stem) for stem, _kind in _ARTIFACT_KIND_STEMS
+    ):
+        words.pop()
+    title = " ".join(words).strip(" ,.'\"")
+    return title or None
+
+
+def _extract_artifact_numbers(utterance: str) -> list[float] | None:
+    """Every number the owner's WORDS actually said ("kira 12000, maaş 45000" ->
+    [12000.0, 45000.0]) — bare digit runs scanned off the RAW utterance (never the
+    filtered token list: a number is a number whatever else surrounds it), the same
+    "never invented" closed set ``ArtifactSpec`` itself validates the model's ``spec``
+    argument against. ``None`` when the owner said no number at all."""
+    if not utterance:
+        return None
+    found = [float(m.group().replace(",", ".")) for m in _NUMBER_TOKEN_RE.finditer(utterance)]
+    return found or None
+
+
+_NUMBER_TOKEN_RE = re.compile(r"\d+(?:[.,]\d+)?")
+
+
+def _artifact_create_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Bana bir bütçe tablosu yap: ...", "Toplantı notlarını Word belgesi yap", "Üç
+    slaytlık bir sunum hazırla: ..." (a genuinely new artifact — a kind word plus the
+    create verb), and "Bunu PDF yap" (a deictic FORMAT request against an artifact that
+    already exists — the deictic word plus the create verb, with no kind word at all;
+    ``artifact_kind`` stays None and the model's own ``format`` argument, on whichever
+    tool it picks, carries the rest)."""
+    if _has_exact(tokens, *_ARTIFACT_CREATE_VERB_STEMS) is None:
+        return None
+    # The deictic word wins FIRST: "kind" words double as FORMAT words ("Excel"/"Word"
+    # name a spreadsheet/document kind AND an xlsx/docx format), and a deictic pronoun
+    # is the unambiguous signal that the owner is pointing at something that already
+    # exists ("Bunu Excel yap" = convert the current artifact), never a request to
+    # build a brand new one from scratch.
+    if _has_exact(tokens, *_ARTIFACT_DEICTIC_WORDS):
+        return "bunu yap"
+    if _artifact_kind_from_tokens(tokens) is not None:
+        return "yap"
+    return None
+
+
+def _artifact_list_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Neler ürettin?", "Ne oluşturdun?", "Hangi dosyaları yaptın?" (spec §5) — an
+    INTERROGATIVE past-tense form of the create verb, checked before
+    ``_artifact_create_match`` so the two families' verb forms can never collide (an
+    imperative and a question share no token here)."""
+    if _has_exact(tokens, *_ARTIFACT_LIST_QUESTION_WORDS) is None:
+        return None
+    if _has_exact(tokens, *_ARTIFACT_LIST_VERB_FORMS) is None:
+        return None
+    return "neler ürettin"
+
+
+def _artifact_validate_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Bu dosya doğru mu?", "Rakamlar doğru mu?" (spec §5) — "doğru" plus a question
+    particle; never gated on a file noun (the fixture's own examples say "bu dosya" but
+    a bare "Doğru mu?" against the current artifact focus is the same question)."""
+    if _has(tokens, *_ARTIFACT_VALIDATE_WORD_STEMS) is None:
+        return None
+    if _has_exact(tokens, *_ARTIFACT_QUESTION_PARTICLES) is None:
+        return None
+    return "doğru mu"
+
+
+def _artifact_open_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Bunu aç.", "Son ürettiğin dosyayı aç.", "Önceki dosyayı aç." (spec §5) — the
+    open verb plus a deictic pronoun, a file noun, or "önceki"/"son ürettiğin" naming
+    the artifact by recency; resolves even with nothing ever produced (the router names
+    the INTENT, the tool's own focus lookup is what may come back empty — module
+    docstring: a clarification is then the honest answer, never a guess)."""
+    if _has_exact(tokens, *_ARTIFACT_OPEN_VERB_FORMS) is None:
+        return None
+    if _has_exact(tokens, *_ARTIFACT_DEICTIC_WORDS):
+        return "bunu aç"
+    if _has_exact(tokens, *_ARTIFACT_PREVIOUS_WORDS):
+        return "önceki aç"
+    if _has(tokens, *_ARTIFACT_FILE_NOUN_STEMS) or _has(tokens, *_ARTIFACT_LAST_PRODUCED_STEMS):
+        return "dosyayı aç"
+    return None
+
+
+def _artifact_ref_for(matched: str) -> str | None:
+    return "previous" if matched == "önceki aç" else None
+
+
 # ------------------------------------------------- research interaction classes
 
 #: A research word in any Turkish inflection: "araştır", "araştırma", "araştırmayı",
@@ -2743,6 +2989,46 @@ def resolve_intent(
     if mail_inbox_matched := _mail_inbox_match(tokens):
         return ResolvedIntent(
             Intent.MAIL_INBOX, scope=SCOPE_CONVERSATION, matched=mail_inbox_matched, **base
+        )
+
+    # 0h. M22 (docs/M22_ARTIFACT_FACTORY_SPEC.md §5): the Artifact Factory, alongside the
+    #     rest of the M19/M20/M21 device/account-reading family, for the same reason the
+    #     mail/calendar block above is here: none of these words mean anything else this
+    #     resolver already claimed higher up. ARTIFACT_LIST is checked before
+    #     ARTIFACT_CREATE because the two share verb stems (an interrogative "ürettin"
+    #     vs. an imperative "üret") that must never collide; ARTIFACT_VALIDATE and
+    #     ARTIFACT_OPEN own their own vocabulary ("doğru mu", "aç") that nothing above
+    #     claims.
+    if list_matched := _artifact_list_match(tokens):
+        return ResolvedIntent(
+            Intent.ARTIFACT_LIST, scope=SCOPE_CONVERSATION, matched=list_matched, **base
+        )
+    if validate_matched := _artifact_validate_match(tokens):
+        return ResolvedIntent(
+            Intent.ARTIFACT_VALIDATE,
+            scope=SCOPE_CONVERSATION,
+            matched=validate_matched,
+            artifact_ref="current",
+            **base,
+        )
+    if open_matched := _artifact_open_match(tokens):
+        return ResolvedIntent(
+            Intent.ARTIFACT_OPEN,
+            scope=SCOPE_CONVERSATION,
+            matched=open_matched,
+            artifact_ref=_artifact_ref_for(open_matched),
+            **base,
+        )
+    if create_matched := _artifact_create_match(tokens):
+        return ResolvedIntent(
+            Intent.ARTIFACT_CREATE,
+            scope=SCOPE_CONVERSATION,
+            matched=create_matched,
+            artifact_ref="current" if create_matched == "bunu yap" else None,
+            artifact_kind=_artifact_kind_from_tokens(tokens),
+            artifact_title=_extract_artifact_title(text),
+            spoken_numbers=_extract_artifact_numbers(text),
+            **base,
         )
 
     # 1. stop — top priority in any state, including TOOL_RUNNING progress.

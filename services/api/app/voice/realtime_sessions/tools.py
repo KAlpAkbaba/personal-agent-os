@@ -49,6 +49,10 @@ from app.voice.realtime import RealtimeState
 from app.voice.realtime_sessions import actions
 from app.voice.realtime_sessions.sideband import SB_NARRATION_CURSOR, SB_PLAN_CHANGED
 from app.voice.realtime_sessions.tools_ambient import register_ambient_tools
+from app.voice.realtime_sessions.tools_artifacts import (
+    ARTIFACT_TOOL_NAMES,
+    register_artifacts_tools,
+)
 from app.voice.realtime_sessions.tools_calendar import (
     CALENDAR_TOOL_NAMES,
     register_calendar_tools,
@@ -538,6 +542,12 @@ DOCUMENT_CLARIFYING_TOOLS: frozenset[str] = frozenset(DOCUMENT_TOOL_NAMES)
 MAIL_CLARIFYING_TOOLS: frozenset[str] = frozenset(MAIL_TOOL_NAMES)
 CALENDAR_CLARIFYING_TOOLS: frozenset[str] = frozenset(CALENDAR_TOOL_NAMES)
 
+#: M22 (docs/M22_ARTIFACT_FACTORY_SPEC.md §5): every artifact tool may answer "Hangi
+#: dosya?" / "Dönebileceğim önceki bir dosya yok efendim." rather than a receipt — the
+#: same non-research extension of the ADR-0077 contract the operator/document/mail
+#: families already get, never a second copy of it.
+ARTIFACT_CLARIFYING_TOOLS: frozenset[str] = frozenset(ARTIFACT_TOOL_NAMES)
+
 
 def result_is_research_bound(tool_name: str, result: Any) -> bool:
     """Whether a handler's result falls under the research result contract (ADR-0077)."""
@@ -579,6 +589,7 @@ def terminal_status_for(tool_name: str, result: Any) -> tuple[str, str | None]:
             | DOCUMENT_CLARIFYING_TOOLS
             | MAIL_CLARIFYING_TOOLS
             | CALENDAR_CLARIFYING_TOOLS
+            | ARTIFACT_CLARIFYING_TOOLS
             and isinstance(result, dict)
             and result.get("status") == RESULT_NEEDS_CLARIFICATION
             and str(result.get("speech") or "").strip()
@@ -1622,6 +1633,8 @@ def default_registry() -> ToolRegistry:
     # M21 (docs/M21_MAIL_CALENDAR_SPEC.md §4): Mail & Calendar's own voice tools.
     register_mail_tools(reg)
     register_calendar_tools(reg)
+    # M22 (docs/M22_ARTIFACT_FACTORY_SPEC.md §5): the Artifact Factory's voice tools.
+    register_artifacts_tools(reg)
     return reg
 
 

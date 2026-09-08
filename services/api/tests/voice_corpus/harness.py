@@ -36,6 +36,7 @@ from app.alarms.sequence import WakeSequence
 from app.alarms.tr_time import parse_when_struct
 from app.ambient import service as ambient_service
 from app.ambient.holdoff import HoldoffRegistry, set_holdoffs
+from app.artifacts import factory as artifact_factory
 from app.artifacts import service as artifact_service
 from app.artifacts.models import (
     Artifact,
@@ -46,6 +47,7 @@ from app.artifacts.models import (
     TaskRun,
 )
 from app.artifacts.runtime import ArtifactRuntime
+from app.artifacts.spec import ArtifactSpec
 from app.broker import service as broker_service
 from app.broker.models import AuditEvent, Device, DeviceCommand, DeviceSession, EnrollmentToken
 from app.broker.runtime import BrokerRuntime, DeviceConnection
@@ -72,8 +74,10 @@ from app.mail.providers import FakeMailSender
 from app.mail.service import MailService
 from app.main import create_app
 from app.narration.models import NarrationSession, PronunciationEntry
+from app.object_store import InMemoryObjectStore
 from app.operator import focus as operator_focus
 from app.operator.models import (
+    FOCUS_KIND_ARTIFACT,
     FOCUS_KIND_DOCUMENT,
     FOCUS_KIND_EVENT,
     FOCUS_KIND_FILE,
@@ -105,12 +109,14 @@ from app.voice.realtime_sessions.runtime import RealtimeVoiceRuntime
 from app.voice.realtime_sessions.sideband import RecordingSideband
 from app.voice.simulator import SimulatedRealtimeProvider
 from tests.alarms_support import FakeDeviceAction, happy_device_results
+from tests.artifacts_support import artifact_capability_results
 from tests.documents_support import document_capability_results, extract_result
 from tests.identity_support import IDENTITY_TABLES
 from tests.mail_calendar_support import build_fake_calendar_provider, build_fake_mail_provider
 from tests.voice_corpus.corpus import (
     CTX_ALARM_RINGING,
     CTX_ALARM_SCHEDULED,
+    CTX_ARTIFACT_FOCUSED,
     CTX_COMMON_POINTS_FOCUSED,
     CTX_DOCUMENT_FOCUSED,
     CTX_DOCX_FOCUSED,
@@ -454,6 +460,62 @@ class Harness:
                     label=".env",
                     source="test_context",
                 )
+        elif context == CTX_ARTIFACT_FOCUSED:
+            # M22 (docs/M22_ARTIFACT_FACTORY_SPEC.md §5): a REAL artifact, made through
+            # the real factory against the harness's in-memory object store — never a
+            # bare focus row pointing at nothing, the same "genuine fixture, not a
+            # sentinel" discipline CTX_DOCUMENT_FOCUSED already uses. An older row (a
+            # one-slide presentation) then the current one (the budget spreadsheet, an
+            # xlsx AND a csv render, both valid) so "önceki dosyayı aç" resolves to
+            # something real too.
+            artifacts_runtime = self.runtime.artifacts
+            with self.factory() as db:
+                older = artifact_factory.create(
+                    db,
+                    artifacts_runtime.store,
+                    spec=ArtifactSpec.model_validate(
+                        {
+                            "kind": "presentation",
+                            "title": "Q3 Sunum",
+                            "slides": [{"title": "Giriş", "bullets": ["Genel bakış"]}],
+                        }
+                    ),
+                )
+                operator_focus.set_focus(
+                    db,
+                    FOCUS_KIND_ARTIFACT,
+                    str(older.artifact_id),
+                    label=older.title,
+                    source="test_context",
+                )
+                current = artifact_factory.create(
+                    db,
+                    artifacts_runtime.store,
+                    spec=ArtifactSpec.model_validate(
+                        {
+                            "kind": "spreadsheet",
+                            "title": "Bütçe 2026",
+                            "sheets": [
+                                {
+                                    "name": "Özet",
+                                    "columns": ["Kalem", "Tutar"],
+                                    "rows": [["Kira", 12000], ["Maaş", 45000]],
+                                    "totals": {"Tutar": "sum"},
+                                }
+                            ],
+                            "spoken_numbers": [12000, 45000],
+                        }
+                    ),
+                )
+                operator_focus.set_focus(
+                    db,
+                    FOCUS_KIND_ARTIFACT,
+                    str(current.artifact_id),
+                    label=current.title,
+                    source="test_context",
+                )
+            self.ids["artifact:current"] = str(current.artifact_id)
+            self.ids["artifact:previous"] = str(older.artifact_id)
         elif context == CTX_OPERATOR_RUNNING:
             with self.factory() as db:
                 operator_focus.set_focus(
@@ -599,6 +661,11 @@ def build_harness() -> Harness:
     artifacts = ArtifactRuntime(settings)
     artifacts._engine = engine
     artifacts._session_factory = factory
+    # M22 (docs/M22_ARTIFACT_FACTORY_SPEC.md §5): artifact.create/render/validate need a
+    # real ObjectStore to write render bytes to; an in-memory one keeps this suite fully
+    # offline (task brief: no network) the same way test_artifact_wiring.py's own client
+    # fixture does. Every prior corpus case never touched ``.store`` at all.
+    artifacts._store = InMemoryObjectStore()
     app.state.artifacts = artifacts
     sim = SimulatedRealtimeProvider()
     runtime = RealtimeVoiceRuntime(
@@ -611,7 +678,13 @@ def build_harness() -> Harness:
     )
     app.state.voice_realtime = runtime
 
-    device = FakeDeviceAction(results={**happy_device_results(), **document_capability_results()})
+    device = FakeDeviceAction(
+        results={
+            **happy_device_results(),
+            **document_capability_results(),
+            **artifact_capability_results(),
+        }
+    )
     sequence = WakeSequence(device_action=device, tts=FakeTTSProvider())
     statuses = DeviceStatusRegistry()
     # The evolution engine gets its OWN in-memory database: on a StaticPool SQLite engine
@@ -788,12 +861,75 @@ def contract_arguments(case: UtteranceCase, tool: str, resolved: dict) -> dict:
         args = {"body": text}
     elif tool in ("calendar.agenda", "calendar.find_slot", "calendar.propose"):
         args = {"when_spoken": text}
-    # mail.inbox / mail.read / mail.thread / mail.edit_draft / mail.read_draft /
-    # mail.send / mail.discard / calendar.read_proposal / calendar.commit /
-    # calendar.discard need no default argument at all — every one of them resolves its
-    # target from the durable focus/read-back state, never from a wire argument.
+    elif tool == "artifact.create":
+        kind = resolved.get("artifact_kind") or "document"
+        title = resolved.get("artifact_title") or "Adsız"
+        numbers = resolved.get("spoken_numbers")
+        args = {"kind": kind, "title": title, "spec": _default_artifact_spec(kind, title, numbers)}
+    elif tool == "artifact.render":
+        fmt = _format_from_utterance(text)
+        args = {"format": fmt} if fmt else {}
+    # artifact.validate / artifact.open / artifact.list need no default argument at
+    # all — every one of them resolves its target from the durable focus state, never
+    # from a wire argument (the same rule mail.inbox/mail.read/... already follow).
     args.update(case.tool_arguments)
     return args
+
+
+#: M22 (docs/M22_ARTIFACT_FACTORY_SPEC.md §5): the format word a "Bunu PDF yap"-shaped
+#: utterance names — the ONE thing the router does not extract (``ResolvedIntent`` has
+#: no format field at all; the model's own tool choice/argument carries it), read here
+#: exactly the way a real model reads it off the utterance.
+_FORMAT_WORDS: dict[str, str] = {
+    "pdf": "pdf",
+    "excel": "xlsx",
+    "xlsx": "xlsx",
+    "word": "docx",
+    "docx": "docx",
+    "csv": "csv",
+    "json": "json",
+    "html": "html",
+    "powerpoint": "pptx",
+    "pptx": "pptx",
+    "metin": "txt",
+    "txt": "txt",
+}
+
+
+def _format_from_utterance(text: str) -> str | None:
+    lowered = text.lower()
+    for word, fmt in _FORMAT_WORDS.items():
+        if word in lowered:
+            return fmt
+    return None
+
+
+def _default_artifact_spec(kind: str, title: str, numbers: list[float] | None) -> dict:
+    """A spec the persona would plausibly send for ``kind`` — its own structural
+    numbers are exactly ``numbers`` (a router-derived subset by construction), so a
+    default case always satisfies the spec's own "never invented" rule; a case that
+    wants to prove the REFUSAL overrides ``spec`` entirely via ``tool_arguments``."""
+    values = list(numbers or [])
+    if kind == "spreadsheet":
+        rows = [[f"Kalem {i + 1}", n] for i, n in enumerate(values)] or [["Kalem 1", 0]]
+        return {
+            "kind": kind,
+            "title": title,
+            "sheets": [{"name": "Özet", "columns": ["Kalem", "Tutar"], "rows": rows}],
+        }
+    if kind == "dataset":
+        rows = [[f"Satır {i + 1}", n] for i, n in enumerate(values)] or [["Satır 1", 0]]
+        return {"kind": kind, "title": title, "columns": ["Ad", "Değer"], "rows": rows}
+    if kind == "presentation":
+        bullets = [str(n) for n in values] or ["İçerik"]
+        return {"kind": kind, "title": title, "slides": [{"title": title, "bullets": bullets}]}
+    # document | page
+    paragraphs = [f"Tutar: {n}" for n in values] or ["İçerik."]
+    return {
+        "kind": kind,
+        "title": title,
+        "sections": [{"heading": title, "level": 1, "paragraphs": paragraphs}],
+    }
 
 
 @dataclass
@@ -908,6 +1044,14 @@ def run_case(case: UtteranceCase, *, harness: Harness | None = None) -> CaseResu
                     "research.start",
                     "state.now",
                     "activity.explain",
+                    # M22 (docs/M22_ARTIFACT_FACTORY_SPEC.md §5): "Bunu PDF yap" is the
+                    # SAME ARTIFACT_CREATE intent as a genuinely new artifact ("bir kind
+                    # word plus the create verb" - intents.py's own docstring), because
+                    # the router names the deterministic part of an utterance, never
+                    # which of two tools answers it (contract §2). The MODEL, seeing a
+                    # deictic format request against an artifact that already exists,
+                    # picks artifact.render over artifact.create.
+                    "artifact.render",
                 )
             ):
                 result.problems.append(f"router capability {mapped!r} != {case.expected_tool!r}")
@@ -1017,6 +1161,25 @@ def run_case(case: UtteranceCase, *, harness: Harness | None = None) -> CaseResu
                     result.problems.append(
                         f"snooze_count {count} != {case.expected['snooze_count']}"
                     )
+
+        # M22 (docs/M22_ARTIFACT_FACTORY_SPEC.md §5): the "never invented" rule, checked
+        # end to end — every number ``artifact.create`` actually built the spec's
+        # structure from (``body["numbers"]``, ``app.artifacts.spec``'s own
+        # ``_structure_numbers()``) must be a SUBSET of what the router extracted from
+        # the owner's own words (``resolved["spoken_numbers"]``). Unconditional, on
+        # every succeeded create — never opt-in, since inventing a number is exactly
+        # the defect this whole rule exists to catch.
+        if case.expected_tool == "artifact.create" and call["status"] == "succeeded":
+            spoken = resolved.get("spoken_numbers")
+            produced = body.get("numbers")
+            if spoken and isinstance(produced, list):
+                allowed = {float(n) for n in spoken}
+                invented = sorted(n for n in produced if float(n) not in allowed)
+                if invented:
+                    result.problems.append(
+                        f"artifact spec invented number(s) not spoken: {invented}"
+                    )
+                    result.verdict = "forbidden_side_effect"
 
         # 4. Forbidden tools: research.start is dispatched and MUST be refused by the relay;
         #    every other forbidden tool is a router assertion (already made above).

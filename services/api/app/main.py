@@ -360,6 +360,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.document_service = document_service
     app.state.mail_service = mail_service
     app.state.calendar_service = calendar_service
+    # M22 (docs/M22_ARTIFACT_FACTORY_SPEC.md §4): POST /v1/artifacts/{id}/open reaches
+    # the device through the SAME BrokerDeviceAction object the wake sequence, the
+    # operator and the documents/mail/calendar families already hold above — one device
+    # port, never a second desktop-control path.
+    app.state.device_action = device_action
     # Scoped CORS: the web shell is a separate origin from the API. Allow only
     # the configured loopback/private web origins (never "*"); M0 review #3.
     app.add_middleware(

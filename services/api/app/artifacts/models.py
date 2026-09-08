@@ -81,6 +81,22 @@ ARTIFACT_STATES = (
 ARTIFACT_KIND_RESEARCH_REPORT = "research_report"
 CANONICAL_FORMAT_MARKDOWN = "markdown"
 
+# M22 Artifact Factory (docs/M22_ARTIFACT_FACTORY_SPEC.md §1, ADR-0085 decisions 1/3/4):
+# the SAME Task -> Artifact -> Presentation tables (ADR-0020) the research pipeline
+# uses, reused rather than duplicated. A factory artifact's ``kind`` is one of
+# ``app.artifacts.spec.ARTIFACT_KINDS`` (never ``ARTIFACT_KIND_RESEARCH_REPORT``); its
+# canonical body is the spec's own deterministic JSON, not Markdown.
+CANONICAL_FORMAT_ARTIFACT_SPEC_JSON = "artifact_spec_json"
+
+#: ``artifact_renders.state`` (migration 20260908_0028): whether the render's
+#: independent-reader validation passed. Existing pre-M22 rows default to "valid"
+#: (see the migration's own docstring for why that default is honest, not a claim of
+#: having literally been validated) — every NEW factory render always gets an
+#: explicit value from a real ``app.artifacts.validation.validate()`` call.
+RENDER_STATE_VALID = "valid"
+RENDER_STATE_INVALID = "invalid"
+RENDER_STATES = (RENDER_STATE_VALID, RENDER_STATE_INVALID)
+
 
 class Task(Base):
     __tablename__ = "tasks"
@@ -206,6 +222,13 @@ class ArtifactRender(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+    # M22 (migration 20260908_0028_artifact_validation, ADR-0085 decision 3): the
+    # independent reader's ValidationReport.to_dict(), NULL for a render nobody has
+    # validated (every pre-M22 row).
+    validation_json: Mapped[dict[str, Any] | None] = mapped_column(JSONColumn, nullable=True)
+    state: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=RENDER_STATE_VALID, server_default=RENDER_STATE_VALID
+    )
 
 
 class ResearchSource(Base):
@@ -227,6 +250,12 @@ class ResearchSource(Base):
 
 
 __all__ = [
+    "ARTIFACT_KIND_RESEARCH_REPORT",
+    "CANONICAL_FORMAT_ARTIFACT_SPEC_JSON",
+    "CANONICAL_FORMAT_MARKDOWN",
+    "RENDER_STATE_INVALID",
+    "RENDER_STATE_VALID",
+    "RENDER_STATES",
     "Artifact",
     "ArtifactRender",
     "ArtifactVersion",

@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from app.artifacts.models import (
     ARTIFACT_KIND_RESEARCH_REPORT,
     CANONICAL_FORMAT_MARKDOWN,
+    RENDER_STATE_VALID,
     TASK_STATUS_COMPLETED,
     TASK_STATUS_CREATED,
     TASK_STATUS_READY,
@@ -222,6 +223,41 @@ def get_or_create_artifact_for_task(
     return artifact
 
 
+def create_artifact(
+    session: Session,
+    *,
+    title: str,
+    kind: str,
+    canonical_format: str = CANONICAL_FORMAT_MARKDOWN,
+    conversation_id: uuid.UUID | None = None,
+    project_id: uuid.UUID | None = None,
+) -> Artifact:
+    """A standalone artifact with no owning Task (M22 factory artifacts: the owner
+    asked for a document/spreadsheet/... directly, not through a research task)."""
+    artifact = Artifact(
+        title=title,
+        kind=kind,
+        canonical_format=canonical_format,
+        conversation_id=conversation_id,
+        project_id=project_id,
+    )
+    session.add(artifact)
+    session.commit()
+    return artifact
+
+
+def get_artifact_version_by_content_hash(
+    session: Session, content_hash: str
+) -> ArtifactVersion | None:
+    """Idempotency for app.artifacts.factory.create(): the SAME spec submitted twice
+    (a retried voice tool call, a retried POST) hashes to the SAME canonical JSON, so
+    this finds the version already created for it instead of minting a duplicate
+    artifact. sha256 collisions are not a practical concern at this scale."""
+    return session.execute(
+        select(ArtifactVersion).where(ArtifactVersion.content_hash == content_hash)
+    ).scalar_one_or_none()
+
+
 def set_artifact_state(session: Session, artifact_id: uuid.UUID, new_state: str) -> Artifact | None:
     artifact = session.get(Artifact, artifact_id)
     if artifact is None:
@@ -306,8 +342,18 @@ def record_render(
     mime_type: str,
     content_hash: str,
     size_bytes: int,
+    validation_json: dict[str, Any] | None = None,
+    state: str = RENDER_STATE_VALID,
 ) -> ArtifactRender:
-    """Upsert a render row keyed on (artifact_version_id, format)."""
+    """Upsert a render row keyed on (artifact_version_id, format).
+
+    ``validation_json``/``state`` are optional (M22, ADR-0085 decision 3) so the
+    pre-M22 call site (app.artifacts.render_store.ensure_render, the research-report
+    pipeline) is unaffected — it never passes them, and every row it writes keeps
+    the column defaults (``state="valid"``, ``validation_json=None``). The Artifact
+    Factory (app.artifacts.factory) always passes both, from a real
+    ``app.artifacts.validation.validate()`` call.
+    """
     existing = session.execute(
         select(ArtifactRender).where(
             ArtifactRender.artifact_version_id == artifact_version_id,
@@ -319,6 +365,8 @@ def record_render(
         existing.mime_type = mime_type
         existing.content_hash = content_hash
         existing.size_bytes = size_bytes
+        existing.validation_json = validation_json
+        existing.state = state
         session.commit()
         return existing
     render = ArtifactRender(
@@ -328,6 +376,8 @@ def record_render(
         mime_type=mime_type,
         content_hash=content_hash,
         size_bytes=size_bytes,
+        validation_json=validation_json,
+        state=state,
     )
     session.add(render)
     session.commit()

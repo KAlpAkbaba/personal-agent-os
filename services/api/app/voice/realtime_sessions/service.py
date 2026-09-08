@@ -1269,6 +1269,12 @@ def record_client_events(
                 # the same "owner's words win over the model's argument" reason.
                 "mail_ref": intent.mail_ref,
                 "calendar_ref": intent.calendar_ref,
+                # M22 (spec §5): the artifact fields the owner's WORDS carried, for the
+                # same "owner's words win over the model's argument" reason.
+                "artifact_ref": intent.artifact_ref,
+                "artifact_kind": intent.artifact_kind,
+                "artifact_title": intent.artifact_title,
+                "spoken_numbers": intent.spoken_numbers,
                 # ADR-0076. The research SHAPE, decided without the "does a completed
                 # research exist?" precondition (that precondition is what let a deictic
                 # follow-up on an empty history become a crawl), and WHICH research the

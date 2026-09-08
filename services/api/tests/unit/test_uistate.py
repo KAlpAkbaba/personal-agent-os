@@ -89,14 +89,16 @@ def test_the_vocabulary_is_the_one_the_owner_specified() -> None:
         # M21 (Mail & Calendar spec §3, §7): the mail/calendar channel.
         "mail.activity",
         "calendar.activity",
+        "artifact.factory",
     }
     contract = ui_state_contract()
-    assert contract["contract_version"] == 6
+    assert contract["contract_version"] == 7
     assert "ambient" in contract["subsystems"]
     assert "operator" in contract["subsystems"]
     assert "documents" in contract["subsystems"]
     assert "mail" in contract["subsystems"]
     assert "calendar" in contract["subsystems"]
+    assert "artifacts" in contract["subsystems"]
     assert "audio" in contract["metadata_rules"]["forbidden"]
 
 

@@ -151,6 +151,13 @@ class Settings(BaseSettings):
     # origin against its own configured broker REST origin before forwarding, so a wrong
     # value here fails closed on the device rather than fetching from somewhere else.
     alarm_audio_origin: str = ""
+    # M22 (docs/M22_ARTIFACT_FACTORY_SPEC.md §4, ADR-0085 decision 4): the origin a
+    # VOICE-triggered ``artifact.open`` builds its render download URL from — there is
+    # no live HTTP request to read a base_url from the way the REST
+    # ``POST /v1/artifacts/{id}/open`` route can. Empty means "not configured yet"; a
+    # real deployment sets it to the same origin devices already dial (the same rule
+    # ``alarm_audio_origin`` follows for the greeting WAV).
+    artifact_download_origin: str = ""
 
     # Devices layer (M13 track C, PROJECT_CONSTITUTION.md §11a). Presence is
     # "online" (live WS) vs "stale" (recently seen but disconnected, within

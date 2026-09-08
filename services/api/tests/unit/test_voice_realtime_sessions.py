@@ -286,6 +286,12 @@ def test_create_selects_by_capability_and_returns_the_contract(wired) -> None:
         "calendar.read_proposal",
         "calendar.commit",
         "calendar.discard",
+        # M22 (docs/M22_ARTIFACT_FACTORY_SPEC.md §5): the Artifact Factory.
+        "artifact.create",
+        "artifact.render",
+        "artifact.validate",
+        "artifact.open",
+        "artifact.list",
     }
     research = next(t for t in data["tools"] if t["name"] == "research.start")
     assert research["long_running"] is True and research["preamble"] == RESEARCH_PREAMBLE_TR

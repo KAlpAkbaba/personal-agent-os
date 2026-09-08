@@ -15,18 +15,35 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from temporalio.client import Client
 from temporalio.exceptions import WorkflowAlreadyStartedError
 
-from app.artifacts import render_store, service
-from app.artifacts.models import Artifact, ArtifactVersion, Task
-from app.artifacts.renderers import DEFAULT_RENDER_FORMATS, EXTENSIONS, SUPPORTED_FORMATS
+from app.artifacts import factory, open_service, render_store, service
+from app.artifacts.models import (
+    CANONICAL_FORMAT_ARTIFACT_SPEC_JSON,
+    Artifact,
+    ArtifactVersion,
+    Task,
+)
+from app.artifacts.renderers import (
+    DEFAULT_RENDER_FORMATS,
+    EXTENSIONS,
+    FACTORY_FORMATS,
+    SUPPORTED_FORMATS,
+)
 from app.artifacts.runtime import ArtifactRuntime
+from app.artifacts.spec import ArtifactSpec
 from app.identity.dependencies import require_owner_session
 from app.logging import get_logger, trace_id_var
 from app.research.provider import DeterministicResearchProvider
 from app.research.workflow import ResearchRequest, ResearchWorkflow
+
+#: The union of formats EITHER surface can name in a bare ``fmt`` path/body param —
+#: the M13 markdown-routed set and the M22 factory set. Which ones are actually
+#: legal for a GIVEN artifact is decided by its own canonical_format/kind further
+#: down (ArtifactSpec.formats() for a factory artifact), not by this constant alone.
+_ALL_KNOWN_FORMATS = frozenset(SUPPORTED_FORMATS) | frozenset(FACTORY_FORMATS)
 
 logger = get_logger("app.artifacts.routes")
 
@@ -174,6 +191,7 @@ def _render_payload(runtime_renders: list[Any]) -> list[dict[str, Any]]:
             "mime_type": r.mime_type,
             "content_hash": r.content_hash,
             "size_bytes": r.size_bytes,
+            "state": r.state,
         }
         for r in runtime_renders
     ]
@@ -281,7 +299,7 @@ async def create_render(
 ) -> dict[str, Any]:
     runtime = _runtime(request)
     fmt = body.format.lower()
-    if fmt not in SUPPORTED_FORMATS:
+    if fmt not in _ALL_KNOWN_FORMATS:
         raise HTTPException(status_code=422, detail=f"unsupported format: {body.format!r}")
     import asyncio
 
@@ -294,7 +312,12 @@ async def create_render(
             if version is None:
                 return None
             row = render_store.ensure_render(
-                session, runtime.store, version=version, title=artifact.title, fmt=fmt
+                session,
+                runtime.store,
+                version=version,
+                title=artifact.title,
+                fmt=fmt,
+                canonical_format=artifact.canonical_format,
             )
             return {
                 "artifact_id": str(artifact_id),
@@ -302,9 +325,16 @@ async def create_render(
                 "mime_type": row.mime_type,
                 "content_hash": row.content_hash,
                 "size_bytes": row.size_bytes,
+                "state": row.state,
             }
 
-    payload = await asyncio.to_thread(do_render)
+    try:
+        payload = await asyncio.to_thread(do_render)
+    except ValueError as exc:
+        # render_factory() refuses a format the artifact's own kind cannot produce
+        # (ArtifactSpec.formats()) — a 422, not a 500: the caller asked for something
+        # this artifact was never going to be able to make.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if payload is None:
         raise HTTPException(status_code=404, detail="artifact or canonical body not found")
     return payload
@@ -314,7 +344,7 @@ async def create_render(
 async def get_render(request: Request, artifact_id: uuid.UUID, fmt: str) -> Response:
     runtime = _runtime(request)
     fmt = fmt.lower()
-    if fmt not in SUPPORTED_FORMATS:
+    if fmt not in _ALL_KNOWN_FORMATS:
         raise HTTPException(status_code=422, detail=f"unsupported format: {fmt!r}")
     import asyncio
 
@@ -327,11 +357,19 @@ async def get_render(request: Request, artifact_id: uuid.UUID, fmt: str) -> Resp
             if version is None:
                 return None
             data, mime, chash = render_store.fetch_render_bytes(
-                session, runtime.store, version=version, title=artifact.title, fmt=fmt
+                session,
+                runtime.store,
+                version=version,
+                title=artifact.title,
+                fmt=fmt,
+                canonical_format=artifact.canonical_format,
             )
             return data, mime, chash, artifact.title
 
-    result = await asyncio.to_thread(load)
+    try:
+        result = await asyncio.to_thread(load)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if result is None:
         raise HTTPException(status_code=404, detail="artifact or canonical body not found")
     data, mime, chash, _title = result
@@ -344,6 +382,151 @@ async def get_render(request: Request, artifact_id: uuid.UUID, fmt: str) -> Resp
             "X-Content-Hash": chash,
         },
     )
+
+
+@router.get("/artifacts/{artifact_id}/renders/{fmt}/validation")
+async def get_render_validation(
+    request: Request, artifact_id: uuid.UUID, fmt: str
+) -> dict[str, Any]:
+    """ADR-0085 decision 3: the independent reader's ValidationReport for one
+    render, so the Cockpit/voice can ask "is this file correct?" without
+    re-downloading and re-parsing the bytes themselves."""
+    runtime = _runtime(request)
+    fmt = fmt.lower()
+    import asyncio
+
+    def load() -> dict[str, Any] | None:
+        with runtime.session() as session:
+            return factory.render_validation(session, artifact_id=artifact_id, fmt=fmt)
+
+    payload = await asyncio.to_thread(load)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="unknown artifact or render")
+    return payload
+
+
+# ------------------------------------------------------------------- factory
+
+
+class CreateFactoryArtifactRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    #: The ArtifactSpec's own fields, validated inside the handler (rather than as
+    #: a nested pydantic model here) so a bad spec surfaces the SAME field-level
+    #: pydantic error detail either way, and this request model never drifts out of
+    #: sync with ArtifactSpec's own shape.
+    spec: dict[str, Any]
+    conversation_id: uuid.UUID | None = None
+
+
+def _factory_render_payload(request: Request, artifact_id: uuid.UUID, r: Any) -> dict[str, Any]:
+    base = str(request.base_url).rstrip("/")
+    return {
+        "format": r.format,
+        "mime_type": r.mime_type,
+        "content_hash": r.content_hash,
+        "size_bytes": r.size_bytes,
+        "state": r.state,
+        "failing_refs": r.failing_refs,
+        # ADR-0085 decision 4: the device's file.fetch dials the EXISTING M13 render
+        # download route on the origin it dialled — built from THIS request's own
+        # base_url (ADR-0069's rule: never a configured URL), never a new route.
+        "download_url": f"{base}{factory.download_path(artifact_id, r.format)}",
+    }
+
+
+@router.post("/artifacts/factory", status_code=201)
+async def create_factory_artifact(
+    request: Request, body: CreateFactoryArtifactRequest
+) -> dict[str, Any]:
+    runtime = _runtime(request)
+    try:
+        spec = ArtifactSpec.model_validate(body.spec)
+    except ValidationError as exc:
+        # include_context=False: pydantic's raw errors() carries the ORIGINAL
+        # exception object (e.g. a ValueError) under ctx.error for a custom
+        # model_validator failure, which json.dumps cannot serialize -- without
+        # this the error handler itself crashes (a real bug this route's own test
+        # caught: a 500 with no body, not the 422 the caller was owed).
+        raise HTTPException(
+            status_code=422, detail=exc.errors(include_context=False, include_url=False)
+        ) from exc
+    import asyncio
+
+    def do_create() -> factory.FactoryResult:
+        with runtime.session() as session:
+            return factory.create(
+                session, runtime.store, spec=spec, conversation_id=body.conversation_id
+            )
+
+    result = await asyncio.to_thread(do_create)
+    return {
+        "artifact_id": str(result.artifact_id),
+        "kind": result.kind,
+        "title": result.title,
+        "version": result.version,
+        "created": result.created,
+        "canonical_format": CANONICAL_FORMAT_ARTIFACT_SPEC_JSON,
+        "all_valid": result.all_valid,
+        "renders": [
+            _factory_render_payload(request, result.artifact_id, r) for r in result.renders
+        ],
+    }
+
+
+# --------------------------------------------------------------------- open
+
+
+class OpenArtifactRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    #: Which render to fetch+open; ``None`` (the default, and what the Cockpit's
+    #: ``POST .../open`` with an empty body sends — ADR-0085 addendum 2 item 5) lets the
+    #: factory pick the first VALID render in the artifact kind's own format order.
+    format: str | None = Field(default=None, max_length=16)
+
+
+@router.post("/artifacts/{artifact_id}/open")
+async def open_artifact_route(
+    request: Request, artifact_id: uuid.UUID, body: OpenArtifactRequest | None = None
+) -> dict[str, Any]:
+    """Fetch + open one artifact's render on the owner's machine (spec §4): the SAME
+    ``file.fetch`` path the voice tool ``artifact.open`` uses
+    (``app.artifacts.open_service``), so the Cockpit's "Aç" and "Bunu aç." can never
+    disagree about what "opened" means."""
+    runtime = _runtime(request)
+    device_action = getattr(request.app.state, "device_action", None)
+    fmt = body.format.lower() if body is not None and body.format else None
+    base_url = str(request.base_url)
+    import asyncio
+
+    def do_open() -> open_service.OpenOutcome:
+        with runtime.session() as session:
+            return open_service.open_artifact(
+                session,
+                device_action,
+                artifact_id=artifact_id,
+                fmt=fmt,
+                base_url=base_url,
+            )
+
+    outcome = await asyncio.to_thread(do_open)
+    if outcome.error_class == open_service.ERROR_NOT_FOUND:
+        raise HTTPException(
+            status_code=404, detail={"code": outcome.error_class, "message": outcome.speech}
+        )
+    if outcome.error_class is not None:
+        raise HTTPException(
+            status_code=422, detail={"code": outcome.error_class, "message": outcome.speech}
+        )
+    return {
+        "artifact_id": outcome.artifact_id,
+        "format": outcome.format,
+        "state": outcome.state,
+        "window_title": outcome.window_title,
+        "speech": outcome.speech,
+        "error_class": outcome.error_class,
+    }
 
 
 # Re-export for wiring/tests.

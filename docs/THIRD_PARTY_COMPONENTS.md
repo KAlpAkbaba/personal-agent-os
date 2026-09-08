@@ -58,7 +58,32 @@ Selection depends on Turkish benchmark by use case.
 
 ## Document fixture generators (dev only, M20)
 
-- `openpyxl` (MIT) and `python-pptx` (MIT): generate the committed XLSX/PPTX fixtures under `services/api/tests/fixtures/documents/` via `scripts/tests/make-document-fixtures.py`; dev group only, never in the production image. `python-docx` (MIT) and `fpdf2` (LGPL-3.0, already a runtime dependency for M13 artifacts) generate the DOCX/PDF fixtures.
+- `python-docx` (MIT) and `fpdf2` (LGPL-3.0, already a runtime dependency for M13 artifacts) generate the DOCX/PDF fixtures under `services/api/tests/fixtures/documents/` via `scripts/tests/make-document-fixtures.py`.
+
+## Artifact Factory renderers + validators (M22, ADR-0085, runtime dependencies)
+
+Role: `services/api/app/artifacts/renderers.py` (XlsxRenderer/PptxRenderer, spec §2) and
+`services/api/app/artifacts/validation.py` (the independent re-readers, spec §3) run in
+the Cloud Core API image on the owner's create → render → validate path, not only in
+tests — moved out of the M20-era dev-only fixture-generator group for exactly that
+reason.
+
+- `openpyxl` **3.1.5** (MIT; https://foss.heptapod.net/openpyxl/openpyxl) — writes and
+  independently re-reads XLSX. `data_only=False` on read so a formula cell is compared
+  by its raw formula text, never a possibly-stale cached value.
+- `python-pptx` **1.0.2** (MIT; https://github.com/scanny/python-pptx) — writes and
+  independently re-reads PPTX (slide title shape + every text-frame paragraph).
+- `pypdf` **6.18.0** (BSD-3-Clause; https://github.com/py-pdf/pypdf) — new dependency;
+  independent PDF text extraction for validation only (the Cloud Core never WRITES
+  PDF through pypdf — PDF authoring stays on the existing `fpdf2` M13 `PdfRenderer`).
+  `app.artifacts.validation` bounds page count (`MAX_PDF_PAGES`) and extracted-text
+  length (`MAX_PDF_PAGE_TEXT_CHARS`/`MAX_PDF_TOTAL_TEXT_CHARS`) before/while calling
+  it — pypdf has no PdfPig-style per-filter streaming counter, so these are the bounds
+  this module itself enforces, not a claim about pypdf's own internals.
+
+Upgrade rule: bump the pin, run `tests/unit/test_artifact_renderers.py` and
+`tests/unit/test_artifact_validation.py` (every fixture spec × format, the lying-
+renderer catches, the resource-bound cases) before shipping.
 
 ## Document parsers in the Windows agent (M20, ADR-0083)
 

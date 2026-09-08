@@ -63,6 +63,12 @@ PROTECTED_ENDPOINTS = [
     ("narration-pronunciation", "put", "/v1/narration/pronunciation"),
     ("tasks", "post", "/v1/tasks"),
     ("artifacts", "get", "/v1/artifacts"),
+    # M22 (docs/M22_ARTIFACT_FACTORY_SPEC.md §4): the factory creates real artifacts
+    # from the owner's spoken structured data -- never one unauthenticated call away.
+    ("artifacts-factory", "post", "/v1/artifacts/factory"),
+    # M22 (docs/M22_ARTIFACT_FACTORY_SPEC.md §4): fetching + opening a render on the
+    # owner's machine is a device mutation — never one unauthenticated call away.
+    ("artifacts-open", "post", f"/v1/artifacts/{uuid.uuid4()}/open"),
     ("broker-enrollment-token", "post", "/v1/devices/enrollment-tokens"),
     ("broker-command", "post", f"/v1/devices/{DEVICE_ID}/commands"),
     ("broker-revoke", "post", f"/v1/devices/{DEVICE_ID}/revoke"),
