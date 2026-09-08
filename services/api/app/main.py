@@ -21,6 +21,7 @@ from app.alarms.routes import router as alarms_router
 from app.alarms.routine_port import WakeAlarmRunner
 from app.alarms.sequence import WakeSequence
 from app.ambient.routes import router as ambient_router
+from app.appfactory.routes import router as apps_router
 from app.appfactory.service import AppFactoryService
 from app.artifacts.render_fetch_store import get_render_fetch_store
 from app.artifacts.routes import device_router as artifacts_device_router
@@ -408,6 +409,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(broker_router)
     app.include_router(broker_ws_router)
     app.include_router(artifacts_router)
+    # M23 (docs/M23_APP_FACTORY_SPEC.md §6, ADR-0086 addendum 2): the Cockpit's
+    # Uygulamalar panel — owner-gated at the router level, the same service and device
+    # port the voice tools call.
+    app.include_router(apps_router)
     # M22 (ADR-0085 addendum 5): the device-facing render-fetch route is separate and
     # deliberately not owner-gated — the device holds a one-time token instead of a
     # session (app/artifacts/routes.py's device_router docstring).
