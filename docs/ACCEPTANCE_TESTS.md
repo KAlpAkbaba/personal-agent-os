@@ -650,6 +650,29 @@ Real acceptance: the Cloud Core half released through blue/green (Stage 18.10); 
 half is machine-proven on this machine and the runner, and reaches the deployed agent with
 the owner's elevated update `install-device-service.ps1 -Operator` (item 28).
 
+## M21 Mail & Calendar
+
+Spec: `docs/M21_MAIL_CALENDAR_SPEC.md` (ADR-0084). Deterministic gates, every CI run:
+
+- **the protocols are real.** the IMAP provider against a scripted fake IMAP4 server, the SMTP
+  sender against a scripted fake SMTP server (nothing leaves the process), the CalDAV provider
+  against `httpx.MockTransport`, the iCalendar parser against `calendar.ics`
+  (`test_mail_imap_provider.py`, `test_mail_smtp_sender.py`, `test_calendar_caldav_provider.py`,
+  `test_calendar_ics.py`);
+- **the gate holds.** no read-back → refused; read-back then the owner's word → exactly one
+  send/commit on the fake; a second word → nothing twice; the host flag off → `send_disabled`;
+  no account → `account_missing` (`test_mail_service.py`, `test_calendar_service.py`,
+  `test_mail_calendar_routes.py`, `test_mail_calendar_tools.py` through the real app object);
+- **the owner's voice.** the corpus category `mail_calendar` with every external side effect
+  forbidden outside the two confirmation cases (`test_owner_utterance_corpus.py`);
+- **the Core tells the truth.** the v6 states and the Posta/Takvim panels from published metadata
+  only, the approval pair issuing exactly one confirm (`mail-calendar-states.test.ts`,
+  `mail-panel.test.tsx`, `calendar-panel.test.tsx`).
+
+Real acceptance: the Cloud Core half released through blue/green (Stage 19.10); a real
+read-only run over the owner's account is READY_FOR_OWNER once the account is on the host
+(item 30); nothing is ever sent for real by the autonomous system.
+
 ## M19b Multi-device / roaming owner qualification
 
 Real-only acceptance on at least two owner-authorised physical computers (PC-A, PC-B) and

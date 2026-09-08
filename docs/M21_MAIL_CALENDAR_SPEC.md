@@ -1,6 +1,6 @@
 # M21 — Mail & Calendar
 
-Status: ACTIVE (owner master directive 2026-09-07, M21 section; kickoff 2026-09-08 after the M20 gate). Decision record: ADR-0084.
+Status: ENGINEERING CLOSED 2026-09-08 (ADR-0084; QUALIFICATION Stage 19; Cloud Core released as 571ddb2 (armed, awaiting the owner's Tailscale SSH check — item 31)). Decision record: ADR-0084.
 Predecessors: M18 action contract (receipts, the one router), ADR-0076 ID-based focus, M19 `object_focus`, M20 documents (the pattern of a bounded index fed only by owner-initiated reads), the evolution risk table (`app/evolution/risk.py`: EXTERNAL_SIDE_EFFECT is never auto-promoted).
 
 The owner's rule, in one line: **reading and preparing are the assistant's; sending and changing the world outside are the owner's — every external mutation is a prepared object the owner hears read back and confirms, and no autonomous test ever sends anything real.**
