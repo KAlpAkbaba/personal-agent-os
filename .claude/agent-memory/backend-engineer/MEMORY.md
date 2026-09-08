@@ -22,3 +22,5 @@
 - [Worktree isolation and cross-worktree transplant](reference_worktree_isolation_and_cross_worktree_transplant.md) — Bash blocks non-git commands referencing paths outside your worktree; recipe for doing real dev work "in" another linked worktree via scratch branch + `git reset --hard`
 - [M20 core track status](project_m20_core_track_status.md) — completed 2026-09-08 on branch m20-core @ 50b65aa in E:\AI\pagentos-wt-m20-core, 8 commits ahead of main, not merged/pushed
 - [M21 core track status](project_m21_core_track_status.md) — completed 2026-09-08 on branch m21-core @ 6da0d06, 5366/5367 unit tests + 804 corpus cases green, 5 real bugs found+fixed, not merged/pushed
+- [M21 security review closeout](project_m21_security_review_closeout.md) — completed 2026-09-08 on branch m21-secfix @ 950b23a in E:\AI\pagentos-wt-m21-secfix, all 5 findings fixed, not merged/pushed
+- [RFC822/RRULE DoS bounds](feedback_rfc822_rrule_dos_bounds.md) — nested-MIME RecursionError trips inside message_from_bytes itself, not walk(); dateutil.rrule has no jump-ahead, cap the raw scan; clamp only the public entry point
