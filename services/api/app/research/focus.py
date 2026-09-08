@@ -244,7 +244,7 @@ def is_completed(db: Session, research_job_id: str | uuid.UUID) -> bool:
 #: ``now=`` and skips only this one); ``_after_the_latest_row`` pushes a new row's instant
 #: past the newest row's in the table, whichever clock the caller used; and the row id is
 #: itself time-ordered (``ResearchFocusRow.id`` is a counter-backed UUIDv7,
-#: ``app.research.models.focus_row_id``), so a tie that is nevertheless in the table —
+#: ``app.ids.focus_row_id``), so a tie that is nevertheless in the table —
 #: rows from before these rules, two writers in concurrent transactions — reads as
 #: insertion order rather than as a coin toss.
 _focus_clock_lock = threading.Lock()

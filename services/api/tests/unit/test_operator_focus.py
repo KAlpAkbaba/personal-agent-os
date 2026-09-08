@@ -8,6 +8,7 @@ to app.operator.models.FOCUS_STACK_LIMIT per kind — and that the hand-written 
 from __future__ import annotations
 
 import ast
+import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -107,6 +108,69 @@ def test_focus_entry_as_dict_is_bounded_and_json_shaped(db) -> None:
     assert payload["object_id"] == "w-1"
     assert payload["source"] == "operator_launch"
     assert payload["selected_at"].endswith("Z")
+
+
+# ------------------------------------------------- a tie on selected_at is not a coin toss
+
+
+def test_rows_sharing_one_selected_at_read_back_in_insertion_order(db) -> None:
+    """Two focus writes on ONE instant: the later act must still be the current one.
+
+    ``_stack`` reads ``ORDER BY selected_at DESC, id DESC``, and the module's default
+    clock can only keep its OWN readings apart: a caller passing an explicit ``now=``
+    twice (a device receipt whose timestamp repeats), or two processes writing
+    concurrently, still land two rows on one instant. The id was then a random v4 and the
+    tiebreak a coin toss — measured on the research focus stack, which reads exactly this
+    way (ADR-0076 addendum 1) — so the id is now a counter-backed UUIDv7 and insertion
+    order IS id order. Ten rounds, alternating which window is written last, leave luck
+    no room; against a v4 id this fails about half of every round.
+    """
+    moment = datetime(2026, 9, 8, 12, 0, 0, tzinfo=UTC)
+    ids: list[uuid.UUID] = []
+    for round_ in range(10):
+        first, last = ("w-1", "w-2") if round_ % 2 == 0 else ("w-2", "w-1")
+        for object_id in (first, last):
+            row = focus_module.set_focus(
+                db,
+                FOCUS_KIND_WINDOW,
+                object_id,
+                label=object_id,
+                source="a",
+                now=moment,  # identical on purpose: the tie the default clock cannot nudge
+            )
+            ids.append(row.id)
+        current = focus_module.current(db, FOCUS_KIND_WINDOW)
+        assert current is not None and current.object_id == last, round_
+        previous = focus_module.previous(db, FOCUS_KIND_WINDOW)
+        assert previous is not None and previous.object_id == first, round_
+
+    assert ids == sorted(ids), "twenty rows on one instant, ids out of insertion order"
+    assert all(i.version == 7 for i in ids)
+
+
+def test_the_id_column_default_is_time_ordered_too(db) -> None:
+    """A row written straight through the ORM — no ``set_focus``, so no explicit id —
+    carries the same guard, because the column default is ``app.ids.focus_row_id``."""
+    moment = datetime(2026, 9, 8, 12, 0, 0, tzinfo=UTC)
+    ids: list[uuid.UUID] = []
+    for n in range(5):
+        row = ObjectFocusRow(
+            kind=FOCUS_KIND_WINDOW,
+            object_id=f"w-{n}",
+            label=str(n),
+            source="a",
+            selected_at=moment,  # identical on purpose
+            meta_json={},
+        )
+        db.add(row)
+        db.flush()
+        ids.append(row.id)
+    db.commit()
+
+    assert ids == sorted(ids)
+    assert all(i.version == 7 for i in ids)
+    current = focus_module.current(db, FOCUS_KIND_WINDOW)
+    assert current is not None and current.object_id == "w-4"  # the last one written
 
 
 # ---------------------------------------------------------- the migration matches the model
