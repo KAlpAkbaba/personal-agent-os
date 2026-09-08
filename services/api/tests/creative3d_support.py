@@ -16,10 +16,9 @@ Two independent fakes:
 
 from __future__ import annotations
 
-import hashlib
+import base64
 import importlib
 import sys
-from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -261,111 +260,177 @@ def install_fake_bpy() -> ModuleType:
 
 # ======================================================================= device
 
-
 _BASE_ROOT = "C:/Users/owner/Documents/PagentOS Projects/3d"
 
+#: The licensing client's own words (docs/M25_CREATIVE_3D_SPEC.md §1's own measured
+#: evidence, docs/evidence/m25-tool-detection-2026-09-08.json) — reused verbatim so a
+#: test proves the receipt carries the REAL refusal text, never a made-up one.
+UNITY_LICENSE_MESSAGE = "No valid Unity Editor license found. Please activate your license."
 
-def scene_scaffold_ok(payload: dict[str, Any]) -> DeviceRunResult:
-    slug = str(payload.get("slug") or "scene-fixture")
-    root_path = f"{_BASE_ROOT}/{slug}"
-    return DeviceRunResult(True, result={"root_path": root_path, "files_written": 3})
 
+class FakeCreative3DDevice:
+    """A stateful fake of the ``project.scaffold`` / ``project.run`` / ``scene.inspect``
+    trio ``app.creative3d.service.SceneService`` calls (DEVICE_PROTOCOL.md §6l + the
+    M25 additions, ADR-0088) — never a real Windows Job Object, never a real Blender/
+    Unity process.
 
-def scene_run_ok(payload: dict[str, Any]) -> DeviceRunResult:
-    plan = payload.get("plan") or {}
-    operations = plan.get("operations") or []
-    objects = []
-    camera = None
-    lights = []
-    for op in operations:
-        if op.get("op") == "add_primitive":
-            objects.append(
-                {
-                    "name": op["name"],
-                    "type": "CAMERA" if op["kind"] == "camera" else (
-                        "LIGHT" if op["kind"].startswith("light_") else "MESH"
-                    ),
-                    "location": list(op.get("location", [0.0, 0.0, 0.0])),
-                    "rotation": list(op.get("rotation", [0.0, 0.0, 0.0])),
-                    "scale": list(op.get("scale", [1.0, 1.0, 1.0])),
-                }
+    For the Blender tool, ``run()`` re-uses the REAL, already-tested
+    ``app.creative3d.drivers.blender_driver.apply_operations`` against a fake ``bpy``
+    module kept PERSISTENT per ``project_id`` — the same object graph survives across
+    calls exactly the way a real ``.blend`` file persists on disk between successive
+    ``blender.exe -b`` invocations, so an ``apply()`` after a ``create()`` genuinely
+    builds on the prior state rather than a hand-authored canned response. This is
+    real driver logic under test, not a second, parallel simulation of it.
+
+    ``unity_available`` toggles the honest ``dependency_unavailable`` refusal (spec
+    §1, §6) — the licensing client's own words, never a crash, never "done".
+    """
+
+    def __init__(self, *, unity_available: bool = False, render_dir: Path | None = None) -> None:
+        self.unity_available = unity_available
+        self._render_dir = render_dir
+        self._plans: dict[str, dict[str, Any]] = {}
+        self._bpy_by_project: dict[str, ModuleType] = {}
+        self._inspections: dict[str, dict[str, Any]] = {}
+        self._unity_state: dict[str, dict[str, Any]] = {}
+
+    # -------------------------------------------------------------- project.scaffold
+
+    def scaffold(self, payload: dict[str, Any]) -> DeviceRunResult:
+        project_id = str(payload["project_id"])
+        slug = str(payload.get("slug") or "scene-fixture")
+        files = payload.get("files") or []
+        plan_text = next((f["text"] for f in files if f.get("path") == "plan.json"), "{}")
+        import json
+
+        self._plans[project_id] = json.loads(plan_text)
+        return DeviceRunResult(
+            True, result={"root_path": f"{_BASE_ROOT}/{slug}", "files_written": len(files)}
+        )
+
+    # ------------------------------------------------------------------ project.run
+
+    def run(self, payload: dict[str, Any]) -> DeviceRunResult:
+        project_id = str(payload["project_id"])
+        plan = self._plans.get(project_id) or {"operations": [], "tool": "blender"}
+        tool = plan.get("tool", "blender")
+
+        if tool == "unity":
+            if not self.unity_available:
+                return DeviceRunResult(False, "dependency_unavailable", UNITY_LICENSE_MESSAGE)
+            state = self._unity_state.setdefault(
+                project_id, {"objects": {}, "camera": None, "lights": {}}
             )
-            if op["kind"] == "camera":
-                camera = op["name"]
-            if op["kind"].startswith("light_"):
-                lights.append({"name": op["name"], "energy": 10.0})
-    inspection = {"objects": objects, "camera": camera, "lights": lights, "render": None, "errors": []}
-    return DeviceRunResult(
-        True,
-        result={
-            "project_id": str(payload.get("project_id") or ""),
-            "state": "applied",
-            "inspection": inspection,
-        },
-    )
+            _apply_plan_to_unity_state(state, plan)
+            self._inspections[project_id] = _unity_state_to_inspection(state)
+            return DeviceRunResult(True, result={})
+
+        fake_bpy = self._bpy_by_project.setdefault(project_id, build_fake_bpy())
+        sys.modules["bpy"] = fake_bpy
+        module_name = "app.creative3d.drivers.blender_driver"
+        driver = (
+            importlib.reload(sys.modules[module_name])
+            if module_name in sys.modules
+            else importlib.import_module(module_name)
+        )
+        out_dir = self._render_dir or Path.cwd()
+        inspection = driver.apply_operations(plan, str(out_dir))
+        self._inspections[project_id] = inspection
+        return DeviceRunResult(True, result={})
+
+    # --------------------------------------------------------------- scene.inspect
+
+    def inspect(self, payload: dict[str, Any]) -> DeviceRunResult:
+        project_id = str(payload["project_id"])
+        inspection = self._inspections.get(
+            project_id, {"objects": [], "camera": None, "lights": [], "render": None, "errors": []}
+        )
+        render_png_base64 = None
+        render = inspection.get("render")
+        if render and render.get("path"):
+            try:
+                render_png_base64 = base64.b64encode(Path(render["path"]).read_bytes()).decode("ascii")
+            except OSError:
+                render_png_base64 = None
+        return DeviceRunResult(
+            True, result={"inspection": inspection, "render_png_base64": render_png_base64}
+        )
+
+    def capability_results(self) -> dict[str, Any]:
+        """``{capability: callable}`` for ``tests.alarms_support.FakeDeviceAction``
+        (the same shape ``tests.appfactory_support.appfactory_capability_results``
+        returns)."""
+        return {
+            "project.scaffold": self.scaffold,
+            "project.run": self.run,
+            "scene.inspect": self.inspect,
+        }
 
 
-def scene_inspect_ok(_payload: dict[str, Any]) -> DeviceRunResult:
-    digest = hashlib.sha256(b"fake-render").hexdigest()
-    return DeviceRunResult(
-        True,
-        result={
-            "inspection": {
-                "objects": [
-                    {
-                        "name": "Kure",
-                        "type": "MESH",
-                        "location": [0.0, 0.0, 0.0],
-                        "rotation": [0.0, 0.0, 0.0],
-                        "scale": [1.0, 1.0, 1.0],
-                        "material_color": [1.0, 0.0, 0.0, 1.0],
-                    }
-                ],
-                "camera": None,
-                "lights": [],
-                "render": {
-                    "path": "render.png",
-                    "sha256": digest,
-                    "bytes": 4096,
-                    "width": 320,
-                    "height": 240,
-                    "engine": "workbench",
-                },
-                "errors": [],
-            },
-            "render_png_base64": None,
-        },
-    )
+def _apply_plan_to_unity_state(state: dict[str, Any], plan: dict[str, Any]) -> None:
+    """A minimal, honest simulation of what ``SceneDriver.cs`` would do — used only
+    because Unity itself cannot run in this environment (spec §1); never claimed as
+    a stand-in for the real Editor API the C# file actually calls."""
+    for op in plan.get("operations") or []:
+        kind = op.get("op")
+        if kind == "create_scene":
+            state["objects"].clear()
+            state["camera"] = None
+            state["lights"].clear()
+        elif kind == "add_primitive":
+            name = op["name"]
+            obj_kind = op["kind"]
+            obj_type = "CAMERA" if obj_kind == "camera" else ("LIGHT" if obj_kind.startswith("light_") else "MESH")
+            state["objects"][name] = {
+                "name": name,
+                "type": obj_type,
+                "location": list(op.get("location", [0.0, 0.0, 0.0])),
+                "rotation": list(op.get("rotation", [0.0, 0.0, 0.0])),
+                "scale": list(op.get("scale", [1.0, 1.0, 1.0])),
+            }
+            if obj_type == "CAMERA" and state["camera"] is None:
+                state["camera"] = name
+            if obj_type == "LIGHT":
+                state["lights"][name] = 10.0
+        elif kind == "transform":
+            obj = state["objects"].get(op["name"])
+            if obj:
+                for field in ("location", "rotation", "scale"):
+                    if op.get(field) is not None:
+                        obj[field] = list(op[field])
+        elif kind == "set_material":
+            obj = state["objects"].get(op["name"])
+            if obj:
+                obj["material_color"] = list(op["color"])
+        elif kind == "set_light":
+            if op["name"] in state["lights"]:
+                state["lights"][op["name"]] = float(op["energy"])
 
 
-def scene_unity_no_license(_payload: dict[str, Any]) -> DeviceRunResult:
-    """The honest Unity refusal (spec §1, §6, ADR-0088 decision 5): the licensing
-    client's own words, never a crash, never "done"."""
-    return DeviceRunResult(
-        False,
-        "dependency_unavailable",
-        "No valid Unity Editor license found. Please activate your license.",
-    )
-
-
-def creative3d_capability_results() -> dict[str, Any]:
-    """``{capability: DeviceRunResult | callable}`` for ``tests.alarms_support.
-    FakeDeviceAction`` (the same shape ``tests.appfactory_support.
-    appfactory_capability_results`` returns)."""
+def _unity_state_to_inspection(state: dict[str, Any]) -> dict[str, Any]:
     return {
-        "project.scaffold": scene_scaffold_ok,
-        "project.run": scene_run_ok,
-        "scene.inspect": scene_inspect_ok,
+        "objects": list(state["objects"].values()),
+        "camera": state["camera"],
+        "lights": [{"name": n, "energy": e} for n, e in state["lights"].items()],
+        "render": None,
+        "errors": [],
     }
 
 
+def creative3d_capability_results(
+    *, unity_available: bool = False, render_dir: Path | None = None
+) -> dict[str, Any]:
+    """Convenience wrapper for the common case: a fresh :class:`FakeCreative3DDevice`.
+    Prefer constructing :class:`FakeCreative3DDevice` directly when a test needs to
+    inspect its state afterward."""
+    return FakeCreative3DDevice(unity_available=unity_available, render_dir=render_dir).capability_results()
+
+
 __all__ = [
+    "UNITY_LICENSE_MESSAGE",
+    "FakeCreative3DDevice",
     "FakeObject",
     "build_fake_bpy",
     "creative3d_capability_results",
     "install_fake_bpy",
-    "scene_inspect_ok",
-    "scene_run_ok",
-    "scene_scaffold_ok",
-    "scene_unity_no_license",
 ]
