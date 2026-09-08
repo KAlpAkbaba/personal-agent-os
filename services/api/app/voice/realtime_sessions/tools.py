@@ -53,7 +53,9 @@ from app.voice.realtime_sessions.tools_documents import (
     DOCUMENT_TOOL_NAMES,
     register_documents_tools,
 )
+from app.voice.realtime_sessions.tools_calendar import register_calendar_tools
 from app.voice.realtime_sessions.tools_evolution import register_evolution_tools
+from app.voice.realtime_sessions.tools_mail import register_mail_tools
 from app.voice.realtime_sessions.tools_operator import register_operator_tools
 
 logger = get_logger("app.voice.realtime_sessions.tools")
@@ -1603,6 +1605,9 @@ def default_registry() -> ToolRegistry:
     register_operator_tools(reg)
     # M20 (docs/M20_FILE_DOCUMENT_INTELLIGENCE_SPEC.md §4): File & Document Intelligence.
     register_documents_tools(reg)
+    # M21 (docs/M21_MAIL_CALENDAR_SPEC.md §4): Mail & Calendar's own voice tools.
+    register_mail_tools(reg)
+    register_calendar_tools(reg)
     return reg
 
 
