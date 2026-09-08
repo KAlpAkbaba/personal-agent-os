@@ -45,6 +45,7 @@ import {
   eyeClaim,
   releaseClaim,
 } from "./truth";
+import { type AppFacts, appCaption, appFacts, appIsServing } from "./apps";
 import { type ArtifactFacts, artifactCaption, artifactFacts } from "./artifacts";
 import { type CalendarFacts, calendarCaption, calendarFacts } from "./calendar";
 import { type DocumentFacts, documentCaption, documentFacts } from "./documents";
@@ -122,7 +123,21 @@ export type CoreVisualKind =
    * the format and the verdict as the caption. An invalid render is worded
    * as invalid with its failing ref — never dressed as done.
    */
-  | "artifact_factory";
+  | "artifact_factory"
+  /**
+   * v8 (M23): the Core making an app for the owner — planning it,
+   * scaffolding it into a real project on the owner's machine, running it
+   * there in a bounded process, testing it with its own tests. A building
+   * posture while the project is planned or scaffolded (the making
+   * posture's lattice and outward traffic); a distinct RUNNING posture when
+   * the publisher said `running` — the lattice stands, the shells open, and
+   * the paths carry steady traffic only when a port was named (a server
+   * answering at an address); still once tested, stopped, or failed. Calm,
+   * nothing that could be read as progress, and the project, the state, the
+   * port and the counts as the caption. A failure is worded as one with its
+   * count — never dressed as done.
+   */
+  | "app_factory";
 
 /**
  * Which of the two evidence sources produced the intent (ADR-0061 §4).
@@ -406,6 +421,15 @@ export type VisualIntent = {
    */
   artifact: ArtifactFacts | null;
 
+  // -------------------------------------------- v8: the App Factory (M23 §6)
+  /**
+   * The published facts about the app being made — the project, the state,
+   * the port, the test counts — each `null` when the publisher sent none,
+   * and the whole thing `null` outside the `app_factory` kind (kept on its
+   * last-known shape). Words, not channels.
+   */
+  app: AppFacts | null;
+
   palette: PaletteToken;
 };
 
@@ -492,6 +516,7 @@ function blank(kind: CoreVisualKind, palette: PaletteToken): VisualIntent {
     mail: null,
     calendar: null,
     artifact: null,
+    app: null,
     palette,
   };
 }
@@ -1080,6 +1105,47 @@ function forLiveState(event: UiStateEvent, claim: Claim): VisualIntent {
       };
     }
 
+    case "app.factory": {
+      // The building posture (M23 §6) while a project is planned or
+      // scaffolded: the making posture's shape — a faint lattice being laid,
+      // the paths carrying files OUT to the owner's machine, nothing flowing
+      // inward, the rings turning slowly. A `running` app is a distinct
+      // posture: the lattice STANDS (a program's structure, not a page
+      // being laid), the shells open a little more, the glow is a shade
+      // brighter — and the paths carry steady traffic only when the
+      // publisher named a port, because a server answering at an address is
+      // what that traffic would mean; a `running` with no port keeps the
+      // shape and the glow, and its paths are still. `tested` is still and
+      // bright (the project's own tests ran); `stopped` is still and dim;
+      // `failed` is held under restraint with no agitation — a failed test
+      // is a fact about a program, not a fault in the agent. A state this
+      // build cannot read, or none at all, is the building posture. No
+      // pulse, no constellation, no progress: a scaffold of unknown length
+      // gets no bar. The caption is the project, the state, the port and the
+      // counts, each as published.
+      const facts = appFacts(event);
+      const state = facts.state;
+      const running = state === "running";
+      const serving = appIsServing(facts);
+      const settled = state === "tested" || state === "failed" || state === "stopped";
+      const glowBase = running ? 0.42 : state === "tested" ? 0.4 : state === "failed" ? 0.22 : state === "stopped" ? 0.18 : 0.3;
+      return {
+        ...base("app_factory", "making"),
+        label: appCaption(facts),
+        scale: running ? 1.06 : 1.04,
+        topology: running ? 0.35 : settled ? 0.15 : 0.2,
+        breathAmplitude: 0.03,
+        breathHz: running ? 0.2 : 0.24,
+        energy: e,
+        glow: glowOf(glowBase, e),
+        shellSpread: running ? 0.4 : settled ? 0.2 : 0.3,
+        ringSpin: running ? 0.25 : settled ? IDLE_RING_SPIN : 0.18,
+        flowRate: serving ? 0.35 : running || settled ? 0 : 0.3,
+        restraint: state === "failed" ? 0.5 : 0,
+        app: facts,
+      };
+    }
+
     default:
       // Reached only by a contract state this table has not been taught. Both
       // gates upstream (`isKnownState`, and `coreClaim`'s agent/lab filter)
@@ -1198,14 +1264,17 @@ export function applyVoiceOverlay(bus: VisualIntent, voice: VoiceOverlay): Visua
   // the calendar: "gelen kutumu oku" runs a mail tool, and the bus knows the
   // folder and the draft (M21 §3). v7 extends it to the factory: "bana bir
   // bütçe tablosu yap" runs `artifact.create`, and the bus knows the title
-  // and the verdict (M22 §6).
+  // and the verdict (M22 §6). v8 extends it to the App Factory: "uygulamayı
+  // çalıştır" runs `app.run`, and the bus knows the project and the port
+  // (M23 §6).
   if (
     voice.state === "tool_running" &&
     (isOperatorActing(bus) ||
       isDocumentReading(bus) ||
       isMailReading(bus) ||
       isCalendarPlanning(bus) ||
-      isArtifactMaking(bus))
+      isArtifactMaking(bus) ||
+      isAppBuilding(bus))
   )
     return bus;
   const local = (kind: CoreVisualKind, palette: PaletteToken): VisualIntent => ({
@@ -1494,4 +1563,14 @@ export function isCalendarPlanning(intent: VisualIntent): boolean {
 /** True while the Core body is a LIVE factory event (v7); a last-known making shape is not. */
 export function isArtifactMaking(intent: VisualIntent): boolean {
   return intent.kind === "artifact_factory";
+}
+
+/** True while the Core body is a LIVE app event (v8) — building, running, tested, failed or stopped; a last-known shape is not. */
+export function isAppBuilding(intent: VisualIntent): boolean {
+  return intent.kind === "app_factory";
+}
+
+/** True while the Core body is a LIVE app event whose publisher said `running` on a named port. */
+export function isAppServing(intent: VisualIntent): boolean {
+  return isAppBuilding(intent) && intent.app !== null && appIsServing(intent.app);
 }

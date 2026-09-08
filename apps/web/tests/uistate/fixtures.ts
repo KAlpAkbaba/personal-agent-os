@@ -564,6 +564,42 @@ export const ARTIFACT_FACTORY = (
 export const ARTIFACT_FACTORY_BARE = () =>
   event({ state: "artifact.factory", subsystem: "artifacts", task_id: "art-task-2" });
 
+// ------------------------------------------------ v8: the App Factory (M23 §6)
+
+/**
+ * `app.factory` as the M23 spec §6 has the Cloud Core publish it: subsystem
+ * `apps`, the task id, and in metadata the project's name, its `AppProject`
+ * state (`planned` | `scaffolded` | `running` | `tested` | `failed` |
+ * `stopped`), the port the bounded process is bound to on `127.0.0.1` while
+ * it runs, and — after a test run — the counts as `tests: {passed, failed}`,
+ * the one structured value this family adds (carried on `event.tests` past
+ * the boundary, as `refs` is).
+ */
+export const APP_FACTORY = (
+  project: string | null = "Görev Takip",
+  state: string | null = "scaffolded",
+  port: number | null = null,
+  tests: { passed: number; failed: number } | null = null,
+  extra: Record<string, unknown> = {},
+) => ({
+  ...event({
+    state: "app.factory",
+    subsystem: "apps",
+    task_id: "app-task-1",
+    status: state ?? "building",
+    metadata: {
+      ...(project === null ? {} : { project }),
+      ...(state === null ? {} : { state }),
+      ...(port === null ? {} : { port }),
+      ...(extra as Record<string, string | number | boolean>),
+    },
+  }),
+  ...(tests === null ? {} : { tests }),
+});
+
+/** An app event whose publisher sent no metadata at all. */
+export const APP_FACTORY_BARE = () => event({ state: "app.factory", subsystem: "apps", task_id: "app-task-2" });
+
 /** The owner-authorised release path, mid-deployment (ADR-0055). */
 export const RELEASE_DEPLOYING = () =>
   event({

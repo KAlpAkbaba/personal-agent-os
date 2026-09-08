@@ -98,6 +98,10 @@ const EXPECTED_KIND: Record<string, CoreVisualKind> = {
   // independent parser is the agent's own work — a core state with its own
   // deliberate making posture.
   "artifact.factory": "artifact_factory",
+  // v8 (M23): making an app for the owner — scaffolding, running and testing
+  // it on the owner's machine — is the agent's own work: a core state with
+  // its own deliberate building posture, and a running posture inside it.
+  "app.factory": "app_factory",
 };
 
 describe("a visual state is entered only by its own event", () => {
