@@ -1,0 +1,69 @@
+{
+  "kind": "m27_m28_tool_detection",
+  "measured_at": "2026-09-08T10:25:00Z",
+  "machine": "the owner's Windows 10 machine",
+  "m27_creative": {
+    "paint": {
+      "mspaint_exe": true,
+      "store_paint_version": null,
+      "verdict": "REAL: classic mspaint.exe present"
+    },
+    "photoshop": {
+      "registered": false,
+      "creative_cloud_app": "6.6.0.611 (present)",
+      "acrobat": "26.001.21691",
+      "verdict": "NOT INSTALLED: provider architecture + honest refusal; the owner may install through Creative Cloud (their licence)"
+    },
+    "illustrator": {
+      "registered": false,
+      "verdict": "NOT INSTALLED"
+    },
+    "figma_desktop": false,
+    "gimp": false,
+    "pil_in_system_python": true
+  },
+  "m28_native_mobile": {
+    "dotnet_sdk": "10.0.400",
+    "dotnet_templates": [
+      "wpf",
+      "winforms",
+      "console"
+    ],
+    "visual_studio_msbuild": false,
+    "windows_kits_makeappx": "C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/<arch>/makeappx.exe",
+    "inno_setup": false,
+    "wix": false,
+    "node": "C:/Program Files/nodejs/node.exe",
+    "cargo": "C:/Users/alpak/.cargo/bin/cargo.exe",
+    "flutter": false,
+    "android_sdk": {
+      "root": "%LOCALAPPDATA%/Android/Sdk",
+      "platform_tools_adb": true,
+      "emulator": true,
+      "cmdline_tools": false,
+      "build_tools": [
+        "30.0.3",
+        "33.0.0"
+      ],
+      "platforms": [
+        "android-32",
+        "android-33"
+      ],
+      "system_images": [
+        "android-23/google_apis/x86",
+        "android-33/..."
+      ],
+      "avds": [],
+      "android_studio": false
+    },
+    "java": {
+      "on_path": false,
+      "JAVA_HOME": null,
+      "jdk_dirs": [],
+      "verdict": "NO JDK: an APK/AAB build (Gradle, javac/kotlinc, avdmanager) needs one - owner item 33 (install a JDK, e.g. Android Studio or Microsoft OpenJDK); no download is started by the assistant"
+    },
+    "hypervisor_present": true,
+    "wsl": false,
+    "verdict": "Windows EXE REAL-capable (dotnet publish WPF; MSIX via makeappx); Android gated on a JDK (item 33); iOS impossible here (no macOS/Xcode) - classify honestly"
+  }
+}
