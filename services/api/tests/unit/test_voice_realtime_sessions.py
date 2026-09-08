@@ -292,6 +292,14 @@ def test_create_selects_by_capability_and_returns_the_contract(wired) -> None:
         "artifact.validate",
         "artifact.open",
         "artifact.list",
+        # M23 (docs/M23_APP_FACTORY_SPEC.md §5): the App Factory.
+        "app.create",
+        "app.run",
+        "app.test",
+        "app.stop",
+        "app.status",
+        "app.open",
+        "app.list",
     }
     research = next(t for t in data["tools"] if t["name"] == "research.start")
     assert research["long_running"] is True and research["preamble"] == RESEARCH_PREAMBLE_TR

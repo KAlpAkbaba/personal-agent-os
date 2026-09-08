@@ -1275,6 +1275,12 @@ def record_client_events(
                 "artifact_kind": intent.artifact_kind,
                 "artifact_title": intent.artifact_title,
                 "spoken_numbers": intent.spoken_numbers,
+                # M23 (spec §5): the App Factory fields the owner's WORDS carried, for
+                # the same "owner's words win over the model's argument" reason.
+                "app_ref": intent.app_ref,
+                "app_template": intent.app_template,
+                "app_name": intent.app_name,
+                "app_commands": intent.app_commands,
                 # ADR-0076. The research SHAPE, decided without the "does a completed
                 # research exist?" precondition (that precondition is what let a deictic
                 # follow-up on an empty history become a crawl), and WHICH research the

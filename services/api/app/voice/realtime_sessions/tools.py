@@ -49,6 +49,7 @@ from app.voice.realtime import RealtimeState
 from app.voice.realtime_sessions import actions
 from app.voice.realtime_sessions.sideband import SB_NARRATION_CURSOR, SB_PLAN_CHANGED
 from app.voice.realtime_sessions.tools_ambient import register_ambient_tools
+from app.voice.realtime_sessions.tools_apps import APP_TOOL_NAMES, register_apps_tools
 from app.voice.realtime_sessions.tools_artifacts import (
     ARTIFACT_TOOL_NAMES,
     register_artifacts_tools,
@@ -548,6 +549,12 @@ CALENDAR_CLARIFYING_TOOLS: frozenset[str] = frozenset(CALENDAR_TOOL_NAMES)
 #: families already get, never a second copy of it.
 ARTIFACT_CLARIFYING_TOOLS: frozenset[str] = frozenset(ARTIFACT_TOOL_NAMES)
 
+#: M23 (docs/M23_APP_FACTORY_SPEC.md §5): every app-factory tool may answer "Hangi
+#: uygulama?" rather than a receipt — the same non-research extension of the ADR-0077
+#: contract the operator/document/mail/artifact families already get, never a second
+#: copy of it.
+APP_CLARIFYING_TOOLS: frozenset[str] = frozenset(APP_TOOL_NAMES)
+
 
 def result_is_research_bound(tool_name: str, result: Any) -> bool:
     """Whether a handler's result falls under the research result contract (ADR-0077)."""
@@ -590,6 +597,7 @@ def terminal_status_for(tool_name: str, result: Any) -> tuple[str, str | None]:
             | MAIL_CLARIFYING_TOOLS
             | CALENDAR_CLARIFYING_TOOLS
             | ARTIFACT_CLARIFYING_TOOLS
+            | APP_CLARIFYING_TOOLS
             and isinstance(result, dict)
             and result.get("status") == RESULT_NEEDS_CLARIFICATION
             and str(result.get("speech") or "").strip()
@@ -1635,6 +1643,8 @@ def default_registry() -> ToolRegistry:
     register_calendar_tools(reg)
     # M22 (docs/M22_ARTIFACT_FACTORY_SPEC.md §5): the Artifact Factory's voice tools.
     register_artifacts_tools(reg)
+    # M23 (docs/M23_APP_FACTORY_SPEC.md §5): the App Factory's voice tools.
+    register_apps_tools(reg)
     return reg
 
 

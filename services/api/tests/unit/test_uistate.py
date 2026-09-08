@@ -90,15 +90,18 @@ def test_the_vocabulary_is_the_one_the_owner_specified() -> None:
         "mail.activity",
         "calendar.activity",
         "artifact.factory",
+        # M23 (App Factory spec §2, §7, ADR-0086): the app-factory channel.
+        "app.factory",
     }
     contract = ui_state_contract()
-    assert contract["contract_version"] == 7
+    assert contract["contract_version"] == 8
     assert "ambient" in contract["subsystems"]
     assert "operator" in contract["subsystems"]
     assert "documents" in contract["subsystems"]
     assert "mail" in contract["subsystems"]
     assert "calendar" in contract["subsystems"]
     assert "artifacts" in contract["subsystems"]
+    assert "appfactory" in contract["subsystems"]
     assert "audio" in contract["metadata_rules"]["forbidden"]
 
 
