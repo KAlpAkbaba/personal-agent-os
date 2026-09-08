@@ -1,0 +1,32 @@
+{
+  "kind": "presentation",
+  "language": "tr",
+  "slides": [
+    {
+      "bullets": [
+        "Üç yeni müşteri",
+        "Gelir hedefi aşıldı"
+      ],
+      "title": "Giriş"
+    },
+    {
+      "bullets": [
+        "Bulut maliyeti yüzde 8 arttı",
+        "Dönüşüm oranı yüzde 12"
+      ],
+      "title": "Bulgular"
+    },
+    {
+      "bullets": [
+        "İki ürün lansmanı",
+        "Destek süresi yarıya"
+      ],
+      "title": "Sonuç"
+    }
+  ],
+  "spoken_numbers": [
+    8,
+    12
+  ],
+  "title": "Q3 Özeti"
+}

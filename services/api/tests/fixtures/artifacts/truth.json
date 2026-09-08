@@ -1,0 +1,421 @@
+{
+  "generated_by": "scripts/tests/make-artifact-fixtures.py",
+  "specs": {
+    "butce-tablosu": {
+      "expect": {
+        "csv": [
+          {
+            "contains": "Kalem",
+            "ref": "r1"
+          },
+          {
+            "contains": "12000",
+            "ref": "r2"
+          },
+          {
+            "contains": "45000",
+            "ref": "r3"
+          },
+          {
+            "contains": "8000",
+            "ref": "r4"
+          },
+          {
+            "contains": "65000",
+            "ref": "r5"
+          }
+        ],
+        "xlsx": [
+          {
+            "ref": "sheet:Ozet!A1",
+            "text": "Kalem"
+          },
+          {
+            "ref": "sheet:Ozet!B1",
+            "text": "Tutar"
+          },
+          {
+            "ref": "sheet:Ozet!A2",
+            "text": "Kira"
+          },
+          {
+            "ref": "sheet:Ozet!B2",
+            "value": 12000
+          },
+          {
+            "ref": "sheet:Ozet!A3",
+            "text": "Maaş"
+          },
+          {
+            "ref": "sheet:Ozet!B3",
+            "value": 45000
+          },
+          {
+            "ref": "sheet:Ozet!A4",
+            "text": "Yazılım"
+          },
+          {
+            "ref": "sheet:Ozet!B4",
+            "value": 8000
+          },
+          {
+            "ref": "sheet:Ozet!A5",
+            "text": "Toplam"
+          },
+          {
+            "ref": "sheet:Ozet!B5",
+            "value": 65000
+          },
+          {
+            "formula": "=B5*0.2",
+            "ref": "sheet:Ozet!B6"
+          }
+        ]
+      },
+      "formats": [
+        "xlsx",
+        "csv"
+      ],
+      "kind": "spreadsheet",
+      "spoken_numbers": [
+        12000,
+        45000,
+        8000
+      ],
+      "title": "Bütçe 2026"
+    },
+    "hosgeldin-sayfasi": {
+      "expect": {
+        "html": [
+          {
+            "ref": "h1:Hoş geldin",
+            "text": "Hoş geldin"
+          },
+          {
+            "ref": "h2:Ne yapabilirim?",
+            "text": "Ne yapabilirim?"
+          },
+          {
+            "contains": "Bu sayfa Artifact Factory tarafından üretildi."
+          }
+        ],
+        "md": [
+          {
+            "ref": "h1:Hoş geldin",
+            "text": "Hoş geldin"
+          },
+          {
+            "ref": "h2:Ne yapabilirim?",
+            "text": "Ne yapabilirim?"
+          },
+          {
+            "contains": "Bu sayfa Artifact Factory tarafından üretildi."
+          }
+        ]
+      },
+      "formats": [
+        "html",
+        "md"
+      ],
+      "kind": "page",
+      "spoken_numbers": [],
+      "title": "Hoş geldin"
+    },
+    "musteri-listesi": {
+      "expect": {
+        "csv": [
+          {
+            "contains": "Ad,Şehir,Tutar",
+            "ref": "r1"
+          },
+          {
+            "contains": "1200",
+            "ref": "r2"
+          },
+          {
+            "contains": "980",
+            "ref": "r3"
+          },
+          {
+            "contains": "1500",
+            "ref": "r4"
+          }
+        ],
+        "json": [
+          {
+            "equals": [
+              "Ad",
+              "Şehir",
+              "Tutar"
+            ],
+            "ref": "$.columns"
+          },
+          {
+            "count": 3,
+            "ref": "$.rows"
+          }
+        ]
+      },
+      "formats": [
+        "csv",
+        "json"
+      ],
+      "kind": "dataset",
+      "spoken_numbers": [
+        1200,
+        980,
+        1500
+      ],
+      "title": "Müşteri Listesi"
+    },
+    "q3-sunum": {
+      "expect": {
+        "pptx": [
+          {
+            "contains": [
+              "Üç yeni müşteri",
+              "Gelir hedefi aşıldı"
+            ],
+            "ref": "s1",
+            "title": "Giriş"
+          },
+          {
+            "contains": [
+              "Bulut maliyeti yüzde 8 arttı",
+              "Dönüşüm oranı yüzde 12"
+            ],
+            "ref": "s2",
+            "title": "Bulgular"
+          },
+          {
+            "contains": [
+              "İki ürün lansmanı",
+              "Destek süresi yarıya"
+            ],
+            "ref": "s3",
+            "title": "Sonuç"
+          },
+          {
+            "structure": {
+              "slide_count": 3
+            }
+          }
+        ]
+      },
+      "formats": [
+        "pptx"
+      ],
+      "kind": "presentation",
+      "spoken_numbers": [
+        8,
+        12
+      ],
+      "title": "Q3 Özeti"
+    },
+    "toplanti-notlari": {
+      "expect": {
+        "docx": [
+          {
+            "ref": "h1:Giriş",
+            "text": "Giriş"
+          },
+          {
+            "ref": "h2:Kararlar",
+            "text": "Kararlar"
+          },
+          {
+            "ref": "h2:Sorumlular",
+            "text": "Sorumlular"
+          },
+          {
+            "ref": "h2:Riskler",
+            "text": "Riskler"
+          },
+          {
+            "ref": "h1:Sonuç",
+            "text": "Sonuç"
+          },
+          {
+            "contains": "8 Eylül 2026 toplantısının notları."
+          },
+          {
+            "contains": "Bütçe onaylandı."
+          },
+          {
+            "contains": "Sürüm takvimi bir hafta öne alındı."
+          },
+          {
+            "contains": "Tedarikçi bağımlılığı."
+          },
+          {
+            "contains": "Bir sonraki toplantı 15 Eylül."
+          }
+        ],
+        "html": [
+          {
+            "ref": "h1:Giriş",
+            "text": "Giriş"
+          },
+          {
+            "ref": "h2:Kararlar",
+            "text": "Kararlar"
+          },
+          {
+            "ref": "h2:Sorumlular",
+            "text": "Sorumlular"
+          },
+          {
+            "ref": "h2:Riskler",
+            "text": "Riskler"
+          },
+          {
+            "ref": "h1:Sonuç",
+            "text": "Sonuç"
+          },
+          {
+            "contains": "8 Eylül 2026 toplantısının notları."
+          },
+          {
+            "contains": "Bütçe onaylandı."
+          },
+          {
+            "contains": "Sürüm takvimi bir hafta öne alındı."
+          },
+          {
+            "contains": "Tedarikçi bağımlılığı."
+          },
+          {
+            "contains": "Bir sonraki toplantı 15 Eylül."
+          }
+        ],
+        "md": [
+          {
+            "ref": "h1:Giriş",
+            "text": "Giriş"
+          },
+          {
+            "ref": "h2:Kararlar",
+            "text": "Kararlar"
+          },
+          {
+            "ref": "h2:Sorumlular",
+            "text": "Sorumlular"
+          },
+          {
+            "ref": "h2:Riskler",
+            "text": "Riskler"
+          },
+          {
+            "ref": "h1:Sonuç",
+            "text": "Sonuç"
+          },
+          {
+            "contains": "8 Eylül 2026 toplantısının notları."
+          },
+          {
+            "contains": "Bütçe onaylandı."
+          },
+          {
+            "contains": "Sürüm takvimi bir hafta öne alındı."
+          },
+          {
+            "contains": "Tedarikçi bağımlılığı."
+          },
+          {
+            "contains": "Bir sonraki toplantı 15 Eylül."
+          }
+        ],
+        "pdf": [
+          {
+            "ref": "h1:Giriş",
+            "text": "Giriş"
+          },
+          {
+            "ref": "h2:Kararlar",
+            "text": "Kararlar"
+          },
+          {
+            "ref": "h2:Sorumlular",
+            "text": "Sorumlular"
+          },
+          {
+            "ref": "h2:Riskler",
+            "text": "Riskler"
+          },
+          {
+            "ref": "h1:Sonuç",
+            "text": "Sonuç"
+          },
+          {
+            "contains": "8 Eylül 2026 toplantısının notları."
+          },
+          {
+            "contains": "Bütçe onaylandı."
+          },
+          {
+            "contains": "Sürüm takvimi bir hafta öne alındı."
+          },
+          {
+            "contains": "Tedarikçi bağımlılığı."
+          },
+          {
+            "contains": "Bir sonraki toplantı 15 Eylül."
+          }
+        ],
+        "txt": [
+          {
+            "ref": "h1:Giriş",
+            "text": "Giriş"
+          },
+          {
+            "ref": "h2:Kararlar",
+            "text": "Kararlar"
+          },
+          {
+            "ref": "h2:Sorumlular",
+            "text": "Sorumlular"
+          },
+          {
+            "ref": "h2:Riskler",
+            "text": "Riskler"
+          },
+          {
+            "ref": "h1:Sonuç",
+            "text": "Sonuç"
+          },
+          {
+            "contains": "8 Eylül 2026 toplantısının notları."
+          },
+          {
+            "contains": "Bütçe onaylandı."
+          },
+          {
+            "contains": "Sürüm takvimi bir hafta öne alındı."
+          },
+          {
+            "contains": "Tedarikçi bağımlılığı."
+          },
+          {
+            "contains": "Bir sonraki toplantı 15 Eylül."
+          }
+        ]
+      },
+      "formats": [
+        "docx",
+        "pdf",
+        "html",
+        "md",
+        "txt"
+      ],
+      "kind": "document",
+      "spoken_numbers": [
+        12000,
+        45000,
+        8,
+        15,
+        2026
+      ],
+      "title": "Toplantı Notları"
+    }
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "kind": "spreadsheet",
+  "language": "tr",
+  "sheets": [
+    {
+      "columns": [
+        "Kalem",
+        "Tutar"
+      ],
+      "formulas": {
+        "A6": "KDV",
+        "B6": "=B5*0.2"
+      },
+      "name": "Ozet",
+      "rows": [
+        [
+          "Kira",
+          12000
+        ],
+        [
+          "Maaş",
+          45000
+        ],
+        [
+          "Yazılım",
+          8000
+        ]
+      ],
+      "totals": {
+        "Tutar": "sum"
+      }
+    }
+  ],
+  "spoken_numbers": [
+    12000,
+    45000,
+    8000
+  ],
+  "title": "Bütçe 2026"
+}

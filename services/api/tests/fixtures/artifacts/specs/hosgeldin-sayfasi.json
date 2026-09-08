@@ -1,0 +1,24 @@
+{
+  "kind": "page",
+  "language": "tr",
+  "sections": [
+    {
+      "heading": "Hoş geldin",
+      "level": 1,
+      "paragraphs": [
+        "Bu sayfa Artifact Factory tarafından üretildi."
+      ]
+    },
+    {
+      "bullets": [
+        "Belge",
+        "Tablo",
+        "Sunum"
+      ],
+      "heading": "Ne yapabilirim?",
+      "level": 2
+    }
+  ],
+  "spoken_numbers": [],
+  "title": "Hoş geldin"
+}

@@ -1,0 +1,67 @@
+{
+  "kind": "document",
+  "language": "tr",
+  "sections": [
+    {
+      "heading": "Giriş",
+      "level": 1,
+      "paragraphs": [
+        "8 Eylül 2026 toplantısının notları."
+      ]
+    },
+    {
+      "bullets": [
+        "Kira 12000",
+        "Maaş 45000"
+      ],
+      "heading": "Kararlar",
+      "level": 2,
+      "paragraphs": [
+        "Bütçe onaylandı.",
+        "Sürüm takvimi bir hafta öne alındı."
+      ]
+    },
+    {
+      "heading": "Sorumlular",
+      "level": 2,
+      "table": {
+        "columns": [
+          "Kişi",
+          "Görev"
+        ],
+        "rows": [
+          [
+            "Ali",
+            "Plan"
+          ],
+          [
+            "Ayşe",
+            "Bütçe"
+          ]
+        ]
+      }
+    },
+    {
+      "heading": "Riskler",
+      "level": 2,
+      "paragraphs": [
+        "Tedarikçi bağımlılığı."
+      ]
+    },
+    {
+      "heading": "Sonuç",
+      "level": 1,
+      "paragraphs": [
+        "Bir sonraki toplantı 15 Eylül."
+      ]
+    }
+  ],
+  "spoken_numbers": [
+    12000,
+    45000,
+    8,
+    15,
+    2026
+  ],
+  "title": "Toplantı Notları"
+}
