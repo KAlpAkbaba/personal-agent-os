@@ -1,0 +1,6 @@
+{
+  "entry": "cli.js",
+  "test": {
+    "unit": "node tests/run.js"
+  }
+}

@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{APP_TITLE}}</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <main>
+    <h1 id="app-title">{{APP_TITLE}}</h1>
+    <form id="task-form">
+      <input id="new-task-input" type="text" placeholder="Yeni görev" maxlength="200" required>
+      <button id="add-task-button" type="submit">Ekle</button>
+    </form>
+    <ul id="task-list"></ul>
+    <p id="empty-message" class="empty">Henüz görev yok.</p>
+  </main>
+  <script src="logic.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

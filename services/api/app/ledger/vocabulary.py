@@ -73,6 +73,11 @@ SUBSYSTEM_CALENDAR = "calendar"
 #: own subsystem so "what did it make/open on my behalf?" is answerable without separating
 #: it from the M13/M20 rows that happen to share a device call or a render.
 SUBSYSTEM_ARTIFACTS = "artifacts"
+#: M23 App Factory (docs/M23_APP_FACTORY_SPEC.md §1, ADR-0086): projects the assistant
+#: scaffolded, ran, tested and stopped on the owner's machine. Its own subsystem so
+#: "what did it build and run for me?" is answerable without separating it from the
+#: M19 operator rows or the M22 artifact rows that happen to share a device call.
+SUBSYSTEM_APPFACTORY = "appfactory"
 
 SUBSYSTEMS: Final[tuple[str, ...]] = (
     SUBSYSTEM_RESEARCH,
@@ -95,6 +100,7 @@ SUBSYSTEMS: Final[tuple[str, ...]] = (
     SUBSYSTEM_MAIL,
     SUBSYSTEM_CALENDAR,
     SUBSYSTEM_ARTIFACTS,
+    SUBSYSTEM_APPFACTORY,
 )
 
 # ------------------------------------------------------------------ statuses
@@ -323,6 +329,17 @@ EVENT_TYPE_ARTIFACT_RENDERED = "artifact.render"
 EVENT_TYPE_ARTIFACT_VALIDATED = "artifact.validate"
 EVENT_TYPE_ARTIFACT_OPENED = "artifact.open"
 EVENT_TYPE_ARTIFACT_LISTED = "artifact.list"
+#: M23 App Factory (spec §1, ADR-0086): one row per owner-initiated project lifecycle
+#: transition — the same "one row per transition" discipline operator.task.* already
+#: gives M19's tasks.
+EVENT_TYPE_APP_PROJECT_CREATED = "app.project.create"
+EVENT_TYPE_APP_PROJECT_SCAFFOLDED = "app.project.scaffold"
+EVENT_TYPE_APP_PROJECT_RUN = "app.project.run"
+EVENT_TYPE_APP_PROJECT_EXERCISED = "app.project.exercise"
+EVENT_TYPE_APP_PROJECT_TESTED = "app.project.test"
+EVENT_TYPE_APP_PROJECT_STOPPED = "app.project.stop"
+EVENT_TYPE_APP_PROJECT_FAILED = "app.project.failed"
+EVENT_TYPE_APP_PROJECT_LISTED = "app.project.list"
 
 EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_RESEARCH_PLANNED,
@@ -410,6 +427,14 @@ EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_ARTIFACT_VALIDATED,
     EVENT_TYPE_ARTIFACT_OPENED,
     EVENT_TYPE_ARTIFACT_LISTED,
+    EVENT_TYPE_APP_PROJECT_CREATED,
+    EVENT_TYPE_APP_PROJECT_SCAFFOLDED,
+    EVENT_TYPE_APP_PROJECT_RUN,
+    EVENT_TYPE_APP_PROJECT_EXERCISED,
+    EVENT_TYPE_APP_PROJECT_TESTED,
+    EVENT_TYPE_APP_PROJECT_STOPPED,
+    EVENT_TYPE_APP_PROJECT_FAILED,
+    EVENT_TYPE_APP_PROJECT_LISTED,
 )
 
 #: ``alarm.<state_lowercase>`` for every state in ``app.alarms.models.ALARM_STATES``
