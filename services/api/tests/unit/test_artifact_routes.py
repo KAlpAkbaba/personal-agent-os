@@ -212,3 +212,107 @@ def test_get_artifact_with_body_returns_the_canonical_spec_json(client: TestClie
     canonical = json.loads(body["canonical_body"])
     assert canonical["title"] == "Bütçe 2026"
     assert canonical["kind"] == "spreadsheet"
+
+
+# ------------------------------------------------------------------- POST .../open
+
+
+def _client_with_device(device):
+    engine = create_engine(
+        "sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False}
+    )
+    for table in ARTIFACT_TABLES:
+        table.create(engine)
+    settings = Settings(_env_file=None)
+    app = create_app(settings)
+    artifacts = ArtifactRuntime(settings)
+    artifacts._engine = engine
+    artifacts._session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    artifacts._store = InMemoryObjectStore()
+    app.state.artifacts = artifacts
+    app.state.device_action = device
+    test_client = TestClient(app)
+    authenticate(app, test_client, settings=settings)
+    return test_client
+
+
+def test_open_artifact_fetches_and_opens_through_the_device() -> None:
+    from tests.alarms_support import FakeDeviceAction
+    from tests.artifacts_support import file_fetch_ok
+
+    device = FakeDeviceAction(results={"file.fetch": file_fetch_ok})
+    client = _client_with_device(device)
+    created = client.post("/v1/artifacts/factory", json={"spec": _spec_json(BUDGET)}).json()
+    artifact_id = created["artifact_id"]
+
+    resp = client.post(f"/v1/artifacts/{artifact_id}/open")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["state"] == "opened"
+    assert body["error_class"] is None
+    assert body["window_title"]
+    assert device.capabilities_called() == ["file.fetch"]
+    payload = device.payload_for("file.fetch")
+    assert payload["open"] is True
+    assert payload["sha256"] in {r["content_hash"] for r in created["renders"]}
+
+
+def test_open_artifact_with_explicit_format() -> None:
+    from tests.alarms_support import FakeDeviceAction
+    from tests.artifacts_support import file_fetch_ok
+
+    device = FakeDeviceAction(results={"file.fetch": file_fetch_ok})
+    client = _client_with_device(device)
+    created = client.post("/v1/artifacts/factory", json={"spec": _spec_json(BUDGET)}).json()
+    artifact_id = created["artifact_id"]
+
+    resp = client.post(f"/v1/artifacts/{artifact_id}/open", json={"format": "csv"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["format"] == "csv"
+
+
+def test_open_artifact_404s_for_unknown_artifact() -> None:
+    import uuid
+
+    from tests.alarms_support import FakeDeviceAction
+
+    client = _client_with_device(FakeDeviceAction())
+    resp = client.post(f"/v1/artifacts/{uuid.uuid4()}/open")
+    assert resp.status_code == 404
+    assert resp.json()["detail"]["code"] == "not_found"
+
+
+def test_open_artifact_with_no_device_action_is_capability_missing() -> None:
+    client = _client_with_device(None)
+    created = client.post("/v1/artifacts/factory", json={"spec": _spec_json(BUDGET)}).json()
+    resp = client.post(f"/v1/artifacts/{created['artifact_id']}/open")
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["code"] == "capability_missing"
+
+
+def test_open_artifact_refuses_an_unproducable_format() -> None:
+    from tests.alarms_support import FakeDeviceAction
+
+    client = _client_with_device(FakeDeviceAction())
+    created = client.post("/v1/artifacts/factory", json={"spec": _spec_json(PRESENTATION)}).json()
+    resp = client.post(f"/v1/artifacts/{created['artifact_id']}/open", json={"format": "xlsx"})
+    assert resp.status_code == 404
+    assert resp.json()["detail"]["code"] == "not_found"
+
+
+def test_open_artifact_requires_owner_session() -> None:
+    import uuid
+
+    from app.identity.root import InMemoryCredentialRoot
+    from app.identity.runtime import IdentityRuntime
+    from tests.identity_support import make_identity_engine
+
+    settings = Settings(_env_file=None)
+    app = create_app(settings)
+    app.state.identity = IdentityRuntime(
+        settings, engine=make_identity_engine(), root=InMemoryCredentialRoot()
+    )
+    app.state.identity.service.bootstrap()
+    unauthenticated = TestClient(app)
+    resp = unauthenticated.post(f"/v1/artifacts/{uuid.uuid4()}/open")
+    assert resp.status_code == 401
