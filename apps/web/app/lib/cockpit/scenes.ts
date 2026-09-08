@@ -186,9 +186,6 @@ export const fetchScenes = (): Promise<Loaded<SceneRow[]>> =>
 
 // -------------------------------------------------------------- the render
 
-/** How long the blob URL handed to an `<img>` stays valid before it is revoked. */
-export const SCENE_RENDER_REVOKE_MS = 300_000;
-
 /**
  * Fetch one scene's last render through the owner session.
  *

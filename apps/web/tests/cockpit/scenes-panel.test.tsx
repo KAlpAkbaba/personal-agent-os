@@ -49,6 +49,7 @@ import {
   sceneRenderPath,
 } from "../../app/lib/cockpit/scenes";
 import { SCENE_OUTCOME_NO_STATE_TR, runSceneAction, sceneOutcomeText } from "../../app/lib/cockpit/useSceneControl";
+import { sceneRenderKey, sceneRenderNotice } from "../../app/lib/cockpit/useSceneRender";
 import { SCENE_RUN_STATES, SCENE_TTL_MS } from "../../app/lib/uistate/contract";
 import { SCENE_NO_OBJECT_NAMES } from "../../app/lib/uistate/labels";
 import { applyResponse, emptyTruth } from "../../app/lib/uistate/truth";
@@ -644,6 +645,26 @@ describe("the client's shapes", () => {
     // A count that is not a whole non-negative number is no count.
     expect(parseSceneRow({ id: "s5", objects: "3" })?.objects).toBeNull();
     expect(parseSceneRow({ id: "s6", object_names: "Kure" })?.object_names).toEqual([]);
+  });
+
+  it("caches one image per render identity, so a NEW render replaces the old one", () => {
+    const first = VERIFIED();
+    expect(sceneRenderKey(first)).toBe("s1#a1b2c3");
+    // Same scene, a render with a different sha: a different key, so the
+    // image is fetched again rather than the old one shown for the new one.
+    expect(sceneRenderKey({ ...first, render_sha256: "d4e5f6" })).not.toBe(sceneRenderKey(first));
+    expect(sceneRenderKey({ ...first })).toBe(sceneRenderKey(first));
+    // With no sha, the row's own update time keeps them apart.
+    expect(sceneRenderKey({ scene_id: "s1", render_sha256: null, updated_at: iso(-1_000) })).not.toBe(
+      sceneRenderKey({ scene_id: "s1", render_sha256: null, updated_at: iso(-2_000) }),
+    );
+  });
+
+  it("says a render it could not fetch, naming the scene and the reason", () => {
+    expect(sceneRenderNotice("s1", new Error("HTTP 503"))).toBe("Render alınamadı (s1): HTTP 503");
+    expect(sceneRenderNotice("s1", "boom")).toBe("Render alınamadı (s1): boom");
+    // Never "there is no render": the row said there is one.
+    expect(sceneRenderNotice("s1", new Error("HTTP 503"))).not.toContain("yok");
   });
 
   it("reads a receipt from any of the shapes, and never invents a step", () => {

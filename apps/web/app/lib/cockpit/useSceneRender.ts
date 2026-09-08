@@ -24,12 +24,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { UnauthorizedError } from "../session";
-import {
-  SCENE_RENDER_REVOKE_MS,
-  type ScenePreviewProps,
-  type SceneRow,
-  fetchSceneRenderBlob,
-} from "./scenes";
+import { type ScenePreviewProps, type SceneRow, fetchSceneRenderBlob } from "./scenes";
 
 /** The ports the fetcher needs, so a test can drive it without a network or a browser. */
 export type SceneRenderPorts = {
@@ -121,6 +116,3 @@ export function useSceneRender(rows: SceneRow[], ports: SceneRenderPorts = scene
     [urls, notice],
   );
 }
-
-/** How long a blob URL is kept when a caller wants a bounded one; re-exported so the figure is spelled once. */
-export { SCENE_RENDER_REVOKE_MS };
