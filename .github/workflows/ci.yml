@@ -176,6 +176,7 @@ jobs:
           powershell -NoProfile -File scripts\tests\installer-acl.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\installer-browser.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\installer-evidence.tests.ps1 && ^
+          powershell -NoProfile -File scripts\tests\agent-update.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\installer-release.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\browser-smoke-evidence.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\agent-release-currency.tests.ps1 && ^
@@ -188,6 +189,15 @@ jobs:
           powershell -NoProfile -File scripts\tests\cloud-secret.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\cloud-release.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\utf8-json.tests.ps1
+      # The staged update, end to end, against the REAL DeviceService this job just built:
+      # candidate identity, the complete capability manifest (40 with -DisplayPower and a
+      # browser worker, browser.media_* included), promotion, Cloud Core verification,
+      # refusal of an invalid candidate, and rollback. This is the chain the 2026-09-08
+      # incident broke; it runs on every commit now, and it needs no install and no network.
+      - name: Staged-update qualification
+        shell: cmd
+        working-directory: ${{ github.workspace }}
+        run: powershell -NoProfile -File scripts\qualify-staged-update.ps1
 
   web-build:
     name: Web shell build

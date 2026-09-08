@@ -61,7 +61,15 @@ public static class Program
         {
             // M18.4 gap 3: the version this binary will announce in its hello, so a staged
             // candidate can be described BEFORE it runs and recognised on Cloud Core after.
+            // 2026-09-08: the rest of the identity a candidate must expose, from ONE source
+            // (AgentInfo) — which half of the agent this is, the assembly stamp that must
+            // agree with the announced version, and a derived fingerprint of the capability
+            // vocabulary so two installs that claim the same manifest really speak it.
             ["software_version"] = AgentInfo.SoftwareVersion,
+            ["component"] = AgentInfo.Component,
+            ["assembly_version"] = AgentInfo.AssemblyVersion,
+            ["capability_manifest_version"] = AgentInfo.CapabilityManifestVersion,
+            ["display_power_enabled"] = options.DisplayPowerEnabled,
             ["browser_enabled"] = options.BrowserEnabled,
             ["operator_enabled"] = options.OperatorEnabled,
             ["capabilities"] = new System.Text.Json.Nodes.JsonArray(
@@ -419,6 +427,17 @@ public static class Program
                 "Nothing was modified; the device identity and enrollment state are intact.");
             return 3;
         }
+        // The identity FIRST, and the whole of it (2026-09-08 incident): a running service's
+        // own log must answer "which version is this, and is it the one that was installed"
+        // without anyone having to ask another process. `started_at` is here rather than
+        // inferred from the log's timestamp because a rotated or re-read log loses that.
+        logger.LogInformation(
+            "agent identity: component={Component} software_version={SoftwareVersion} assembly_version={AssemblyVersion} capability_manifest={CapabilityManifest} started_at={StartedAt}",
+            AgentInfo.Component,
+            AgentInfo.SoftwareVersion,
+            AgentInfo.AssemblyVersion,
+            AgentInfo.CapabilityManifestVersion,
+            DateTimeOffset.UtcNow.ToString("O", System.Globalization.CultureInfo.InvariantCulture));
         logger.LogInformation(
             "starting device service: device_id={DeviceId} broker={Broker} data_dir={DataDir} pipe={Pipe}",
             state.DeviceId,

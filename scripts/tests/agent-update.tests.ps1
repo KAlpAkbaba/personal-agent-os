@@ -53,6 +53,7 @@ function New-Staging {
 $serviceManifest = [pscustomobject]@{
     Ok = $true; Capabilities = @("desktop.open_application", "desktop.alarm_arm", "browser.chrome", "browser.navigate"); BrowserEnabled = $true
     ExitCode = 0; StdErr = ""; SoftwareVersion = "0.2.0"
+    Component = "device-service"; AssemblyVersion = "0.2.0"; CapabilityManifestVersion = "aabbccdd1122"
 }
 
 try {
@@ -121,6 +122,97 @@ try {
     $unknown = { [pscustomobject]@{ devices = @() } }
     $hb5 = Test-AgentHeartbeatOnCore -FetchDevices $unknown -DeviceId $device -ExpectedVersion "0.2.0" -TimeoutSeconds 5 -PollSeconds 5 -Sleep $sleep -Now $now
     Assert-True (-not $hb5.Ok -and ($hb5.Reasons -join " ") -match "does not list device dev-1") "a device Cloud Core does not list is a failure"
+
+    # ---------------------------------------------------------------------------------
+    # 2026-09-08 PRODUCTION INCIDENT: candidate 0.6.0 staged, promoted, started, was seen by
+    # Cloud Core with all 40 of its capabilities - and this check reported
+    #   "the device reports software version '', candidate is 0.6.0"
+    # after 92.6 s, so the engine rolled a healthy release back.
+    #
+    # Why the suite above did not catch it: `New-Listing` invents a device row, and the
+    # invented row carries a TOP-LEVEL software_version. The real GET /v1/devices row never
+    # had one - the version lived at row.health.software_version. The fake was a picture of
+    # a contract nobody had written down, and it passed for months.
+    #
+    # These cases use the row shape Cloud Core actually returns (asserted from the other
+    # side by services/api/tests/unit/test_device_identity_contract.py), in both directions.
+    # ---------------------------------------------------------------------------------
+    Write-Host "the production device row (2026-09-08 incident)"
+
+    function New-CoreRow {
+        <#  The real /v1/devices row shape: identity at the top, health nested.  #>
+        param([string]$Presence, [string]$Version, [string[]]$Caps, [switch]$NoTopLevelVersion, [switch]$NoVersionAnywhere)
+        $health = [pscustomobject]@{
+            last_hello_at = "2026-09-08T20:23:00Z"
+            software_version = $(if ($NoVersionAnywhere) { $null } else { $Version })
+            heartbeat_age_s = 2.0
+            recent_outcomes = @()
+        }
+        $row = [ordered]@{
+            device_id = $device
+            name = "owner-pc"
+            platform = "windows"
+            status = $Presence
+            presence = $Presence
+            capabilities = $Caps
+            capability_count = @($Caps).Count
+            last_seen_at = "2026-09-08T20:23:00Z"
+            health = $health
+        }
+        if (-not $NoTopLevelVersion -and -not $NoVersionAnywhere) { $row["software_version"] = $Version }
+        return [pscustomobject]@{ devices = @([pscustomobject]$row) }
+    }
+
+    $m183 = @("desktop.open_application", "browser.chrome", "browser.media_play", "browser.media_volume", "browser.media_status", "browser.media_stop")
+
+    $script:clock = [datetime]"2026-09-08T20:22:00Z"
+    $live = { New-CoreRow -Presence "online" -Version "0.6.0" -Caps $m183 }
+    $hb6 = Test-AgentHeartbeatOnCore -FetchDevices $live -DeviceId $device -ExpectedVersion "0.6.0" -ExpectedCapabilities $m183 -TimeoutSeconds 90 -PollSeconds 3 -Sleep $sleep -Now $now
+    Assert-True ($hb6.Ok -and $hb6.Observed.software_version -eq "0.6.0" -and $hb6.Observed.capability_count -eq 6) "FORWARD: candidate 0.6.0 -> the production device row -> the verifier observes 0.6.0 and passes (this is the case that wrongly failed on 2026-09-08)"
+
+    $script:clock = [datetime]"2026-09-08T20:22:00Z"
+    $nestedOnly = { New-CoreRow -Presence "online" -Version "0.6.0" -Caps $m183 -NoTopLevelVersion }
+    $hb7 = Test-AgentHeartbeatOnCore -FetchDevices $nestedOnly -DeviceId $device -ExpectedVersion "0.6.0" -ExpectedCapabilities $m183 -TimeoutSeconds 90 -PollSeconds 3 -Sleep $sleep -Now $now
+    Assert-True ($hb7.Ok -and $hb7.Observed.software_version -eq "0.6.0") "a Cloud Core that has not been deployed yet (version only under health) is still read correctly - the installer does not require a lockstep deploy"
+
+    $script:clock = [datetime]"2026-09-08T20:22:00Z"
+    $noVersionAnywhere = { New-CoreRow -Presence "online" -Version "0.6.0" -Caps $m183 -NoVersionAnywhere }
+    $hb8 = Test-AgentHeartbeatOnCore -FetchDevices $noVersionAnywhere -DeviceId $device -ExpectedVersion "0.6.0" -ExpectedCapabilities $m183 -TimeoutSeconds 6 -PollSeconds 3 -Sleep $sleep -Now $now
+    Assert-True (-not $hb8.Ok -and ($hb8.Reasons -join " ") -match "carries no software version at all" -and ($hb8.Reasons -join " ") -match "Cloud Core contract fault") "REVERSE: a row that names no version ANYWHERE fails the candidate truthfully, and says the fault is Cloud Core's row - it never passes"
+
+    $script:clock = [datetime]"2026-09-08T20:22:00Z"
+    $wrongVersion = { New-CoreRow -Presence "online" -Version "0.1.0" -Caps $m183 }
+    $hb9 = Test-AgentHeartbeatOnCore -FetchDevices $wrongVersion -DeviceId $device -ExpectedVersion "0.6.0" -ExpectedCapabilities $m183 -TimeoutSeconds 6 -PollSeconds 3 -Sleep $sleep -Now $now
+    Assert-True (-not $hb9.Ok -and ($hb9.Reasons -join " ") -match "reports software version '0.1.0', the candidate is 0.6.0" -and ($hb9.Reasons -join " ") -notmatch "contract fault") "a device still on the OLD version fails as a version mismatch, distinct from a missing-version contract fault"
+
+    $script:clock = [datetime]"2026-09-08T20:22:00Z"
+    $preMedia = { New-CoreRow -Presence "online" -Version "0.6.0" -Caps @("desktop.open_application", "browser.chrome") }
+    $hb10 = Test-AgentHeartbeatOnCore -FetchDevices $preMedia -DeviceId $device -ExpectedVersion "0.6.0" -ExpectedCapabilities $m183 -TimeoutSeconds 6 -PollSeconds 3 -Sleep $sleep -Now $now
+    Assert-True (-not $hb10.Ok -and ($hb10.Reasons -join " ") -match "browser.media_play") "the right version with the wrong capability manifest still fails, naming the missing browser media operations"
+
+    Write-Host "the candidate's identity (component, stamped version, capability fingerprint)"
+    $staging3 = New-Staging "c"
+    $identityManifest = New-AgentCandidateManifest -StagingRoot $staging3 -Components @("service", "companion") -ServiceManifest $serviceManifest
+    Assert-True ($identityManifest.component -eq "device-service" -and $identityManifest.assembly_version -eq "0.2.0" -and $identityManifest.capability_manifest_version -eq "aabbccdd1122") "the candidate manifest carries the whole identity, not only the version"
+    $vId = Test-AgentCandidateManifest -Manifest $identityManifest -StagingRoot $staging3 -RequireIdentity
+    Assert-True ($vId.Ok) "a candidate that names itself fully verifies"
+
+    $drifted = [pscustomobject]@{
+        Ok = $true; Capabilities = @("desktop.open_application"); BrowserEnabled = $false; ExitCode = 0; StdErr = ""
+        SoftwareVersion = "0.6.0"; Component = "device-service"; AssemblyVersion = "0.5.0"; CapabilityManifestVersion = "aabbccdd1122"
+    }
+    $driftedManifest = New-AgentCandidateManifest -StagingRoot $staging3 -Components @("service", "companion") -ServiceManifest $drifted
+    $vDrift = Test-AgentCandidateManifest -Manifest $driftedManifest -StagingRoot $staging3 -RequireIdentity
+    Assert-True (-not $vDrift.Ok -and ($vDrift.Reasons -join " ") -match "would announce 0.6.0 but its binary is stamped 0.5.0") "ONE canonical identity: a candidate whose announced version and binary stamp disagree is refused before the swap"
+
+    $anonymous = [pscustomobject]@{
+        Ok = $true; Capabilities = @("desktop.open_application"); BrowserEnabled = $false; ExitCode = 0; StdErr = ""; SoftwareVersion = "0.1.0"
+    }
+    $anonymousManifest = New-AgentCandidateManifest -StagingRoot $staging3 -Components @("service", "companion") -ServiceManifest $anonymous
+    $vAnon = Test-AgentCandidateManifest -Manifest $anonymousManifest -StagingRoot $staging3 -RequireIdentity
+    Assert-True (-not $vAnon.Ok -and ($vAnon.Reasons -join " ") -match "carries no assembly version" -and ($vAnon.Reasons -join " ") -match "does not name which component") "a binary older than the identity contract cannot become a candidate..."
+    $vAnonOld = Test-AgentCandidateManifest -Manifest $anonymousManifest -StagingRoot $staging3
+    Assert-True ($vAnonOld.Ok) "...but describing that same older binary (no -RequireIdentity) still works, which is what a rollback needs"
 
     Write-Host "identity output"
     Assert-True ((ConvertFrom-IdentityOutput -StdOut "diag line`n{`"device_id`":`"1d0c`",`"name`":`"MAIL`"}`n") -eq "1d0c") "the identity verb's JSON document yields the device id past diagnostics"

@@ -611,7 +611,8 @@ if (@($components).Count -gt 0 -and -not $SkipBuild) {
     $candidateManifestPath = Write-AgentCandidateManifest -Manifest $candidateManifest -Path (Get-CandidateManifestPath -StagingRoot (Join-Path $InstallRoot ".staging"))
     $requiredCapabilities = @("desktop.open_application")
     if (-not $SkipBrowser) { $requiredCapabilities += "browser.chrome" }
-    $candidateVerdict = Test-AgentCandidateManifest -Manifest (Read-AgentCandidateManifest -Path $candidateManifestPath) -StagingRoot (Join-Path $InstallRoot ".staging") -RequireCapabilities $requiredCapabilities
+    $candidateVerdict = Test-AgentCandidateManifest -Manifest (Read-AgentCandidateManifest -Path $candidateManifestPath) `
+        -StagingRoot (Join-Path $InstallRoot ".staging") -RequireCapabilities $requiredCapabilities -RequireIdentity
     Write-CandidateSummary -Manifest $candidateManifest -Verdict $candidateVerdict
     if (-not $candidateVerdict.Ok) {
         throw "the staged candidate does not verify against its manifest; nothing was swapped: $($candidateVerdict.Reasons -join '; ')"
@@ -650,6 +651,7 @@ $stagedHashes = if ($SkipBuild) { Get-ArtifactHashes -Root $InstallRoot } else {
 $deployStartedAt = Get-Date
 $script:LiveWorkerProof = $null
 $script:CoreHeartbeatProof = $null
+$script:CandidateRuntimeIdentity = $null
 # Every process running the worker module before the swap (the venv trampoline AND the base
 # interpreter it launches); after the swap none of them may be alive.
 $preWorkerPids = @(Select-BrowserWorkerProcess -Processes @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue) | ForEach-Object { [int]$_.ProcessId })
@@ -682,6 +684,19 @@ $testHealth = {
         Write-Warning "health: running images are not the installed binaries (service: $($images.Service); companion: $($images.Companion))"
         return $false
     }
+    # The candidate's runtime identity, in one line, BEFORE the Cloud Core read - so that a
+    # Cloud Core disagreement can be told apart from a candidate that never ran. started_at
+    # is evidence, not a gate: a clock detail must not roll back a healthy release.
+    $script:CandidateRuntimeIdentity = [pscustomobject]@{
+        Component                 = $manifest.Component
+        SoftwareVersion           = $manifest.SoftwareVersion
+        AssemblyVersion           = $manifest.AssemblyVersion
+        CapabilityManifestVersion = $manifest.CapabilityManifestVersion
+        CapabilityCount           = @($manifest.Capabilities).Count
+        ServiceStartedAt          = $images.ServiceStartedAt
+        CompanionStartedAt        = $images.CompanionStartedAt
+    }
+    Write-Host "candidate is live: component $($manifest.Component) $($manifest.SoftwareVersion) (binary $($manifest.AssemblyVersion), capability manifest $($manifest.CapabilityManifestVersion)), $(@($manifest.Capabilities).Count) capabilities; service started $(if ($images.ServiceStartedAt) { $images.ServiceStartedAt.ToString('o') } else { 'unknown' }), companion started $(if ($images.CompanionStartedAt) { $images.CompanionStartedAt.ToString('o') } else { 'unknown' }) (deployment began $($deployStartedAt.ToString('o')))"
     if ($browserStaging) {
         # Deployment truthfulness (2026-09-04): the process the companion actually started
         # after the swap must report the staged release from the installed venv, its pid
@@ -710,10 +725,46 @@ $testHealth = {
             -TimeoutSeconds $CoreVerifyTimeoutSeconds
         if (-not $heartbeat.Ok) {
             Write-Warning "health: Cloud Core does not see the candidate after $($heartbeat.Waited) s: $($heartbeat.Reasons -join '; ')"
+            # Locally the candidate may be perfectly healthy - it was on 2026-09-08, and the
+            # missing piece was Cloud Core's row shape, not the candidate. Print both sides so
+            # the next reader does not have to guess which half disagreed.
+            if ($script:CandidateRuntimeIdentity) {
+                Write-Warning "health: locally the candidate IS running as $($script:CandidateRuntimeIdentity.Component) $($script:CandidateRuntimeIdentity.SoftwareVersion) with $($script:CandidateRuntimeIdentity.CapabilityCount) capabilities; Cloud Core reported version '$($heartbeat.Observed.software_version)' and $($heartbeat.Observed.capability_count) capabilities. When the local identity is right and Cloud Core's is empty, the fault is in Cloud Core's device row, not in this candidate."
+            }
             return $false
         }
         $script:CoreHeartbeatProof = $heartbeat
         Write-Host "Cloud Core sees the candidate: online, version $($heartbeat.Observed.software_version), $($heartbeat.Observed.capability_count) capabilities, last seen $($heartbeat.Observed.last_seen_at) (after $($heartbeat.Waited) s)"
+    }
+    return $true
+}
+# How the PREVIOUS release is judged after a rollback restored it (2026-09-08 incident).
+# NOT $testHealth: that asserts the CANDIDATE's contract - its capability manifest, its
+# version on Cloud Core - and the release being restored predates all of it by definition.
+# Running it against the restored tree reported "the installed service ... lacks:
+# browser.media_play, browser.media_volume, browser.media_status, browser.media_stop"
+# about a correct rollback, and journalled "restored but NOT healthy - investigate".
+# The previous release is healthy when it is UP and ANSWERING as itself.
+$testRollbackHealth = {
+    $restored = Get-InstalledAgentManifest -ServiceExe $serviceExe
+    if (-not $restored.Ok) {
+        Write-Warning "rollback health: the restored service does not answer its 'capabilities' verb (exit $($restored.ExitCode)); the previous release is NOT usable. stderr: $($restored.StdErr)"
+        return $false
+    }
+    if (@($restored.Capabilities) -notcontains "desktop.open_application") {
+        Write-Warning "rollback health: the restored service advertises no desktop.open_application: [$(@($restored.Capabilities) -join ', ')]"
+        return $false
+    }
+    Write-Host "rollback health: the PREVIOUS release is live and answering - version $(if ($restored.SoftwareVersion) { $restored.SoftwareVersion } else { 'pre-0.2.0 (no version verb)' }), $(@($restored.Capabilities).Count) capabilities, browser_enabled=$($restored.BrowserEnabled). It is expected to advertise FEWER capabilities than the candidate; that is what a rollback is." -ForegroundColor Yellow
+    if (-not $enrolled) { return $true }
+    if (-not (Test-AgentRuntimeHealth -ServiceName $ServiceName -ConfigPath (Join-Path $serviceDir "appsettings.json") -TimeoutSeconds 45)) {
+        Write-Warning "rollback health: the restored service, companion or pipe did not come up within 45 s"
+        return $false
+    }
+    $restoredImages = Get-RunningAgentImages -ServiceName $ServiceName
+    if (($restoredImages.Service -ne $serviceExe) -or ($restoredImages.Companion -ne $companionExe)) {
+        Write-Warning "rollback health: the restored running images are not the installed binaries (service: $($restoredImages.Service); companion: $($restoredImages.Companion))"
+        return $false
     }
     return $true
 }
@@ -725,7 +776,8 @@ $applyAcl = {
 if (@($components).Count -gt 0) {
     Write-Host "deploying $($components -join ', ') through the journaled engine (runtime stopped by PID, same-volume renames, rollback on any failure)"
     [void](Invoke-AgentDeployment -Root $InstallRoot -Components $components -NonExecutableComponents @("browser") `
-        -StopRuntime $stopRuntime -StartRuntime $startRuntime -TestHealth $testHealth -ApplyAcl $applyAcl)
+        -StopRuntime $stopRuntime -StartRuntime $startRuntime -TestHealth $testHealth `
+        -TestRollbackHealth $testRollbackHealth -ApplyAcl $applyAcl)
     Write-Host "deployed $($components -join ', '); journal: $(Get-DeployJournalPath -Root $InstallRoot)"
 }
 else {
@@ -836,8 +888,14 @@ if ($browserStaging) {
 $journalDoc = Read-DeployJournal -Root $InstallRoot
 $journalSummary = if ($journalDoc) { "$($journalDoc.version) phase=$($journalDoc.phase)" } else { "none" }
 $capabilitySummary = if ($manifest.Ok) {
-    "$(@($manifest.Capabilities).Count) capabilities, browser_enabled=$($manifest.BrowserEnabled), family=$(@($manifest.Capabilities) -contains 'browser.chrome')"
+    # The whole identity, in the evidence block: after the 2026-09-08 incident, "which
+    # version is installed" must be answerable from the install log alone, and answerable
+    # with ONE number - the announced version and the binary's own stamp together.
+    "$(@($manifest.Capabilities).Count) capabilities, browser_enabled=$($manifest.BrowserEnabled), display_power=$($manifest.DisplayPowerEnabled), family=$(@($manifest.Capabilities) -contains 'browser.chrome')"
 } else { "capabilities verb NOT answered (exit $($manifest.ExitCode))" }
+$identitySummary = if ($manifest.Ok) {
+    "component $(if ($manifest.Component) { $manifest.Component } else { 'unnamed (pre-identity binary)' }) version $(if ($manifest.SoftwareVersion) { $manifest.SoftwareVersion } else { 'unnamed' }) binary $(if ($manifest.AssemblyVersion) { $manifest.AssemblyVersion } else { 'unstamped' }) capability-manifest $(if ($manifest.CapabilityManifestVersion) { $manifest.CapabilityManifestVersion } else { 'unfingerprinted' })"
+} else { "not answered" }
 Write-InstallEvidence -Evidence ([pscustomobject]@{
     RepoHead            = Get-RepoHead -RepoRoot $repoRoot
     SourceHashes        = $sourceHashes
@@ -852,6 +910,8 @@ Write-InstallEvidence -Evidence ([pscustomobject]@{
     BrowserWorker       = $workerPath
     BrowserRelease      = @($browserReleaseEvidence)
     CapabilitySummary   = $capabilitySummary
+    AgentIdentity       = $identitySummary
+    RuntimeStartedAt    = $(if ($script:CandidateRuntimeIdentity) { "service $(if ($script:CandidateRuntimeIdentity.ServiceStartedAt) { $script:CandidateRuntimeIdentity.ServiceStartedAt.ToString('o') } else { 'unknown' }); companion $(if ($script:CandidateRuntimeIdentity.CompanionStartedAt) { $script:CandidateRuntimeIdentity.CompanionStartedAt.ToString('o') } else { 'unknown' })" } else { "not recorded (no health pass)" })
     Journal             = $journalSummary
     LogPath             = $script:InstallLog
 })

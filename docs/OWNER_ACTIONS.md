@@ -33,6 +33,18 @@ only you can cross, and each says exactly what it turns from PROVEN_PROXY into P
    agent still advertises 29 capabilities and none of the 3D ones, so a scene cannot be
    started from production at all, and the same update carries the Digital Operator and
    documents families. One UAC prompt.
+
+   > **Your 2026-09-08 attempt was not your fault, and the reason is fixed.** Candidate
+   > 0.6.0 staged, promoted and ran correctly — Cloud Core saw it with all 40 of its
+   > capabilities at 20:23Z. The installer rolled it back anyway because its verifier read
+   > `software_version` from a place the device row has never carried it, so it saw `""`
+   > and concluded Cloud Core could not see the candidate. The second message, about
+   > missing `browser.media_*` names, was the same check being run against the OLD release
+   > the rollback had just restored — that release genuinely predates those names, and
+   > nothing was actually missing. Both are fixed (ADR-0090), and the whole chain is now
+   > proven automatically before you are asked to run anything:
+   > `powershell -NoProfile -File scripts\qualify-staged-update.ps1` (no elevation, no
+   > install, nothing touched) must print `STAGED UPDATE QUALIFIED` first.
 2. **Item 29** — OpenAI credits. Every voice synthesis has answered HTTP 429 since
    2026-09-07, so the TTS loopback is the one proof I cannot run; it is `NOT_YET_PROVEN`
    in four milestone gates for that single reason.

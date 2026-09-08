@@ -25,6 +25,47 @@ public static class AgentInfo
     // the tool's own read-back and its render — behind the same operator gate.
     public const string SoftwareVersion = "0.6.0";
     public const string Platform = "windows";
+
+    /// <summary>
+    /// Which half of the agent this process is. The staged-update verifier and Cloud Core
+    /// both need to say WHICH component announced a version; "the device reports 0.6.0" is
+    /// only meaningful once it names what did the reporting.
+    /// </summary>
+    public const string Component = "device-service";
+
+    /// <summary>
+    /// The assembly version this binary was built with, as a three-part string.
+    /// <c>Directory.Build.props</c> sets it from the same number as
+    /// <see cref="SoftwareVersion"/>, and <c>AgentIdentityTests</c> asserts they are equal:
+    /// there is ONE canonical version identity for this agent, and a file-version stamp that
+    /// disagreed with the announced version would be a second one.
+    /// </summary>
+    public static string AssemblyVersion =>
+        typeof(AgentInfo).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
+
+    /// <summary>
+    /// A DERIVED fingerprint of the full capability vocabulary this binary can advertise —
+    /// every family, every gate on — as the first 12 hex characters of SHA-256 over the
+    /// newline-joined superset manifest.
+    ///
+    /// Derived rather than hand-maintained on purpose: a hand-written manifest version is a
+    /// number someone forgets to bump, and the failure mode is a device that announces an
+    /// old manifest identity with a new manifest. This one cannot drift — adding, removing
+    /// or reordering a capability name changes it by construction, so two installs that
+    /// report the same fingerprint really do speak the same capability vocabulary.
+    /// </summary>
+    public static string CapabilityManifestVersion
+    {
+        get
+        {
+            var superset = string.Join(
+                "\n",
+                AgentCapabilities.Compose(browserEnabled: true, displayPowerEnabled: true, operatorEnabled: true));
+            var digest = System.Security.Cryptography.SHA256.HashData(
+                System.Text.Encoding.UTF8.GetBytes(superset));
+            return Convert.ToHexString(digest)[..12].ToLowerInvariant();
+        }
+    }
 }
 
 public static class AckStatus

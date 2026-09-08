@@ -126,24 +126,40 @@ function Get-InstalledAgentManifest {
     $browserEnabled = $false
     $ok = $false
     $softwareVersion = $null
+    $component = $null
+    $assemblyVersion = $null
+    $capabilityManifestVersion = $null
+    $displayPowerEnabled = $false
     if ($result.ExitCode -eq 0 -and $result.StdOut) {
         try {
             $doc = ($result.StdOut.Trim() -split "`n" | Where-Object { $_.Trim().StartsWith("{") } | Select-Object -Last 1) | ConvertFrom-Json
+            $names = $doc.PSObject.Properties.Name
             $caps = @($doc.capabilities)
             $browserEnabled = [bool]$doc.browser_enabled
             # M18.4 gap 3: a 0.2.0+ binary names the version it will announce; older ones do not.
-            if ($doc.PSObject.Properties.Name -contains "software_version" -and $doc.software_version) { $softwareVersion = [string]$doc.software_version }
+            if ($names -contains "software_version" -and $doc.software_version) { $softwareVersion = [string]$doc.software_version }
+            # 2026-09-08: the rest of the candidate identity. Each is optional here because an
+            # OLDER binary (the one a rollback restores) genuinely does not have it, and this
+            # function must be able to describe that binary truthfully rather than throw.
+            if ($names -contains "component" -and $doc.component) { $component = [string]$doc.component }
+            if ($names -contains "assembly_version" -and $doc.assembly_version) { $assemblyVersion = [string]$doc.assembly_version }
+            if ($names -contains "capability_manifest_version" -and $doc.capability_manifest_version) { $capabilityManifestVersion = [string]$doc.capability_manifest_version }
+            if ($names -contains "display_power_enabled") { $displayPowerEnabled = [bool]$doc.display_power_enabled }
             $ok = $true
         }
         catch { $ok = $false }
     }
     return [pscustomobject]@{
-        Ok              = $ok
-        Capabilities    = @($caps)
-        BrowserEnabled  = $browserEnabled
-        SoftwareVersion = $softwareVersion
-        ExitCode        = $result.ExitCode
-        StdErr          = [string]$result.StdErr
+        Ok                        = $ok
+        Capabilities              = @($caps)
+        BrowserEnabled            = $browserEnabled
+        DisplayPowerEnabled       = $displayPowerEnabled
+        SoftwareVersion           = $softwareVersion
+        Component                 = $component
+        AssemblyVersion           = $assemblyVersion
+        CapabilityManifestVersion = $capabilityManifestVersion
+        ExitCode                  = $result.ExitCode
+        StdErr                    = [string]$result.StdErr
     }
 }
 
@@ -197,18 +213,36 @@ function Get-RegisteredExecutablePaths {
 }
 
 function Get-RunningAgentImages {
-    <#  The image paths of the service and companion processes now running (or "not running").  #>
+    <#
+    .SYNOPSIS
+        The image paths of the service and companion processes now running (or "not
+        running"), and WHEN each started.
+    .DESCRIPTION
+        The start times are part of the candidate's runtime identity (2026-09-08): "the
+        installed binary is the candidate" and "the process running it started after the
+        swap" are different claims, and only the second one distinguishes a promoted
+        candidate from a process that was already running the old tree.
+    #>
     param([Parameter(Mandatory = $true)][string]$ServiceName)
     $servicePath = "not running"
+    $serviceStartedAt = $null
     $cim = Get-CimInstance Win32_Service -Filter "Name='$ServiceName'" -ErrorAction SilentlyContinue
     if ($cim -and $cim.ProcessId -gt 0) {
         $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$($cim.ProcessId)" -ErrorAction SilentlyContinue
         if ($proc -and $proc.ExecutablePath) { $servicePath = $proc.ExecutablePath }
+        if ($proc -and $proc.CreationDate) { $serviceStartedAt = [datetime]$proc.CreationDate }
     }
     $companionPath = "not running"
+    $companionStartedAt = $null
     $companion = Get-CimInstance Win32_Process -Filter "Name='PagentOS.SessionCompanion.exe'" -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($companion -and $companion.ExecutablePath) { $companionPath = $companion.ExecutablePath }
-    return [pscustomobject]@{ Service = $servicePath; Companion = $companionPath }
+    if ($companion -and $companion.CreationDate) { $companionStartedAt = [datetime]$companion.CreationDate }
+    return [pscustomobject]@{
+        Service            = $servicePath
+        Companion          = $companionPath
+        ServiceStartedAt   = $serviceStartedAt
+        CompanionStartedAt = $companionStartedAt
+    }
 }
 
 function Write-InstallEvidence {
@@ -234,6 +268,14 @@ function Write-InstallEvidence {
         }
     }
     Write-Host "installed capability manifest   $($Evidence.CapabilitySummary)"
+    if ($Evidence.PSObject.Properties.Name -contains "AgentIdentity") {
+        # ONE canonical version identity (2026-09-08): the install log must answer "which
+        # version is running" by itself, and answer it with one number.
+        Write-Host "installed agent identity        $($Evidence.AgentIdentity)"
+    }
+    if ($Evidence.PSObject.Properties.Name -contains "RuntimeStartedAt") {
+        Write-Host "runtime started at              $($Evidence.RuntimeStartedAt)"
+    }
     Write-Host "deployment journal              $($Evidence.Journal)"
     Write-Host "install log                     $($Evidence.LogPath)"
 }

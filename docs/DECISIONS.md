@@ -7042,3 +7042,130 @@ Decision 3's own wording ("one idempotent activity per step keyed by `(run, step
 7. **Two real bugs found and fixed during voice-corpus authoring**, both regression-tested: a step id template (`f"amend{uuid4().hex[:4]}"`) silently exceeded `Step.id`'s 8-char bound, so every `executive.amend` call failed validation; and a diacritic-stripped ASR variant of "taslağı" (drama-free lowercasing, not `turkish_casefold`) matched neither of the two word-form stems first written for it — both are now three-form stems (bare / diacritic / diacritic-stripped), the same discipline this file's own eye/camera word-form comments already document elsewhere.
 
 **Residual gaps, stated plainly (not proven by this branch):** end-to-end reattachment by an actually-killed-and-restarted OS process (proven at the SDK/Temporal-replay boundary, per decision 5, not via a real process kill); the model-proposed-graph path (`ClaudeExecutivePlanner`) stays inert, per the spec's own instruction; a full production run of shapes (b)/(c) needs the owner's folder/mail account (ADR-0089's own named gap, unchanged); `artifacts.render`'s own kind handler is implemented against the closed vocabulary but no planner shape in this track emits it (no base case exercises it beyond its own unit-adjacent coverage via the activity dispatch table).
+
+## ADR-0090 — the device identity chain, and what a rollback is allowed to say about the release it restores (2026-09-09)
+
+**Context — a production incident, 2026-09-08.** The owner ran
+`scripts\install-device-service.ps1 -DisplayPower`. Candidate 0.6.0 published, staged and
+verified file by file; the journaled engine stopped the runtime, swapped the trees, started
+the candidate and health-checked it. The candidate really ran: measured against production,
+the device advertised 29 capabilities at 19:59Z (the pre-M18.3 build), **40** at 20:23Z
+(`desktop.display_off`, `desktop.display_wake`, `desktop.display_status`,
+`desktop.activity_status`, `desktop.alarm_arm`, `desktop.alarm_disarm`, `desktop.play_audio`,
+and the whole browser family including the four `browser.media_*` names), and 29 again at
+20:26Z after the rollback. The installer nevertheless said
+
+```
+health: Cloud Core does not see the candidate after 92.6 s:
+        the device reports software version '', the candidate is 0.6.0
+```
+
+and then, about the release it had just correctly restored,
+
+```
+health: the installed service was expected to advertise the browser family but lacks:
+        browser.media_play, browser.media_volume, browser.media_status, browser.media_stop
+        (BrowserEnabled=True)
+```
+
+Two separate defects, one of them wearing the other's clothes.
+
+**Root cause 1 — the identity chain had an unowned link.** `Test-AgentHeartbeatOnCore` read
+`row["software_version"]` from `GET /v1/devices`. That key had **never existed** on that row:
+`DeviceView.as_dict()` emitted the version only inside `health`. Every producer along the
+chain was correct — `AgentInfo.SoftwareVersion` is `0.6.0`, the `capabilities` verb printed
+it, the `hello` announced it, `apply_hello` stored it on `devices.software_version` — and the
+one consumer read a name nobody wrote. Both halves had green suites: the PowerShell suite fed
+itself a device row it had **invented**, and that invention carried a top-level
+`software_version`; the Python suite never looked at the verifier at all. This is the class
+`test_uistate_contract_halves.py` (ADR-0088 §9) was written for, one layer down.
+
+**Root cause 2 — a rollback judged the old release by the new release's contract.** The
+deployment engine's rollback path re-ran `$TestHealth` against the RESTORED previous release.
+`$TestHealth` asserts the CANDIDATE's contract — its capability manifest, its version on Cloud
+Core — and the release being restored predates all of it by definition. So a correct rollback
+of a 0.6.0 candidate produced a capability-regression message about a 0.1.0 build that never
+had those names, and journalled `previous version restored but NOT healthy - investigate`. The
+four `browser.media_*` names were never missing from anything current: they are in
+`BrowserCapabilities.Operations`, `browser_agent.policy.CAPABILITIES`,
+`BROWSER_CAPABILITIES.md` §1 and `$script:BrowserOperations`, and `test_capability_mirrors.py`
+already holds those four lists together.
+
+**Contributing cause — the code that failed was in no gate.**
+`scripts/tests/agent-update.tests.ps1`, the entire test suite for the staged-update candidate
+manifest and the Cloud Core verification, was wired into neither `quality-gate.ps1` nor CI. It
+had never run in an automated gate since it was written.
+
+**Decision.**
+
+1. **ONE canonical version identity, enforced by tests rather than remembered.**
+   `AgentInfo.SoftwareVersion` is the number; `Directory.Build.props` `<Version>` stamps the
+   binary with it, and `AgentIdentityTests` fails the build if the two disagree. A candidate
+   whose announced version and file stamp differ cannot be reasoned about after the fact, and
+   `Test-AgentCandidateManifest -RequireIdentity` refuses it before the swap.
+2. **A candidate exposes its whole identity, from one place.** The `capabilities` verb now
+   prints `software_version`, `component` (`device-service`), `assembly_version`,
+   `capability_manifest_version` and `display_power_enabled` beside the manifest; the candidate
+   manifest carries all of them plus the checkout's commit (`repo_head`), and the installer
+   reports the promoted runtime's `started_at` from the process itself. Commit identity stays
+   an INSTALL-time fact rather than a baked-in build stamp: the owner's local `dotnet publish`
+   cannot produce a reproducible source-revision stamp, and inventing one would create a second
+   identity to disagree with the first.
+3. **`capability_manifest_version` is derived, never hand-bumped** — the first 12 hex of
+   SHA-256 over the newline-joined superset manifest. A hand-written manifest version is a
+   number someone forgets to bump; this one changes by construction when a capability name is
+   added, removed or reordered.
+4. **Cloud Core emits the canonical identity at the TOP of the device row**
+   (`app.devices.types.DEVICE_IDENTITY_KEYS`: `device_id`, `presence`, `software_version`,
+   `capabilities`, `capability_count`, `last_seen_at`). `health.software_version` stays and
+   carries the same value — one value in two readable places, never two values. A device that
+   has never said hello reports `null`, not `""`: "I do not know" and "it announced an empty
+   version" are different failures and the installer must be able to tell them apart.
+5. **The verifier reads the canonical key, falls back to the nested one, and never passes on an
+   absent version.** The fallback means the installer keeps working against a Cloud Core that
+   has not been deployed yet — no lockstep deploy required — and a row that names no version
+   anywhere fails the candidate with `this is a Cloud Core contract fault, not a candidate
+   fault`, which is the sentence that would have sent this investigation to the right file on
+   the first evening.
+6. **The engine gets `-TestRollbackHealth`: a restored previous release is judged by a BASELINE
+   predicate, not by the candidate's contract.** Baseline = it answers its `capabilities` verb,
+   advertises `desktop.open_application`, and its service, companion and pipe are up running
+   the installed binaries. It is NOT asked for the candidate's capability manifest or the
+   candidate's version on Cloud Core. The installer also prints, on a Cloud Core disagreement,
+   what the candidate's LOCAL identity actually is, so "the candidate is broken" and "Cloud
+   Core's row is broken" are distinguishable at the moment of failure.
+7. **Nothing in the health check was weakened.** The 90 s timeout is unchanged; version
+   verification is unchanged; Cloud Core verification stays on; the four `browser.media_*` names
+   stay required of the candidate (`test_desktop_capability_mirror.py` and
+   `installer-evidence.tests.ps1` both refuse their removal, from opposite sides); rollback is
+   unchanged and now additionally proven.
+8. **`scripts/qualify-staged-update.ps1`** walks the whole chain automatically before the owner
+   is asked to install again — stage, manifest verified file by file, candidate identity, the
+   complete capability manifest (40 with `-DisplayPower` and a browser worker), promotion,
+   companion and browser-worker health, Cloud Core seeing the candidate's version AND
+   capabilities, committed; then a tampered candidate refused before the swap, and a candidate
+   Cloud Core cannot see rolled back with both halves restored. It uses the REAL built
+   DeviceService (configured through `PAGENTOS_AGENT_*` environment variables, so no tree is
+   modified), the REAL engine and the REAL verifier against a row in the shape Cloud Core
+   actually returns. It is a `quality-gate.ps1` step and a CI job.
+9. **The desktop family gets the mirror the browser family already had.**
+   `test_desktop_capability_mirror.py` holds `app.routines.dispatch`'s `CAPABILITY_DESKTOP_*`
+   constants, `AgentCapabilities`' C# constants, the installer's verification list and the owner
+   harness to one canonical spelling, in both directions — a name Cloud Core dispatches that the
+   agent never declares, and a name the agent advertises that nobody dispatches, are both
+   failures now.
+
+**Consequences.** The chain from `AgentInfo.SoftwareVersion` to the installer's verdict has no
+unowned link and no invented fixture: every hop is asserted from the other side. A rollback
+tells the truth about the release it restores. The staged update is qualified automatically, so
+the next `-DisplayPower` install is a retry of a proven path rather than a second experiment on
+production.
+
+**Named gaps.** The promoted runtime's `started_at` is recorded as evidence, not as a rollback
+trigger — a clock detail must not roll back a healthy release. A real elevated install over the
+live runtime is still an owner action (`READY_FOR_OWNER`); nothing here was proven by installing
+over production, and the incident's own instruction was not to try while the owner is at the
+machine.
+
+**The rule this incident paid for, again.** A fixture that invents the other side's shape proves
+only that the code agrees with the fixture. Make one half read the other half's source.

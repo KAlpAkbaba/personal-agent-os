@@ -140,6 +140,18 @@ function Invoke-AgentDeployment {
         TestHealth returns $true only when both halves are actually working — "the service
         is Running" alone is not health; a real incident had the service Running with its
         pipe server dead.
+
+    .PARAMETER TestRollbackHealth
+        How to judge the PREVIOUS release after a rollback restored it. Defaults to
+        $TestHealth, which is what it was — and was wrong on 2026-09-08: TestHealth asserts
+        the CANDIDATE's contract (its capability manifest, its version on Cloud Core), and
+        the previous release predates all of it by definition. A correct rollback of a
+        0.6.0 candidate therefore logged "the installed service ... lacks:
+        browser.media_play, browser.media_volume, browser.media_status, browser.media_stop"
+        against the restored 0.1.0 and journalled "previous version restored but NOT
+        healthy - investigate", sending the owner after a capability regression that did
+        not exist. A restored previous release is healthy when it is UP and ANSWERING, not
+        when it satisfies the contract of the release that just failed.
     #>
     [CmdletBinding()]
     param(
@@ -148,6 +160,7 @@ function Invoke-AgentDeployment {
         [Parameter(Mandatory = $true)][scriptblock]$StopRuntime,
         [Parameter(Mandatory = $true)][scriptblock]$StartRuntime,
         [Parameter(Mandatory = $true)][scriptblock]$TestHealth,
+        [scriptblock]$TestRollbackHealth,
         [scriptblock]$ApplyAcl,
         [string]$Version = (Get-Date -Format "yyyyMMdd-HHmmss"),
         # Components that carry no PagentOS executable (M13: the Browser Worker tree holds a
@@ -266,7 +279,10 @@ function Invoke-AgentDeployment {
             if ($runtimeStopped) {
                 try {
                     $null = & $StartRuntime
-                    if (& $TestHealth) {
+                    # The PREVIOUS release is judged by the baseline predicate, never by the
+                    # candidate's own contract (see .PARAMETER TestRollbackHealth).
+                    $rollbackHealth = if ($TestRollbackHealth) { $TestRollbackHealth } else { $TestHealth }
+                    if (& $rollbackHealth) {
                         Write-DeployPhase -Root $Root -Version $Version -Phase "rolled_back" -Detail "previous version restored and healthy"
                     }
                     else {
