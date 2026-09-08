@@ -15,7 +15,7 @@
  */
 
 /** Contract version this client was written against (`CONTRACT_VERSION` in contract.py). */
-export const KNOWN_CONTRACT_VERSION = 8;
+export const KNOWN_CONTRACT_VERSION = 9;
 
 /**
  * The build marker of the Living Core (M18.3 §12, qualification A). Rendered server-side
@@ -41,13 +41,15 @@ export const CORE_BUILD_ID = "living-core-1";
  * four short tokens (`title`, `format`, `verdict`, `failing_ref`). v8 is
  * additive over v7 (M23 spec §6): one token, `app.factory`, one subsystem,
  * three short tokens (`project`, `state`, `port`) and one bounded structured
- * value (`tests: {passed, failed}`) that older publishers never send. A v2
- * to v7 server therefore serves a strict subset of what this build knows,
- * and refusing to draw anything at all because the alarm, operator,
- * document, mail, calendar, artifact or app states have not shipped yet
- * would be a worse lie than saying so in one line. A server NEWER than this
- * build is a different matter — we do not know its vocabulary, so it stays
- * a mismatch.
+ * value (`tests: {passed, failed}`) that older publishers never send. v9 is
+ * additive over v8 (M24 spec §8): one token, `capability.genesis`, one
+ * subsystem, and metadata of four short tokens (`capability`, `state`,
+ * `approval_required`, `error_class`). A v2 to v8 server therefore serves a
+ * strict subset of what this build knows, and refusing to draw anything at
+ * all because the alarm, operator, document, mail, calendar, artifact, app
+ * or genesis states have not shipped yet would be a worse lie than saying
+ * so in one line. A server NEWER than this build is a different matter — we
+ * do not know its vocabulary, so it stays a mismatch.
  */
 export const MIN_SUPPORTED_CONTRACT_VERSION = 2;
 
@@ -182,6 +184,16 @@ export const UI_STATES = [
   // when it runs and its tests pass, and nothing here says so on its own
   // (ADR-0086).
   "app.factory",
+  // v9 (M24 spec §8) — Capability Genesis. Published by `GenesisService` at
+  // every transition of ONE genesis run, from its row alone, with
+  // `{capability?, state?, approval_required?, error_class?}`: the
+  // capability the owner's request needs, the run's state in the §5 names,
+  // whether authority parked it for the owner, and — on `failed` — the
+  // error class. The agent's own work (it lacks a capability and is
+  // acquiring one for the owner), so it stays on the agent channel; the
+  // capability EXISTS when the run says `verified`, never before, and
+  // nothing here says so on its own (ADR-0087).
+  "capability.genesis",
 ] as const;
 
 export type KnownUiState = (typeof UI_STATES)[number];
@@ -424,6 +436,67 @@ export function asPort(value: unknown): number | null {
   return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= MAX_PORT ? value : null;
 }
 
+/** The one genesis token (v9). Spelled here so every reader names the same wire word. */
+export const CAPABILITY_GENESIS = "capability.genesis";
+
+/**
+ * Capability Genesis's states (v9). One token: the spec publishes the whole
+ * gap → research → build → test → classify → approve → roll out → register
+ * → use → verify loop as `capability.genesis` and names the run's state in
+ * `metadata.state`, so — as with the app's — there is nothing else to
+ * enumerate. Kept as a list so a second token lands here and nowhere else.
+ */
+export const GENESIS_STATES = [CAPABILITY_GENESIS] as const;
+
+export type GenesisUiState = (typeof GENESIS_STATES)[number];
+
+const GENESIS_STATE_SET: ReadonlySet<string> = new Set(GENESIS_STATES);
+
+/**
+ * True for a v9 genesis state this build knows how to draw. Membership, not
+ * prefix: a newer server's `capability.revoked` must not be drawn as a
+ * capability being acquired on the strength of a word this build cannot read.
+ */
+export function isGenesisState(state: string): state is GenesisUiState {
+  return GENESIS_STATE_SET.has(state);
+}
+
+/**
+ * A `GenesisRun`'s state as the publisher names it in `metadata.state` (M24
+ * spec §5), in the order the run passes through them: the registry could
+ * not resolve the request, the interface is being researched, the adapter
+ * designed and built, the build tested against the running application,
+ * its authority and side effects classified, the run parked for the owner
+ * (only when authority requires it), rolled out, registered, then the
+ * capability available, used for the ORIGINAL request, and verified by the
+ * read-back the description declared — or failed, from any state. A token
+ * outside this list is a word this build cannot read and is shown as the
+ * plain state, never as one of these.
+ */
+export const GENESIS_RUN_STATES = [
+  "capability_missing",
+  "researching",
+  "designing",
+  "building",
+  "testing",
+  "classifying",
+  "awaiting_approval",
+  "rolling_out",
+  "registering",
+  "available",
+  "used",
+  "verified",
+  "failed",
+] as const;
+
+export type GenesisRunState = (typeof GENESIS_RUN_STATES)[number];
+
+const GENESIS_RUN_STATE_SET: ReadonlySet<string> = new Set(GENESIS_RUN_STATES);
+
+export function isGenesisRunState(value: unknown): value is GenesisRunState {
+  return typeof value === "string" && GENESIS_RUN_STATE_SET.has(value);
+}
+
 /**
  * A draft's lifecycle as the publisher names it in `metadata.draft_state`
  * (M21 spec §3 with the read-back step made explicit): prepared by the
@@ -522,6 +595,24 @@ export type AppFactoryMetadata = {
 };
 
 /**
+ * The metadata a `capability.genesis` event may carry (M24 spec §8). Every
+ * key is optional on the wire and every value is a short token or a flag
+ * the bus already admits; nothing here is an interface description, a
+ * rendered adapter or a sandbox log — the run is a row on `genesis_runs`,
+ * which the Cockpit reads from `/v1/genesis/runs`, never from the bus.
+ */
+export type CapabilityGenesisMetadata = {
+  /** The capability the request needs (`counterbox.increment`), as the run names it. */
+  capability?: string;
+  /** The run's state in the §5 names. Absent while the publisher has nothing to say yet. */
+  state?: GenesisRunState;
+  /** True when authority parked the run for the owner (a mutation on an unauthorized asset). */
+  approval_required?: boolean;
+  /** On `failed`: the taxonomy class (`dependency_unavailable`, `validation_error`, `postcondition_failed`, …). */
+  error_class?: string;
+};
+
+/**
  * States that belong to the release band's own vocabulary.
  *
  * `releaseClaim` reads exactly these rather than "the newest event on the
@@ -574,6 +665,9 @@ export const SUBSYSTEMS = [
   // v8: the App Factory (M23 spec §6) publishes `app.factory`; its receipts
   // and ledger rows carry the same subsystem name.
   "apps",
+  // v9: Capability Genesis (M24 spec §6, §8) publishes `capability.genesis`;
+  // its receipts and ledger rows (`genesis.<state>`) carry the same name.
+  "genesis",
 ] as const;
 
 export type Subsystem = (typeof SUBSYSTEMS)[number];
@@ -801,6 +895,14 @@ const STATE_KINDS: Record<KnownUiState, StateKind> = {
   // `/v1/apps`, which does not expire, and the publisher's `ttl_s` may
   // lengthen a standing condition. The claim never falls to "finished" or idle.
   "app.factory": "transient",
+  // v9. Researching, building, testing and rolling out an adapter is work in
+  // flight on the same footing (`GENESIS_TTL_MS`). A run parked at
+  // `awaiting_approval` is a standing condition, but the bus claim is about
+  // the MOMENT it was published: the run itself is a ROW on
+  // `/v1/genesis/runs`, which does not expire and is where "Onayla" lives,
+  // and the publisher's `ttl_s` may lengthen the claim. The claim never
+  // falls to "finished", "verified" or idle.
+  "capability.genesis": "transient",
 };
 
 /**
@@ -915,6 +1017,51 @@ export const APP_STATE_LABEL: Record<AppProjectState, string> = {
 };
 
 /**
+ * How long a genesis step may be claimed as current without a newer event.
+ *
+ * The operator's horizon, for the app's reason: the Cloud Core speaks once
+ * per run transition, not on a heartbeat, and a sandbox run of the rendered
+ * tests against the fixture application can outlast the twelve-second
+ * transient. Still a horizon: a `building` from a minute ago is last-known
+ * on the Core — the run itself is a ROW on `/v1/genesis/runs`, and the
+ * Cockpit's controls come from that row. The publisher's own `ttl_s` beats
+ * this figure.
+ */
+export const GENESIS_TTL_MS: number = OPERATOR_STEP_TTL_MS;
+
+/**
+ * The Core's one wording for a genesis event whose metadata named nothing
+ * this build can read (v9): the plain name of the token, and nothing it did
+ * not say. Deliberately no verb: a run may be building, waiting, verified
+ * or failed, and the bare line must be true of every one of them.
+ */
+export const GENESIS_CAPTION_BARE = "Yeni yetenek";
+
+/**
+ * The run's state in the owner's words, spelled once for the caption, the
+ * facts line and the Cockpit's rows alike (M24 spec §6's six truths, one
+ * word per §5 state). "Doğrulandı" is said only when the publisher said
+ * `verified`, and "kullanılabilir" only on `available`: a run that is
+ * `registering` is not yet a capability the owner has, and nothing here
+ * rounds it up to one.
+ */
+export const GENESIS_STATE_LABEL: Record<GenesisRunState, string> = {
+  capability_missing: "yetenek yok — deneniyor",
+  researching: "arayüz araştırılıyor",
+  designing: "bağdaştırıcı tasarlanıyor",
+  building: "bağdaştırıcı yazılıyor",
+  testing: "sınanıyor",
+  classifying: "sınıflandırılıyor",
+  awaiting_approval: "onay bekliyor",
+  rolling_out: "yayına alınıyor",
+  registering: "kaydediliyor",
+  available: "kullanılabilir",
+  used: "kullanıldı",
+  verified: "doğrulandı",
+  failed: "başarısız",
+};
+
+/**
  * Per-state lifetimes for v3, in ms, exactly as `docs/M18_3_LIVING_CORE_WAKE_ALARM_SPEC.md`
  * §7 states them.
  *
@@ -942,6 +1089,7 @@ const STATE_TTL_MS: Partial<Record<KnownUiState, number>> = {
   "calendar.activity": CALENDAR_ACTIVITY_TTL_MS,
   "artifact.factory": ARTIFACT_FACTORY_TTL_MS,
   "app.factory": APP_FACTORY_TTL_MS,
+  "capability.genesis": GENESIS_TTL_MS,
 };
 
 /**
@@ -1028,6 +1176,9 @@ export function stateChannel(state: string): StateChannel {
   // v7's `artifact.factory`, through `isArtifactState`: making a file for
   // the owner is the agent working. v8's `app.factory` follows through
   // `isAppState`: building and running an app for the owner is the same.
+  // v9's `capability.genesis` follows through `isGenesisState`: acquiring
+  // a capability the owner's request needs is the agent's own work — not
+  // the lab's channel, although the lab's pipeline does the building.
   // v3 adds `display.*` to the room: whether the screens are lit is a fact
   // about the owner's desk, never about the agent's activity.
   if (state.startsWith("eye.") || state.startsWith("owner.") || state.startsWith("display."))

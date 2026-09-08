@@ -600,6 +600,42 @@ export const APP_FACTORY = (
 /** An app event whose publisher sent no metadata at all. */
 export const APP_FACTORY_BARE = () => event({ state: "app.factory", subsystem: "apps", task_id: "app-task-2" });
 
+// ------------------------------------------- v9: Capability Genesis (M24 §8)
+
+/**
+ * `capability.genesis` as the M24 spec §8 has `GenesisService` publish it
+ * at every transition of one run, from its row alone: subsystem `genesis`,
+ * the task id, and in metadata the capability the request needs, the run's
+ * state (`capability_missing` | `researching` | `designing` | `building` |
+ * `testing` | `classifying` | `awaiting_approval` | `rolling_out` |
+ * `registering` | `available` | `used` | `verified` | `failed`), whether
+ * authority parked it for the owner, and — on `failed` — the error class.
+ */
+export const CAPABILITY_GENESIS = (
+  capability: string | null = "counterbox.increment",
+  state: string | null = "building",
+  errorClass: string | null = null,
+  approvalRequired: boolean | null = null,
+  extra: Record<string, unknown> = {},
+) =>
+  event({
+    state: "capability.genesis",
+    subsystem: "genesis",
+    task_id: "genesis-task-1",
+    status: state ?? "genesis",
+    metadata: {
+      ...(capability === null ? {} : { capability }),
+      ...(state === null ? {} : { state }),
+      ...(approvalRequired === null ? {} : { approval_required: approvalRequired }),
+      ...(errorClass === null ? {} : { error_class: errorClass }),
+      ...(extra as Record<string, string | number | boolean>),
+    },
+  });
+
+/** A genesis event whose publisher sent no metadata at all. */
+export const CAPABILITY_GENESIS_BARE = () =>
+  event({ state: "capability.genesis", subsystem: "genesis", task_id: "genesis-task-2" });
+
 /** The owner-authorised release path, mid-deployment (ADR-0055). */
 export const RELEASE_DEPLOYING = () =>
   event({

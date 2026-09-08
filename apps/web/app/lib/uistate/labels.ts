@@ -16,10 +16,13 @@ import {
   ARTIFACT_VERDICT_LABEL,
   CALENDAR_CAPTION_BARE,
   DOCUMENT_CAPTION_BARE,
+  GENESIS_CAPTION_BARE,
+  GENESIS_STATE_LABEL,
   MAIL_CAPTION_BARE,
 } from "./contract";
 import type { DocumentRef, KnownUiState } from "./contract";
 import { type AppFacts, type AppStage, appTestsPhrase } from "./apps";
+import { type GenesisFacts, type GenesisStage, genesisStatePhrase } from "./genesis";
 import { type ArtifactFacts, type ArtifactStage, artifactFormatLabel } from "./artifacts";
 import {
   CALENDAR_PROPOSAL_STATE_LABEL,
@@ -68,6 +71,7 @@ export const KIND_LABEL: Record<CoreVisualKind, string> = {
   calendar_activity: CALENDAR_CAPTION_BARE,
   artifact_factory: ARTIFACT_CAPTION_BARE,
   app_factory: APP_CAPTION_BARE,
+  capability_genesis: GENESIS_CAPTION_BARE,
 };
 
 /**
@@ -130,6 +134,14 @@ export const KIND_DETAIL: Record<CoreVisualKind, string> = {
   // app (ADR-0086) and that nothing here says it on its own.
   app_factory:
     "Sahip için bir uygulama planlanıyor, iskeleti kuruluyor, sahibin makinesinde sınırlı bir süreçte çalıştırılıyor ya da kendi testleriyle sınanıyor; proje, durum, port ve test sayıları yalnızca yayınlandığı kadar söylenir. Testleri geçmemiş bir uygulama bitmiş sayılmaz. İlerleme bildirilmez.",
+  // M24: the assistant lacks a capability the owner's request needs and is
+  // acquiring one — the interface researched, an adapter written and tested
+  // against the running application, classified, approved by the owner
+  // where authority requires it, rolled out, registered, used and verified
+  // by reading the application back. The sentence says what "having" the
+  // capability means (ADR-0087) and that nothing here says it on its own.
+  capability_genesis:
+    "Sahibin istediği şey için bir yetenek yok; arayüzü araştırılıyor, bağdaştırıcısı yazılıyor, çalışan uygulamaya karşı sınanıyor, gerekirse sahip onayı bekleniyor, kaydediliyor, kullanılıyor ve sonuç uygulamadan okunarak doğrulanıyor; yetenek, durum ve hata sınıfı yalnızca yayınlandığı kadar söylenir. Doğrulanmamış bir yetenek yapıldı sayılmaz. İlerleme bildirilmez.",
 };
 
 /**
@@ -280,6 +292,10 @@ export const STATE_LABEL: Record<KnownUiState, string> = {
   // one for the whole loop, and the project's state is said only from its
   // published metadata.
   "app.factory": APP_CAPTION_BARE,
+  // v9 — Capability Genesis (M24). No verb at all: the token is one for the
+  // whole run, from "yetenek yok" to "doğrulandı", and the run's state is
+  // said only from its published metadata.
+  "capability.genesis": GENESIS_CAPTION_BARE,
 };
 
 export function stateLabel(state: string): string {
@@ -306,6 +322,7 @@ export const SUBSYSTEM_LABEL: Record<string, string> = {
   calendar: "Takvim",
   artifacts: "Üretim",
   apps: "Uygulamalar",
+  genesis: "Yeni yetenek",
 };
 
 export function subsystemLabel(subsystem: string): string {
@@ -457,6 +474,7 @@ const CONTRACT_ADDITIONS: Record<number, string> = {
   6: "posta ve takvim durumları",
   7: "dosya üretim durumu",
   8: "uygulama üretim durumu",
+  9: "yeni yetenek durumu",
 };
 
 /**
@@ -717,4 +735,54 @@ export function appFactsLine(facts: AppFacts): string {
   if (tests) parts.push(`testler: ${tests}`);
   else if (facts.state === "tested" || facts.state === "failed") parts.push("test sayısı bildirilmedi");
   return parts.join(" · ");
+}
+
+// ------------------------------------------------------- v9: Capability Genesis
+
+export const GENESIS_LABEL: Record<GenesisStage, string> = {
+  active: GENESIS_CAPTION_BARE,
+  none: "Süren bir yetenek edinimi yok",
+};
+
+/** The Yeni Yetenek panel's empty sentence (M24 spec §8): the list route answered, and holds no run. */
+export const GENESIS_EMPTY = "Henüz yeni bir yetenek istenmedi.";
+
+/** The Yeni Yetenek panel's line when the bus never carried a genesis event: not "no runs", "nothing reported". */
+export const GENESIS_UNTOLD = "Yeni yetenek etkinliği bildirilmedi.";
+
+/** Said beside `failed` when the publisher named no class: a failure whose class nobody published. */
+export const GENESIS_ERROR_CLASS_UNTOLD = "hata sınıfı bildirilmedi";
+
+/**
+ * A run state token as one word: the spec's word for the thirteen this
+ * build knows, the token verbatim for one it does not (still a published
+ * fact), and the statement that none came.
+ */
+export function genesisStateWord(token: string | null): string {
+  if (token === null) return "durum bildirilmedi";
+  return (GENESIS_STATE_LABEL as Record<string, string>)[token] ?? token;
+}
+
+/**
+ * The published genesis facts on one line, each one either what the
+ * publisher sent or the statement that it did not send it. The approval
+ * flag is printed whenever one was sent ("onay gerekli" / "onay
+ * gerekmiyor") and its absence is never said: a flag nobody published is
+ * not a fact either way. The error class is printed beside `failed` only,
+ * and its absence is said only there — a verified run has no class to
+ * name, and "hata sınıfı bildirilmedi" beside it would be noise.
+ */
+export function genesisFactsLine(facts: GenesisFacts): string {
+  const parts = [
+    facts.capability ? `yetenek: ${facts.capability}` : "yetenek bildirilmedi",
+    facts.stateToken ? `durum: ${facts.state === "failed" ? GENESIS_STATE_LABEL.failed : genesisStateWord(facts.stateToken)}` : "durum bildirilmedi",
+  ];
+  if (facts.approvalRequired !== null) parts.push(facts.approvalRequired ? "onay gerekli" : "onay gerekmiyor");
+  if (facts.state === "failed") parts.push(facts.errorClass ? `hata: ${facts.errorClass}` : GENESIS_ERROR_CLASS_UNTOLD);
+  return parts.join(" · ");
+}
+
+/** The state with its failure class, for a row or a caption, or the statement that none came. */
+export function genesisStateLine(facts: Pick<GenesisFacts, "state" | "stateToken" | "errorClass">): string {
+  return genesisStatePhrase(facts) ?? genesisStateWord(facts.stateToken);
 }

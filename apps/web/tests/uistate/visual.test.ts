@@ -102,6 +102,11 @@ const EXPECTED_KIND: Record<string, CoreVisualKind> = {
   // it on the owner's machine — is the agent's own work: a core state with
   // its own deliberate building posture, and a running posture inside it.
   "app.factory": "app_factory",
+  // v9 (M24): acquiring a capability the owner's request needs — researching
+  // the interface, writing, testing, registering, using and verifying an
+  // adapter — is the agent's own work: a core state with its own deliberate
+  // building posture, a waiting posture and a settled posture inside it.
+  "capability.genesis": "capability_genesis",
 };
 
 describe("a visual state is entered only by its own event", () => {
