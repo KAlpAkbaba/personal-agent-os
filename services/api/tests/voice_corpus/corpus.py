@@ -2240,6 +2240,62 @@ def _artifact_negative_cases() -> list[UtteranceCase]:
             )
         )
     )
+    # Independent security review of M22's Cloud Core half (ADR-0085 addendum 6).
+    #
+    # MEDIUM — the "never invented" rule used to be OPT-IN: a numberless utterance
+    # left ``spoken_numbers`` unset entirely (the tool only force-set it when the
+    # router found numbers at all), so a model-side spec carrying an invented number
+    # sailed straight through. "Bir tablo yap." says no number at all; the harness
+    # makes the model-side spec carry one (12000) anyway — refused, nothing rendered.
+    cases.append(
+        UtteranceCase(
+            case_id="art.neg.invented",
+            utterance="Bir tablo yap.",
+            expected_intent="artifact_create",
+            expected_tool="artifact.create",
+            expected_response=RESPONSE_REFUSED,
+            expected={"error_class": "invented_number"},
+            tool_arguments={
+                "spec": {
+                    "kind": "spreadsheet",
+                    "title": "Tablo",
+                    "sheets": [
+                        {
+                            "name": "Özet",
+                            "columns": ["Kalem", "Tutar"],
+                            "rows": [["Kira", 12000]],
+                        }
+                    ],
+                }
+            },
+            side_effects=SIDE_EFFECTS_NONE,
+            context=CTX_NONE,
+            category="artifacts",
+            source="regression",
+            regression_issue_id="ADR-0085 addendum 6 (MEDIUM): a numberless utterance "
+            "must still enforce 'no numbers allowed', never skip the rule",
+        )
+    )
+    # LOW — artifact.create had no secret-reference gate at all (mail/typing already
+    # refuse "şifre"/"parola"/... , M19 spec §1 invariant 2 / M21). "Şifremi belge
+    # yap." asks for a document whose own title (router-extracted: "Şifremi") already
+    # names a secret — refused before anything is rendered.
+    cases.append(
+        UtteranceCase(
+            case_id="art.neg.secret",
+            utterance="Şifremi belge yap.",
+            expected_intent="artifact_create",
+            expected_tool="artifact.create",
+            expected_response=RESPONSE_REFUSED,
+            expected={"error_class": "secret_refused"},
+            side_effects=SIDE_EFFECTS_NONE,
+            context=CTX_NONE,
+            category="artifacts",
+            source="regression",
+            regression_issue_id="ADR-0085 addendum 6 (LOW): never write a secret into "
+            "an artifact",
+        )
+    )
     return cases
 
 
