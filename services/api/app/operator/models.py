@@ -40,12 +40,29 @@ FOCUS_KIND_APP = "app"
 FOCUS_KIND_FILE = "file"
 FOCUS_KIND_DOCUMENT = "document"
 FOCUS_KIND_FOLDER = "folder"
+#: M21 (docs/M21_MAIL_CALENDAR_SPEC.md §3, ADR-0084 decision 5): additive kinds for Mail &
+#: Calendar's own focus by identity. ``message``/``thread`` name a mail item the owner read
+#: ("Buna cevap yaz" = the current message); ``draft`` names a prepared ``mail_drafts`` row
+#: ("Cevabı oku" = the current draft, "Gönder." = the current draft only after its
+#: read-back); ``event``/``proposal`` are the calendar equivalents ("Bunu bir saat ertele" =
+#: the current event -> a proposal). Five more independent stacks, the same current/
+#: previous discipline every other kind already gets from this module.
+FOCUS_KIND_MESSAGE = "message"
+FOCUS_KIND_THREAD = "thread"
+FOCUS_KIND_DRAFT = "draft"
+FOCUS_KIND_EVENT = "event"
+FOCUS_KIND_PROPOSAL = "proposal"
 FOCUS_KINDS: tuple[str, ...] = (
     FOCUS_KIND_WINDOW,
     FOCUS_KIND_APP,
     FOCUS_KIND_FILE,
     FOCUS_KIND_DOCUMENT,
     FOCUS_KIND_FOLDER,
+    FOCUS_KIND_MESSAGE,
+    FOCUS_KIND_THREAD,
+    FOCUS_KIND_DRAFT,
+    FOCUS_KIND_EVENT,
+    FOCUS_KIND_PROPOSAL,
 )
 
 #: How many recent rows of ONE kind the stack keeps (bounded, per task brief: "a bounded
@@ -84,8 +101,13 @@ __all__ = [
     "FOCUS_KINDS",
     "FOCUS_KIND_APP",
     "FOCUS_KIND_DOCUMENT",
+    "FOCUS_KIND_DRAFT",
+    "FOCUS_KIND_EVENT",
     "FOCUS_KIND_FILE",
     "FOCUS_KIND_FOLDER",
+    "FOCUS_KIND_MESSAGE",
+    "FOCUS_KIND_PROPOSAL",
+    "FOCUS_KIND_THREAD",
     "FOCUS_KIND_WINDOW",
     "FOCUS_STACK_LIMIT",
     "ObjectFocusRow",

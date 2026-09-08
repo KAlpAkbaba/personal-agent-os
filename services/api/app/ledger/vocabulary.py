@@ -61,6 +61,13 @@ SUBSYSTEM_OPERATOR = "operator"
 #: without separating document rows from operator/routine rows that happen to share a
 #: device call.
 SUBSYSTEM_DOCUMENTS = "documents"
+#: M21 Mail & Calendar (docs/M21_MAIL_CALENDAR_SPEC.md §3, ADR-0084). Two subsystems, not
+#: one: "what did the system read/send in my mailbox?" and "what did it read/change on my
+#: calendar?" are different owner questions, and mail.read/send rows must never hide inside
+#: a calendar row that happens to share a turn (the same reasoning SUBSYSTEM_DOCUMENTS's
+#: own docstring gives for its own separation from operator/routine).
+SUBSYSTEM_MAIL = "mail"
+SUBSYSTEM_CALENDAR = "calendar"
 
 SUBSYSTEMS: Final[tuple[str, ...]] = (
     SUBSYSTEM_RESEARCH,
@@ -80,6 +87,8 @@ SUBSYSTEMS: Final[tuple[str, ...]] = (
     SUBSYSTEM_AMBIENT,
     SUBSYSTEM_OPERATOR,
     SUBSYSTEM_DOCUMENTS,
+    SUBSYSTEM_MAIL,
+    SUBSYSTEM_CALENDAR,
 )
 
 # ------------------------------------------------------------------ statuses
@@ -290,6 +299,17 @@ EVENT_TYPE_DOCUMENT_SEARCHED = "document.search"
 EVENT_TYPE_DOCUMENT_READ = "document.read"
 EVENT_TYPE_DOCUMENT_ANSWERED = "document.answer"
 EVENT_TYPE_DOCUMENT_COMPARED = "document.compare"
+#: M21 Mail & Calendar (spec §3, ADR-0084): one row per owner-initiated mail/calendar
+#: interaction — the three tiers (READ/PREPARE/EXTERNAL MUTATION) each get their own event
+#: type so "did it actually send, or only draft?" is answerable from the ledger alone.
+EVENT_TYPE_MAIL_READ = "mail.read"
+EVENT_TYPE_MAIL_DRAFTED = "mail.draft"
+EVENT_TYPE_MAIL_SENT = "mail.send"
+EVENT_TYPE_MAIL_DISCARDED = "mail.discard"
+EVENT_TYPE_CALENDAR_READ = "calendar.read"
+EVENT_TYPE_CALENDAR_PROPOSED = "calendar.propose"
+EVENT_TYPE_CALENDAR_COMMITTED = "calendar.commit"
+EVENT_TYPE_CALENDAR_DISCARDED = "calendar.discard"
 
 EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_RESEARCH_PLANNED,
@@ -364,6 +384,14 @@ EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_DOCUMENT_READ,
     EVENT_TYPE_DOCUMENT_ANSWERED,
     EVENT_TYPE_DOCUMENT_COMPARED,
+    EVENT_TYPE_MAIL_READ,
+    EVENT_TYPE_MAIL_DRAFTED,
+    EVENT_TYPE_MAIL_SENT,
+    EVENT_TYPE_MAIL_DISCARDED,
+    EVENT_TYPE_CALENDAR_READ,
+    EVENT_TYPE_CALENDAR_PROPOSED,
+    EVENT_TYPE_CALENDAR_COMMITTED,
+    EVENT_TYPE_CALENDAR_DISCARDED,
 )
 
 #: ``alarm.<state_lowercase>`` for every state in ``app.alarms.models.ALARM_STATES``

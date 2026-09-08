@@ -41,7 +41,11 @@ from typing import Any
 #: publisher allows through, as ``[{ref, path}]``, never ``excerpt``: see
 #: ``app.uistate.publisher._clean_metadata``), plus the ``documents`` subsystem. Same
 #: additive rule: a v4 renderer keeps working and simply never sees it.
-CONTRACT_VERSION = 5
+#: v6 (M21 Mail & Calendar spec §3, ADR-0084) adds ``mail.activity`` (metadata
+#: ``{folder?, subject?, draft_state?}``) and ``calendar.activity`` (metadata
+#: ``{range?, event?, proposal_state?}``), plus the ``mail``/``calendar`` subsystems. Same
+#: additive rule: a v5 renderer keeps working and simply never sees them.
+CONTRACT_VERSION = 6
 
 #: Metadata value bounds. Numbers are floats in [0, 1] except where noted; strings are
 #: short machine tokens, never prose.
@@ -143,6 +147,15 @@ class UiState(StrEnum):
     #: animate a surge, the same rule every other channel here follows.
     DOCUMENT_ANALYSIS = "document.analysis"
 
+    #: M21 (spec §3, §7): the Mail & Calendar channel. Published around a read, a
+    #: draft/proposal read-back, and a confirmed send/commit — never to animate a surge,
+    #: the same rule every other channel here follows. Metadata is identity only: a
+    #: folder/subject/draft_state for mail, a range/event/proposal_state for calendar —
+    #: never a body, an address book, or the spoken text (app.uistate.publisher's
+    #: forbidden-key rule already refuses "body"/"content"/anything text-shaped).
+    MAIL_ACTIVITY = "mail.activity"
+    CALENDAR_ACTIVITY = "calendar.activity"
+
 
 UI_STATES: tuple[str, ...] = tuple(s.value for s in UiState)
 
@@ -168,6 +181,9 @@ SUBSYSTEMS: tuple[str, ...] = (
     "operator",
     # M20: File & Document Intelligence publishes document.analysis (spec §7).
     "documents",
+    # M21: Mail & Calendar publishes mail.activity / calendar.activity (spec §7).
+    "mail",
+    "calendar",
 )
 
 SEVERITIES: tuple[str, ...] = ("info", "notice", "warning", "critical")
