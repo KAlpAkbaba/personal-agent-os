@@ -21,6 +21,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.ids import focus_row_id
 from app.operator.models import FOCUS_KINDS, FOCUS_STACK_LIMIT, ObjectFocusRow
 
 #: How many rows to scan to find the last ``FOCUS_STACK_LIMIT`` DISTINCT objects. The
@@ -32,9 +33,13 @@ _SCAN_ROWS = FOCUS_STACK_LIMIT * 6
 #: from the SAME process (two operator steps a few milliseconds apart; two calls in one
 #: test) can land on the identical ``datetime.now(UTC)`` reading on a coarse wall clock
 #: (Windows' default resolution is far coarser than a microsecond), and ``_stack``'s
-#: secondary sort key (row id) is not chronological. A caller that already has a real,
-#: meaningful moment (a device receipt's own timestamp) passes ``now=`` explicitly and
-#: bypasses this entirely; only the default path is nudged.
+#: secondary sort key is the row id. Two guards, each sufficient on its own for the
+#: sequential case. (1) The default clock below never hands out one instant twice in a
+#: process. A caller that already has a real, meaningful moment (a device receipt's own
+#: timestamp) passes ``now=`` explicitly and bypasses it entirely; only the default path
+#: is nudged. (2) The row id is itself time-ordered (``app.ids.focus_row_id``), so a tie
+#: that reaches the table anyway — two callers passing one identical ``now=``, rows
+#: written by two processes — reads as insertion order rather than as a coin toss.
 _focus_clock_lock = threading.Lock()
 _focus_last_selected_at: datetime | None = None
 
@@ -100,7 +105,7 @@ def set_focus(
     """Append one focus row: ``object_id`` of ``kind`` is now the one the owner points at."""
     _validate_kind(kind)
     row = ObjectFocusRow(
-        id=uuid.uuid4(),
+        id=focus_row_id(),
         owner_session_id=owner_session_id,
         kind=kind,
         object_id=str(object_id)[:200],

@@ -24,6 +24,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import JSON
 
+from app.ids import focus_row_id
 from app.models import Base
 
 #: Object kinds this table accepts today. Additive: a future kind (``file``, ``tab``, ...)
@@ -90,7 +91,13 @@ class ObjectFocusRow(Base):
     __tablename__ = "object_focus"
     __table_args__ = (Index("ix_object_focus_kind_selected_at", "kind", "selected_at"),)
 
-    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    #: TIME-ORDERED on purpose (``app.ids.focus_row_id``, an RFC 9562 UUIDv7), never
+    #: random: ``app.operator.focus._stack`` reads ``ORDER BY selected_at DESC, id DESC``
+    #: and this is that second key. A random v4 made it a coin toss whenever two rows
+    #: shared one ``selected_at`` — two callers passing the same explicit ``now=``, or
+    #: rows written by two processes, neither of which the module's default clock can
+    #: nudge apart. The same guard ``ResearchFocusRow`` carries (ADR-0076 addendum 1).
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=focus_row_id)
     #: Which realtime session (if any) was in the room when the focus moved. Informational
     #: only - the focus itself is the owner's and outlives any one session.
     owner_session_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
