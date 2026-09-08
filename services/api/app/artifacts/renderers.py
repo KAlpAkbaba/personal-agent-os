@@ -37,7 +37,7 @@ import zipfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final, Protocol, runtime_checkable
 
 import markdown as markdown_lib
 from docx import Document
@@ -45,6 +45,8 @@ from fpdf import FPDF
 from fpdf.enums import XPos, YPos
 from openpyxl import Workbook
 from pptx import Presentation
+
+from app.artifacts.security import is_formula_injection
 
 if TYPE_CHECKING:
     from app.artifacts.spec import ArtifactSpec, Sheet
@@ -230,6 +232,90 @@ class TxtRenderer:
         return text.encode("utf-8")
 
 
+#: MEDIUM/HIGH security-review finding (ADR-0085 addendum 6): python-markdown's own
+#: link/image syntax (``[text](url)`` / ``![alt](src)``) survives the ``&``/``<``/``>``
+#: escaping above unchanged (that escaping only neutralises RAW HTML in the source —
+#: markdown's OWN generated ``<a href>``/``<img src>`` is built AFTER escaping, from
+#: whatever URL the owner/model wrote), so ``[Tıkla](javascript:alert(1))`` became a
+#: live ``javascript:`` href. Every href/src is now allow-listed to http/https/mailto
+#: (mailto meaningless for ``src`` but harmless to allow) after normalising away a
+#: leading BOM/whitespace and any embedded control/whitespace character a scheme-sniff
+#: bypass would rely on (``"java\tscript:alert(1)"``); anything else is refused —
+#: an anchor keeps only its inner text, an image is dropped outright.
+_ALLOWED_URL_SCHEMES: Final = ("http:", "https:", "mailto:")
+_URL_SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.\-]*:", re.IGNORECASE)
+_CONTROL_OR_WHITESPACE_RE = re.compile(r"[\x00-\x20]+")
+
+
+def _normalize_url_for_scheme_check(value: str) -> str:
+    return _CONTROL_OR_WHITESPACE_RE.sub("", value)
+
+
+def _url_is_safe(value: str) -> bool:
+    normalized = _normalize_url_for_scheme_check(value)
+    match = _URL_SCHEME_RE.match(normalized)
+    if match is None:
+        return True  # no scheme at all -- a relative reference, never executable
+    return match.group(0).lower() in _ALLOWED_URL_SCHEMES
+
+
+_TAG_ATTR_RE = re.compile(r'([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*"([^"]*)"')
+
+
+def _tag_attr(tag_text: str, name: str) -> str | None:
+    for attr_name, value in _TAG_ATTR_RE.findall(tag_text):
+        if attr_name.lower() == name:
+            return value
+    return None
+
+
+_ANCHOR_RE = re.compile(r"<a\b([^>]*)>(.*?)</a>", re.IGNORECASE | re.DOTALL)
+_IMG_RE = re.compile(r"<img\b[^>]*/?>", re.IGNORECASE)
+#: Belt-and-braces assertion (finding: "refuse <script/on*= after conversion"): our OWN
+#: converter, fed only escaped input, must never be able to produce either shape. If it
+#: ever does (a future markdown extension, a library upgrade), refuse to emit rather
+#: than silently ship it — this is a tripwire on OUR OWN output, not a sanitiser for
+#: arbitrary third-party HTML.
+#: Deliberately anchored to a REAL, unescaped tag opening (``<tagname ... on*=``) —
+#: never a bare ``on*=`` anywhere in the text, which would false-positive on the
+#: pre-existing M3 escaping's own OUTPUT: an injected ``<img ... onerror=...>`` in the
+#: source is escaped upstream into literal text (``&lt;img ... onerror=...&gt;``,
+#: proven safe by ``tests/unit/test_renderers.py``'s own M3 regression test) that
+#: still contains the substring ``" onerror="`` despite carrying no live ``<``/``>``
+#: at all — a bare substring search would wrongly refuse that already-safe output.
+_SCRIPT_OR_HANDLER_RE = re.compile(r"<script\b|<[a-zA-Z][^>]*\son[a-zA-Z]+\s*=", re.IGNORECASE)
+
+
+class UnsafeGeneratedHtmlError(RuntimeError):
+    """Raised when this module's own HTML output carries a ``<script>`` tag or an
+    ``on*=`` event-handler attribute after conversion — should never happen given the
+    escaping upstream; refusing to emit is safer than trusting "should never"."""
+
+
+def _sanitize_generated_html(body: str) -> str:
+    def _anchor_sub(match: re.Match[str]) -> str:
+        attrs, inner = match.group(1), match.group(2)
+        href = _tag_attr(attrs, "href")
+        if href is None or not _url_is_safe(href):
+            return inner  # "render the text only" (finding's own wording)
+        return match.group(0)
+
+    def _img_sub(match: re.Match[str]) -> str:
+        tag = match.group(0)
+        src = _tag_attr(tag, "src")
+        if src is None or not _url_is_safe(src):
+            return ""  # no safe source to keep -- drop the image outright
+        return tag
+
+    body = _ANCHOR_RE.sub(_anchor_sub, body)
+    body = _IMG_RE.sub(_img_sub, body)
+    if _SCRIPT_OR_HANDLER_RE.search(body):
+        raise UnsafeGeneratedHtmlError(
+            "html renderer produced a <script>/on*= construct after conversion"
+        )
+    return body
+
+
 class HtmlRenderer:
     format = FORMAT_HTML
     mime_type = MIME_TYPES[FORMAT_HTML]
@@ -249,6 +335,7 @@ class HtmlRenderer:
         body = markdown_lib.markdown(
             safe_markdown, extensions=["extra", "sane_lists"]
         )
+        body = _sanitize_generated_html(body)
         escaped_title = (
             title.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         )
@@ -554,6 +641,22 @@ def _safe_sheet_name(name: str) -> str:
     return cleaned[:31]
 
 
+def _write_safe_cell(worksheet: Any, *, row: int, column: int, value: object) -> None:
+    """Write ``value`` at (row, column); a STRING that would become a live formula the
+    moment Excel opens the file (HIGH security-review finding, ADR-0085 addendum 6) is
+    written as literal text instead — defence in depth alongside ``ArtifactSpec``'s own
+    refusal (app.artifacts.spec), reached only when a caller bypasses that refusal (a
+    test double exercising this renderer directly, or a future spec field this module
+    has not yet learned to check). A leading apostrophe is the spreadsheet convention
+    for "this is text, not a formula", AND flips openpyxl's own ``data_type`` away from
+    ``"f"`` since the string no longer starts with ``"="``; ``data_type`` is then forced
+    to ``"s"`` explicitly too, so the guarantee never depends on that heuristic alone."""
+    cell = worksheet.cell(row=row, column=column, value=value)
+    if isinstance(value, str) and is_formula_injection(value):
+        cell.value = "'" + value
+        cell.data_type = "s"
+
+
 class XlsxRenderer:
     format = FORMAT_XLSX
     mime_type = MIME_TYPES[FORMAT_XLSX]
@@ -565,17 +668,19 @@ class XlsxRenderer:
         for sheet_spec in spec.sheets:
             worksheet = workbook.create_sheet(title=_safe_sheet_name(sheet_spec.name))
             for c, col in enumerate(sheet_spec.columns, start=1):
-                worksheet.cell(row=1, column=c, value=col)
+                _write_safe_cell(worksheet, row=1, column=c, value=col)
             for r, row in enumerate(sheet_spec.rows, start=2):
                 for c, value in enumerate(row, start=1):
-                    worksheet.cell(row=r, column=c, value=value)
+                    _write_safe_cell(worksheet, row=r, column=c, value=value)
             totals_row = _totals_row(sheet_spec)
             if totals_row is not None:
                 next_row = 2 + len(sheet_spec.rows)
                 for c, value in enumerate(totals_row, start=1):
                     if value != "":
-                        worksheet.cell(row=next_row, column=c, value=value)
+                        _write_safe_cell(worksheet, row=next_row, column=c, value=value)
             if sheet_spec.formulas:
+                # The ONE place a leading "=" is intentional (spec §1) — never routed
+                # through _write_safe_cell, which would neutralise it right back.
                 for cell_ref, raw in sheet_spec.formulas.items():
                     worksheet[cell_ref] = raw
         workbook.properties.creator = "Personal Agent OS"
@@ -590,6 +695,20 @@ class XlsxRenderer:
 # --------------------------------------------------------- spreadsheet/dataset: CSV
 
 
+def _csv_safe_cell(value: object) -> object:
+    """CSV has no ``data_type`` at all — a spreadsheet application decides purely from
+    the leading character on IMPORT, so the same leading-apostrophe convention is the
+    ENTIRE defence here (HIGH security-review finding, ADR-0085 addendum 6). Defence in
+    depth alongside ``ArtifactSpec``'s own refusal, same as ``_write_safe_cell`` above."""
+    if isinstance(value, str) and is_formula_injection(value):
+        return "'" + value
+    return value
+
+
+def _csv_safe_row(row: list[object]) -> list[object]:
+    return [_csv_safe_cell(v) for v in row]
+
+
 class CsvRenderer:
     format = FORMAT_CSV
     mime_type = MIME_TYPES[FORMAT_CSV]
@@ -600,17 +719,17 @@ class CsvRenderer:
         if spec.kind == "spreadsheet":
             assert spec.sheets is not None
             sheet = spec.sheets[0]
-            writer.writerow(sheet.columns)
+            writer.writerow(_csv_safe_row(sheet.columns))
             for row in sheet.rows:
-                writer.writerow(row)
+                writer.writerow(_csv_safe_row(row))
             totals_row = _totals_row(sheet)
             if totals_row is not None:
-                writer.writerow(totals_row)
+                writer.writerow(_csv_safe_row(totals_row))
         else:
             assert spec.columns is not None and spec.rows is not None
-            writer.writerow(spec.columns)
+            writer.writerow(_csv_safe_row(spec.columns))
             for row in spec.rows:
-                writer.writerow(row)
+                writer.writerow(_csv_safe_row(row))
         return buf.getvalue().encode("utf-8")
 
 
