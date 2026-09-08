@@ -1953,7 +1953,7 @@ function GenesisRowItem({ row, now, control }: { row: GenesisRunRow; now: number
  * refuses on its own terms (the approval is bound to the owner's session,
  * ADR-0087 §5). The empty sentence is the route's answer, never the bus's
  * silence — and "henüz yok" (no route on this Cloud Core) is neither. No
- * progress bar and no "improving": thirteen states, each a sentence about
+ * progress bar and no "improving": fourteen states, each a sentence about
  * a row.
  */
 export function GenesisPanel({

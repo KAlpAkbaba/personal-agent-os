@@ -166,7 +166,7 @@ const USED = () => CAPABILITY_GENESIS(CAP, "used");
 const VERIFIED = () => CAPABILITY_GENESIS(CAP, "verified");
 const FAILED = () => CAPABILITY_GENESIS(CAP, "failed", "dependency_unavailable");
 
-/** The thirteen states as the caption must word each one, for `counterbox.increment`. */
+/** The fourteen states as the caption must word each one, for `counterbox.increment`. */
 const EXPECTED_CAPTION: Record<(typeof GENESIS_RUN_STATES)[number], string> = {
   capability_missing: "counterbox.increment için yetenek yok — deneniyor",
   researching: "counterbox.increment için arayüz araştırılıyor",
@@ -292,7 +292,7 @@ describe("contract v9 is v8 plus the genesis state, and says so", () => {
     expect(stateLabel("capability.genesis")).not.toBe("capability.genesis");
     expect(GENESIS_EMPTY).toBe("Henüz yeni bir yetenek istenmedi.");
     expect(GENESIS_UNTOLD).not.toBe(GENESIS_EMPTY);
-    // The thirteen states, each a constant spelled once.
+    // The fourteen states, each a constant spelled once.
     expect(GENESIS_STATE_LABEL).toEqual({
       capability_missing: "yetenek yok — deneniyor",
       researching: "arayüz araştırılıyor",
