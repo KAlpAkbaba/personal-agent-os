@@ -65,6 +65,23 @@ logger = get_logger("app.evolution.runtime")
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 
+#: The app tree itself (``services/api`` in a checkout, ``/srv/pagentos`` in the image).
+_APP_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _default_skills_root() -> Path:
+    """Where generated skills live when the deployment names no root.
+
+    A checkout has ``services/api`` beneath ``_REPO_ROOT``; an image has the app tree
+    copied in with nothing writable above it, so ``_REPO_ROOT`` there is the filesystem
+    root and ``<root>/skills/generated`` is both unwritable and meaningless. Only trust
+    the repository root when it really looks like one (2026-09-08: the M24 release found
+    the container computing ``/skills`` and failing to start).
+    """
+    if (_REPO_ROOT / "services" / "api").is_dir():
+        return _REPO_ROOT / "skills" / "generated"
+    return _APP_ROOT / "skills" / "generated"
+
 
 class EvolutionRuntime:
     def __init__(self, settings: Settings, *, engine: Engine | None = None) -> None:
@@ -83,9 +100,7 @@ class EvolutionRuntime:
         )
 
         self.skills_root = Path(
-            os.environ.get(
-                "PAGENTOS_EVOLUTION_SKILLS_ROOT", str(_REPO_ROOT / "skills" / "generated")
-            )
+            os.environ.get("PAGENTOS_EVOLUTION_SKILLS_ROOT", str(_default_skills_root()))
         ).resolve()
         self.work_root = Path(
             os.environ.get("PAGENTOS_EVOLUTION_WORK_ROOT", str(self.skills_root / ".work"))
@@ -223,9 +238,7 @@ class EvolutionRuntime:
 
     @property
     def reviewer(self) -> IndependentSkillReviewer:
-        return IndependentSkillReviewer(
-            sandbox=self.sandbox, authorization=self.authorization
-        )
+        return IndependentSkillReviewer(sandbox=self.sandbox, authorization=self.authorization)
 
     @property
     def dispatcher(self) -> CapabilityDispatcher:

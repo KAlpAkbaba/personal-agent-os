@@ -57,7 +57,15 @@ class GenesisRuntime:
     @property
     def service(self) -> GenesisService:
         if self._service is None:
-            self.skills_root.mkdir(parents=True, exist_ok=True)
+            # NO directory is created here. ``create_app`` builds this service while the
+            # application object is being constructed, so a mkdir on this path runs on
+            # every process start — and in the image there is nothing writable above the
+            # app tree, which is exactly how the 2026-09-08 release found this: the
+            # container died with PermissionError before uvicorn could load the app and
+            # the blue/green release rolled back. ``GenesisService._publish_and_register``
+            # already creates the target tree when a run actually publishes a skill,
+            # which is the same discipline ``EvolutionRuntime`` follows (it builds paths
+            # at startup and creates nothing).
             self._service = GenesisService(
                 self._evolution.session,
                 registry=self._evolution.registry,
