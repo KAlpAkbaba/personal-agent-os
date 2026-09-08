@@ -112,6 +112,31 @@ class Intent(StrEnum):
     DOCUMENT_COMMON_POINTS = "document_common_points"  # bunların ortak noktalarını çıkar
     DOCUMENT_PREVIOUS = "document_previous"  # az önceki belgeye/sunuma dön
 
+    # M21 (docs/M21_MAIL_CALENDAR_SPEC.md §3): Mail & Calendar. Every one of these targets
+    # app.mail/app.calendar through tools_mail/tools_calendar - never a second mail/
+    # calendar path (ADR-0084). The three tiers keep their own vocabulary (spec §1): READ
+    # (INBOX/SEARCH/READ/THREAD, AGENDA/FIND_SLOT) mutates nothing the owner can see;
+    # PREPARE (DRAFT_REPLY/DRAFT_NEW/EDIT_DRAFT/READ_DRAFT, PROPOSE/READ_PROPOSAL) writes a
+    # local, reversible row, always read back; EXTERNAL MUTATION (SEND, COMMIT) is the
+    # owner's alone, and DISCARD ends either the draft or the proposal, whichever is
+    # pending (the tool layer decides which, from the SAME durable focus the read-back
+    # gate itself reads — never from vocabulary alone).
+    MAIL_INBOX = "mail_inbox"  # Gelen kutumda ne var? / Okunmamış maillerim var mı?
+    MAIL_SEARCH = "mail_search"  # Fatura maillerini bul
+    MAIL_READ = "mail_read"  # Ali'den gelen son maili oku
+    MAIL_THREAD = "mail_thread"  # Bu konuşmanın tamamını oku
+    MAIL_DRAFT_REPLY = "mail_draft_reply"  # Buna cevap yaz: ...
+    MAIL_DRAFT_NEW = "mail_draft_new"  # Yeni mail: Ayşe'ye, konu ..., ...
+    MAIL_EDIT_DRAFT = "mail_edit_draft"  # Konuyu 'Plan onayı' yap
+    MAIL_READ_DRAFT = "mail_read_draft"  # Cevabı oku
+    MAIL_SEND = "mail_send"  # Gönder. (only with a draft read back)
+    CALENDAR_AGENDA = "calendar_agenda"  # Bugün takvimimde ne var?
+    CALENDAR_FIND_SLOT = "calendar_find_slot"  # Cuma 60 dakikalık boşluk bul
+    CALENDAR_PROPOSE = "calendar_propose"  # Perşembe 15'e diş hekimi ekle / Bunu bir saat ertele
+    CALENDAR_READ_PROPOSAL = "calendar_read_proposal"  # Öneriyi oku
+    CALENDAR_COMMIT = "calendar_commit"  # Onayla. / Tamam, ekle. (only with a proposal read back)
+    DISCARD = "discard"  # Gönderme. / Vazgeç. — whichever of draft/proposal is pending
+
     NONE = "none"
 
 
@@ -163,6 +188,19 @@ CAPABILITY_BY_INTENT: dict[Intent, str] = {
     Intent.WINDOW_PREVIOUS: "operator.window_control",
     Intent.TYPE_TEXT: "operator.type",
     Intent.OPERATOR_CANCEL: "operator.cancel",
+    # M21 (spec §3): the PREPARE and EXTERNAL MUTATION tiers end in a receipt, the same
+    # class alarm.create/ambient.set_policy already get. DISCARD is deliberately absent —
+    # it targets one of two capabilities depending on which object is pending, decided at
+    # the tool layer, and `ResolvedIntent.capability`/`klass` are set explicitly at its own
+    # call site in resolve_intent rather than through this static table.
+    Intent.MAIL_DRAFT_REPLY: "mail.draft",
+    Intent.MAIL_DRAFT_NEW: "mail.draft",
+    Intent.MAIL_EDIT_DRAFT: "mail.edit_draft",
+    Intent.MAIL_READ_DRAFT: "mail.read_draft",
+    Intent.MAIL_SEND: "mail.send",
+    Intent.CALENDAR_PROPOSE: "calendar.propose",
+    Intent.CALENDAR_READ_PROPOSAL: "calendar.read_proposal",
+    Intent.CALENDAR_COMMIT: "calendar.commit",
 }
 
 #: QUERY intents that name a tool rather than being answered conversationally (contract §2:
@@ -188,6 +226,15 @@ QUERY_TOOL_BY_INTENT: dict[Intent, str] = {
     Intent.DOCUMENT_INSPECT: "document.inspect",
     Intent.DOCUMENT_COMMON_POINTS: "document.common_points",
     Intent.DOCUMENT_PREVIOUS: "document.previous",
+    # M21 (spec §3): reading and searching mail/calendar mutates nothing the owner can
+    # see (mail_index/calendar_index are Cloud Core bookkeeping) - the same query class
+    # the document family already gets for the identical reason.
+    Intent.MAIL_INBOX: "mail.inbox",
+    Intent.MAIL_SEARCH: "mail.search",
+    Intent.MAIL_READ: "mail.read",
+    Intent.MAIL_THREAD: "mail.thread",
+    Intent.CALENDAR_AGENDA: "calendar.agenda",
+    Intent.CALENDAR_FIND_SLOT: "calendar.find_slot",
 }
 
 
@@ -368,6 +415,15 @@ class ResolvedIntent:
     folder: str | None = None
     #: For FILE_SEARCH, the extensions the owner's words named ([".pdf"]), or None.
     extensions: list[str] | None = None
+    #: M21 (docs/M21_MAIL_CALENDAR_SPEC.md §3): for the mail family, which message the
+    #: owner's WORDS pointed at: "current" | "previous" | None. ``None`` means the words
+    #: named neither — the tool falls back to the model's own ``target`` argument (a
+    #: spoken name, "Ali'den gelen son maili oku"), the same "owner's words win only when
+    #: they actually said something" rule ``document_ref`` already follows.
+    mail_ref: str | None = None
+    #: For the calendar reschedule shape ("Bunu bir saat ertele"), the event the owner's
+    #: WORDS pointed at: "current" | None.
+    calendar_ref: str | None = None
 
     def __post_init__(self) -> None:
         if not self.klass:
@@ -401,6 +457,8 @@ class ResolvedIntent:
             "pattern": self.pattern,
             "folder": self.folder,
             "extensions": list(self.extensions) if self.extensions else None,
+            "mail_ref": self.mail_ref,
+            "calendar_ref": self.calendar_ref,
         }
 
     @property
@@ -875,7 +933,7 @@ def _is_question(tokens: tuple[str, ...]) -> bool:
 
 
 def _alarm_match(
-    tokens: tuple[str, ...], *, alarm_ringing: bool = False
+    tokens: tuple[str, ...], *, alarm_ringing: bool = False, event_focused: bool = False
 ) -> tuple[Intent, str] | None:
     """The alarm family (spec §6's phrase list), in priority order.
 
@@ -893,8 +951,20 @@ def _alarm_match(
     """
     # "Beş dakika ertele." names no alarm at all — the owner is talking to the thing that
     # just woke them, and requiring the noun would leave that sentence unresolved at
-    # exactly the moment they are least able to rephrase it. "ertele" means nothing else.
+    # exactly the moment they are least able to rephrase it. "ertele" means nothing else —
+    # EXCEPT the one new meaning M21 gives it (spec §3: "Bunu bir saat ertele" reschedules
+    # the focused calendar EVENT), and only when there is no alarm noun, no alarm actually
+    # ringing, and a calendar event genuinely focused right now: a real alarm keeps every
+    # priority it already had, in every existing case (``event_focused`` is False unless
+    # this milestone's own focus kind was set, which no pre-M21 corpus case ever does).
     if _has(tokens, *_SNOOZE_VERB_STEMS):
+        if (
+            event_focused
+            and not alarm_ringing
+            and _alarm_noun(tokens) is None
+            and _screen_noun(tokens) is None
+        ):
+            return None
         return Intent.ALARM_SNOOZE, "ertele"
     if again := _snooze_again_match(tokens):
         return Intent.ALARM_SNOOZE, again
@@ -1440,6 +1510,231 @@ def _extract_document_extensions(tokens: tuple[str, ...]) -> list[str] | None:
 
 #: ``_extract_document_pattern`` (below ``_DEICTIC_WORDS``, which it needs) resolves the
 #: search PATTERN a spoken name leaves behind (see ``_SEARCH_PATTERN_SKIP`` further down).
+
+
+# --------------------------------------------------------- M21: Mail & Calendar
+#
+# Built on the SAME token/stem primitives as every intent above - no second Turkish
+# pattern table (module docstring's own rule). Freeform CONTENT (a draft's body, a new
+# mail's subject/recipient, a proposal's summary/time) is never regex-extracted from the
+# raw utterance here — the model supplies it as a tool argument (the same "owner's words
+# win only for an unambiguous IDENTITY, content stays the model's job" split
+# ``research.start``'s own ``topic`` argument and ``alarm.create``'s own ``when_spoken``
+# already establish). This block decides only WHICH tool fires and, where the words are
+# genuinely unambiguous, WHICH object ("current"/"previous") they point at.
+
+_MAIL_NOUN_STEMS: Final[tuple[str, ...]] = ("mail", "posta", "eposta")
+_INBOX_NOUN_STEMS: Final[tuple[str, ...]] = ("kutu",)
+_UNREAD_STEMS: Final[tuple[str, ...]] = ("okunmamış", "okunmamis")
+_THREAD_NOUN_STEMS: Final[tuple[str, ...]] = ("konuşma", "konusma", "yazışma", "yazisma")
+_REPLY_NOUN_STEMS: Final[tuple[str, ...]] = ("cevab", "cevap", "yanıt", "yanit")
+_MAIL_WRITE_VERB_FORMS: Final[tuple[str, ...]] = ("yaz", "yazsana", "yazar")
+_MAIL_NEW_STEMS: Final[tuple[str, ...]] = ("yeni",)
+_MAIL_SEND_VERB_FORMS: Final[tuple[str, ...]] = ("gönder", "gonder", "göndersene", "gondersene")
+_MAIL_SEND_NEGATION_FORMS: Final[tuple[str, ...]] = (
+    "gönderme",
+    "gonderme",
+    "göndermeyin",
+    "gondermeyin",
+)
+_DISCARD_STEMS: Final[tuple[str, ...]] = ("vazgeç", "vazgec")
+_SUBJECT_NOUN_STEMS: Final[tuple[str, ...]] = ("konu",)
+_SET_SUBJECT_VERB_FORMS: Final[tuple[str, ...]] = ("yap", "yapsana", "yapar")
+
+
+def _mail_inbox_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Gelen kutumda ne var?" / "Okunmamış maillerim var mı?" (spec §3)."""
+    if _has(tokens, *_INBOX_NOUN_STEMS) and _has_exact(tokens, "ne") and _has_exact(tokens, "var"):
+        return "kutuda ne var"
+    if _has(tokens, *_UNREAD_STEMS) and _has(tokens, *_MAIL_NOUN_STEMS):
+        return "okunmamış mail"
+    return None
+
+
+def _mail_search_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Fatura maillerini bul." (spec §3) — the same find/search verbs the document
+    family already uses (module comment: not a second table, a shared one)."""
+    if _has_exact(tokens, *_FIND_VERB_FORMS, *_SEARCH_VERB_FORMS) is None:
+        return None
+    if _has(tokens, *_MAIL_NOUN_STEMS) is None:
+        return None
+    return "mail bul"
+
+
+def _mail_thread_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Bu konuşmanın tamamını oku." (spec §3) — checked before the generic mail READ so
+    a thread noun always wins its own shape."""
+    if _has(tokens, *_THREAD_NOUN_STEMS) is None:
+        return None
+    if _has_exact(tokens, *_READ_VERB_FORMS) is None:
+        return None
+    return "konuşmayı oku"
+
+
+def _mail_read_draft_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Cevabı oku." (spec §3) — the CURRENT DRAFT, never a mailbox message: the reply
+    noun with no mail noun alongside it names the thing just prepared, not something to
+    search for."""
+    if _has(tokens, *_REPLY_NOUN_STEMS) is None:
+        return None
+    if _has_exact(tokens, *_READ_VERB_FORMS) is None:
+        return None
+    return "cevabı oku"
+
+
+def _mail_read_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Ali'den gelen son maili oku." (spec §3) — checked after thread/read_draft so
+    those more specific nouns win first."""
+    if _has_exact(tokens, *_READ_VERB_FORMS) is None:
+        return None
+    if _has(tokens, *_MAIL_NOUN_STEMS) is None:
+        return None
+    return "maili oku"
+
+
+def _mail_draft_reply_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Buna cevap yaz: yarın 10'da uygunum." (spec §3) — the CURRENT message, always
+    (module comment: the body text itself is the model's own argument)."""
+    if _has(tokens, *_REPLY_NOUN_STEMS) is None:
+        return None
+    if _has(tokens, *_MAIL_WRITE_VERB_FORMS) is None:
+        return None
+    return "cevap yaz"
+
+
+def _mail_draft_new_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Yeni mail: Ayşe'ye, konu toplantı, yarın gelemiyorum." (spec §3)."""
+    if _has(tokens, *_MAIL_NEW_STEMS) is None:
+        return None
+    if _has(tokens, *_MAIL_NOUN_STEMS) is None:
+        return None
+    return "yeni mail"
+
+
+def _mail_edit_draft_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Konuyu 'Plan onayı' yap." (spec §3) — the new subject text is the model's own
+    argument; this only recognises the SHAPE."""
+    if _has(tokens, *_SUBJECT_NOUN_STEMS) is None:
+        return None
+    if _has_exact(tokens, *_SET_SUBJECT_VERB_FORMS) is None:
+        return None
+    return "konuyu değiştir"
+
+
+def _mail_send_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Gönder." (spec §3) — gated by the CALLER on ``draft_pending`` (a prepared draft
+    read back this session), never on vocabulary alone: without one, this must resolve to
+    a clarification, not a guess at what to send."""
+    if _has_exact(tokens, *_MAIL_SEND_NEGATION_FORMS):
+        return None
+    return _has_exact(tokens, *_MAIL_SEND_VERB_FORMS)
+
+
+def _mail_send_negation_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Gönderme." (spec §3) — the mail-specific half of DISCARD; checked ahead of the
+    generic ``vazgeç`` so a bare "gönderme" always names the mail draft, never a proposal
+    that happens to also be pending."""
+    return _has_exact(tokens, *_MAIL_SEND_NEGATION_FORMS)
+
+
+def _discard_word_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Vazgeç." (spec §3) — ambiguous between a pending draft and a pending proposal;
+    ``resolve_intent`` decides which object from ``draft_pending``/``proposal_pending``."""
+    if _mail_send_negation_match(tokens):
+        return "gönderme"
+    return _has(tokens, *_DISCARD_STEMS)
+
+
+#: M21 calendar vocabulary. ``_CALENDAR_NOUN_STEMS`` deliberately excludes the alarm's own
+#: "alarm" noun (a different family, spec §1's own words: "no delete, no move, no mass
+#: action") and the "ertele" verb is handled entirely inside ``_alarm_match`` (module
+#: comment there) rather than duplicated here.
+_CALENDAR_NOUN_STEMS: Final[tuple[str, ...]] = ("takvim", "ajanda")
+_AGENDA_QUESTION_WORDS: Final[tuple[str, ...]] = ("ne", "var")
+_FREE_QUESTION_FORMS: Final[tuple[str, ...]] = ("boş", "bos")
+_SLOT_NOUN_STEMS: Final[tuple[str, ...]] = ("boşluk", "bosluk", "müsaitlik", "musaitlik")
+_CALENDAR_ADD_VERB_FORMS: Final[tuple[str, ...]] = ("ekle", "eklesene", "koy", "koysana")
+_CALENDAR_RESCHEDULE_VERB_STEMS: Final[tuple[str, ...]] = ("ertele",)
+_CALENDAR_APPROVE_FORMS: Final[tuple[str, ...]] = ("onayla", "onaylıyorum", "onayliyorum")
+_CALENDAR_APPROVE_OK_FORMS: Final[tuple[str, ...]] = ("tamam",)
+
+
+def _calendar_agenda_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Bugün takvimimde ne var?" (spec §3)."""
+    if _has(tokens, *_CALENDAR_NOUN_STEMS) is None:
+        return None
+    if _has_exact(tokens, "ne") and _has_exact(tokens, "var"):
+        return "takvimde ne var"
+    return None
+
+
+#: "boş muyum?" / "boş musun?" — the first/second-person question suffix glued onto "mu"
+#: (never a standalone token the generic ``_is_question`` helper's exact "mı"/"mu" check
+#: would catch), plus the plain "boş mu?" spacing an ASR sometimes keeps separate.
+_FREE_QUESTION_SUFFIX_FORMS: Final[tuple[str, ...]] = (
+    "muyum",
+    "musun",
+    "mıyım",
+    "miyim",
+    "mı",
+    "mi",
+    "mu",
+    "mü",
+)
+
+
+def _calendar_find_slot_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Cuma 60 dakikalık boşluk bul." / "Yarın öğleden sonra boş muyum?" (spec §3)."""
+    if _has(tokens, *_SLOT_NOUN_STEMS) and _has_exact(tokens, *_FIND_VERB_FORMS):
+        return "boşluk bul"
+    if _has_exact(tokens, *_FREE_QUESTION_FORMS) and _has_exact(
+        tokens, *_FREE_QUESTION_SUFFIX_FORMS
+    ):
+        return "boş muyum"
+    return None
+
+
+def _calendar_propose_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Perşembe 15'e diş hekimi ekle." (spec §3) — a NEW event; the summary/time text is
+    the model's own argument."""
+    if _has_exact(tokens, *_CALENDAR_ADD_VERB_FORMS) is None:
+        return None
+    return "etkinlik ekle"
+
+
+def _calendar_reschedule_match(tokens: tuple[str, ...], *, event_focused: bool) -> str | None:
+    """ "Bunu bir saat ertele." (spec §3) — the FOCUSED event, gated on ``event_focused``
+    the same way ``_alarm_match`` is gated on ``alarm_ringing`` for the identical word:
+    without a calendar event actually focused, "ertele" keeps meaning the alarm snooze it
+    always meant (this function is never even reached in that case — see
+    ``resolve_intent``'s own ordering)."""
+    if not event_focused:
+        return None
+    if _has(tokens, *_CALENDAR_RESCHEDULE_VERB_STEMS) is None:
+        return None
+    return "ertele"
+
+
+def _calendar_read_proposal_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Öneriyi oku." (spec §3)."""
+    if _has(tokens, "öneri", "oneri") is None:
+        return None
+    if _has_exact(tokens, *_READ_VERB_FORMS) is None:
+        return None
+    return "öneriyi oku"
+
+
+def _calendar_commit_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Onayla." / "Tamam, ekle." (spec §3) — gated by the CALLER on ``proposal_pending``
+    (a prepared proposal read back this session), the same discipline ``_mail_send_match``
+    uses for ``draft_pending``."""
+    if _has_exact(tokens, *_CALENDAR_APPROVE_FORMS):
+        return "onayla"
+    if _has_exact(tokens, *_CALENDAR_APPROVE_OK_FORMS) and _has_exact(
+        tokens, *_CALENDAR_ADD_VERB_FORMS
+    ):
+        return "tamam ekle"
+    return None
 
 
 # ------------------------------------------------- research interaction classes
@@ -2069,6 +2364,9 @@ def resolve_intent(
     alarm_ringing: bool = False,
     operator_running: bool = False,
     document_focused: bool = False,
+    event_focused: bool = False,
+    draft_pending: bool = False,
+    proposal_pending: bool = False,
 ) -> ResolvedIntent:
     """Resolve a transcript into an :class:`Intent` against the live state.
 
@@ -2097,6 +2395,16 @@ def resolve_intent(
     deictic ("Bunu özetle.", "Ödeme süresi kaç gün?") a document intent rather than falling
     through to the plain SUMMARIZE control intent or NONE - the same
     "context, never vocabulary alone" discipline the ringing/running flags already keep.
+
+    ``event_focused``, ``draft_pending`` and ``proposal_pending`` are M21's own three
+    (docs/M21_MAIL_CALENDAR_SPEC.md §3, ADR-0084): whether a ``event`` object focus exists
+    (the same "ertele" disambiguation ``alarm_ringing`` already gives the alarm's own
+    snooze word — see ``_alarm_match``), and whether a PREPARED draft/proposal was read
+    back to the owner in THIS session — the one precondition that turns a bare "Gönder."/
+    "Onayla."/"Vazgeç." into MAIL_SEND/CALENDAR_COMMIT/DISCARD rather than a clarification
+    ("Neyi göndereyim?"/"Neyi onaylayayım?") or nothing at all. The caller establishes all
+    three from the durable focus stack and the drafts/proposals tables; the resolver stays
+    pure.
     """
     normalized, tokens, dropped = normalize_transcript(text)
     confidence = 1.0 if dropped == 0 else 0.9
@@ -2166,7 +2474,9 @@ def resolve_intent(
             ),
             **base,
         )
-    if alarm_matched := _alarm_match(tokens, alarm_ringing=alarm_ringing):
+    if alarm_matched := _alarm_match(
+        tokens, alarm_ringing=alarm_ringing, event_focused=event_focused
+    ):
         return ResolvedIntent(
             alarm_matched[0],
             scope=SCOPE_CONVERSATION,
@@ -2317,6 +2627,106 @@ def resolve_intent(
             document_ref="current",
             question=text,
             **base,
+        )
+
+    # 0g. M21 (docs/M21_MAIL_CALENDAR_SPEC.md §3): Mail & Calendar, alongside the rest of
+    #     the M19/M20/M21 device/account-reading family, for the same reason app_open and
+    #     the documents block are here: none of these words mean anything else this
+    #     resolver already claimed higher up. CALENDAR_COMMIT is checked BEFORE
+    #     CALENDAR_PROPOSE because "Tamam, ekle." shares the word "ekle" with a fresh
+    #     "... ekle" proposal, and the explicit "tamam" must win the tie. MAIL_SEND and
+    #     CALENDAR_COMMIT match on vocabulary ALONE — with nothing pending, the tool they
+    #     name (mail.send / calendar.commit) still runs and answers with an honest
+    #     clarification ("Neyi göndereyim?"/"Neyi onaylayayım?") from its OWN service
+    #     layer, never a guess made here; ``draft_pending``/``proposal_pending`` decide
+    #     only which of the two capabilities a bare DISCARD targets.
+    if commit_matched := _calendar_commit_match(tokens):
+        return ResolvedIntent(
+            Intent.CALENDAR_COMMIT, scope=SCOPE_CONVERSATION, matched=commit_matched, **base
+        )
+    if send_matched := _mail_send_match(tokens):
+        return ResolvedIntent(
+            Intent.MAIL_SEND, scope=SCOPE_CONVERSATION, matched=send_matched, **base
+        )
+    if discard_matched := _discard_word_match(tokens):
+        capability = "calendar.discard" if (proposal_pending and not draft_pending) else "mail.discard"
+        return ResolvedIntent(
+            Intent.DISCARD,
+            scope=SCOPE_CONVERSATION,
+            matched=discard_matched,
+            klass=KLASS_ACTION,
+            capability=capability,
+            **base,
+        )
+    if reschedule_matched := _calendar_reschedule_match(tokens, event_focused=event_focused):
+        return ResolvedIntent(
+            Intent.CALENDAR_PROPOSE,
+            scope=SCOPE_CONVERSATION,
+            matched=reschedule_matched,
+            calendar_ref="current",
+            **base,
+        )
+    if propose_matched := _calendar_propose_match(tokens):
+        return ResolvedIntent(
+            Intent.CALENDAR_PROPOSE, scope=SCOPE_CONVERSATION, matched=propose_matched, **base
+        )
+    if read_proposal_matched := _calendar_read_proposal_match(tokens):
+        return ResolvedIntent(
+            Intent.CALENDAR_READ_PROPOSAL,
+            scope=SCOPE_CONVERSATION,
+            matched=read_proposal_matched,
+            **base,
+        )
+    if find_slot_matched := _calendar_find_slot_match(tokens):
+        return ResolvedIntent(
+            Intent.CALENDAR_FIND_SLOT,
+            scope=SCOPE_CONVERSATION,
+            matched=find_slot_matched,
+            **base,
+        )
+    if agenda_matched := _calendar_agenda_match(tokens):
+        return ResolvedIntent(
+            Intent.CALENDAR_AGENDA, scope=SCOPE_CONVERSATION, matched=agenda_matched, **base
+        )
+    if read_draft_matched := _mail_read_draft_match(tokens):
+        return ResolvedIntent(
+            Intent.MAIL_READ_DRAFT, scope=SCOPE_CONVERSATION, matched=read_draft_matched, **base
+        )
+    if edit_draft_matched := _mail_edit_draft_match(tokens):
+        return ResolvedIntent(
+            Intent.MAIL_EDIT_DRAFT, scope=SCOPE_CONVERSATION, matched=edit_draft_matched, **base
+        )
+    if draft_reply_matched := _mail_draft_reply_match(tokens):
+        return ResolvedIntent(
+            Intent.MAIL_DRAFT_REPLY,
+            scope=SCOPE_CONVERSATION,
+            matched=draft_reply_matched,
+            mail_ref="current",
+            **base,
+        )
+    if draft_new_matched := _mail_draft_new_match(tokens):
+        return ResolvedIntent(
+            Intent.MAIL_DRAFT_NEW, scope=SCOPE_CONVERSATION, matched=draft_new_matched, **base
+        )
+    if thread_matched := _mail_thread_match(tokens):
+        return ResolvedIntent(
+            Intent.MAIL_THREAD,
+            scope=SCOPE_CONVERSATION,
+            matched=thread_matched,
+            mail_ref="current",
+            **base,
+        )
+    if mail_read_matched := _mail_read_match(tokens):
+        return ResolvedIntent(
+            Intent.MAIL_READ, scope=SCOPE_CONVERSATION, matched=mail_read_matched, **base
+        )
+    if mail_search_matched := _mail_search_match(tokens):
+        return ResolvedIntent(
+            Intent.MAIL_SEARCH, scope=SCOPE_CONVERSATION, matched=mail_search_matched, **base
+        )
+    if mail_inbox_matched := _mail_inbox_match(tokens):
+        return ResolvedIntent(
+            Intent.MAIL_INBOX, scope=SCOPE_CONVERSATION, matched=mail_inbox_matched, **base
         )
 
     # 1. stop — top priority in any state, including TOOL_RUNNING progress.
