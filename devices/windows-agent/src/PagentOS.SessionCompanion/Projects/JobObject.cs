@@ -101,6 +101,25 @@ public sealed class JobObject : IDisposable
     public static JobObject CreateBounded()
         => Create(ProjectCapabilityNames.MemoryLimitBytes, ProjectCapabilityNames.CpuTimeLimit, ProjectCapabilityNames.MaxProcessesPerJob);
 
+    /// <summary>
+    /// M25: the bounds for one runtime. The web runtimes keep M23's 512 MiB / 10 min CPU; the
+    /// two editors get their own (Blender 2 GiB and 5 min, Unity 4 GiB and 10 min — an editor
+    /// that imports a project is not a static file server), and more room for the processes
+    /// they fork (Unity starts a licensing client, a package manager and a compiler). Every
+    /// other flag — kill-on-close, no breakaway, every UI restriction, die-on-exception — is
+    /// the same, because those are what make the child safe, not what make it small.
+    /// </summary>
+    public static JobObject CreateBounded(ProjectRuntime runtime)
+        => runtime switch
+        {
+            ProjectRuntime.Blender => Create(SceneCapabilityNames.BlenderMemoryLimitBytes, SceneCapabilityNames.BlenderRunLimit, Max3dProcessesPerJob),
+            ProjectRuntime.Unity => Create(SceneCapabilityNames.UnityMemoryLimitBytes, SceneCapabilityNames.UnityRunLimit, Max3dProcessesPerJob),
+            _ => CreateBounded(),
+        };
+
+    /// <summary>M25: an editor forks more than a file server does (Unity's licensing client, package manager and compilers) — still a fixed, small cap, never a fork bomb.</summary>
+    public const int Max3dProcessesPerJob = 32;
+
     /// <summary>Puts <paramref name="process"/> in the job. Fails loudly; the caller ends a process it could not contain.</summary>
     public void Assign(Process process)
     {

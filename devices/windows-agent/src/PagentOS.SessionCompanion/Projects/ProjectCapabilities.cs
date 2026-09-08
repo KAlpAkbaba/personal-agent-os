@@ -9,6 +9,7 @@ using PagentOS.Agent.Core.Commands;
 using PagentOS.Agent.Core.Protocol;
 using PagentOS.SessionCompanion.Documents;
 using PagentOS.SessionCompanion.Operator;
+using PagentOS.SessionCompanion.Scenes;
 
 namespace PagentOS.SessionCompanion.Projects;
 
@@ -32,12 +33,13 @@ public sealed class ProjectCapabilities : IDisposable
     private readonly ILogger _logger;
     private readonly AuditLog? _audit;
 
-    public ProjectCapabilities(OperatorOptions options, ILogger logger, AuditLog? audit = null, ProjectRunner? runner = null, ProjectRoots? roots = null)
+    public ProjectCapabilities(OperatorOptions options, ILogger logger, AuditLog? audit = null, ProjectRunner? runner = null, ProjectRoots? roots = null, ProjectRoots? roots3d = null)
     {
         _options = options;
         _logger = logger;
         _audit = audit;
         Roots = roots ?? new ProjectRoots(options);
+        Roots3d = roots3d ?? new ProjectRoots(options.Scene3dOptions());
         Runner = runner ?? new ProjectRunner(logger);
     }
 
@@ -46,18 +48,24 @@ public sealed class ProjectCapabilities : IDisposable
 
     public ProjectRoots Roots { get; }
 
+    /// <summary>M25: the same rules, one directory lower — the 3D root, where and only where the two editors run.</summary>
+    public ProjectRoots Roots3d { get; }
+
     public ProjectRunner Runner { get; }
 
     /// <summary>The Projects root as configured (for the log).</summary>
     public string? ProjectsRoot => _options.EffectiveProjectsRoot;
 
+    /// <summary>M25: the 3D root as configured (for the log).</summary>
+    public string? ProjectsRoot3d => _options.EffectiveProjectsRoot3d;
+
     // ================================================================== entry point
 
     public async Task<JsonObject> ExecuteAsync(string capability, JsonObject payload, TimeSpan budget, CancellationToken cancellationToken)
     {
-        if (!ProjectCapabilityNames.IsMember(capability))
+        if (!ProjectCapabilityNames.IsMember(capability) && !SceneCapabilityNames.IsMember(capability))
         {
-            throw new CapabilityException(ErrorClasses.CapabilityMissing, $"'{capability}' is not a projects capability", retryable: false);
+            throw new CapabilityException(ErrorClasses.CapabilityMissing, $"'{capability}' is not a projects or scenes capability", retryable: false);
         }
 
         var stopwatch = Stopwatch.StartNew();
@@ -117,6 +125,7 @@ public sealed class ProjectCapabilities : IDisposable
             ProjectCapabilityNames.ProjectStatus => Task.Run(() => Status(payload), CancellationToken.None),
             ProjectCapabilityNames.ProjectStop => StopAsync(payload, cancellationToken),
             ProjectCapabilityNames.ProjectTest => TestAsync(payload, budget, cancellationToken),
+            SceneCapabilityNames.Inspect => Task.Run(() => Inspect(payload), CancellationToken.None),
             _ => throw new CapabilityException(ErrorClasses.CapabilityMissing, $"'{capability}' has no dispatch entry", retryable: false),
         };
 
@@ -125,8 +134,19 @@ public sealed class ProjectCapabilities : IDisposable
     private JsonObject Scaffold(JsonObject payload, CancellationToken cancellationToken)
     {
         var request = ProjectScaffold.Parse(payload);
-        var outcome = ProjectScaffold.Write(Roots, request, cancellationToken);
-        _logger.LogInformation("project.scaffold '{Slug}' wrote {Count} files ({Bytes} bytes of text)", request.Slug, outcome.Files.Count, request.Files.Sum(f => (long)f.Text.Length));
+        // M25: the payload's `root` chooses between the two roots this companion HOLDS, never
+        // a path — a 3D project is written under the 3D root and a web project under the
+        // Projects root, and each is parsed against its own half of the runtime allowlist.
+        var roots = request.Scope == ProjectScope.ThreeD ? Roots3d : Roots;
+        if (request.Scope == ProjectScope.Web && Is3dRootName(request.Slug))
+        {
+            // The 3D root lives at <Projects root>\3d by default, so a web project called "3d"
+            // would be asking to become it. Refused by name, before anything is resolved.
+            throw DocumentErrors.Invalid($"payload.slug '{request.Slug}' is the 3D root's own folder; scaffold with root='{SceneCapabilityNames.Root3dFolderName}' to make a 3D project");
+        }
+
+        var outcome = ProjectScaffold.Write(roots, request, cancellationToken);
+        _logger.LogInformation("project.scaffold '{Slug}' ({Scope}) wrote {Count} files ({Bytes} bytes of text)", request.Slug, request.Scope, outcome.Files.Count, request.Files.Sum(f => (long)f.Text.Length));
 
         var hashes = new JsonObject();
         foreach (var (path, sha256) in outcome.Files)
@@ -142,7 +162,24 @@ public sealed class ProjectCapabilities : IDisposable
             ["files_written"] = outcome.Files.Count,
             ["sha256_by_path"] = hashes,
             ["manifest"] = request.Manifest.Json.DeepClone(),
+            ["root"] = request.Scope == ProjectScope.ThreeD ? SceneCapabilityNames.Root3dFolderName : "projects",
         };
+    }
+
+    /// <summary>M25: whether a slug names the 3D root's own folder under the Projects root.</summary>
+    private bool Is3dRootName(string slug)
+    {
+        if (string.Equals(slug, SceneCapabilityNames.Root3dFolderName, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var root3d = ProjectsRoot3d;
+        var root = ProjectsRoot;
+        return root3d is not null
+            && root is not null
+            && string.Equals(Path.GetDirectoryName(root3d), root, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(Path.GetFileName(root3d), slug, StringComparison.OrdinalIgnoreCase);
     }
 
     // ================================================================== project.run
@@ -152,6 +189,27 @@ public sealed class ProjectCapabilities : IDisposable
         var project = Locate(payload);
         var key = OptionalString(payload, "command_key", MaxCommandKeyChars);
         var command = Pick(project.Manifest.Run, key, "run", project.Slug);
+        if (command.IsBatch)
+        {
+            // M25: Blender and Unity are batch runs, not servers. There is no port to bind and
+            // nothing to probe: the run WAITS for the exit and answers with it.
+            var batch = await Runner.RunBatchAsync(project, command, budget, cancellationToken).ConfigureAwait(false);
+            return new JsonObject
+            {
+                ["project_id"] = project.ProjectId,
+                ["slug"] = project.Slug,
+                ["runtime"] = batch.Runtime.ToString().ToLowerInvariant(),
+                ["command_key"] = command.Key,
+                ["batch"] = true,
+                ["exit_code"] = batch.ExitCode,
+                ["seconds"] = Math.Round(batch.Seconds, 3),
+                ["log_tail"] = batch.LogTail,
+                ["log_truncated"] = batch.Truncated,
+                ["log_path"] = batch.LogPath,
+                ["pid"] = batch.Pid,
+            };
+        }
+
         var run = await Runner.StartAsync(project, command, budget, cancellationToken).ConfigureAwait(false);
         return new JsonObject
         {
@@ -274,17 +332,87 @@ public sealed class ProjectCapabilities : IDisposable
         };
     }
 
+    // ================================================================== scene.inspect
+
+    /// <summary>
+    /// M25 (DEVICE_PROTOCOL.md §6m, ADR-0088 decision 2): the tool's own read-back for one 3D
+    /// project — the bounded <c>out.json</c> a driver wrote, parsed to prove it IS JSON, and
+    /// the render it declares as base64 with its SHA-256 checked against the one the driver
+    /// recorded. Only projects under the 3D root have an inspection; a web project is
+    /// <c>not_found</c> here, as is an id nobody scaffolded.
+    /// </summary>
+    private JsonObject Inspect(JsonObject payload)
+    {
+        var project = Locate3d(payload);
+        var inspection = SceneInspection.ReadInspection(project.Folder, project.Slug);
+        var render = SceneInspection.ReadRender(project.Folder, project.Slug, inspection);
+        _logger.LogInformation(
+            "scene.inspect '{Slug}' inspection_keys={Keys} render={Render}",
+            project.Slug,
+            inspection.Count,
+            render is null ? "(none)" : $"{render.RelativePath} {render.Bytes} bytes");
+
+        var result = new JsonObject
+        {
+            ["project_id"] = project.ProjectId,
+            ["slug"] = project.Slug,
+            ["root_path"] = project.Folder,
+            ["inspection"] = inspection,
+            ["inspection_path"] = Path.Combine(project.Folder, SceneCapabilityNames.InspectionFileName),
+        };
+
+        if (render is null)
+        {
+            result["render"] = null;
+            return result;
+        }
+
+        result["render"] = new JsonObject
+        {
+            ["path"] = render.RelativePath,
+            ["bytes"] = render.Bytes,
+            ["sha256"] = render.Sha256,
+            ["verified"] = true,
+            ["png_base64"] = Convert.ToBase64String(render.Content),
+        };
+        return result;
+    }
+
     // ================================================================== helpers
 
-    /// <summary>The project a payload names: the id validated, its folder found through the markers, the marker's manifest re-validated (a tampered command is refused HERE, before any process).</summary>
+    /// <summary>
+    /// The project a payload names: the id validated, its folder found through the markers —
+    /// under the Projects root, else (M25) under the 3D root — and the marker's manifest
+    /// re-validated against the scope of the root it was FOUND under (a tampered command, or a
+    /// 3D runtime in a web project, is refused HERE, before any process).
+    /// </summary>
     private ProjectContext Locate(JsonObject payload)
     {
         var projectId = RequireString(payload, "project_id", ProjectRoots.MaxProjectIdChars);
         ProjectRoots.RequireProjectId(projectId);
-        var folder = Roots.Find(projectId) ?? throw DocumentErrors.NotFound("no scaffolded project carries payload.project_id; scaffold it first");
+        var folder = Roots.Find(projectId);
+        var scope = ProjectScope.Web;
+        if (folder is null)
+        {
+            folder = Roots3d.Find(projectId) ?? throw DocumentErrors.NotFound("no scaffolded project carries payload.project_id; scaffold it first");
+            scope = ProjectScope.ThreeD;
+        }
+
         var marker = ProjectRoots.ReadMarker(folder) ?? throw DocumentErrors.NotFound("the project's marker is gone; scaffold it again");
-        var manifest = ProjectManifest.Parse(marker.Manifest, filePaths: null);
-        return new ProjectContext(projectId, marker.Slug, folder, manifest);
+        var manifest = ProjectManifest.Parse(marker.Manifest, filePaths: null, scope);
+        return new ProjectContext(projectId, marker.Slug, folder, manifest, scope);
+    }
+
+    /// <summary>M25: the same lookup, restricted to the 3D root — a web project has no scene to inspect and is <c>not_found</c> rather than half-answered.</summary>
+    private ProjectContext Locate3d(JsonObject payload)
+    {
+        var project = Locate(payload);
+        if (project.Scope != ProjectScope.ThreeD)
+        {
+            throw DocumentErrors.NotFound($"'{project.Slug}' is a project of the Projects root, not a 3D project; only a project under the 3D root has a scene to inspect");
+        }
+
+        return project;
     }
 
     private static ProjectCommand Pick(IReadOnlyDictionary<string, ProjectCommand> commands, string? key, string section, string slug)

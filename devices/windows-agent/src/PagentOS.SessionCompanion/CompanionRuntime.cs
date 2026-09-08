@@ -405,6 +405,7 @@ public sealed class CompanionRuntime(
                 || AgentCapabilities.IsOperator(request.Capability)
                 || AgentCapabilities.IsDocuments(request.Capability)
                 || AgentCapabilities.IsProjects(request.Capability)
+                || AgentCapabilities.IsScenes(request.Capability)
                 || string.Equals(request.Capability, AgentCapabilities.DesktopPlayAudio, StringComparison.Ordinal))
             {
                 // M13: browser requests are long (a navigation, an extraction) and may run
@@ -512,7 +513,7 @@ public sealed class CompanionRuntime(
                 return new ExecResponse { RequestId = request.RequestId, Ok = true, Result = documentsResult };
             }
 
-            if (AgentCapabilities.IsProjects(request.Capability))
+            if (AgentCapabilities.IsProjects(request.Capability) || AgentCapabilities.IsScenes(request.Capability))
             {
                 // M23: the projects family shares the operator's gate too (writing source and
                 // starting a bounded child on the owner's machine is the same trust decision)
@@ -522,7 +523,7 @@ public sealed class CompanionRuntime(
                 {
                     throw new CapabilityException(
                         ErrorClasses.CapabilityMissing,
-                        $"capability '{request.Capability}' is not enabled on this companion (PAGENTOS_AGENT_OperatorEnabled=true enables the projects family with the Digital Operator)",
+                        $"capability '{request.Capability}' is not enabled on this companion (PAGENTOS_AGENT_OperatorEnabled=true enables the projects and scenes families with the Digital Operator)",
                         retryable: false);
                 }
 

@@ -68,6 +68,12 @@ public sealed class InteractiveCapabilityExecutor(
     /// <summary>The M23 cap for <c>project.test</c> alone: the 5 min test bound plus headroom.</summary>
     public static readonly TimeSpan ProjectTestTimeoutCap = ProjectCapabilityNames.TestCommandTimeoutCap;
 
+    /// <summary>The M25 cap for <c>project.run</c> alone: the longest 3D batch bound (Unity's 10 min) plus headroom. A web run still answers within its 20 s port wait — the cap is a ceiling.</summary>
+    public static readonly TimeSpan ProjectRunTimeoutCap = ProjectCapabilityNames.RunCommandTimeoutCap;
+
+    /// <summary>The M25 cap for the scenes family: reading a bounded file and a bounded PNG is the operator family's 30 s.</summary>
+    public static readonly TimeSpan ScenesTimeoutCap = SceneCapabilityNames.CommandTimeoutCap;
+
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
 
     /// <summary>Whether <c>browser.*</c> commands are routed at all (service option <c>BrowserEnabled</c>).</summary>
@@ -127,7 +133,12 @@ public sealed class InteractiveCapabilityExecutor(
             return ProjectTestTimeoutCap;
         }
 
-        if (AgentCapabilities.IsProjects(capability))
+        if (string.Equals(capability, ProjectCapabilityNames.ProjectRun, StringComparison.Ordinal))
+        {
+            return ProjectRunTimeoutCap;
+        }
+
+        if (AgentCapabilities.IsProjects(capability) || AgentCapabilities.IsScenes(capability))
         {
             return ProjectsTimeoutCap;
         }
@@ -237,6 +248,18 @@ public sealed class InteractiveCapabilityExecutor(
                 throw new CapabilityException(
                     ErrorClasses.CapabilityMissing,
                     $"capability '{command.Capability}' is not enabled on this device (OperatorEnabled=false gates the projects family)",
+                    retryable: false);
+            }
+        }
+        else if (AgentCapabilities.IsScenes(command.Capability))
+        {
+            if (!OperatorEnabled)
+            {
+                // M25: the scenes family reads back a 3D project the projects family made, in
+                // the same root, under the same flag — one trust decision, not two.
+                throw new CapabilityException(
+                    ErrorClasses.CapabilityMissing,
+                    $"capability '{command.Capability}' is not enabled on this device (OperatorEnabled=false gates the scenes family)",
                     retryable: false);
             }
         }
