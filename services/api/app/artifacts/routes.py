@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from temporalio.client import Client
 from temporalio.exceptions import WorkflowAlreadyStartedError
 
-from app.artifacts import factory, render_store, service
+from app.artifacts import factory, open_service, render_store, service
 from app.artifacts.models import (
     CANONICAL_FORMAT_ARTIFACT_SPEC_JSON,
     Artifact,
@@ -471,6 +471,61 @@ async def create_factory_artifact(
         "renders": [
             _factory_render_payload(request, result.artifact_id, r) for r in result.renders
         ],
+    }
+
+
+# --------------------------------------------------------------------- open
+
+
+class OpenArtifactRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    #: Which render to fetch+open; ``None`` (the default, and what the Cockpit's
+    #: ``POST .../open`` with an empty body sends — ADR-0085 addendum 2 item 5) lets the
+    #: factory pick the first VALID render in the artifact kind's own format order.
+    format: str | None = Field(default=None, max_length=16)
+
+
+@router.post("/artifacts/{artifact_id}/open")
+async def open_artifact_route(
+    request: Request, artifact_id: uuid.UUID, body: OpenArtifactRequest | None = None
+) -> dict[str, Any]:
+    """Fetch + open one artifact's render on the owner's machine (spec §4): the SAME
+    ``file.fetch`` path the voice tool ``artifact.open`` uses
+    (``app.artifacts.open_service``), so the Cockpit's "Aç" and "Bunu aç." can never
+    disagree about what "opened" means."""
+    runtime = _runtime(request)
+    device_action = getattr(request.app.state, "device_action", None)
+    fmt = body.format.lower() if body is not None and body.format else None
+    base_url = str(request.base_url)
+    import asyncio
+
+    def do_open() -> open_service.OpenOutcome:
+        with runtime.session() as session:
+            return open_service.open_artifact(
+                session,
+                device_action,
+                artifact_id=artifact_id,
+                fmt=fmt,
+                base_url=base_url,
+            )
+
+    outcome = await asyncio.to_thread(do_open)
+    if outcome.error_class == open_service.ERROR_NOT_FOUND:
+        raise HTTPException(
+            status_code=404, detail={"code": outcome.error_class, "message": outcome.speech}
+        )
+    if outcome.error_class is not None:
+        raise HTTPException(
+            status_code=422, detail={"code": outcome.error_class, "message": outcome.speech}
+        )
+    return {
+        "artifact_id": outcome.artifact_id,
+        "format": outcome.format,
+        "state": outcome.state,
+        "window_title": outcome.window_title,
+        "speech": outcome.speech,
+        "error_class": outcome.error_class,
     }
 
 
