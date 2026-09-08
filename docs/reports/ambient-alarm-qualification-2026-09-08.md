@@ -196,9 +196,17 @@ presence facts) rather than on a production claim.
    `{"kind": "tone"}` unconditionally. So "Yarın 07:30'da beni uyandır." can never use the
    saved song, which is exactly the owner's report and their directive's item 2. The
    YouTube-primary/tone-fallback design in `sequence.py::fire` is correct and already
-   built — the defect is one branch upstream of it. **Being fixed on its own track**, with
-   the regression test the owner asked for by name ("with a configured playable wake song,
-   a normal alarm is not a beep").
+   built — the defect was one branch upstream of it. **FIXED and merged** (`cbabfd6`): a
+   plain alarm now resolves the approved wake song, `media_source` still records that the
+   owner named nothing while `resolved_media_identity` says what will actually play, and
+   the regression test the owner asked for by name is in place. Three things came out of
+   the fix that were not in the report: a durable `media_failure_reason` on the alarm row
+   so "why did it ring instead of playing my song?" is answerable from the row alone; a
+   named rule that a `browser.media_play` which returned ok but never verified playback is
+   NOT a played song; and coverage for `max_play_seconds` completion and snooze, which had
+   only ever been tested against the tone path. Owner item 34 asks for the real song URL —
+   nothing invented one. Still `PROVEN_PROXY` until that URL exists and the agent update
+   lands, because no real YouTube playback has been driven end to end on this machine.
 2. **The staged 0.6.0 update fails health and rolls back** — the owner's own incident
    report, reproduced in my measurements: 29 caps → 40 caps during the candidate window →
    29 caps after rollback. **Under repair on its own track.** It is the single blocker
