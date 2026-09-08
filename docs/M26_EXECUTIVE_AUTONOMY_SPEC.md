@@ -52,6 +52,9 @@ UI contract v11 `executive.run` `{run, state, step, done, total}` (scalars) publ
 
 ## 7. Marks sought
 
+**What production can actually reach, measured 2026-09-08 17:30Z** (`GET /v1/devices` with the owner session, against release 20db267): the deployed Windows agent advertises 29 capabilities — the whole browser family (`browser.navigate/click/extract/fetch_evidence/snapshot/session_open/...`, 25 of them) plus `desktop.alarm_start|alarm_stop|open_application|open_artifact`. It does NOT advertise the documents family (`file.search`, `document.extract`), the projects family, or `scene.inspect`, because those wait on the elevated agent update (owner item 28). So shape (a) — research through the owner's device, synthesize, a document artifact — is the run that can be proven REAL on production, and it is the one the gate asks for; shapes (b) and (c) stay unit-proven until item 28 and item 30. This is recorded at kickoff rather than discovered at the gate.
+
+
 The graph, the planner, the durable workflow (worker restart, pause/resume/cancel/retry/amend, the failure matrix) PROVEN_AUTOMATED (the Temporal test environment); voice PROVEN_AUTOMATED (multi-turn corpus); TTS per credits; the Living Core PROVEN_AUTOMATED; the Cloud Core PROVEN_REAL (release) with ONE real executive run on production — shape (a) with the real browser research through the owner's device and a real document artifact, read back through `/v1/executive/runs/{id}` and the artifact's validation; shapes (b) and (c) real on production only when the owner's folder/mail account exist (items 30/28), else the unit proof stands.
 
 ## 8. Security
