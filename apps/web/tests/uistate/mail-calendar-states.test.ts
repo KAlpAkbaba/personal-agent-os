@@ -425,6 +425,12 @@ describe("mail: facts, view and caption from published metadata only", () => {
 
 // --------------------------------------------------------------- calendar
 
+const preparedCaption = (conflicts: number | null) =>
+  calendarCaption(calendarFacts(CALENDAR_ACTIVITY("today", null, "prepared", conflicts)));
+
+const readBackCaption = (conflicts: number | null) =>
+  calendarCaption(calendarFacts(CALENDAR_ACTIVITY("today", "Ali ile toplantı", "read_back", conflicts)));
+
 describe("calendar: facts, view and caption from published metadata only", () => {
   it("reads the range, the event, the proposal state and the counted conflicts verbatim", () => {
     const facts = calendarFacts(CALENDAR_ACTIVITY("today", "Ali ile toplantı", "prepared", 2));
@@ -473,16 +479,13 @@ describe("calendar: facts, view and caption from published metadata only", () =>
     expect(conflictsPhrase(0)).toBe("çakışma yok");
     expect(conflictsPhrase(null)).toBeNull();
 
-    const prepared = (conflicts: number | null) => calendarCaption(calendarFacts(CALENDAR_ACTIVITY("today", null, "prepared", conflicts)));
-    expect(prepared(2)).toBe("Öneri hazır — 2 çakışma");
-    expect(prepared(0)).toBe("Öneri hazır — çakışma yok");
+    expect(preparedCaption(2)).toBe("Öneri hazır — 2 çakışma");
+    expect(preparedCaption(0)).toBe("Öneri hazır — çakışma yok");
     // No count published: no count named.
-    expect(prepared(null)).toBe("Öneri hazır");
+    expect(preparedCaption(null)).toBe("Öneri hazır");
 
-    const readBack = (conflicts: number | null) =>
-      calendarCaption(calendarFacts(CALENDAR_ACTIVITY("today", "Ali ile toplantı", "read_back", conflicts)));
-    expect(readBack(1)).toBe("Öneri okundu — onay bekliyor · 1 çakışma · Ali ile toplantı");
-    expect(readBack(null)).toBe("Öneri okundu — onay bekliyor · Ali ile toplantı");
+    expect(readBackCaption(1)).toBe("Öneri okundu — onay bekliyor · 1 çakışma · Ali ile toplantı");
+    expect(readBackCaption(null)).toBe("Öneri okundu — onay bekliyor · Ali ile toplantı");
 
     // Once committed or discarded the conflicts are history, not a caption.
     expect(calendarCaption(calendarFacts(CALENDAR_ACTIVITY("today", null, "committed", 2)))).toBe("Takvime işlendi");

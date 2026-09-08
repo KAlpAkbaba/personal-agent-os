@@ -21,11 +21,13 @@ import {
   KIND_LABEL,
   SEVERITY_LABEL,
   SOURCE_LABEL,
+  calendarFactsLine,
   capabilityNodesLine,
   documentFactsLine,
   formatAge,
   formatProgress,
   kindDetail,
+  mailFactsLine,
   operatorErrorLine,
   operatorFactsLine,
   stateLabel,
@@ -188,6 +190,40 @@ export default function StateReadout({
           data-document-step={intent.document.step ?? ""}
         >
           {documentFactsLine(intent.document)}
+        </p>
+      )}
+
+      {/*
+        M21: the mail activity's published facts — the folder, the subject,
+        the draft's step — and the calendar's — the range, the event, the
+        proposal's step and its counted conflicts. Each the token the
+        publisher sent or the statement that none came; present on the live
+        posture and on its last-known shape alike. The compact caption
+        already carries the same sentence as `label`, so the long line is the
+        full form's alone. No bar under either: nothing publishes progress
+        for a read, and a draft waiting on the owner has no progress to draw.
+      */}
+      {intent.mail && !compact && (
+        <p
+          className="muted core-count"
+          data-mail-facts
+          data-mail-folder={intent.mail.folder ?? ""}
+          data-mail-subject={intent.mail.subject ?? ""}
+          data-mail-draft-state={intent.mail.draftStateToken ?? ""}
+        >
+          {mailFactsLine(intent.mail)}
+        </p>
+      )}
+      {intent.calendar && !compact && (
+        <p
+          className="muted core-count"
+          data-calendar-facts
+          data-calendar-range={intent.calendar.range ?? ""}
+          data-calendar-event={intent.calendar.event ?? ""}
+          data-calendar-proposal-state={intent.calendar.proposalStateToken ?? ""}
+          data-calendar-conflicts={intent.calendar.conflicts ?? ""}
+        >
+          {calendarFactsLine(intent.calendar)}
         </p>
       )}
 

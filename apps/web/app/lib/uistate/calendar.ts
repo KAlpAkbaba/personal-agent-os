@@ -29,7 +29,7 @@ import {
   metaNumber,
   metaToken,
 } from "./contract";
-import type { Claim } from "./truth";
+import type { Claim, CoreTruth } from "./truth";
 
 /** The metadata the publisher sends with every calendar event, read verbatim. */
 export type CalendarFacts = {
@@ -197,4 +197,36 @@ export function calendarView(claim: Claim): CalendarView {
 /** True while the Core is actually doing something with the calendar right now. */
 export function calendarIsActive(view: CalendarView): boolean {
   return view.stage === "active";
+}
+
+// ------------------------------------------------------------ the history
+
+/** An event the bus itself carried for today, with the event it came on. */
+export type PublishedCalendarEvent = {
+  title: string;
+  range: string;
+  event: UiStateEvent;
+};
+
+/**
+ * Today's events as published: every `calendar.activity` READ in the tail
+ * (no proposal state — a proposal's title is a proposal, not an event on
+ * the calendar) whose metadata named an event AND whose range names today.
+ * Newest first, one row per title, bounded. Read from `truth.recent`, never
+ * fetched: this page cannot ask a calendar, so an event with no published
+ * range is not claimed for today on the strength of nothing.
+ */
+export function todaysPublishedEvents(truth: CoreTruth, limit = 8): PublishedCalendarEvent[] {
+  const seen = new Set<string>();
+  const out: PublishedCalendarEvent[] = [];
+  for (let i = truth.recent.length - 1; i >= 0 && out.length < limit; i -= 1) {
+    const event = truth.recent[i];
+    if (!isCalendarState(event.state)) continue;
+    const facts = calendarFacts(event);
+    if (facts.event === null || facts.range === null || facts.proposalStateToken !== null) continue;
+    if (!calendarRangeIsToday(facts.range) || seen.has(facts.event)) continue;
+    seen.add(facts.event);
+    out.push({ title: facts.event, range: facts.range, event });
+  }
+  return out;
 }

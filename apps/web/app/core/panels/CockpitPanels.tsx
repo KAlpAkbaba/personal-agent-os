@@ -26,6 +26,7 @@ import {
   type Health,
   type LedgerEvent,
   type Lesson,
+  type Loaded,
   type MemoryAuditEvent,
   type Opportunity,
   type PendingBriefing,
@@ -40,15 +41,43 @@ import {
   isHealthy,
 } from "../../lib/cockpit/api";
 import {
+  type ApprovalGate,
+  approvalGate,
+  draftKindLabel,
+  draftRecipientsLine,
+  firstLine,
+  formatEventWhen,
+  proposalConflictsLine,
+  proposalKindLabel,
+  rowPending,
+  rowReadBack,
+} from "../../lib/cockpit/approval-rows";
+import type {
+  ApprovalPairProps,
+  PendingDraft,
+  PendingProposal,
+} from "../../lib/cockpit/approvals";
+import {
   FOCUS_UNSUPPORTED,
   focusSourceLabel,
   focusSummary,
   identityLine,
 } from "../../lib/research/focus";
+import {
+  CALENDAR_PROPOSAL_STATE_LABEL,
+  calendarView,
+  todaysPublishedEvents,
+} from "../../lib/uistate/calendar";
+import { isCalendarProposalState, isMailDraftState } from "../../lib/uistate/contract";
 import { documentPartPhrase, documentView, lastAnswerRefs, previousDocument } from "../../lib/uistate/documents";
 import {
+  CALENDAR_EMPTY,
+  CALENDAR_NO_PROPOSAL,
+  CALENDAR_UNTOLD,
   DOCUMENT_EMPTY,
   DOCUMENT_LABEL,
+  MAIL_EMPTY,
+  MAIL_UNTOLD,
   OPERATOR_EMPTY,
   OPERATOR_LABEL,
   documentFactsLine,
@@ -59,10 +88,18 @@ import {
   stateLabel,
   subsystemLabel,
 } from "../../lib/uistate/labels";
+import { MAIL_DRAFT_STATE_LABEL, mailView } from "../../lib/uistate/mail";
 import { operatorPosition, operatorView } from "../../lib/uistate/operator";
 import type { CoreTruth } from "../../lib/uistate/truth";
-import { documentClaim, liveEventFor, operatorClaim, recentDescending } from "../../lib/uistate/truth";
-import Panel from "./Panel";
+import {
+  calendarClaim,
+  documentClaim,
+  liveEventFor,
+  mailClaim,
+  operatorClaim,
+  recentDescending,
+} from "../../lib/uistate/truth";
+import Panel, { LoadedNotice } from "./Panel";
 
 function when(iso: string | null | undefined, now: number): string {
   if (!iso) return "";
@@ -482,11 +519,13 @@ function riskLine(item: Opportunity, floor: number | null): string {
  * finished and the owner has not yet answered, with the one fact that decides
  * the answer — how risky it is — beside each one.
  *
- * Read-only, on purpose and permanently. The Core has no write path (ADR-0052,
- * ADR-0053 §5): approving and authorising are owner actions on the surface that
- * owns them, and a panel that could perform one would be a second authority
- * surface to keep honest. This one can only show, and says where the real
- * action lives.
+ * Read-only, on purpose and permanently. Approving a candidate and
+ * authorising a release are owner actions on the surface that owns them
+ * (ADR-0052, ADR-0053 §5), and a panel that could perform one would be a
+ * second authority surface to keep honest. This one can only show, and says
+ * where the real action lives. (M21's approval pair under a draft is not
+ * that: it asks the Cloud Core to run its own gate and decides nothing —
+ * see `MailPanel`.)
  */
 export function ShadowReadyPanel({ state }: { state: CockpitData["shadowReady"] }) {
   return (
@@ -930,6 +969,390 @@ export function DocumentsPanel({ truth, now }: { truth: CoreTruth; now: number }
           )}
         </ul>
       )}
+    </section>
+  );
+}
+
+// ------------------------------------------------- M21: mail and the calendar
+
+/** What the pair says under a draft: what it would do, and what it would not. */
+const MAIL_GATE_NOTE =
+  'Onay, sesli "Gönder." ile aynı kapıdan geçer: okunmamış bir taslak gönderilmez, sunucu ayarı kapalıysa gönderilmez, ikinci onay ikinci kez göndermez. Bu ekran posta sunucusuna doğrudan ulaşmaz.';
+
+const CALENDAR_GATE_NOTE =
+  'Onay, sesli "Onayla." ile aynı kapıdan geçer: okunmamış bir öneri işlenmez, sunucu ayarı kapalıysa işlenmez, ikinci onay ikinci kez işlemez. Bu ekran takvim sunucusuna doğrudan ulaşmaz.';
+
+/**
+ * The Approve / Discard pair under one pending row (M21 spec §3).
+ *
+ * This is the cockpit's one control that asks the Cloud Core to change the
+ * world outside — and it is not a second authority surface, because it
+ * decides nothing: the click asks the Cloud Core to run the SAME gate the
+ * spoken "Gönder." runs, and the Cloud Core refuses on its own terms (not
+ * read back, host flag off, already sent). The pair is disabled here with
+ * its reason in words until the row was read back, so the button never
+ * invites a click the gate would refuse; it is disabled while any call is
+ * in flight, so nothing is asked for twice.
+ */
+function ApprovalPair({
+  id,
+  family,
+  gate,
+  pair,
+  confirmLabel,
+}: {
+  id: string;
+  family: "draft" | "proposal";
+  gate: ApprovalGate;
+  pair: ApprovalPairProps;
+  confirmLabel: string;
+}) {
+  const inFlight = pair.busy !== null && pair.busy.id === id;
+  return (
+    <div
+      className="approval-pair"
+      data-approval-pair={id}
+      data-approval-family={family}
+      data-approval-enabled={gate.enabled ? "yes" : "no"}
+      data-approval-in-flight={inFlight ? "yes" : "no"}
+    >
+      <button
+        type="button"
+        className="core-chip"
+        data-approval-action="confirm"
+        data-approval-target={id}
+        disabled={!gate.enabled}
+        onClick={() => pair.onConfirm(id)}
+      >
+        {confirmLabel}
+      </button>
+      <button
+        type="button"
+        className="core-chip"
+        data-approval-action="discard"
+        data-approval-target={id}
+        disabled={!gate.enabled}
+        onClick={() => pair.onDiscard(id)}
+      >
+        Vazgeç
+      </button>
+      {gate.reason && (
+        <span className="approval-reason" data-approval-reason={gate.reasonKind ?? ""}>
+          {gate.reason}
+        </span>
+      )}
+    </div>
+  );
+}
+
+/** The last answer the pair got, for the family this panel shows, dated. */
+function ApprovalOutcomeLine({ pair, family, now }: { pair: ApprovalPairProps; family: "draft" | "proposal"; now: number }) {
+  const outcome = pair.outcome;
+  if (!outcome) return null;
+  const draft = outcome.action === "confirm_draft" || outcome.action === "discard_draft";
+  if ((family === "draft") !== draft) return null;
+  return (
+    <p
+      className={`approval-outcome ${outcome.ok ? "muted" : "panel-unknown"}`}
+      data-approval-outcome={outcome.action}
+      data-approval-ok={outcome.ok ? "yes" : "no"}
+      data-approval-target={outcome.id}
+    >
+      {outcome.text}
+      {` · ${formatAge(Math.max(0, now - outcome.at))}`}
+    </p>
+  );
+}
+
+/** The draft's lifecycle line: its state in the spec's word, when it was read back, when confirmed, what was sent. */
+function draftStateLine(draft: PendingDraft, now: number): string {
+  const pending = rowPending(draft.state);
+  const readBack = rowReadBack(draft);
+  let word: string;
+  if (pending && readBack) word = draft.read_back_at ? `okundu (${when(draft.read_back_at, now)})` : "okundu";
+  else if (draft.state === null) word = "durum bildirilmedi";
+  else word = isMailDraftState(draft.state) ? MAIL_DRAFT_STATE_LABEL[draft.state] : draft.state;
+  const parts = [`taslak: ${word}`];
+  if (pending && !readBack) parts.push("henüz okunmadı");
+  if (draft.confirmed_at) parts.push(`onaylandı ${when(draft.confirmed_at, now)}`);
+  if (draft.sent_message_id) parts.push(`ileti: ${draft.sent_message_id}`);
+  return parts.join(" · ");
+}
+
+function DraftRow({ draft, now, pair }: { draft: PendingDraft; now: number; pair: ApprovalPairProps }) {
+  const pending = rowPending(draft.state);
+  const readBack = rowReadBack(draft);
+  const line = firstLine(draft.body);
+  return (
+    <li
+      data-draft={draft.draft_id}
+      data-draft-state={draft.state ?? ""}
+      data-draft-pending={pending ? "yes" : "no"}
+      data-draft-read-back={readBack ? "yes" : "no"}
+    >
+      <div className="event-row">
+        <span>{draft.subject ?? "konu bildirilmedi"}</span>
+        <span className="event-when">
+          {[draftKindLabel(draft.kind), when(draft.created_at, now)].filter(Boolean).join(" · ")}
+        </span>
+      </div>
+      <span className="muted" data-draft-to>
+        {draftRecipientsLine(draft)}
+      </span>
+      {/* The first line and no more: the body stays on the Cloud Core. */}
+      <span className="muted" data-draft-first-line>
+        {line ?? "gövde bildirilmedi"}
+      </span>
+      <span className="muted" data-draft-state-line>
+        {draftStateLine(draft, now)}
+      </span>
+      {pending && (
+        <ApprovalPair
+          id={draft.draft_id}
+          family="draft"
+          gate={approvalGate(draft, pair.busy)}
+          pair={pair}
+          confirmLabel="Onayla — gönder"
+        />
+      )}
+    </li>
+  );
+}
+
+/**
+ * Posta (M21 spec §3): what the Core is doing with the owner's mail, from
+ * the bus, and the drafts waiting for the owner, from `/v1/mail/drafts/pending`
+ * — with the pair that asks the Cloud Core to send or discard one.
+ *
+ * Two sources, kept apart because they answer different questions. The bus
+ * line is "what is happening now" and decays like every bus claim; the rows
+ * are "what exists" and are the route's. Nothing here reaches a mail
+ * provider: the folder and subject are tokens the Cloud Core published, the
+ * draft is the row the Cloud Core holds, and the body is shown to its first
+ * line only. The empty sentence is the route's answer, never the bus's
+ * silence — and "henüz yok" (no route on this Cloud Core) is neither.
+ */
+export function MailPanel({
+  pending,
+  truth,
+  now,
+  pair,
+}: {
+  pending: Loaded<PendingDraft[]>;
+  truth: CoreTruth;
+  now: number;
+  pair: ApprovalPairProps;
+}) {
+  const view = mailView(mailClaim(truth, now));
+  const told = view.lastKnown !== null;
+  const drafts = pending.kind === "ok" ? pending.value : [];
+  const open = drafts.filter((d) => rowPending(d.state));
+  const awaiting = open.filter((d) => rowReadBack(d));
+  return (
+    <section
+      className={`panel ${awaiting.length ? "attention" : ""}`}
+      data-panel="mail"
+      data-panel-state={pending.kind}
+      data-panel-empty={pending.kind === "ok" ? (open.length ? "no" : "yes") : ""}
+      data-mail-stage={view.stage}
+      data-mail-last-known={view.lastKnown ?? ""}
+    >
+      <h3 className="panel-title">
+        <span>Posta</span>
+        {pending.kind === "ok" && (
+          <span className="panel-count" data-panel-badge>
+            {open.length}
+          </span>
+        )}
+      </h3>
+      {/* The bus: the caption the Core draws, with its age; last-known when it aged out. */}
+      <p
+        className={told ? "muted" : "panel-empty"}
+        data-mail-activity={told ? view.stage : "untold"}
+        data-mail-caption={told ? view.caption : ""}
+      >
+        {told ? `${view.stage === "none" ? "Son bilinen: " : ""}${view.caption} · ${formatAge(view.ageMs)}` : MAIL_UNTOLD}
+      </p>
+      <LoadedNotice state={pending} />
+      {pending.kind === "ok" && open.length === 0 && (
+        <p className="panel-empty" data-panel-empty-text>
+          {MAIL_EMPTY}
+        </p>
+      )}
+      {drafts.length > 0 && (
+        <ul>
+          {drafts.map((draft) => (
+            <DraftRow key={draft.draft_id} draft={draft} now={now} pair={pair} />
+          ))}
+        </ul>
+      )}
+      <ApprovalOutcomeLine pair={pair} family="draft" now={now} />
+      <p className="muted" data-mail-gate-note>
+        {MAIL_GATE_NOTE}
+      </p>
+    </section>
+  );
+}
+
+/** The proposal's lifecycle line, on the draft's pattern. */
+function proposalStateLine(proposal: PendingProposal, now: number): string {
+  const pending = rowPending(proposal.state);
+  const readBack = rowReadBack(proposal);
+  let word: string;
+  if (pending && readBack) word = proposal.read_back_at ? `okundu (${when(proposal.read_back_at, now)})` : "okundu";
+  else if (proposal.state === null) word = "durum bildirilmedi";
+  else word = isCalendarProposalState(proposal.state) ? CALENDAR_PROPOSAL_STATE_LABEL[proposal.state] : proposal.state;
+  const parts = [`öneri: ${word}`];
+  if (pending && !readBack) parts.push("henüz okunmadı");
+  if (proposal.confirmed_at) parts.push(`onaylandı ${when(proposal.confirmed_at, now)}`);
+  if (proposal.event_id) parts.push(`etkinlik: ${proposal.event_id}`);
+  return parts.join(" · ");
+}
+
+function ProposalRow({ proposal, now, pair }: { proposal: PendingProposal; now: number; pair: ApprovalPairProps }) {
+  const pending = rowPending(proposal.state);
+  const readBack = rowReadBack(proposal);
+  return (
+    <li
+      data-proposal={proposal.proposal_id}
+      data-proposal-state={proposal.state ?? ""}
+      data-proposal-pending={pending ? "yes" : "no"}
+      data-proposal-read-back={readBack ? "yes" : "no"}
+      data-proposal-conflicts={proposal.conflicts === null ? "" : proposal.conflicts.length}
+    >
+      <div className="event-row">
+        <span>{proposal.title ?? "başlık bildirilmedi"}</span>
+        <span className="event-when">
+          {[proposalKindLabel(proposal.kind), when(proposal.created_at, now)].filter(Boolean).join(" · ")}
+        </span>
+      </div>
+      <span className="muted" data-proposal-when>
+        {formatEventWhen(proposal.start, proposal.end, proposal.all_day)}
+        {proposal.location && ` · ${proposal.location}`}
+      </span>
+      {/* The conflicts the row carries, each named as the Cloud Core recorded it. */}
+      <span className="muted" data-proposal-conflicts-line>
+        {proposalConflictsLine(proposal)}
+      </span>
+      {proposal.conflicts !== null && proposal.conflicts.length > 0 && (
+        <ul>
+          {proposal.conflicts.map((conflict, index) => (
+            <li key={`${conflict.title ?? ""}#${conflict.start ?? ""}#${index}`} data-proposal-conflict={index}>
+              <span className="muted">
+                {`çakışma: ${conflict.title ?? "başlık bildirilmedi"} · ${formatEventWhen(conflict.start, conflict.end, null)}`}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <span className="muted" data-proposal-state-line>
+        {proposalStateLine(proposal, now)}
+      </span>
+      {pending && (
+        <ApprovalPair
+          id={proposal.proposal_id}
+          family="proposal"
+          gate={approvalGate(proposal, pair.busy)}
+          pair={pair}
+          confirmLabel="Onayla — takvime işle"
+        />
+      )}
+    </li>
+  );
+}
+
+/**
+ * Takvim (M21 spec §3): what the Core is doing with the owner's calendar,
+ * today's events as the bus itself carried them, and the proposals waiting
+ * for the owner from `/v1/calendar/proposals/pending` — with their conflicts
+ * and the pair that asks the Cloud Core to commit or discard one.
+ *
+ * "Today" here is exactly what was published for today: a `calendar.activity`
+ * read that named an event and a range meaning today. This page cannot ask
+ * a calendar, so it does not claim an agenda it was not given; the empty
+ * sentence says there is no published entry, which is the fact.
+ */
+export function CalendarPanel({
+  pending,
+  truth,
+  now,
+  pair,
+}: {
+  pending: Loaded<PendingProposal[]>;
+  truth: CoreTruth;
+  now: number;
+  pair: ApprovalPairProps;
+}) {
+  const view = calendarView(calendarClaim(truth, now));
+  const told = view.lastKnown !== null;
+  const today = todaysPublishedEvents(truth);
+  const proposals = pending.kind === "ok" ? pending.value : [];
+  const open = proposals.filter((p) => rowPending(p.state));
+  const awaiting = open.filter((p) => rowReadBack(p));
+  return (
+    <section
+      className={`panel ${awaiting.length ? "attention" : ""}`}
+      data-panel="calendar"
+      data-panel-state={pending.kind}
+      data-panel-empty={pending.kind === "ok" ? (open.length || today.length ? "no" : "yes") : ""}
+      data-calendar-stage={view.stage}
+      data-calendar-last-known={view.lastKnown ?? ""}
+      data-calendar-today={today.length}
+    >
+      <h3 className="panel-title">
+        <span>Takvim</span>
+        {pending.kind === "ok" && (
+          <span className="panel-count" data-panel-badge>
+            {open.length}
+          </span>
+        )}
+      </h3>
+      <p
+        className={told ? "muted" : "panel-empty"}
+        data-calendar-activity={told ? view.stage : "untold"}
+        data-calendar-caption={told ? view.caption : ""}
+      >
+        {told ? `${view.stage === "none" ? "Son bilinen: " : ""}${view.caption} · ${formatAge(view.ageMs)}` : CALENDAR_UNTOLD}
+      </p>
+      <p className="panel-subheading" data-calendar-today-heading>
+        Bugün — yayınlandığı kadar
+      </p>
+      {today.length === 0 ? (
+        <p className="panel-empty" data-calendar-today-empty>
+          {CALENDAR_EMPTY}
+        </p>
+      ) : (
+        <ul>
+          {today.map((entry) => (
+            <li key={entry.title} data-calendar-event={entry.title}>
+              <div className="event-row">
+                <span>{entry.title}</span>
+                <span className="event-when">{when(entry.event.at, now)}</span>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="panel-subheading" data-calendar-proposals-heading>
+        Bekleyen öneriler
+      </p>
+      <LoadedNotice state={pending} />
+      {pending.kind === "ok" && open.length === 0 && (
+        <p className="panel-empty" data-panel-empty-text>
+          {CALENDAR_NO_PROPOSAL}
+        </p>
+      )}
+      {proposals.length > 0 && (
+        <ul>
+          {proposals.map((proposal) => (
+            <ProposalRow key={proposal.proposal_id} proposal={proposal} now={now} pair={pair} />
+          ))}
+        </ul>
+      )}
+      <ApprovalOutcomeLine pair={pair} family="proposal" now={now} />
+      <p className="muted" data-calendar-gate-note>
+        {CALENDAR_GATE_NOTE}
+      </p>
     </section>
   );
 }

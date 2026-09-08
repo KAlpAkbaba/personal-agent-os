@@ -51,6 +51,7 @@ import {
   fetchVoiceQualification,
   fetchWorld,
 } from "./api";
+import { type PendingDraft, type PendingProposal, fetchPendingDrafts, fetchPendingProposals } from "./approvals";
 
 const POLL_VISIBLE_MS = 15_000;
 
@@ -80,6 +81,14 @@ export type CockpitData = {
   // publishes its transitions to the UI-state bus and has no status route;
   // `DigitalOperatorPanel` reads `CoreTruth` (the Core's own feed and clock),
   // like `RunningToolsPanel` and `StateStreamPanel` do.
+  /**
+   * M21 §3: the drafts and proposals waiting for the owner, from the two
+   * pending routes. The Cloud Core half lands on a parallel track; until it
+   * does both answer "absent", which the panels say in words. The activity
+   * itself (reading, preparing) is on the bus, not here.
+   */
+  mailDrafts: Loaded<PendingDraft[]>;
+  calendarProposals: Loaded<PendingProposal[]>;
 };
 
 const INITIAL: CockpitData = {
@@ -99,6 +108,8 @@ const INITIAL: CockpitData = {
   devices: { kind: "loading" },
   voiceQualification: { kind: "loading" },
   evolutionSupervisor: { kind: "loading" },
+  mailDrafts: { kind: "loading" },
+  calendarProposals: { kind: "loading" },
 };
 
 export function useCockpitData(enabled = true): { data: CockpitData; refresh: () => void } {
@@ -127,6 +138,8 @@ export function useCockpitData(enabled = true): { data: CockpitData; refresh: ()
         devices,
         voiceQualification,
         evolutionSupervisor,
+        mailDrafts,
+        calendarProposals,
       ] = await Promise.all([
         fetchResearchTasks(),
         // Same refresh, no extra timer: the focus changes when the list does.
@@ -145,6 +158,8 @@ export function useCockpitData(enabled = true): { data: CockpitData; refresh: ()
         fetchDeviceStatus(),
         fetchVoiceQualification(),
         fetchEvolutionSupervisor(),
+        fetchPendingDrafts(),
+        fetchPendingProposals(),
       ]);
       if (stopped.current) return;
       setData({
@@ -164,6 +179,8 @@ export function useCockpitData(enabled = true): { data: CockpitData; refresh: ()
         devices,
         voiceQualification,
         evolutionSupervisor,
+        mailDrafts,
+        calendarProposals,
       });
     } finally {
       inFlight.current = false;

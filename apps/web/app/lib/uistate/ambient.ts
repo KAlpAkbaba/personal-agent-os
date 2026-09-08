@@ -20,7 +20,7 @@
  *    owner session).
  *
  * The release channel is presentation only. Nothing in this client can start,
- * authorise or advance a deployment; the Core has no write path at all.
+ * authorise or advance a deployment; this channel has no write path at all.
  */
 
 import { type Severity, type UiStateEvent, isSeverity, metaNumber, metaToken } from "./contract";
