@@ -76,6 +76,14 @@ PROTECTED_ENDPOINTS = [
     ("apps-run", "post", f"/v1/apps/{uuid.uuid4()}/run"),
     ("apps-stop", "post", f"/v1/apps/{uuid.uuid4()}/stop"),
     ("apps-test", "post", f"/v1/apps/{uuid.uuid4()}/test"),
+    # M24 (docs/M24_CAPABILITY_GENESIS_SPEC.md §8): a generated capability's
+    # approval/cancellation is a security decision, and the run list names
+    # what the assistant taught itself against what interface — never one
+    # unauthenticated HTTP call away.
+    ("genesis-runs", "get", "/v1/genesis/runs"),
+    ("genesis-run", "get", f"/v1/genesis/runs/{uuid.uuid4()}"),
+    ("genesis-approve", "post", f"/v1/genesis/runs/{uuid.uuid4()}/approve"),
+    ("genesis-cancel", "post", f"/v1/genesis/runs/{uuid.uuid4()}/cancel"),
     ("broker-enrollment-token", "post", "/v1/devices/enrollment-tokens"),
     ("broker-command", "post", f"/v1/devices/{DEVICE_ID}/commands"),
     ("broker-revoke", "post", f"/v1/devices/{DEVICE_ID}/revoke"),
@@ -330,9 +338,7 @@ def test_optional_session_never_raises(client) -> None:
     issued = runtime.service.issue_session(client_kind="cli")
     with TestClient(_scoped_app(runtime)) as scoped:
         assert scoped.get("/optional").json() == {"authenticated": False}
-        assert scoped.get("/optional", headers=bearer("garbage")).json() == {
-            "authenticated": False
-        }
+        assert scoped.get("/optional", headers=bearer("garbage")).json() == {"authenticated": False}
         assert scoped.get("/optional", headers=bearer(issued.token)).json() == {
             "authenticated": True
         }
@@ -361,7 +367,7 @@ def _mixed_app(runtime: IdentityRuntime) -> FastAPI:
 
 
 def test_a_scoped_session_cannot_reach_a_full_authority_route(client) -> None:
-    """"Scopes narrow, never elevate" must hold by construction.
+    """ "Scopes narrow, never elevate" must hold by construction.
 
     Before this rule, a scoped session sailed through every route that gated on
     bare require_owner_session - i.e. issuing a narrowed credential silently
@@ -372,9 +378,7 @@ def test_a_scoped_session_cannot_reach_a_full_authority_route(client) -> None:
     _, runtime, _ = client
     service = runtime.service
     full = service.issue_session(client_kind="mobile", label="full")
-    narrow = service.issue_session(
-        client_kind="mobile", label="narrow", scopes=["narration.read"]
-    )
+    narrow = service.issue_session(client_kind="mobile", label="narrow", scopes=["narration.read"])
 
     with TestClient(_mixed_app(runtime)) as mixed:
         assert mixed.get("/full-authority", headers=bearer(full.token)).status_code == 200
@@ -397,9 +401,7 @@ def test_require_scope_still_accepts_the_scoped_session_it_gates(client) -> None
     _, runtime, _ = client
     service = runtime.service
     full = service.issue_session(client_kind="cli", label="full")
-    narrow = service.issue_session(
-        client_kind="mobile", label="narrow", scopes=["narration.read"]
-    )
+    narrow = service.issue_session(client_kind="mobile", label="narrow", scopes=["narration.read"])
 
     with TestClient(_mixed_app(runtime)) as mixed:
         assert mixed.get("/needs-scope", headers=bearer(narrow.token)).status_code == 200

@@ -16,9 +16,11 @@ No test here calls a handler directly and none knows a phrase table of its own.
 from __future__ import annotations
 
 import base64
+import tempfile
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -67,6 +69,8 @@ from app.documents.service import DocumentService
 from app.evolution.models import Capability, CapabilityGap, EvolutionOpportunity, SkillVersion
 from app.evolution.runtime import EvolutionRuntime
 from app.evolution.supervisor import is_paused
+from app.genesis.models import GenesisRun
+from app.genesis.runtime import GenesisRuntime
 from app.identity.root import InMemoryCredentialRoot
 from app.identity.runtime import IdentityRuntime
 from app.ledger import service as ledger_service
@@ -103,6 +107,7 @@ from app.research.models import (
     ResearchRunRow,
 )
 from app.routines.models import Routine, RoutineFiring
+from app.security.models import AuthorizedAsset
 from app.uistate.publisher import UiStatePublisher, set_publisher
 from app.voice.models import VoiceProfile
 from app.voice.providers import FakeTTSProvider
@@ -256,6 +261,7 @@ class Harness:
     calendar: CalendarService
     app_factory: AppFactoryService
     browser_gateway: FakeBrowserGateway
+    genesis: GenesisRuntime
     ids: dict[str, str] = field(default_factory=dict)
 
     # ------------------------------------------------------------- relay
@@ -789,9 +795,32 @@ def build_harness() -> Harness:
         SkillVersion.__table__,
         CapabilityGap.__table__,
         EvolutionOpportunity.__table__,
+        GenesisRun.__table__,
+        # app.security.provider.RegistryAuthorizationProvider (the default
+        # mutation-authorization source, app.evolution.runtime.EvolutionRuntime
+        # .authorization) queries this table for ANY genesis run against a
+        # MUTATING operation — present here even though no row is ever
+        # inserted by this harness (a mutating op always parks at
+        # awaiting_approval, exactly as production would with nothing
+        # enrolled).
+        AuthorizedAsset.__table__,
     ):
         table.create(evolution_engine)
     evolution = EvolutionRuntime(settings, engine=evolution_engine)
+    # M24 (docs/M24_CAPABILITY_GENESIS_SPEC.md §5, ADR-0087): the genesis
+    # runtime is a thin wrapper over the SAME EvolutionRuntime (registry,
+    # gaps, authorization) — no second engine, no second registry. The
+    # publish roots are overridden to a FRESH temp directory per harness
+    # call: EvolutionRuntime.skills_root otherwise defaults to a real,
+    # process-wide path (PAGENTOS_EVOLUTION_SKILLS_ROOT or
+    # <repo>/skills/generated), and a published skill version is immutable
+    # (app.genesis.service._publish) — two independent harnesses (two
+    # separate in-memory databases, no shared history) publishing the SAME
+    # capability_id/version to that ONE real directory would collide.
+    evolution.skills_root = Path(tempfile.mkdtemp(prefix="genesis-skills-"))
+    evolution.work_root = Path(tempfile.mkdtemp(prefix="genesis-work-"))
+    genesis = GenesisRuntime(evolution)
+    app.state.genesis = genesis
     # M19 (docs/M19_DIGITAL_OPERATOR_SPEC.md §4): the SAME fake device port every operator
     # tool reaches through ``ctx.live["device_action"]`` (production's is the SAME object
     # the wake sequence holds; here it is the same ``device`` fake every other family
@@ -879,6 +908,7 @@ def build_harness() -> Harness:
         calendar=calendar_service,
         app_factory=app_factory_service,
         browser_gateway=browser_gateway,
+        genesis=genesis,
     )
 
 

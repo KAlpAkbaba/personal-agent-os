@@ -42,6 +42,8 @@ from app.documents.service import DocumentService
 from app.evolution.routes import router as evolution_router
 from app.evolution.runtime import EvolutionRuntime
 from app.experience.routes import router as experience_router
+from app.genesis.routes import router as genesis_router
+from app.genesis.runtime import GenesisRuntime
 from app.goals.routes import router as goals_router
 from app.health import run_health_checks
 from app.identity.routes import router as identity_router
@@ -117,6 +119,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     memory = MemoryRuntime(settings)
     selfhealing = SelfHealingRuntime(settings)
     evolution = EvolutionRuntime(settings)
+    genesis = GenesisRuntime(evolution)
     security = SecurityRuntime(settings)
     identity = IdentityRuntime(settings)
     mobile = MobileRuntime(settings)
@@ -364,6 +367,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.selfhealing = selfhealing
     app.state.evolution = evolution
+    app.state.genesis = genesis
     app.state.security = security
     app.state.identity = identity
     app.state.mobile = mobile
@@ -423,6 +427,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(memory_router)
     app.include_router(selfhealing_router)
     app.include_router(evolution_router)
+    app.include_router(genesis_router)
     app.include_router(security_router)
     app.include_router(mobile_router)
     app.include_router(research_router)
