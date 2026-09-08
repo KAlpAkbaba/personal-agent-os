@@ -21,3 +21,4 @@
 - [git stash / worktree gotchas](reference_git_stash_untracked_gotcha.md) — use `git stash -u` for a true baseline; git commands (not other executables) DO work cross-worktree, see the isolation reference below
 - [Worktree isolation and cross-worktree transplant](reference_worktree_isolation_and_cross_worktree_transplant.md) — Bash blocks non-git commands referencing paths outside your worktree; recipe for doing real dev work "in" another linked worktree via scratch branch + `git reset --hard`
 - [M20 core track status](project_m20_core_track_status.md) — completed 2026-09-08 on branch m20-core @ 50b65aa in E:\AI\pagentos-wt-m20-core, 8 commits ahead of main, not merged/pushed
+- [M21 core track status](project_m21_core_track_status.md) — completed 2026-09-08 on branch m21-core @ 6da0d06, 5366/5367 unit tests + 804 corpus cases green, 5 real bugs found+fixed, not merged/pushed
