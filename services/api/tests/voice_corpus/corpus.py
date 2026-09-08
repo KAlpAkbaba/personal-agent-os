@@ -111,6 +111,13 @@ CTX_APP_SCAFFOLDED: Final = "app_scaffolded"
 #: "uygulamayı durdur" / "uygulama çalışıyor mu?" / "uygulamayı aç".
 CTX_APP_RUNNING: Final = "app_running"
 
+#: M25 (docs/M25_CREATIVE_3D_SPEC.md §5): a REAL ``scenes`` row, scaffolded through
+#: the real ``SceneService.create`` against the fake device (the same "genuine
+#: fixture, not a sentinel" discipline CTX_APP_SCAFFOLDED already uses) — a Blender
+#: scene, current object focus (kind ``scene``), so "Bir küp ekle." / "Render al." /
+#: "Sahnede ne var?" resolve to something real.
+CTX_SCENE_BLENDER: Final = "scene_blender"
+
 #: M24 (docs/M24_CAPABILITY_GENESIS_SPEC.md §6, §7): the REAL counter-box/lamp-box
 #: fixture application, started by the harness on a free port and registered into
 #: app.genesis.catalogue for the duration of ONE case — never a mock; the same
@@ -193,6 +200,18 @@ SIDE_EFFECTS_APP_OPEN: Final[frozenset[str]] = frozenset({"file.reveal"})
 #: state". A case naming it must actually change that state; every other genesis case
 #: must not.
 SIDE_EFFECTS_CAPABILITY_MUTATE: Final[frozenset[str]] = frozenset({"capability.mutate"})
+
+#: M25 (docs/M25_CREATIVE_3D_SPEC.md §5, §7): the device capabilities the 3D-creation
+#: family may reach — the SAME ``project.scaffold``/``project.run`` capability names
+#: the App Factory already uses (App Factory device family, extended by the windows-
+#: engineer track with the two 3D runtimes) plus the new ``scene.inspect``. Every
+#: mutating scene tool (create/add/transform/material/light/camera/render) scaffolds,
+#: runs and inspects in one call; the query tool (scene.inspect) reaches only the
+#: last one.
+SIDE_EFFECTS_SCENE_MUTATE: Final[frozenset[str]] = frozenset(
+    {"project.scaffold", "project.run", "scene.inspect"}
+)
+SIDE_EFFECTS_SCENE_INSPECT: Final[frozenset[str]] = frozenset({"scene.inspect"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -2984,6 +3003,335 @@ def _capability_cases() -> list[UtteranceCase]:
     ]
 
 
+# ------------------------------------------------------------ M25: 3D Creation
+#
+# docs/M25_CREATIVE_3D_SPEC.md §5. Every case names ``category="creative3d"``. The
+# tool word (blender/unity) and, for ADD, the primitive kind are the router's own
+# job (app.voice.intents' SCENE_* matchers) — everything else a case needs
+# (an object name, a colour, an energy value) is a plausible MODEL argument,
+# supplied by ``contract_arguments``'s own scene.* defaults unless a case overrides
+# it via ``tool_arguments``. CTX_SCENE_BLENDER seeds one real, focused Blender scene
+# so ADD/TRANSFORM/MATERIAL/LIGHT/CAMERA/RENDER/INSPECT resolve to something real;
+# CREATE cases start from CTX_NONE (a fresh scene is exactly what they ask for).
+
+
+def _scene_create_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        ("scene.create.blender.canonical", "Blender'da yeni sahne aç.", "canonical"),
+        ("scene.create.unity.canonical", "Unity'de boş bir sahne oluştur.", "canonical"),
+        ("scene.create.blender.para", "Blender'da yeni bir sahne oluşturur musun?", "paraphrase"),
+        ("scene.create.blender.para2", "Blender'da boş bir sahne aç.", "paraphrase"),
+        ("scene.create.blender.asr", "blenderda yeni sahne ac", "asr_noise"),
+    ):
+        is_unity = "unity" in case_id
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="scene_create",
+                    expected_tool="scene.create",
+                    expected_response=RESPONSE_REFUSED if is_unity else RESPONSE_OK,
+                    expected={"error_class": "dependency_unavailable"} if is_unity else {},
+                    side_effects=SIDE_EFFECTS_SCENE_MUTATE,
+                    context=CTX_NONE,
+                    category="creative3d",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _scene_add_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        ("scene.add.cube.canonical", "Bir küp ekle.", "canonical"),
+        ("scene.add.sphere.canonical", "Blender'da küre oluştur.", "canonical"),
+        ("scene.add.light.canonical", "Bir ışık ekle.", "canonical"),
+        ("scene.add.cylinder.para", "Bir silindir ekler misin?", "paraphrase"),
+        ("scene.add.plane.para", "Bir düzlem ekle.", "paraphrase"),
+        ("scene.add.camera.para", "Sahneye bir kamera ekle.", "paraphrase"),
+        ("scene.add.sun.para", "Bir güneş ışığı ekle.", "paraphrase"),
+        ("scene.add.cube.asr", "bir kup ekle", "asr_noise"),
+        ("scene.add.sphere.asr", "kure eklesene", "asr_noise"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="scene_add",
+                    expected_tool="scene.add",
+                    side_effects=SIDE_EFFECTS_SCENE_MUTATE,
+                    context=CTX_SCENE_BLENDER,
+                    category="creative3d",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _scene_transform_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        ("scene.transform.move.canonical", "Küpü sağa taşı.", "canonical"),
+        ("scene.transform.scale.canonical", "Küreyi iki kat büyüt.", "canonical"),
+        ("scene.transform.shrink.para", "Küpü küçült.", "paraphrase"),
+        ("scene.transform.rotate.para", "Küreyi döndür.", "paraphrase"),
+        ("scene.transform.deictic.para", "Bunu sağa taşı.", "paraphrase"),
+        ("scene.transform.move.asr", "kupu saga tasi", "asr_noise"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="scene_transform",
+                    expected_tool="scene.transform",
+                    side_effects=SIDE_EFFECTS_SCENE_MUTATE,
+                    context=CTX_SCENE_BLENDER,
+                    category="creative3d",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _scene_material_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        ("scene.material.red.canonical", "Küpü kırmızı yap.", "canonical"),
+        ("scene.material.blue.canonical", "Rengini maviye boya.", "canonical"),
+        ("scene.material.green.para", "Küreyi yeşil yapar mısın?", "paraphrase"),
+        ("scene.material.black.para", "Bunu siyaha boya.", "paraphrase"),
+        ("scene.material.red.asr", "kupu kirmizi yap", "asr_noise"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="scene_material",
+                    expected_tool="scene.material",
+                    side_effects=SIDE_EFFECTS_SCENE_MUTATE,
+                    context=CTX_SCENE_BLENDER,
+                    category="creative3d",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _scene_light_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        ("scene.light.adjust.canonical", "Işığı ayarla.", "canonical"),
+        ("scene.light.increase.canonical", "Işığı artır.", "canonical"),
+        ("scene.light.decrease.para", "Işığı biraz azalt.", "paraphrase"),
+        ("scene.light.adjust.asr", "isigi ayarla", "asr_noise"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="scene_light",
+                    expected_tool="scene.light",
+                    side_effects=SIDE_EFFECTS_SCENE_MUTATE,
+                    context=CTX_SCENE_BLENDER,
+                    category="creative3d",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _scene_camera_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        ("scene.camera.aim.canonical", "Kamerayı nesneye çevir.", "canonical"),
+        ("scene.camera.aim.para", "Kamerayı çevirir misin?", "paraphrase"),
+        ("scene.camera.aim.para2", "Kamerayı yönlendir.", "paraphrase"),
+        ("scene.camera.aim.asr", "kamerayi nesneye cevir", "asr_noise"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="scene_camera",
+                    expected_tool="scene.camera",
+                    side_effects=SIDE_EFFECTS_SCENE_MUTATE,
+                    context=CTX_SCENE_BLENDER,
+                    category="creative3d",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _scene_render_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        ("scene.render.canonical", "Render al.", "canonical"),
+        ("scene.render.para", "Bir render alır mısın?", "paraphrase"),
+        ("scene.render.para2", "Render alsana.", "paraphrase"),
+        ("scene.render.asr", "render al", "asr_noise"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="scene_render",
+                    expected_tool="scene.render",
+                    side_effects=SIDE_EFFECTS_SCENE_MUTATE,
+                    context=CTX_SCENE_BLENDER,
+                    category="creative3d",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _scene_inspect_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        ("scene.inspect.canonical", "Sahnede ne var?", "canonical"),
+        ("scene.inspect.para", "Sahnede neler var acaba?", "paraphrase"),
+        ("scene.inspect.asr", "sahnede ne var", "asr_noise"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="scene_inspect",
+                    expected_tool="scene.inspect",
+                    side_effects=SIDE_EFFECTS_SCENE_INSPECT,
+                    context=CTX_SCENE_BLENDER,
+                    category="creative3d",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _scene_negative_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    # "Sahneyi sil." reaches no tool at all (spec §5's own negative case) - the closed
+    # operation vocabulary names no delete anywhere, so nothing here can ever match it.
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="scene.neg.delete",
+                utterance="Sahneyi sil.",
+                expected_intent="none",
+                expected_tool=None,
+                expected_response=RESPONSE_NONE,
+                side_effects=SIDE_EFFECTS_NONE,
+                context=CTX_SCENE_BLENDER,
+                category="creative3d",
+                source="canonical",
+                regression_issue_id="M25 spec §5: the closed vocabulary names no delete",
+            )
+        )
+    )
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="scene.neg.delete_project",
+                utterance="Projeyi sil.",
+                expected_intent="none",
+                expected_tool=None,
+                expected_response=RESPONSE_NONE,
+                side_effects=SIDE_EFFECTS_NONE,
+                context=CTX_SCENE_BLENDER,
+                category="creative3d",
+                source="canonical",
+                regression_issue_id="M25 spec §5: the closed vocabulary names no delete",
+            )
+        )
+    )
+    # An operation outside the vocabulary ("Sahneyi kaydet." - no such tool/intent
+    # exists) reaches no tool: a plain, honest miss, never a guess.
+    cases.append(
+        UtteranceCase(
+            case_id="scene.neg.unknown_op",
+            utterance="Sahneyi dışa aktar.",
+            expected_intent="none",
+            expected_tool=None,
+            expected_response=RESPONSE_NONE,
+            side_effects=SIDE_EFFECTS_NONE,
+            context=CTX_SCENE_BLENDER,
+            category="creative3d",
+            source="regression",
+            regression_issue_id="M25 spec §7: an operation outside the vocabulary is never guessed",
+        )
+    )
+    # "Bunu teknik anlat." stays exactly what M18.2/M21/M22/M23 already made it - the
+    # SAME assertion those families' own "*.neg.technical_unchanged" cases make, kept
+    # here too so the creative3d category proves it on its own.
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="scene.neg.technical_unchanged",
+                utterance="Bunu teknik anlat.",
+                expected_intent="technical",
+                expected_tool="research.explain",
+                expected_target="current",
+                expected={"level": "technical"},
+                forbidden_tools=("research.start",),
+                context=CTX_RESEARCH_FOCUS_B,
+                category="creative3d",
+                source="regression",
+                regression_issue_id="M25 must not touch the M18.2 technical-explain path",
+            )
+        )
+    )
+    # A bare "Küpü sil." with no tool for it either - the router names deterministic
+    # vocabulary only, and no SCENE_* matcher accepts "sil" (module comment: no
+    # matcher shares a verb with anything unrelated, including its own deletion).
+    cases.append(
+        UtteranceCase(
+            case_id="scene.neg.delete_object",
+            utterance="Küpü sil.",
+            expected_intent="none",
+            expected_tool=None,
+            expected_response=RESPONSE_NONE,
+            side_effects=SIDE_EFFECTS_NONE,
+            context=CTX_SCENE_BLENDER,
+            category="creative3d",
+            source="regression",
+            regression_issue_id="M25 spec §5: no delete tool for any object either",
+        )
+    )
+    return cases
+
+
+def _scene_cases() -> list[UtteranceCase]:
+    return [
+        *_scene_create_cases(),
+        *_scene_add_cases(),
+        *_scene_transform_cases(),
+        *_scene_material_cases(),
+        *_scene_light_cases(),
+        *_scene_camera_cases(),
+        *_scene_render_cases(),
+        *_scene_inspect_cases(),
+        *_scene_negative_cases(),
+    ]
+
+
 def all_cases() -> list[UtteranceCase]:
     cases = [
         *_research_cases(),
@@ -2999,6 +3347,7 @@ def all_cases() -> list[UtteranceCase]:
         *_artifact_cases(),
         *_app_cases(),
         *_capability_cases(),
+        *_scene_cases(),
     ]
     ids = [c.case_id for c in cases]
     assert len(ids) == len(set(ids)), "duplicate case ids"

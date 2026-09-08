@@ -62,6 +62,8 @@ from app.calendar.models import (
 from app.calendar.providers import FakeCalendarWriter
 from app.calendar.service import CalendarService
 from app.config import Settings
+from app.creative3d.models import SceneRow
+from app.creative3d.service import SceneService
 from app.devices.status import DeviceStatusRegistry
 from app.documents.index import DocumentIndex
 from app.documents.models import DocumentIndexRow
@@ -121,6 +123,7 @@ from app.voice.simulator import SimulatedRealtimeProvider
 from tests.alarms_support import FakeDeviceAction, happy_device_results
 from tests.appfactory_support import appfactory_capability_results
 from tests.artifacts_support import artifact_capability_results
+from tests.creative3d_support import FakeCreative3DDevice
 from tests.documents_support import document_capability_results, extract_result
 from tests.identity_support import IDENTITY_TABLES
 from tests.mail_calendar_support import build_fake_calendar_provider, build_fake_mail_provider
@@ -145,6 +148,7 @@ from tests.voice_corpus.corpus import (
     CTX_PPTX_FOCUSED,
     CTX_PROPOSAL_READ_BACK,
     CTX_RESEARCH_FOCUS_B,
+    CTX_SCENE_BLENDER,
     CTX_SECRET_FILE_FOCUSED,
     CTX_WINDOW_FOCUSED,
     CTX_XLSX_FOCUSED,
@@ -195,6 +199,7 @@ TABLES = (
     CalendarIndexRow.__table__,
     CalendarProposalRow.__table__,
     AppProjectRow.__table__,
+    SceneRow.__table__,
 )
 
 #: The tools the harness may dispatch as "forbidden" because the product refuses them at
@@ -266,6 +271,7 @@ class Harness:
     app_factory: AppFactoryService
     browser_gateway: FakeBrowserGateway
     genesis: GenesisRuntime
+    creative3d: SceneService
     ids: dict[str, str] = field(default_factory=dict)
     #: M24 (docs/M24_CAPABILITY_GENESIS_SPEC.md §6, §7): the live fixture application
     #: (CounterBoxServer/LampBoxServer) a CTX_COUNTERBOX_RUNNING/CTX_LAMPBOX_RUNNING case
@@ -682,6 +688,27 @@ class Harness:
                         db, self.device, target="current", session_id="seed:app_running"
                     )
                     assert ran["execution_status"] == "executed", ran
+        elif context == CTX_SCENE_BLENDER:
+            # M25 (docs/M25_CREATIVE_3D_SPEC.md §5): a REAL scenes row, made through
+            # the real SceneService.create against the fake device (the same "genuine
+            # fixture, not a sentinel" discipline CTX_APP_SCAFFOLDED already uses) —
+            # sets the current ``scene`` focus as a side effect
+            # (SceneService._finish's own focus_module.set_focus call), so "Bir küp
+            # ekle."/"Render al." resolve to something real.
+            with self.factory() as db:
+                created = self.creative3d.create(
+                    db,
+                    self.device,
+                    plan={
+                        "tool": "blender",
+                        "project": "corpus-fixture",
+                        "scene": "demo",
+                        "operations": [{"op": "create_scene"}],
+                    },
+                    session_id="seed:scene_blender",
+                )
+                assert created["execution_status"] == "executed", created
+                self.ids["scene:current"] = created["scene_id"]
         elif context in (CTX_COUNTERBOX_RUNNING, CTX_LAMPBOX_RUNNING):
             # M24 (docs/M24_CAPABILITY_GENESIS_SPEC.md §6, §7): the REAL fixture
             # application, started on a free port for the duration of THIS ONE case (a
@@ -881,12 +908,22 @@ def build_harness() -> Harness:
     )
     app.state.voice_realtime = runtime
 
+    # M25 (docs/M25_CREATIVE_3D_SPEC.md §2-§4, ADR-0088): the SAME ``project.scaffold``/
+    # ``project.run`` capability names the App Factory already uses (module docstring:
+    # one desktop authority, never a second path) — this fake tells the two apart by
+    # payload shape the same way a real device would (``FakeCreative3DDevice.scaffold``'s
+    # own docstring), so it must be spread AFTER ``appfactory_capability_results()``
+    # to be the one actually reached for both.
+    creative3d_device = FakeCreative3DDevice(
+        unity_available=False, render_dir=Path(tempfile.mkdtemp(prefix="creative3d-render-"))
+    )
     device = FakeDeviceAction(
         results={
             **happy_device_results(),
             **document_capability_results(),
             **artifact_capability_results(),
             **appfactory_capability_results(),
+            **creative3d_device.capability_results(),
         }
     )
     sequence = WakeSequence(device_action=device, tts=FakeTTSProvider())
@@ -966,6 +1003,11 @@ def build_harness() -> Harness:
     app_factory_service = AppFactoryService()
     browser_gateway = FakeBrowserGateway()
     app.state.app_factory_service = app_factory_service
+    # M25 (docs/M25_CREATIVE_3D_SPEC.md §2-§4, ADR-0088): 3D Creation's own service,
+    # reading the SAME fake device port every other family holds, with the SAME
+    # in-memory object store artifacts already uses (task brief: no network).
+    creative3d_service = SceneService(object_store=artifacts.store)
+    app.state.creative3d_service = creative3d_service
     runtime.register_live(
         wake_sequence=sequence,
         device_statuses=statuses,
@@ -980,6 +1022,7 @@ def build_harness() -> Harness:
         app_factory_service=app_factory_service,
         browser_gateway=browser_gateway,
         genesis_service=genesis.service,
+        creative3d_service=creative3d_service,
     )
     holdoffs = HoldoffRegistry()
     set_holdoffs(holdoffs)
@@ -1025,6 +1068,7 @@ def build_harness() -> Harness:
         app_factory=app_factory_service,
         browser_gateway=browser_gateway,
         genesis=genesis,
+        creative3d=creative3d_service,
     )
 
 
@@ -1118,10 +1162,28 @@ def contract_arguments(case: UtteranceCase, tool: str, resolved: dict) -> dict:
         template = resolved.get("app_template") or "task-tracker"
         name = resolved.get("app_name") or "Adsız Uygulama"
         args = {"template": template, "name": name}
+    # M25 (docs/M25_CREATIVE_3D_SPEC.md §5): the 3D-creation family. The router
+    # resolves the tool word and (for scene.add) the primitive kind - everything
+    # else here is a plausible model argument a real persona would send after
+    # hearing the prior receipt's own object name (spec's "numbers spoken are
+    # numbers read back" rule, mirrored for names): a fixed default identifier a
+    # case overrides via ``tool_arguments`` when it needs a specific one.
+    elif tool == "scene.add":
+        kind = resolved.get("scene_kind") or "cube"
+        args = {"kind": kind}
+    elif tool == "scene.transform":
+        args = {"name": "Nesne", "location": [1.0, 0.0, 0.0]}
+    elif tool == "scene.material":
+        args = {"name": "Nesne", "color": [1.0, 0.0, 0.0, 1.0]}
+    elif tool == "scene.light":
+        args = {"name": "Isik", "energy": 5.0}
+    elif tool == "scene.camera":
+        args = {"name": "Kamera", "look_at": "Nesne"}
     # artifact.validate / artifact.open / artifact.list / app.run / app.test / app.stop /
-    # app.status / app.open / app.list need no default argument at all — every one of
-    # them resolves its target from the durable focus state, never from a wire argument
-    # (the same rule mail.inbox/mail.read/... already follow).
+    # app.status / app.open / app.list / scene.create / scene.render / scene.inspect
+    # need no default argument at all — every one of them resolves its target from the
+    # durable focus state, never from a wire argument (the same rule
+    # mail.inbox/mail.read/... already follow).
     args.update(case.tool_arguments)
     return args
 

@@ -1,0 +1,146 @@
+{
+  "kind": "m25_blender_lab",
+  "measured_at": "2026-09-08T142357Z",
+  "driver_path": "E:\\AI\\PersonalAgentOS_Claude_Autonomous_Build_Package_v1\\.claude\\worktrees\\agent-a253b3ebbeb3e7e13\\services\\api\\app\\creative3d\\drivers\\blender_driver.py",
+  "blender_exe": "C:\\Program Files\\Blender Foundation\\Blender 4.5\\blender.exe",
+  "driver_sha256": "0e2ce126970d8feb4f6cbaeaae90213200a4a6627a4014a1210e272a6a5d0748",
+  "fixture_root": "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-blender-lab-efkayeno",
+  "refusals": [
+    {
+      "case": "name_outside_alphabet",
+      "refused": true,
+      "detail": "1 validation error for ScenePlan\n  Value error, add_primitive.name 'Kup; DROP TABLE scenes;--' is not a plain identifier ([A-Za-z][A-Za-z0-9_]{0,63}) [type=value_error, input_value={'tool': 'blender',"
+    },
+    {
+      "case": "operation_outside_vocabulary",
+      "refused": true,
+      "detail": "1 validation error for ScenePlan\noperations.0\n  Input tag 'delete_everything' found using 'op' does not match any of the expected tags: 'create_scene', 'add_primitive', 'transform', 'set_material', 's"
+    },
+    {
+      "case": "path_outside_root",
+      "refused": true,
+      "detail": "C:\\Users\\alpak\\AppData\\Local\\Temp\\outside-the-root\\out.json does not resolve inside the fixture root C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-blender-lab-efkayeno"
+    }
+  ],
+  "duration_s": 1.39,
+  "blender_exit_code": 0,
+  "blender_stderr_tail": "",
+  "inspection": {
+    "camera": "Kamera",
+    "errors": [],
+    "lights": [
+      {
+        "energy": 3.0,
+        "name": "Gunes"
+      }
+    ],
+    "objects": [
+      {
+        "location": [
+          0.0,
+          0.0,
+          5.0
+        ],
+        "name": "Gunes",
+        "rotation": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "type": "LIGHT"
+      },
+      {
+        "location": [
+          1.0,
+          -6.0,
+          1.5
+        ],
+        "name": "Kamera",
+        "rotation": [
+          76.147334,
+          0.0,
+          9.462322
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "type": "CAMERA"
+      },
+      {
+        "location": [
+          2.5,
+          0.0,
+          0.0
+        ],
+        "name": "Kup",
+        "rotation": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.5,
+          1.5,
+          1.5
+        ],
+        "type": "MESH"
+      },
+      {
+        "location": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "material_color": [
+          0.9,
+          0.1,
+          0.1,
+          1.0
+        ],
+        "name": "Kure",
+        "rotation": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "type": "MESH"
+      }
+    ],
+    "render": {
+      "bytes": 70588,
+      "engine": "workbench",
+      "height": 240,
+      "path": "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-blender-lab-efkayeno\\render.png",
+      "sha256": "95933b7a8098426c47d84b0e776bc42917228154e36b9c2b86e425a0bd720d41",
+      "width": 320
+    }
+  },
+  "driver_errors": [],
+  "blend_file_present": true,
+  "blend_file_bytes": 488797,
+  "render_path": "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-blender-lab-efkayeno\\render.png",
+  "render_bytes_on_disk": 70588,
+  "render_sha256_recomputed": "95933b7a8098426c47d84b0e776bc42917228154e36b9c2b86e425a0bd720d41",
+  "render_sha256_matches_driver": true,
+  "render_independent_check": "non_trivial",
+  "compare": {
+    "ok": true,
+    "checked": 15,
+    "mismatches": [],
+    "reason": null
+  },
+  "ok": true,
+  "problems": []
+}

@@ -94,9 +94,11 @@ def test_the_vocabulary_is_the_one_the_owner_specified() -> None:
         "app.factory",
         # M24 (Capability Genesis spec §5, §8, ADR-0087): the genesis channel.
         "capability.genesis",
+        # M25 (3D Creation spec §5, §6, ADR-0088): the scene channel.
+        "scene.activity",
     }
     contract = ui_state_contract()
-    assert contract["contract_version"] == 9
+    assert contract["contract_version"] == 10
     assert "ambient" in contract["subsystems"]
     assert "operator" in contract["subsystems"]
     assert "documents" in contract["subsystems"]

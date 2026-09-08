@@ -34,6 +34,8 @@ from app.calendar.providers import build_calendar_provider, build_calendar_write
 from app.calendar.routes import router as calendar_router
 from app.calendar.service import CalendarService
 from app.config import Settings, get_settings
+from app.creative3d.routes import router as scenes_router
+from app.creative3d.service import SceneService
 from app.db import build_engine, build_session_factory
 from app.devices.commands import DeviceCommandClient, register_broker_runtime
 from app.devices.routes import router as devices_router
@@ -216,6 +218,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # truthful refused receipt rather than crashing the tool call.
     app_factory_service = AppFactoryService()
     browser_gateway = UnwiredBrowserGateway()
+    # M25 (docs/M25_CREATIVE_3D_SPEC.md §2-§4, ADR-0088): 3D Creation's own service,
+    # reading the SAME device port every other family holds (project.scaffold/
+    # project.run, extended by the windows-engineer track with the two 3D runtimes and
+    # scene.inspect) — one desktop authority, never a second path. Renders share the
+    # SAME object store the Artifact Factory already uses (``artifacts.store``): one
+    # bucket, one provider interface, never a second one for the same kind of file.
+    creative3d_service = SceneService(object_store=artifacts.store)
     voice_realtime.register_live(
         wake_sequence=wake_sequence,
         device_statuses=get_status_registry(),
@@ -234,6 +243,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # M24 (docs/M24_CAPABILITY_GENESIS_SPEC.md §6): capability.* reads the SAME
         # GenesisService the REST surface (app/genesis/routes.py) drives.
         genesis_service=genesis.service,
+        # M25 (docs/M25_CREATIVE_3D_SPEC.md §5): scene.* reads the SAME SceneService
+        # the REST surface (app/creative3d/routes.py) drives.
+        creative3d_service=creative3d_service,
     )
 
     def _build_routine_dispatcher() -> ActionDispatcher:
@@ -397,6 +409,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.mail_service = mail_service
     app.state.calendar_service = calendar_service
     app.state.app_factory_service = app_factory_service
+    app.state.creative3d_service = creative3d_service
     # M22 (docs/M22_ARTIFACT_FACTORY_SPEC.md §4): POST /v1/artifacts/{id}/open reaches
     # the device through the SAME BrokerDeviceAction object the wake sequence, the
     # operator and the documents/mail/calendar families already hold above — one device
@@ -466,6 +479,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # router applies.
     app.include_router(mail_router)
     app.include_router(calendar_router)
+    # M25 (docs/M25_CREATIVE_3D_SPEC.md §6): the Cockpit's "3B Sahne" panel — owner-
+    # gated, the same require_owner_session dependency every other router applies.
+    app.include_router(scenes_router)
 
     @app.get("/v1/system/health")
     async def system_health() -> dict[str, Any]:

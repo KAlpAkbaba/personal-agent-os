@@ -175,6 +175,25 @@ class Intent(StrEnum):
     CAPABILITY_APPROVE = "capability_approve"  # Onaylıyorum / Bu uygulamayı yetkilendir
     CAPABILITY_CANCEL = "capability_cancel"  # Vazgeç, yapma
 
+    # M25 (docs/M25_CREATIVE_3D_SPEC.md §5): 3D Creation. Every one of these targets
+    # app.creative3d through tools_scene - never a second Blender/Unity path
+    # (ADR-0088). Every matcher is gated on its OWN noun (sahne / küp / küre /
+    # silindir / düzlem / ışık / kamera / render, spec §5's own list) so nothing here
+    # can ever be reached by an utterance about a window, an alarm, a document or an
+    # app - the same "every family requires its own noun" discipline
+    # _APP_NOUN_STEMS's own module comment documents. SCENE_MATERIAL has no separate
+    # utterance in the spec's own enumeration but the tool (scene.material) does
+    # (spec §5's tool list) - added here as the router's own reasonable extension,
+    # gated on a colour word plus an object noun, never colliding with anything above.
+    SCENE_CREATE = "scene_create"  # Unity'de boş bir sahne oluştur / Blender'da yeni sahne aç
+    SCENE_ADD = "scene_add"  # Bir küp ekle / Blender'da küre oluştur / Bir ışık ekle
+    SCENE_TRANSFORM = "scene_transform"  # Küpü sağa taşı / Küreyi iki kat büyüt
+    SCENE_MATERIAL = "scene_material"  # Küpü kırmızı yap / rengini maviye boya
+    SCENE_LIGHT = "scene_light"  # Işığı ayarla / Işığı artır
+    SCENE_CAMERA = "scene_camera"  # Kamerayı nesneye çevir
+    SCENE_RENDER = "scene_render"  # Render al
+    SCENE_INSPECT = "scene_inspect"  # Sahnede ne var?
+
     NONE = "none"
 
 
@@ -258,6 +277,16 @@ CAPABILITY_BY_INTENT: dict[Intent, str] = {
     Intent.CAPABILITY_REQUEST: "capability.request",
     Intent.CAPABILITY_APPROVE: "capability.approve",
     Intent.CAPABILITY_CANCEL: "capability.cancel",
+    # M25 (spec §5): creating/changing a 3D scene on the owner's machine is a real
+    # mutation, the same class app.create/capability.request already get. Inspecting
+    # one is not (SCENE_INSPECT is a QUERY_TOOL_BY_INTENT entry instead, below).
+    Intent.SCENE_CREATE: "scene.create",
+    Intent.SCENE_ADD: "scene.add",
+    Intent.SCENE_TRANSFORM: "scene.transform",
+    Intent.SCENE_MATERIAL: "scene.material",
+    Intent.SCENE_LIGHT: "scene.light",
+    Intent.SCENE_CAMERA: "scene.camera",
+    Intent.SCENE_RENDER: "scene.render",
 }
 
 #: QUERY intents that name a tool rather than being answered conversationally (contract §2:
@@ -304,6 +333,10 @@ QUERY_TOOL_BY_INTENT: dict[Intent, str] = {
     # M24 (spec §6): a status read-back mutates nothing the owner can see - the same
     # query class artifact.list/app.status already get.
     Intent.CAPABILITY_STATUS: "capability.status",
+    # M25 (spec §5): reading a scene back mutates nothing the owner can see (the
+    # device call is a read of the tool's own state) - the same query class
+    # document.read/app.status already get for the identical reason.
+    Intent.SCENE_INSPECT: "scene.inspect",
 }
 
 
@@ -549,6 +582,25 @@ class ResolvedIntent:
     #: or None when no known verb matched - the tool then asks which operation,
     #: never guesses one.
     capability_operation: str | None = None
+    #: M25 (docs/M25_CREATIVE_3D_SPEC.md §5): for the 3D creation family, the tool
+    #: word the owner's WORDS carried ("blender" / "unity"), or None when no tool
+    #: word was said at all - the tool then falls back to the CURRENT scene focus's
+    #: own tool, and only asks a clarification when neither is known (spec §5's own
+    #: rule, "the tool word resolved from the utterance, else the current focus,
+    #: else a clarification").
+    scene_tool: str | None = None
+    #: For the 3D creation family, which scene the owner's WORDS pointed at:
+    #: "current" | None. ``None`` means the words named neither and the tool falls
+    #: back to its own default ("current") - the same "owner's words win only when
+    #: they actually said something" rule ``app_ref``/``artifact_ref`` already follow.
+    scene_ref: str | None = None
+    #: For SCENE_ADD, the primitive kind word the owner's WORDS carried ("küp" ->
+    #: "cube", "küre" -> "sphere", "silindir" -> "cylinder", "düzlem" -> "plane",
+    #: "ışık" -> "light_point", "kamera" -> "camera"), or None when no kind word was
+    #: said at all - the model still names its own ``kind`` argument, and this is
+    #: only a best-effort convenience the tool prefers when non-empty (the same rule
+    #: ``app_template``/``artifact_kind`` already follow).
+    scene_kind: str | None = None
 
     def __post_init__(self) -> None:
         if not self.klass:
@@ -2154,7 +2206,7 @@ _APP_NAME_RE = re.compile(
 
 
 def _appfactory_template_from_tokens(tokens: tuple[str, ...]) -> str | None:
-    """"görev takip" -> "task-tracker", "web sayfası" -> "static-page", "komut satırı"/
+    """ "görev takip" -> "task-tracker", "web sayfası" -> "static-page", "komut satırı"/
     "cli" -> "cli-tool" (spec §5's own three built-in templates) - a best-effort
     convenience the tool prefers only when non-empty, never a substitute for the
     model's own ``template`` argument (the same rule ``_artifact_kind_from_tokens``
@@ -2242,9 +2294,10 @@ def _appfactory_test_match(tokens: tuple[str, ...]) -> str | None:
     (the durable ``project`` focus resolves which one)."""
     if _has(tokens, *_APP_TEST_NOUN_STEMS) is None:
         return None
-    if _has_exact(tokens, *_APP_RUN_VERB_FORMS) is None and _has_exact(
-        tokens, *_APP_CREATE_VERB_STEMS
-    ) is None:
+    if (
+        _has_exact(tokens, *_APP_RUN_VERB_FORMS) is None
+        and _has_exact(tokens, *_APP_CREATE_VERB_STEMS) is None
+    ):
         return None
     return "testleri çalıştır"
 
@@ -2385,6 +2438,259 @@ def _capability_cancel_match(tokens: tuple[str, ...]) -> str | None:
     """ "Vazgeç, yapma." (spec §6) — gated by the CALLER on ``genesis_awaiting_approval``
     (module comment above)."""
     return _has(tokens, *_CAPABILITY_CANCEL_STEMS)
+
+
+# --------------------------------------------------------- M25: 3D Creation
+#
+# Built on the SAME token/stem primitives as every intent above - no second Turkish
+# pattern table (module docstring's own rule). Every matcher is gated on its OWN noun
+# (sahne / küp / küre / silindir / düzlem / ışık / kamera / render, spec §5's own
+# list) - the same "every family requires its own noun" discipline
+# ``_APP_NOUN_STEMS``'s own module comment documents - so nothing here can ever be
+# reached by an utterance about a window, an alarm, a document, an app or the M18
+# Active Eye ("kamerayı kapat" shares the "kamera" noun with SCENE_CAMERA but never
+# its verb: EYE_DISABLE needs "kapat", SCENE_CAMERA needs "çevir"/"yönlendir", and
+# EYE_DISABLE is checked first regardless, priority 0). The TOOL WORD ("blender" /
+# "unity") is resolved once, from the SAME utterance, by ``_scene_tool_from_tokens`` -
+# never a second name-resolution table (the same shape ``_capability_catalogue_entry``
+# already gives M24's own target resolution).
+
+_SCENE_NOUN_STEMS: Final[tuple[str, ...]] = ("sahne",)
+
+#: A primitive/object noun -> the closed ``add_primitive.kind`` word it names (spec
+#: §2's own vocabulary). "ışık" alone (no "güneş"/sun qualifier) defaults to a point
+#: light - the commonest, least surprising reading of a bare "bir ışık ekle".
+_PRIMITIVE_KIND_BY_NOUN: Final[dict[str, str]] = {
+    "küp": "cube",
+    "kup": "cube",
+    "küre": "sphere",
+    "kure": "sphere",
+    "silindir": "cylinder",
+    "düzlem": "plane",
+    "duzlem": "plane",
+    "güneş": "light_sun",
+    "gunes": "light_sun",
+    "ışık": "light_point",
+    "isik": "light_point",
+    # The k->ğ consonant softening a vowel-initial suffix triggers ("ışık" + "-ı" ->
+    # "ışığı", the same mutation "renk" + "-i" -> "rengi" undergoes below): the
+    # MUTATED stem, never reachable through a plain ``.startswith("ışık")`` prefix
+    # check.
+    "ışığ": "light_point",
+    "isig": "light_point",
+    # A naive (non-Turkish-aware) lowercasing of "Işık"/"Işığı" maps the dotless
+    # capital "I" to the DOTTED lowercase "i" ("işık"/"işığı"), not "ı" -
+    # ``turkish_casefold`` fixes this on text that still carries its true case, but
+    # the corpus's own ".lower()" ASR-noise variant (``_variants``,
+    # tests/voice_corpus/corpus.py) already lowercased the word before this resolver
+    # ever sees it, the same way a naive real ASR normalizer could. Both readings
+    # are accepted.
+    "işık": "light_point",
+    "işığ": "light_point",
+    "kamera": "camera",
+}
+_PRIMITIVE_NOUN_STEMS: Final[tuple[str, ...]] = tuple(_PRIMITIVE_KIND_BY_NOUN)
+
+_SCENE_CREATE_VERB_FORMS: Final[tuple[str, ...]] = (
+    "oluştur",
+    "olustur",
+    "oluşturur",
+    "olusturur",
+    "oluştursana",
+    "olustursana",
+    "aç",
+    "ac",
+    "açsana",
+    "acsana",
+    "açar",
+    "acar",
+)
+_SCENE_ADD_VERB_FORMS: Final[tuple[str, ...]] = (
+    "ekle",
+    "eklesene",
+    "ekler",
+    "koy",
+    "koysana",
+    "oluştur",
+    "olustur",
+    "oluşturur",
+    "olusturur",
+)
+_SCENE_TRANSFORM_VERB_STEMS: Final[tuple[str, ...]] = (
+    "taşı",
+    "tasi",
+    "büyüt",
+    "buyut",
+    "küçült",
+    "kucult",
+    "döndür",
+    "dondur",
+)
+_SCENE_DEICTIC_WORDS: Final[tuple[str, ...]] = ("bunu", "onu")
+_SCENE_COLOR_STEMS: Final[tuple[str, ...]] = (
+    "kırmızı",
+    "kirmizi",
+    "mavi",
+    "yeşil",
+    "yesil",
+    "sarı",
+    "sari",
+    "siyah",
+    "beyaz",
+    "turuncu",
+    "mor",
+    "pembe",
+)
+_SCENE_MATERIAL_NOUN_STEMS: Final[tuple[str, ...]] = ("renk", "reng")
+_SCENE_MATERIAL_VERB_FORMS: Final[tuple[str, ...]] = (
+    "yap",
+    "yapsana",
+    "yapar",
+    "boya",
+    "boyasana",
+    "boyar",
+)
+#: "ışık" itself, "ışığ" (the k->ğ mutated stem "ışığı"/"ışığını" actually carry —
+#: see ``_PRIMITIVE_KIND_BY_NOUN``'s identical comment) and their diacritic-stripped
+#: ASR-noise forms.
+_SCENE_LIGHT_NOUN_STEMS: Final[tuple[str, ...]] = (
+    "ışık",
+    "isik",
+    "ışığ",
+    "isig",
+    "işık",
+    "işığ",
+)
+_SCENE_LIGHT_VERB_FORMS: Final[tuple[str, ...]] = (
+    "ayarla",
+    "ayarlasana",
+    "artır",
+    "artir",
+    "artırsana",
+    "artirsana",
+    "azalt",
+    "azaltsana",
+)
+_SCENE_CAMERA_NOUN_STEMS: Final[tuple[str, ...]] = ("kamera",)
+_SCENE_CAMERA_VERB_FORMS: Final[tuple[str, ...]] = (
+    "çevir",
+    "cevir",
+    "çevirsene",
+    "cevirsene",
+    "çevirir",
+    "cevirir",
+    "yönlendir",
+    "yonlendir",
+)
+_SCENE_RENDER_NOUN_STEMS: Final[tuple[str, ...]] = ("render",)
+_SCENE_RENDER_VERB_FORMS: Final[tuple[str, ...]] = ("al", "alsana", "alır", "alir")
+
+
+def _scene_tool_from_tokens(tokens: tuple[str, ...]) -> str | None:
+    """ "Blender'da" / "Unity'de" (spec §5) - the tool word, resolved once from the
+    SAME utterance every matcher below already checked, never a guess."""
+    if _has(tokens, "blender"):
+        return "blender"
+    if _has(tokens, "unity"):
+        return "unity"
+    return None
+
+
+def _scene_kind_from_tokens(tokens: tuple[str, ...]) -> str | None:
+    for tok in tokens:
+        for noun, kind in _PRIMITIVE_KIND_BY_NOUN.items():
+            if tok == noun or tok.startswith(noun):
+                return kind
+    return None
+
+
+def _scene_create_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Unity'de boş bir sahne oluştur.", "Blender'da yeni sahne aç." (spec §5)."""
+    if _has(tokens, *_SCENE_NOUN_STEMS) is None:
+        return None
+    if _has_exact(tokens, *_SCENE_CREATE_VERB_FORMS) is None:
+        return None
+    return "sahne oluştur"
+
+
+def _scene_inspect_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Sahnede ne var?" (spec §5) - checked before ADD/TRANSFORM/... so the shared
+    "sahne" noun never falls through to CREATE by accident (no create verb here
+    anyway, but kept first for the same "the more specific question form wins"
+    ordering ``_appfactory_list_match`` documents for its own family)."""
+    if _has(tokens, *_SCENE_NOUN_STEMS) is None:
+        return None
+    if _has_exact(tokens, "ne", "neler") is None or _has_exact(tokens, "var") is None:
+        return None
+    return "sahnede ne var"
+
+
+def _scene_add_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Bir küp ekle.", "Blender'da küre oluştur.", "Bir ışık ekle." (spec §5)."""
+    if _scene_kind_from_tokens(tokens) is None:
+        return None
+    if _has_exact(tokens, *_SCENE_ADD_VERB_FORMS) is None:
+        return None
+    return "nesne ekle"
+
+
+def _scene_transform_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Küpü sağa taşı.", "Küreyi iki kat büyüt." (spec §5)."""
+    has_object = _has(tokens, *_PRIMITIVE_NOUN_STEMS) is not None or _has_exact(
+        tokens, *_SCENE_DEICTIC_WORDS
+    )
+    if not has_object:
+        return None
+    if _has(tokens, *_SCENE_TRANSFORM_VERB_STEMS) is None:
+        return None
+    return "nesneyi taşı"
+
+
+def _scene_material_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Küpü kırmızı yap.", "Rengini maviye boya." (spec §5's ``scene.material``
+    tool - the router's own reasonable extension, module comment above the
+    ``Intent`` block)."""
+    has_object = (
+        _has(tokens, *_PRIMITIVE_NOUN_STEMS) is not None
+        or _has(tokens, *_SCENE_MATERIAL_NOUN_STEMS) is not None
+        or _has_exact(tokens, *_SCENE_DEICTIC_WORDS)
+    )
+    if not has_object:
+        return None
+    if _has(tokens, *_SCENE_COLOR_STEMS) is None:
+        return None
+    if _has_exact(tokens, *_SCENE_MATERIAL_VERB_FORMS) is None:
+        return None
+    return "nesnenin rengini değiştir"
+
+
+def _scene_light_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Işığı ayarla.", "Işığı artır." (spec §5) - checked AFTER ADD so "Bir ışık
+    ekle." (no adjust verb here) is never swallowed by this more general noun match."""
+    if _has(tokens, *_SCENE_LIGHT_NOUN_STEMS) is None:
+        return None
+    if _has_exact(tokens, *_SCENE_LIGHT_VERB_FORMS) is None:
+        return None
+    return "ışığı ayarla"
+
+
+def _scene_camera_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Kamerayı nesneye çevir." (spec §5) - checked AFTER ADD so "Kamera ekle."
+    is never swallowed by this more general noun match."""
+    if _has(tokens, *_SCENE_CAMERA_NOUN_STEMS) is None:
+        return None
+    if _has_exact(tokens, *_SCENE_CAMERA_VERB_FORMS) is None:
+        return None
+    return "kamerayı çevir"
+
+
+def _scene_render_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Render al." (spec §5)."""
+    if _has(tokens, *_SCENE_RENDER_NOUN_STEMS) is None:
+        return None
+    if _has_exact(tokens, *_SCENE_RENDER_VERB_FORMS) is None:
+        return None
+    return "render al"
 
 
 # ------------------------------------------------- research interaction classes
@@ -3316,6 +3622,88 @@ def resolve_intent(
             capability_target_name=entry.name,
             capability_target_url=entry.url,
             capability_operation=operation_id,
+            **base,
+        )
+
+    # 0f-3. M25 (docs/M25_CREATIVE_3D_SPEC.md §5): 3D Creation, alongside the rest of
+    #       the M19-M24 device/account-reading family, for the same reason the
+    #       capability-genesis block above is here: none of these words mean anything
+    #       else this resolver already claimed higher up (every matcher gated on its
+    #       own noun - module comment above ``_SCENE_NOUN_STEMS``). INSPECT is checked
+    #       right after CREATE because they share the "sahne" noun (no other overlap);
+    #       ADD before LIGHT/CAMERA so "Bir ışık ekle."/"Kamera ekle." are never
+    #       swallowed by the more general noun-only LIGHT/CAMERA matches.
+    scene_tool = _scene_tool_from_tokens(tokens)
+    if scene_create_matched := _scene_create_match(tokens):
+        return ResolvedIntent(
+            Intent.SCENE_CREATE,
+            scope=SCOPE_CONVERSATION,
+            matched=scene_create_matched,
+            scene_tool=scene_tool,
+            **base,
+        )
+    if scene_inspect_matched := _scene_inspect_match(tokens):
+        return ResolvedIntent(
+            Intent.SCENE_INSPECT,
+            scope=SCOPE_CONVERSATION,
+            matched=scene_inspect_matched,
+            scene_tool=scene_tool,
+            scene_ref="current",
+            **base,
+        )
+    if scene_add_matched := _scene_add_match(tokens):
+        return ResolvedIntent(
+            Intent.SCENE_ADD,
+            scope=SCOPE_CONVERSATION,
+            matched=scene_add_matched,
+            scene_tool=scene_tool,
+            scene_ref="current",
+            scene_kind=_scene_kind_from_tokens(tokens),
+            **base,
+        )
+    if scene_transform_matched := _scene_transform_match(tokens):
+        return ResolvedIntent(
+            Intent.SCENE_TRANSFORM,
+            scope=SCOPE_CONVERSATION,
+            matched=scene_transform_matched,
+            scene_tool=scene_tool,
+            scene_ref="current",
+            **base,
+        )
+    if scene_material_matched := _scene_material_match(tokens):
+        return ResolvedIntent(
+            Intent.SCENE_MATERIAL,
+            scope=SCOPE_CONVERSATION,
+            matched=scene_material_matched,
+            scene_tool=scene_tool,
+            scene_ref="current",
+            **base,
+        )
+    if scene_light_matched := _scene_light_match(tokens):
+        return ResolvedIntent(
+            Intent.SCENE_LIGHT,
+            scope=SCOPE_CONVERSATION,
+            matched=scene_light_matched,
+            scene_tool=scene_tool,
+            scene_ref="current",
+            **base,
+        )
+    if scene_camera_matched := _scene_camera_match(tokens):
+        return ResolvedIntent(
+            Intent.SCENE_CAMERA,
+            scope=SCOPE_CONVERSATION,
+            matched=scene_camera_matched,
+            scene_tool=scene_tool,
+            scene_ref="current",
+            **base,
+        )
+    if scene_render_matched := _scene_render_match(tokens):
+        return ResolvedIntent(
+            Intent.SCENE_RENDER,
+            scope=SCOPE_CONVERSATION,
+            matched=scene_render_matched,
+            scene_tool=scene_tool,
+            scene_ref="current",
             **base,
         )
 

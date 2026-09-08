@@ -76,6 +76,12 @@ PROTECTED_ENDPOINTS = [
     ("apps-run", "post", f"/v1/apps/{uuid.uuid4()}/run"),
     ("apps-stop", "post", f"/v1/apps/{uuid.uuid4()}/stop"),
     ("apps-test", "post", f"/v1/apps/{uuid.uuid4()}/test"),
+    # M25 (docs/M25_CREATIVE_3D_SPEC.md §6): rendering or re-inspecting a scene runs
+    # Blender/Unity on the owner's machine — never one unauthenticated HTTP call away;
+    # the listing names the owner's own scenes and their last render.
+    ("scenes", "get", "/v1/scenes"),
+    ("scenes-render", "post", f"/v1/scenes/{uuid.uuid4()}/render"),
+    ("scenes-inspect", "post", f"/v1/scenes/{uuid.uuid4()}/inspect"),
     # M24 (docs/M24_CAPABILITY_GENESIS_SPEC.md §8): a generated capability's
     # approval/cancellation is a security decision, and the run list names
     # what the assistant taught itself against what interface — never one

@@ -65,6 +65,12 @@ FOCUS_KIND_ARTIFACT = "artifact"
 #: uygulaması yap" resolves to the project just made, and "önceki" works the same
 #: current/previous way every other kind above already gets from this module.
 FOCUS_KIND_PROJECT = "project"
+#: M25 (docs/M25_CREATIVE_3D_SPEC.md §5, ADR-0088): 3D creation's own focus by identity.
+#: ``scene`` names one ``scenes`` row (never a render/inspection version — those are
+#: read from the row itself) so "Bir küp ekle" after "Blender'da yeni sahne aç" resolves
+#: to the scene just created, and "önceki" works the same current/previous way every
+#: other kind above already gets from this module.
+FOCUS_KIND_SCENE = "scene"
 FOCUS_KINDS: tuple[str, ...] = (
     FOCUS_KIND_WINDOW,
     FOCUS_KIND_APP,
@@ -78,6 +84,7 @@ FOCUS_KINDS: tuple[str, ...] = (
     FOCUS_KIND_PROPOSAL,
     FOCUS_KIND_ARTIFACT,
     FOCUS_KIND_PROJECT,
+    FOCUS_KIND_SCENE,
 )
 
 #: How many recent rows of ONE kind the stack keeps (bounded, per task brief: "a bounded
@@ -130,6 +137,7 @@ __all__ = [
     "FOCUS_KIND_MESSAGE",
     "FOCUS_KIND_PROJECT",
     "FOCUS_KIND_PROPOSAL",
+    "FOCUS_KIND_SCENE",
     "FOCUS_KIND_THREAD",
     "FOCUS_KIND_WINDOW",
     "FOCUS_STACK_LIMIT",
