@@ -102,6 +102,13 @@ def test_inbox_summary_matches_the_oracle(db) -> None:
     assert got_unread_uids == sorted(TRUTH["unread_inbox_uids"])
 
 
+def test_inbox_summary_matches_the_oracle_for_every_folder(db) -> None:
+    service = _service()
+    for folder in ("INBOX", "Gönderilmiş", "Arşiv"):
+        result = service.inbox_summary(db, folder=folder)
+        assert result["count"] == TRUTH["counts"][folder], folder
+
+
 def test_search_fatura_matches_the_oracle(db) -> None:
     service = _service()
     result = service.search(db, "fatura")
