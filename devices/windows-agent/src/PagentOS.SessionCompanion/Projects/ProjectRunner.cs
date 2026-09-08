@@ -378,14 +378,12 @@ public sealed class ProjectRunner : IDisposable
         {
             if (_runs.TryGetValue(project.ProjectId, out var existing) && existing.IsActive)
             {
-                run.Log.Dispose();
                 throw new CapabilityException(ErrorClasses.DependencyUnavailable, $"'{project.Slug}' is already {existing.State} (pid {existing.Pid}, port {existing.Port}); stop it first", retryable: true, new Dictionary<string, object?> { [DocumentErrors.DetailKey] = "already_running" });
             }
 
             var active = _runs.Values.Count(r => r.IsActive);
             if (active >= MaxRunning)
             {
-                run.Log.Dispose();
                 throw new CapabilityException(ErrorClasses.DependencyUnavailable, $"{active} projects are running, the most this companion runs at once ({MaxRunning}); stop one first", retryable: true, new Dictionary<string, object?> { [DocumentErrors.DetailKey] = "projects_busy" });
             }
 
@@ -397,6 +395,7 @@ public sealed class ProjectRunner : IDisposable
         {
             RequirePortFree(port);
             var startInfo = BuildStartInfo(executable, [.. prefix, .. command.Materialise(project.Folder)], project.Folder);
+            run.Log.Open();
             StartContained(run, startInfo);
             _logger.LogInformation("project.run {Slug} pid={Pid} port={Port} command={Key} log={Log}", project.Slug, run.Pid, port, command.Key, logPath);
 
@@ -407,7 +406,7 @@ public sealed class ProjectRunner : IDisposable
         }
         catch (Exception)
         {
-            Release(run, ProjectRun.StateStopped);
+            Release(run);
             throw;
         }
     }
@@ -485,17 +484,29 @@ public sealed class ProjectRunner : IDisposable
         return startInfo;
     }
 
+    private static readonly TimeSpan PortReleaseWait = TimeSpan.FromSeconds(2);
+
+    /// <summary>The manifest's port must be bindable on loopback. A run stopped a moment ago still holds its listener for a few milliseconds after its process is gone, so a bind that fails is retried briefly before it is a refusal.</summary>
     private static void RequirePortFree(int port)
     {
-        try
+        var deadline = DateTime.UtcNow + PortReleaseWait;
+        while (true)
         {
-            var probe = new TcpListener(IPAddress.Loopback, port);
-            probe.Start();
-            probe.Stop();
-        }
-        catch (SocketException)
-        {
-            throw new CapabilityException(ErrorClasses.DependencyUnavailable, $"port {port} on {ProjectManifest.Loopback} is not free; nothing was run", retryable: true, new Dictionary<string, object?> { [DocumentErrors.DetailKey] = "port_busy" });
+            try
+            {
+                var probe = new TcpListener(IPAddress.Loopback, port);
+                probe.Start();
+                probe.Stop();
+                return;
+            }
+            catch (SocketException) when (DateTime.UtcNow < deadline)
+            {
+                Thread.Sleep(100);
+            }
+            catch (SocketException)
+            {
+                throw new CapabilityException(ErrorClasses.DependencyUnavailable, $"port {port} on {ProjectManifest.Loopback} is not free; nothing was run", retryable: true, new Dictionary<string, object?> { [DocumentErrors.DetailKey] = "port_busy" });
+            }
         }
     }
 
@@ -522,8 +533,12 @@ public sealed class ProjectRunner : IDisposable
 
             if (!run.IsActive || run.Process is null || run.Process.HasExited)
             {
-                await Task.Delay(50, CancellationToken.None).ConfigureAwait(false);
+                // Ended before the port answered: let the pumps drain its last words, mark it
+                // exited HERE (the watcher may not have run yet, and the start-failure cleanup
+                // must not turn an exit into a "stopped"), then say so with the tail.
+                await run.Log.CompleteAsync().ConfigureAwait(false);
                 var code = run.ExitCode ?? TryExitCode(run.Process);
+                run.TryMarkExited(code ?? -1);
                 throw new CapabilityException(
                     ErrorClasses.PostconditionFailed,
                     $"'{run.Project.Slug}' exited before port {run.Port} answered (exit code {code?.ToString(CultureInfo.InvariantCulture) ?? "?"}); log tail: {Trim(run.LogTail, 1200)}",
@@ -675,14 +690,21 @@ public sealed class ProjectRunner : IDisposable
         }
     }
 
-    private void Release(ProjectRun run, string state)
+    /// <summary>A start that did not become a run: the job (if any) ended, the log closed, and — when no process ever existed — the slot's entry forgotten so the project reads as scaffolded again.</summary>
+    private void Release(ProjectRun run)
     {
-        if (state == ProjectRun.StateStopped)
-        {
-            Stop(run, run.StopReason ?? "start_failed");
-        }
-
+        Stop(run, "start_failed");
         run.Log.Dispose();
+        if (run.Process is null)
+        {
+            lock (_lock)
+            {
+                if (_runs.TryGetValue(run.Project.ProjectId, out var current) && ReferenceEquals(current, run))
+                {
+                    _runs.Remove(run.Project.ProjectId);
+                }
+            }
+        }
     }
 
     // ================================================================== project.test
@@ -731,6 +753,7 @@ public sealed class ProjectRunner : IDisposable
 
             _logger.LogInformation("project.test {Slug} pid={Pid} command={Key} log={Log}", project.Slug, process.Id, command.Key, logPath);
             process.StandardInput.Close();
+            log.Open();
             log.Pump(process.StandardOutput);
             log.Pump(process.StandardError);
 
@@ -755,7 +778,7 @@ public sealed class ProjectRunner : IDisposable
                     throw;
                 }
 
-                throw new CapabilityException(ErrorClasses.Timeout, $"'{project.Slug}' tests ran past {wait.TotalSeconds:F0} s; the job was ended; log tail: {Trim(log.Tail, 1200)}", retryable: true, new Dictionary<string, object?> { ["log_tail"] = log.Tail });
+                throw new CapabilityException(ErrorClasses.Timeout, $"'{project.Slug}' tests ran past {wait.TotalSeconds:F0} s; the job was ended; log tail: {Trim(log.Tail, 1200)}", retryable: true, new Dictionary<string, object?> { ["log_tail"] = log.Tail, ["pid"] = process.Id });
             }
 
             await log.CompleteAsync().ConfigureAwait(false);
@@ -871,12 +894,45 @@ public sealed class BoundedLog : IDisposable
     private long _written;
     private bool _truncated;
 
+    private static readonly TimeSpan OpenRetry = TimeSpan.FromSeconds(3);
+
     public BoundedLog(string path, long maxBytes, int tailChars)
     {
+        Path = path;
         _maxBytes = maxBytes;
         _tailChars = tailChars;
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        _file = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read);
+    }
+
+    public string Path { get; }
+
+    /// <summary>
+    /// Creates (truncates) the file. The previous run's handle on the same path may still be
+    /// closing — its exit watcher closes it a moment after the process ends — so a sharing
+    /// violation is retried for a few seconds before it is an error.
+    /// </summary>
+    public void Open()
+    {
+        System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(Path)!);
+        var deadline = DateTime.UtcNow + OpenRetry;
+        while (true)
+        {
+            try
+            {
+                var file = new FileStream(Path, FileMode.Create, FileAccess.Write, FileShare.Read);
+                lock (_lock)
+                {
+                    _file = file;
+                    _written = 0;
+                    _truncated = false;
+                }
+
+                return;
+            }
+            catch (IOException) when (DateTime.UtcNow < deadline)
+            {
+                Thread.Sleep(50);
+            }
+        }
     }
 
     public bool Truncated
@@ -977,7 +1033,7 @@ public sealed class BoundedLog : IDisposable
         }
     }
 
-    /// <summary>Waits for the pumps to drain what the process wrote before it ended.</summary>
+    /// <summary>Waits for the pumps to drain what the process wrote before it ended, then closes the file; the tail stays readable.</summary>
     internal async Task CompleteAsync()
     {
         Task[] pumps;
@@ -994,8 +1050,11 @@ public sealed class BoundedLog : IDisposable
         {
             // A pump that is stuck on a handle a grandchild inherited: the tail is what it is.
         }
+
+        Dispose();
     }
 
+    /// <summary>Closes the file (the in-memory tail is kept). Idempotent.</summary>
     public void Dispose()
     {
         lock (_lock)

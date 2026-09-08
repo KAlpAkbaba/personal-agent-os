@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using PagentOS.Agent.Core.Commands;
 using PagentOS.SessionCompanion.Documents;
 using PagentOS.SessionCompanion.Operator;
 
@@ -58,7 +59,10 @@ public sealed class ProjectManifest
     public const string Loopback = "127.0.0.1";
 
     private static readonly Regex KeyPattern = new("^[a-z][a-z0-9_-]{0,31}$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly char[] CompositionCharacters = [';', '|', '&', '$', '(', ')', '{', '}', '<', '>', '`', '\r', '\n', '\0', '"', '\''];
+    // No shell ever sees a manifest command (the arguments go to CreateProcess as a list), so
+    // this is belt and braces over the token-exact match below; `<` and `>` are left out
+    // because the placeholders carry them and the exact match refuses them anywhere else.
+    private static readonly char[] CompositionCharacters = [';', '|', '&', '$', '(', ')', '{', '}', '`', '\r', '\n', '\0', '"', '\''];
 
     private ProjectManifest(string entry, int port, IReadOnlyDictionary<string, ProjectCommand> run, IReadOnlyDictionary<string, ProjectCommand> test, bool hasLockfile, JsonObject json)
     {
@@ -244,7 +248,16 @@ public sealed class ProjectManifest
 
             case "node" when tokens.Length == 2:
                 {
-                    var file = ProjectScaffold.NormalisePath(tokens[1], $"manifest command '{key}'");
+                    string file;
+                    try
+                    {
+                        file = ProjectScaffold.NormalisePath(tokens[1], $"manifest command '{key}'");
+                    }
+                    catch (CapabilityException)
+                    {
+                        throw Refuse(key, text, "a node command runs one relative file inside the project (no '..', no drive, no separator first)");
+                    }
+
                     if (!isTest && !string.Equals(file, entry, StringComparison.Ordinal))
                     {
                         throw Refuse(key, text, "a node run command runs exactly the manifest's entry file");
