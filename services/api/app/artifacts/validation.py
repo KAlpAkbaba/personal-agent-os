@@ -375,6 +375,16 @@ def _validate_xlsx(spec: ArtifactSpec, data: bytes) -> ValidationReport:
         workbook = load_workbook(io.BytesIO(data), data_only=False)
     except ArtifactValidationBoundError as exc:
         return _bound_failure_report(exc.reason)
+    except (ValueError, KeyError) as exc:
+        # LOW security-review finding (ADR-0085 addendum 6): a malicious inner XML part
+        # (an entity-expansion/"billion laughs" payload well within the zip-level size
+        # bounds above) is refused by openpyxl's own XML layer -- with defusedxml
+        # active (see docs/THIRD_PARTY_COMPONENTS.md) that refusal surfaces as a
+        # ``ValueError`` (openpyxl wraps whatever its XML backend raised), not the
+        # ``ArtifactValidationBoundError`` this module raises itself; a missing
+        # required part surfaces as ``KeyError``. Either way this is "refused",
+        # never "crashed" (module docstring's own invariant).
+        return _bound_failure_report(f"xml_parse_refused:{type(exc).__name__}")
 
     checks: list[dict[str, Any]] = []
     recomputed_totals: dict[str, float] = {}
@@ -393,16 +403,44 @@ def _validate_xlsx(spec: ArtifactSpec, data: bytes) -> ValidationReport:
             )
             continue
         worksheet = workbook[sheet_name]
+        # HIGH security-review finding (ADR-0085 addendum 6): a cell whose STORED TEXT
+        # happens to equal the spec's own expected literal (e.g. the spec cell IS the
+        # string "=HYPERLINK(...)") passes the value-equality check above/below even
+        # though the file now carries a LIVE formula, not the literal text the spec
+        # asked for — ``data_type`` is what actually decides what Excel does when it
+        # opens the file, and openpyxl exposes it independently of ``.value``. Any cell
+        # whose coordinate is not explicitly declared in ``formulas`` must never be
+        # ``data_type == "f"``, regardless of whether its text happens to match.
+        declared_coords = set(sheet_spec.formulas or {})
+
+        def _unexpected_formula_check(
+            cell_obj: Any, ref: str, coord: str, *, _declared: set[str] = declared_coords
+        ) -> dict[str, Any] | None:
+            if coord in _declared or cell_obj.data_type != "f":
+                return None
+            return {
+                "ref": ref,
+                "expected": "not a formula",
+                "found": "formula",
+                "ok": False,
+                "kind": "unexpected_formula",
+            }
+
         for c, col in enumerate(sheet_spec.columns, start=1):
             ref = f"sheet:{sheet_spec.name}!{get_column_letter(c)}1"
-            found = worksheet.cell(row=1, column=c).value
+            cell_obj = worksheet.cell(row=1, column=c)
+            found = cell_obj.value
             checks.append(
                 {"ref": ref, "expected": col, "found": found, "ok": found == col, "kind": "text"}
             )
+            extra = _unexpected_formula_check(cell_obj, ref, f"{get_column_letter(c)}1")
+            if extra is not None:
+                checks.append(extra)
         for r, row in enumerate(sheet_spec.rows, start=2):
             for c, value in enumerate(row, start=1):
                 ref = f"sheet:{sheet_spec.name}!{get_column_letter(c)}{r}"
-                found = worksheet.cell(row=r, column=c).value
+                cell_obj = worksheet.cell(row=r, column=c)
+                found = cell_obj.value
                 checks.append(
                     {
                         "ref": ref,
@@ -412,6 +450,9 @@ def _validate_xlsx(spec: ArtifactSpec, data: bytes) -> ValidationReport:
                         "kind": "value" if isinstance(value, int | float) else "text",
                     }
                 )
+                extra = _unexpected_formula_check(cell_obj, ref, f"{get_column_letter(c)}{r}")
+                if extra is not None:
+                    checks.append(extra)
         totals = _totals_expected_row(sheet_spec)
         if totals is not None:
             totals_row, totals_recomputed = totals
