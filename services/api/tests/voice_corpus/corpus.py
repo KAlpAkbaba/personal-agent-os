@@ -161,6 +161,15 @@ class UtteranceCase:
     tool_arguments: dict[str, object] = field(default_factory=dict)
     #: A turn number > 1 lets a case run after another case in the same session (conversation).
     notes: str = ""
+    #: M21 (ADR-0084 addendum 2): a (utterance, tool_name) pair the harness runs FIRST, in
+    #: the SAME session at turn 1, before this case's own utterance (which then runs at
+    #: turn 2) — for a case whose contract is genuinely a TWO-TURN sequence: a read-back
+    #: turn, then the owner's confirmation. ``None`` for every single-turn case (the
+    #: overwhelming majority); ``mc.send.confirmed``/``mc.commit.confirmed`` are the ones
+    #: that need it, because the confirmation gate now binds a confirmation to the SAME
+    #: session and a LATER turn than its own read-back (never satisfied by a context
+    #: fixture alone — see tests/voice_corpus/harness.py's ``seed`` docstring).
+    pre_turn: tuple[str, str] | None = None
 
 
 def _strip_diacritics(text: str) -> str:
@@ -1683,6 +1692,25 @@ def _mail_calendar_cases() -> list[UtteranceCase]:
             side_effects=SIDE_EFFECTS_MAIL_SEND,
             category="mail_calendar",
             source="canonical",
+            # ADR-0084 addendum 2: the REAL read-back-then-confirm sequence, through the
+            # real tool, in this session, at an EARLIER turn than the confirmation below.
+            pre_turn=("Cevabı oku.", "mail.read_draft"),
+        )
+    )
+    cases.append(
+        UtteranceCase(
+            case_id="mc.send.no_owner_turn",
+            utterance="Cevabı oku.",
+            expected_intent="mail_read_draft",
+            expected_tool="mail.read_draft",
+            context=CTX_DRAFT_READ_BACK,
+            forbidden_tools=("mail.send",),
+            category="mail_calendar",
+            source="canonical",
+            regression_issue_id=(
+                "M21 security review H1: a model-issued mail.send with no owner "
+                "MAIL_SEND turn behind it is refused confirmation_not_owner, nothing sent"
+            ),
         )
     )
     cases.append(
@@ -1817,6 +1845,25 @@ def _mail_calendar_cases() -> list[UtteranceCase]:
             side_effects=SIDE_EFFECTS_CALENDAR_COMMIT,
             category="mail_calendar",
             source="canonical",
+            # ADR-0084 addendum 2: see mc.send.confirmed's identical comment.
+            pre_turn=("Öneriyi oku.", "calendar.read_proposal"),
+        )
+    )
+    cases.append(
+        UtteranceCase(
+            case_id="mc.commit.no_owner_turn",
+            utterance="Öneriyi oku.",
+            expected_intent="calendar_read_proposal",
+            expected_tool="calendar.read_proposal",
+            context=CTX_PROPOSAL_READ_BACK,
+            forbidden_tools=("calendar.commit",),
+            category="mail_calendar",
+            source="canonical",
+            regression_issue_id=(
+                "M21 security review H1: a model-issued calendar.commit with no owner "
+                "CALENDAR_COMMIT turn behind it is refused confirmation_not_owner, "
+                "nothing committed"
+            ),
         )
     )
     cases.append(
@@ -1829,6 +1876,7 @@ def _mail_calendar_cases() -> list[UtteranceCase]:
             side_effects=SIDE_EFFECTS_CALENDAR_COMMIT,
             category="mail_calendar",
             source="paraphrase",
+            pre_turn=("Öneriyi oku.", "calendar.read_proposal"),
         )
     )
     cases.append(

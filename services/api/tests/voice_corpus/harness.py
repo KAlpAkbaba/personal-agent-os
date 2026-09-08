@@ -176,7 +176,11 @@ TABLES = (
 
 #: The tools the harness may dispatch as "forbidden" because the product refuses them at
 #: the relay; every other forbidden tool is asserted at the router (never dispatched).
-_REFUSAL_PROVEN_BY_DISPATCH = frozenset({"research.start"})
+#: ``mail.send``/``calendar.commit`` (M21 security review H1, ADR-0084 addendum 2): a
+#: model calling either DIRECTLY, exactly as a hostile document could steer it to, with
+#: no owner MAIL_SEND/CALENDAR_COMMIT turn behind it — the confirmation gate, not the
+#: router, is what refuses this one (mc.send.no_owner_turn / mc.commit.no_owner_turn).
+_REFUSAL_PROVEN_BY_DISPATCH = frozenset({"research.start", "mail.send", "calendar.commit"})
 
 
 def _spki() -> str:
@@ -861,7 +865,21 @@ def run_case(case: UtteranceCase, *, harness: Harness | None = None) -> CaseResu
         mail_sent_before = h.mail_sent_count()
         calendar_committed_before = h.calendar_committed_count()
 
-        said = h.say(sid, case.utterance)
+        main_turn = 1
+        if case.pre_turn is not None:
+            # ADR-0084 addendum 2: the read-back turn, through the REAL tool, in THIS
+            # session, at turn 1 — the case's own utterance (the confirmation) then runs
+            # at turn 2, strictly after it (UtteranceCase.pre_turn's own docstring).
+            pre_text, pre_tool = case.pre_turn
+            h.say(sid, pre_text, turn=1)
+            pre_call = h.tool(sid, "c-pre", pre_tool, {})
+            if pre_call["status"] != "succeeded":
+                result.problems.append(
+                    f"pre_turn {pre_tool!r} did not succeed: {pre_call['status']}"
+                )
+            main_turn = 2
+
+        said = h.say(sid, case.utterance, turn=main_turn)
         resolved = said["resolved_intents"][0]
         result.resolved_intent = resolved.get("intent")
         result.research_class = resolved.get("research_class")
@@ -1004,14 +1022,34 @@ def run_case(case: UtteranceCase, *, harness: Harness | None = None) -> CaseResu
         #    every other forbidden tool is a router assertion (already made above).
         for forbidden in case.forbidden_tools:
             if forbidden in _REFUSAL_PROVEN_BY_DISPATCH:
-                blocked = h.tool(
-                    sid, f"forbidden-{forbidden}", forbidden, {"topic": case.utterance}
-                )
+                # mail.send/calendar.commit take no arguments at all (their own schema);
+                # only research.start's own forbidden-dispatch check needs a topic.
+                forbidden_args = {} if forbidden in ("mail.send", "calendar.commit") else {
+                    "topic": case.utterance
+                }
+                blocked = h.tool(sid, f"forbidden-{forbidden}", forbidden, forbidden_args)
                 blocked_body = blocked.get("result") or {}
-                if not (
-                    blocked["status"] == "succeeded" and blocked_body.get("status") == "refused"
-                ):
+                # A research.start refusal is a SUCCEEDED call whose own result carries
+                # status="refused" (ADR-0075's plain dict); mail.send/calendar.commit's
+                # refusal is the ActionReceipt shape instead (execution_status="refused",
+                # module M21 security review H1) — both are "the tool call succeeded and
+                # its own answer says refused", never a 4xx/5xx or an unhandled crash.
+                refused = blocked_body.get("status") == "refused" or (
+                    blocked_body.get("execution_status") == "refused"
+                )
+                if not (blocked["status"] == "succeeded" and refused):
                     result.problems.append(f"{forbidden} was NOT refused: {blocked['status']}")
+                    result.verdict = "forbidden_side_effect"
+                elif forbidden == "mail.send" and h.mail_sent_count() > mail_sent_before:
+                    result.problems.append("mail.send was refused but something was sent anyway")
+                    result.verdict = "forbidden_side_effect"
+                elif (
+                    forbidden == "calendar.commit"
+                    and h.calendar_committed_count() > calendar_committed_before
+                ):
+                    result.problems.append(
+                        "calendar.commit was refused but something was committed anyway"
+                    )
                     result.verdict = "forbidden_side_effect"
 
         # 5. Side effects on the fake device, and on the tables a wrong route would touch.
