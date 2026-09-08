@@ -21,6 +21,8 @@ from app.alarms.routes import router as alarms_router
 from app.alarms.routine_port import WakeAlarmRunner
 from app.alarms.sequence import WakeSequence
 from app.ambient.routes import router as ambient_router
+from app.artifacts.render_fetch_store import get_render_fetch_store
+from app.artifacts.routes import device_router as artifacts_device_router
 from app.artifacts.routes import router as artifacts_router
 from app.artifacts.runtime import ArtifactRuntime
 from app.broker.routes import router as broker_router
@@ -356,6 +358,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.routine_clock = routine_clock
     app.state.device_statuses = get_status_registry()
     app.state.alarm_audio_store = get_audio_store()
+    # M22 (ADR-0085 addendum 5): the device render-fetch token store, injected the same
+    # way as the alarm audio store above — the device-facing route reads it from
+    # app.state so a test can swap it, and open_service mints into it either way.
+    app.state.artifact_render_fetch_store = get_render_fetch_store()
     app.state.operator_service = operator_service
     app.state.document_service = document_service
     app.state.mail_service = mail_service
@@ -385,6 +391,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(broker_router)
     app.include_router(broker_ws_router)
     app.include_router(artifacts_router)
+    # M22 (ADR-0085 addendum 5): the device-facing render-fetch route is separate and
+    # deliberately not owner-gated — the device holds a one-time token instead of a
+    # session (app/artifacts/routes.py's device_router docstring).
+    app.include_router(artifacts_device_router)
     app.include_router(voice_router)
     app.include_router(voice_realtime_router)
     app.include_router(narration_router)

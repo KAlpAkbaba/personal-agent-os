@@ -18,8 +18,9 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.artifacts import factory, service
+from app.artifacts import service
 from app.artifacts.models import RENDER_STATE_VALID
+from app.artifacts.render_fetch_store import RenderFetchStore, get_render_fetch_store
 from app.artifacts.renderers import EXTENSIONS
 from app.artifacts.spec import KIND_FORMATS
 from app.routines.dispatch import DeviceActionPort
@@ -135,11 +136,23 @@ def open_artifact(
     base_url: str,
     idempotency_key: str | None = None,
     timeout_s: float = 30.0,
+    render_fetch_store: RenderFetchStore | None = None,
 ) -> OpenOutcome:
     """Fetch + open one artifact's render on the owner's machine (spec §4). ``base_url``
     is THIS request's own origin (never a configured URL — ADR-0069's rule, the same one
     the M13 download URL already follows): the device only ever fetches the origin it
-    dialled, and the URL built here is that same M13 render-download route."""
+    dialled.
+
+    ADR-0085 addendum 5: the URL handed to the device is NEVER the bearer-gated M13
+    download route (``GET /v1/artifacts/{id}/renders/{fmt}``) — the device's ``file.fetch``
+    carries no owner token, cookie or header of its own (DEVICE_PROTOCOL.md §6k step 6), so
+    that route can never authenticate it. Instead this mints a single-use,
+    ten-minute-lived, 256-bit render-fetch token (:mod:`app.artifacts.render_fetch_store`)
+    naming exactly this (artifact, format, content_hash), and the device-facing route
+    ``GET /v1/artifacts/renders/fetch/{token}`` — deliberately unauthenticated, like the
+    alarm greeting audio route — is the ONLY thing that token can ever be redeemed
+    against. The ordinary bearer-gated route keeps serving the web/Cockpit exactly as
+    before; this module is the one caller that never uses it for the device."""
     artifact = service.get_artifact(session, artifact_id)
     if artifact is None:
         return OpenOutcome(False, None, _SPEECH[ERROR_NOT_FOUND], ERROR_NOT_FOUND)
@@ -169,7 +182,9 @@ def open_artifact(
             format=row.format,
         )
     name = _safe_file_name(artifact.title, row.format)
-    url = f"{base_url.rstrip('/')}{factory.download_path(artifact_id, row.format)}"
+    store = render_fetch_store or get_render_fetch_store()
+    handle = store.put(artifact_id=artifact_id, fmt=row.format, content_hash=row.content_hash)
+    url = f"{base_url.rstrip('/')}{handle.path()}"
     key = idempotency_key or f"artifact-open:{artifact_id}:{row.format}:{uuid.uuid4()}"
     result = device_action.run(
         capability=CAPABILITY_FILE_FETCH,
