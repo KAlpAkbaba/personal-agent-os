@@ -1,6 +1,6 @@
 # M20 — File & Document Intelligence
 
-Status: ACTIVE (owner master directive 2026-09-07, M20 section; kickoff 2026-09-08 after the M19 gate). Decision record: ADR-0083.
+Status: ENGINEERING CLOSED 2026-09-08 (ADR-0083; QUALIFICATION Stage 18; Cloud Core released as 092e56d). Decision record: ADR-0083.
 Predecessors: M13 research artifacts (`app/artifacts`: canonical Markdown → PDF/DOCX/HTML/TXT renderers, object store), ADR-0076 (ID-based focus, the reference resolver), M19 (`object_focus`, the Digital Operator's `file.open` / `file.reveal`, `AuthorisedRoots`, the companion as the only process in the owner's session that touches files).
 
 The owner's rule, in one line: **the system understands the owner's local documents and file structures with exact provenance — every answer names the file by identity and the place inside it, never by a fuzzy title.**

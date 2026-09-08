@@ -628,6 +628,28 @@ Real acceptance: the Cloud Core half released through blue/green (Stage 17.10); 
 half is machine-proven on this machine and the runner, and reaches the deployed agent with
 the owner's elevated update `install-device-service.ps1 -Operator` (item 28).
 
+## M20 File & Document Intelligence
+
+Spec: `docs/M20_FILE_DOCUMENT_INTELLIGENCE_SPEC.md` (ADR-0083). Deterministic gates, every CI run:
+
+- **the oracle is real files.** the documents lab copies the committed fixtures under the
+  fixture root and drives the companion's real dispatcher: extraction equals
+  `expected/*.extract.json` block for block, search / inspect / read / compare / identity /
+  confinement / bounds / bomb containers as ADR-0083 lists them (`devices/windows-agent/tests/.../Documents/`);
+- **answers cite refs.** every `truth.json` question, comparison and common-points entry
+  through the real app object with the expected extracts served by a fake device
+  (`test_documents_answers.py`, `test_documents_tools.py`, `test_documents_wiring.py`); the
+  index and focus (`test_documents_index.py`, `test_documents_focus.py`); the expand-only
+  migration; the fixture integrity test (`test_documents_fixtures.py`);
+- **the owner's voice.** the corpus category `documents` with 0 forbidden side effects and
+  every earlier category unchanged (`test_owner_utterance_corpus.py`);
+- **the Core tells the truth.** the v5 `document.analysis` state and the Cockpit panel from
+  published metadata only (`document-states.test.ts`, `documents-panel.test.tsx`).
+
+Real acceptance: the Cloud Core half released through blue/green (Stage 18.10); the device
+half is machine-proven on this machine and the runner, and reaches the deployed agent with
+the owner's elevated update `install-device-service.ps1 -Operator` (item 28).
+
 ## M19b Multi-device / roaming owner qualification
 
 Real-only acceptance on at least two owner-authorised physical computers (PC-A, PC-B) and
