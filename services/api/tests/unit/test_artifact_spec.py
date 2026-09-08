@@ -257,3 +257,111 @@ def test_title_is_never_checked_against_spoken_numbers() -> None:
     spec = ArtifactSpec.model_validate(_load("tests/fixtures/artifacts/specs/butce-tablosu.json"))
     assert 2026.0 not in spec._structure_numbers()
     assert "2026" in spec.title
+
+
+def test_invented_number_refusal_names_the_offending_ref() -> None:
+    # ADR-0085 addendum 6 (MEDIUM finding): the refusal message names the CELL that
+    # carried the invented number, in a fixed "invented_number[<ref>]:" shape the tool
+    # layer greps for -- never just the bare number.
+    with pytest.raises(ValidationError, match=r"invented_number\[sheet:S!B2\]:"):
+        ArtifactSpec.model_validate(
+            {
+                "kind": "spreadsheet",
+                "title": "T",
+                "sheets": [
+                    {"name": "S", "columns": ["Kalem", "Tutar"], "rows": [["Kira", 12000]]}
+                ],
+                "spoken_numbers": [],
+            }
+        )
+
+
+# ------------------------------------------------------------ formula injection
+
+
+_FORMULA_INJECTION_CELLS = [
+    '=HYPERLINK("http://evil","x")',
+    "+1",
+    "-1",
+    "@SUM(A1)",
+    "﻿=1+1",  # a leading BOM
+    "\t=1+1",  # a leading tab
+]
+
+
+@pytest.mark.parametrize("bad", _FORMULA_INJECTION_CELLS)
+def test_formula_injection_cell_is_refused(bad: str) -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        ArtifactSpec.model_validate(
+            {
+                "kind": "spreadsheet",
+                "title": "T",
+                "sheets": [{"name": "S", "columns": ["A", "B"], "rows": [[bad, 1]]}],
+            }
+        )
+    msg = exc_info.value.errors()[0]["msg"]
+    assert msg.startswith("Value error, formula_injection[sheet:S!A2]:")
+    # HIGH finding: the refused CONTENT itself must never appear in this module's own
+    # message (pydantic's own error formatting separately echoes the raw input -- see
+    # tools_artifacts.py, which never forwards that raw text into a receipt).
+    assert bad not in msg
+
+
+def test_formula_injection_column_header_is_refused() -> None:
+    with pytest.raises(ValidationError, match=r"formula_injection\[sheet:S!A1\]:"):
+        ArtifactSpec.model_validate(
+            {
+                "kind": "spreadsheet",
+                "title": "T",
+                "sheets": [{"name": "S", "columns": ["=1+1", "B"], "rows": [["x", 1]]}],
+            }
+        )
+
+
+def test_formula_injection_declared_formulas_dict_is_exempt() -> None:
+    # The ONE place a leading "=" is the point, not an accident (spec §1).
+    spec = ArtifactSpec.model_validate(
+        {
+            "kind": "spreadsheet",
+            "title": "T",
+            "sheets": [
+                {
+                    "name": "S",
+                    "columns": ["A", "B"],
+                    "rows": [["x", 1]],
+                    "formulas": {"C1": "=SUM(A1:B1)"},
+                }
+            ],
+        }
+    )
+    assert spec.sheets[0].formulas == {"C1": "=SUM(A1:B1)"}
+
+
+def test_formula_injection_numeric_cell_never_flagged() -> None:
+    # A genuinely NUMERIC -5 is not the string "-5" -- never scanned by this rule.
+    spec = ArtifactSpec.model_validate(
+        {
+            "kind": "spreadsheet",
+            "title": "T",
+            "sheets": [{"name": "S", "columns": ["A", "B"], "rows": [["x", -5]]}],
+        }
+    )
+    assert spec.sheets[0].rows[0][1] == -5
+
+
+@pytest.mark.parametrize("bad", _FORMULA_INJECTION_CELLS)
+def test_dataset_formula_injection_cell_is_refused(bad: str) -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        ArtifactSpec.model_validate(
+            {"kind": "dataset", "title": "T", "columns": ["Ad", "Değer"], "rows": [[bad, 1]]}
+        )
+    msg = exc_info.value.errors()[0]["msg"]
+    assert msg.startswith("Value error, formula_injection[r2]:")
+    assert bad not in msg
+
+
+def test_dataset_formula_injection_column_header_is_refused() -> None:
+    with pytest.raises(ValidationError, match=r"formula_injection\[r1\]:"):
+        ArtifactSpec.model_validate(
+            {"kind": "dataset", "title": "T", "columns": ["=1+1", "Değer"], "rows": [["x", 1]]}
+        )

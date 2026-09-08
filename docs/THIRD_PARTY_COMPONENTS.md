@@ -80,6 +80,17 @@ reason.
   length (`MAX_PDF_PAGE_TEXT_CHARS`/`MAX_PDF_TOTAL_TEXT_CHARS`) before/while calling
   it — pypdf has no PdfPig-style per-filter streaming counter, so these are the bounds
   this module itself enforces, not a claim about pypdf's own internals.
+- `defusedxml` **0.7.1** (BSD-derived — PSF-2.0; https://github.com/tiran/defusedxml)
+  — LOW security-review finding (ADR-0085 addendum 6): `openpyxl.xml.functions`
+  imports `defusedxml.ElementTree`/`.cElementTree` when present and otherwise falls
+  BACK, silently, to the stdlib's `xml.etree` (vulnerable to entity-expansion/billion-
+  laughs on a hostile XLSX `validate()` reopens). It was already present
+  TRANSITIVELY (pulled in by `fpdf2`), which made the fallback look closed by
+  accident — pinned here explicitly as its own runtime dependency so an unrelated
+  package's own version bump can never silently drop it again.
+  `tests/unit/test_artifact_validation.py::test_defusedxml_is_active_in_this_environment`
+  asserts `openpyxl.xml.functions.DEFUSEDXML is True`; a second test proves an
+  entity-expansion XLSX payload is refused/bounded rather than expanded.
 
 Upgrade rule: bump the pin, run `tests/unit/test_artifact_renderers.py` and
 `tests/unit/test_artifact_validation.py` (every fixture spec × format, the lying-

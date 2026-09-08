@@ -113,7 +113,218 @@ def test_artifact_create_refuses_a_number_the_owner_never_said() -> None:
     assert call["status"] == "succeeded", call
     body = call["result"]
     assert body["execution_status"] == "refused"
-    assert body["error_class"] == "validation_error"
+    # ADR-0085 addendum 6 (MEDIUM finding): the "never invented" rule now gets its own
+    # error class (naming the failing ref), rather than the generic malformed-spec one.
+    assert body["error_class"] == "invented_number"
+    assert body["failing_ref"]
+
+
+def test_artifact_create_numberless_utterance_with_no_numbers_is_fine() -> None:
+    """MEDIUM security-review finding (ADR-0085 addendum 6): ``spoken_numbers`` is now
+    ALWAYS force-set (an empty list when the utterance had none) — a genuinely
+    numberless document must still succeed, never falsely refused."""
+    h = build_harness()
+    sid = h.new_session()
+    h.say(sid, "Toplantı notlarını Word belgesi yap.")
+    call = h.tool(
+        sid,
+        "c-1",
+        "artifact.create",
+        {
+            "kind": "document",
+            "title": "Notlar",
+            "spec": {
+                "kind": "document",
+                "title": "Notlar",
+                "sections": [
+                    {"heading": "Notlar", "level": 1, "paragraphs": ["Herkes katıldı."]}
+                ],
+            },
+        },
+    )
+    assert call["status"] == "succeeded", call
+    body = call["result"]
+    assert body["execution_status"] == "executed"
+    assert body["all_valid"] is True
+    assert body["numbers"] == []
+
+
+def test_artifact_create_numberless_utterance_with_an_invented_number_is_refused() -> None:
+    """MEDIUM finding: previously a numberless utterance left ``spoken_numbers``
+    entirely UNSET on the spec (the tool only force-set it when the router found
+    numbers at all), so ``ArtifactSpec.spoken_numbers`` defaulted to ``None`` and the
+    "never invented" rule was SKIPPED OUTRIGHT — an invented number sailed through.
+    Now the router's own empty extraction is passed as ``spoken_numbers=[]``, which the
+    rule already treats as "no numbers allowed at all"."""
+    h = build_harness()
+    sid = h.new_session()
+    h.say(sid, "Bir tablo yap.")  # no numbers spoken at all
+    call = h.tool(
+        sid,
+        "c-1",
+        "artifact.create",
+        {
+            "kind": "spreadsheet",
+            "title": "Tablo",
+            "spec": {
+                "kind": "spreadsheet",
+                "title": "Tablo",
+                "sheets": [
+                    {"name": "Özet", "columns": ["Kalem", "Tutar"], "rows": [["Kira", 12000]]}
+                ],
+            },
+        },
+    )
+    assert call["status"] == "succeeded", call
+    body = call["result"]
+    assert body["execution_status"] == "refused"
+    assert body["error_class"] == "invented_number"
+    assert body["failing_ref"]
+
+
+def test_artifact_create_models_own_spoken_numbers_argument_is_ignored() -> None:
+    """The MODEL's own 'spec' argument must never WIDEN ``spoken_numbers`` — only the
+    router's own extraction from the owner's actual words is ever trusted (MEDIUM
+    finding: a force-assignment, never a ``setdefault``)."""
+    h = build_harness()
+    sid = h.new_session()
+    h.say(sid, "Bir tablo yap.")  # no numbers spoken at all
+    call = h.tool(
+        sid,
+        "c-1",
+        "artifact.create",
+        {
+            "kind": "spreadsheet",
+            "title": "Tablo",
+            "spec": {
+                "kind": "spreadsheet",
+                "title": "Tablo",
+                "sheets": [
+                    {"name": "Özet", "columns": ["Kalem", "Tutar"], "rows": [["Kira", 12000]]}
+                ],
+                "spoken_numbers": [12000],  # the model tries to widen the set itself
+            },
+        },
+    )
+    assert call["status"] == "succeeded", call
+    body = call["result"]
+    assert body["execution_status"] == "refused"
+    assert body["error_class"] == "invented_number"
+
+
+def test_artifact_create_refuses_a_secret_in_the_title() -> None:
+    """LOW security-review finding (ADR-0085 addendum 6): the same secret-reference
+    gate M21 applies to mail/typing (M19 spec §1 invariant 2) is applied here."""
+    h = build_harness()
+    sid = h.new_session()
+    h.say(sid, "Şifremi belge yap.")
+    call = h.tool(
+        sid,
+        "c-1",
+        "artifact.create",
+        {
+            "kind": "document",
+            "title": "Şifremi",
+            "spec": {
+                "kind": "document",
+                "title": "Şifremi",
+                "sections": [{"heading": "Şifremi", "level": 1, "paragraphs": ["İçerik."]}],
+            },
+        },
+    )
+    assert call["status"] == "succeeded", call
+    body = call["result"]
+    assert body["execution_status"] == "refused"
+    assert body["error_class"] == "secret_refused"
+
+
+def test_artifact_create_refuses_a_secret_in_a_paragraph() -> None:
+    h = build_harness()
+    sid = h.new_session()
+    h.say(sid, "Bir belge yap.")
+    call = h.tool(
+        sid,
+        "c-1",
+        "artifact.create",
+        {
+            "kind": "document",
+            "title": "Notlar",
+            "spec": {
+                "kind": "document",
+                "title": "Notlar",
+                "sections": [
+                    {"heading": "Notlar", "level": 1, "paragraphs": ["Şifrem gizli bir şey."]}
+                ],
+            },
+        },
+    )
+    assert call["status"] == "succeeded", call
+    body = call["result"]
+    assert body["execution_status"] == "refused"
+    assert body["error_class"] == "secret_refused"
+
+
+def test_artifact_create_refuses_a_secret_in_a_spreadsheet_cell() -> None:
+    """"every spreadsheet/dataset cell" (task brief) — not just free text."""
+    h = build_harness()
+    sid = h.new_session()
+    h.say(sid, "Bir tablo yap.")
+    call = h.tool(
+        sid,
+        "c-1",
+        "artifact.create",
+        {
+            "kind": "spreadsheet",
+            "title": "Tablo",
+            "spec": {
+                "kind": "spreadsheet",
+                "title": "Tablo",
+                "sheets": [
+                    {"name": "Özet", "columns": ["Alan", "Değer"], "rows": [["Şifre", "gizli"]]}
+                ],
+            },
+        },
+    )
+    assert call["status"] == "succeeded", call
+    body = call["result"]
+    assert body["execution_status"] == "refused"
+    assert body["error_class"] == "secret_refused"
+
+
+def test_artifact_create_refuses_a_formula_injection_cell() -> None:
+    """HIGH security-review finding (ADR-0085 addendum 6), end to end through the
+    tool: a spreadsheet cell that would become a live formula once opened in Excel is
+    refused before anything is rendered, naming the ref, never the content."""
+    h = build_harness()
+    sid = h.new_session()
+    h.say(sid, "Bir tablo yap.")
+    call = h.tool(
+        sid,
+        "c-1",
+        "artifact.create",
+        {
+            "kind": "spreadsheet",
+            "title": "Tablo",
+            "spec": {
+                "kind": "spreadsheet",
+                "title": "Tablo",
+                "sheets": [
+                    {
+                        "name": "Özet",
+                        "columns": ["Kalem", "Tutar"],
+                        "rows": [["=HYPERLINK(\"http://evil\",\"x\")", "gizli değil"]],
+                    }
+                ],
+            },
+        },
+    )
+    assert call["status"] == "succeeded", call
+    body = call["result"]
+    assert body["execution_status"] == "refused"
+    assert body["error_class"] == "formula_injection"
+    assert body["failing_ref"] == "sheet:Özet!A2"
+    # The refused text is never echoed back into the receipt.
+    assert "HYPERLINK" not in str(body)
 
 
 def test_artifact_create_with_no_kind_word_at_all_asks_which_kind() -> None:

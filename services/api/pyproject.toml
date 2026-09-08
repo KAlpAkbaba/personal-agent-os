@@ -27,6 +27,13 @@ dependencies = [
     "openpyxl>=3.1",
     "python-pptx>=1.0",
     "pypdf>=4.0",
+    # LOW security-review finding (ADR-0085 addendum 6): openpyxl's own XML parsing
+    # (``openpyxl.xml.functions``) silently falls back to the stdlib's entity-expansion-
+    # vulnerable parser when defusedxml is absent from the environment. It was already
+    # present TRANSITIVELY (pulled in by fpdf2), which made the fallback look closed by
+    # accident rather than by declaration -- pinned here explicitly so it can never be
+    # dropped by an unrelated dependency's own version bump.
+    "defusedxml>=0.7",
 ]
 
 [dependency-groups]

@@ -26,7 +26,7 @@ from pptx import Presentation
 
 from app.artifacts import renderers as R
 from app.artifacts import validation as V
-from app.artifacts.spec import ArtifactSpec
+from app.artifacts.spec import ArtifactSpec, Sheet
 
 FIXTURE_SPECS = sorted(glob.glob("tests/fixtures/artifacts/specs/*.json"))
 TRUTH = json.load(open("tests/fixtures/artifacts/truth.json", encoding="utf-8"))["specs"]
@@ -185,6 +185,66 @@ def test_lying_docx_corrupted_heading_is_caught() -> None:
     assert "h1:Giriş" in report.failing_refs
 
 
+def test_lying_xlsx_cell_that_became_a_real_formula_is_caught_even_when_text_matches() -> None:
+    """HIGH security-review finding (ADR-0085 addendum 6): a cell whose stored TEXT
+    happens to equal the spec's own expected literal (the spec cell IS the formula
+    string) used to pass the plain content-equality check even though the file now
+    carries a LIVE formula (``data_type == "f"``), not the literal text asked for. The
+    spec itself now refuses to construct such a spec (test_artifact_spec.py); this
+    proves the independent validator ALSO catches it, for a renderer that (hypothetic-
+    ally, via a bug) still let one through."""
+    bad_sheet = Sheet.model_construct(
+        name="Ozet",
+        columns=["Kalem", "Tutar"],
+        rows=[['=HYPERLINK("http://evil","x")', 1]],
+        totals=None,
+        formulas=None,
+    )
+    spec = ArtifactSpec.model_construct(
+        kind="spreadsheet",
+        title="T",
+        language="tr",
+        sections=None,
+        sheets=[bad_sheet],
+        slides=None,
+        columns=None,
+        rows=None,
+        style=None,
+        spoken_numbers=None,
+    )
+    wb = Workbook()
+    wb.remove(wb.active)
+    ws = wb.create_sheet("Ozet")
+    ws.cell(row=1, column=1, value="Kalem")
+    ws.cell(row=1, column=2, value="Tutar")
+    ws.cell(row=2, column=1, value='=HYPERLINK("http://evil","x")')  # openpyxl: data_type "f"
+    ws.cell(row=2, column=2, value=1)
+    buf = io.BytesIO()
+    wb.save(buf)
+
+    report = V.validate(spec, "xlsx", buf.getvalue())
+    assert not report.ok
+    assert "sheet:Ozet!A2" in report.failing_refs
+    unexpected = [c for c in report.checks if c.get("kind") == "unexpected_formula"]
+    assert unexpected and unexpected[0]["ref"] == "sheet:Ozet!A2"
+    # The content-equality check on the SAME cell still reports ok=True (the text DOES
+    # match) -- the unexpected_formula check is what actually catches this.
+    text_checks = [
+        c
+        for c in report.checks
+        if c["ref"] == "sheet:Ozet!A2" and c.get("kind") != "unexpected_formula"
+    ]
+    assert text_checks and text_checks[0]["ok"] is True
+
+
+def test_declared_formula_cell_is_not_flagged_as_unexpected() -> None:
+    spec = _load_spec("tests/fixtures/artifacts/specs/butce-tablosu.json")
+    result = R.render_factory("xlsx", spec)
+    report = V.validate(spec, "xlsx", result.data)
+    assert report.ok
+    assert not any(c.get("kind") == "unexpected_formula" for c in report.checks)
+
+
 def test_lying_document_missing_paragraph_is_caught_by_ref_text() -> None:
     spec = _load_spec("tests/fixtures/artifacts/specs/hosgeldin-sayfasi.json")
     html = "<!DOCTYPE html><html><body><h1>Hoş geldin</h1></body></html>"
@@ -251,6 +311,82 @@ def test_pdf_page_bound_is_refused() -> None:
     report = V.validate(spec, "pdf", buf.getvalue())
     assert not report.ok
     assert report.failing_refs == ["bound:page_bound"]
+
+
+def _billion_laughs_xlsx() -> bytes:
+    """A minimal, well-formed OOXML zip (tiny — never trips the size/ratio bounds
+    above) whose ONE worksheet part carries a classic "billion laughs" DOCTYPE. Proves
+    LOW security-review finding (ADR-0085 addendum 6): with ``defusedxml`` active,
+    openpyxl refuses this outright rather than expanding it — and this module must
+    turn that refusal into a failing report, never an unhandled exception."""
+    content_types = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" '
+        'ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/xl/workbook.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+        '<Override PartName="/xl/worksheets/sheet1.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+        "</Types>"
+    )
+    rels = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" '
+        'Target="xl/workbook.xml"/></Relationships>'
+    )
+    wb_rels = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" '
+        'Target="worksheets/sheet1.xml"/></Relationships>'
+    )
+    workbook_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        '<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>'
+    )
+    sheet_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+        "<!DOCTYPE root [\n"
+        '<!ENTITY lol "lol">\n'
+        '<!ENTITY lol2 "&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;">\n'
+        "]>\n"
+        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        '<sheetData><row r="1"><c r="A1" t="str"><v>&lol2;</v></c></row></sheetData>'
+        "</worksheet>"
+    )
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("[Content_Types].xml", content_types)
+        zf.writestr("_rels/.rels", rels)
+        zf.writestr("xl/_rels/workbook.xml.rels", wb_rels)
+        zf.writestr("xl/workbook.xml", workbook_xml)
+        zf.writestr("xl/worksheets/sheet1.xml", sheet_xml)
+    return buf.getvalue()
+
+
+def test_defusedxml_is_active_in_this_environment() -> None:
+    # LOW finding: this was already true TRANSITIVELY (pulled in by fpdf2) before
+    # ``defusedxml`` became this project's own explicit runtime dependency; pinning it
+    # explicitly is what keeps this assertion true independent of any OTHER package's
+    # own future dependency changes.
+    import openpyxl.xml.functions as openpyxl_xml
+
+    assert openpyxl_xml.DEFUSEDXML is True
+
+
+def test_xlsx_entity_expansion_payload_is_refused_not_expanded() -> None:
+    spec = _load_spec("tests/fixtures/artifacts/specs/butce-tablosu.json")
+    report = V.validate(spec, "xlsx", _billion_laughs_xlsx())
+    assert not report.ok
+    assert report.failing_refs
+    assert report.failing_refs[0].startswith("bound:xml_parse_refused")
 
 
 def test_not_a_zip_is_refused_not_crashed() -> None:

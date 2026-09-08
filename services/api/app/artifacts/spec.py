@@ -20,7 +20,10 @@ from __future__ import annotations
 import re
 from typing import Annotated, Literal
 
+from openpyxl.utils import get_column_letter
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from app.artifacts.security import is_formula_injection
 
 # --------------------------------------------------------------------------- kinds
 
@@ -64,6 +67,11 @@ _NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?")
 def _numbers_in_text(text: str) -> list[float]:
     """Every digit run embedded in free text, as a float ("yüzde 8 arttı" -> [8.0])."""
     return [float(m.group()) for m in _NUMBER_RE.finditer(text)]
+
+
+def _format_spec_number(value: float) -> str:
+    """"12000" rather than "12000.0" in a human-facing refusal message."""
+    return str(int(value)) if value.is_integer() else str(value)
 
 
 class _StrictModel(BaseModel):
@@ -114,6 +122,39 @@ class Sheet(_StrictModel):
             unknown = set(self.totals) - set(self.columns)
             if unknown:
                 raise ValueError(f"sheet {self.name!r}: totals name unknown column(s) {unknown}")
+        return self
+
+    @model_validator(mode="after")
+    def _no_formula_injection(self) -> Sheet:
+        """HIGH security-review finding (ADR-0085 addendum 6): ``XlsxRenderer`` and
+        ``CsvRenderer`` write column headers and row cells VERBATIM; a string cell
+        beginning with ``=``/``+``/``-``/``@`` becomes a live formula the moment Excel
+        (or a CSV import) opens the file, whatever the caller intended it as. Refused
+        HERE, before any renderer ever sees it — never scanning ``formulas`` (a sheet's
+        own explicit ``{cell_ref: formula_text}`` map, spec §1: the ONE place a leading
+        ``"="`` is the point, not an accident). The message names the cell's REFERENCE
+        only, between a fixed, greppable ``formula_injection[<ref>]:`` marker (the same
+        convention ``_numbers_never_invented`` uses) so the tool layer
+        (tools_artifacts.py) can build a refusal receipt naming the ref WITHOUT ever
+        embedding ``str(exc)`` — pydantic's own ``ValidationError`` formatting echoes
+        the raw failing input alongside any custom message, so the refused text itself
+        is never put in this message's own words either."""
+        for c, col in enumerate(self.columns, start=1):
+            if isinstance(col, str) and is_formula_injection(col):
+                ref = f"sheet:{self.name}!{get_column_letter(c)}1"
+                raise ValueError(
+                    f"formula_injection[{ref}]: a spreadsheet column header may not "
+                    "begin with '=', '+', '-' or '@' (formula injection)"
+                )
+        for r, row in enumerate(self.rows, start=2):
+            for c, value in enumerate(row, start=1):
+                if isinstance(value, str) and is_formula_injection(value):
+                    ref = f"sheet:{self.name}!{get_column_letter(c)}{r}"
+                    raise ValueError(
+                        f"formula_injection[{ref}]: a spreadsheet cell may not begin "
+                        "with '=', '+', '-' or '@' (formula injection) unless declared "
+                        "in 'formulas'"
+                    )
         return self
 
 
@@ -199,6 +240,31 @@ class ArtifactSpec(_StrictModel):
                     )
         return self
 
+    # ------------------------------------------------------ dataset formula injection
+
+    @model_validator(mode="after")
+    def _dataset_no_formula_injection(self) -> ArtifactSpec:
+        """The dataset kind's own CSV output (``CsvRenderer``) has no ``formulas``
+        concept at all — every cell is data — so the same HIGH finding (this class's
+        ``Sheet._no_formula_injection``) applies unconditionally here. Refs use the
+        validator's own "r1" (header) / "r<n>" (data row n, 1-based) scheme."""
+        if self.kind != KIND_DATASET or self.columns is None or self.rows is None:
+            return self
+        for col in self.columns:
+            if isinstance(col, str) and is_formula_injection(col):
+                raise ValueError(
+                    "formula_injection[r1]: a dataset column header may not begin "
+                    "with '=', '+', '-' or '@' (formula injection)"
+                )
+        for i, row in enumerate(self.rows, start=1):
+            for value in row:
+                if isinstance(value, str) and is_formula_injection(value):
+                    raise ValueError(
+                        f"formula_injection[r{i + 1}]: a dataset cell may not begin "
+                        "with '=', '+', '-' or '@' (formula injection)"
+                    )
+        return self
+
     # --------------------------------------------------------------------- bounds
 
     @model_validator(mode="after")
@@ -220,12 +286,24 @@ class ArtifactSpec(_StrictModel):
         if self.spoken_numbers is None:
             return self
         allowed = {float(n) for n in self.spoken_numbers}
-        found = self._structure_numbers()
-        invented = sorted(found - allowed)
+        scanned = self._scan_numbers_with_refs()
+        invented = sorted(
+            (item for item in scanned if item[0] not in allowed),
+            key=lambda item: (item[0], item[1]),
+        )
         if invented:
+            number, ref = invented[0]
+            invented_values = sorted({n for n, _ref in invented})
+            # MEDIUM security-review finding (ADR-0085 addendum 6): the message names
+            # the offending REF between brackets, in a fixed, greppable shape
+            # (``invented_number[<ref>]:``) so the tool layer (tools_artifacts.py) can
+            # report exactly which cell/heading/slide carried the invented figure,
+            # without this module importing anything from the tool layer.
             raise ValueError(
-                "spec contains number(s) not in spoken_numbers (never invented rule): "
-                f"{invented} not in {sorted(allowed)}"
+                f"invented_number[{ref}]: spec contains number "
+                f"{_format_spec_number(number)} not in spoken_numbers "
+                f"(never invented rule): {[_format_spec_number(n) for n in invented_values]} "
+                f"not in {[_format_spec_number(n) for n in sorted(allowed)]}"
             )
         return self
 
@@ -269,54 +347,66 @@ class ArtifactSpec(_StrictModel):
         ``formulas`` (a sheet's own dict of cell_ref -> text/formula) is deliberately
         excluded: a formula's constants (a VAT rate, a cell address digit) are the
         renderer's own arithmetic, never a number the owner said."""
-        found: set[float] = set()
+        return {number for number, _ref in self._scan_numbers_with_refs()}
 
-        def scan_cell(value: CellValue) -> None:
+    def _scan_numbers_with_refs(self) -> list[tuple[float, str]]:
+        """Every number in the structure, alongside a human-locatable reference (M20's
+        own scheme where one naturally exists — ``sheet:<name>!<cell>``, ``h<level>:
+        <heading>``, ``s<n>``, ``r<n>``) — the SAME set :meth:`_structure_numbers`
+        returns, just with a location kept alongside each value so a refusal can NAME
+        the offending cell (MEDIUM security-review finding, ADR-0085 addendum 6:
+        previously the "never invented" refusal named only the numbers, never where
+        they were). ``formulas`` stays excluded — see :meth:`_structure_numbers`."""
+        found: list[tuple[float, str]] = []
+
+        def scan_cell(value: CellValue, ref: str) -> None:
             if isinstance(value, bool):
                 return
             if isinstance(value, int | float):
-                found.add(float(value))
+                found.append((float(value), ref))
             else:
-                found.update(_numbers_in_text(str(value)))
+                found.extend((n, ref) for n in _numbers_in_text(str(value)))
 
-        def scan_text(text: str) -> None:
-            found.update(_numbers_in_text(text))
+        def scan_text(text: str, ref: str) -> None:
+            found.extend((n, ref) for n in _numbers_in_text(text))
 
         if self.sections:
             for section in self.sections:
-                scan_text(section.heading)
+                ref = f"h{section.level}:{section.heading}"
+                scan_text(section.heading, ref)
                 for p in section.paragraphs:
-                    scan_text(p)
+                    scan_text(p, f"text:{p[:60]}")
                 if section.bullets:
                     for b in section.bullets:
-                        scan_text(b)
+                        scan_text(b, f"text:{b[:60]}")
                 if section.table:
                     for col in section.table.columns:
-                        scan_text(col)
+                        scan_text(col, f"text:{col[:60]}")
                     for row in section.table.rows:
                         for cell in row:
-                            scan_cell(cell)
+                            scan_cell(cell, f"text:{str(cell)[:60]}")
         if self.sheets:
             for sheet in self.sheets:
-                for col in sheet.columns:
-                    scan_text(col)
-                for row in sheet.rows:
-                    for cell in row:
-                        scan_cell(cell)
+                for c, col in enumerate(sheet.columns, start=1):
+                    scan_text(col, f"sheet:{sheet.name}!{get_column_letter(c)}1")
+                for r, row in enumerate(sheet.rows, start=2):
+                    for c, cell in enumerate(row, start=1):
+                        scan_cell(cell, f"sheet:{sheet.name}!{get_column_letter(c)}{r}")
         if self.slides:
-            for slide in self.slides:
-                scan_text(slide.title)
+            for i, slide in enumerate(self.slides, start=1):
+                ref = f"s{i}"
+                scan_text(slide.title, ref)
                 for b in slide.bullets:
-                    scan_text(b)
+                    scan_text(b, ref)
                 if slide.notes:
-                    scan_text(slide.notes)
+                    scan_text(slide.notes, ref)
         if self.columns:
             for col in self.columns:
-                scan_text(col)
+                scan_text(col, "r1")
         if self.rows:
-            for row in self.rows:
+            for i, row in enumerate(self.rows, start=1):
                 for cell in row:
-                    scan_cell(cell)
+                    scan_cell(cell, f"r{i + 1}")
         return found
 
     def formats(self) -> tuple[str, ...]:

@@ -17,9 +17,10 @@ import json
 import zipfile
 
 import pytest
+from openpyxl import load_workbook
 
 from app.artifacts import renderers as R
-from app.artifacts.spec import ArtifactSpec
+from app.artifacts.spec import ArtifactSpec, Section, Sheet
 
 FIXTURE_SPECS = sorted(glob.glob("tests/fixtures/artifacts/specs/*.json"))
 
@@ -186,3 +187,189 @@ def test_parse_blocks_never_misfires_on_plain_pipe_text() -> None:
     md = "This costs $5 | $10 depending on size.\n"
     blocks = R._parse_blocks(md)
     assert all(b.kind != "table" for b in blocks)
+
+
+# ------------------------------------------------------- formula injection (HIGH)
+#
+# ArtifactSpec itself already refuses every one of these (test_artifact_spec.py); the
+# tests here exercise the RENDERERS' own defence-in-depth directly, via a test-only
+# bypass (``model_construct``, which skips pydantic validators) that stands in for "a
+# future bug let this reach the renderer anyway" (ADR-0085 addendum 6, HIGH finding).
+
+
+def _bypass_sheet_spec(cell: object) -> ArtifactSpec:
+    sheet = Sheet.model_construct(
+        name="Ozet", columns=["Kalem", "Tutar"], rows=[[cell, 1]], totals=None, formulas=None
+    )
+    return ArtifactSpec.model_construct(
+        kind="spreadsheet",
+        title="T",
+        language="tr",
+        sections=None,
+        sheets=[sheet],
+        slides=None,
+        columns=None,
+        rows=None,
+        style=None,
+        spoken_numbers=None,
+    )
+
+
+def test_xlsx_renderer_neutralises_a_formula_injection_cell() -> None:
+    spec = _bypass_sheet_spec('=HYPERLINK("http://evil","x")')
+    result = R.XlsxRenderer().render_spec(spec)
+    workbook = load_workbook(io.BytesIO(result))
+    cell = workbook["Ozet"].cell(row=2, column=1)
+    assert cell.data_type != "f"
+    assert cell.value == "'=HYPERLINK(\"http://evil\",\"x\")"
+
+
+def test_xlsx_renderer_neutralises_a_formula_injection_column_header() -> None:
+    sheet = Sheet.model_construct(
+        name="Ozet", columns=["=1+1", "Tutar"], rows=[["x", 1]], totals=None, formulas=None
+    )
+    spec = ArtifactSpec.model_construct(
+        kind="spreadsheet",
+        title="T",
+        language="tr",
+        sections=None,
+        sheets=[sheet],
+        slides=None,
+        columns=None,
+        rows=None,
+        style=None,
+        spoken_numbers=None,
+    )
+    result = R.XlsxRenderer().render_spec(spec)
+    workbook = load_workbook(io.BytesIO(result))
+    cell = workbook["Ozet"].cell(row=1, column=1)
+    assert cell.data_type != "f"
+
+
+def test_xlsx_renderer_still_writes_a_declared_formula_as_a_real_formula() -> None:
+    # Defence in depth must never neutralise the ONE place a formula is intentional.
+    sheet = Sheet.model_construct(
+        name="Ozet",
+        columns=["Kalem", "Tutar"],
+        rows=[["x", 1]],
+        totals=None,
+        formulas={"C1": "=SUM(B1:B1)"},
+    )
+    spec = ArtifactSpec.model_construct(
+        kind="spreadsheet",
+        title="T",
+        language="tr",
+        sections=None,
+        sheets=[sheet],
+        slides=None,
+        columns=None,
+        rows=None,
+        style=None,
+        spoken_numbers=None,
+    )
+    result = R.XlsxRenderer().render_spec(spec)
+    workbook = load_workbook(io.BytesIO(result))
+    cell = workbook["Ozet"]["C1"]
+    assert cell.data_type == "f"
+    assert cell.value == "=SUM(B1:B1)"
+
+
+def test_csv_renderer_neutralises_a_formula_injection_cell() -> None:
+    spec = _bypass_sheet_spec("+1")
+    result = R.CsvRenderer().render_spec(spec)
+    rows = list(csv.reader(io.StringIO(result.decode("utf-8"))))
+    assert rows[1][0] == "'+1"
+
+
+def test_csv_renderer_neutralises_a_formula_injection_dataset_cell() -> None:
+    spec = ArtifactSpec.model_construct(
+        kind="dataset",
+        title="T",
+        language="tr",
+        sections=None,
+        sheets=None,
+        slides=None,
+        columns=["Ad", "Değer"],
+        rows=[["@SUM(A1)", 1]],
+        style=None,
+        spoken_numbers=None,
+    )
+    result = R.CsvRenderer().render_spec(spec)
+    rows = list(csv.reader(io.StringIO(result.decode("utf-8"))))
+    assert rows[1][0] == "'@SUM(A1)"
+
+
+def test_csv_renderer_leaves_ordinary_cells_untouched() -> None:
+    spec = _bypass_sheet_spec("Kira")
+    result = R.CsvRenderer().render_spec(spec)
+    rows = list(csv.reader(io.StringIO(result.decode("utf-8"))))
+    assert rows[1][0] == "Kira"
+
+
+# ------------------------------------------------------------- HTML link injection
+
+
+def _page_spec(paragraph: str) -> ArtifactSpec:
+    section = Section.model_construct(
+        heading="H", level=1, paragraphs=[paragraph], bullets=None, table=None
+    )
+    return ArtifactSpec.model_construct(
+        kind="page",
+        title="T",
+        language="tr",
+        sections=[section],
+        sheets=None,
+        slides=None,
+        columns=None,
+        rows=None,
+        style=None,
+        spoken_numbers=None,
+    )
+
+
+@pytest.mark.parametrize(
+    "paragraph",
+    [
+        "[Tıkla](javascript:alert(1))",
+        "[Tıkla](JAVASCRIPT:alert(1))",
+        "[Tıkla](data:text/html,<script>alert(1)</script>)",
+        "[Tıkla](vbscript:msgbox(1))",
+    ],
+)
+def test_html_renderer_strips_a_dangerous_href_keeping_the_text(paragraph: str) -> None:
+    spec = _page_spec(paragraph)
+    html = R.render_factory("html", spec).data.decode("utf-8")
+    assert "javascript:" not in html.lower()
+    assert "vbscript:" not in html.lower()
+    assert "data:" not in html.lower()
+    assert "Tıkla" in html
+    assert "<a " not in html  # the anchor itself is gone, only its text remains
+
+
+def test_html_renderer_strips_a_dangerous_image_source() -> None:
+    spec = _page_spec("![alt](javascript:alert(1))")
+    html = R.render_factory("html", spec).data.decode("utf-8")
+    assert "javascript:" not in html.lower()
+    assert "<img" not in html
+
+
+def test_html_renderer_keeps_a_legitimate_https_link() -> None:
+    spec = _page_spec("[Belgeye git](https://example.com/rapor)")
+    html = R.render_factory("html", spec).data.decode("utf-8")
+    assert '<a href="https://example.com/rapor">Belgeye git</a>' in html
+
+
+def test_html_renderer_keeps_a_mailto_link() -> None:
+    spec = _page_spec("[Yaz](mailto:owner@example.com)")
+    html = R.render_factory("html", spec).data.decode("utf-8")
+    assert 'href="mailto:owner@example.com"' in html
+
+
+def test_sanitize_generated_html_tripwire_on_script_tag() -> None:
+    with pytest.raises(R.UnsafeGeneratedHtmlError):
+        R._sanitize_generated_html("<script>bad()</script>")
+
+
+def test_sanitize_generated_html_tripwire_on_event_handler() -> None:
+    with pytest.raises(R.UnsafeGeneratedHtmlError):
+        R._sanitize_generated_html('<img src="x.png" onerror="bad()">')
