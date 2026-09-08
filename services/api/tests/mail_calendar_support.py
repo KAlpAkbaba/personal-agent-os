@@ -13,11 +13,12 @@ ephemeral port and never touch a network.
 from __future__ import annotations
 
 import json
-import smtplib
 import socket
 import socketserver
 import threading
 from dataclasses import dataclass, field
+from email import message_from_bytes
+from email import policy as email_policy
 from email.message import EmailMessage
 from pathlib import Path
 from typing import Any
@@ -99,7 +100,8 @@ def _rfc822(
 #: :class:`app.mail.providers.FakeMailProvider`, which loads it directly; this server
 #: proves the PROVIDER's own wire parsing, a different claim).
 def default_imap_fixture() -> dict[str, list[_ImapMessage]]:
-    encoded_subject = "=?UTF-8?B?RXlsw7xsIDIwMjYgZWxla3RyaWsgZmF0dXJhbsSxeg==?="  # "Eylül 2026 elektrik faturanız"
+    # "Eylül 2026 elektrik faturanız", RFC 2047 base64-encoded.
+    encoded_subject = "=?UTF-8?B?RXlsw7xsIDIwMjYgZWxla3RyaWsgZmF0dXJhbsSxeg==?="
     html_body = (
         "<html><body><p>Sayın Alp Akbaba,</p>"
         "<p>Eylül 2026 dönemi elektrik faturanız <b>1.284,50 TL</b> olarak düzenlenmiştir.</p>"
@@ -163,7 +165,7 @@ def default_imap_fixture() -> dict[str, list[_ImapMessage]]:
 
 
 class _ImapHandler(socketserver.StreamRequestHandler):
-    server: "FakeImapServer"
+    server: FakeImapServer
 
     def handle(self) -> None:
         self._send("* OK IMAP4rev1 fake ready")
@@ -357,9 +359,6 @@ class FakeSmtpServer:
                 if line.strip() == b".":
                     in_data = False
                     raw = b"".join(data_lines)
-                    msg = EmailMessage()
-                    from email import message_from_bytes, policy as email_policy
-
                     parsed = message_from_bytes(raw, policy=email_policy.default)
                     self.received.append(parsed)  # type: ignore[arg-type]
                     send("250 OK message queued")
