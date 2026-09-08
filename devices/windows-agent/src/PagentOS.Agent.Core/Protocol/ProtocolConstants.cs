@@ -14,7 +14,10 @@ public static class AgentInfo
     // the candidate manifest; a version the installer can tell apart from 0.1.0 on Cloud Core.
     // 0.3.0 (M20, ADR-0083): the documents family (file.search/locate/inspect/read/compare,
     // document.extract) behind the operator gate, and the error classes it needs.
-    public const string SoftwareVersion = "0.3.0";
+    // 0.4.0 (M22, ADR-0085): file.fetch — a Cloud Core render, from the dialled origin only,
+    // into the Downloads root, hash-verified before it is kept — and the broker origin the
+    // service now hands the companion in the pipe challenge.
+    public const string SoftwareVersion = "0.4.0";
     public const string Platform = "windows";
 }
 
@@ -135,7 +138,9 @@ public static class AgentCapabilities
     /// extract a document's text and structure with the references an answer cites. It is
     /// advertised behind the SAME gate as the operator family (<c>OperatorEnabled</c> on both
     /// halves) because it is the same trust decision: the companion may touch the owner's
-    /// files. Read-only by construction — there is no delete, move or write name.
+    /// files. Read-only by construction — there is no delete, move or write name — with one
+    /// creator since M22: <c>file.fetch</c> brings a Cloud Core render into the Downloads root
+    /// as a NEW file (never over an existing one), from the origin the device dialled only.
     /// </summary>
     public static IReadOnlyList<string> Documents => DocumentCapabilityNames.All;
 
@@ -303,11 +308,28 @@ public static class DocumentCapabilityNames
     public const string FileCompare = "file.compare";
     public const string DocumentExtract = "document.extract";
 
-    /// <summary>Every documents name, in the order of the specification's table.</summary>
+    /// <summary>
+    /// M22 (M22_ARTIFACT_FACTORY_SPEC.md §4, ADR-0085 decision 4, DEVICE_PROTOCOL.md §6k):
+    /// download one Cloud Core render — from the origin the device dialled, nowhere else —
+    /// into the Downloads root, verify its SHA-256 before it is kept, optionally open it
+    /// through <c>file.open</c>. Appended to the family so the manifest reads as an addition.
+    /// </summary>
+    public const string FileFetch = "file.fetch";
+
+    /// <summary>Every documents name, in the order of the specification's table (<c>file.fetch</c> last, M22).</summary>
     public static readonly IReadOnlyList<string> All =
     [
-        FileSearch, FileLocate, FileInspect, FileRead, FileCompare, DocumentExtract,
+        FileSearch, FileLocate, FileInspect, FileRead, FileCompare, DocumentExtract, FileFetch,
     ];
+
+    /// <summary>§6k: the most <c>file.fetch</c> will download — the same 50 MiB the family reads.</summary>
+    public const long MaxFetchBytes = 50L * 1024 * 1024;
+
+    /// <summary>§6k: the longest <c>payload.name</c> <c>file.fetch</c> accepts (a plain file name; the unique suffix on collision is the companion's own).</summary>
+    public const int MaxFetchNameChars = 120;
+
+    /// <summary>§6k: the only path prefix a render URL may have on the dialled origin.</summary>
+    public const string FetchPathPrefix = "/v1/artifacts/";
 
     /// <summary>§2: <c>file.search</c> answers at most this many records.</summary>
     public const int MaxSearchResults = 200;

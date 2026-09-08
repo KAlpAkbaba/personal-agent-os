@@ -16,19 +16,20 @@ namespace PagentOS.Agent.Tests.Documents;
 
 /// <summary>
 /// The family's place in the manifest and the routing (M20_FILE_DOCUMENT_INTELLIGENCE_SPEC.md
-/// §2, ADR-0083 decision 1): six names after the operator family, advertised only behind
-/// <c>OperatorEnabled</c> (<c>Compose(operatorEnabled: true)</c> lists them, <c>false</c> lists
-/// none), interactive on every member, capped at 30 s, refused by the service before the pipe
-/// when off, answered by the companion over the real pipe when on; the two new error classes
-/// in the taxonomy, the schema and (by the broker test) <c>frames.py</c>; the software version.
+/// §2, ADR-0083 decision 1): six names after the operator family — seven since M22 appended
+/// <c>file.fetch</c> (ADR-0085) — advertised only behind <c>OperatorEnabled</c>
+/// (<c>Compose(operatorEnabled: true)</c> lists them, <c>false</c> lists none), interactive on
+/// every member, capped at 30 s, refused by the service before the pipe when off, answered by
+/// the companion over the real pipe when on; the two new error classes in the taxonomy, the
+/// schema and (by the broker test) <c>frames.py</c>; the software version.
 /// </summary>
 public sealed class DocumentAdvertisementTests
 {
     [Fact]
-    public void Compose_lists_the_six_names_after_the_operator_family_only_when_operator_is_enabled()
+    public void Compose_lists_the_seven_names_after_the_operator_family_only_when_operator_is_enabled()
     {
-        Assert.Equal(["file.search", "file.locate", "file.inspect", "file.read", "file.compare", "document.extract"], AgentCapabilities.Documents);
-        Assert.Equal(6, AgentCapabilities.Documents.Count);
+        Assert.Equal(["file.search", "file.locate", "file.inspect", "file.read", "file.compare", "document.extract", "file.fetch"], AgentCapabilities.Documents);
+        Assert.Equal(7, AgentCapabilities.Documents.Count);
         Assert.Equal(32, AgentCapabilities.Operator.Count);
 
         var without = AgentCapabilities.Compose(browserEnabled: true, displayPowerEnabled: true, operatorEnabled: false);
@@ -39,12 +40,12 @@ public sealed class DocumentAdvertisementTests
         Assert.Equal(AgentCapabilities.Documents, with.TakeLast(AgentCapabilities.Documents.Count));
         Assert.Equal(AgentCapabilities.Operator, with.SkipLast(AgentCapabilities.Documents.Count).TakeLast(AgentCapabilities.Operator.Count));
         Assert.Equal(with.Count, with.Distinct(StringComparer.Ordinal).Count());
-        Assert.Equal(without.Count + 32 + 6, with.Count);
+        Assert.Equal(without.Count + 32 + 7, with.Count);
 
-        // The deployed 0.1.0 / 0.2.0 baseline — no operator — is untouched by M20.
+        // The deployed 0.1.0 / 0.2.0 baseline — no operator — is untouched by M20 and M22.
         Assert.Equal(AgentCapabilities.Compose(browserEnabled: false), AgentCapabilities.Compose(browserEnabled: false, displayPowerEnabled: false, operatorEnabled: false));
         Assert.Equal(AgentCapabilities.Desktop, AgentCapabilities.All);
-        Assert.Equal("0.3.0", AgentInfo.SoftwareVersion);
+        Assert.Equal("0.4.0", AgentInfo.SoftwareVersion);
     }
 
     [Fact]

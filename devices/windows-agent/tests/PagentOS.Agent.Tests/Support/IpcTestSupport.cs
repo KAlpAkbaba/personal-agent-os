@@ -122,15 +122,18 @@ public static class IpcTestSupport
             "pipe could not be created at all, not that the test raced ahead of it.");
     }
 
+    /// <param name="brokerOrigin">M22: the Cloud Core origin the service tells the companion in its challenge; null stages an older service that says none.</param>
     public static CompanionPipeServer NewServer(
         string pipeName,
         CompanionAdmissionPolicy? policy = null,
-        IPipePeerInspector? inspector = null)
+        IPipePeerInspector? inspector = null,
+        string? brokerOrigin = null)
         => new(
             pipeName,
             policy ?? SelfPolicy(),
             inspector ?? new WindowsPipePeerInspector(),
-            NullLogger<CompanionPipeServer>.Instance);
+            NullLogger<CompanionPipeServer>.Instance,
+            brokerOrigin: brokerOrigin);
 
     /// <summary>The identity of this test process as the kernel reports it.</summary>
     public static PipePeer SelfPeer()

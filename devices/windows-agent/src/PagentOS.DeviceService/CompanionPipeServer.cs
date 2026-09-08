@@ -57,16 +57,25 @@ public sealed class CompanionPipeServer : BackgroundService, ICompanionCapabilit
         CompanionAdmissionPolicy policy,
         IPipePeerInspector inspector,
         ILogger<CompanionPipeServer> logger,
-        AuditLog? audit = null)
+        AuditLog? audit = null,
+        string? brokerOrigin = null)
     {
         _pipeName = pipeName;
         _policy = policy;
         _inspector = inspector;
         _logger = logger;
         _audit = audit;
+        BrokerOrigin = HttpOrigin.Of(brokerOrigin);
     }
 
     public bool CompanionConnected => _connection is not null;
+
+    /// <summary>
+    /// M22: the origin of the Cloud Core this service dials, handed to the companion in every
+    /// challenge so it can pin <c>file.fetch</c> to it. Null when the service has no usable
+    /// broker URL — then the companion is told nothing and refuses every fetch.
+    /// </summary>
+    public string? BrokerOrigin { get; }
 
     /// <summary>Refusals since start, by reason. Surfaced in telemetry; also what the tests assert.</summary>
     public ConcurrentDictionary<IpcRefusal, int> Refusals { get; } = new();
@@ -349,6 +358,7 @@ public sealed class CompanionPipeServer : BackgroundService, ICompanionCapabilit
         {
             ConnectionId = connection.Guard.ConnectionId,
             Nonce = nonce,
+            BrokerOrigin = BrokerOrigin,
         };
         await connection.WriteLineAsync(PipeJson.Serialize(challenge), cancellationToken).ConfigureAwait(false);
 
