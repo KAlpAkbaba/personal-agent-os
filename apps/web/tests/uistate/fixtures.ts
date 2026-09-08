@@ -636,6 +636,42 @@ export const CAPABILITY_GENESIS = (
 export const CAPABILITY_GENESIS_BARE = () =>
   event({ state: "capability.genesis", subsystem: "genesis", task_id: "genesis-task-2" });
 
+// ---------------------------------------------- v10: 3D creation (M25 §6)
+
+/**
+ * `scene.activity` as the M25 spec §6 has the Cloud Core publish it at
+ * every step of one scene run, from the run's own row: subsystem
+ * `creative3d`, the task id, and in metadata the tool being driven
+ * (`blender` | `unity`), the scene the plan names, the step
+ * (`creating` | `applying` | `rendering` | `inspecting` | `verified` |
+ * `mismatch` | `unavailable` | `failed`), and — once the tool was read back
+ * — how many objects the INSPECTION counted.
+ */
+export const SCENE_ACTIVITY = (
+  tool: string | null = "blender",
+  scene: string | null = "Kure",
+  state: string | null = "creating",
+  objects: number | null = null,
+  extra: Record<string, unknown> = {},
+) =>
+  event({
+    state: "scene.activity",
+    subsystem: "creative3d",
+    task_id: "scene-task-1",
+    status: state ?? "scene",
+    metadata: {
+      ...(tool === null ? {} : { tool }),
+      ...(scene === null ? {} : { scene }),
+      ...(state === null ? {} : { state }),
+      ...(objects === null ? {} : { objects }),
+      ...(extra as Record<string, string | number | boolean>),
+    },
+  });
+
+/** A scene event whose publisher sent no metadata at all. */
+export const SCENE_ACTIVITY_BARE = () =>
+  event({ state: "scene.activity", subsystem: "creative3d", task_id: "scene-task-2" });
+
 /** The owner-authorised release path, mid-deployment (ADR-0055). */
 export const RELEASE_DEPLOYING = () =>
   event({

@@ -103,7 +103,9 @@ export function useSceneRender(rows: SceneRow[], ports: SceneRenderPorts = scene
   // One revoke pass, on unmount: an image the owner is still looking at must
   // not have its bytes pulled out from under it by a re-render.
   const revoke = useRef(ports.revoke);
-  revoke.current = ports.revoke;
+  useEffect(() => {
+    revoke.current = ports.revoke;
+  }, [ports]);
   useEffect(() => {
     const urlsMade = made.current;
     return () => {

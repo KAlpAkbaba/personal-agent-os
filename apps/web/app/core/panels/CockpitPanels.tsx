@@ -2041,6 +2041,22 @@ const SCENE_NOTE =
 const SCENE_RENDER_PENDING = "Render var; görüntü henüz alınmadı.";
 
 /**
+ * One scene's last render.
+ *
+ * A plain `<img>` on purpose, and `next/image` deliberately not used: `src`
+ * here is a `blob:` URL made in this tab from bytes fetched through the
+ * owner session (the route is gated, so an optimizer that re-fetches the
+ * URL server-side would be answered with a 401 and could not read a blob of
+ * this tab's anyway). The dimensions are the driver's, not this page's — a
+ * render is up to 1920×1080 (M25 spec §7) and the CSS bounds it without
+ * changing its proportions, because the owner reads geometry off it.
+ */
+function SceneRenderImage({ row, src }: { row: SceneRow; src: string }) {
+  /* eslint-disable-next-line next/no-img-element */
+  return <img className="scene-render" src={src} alt={sceneRenderAlt(row)} data-scene-render={row.scene_id} data-scene-render-sha={row.render_sha256 ?? ""} />;
+}
+
+/**
  * The chips under one scene: both for a scene whose step this build can
  * read, NEITHER for a tool that could not be driven — each drawn only when
  * the Cloud Core would not refuse it, and disabled with the reason in words
@@ -2103,7 +2119,6 @@ function SceneRowItem({
   preview: ScenePreviewProps;
 }) {
   const unavailable = sceneRowIsUnavailable(row);
-  const mismatch = sceneRowIsMismatch(row);
   const failed = sceneRowIsFailed(row);
   const hasRender = sceneRowHasRender(row);
   const src = hasRender ? preview.srcFor(row.scene_id) : null;
@@ -2150,13 +2165,7 @@ function SceneRowItem({
           row says that, rather than drawing a picture that is not there. */}
       {hasRender &&
         (src ? (
-          <img
-            className="scene-render"
-            src={src}
-            alt={sceneRenderAlt(row)}
-            data-scene-render={row.scene_id}
-            data-scene-render-sha={row.render_sha256 ?? ""}
-          />
+          <SceneRenderImage row={row} src={src} />
         ) : (
           <span className="muted" data-scene-render-pending>
             {SCENE_RENDER_PENDING}
