@@ -58,11 +58,25 @@ import type {
   PendingProposal,
 } from "../../lib/cockpit/approvals";
 import {
+  artifactKindLabel,
+  artifactOpenGate,
+  artifactRenderLine,
+  renderIsValid,
+  validRenders,
+} from "../../lib/cockpit/artifact-rows";
+import {
+  type ArtifactOpenProps,
+  type ArtifactRender,
+  type ArtifactRow,
+  artifactRenderUrl,
+} from "../../lib/cockpit/artifacts";
+import {
   FOCUS_UNSUPPORTED,
   focusSourceLabel,
   focusSummary,
   identityLine,
 } from "../../lib/research/focus";
+import { artifactView } from "../../lib/uistate/artifacts";
 import {
   CALENDAR_PROPOSAL_STATE_LABEL,
   calendarView,
@@ -71,6 +85,8 @@ import {
 import { isCalendarProposalState, isMailDraftState } from "../../lib/uistate/contract";
 import { documentPartPhrase, documentView, lastAnswerRefs, previousDocument } from "../../lib/uistate/documents";
 import {
+  ARTIFACT_EMPTY,
+  ARTIFACT_UNTOLD,
   CALENDAR_EMPTY,
   CALENDAR_NO_PROPOSAL,
   CALENDAR_UNTOLD,
@@ -92,6 +108,7 @@ import { MAIL_DRAFT_STATE_LABEL, mailView } from "../../lib/uistate/mail";
 import { operatorPosition, operatorView } from "../../lib/uistate/operator";
 import type { CoreTruth } from "../../lib/uistate/truth";
 import {
+  artifactClaim,
   calendarClaim,
   documentClaim,
   liveEventFor,
@@ -1352,6 +1369,233 @@ export function CalendarPanel({
       <ApprovalOutcomeLine pair={pair} family="proposal" now={now} />
       <p className="muted" data-calendar-gate-note>
         {CALENDAR_GATE_NOTE}
+      </p>
+    </section>
+  );
+}
+
+// ------------------------------------------------- M22: the Artifact Factory
+
+/** How many of the list's artifacts the panel shows: the last ones, as the route orders them. */
+export const ARTIFACT_ROWS_SHOWN = 6;
+
+/** What the panel says under the rows: where the links go, and what "Aç" asks for. */
+const ARTIFACT_NOTE =
+  'İndirme bağlantıları sahip oturumundan geçer. "Aç", dosyayı Cloud Core\'un kendi adresinden cihaza getirip açmasını ister; özeti kayıttakiyle eşleşmeyen dosya tutulmaz. Doğrulanmamış bir çıktı açılmaz. Bu ekran dosya üretmez, doğrulamaz, cihaza ulaşmaz.';
+
+/**
+ * One render on its line, with a download link when — and only when — the
+ * row says the independent parser passed it. The link's `href` is the
+ * render's real URL (M13's owner-session-gated route); the click fetches
+ * the bytes through the session and hands the browser a blob, because a
+ * bare navigation carries no bearer. Without a handler the link is still
+ * the honest address.
+ */
+function ArtifactRenderRow({
+  artifactId,
+  render,
+  onDownload,
+}: {
+  artifactId: string;
+  render: ArtifactRender;
+  onDownload?: (artifactId: string, format: string) => void;
+}) {
+  const valid = renderIsValid(render);
+  return (
+    <li
+      data-artifact-render={render.format}
+      data-render-state={render.state ?? ""}
+      data-render-failing-ref={render.failing_ref ?? ""}
+      data-render-valid={valid ? "yes" : "no"}
+    >
+      <span className="muted">{artifactRenderLine(render)}</span>
+      {valid && (
+        <a
+          className="artifact-download"
+          href={artifactRenderUrl(artifactId, render.format)}
+          rel="noreferrer"
+          data-artifact-download={render.format}
+          data-artifact-download-target={artifactId}
+          onClick={
+            onDownload
+              ? (e) => {
+                  e.preventDefault();
+                  onDownload(artifactId, render.format);
+                }
+              : undefined
+          }
+        >
+          İndir
+        </a>
+      )}
+    </li>
+  );
+}
+
+function ArtifactRowItem({
+  row,
+  now,
+  open,
+  onDownload,
+}: {
+  row: ArtifactRow;
+  now: number;
+  open: ArtifactOpenProps;
+  onDownload?: (artifactId: string, format: string) => void;
+}) {
+  const gate = artifactOpenGate(row, open.busy);
+  const inFlight = open.busy === row.artifact_id;
+  const valid = validRenders(row).length;
+  return (
+    <li
+      data-artifact={row.artifact_id}
+      data-artifact-state={row.state ?? ""}
+      data-artifact-kind={row.kind ?? ""}
+      data-artifact-renders={row.renders.length}
+      data-artifact-valid-renders={valid}
+    >
+      <div className="event-row">
+        <span>{row.title ?? "başlık bildirilmedi"}</span>
+        <span className="event-when">
+          {[artifactKindLabel(row.kind), when(row.updated_at ?? row.created_at, now)].filter(Boolean).join(" · ")}
+        </span>
+      </div>
+      {row.renders.length === 0 ? (
+        <span className="muted" data-artifact-no-renders>
+          çıktı bildirilmedi
+        </span>
+      ) : (
+        <ul>
+          {row.renders.map((render, index) => (
+            <ArtifactRenderRow
+              key={`${render.format}#${index}`}
+              artifactId={row.artifact_id}
+              render={render}
+              onDownload={onDownload}
+            />
+          ))}
+        </ul>
+      )}
+      {/* "Aç": one chip per artifact, enabled only for one the Cloud Core would open. */}
+      <div
+        className="approval-pair"
+        data-artifact-open={row.artifact_id}
+        data-artifact-open-enabled={gate.enabled ? "yes" : "no"}
+        data-artifact-open-in-flight={inFlight ? "yes" : "no"}
+      >
+        <button
+          type="button"
+          className="core-chip"
+          data-artifact-action="open"
+          data-artifact-target={row.artifact_id}
+          disabled={!gate.enabled}
+          onClick={() => open.onOpen(row.artifact_id)}
+        >
+          Aç
+        </button>
+        {gate.reason && (
+          <span className="approval-reason" data-artifact-open-reason={gate.reasonKind ?? ""}>
+            {gate.reason}
+          </span>
+        )}
+      </div>
+    </li>
+  );
+}
+
+/**
+ * Üretilenler (M22 spec §4): what the factory is doing, from the bus, and
+ * what it made, from M13's list route — each artifact with its renders,
+ * each render with the verdict the independent parser gave it and the ref
+ * that failed when it did not pass, a download link per VALID render on
+ * the owner-session-gated route, and "Aç", which asks the Cloud Core to
+ * fetch and open one on the device.
+ *
+ * Two sources, kept apart because they answer different questions. The bus
+ * line is "what is happening now" and decays like every bus claim; the rows
+ * are "what exists" and are the route's. Nothing here renders, validates,
+ * or reaches the device: a render is valid because its row says so, a link
+ * exists because the render is valid, "Aç" is enabled because a valid
+ * render exists and nothing else is in flight — and the Cloud Core still
+ * refuses on its own terms. The empty sentence is the route's answer, never
+ * the bus's silence — and "henüz yok" (no route on this Cloud Core) is neither.
+ */
+export function ArtifactsPanel({
+  artifacts,
+  truth,
+  now,
+  open,
+  onDownload,
+  notice,
+}: {
+  artifacts: Loaded<ArtifactRow[]>;
+  truth: CoreTruth;
+  now: number;
+  open: ArtifactOpenProps;
+  onDownload?: (artifactId: string, format: string) => void;
+  /** A download that could not be fetched, in words; the link itself stays. */
+  notice?: string | null;
+}) {
+  const view = artifactView(artifactClaim(truth, now));
+  const told = view.lastKnown !== null;
+  const rows = artifacts.kind === "ok" ? artifacts.value : [];
+  const shown = rows.slice(0, ARTIFACT_ROWS_SHOWN);
+  return (
+    <section
+      className="panel"
+      data-panel="artifacts"
+      data-panel-state={artifacts.kind}
+      data-panel-empty={artifacts.kind === "ok" ? (rows.length ? "no" : "yes") : ""}
+      data-artifact-stage={view.stage}
+      data-artifact-last-known={view.lastKnown ?? ""}
+    >
+      <h3 className="panel-title">
+        <span>Üretilenler</span>
+        {artifacts.kind === "ok" && (
+          <span className="panel-count" data-panel-badge>
+            {rows.length}
+          </span>
+        )}
+      </h3>
+      {/* The bus: the caption the Core draws, with its age; last-known when it aged out. */}
+      <p
+        className={told ? "muted" : "panel-empty"}
+        data-artifact-activity={told ? view.stage : "untold"}
+        data-artifact-caption={told ? view.caption : ""}
+      >
+        {told ? `${view.stage === "none" ? "Son bilinen: " : ""}${view.caption} · ${formatAge(view.ageMs)}` : ARTIFACT_UNTOLD}
+      </p>
+      <LoadedNotice state={artifacts} />
+      {artifacts.kind === "ok" && rows.length === 0 && (
+        <p className="panel-empty" data-panel-empty-text>
+          {ARTIFACT_EMPTY}
+        </p>
+      )}
+      {shown.length > 0 && (
+        <ul>
+          {shown.map((row) => (
+            <ArtifactRowItem key={row.artifact_id} row={row} now={now} open={open} onDownload={onDownload} />
+          ))}
+        </ul>
+      )}
+      {notice && (
+        <p className="panel-unknown" data-artifact-notice>
+          {notice}
+        </p>
+      )}
+      {open.outcome && (
+        <p
+          className={`approval-outcome ${open.outcome.ok ? "muted" : "panel-unknown"}`}
+          data-artifact-outcome
+          data-artifact-ok={open.outcome.ok ? "yes" : "no"}
+          data-artifact-target={open.outcome.artifactId}
+        >
+          {open.outcome.text}
+          {` · ${formatAge(Math.max(0, now - open.outcome.at))}`}
+        </p>
+      )}
+      <p className="muted" data-artifact-note>
+        {ARTIFACT_NOTE}
       </p>
     </section>
   );

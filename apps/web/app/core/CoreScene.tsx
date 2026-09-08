@@ -98,6 +98,10 @@ const PALETTE: Record<PaletteToken, string> = {
   // greener and duller, so laying out a day is told apart from reading a
   // page without leaving the gold family.
   planning: "#d4c48e",
+  // v7: a making Core is wheat amber — a shade warmer and more saturated
+  // than parchment, so a page being MADE is told apart from one being read
+  // without leaving the gold family.
+  making: "#e6b877",
   unknown: "#6b6250",
 };
 

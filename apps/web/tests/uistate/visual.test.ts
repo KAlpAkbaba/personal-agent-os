@@ -94,6 +94,10 @@ const EXPECTED_KIND: Record<string, CoreVisualKind> = {
   // posture and a planning posture, each its own deliberate kind.
   "mail.activity": "mail_activity",
   "calendar.activity": "calendar_activity",
+  // v7 (M22): making a file for the owner and checking it with an
+  // independent parser is the agent's own work — a core state with its own
+  // deliberate making posture.
+  "artifact.factory": "artifact_factory",
 };
 
 describe("a visual state is entered only by its own event", () => {

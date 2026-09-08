@@ -15,7 +15,7 @@
  */
 
 /** Contract version this client was written against (`CONTRACT_VERSION` in contract.py). */
-export const KNOWN_CONTRACT_VERSION = 6;
+export const KNOWN_CONTRACT_VERSION = 7;
 
 /**
  * The build marker of the Living Core (M18.3 §12, qualification A). Rendered server-side
@@ -36,12 +36,14 @@ export const CORE_BUILD_ID = "living-core-1";
  * subsystem, and one bounded metadata shape (`refs`) that older publishers
  * never send. v6 is additive over v5 (M21 spec §3): two tokens,
  * `mail.activity` and `calendar.activity`, two subsystems, and metadata made
- * of the short tokens the bus already carried. A v2, v3, v4 or v5 server
- * therefore serves a strict subset of what this build knows, and refusing to
- * draw anything at all because the alarm, operator, document, mail or
- * calendar states have not shipped yet would be a worse lie than saying so in
- * one line. A server NEWER than this build is a different matter — we do not
- * know its vocabulary, so it stays a mismatch.
+ * of the short tokens the bus already carried. v7 is additive over v6 (M22
+ * spec §6): one token, `artifact.factory`, one subsystem, and metadata of
+ * four short tokens (`title`, `format`, `verdict`, `failing_ref`). A v2 to
+ * v6 server therefore serves a strict subset of what this build knows, and
+ * refusing to draw anything at all because the alarm, operator, document,
+ * mail, calendar or artifact states have not shipped yet would be a worse
+ * lie than saying so in one line. A server NEWER than this build is a
+ * different matter — we do not know its vocabulary, so it stays a mismatch.
  */
 export const MIN_SUPPORTED_CONTRACT_VERSION = 2;
 
@@ -157,6 +159,15 @@ export const UI_STATES = [
   // client, which only ever asks the Cloud Core to run its own gate.
   "mail.activity",
   "calendar.activity",
+  // v7 (M22 spec §6) — the Artifact Factory. Published while a render is
+  // being made and while it is reopened by an independent parser and
+  // compared to what was asked, with `{title?, format?, verdict?,
+  // failing_ref?}`: the artifact's title, the format in hand, the verdict
+  // (`rendering` while the factory works, `valid` when the parser found what
+  // was asked, `invalid` when it did not — and then the ref that failed).
+  // The agent's own work, so it stays on the agent channel; a render whose
+  // validation failed is kept and NAMED, never presented as done (ADR-0085 §3).
+  "artifact.factory",
 ] as const;
 
 export type KnownUiState = (typeof UI_STATES)[number];
@@ -286,6 +297,50 @@ export function isCalendarState(state: string): state is CalendarUiState {
   return CALENDAR_STATE_SET.has(state);
 }
 
+/** The one artifact token (v7). Spelled here so every reader names the same wire word. */
+export const ARTIFACT_FACTORY = "artifact.factory";
+
+/**
+ * The Artifact Factory's states (v7). One token: the spec publishes the
+ * whole render → reopen → compare loop as `artifact.factory` and names the
+ * phase in `metadata.verdict`, so — as with the document's and the mail's —
+ * there is nothing else to enumerate. Kept as a list so a second token lands
+ * here and nowhere else.
+ */
+export const ARTIFACT_STATES = [ARTIFACT_FACTORY] as const;
+
+export type ArtifactUiState = (typeof ARTIFACT_STATES)[number];
+
+const ARTIFACT_STATE_SET: ReadonlySet<string> = new Set(ARTIFACT_STATES);
+
+/**
+ * True for a v7 artifact state this build knows how to draw. Membership, not
+ * prefix: a newer server's `artifact.deleted` must not be drawn as a making
+ * Core on the strength of a word this build cannot read.
+ */
+export function isArtifactState(state: string): state is ArtifactUiState {
+  return ARTIFACT_STATE_SET.has(state);
+}
+
+/**
+ * A render's verdict as the publisher names it in `metadata.verdict` (M22
+ * spec §3, §6): `rendering` while the factory writes the bytes, `valid` once
+ * an INDEPENDENT parser reopened them and found every element that was
+ * asked for, `invalid` when it did not — and then `failing_ref` names the
+ * first element it could not find, in M20's reference scheme. A token
+ * outside this list is a word this build cannot read and is shown as the
+ * plain state, never as one of these.
+ */
+export const ARTIFACT_VERDICTS = ["rendering", "valid", "invalid"] as const;
+
+export type ArtifactVerdict = (typeof ARTIFACT_VERDICTS)[number];
+
+const ARTIFACT_VERDICT_SET: ReadonlySet<string> = new Set(ARTIFACT_VERDICTS);
+
+export function isArtifactVerdict(value: unknown): value is ArtifactVerdict {
+  return typeof value === "string" && ARTIFACT_VERDICT_SET.has(value);
+}
+
 /**
  * A draft's lifecycle as the publisher names it in `metadata.draft_state`
  * (M21 spec §3 with the read-back step made explicit): prepared by the
@@ -346,6 +401,24 @@ export type CalendarActivityMetadata = {
 };
 
 /**
+ * The metadata an `artifact.factory` event may carry (M22 spec §6). Every
+ * key is optional on the wire and every value is a short token; nothing
+ * here is a spec body, a rendered byte or a validation report — the report
+ * is a row on `artifact_renders`, and the Cockpit reads it from the list
+ * route, never from the bus.
+ */
+export type ArtifactFactoryMetadata = {
+  /** The artifact's title, as the owner named it. */
+  title?: string;
+  /** The format in hand (`xlsx`, `pdf`, `docx`, `pptx`, `csv`, `json`, `html`, `md`, `txt`). */
+  format?: string;
+  /** Where the render is in its loop. Absent while the publisher has nothing to say yet. */
+  verdict?: ArtifactVerdict;
+  /** On `invalid`: the ref of the first element the parser could not find (`sheet:Ozet!B5`, `p3`, `s4`, `h2:Giriş`). */
+  failing_ref?: string;
+};
+
+/**
  * States that belong to the release band's own vocabulary.
  *
  * `releaseClaim` reads exactly these rather than "the newest event on the
@@ -392,6 +465,9 @@ export const SUBSYSTEMS = [
   // own names, which are also their receipt subsystems.
   "mail",
   "calendar",
+  // v7: the Artifact Factory (M22 spec §6) publishes `artifact.factory`;
+  // its receipts and ledger rows carry the same subsystem name.
+  "artifacts",
 ] as const;
 
 export type Subsystem = (typeof SUBSYSTEMS)[number];
@@ -597,6 +673,13 @@ const STATE_KINDS: Record<KnownUiState, StateKind> = {
   // lengthen it for a standing condition.
   "mail.activity": "transient",
   "calendar.activity": "transient",
+  // v7. Making a file and reopening it with an independent parser is work
+  // in flight, bounded like a device round trip (`ARTIFACT_FACTORY_TTL_MS`).
+  // A verdict is a MOMENT the publisher named — `valid` or `invalid` — and it
+  // decays like the rest: what the factory said a minute ago is last-known,
+  // and the render itself is a ROW the Cockpit reads from the list route,
+  // which does not expire. The claim never falls to "finished" or idle.
+  "artifact.factory": "transient",
 };
 
 /**
@@ -646,6 +729,36 @@ export const MAIL_CAPTION_BARE = "Posta okunuyor";
 export const CALENDAR_CAPTION_BARE = "Takvim okunuyor";
 
 /**
+ * How long a factory step may be claimed as current without a newer event.
+ *
+ * The operator's horizon, for the document's reason: the Cloud Core speaks
+ * once per render and once per verdict, not on a heartbeat, and rendering a
+ * PPTX then reopening it with python-pptx can outlast the twelve-second
+ * transient. Still a horizon: a `rendering` from a minute ago is last-known,
+ * never a factory still writing. The publisher's own `ttl_s` beats this figure.
+ */
+export const ARTIFACT_FACTORY_TTL_MS: number = OPERATOR_STEP_TTL_MS;
+
+/**
+ * The Core's one wording for a factory event whose metadata named no title
+ * (v7): the plain state, and nothing it did not say. A verdict with no title
+ * would be a verdict on nothing, so it too yields this line alone.
+ */
+export const ARTIFACT_CAPTION_BARE = "Dosya üretiliyor";
+
+/**
+ * The verdict in the owner's words, spelled once for the caption, the facts
+ * line and the Cockpit's rows alike. "Doğrulandı" is said only when the
+ * publisher said `valid`: a render whose validation nobody published is
+ * "doğrulama bildirilmedi" downstream, never one of these.
+ */
+export const ARTIFACT_VERDICT_LABEL: Record<ArtifactVerdict, string> = {
+  rendering: "üretiliyor",
+  valid: "doğrulandı",
+  invalid: "doğrulanamadı",
+};
+
+/**
  * Per-state lifetimes for v3, in ms, exactly as `docs/M18_3_LIVING_CORE_WAKE_ALARM_SPEC.md`
  * §7 states them.
  *
@@ -671,6 +784,7 @@ const STATE_TTL_MS: Partial<Record<KnownUiState, number>> = {
   "document.analysis": DOCUMENT_STEP_TTL_MS,
   "mail.activity": MAIL_ACTIVITY_TTL_MS,
   "calendar.activity": CALENDAR_ACTIVITY_TTL_MS,
+  "artifact.factory": ARTIFACT_FACTORY_TTL_MS,
 };
 
 /**
@@ -753,7 +867,9 @@ export function stateChannel(state: string): StateChannel {
   // document IS the agent working, and the cockpit asks "which document" by
   // membership (`isDocumentState`), never off a channel. It falls through to
   // `agent` below. v6's `mail.activity` and `calendar.activity` do the same,
-  // for the same reason, through `isMailState` / `isCalendarState`.
+  // for the same reason, through `isMailState` / `isCalendarState`; so does
+  // v7's `artifact.factory`, through `isArtifactState`: making a file for
+  // the owner is the agent working.
   // v3 adds `display.*` to the room: whether the screens are lit is a fact
   // about the owner's desk, never about the agent's activity.
   if (state.startsWith("eye.") || state.startsWith("owner.") || state.startsWith("display."))
