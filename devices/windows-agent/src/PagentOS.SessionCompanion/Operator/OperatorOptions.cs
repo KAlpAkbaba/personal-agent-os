@@ -16,16 +16,26 @@ namespace PagentOS.SessionCompanion.Operator;
 /// <item><c>DownloadsRoot</c> (M22, DEVICE_PROTOCOL.md §6k) — the ONE directory
 /// <c>file.fetch</c> writes into; empty means the owner's Downloads known folder. It must
 /// itself resolve inside <c>OperatorRoots</c> at fetch time or every fetch is refused.</item>
+/// <item><c>ProjectsRoot</c> (M23, DEVICE_PROTOCOL.md §6l) — the ONE directory the projects
+/// family writes source into and runs from; empty means <see cref="DefaultProjectsRoot"/>
+/// (<c>Documents\PagentOS Projects</c>). It is always one of the authorised roots
+/// (<see cref="FromConfiguration"/> appends it), so <c>file.*</c> and the terminal's
+/// project-scoped entry reach it, and it must itself resolve inside the roots at scaffold
+/// time.</item>
 /// </list>
 /// </summary>
 public sealed record OperatorOptions(
     bool Enabled,
     IReadOnlyList<string> TerminalAllowlist,
     IReadOnlyList<string> AuthorisedRoots,
-    string? DownloadsRoot = null)
+    string? DownloadsRoot = null,
+    string? ProjectsRoot = null)
 {
     /// <summary>The fixture folder the operator lab uses (M19_DIGITAL_OPERATOR_SPEC.md §5); a default root so the lab runs against the default configuration.</summary>
     public static string FixtureRoot => Path.Combine(Path.GetTempPath(), "pagentos-operator-fixture");
+
+    /// <summary>M23: the folder name of the Projects root under the owner's Documents.</summary>
+    public const string ProjectsFolderName = "PagentOS Projects";
 
     private static readonly Guid DownloadsFolderId = new("374DE290-123F-4565-9164-39C4925E467B");
 
@@ -35,15 +45,34 @@ public sealed record OperatorOptions(
         var allowlist = SplitList(configuration["TerminalAllowlist"]);
         var roots = SplitList(configuration["OperatorRoots"]);
         var downloads = configuration["DownloadsRoot"];
+        var projects = configuration["ProjectsRoot"];
+        var projectsRoot = string.IsNullOrWhiteSpace(projects) ? DefaultProjectsRoot() : projects.Trim();
+
+        // M23: the Projects root is an authorised root whatever the owner configured — the
+        // family writes there and nowhere else, and the operator must be able to open and
+        // reveal what it wrote. An owner-configured root list gains exactly this one entry.
+        var effectiveRoots = new List<string>(roots.Count == 0 ? DefaultRoots() : roots);
+        Add(effectiveRoots, projectsRoot);
         return new OperatorOptions(
             enabled,
             allowlist.Count == 0 ? TerminalRunner.DefaultAllowlist : allowlist,
-            roots.Count == 0 ? DefaultRoots() : roots,
-            string.IsNullOrWhiteSpace(downloads) ? null : downloads.Trim());
+            effectiveRoots,
+            string.IsNullOrWhiteSpace(downloads) ? null : downloads.Trim(),
+            projectsRoot);
     }
 
     /// <summary>The directory <c>file.fetch</c> writes into: the configured one, else the owner's Downloads folder; null when the machine has neither.</summary>
     public string? EffectiveDownloadsRoot => string.IsNullOrWhiteSpace(DownloadsRoot) ? DownloadsFolder() : DownloadsRoot;
+
+    /// <summary>The directory the projects family writes into: the configured one, else <c>Documents\PagentOS Projects</c>; null when the machine has no Documents folder.</summary>
+    public string? EffectiveProjectsRoot => string.IsNullOrWhiteSpace(ProjectsRoot) ? DefaultProjectsRoot() : ProjectsRoot;
+
+    /// <summary><c>%USERPROFILE%\Documents\PagentOS Projects</c> (M23_APP_FACTORY_SPEC.md §1), or null when the owner has no Documents folder.</summary>
+    public static string? DefaultProjectsRoot()
+    {
+        var documents = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+        return string.IsNullOrWhiteSpace(documents) ? null : Path.Combine(documents, ProjectsFolderName);
+    }
 
     /// <summary>
     /// The owner's document folders — Documents, Desktop, Downloads, Pictures, Videos, Music —
@@ -63,6 +92,9 @@ public sealed record OperatorOptions(
         Add(roots, Environment.GetFolderPath(Environment.SpecialFolder.MyVideos));
         Add(roots, Environment.GetFolderPath(Environment.SpecialFolder.MyMusic));
         Add(roots, FixtureRoot);
+        // M23: the Projects root, stated on its own even though Documents contains it — the
+        // list is what the log and the refusal messages name.
+        Add(roots, DefaultProjectsRoot());
         return roots;
     }
 
@@ -85,6 +117,14 @@ public sealed record OperatorOptions(
         {
             roots.Add(root);
         }
+    }
+
+    /// <summary>These options with the projects root replaced (a lab points it inside its run directory).</summary>
+    public OperatorOptions WithProjectsRoot(string projectsRoot)
+    {
+        var roots = new List<string>(AuthorisedRoots);
+        Add(roots, projectsRoot);
+        return this with { AuthorisedRoots = roots, ProjectsRoot = projectsRoot };
     }
 
     private static IReadOnlyList<string> SplitList(string? raw)

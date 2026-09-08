@@ -48,7 +48,8 @@ public sealed class CompanionRuntime(
     ActivityStatusReporter? activityStatus = null,
     GreetingPlayer? greeting = null,
     Operator.OperatorCapabilities? operatorCapabilities = null,
-    Documents.DocumentCapabilities? documentCapabilities = null)
+    Documents.DocumentCapabilities? documentCapabilities = null,
+    Projects.ProjectCapabilities? projectCapabilities = null)
 {
     private const int ConnectTimeoutMs = 2000;
 
@@ -118,18 +119,19 @@ public sealed class CompanionRuntime(
     /// The capabilities this companion announces in its hello: the desktop names and the M18
     /// alarm pair always, the browser family only when a worker is configured (M13),
     /// <c>desktop.display_off</c> only when display power was enabled out loud (M18), and the
-    /// Digital Operator family — with the M20 documents family that shares its gate — only
-    /// when it was enabled out loud (M19). Advertising a name is a promise to answer it with
-    /// something other than a hang: a companion built with the operator but without the
-    /// documents object still advertises the six names (the gate is the flag, as on the
-    /// service side) and answers each with <c>capability_missing</c>; <c>Program</c> builds
-    /// both objects from the one flag so that never happens in the shipped process.
+    /// Digital Operator family — with the M20 documents family and the M23 projects family
+    /// that share its gate — only when it was enabled out loud (M19). Advertising a name is a
+    /// promise to answer it with something other than a hang: a companion built with the
+    /// operator but without the documents or projects object still advertises their names
+    /// (the gate is the flag, as on the service side) and answers each with
+    /// <c>capability_missing</c>; <c>Program</c> builds all three objects from the one flag so
+    /// that never happens in the shipped process.
     /// </summary>
     public IReadOnlyList<string> AdvertisedCapabilities
         => AgentCapabilities.Compose(
             browserWorker?.IsConfigured == true,
             displayPower?.Enabled == true,
-            operatorCapabilities?.Enabled == true || documentCapabilities?.Enabled == true);
+            operatorCapabilities?.Enabled == true || documentCapabilities?.Enabled == true || projectCapabilities?.Enabled == true);
 
     /// <summary>
     /// The operator's budget for a request: what is LEFT of the service's wait, less the
@@ -402,6 +404,7 @@ public sealed class CompanionRuntime(
             if (AgentCapabilities.IsBrowser(request.Capability)
                 || AgentCapabilities.IsOperator(request.Capability)
                 || AgentCapabilities.IsDocuments(request.Capability)
+                || AgentCapabilities.IsProjects(request.Capability)
                 || string.Equals(request.Capability, AgentCapabilities.DesktopPlayAudio, StringComparison.Ordinal))
             {
                 // M13: browser requests are long (a navigation, an extraction) and may run
@@ -507,6 +510,28 @@ public sealed class CompanionRuntime(
                     .ConfigureAwait(false);
                 logger.LogInformation("executed {Capability}: ok", request.Capability);
                 return new ExecResponse { RequestId = request.RequestId, Ok = true, Result = documentsResult };
+            }
+
+            if (AgentCapabilities.IsProjects(request.Capability))
+            {
+                // M23: the projects family shares the operator's gate too (writing source and
+                // starting a bounded child on the owner's machine is the same trust decision)
+                // and rides the same long-running path: a project.test may take minutes, and
+                // the heartbeat's status request must not wait behind it.
+                if (projectCapabilities is null || !projectCapabilities.Enabled)
+                {
+                    throw new CapabilityException(
+                        ErrorClasses.CapabilityMissing,
+                        $"capability '{request.Capability}' is not enabled on this companion (PAGENTOS_AGENT_OperatorEnabled=true enables the projects family with the Digital Operator)",
+                        retryable: false);
+                }
+
+                var projectsBudget = OperatorBudget(request, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+                var projectsResult = await projectCapabilities
+                    .ExecuteAsync(request.Capability, request.Payload, projectsBudget, cancellationToken)
+                    .ConfigureAwait(false);
+                logger.LogInformation("executed {Capability}: ok", request.Capability);
+                return new ExecResponse { RequestId = request.RequestId, Ok = true, Result = projectsResult };
             }
 
             if (browserWorker is null || !browserWorker.IsConfigured)

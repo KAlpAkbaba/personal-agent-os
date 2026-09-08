@@ -17,7 +17,10 @@ public static class AgentInfo
     // 0.4.0 (M22, ADR-0085): file.fetch — a Cloud Core render, from the dialled origin only,
     // into the Downloads root, hash-verified before it is kept — and the broker origin the
     // service now hands the companion in the pipe challenge.
-    public const string SoftwareVersion = "0.4.0";
+    // 0.5.0 (M23, ADR-0086): the projects family (project.scaffold/run/status/stop/test) —
+    // source written into the one Projects root, a run as the companion's own child in a
+    // bounded Windows Job Object — behind the same operator gate.
+    public const string SoftwareVersion = "0.5.0";
     public const string Platform = "windows";
 }
 
@@ -145,18 +148,29 @@ public static class AgentCapabilities
     public static IReadOnlyList<string> Documents => DocumentCapabilityNames.All;
 
     /// <summary>
+    /// The projects family (M23, M23_APP_FACTORY_SPEC.md §3, ADR-0086): scaffold an app the
+    /// assistant generated into the one Projects root, run it as the companion's own child in
+    /// a bounded Windows Job Object, report it, stop it, run its own tests. Advertised behind
+    /// the SAME gate as the operator family — the companion may write source and start a
+    /// process on the owner's machine is the same trust decision as touching the owner's
+    /// files — and appended after the documents family so the manifest reads as an addition.
+    /// There is no delete name (ADR-0086 decision 5).
+    /// </summary>
+    public static IReadOnlyList<string> Projects => ProjectCapabilityNames.All;
+
+    /// <summary>
     /// The manifest this device actually advertises: the desktop names, the alarm pair and
     /// the M18.3 ambient group always, display power, the browser family and the operator
-    /// family (with the documents family that shares its gate) only when each is
-    /// configured. Order is stable (desktop, alarm, ambient, display, browser, operator,
-    /// documents) so a manifest diff between two versions reads as an addition rather than
-    /// a reshuffle.
+    /// family (with the documents and projects families that share its gate) only when each
+    /// is configured. Order is stable (desktop, alarm, ambient, display, browser, operator,
+    /// documents, projects) so a manifest diff between two versions reads as an addition
+    /// rather than a reshuffle.
     /// </summary>
     public static IReadOnlyList<string> Compose(bool browserEnabled, bool displayPowerEnabled = false, bool operatorEnabled = false)
     {
         var names = new List<string>(
             Desktop.Count + Alarm.Count + Ambient.Count + DisplayPower.Count + BrowserCapabilities.All.Count
-            + OperatorCapabilityNames.All.Count + DocumentCapabilityNames.All.Count);
+            + OperatorCapabilityNames.All.Count + DocumentCapabilityNames.All.Count + ProjectCapabilityNames.All.Count);
         names.AddRange(Desktop);
         names.AddRange(Alarm);
         names.AddRange(Ambient);
@@ -174,6 +188,7 @@ public static class AgentCapabilities
         {
             names.AddRange(OperatorCapabilityNames.All);
             names.AddRange(DocumentCapabilityNames.All);
+            names.AddRange(ProjectCapabilityNames.All);
         }
 
         return names;
@@ -193,6 +208,9 @@ public static class AgentCapabilities
     /// <summary>M20: a member of the documents family — routed like the operator family, gated by the same flag, never a member of it.</summary>
     public static bool IsDocuments(string capability) => DocumentCapabilityNames.IsMember(capability);
 
+    /// <summary>M23: a member of the projects family — routed like the operator family, gated by the same flag, never a member of it.</summary>
+    public static bool IsProjects(string capability) => ProjectCapabilityNames.IsMember(capability);
+
     /// <summary>
     /// Every name the Session Companion executes in the owner's interactive session. The
     /// Device Service routes exactly this set over the pipe and refuses everything else
@@ -200,7 +218,7 @@ public static class AgentCapabilities
     /// added here — never by being spelled <c>desktop.</c>-something.
     /// </summary>
     public static bool IsInteractive(string capability)
-        => IsDesktop(capability) || IsAlarm(capability) || IsAmbient(capability) || IsDisplayPower(capability) || IsOperator(capability) || IsDocuments(capability);
+        => IsDesktop(capability) || IsAlarm(capability) || IsAmbient(capability) || IsDisplayPower(capability) || IsOperator(capability) || IsDocuments(capability) || IsProjects(capability);
 
     public static bool IsBrowser(string capability) => BrowserCapabilities.IsFamilyMember(capability);
 }
@@ -360,6 +378,73 @@ public static class DocumentCapabilityNames
 
     /// <summary>The service's per-command cap for the family: the search bound plus extraction headroom, the same 30 s as the operator family.</summary>
     public static readonly TimeSpan CommandTimeoutCap = TimeSpan.FromSeconds(30);
+
+    public static bool IsMember(string capability) => All.Contains(capability, StringComparer.Ordinal);
+}
+
+/// <summary>
+/// M23_APP_FACTORY_SPEC.md §3 — the projects family (DEVICE_PROTOCOL.md §6l). The wire
+/// contract with Cloud Core's App Factory (<c>app/appfactory/</c>); change the document first.
+/// Every name is an operation the companion executes itself: source is written ONLY under the
+/// Projects root, a run is the companion's own child in a Windows Job Object with the bounds
+/// below, and the payload of <c>project.run</c> / <c>project.test</c> names a command KEY from
+/// the manifest's allowlist — never a command line. There is no delete name.
+/// </summary>
+public static class ProjectCapabilityNames
+{
+    public const string ProjectScaffold = "project.scaffold";
+    public const string ProjectRun = "project.run";
+    public const string ProjectStatus = "project.status";
+    public const string ProjectStop = "project.stop";
+    public const string ProjectTest = "project.test";
+
+    /// <summary>Every projects name, in the order of the specification's table.</summary>
+    public static readonly IReadOnlyList<string> All =
+    [
+        ProjectScaffold, ProjectRun, ProjectStatus, ProjectStop, ProjectTest,
+    ];
+
+    /// <summary>§2: a generated file set carries at most this many files.</summary>
+    public const int MaxFiles = 200;
+
+    /// <summary>§2: a generated file set's texts sum to at most this many UTF-8 bytes.</summary>
+    public const long MaxTotalBytes = 2L * 1024 * 1024;
+
+    /// <summary>§1: a slug is a plain name of at most this many characters (<c>[a-z0-9-]</c>).</summary>
+    public const int MaxSlugChars = 64;
+
+    /// <summary>§3: the job's committed-memory bound.</summary>
+    public const long MemoryLimitBytes = 512L * 1024 * 1024;
+
+    /// <summary>§3: the job's user-mode CPU-time bound — a static server or a test runner that burns this much is not the app that was asked for.</summary>
+    public static readonly TimeSpan CpuTimeLimit = TimeSpan.FromMinutes(10);
+
+    /// <summary>§3: the most processes one job may hold at once (a runtime plus what it forks; never a fork bomb).</summary>
+    public const int MaxProcessesPerJob = 8;
+
+    /// <summary>§3: a run's stdout/stderr log under the project root is cut at this size; the result says <c>truncated: true</c>.</summary>
+    public const long MaxLogBytes = 1L * 1024 * 1024;
+
+    /// <summary>§3: a run ends by itself after this long.</summary>
+    public static readonly TimeSpan RunLifetime = TimeSpan.FromMinutes(30);
+
+    /// <summary>§3: at most this many projects run at once.</summary>
+    public const int MaxRunningProjects = 2;
+
+    /// <summary>§3: <c>project.test</c> waits at most this long for the manifest's test command.</summary>
+    public static readonly TimeSpan TestTimeout = TimeSpan.FromMinutes(5);
+
+    /// <summary>§3: <c>project.run</c> waits at most this long for the manifest's port to answer before it calls the run a failure.</summary>
+    public static readonly TimeSpan PortWait = TimeSpan.FromSeconds(20);
+
+    /// <summary>§3: <c>project.stop</c> waits at most this long for the job's processes to be gone.</summary>
+    public static readonly TimeSpan StopWait = TimeSpan.FromSeconds(5);
+
+    /// <summary>The service's per-command cap for scaffold, run, status and stop — the operator family's 30 s (a run answers once the port does, within <see cref="PortWait"/>).</summary>
+    public static readonly TimeSpan CommandTimeoutCap = TimeSpan.FromSeconds(30);
+
+    /// <summary>The service's cap for <c>project.test</c> alone: the test bound plus headroom for the typed answer.</summary>
+    public static readonly TimeSpan TestCommandTimeoutCap = TestTimeout + TimeSpan.FromSeconds(30);
 
     public static bool IsMember(string capability) => All.Contains(capability, StringComparer.Ordinal);
 }

@@ -31,14 +31,17 @@ public sealed class AdvertisementTests
         Assert.Equal(AgentCapabilities.Compose(browserEnabled: false), without);
 
         // M20 appends the documents family (6; 7 since M22's file.fetch) after the operator
-        // family (32) under the same flag; the operator family itself is exactly where it was.
+        // family (32) under the same flag, and M23 the projects family (5) after that; the
+        // operator family itself is exactly where it was.
         var with = AgentCapabilities.Compose(browserEnabled: true, displayPowerEnabled: true, operatorEnabled: true);
-        var appended = AgentCapabilities.Operator.Count + AgentCapabilities.Documents.Count;
+        var appended = AgentCapabilities.Operator.Count + AgentCapabilities.Documents.Count + AgentCapabilities.Projects.Count;
         Assert.Equal(AgentCapabilities.Operator, with.TakeLast(appended).Take(AgentCapabilities.Operator.Count));
-        Assert.Equal(AgentCapabilities.Documents, with.TakeLast(AgentCapabilities.Documents.Count));
+        Assert.Equal(AgentCapabilities.Documents, with.TakeLast(appended).Skip(AgentCapabilities.Operator.Count).Take(AgentCapabilities.Documents.Count));
+        Assert.Equal(AgentCapabilities.Projects, with.TakeLast(AgentCapabilities.Projects.Count));
         Assert.Equal(with.Count, with.Distinct(StringComparer.Ordinal).Count());
         Assert.Equal(32, AgentCapabilities.Operator.Count);
         Assert.Equal(7, AgentCapabilities.Documents.Count);
+        Assert.Equal(5, AgentCapabilities.Projects.Count);
         Assert.Equal(AgentCapabilities.Compose(browserEnabled: true, displayPowerEnabled: true), with.Take(with.Count - appended));
     }
 
@@ -114,7 +117,12 @@ public sealed class AdvertisementTests
 
         Assert.True(options.Enabled);
         Assert.Equal(["hostname", "Get-Date", "ipconfig /all"], options.TerminalAllowlist);
-        Assert.Equal([@"D:\Owner", @"E:\Projects"], options.AuthorisedRoots);
+        // M23: the Projects root is an authorised root whatever the owner listed — appended,
+        // never replacing an entry — so the family has a place to write and the operator can
+        // open what it wrote.
+        Assert.Equal([@"D:\Owner", @"E:\Projects", OperatorOptions.DefaultProjectsRoot()!], options.AuthorisedRoots);
+        Assert.Equal(OperatorOptions.DefaultProjectsRoot(), options.EffectiveProjectsRoot);
+        Assert.EndsWith(@"\Documents\PagentOS Projects", options.EffectiveProjectsRoot, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

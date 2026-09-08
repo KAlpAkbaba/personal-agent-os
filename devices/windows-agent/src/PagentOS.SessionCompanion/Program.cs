@@ -303,6 +303,7 @@ public static class Program
         var operatorOptions = Operator.OperatorOptions.FromConfiguration(configuration);
         Operator.OperatorCapabilities? operatorCapabilities = null;
         Documents.DocumentCapabilities? documentCapabilities = null;
+        Projects.ProjectCapabilities? projectCapabilities = null;
         if (operatorOptions.Enabled && OperatingSystem.IsWindows())
         {
             operatorCapabilities = new Operator.OperatorCapabilities(operatorOptions, loggerFactory.CreateLogger("Operator"), audit);
@@ -322,10 +323,24 @@ public static class Program
                 "documents: ENABLED - {Count} capabilities inside the operator roots (read-only except file.fetch, which writes new files into {Downloads}; secret-bearing names never read or written)",
                 AgentCapabilities.Documents.Count,
                 documentCapabilities.DownloadsRoot ?? "(no Downloads folder: every file.fetch is refused)");
+
+            // M23 (M23_APP_FACTORY_SPEC.md §3, ADR-0086): the projects family — the same flag
+            // once more. Source goes into the one Projects root only; a run is this process's
+            // own child in a bounded job that dies with it (kill-on-close), so nothing the
+            // companion started can outlive the companion.
+            projectCapabilities = new Projects.ProjectCapabilities(operatorOptions, loggerFactory.CreateLogger("Projects"), audit);
+            logger.LogInformation(
+                "projects: ENABLED - {Count} capabilities; root={Root}; runs bounded to {Memory} MiB, {Cpu:F0} min CPU, {Lifetime:F0} min, {Max} at once",
+                AgentCapabilities.Projects.Count,
+                projectCapabilities.ProjectsRoot ?? "(no Documents folder: every project.scaffold is refused)",
+                ProjectCapabilityNames.MemoryLimitBytes / (1024 * 1024),
+                ProjectCapabilityNames.CpuTimeLimit.TotalMinutes,
+                ProjectCapabilityNames.RunLifetime.TotalMinutes,
+                ProjectCapabilityNames.MaxRunningProjects);
         }
         else
         {
-            logger.LogInformation("digital operator: disabled (PAGENTOS_AGENT_OperatorEnabled=true enables it); the operator and documents families are not advertised");
+            logger.LogInformation("digital operator: disabled (PAGENTOS_AGENT_OperatorEnabled=true enables it); the operator, documents and projects families are not advertised");
         }
 
         var runtime = new CompanionRuntime(
@@ -343,7 +358,8 @@ public static class Program
             activityStatus: activityStatus,
             greeting: greeting,
             operatorCapabilities: operatorCapabilities,
-            documentCapabilities: documentCapabilities);
+            documentCapabilities: documentCapabilities,
+            projectCapabilities: projectCapabilities);
         logger.LogInformation("capabilities advertised to the device service: {Capabilities}", string.Join(",", runtime.AdvertisedCapabilities));
 
         if (browserHost is not null && browserOptions.Eager)
@@ -418,6 +434,9 @@ public static class Program
                 // "shutdown" on stdin, a bounded wait, then the process tree — Chrome included.
                 await browserHost.StopAsync().ConfigureAwait(false);
             }
+
+            // M23: every project job this process holds is ended — its own children only.
+            projectCapabilities?.Dispose();
 
             // A ringing alarm must not outlive the process that started it: there would be no
             // way left to stop it except killing the audio session.

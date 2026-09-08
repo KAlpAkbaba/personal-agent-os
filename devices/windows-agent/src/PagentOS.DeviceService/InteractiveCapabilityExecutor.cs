@@ -31,6 +31,11 @@ namespace PagentOS.DeviceService;
 /// owner's files), otherwise <c>capability_missing</c> before the companion is consulted.
 /// Per-command cap 30 s: a search is bounded at 10 s by contract and an extraction of a
 /// 50 MiB document fits well inside the rest.</item>
+/// <item>the projects family (M23, M23_APP_FACTORY_SPEC.md §3) — routed under the SAME
+/// <c>OperatorEnabled</c> gate (writing source and starting a bounded child on the owner's
+/// machine is the same trust decision), otherwise <c>capability_missing</c> before the
+/// companion is consulted. Per-command cap 30 s (<c>project.run</c> answers once the port
+/// does, within 20 s) and 5 min 30 s for <c>project.test</c>, whose bound is 5 min.</item>
 /// </list>
 /// The "no companion connected → <c>dependency_unavailable</c>, retryable" rule belongs to
 /// the pipe server and applies to every family.
@@ -56,6 +61,12 @@ public sealed class InteractiveCapabilityExecutor(
 
     /// <summary>The M20 cap for the documents family (§2 bounds: a 10 s search, a bounded extraction).</summary>
     public static readonly TimeSpan DocumentsTimeoutCap = DocumentCapabilityNames.CommandTimeoutCap;
+
+    /// <summary>The M23 cap for the projects family (scaffold, run, status, stop).</summary>
+    public static readonly TimeSpan ProjectsTimeoutCap = ProjectCapabilityNames.CommandTimeoutCap;
+
+    /// <summary>The M23 cap for <c>project.test</c> alone: the 5 min test bound plus headroom.</summary>
+    public static readonly TimeSpan ProjectTestTimeoutCap = ProjectCapabilityNames.TestCommandTimeoutCap;
 
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
 
@@ -109,6 +120,16 @@ public sealed class InteractiveCapabilityExecutor(
         if (AgentCapabilities.IsDocuments(capability))
         {
             return DocumentsTimeoutCap;
+        }
+
+        if (string.Equals(capability, ProjectCapabilityNames.ProjectTest, StringComparison.Ordinal))
+        {
+            return ProjectTestTimeoutCap;
+        }
+
+        if (AgentCapabilities.IsProjects(capability))
+        {
+            return ProjectsTimeoutCap;
         }
 
         return AgentCapabilities.IsOperator(capability) ? OperatorTimeoutCap : DesktopTimeoutCap;
@@ -204,6 +225,19 @@ public sealed class InteractiveCapabilityExecutor(
                 // would download the URL, so the origin is checked on the side that has not
                 // been asked to yet, against the origin THIS side dialled.
                 ValidateFetchOrigin(command.Payload, BrokerOrigin);
+            }
+        }
+        else if (AgentCapabilities.IsProjects(command.Capability))
+        {
+            if (!OperatorEnabled)
+            {
+                // M23: the projects family is advertised and routed under the operator's
+                // flag; a command aimed straight at the device cannot write source or start
+                // a process before that flag was switched on out loud.
+                throw new CapabilityException(
+                    ErrorClasses.CapabilityMissing,
+                    $"capability '{command.Capability}' is not enabled on this device (OperatorEnabled=false gates the projects family)",
+                    retryable: false);
             }
         }
         else if (!AgentCapabilities.IsInteractive(command.Capability))
