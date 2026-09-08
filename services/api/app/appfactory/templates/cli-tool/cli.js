@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// {{APP_TITLE}} — a tiny command-line tool. `node cli.js --help` lists its commands
+// PagentOS App Factory (cli-tool) — a tiny command-line tool. `node cli.js --help` lists its commands
 // (docs/M23_APP_FACTORY_SPEC.md §4: exercised through terminal.execute, read-only).
 "use strict";
 

@@ -1,4 +1,4 @@
-// {{APP_TITLE}} — stdlib-only Node test runner over logic.js's pure functions.
+// PagentOS App Factory (cli-tool) — stdlib-only Node test runner over logic.js's pure functions.
 var assert = require("assert");
 var CliLogic = require("../logic.js");
 

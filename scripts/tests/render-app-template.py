@@ -27,11 +27,18 @@ def main() -> int:
     parser.add_argument("--template", required=True, choices=sorted(TEMPLATE_KIND))
     parser.add_argument("--name", default="Yapılacaklar")
     parser.add_argument("--out", required=True)
+    parser.add_argument(
+        "--command",
+        action="append",
+        default=[],
+        help="a command name for the cli-tool template (repeatable)",
+    )
     args = parser.parse_args()
 
-    spec = AppSpec.model_validate(
-        {"name": args.name, "kind": TEMPLATE_KIND[args.template], "template": args.template}
-    )
+    payload: dict = {"name": args.name, "kind": TEMPLATE_KIND[args.template], "template": args.template}
+    if args.command:
+        payload["commands"] = [{"name": c} for c in args.command]
+    spec = AppSpec.model_validate(payload)
     files = DeterministicAppGenerator().generate(spec)
     try:
         validate(files)

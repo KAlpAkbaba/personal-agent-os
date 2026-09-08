@@ -1,4 +1,4 @@
-// {{PAGE_TITLE}} — stdlib-only Node test runner over logic.js's pure functions.
+// PagentOS App Factory (static-page) — stdlib-only Node test runner over logic.js's pure functions.
 var assert = require("assert");
 var PageLogic = require("../logic.js");
 

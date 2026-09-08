@@ -1,4 +1,4 @@
-// {{APP_TITLE}} — DOM glue over logic.js (TaskLogic) + localStorage. Vanilla JS, no
+// PagentOS App Factory (task-tracker) — DOM glue over logic.js (TaskLogic) + localStorage. Vanilla JS, no
 // build step, no framework: the app.js/index.html/app.css/logic.js quartet is the
 // whole runtime (docs/M23_APP_FACTORY_SPEC.md §2).
 (function () {

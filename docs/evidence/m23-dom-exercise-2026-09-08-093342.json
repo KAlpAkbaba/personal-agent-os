@@ -1,0 +1,116 @@
+{
+  "kind": "m23_dom_exercise",
+  "started_at": "2026-09-08T09:33:42.682289+00:00",
+  "project_dir": "C:\\Users\\alpak\\AppData\\Local\\Temp\\claude\\E--AI-PersonalAgentOS-Claude-Autonomous-Build-Package-v1\\a969fc59-b765-484a-a9b7-5773f8a50fca\\scratchpad\\m23-render-task-tracker-secfix",
+  "oracle": "E:\\AI\\PersonalAgentOS_Claude_Autonomous_Build_Package_v1\\services\\api\\tests\\fixtures\\apps\\task-tracker\\oracle.json",
+  "template": "task-tracker",
+  "serve_command": "C:/Users/alpak/AppData/Local/Programs/Python/Python312/python.exe -m http.server 49853 --bind 127.0.0.1",
+  "url": "http://127.0.0.1:49853/",
+  "initial_assertions": [
+    {
+      "selector": "#app-title",
+      "expected_exists": true,
+      "count": 1,
+      "ok": true
+    },
+    {
+      "selector": "#task-form",
+      "expected_exists": true,
+      "count": 1,
+      "ok": true
+    },
+    {
+      "selector": "#new-task-input",
+      "expected_exists": true,
+      "count": 1,
+      "ok": true
+    },
+    {
+      "selector": "#add-task-button",
+      "expected_exists": true,
+      "count": 1,
+      "ok": true
+    },
+    {
+      "selector": "#task-list",
+      "expected_exists": true,
+      "count": 1,
+      "ok": true
+    }
+  ],
+  "interaction_steps": [
+    {
+      "step": {
+        "action": "fill",
+        "selector": "#new-task-input",
+        "value": "Sütü al"
+      },
+      "ok": true,
+      "ms": 0
+    },
+    {
+      "step": {
+        "action": "click",
+        "selector": "#add-task-button"
+      },
+      "ok": true,
+      "ms": 141
+    },
+    {
+      "step": {
+        "action": "assert_text",
+        "selector": "#task-list",
+        "contains": "Sütü al"
+      },
+      "ok": true,
+      "ms": 15
+    },
+    {
+      "step": {
+        "action": "click",
+        "selector": ".task-item .toggle-done"
+      },
+      "ok": true,
+      "ms": 31
+    },
+    {
+      "step": {
+        "action": "assert_class",
+        "selector": ".task-item",
+        "class": "done"
+      },
+      "ok": true,
+      "ms": 16
+    },
+    {
+      "step": {
+        "action": "reload"
+      },
+      "ok": true,
+      "ms": 0
+    },
+    {
+      "step": {
+        "action": "assert_text",
+        "selector": "#task-list",
+        "contains": "Sütü al"
+      },
+      "ok": true,
+      "ms": 31
+    },
+    {
+      "step": {
+        "action": "assert_class",
+        "selector": ".task-item",
+        "class": "done"
+      },
+      "ok": true,
+      "ms": 16
+    }
+  ],
+  "verdict": "PASS",
+  "browser": "chromium 151.0.7922.34 headless",
+  "title": "Yapılacaklar",
+  "failures": 0,
+  "finished_at": "2026-09-08T09:33:45.393793+00:00"
+}

@@ -1,4 +1,4 @@
-// {{APP_TITLE}} — pure logic (no DOM, no localStorage). Loaded as a plain <script> in
+// PagentOS App Factory (task-tracker) — pure logic (no DOM, no localStorage). Loaded as a plain <script> in
 // the browser (defines window.TaskLogic) and via require() from tests/run.js in Node —
 // the SAME functions, exercised both ways, so a Node test proves what the browser runs.
 (function (root, factory) {

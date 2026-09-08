@@ -57,6 +57,27 @@ def test_unsafe_paths_are_refused(bad_path: str) -> None:
     assert exc.value.code in ("invalid_path", "empty_project")
 
 
+@pytest.mark.parametrize(
+    "bad_path",
+    [
+        "a.txt:secret.txt",  # an NTFS alternate data stream (the review's shape)
+        "notes/CON /file.txt",  # a reserved name hidden by a trailing space
+        "dir./x.txt",  # a trailing dot Windows would strip
+        "x /y.txt",  # a trailing space Windows would strip
+        "a//b.txt",  # an empty segment
+    ],
+)
+def test_the_shapes_the_device_refuses_are_refused_here_too(bad_path: str) -> None:
+    """The M23 security review (Medium): the two validators must agree, so a file set
+    the Cloud Core certifies is one the device will write, never one it refuses."""
+    files = ProjectFiles(
+        files=(ProjectFile(path=bad_path, text="x"), ProjectFile(path="index.html", text="<p>"))
+    )
+    with pytest.raises(AppValidationError) as excinfo:
+        validate_files(files)
+    assert excinfo.value.code == "invalid_path"
+
+
 def test_duplicate_paths_are_refused() -> None:
     files = ProjectFiles(files=(ProjectFile("a.txt", "1"), ProjectFile("a.txt", "2")))
     with pytest.raises(AppValidationError) as exc:
@@ -66,7 +87,11 @@ def test_duplicate_paths_are_refused() -> None:
 
 def test_a_file_carrying_a_secret_is_refused() -> None:
     files = ProjectFiles(
-        files=(ProjectFile("config.js", "const apiKey = 'sk-abcdefghijklmnopqrstuvwx';"),)
+        files=(
+            ProjectFile(
+                "config.js", "const apiKey = '" + "sk-" + "abcdefghijklmnopqrstuvwx" + "';"
+            ),
+        )
     )
     with pytest.raises(AppValidationError) as exc:
         validate_files(files)

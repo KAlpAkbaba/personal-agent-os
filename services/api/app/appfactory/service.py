@@ -224,7 +224,7 @@ class AppFactoryService:
     # ----------------------------------------------------------------- resolution
 
     def resolve_project(self, db: Session, target: str | None) -> AppProjectRow | None:
-        """"current" (or None) -> the durable ``project`` focus; a literal project id
+        """ "current" (or None) -> the durable ``project`` focus; a literal project id
         string -> that row directly; anything else -> the most recently created row (a
         convenience fallback the same "owner's words win, else best effort" discipline
         ``app.documents.service`` follows for a bare "bu dosya" with no explicit id)."""
@@ -433,7 +433,10 @@ class AppFactoryService:
             )
         if project.kind not in _RUNNABLE_KINDS:
             return self._invalid_argument(
-                capability="app.run", requested_state="running", speech=SPEECH_NOT_RUNNABLE, db=db,
+                capability="app.run",
+                requested_state="running",
+                speech=SPEECH_NOT_RUNNABLE,
+                db=db,
                 session_id=session_id,
             )
 
@@ -505,7 +508,10 @@ class AppFactoryService:
             return self._clarification(SPEECH_NO_PROJECT)
         if project.kind not in _RUNNABLE_KINDS:
             return self._invalid_argument(
-                capability="app.open", requested_state="opened", speech=SPEECH_NOT_RUNNABLE, db=db,
+                capability="app.open",
+                requested_state="opened",
+                speech=SPEECH_NOT_RUNNABLE,
+                db=db,
                 session_id=session_id,
             )
         if not project.run_port:
@@ -513,7 +519,10 @@ class AppFactoryService:
             # now": ``test()`` moves ``state`` on to "tested"/"failed" as a lifecycle
             # milestone without touching a still-running process's own port.
             return self._invalid_argument(
-                capability="app.open", requested_state="opened", speech=SPEECH_NOT_RUNNING, db=db,
+                capability="app.open",
+                requested_state="opened",
+                speech=SPEECH_NOT_RUNNING,
+                db=db,
                 session_id=session_id,
             )
         if browser_gateway is None:

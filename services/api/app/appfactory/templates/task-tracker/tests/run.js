@@ -1,4 +1,4 @@
-// {{APP_TITLE}} — a stdlib-only Node test runner over logic.js's pure functions
+// PagentOS App Factory (task-tracker) — a stdlib-only Node test runner over logic.js's pure functions
 // (docs/M23_APP_FACTORY_SPEC.md §2: "a tests/ folder with a Node test runner over the
 // app's pure functions"). No dependencies, no network: `node tests/run.js`, the exact
 // command the manifest's "test" entry names.

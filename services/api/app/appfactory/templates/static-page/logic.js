@@ -1,4 +1,4 @@
-// {{PAGE_TITLE}} — pure logic (no DOM). Same require()-from-Node / <script>-in-browser
+// PagentOS App Factory (static-page) — pure logic (no DOM). Same require()-from-Node / <script>-in-browser
 // pattern as the task-tracker template's logic.js.
 (function (root, factory) {
   if (typeof module === "object" && module.exports) {

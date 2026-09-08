@@ -95,7 +95,7 @@ def test_create_with_a_secret_bearing_page_body_is_refused_before_scaffold(
         "template": "static-page",
         "page_title": "Notlar",
         "page_heading": "Notlar",
-        "page_body": "api_key: sk-abcdefghijklmnopqrstuvwx",
+        "page_body": "api_key: " + "sk-" + "abcdefghijklmnopqrstuvwx",
     }
     result = service.create(db, device, spec=spec)
     assert result["execution_status"] == "refused"

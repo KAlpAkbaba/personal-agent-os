@@ -107,10 +107,43 @@ def _read_template_files(template: str) -> list[tuple[str, str]]:
     return out
 
 
-def _substitute(text: str, slots: dict[str, str]) -> str:
+#: Files where a slot value becomes CODE. A value spliced here must be a closed-alphabet
+#: token or a JSON literal the generator itself produced — never free text, not even
+#: escaped free text, and never inside a comment (the M23 security review's finding: a
+#: newline in an HTML-escaped title ended a ``//`` comment and the rest of the value ran
+#: as top-level JavaScript in the owner's browser). Enforced at the splice point, in
+#: code, on every render — the templates are data, this rule is not.
+_CODE_SUFFIXES = (".js", ".mjs", ".cjs", ".json", ".ts")
+_CODE_SAFE_RE = re.compile(r"[A-Za-z0-9_-]{1,120}")
+_LINE_TERMINATORS = ("\n", "\r", "\u2028", "\u2029")
+
+
+class _JsonLiteral(str):
+    """A slot value the generator produced with ``json.dumps`` — the only kind of free
+    text allowed into a code file."""
+
+
+def _code_safe(key: str, value: str) -> None:
+    if isinstance(value, _JsonLiteral):
+        if any(t in value for t in _LINE_TERMINATORS):
+            raise AppGeneratorError(f"slot {key} carries a line terminator into code")
+        return
+    if _CODE_SAFE_RE.fullmatch(value) is None:
+        raise AppGeneratorError(f"slot {key} is free text and may not be spliced into a code file")
+
+
+def _substitute(text: str, slots: dict[str, str], *, path: str = "") -> str:
     out = text
+    is_code = path.lower().endswith(_CODE_SUFFIXES)
     for key, value in slots.items():
-        out = out.replace("{{" + key + "}}", value)
+        marker = "{{" + key + "}}"
+        if marker not in out:
+            continue
+        if is_code:
+            _code_safe(key, value)
+        out = out.replace(marker, value)
+    if "{{" in out and re.search(r"\{\{[A-Z_]+\}\}", out):
+        raise AppGeneratorError(f"{path or 'template'} still carries an unfilled slot")
     return out
 
 
@@ -130,7 +163,7 @@ class DeterministicAppGenerator:
         else:  # pragma: no cover - AppSpec's Literal already excludes this
             raise AppGeneratorError(f"unknown template {spec.template!r}")
         rendered = [
-            ProjectFile(path=rel, text=_substitute(text, slots))
+            ProjectFile(path=rel, text=_substitute(text, slots, path=rel))
             for rel, text in _read_template_files(spec.template)
         ]
         return ProjectFiles(files=tuple(rendered))
@@ -161,7 +194,7 @@ class DeterministicAppGenerator:
             # json.dumps on a list of shape-checked identifiers: no string can ever
             # terminate the array literal or inject code (the same "closed alphabet,
             # then escape" discipline app.evolution.skills's splice points use).
-            "COMMANDS_JSON": json.dumps(commands, ensure_ascii=False),
+            "COMMANDS_JSON": _JsonLiteral(json.dumps(commands, ensure_ascii=False)),
             "COMMANDS_LIST": ", ".join(commands),
         }
 

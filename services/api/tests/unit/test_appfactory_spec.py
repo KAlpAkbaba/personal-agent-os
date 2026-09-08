@@ -98,6 +98,41 @@ def test_name_may_not_carry_a_path(bad_name: str) -> None:
         AppSpec.model_validate(_task_tracker(name=bad_name))
 
 
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("page_title", "X\nwindow.__pwned=1;//"),  # the review's working PoC
+        ("page_title", "X\r\n//"),
+        ("page_title", "X\u2028window.x=1"),  # a JS line terminator that is not \n
+        ("page_heading", "a\x00b"),
+        ("page_heading", "tab\there"),
+        ("name", "Notlar\x85im"),  # a C1 control (NEL)
+        ("page_body", "a\x1bb"),  # an escape character inside body text
+    ],
+)
+def test_free_text_refuses_every_control_character(field: str, value: str) -> None:
+    """The M23 security review (Critical): a newline in ``page_title`` ended a ``//``
+    comment in the generated ``app.js`` and the rest ran as top-level JavaScript in the
+    owner's browser. Free text is one line of printable text, or it is refused here —
+    before generation, before the device."""
+    payload = {"name": "Notlarim", "kind": "web_static", "template": "static-page"}
+    payload[field] = value
+    with pytest.raises(ValidationError, match="control character"):
+        AppSpec.model_validate(payload)
+
+
+def test_body_text_may_carry_line_breaks() -> None:
+    spec = AppSpec.model_validate(
+        {
+            "name": "Notlarim",
+            "kind": "web_static",
+            "template": "static-page",
+            "page_body": "ilk satır\nikinci satır",
+        }
+    )
+    assert spec.page_body == "ilk satır\nikinci satır"
+
+
 def test_name_may_not_be_empty() -> None:
     with pytest.raises(ValidationError):
         AppSpec.model_validate(_task_tracker(name=""))

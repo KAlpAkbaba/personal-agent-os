@@ -96,10 +96,25 @@ def _check_path(path: str) -> str | None:
     pure = PureWindowsPath(path)
     if pure.drive or pure.root:
         return "path must not name a drive or be absolute"
+    if "//" in path or "\\\\" in path or "/\\" in path or "\\/" in path:
+        # Windows collapses repeated separators, so the text would not say where the
+        # file lands.
+        return "path carries repeated separators"
+    if ":" in path:
+        # A drive was excluded above; what is left is an NTFS alternate data stream
+        # (``a.txt:secret``) — the device refuses it, and so does this side (the M23
+        # security review: the two validators must agree).
+        return "path must not carry an alternate data stream"
     parts = pure.parts
     if ".." in parts:
         return "path must not contain '..'"
     for part in parts:
+        if part in ("", "."):
+            return "path segment is empty"
+        if part != part.rstrip(" ."):
+            # Windows silently strips trailing dots and spaces, so ``CON `` or ``x.``
+            # would land somewhere other than where the text says.
+            return f"path segment {part!r} ends with a dot or a space"
         stem = part.split(".")[0].upper()
         if stem in _RESERVED_NAMES:
             return f"path segment {part!r} is a reserved Windows device name"

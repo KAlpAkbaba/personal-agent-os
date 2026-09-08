@@ -1,4 +1,4 @@
-// {{PAGE_TITLE}} — nothing to wire up beyond a page-load log line; this template is a
+// PagentOS App Factory (static-page) — nothing to wire up beyond a page-load log line; this template is a
 // static page (docs/M23_APP_FACTORY_SPEC.md §2), not an interactive app.
 (function () {
   "use strict";

@@ -1,4 +1,4 @@
-// {{APP_TITLE}} — pure logic (no process, no argv parsing). Same require()-from-Node
+// PagentOS App Factory (cli-tool) — pure logic (no process, no argv parsing). Same require()-from-Node
 // pattern as the other templates' logic.js.
 (function (root, factory) {
   if (typeof module === "object" && module.exports) {

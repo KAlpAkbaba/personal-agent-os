@@ -18,7 +18,7 @@ from __future__ import annotations
 import re
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # --------------------------------------------------------------------------- kinds
 
@@ -73,6 +73,23 @@ class _StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
 
+#: Every character that can end a line or a statement somewhere a value is spliced: the
+#: C0/C1 controls (incl. NUL, CR, LF, TAB), and the Unicode line/paragraph separators
+#: U+2028/U+2029, which JavaScript treats as line terminators even inside a comment.
+#: The M23 security review (2026-09-08) turned a newline in ``page_title`` into live
+#: top-level JavaScript through a ``// {{PAGE_TITLE}}`` comment line: the generator no
+#: longer splices free text into code at all, and the spec refuses the characters on top.
+_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
+
+
+def _no_control_characters(value: str, field: str, *, allow_newlines: bool = False) -> str:
+    text = value.replace("\r\n", "\n").replace("\n", "") if allow_newlines else value
+    hit = _CONTROL_RE.search(text)
+    if hit is not None:
+        raise ValueError(f"{field} must not contain the control character U+{ord(hit.group()):04X}")
+    return value
+
+
 # ------------------------------------------------------------------- task-tracker
 
 
@@ -80,15 +97,30 @@ class EntityField(_StrictModel):
     name: str = Field(min_length=1, max_length=60)
     type: Literal["text", "number", "boolean", "date"] = "text"
 
+    @field_validator("name")
+    @classmethod
+    def _plain(cls, value: str) -> str:
+        return _no_control_characters(value, "field name")
+
 
 class Entity(_StrictModel):
     name: str = Field(min_length=1, max_length=60)
     fields: list[EntityField] = Field(default_factory=list, max_length=MAX_FIELDS_PER_ENTITY)
 
+    @field_validator("name")
+    @classmethod
+    def _plain(cls, value: str) -> str:
+        return _no_control_characters(value, "entity name")
+
 
 class Screen(_StrictModel):
     name: str = Field(min_length=1, max_length=60)
     entity: str | None = None
+
+    @field_validator("name", "entity")
+    @classmethod
+    def _plain(cls, value: str | None) -> str | None:
+        return None if value is None else _no_control_characters(value, "screen name")
 
 
 # ------------------------------------------------------------------------ cli-tool
@@ -97,6 +129,11 @@ class Screen(_StrictModel):
 class Command(_StrictModel):
     name: str = Field(min_length=1, max_length=MAX_COMMAND_NAME_CHARS)
     description: str = Field(default="", max_length=200)
+
+    @field_validator("description")
+    @classmethod
+    def _plain(cls, value: str) -> str:
+        return _no_control_characters(value, "command description")
 
     @model_validator(mode="after")
     def _name_shape(self) -> Command:
@@ -128,6 +165,23 @@ class AppSpec(_StrictModel):
 
     # cli-tool
     commands: list[Command] | None = Field(default=None, max_length=MAX_COMMANDS)
+
+    @field_validator("name", "page_title", "page_heading")
+    @classmethod
+    def _single_line(cls, value: str | None) -> str | None:
+        # A title is one line of text wherever it lands (an HTML <title>, an <h1>, a
+        # Markdown heading): no control character of any kind.
+        return None if value is None else _no_control_characters(value, "title")
+
+    @field_validator("page_body")
+    @classmethod
+    def _body_text(cls, value: str | None) -> str | None:
+        # Body text may carry line breaks (it is HTML-escaped into a <div>), nothing else.
+        return (
+            None
+            if value is None
+            else _no_control_characters(value, "page body", allow_newlines=True)
+        )
 
     @model_validator(mode="after")
     def _name_shape(self) -> AppSpec:
