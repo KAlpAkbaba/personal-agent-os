@@ -816,5 +816,5 @@ describe("the voice overlay and the genesis posture", () => {
 });
 
 /** The facts type is the contract's: a compile-time check that nothing here reads a key the type does not name. */
-const _typed: GenesisFacts = genesisFacts(null);
-void _typed;
+const typedFacts: GenesisFacts = genesisFacts(null);
+void typedFacts;

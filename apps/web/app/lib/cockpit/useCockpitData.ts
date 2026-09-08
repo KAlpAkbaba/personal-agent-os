@@ -54,6 +54,7 @@ import {
 import { type PendingDraft, type PendingProposal, fetchPendingDrafts, fetchPendingProposals } from "./approvals";
 import { type AppProjectRow, fetchApps } from "./apps";
 import { type ArtifactRow, fetchArtifacts } from "./artifacts";
+import { type GenesisRunRow, fetchGenesisRuns } from "./genesis";
 
 const POLL_VISIBLE_MS = 15_000;
 
@@ -105,6 +106,14 @@ export type CockpitData = {
    * panel says in words. The building itself is on the bus, not here.
    */
   apps: Loaded<AppProjectRow[]>;
+  /**
+   * M24 §8: the genesis runs, from `/v1/genesis/runs`, each with its
+   * capability, its state, whether authority parked it for the owner, and
+   * on `failed` its error. The Cloud Core half lands on a parallel track
+   * (ADR-0087 §8); until it does the route answers "absent", which the
+   * panel says in words. The run's transitions are on the bus, not here.
+   */
+  genesisRuns: Loaded<GenesisRunRow[]>;
 };
 
 const INITIAL: CockpitData = {
@@ -128,6 +137,7 @@ const INITIAL: CockpitData = {
   calendarProposals: { kind: "loading" },
   artifacts: { kind: "loading" },
   apps: { kind: "loading" },
+  genesisRuns: { kind: "loading" },
 };
 
 export function useCockpitData(enabled = true): { data: CockpitData; refresh: () => void } {
@@ -160,6 +170,7 @@ export function useCockpitData(enabled = true): { data: CockpitData; refresh: ()
         calendarProposals,
         artifacts,
         apps,
+        genesisRuns,
       ] = await Promise.all([
         fetchResearchTasks(),
         // Same refresh, no extra timer: the focus changes when the list does.
@@ -182,6 +193,7 @@ export function useCockpitData(enabled = true): { data: CockpitData; refresh: ()
         fetchPendingProposals(),
         fetchArtifacts(),
         fetchApps(),
+        fetchGenesisRuns(),
       ]);
       if (stopped.current) return;
       setData({
@@ -205,6 +217,7 @@ export function useCockpitData(enabled = true): { data: CockpitData; refresh: ()
         calendarProposals,
         artifacts,
         apps,
+        genesisRuns,
       });
     } finally {
       inFlight.current = false;

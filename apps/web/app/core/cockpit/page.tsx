@@ -33,10 +33,12 @@ import OwnerGate from "../../components/OwnerGate";
 import { approvalClient } from "../../lib/cockpit/approvals";
 import { appsClient } from "../../lib/cockpit/apps";
 import { artifactClient, downloadRender } from "../../lib/cockpit/artifacts";
+import { genesisClient } from "../../lib/cockpit/genesis";
 import { useApprovalPair } from "../../lib/cockpit/useApprovalPair";
 import { useAppsControl } from "../../lib/cockpit/useAppsControl";
 import { useArtifactOpen } from "../../lib/cockpit/useArtifactOpen";
 import { useCockpitData } from "../../lib/cockpit/useCockpitData";
+import { useGenesisControl } from "../../lib/cockpit/useGenesisControl";
 import { selectResearchFocus } from "../../lib/research/api";
 import { UnauthorizedError } from "../../lib/session";
 import { alarmView, displayView, eyeView, presenceView, releaseView } from "../../lib/uistate/ambient";
@@ -69,6 +71,7 @@ import {
   DocumentsPanel,
   EvolutionPanel,
   EvolutionSupervisorPanel,
+  GenesisPanel,
   GoalsPanel,
   HealthPanel,
   LedgerPanel,
@@ -124,6 +127,13 @@ function Cockpit() {
   // every answer reloads the list so the rows show the state the Cloud Core
   // now holds — never the state this page assumed a click produced.
   const appsControl = useAppsControl(appsClient, refreshPanels);
+  // M24 §8: "Onayla" and "Vazgeç" ask the Cloud Core for its own
+  // `capability.approve` / `capability.cancel` on one run, one call at a
+  // time, and every answer reloads the list so the rows show the state the
+  // Cloud Core now holds — never the state this page assumed a click
+  // produced. The routes land on the Cloud Core track (ADR-0087 §8); until
+  // they do, the panel says "henüz yok".
+  const genesisControl = useGenesisControl(genesisClient, refreshPanels);
   const [downloadNotice, setDownloadNotice] = useState<string | null>(null);
   const download = useCallback((artifactId: string, format: string) => {
     setDownloadNotice(null);
@@ -230,6 +240,10 @@ function Cockpit() {
               last test counts, and the chips for the device's bounded
               process. */}
           <AppsPanel apps={data.apps} truth={truth} now={now} control={appsControl} />
+          {/* M24 §8: the capabilities the assistant is acquiring for the
+              owner — each run's state, the error when it failed, "Onayla"
+              only while one waits for the owner, "Vazgeç" while one runs. */}
+          <GenesisPanel runs={data.genesisRuns} truth={truth} now={now} control={genesisControl} />
           <GoalsPanel state={data.goals} now={now} />
           <ResearchPanel
             state={data.research}

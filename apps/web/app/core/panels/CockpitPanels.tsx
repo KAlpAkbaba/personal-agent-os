@@ -80,6 +80,17 @@ import {
   rowIsRunning,
 } from "../../lib/cockpit/app-rows";
 import { APP_ACTIONS, type AppAction, type AppProjectRow, type AppsControlProps } from "../../lib/cockpit/apps";
+import type { GenesisAction, GenesisControlProps, GenesisRunRow } from "../../lib/cockpit/genesis";
+import {
+  GENESIS_ACTION_LABEL,
+  GENESIS_ROWS_SHOWN,
+  genesisActionGate,
+  genesisRowActions,
+  genesisRowLine,
+  rowIsActive as genesisRowIsActive,
+  rowIsAwaiting as genesisRowIsAwaiting,
+  rowIsFailed as genesisRowIsFailed,
+} from "../../lib/cockpit/genesis-rows";
 import {
   FOCUS_UNSUPPORTED,
   focusSourceLabel,
@@ -95,6 +106,7 @@ import {
 } from "../../lib/uistate/calendar";
 import { isCalendarProposalState, isMailDraftState } from "../../lib/uistate/contract";
 import { documentPartPhrase, documentView, lastAnswerRefs, previousDocument } from "../../lib/uistate/documents";
+import { genesisView } from "../../lib/uistate/genesis";
 import {
   APP_EMPTY,
   APP_UNTOLD,
@@ -105,6 +117,8 @@ import {
   CALENDAR_UNTOLD,
   DOCUMENT_EMPTY,
   DOCUMENT_LABEL,
+  GENESIS_EMPTY,
+  GENESIS_UNTOLD,
   MAIL_EMPTY,
   MAIL_UNTOLD,
   OPERATOR_EMPTY,
@@ -125,6 +139,7 @@ import {
   artifactClaim,
   calendarClaim,
   documentClaim,
+  genesisClaim,
   liveEventFor,
   mailClaim,
   operatorClaim,
@@ -1803,6 +1818,190 @@ export function AppsPanel({
       )}
       <p className="muted" data-app-note>
         {APP_NOTE}
+      </p>
+    </section>
+  );
+}
+
+// ------------------------------------------------- M24: Capability Genesis
+
+/** What the panel says under the rows: what the two chips ask for, and what this page cannot do. */
+const GENESIS_NOTE =
+  '"Onayla" yalnızca onay bekleyen bir çalışma için gösterilir ve Cloud Core\'dan sesli "Onaylıyorum" ile aynı kapıdan geçmesini ister: yetkilendirme sahip oturumuna bağlı kaydedilir, çalışma oradan sürer. "Vazgeç" süren bir çalışmayı durdurmasını ister; kayıt bırakmaz. Bir yetenek "doğrulandı" dendiğinde vardır, önce değil. Bu ekran arayüz araştırmaz, bağdaştırıcı yazmaz, yetenek kaydetmez, uygulamaya ulaşmaz.';
+
+/**
+ * The chips under one run: "Onayla" ONLY at `awaiting_approval`, "Vazgeç"
+ * while the run is active, neither once it settled or failed — each drawn
+ * only when the Cloud Core would not refuse it, and disabled with the reason
+ * in words while another call is in flight.
+ */
+function GenesisControls({ row, control }: { row: GenesisRunRow; control: GenesisControlProps }) {
+  const actions = genesisRowActions(row);
+  if (actions.length === 0) return null;
+  const handlers: Record<GenesisAction, (id: string) => void> = { approve: control.onApprove, cancel: control.onCancel };
+  const gates = actions.map((action) => ({ action, gate: genesisActionGate(row, action, control.busy) }));
+  const inFlight = control.busy !== null && control.busy.id === row.run_id;
+  // One sentence per distinct reason, naming every chip it refuses; the one
+  // in-flight call disables both chips and is said once.
+  const reasons = new Map<string, { actions: GenesisAction[]; kind: string }>();
+  for (const { action, gate } of gates) {
+    if (gate.reason === null) continue;
+    const entry = reasons.get(gate.reason) ?? { actions: [], kind: gate.reasonKind ?? "" };
+    entry.actions.push(action);
+    reasons.set(gate.reason, entry);
+  }
+  return (
+    <div
+      className="approval-pair"
+      data-genesis-controls={row.run_id}
+      data-genesis-in-flight={inFlight ? "yes" : "no"}
+      data-genesis-in-flight-action={inFlight && control.busy ? control.busy.action : ""}
+    >
+      {gates.map(({ action, gate }) => (
+        <button
+          key={action}
+          type="button"
+          className="core-chip"
+          data-genesis-action={action}
+          data-genesis-target={row.run_id}
+          data-genesis-enabled={gate.enabled ? "yes" : "no"}
+          disabled={!gate.enabled}
+          onClick={() => handlers[action](row.run_id)}
+        >
+          {GENESIS_ACTION_LABEL[action]}
+        </button>
+      ))}
+      {Array.from(reasons, ([reason, { actions: refused, kind }]) => (
+        <span key={reason} className="approval-reason" data-genesis-reason={kind} data-genesis-reason-for={refused.join(",")}>
+          {kind === "busy" ? reason : `${refused.map((a) => GENESIS_ACTION_LABEL[a]).join(", ")}: ${reason}`}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function GenesisRowItem({ row, now, control }: { row: GenesisRunRow; now: number; control: GenesisControlProps }) {
+  const awaiting = genesisRowIsAwaiting(row);
+  const failed = genesisRowIsFailed(row);
+  return (
+    <li
+      data-genesis-run={row.run_id}
+      data-genesis-run-state={row.state ?? ""}
+      data-genesis-run-capability={row.capability ?? ""}
+      data-genesis-run-awaiting={awaiting ? "yes" : "no"}
+      data-genesis-run-active={genesisRowIsActive(row) ? "yes" : "no"}
+      data-genesis-run-failed={failed ? "yes" : "no"}
+      data-genesis-run-approval-required={row.approval_required === null ? "" : row.approval_required ? "yes" : "no"}
+      data-genesis-run-error-class={row.error_class ?? ""}
+    >
+      <div className="event-row">
+        <span>{row.capability ?? "yetenek bildirilmedi"}</span>
+        <span className="event-when">{when(row.updated_at ?? row.created_at, now)}</span>
+      </div>
+      {/* The state with its error class beside failed, the approval flag and the two classes — each as the row says it, or the statement that it did not. */}
+      <span className="muted" data-genesis-line>
+        {genesisRowLine(row)}
+      </span>
+      {/* The run's own sentence about its failure, when the row carried one — only beside failed. */}
+      {failed && row.error_message && (
+        <span className="muted" data-genesis-error-message>
+          {row.error_message}
+        </span>
+      )}
+      <GenesisControls row={row} control={control} />
+    </li>
+  );
+}
+
+/**
+ * Yeni Yetenek (M24 spec §8): what Capability Genesis is doing, from the
+ * bus, and the runs that exist, from `/v1/genesis/runs` — each run with its
+ * capability, its state, when, and the error when it failed; "Onayla" ONLY
+ * for a run at `awaiting_approval` and "Vazgeç" while a run is active, both
+ * asking the Cloud Core for its own `capability.approve` / `capability.cancel`.
+ *
+ * Two sources, kept apart because they answer different questions. The bus
+ * line is "what is happening now" and decays like every bus claim; the rows
+ * are "what exists" and are the route's. Nothing here researches, builds,
+ * registers or reaches the application: a run is waiting because its row
+ * says so, a chip is drawn because the Cloud Core would not refuse it and
+ * enabled because nothing else is in flight — and the Cloud Core still
+ * refuses on its own terms (the approval is bound to the owner's session,
+ * ADR-0087 §5). The empty sentence is the route's answer, never the bus's
+ * silence — and "henüz yok" (no route on this Cloud Core) is neither. No
+ * progress bar and no "improving": thirteen states, each a sentence about
+ * a row.
+ */
+export function GenesisPanel({
+  runs,
+  truth,
+  now,
+  control,
+}: {
+  runs: Loaded<GenesisRunRow[]>;
+  truth: CoreTruth;
+  now: number;
+  control: GenesisControlProps;
+}) {
+  const view = genesisView(genesisClaim(truth, now));
+  const told = view.lastKnown !== null;
+  const rows = runs.kind === "ok" ? runs.value : [];
+  const shown = rows.slice(0, GENESIS_ROWS_SHOWN);
+  const awaiting = rows.filter(genesisRowIsAwaiting).length;
+  const failed = rows.some(genesisRowIsFailed);
+  return (
+    <section
+      className={`panel ${awaiting > 0 || failed ? "attention" : ""}`}
+      data-panel="genesis"
+      data-panel-state={runs.kind}
+      data-panel-empty={runs.kind === "ok" ? (rows.length ? "no" : "yes") : ""}
+      data-genesis-stage={view.stage}
+      data-genesis-last-known={view.lastKnown ?? ""}
+      data-genesis-posture={told ? view.posture : ""}
+      data-genesis-awaiting={runs.kind === "ok" ? awaiting : ""}
+    >
+      <h3 className="panel-title">
+        <span>Yeni Yetenek</span>
+        {runs.kind === "ok" && (
+          <span className="panel-count" data-panel-badge>
+            {awaiting > 0 ? `${awaiting} onay bekliyor / ${rows.length}` : `${rows.length}`}
+          </span>
+        )}
+      </h3>
+      {/* The bus: the caption the Core draws, with its age; last-known when it aged out. */}
+      <p
+        className={told ? "muted" : "panel-empty"}
+        data-genesis-activity={told ? view.stage : "untold"}
+        data-genesis-caption={told ? view.caption : ""}
+      >
+        {told ? `${view.stage === "none" ? "Son bilinen: " : ""}${view.caption} · ${formatAge(view.ageMs)}` : GENESIS_UNTOLD}
+      </p>
+      <LoadedNotice state={runs} />
+      {runs.kind === "ok" && rows.length === 0 && (
+        <p className="panel-empty" data-panel-empty-text>
+          {GENESIS_EMPTY}
+        </p>
+      )}
+      {shown.length > 0 && (
+        <ul>
+          {shown.map((row) => (
+            <GenesisRowItem key={row.run_id} row={row} now={now} control={control} />
+          ))}
+        </ul>
+      )}
+      {control.outcome && (
+        <p
+          className={`approval-outcome ${control.outcome.ok ? "muted" : "panel-unknown"}`}
+          data-genesis-outcome={control.outcome.action}
+          data-genesis-ok={control.outcome.ok ? "yes" : "no"}
+          data-genesis-target={control.outcome.id}
+        >
+          {control.outcome.text}
+          {` · ${formatAge(Math.max(0, now - control.outcome.at))}`}
+        </p>
+      )}
+      <p className="muted" data-genesis-note>
+        {GENESIS_NOTE}
       </p>
     </section>
   );
