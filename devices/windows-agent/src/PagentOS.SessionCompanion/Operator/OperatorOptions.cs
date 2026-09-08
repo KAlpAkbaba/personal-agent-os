@@ -13,12 +13,16 @@ namespace PagentOS.SessionCompanion.Operator;
 /// <item><c>OperatorRoots</c> — <c>;</c>-separated directories the operator may open, reveal
 /// and list; empty means <see cref="DefaultRoots"/>: the owner's document folders, not the
 /// profile.</item>
+/// <item><c>DownloadsRoot</c> (M22, DEVICE_PROTOCOL.md §6k) — the ONE directory
+/// <c>file.fetch</c> writes into; empty means the owner's Downloads known folder. It must
+/// itself resolve inside <c>OperatorRoots</c> at fetch time or every fetch is refused.</item>
 /// </list>
 /// </summary>
 public sealed record OperatorOptions(
     bool Enabled,
     IReadOnlyList<string> TerminalAllowlist,
-    IReadOnlyList<string> AuthorisedRoots)
+    IReadOnlyList<string> AuthorisedRoots,
+    string? DownloadsRoot = null)
 {
     /// <summary>The fixture folder the operator lab uses (M19_DIGITAL_OPERATOR_SPEC.md §5); a default root so the lab runs against the default configuration.</summary>
     public static string FixtureRoot => Path.Combine(Path.GetTempPath(), "pagentos-operator-fixture");
@@ -30,11 +34,16 @@ public sealed record OperatorOptions(
         var enabled = Program.ParseFlag(configuration["OperatorEnabled"]);
         var allowlist = SplitList(configuration["TerminalAllowlist"]);
         var roots = SplitList(configuration["OperatorRoots"]);
+        var downloads = configuration["DownloadsRoot"];
         return new OperatorOptions(
             enabled,
             allowlist.Count == 0 ? TerminalRunner.DefaultAllowlist : allowlist,
-            roots.Count == 0 ? DefaultRoots() : roots);
+            roots.Count == 0 ? DefaultRoots() : roots,
+            string.IsNullOrWhiteSpace(downloads) ? null : downloads.Trim());
     }
+
+    /// <summary>The directory <c>file.fetch</c> writes into: the configured one, else the owner's Downloads folder; null when the machine has neither.</summary>
+    public string? EffectiveDownloadsRoot => string.IsNullOrWhiteSpace(DownloadsRoot) ? DownloadsFolder() : DownloadsRoot;
 
     /// <summary>
     /// The owner's document folders — Documents, Desktop, Downloads, Pictures, Videos, Music —
@@ -57,7 +66,8 @@ public sealed record OperatorOptions(
         return roots;
     }
 
-    private static string? DownloadsFolder()
+    /// <summary>The owner's Downloads known folder (the owner may have moved it), else <c>%USERPROFILE%\Downloads</c>, else null.</summary>
+    public static string? DownloadsFolder()
     {
         var known = OperatingSystem.IsWindows() ? OperatorNative.KnownFolderPath(DownloadsFolderId) : null;
         if (!string.IsNullOrWhiteSpace(known))

@@ -267,6 +267,17 @@ public sealed class CompanionRuntime(
             return;
         }
 
+        // M22 (§6k): the service tells this companion which origin it dialled; file.fetch is
+        // pinned to it from this moment. An older service sends none, and then no fetch is
+        // possible — the companion never guesses an origin from its own configuration.
+        if (documentCapabilities is not null)
+        {
+            documentCapabilities.FetchOrigin = challenge.BrokerOrigin;
+            logger.LogInformation(
+                "file.fetch origin: {Origin}",
+                documentCapabilities.FetchOrigin ?? "(none - the service sent no broker origin; every file.fetch is refused)");
+        }
+
         var guard = new IpcChannelGuard(challenge.ConnectionId);
         var hello = new CompanionHello
         {

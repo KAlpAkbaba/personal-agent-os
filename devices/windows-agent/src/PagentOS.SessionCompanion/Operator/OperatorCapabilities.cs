@@ -47,7 +47,8 @@ public sealed class OperatorCapabilities
     public const int MaxArgs = 16;
     public const int MaxArgChars = 1024;
 
-    private static readonly HashSet<string> ExecutableExtensions = new(StringComparer.OrdinalIgnoreCase)
+    /// <summary>Extensions <c>file.open</c> never opens (they run) — and, since M22, that <c>file.fetch</c> never writes.</summary>
+    public static readonly IReadOnlySet<string> ExecutableExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
         ".exe", ".bat", ".cmd", ".com", ".scr", ".ps1", ".psm1", ".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh", ".msi", ".msp", ".lnk", ".hta", ".reg", ".cpl", ".inf",
     };
