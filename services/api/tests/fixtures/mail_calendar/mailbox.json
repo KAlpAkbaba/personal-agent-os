@@ -1,0 +1,1041 @@
+{
+  "owner": {
+    "name": "Alp Akbaba",
+    "email": "alp@example.com"
+  },
+  "folders": [
+    "INBOX",
+    "Gönderilmiş",
+    "Arşiv"
+  ],
+  "messages": [
+    {
+      "uid": 115,
+      "folder": "Arşiv",
+      "message_id": "<m115@fixture.example>",
+      "from": {
+        "name": "Ali Yılmaz",
+        "email": "ali.yilmaz@example.com"
+      },
+      "to": [
+        {
+          "name": "Alp Akbaba",
+          "email": "alp@example.com"
+        }
+      ],
+      "cc": [],
+      "subject": "Sözleşme taslağı",
+      "date": "2026-08-20T11:00:00+03:00",
+      "flags": [
+        "\\Seen"
+      ],
+      "body_text": "Sözleşme taslağının ilk sürümü ekte. Ödeme süresi 30 gün olarak yazıldı.",
+      "body_html": null,
+      "attachments": [
+        {
+          "filename": "sozlesme-taslak.docx",
+          "size": 37178,
+          "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        }
+      ],
+      "in_reply_to": null,
+      "references": [],
+      "thread": "Sözleşme taslağı"
+    },
+    {
+      "uid": 116,
+      "folder": "Arşiv",
+      "message_id": "<m116@fixture.example>",
+      "from": {
+        "name": "Zeynep Arslan",
+        "email": "zeynep.arslan@example.com"
+      },
+      "to": [
+        {
+          "name": "Alp Akbaba",
+          "email": "alp@example.com"
+        }
+      ],
+      "cc": [],
+      "subject": "Fotoğraflar",
+      "date": "2026-08-22T18:40:00+03:00",
+      "flags": [
+        "\\Seen"
+      ],
+      "body_text": "Geçen haftaki etkinliğin fotoğraflarını paylaşıyorum.",
+      "body_html": null,
+      "attachments": [],
+      "in_reply_to": null,
+      "references": [],
+      "thread": "Fotoğraflar"
+    },
+    {
+      "uid": 117,
+      "folder": "Arşiv",
+      "message_id": "<m117@fixture.example>",
+      "from": {
+        "name": "Mehmet Demir",
+        "email": "mehmet.demir@example.com"
+      },
+      "to": [
+        {
+          "name": "Alp Akbaba",
+          "email": "alp@example.com"
+        }
+      ],
+      "cc": [],
+      "subject": "Sunucu bakımı",
+      "date": "2026-08-25T09:00:00+03:00",
+      "flags": [
+        "\\Seen"
+      ],
+      "body_text": "Cumartesi 02:00-04:00 arasında sunucu bakımı yapılacak.",
+      "body_html": null,
+      "attachments": [],
+      "in_reply_to": null,
+      "references": [],
+      "thread": "Sunucu bakımı"
+    },
+    {
+      "uid": 118,
+      "folder": "Arşiv",
+      "message_id": "<m118@fixture.example>",
+      "from": {
+        "name": "Ali Yılmaz",
+        "email": "ali.yilmaz@example.com"
+      },
+      "to": [
+        {
+          "name": "Alp Akbaba",
+          "email": "alp@example.com"
+        }
+      ],
+      "cc": [],
+      "subject": "Arşiv notu 1",
+      "date": "2026-08-01T08:00:00+03:00",
+      "flags": [
+        "\\Seen"
+      ],
+      "body_text": "Arşivlenmiş 1. not. Bu satır sabit bir dolgu metnidir.",
+      "body_html": null,
+      "attachments": [],
+      "in_reply_to": null,
+      "references": [],
+      "thread": "Arşiv notu 1"
+    },
+    {
+      "uid": 119,
+      "folder": "Arşiv",
+      "message_id": "<m119@fixture.example>",
+      "from": {
+        "name": "Ayşe Kaya",
+        "email": "ayse.kaya@example.com"
+      },
+      "to": [
+        {
+          "name": "Alp Akbaba",
+          "email": "alp@example.com"
+        }
+      ],
+      "cc": [],
+      "subject": "Arşiv notu 2",
+      "date": "2026-08-02T09:05:00+03:00",
+      "flags": [
+        "\\Seen"
+      ],
+      "body_text": "Arşivlenmiş 2. not. Bu satır sabit bir dolgu metnidir.",
+      "body_html": null,
+      "attachments": [],
+      "in_reply_to": null,
+      "references": [],
+      "thread": "Arşiv notu 2"
+    },
+    {
+      "uid": 120,
+      "folder": "Arşiv",
+      "message_id": "<m120@fixture.example>",
+      "from": {
+        "name": "Mehmet Demir",
+        "email": "mehmet.demir@example.com"
+      },
+      "to": [
+        {
+          "name": "Alp Akbaba",
+          "email": "alp@example.com"
+        }
+      ],
+      "cc": [],
+      "subject": "Arşiv notu 3",
+      "date": "2026-08-03T10:10:00+03:00",
+      "flags": [
+        "\\Seen"
+      ],
+      "body_text": "Arşivlenmiş 3. not. Bu satır sabit bir dolgu metnidir.",
+      "body_html": null,
+      "attachments": [],
+      "in_reply_to": null,
+      "references": [],
+      "thread": "Arşiv notu 3"
+    },
+    {
+      "uid": 121,
+      "folder": "Arşiv",
+      "message_id": "<m121@fixture.example>",
+      "from": {
+        "name": "Zeynep Arslan",
+        "email": "zeynep.arslan@example.com"
+      },
+      "to": [
+        {
+          "name": "Alp Akbaba",
+          "email": "alp@example.com"
+        }
+      ],
+      "cc": [],
+      "subject": "Arşiv notu 4",
+      "date": "2026-08-04T11:15:00+03:00",
+      "flags": [
+        "\\Seen"
+      ],
+      "body_text": "Arşivlenmiş 4. not. Bu satır sabit bir dolgu metnidir.",
+      "body_html": null,
+      "attachments": [],
+      "in_reply_to": null,
+      "references": [],
+      "thread": "Arşiv notu 4"
+    },
+    {
+      "uid": 122,
+      "folder": "Arşiv",
+      "message_id": "<m122@fixture.example>",
+      "from": {
+        "name": "Haftalık Bülten",
+        "email": "bulten@haber.example"
+      },
+      "to": [
+        {
+          "name": "Alp Akbaba",
+          "email": "alp@example.com"
+        }
+      ],
+      "cc": [],
+      "subject": "Arşiv notu 5",
+      "date": "2026-08-05T12:20:00+03:00",
+      "flags": [
+        "\\Seen"
+      ],
+      "body_text": "Arşivlenmiş 5. not. Bu satır sabit bir dolgu metnidir.",
+      "body_html": null,
+      "attachments": [],
+      "in_reply_to": null,
+      "references": [],
+      "thread": "Arşiv notu 5"
+    },
+    {
+      "uid": 123,
+      "folder": "Arşiv",
+      "message_id": "<m123@fixture.example>",
+      "from": {
+        "name": "Ali Yılmaz",
+        "email": "ali.yilmaz@example.com"
+      },
+      "to": [
+        {
+          "name": "Alp Akbaba",
+          "email": "alp@example.com"
+        }
+      ],
+      "cc": [],
+      "subject": "Arşiv notu 6",
+      "date": "2026-08-06T13:25:00+03:00",
+      "flags": [
+        "\\Seen"
+      ],
+      "body_text": "Arşivlenmiş 6. not. Bu satır sabit bir dolgu metnidir.",
+      "body_html": null,
+      "attachments": [],
+      "in_reply_to": null,
+      "references": [],
+      "thread": "Arşiv notu 6"
+    },
+    {
+      "uid": 124,
+      "folder": "Arşiv",
+      "message_id": "<m124@fixture.example>",
+      "from": {
+        "name": "Ayşe Kaya",
+        "email": "ayse.kaya@example.com"
+      },
+      "to": [
+        {
+          "name": "Alp Akbaba",
+          "email": "alp@example.com"
+        }
+      ],
+      "cc": [],
+      "subject": "Arşiv notu 7",
+      "date": "2026-08-07T14:30:00+03:00",
+      "flags": [
+        "\\Seen"
+      ],
+      "body_text": "Arşivlenmiş 7. not. Bu satır sabit bir dolgu metnidir.",
+      "body_html": null,
+      "attachments": [],
+      "in_reply_to": null,
+      "references": [],
+      "thread": "Arşiv notu 7"
+    },
+    {
+      "uid": 125,
+      "folder": "Arşiv",
+      "message_id": "<m125@fixture.example>",
+      "from": {
+        "name": "Mehmet Demir",
+        "email": "mehmet.demir@example.com"
+      },
+      "to": [
+        {
+          "name": "Alp Akbaba",
+          "email": "alp@example.com"
+        }
+      ],
+      "cc": [],
+      "subject": "Arşiv notu 8",
+      "date": "2026-08-08T15:35:00+03:00",
+      "flags": [
+        "\\Seen"
+      ],
+      "body_text": "Arşivlenmiş 8. not. Bu satır sabit bir dolgu metnidir.",
+      "body_html": null,
+      "attachments": [],
+      "in_reply_to": null,
+      "references": [],
+      "thread": "Arşiv notu 8"
+    },
+    {
+      "uid": 126,
+      "folder": "Arşiv",
+      "message_id": "<m126@fixture.example>",
+      "from": {
+        "name": "Zeynep Arslan",
+        "email": "zeynep.arslan@example.com"
+      },
+      "to": [
+        {
+          "name": "Alp Akbaba",
+          "email": "alp@example.com"
+        }
+      ],
+      "cc": [],
+      "subject": "Arşiv notu 9",
+      "date": "2026-08-09T16:40:00+03:00",
+      "flags": [
+        "\\Seen"
+      ],
+      "body_text": "Arşivlenmiş 9. not. Bu satır sabit bir dolgu metnidir.",
+      "body_html": null,
+      "attachments": [],
+      "in_reply_to": null,
+      "references": [],
+      "thread": "Arşiv notu 9"
+    },
+    {
+      "uid": 127,
+      "folder": "Arşiv",
+      "message_id": "<m127@fixture.example>",
+      "from": {
+        "name": "Haftalık Bülten",
+        "email": "bulten@haber.example"
+      },
+      "to": [
+        {
+          "name": "Alp Akbaba",
+          "email": "alp@example.com"
+        }
+      ],
+      "cc": [],
+      "subject": "Arşiv notu 10",
+      "date": "2026-08-10T08:45:00+03:00",
+      "flags": [
+        "\\Seen"
+      ],
+      "body_text": "Arşivlenmiş 10. not. Bu satır sabit bir dolgu metnidir.",
+      "body_html": null,
+      "attachments": [],
+      "in_reply_to": null,
+      "references": [],
+      "thread": "Arşiv notu 10"
+    },
+    {
+      "uid": 128,
+      "folder": "Arşiv",
+      "message_id": "<m128@fixture.example>",
+      "from": {
+        "name": "Ali Yılmaz",
+        "email": "ali.yilmaz@example.com"
+      },
+      "to": [
+        {
+          "name": "Alp Akbaba",
+          "email": "alp@example.com"
+        }
+      ],
+      "cc": [],
+      "subject": "Arşiv notu 11",
+      "date": "2026-08-11T09:50:00+03:00",
+      "flags": [
+        "\\Seen"
+      ],
+      "body_text": "Arşivlenmiş 11. not. Bu satır sabit bir dolgu metnidir.",
+      "body_html": null,
+      "attachments": [],
+      "in_reply_to": null,
+      "references": [],
+      "thread": "Arşiv notu 11"
+    },
+    {
+      "uid": 129,
+      "folder": "Arşiv",
+      "message_id": "<m129@fixture.example>",
+      "from": {
+        "name": "Ayşe Kaya",
+        "email": "ayse.kaya@example.com"
+      },
+      "to": [
+        {
+          "name": "Alp Akbaba",
+          "email": "alp@example.com"
+        }
+      ],
+      "cc": [],
+      "subject": "Arşiv notu 12",
+      "date": "2026-08-12T10:55:00+03:00",
+      "flags": [
+        "\\Seen"
+      ],
+      "body_text": "Arşivlenmiş 12. not. Bu satır sabit bir dolgu metnidir.",
+      "body_html": null,
+      "attachments": [],
+      "in_reply_to": null,
+      "references": [],
+      "thread": "Arşiv notu 12"
+    },
+    {
+      "uid": 130,
+      "folder": "Arşiv",
+      "message_id": "<m130@fixture.example>",
+      "from": {
+        "name": "Mehmet Demir",
+        "email": "mehmet.demir@example.com"
+      },
+      "to": [
+        {
+          "name": "Alp Akbaba",
+          "email": "alp@example.com"
+        }
+      ],
+      "cc": [],
+      "subject": "Arşiv notu 13",
+      "date": "2026-08-13T11:00:00+03:00",
+      "flags": [
+        "\\Seen"
+      ],
+      "body_text": "Arşivlenmiş 13. not. Bu satır sabit bir dolgu metnidir.",
+      "body_html": null,
+      "attachments": [],
+      "in_reply_to": null,
+      "references": [],
+      "thread": "Arşiv notu 13"
+    },
+    {
+      "uid": 131,
+      "folder": "Arşiv",
+      "message_id": "<m131@fixture.example>",
+      "from": {
+        "name": "Zeynep Arslan",
+        "email": "zeynep.arslan@example.com"
+      },
+      "to": [
+        {
+          "name": "Alp Akbaba",
+          "email": "alp@example.com"
+        }
+      ],
+      "cc": [],
+      "subject": "Arşiv notu 14",
+      "date": "2026-08-14T12:05:00+03:00",
+      "flags": [
+        "\\Seen"
+      ],
+      "body_text": "Arşivlenmiş 14. not. Bu satır sabit bir dolgu metnidir.",
+      "body_html": null,
+      "attachments": [],
+      "in_reply_to": null,
+      "references": [],
+      "thread": "Arşiv notu 14"
+    },
+    {
+      "uid": 132,
+      "folder": "Arşiv",
+      "message_id": "<m132@fixture.example>",
+      "from": {
+        "name": "Haftalık Bülten",
+        "email": "bulten@haber.example"
+      },
+      "to": [
+        {
+          "name": "Alp Akbaba",
+          "email": "alp@example.com"
+        }
+      ],
+      "cc": [],
+      "subject": "Arşiv notu 15",
+      "date": "2026-08-15T13:10:00+03:00",
+      "flags": [
+        "\\Seen"
+      ],
+      "body_text": "Arşivlenmiş 15. not. Bu satır sabit bir dolgu metnidir.",
+      "body_html": null,
+      "attachments": [],
+      "in_reply_to": null,
+      "references": [],
+      "thread": "Arşiv notu 15"
+    },
+    {
+      "uid": 133,
+      "folder": "Arşiv",
+      "message_id": "<m133@fixture.example>",
+      "from": {
+        "name": "Ali Yılmaz",
+        "email": "ali.yilmaz@example.com"
+      },
+      "to": [
+        {
+          "name": "Alp Akbaba",
+          "email": "alp@example.com"
+        }
+      ],
+      "cc": [],
+      "subject": "Arşiv notu 16",
+      "date": "2026-08-01T14:15:00+03:00",
+      "flags": [
+        "\\Seen"
+      ],
+      "body_text": "Arşivlenmiş 16. not. Bu satır sabit bir dolgu metnidir.",
+      "body_html": null,
+      "attachments": [],
+      "in_reply_to": null,
+      "references": [],
+      "thread": "Arşiv notu 16"
+    },
+    {
+      "uid": 134,
+      "folder": "Arşiv",
+      "message_id": "<m134@fixture.example>",
+      "from": {
+        "name": "Ayşe Kaya",
+        "email": "ayse.kaya@example.com"
+      },
+      "to": [
+        {
+          "name": "Alp Akbaba",
+          "email": "alp@example.com"
+        }
+      ],
+      "cc": [],
+      "subject": "Arşiv notu 17",
+      "date": "2026-08-02T15:20:00+03:00",
+      "flags": [
+        "\\Seen"
+      ],
+      "body_text": "Arşivlenmiş 17. not. Bu satır sabit bir dolgu metnidir.",
+      "body_html": null,
+      "attachments": [],
+      "in_reply_to": null,
+      "references": [],
+      "thread": "Arşiv notu 17"
+    },
+    {
+      "uid": 135,
+      "folder": "Arşiv",
+      "message_id": "<m135@fixture.example>",
+      "from": {
+        "name": "Mehmet Demir",
+        "email": "mehmet.demir@example.com"
+      },
+      "to": [
+        {
+          "name": "Alp Akbaba",
+          "email": "alp@example.com"
+        }
+      ],
+      "cc": [],
+      "subject": "Arşiv notu 18",
+      "date": "2026-08-03T16:25:00+03:00",
+      "flags": [
+        "\\Seen"
+      ],
+      "body_text": "Arşivlenmiş 18. not. Bu satır sabit bir dolgu metnidir.",
+      "body_html": null,
+      "attachments": [],
+      "in_reply_to": null,
+      "references": [],
+      "thread": "Arşiv notu 18"
+    },
+    {
+      "uid": 136,
+      "folder": "Arşiv",
+      "message_id": "<m136@fixture.example>",
+      "from": {
+        "name": "Zeynep Arslan",
+        "email": "zeynep.arslan@example.com"
+      },
+      "to": [
+        {
+          "name": "Alp Akbaba",
+          "email": "alp@example.com"
+        }
+      ],
+      "cc": [],
+      "subject": "Arşiv notu 19",
+      "date": "2026-08-04T08:30:00+03:00",
+      "flags": [
+        "\\Seen"
+      ],
+      "body_text": "Arşivlenmiş 19. not. Bu satır sabit bir dolgu metnidir.",
+      "body_html": null,
+      "attachments": [],
+      "in_reply_to": null,
+      "references": [],
+      "thread": "Arşiv notu 19"
+    },
+    {
+      "uid": 137,
+      "folder": "Arşiv",
+      "message_id": "<m137@fixture.example>",
+      "from": {
+        "name": "Haftalık Bülten",
+        "email": "bulten@haber.example"
+      },
+      "to": [
+        {
+          "name": "Alp Akbaba",
+          "email": "alp@example.com"
+        }
+      ],
+      "cc": [],
+      "subject": "Arşiv notu 20",
+      "date": "2026-08-05T09:35:00+03:00",
+      "flags": [
+        "\\Seen"
+      ],
+      "body_text": "Arşivlenmiş 20. not. Bu satır sabit bir dolgu metnidir.",
+      "body_html": null,
+      "attachments": [],
+      "in_reply_to": null,
+      "references": [],
+      "thread": "Arşiv notu 20"
+    },
+    {
+      "uid": 102,
+      "folder": "Gönderilmiş",
+      "message_id": "<m102@fixture.example>",
+      "from": {
+        "name": "Alp Akbaba",
+        "email": "alp@example.com"
+      },
+      "to": [
+        {
+          "name": "Ali Yılmaz",
+          "email": "ali.yilmaz@example.com"
+        }
+      ],
+      "cc": [],
+      "subject": "Re: Proje planı",
+      "date": "2026-09-01T14:40:00+03:00",
+      "flags": [
+        "\\Seen"
+      ],
+      "body_text": "Teşekkürler Ali, ikinci aşamayı bir hafta öne çekebilir miyiz?",
+      "body_html": null,
+      "attachments": [],
+      "in_reply_to": "<m101@fixture.example>",
+      "references": [
+        "<m101@fixture.example>"
+      ],
+      "thread": "Proje planı"
+    },
+    {
+      "uid": 106,
+      "folder": "Gönderilmiş",
+      "message_id": "<m106@fixture.example>",
+      "from": {
+        "name": "Alp Akbaba",
+        "email": "alp@example.com"
+      },
+      "to": [
+        {
+          "name": "Örnek Enerji",
+          "email": "fatura@ornekenerji.example"
+        }
+      ],
+      "cc": [],
+      "subject": "Re: Eylül 2026 elektrik faturanız",
+      "date": "2026-09-03T09:12:00+03:00",
+      "flags": [
+        "\\Seen"
+      ],
+      "body_text": "Faturayı aldım, teşekkürler.",
+      "body_html": null,
+      "attachments": [],
+      "in_reply_to": "<m105@fixture.example>",
+      "references": [
+        "<m105@fixture.example>"
+      ],
+      "thread": "Fatura"
+    },
+    {
+      "uid": 101,
+      "folder": "INBOX",
+      "message_id": "<m101@fixture.example>",
+      "from": {
+        "name": "Ali Yılmaz",
+        "email": "ali.yilmaz@example.com"
+      },
+      "to": [
+        {
+          "name": "Alp Akbaba",
+          "email": "alp@example.com"
+        }
+      ],
+      "cc": [],
+      "subject": "Proje planı",
+      "date": "2026-09-01T09:15:00+03:00",
+      "flags": [
+        "\\Seen"
+      ],
+      "body_text": "Merhaba Alp, proje planının ilk taslağını ekte gönderiyorum. Görüşlerini bekliyorum.",
+      "body_html": null,
+      "attachments": [
+        {
+          "filename": "proje-plani-v1.docx",
+          "size": 48213,
+          "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        }
+      ],
+      "in_reply_to": null,
+      "references": [],
+      "thread": "Proje planı"
+    },
+    {
+      "uid": 103,
+      "folder": "INBOX",
+      "message_id": "<m103@fixture.example>",
+      "from": {
+        "name": "Ali Yılmaz",
+        "email": "ali.yilmaz@example.com"
+      },
+      "to": [
+        {
+          "name": "Alp Akbaba",
+          "email": "alp@example.com"
+        }
+      ],
+      "cc": [],
+      "subject": "Re: Proje planı",
+      "date": "2026-09-02T10:05:00+03:00",
+      "flags": [
+        "\\Seen"
+      ],
+      "body_text": "Öne çekebiliriz; test süresini kısaltmamız gerekir.",
+      "body_html": null,
+      "attachments": [],
+      "in_reply_to": "<m102@fixture.example>",
+      "references": [
+        "<m101@fixture.example>",
+        "<m102@fixture.example>"
+      ],
+      "thread": "Proje planı"
+    },
+    {
+      "uid": 104,
+      "folder": "INBOX",
+      "message_id": "<m104@fixture.example>",
+      "from": {
+        "name": "Ali Yılmaz",
+        "email": "ali.yilmaz@example.com"
+      },
+      "to": [
+        {
+          "name": "Alp Akbaba",
+          "email": "alp@example.com"
+        }
+      ],
+      "cc": [],
+      "subject": "Re: Proje planı",
+      "date": "2026-09-08T17:30:00+03:00",
+      "flags": [],
+      "body_text": "Güncel planı ekledim: ikinci aşama 15 Eylül'de başlıyor. Onaylarsan ekibe duyuruyorum.",
+      "body_html": null,
+      "attachments": [
+        {
+          "filename": "proje-plani-v2.docx",
+          "size": 50122,
+          "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        }
+      ],
+      "in_reply_to": "<m103@fixture.example>",
+      "references": [
+        "<m101@fixture.example>",
+        "<m102@fixture.example>",
+        "<m103@fixture.example>"
+      ],
+      "thread": "Proje planı"
+    },
+    {
+      "uid": 105,
+      "folder": "INBOX",
+      "message_id": "<m105@fixture.example>",
+      "from": {
+        "name": "Örnek Enerji",
+        "email": "fatura@ornekenerji.example"
+      },
+      "to": [
+        {
+          "name": "Alp Akbaba",
+          "email": "alp@example.com"
+        }
+      ],
+      "cc": [],
+      "subject": "Eylül 2026 elektrik faturanız",
+      "date": "2026-09-03T08:00:00+03:00",
+      "flags": [
+        "\\Seen"
+      ],
+      "body_text": "Sayın Alp Akbaba, Eylül 2026 dönemi elektrik faturanız 1.284,50 TL olarak düzenlenmiştir. Son ödeme tarihi 20 Eylül 2026.",
+      "body_html": "<html><body><p>Sayın Alp Akbaba,</p><p>Eylül 2026 dönemi elektrik faturanız <b>1.284,50 TL</b> olarak düzenlenmiştir.</p><p>Son ödeme tarihi 20 Eylül 2026.</p></body></html>",
+      "attachments": [
+        {
+          "filename": "fatura-2026-09.pdf",
+          "size": 118004,
+          "content_type": "application/pdf"
+        }
+      ],
+      "in_reply_to": null,
+      "references": [],
+      "thread": "Fatura"
+    },
+    {
+      "uid": 107,
+      "folder": "INBOX",
+      "message_id": "<m107@fixture.example>",
+      "from": {
+        "name": "Ayşe Kaya",
+        "email": "ayse.kaya@example.com"
+      },
+      "to": [
+        {
+          "name": "Alp Akbaba",
+          "email": "alp@example.com"
+        }
+      ],
+      "cc": [],
+      "subject": "Yarınki toplantı",
+      "date": "2026-09-08T09:30:00+03:00",
+      "flags": [],
+      "body_text": "Yarın 10:00'daki ekip toplantısına katılabilecek misin? Gündem: sürüm takvimi.",
+      "body_html": null,
+      "attachments": [],
+      "in_reply_to": null,
+      "references": [],
+      "thread": "Yarınki toplantı"
+    },
+    {
+      "uid": 108,
+      "folder": "INBOX",
+      "message_id": "<m108@fixture.example>",
+      "from": {
+        "name": "Mehmet Demir",
+        "email": "mehmet.demir@example.com"
+      },
+      "to": [
+        {
+          "name": "Alp Akbaba",
+          "email": "alp@example.com"
+        }
+      ],
+      "cc": [],
+      "subject": "Sunum dosyası",
+      "date": "2026-09-08T11:05:00+03:00",
+      "flags": [],
+      "body_text": "Q3 sunumunun son halini ekte bulabilirsin.",
+      "body_html": null,
+      "attachments": [
+        {
+          "filename": "sunum-q3.pptx",
+          "size": 33632,
+          "content_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        }
+      ],
+      "in_reply_to": null,
+      "references": [],
+      "thread": "Sunum dosyası"
+    },
+    {
+      "uid": 109,
+      "folder": "INBOX",
+      "message_id": "<m109@fixture.example>",
+      "from": {
+        "name": "Zeynep Arslan",
+        "email": "zeynep.arslan@example.com"
+      },
+      "to": [
+        {
+          "name": "Alp Akbaba",
+          "email": "alp@example.com"
+        }
+      ],
+      "cc": [],
+      "subject": "Öğle yemeği?",
+      "date": "2026-09-08T12:45:00+03:00",
+      "flags": [],
+      "body_text": "Perşembe öğle yemeğine ne dersin? 12:30 uygun mu?",
+      "body_html": null,
+      "attachments": [],
+      "in_reply_to": null,
+      "references": [],
+      "thread": "Öğle yemeği?"
+    },
+    {
+      "uid": 110,
+      "folder": "INBOX",
+      "message_id": "<m110@fixture.example>",
+      "from": {
+        "name": "Haftalık Bülten",
+        "email": "bulten@haber.example"
+      },
+      "to": [
+        {
+          "name": "Alp Akbaba",
+          "email": "alp@example.com"
+        }
+      ],
+      "cc": [],
+      "subject": "Haftalık bülten — 36. hafta",
+      "date": "2026-09-08T07:00:00+03:00",
+      "flags": [],
+      "body_text": "Bu hafta: yapay zekâ ajanları, yerel modeller ve gizlilik.",
+      "body_html": null,
+      "attachments": [],
+      "in_reply_to": null,
+      "references": [],
+      "thread": "Haftalık bülten — 36. hafta"
+    },
+    {
+      "uid": 111,
+      "folder": "INBOX",
+      "message_id": "<m111@fixture.example>",
+      "from": {
+        "name": "Ayşe Kaya",
+        "email": "ayse.kaya@example.com"
+      },
+      "to": [
+        {
+          "name": "Alp Akbaba",
+          "email": "alp@example.com"
+        }
+      ],
+      "cc": [],
+      "subject": "Bütçe tablosu güncellendi",
+      "date": "2026-09-08T16:20:00+03:00",
+      "flags": [],
+      "body_text": "Bütçe tablosunda Yazılım kalemini 8.000 TL olarak güncelledim.",
+      "body_html": null,
+      "attachments": [],
+      "in_reply_to": null,
+      "references": [],
+      "thread": "Bütçe tablosu güncellendi"
+    },
+    {
+      "uid": 112,
+      "folder": "INBOX",
+      "message_id": "<m112@fixture.example>",
+      "from": {
+        "name": "Mehmet Demir",
+        "email": "mehmet.demir@example.com"
+      },
+      "to": [
+        {
+          "name": "Alp Akbaba",
+          "email": "alp@example.com"
+        }
+      ],
+      "cc": [],
+      "subject": "Toplantı notları",
+      "date": "2026-09-04T15:00:00+03:00",
+      "flags": [
+        "\\Seen"
+      ],
+      "body_text": "Dünkü toplantının notlarını paylaşıyorum: kararlar ve sorumlular listede.",
+      "body_html": null,
+      "attachments": [],
+      "in_reply_to": null,
+      "references": [],
+      "thread": "Toplantı notları"
+    },
+    {
+      "uid": 113,
+      "folder": "INBOX",
+      "message_id": "<m113@fixture.example>",
+      "from": {
+        "name": "Ayşe Kaya",
+        "email": "ayse.kaya@example.com"
+      },
+      "to": [
+        {
+          "name": "Alp Akbaba",
+          "email": "alp@example.com"
+        }
+      ],
+      "cc": [],
+      "subject": "Tatil planı",
+      "date": "2026-09-05T10:30:00+03:00",
+      "flags": [
+        "\\Seen"
+      ],
+      "body_text": "14 Eylül bayram tatili; ofis kapalı.",
+      "body_html": null,
+      "attachments": [],
+      "in_reply_to": null,
+      "references": [],
+      "thread": "Tatil planı"
+    },
+    {
+      "uid": 114,
+      "folder": "INBOX",
+      "message_id": "<m114@fixture.example>",
+      "from": {
+        "name": "Haftalık Bülten",
+        "email": "bulten@haber.example"
+      },
+      "to": [
+        {
+          "name": "Alp Akbaba",
+          "email": "alp@example.com"
+        }
+      ],
+      "cc": [],
+      "subject": "Haftalık bülten — 35. hafta",
+      "date": "2026-09-01T07:00:00+03:00",
+      "flags": [
+        "\\Seen"
+      ],
+      "body_text": "Bu hafta: tarayıcı ajanları ve erişilebilirlik ağaçları.",
+      "body_html": null,
+      "attachments": [],
+      "in_reply_to": null,
+      "references": [],
+      "thread": "Haftalık bülten — 35. hafta"
+    }
+  ]
+}

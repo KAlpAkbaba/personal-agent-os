@@ -1,0 +1,237 @@
+{
+  "generated_by": "scripts/tests/make-mail-calendar-fixtures.py",
+  "now": "2026-09-09T09:00:00+03:00",
+  "timezone": "Europe/Istanbul",
+  "mail": {
+    "folders": [
+      "INBOX",
+      "Gönderilmiş",
+      "Arşiv"
+    ],
+    "counts": {
+      "INBOX": 12,
+      "Gönderilmiş": 2,
+      "Arşiv": 23
+    },
+    "unread_inbox": 6,
+    "unread_inbox_uids": [
+      104,
+      107,
+      108,
+      109,
+      110,
+      111
+    ],
+    "latest_from_ali": {
+      "uid": 104,
+      "subject": "Re: Proje planı",
+      "date": "2026-09-08T17:30:00+03:00",
+      "attachment": "proje-plani-v2.docx"
+    },
+    "thread_proje_plani": [
+      101,
+      102,
+      103,
+      104
+    ],
+    "html_only_body_uid": 105,
+    "html_only_body_contains": "1.284,50 TL",
+    "search": {
+      "fatura": [
+        106,
+        105
+      ],
+      "bütçe": [
+        111
+      ]
+    },
+    "reply_to_latest_ali": {
+      "to": "ali.yilmaz@example.com",
+      "subject": "Re: Proje planı",
+      "in_reply_to": "<m104@fixture.example>",
+      "references": [
+        "<m101@fixture.example>",
+        "<m102@fixture.example>",
+        "<m103@fixture.example>",
+        "<m104@fixture.example>"
+      ]
+    }
+  },
+  "calendar": {
+    "expanded_events": [
+      {
+        "uid": "ev-spor@fixture.example",
+        "summary": "Spor",
+        "start": "2026-09-08T07:00:00+03:00",
+        "end": "2026-09-08T08:00:00+03:00",
+        "all_day": false
+      },
+      {
+        "uid": "ev-ekip@fixture.example",
+        "summary": "Haftalık ekip toplantısı",
+        "start": "2026-09-08T10:00:00+03:00",
+        "end": "2026-09-08T11:00:00+03:00",
+        "all_day": false
+      },
+      {
+        "uid": "ev-spor@fixture.example",
+        "summary": "Spor",
+        "start": "2026-09-09T07:00:00+03:00",
+        "end": "2026-09-09T08:00:00+03:00",
+        "all_day": false
+      },
+      {
+        "uid": "ev-ogle@fixture.example",
+        "summary": "Öğle yemeği (Zeynep)",
+        "start": "2026-09-09T12:30:00+03:00",
+        "end": "2026-09-09T13:30:00+03:00",
+        "all_day": false
+      },
+      {
+        "uid": "ev-spor@fixture.example",
+        "summary": "Spor",
+        "start": "2026-09-10T07:00:00+03:00",
+        "end": "2026-09-10T08:00:00+03:00",
+        "all_day": false
+      },
+      {
+        "uid": "ev-dis@fixture.example",
+        "summary": "Diş hekimi",
+        "start": "2026-09-10T15:00:00+03:00",
+        "end": "2026-09-10T16:00:00+03:00",
+        "all_day": false
+      },
+      {
+        "uid": "ev-spor@fixture.example",
+        "summary": "Spor",
+        "start": "2026-09-11T07:00:00+03:00",
+        "end": "2026-09-11T08:00:00+03:00",
+        "all_day": false
+      },
+      {
+        "uid": "ev-musteri@fixture.example",
+        "summary": "Müşteri görüşmesi",
+        "start": "2026-09-11T14:00:00+03:00",
+        "end": "2026-09-11T15:00:00+03:00",
+        "all_day": false
+      },
+      {
+        "uid": "ev-doktor@fixture.example",
+        "summary": "Doktor kontrolü",
+        "start": "2026-09-11T14:30:00+03:00",
+        "end": "2026-09-11T15:30:00+03:00",
+        "all_day": false
+      },
+      {
+        "uid": "ev-spor@fixture.example",
+        "summary": "Spor",
+        "start": "2026-09-12T07:00:00+03:00",
+        "end": "2026-09-12T08:00:00+03:00",
+        "all_day": false
+      },
+      {
+        "uid": "ev-bayram@fixture.example",
+        "summary": "Bayram (ofis kapalı)",
+        "start": "2026-09-14T00:00:00+03:00",
+        "end": "2026-09-15T00:00:00+03:00",
+        "all_day": true
+      },
+      {
+        "uid": "ev-ekip@fixture.example",
+        "summary": "Haftalık ekip toplantısı",
+        "start": "2026-09-15T10:00:00+03:00",
+        "end": "2026-09-15T11:00:00+03:00",
+        "all_day": false
+      },
+      {
+        "uid": "ev-ekip@fixture.example",
+        "summary": "Haftalık ekip toplantısı",
+        "start": "2026-09-29T10:00:00+03:00",
+        "end": "2026-09-29T11:00:00+03:00",
+        "all_day": false
+      },
+      {
+        "uid": "ev-ekip@fixture.example",
+        "summary": "Haftalık ekip toplantısı",
+        "start": "2026-10-06T10:00:00+03:00",
+        "end": "2026-10-06T11:00:00+03:00",
+        "all_day": false
+      },
+      {
+        "uid": "ev-ekip@fixture.example",
+        "summary": "Haftalık ekip toplantısı",
+        "start": "2026-10-13T10:00:00+03:00",
+        "end": "2026-10-13T11:00:00+03:00",
+        "all_day": false
+      },
+      {
+        "uid": "ev-ekip@fixture.example",
+        "summary": "Haftalık ekip toplantısı",
+        "start": "2026-10-20T10:00:00+03:00",
+        "end": "2026-10-20T11:00:00+03:00",
+        "all_day": false
+      },
+      {
+        "uid": "ev-ekip@fixture.example",
+        "summary": "Haftalık ekip toplantısı",
+        "start": "2026-10-27T10:00:00+03:00",
+        "end": "2026-10-27T11:00:00+03:00",
+        "all_day": false
+      },
+      {
+        "uid": "ev-ekip@fixture.example",
+        "summary": "Haftalık ekip toplantısı",
+        "start": "2026-11-03T10:00:00+03:00",
+        "end": "2026-11-03T11:00:00+03:00",
+        "all_day": false
+      },
+      {
+        "uid": "ev-ekip@fixture.example",
+        "summary": "Haftalık ekip toplantısı",
+        "start": "2026-11-10T10:00:00+03:00",
+        "end": "2026-11-10T11:00:00+03:00",
+        "all_day": false
+      }
+    ],
+    "event_count": 19,
+    "today": [
+      "Spor",
+      "Öğle yemeği (Zeynep)"
+    ],
+    "today_uids": [
+      "ev-spor@fixture.example",
+      "ev-ogle@fixture.example"
+    ],
+    "ekip_occurrences": 9,
+    "exdate_skipped": "2026-09-22T10:00:00+03:00",
+    "conflicts": [
+      [
+        "ev-musteri@fixture.example",
+        "ev-doktor@fixture.example"
+      ]
+    ],
+    "free_slots_2026_09_11_60min_0900_1800": [
+      {
+        "start": "2026-09-11T09:00:00+03:00",
+        "end": "2026-09-11T14:00:00+03:00"
+      },
+      {
+        "start": "2026-09-11T15:30:00+03:00",
+        "end": "2026-09-11T18:00:00+03:00"
+      }
+    ],
+    "propose_dentist_move": {
+      "uid": "ev-dis@fixture.example",
+      "to_start": "2026-09-10T16:00:00+03:00",
+      "to_end": "2026-09-10T17:00:00+03:00",
+      "conflicts": []
+    },
+    "propose_new_1500_friday": {
+      "start": "2026-09-11T15:00:00+03:00",
+      "end": "2026-09-11T16:00:00+03:00",
+      "conflicts": [
+        "ev-doktor@fixture.example"
+      ]
+    }
+  }
+}
