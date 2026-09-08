@@ -2699,6 +2699,24 @@ def _capability_request_cases() -> list[UtteranceCase]:
             CTX_COUNTERBOX_RUNNING,
             {"by": 1},
         ),
+        # The number the OWNER said, carried literally (spec §6's "numbers spoken are
+        # numbers read back"): three and two are different literals reaching the same
+        # operation, so a tool that quietly normalised every increment to one would
+        # fail here rather than in production.
+        (
+            "genesis.request.increment.three",
+            "Sayacı üç artır.",
+            "canonical",
+            CTX_COUNTERBOX_RUNNING,
+            {"by": 3},
+        ),
+        (
+            "genesis.request.increment.arttir",
+            "Sayaç kutusunu iki arttır.",
+            "canonical",
+            CTX_COUNTERBOX_RUNNING,
+            {"by": 2},
+        ),
     ):
         cases.extend(
             _with_variants(
@@ -2737,6 +2755,20 @@ def _capability_request_cases() -> list[UtteranceCase]:
             CTX_LAMPBOX_RUNNING,
             {},
         ),
+        (
+            "genesis.request.reset.sifirlasana",
+            "Sayaç kutusunu sıfırlasana.",
+            "paraphrase",
+            CTX_COUNTERBOX_RUNNING,
+            {},
+        ),
+        (
+            "genesis.request.toggle.degistir",
+            "Lambayı değiştir.",
+            "canonical",
+            CTX_LAMPBOX_RUNNING,
+            {},
+        ),
     ):
         cases.extend(
             _with_variants(
@@ -2759,6 +2791,21 @@ def _capability_request_cases() -> list[UtteranceCase]:
             "genesis.request.state",
             "Test lambasının durumu ne?",
             "canonical",
+            CTX_LAMPBOX_RUNNING,
+        ),
+        # The target's full name with the same read verb, and the lamp's state asked
+        # with the word ("durumda") the STATUS matcher also uses — the status family
+        # needs its own "yetenek" noun, so this must stay a read of the lamp itself.
+        (
+            "genesis.request.read.full",
+            "Sayaç kutusu kaç?",
+            "paraphrase",
+            CTX_COUNTERBOX_RUNNING,
+        ),
+        (
+            "genesis.request.state.durumda",
+            "Lamba ne durumda?",
+            "paraphrase",
             CTX_LAMPBOX_RUNNING,
         ),
     ):
@@ -2785,6 +2832,7 @@ def _capability_status_cases() -> list[UtteranceCase]:
         ("genesis.status.general", "Yeni yetenek ne durumda?", "canonical"),
         ("genesis.status.deictic", "Onu yapabiliyor musun artık?", "canonical"),
         ("genesis.status.para", "Yeni yeteneğin durumu nedir?", "paraphrase"),
+        ("genesis.status.yapabildin", "Yeteneği yapabildin mi?", "paraphrase"),
     ):
         cases.extend(
             _with_variants(
@@ -2813,6 +2861,7 @@ def _capability_approve_cancel_cases() -> list[UtteranceCase]:
         ("genesis.approve.canonical", "Onaylıyorum.", "canonical"),
         ("genesis.approve.authorize", "Bu uygulamayı yetkilendir.", "canonical"),
         ("genesis.approve.para", "Onaylıyorum, devam et.", "paraphrase"),
+        ("genesis.approve.yetkilendiriyorum", "Yetkilendiriyorum.", "paraphrase"),
     ):
         cases.extend(
             _with_variants(
@@ -2832,6 +2881,7 @@ def _capability_approve_cancel_cases() -> list[UtteranceCase]:
     for case_id, text, source in (
         ("genesis.cancel.canonical", "Vazgeç, yapma.", "canonical"),
         ("genesis.cancel.para", "Boş ver, vazgeçtim.", "paraphrase"),
+        ("genesis.cancel.vazgectim", "Vazgeçtim.", "paraphrase"),
     ):
         cases.extend(
             _with_variants(
@@ -2865,6 +2915,22 @@ def _capability_negative_cases() -> list[UtteranceCase]:
                     context=CTX_COUNTERBOX_RUNNING,
                     category="genesis",
                     source="canonical",
+                    regression_issue_id="M24 spec §7: no delete tool for a genesis target",
+                ),
+                UtteranceCase(
+                    case_id="genesis.neg.delete_lamp",
+                    utterance="Test lambasını sil.",
+                    expected_intent="none",
+                    expected_tool=None,
+                    expected_response=RESPONSE_NONE,
+                    context=CTX_LAMPBOX_RUNNING,
+                    category="genesis",
+                    source="canonical",
+                    notes=(
+                        "The same refusal on the OTHER fixture: a KNOWN target with an "
+                        "unrecognised verb falls through to NONE, so the guard is a "
+                        "property of the matcher and not a counterbox-shaped special case."
+                    ),
                     regression_issue_id="M24 spec §7: no delete tool for a genesis target",
                 ),
                 UtteranceCase(
