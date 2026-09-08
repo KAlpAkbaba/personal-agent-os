@@ -89,6 +89,14 @@ CTX_EVENT_FOCUSED: Final = "event_focused"
 #: precondition "Onayla."/"Vazgeç." need to resolve to something real.
 CTX_PROPOSAL_READ_BACK: Final = "proposal_read_back"
 
+#: M22 (docs/M22_ARTIFACT_FACTORY_SPEC.md §5): a real ``artifacts`` row already exists —
+#: a budget spreadsheet, current object focus (kind ``artifact``) — so "bunu aç" /
+#: "bu dosya doğru mu?" / "bunu PDF yap" resolve to something real. No CTX for a SECOND,
+#: older artifact + "önceki": the harness seeds one current row and one older row, the
+#: same two-timestamp discipline CTX_WINDOW_FOCUSED already uses for "önceki pencereye
+#: dön" (see tests/voice_corpus/harness.py's own ``seed``).
+CTX_ARTIFACT_FOCUSED: Final = "artifact_focused"
+
 #: Side-effect policies: the device capabilities a case MAY reach on the fake device.
 #: Anything else the fake device saw is a forbidden side effect.
 SIDE_EFFECTS_NONE: Final[frozenset[str]] = frozenset()
@@ -137,6 +145,12 @@ SIDE_EFFECTS_DOCUMENTS_COMPARE: Final[frozenset[str]] = frozenset({"file.compare
 #: calendar change.
 SIDE_EFFECTS_MAIL_SEND: Final[frozenset[str]] = frozenset({"mail.send"})
 SIDE_EFFECTS_CALENDAR_COMMIT: Final[frozenset[str]] = frozenset({"calendar.commit"})
+
+#: M22 (docs/M22_ARTIFACT_FACTORY_SPEC.md §5): ``artifact.open`` reaches the fake device
+#: through ``file.fetch`` only — the same policy discipline every family above uses.
+#: create/render/validate/list touch no device at all (the factory renders in-process
+#: against the in-memory object store).
+SIDE_EFFECTS_ARTIFACT_OPEN: Final[frozenset[str]] = frozenset({"file.fetch"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -1956,6 +1970,290 @@ def _mail_calendar_cases() -> list[UtteranceCase]:
     return cases
 
 
+# ------------------------------------------------------- M22: the Artifact Factory
+
+
+def _artifact_create_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        (
+            "art.create.spreadsheet",
+            "Bana bir bütçe tablosu yap: kira 12000, maaş 45000, yazılım 8000.",
+            "canonical",
+        ),
+        ("art.create.document", "Toplantı notlarını Word belgesi yap.", "canonical"),
+        (
+            "art.create.presentation",
+            "Üç slaytlık bir sunum hazırla: giriş, bulgular, sonuç.",
+            "canonical",
+        ),
+        (
+            "art.create.dataset",
+            "Bana harcamalarımın bir listesini hazırla: kira 12000, market 3000.",
+            "canonical",
+        ),
+        ("art.create.page", "Bana boş bir sayfa hazırla.", "canonical"),
+        (
+            "art.create.spreadsheet.para",
+            "Bir bütçe tablosu yapar mısın? Kira 12000, maaş 45000.",
+            "paraphrase",
+        ),
+        (
+            "art.create.document.para",
+            "Toplantı notlarını bir Word belgesi hazırlar mısın?",
+            "paraphrase",
+        ),
+        (
+            "art.create.presentation.para",
+            "Üç slaytlık bir sunum yapsana: giriş, bulgular, sonuç.",
+            "paraphrase",
+        ),
+        ("art.create.page.para", "Bana bir sayfa oluştur.", "paraphrase"),
+        (
+            "art.create.presentation.new",
+            "Yeni bir sunum yap: açılış, demo, kapanış.",
+            "canonical",
+        ),
+        ("art.create.spreadsheet.single", "Bir gider tablosu yap: kira 12000.", "canonical"),
+        (
+            "art.create.dataset.para",
+            "Harcama listemi hazırlar mısın? Market 3000, ulaşım 500.",
+            "paraphrase",
+        ),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="artifact_create",
+                    expected_tool="artifact.create",
+                    side_effects=SIDE_EFFECTS_NONE,
+                    context=CTX_NONE,
+                    category="artifacts",
+                    source=source,
+                )
+            )
+        )
+    # The "never invented" rule, proven end to end: the model's OWN spec argument
+    # carries a number the owner never said (99999) alongside the one they did
+    # (12000) — ArtifactSpec refuses to construct it, and the tool answers with a
+    # truthful refusal rather than a file with an invented figure in it.
+    cases.append(
+        UtteranceCase(
+            case_id="art.create.never_invented",
+            utterance="Bana bir bütçe tablosu yap: kira 12000.",
+            expected_intent="artifact_create",
+            expected_tool="artifact.create",
+            expected_response=RESPONSE_REFUSED,
+            expected={"error_class": "validation_error"},
+            tool_arguments={
+                "spec": {
+                    "kind": "spreadsheet",
+                    "title": "Bütçe",
+                    "sheets": [
+                        {
+                            "name": "Özet",
+                            "columns": ["Kalem", "Tutar"],
+                            "rows": [["Kira", 12000], ["Bilinmeyen", 99999]],
+                        }
+                    ],
+                }
+            },
+            side_effects=SIDE_EFFECTS_NONE,
+            context=CTX_NONE,
+            category="artifacts",
+            source="regression",
+            regression_issue_id="M22 spec §1: never invented",
+        )
+    )
+    return cases
+
+
+def _artifact_render_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        ("art.render.pdf", "Bunu PDF yap.", "canonical"),
+        ("art.render.excel", "Bunu Excel yap.", "canonical"),
+        ("art.render.para", "Bunu PDF olarak da hazırlar mısın?", "paraphrase"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="artifact_create",
+                    expected_tool="artifact.render",
+                    side_effects=SIDE_EFFECTS_NONE,
+                    context=CTX_ARTIFACT_FOCUSED,
+                    category="artifacts",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _artifact_open_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        ("art.open.this", "Bunu aç.", "canonical"),
+        ("art.open.last", "Son ürettiğin dosyayı aç.", "canonical"),
+        ("art.open.para", "Bunu açar mısın?", "paraphrase"),
+        ("art.open.asr", "bunu ac", "asr_noise"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="artifact_open",
+                    expected_tool="artifact.open",
+                    side_effects=SIDE_EFFECTS_ARTIFACT_OPEN,
+                    context=CTX_ARTIFACT_FOCUSED,
+                    category="artifacts",
+                    source=source,
+                )
+            )
+        )
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="art.open.previous",
+                utterance="Önceki dosyayı aç.",
+                expected_intent="artifact_open",
+                expected_tool="artifact.open",
+                side_effects=SIDE_EFFECTS_ARTIFACT_OPEN,
+                context=CTX_ARTIFACT_FOCUSED,
+                category="artifacts",
+                source="canonical",
+            )
+        )
+    )
+    # Negative (task brief): "Bunu aç." with nothing EVER produced -> an honest
+    # clarification, never a guess and never a crash.
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="art.neg.open_nothing_produced",
+                utterance="Bunu aç.",
+                expected_intent="artifact_open",
+                expected_tool="artifact.open",
+                expected_response=RESPONSE_CLARIFY,
+                side_effects=SIDE_EFFECTS_NONE,
+                context=CTX_NONE,
+                category="artifacts",
+                source="regression",
+                regression_issue_id="M22 spec §5: nothing produced -> clarification",
+            )
+        )
+    )
+    return cases
+
+
+def _artifact_list_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, text, context, source in (
+        ("art.list.nothing", "Neler ürettin?", CTX_NONE, "canonical"),
+        ("art.list.something", "Ne oluşturdun bugüne kadar?", CTX_ARTIFACT_FOCUSED, "paraphrase"),
+        ("art.list.which", "Hangi dosyaları yaptın?", CTX_ARTIFACT_FOCUSED, "paraphrase"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="artifact_list",
+                    expected_tool="artifact.list",
+                    side_effects=SIDE_EFFECTS_NONE,
+                    context=context,
+                    category="artifacts",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _artifact_validate_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        ("art.validate.this", "Bu dosya doğru mu?", "canonical"),
+        ("art.validate.bare", "Doğru mu?", "paraphrase"),
+        ("art.validate.numbers", "Rakamlar doğru mu?", "paraphrase"),
+        ("art.validate.asr", "bu dosya dogru mu", "asr_noise"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="artifact_validate",
+                    expected_tool="artifact.validate",
+                    side_effects=SIDE_EFFECTS_NONE,
+                    context=CTX_ARTIFACT_FOCUSED,
+                    category="artifacts",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _artifact_negative_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    # "Sil." reaches no tool at all (M22 spec §5 names five tools, none of them a
+    # delete) — even with a real artifact focused, the router resolves nothing.
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="art.neg.delete",
+                utterance="Bunu sil.",
+                expected_intent="none",
+                expected_tool=None,
+                expected_response=RESPONSE_NONE,
+                side_effects=SIDE_EFFECTS_NONE,
+                context=CTX_ARTIFACT_FOCUSED,
+                category="artifacts",
+                source="canonical",
+                regression_issue_id="M22 spec §5: no delete tool",
+            )
+        )
+    )
+    # "Bunu teknik anlat." stays exactly what M18.2/M21 already made it — the SAME
+    # assertion mc.neg.technical_unchanged makes, kept here too so the artifacts
+    # category proves it on its own (task brief: "'Bunu teknik anlat.' unchanged").
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="art.neg.technical_unchanged",
+                utterance="Bunu teknik anlat.",
+                expected_intent="technical",
+                expected_tool="research.explain",
+                expected_target="current",
+                expected={"level": "technical"},
+                forbidden_tools=("research.start",),
+                context=CTX_RESEARCH_FOCUS_B,
+                category="artifacts",
+                source="regression",
+                regression_issue_id="M22 must not touch the M18.2 technical-explain path",
+            )
+        )
+    )
+    return cases
+
+
+def _artifact_cases() -> list[UtteranceCase]:
+    return [
+        *_artifact_create_cases(),
+        *_artifact_render_cases(),
+        *_artifact_open_cases(),
+        *_artifact_list_cases(),
+        *_artifact_validate_cases(),
+        *_artifact_negative_cases(),
+    ]
+
+
 def all_cases() -> list[UtteranceCase]:
     cases = [
         *_research_cases(),
@@ -1968,6 +2266,7 @@ def all_cases() -> list[UtteranceCase]:
         *_operator_cases(),
         *_documents_cases(),
         *_mail_calendar_cases(),
+        *_artifact_cases(),
     ]
     ids = [c.case_id for c in cases]
     assert len(ids) == len(set(ids)), "duplicate case ids"
