@@ -40,6 +40,8 @@ from tests.identity_support import bearer, make_identity_engine
 
 DEVICE_ID = uuid.uuid4()
 MEMORY_ID = uuid.uuid4()
+DRAFT_ID = uuid.uuid4()
+PROPOSAL_ID = uuid.uuid4()
 
 #: One representative endpoint per module — mutating/sensitive where the module
 #: has one. (module, method, path)
@@ -70,6 +72,14 @@ PROTECTED_ENDPOINTS = [
     ("evolution-resolve", "post", f"/v1/evolution/gaps/{uuid.uuid4()}/resolve"),
     ("security-enroll-asset", "post", "/v1/security/assets"),
     ("security-assessment", "post", "/v1/security/assessments"),
+    # M21 (docs/M21_MAIL_CALENDAR_SPEC.md §3): the Cockpit's approval pair — an EXTERNAL
+    # MUTATION must never be one unauthenticated HTTP call away.
+    ("mail-drafts-pending", "get", "/v1/mail/drafts/pending"),
+    ("mail-drafts-confirm", "post", f"/v1/mail/drafts/{DRAFT_ID}/confirm"),
+    ("mail-drafts-discard", "post", f"/v1/mail/drafts/{DRAFT_ID}/discard"),
+    ("calendar-proposals-pending", "get", "/v1/calendar/proposals/pending"),
+    ("calendar-proposals-confirm", "post", f"/v1/calendar/proposals/{PROPOSAL_ID}/confirm"),
+    ("calendar-proposals-discard", "post", f"/v1/calendar/proposals/{PROPOSAL_ID}/discard"),
     ("identity", "get", "/v1/identity/sessions"),
 ]
 
