@@ -67,6 +67,13 @@ from typing import Any
 #: — never to animate a surge, the same rule every other channel here follows — plus
 #: the ``creative3d`` subsystem.
 #: Same additive rule: a v9 renderer keeps working and simply never sees it.
+#: v11 (M26 Executive Autonomy spec §6, §7, ADR-0089) adds ``executive.run``, published
+#: from ``executive_runs`` rows at every transition, with metadata
+#: ``{run, step?, state, done, total}`` (``run`` a short id token, ``step`` the current
+#: step id when one is running/paused on, ``state`` the STEP OF THE RUN — never a
+#: database row's own word if the two ever diverge, from ``EXECUTIVE_RUN_STATES``
+#: below — ``done``/``total`` the step counts) plus the ``executive`` subsystem. Same
+#: additive rule: a v10 renderer keeps working and simply never sees it.
 
 #: The STEP of the 3D loop that ``scene.activity`` names in ``metadata.state`` — the
 #: channel says what is happening, never what a database row happens to be called. The
@@ -103,8 +110,37 @@ SCENE_ACTIVITY_STEPS: tuple[str, ...] = (
     SCENE_STEP_FAILED,
 )
 
+#: M26 (spec §3, §6): the STEP OF THE RUN that ``executive.run`` names in
+#: ``metadata.state`` — spelled ONCE here, the same "publish the step, never a row's
+#: own word if they ever diverge" rule ``SCENE_ACTIVITY_STEPS`` documents. Unlike the
+#: 3D family, ``app.executive.models.ExecutiveRunRow.state`` uses THIS SAME closed
+#: vocabulary directly (the run's seven states already are the seven words a client
+#: needs — there is no second, richer set of database words to translate down from),
+#: so the constants below are both the row's own column values and the wire words in
+#: one place; a future run-state that is NOT one of these seven must not be added to
+#: the row without adding it here first (`test_uistate_contract_halves.py`'s guard).
+EXECUTIVE_STEP_PLANNED = "planned"
+EXECUTIVE_STEP_RUNNING = "running"
+EXECUTIVE_STEP_PAUSED = "paused"
+EXECUTIVE_STEP_COMPLETED = "completed"
+#: Every step that did not verify is named, and why; the synthesis still ran over
+#: whatever exists (spec §3's honest partial-result state — never silently "completed").
+EXECUTIVE_STEP_PARTIAL = "partial"
+EXECUTIVE_STEP_CANCELLED = "cancelled"
+EXECUTIVE_STEP_FAILED = "failed"
 
-CONTRACT_VERSION = 10
+EXECUTIVE_RUN_STATES: tuple[str, ...] = (
+    EXECUTIVE_STEP_PLANNED,
+    EXECUTIVE_STEP_RUNNING,
+    EXECUTIVE_STEP_PAUSED,
+    EXECUTIVE_STEP_COMPLETED,
+    EXECUTIVE_STEP_PARTIAL,
+    EXECUTIVE_STEP_CANCELLED,
+    EXECUTIVE_STEP_FAILED,
+)
+
+
+CONTRACT_VERSION = 11
 
 #: Metadata value bounds. Numbers are floats in [0, 1] except where noted; strings are
 #: short machine tokens, never prose.
@@ -242,6 +278,13 @@ class UiState(StrEnum):
     #: inspection.
     SCENE_ACTIVITY = "scene.activity"
 
+    #: M26 (spec §6, §7): Executive Autonomy's channel. Published from
+    #: ``executive_runs`` rows at every transition — never to animate a surge, the
+    #: same rule every other channel here follows. Metadata is identity only: the
+    #: run's short id, the current step id, the run's STEP OF THE RUN, and the
+    #: done/total step counts.
+    EXECUTIVE_RUN = "executive.run"
+
 
 UI_STATES: tuple[str, ...] = tuple(s.value for s in UiState)
 
@@ -278,6 +321,8 @@ SUBSYSTEMS: tuple[str, ...] = (
     "genesis",
     # M25: 3D Creation publishes scene.activity (spec §6).
     "creative3d",
+    # M26: Executive Autonomy publishes executive.run (spec §6).
+    "executive",
 )
 
 SEVERITIES: tuple[str, ...] = ("info", "notice", "warning", "critical")
@@ -356,8 +401,17 @@ def ui_state_contract() -> dict[str, Any]:
 
 __all__ = [
     "CONTRACT_VERSION",
+    "EXECUTIVE_RUN_STATES",
+    "EXECUTIVE_STEP_CANCELLED",
+    "EXECUTIVE_STEP_COMPLETED",
+    "EXECUTIVE_STEP_FAILED",
+    "EXECUTIVE_STEP_PARTIAL",
+    "EXECUTIVE_STEP_PAUSED",
+    "EXECUTIVE_STEP_PLANNED",
+    "EXECUTIVE_STEP_RUNNING",
     "MAX_LABEL_CHARS",
     "MAX_METADATA_KEYS",
+    "SCENE_ACTIVITY_STEPS",
     "SEVERITIES",
     "SUBSYSTEMS",
     "UI_STATES",

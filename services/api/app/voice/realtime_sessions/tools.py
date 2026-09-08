@@ -63,6 +63,10 @@ from app.voice.realtime_sessions.tools_documents import (
     register_documents_tools,
 )
 from app.voice.realtime_sessions.tools_evolution import register_evolution_tools
+from app.voice.realtime_sessions.tools_executive import (
+    EXECUTIVE_TOOL_NAMES,
+    register_executive_tools,
+)
 from app.voice.realtime_sessions.tools_genesis import (
     CAPABILITY_TOOL_NAMES,
     register_genesis_tools,
@@ -573,6 +577,12 @@ GENESIS_CLARIFYING_TOOLS: frozenset[str] = frozenset(CAPABILITY_TOOL_NAMES)
 #: never a second copy of it.
 SCENE_CLARIFYING_TOOLS: frozenset[str] = frozenset(SCENE_TOOL_NAMES)
 
+#: M26 (docs/M26_EXECUTIVE_AUTONOMY_SPEC.md §5): every executive tool may answer "Ne
+#: yapmamı istediğinizi söyler misiniz?" / "Şu anda yürüttüğüm bir iş yok." rather than
+#: a receipt — the same non-research extension of the ADR-0077 contract every family
+#: above already gets, never a second copy of it.
+EXECUTIVE_CLARIFYING_TOOLS: frozenset[str] = frozenset(EXECUTIVE_TOOL_NAMES)
+
 
 def result_is_research_bound(tool_name: str, result: Any) -> bool:
     """Whether a handler's result falls under the research result contract (ADR-0077)."""
@@ -618,6 +628,7 @@ def terminal_status_for(tool_name: str, result: Any) -> tuple[str, str | None]:
             | APP_CLARIFYING_TOOLS
             | GENESIS_CLARIFYING_TOOLS
             | SCENE_CLARIFYING_TOOLS
+            | EXECUTIVE_CLARIFYING_TOOLS
             and isinstance(result, dict)
             and result.get("status") == RESULT_NEEDS_CLARIFICATION
             and str(result.get("speech") or "").strip()
@@ -1669,6 +1680,8 @@ def default_registry() -> ToolRegistry:
     register_genesis_tools(reg)
     # M25 (docs/M25_CREATIVE_3D_SPEC.md §5): 3D Creation's voice tools.
     register_scene_tools(reg)
+    # M26 (docs/M26_EXECUTIVE_AUTONOMY_SPEC.md §5): Executive Autonomy's voice tools.
+    register_executive_tools(reg)
     return reg
 
 

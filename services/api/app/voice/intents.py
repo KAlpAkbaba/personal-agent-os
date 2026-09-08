@@ -194,6 +194,30 @@ class Intent(StrEnum):
     SCENE_RENDER = "scene_render"  # Render al
     SCENE_INSPECT = "scene_inspect"  # Sahnede ne var?
 
+    # M26 (docs/M26_EXECUTIVE_AUTONOMY_SPEC.md §5): Executive Autonomy. Every one of
+    # these targets app.executive through tools_executive - never a second multi-step
+    # orchestration path (ADR-0089). EXEC_START recognises the directive's three
+    # SHAPES (a bounded, deliberately small vocabulary fragment — WHICH shape and the
+    # full graph is app.executive.planner.RuleBasedExecutivePlanner's own job, given
+    # the SAME directive text verbatim; this resolver only decides "is this a
+    # multi-step executive directive at all", the same split app.explain.classify /
+    # this file's own EXPLAIN branch already keeps for a different family). The other
+    # six are gated on ``executive_run_active`` (the CALLER's one live fact, the same
+    # "context, never vocabulary alone" discipline ``operator_running``/
+    # ``genesis_awaiting_approval`` already establish) — EXEC_STATUS/EXEC_CANCEL would
+    # otherwise silently steal "Ne yapıyorsun?"/"Vazgeç" from OPERATOR_STATUS/DISCARD
+    # even with no run to be asked about.
+    EXEC_START = (
+        "exec_start"  # Son üç gündeki AI gelişmelerini araştır... Word raporu ve sunum hazırla.
+    )
+    EXEC_STATUS = "exec_status"  # Ne yapıyorsun? / Ne durumda?
+    EXEC_EXPLAIN = "exec_explain"  # Şu an tam olarak ne yapıyorsun?
+    EXEC_PAUSE = "exec_pause"  # Bu işi durdur / Bekle
+    EXEC_RESUME = "exec_resume"  # Devam et
+    EXEC_RETRY = "exec_retry"  # İkinci adımı tekrar dene / Araştırmayı tekrar dene
+    EXEC_AMEND = "exec_amend"  # Sunumu da ekle / Excel'i de hazırla
+    EXEC_CANCEL = "exec_cancel"  # Bunu iptal et / Vazgeç
+
     NONE = "none"
 
 
@@ -287,6 +311,16 @@ CAPABILITY_BY_INTENT: dict[Intent, str] = {
     Intent.SCENE_LIGHT: "scene.light",
     Intent.SCENE_CAMERA: "scene.camera",
     Intent.SCENE_RENDER: "scene.render",
+    # M26 (spec §5): starting/pausing/resuming/retrying/amending/cancelling a durable
+    # multi-step job is a real mutation, the same class every other family above gets.
+    # EXEC_STATUS/EXEC_EXPLAIN are QUERY_TOOL_BY_INTENT entries instead (read nothing
+    # the owner cannot already see, mutate nothing).
+    Intent.EXEC_START: "executive.start",
+    Intent.EXEC_PAUSE: "executive.pause",
+    Intent.EXEC_RESUME: "executive.resume",
+    Intent.EXEC_RETRY: "executive.retry",
+    Intent.EXEC_AMEND: "executive.amend",
+    Intent.EXEC_CANCEL: "executive.cancel",
 }
 
 #: QUERY intents that name a tool rather than being answered conversationally (contract §2:
@@ -337,6 +371,11 @@ QUERY_TOOL_BY_INTENT: dict[Intent, str] = {
     # device call is a read of the tool's own state) - the same query class
     # document.read/app.status already get for the identical reason.
     Intent.SCENE_INSPECT: "scene.inspect",
+    # M26 (spec §5): a status read-back and the current step's own one-sentence
+    # explanation mutate nothing the owner can see - the same query class every other
+    # family's own status/explain entry above already gets.
+    Intent.EXEC_STATUS: "executive.status",
+    Intent.EXEC_EXPLAIN: "executive.explain",
 }
 
 
@@ -601,6 +640,29 @@ class ResolvedIntent:
     #: only a best-effort convenience the tool prefers when non-empty (the same rule
     #: ``app_template``/``artifact_kind`` already follow).
     scene_kind: str | None = None
+    #: M26 (docs/M26_EXECUTIVE_AUTONOMY_SPEC.md §5): for EXEC_START, WHICH of the three
+    #: directive shapes the owner's WORDS matched ("research" | "folder_compare" |
+    #: "mail_thread") — a diagnostic echo of what this resolver decided, never itself
+    #: the planner's input (the planner re-derives the shape from the SAME directive
+    #: text, app.executive.planner.RuleBasedExecutivePlanner's own docstring: "no
+    #: second Turkish table" holds here too - this field is for the audit row and the
+    #: tool's own follow-up, not a second source of truth the planner would trust).
+    exec_shape: str | None = None
+    #: For EXEC_RETRY, the 1-based ordinal the owner's WORDS named ("ikinci adımı" ->
+    #: 2), or None when none was said ("Araştırmayı tekrar dene" names a KIND instead,
+    #: exec_kind_hint below). The tool resolves the actual step id from the run's own
+    #: rows either way - this is only what the words themselves said.
+    exec_step_ordinal: int | None = None
+    #: For EXEC_RETRY, a coarse step-kind family the owner's WORDS named
+    #: ("araştırmayı" -> "research", "excel'i" -> "artifacts"), or None. The tool
+    #: matches this against the run's own step kinds (app.executive.spec.STEP_KINDS
+    #: all start with one of these family prefixes) - never a guess at a specific step
+    #: id from the word alone.
+    exec_kind_hint: str | None = None
+    #: For EXEC_AMEND, the deliverable kind the owner's WORDS named ("sunumu da ekle"
+    #: -> "presentation", "excel'i de hazırla" -> "spreadsheet"), or None when the
+    #: words named neither - the tool then asks which, never guesses.
+    exec_amend_kind: str | None = None
 
     def __post_init__(self) -> None:
         if not self.klass:
@@ -2693,6 +2755,211 @@ def _scene_render_match(tokens: tuple[str, ...]) -> str | None:
     return "render al"
 
 
+# --------------------------------------------------- M26: Executive Autonomy
+#
+# Built on the same token/stem primitives as every family above — no second Turkish
+# pattern table (module docstring's own rule). ``_executive_start_match`` reuses
+# ``_RESEARCH_STEMS`` (defined below for the research interaction classes) rather than
+# a duplicate constant of the same name and meaning.
+
+#: An OUTPUT word — required alongside a shape's own noun so a bare "Onu araştır" (the
+#: EXISTING single-shot research family) or "Bunu PDF yap" (ARTIFACT_CREATE) is never
+#: misread as a multi-step executive directive (spec §5's own three examples all name a
+#: concrete deliverable: "Word raporu", "sunum", "Excel", "yönetici özeti", "cevap
+#: taslağı"). Deliberately narrower than a bare "hazırla"/"özet", which ARTIFACT_CREATE
+#: and plain research already use for a SINGLE deliverable.
+_EXEC_OUTPUT_STEMS: Final[tuple[str, ...]] = ("rapor", "sunum", "slayt", "excel", "tablo")
+_EXEC_COMPARE_STEMS: Final[tuple[str, ...]] = ("karşılaştır", "karsilastir", "kıyasla", "kiyasla")
+_EXEC_FOLDER_STEMS: Final[tuple[str, ...]] = ("klasör", "klasor", "teklif")
+_EXEC_MAIL_STEMS: Final[tuple[str, ...]] = ("mail", "posta", "eposta")
+_EXEC_MAIL_THREAD_STEMS: Final[tuple[str, ...]] = ("zincir", "konuşma", "konusma")
+#: All three surface forms: "taslak" (bare), "taslağ-" (suffixed: taslağı, taslağa —
+#: "taslak" softens its final k to ğ before a vowel suffix) and "taslag-" (the SAME
+#: suffixed form with its diacritic stripped, exactly what an ASR-noise transcript or
+#: ``tests.voice_corpus.corpus._strip_diacritics`` produces) — the same alternation
+#: ``app.voice.intents``'s own word-form comments handle elsewhere by listing forms
+#: explicitly rather than risking a short, over-eager prefix. Found via the corpus: a
+#: diacritic-stripped "taslagi" matched neither of the first two forms.
+_EXEC_DRAFT_STEMS: Final[tuple[str, ...]] = ("taslak", "taslağ", "taslag")
+
+
+def _executive_output_requested(tokens: tuple[str, ...]) -> bool:
+    if _has(tokens, *_EXEC_OUTPUT_STEMS):
+        return True
+    if _has_exact(tokens, "yönetici", "yonetici") and _has(tokens, "özet", "ozet"):
+        return True
+    return bool(_has(tokens, *_EXEC_DRAFT_STEMS))
+
+
+def _executive_start_match(tokens: tuple[str, ...]) -> tuple[str, str] | None:
+    """(shape, matched) for one of spec §5's three directive shapes, or ``None``. Only
+    decides "is this a multi-step executive directive at all" — WHICH shape's full
+    graph is built is ``app.executive.planner.RuleBasedExecutivePlanner``'s own job,
+    given the SAME directive text verbatim (module comment above)."""
+    if not _executive_output_requested(tokens):
+        return None
+    if _has_exact(tokens, *_EXEC_MAIL_STEMS) and (
+        _has(tokens, *_EXEC_MAIL_THREAD_STEMS) or _has(tokens, *_EXEC_DRAFT_STEMS)
+    ):
+        return "mail_thread", "mail zinciri + taslak"
+    if _has(tokens, *_EXEC_COMPARE_STEMS) and _has(tokens, *_EXEC_FOLDER_STEMS):
+        return "folder_compare", "klasör karşılaştırma"
+    if _has(tokens, *_RESEARCH_STEMS):
+        return "research_report", "araştırma + rapor"
+    return None
+
+
+#: "adım" (step) — exact forms only: "adama"/"adamı" (a person) shares no prefix, but
+#: "adımı"/"adıma" do share the stem "adım", so a startswith match is safe here.
+_EXEC_STEP_NOUN_STEMS: Final[tuple[str, ...]] = ("adım", "adim")
+_EXEC_RETRY_VERB_STEMS: Final[tuple[str, ...]] = ("dene", "deneyin", "yeniden")
+#: A coarse step-KIND family a retry/amend phrase names instead of an ordinal ("
+#: araştırmayı tekrar dene", "excel'i de hazırla") — app.executive.spec.STEP_KINDS all
+#: start with one of these family prefixes.
+_EXEC_KIND_HINTS: Final[dict[str, str]] = {
+    "araştır": "research",
+    "arastir": "research",
+    "mail": "mail",
+    "posta": "mail",
+    "taslak": "mail",
+    "taslağ": "mail",  # taslağı/taslağa - see _EXEC_DRAFT_STEMS's own comment
+    "taslag": "mail",  # diacritic-stripped taslağı/taslağa - see the same comment
+    "takvim": "calendar",
+    "excel": "artifacts",
+    "tablo": "artifacts",
+    "sunum": "artifacts",
+    "rapor": "artifacts",
+    "belge": "documents",
+    "dosya": "documents",
+}
+
+
+def _exec_step_ordinal(tokens: tuple[str, ...]) -> int | None:
+    if _has(tokens, *_EXEC_STEP_NOUN_STEMS) is None:
+        return None
+    for tok in tokens:
+        if tok in _ORDINALS:
+            return _ORDINALS[tok]
+        for word, idx in _ORDINALS.items():
+            if len(word) > 3 and tok.startswith(word):
+                return idx
+    return None
+
+
+def _exec_kind_hint(tokens: tuple[str, ...]) -> str | None:
+    for tok in tokens:
+        for stem, family in _EXEC_KIND_HINTS.items():
+            if tok.startswith(stem):
+                return family
+    return None
+
+
+#: For EXEC_AMEND specifically: the SPECIFIC deliverable kind
+#: (app.artifacts.spec.ARTIFACT_KINDS), not the coarse family ``_exec_kind_hint`` gives
+#: RETRY — "sunumu da ekle" must add a PRESENTATION, never merely "an artifacts step".
+_EXEC_AMEND_KIND_WORDS: Final[dict[str, str]] = {
+    "sunum": "presentation",
+    "slayt": "presentation",
+    "excel": "spreadsheet",
+    "tablo": "spreadsheet",
+    "rapor": "document",
+    "belge": "document",
+}
+
+
+def _exec_amend_kind(tokens: tuple[str, ...]) -> str | None:
+    for tok in tokens:
+        for stem, kind in _EXEC_AMEND_KIND_WORDS.items():
+            if tok.startswith(stem):
+                return kind
+    return None
+
+
+def _executive_retry_match(tokens: tuple[str, ...]) -> str | None:
+    """ "İkinci adımı tekrar dene." / "Araştırmayı tekrar dene." (spec §5) — needs
+    EITHER an ordinal+adım OR a recognised kind hint, so a bare "tekrar dene" with
+    neither (ambiguous — which step?) falls through to REPEAT instead."""
+    if _has(tokens, *_EXEC_RETRY_VERB_STEMS) is None:
+        return None
+    if _exec_step_ordinal(tokens) is not None or _exec_kind_hint(tokens) is not None:
+        return "tekrar dene"
+    return None
+
+
+_EXEC_AMEND_VERB_STEMS: Final[tuple[str, ...]] = ("ekle", "eklesene", "eklermisin")
+#: "de"/"da" (Turkish "also/too", a separate word here, not a suffix) — spec's own
+#: examples both carry it ("Sunumu DA ekle", "Excel'i DE hazırla"), the discriminator
+#: that keeps a plain ARTIFACT_CREATE ("Bana bir sunum hazırla") from being misread as
+#: an amendment to something that may not even be running.
+_EXEC_ALSO_WORDS: Final[tuple[str, ...]] = ("de", "da")
+
+
+def _executive_amend_match(tokens: tuple[str, ...]) -> str | None:
+    if _has_exact(tokens, *_EXEC_ALSO_WORDS) is None:
+        return None
+    if _has_exact(tokens, *_EXEC_AMEND_VERB_STEMS):
+        return "de ekle"
+    if _has(tokens, "hazırla", "hazirla") and _exec_amend_kind(tokens) is not None:
+        return "de hazırla"
+    return None
+
+
+def _executive_active_match(
+    tokens: tuple[str, ...], *, run_state: str | None
+) -> tuple[Intent, str] | None:
+    """The six intents that only mean something with a run to point at (module comment
+    above) — gated on ``run_state`` (one of app.executive.models.EXECUTIVE_RUN_STATE_
+    VALUES, or None when no run exists), the CALLER's one live fact, never guessed from
+    vocabulary alone. Order: EXPLAIN before STATUS ("tam olarak" is the discriminator,
+    spec's own EXPLAIN phrasing); CANCEL before PAUSE (both can carry "dur"-shaped
+    words, and "iptal et"/"vazgeç" are unambiguous); RETRY and AMEND last, each gated on
+    their own extra word (module comments).
+
+    PAUSE and RESUME match on ANY active run, not only the exact state each is really
+    about — the SAME "vocabulary decides the tool, the tool decides whether it can
+    actually act" split MAIL_SEND/CALENDAR_COMMIT already use (resolve_intent's own
+    docstring: they "match on vocabulary ALONE ... the tool ... answers with an honest
+    clarification from its OWN service layer, never a guess made here"). Gating PAUSE
+    strictly on "running" or RESUME strictly on "paused" would make spec §5's own
+    negative case ("Devam et" with nothing paused) fall through to the generic RESUME
+    control intent instead of an EXECUTIVE clarification whenever a run genuinely
+    exists but is not paused — silently correct-looking, and wrong: the owner asked
+    THIS system to continue THIS job, and deserves "Duraklatılmış bir iş yok efendim."
+    from ``app.executive.service.resume_run_db``, not a narration no-op.
+    """
+    if run_state is None:
+        return None
+    if (
+        _has_exact(tokens, "tam")
+        and _has_exact(tokens, "olarak")
+        and _has_exact(tokens, "ne")
+        and _has(tokens, "yap")
+    ):
+        return Intent.EXEC_EXPLAIN, "şu an tam olarak ne yapıyorsun"
+    if _has_exact(tokens, "ne") and (
+        _has(tokens, "yap") or (_has(tokens, "durum") and _has_exact(tokens, "ne", "nedir"))
+    ):
+        return Intent.EXEC_STATUS, "ne yapıyorsun / ne durumda"
+    if _has_exact(tokens, "iptal") or _has_exact(tokens, "vazgeç", "vazgec"):
+        return Intent.EXEC_CANCEL, "iptal et / vazgeç"
+    # Never on a run that has already reached a TERMINAL state (spec §3's own seven
+    # words, EXECUTIVE_RUN_STATES — frozen, so these three literals cannot silently
+    # drift the way a duplicated Turkish table could): a "Bekle"/"Devam et" said long
+    # after a run finished means whatever it ordinarily means, not a stale executive
+    # command. The strict PAUSE-only-while-running / RESUME-only-while-paused split
+    # still belongs to the TOOL, not this check (module docstring above).
+    if run_state in ("planned", "running", "paused"):
+        if _has_exact(tokens, *STOP_TOKENS):
+            return Intent.EXEC_PAUSE, "bu işi durdur / bekle"
+        if _has_exact(tokens, "devam", "sürdür", "surdur"):
+            return Intent.EXEC_RESUME, "devam et"
+    if retry_matched := _executive_retry_match(tokens):
+        return Intent.EXEC_RETRY, retry_matched
+    if amend_matched := _executive_amend_match(tokens):
+        return Intent.EXEC_AMEND, amend_matched
+    return None
+
+
 # ------------------------------------------------- research interaction classes
 
 #: A research word in any Turkish inflection: "araştır", "araştırma", "araştırmayı",
@@ -3324,6 +3591,7 @@ def resolve_intent(
     draft_pending: bool = False,
     proposal_pending: bool = False,
     genesis_awaiting_approval: bool = False,
+    executive_run_state: str | None = None,
 ) -> ResolvedIntent:
     """Resolve a transcript into an :class:`Intent` against the live state.
 
@@ -3368,6 +3636,14 @@ def resolve_intent(
     session right now — the same "one precondition turns a bare confirmation word into a
     real tool call" shape ``draft_pending``/``proposal_pending`` already give MAIL_SEND/
     CALENDAR_COMMIT, established by the caller from ``GenesisService.find_awaiting_approval``.
+
+    ``executive_run_state`` is M26's own one fact (docs/M26_EXECUTIVE_AUTONOMY_SPEC.md §5,
+    ADR-0089): one of ``app.executive.models.EXECUTIVE_RUN_STATE_VALUES`` when the owner
+    has a run at all (established by the caller from the owner's most recent non-terminal,
+    or otherwise most recent, ``ExecutiveRunRow``), else ``None`` — the same "context, never
+    vocabulary alone" discipline ``operator_running``/``genesis_awaiting_approval`` already
+    establish, so "Ne yapıyorsun?"/"Vazgeç" is read as EXEC_STATUS/EXEC_CANCEL only when
+    there is a run to be asked about, never stolen from OPERATOR_STATUS/DISCARD otherwise.
     """
     normalized, tokens, dropped = normalize_transcript(text)
     confidence = 1.0 if dropped == 0 else 0.9
@@ -3505,6 +3781,40 @@ def resolve_intent(
             scope=SCOPE_CONVERSATION,
             matched=app_matched_text,
             application=app_canonical,
+            **base,
+        )
+
+    # 0e-2. M26 (docs/M26_EXECUTIVE_AUTONOMY_SPEC.md §5): Executive Autonomy. Checked
+    #       HERE, before the M20 document block (DOCUMENT_COMPARE also owns
+    #       "karşılaştır") and before the M21 mail block (MAIL_THREAD/DISCARD also own
+    #       "zincir"/"vazgeç") — a multi-step directive or a live run's own control word
+    #       must never be swallowed by either single-step family. The active-run-gated
+    #       six are checked FIRST (a run in progress outranks starting a new one on the
+    #       same ambiguous words, and there are <= 2 active runs to begin with, spec
+    #       §4), then EXEC_START.
+    if executive_matched := _executive_active_match(tokens, run_state=executive_run_state):
+        exec_intent, exec_matched_text = executive_matched
+        return ResolvedIntent(
+            exec_intent,
+            scope=SCOPE_CONVERSATION,
+            matched=exec_matched_text,
+            exec_step_ordinal=(
+                _exec_step_ordinal(tokens) if exec_intent == Intent.EXEC_RETRY else None
+            ),
+            exec_kind_hint=(_exec_kind_hint(tokens) if exec_intent == Intent.EXEC_RETRY else None),
+            exec_amend_kind=(
+                _exec_amend_kind(tokens) if exec_intent == Intent.EXEC_AMEND else None
+            ),
+            **base,
+        )
+    if exec_start_matched := _executive_start_match(tokens):
+        shape, exec_start_text = exec_start_matched
+        return ResolvedIntent(
+            Intent.EXEC_START,
+            scope=SCOPE_CONVERSATION,
+            matched=exec_start_text,
+            exec_shape=shape,
+            folder=_extract_document_folder(tokens) if shape == "folder_compare" else None,
             **base,
         )
 

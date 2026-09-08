@@ -34,7 +34,7 @@ import pytest
 from app.appfactory.models import APP_PROJECT_STATES
 from app.creative3d.models import SCENE_STATES, wire_step
 from app.genesis.models import GENESIS_STATES
-from app.uistate.contract import SCENE_ACTIVITY_STEPS
+from app.uistate.contract import EXECUTIVE_RUN_STATES, SCENE_ACTIVITY_STEPS
 
 #: Found by walking up rather than by a counted `parents[n]`: a wrong depth would make this
 #: guard read nothing and pass, which is worse than not having it (the M24 `_REPO_ROOT`
@@ -71,6 +71,12 @@ FAMILIES: list[tuple[str, set[str], str]] = [
     ("app_projects", set(APP_PROJECT_STATES), "APP_PROJECT_STATES"),
     ("genesis_runs", set(GENESIS_STATES), "GENESIS_RUN_STATES"),
     ("scene_activity", set(SCENE_ACTIVITY_STEPS), "SCENE_RUN_STATES"),
+    # M26 (ADR-0089): the executive family's row states ARE the wire words (one
+    # vocabulary, app.uistate.contract's own comment on EXECUTIVE_STEP_* explains
+    # why there is no second, richer set to translate down from here). Expected to
+    # FAIL until the web track lands its own EXECUTIVE_RUN_STATES list — that is the
+    # correct, catchable state this guard exists to produce (module docstring).
+    ("executive_run", set(EXECUTIVE_RUN_STATES), "EXECUTIVE_RUN_STATES"),
 ]
 
 
