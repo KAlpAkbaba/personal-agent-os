@@ -44,6 +44,17 @@ public sealed record ServiceChallenge : PipeMessage
 
     [JsonPropertyName("protocol_version")]
     public int ProtocolVersion { get; init; } = IpcProtocol.Version;
+
+    /// <summary>
+    /// M22 (ADR-0085): the origin — scheme, host, port — of the Cloud Core this device
+    /// enrolled against and dials (<see cref="Protocol.HttpOrigin"/> of the broker REST base).
+    /// The companion pins <c>file.fetch</c> to it; it never learns the origin from anywhere
+    /// else, so an older service that sends none leaves <c>file.fetch</c> refusing every URL.
+    /// Optional and additive: an older companion ignores it, an older service omits it.
+    /// </summary>
+    [JsonPropertyName("broker_origin")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? BrokerOrigin { get; init; }
 }
 
 public sealed record CompanionHello : PipeMessage

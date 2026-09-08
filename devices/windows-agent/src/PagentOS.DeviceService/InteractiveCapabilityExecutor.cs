@@ -86,6 +86,13 @@ public sealed class InteractiveCapabilityExecutor(
     /// </summary>
     public string? AudioOrigin { get; } = OriginOf(brokerRestUrl);
 
+    /// <summary>
+    /// M22 (§6k): the same origin, under the name the rest of the agent uses — the ONE origin
+    /// <c>file.fetch</c> may download from. The service refuses a foreign origin before the
+    /// pipe and tells the companion this value in the challenge so it refuses it again.
+    /// </summary>
+    public string? BrokerOrigin => AudioOrigin;
+
     /// <summary>Per-family cap on the time one command may hold the companion.</summary>
     public static TimeSpan TimeoutCapFor(string capability)
     {
@@ -190,6 +197,14 @@ public sealed class InteractiveCapabilityExecutor(
                     $"capability '{command.Capability}' is not enabled on this device (OperatorEnabled=false gates the documents family)",
                     retryable: false);
             }
+
+            if (string.Equals(command.Capability, DocumentCapabilityNames.FileFetch, StringComparison.Ordinal))
+            {
+                // M22: before the pipe, as for play_audio — the companion is the thing that
+                // would download the URL, so the origin is checked on the side that has not
+                // been asked to yet, against the origin THIS side dialled.
+                ValidateFetchOrigin(command.Payload, BrokerOrigin);
+            }
         }
         else if (!AgentCapabilities.IsInteractive(command.Capability))
         {
@@ -247,10 +262,46 @@ public sealed class InteractiveCapabilityExecutor(
         }
     }
 
-    /// <summary>Scheme, host and port of a configured URL, or null when it is unusable.</summary>
-    public static string? OriginOf(string? url)
-        => Uri.TryCreate(url, UriKind.Absolute, out var parsed)
-           && (parsed.Scheme == Uri.UriSchemeHttp || parsed.Scheme == Uri.UriSchemeHttps)
-            ? parsed.GetLeftPart(UriPartial.Authority)
-            : null;
+    /// <summary>
+    /// M22 (§6k): refuses a <c>file.fetch</c> payload whose <c>url</c> is not on
+    /// <paramref name="allowedOrigin"/> with <c>permission_denied</c> (never retryable). The
+    /// message names the field and says "beklenen köken değil"; it never repeats the URL's
+    /// host. No configured origin is a refusal too, for the reason
+    /// <see cref="ValidateAudioOrigin"/> gives. Everything else about the payload — the
+    /// path prefix, the name, the hash, the size — is the companion's to validate.
+    /// </summary>
+    public static void ValidateFetchOrigin(JsonObject payload, string? allowedOrigin)
+    {
+        ArgumentNullException.ThrowIfNull(payload);
+
+        if (string.IsNullOrWhiteSpace(allowedOrigin))
+        {
+            throw new CapabilityException(
+                ErrorClasses.PermissionDenied,
+                $"'{DocumentCapabilityNames.FileFetch}' is refused: this device has no configured broker origin, so no render URL can be recognised as the owner's own (beklenen köken değil)",
+                retryable: false);
+        }
+
+        var raw = payload["url"]?.GetValueKind() == System.Text.Json.JsonValueKind.String ? payload["url"]!.GetValue<string>() : null;
+        if (string.IsNullOrWhiteSpace(raw)
+            || !Uri.TryCreate(raw, UriKind.Absolute, out var url)
+            || HttpOrigin.Of(url) is null)
+        {
+            throw new CapabilityException(
+                ErrorClasses.ValidationError,
+                "payload.url must be an absolute http(s) URL",
+                retryable: false);
+        }
+
+        if (!HttpOrigin.Same(HttpOrigin.Of(url), allowedOrigin))
+        {
+            throw new CapabilityException(
+                ErrorClasses.PermissionDenied,
+                "payload.url is not on the origin this device dialled for its Cloud Core connection (beklenen köken değil); nothing was fetched",
+                retryable: false);
+        }
+    }
+
+    /// <summary>Scheme, host and port of a configured URL, or null when it is unusable (<see cref="HttpOrigin.Of(string?)"/>).</summary>
+    public static string? OriginOf(string? url) => HttpOrigin.Of(url);
 }

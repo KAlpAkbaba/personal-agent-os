@@ -315,10 +315,13 @@ public static class Program
             // M20 (M20_FILE_DOCUMENT_INTELLIGENCE_SPEC.md §2): the documents family rides the
             // same flag and the same roots — one decision, "the companion may touch the
             // owner's files", not two.
-            documentCapabilities = new Documents.DocumentCapabilities(operatorOptions, loggerFactory.CreateLogger("Documents"), audit);
+            // M22 (§6k): file.fetch opens what it kept through the operator's own file.open;
+            // its origin arrives with every pipe challenge (CompanionRuntime), never from here.
+            documentCapabilities = new Documents.DocumentCapabilities(operatorOptions, loggerFactory.CreateLogger("Documents"), audit, fileOpener: operatorCapabilities);
             logger.LogInformation(
-                "documents: ENABLED - {Count} capabilities inside the operator roots (read-only; secret-bearing names never read)",
-                AgentCapabilities.Documents.Count);
+                "documents: ENABLED - {Count} capabilities inside the operator roots (read-only except file.fetch, which writes new files into {Downloads}; secret-bearing names never read or written)",
+                AgentCapabilities.Documents.Count,
+                documentCapabilities.DownloadsRoot ?? "(no Downloads folder: every file.fetch is refused)");
         }
         else
         {

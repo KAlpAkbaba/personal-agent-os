@@ -30,15 +30,15 @@ public sealed class AdvertisementTests
         Assert.DoesNotContain(without, AgentCapabilities.IsOperator);
         Assert.Equal(AgentCapabilities.Compose(browserEnabled: false), without);
 
-        // M20 appends the documents family (6) after the operator family (32) under the same
-        // flag; the operator family itself is exactly where it was.
+        // M20 appends the documents family (6; 7 since M22's file.fetch) after the operator
+        // family (32) under the same flag; the operator family itself is exactly where it was.
         var with = AgentCapabilities.Compose(browserEnabled: true, displayPowerEnabled: true, operatorEnabled: true);
         var appended = AgentCapabilities.Operator.Count + AgentCapabilities.Documents.Count;
         Assert.Equal(AgentCapabilities.Operator, with.TakeLast(appended).Take(AgentCapabilities.Operator.Count));
         Assert.Equal(AgentCapabilities.Documents, with.TakeLast(AgentCapabilities.Documents.Count));
         Assert.Equal(with.Count, with.Distinct(StringComparer.Ordinal).Count());
         Assert.Equal(32, AgentCapabilities.Operator.Count);
-        Assert.Equal(6, AgentCapabilities.Documents.Count);
+        Assert.Equal(7, AgentCapabilities.Documents.Count);
         Assert.Equal(AgentCapabilities.Compose(browserEnabled: true, displayPowerEnabled: true), with.Take(with.Count - appended));
     }
 
