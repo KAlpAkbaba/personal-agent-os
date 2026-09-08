@@ -45,7 +45,9 @@ import {
   eyeClaim,
   releaseClaim,
 } from "./truth";
+import { type CalendarFacts, calendarCaption, calendarFacts } from "./calendar";
 import { type DocumentFacts, documentCaption, documentFacts } from "./documents";
+import { type MailFacts, mailCaption, mailFacts } from "./mail";
 import { operatorCaption, operatorFacts } from "./operator";
 import type { VoiceUiState } from "../voice/controller";
 
@@ -94,7 +96,22 @@ export type CoreVisualKind =
    * drawn in, the structure calm, nothing that could be read as progress,
    * with the published file and place as the caption.
    */
-  | "document_analysis";
+  | "document_analysis"
+  /**
+   * v6 (M21): the Core reading the owner's mail or holding a draft. The
+   * reading posture again — calm, information drawn in, nothing that could
+   * be read as progress — with the folder, the draft's step and the subject
+   * as the caption. A draft waiting on the owner does not make the Core
+   * busy: the posture is the same calm one, and the caption says "bekliyor".
+   */
+  | "mail_activity"
+  /**
+   * v6 (M21): the Core reading the owner's calendar or holding a proposal.
+   * A planning posture: the structure laid a little open and still, the
+   * rings barely turning, nothing flowing inward — arranging, not ingesting
+   * — with the range, the proposal's step and its conflicts as the caption.
+   */
+  | "calendar_activity";
 
 /**
  * Which of the two evidence sources produced the intent (ADR-0061 §4).
@@ -121,6 +138,8 @@ export type PaletteToken =
   | "ready"
   /** v5: the reading Core — a pale parchment gold, calmer than any working tone. */
   | "reading"
+  /** v6: the planning Core — straw, the parchment's duller neighbour. */
+  | "planning"
   | "unknown";
 
 /**
@@ -354,6 +373,17 @@ export type VisualIntent = {
    */
   document: DocumentFacts | null;
 
+  // ------------------------------------------- v6: Mail & Calendar (M21 §3)
+  /**
+   * The published facts about the mail activity — the folder, the subject,
+   * the draft's step — each `null` when the publisher sent none, and the
+   * whole thing `null` outside the `mail_activity` kind (kept on its
+   * last-known shape). Words, not channels.
+   */
+  mail: MailFacts | null;
+  /** The same for the calendar: the range, the event, the proposal's step and its conflicts. */
+  calendar: CalendarFacts | null;
+
   palette: PaletteToken;
 };
 
@@ -437,6 +467,8 @@ function blank(kind: CoreVisualKind, palette: PaletteToken): VisualIntent {
     operatorWindow: null,
     operatorErrorClass: null,
     document: null,
+    mail: null,
+    calendar: null,
     palette,
   };
 }
@@ -942,6 +974,57 @@ function forLiveState(event: UiStateEvent, claim: Claim): VisualIntent {
       };
     }
 
+    case "mail.activity": {
+      // The reading posture once more (M21 §3), a shade calmer than the
+      // document's: mail is read a message at a time, and a draft in hand is
+      // held, not worked. Information comes in — the inward flow is the one
+      // channel that moves with intent — the shells sit close, the rings turn
+      // slowly, nothing pulses and nothing is drawn as progress. The caption
+      // is the draft's step or the folder being read, then the subject; a
+      // draft waiting on the owner is worded as waiting, never as busy.
+      const facts = mailFacts(event);
+      return {
+        ...base("mail_activity", "reading"),
+        label: mailCaption(facts),
+        scale: 1,
+        topology: 0.1,
+        inwardFlow: 0.25,
+        breathAmplitude: 0.03,
+        breathHz: 0.22,
+        energy: e,
+        glow: glowOf(0.26, e),
+        shellSpread: 0.22,
+        ringSpin: 0.15,
+        flowRate: 0.15,
+        mail: facts,
+      };
+    }
+
+    case "calendar.activity": {
+      // The planning posture (M21 §3): the structure laid a little open and
+      // held there — a day being arranged — with a faint lattice for the
+      // grid of it, the rings barely turning, and NO inward flow: planning
+      // arranges what is already known rather than taking anything in. No
+      // pulse, no constellation, no progress: a proposal with two conflicts
+      // is two conflicts in words, not a bar. The caption is the proposal's
+      // step with its counted conflicts, or the range being read.
+      const facts = calendarFacts(event);
+      return {
+        ...base("calendar_activity", "planning"),
+        label: calendarCaption(facts),
+        scale: 1.02,
+        topology: 0.2,
+        breathAmplitude: 0.03,
+        breathHz: 0.2,
+        energy: e,
+        glow: glowOf(0.26, e),
+        shellSpread: 0.35,
+        ringSpin: 0.12,
+        flowRate: 0.1,
+        calendar: facts,
+      };
+    }
+
     default:
       // Reached only by a contract state this table has not been taught. Both
       // gates upstream (`isKnownState`, and `coreClaim`'s agent/lab filter)
@@ -1056,8 +1139,14 @@ export function applyVoiceOverlay(bus: VisualIntent, voice: VoiceOverlay): Visua
   // body earns this — a last-known operator shape yields to the local
   // observation like every other bus state does. v5 extends the same rule to
   // a live reading Core: a spoken "bunu özetle" runs a document tool, and the
-  // bus knows which file and which page (M20 §3).
-  if (voice.state === "tool_running" && (isOperatorActing(bus) || isDocumentReading(bus))) return bus;
+  // bus knows which file and which page (M20 §3). v6 extends it to mail and
+  // the calendar: "gelen kutumu oku" runs a mail tool, and the bus knows the
+  // folder and the draft (M21 §3).
+  if (
+    voice.state === "tool_running" &&
+    (isOperatorActing(bus) || isDocumentReading(bus) || isMailReading(bus) || isCalendarPlanning(bus))
+  )
+    return bus;
   const local = (kind: CoreVisualKind, palette: PaletteToken): VisualIntent => ({
     ...blank(kind, palette),
     source: "voice",
@@ -1329,4 +1418,14 @@ export function isOperatorActing(intent: VisualIntent): boolean {
  */
 export function isDocumentReading(intent: VisualIntent): boolean {
   return intent.kind === "document_analysis";
+}
+
+/** True while the Core body is a LIVE mail activity (v6); a last-known mail shape is not. */
+export function isMailReading(intent: VisualIntent): boolean {
+  return intent.kind === "mail_activity";
+}
+
+/** True while the Core body is a LIVE calendar activity (v6); a last-known calendar shape is not. */
+export function isCalendarPlanning(intent: VisualIntent): boolean {
+  return intent.kind === "calendar_activity";
 }

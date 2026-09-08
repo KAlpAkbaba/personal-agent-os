@@ -651,6 +651,10 @@
 .palette-reading {
   --core-color: #e3cfa0;
 }
+/* v6: the planning Core, straw. Same value as CoreScene's PALETTE. */
+.palette-planning {
+  --core-color: #d4c48e;
+}
 .palette-unknown {
   --core-color: #6b6250;
 }
@@ -892,6 +896,46 @@
 .panel li[data-focus="previous"] {
   border-left: 2px solid #2c3550;
   padding-left: 0.5rem;
+}
+
+/* ------------------------------------------------ approval pair (M21 §3) */
+
+/* The one control in the cockpit that asks the Cloud Core to change the
+   world outside: two chips under a pending draft or proposal, disabled with
+   their reason in words until the row was read back, and never animated.
+   The confirm chip is accented only when it may actually be pressed. */
+.approval-pair {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+}
+
+.approval-pair .core-chip:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.approval-pair .core-chip[data-approval-action="confirm"]:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.approval-reason {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.approval-outcome {
+  margin: 0.5rem 0 0;
+  font-size: 0.85rem;
+}
+
+.panel-subheading {
+  margin: 0.6rem 0 0.2rem;
+  font-size: 0.78rem;
+  color: var(--muted);
 }
 
 /* ---------------------------------------------------- reduced motion */

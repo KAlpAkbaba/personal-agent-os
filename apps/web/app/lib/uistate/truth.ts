@@ -23,8 +23,10 @@ import {
   type UiStateResponse,
   ageMs,
   isAlarmLifecycleState,
+  isCalendarState,
   isCoreChannel,
   isDocumentState,
+  isMailState,
   isOperatorState,
   isReleaseBandState,
   isSeverity,
@@ -289,6 +291,21 @@ export function operatorClaim(truth: CoreTruth, now: number): Claim {
  */
 export function documentClaim(truth: CoreTruth, now: number): Claim {
   return claimFor(newestWhere(truth, isDocumentState), now);
+}
+
+/**
+ * The mail channel's own claim (v6): the newest `mail.activity`, and nothing
+ * else — by membership, for the document's reason. Returned expired or not:
+ * the panel words the age, and an expired activity is one we stopped hearing
+ * about, not a draft that stopped existing (the rows are the REST route's).
+ */
+export function mailClaim(truth: CoreTruth, now: number): Claim {
+  return claimFor(newestWhere(truth, isMailState), now);
+}
+
+/** The calendar channel's own claim (v6): the newest `calendar.activity`, by membership. */
+export function calendarClaim(truth: CoreTruth, now: number): Claim {
+  return claimFor(newestWhere(truth, isCalendarState), now);
 }
 
 /**

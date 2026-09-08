@@ -35,6 +35,40 @@ export type PanelProps<T> = {
   id: string;
 };
 
+/**
+ * The three not-yet-loaded outcomes in their words, and nothing for `ok`.
+ *
+ * Split out of `Panel` (M21) for the panels that draw their own section —
+ * a bus line above a REST list — so "yükleniyor", "alınamadı" and "henüz
+ * yok" are spelled once and mean the same thing under every title.
+ */
+export function LoadedNotice<T>({ state }: { state: Loaded<T> }) {
+  return (
+    <>
+      {state.kind === "loading" && (
+        <p className="panel-empty" data-panel-loading>
+          yükleniyor…
+        </p>
+      )}
+
+      {state.kind === "failed" && (
+        // Never an empty list: we do not know whether it is empty.
+        <p className="panel-unknown" data-panel-failed>
+          Alınamadı: {state.error}
+        </p>
+      )}
+
+      {state.kind === "absent" && (
+        // A route that does not exist yet. Distinct from both "empty" and
+        // "failed": the question could not be asked, so no answer is implied.
+        <p className="panel-unknown" data-panel-absent>
+          Henüz yok. {state.detail}
+        </p>
+      )}
+    </>
+  );
+}
+
 export default function Panel<T>({
   title,
   state,
@@ -63,26 +97,7 @@ export default function Panel<T>({
         )}
       </h3>
 
-      {state.kind === "loading" && (
-        <p className="panel-empty" data-panel-loading>
-          yükleniyor…
-        </p>
-      )}
-
-      {state.kind === "failed" && (
-        // Never an empty list: we do not know whether it is empty.
-        <p className="panel-unknown" data-panel-failed>
-          Alınamadı: {state.error}
-        </p>
-      )}
-
-      {state.kind === "absent" && (
-        // A route that does not exist yet. Distinct from both "empty" and
-        // "failed": the question could not be asked, so no answer is implied.
-        <p className="panel-unknown" data-panel-absent>
-          Henüz yok. {state.detail}
-        </p>
-      )}
+      <LoadedNotice state={state} />
 
       {state.kind === "ok" &&
         (isEmpty(state.value) ? (

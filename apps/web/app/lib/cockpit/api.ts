@@ -6,9 +6,11 @@
  * The Core is driven entirely by `/v1/ui/state`. These endpoints answer the
  * different question the cockpit asks — not "what is happening now" but "what
  * currently exists": which goals, which candidates, which facts, what the
- * ledger recorded. Every call here is a GET; nothing in the cockpit mutates
- * anything, and approving a candidate or a goal remains an owner action taken
- * on the surface that owns it.
+ * ledger recorded. Every call in this file is a GET. The cockpit's one
+ * mutating client — M21's approval pair, `approvals.ts` — asks the Cloud Core
+ * to run its own confirmation gate on a draft or proposal and decides
+ * nothing; approving a candidate or a goal remains an owner action taken on
+ * the surface that owns it.
  *
  * The important type in this file is `Loaded<T>`. A panel must be able to say
  * "there are no goals" and "I could not find out whether there are goals" in

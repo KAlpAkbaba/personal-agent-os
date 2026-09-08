@@ -469,6 +469,67 @@ export const DOCUMENT_ANSWERED = (
 export const DOCUMENT_ANALYSIS_BARE = () =>
   event({ state: "document.analysis", subsystem: "documents", task_id: "doc-task-2" });
 
+// ------------------------------------------- v6: Mail & Calendar (M21 §3)
+
+/**
+ * `mail.activity` as the M21 spec §3 has the Cloud Core publish it:
+ * subsystem `mail`, the task id, and in metadata the folder being read, the
+ * subject in hand and — for a draft — its lifecycle step as `draft_state`.
+ * A plain read carries no `draft_state` at all.
+ */
+export const MAIL_ACTIVITY = (
+  folder: string | null = "INBOX",
+  subject: string | null = null,
+  draftState: string | null = null,
+  extra: Record<string, unknown> = {},
+) =>
+  event({
+    state: "mail.activity",
+    subsystem: "mail",
+    task_id: "mail-task-1",
+    status: draftState === null ? "reading" : "draft",
+    metadata: {
+      ...(folder === null ? {} : { folder }),
+      ...(subject === null ? {} : { subject }),
+      ...(draftState === null ? {} : { draft_state: draftState }),
+      ...(extra as Record<string, string | number | boolean>),
+    },
+  });
+
+/** A mail event whose publisher sent no metadata at all. */
+export const MAIL_ACTIVITY_BARE = () => event({ state: "mail.activity", subsystem: "mail", task_id: "mail-task-2" });
+
+/**
+ * `calendar.activity` as the spec has the Cloud Core publish it: subsystem
+ * `calendar`, in metadata the range being read, the event or proposal title
+ * in hand, the proposal's step as `proposal_state`, and the conflicts the
+ * Core counted for a proposal.
+ */
+export const CALENDAR_ACTIVITY = (
+  range: string | null = "today",
+  title: string | null = null,
+  proposalState: string | null = null,
+  conflicts: number | null = null,
+  extra: Record<string, unknown> = {},
+) =>
+  event({
+    state: "calendar.activity",
+    subsystem: "calendar",
+    task_id: "cal-task-1",
+    status: proposalState === null ? "reading" : "proposal",
+    metadata: {
+      ...(range === null ? {} : { range }),
+      ...(title === null ? {} : { event: title }),
+      ...(proposalState === null ? {} : { proposal_state: proposalState }),
+      ...(conflicts === null ? {} : { conflicts }),
+      ...(extra as Record<string, string | number | boolean>),
+    },
+  });
+
+/** A calendar event whose publisher sent no metadata at all. */
+export const CALENDAR_ACTIVITY_BARE = () =>
+  event({ state: "calendar.activity", subsystem: "calendar", task_id: "cal-task-2" });
+
 /** The owner-authorised release path, mid-deployment (ADR-0055). */
 export const RELEASE_DEPLOYING = () =>
   event({

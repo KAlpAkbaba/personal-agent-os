@@ -21,7 +21,7 @@
  *    publisher said which, and nothing about how many remain.
  *
  * This channel is presentation only. Nothing in this client can start, cancel
- * or steer an operator task; the Core has no write path at all.
+ * or steer an operator task; this channel has no write path at all.
  */
 
 import { type Severity, type UiStateEvent, isSeverity, metaNumber, metaToken } from "./contract";

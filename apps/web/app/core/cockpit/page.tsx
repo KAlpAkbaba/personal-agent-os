@@ -17,11 +17,21 @@
  * which completed report the conversation is about is the owner's own act, not
  * the renderer approving work or setting policy. Clicking a research row says
  * "this one", by id.
+ *
+ * M21 adds the one control that asks the Cloud Core to change the world
+ * outside — the Approve/Discard pair under a pending draft or proposal — and
+ * it is not a second authority surface for the same reason: the click asks
+ * the Cloud Core to run the SAME gate the spoken "Gönder." / "Onayla." runs
+ * (ADR-0084 §1), and the Cloud Core refuses on its own terms. The pair
+ * decides nothing, reaches no provider, and is disabled with its reason in
+ * words until the row was read back to the owner.
  */
 
 import { useCallback, useMemo, useState } from "react";
 
 import OwnerGate from "../../components/OwnerGate";
+import { approvalClient } from "../../lib/cockpit/approvals";
+import { useApprovalPair } from "../../lib/cockpit/useApprovalPair";
 import { useCockpitData } from "../../lib/cockpit/useCockpitData";
 import { selectResearchFocus } from "../../lib/research/api";
 import { UnauthorizedError } from "../../lib/session";
@@ -48,6 +58,7 @@ import { useCorePreferences } from "../usePreferences";
 import {
   AlarmsPanel,
   AmbientPanel,
+  CalendarPanel,
   DigitalOperatorPanel,
   DocumentsPanel,
   EvolutionPanel,
@@ -56,6 +67,7 @@ import {
   HealthPanel,
   LedgerPanel,
   LessonsPanel,
+  MailPanel,
   MemoryPanel,
   OwnerActionsPanel,
   ResearchPanel,
@@ -89,6 +101,11 @@ function Cockpit() {
     },
     [refreshPanels],
   );
+
+  // M21: the approval pair's one state, bound to the real client; every
+  // answer reloads the pending lists so the panels show what the Cloud Core
+  // now holds rather than what this page assumed it did.
+  const approvals = useApprovalPair(approvalClient, refreshPanels);
 
   // The tab's one voice session (ADR-0061): its real states overlay the bus
   // body, labelled as this device's own observation.
@@ -148,6 +165,11 @@ function Cockpit() {
             shadowReady={data.shadowReady}
             now={now}
           />
+          {/* M21 §3: the drafts and proposals waiting for the owner, with the
+              pair that asks the Cloud Core to run its gate on one — placed
+              with the owner's actions, because that is what they are. */}
+          <MailPanel pending={data.mailDrafts} truth={truth} now={now} pair={approvals.drafts} />
+          <CalendarPanel pending={data.calendarProposals} truth={truth} now={now} pair={approvals.proposals} />
           <RunningToolsPanel truth={truth} now={now} />
           {/* M18.3: what is set to wake the owner, and what the screens are
               doing. Both are read-only here; the renderer owns no policy. */}
