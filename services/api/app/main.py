@@ -26,6 +26,9 @@ from app.artifacts.runtime import ArtifactRuntime
 from app.broker.routes import router as broker_router
 from app.broker.runtime import BrokerRuntime
 from app.broker.ws import router as broker_ws_router
+from app.calendar.providers import build_calendar_provider, build_calendar_writer
+from app.calendar.routes import router as calendar_router
+from app.calendar.service import CalendarService
 from app.config import Settings, get_settings
 from app.db import build_engine, build_session_factory
 from app.devices.commands import DeviceCommandClient, register_broker_runtime
@@ -42,6 +45,9 @@ from app.identity.runtime import IdentityRuntime
 from app.ledger import service as ledger_service
 from app.ledger.routes import router as ledger_router
 from app.logging import configure_logging, get_logger
+from app.mail.providers import build_mail_provider, build_mail_sender
+from app.mail.routes import router as mail_router
+from app.mail.service import MailService
 from app.memory.routes import router as memory_router
 from app.memory.runtime import MemoryRuntime
 from app.middleware import TraceIdMiddleware
@@ -176,6 +182,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # file authority, never a second path. No process-wide registry of its own (unlike
     # OperatorService): nothing outside a tool call needs to ask "is a read running?".
     document_service = DocumentService()
+    # M21 (docs/M21_MAIL_CALENDAR_SPEC.md §2, §3, ADR-0084): Mail & Calendar's own
+    # providers, built from settings — never a fake in production (module docstrings of
+    # app.mail.providers / app.calendar.providers). With nothing configured the provider
+    # (and therefore the service) is honest about `account_missing`.
+    mail_service = MailService(build_mail_provider(settings), build_mail_sender(settings))
+    calendar_service = CalendarService(
+        build_calendar_provider(settings), build_calendar_writer(settings)
+    )
     voice_realtime.register_live(
         wake_sequence=wake_sequence,
         device_statuses=get_status_registry(),
@@ -187,6 +201,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         device_action=device_action,
         operator=operator_service,
         document_service=document_service,
+        mail_service=mail_service,
+        calendar_service=calendar_service,
     )
 
     def _build_routine_dispatcher() -> ActionDispatcher:
@@ -342,6 +358,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.alarm_audio_store = get_audio_store()
     app.state.operator_service = operator_service
     app.state.document_service = document_service
+    app.state.mail_service = mail_service
+    app.state.calendar_service = calendar_service
     # Scoped CORS: the web shell is a separate origin from the API. Allow only
     # the configured loopback/private web origins (never "*"); M0 review #3.
     app.add_middleware(
@@ -392,6 +410,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(voice_qualification_router)
     app.include_router(release_router)
     app.include_router(devices_router)
+    # M21 (docs/M21_MAIL_CALENDAR_SPEC.md §3): the Cockpit's approval pair for a pending
+    # draft/proposal — owner-gated, the same require_owner_session dependency every other
+    # router applies.
+    app.include_router(mail_router)
+    app.include_router(calendar_router)
 
     @app.get("/v1/system/health")
     async def system_health() -> dict[str, Any]:

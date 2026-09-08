@@ -49,6 +49,12 @@ from app.artifacts.runtime import ArtifactRuntime
 from app.broker import service as broker_service
 from app.broker.models import AuditEvent, Device, DeviceCommand, DeviceSession, EnrollmentToken
 from app.broker.runtime import BrokerRuntime, DeviceConnection
+from app.calendar.models import (
+    CalendarIndexRow,
+    CalendarProposalRow,
+)
+from app.calendar.providers import FakeCalendarWriter
+from app.calendar.service import CalendarService
 from app.config import Settings
 from app.devices.status import DeviceStatusRegistry
 from app.documents.index import DocumentIndex
@@ -61,11 +67,15 @@ from app.identity.root import InMemoryCredentialRoot
 from app.identity.runtime import IdentityRuntime
 from app.ledger import service as ledger_service
 from app.ledger.models import ActivityEventRow, PendingBriefingRow
+from app.mail.models import MailDraftRow, MailIndexRow
+from app.mail.providers import FakeMailSender
+from app.mail.service import MailService
 from app.main import create_app
 from app.narration.models import NarrationSession, PronunciationEntry
 from app.operator import focus as operator_focus
 from app.operator.models import (
     FOCUS_KIND_DOCUMENT,
+    FOCUS_KIND_EVENT,
     FOCUS_KIND_FILE,
     FOCUS_KIND_WINDOW,
     ObjectFocusRow,
@@ -97,16 +107,21 @@ from app.voice.simulator import SimulatedRealtimeProvider
 from tests.alarms_support import FakeDeviceAction, happy_device_results
 from tests.documents_support import document_capability_results, extract_result
 from tests.identity_support import IDENTITY_TABLES
+from tests.mail_calendar_support import build_fake_calendar_provider, build_fake_mail_provider
 from tests.voice_corpus.corpus import (
     CTX_ALARM_RINGING,
     CTX_ALARM_SCHEDULED,
     CTX_COMMON_POINTS_FOCUSED,
     CTX_DOCUMENT_FOCUSED,
     CTX_DOCX_FOCUSED,
+    CTX_DRAFT_READ_BACK,
+    CTX_EVENT_FOCUSED,
     CTX_EYE_DISABLED,
     CTX_FILE_FOCUSED,
+    CTX_MESSAGE_FOCUSED,
     CTX_OPERATOR_RUNNING,
     CTX_PPTX_FOCUSED,
+    CTX_PROPOSAL_READ_BACK,
     CTX_RESEARCH_FOCUS_B,
     CTX_SECRET_FILE_FOCUSED,
     CTX_WINDOW_FOCUSED,
@@ -153,6 +168,10 @@ TABLES = (
     RoutineFiring.__table__,
     ObjectFocusRow.__table__,
     DocumentIndexRow.__table__,
+    MailIndexRow.__table__,
+    MailDraftRow.__table__,
+    CalendarIndexRow.__table__,
+    CalendarProposalRow.__table__,
 )
 
 #: The tools the harness may dispatch as "forbidden" because the product refuses them at
@@ -215,6 +234,8 @@ class Harness:
     holdoffs: HoldoffRegistry
     operator: OperatorService
     documents: DocumentService
+    mail: MailService
+    calendar: CalendarService
     ids: dict[str, str] = field(default_factory=dict)
 
     # ------------------------------------------------------------- relay
@@ -452,6 +473,41 @@ class Harness:
                     last_observed={"window": {"title": "Adsız - Not Defteri"}},
                 )
             )
+        elif context == CTX_MESSAGE_FOCUSED:
+            # The latest message from Ali (uid 104, truth.json's own "Re: Proje planı") —
+            # a real fake-provider read, exactly as if the owner had just heard it.
+            with self.factory() as db:
+                self.mail.read(db, target="Ali")
+        elif context == CTX_DRAFT_READ_BACK:
+            with self.factory() as db:
+                self.mail.read(db, target="Ali")
+                self.mail.draft_reply(db, body="Yarın 10'da uygunum.", target="current")
+        elif context == CTX_EVENT_FOCUSED:
+            with self.factory() as db:
+                operator_focus.set_focus(
+                    db,
+                    FOCUS_KIND_EVENT,
+                    "ev-dis@fixture.example",
+                    label="Diş hekimi",
+                    source="test_context",
+                )
+        elif context == CTX_PROPOSAL_READ_BACK:
+            with self.factory() as db:
+                self.calendar.propose(
+                    db,
+                    summary="Kontrol",
+                    start=datetime(2026, 9, 15, 11, 0, tzinfo=UTC),
+                    end=datetime(2026, 9, 15, 12, 0, tzinfo=UTC),
+                )
+
+    # ------------------------------------------------------------- M21: mail/calendar
+
+    def mail_sent_count(self) -> int:
+        return len(self.mail._sender.sent)  # type: ignore[attr-defined]
+
+    def calendar_committed_count(self) -> int:
+        writer = self.calendar._writer  # type: ignore[attr-defined]
+        return len(writer.created) + len(writer.updated)
 
     # ------------------------------------------------------------- M20: documents
 
@@ -495,7 +551,17 @@ class Harness:
 
 def build_harness() -> Harness:
     """A fresh application per case: real relay, real router, real services, fake device."""
-    settings = Settings(_env_file=None, voice_openai_api_key=VENDOR_KEY)
+    settings = Settings(
+        _env_file=None,
+        voice_openai_api_key=VENDOR_KEY,
+        # M21 (docs/M21_MAIL_CALENDAR_SPEC.md §3): the host flags a real deployment sets
+        # out of band, on out of the autonomous system's own reach — set here so the
+        # corpus proves the READ-BACK gate specifically (not merely "the flag is off"),
+        # the same way a real qualification run would with the owner's account
+        # configured and sending genuinely enabled.
+        mail_send_enabled=True,
+        calendar_write_enabled=True,
+    )
     engine = create_engine(
         "sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False}
     )
@@ -558,6 +624,19 @@ def build_harness() -> Harness:
     # M20 (docs/M20_FILE_DOCUMENT_INTELLIGENCE_SPEC.md §3): the SAME fake device, through
     # the SAME live-source path - one document authority, never a second one.
     document_service = DocumentService()
+    # M21 (docs/M21_MAIL_CALENDAR_SPEC.md §2, §4, ADR-0084): the FAKE providers loading
+    # the fixture mailbox/calendar directly (never the reals ``create_app`` itself would
+    # have built from empty settings) — replaces what ``create_app`` wired, the same way
+    # ``document_service`` above replaces its own, so every mail/calendar tool call in a
+    # corpus case reaches the SAME fake sender/writer this harness can inspect.
+    mail_provider = build_fake_mail_provider()
+    mail_sender = FakeMailSender()
+    mail_service = MailService(mail_provider, mail_sender)
+    calendar_provider = build_fake_calendar_provider()
+    calendar_writer = FakeCalendarWriter()
+    calendar_service = CalendarService(calendar_provider, calendar_writer)
+    app.state.mail_service = mail_service
+    app.state.calendar_service = calendar_service
     runtime.register_live(
         wake_sequence=sequence,
         device_statuses=statuses,
@@ -567,6 +646,8 @@ def build_harness() -> Harness:
         device_action=device,
         operator=operator_service,
         document_service=document_service,
+        mail_service=mail_service,
+        calendar_service=calendar_service,
     )
     holdoffs = HoldoffRegistry()
     set_holdoffs(holdoffs)
@@ -607,6 +688,8 @@ def build_harness() -> Harness:
         holdoffs=holdoffs,
         operator=operator_service,
         documents=document_service,
+        mail=mail_service,
+        calendar=calendar_service,
     )
 
 
@@ -682,6 +765,16 @@ def contract_arguments(case: UtteranceCase, tool: str, resolved: dict) -> dict:
         args = {}
     elif tool == "operator.shell":
         args = {"query": resolved.get("shell_query")} if resolved.get("shell_query") else {}
+    elif tool == "mail.search":
+        args = {"query": text}
+    elif tool == "mail.draft":
+        args = {"body": text}
+    elif tool in ("calendar.agenda", "calendar.find_slot", "calendar.propose"):
+        args = {"when_spoken": text}
+    # mail.inbox / mail.read / mail.thread / mail.edit_draft / mail.read_draft /
+    # mail.send / mail.discard / calendar.read_proposal / calendar.commit /
+    # calendar.discard need no default argument at all — every one of them resolves its
+    # target from the durable focus/read-back state, never from a wire argument.
     args.update(case.tool_arguments)
     return args
 
@@ -752,6 +845,8 @@ def run_case(case: UtteranceCase, *, harness: Harness | None = None) -> CaseResu
         h.device.reset()
         tasks_before = h.research_task_ids()
         alarms_before = h.alarm_rows()
+        mail_sent_before = h.mail_sent_count()
+        calendar_committed_before = h.calendar_committed_count()
 
         said = h.say(sid, case.utterance)
         resolved = said["resolved_intents"][0]
@@ -916,6 +1011,36 @@ def run_case(case: UtteranceCase, *, harness: Harness | None = None) -> CaseResu
             result.verdict = "forbidden_side_effect"
         if case.expected_tool != "alarm.create" and h.alarm_rows() != alarms_before:
             result.problems.append("an alarm row was created")
+            result.verdict = "forbidden_side_effect"
+        # M21 (docs/M21_MAIL_CALENDAR_SPEC.md §5, ADR-0084): mail.send/calendar.commit
+        # never touch the fake DEVICE at all — the check above cannot see them. A case
+        # naming "mail.send"/"calendar.commit" in ``side_effects`` must reach the fake
+        # sender/writer EXACTLY once; every other case must reach it exactly zero times.
+        mail_sent_after = h.mail_sent_count()
+        calendar_committed_after = h.calendar_committed_count()
+        mail_sent_delta = mail_sent_after - mail_sent_before
+        calendar_committed_delta = calendar_committed_after - calendar_committed_before
+        if "mail.send" in case.side_effects:
+            if mail_sent_delta != 1:
+                result.problems.append(
+                    f"mail.send reached the fake sender {mail_sent_delta} times, want 1"
+                )
+                result.verdict = "forbidden_side_effect"
+        elif mail_sent_delta != 0:
+            result.problems.append(
+                f"mail.send reached the fake sender ({mail_sent_delta}x) unexpectedly"
+            )
+            result.verdict = "forbidden_side_effect"
+        if "calendar.commit" in case.side_effects:
+            if calendar_committed_delta != 1:
+                result.problems.append(
+                    f"calendar.commit reached the writer {calendar_committed_delta}x, want 1"
+                )
+                result.verdict = "forbidden_side_effect"
+        elif calendar_committed_delta != 0:
+            result.problems.append(
+                f"calendar.commit reached the writer ({calendar_committed_delta}x) unexpectedly"
+            )
             result.verdict = "forbidden_side_effect"
 
         # 6. The speech lifecycle, structurally: the client reports the turn and the record

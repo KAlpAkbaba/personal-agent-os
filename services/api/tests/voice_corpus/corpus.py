@@ -74,6 +74,21 @@ CTX_COMMON_POINTS_FOCUSED: Final = "common_points_focused"
 #: tests/documents_support.py's fake recognises the sentinel id and refuses honestly.
 CTX_SECRET_FILE_FOCUSED: Final = "secret_file_focused"
 
+#: M21 (docs/M21_MAIL_CALENDAR_SPEC.md §5): the fixture contexts Mail & Calendar needs, all
+#: pre-seeded straight from the oracle (tests/mail_calendar_support.py) — no fake-provider
+#: call at all for the focus itself, only for what the tool subsequently reads.
+#: The current message is the latest from Ali (uid 104, "Re: Proje planı").
+CTX_MESSAGE_FOCUSED: Final = "message_focused"
+#: A mail_drafts row exists, PREPARED and already read back this session — the one
+#: precondition "Gönder."/"Gönderme."/"Vazgeç." need to resolve to something real.
+CTX_DRAFT_READ_BACK: Final = "draft_read_back"
+#: The current event is the fixture's own "Diş hekimi" (ev-dis@fixture.example) —
+#: for "Bunu bir saat ertele." (spec §3's own reschedule example).
+CTX_EVENT_FOCUSED: Final = "event_focused"
+#: A calendar_proposals row exists, PREPARED and already read back this session — the one
+#: precondition "Onayla."/"Vazgeç." need to resolve to something real.
+CTX_PROPOSAL_READ_BACK: Final = "proposal_read_back"
+
 #: Side-effect policies: the device capabilities a case MAY reach on the fake device.
 #: Anything else the fake device saw is a forbidden side effect.
 SIDE_EFFECTS_NONE: Final[frozenset[str]] = frozenset()
@@ -111,6 +126,17 @@ SIDE_EFFECTS_OPERATOR_SHELL: Final[frozenset[str]] = frozenset({"terminal.execut
 SIDE_EFFECTS_DOCUMENTS_SEARCH: Final[frozenset[str]] = frozenset({"file.search"})
 SIDE_EFFECTS_DOCUMENTS_READ: Final[frozenset[str]] = frozenset({"document.extract"})
 SIDE_EFFECTS_DOCUMENTS_COMPARE: Final[frozenset[str]] = frozenset({"file.compare"})
+
+#: M21 (docs/M21_MAIL_CALENDAR_SPEC.md §5): NOT a fake-DEVICE capability like every set
+#: above — mail/calendar never touch the device at all. This is the harness's OWN token
+#: for "this case's tool call is allowed to reach the fake sender/writer exactly once";
+#: the harness checks ``FakeMailSender.sent`` / ``FakeCalendarWriter.created+updated``
+#: directly rather than ``FakeDeviceAction.capabilities_called()``. Forbidden in every
+#: mail_calendar case except the ONE confirmation case that names its own — never both on
+#: the same case, since no single utterance legitimately sends a mail AND commits a
+#: calendar change.
+SIDE_EFFECTS_MAIL_SEND: Final[frozenset[str]] = frozenset({"mail.send"})
+SIDE_EFFECTS_CALENDAR_COMMIT: Final[frozenset[str]] = frozenset({"calendar.commit"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -1485,6 +1511,403 @@ def _documents_cases() -> list[UtteranceCase]:
     ]
 
 
+def _mail_calendar_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+
+    # ---------------------------------------------------------------------- mail: READ
+    inbox = [
+        ("mc.inbox.1", "Gelen kutumda ne var?", "canonical"),
+        ("mc.inbox.2", "Okunmamış maillerim var mı?", "canonical"),
+        ("mc.inbox.3", "Gelen kutumu kontrol eder misin?", "paraphrase"),
+        ("mc.inbox.4", "Hiç okunmamış mailim var mı acaba?", "paraphrase"),
+    ]
+    for case_id, text, source in inbox:
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="mail_inbox",
+                    expected_tool="mail.inbox",
+                    category="mail_calendar",
+                    source=source,
+                )
+            )
+        )
+    search = [
+        ("mc.search.1", "Fatura maillerini bul.", "canonical", "fatura"),
+        ("mc.search.2", "Bütçeyle ilgili maili bulur musun?", "paraphrase", "bütçe"),
+    ]
+    for case_id, text, source, query in search:
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="mail_search",
+                    expected_tool="mail.search",
+                    category="mail_calendar",
+                    source=source,
+                    tool_arguments={"query": query},
+                )
+            )
+        )
+    read = [
+        ("mc.read.1", "Ali'den gelen son maili oku.", "canonical"),
+        ("mc.read.2", "Ali'nin son mailini okur musun?", "paraphrase"),
+    ]
+    for case_id, text, source in read:
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="mail_read",
+                    expected_tool="mail.read",
+                    category="mail_calendar",
+                    source=source,
+                    tool_arguments={"target": "Ali"},
+                )
+            )
+        )
+    thread = [
+        ("mc.thread.1", "Bu konuşmanın tamamını oku.", "canonical"),
+        ("mc.thread.2", "Bütün yazışmayı okur musun?", "paraphrase"),
+    ]
+    for case_id, text, source in thread:
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="mail_thread",
+                    expected_tool="mail.thread",
+                    context=CTX_MESSAGE_FOCUSED,
+                    category="mail_calendar",
+                    source=source,
+                )
+            )
+        )
+
+    # ------------------------------------------------------------------- mail: PREPARE
+    draft_reply = [
+        ("mc.draft_reply.1", "Buna cevap yaz: yarın 10'da uygunum.", "canonical"),
+        ("mc.draft_reply.2", "Şuna cevap yazar mısın: yarın 10'da uygunum.", "paraphrase"),
+    ]
+    for case_id, text, source in draft_reply:
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="mail_draft_reply",
+                    expected_tool="mail.draft",
+                    context=CTX_MESSAGE_FOCUSED,
+                    category="mail_calendar",
+                    source=source,
+                    tool_arguments={"body": "Yarın 10'da uygunum."},
+                )
+            )
+        )
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="mc.draft_new.1",
+                utterance="Yeni mail: Ayşe'ye, konu toplantı, yarın gelemiyorum.",
+                expected_intent="mail_draft_new",
+                expected_tool="mail.draft",
+                category="mail_calendar",
+                source="canonical",
+                tool_arguments={
+                    "to": "ayse.kaya@example.com",
+                    "subject": "Toplantı",
+                    "body": "Yarın gelemiyorum.",
+                },
+            )
+        )
+    )
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="mc.draft_new.2",
+                utterance="Ali'ye mail gönder.",
+                expected_intent="mail_draft_new",
+                expected_tool="mail.draft",
+                expected={"routed_not": "sent"},
+                category="mail_calendar",
+                source="canonical",
+                tool_arguments={
+                    "to": "ali.yilmaz@example.com",
+                    "subject": "Merhaba",
+                    "body": "Merhaba Ali,",
+                },
+            )
+        )
+    )
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="mc.read_draft.1",
+                utterance="Cevabı oku.",
+                expected_intent="mail_read_draft",
+                expected_tool="mail.read_draft",
+                context=CTX_DRAFT_READ_BACK,
+                category="mail_calendar",
+                source="canonical",
+            )
+        )
+    )
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="mc.edit_draft.1",
+                utterance="Konuyu 'Plan onayı' yap.",
+                expected_intent="mail_edit_draft",
+                expected_tool="mail.edit_draft",
+                context=CTX_DRAFT_READ_BACK,
+                category="mail_calendar",
+                source="canonical",
+                tool_arguments={"subject": "Plan onayı"},
+            )
+        )
+    )
+
+    # ------------------------------------------------------- mail: EXTERNAL MUTATION
+    cases.append(
+        UtteranceCase(
+            case_id="mc.send.confirmed",
+            utterance="Gönder.",
+            expected_intent="mail_send",
+            expected_tool="mail.send",
+            context=CTX_DRAFT_READ_BACK,
+            side_effects=SIDE_EFFECTS_MAIL_SEND,
+            category="mail_calendar",
+            source="canonical",
+        )
+    )
+    cases.append(
+        UtteranceCase(
+            case_id="mc.send.no_readback",
+            utterance="Gönder.",
+            expected_intent="mail_send",
+            expected_tool="mail.send",
+            expected_response=RESPONSE_CLARIFY,
+            context=CTX_NONE,
+            category="mail_calendar",
+            source="canonical",
+            regression_issue_id="M21 spec §1: no read-back, no send",
+        )
+    )
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="mc.discard.mail.1",
+                utterance="Gönderme.",
+                expected_intent="discard",
+                expected_tool="mail.discard",
+                context=CTX_DRAFT_READ_BACK,
+                category="mail_calendar",
+                source="canonical",
+            )
+        )
+    )
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="mc.discard.mail.2",
+                utterance="Vazgeç.",
+                expected_intent="discard",
+                expected_tool="mail.discard",
+                context=CTX_DRAFT_READ_BACK,
+                category="mail_calendar",
+                source="canonical",
+            )
+        )
+    )
+
+    # ---------------------------------------------------------------- calendar: READ
+    agenda = [
+        ("mc.agenda.1", "Bugün takvimimde ne var?", "canonical"),
+        ("mc.agenda.2", "Bugün ajandamda ne var acaba?", "paraphrase"),
+    ]
+    for case_id, text, source in agenda:
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="calendar_agenda",
+                    expected_tool="calendar.agenda",
+                    category="mail_calendar",
+                    source=source,
+                    tool_arguments={"when_spoken": "bugün"},
+                )
+            )
+        )
+    find_slot = [
+        ("mc.slot.1", "Yarın öğleden sonra boş muyum?", "canonical"),
+        ("mc.slot.2", "Cuma 60 dakikalık boşluk bul.", "canonical"),
+        ("mc.slot.3", "Cuma günü bir saatlik boş vaktim var mı?", "paraphrase"),
+    ]
+    for case_id, text, source in find_slot:
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="calendar_find_slot",
+                    expected_tool="calendar.find_slot",
+                    category="mail_calendar",
+                    source=source,
+                    tool_arguments={"when_spoken": text},
+                )
+            )
+        )
+
+    # ------------------------------------------------------------- calendar: PREPARE
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="mc.propose.new.1",
+                utterance="Perşembe 15'e diş hekimi ekle.",
+                expected_intent="calendar_propose",
+                expected_tool="calendar.propose",
+                category="mail_calendar",
+                source="canonical",
+                tool_arguments={"when_spoken": "Perşembe 15'e", "summary": "Diş hekimi"},
+            )
+        )
+    )
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="mc.propose.reschedule.1",
+                utterance="Bunu bir saat ertele.",
+                expected_intent="calendar_propose",
+                expected_tool="calendar.propose",
+                context=CTX_EVENT_FOCUSED,
+                category="mail_calendar",
+                source="canonical",
+                tool_arguments={"when_spoken": "bir saat"},
+            )
+        )
+    )
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="mc.read_proposal.1",
+                utterance="Öneriyi oku.",
+                expected_intent="calendar_read_proposal",
+                expected_tool="calendar.read_proposal",
+                context=CTX_PROPOSAL_READ_BACK,
+                category="mail_calendar",
+                source="canonical",
+            )
+        )
+    )
+
+    # ----------------------------------------------------- calendar: EXTERNAL MUTATION
+    cases.append(
+        UtteranceCase(
+            case_id="mc.commit.confirmed",
+            utterance="Onayla.",
+            expected_intent="calendar_commit",
+            expected_tool="calendar.commit",
+            context=CTX_PROPOSAL_READ_BACK,
+            side_effects=SIDE_EFFECTS_CALENDAR_COMMIT,
+            category="mail_calendar",
+            source="canonical",
+        )
+    )
+    cases.append(
+        UtteranceCase(
+            case_id="mc.commit.tamam_ekle",
+            utterance="Tamam, ekle.",
+            expected_intent="calendar_commit",
+            expected_tool="calendar.commit",
+            context=CTX_PROPOSAL_READ_BACK,
+            side_effects=SIDE_EFFECTS_CALENDAR_COMMIT,
+            category="mail_calendar",
+            source="paraphrase",
+        )
+    )
+    cases.append(
+        UtteranceCase(
+            case_id="mc.commit.no_readback",
+            utterance="Onayla.",
+            expected_intent="calendar_commit",
+            expected_tool="calendar.commit",
+            expected_response=RESPONSE_CLARIFY,
+            context=CTX_NONE,
+            category="mail_calendar",
+            source="canonical",
+            regression_issue_id="M21 spec §1: no read-back, no commit",
+        )
+    )
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="mc.discard.calendar.1",
+                utterance="Vazgeç.",
+                expected_intent="discard",
+                expected_tool="calendar.discard",
+                context=CTX_PROPOSAL_READ_BACK,
+                category="mail_calendar",
+                source="canonical",
+            )
+        )
+    )
+
+    # --------------------------------------------------------------------- negatives
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="mc.neg.delete_all",
+                utterance="Tüm mailleri sil.",
+                expected_intent="none",
+                expected_tool=None,
+                expected_response=RESPONSE_CONTROL,
+                category="mail_calendar",
+                source="canonical",
+                regression_issue_id="ADR-0084 decision 2: no delete/move/mass action",
+            )
+        )
+    )
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="mc.neg.secret",
+                utterance="Şifremi Ali'ye maille.",
+                expected_intent="none",
+                expected_tool=None,
+                expected_response=RESPONSE_CONTROL,
+                category="mail_calendar",
+                source="canonical",
+                regression_issue_id="ADR-0084: never draft a secret",
+            )
+        )
+    )
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="mc.neg.technical_unchanged",
+                utterance="Bunu teknik anlat.",
+                expected_intent="technical",
+                expected_tool="research.explain",
+                expected_target="current",
+                expected={"level": "technical"},
+                forbidden_tools=("research.start",),
+                context=CTX_RESEARCH_FOCUS_B,
+                category="mail_calendar",
+                source="regression",
+                regression_issue_id="M21 must not touch the M18.2 technical-explain path",
+            )
+        )
+    )
+
+    return cases
+
+
 def all_cases() -> list[UtteranceCase]:
     cases = [
         *_research_cases(),
@@ -1496,6 +1919,7 @@ def all_cases() -> list[UtteranceCase]:
         *_evolution_cases(),
         *_operator_cases(),
         *_documents_cases(),
+        *_mail_calendar_cases(),
     ]
     ids = [c.case_id for c in cases]
     assert len(ids) == len(set(ids)), "duplicate case ids"

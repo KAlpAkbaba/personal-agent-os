@@ -216,6 +216,30 @@ class Settings(BaseSettings):
     identity_auth_max_failures: int = 10
     identity_auth_failure_window_s: float = 60.0
 
+    # M21 Mail & Calendar (docs/M21_MAIL_CALENDAR_SPEC.md §2, ADR-0084). Empty host means
+    # "no account configured" - the honest `account_missing` answer is production's own
+    # until the owner puts real credentials on the host (owner item); nothing here is a
+    # default credential. The two "enabled" flags are host settings the autonomous system
+    # NEVER writes (ADR-0084 decision 1) - a real send/write happens only when the owner
+    # has explicitly turned the flag on out of band, on top of the per-call read-back gate.
+    mail_imap_host: str = ""
+    mail_imap_port: int = 993
+    mail_imap_user: str = ""
+    mail_imap_password: str = ""
+    mail_imap_use_ssl: bool = True
+    mail_smtp_host: str = ""
+    mail_smtp_port: int = 587
+    mail_smtp_user: str = ""
+    mail_smtp_password: str = ""
+    mail_smtp_use_tls: bool = True
+    mail_from: str = ""
+    mail_send_enabled: bool = False
+    caldav_url: str = ""
+    caldav_user: str = ""
+    caldav_password: str = ""
+    calendar_ics_url: str = ""
+    calendar_write_enabled: bool = False
+
 
 @lru_cache
 def get_settings() -> Settings:

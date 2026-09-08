@@ -1108,6 +1108,14 @@ def record_client_events(
     #: focus exists right now - the same lazy, once-per-request discipline as the three
     #: flags above, read from the durable focus stack rather than a device/process registry.
     document_focused_known: bool | None = None
+    #: M21 (docs/M21_MAIL_CALENDAR_SPEC.md §3, ADR-0084): the same lazy, once-per-request
+    #: discipline for the three facts the mail/calendar family needs — whether a calendar
+    #: ``event`` is focused (the "ertele" disambiguation ``_alarm_match`` needs), and
+    #: whether a PREPARED draft/proposal exists (what turns a bare "Gönder."/"Onayla."/
+    #: "Vazgeç." into a real tool call rather than one this router never dispatches).
+    event_focused_known: bool | None = None
+    draft_pending_known: bool | None = None
+    proposal_pending_known: bool | None = None
     accepted = 0
     sideband_payloads: list[tuple[str, dict[str, Any]]] = []
     for ev in events:
@@ -1155,6 +1163,54 @@ def record_client_events(
                     )
                 except Exception:  # noqa: BLE001 - a deployment without the focus table
                     document_focused_known = False
+            if event_focused_known is None:
+                from app.operator import focus as event_focus_module
+                from app.operator.models import FOCUS_KIND_EVENT
+
+                try:
+                    event_focused_known = (
+                        event_focus_module.current(db, FOCUS_KIND_EVENT) is not None
+                    )
+                except Exception:  # noqa: BLE001 - a deployment without the focus table
+                    event_focused_known = False
+            if draft_pending_known is None:
+                import uuid as _uuid
+
+                from app.mail.models import DRAFT_STATE_PREPARED, MailDraftRow
+                from app.operator import focus as draft_focus_module
+                from app.operator.models import FOCUS_KIND_DRAFT
+
+                try:
+                    entry = draft_focus_module.current(db, FOCUS_KIND_DRAFT)
+                    draft_row = (
+                        db.get(MailDraftRow, _uuid.UUID(entry.object_id))
+                        if entry is not None
+                        else None
+                    )
+                    draft_pending_known = (
+                        draft_row is not None and draft_row.state == DRAFT_STATE_PREPARED
+                    )
+                except Exception:  # noqa: BLE001 - a deployment without the mail tables
+                    draft_pending_known = False
+            if proposal_pending_known is None:
+                import uuid as _uuid
+
+                from app.calendar.models import PROPOSAL_STATE_PREPARED, CalendarProposalRow
+                from app.operator import focus as proposal_focus_module
+                from app.operator.models import FOCUS_KIND_PROPOSAL
+
+                try:
+                    entry = proposal_focus_module.current(db, FOCUS_KIND_PROPOSAL)
+                    proposal_row = (
+                        db.get(CalendarProposalRow, _uuid.UUID(entry.object_id))
+                        if entry is not None
+                        else None
+                    )
+                    proposal_pending_known = (
+                        proposal_row is not None and proposal_row.state == PROPOSAL_STATE_PREPARED
+                    )
+                except Exception:  # noqa: BLE001 - a deployment without the calendar tables
+                    proposal_pending_known = False
             intent: ResolvedIntent = resolve_intent(
                 text,
                 session_state=RealtimeState(fsm) if fsm else None,
@@ -1163,6 +1219,9 @@ def record_client_events(
                 alarm_ringing=alarm_ringing_known,
                 operator_running=operator_running_known,
                 document_focused=document_focused_known,
+                event_focused=event_focused_known,
+                draft_pending=draft_pending_known,
+                proposal_pending=proposal_pending_known,
             )
             ctx["last_intent"] = intent.intent.value
             # ADR-0075: the LATEST resolved utterance of this session, kept on the
@@ -1198,6 +1257,10 @@ def record_client_events(
                 "pattern": intent.pattern,
                 "folder": intent.folder,
                 "extensions": intent.extensions,
+                # M21 (spec §3): the mail/calendar fields the owner's WORDS carried, for
+                # the same "owner's words win over the model's argument" reason.
+                "mail_ref": intent.mail_ref,
+                "calendar_ref": intent.calendar_ref,
                 # ADR-0076. The research SHAPE, decided without the "does a completed
                 # research exist?" precondition (that precondition is what let a deictic
                 # follow-up on an empty history become a crawl), and WHICH research the

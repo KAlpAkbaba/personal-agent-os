@@ -49,11 +49,16 @@ from app.voice.realtime import RealtimeState
 from app.voice.realtime_sessions import actions
 from app.voice.realtime_sessions.sideband import SB_NARRATION_CURSOR, SB_PLAN_CHANGED
 from app.voice.realtime_sessions.tools_ambient import register_ambient_tools
+from app.voice.realtime_sessions.tools_calendar import (
+    CALENDAR_TOOL_NAMES,
+    register_calendar_tools,
+)
 from app.voice.realtime_sessions.tools_documents import (
     DOCUMENT_TOOL_NAMES,
     register_documents_tools,
 )
 from app.voice.realtime_sessions.tools_evolution import register_evolution_tools
+from app.voice.realtime_sessions.tools_mail import MAIL_TOOL_NAMES, register_mail_tools
 from app.voice.realtime_sessions.tools_operator import register_operator_tools
 
 logger = get_logger("app.voice.realtime_sessions.tools")
@@ -526,6 +531,13 @@ OPERATOR_CLARIFYING_TOOLS: frozenset[str] = frozenset({"operator.window_control"
 #: gets, never a second copy of it.
 DOCUMENT_CLARIFYING_TOOLS: frozenset[str] = frozenset(DOCUMENT_TOOL_NAMES)
 
+#: M21 (docs/M21_MAIL_CALENDAR_SPEC.md §3): every mail/calendar tool may answer
+#: "Neyi göndereyim?" / "Neyi onaylayayım?" / "Hangi maili?" / "Hangi etkinlik?" rather
+#: than a receipt — the same non-research extension of the ADR-0077 contract the
+#: operator/document families already get, never a second copy of it.
+MAIL_CLARIFYING_TOOLS: frozenset[str] = frozenset(MAIL_TOOL_NAMES)
+CALENDAR_CLARIFYING_TOOLS: frozenset[str] = frozenset(CALENDAR_TOOL_NAMES)
+
 
 def result_is_research_bound(tool_name: str, result: Any) -> bool:
     """Whether a handler's result falls under the research result contract (ADR-0077)."""
@@ -562,7 +574,11 @@ def terminal_status_for(tool_name: str, result: Any) -> tuple[str, str | None]:
 
     if not result_is_research_bound(tool_name, result):
         if (
-            tool_name in OPERATOR_CLARIFYING_TOOLS | DOCUMENT_CLARIFYING_TOOLS
+            tool_name
+            in OPERATOR_CLARIFYING_TOOLS
+            | DOCUMENT_CLARIFYING_TOOLS
+            | MAIL_CLARIFYING_TOOLS
+            | CALENDAR_CLARIFYING_TOOLS
             and isinstance(result, dict)
             and result.get("status") == RESULT_NEEDS_CLARIFICATION
             and str(result.get("speech") or "").strip()
@@ -1603,6 +1619,9 @@ def default_registry() -> ToolRegistry:
     register_operator_tools(reg)
     # M20 (docs/M20_FILE_DOCUMENT_INTELLIGENCE_SPEC.md §4): File & Document Intelligence.
     register_documents_tools(reg)
+    # M21 (docs/M21_MAIL_CALENDAR_SPEC.md §4): Mail & Calendar's own voice tools.
+    register_mail_tools(reg)
+    register_calendar_tools(reg)
     return reg
 
 
