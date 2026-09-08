@@ -150,7 +150,9 @@ def scene_add(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
     if tool is None:
         return service.clarification(SPEECH_NO_TOOL)
     device_action = ctx.live.get("device_action")
-    kind = arguments.get("kind")
+    turn = _turn_record(ctx)
+    turn_kind = turn.get("scene_kind")
+    kind = turn_kind if isinstance(turn_kind, str) and turn_kind else arguments.get("kind")
     if kind not in (
         "cube", "sphere", "cylinder", "plane", "light_sun", "light_point", "camera"
     ):

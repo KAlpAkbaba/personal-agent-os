@@ -110,11 +110,8 @@ async def get_render(request: Request, scene_id: uuid.UUID) -> Response:
             row = db.get(SceneRow, scene_id)
             if row is None or row.render_object_key is None:
                 return None
-            object_store = getattr(request.app.state, "object_store", None)
-            if object_store is None:
-                return None
             try:
-                return object_store.get(row.render_object_key)
+                return artifacts.store.get(row.render_object_key)
             except KeyError:
                 return None
 

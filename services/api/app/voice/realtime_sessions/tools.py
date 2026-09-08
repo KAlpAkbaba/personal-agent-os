@@ -69,6 +69,7 @@ from app.voice.realtime_sessions.tools_genesis import (
 )
 from app.voice.realtime_sessions.tools_mail import MAIL_TOOL_NAMES, register_mail_tools
 from app.voice.realtime_sessions.tools_operator import register_operator_tools
+from app.voice.realtime_sessions.tools_scene import SCENE_TOOL_NAMES, register_scene_tools
 
 logger = get_logger("app.voice.realtime_sessions.tools")
 
@@ -566,6 +567,12 @@ APP_CLARIFYING_TOOLS: frozenset[str] = frozenset(APP_TOOL_NAMES)
 #: get, never a second copy of it.
 GENESIS_CLARIFYING_TOOLS: frozenset[str] = frozenset(CAPABILITY_TOOL_NAMES)
 
+#: M25 (docs/M25_CREATIVE_3D_SPEC.md §5): every 3D-creation tool may answer "Hangi
+#: araçla efendim?" / "Hangi sahne efendim?" rather than a receipt — the same
+#: non-research extension of the ADR-0077 contract every family above already gets,
+#: never a second copy of it.
+SCENE_CLARIFYING_TOOLS: frozenset[str] = frozenset(SCENE_TOOL_NAMES)
+
 
 def result_is_research_bound(tool_name: str, result: Any) -> bool:
     """Whether a handler's result falls under the research result contract (ADR-0077)."""
@@ -610,6 +617,7 @@ def terminal_status_for(tool_name: str, result: Any) -> tuple[str, str | None]:
             | ARTIFACT_CLARIFYING_TOOLS
             | APP_CLARIFYING_TOOLS
             | GENESIS_CLARIFYING_TOOLS
+            | SCENE_CLARIFYING_TOOLS
             and isinstance(result, dict)
             and result.get("status") == RESULT_NEEDS_CLARIFICATION
             and str(result.get("speech") or "").strip()
@@ -1659,6 +1667,8 @@ def default_registry() -> ToolRegistry:
     register_apps_tools(reg)
     # M24 (docs/M24_CAPABILITY_GENESIS_SPEC.md §6): Capability Genesis's voice tools.
     register_genesis_tools(reg)
+    # M25 (docs/M25_CREATIVE_3D_SPEC.md §5): 3D Creation's voice tools.
+    register_scene_tools(reg)
     return reg
 
 

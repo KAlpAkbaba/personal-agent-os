@@ -1304,6 +1304,12 @@ def record_client_events(
                 "capability_target_name": intent.capability_target_name,
                 "capability_target_url": intent.capability_target_url,
                 "capability_operation": intent.capability_operation,
+                # M25 (docs/M25_CREATIVE_3D_SPEC.md §5): the 3D Creation fields the
+                # owner's WORDS carried, for the same "owner's words win over the
+                # model's argument" reason.
+                "scene_tool": intent.scene_tool,
+                "scene_ref": intent.scene_ref,
+                "scene_kind": intent.scene_kind,
                 # ADR-0076. The research SHAPE, decided without the "does a completed
                 # research exist?" precondition (that precondition is what let a deictic
                 # follow-up on an empty history become a crawl), and WHICH research the

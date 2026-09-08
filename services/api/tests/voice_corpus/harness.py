@@ -40,6 +40,8 @@ from app.ambient import service as ambient_service
 from app.ambient.holdoff import HoldoffRegistry, set_holdoffs
 from app.appfactory.models import AppProjectRow
 from app.appfactory.service import AppFactoryService
+from app.creative3d.models import SceneRow
+from app.creative3d.service import SceneService
 from app.artifacts import factory as artifact_factory
 from app.artifacts import service as artifact_service
 from app.artifacts.models import (
@@ -120,6 +122,7 @@ from app.voice.realtime_sessions.sideband import RecordingSideband
 from app.voice.simulator import SimulatedRealtimeProvider
 from tests.alarms_support import FakeDeviceAction, happy_device_results
 from tests.appfactory_support import appfactory_capability_results
+from tests.creative3d_support import FakeCreative3DDevice
 from tests.artifacts_support import artifact_capability_results
 from tests.documents_support import document_capability_results, extract_result
 from tests.identity_support import IDENTITY_TABLES
@@ -195,6 +198,7 @@ TABLES = (
     CalendarIndexRow.__table__,
     CalendarProposalRow.__table__,
     AppProjectRow.__table__,
+    SceneRow.__table__,
 )
 
 #: The tools the harness may dispatch as "forbidden" because the product refuses them at
@@ -881,12 +885,20 @@ def build_harness() -> Harness:
     )
     app.state.voice_realtime = runtime
 
+    # M25 (docs/M25_CREATIVE_3D_SPEC.md §2-§4, ADR-0088): the SAME ``project.scaffold``/
+    # ``project.run`` capability names the App Factory already uses (module docstring:
+    # one desktop authority, never a second path) — this fake tells the two apart by
+    # payload shape the same way a real device would (``FakeCreative3DDevice.scaffold``'s
+    # own docstring), so it must be spread AFTER ``appfactory_capability_results()``
+    # to be the one actually reached for both.
+    creative3d_device = FakeCreative3DDevice(unity_available=False, render_dir=Path(tempfile.mkdtemp(prefix="creative3d-render-")))
     device = FakeDeviceAction(
         results={
             **happy_device_results(),
             **document_capability_results(),
             **artifact_capability_results(),
             **appfactory_capability_results(),
+            **creative3d_device.capability_results(),
         }
     )
     sequence = WakeSequence(device_action=device, tts=FakeTTSProvider())
@@ -966,6 +978,11 @@ def build_harness() -> Harness:
     app_factory_service = AppFactoryService()
     browser_gateway = FakeBrowserGateway()
     app.state.app_factory_service = app_factory_service
+    # M25 (docs/M25_CREATIVE_3D_SPEC.md §2-§4, ADR-0088): 3D Creation's own service,
+    # reading the SAME fake device port every other family holds, with the SAME
+    # in-memory object store artifacts already uses (task brief: no network).
+    creative3d_service = SceneService(object_store=artifacts.store)
+    app.state.creative3d_service = creative3d_service
     runtime.register_live(
         wake_sequence=sequence,
         device_statuses=statuses,
@@ -980,6 +997,7 @@ def build_harness() -> Harness:
         app_factory_service=app_factory_service,
         browser_gateway=browser_gateway,
         genesis_service=genesis.service,
+        creative3d_service=creative3d_service,
     )
     holdoffs = HoldoffRegistry()
     set_holdoffs(holdoffs)

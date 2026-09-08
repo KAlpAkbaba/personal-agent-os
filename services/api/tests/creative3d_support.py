@@ -297,10 +297,22 @@ class FakeCreative3DDevice:
     # -------------------------------------------------------------- project.scaffold
 
     def scaffold(self, payload: dict[str, Any]) -> DeviceRunResult:
+        """``project.scaffold`` is the SAME capability name the App Factory's own
+        ``project.scaffold`` already uses (module docstring: one desktop authority,
+        never a second path) — a real device tells the two apart by the payload's
+        own shape, never by capability name, so this fake does too: a ``plan.json``
+        file names a 3D scene; anything else falls through to
+        ``tests.appfactory_support``'s own fake, so ONE fake device answers both
+        families in the corpus harness exactly the way ONE real companion would."""
+        files = payload.get("files") or []
+        if not any(f.get("path") == "plan.json" for f in files):
+            from tests.appfactory_support import project_scaffold_ok
+
+            return project_scaffold_ok(payload)
+
         project_id = str(payload["project_id"])
         slug = str(payload.get("slug") or "scene-fixture")
-        files = payload.get("files") or []
-        plan_text = next((f["text"] for f in files if f.get("path") == "plan.json"), "{}")
+        plan_text = next(f["text"] for f in files if f.get("path") == "plan.json")
         import json
 
         self._plans[project_id] = json.loads(plan_text)
@@ -312,6 +324,11 @@ class FakeCreative3DDevice:
 
     def run(self, payload: dict[str, Any]) -> DeviceRunResult:
         project_id = str(payload["project_id"])
+        if project_id not in self._plans:
+            from tests.appfactory_support import project_run_ok
+
+            return project_run_ok(payload)
+
         plan = self._plans.get(project_id) or {"operations": [], "tool": "blender"}
         tool = plan.get("tool", "blender")
 
