@@ -49,6 +49,7 @@ import { type AppFacts, appCaption, appFacts, appIsServing } from "./apps";
 import { type ArtifactFacts, artifactCaption, artifactFacts } from "./artifacts";
 import { type CalendarFacts, calendarCaption, calendarFacts } from "./calendar";
 import { type DocumentFacts, documentCaption, documentFacts } from "./documents";
+import { type GenesisFacts, genesisCaption, genesisFacts, genesisPosture } from "./genesis";
 import { type MailFacts, mailCaption, mailFacts } from "./mail";
 import { operatorCaption, operatorFacts } from "./operator";
 import type { VoiceUiState } from "../voice/controller";
@@ -137,7 +138,22 @@ export type CoreVisualKind =
    * port and the counts as the caption. A failure is worded as one with its
    * count — never dressed as done.
    */
-  | "app_factory";
+  | "app_factory"
+  /**
+   * v9 (M24): the Core acquiring a capability the owner's request needs —
+   * researching the interface, writing and testing an adapter, classifying
+   * it, rolling it out, registering it, using it and verifying the result
+   * through the application. A building posture while the run works (the
+   * making posture's lattice and outward traffic); a distinct WAITING
+   * posture at `awaiting_approval` — the owner is the thing being waited
+   * on, so the Core is held exactly as it is for `agent.waiting_owner`;
+   * a settled posture from `available` on — still and bright, the
+   * capability what the run says it is; `failed` is held under restraint
+   * with no agitation — a failed run is a fact about an adapter, not a
+   * fault in the agent. Calm, nothing that could be read as progress, and
+   * the capability, the state and the error class as the caption.
+   */
+  | "capability_genesis";
 
 /**
  * Which of the two evidence sources produced the intent (ADR-0061 §4).
@@ -430,6 +446,16 @@ export type VisualIntent = {
    */
   app: AppFacts | null;
 
+  // ------------------------------------------ v9: Capability Genesis (M24 §8)
+  /**
+   * The published facts about the capability being acquired — the
+   * capability, the state, whether approval is required, the error class —
+   * each `null` when the publisher sent none, and the whole thing `null`
+   * outside the `capability_genesis` kind (kept on its last-known shape).
+   * Words, not channels.
+   */
+  genesis: GenesisFacts | null;
+
   palette: PaletteToken;
 };
 
@@ -517,6 +543,7 @@ function blank(kind: CoreVisualKind, palette: PaletteToken): VisualIntent {
     calendar: null,
     artifact: null,
     app: null,
+    genesis: null,
     palette,
   };
 }
@@ -1146,6 +1173,49 @@ function forLiveState(event: UiStateEvent, claim: Claim): VisualIntent {
       };
     }
 
+    case "capability.genesis": {
+      // Three postures and a failure (M24 §8), each from the published state
+      // alone. BUILDING (`capability_missing` through `registering`): the
+      // making posture's shape — a faint lattice being laid, the paths
+      // carrying an adapter OUT toward the application, nothing flowing
+      // inward, the rings turning slowly. WAITING (`awaiting_approval`): the
+      // owner is the thing being waited on, so the Core is held exactly as
+      // `agent.waiting_owner` holds it — full restraint, the rings all but
+      // stopped, the shells close, nothing flows, the held palette — because
+      // busy motion under "onay bekliyor" would be the lie ADR-0052 exists to
+      // prevent. SETTLED (`available`, `used`, `verified`): still and bright
+      // in the ready palette, `verified` a shade brighter — the read-back
+      // held. FAILED: held under restraint with no agitation, dim — a failed
+      // run is a fact about an adapter, not a fault in the agent, and the
+      // gap stays open. A state this build cannot read, or none at all, is
+      // the building posture with the bare caption. No pulse, no
+      // constellation, no candidate nodes and no progress: a run of unknown
+      // length gets no bar, and the M7 lab's own satellites are the lab's.
+      const facts = genesisFacts(event);
+      const posture = genesisPosture(facts.state);
+      const waiting = posture === "waiting";
+      const settled = posture === "settled";
+      const failed = posture === "failed";
+      const still = waiting || settled || failed;
+      const palette: PaletteToken = waiting ? "held" : settled ? "ready" : "making";
+      const glowBase = facts.state === "verified" ? 0.42 : settled ? 0.38 : failed ? 0.22 : waiting ? 0.12 : 0.3;
+      return {
+        ...base("capability_genesis", palette),
+        label: genesisCaption(facts),
+        scale: waiting ? 0.94 : settled ? 1.02 : 1.04,
+        topology: waiting ? 0 : settled || failed ? 0.15 : 0.2,
+        breathAmplitude: waiting ? 0.015 : 0.03,
+        breathHz: waiting ? 0.09 : settled ? 0.14 : 0.24,
+        energy: e,
+        glow: glowOf(glowBase, e),
+        shellSpread: waiting ? 0.1 : settled || failed ? 0.2 : 0.3,
+        ringSpin: waiting ? 0.02 : settled || failed ? IDLE_RING_SPIN : 0.18,
+        flowRate: still ? 0 : 0.3,
+        restraint: waiting ? 1 : failed ? 0.5 : 0,
+        genesis: facts,
+      };
+    }
+
     default:
       // Reached only by a contract state this table has not been taught. Both
       // gates upstream (`isKnownState`, and `coreClaim`'s agent/lab filter)
@@ -1266,7 +1336,9 @@ export function applyVoiceOverlay(bus: VisualIntent, voice: VoiceOverlay): Visua
   // bütçe tablosu yap" runs `artifact.create`, and the bus knows the title
   // and the verdict (M22 §6). v8 extends it to the App Factory: "uygulamayı
   // çalıştır" runs `app.run`, and the bus knows the project and the port
-  // (M23 §6).
+  // (M23 §6). v9 extends it to Capability Genesis: "sayaç kutusunu bir
+  // artır" runs `capability.request`, and the bus knows the capability and
+  // the run's state (M24 §6, §8).
   if (
     voice.state === "tool_running" &&
     (isOperatorActing(bus) ||
@@ -1274,7 +1346,8 @@ export function applyVoiceOverlay(bus: VisualIntent, voice: VoiceOverlay): Visua
       isMailReading(bus) ||
       isCalendarPlanning(bus) ||
       isArtifactMaking(bus) ||
-      isAppBuilding(bus))
+      isAppBuilding(bus) ||
+      isGenesisWorking(bus))
   )
     return bus;
   const local = (kind: CoreVisualKind, palette: PaletteToken): VisualIntent => ({
@@ -1573,4 +1646,14 @@ export function isAppBuilding(intent: VisualIntent): boolean {
 /** True while the Core body is a LIVE app event whose publisher said `running` on a named port. */
 export function isAppServing(intent: VisualIntent): boolean {
   return isAppBuilding(intent) && intent.app !== null && appIsServing(intent.app);
+}
+
+/** True while the Core body is a LIVE genesis event (v9) — building, waiting, settled or failed; a last-known shape is not. */
+export function isGenesisWorking(intent: VisualIntent): boolean {
+  return intent.kind === "capability_genesis";
+}
+
+/** True while the Core body is a LIVE genesis event whose publisher said `awaiting_approval`: the owner is the thing being waited on. */
+export function isGenesisAwaiting(intent: VisualIntent): boolean {
+  return isGenesisWorking(intent) && intent.genesis !== null && genesisPosture(intent.genesis.state) === "waiting";
 }

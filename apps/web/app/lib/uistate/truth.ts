@@ -28,6 +28,7 @@ import {
   isCalendarState,
   isCoreChannel,
   isDocumentState,
+  isGenesisState,
   isMailState,
   isOperatorState,
   isReleaseBandState,
@@ -329,6 +330,18 @@ export function artifactClaim(truth: CoreTruth, now: number): Claim {
  */
 export function appClaim(truth: CoreTruth, now: number): Claim {
   return claimFor(newestWhere(truth, isAppState), now);
+}
+
+/**
+ * Capability Genesis's own claim (v9): the newest `capability.genesis`, by
+ * membership. Returned expired or not, for the app's reason: the panel
+ * words the age, and an expired genesis event is one we stopped hearing
+ * about — the runs themselves are rows on `/v1/genesis/runs`, which do not
+ * expire, and an `awaiting_approval` row is what the Cockpit's "Onayla" is
+ * built from.
+ */
+export function genesisClaim(truth: CoreTruth, now: number): Claim {
+  return claimFor(newestWhere(truth, isGenesisState), now);
 }
 
 /**

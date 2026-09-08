@@ -162,10 +162,16 @@ const STOPPED = () => APP_FACTORY("Görev Takip", "stopped");
 // ------------------------------------------------------------ the contract
 
 describe("contract v8 is v7 plus the app state, and says so", () => {
-  it("is version 8 and still reads a v7, v6, v5, v4, v3 and v2 server", () => {
-    expect(KNOWN_CONTRACT_VERSION).toBe(8);
+  it("still reads a v8, v7, v6, v5, v4, v3 and v2 server from a build at v8 or later", () => {
+    // v9 (M24) bumped the build past this file's contract; the assertion is
+    // relative, as the v7 file's became when v8 landed, so the v8 additions
+    // stay proven without pinning the build to a version it has left.
+    expect(KNOWN_CONTRACT_VERSION).toBeGreaterThanOrEqual(8);
     expect(MIN_SUPPORTED_CONTRACT_VERSION).toBe(2);
-    expect(contractCompatibility(8)).toBe("current");
+    expect(contractCompatibility(KNOWN_CONTRACT_VERSION)).toBe("current");
+    // v8 itself: current on a v8 build, a readable subset on any later one.
+    const built: number = KNOWN_CONTRACT_VERSION;
+    expect(contractCompatibility(8)).toBe(built === 8 ? "current" : "older_supported");
     expect(contractCompatibility(7)).toBe("older_supported");
     expect(contractCompatibility(6)).toBe("older_supported");
     expect(contractCompatibility(5)).toBe("older_supported");
@@ -174,7 +180,7 @@ describe("contract v8 is v7 plus the app state, and says so", () => {
     expect(contractCompatibility(2)).toBe("older_supported");
     // A server ahead of this build is a different problem: we do not know its
     // vocabulary, so nothing is drawn from it.
-    expect(contractCompatibility(9)).toBe("unsupported");
+    expect(contractCompatibility(KNOWN_CONTRACT_VERSION + 1)).toBe("unsupported");
     expect(contractCompatibility(1)).toBe("unsupported");
   });
 
@@ -196,7 +202,9 @@ describe("contract v8 is v7 plus the app state, and says so", () => {
 
   it("appends the token after v7's, never reordering", () => {
     expect(UI_STATES.indexOf("app.factory")).toBe(UI_STATES.indexOf("artifact.factory") + 1);
-    expect(UI_STATES[UI_STATES.length - 1]).toBe("app.factory");
+    // v9 appended its own token after this one; the order this file proves
+    // is v8's place after v7's, which no later version may move.
+    expect(UI_STATES.indexOf("app.factory")).toBeGreaterThan(UI_STATES.indexOf("artifact.factory"));
   });
 
   it("types the six project states, and admits nothing outside them", () => {

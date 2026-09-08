@@ -28,6 +28,7 @@ import {
   documentFactsLine,
   formatAge,
   formatProgress,
+  genesisFactsLine,
   kindDetail,
   mailFactsLine,
   operatorErrorLine,
@@ -38,6 +39,7 @@ import {
 import { appIsServing } from "../lib/uistate/apps";
 import { isOperatorState } from "../lib/uistate/contract";
 import { documentPartPhrase } from "../lib/uistate/documents";
+import { genesisPosture } from "../lib/uistate/genesis";
 import { operatorPosition } from "../lib/uistate/operator";
 import type { VisualIntent } from "../lib/uistate/visual";
 import { isLive } from "../lib/uistate/visual";
@@ -88,6 +90,11 @@ export default function StateReadout({
       data-voice-state={intent.voiceState ?? ""}
       data-live={live ? "yes" : "no"}
       data-severity={intent.severity}
+      // M24: which of the three postures (and the failure) the genesis body
+      // takes, from the published state alone — on the root so a harness can
+      // tell "onay bekliyor" from "bağdaştırıcı yazılıyor" in the compact
+      // form too, without reading the geometry. Absent for every other kind.
+      data-genesis-posture={intent.genesis ? genesisPosture(intent.genesis.state) : undefined}
     >
       <h2 className="core-headline">{KIND_LABEL[intent.kind]}</h2>
 
@@ -276,6 +283,31 @@ export default function StateReadout({
           data-app-serving={appIsServing(intent.app) ? "yes" : "no"}
         >
           {appFactsLine(intent.app)}
+        </p>
+      )}
+
+      {/*
+        M24: Capability Genesis's published facts — the capability, the
+        run's state, whether approval is required, and on `failed` the
+        error class — each the token the publisher sent or the statement
+        that none came; present on the live posture and on its last-known
+        shape alike. The compact caption already carries the same sentence
+        as `label`, so the long line is the full form's alone. No bar: a
+        run of unknown length gets none. No control here either — "Onayla"
+        and "Vazgeç" are the Cockpit's, built from the row on the list route.
+      */}
+      {intent.genesis && !compact && (
+        <p
+          className="muted core-count"
+          data-genesis-facts
+          data-genesis-capability={intent.genesis.capability ?? ""}
+          data-genesis-state={intent.genesis.stateToken ?? ""}
+          data-genesis-approval-required={
+            intent.genesis.approvalRequired === null ? "" : intent.genesis.approvalRequired ? "yes" : "no"
+          }
+          data-genesis-error-class={intent.genesis.errorClass ?? ""}
+        >
+          {genesisFactsLine(intent.genesis)}
         </p>
       )}
 
