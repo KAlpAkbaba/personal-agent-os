@@ -33,7 +33,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy import select
 
 from app.actions.receipt import EXECUTION_EXECUTED
-from app.creative3d.models import SceneRow
+from app.creative3d.models import SceneRow, wire_step
 from app.creative3d.service import SceneService
 from app.identity.dependencies import require_owner_session
 
@@ -57,7 +57,10 @@ def _row_dict(row: SceneRow) -> dict[str, Any]:
         "tool": row.tool,
         "project": row.project,
         "scene": row.scene,
-        "state": row.state,
+        # The STEP, never the database row's own word: the panel reads this through the
+        # same closed vocabulary the bus uses (DEVICE_PROTOCOL-style one contract, M25
+        # spec §6), and sending `applied` here left every row without controls.
+        "state": wire_step(row.state, row.compare_json),
         "objects": objects,
         "has_render": bool(row.render_object_key),
         "created_at": row.created_at.isoformat() if row.created_at else None,

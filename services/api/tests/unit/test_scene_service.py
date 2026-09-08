@@ -16,7 +16,6 @@ from app.creative3d.models import (
     STATE_APPLIED,
     STATE_DEPENDENCY_UNAVAILABLE,
     STATE_MISMATCH,
-    STATE_RENDERED,
     SceneRow,
 )
 from app.creative3d.service import (
@@ -32,6 +31,7 @@ from app.ledger.models import ActivityEventRow
 from app.object_store import InMemoryObjectStore
 from app.operator import focus as focus_module
 from app.operator.models import FOCUS_KIND_SCENE, ObjectFocusRow
+from app.uistate.contract import SCENE_ACTIVITY_STEPS
 from tests.alarms_support import FakeDeviceAction
 from tests.creative3d_support import UNITY_LICENSE_MESSAGE, FakeCreative3DDevice
 
@@ -80,7 +80,8 @@ def test_create_scaffolds_and_applies_and_sets_focus(
 ) -> None:
     result = service.create(db, device, plan=BLENDER_CREATE_PLAN, session_id="s-1")
     assert result["execution_status"] == "executed", result
-    assert result["state"] == STATE_APPLIED
+    # The receipt carries the STEP a client reads; the row below keeps the database's word.
+    assert result["state"] == "verified"
     assert result["objects"] == 1
     assert device.capabilities_called() == ["project.scaffold", "project.run", "scene.inspect"]
 
@@ -178,7 +179,7 @@ def test_render_produces_a_stored_nontrivial_png(
     )
     result = service.render(db, device, target=scene_id, width=64, height=48)
     assert result["execution_status"] == "executed", result
-    assert result["state"] == STATE_RENDERED
+    assert result["state"] == "verified"
 
     row = db.get(SceneRow, uuid.UUID(scene_id))
     assert row.render_object_key is not None
@@ -268,7 +269,11 @@ def test_status_and_list(db: Session, device: FakeDeviceAction, service: SceneSe
     created = service.create(db, device, plan=BLENDER_CREATE_PLAN)
     scene_id = created["scene_id"]
     status = service.status(db, target=scene_id)
-    assert status["state"] == STATE_APPLIED
+    # The step, in the vocabulary every client reads — and the sentence the owner hears is
+    # Turkish, not the database's English token ("... sahnesi applied durumunda efendim").
+    assert status["state"] == "verified"
+    assert "applied" not in status["speech"]
+    assert "doğrulandı" in status["speech"]
     listing = service.list(db)
     assert listing["execution_status"] == "executed"
     assert len(listing["scenes"]) == 1
@@ -395,8 +400,11 @@ def test_a_matching_read_back_is_still_verified(
     mismatch."""
     result = service.create(db, device, plan=BLENDER_CREATE_PLAN, session_id="s-1")
     assert result["terminal_status"] == "verified"
-    assert result["state"] == STATE_APPLIED
+    assert result["state"] == "verified"
     assert result["compare"]["ok"] is True
+    # And the row keeps its own word, which is a different vocabulary on purpose.
+    row = db.get(SceneRow, uuid.UUID(result["scene_id"]))
+    assert row is not None and row.state == STATE_APPLIED
 
 
 def test_a_plan_with_nothing_to_check_is_neither_verified_nor_a_mismatch(
@@ -416,8 +424,10 @@ def test_a_plan_with_nothing_to_check_is_neither_verified_nor_a_mismatch(
     }
     result = service.create(db, device, plan=plan, session_id="s-1")
     assert result["execution_status"] == "executed"
-    # Not a mismatch: nothing disagreed.
-    assert result["state"] == STATE_APPLIED
+    # Not a mismatch: nothing disagreed. The row stays `applied`; the step the client reads
+    # is `unverified`, which is neither of the two words it must never be rounded to.
+    assert db.get(SceneRow, uuid.UUID(result["scene_id"])).state == STATE_APPLIED
+    assert result["state"] == "unverified"
     assert not any(e.event_type == "scene.mismatch" for e in db.query(ActivityEventRow).all())
     assert "Uyuşmazlık" not in result["speech"]
     # And not verified either: nothing was read back to verify.
@@ -425,3 +435,127 @@ def test_a_plan_with_nothing_to_check_is_neither_verified_nor_a_mismatch(
     assert result["compare"]["ok"] is False
     assert result["compare"]["reason"] == "no_constraints"
     assert "Doğrulanacak bir şey yoktu" in result["speech"]
+
+
+# ------------------------------------------- what the Cockpit is actually told
+
+
+def _published_steps(monkeypatch) -> list[str]:
+    """Collects `metadata.state` from every `scene.activity` this test publishes."""
+    import app.creative3d.service as service_module
+
+    steps: list[str] = []
+
+    def _capture(*_args, **kwargs):
+        steps.append((kwargs.get("metadata") or {}).get("state"))
+
+    monkeypatch.setattr(service_module, "publish_ui_state", _capture)
+    return steps
+
+
+def test_a_verified_run_publishes_words_the_cockpit_can_read(
+    db: Session, device: FakeDeviceAction, service: SceneService, monkeypatch
+) -> None:
+    """The defect this replaces: the service published the DATABASE ROW's word ("applied"),
+    which the web build cannot read at all, so the Cockpit's 3B Sahne row could never say
+    "doğrulandı" and never settled — it drew every finished run as one still being made.
+    Measured on the real service 2026-09-08; `test_scene_activity_vocabulary.py` is what
+    keeps the two lists together from now on."""
+    steps = _published_steps(monkeypatch)
+    result = service.create(db, device, plan=BLENDER_CREATE_PLAN, session_id="s-1")
+    assert result["terminal_status"] == "verified"
+    assert steps == ["creating", "verified"]
+    assert all(step in SCENE_ACTIVITY_STEPS for step in steps)
+
+
+def test_a_disagreeing_run_publishes_the_mismatch_the_web_already_drew(
+    db: Session, device: FakeDeviceAction, service: SceneService, monkeypatch
+) -> None:
+    """The web contract carried a `mismatch` posture from the day it was written; the
+    backend had never emitted it (the M25 security review's first finding)."""
+    steps = _published_steps(monkeypatch)
+    service.create(
+        db,
+        device,
+        plan={
+            "tool": "blender",
+            "project": "lab",
+            "scene": "demo",
+            "operations": [
+                {"op": "create_scene"},
+                {"op": "transform", "name": "Kup", "location": [1.0, 0.0, 0.0]},
+            ],
+        },
+        session_id="s-1",
+    )
+    assert steps == ["creating", "mismatch"]
+
+
+def test_a_run_with_nothing_to_check_publishes_its_own_word(
+    db: Session, device: FakeDeviceAction, service: SceneService, monkeypatch
+) -> None:
+    """Neither "verified" nor "mismatch" may stand in for it: the run did what was asked
+    and there was nothing checkable to read back."""
+    steps = _published_steps(monkeypatch)
+    service.create(
+        db,
+        device,
+        plan={
+            "tool": "blender",
+            "project": "lab",
+            "scene": "bos",
+            "operations": [{"op": "create_scene"}],
+        },
+        session_id="s-1",
+    )
+    assert steps == ["creating", "unverified"]
+
+
+def test_a_render_says_it_is_rendering_and_an_edit_says_it_is_applying(
+    db: Session, device: FakeDeviceAction, service: SceneService, monkeypatch
+) -> None:
+    """Writing an image is not the same act as building the thing in it, and the Core draws
+    them differently — so the publisher has to tell them apart."""
+    created = service.create(db, device, plan=BLENDER_CREATE_PLAN, session_id="s-1")
+    scene_id = created["scene_id"]
+
+    steps = _published_steps(monkeypatch)
+    service.apply(
+        db,
+        device,
+        target=scene_id,
+        operations=[
+            {"op": "add_primitive", "kind": "cube", "name": "Kup2", "location": [2.0, 0.0, 0.0]}
+        ],
+        session_id="s-1",
+    )
+    assert steps[0] == "applying"
+
+    steps.clear()
+    service.render(db, device, target=scene_id, width=64, height=48, session_id="s-1")
+    assert steps[0] == "rendering"
+
+
+def test_unity_without_a_licence_publishes_the_settled_unavailable_step(
+    db: Session, service: SceneService, monkeypatch, tmp_path
+) -> None:
+    """A tool that cannot be driven is a fact about a licence, not a fault (ADR-0088 §5),
+    and the Core has a dim settled posture for exactly that — which was unreachable,
+    because this path published nothing at all."""
+    fake = FakeCreative3DDevice(unity_available=False, render_dir=tmp_path)
+    unity_device = FakeDeviceAction(results=fake.capability_results())
+    steps = _published_steps(monkeypatch)
+    result = service.create(
+        db,
+        unity_device,
+        plan={
+            "tool": "unity",
+            "project": "lab",
+            "scene": "arac",
+            "operations": [{"op": "create_scene"}],
+        },
+        session_id="s-1",
+    )
+    assert result["error_class"] == "dependency_unavailable"
+    assert UNITY_LICENSE_MESSAGE in result["speech"]
+    assert steps == ["creating", "unavailable"]

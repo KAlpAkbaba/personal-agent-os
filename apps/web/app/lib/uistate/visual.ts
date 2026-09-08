@@ -1258,8 +1258,12 @@ function forLiveState(event: UiStateEvent, claim: Claim): VisualIntent {
       // INWARD, on the document Core's shape — the tool is being asked what
       // it holds, and the answer is what every claim downstream rests on.
       // VERIFIED: still and bright in the ready palette — the read-back
-      // matched. MISMATCH: held under restraint, named, never rounded up to
-      // done. UNAVAILABLE: settled and dim under restraint with NO agitation
+      // matched. UNVERIFIED: just as still, because the run is over, but in
+      // the plain making palette with no brightness — the plan asked for
+      // nothing checkable, so there is nothing to be bright about and
+      // nothing to hold under restraint either. MISMATCH: held under
+      // restraint, named, never rounded up to done. UNAVAILABLE: settled and
+      // dim under restraint with NO agitation
       // and no error palette at all — an editor that cannot be driven for
       // want of a licence is a fact about a licence (ADR-0088 §5), and
       // drawing it as a fault would be the Core telling the owner something
@@ -1272,19 +1276,32 @@ function forLiveState(event: UiStateEvent, claim: Claim): VisualIntent {
       const rendering = posture === "rendering";
       const reading = posture === "reading";
       const verified = posture === "verified";
+      const unverified = posture === "unverified";
       const mismatch = posture === "mismatch";
       const unavailable = posture === "unavailable";
       const failed = posture === "failed";
-      const still = verified || mismatch || unavailable || failed;
+      const still = verified || unverified || mismatch || unavailable || failed;
       const palette: PaletteToken = unavailable ? "held" : verified ? "ready" : reading ? "reading" : "making";
-      const glowBase = verified ? 0.42 : rendering ? 0.36 : mismatch ? 0.22 : failed ? 0.22 : unavailable ? 0.12 : 0.3;
+      const glowBase = verified
+        ? 0.42
+        : rendering
+          ? 0.36
+          : mismatch
+            ? 0.22
+            : failed
+              ? 0.22
+              : unavailable
+                ? 0.12
+                : unverified
+                  ? 0.2
+                  : 0.3;
       return {
         ...base("scene_activity", palette),
         label: sceneCaption(facts),
         scale: unavailable ? 0.96 : rendering ? 1.05 : still ? 1.02 : 1.04,
         topology: reading ? 0.1 : unavailable ? 0 : rendering ? 0.3 : still ? 0.15 : 0.2,
         breathAmplitude: unavailable ? 0.015 : 0.03,
-        breathHz: unavailable ? 0.1 : rendering ? 0.18 : verified ? 0.14 : 0.24,
+        breathHz: unavailable ? 0.1 : rendering ? 0.18 : verified || unverified ? 0.14 : 0.24,
         energy: e,
         glow: glowOf(glowBase, e),
         inwardFlow: reading ? 0.3 : 0,

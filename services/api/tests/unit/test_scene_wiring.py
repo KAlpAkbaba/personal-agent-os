@@ -20,7 +20,6 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.config import Settings
-from app.creative3d.models import STATE_APPLIED
 from app.main import create_app
 from app.routines.dispatch import DeviceRunResult
 from tests.alarms_support import FakeDeviceAction, happy_device_results
@@ -84,7 +83,10 @@ def test_create_add_render_inspect_through_the_real_application_object() -> None
     created = tool("scene.create", {}, "c-1")
     assert created["status"] == "succeeded", created
     assert created["result"]["execution_status"] == "executed"
-    assert created["result"]["state"] == STATE_APPLIED
+    # An EMPTY scene: the run did exactly what was asked and there was nothing checkable to
+    # read back, which is neither `verified` nor `mismatch` (ADR-0088 addendum 1). The word
+    # here is the STEP every client reads, not the database row's own (`applied`).
+    assert created["result"]["state"] == "unverified"
     scene_id = created["result"]["scene_id"]
 
     say("Bir küp ekle.", turn=2)
@@ -99,7 +101,9 @@ def test_create_add_render_inspect_through_the_real_application_object() -> None
 
     resp = client.get(f"/v1/scenes/{scene_id}")
     assert resp.status_code == 200
-    assert resp.json()["state"] == STATE_APPLIED
+    # The cube was added and read back, so this one IS verified — and the row the panel
+    # reads carries the step, never `applied`, which that build cannot read at all.
+    assert resp.json()["state"] == "verified"
 
     assert device.capabilities_called() == [
         "project.scaffold",

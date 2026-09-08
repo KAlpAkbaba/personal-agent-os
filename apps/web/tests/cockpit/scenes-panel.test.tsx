@@ -540,8 +540,25 @@ describe("the rows", () => {
   });
 
   it("draws both chips for a driveable scene and NONE for a tool that could not be driven or a step it cannot read", () => {
-    for (const state of ["creating", "applying", "rendering", "inspecting", "verified", "mismatch", "failed"]) {
+    for (const state of [
+      "creating",
+      "applying",
+      "rendering",
+      "inspecting",
+      "verified",
+      "unverified",
+      "mismatch",
+      "failed",
+    ]) {
       expect(sceneRowActions({ state }), state).toEqual(["render", "inspect"]);
+    }
+    // The words the ROUTE actually sends. `/v1/scenes` used to send the database row's
+    // own word (`applied`, `rendered`, `dependency_unavailable`), which is not in this
+    // vocabulary at all — so `rowState()` was null for every real scene and this panel
+    // showed no chips whatsoever (measured 2026-09-08). A row that says nothing at all
+    // still shows none, which is the honest case this list must keep distinguishing.
+    for (const dbWord of ["applied", "rendered", "dependency_unavailable", "planned", "scaffolded"]) {
+      expect(sceneRowActions({ state: dbWord }), dbWord).toEqual([]);
     }
     expect(sceneRowActions({ state: "unavailable" })).toEqual([]);
     expect(sceneRowActions({ state: null })).toEqual([]);

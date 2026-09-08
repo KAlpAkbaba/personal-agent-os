@@ -62,10 +62,48 @@ from typing import Any
 #: renderer keeps working and simply never sees it.
 #: v10 (M25 3D Creation spec §5, §6, ADR-0088) adds ``scene.activity``, published
 #: around every scene lifecycle transition (create/apply/render/inspect) with metadata
-#: ``{tool?, scene?, state?, objects?}`` (``state`` one of the ``scenes`` states,
-#: ``objects`` the object count from the last inspection) — never to animate a surge,
-#: the same rule every other channel here follows — plus the ``creative3d`` subsystem.
+#: ``{tool?, scene?, state?, objects?}`` (``state`` one of the STEPS below, never a
+#: ``scenes`` row's own word; ``objects`` the object count from the last inspection)
+#: — never to animate a surge, the same rule every other channel here follows — plus
+#: the ``creative3d`` subsystem.
 #: Same additive rule: a v9 renderer keeps working and simply never sees it.
+
+#: The STEP of the 3D loop that ``scene.activity`` names in ``metadata.state`` — the
+#: channel says what is happening, never what a database row happens to be called. The
+#: web reads exactly these words (``apps/web/app/lib/uistate/contract.ts``,
+#: ``SCENE_RUN_STATES``) and draws a posture from each; a word outside this list is one
+#: that build cannot read, so it draws a run in progress and settles nothing.
+#: ``test_scene_activity_vocabulary.py`` holds the two lists to each other by reading
+#: the TypeScript file — they drifted once, silently, and the Cockpit could never have
+#: said "doğrulandı" (measured 2026-09-08).
+SCENE_STEP_CREATING = "creating"
+SCENE_STEP_APPLYING = "applying"
+SCENE_STEP_RENDERING = "rendering"
+SCENE_STEP_INSPECTING = "inspecting"
+#: The read-back agreed with the plan.
+SCENE_STEP_VERIFIED = "verified"
+#: The run did what was asked and there was nothing checkable to read back (an empty
+#: scene). Not verified, and not a disagreement either.
+SCENE_STEP_UNVERIFIED = "unverified"
+#: The read-back disagreed with the plan.
+SCENE_STEP_MISMATCH = "mismatch"
+#: The tool could not be driven at all — a licence, not a fault (ADR-0088 §5).
+SCENE_STEP_UNAVAILABLE = "unavailable"
+SCENE_STEP_FAILED = "failed"
+
+SCENE_ACTIVITY_STEPS: tuple[str, ...] = (
+    SCENE_STEP_CREATING,
+    SCENE_STEP_APPLYING,
+    SCENE_STEP_RENDERING,
+    SCENE_STEP_INSPECTING,
+    SCENE_STEP_VERIFIED,
+    SCENE_STEP_UNVERIFIED,
+    SCENE_STEP_MISMATCH,
+    SCENE_STEP_UNAVAILABLE,
+    SCENE_STEP_FAILED,
+)
+
+
 CONTRACT_VERSION = 10
 
 #: Metadata value bounds. Numbers are floats in [0, 1] except where noted; strings are

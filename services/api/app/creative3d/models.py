@@ -29,6 +29,14 @@ from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import JSON
 
 from app.models import Base
+from app.uistate.contract import (
+    SCENE_STEP_CREATING,
+    SCENE_STEP_FAILED,
+    SCENE_STEP_MISMATCH,
+    SCENE_STEP_UNAVAILABLE,
+    SCENE_STEP_UNVERIFIED,
+    SCENE_STEP_VERIFIED,
+)
 
 JSONColumn = JSON().with_variant(JSONB(), "postgresql")
 
@@ -45,6 +53,40 @@ STATE_MISMATCH = "mismatch"
 #: refused, never a crash, never "done" — kept as its OWN state so a row that landed
 #: here is never confused with a genuine ``failed`` (a plan/driver problem).
 STATE_DEPENDENCY_UNAVAILABLE = "dependency_unavailable"
+
+
+def wire_step(state: str, compare: dict | None) -> str:
+    """The word every CLIENT sees for this row — the step of the loop, from the one closed
+    vocabulary the Cloud Core and the web share (`app.uistate.contract.SCENE_ACTIVITY_STEPS`).
+
+    A database state is not a wire word. They were the same thing until 2026-09-08, and the
+    result was a Cockpit that could not read a single successful run: `applied` and
+    `rendered` mean nothing to the web build, so its panel showed no controls on any row,
+    never marked one verified, and its Core drew every finished scene as one still being
+    made. Derived here rather than stored, from what the row already recorded: `applied` and
+    `rendered` are `verified` unless the comparison the row kept says otherwise.
+    """
+    if state == STATE_MISMATCH:
+        return SCENE_STEP_MISMATCH
+    if state == STATE_DEPENDENCY_UNAVAILABLE:
+        return SCENE_STEP_UNAVAILABLE
+    if state == STATE_FAILED:
+        return SCENE_STEP_FAILED
+    if state in (STATE_APPLIED, STATE_RENDERED):
+        # A finished run is not verified because it finished. The row kept the comparison,
+        # and only a comparison that actually agreed earns the word — a row with none is
+        # `unverified`, never verified over nothing, which is the M24 defect this whole
+        # family refuses (ADR-0087 addendum 1, ADR-0088 addendum 1).
+        if compare is None:
+            return SCENE_STEP_UNVERIFIED
+        if not compare.get("ok", False):
+            if compare.get("reason") == "no_constraints":
+                return SCENE_STEP_UNVERIFIED
+            return SCENE_STEP_MISMATCH
+        return SCENE_STEP_VERIFIED
+    # planned / scaffolded: a run that has not finished.
+    return SCENE_STEP_CREATING
+
 
 SCENE_STATES: tuple[str, ...] = (
     STATE_PLANNED,

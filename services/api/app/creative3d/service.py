@@ -72,6 +72,7 @@ from app.creative3d.models import (
     STATE_RENDERED,
     STATE_SCAFFOLDED,
     SceneRow,
+    wire_step,
 )
 from app.creative3d.spec import TOOL_UNITY, ScenePlan
 from app.ledger import service as ledger_service
@@ -93,6 +94,18 @@ from app.operator.models import FOCUS_KIND_SCENE
 from app.routines.dispatch import DeviceActionPort
 from app.uistate import UiState
 from app.uistate import publish as publish_ui_state
+from app.uistate.contract import (
+    SCENE_ACTIVITY_STEPS,
+    SCENE_STEP_APPLYING,
+    SCENE_STEP_CREATING,
+    SCENE_STEP_FAILED,
+    SCENE_STEP_INSPECTING,
+    SCENE_STEP_MISMATCH,
+    SCENE_STEP_RENDERING,
+    SCENE_STEP_UNAVAILABLE,
+    SCENE_STEP_UNVERIFIED,
+    SCENE_STEP_VERIFIED,
+)
 
 logger = get_logger("app.creative3d.service")
 
@@ -185,6 +198,22 @@ SPEECH_INVALID_PLAN = "Bu sahne isteğini işleyemedim efendim."
 #: A plan that asks for nothing checkable (an empty scene) is not verified and is not a
 #: disagreement — the owner is told which of the two it is, rather than either word.
 SPEECH_NOTHING_TO_CHECK = "Doğrulanacak bir şey yoktu efendim."
+
+#: The owner hears the STEP in Turkish, never the database's English token — `scene.status`
+#: used to say "demo sahnesi applied durumunda efendim". The words match the ones the web
+#: draws for the same steps (`apps/web/app/lib/uistate/contract.ts`, `SCENE_STATE_LABEL`),
+#: so the Cockpit and the voice call one run by one name.
+SCENE_STEP_TR: dict[str, str] = {
+    SCENE_STEP_CREATING: "sahne kuruluyor",
+    SCENE_STEP_APPLYING: "değişiklikler uygulanıyor",
+    SCENE_STEP_RENDERING: "render alınıyor",
+    SCENE_STEP_INSPECTING: "sahne okunuyor",
+    SCENE_STEP_VERIFIED: "doğrulandı",
+    SCENE_STEP_UNVERIFIED: "doğrulanacak bir şey yoktu",
+    SCENE_STEP_MISMATCH: "uyuşmazlık var",
+    SCENE_STEP_UNAVAILABLE: "yapılamadı",
+    SCENE_STEP_FAILED: "başarısız",
+}
 
 
 def _mismatch_speech(plan: ScenePlan, result: CompareResult) -> str:
@@ -326,8 +355,18 @@ class SceneService:
         except Exception:  # noqa: BLE001 - evidence, never a dependency of the action
             logger.warning("creative3d_ledger_failed", action=action)
 
-    def _publish(self, *, tool: str, scene: str, state: str, objects: int | None = None) -> None:
-        metadata: dict[str, Any] = {"tool": tool, "scene": scene[:64], "state": state}
+    def _publish(self, *, tool: str, scene: str, step: str, objects: int | None = None) -> None:
+        """One `scene.activity` event. ``metadata.state`` is the STEP of the loop, from the
+        closed wire vocabulary both halves share — never the database row's own word, which
+        is what let the two drift until the Cockpit could not read a single successful run
+        (measured 2026-09-08)."""
+        if step not in SCENE_ACTIVITY_STEPS:
+            # A word the Core cannot read would draw a finished run as one still being
+            # made, which is the defect this vocabulary exists to close. Say nothing
+            # rather than say it, and never fail the owner's run over a UI concern.
+            logger.error("creative3d_unknown_activity_step", step=step)
+            return
+        metadata: dict[str, Any] = {"tool": tool, "scene": scene[:64], "state": step}
         if objects is not None:
             metadata["objects"] = objects
         publish_ui_state(
@@ -447,9 +486,12 @@ class SceneService:
         row: SceneRow,
         plan: ScenePlan,
         session_id: str | None,
+        working_step: str,
     ) -> dict[str, Any] | None:
         """Runs ``project.scaffold`` then ``project.run`` for ``plan``. Returns an
-        early-refusal receipt on failure, or ``None`` to continue to ``scene.inspect``."""
+        early-refusal receipt on failure, or ``None`` to continue to ``scene.inspect``.
+
+        ``working_step`` is what the Core shows while the editor runs."""
         try:
             driver_source = driver_text(plan.tool)
         except DriverPinMismatch as exc:
@@ -501,6 +543,7 @@ class SceneService:
             speech, error_class = _translate_error(
                 scaffold_result.error_class, scaffold_result.message
             )
+            self._publish(tool=plan.tool, scene=plan.scene, step=SCENE_STEP_FAILED)
             row.state = STATE_FAILED
             row.error_class = error_class
             row.error_message = scaffold_result.message
@@ -528,6 +571,9 @@ class SceneService:
         row.root_path = str((scaffold_result.result or {}).get("root_path") or "") or row.root_path
         row.state = STATE_SCAFFOLDED
         db.commit()
+        # The editor is about to run: the Core says so while it does, rather than only
+        # once it is over (M25 spec §6 — the panel is meant to show a scene being made).
+        self._publish(tool=plan.tool, scene=plan.scene, step=working_step)
 
         run_result = device_action.run(
             capability=CAPABILITY_PROJECT_RUN,
@@ -553,6 +599,9 @@ class SceneService:
                     detail={"scene_id": str(row.id), "message": run_result.message},
                 )
                 speech = f"Unity lisansı yok: yapamadım efendim. ({run_result.message})"
+                # A tool that cannot be driven is a settled fact, and the Core says so:
+                # without this the dim `unavailable` posture was unreachable.
+                self._publish(tool=plan.tool, scene=plan.scene, step=SCENE_STEP_UNAVAILABLE)
                 return self._receipt(
                     capability="scene.create",
                     requested_state="applied",
@@ -563,9 +612,10 @@ class SceneService:
                     db=db,
                     error_class="dependency_unavailable",
                     session_id=session_id,
-                    extra={"scene_id": str(row.id), "state": STATE_DEPENDENCY_UNAVAILABLE},
+                    extra={"scene_id": str(row.id), "state": SCENE_STEP_UNAVAILABLE},
                 )
             speech, error_class = _translate_error(run_result.error_class, run_result.message)
+            self._publish(tool=plan.tool, scene=plan.scene, step=SCENE_STEP_FAILED)
             row.state = STATE_FAILED
             row.error_class = error_class
             row.error_message = run_result.message
@@ -647,6 +697,7 @@ class SceneService:
             speech, error_class = _translate_error(
                 inspect_result.error_class, inspect_result.message
             )
+            self._publish(tool=plan.tool, scene=plan.scene, step=SCENE_STEP_FAILED)
             row.state = STATE_FAILED
             row.error_class = error_class
             row.updated_at = datetime.now(UTC)
@@ -701,7 +752,13 @@ class SceneService:
             speech = self._describe(plan, inspection) + " " + SPEECH_NOTHING_TO_CHECK
         else:
             speech = _mismatch_speech(plan, cmp_result)
-        self._publish(tool=plan.tool, scene=plan.scene, state=row.state, objects=object_count)
+        if cmp_result.ok:
+            step = SCENE_STEP_VERIFIED
+        elif nothing_to_check:
+            step = SCENE_STEP_UNVERIFIED
+        else:
+            step = SCENE_STEP_MISMATCH
+        self._publish(tool=plan.tool, scene=plan.scene, step=step, objects=object_count)
         if row.state == STATE_MISMATCH:
             event_type = EVENT_TYPE_SCENE_MISMATCH
         elif row.state == STATE_RENDERED:
@@ -737,7 +794,7 @@ class SceneService:
             session_id=session_id,
             extra={
                 "scene_id": str(row.id),
-                "state": row.state,
+                "state": step,
                 "inspection": inspection,
                 "compare": cmp_result.as_dict(),
                 "objects": object_count,
@@ -819,7 +876,9 @@ class SceneService:
             detail={"scene_id": str(scene_id), "tool": scene_plan.tool},
         )
 
-        refusal = self._scaffold_and_run(db, device_action, row, scene_plan, session_id)
+        refusal = self._scaffold_and_run(
+            db, device_action, row, scene_plan, session_id, working_step=SCENE_STEP_CREATING
+        )
         if refusal is not None:
             return refusal
         return self._finish(
@@ -887,7 +946,12 @@ class SceneService:
                 },
             )
 
-        refusal = self._scaffold_and_run(db, device_action, row, scene_plan, session_id)
+        # A render is its own posture: writing an image is not the same act as building
+        # the thing in it (the web's own reading of the loop, ADR-0088 §6).
+        working = SCENE_STEP_RENDERING if capability == "scene.render" else SCENE_STEP_APPLYING
+        refusal = self._scaffold_and_run(
+            db, device_action, row, scene_plan, session_id, working_step=working
+        )
         if refusal is not None:
             return refusal
         return self._finish(
@@ -1001,19 +1065,20 @@ class SceneService:
         if row is None:
             return self._clarification(SPEECH_NO_SCENE)
         objects = len((row.inspection_json or {}).get("objects") or [])
+        step = wire_step(row.state, row.compare_json)
         speech = (
-            f"{row.project}/{row.scene} sahnesi {row.state} durumunda efendim; {objects} nesne."
+            f"{row.project}/{row.scene} sahnesi: {SCENE_STEP_TR[step]} efendim; {objects} nesne."
         )
         return self._receipt(
             capability="scene.status",
-            requested_state=row.state,
+            requested_state=step,
             execution=EXECUTION_EXECUTED,
             terminal=TERMINAL_VERIFIED,
-            server={"state": row.state, "objects": objects},
+            server={"state": step, "objects": objects},
             speech=speech,
             db=db,
             session_id=session_id,
-            extra={"scene_id": str(row.id), "state": row.state, "objects": objects},
+            extra={"scene_id": str(row.id), "state": step, "objects": objects},
         )
 
     # -------------------------------------------------------------------------- list
@@ -1034,7 +1099,11 @@ class SceneService:
         if not rows:
             speech = "Henüz bir sahne oluşturmadım efendim."
         else:
-            names = ", ".join(f"{r.tool}:{r.project}/{r.scene} ({r.state})" for r in rows)
+            names = ", ".join(
+                f"{r.tool}:{r.project}/{r.scene} "
+                f"({SCENE_STEP_TR[wire_step(r.state, r.compare_json)]})"
+                for r in rows
+            )
             speech = f"Şu sahneler var efendim: {names}."
         scenes = [
             {
@@ -1042,7 +1111,7 @@ class SceneService:
                 "tool": r.tool,
                 "project": r.project,
                 "scene": r.scene,
-                "state": r.state,
+                "state": wire_step(r.state, r.compare_json),
             }
             for r in rows
         ]

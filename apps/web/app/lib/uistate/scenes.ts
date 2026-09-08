@@ -91,6 +91,10 @@ export function sceneFacts(event: UiStateEvent | null): SceneFacts {
  *   reading     — `inspecting`: the tool is being read back; the one posture
  *                 in this family that draws inward
  *   verified    — `verified`: the read-back matched; still and bright
+ *   unverified  — `unverified`: the run did what was asked and there was
+ *                 nothing checkable to read back (an empty scene). Settled
+ *                 and plain: nothing disagreed, and nothing was verified
+ *                 either, so neither word is rounded to
  *   mismatch    — `mismatch`: held under restraint and NAMED; the scene is
  *                 not what was asked for, and nothing rounds that up
  *   unavailable — `unavailable`: settled and dim. A tool that cannot be
@@ -107,6 +111,7 @@ export type ScenePosture =
   | "rendering"
   | "reading"
   | "verified"
+  | "unverified"
   | "mismatch"
   | "unavailable"
   | "failed";
@@ -129,6 +134,8 @@ export function scenePosture(state: SceneRunState | null): ScenePosture {
       return "reading";
     case "verified":
       return "verified";
+    case "unverified":
+      return "unverified";
     case "mismatch":
       return "mismatch";
     case "unavailable":

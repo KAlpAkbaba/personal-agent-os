@@ -12,7 +12,6 @@ import uuid
 from fastapi.testclient import TestClient
 
 from app.config import Settings
-from app.creative3d.models import STATE_APPLIED, STATE_RENDERED
 from app.main import create_app
 from tests.voice_corpus.harness import build_harness
 
@@ -47,7 +46,12 @@ def test_list_returns_the_created_scene_as_a_row() -> None:
     rows = resp.json()["scenes"]
     assert [r["id"] for r in rows] == [scene_id]
     assert rows[0]["tool"] == "blender"
-    assert rows[0]["state"] == STATE_APPLIED
+    # The row the PANEL reads carries the step, not the database's word: sending `applied`
+    # here left `rowState()` null for every real scene, so the panel showed no controls at
+    # all and could never mark a row verified (measured 2026-09-08). "Blender'da yeni sahne
+    # aç." asks for an EMPTY scene, so the honest step is `unverified` — the run did what
+    # was asked and there was nothing checkable to read back.
+    assert rows[0]["state"] == "unverified"
 
 
 def test_get_one_scene_carries_its_inspection() -> None:
@@ -82,7 +86,8 @@ def test_post_render_reaches_the_same_device_port_and_stores_a_png() -> None:
     resp = h.client.post(f"/v1/scenes/{scene_id}/render")
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["state"] == STATE_RENDERED
+    # The step the panel reads; the row itself is `rendered`.
+    assert body["state"] == "verified"
 
     render_resp = h.client.get(f"/v1/scenes/{scene_id}/render")
     assert render_resp.status_code == 200

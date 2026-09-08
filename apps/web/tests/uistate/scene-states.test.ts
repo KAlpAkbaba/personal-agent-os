@@ -231,7 +231,7 @@ describe("contract v10 is v9 plus the scene state, and says so", () => {
     expect(UI_STATES[0]).toBe("agent.idle");
   });
 
-  it("types the two tools and the eight steps in the spec's order, and admits nothing outside them", () => {
+  it("types the two tools and the nine steps in the spec's order, and admits nothing outside them", () => {
     expect(SCENE_TOOLS).toEqual(["blender", "unity"]);
     for (const tool of SCENE_TOOLS) expect(isSceneTool(tool), tool).toBe(true);
     expect(isSceneTool("Blender")).toBe(false);
@@ -239,12 +239,19 @@ describe("contract v10 is v9 plus the scene state, and says so", () => {
     expect(isSceneTool(null)).toBe(false);
     expect(isSceneTool(3)).toBe(false);
 
+    // Nine, not eight: `unverified` is the outcome where the run did exactly what was
+    // asked and there was nothing checkable to read back (an empty scene). Neither
+    // `verified` nor `mismatch` may stand in for it — rounding to either is the one thing
+    // this family refuses. The API holds this list to its own by reading this file
+    // (services/api/tests/unit/test_scene_activity_vocabulary.py); they drifted once and
+    // the Core could not read a single successful run.
     expect(SCENE_RUN_STATES).toEqual([
       "creating",
       "applying",
       "rendering",
       "inspecting",
       "verified",
+      "unverified",
       "mismatch",
       "unavailable",
       "failed",
@@ -306,13 +313,14 @@ describe("contract v10 is v9 plus the scene state, and says so", () => {
     expect(stateLabel("scene.activity")).not.toBe("scene.activity");
     expect(SCENE_EMPTY).toBe("Henüz bir sahne yapılmadı.");
     expect(SCENE_UNTOLD).not.toBe(SCENE_EMPTY);
-    // The eight steps, each a constant spelled once.
+    // The nine steps, each a constant spelled once.
     expect(SCENE_STATE_LABEL).toEqual({
       creating: "sahne kuruluyor",
       applying: "değişiklikler uygulanıyor",
       rendering: "render alınıyor",
       inspecting: "sahne okunuyor",
       verified: "doğrulandı",
+      unverified: "doğrulanacak bir şey yoktu",
       mismatch: "uyuşmazlık",
       unavailable: "yapılamadı",
       failed: "başarısız",
@@ -460,10 +468,28 @@ describe("the posture, from the published step alone", () => {
     expect(scenePosture("rendering")).toBe("rendering");
     expect(scenePosture("inspecting")).toBe("reading");
     expect(scenePosture("verified")).toBe("verified");
+    expect(scenePosture("unverified")).toBe("unverified");
     expect(scenePosture("mismatch")).toBe("mismatch");
     expect(scenePosture("unavailable")).toBe("unavailable");
     expect(scenePosture("failed")).toBe("failed");
     expect(scenePosture(null)).toBe("making");
+  });
+
+  it("never rounds a run with nothing to check into one that was verified", () => {
+    // The publisher's third outcome: the run did exactly what was asked and there was
+    // nothing checkable to read back (an empty scene). It is over, so it is not a working
+    // step; it is not `verified`, because nothing was verified; and it is not `mismatch`,
+    // because nothing disagreed. Its own posture, its own word.
+    expect(scenePosture("unverified")).not.toBe("verified");
+    expect(scenePosture("unverified")).not.toBe("mismatch");
+    expect(scenePosture("unverified")).not.toBe("making");
+    expect(sceneRunIsWorking("unverified")).toBe(false);
+    expect(sceneIsUnavailable({ state: "unverified" })).toBe(false);
+    expect(SCENE_STATE_LABEL.unverified).not.toBe(SCENE_STATE_LABEL.verified);
+    expect(SCENE_STATE_LABEL.unverified).not.toContain("doğrulandı");
+    expect(sceneStatePhrase({ state: "unverified", tool: "blender", objects: 3 })).toBe(
+      SCENE_STATE_LABEL.unverified,
+    );
   });
 
   it("knows which steps mean an editor is actually running", () => {
