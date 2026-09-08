@@ -721,3 +721,7 @@ the real Hetzner Cloud Core; nothing here is accepted from fakes or a single mac
 - agent update: a centrally coordinated rollout to both machines with health check,
   rollback of one machine, and a correct version inventory afterwards;
 - no per-machine source edit or manual configuration was needed after enrollment.
+
+## M23 — App Factory (ADR-0086)
+
+Gate: QUALIFICATION Stage 21 rows 21.1–21.8. Automated: `services/api` unit suite incl. `tests/unit/test_appfactory_*.py` and the corpus category `apps`; the agent project incl. `tests/PagentOS.Agent.Tests/Projects/`; the web suite incl. `tests/uistate/app-states.test.ts` + `tests/cockpit/apps-panel.test.tsx`. Real: the projects lab on this machine and the runner; the headless DOM exercise of the task-tracker on this machine. Merged main f7baf19 (web 621ead2, device 904edfc, core 8610c4f, routes c0fa403, DOM exercise 6259f61, the review fixes f7baf19); CI run 34210920189 on f7baf19: 7/7 jobs green (API lint + unit, API integration, Windows agent build + tests 695/695 + audio 135/135 with the projects lab on the runner, browser agent, web shell build 1167/1167, recovery supervisor, secret hygiene); the merges before it: 621ead2 web (green), 904edfc device (its run superseded, then 191e353 green with the audit-log fix), 6259f61 integration (6/7 — secret hygiene caught two key-shaped test literals, fixed in f7baf19); two runner flakes on the way were real defects and are fixed with regression facts (437eb7e the fetch lab's socket count, 191e353 the AuditLog sharing violation).

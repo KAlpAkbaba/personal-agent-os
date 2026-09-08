@@ -1,6 +1,6 @@
 # M23 — App Factory
 
-Status: ACTIVE (owner master directive 2026-09-07, M23 section; kickoff 2026-09-08 after the M22 gate). Decision record: ADR-0086.
+Status: CLOSED 2026-09-08 (ADR-0086 + addenda 1–4; QUALIFICATION Stage 21 with 21.8 PROVEN_REAL; Cloud Core f7baf19 released to production 09:47Z through the blue/green path, LAST_KNOWN_GOOD c2f1904; the deployed agent 0.4.0 awaits item 28 for the `projects` family). Decision record: ADR-0086.
 Predecessors: M6/M18.4 evolution (`CodingBackend` Protocol with `DeterministicCodingBackend` and `ClaudeCodingBackend`; `SkillGenerator`; the sandbox policy and protected trees), M13 browser (the device browser worker through `BrowserGateway` / `DeviceBrowserGateway`: `browser.session_open`, `browser.fetch_evidence`, headless only under the window monitor), M19 Digital Operator (`terminal.*` allowlisted read-only, `file.open`, the focus guard), M20/M22 (`AuthorisedRoots`, `file.fetch`, validation by independent readers).
 
 The owner's rule, in one line: **an app the assistant made exists when it has been scaffolded into a real project on the owner's machine, run there in a bounded process, exercised through the browser or the Digital Operator, and its own tests have passed — and nothing of that touches the owner's other projects.**
