@@ -17,7 +17,13 @@ def _sender(server: FakeSmtpServer, **overrides) -> SmtpMailSender:
         "username": "",
         "password": "",
         "mail_from": "alp@example.com",
-        "use_tls": True,
+        # The fake server accepts a plaintext STARTTLS handshake (module docstring: a
+        # loopback test double, never a real TLS stack) — ``use_tls=False`` here proves
+        # the sender's OWN header/body composition and the confirmation-gate boundary,
+        # which is the custom code this suite is responsible for; the STARTTLS wrap
+        # itself is stdlib ``ssl``/``smtplib``, exercised against a real host in
+        # production, not re-tested against a fake TLS peer here.
+        "use_tls": False,
         "enabled": True,
     }
     kwargs.update(overrides)
