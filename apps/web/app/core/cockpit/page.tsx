@@ -34,11 +34,14 @@ import { approvalClient } from "../../lib/cockpit/approvals";
 import { appsClient } from "../../lib/cockpit/apps";
 import { artifactClient, downloadRender } from "../../lib/cockpit/artifacts";
 import { genesisClient } from "../../lib/cockpit/genesis";
+import { type SceneRow, sceneClient } from "../../lib/cockpit/scenes";
 import { useApprovalPair } from "../../lib/cockpit/useApprovalPair";
 import { useAppsControl } from "../../lib/cockpit/useAppsControl";
 import { useArtifactOpen } from "../../lib/cockpit/useArtifactOpen";
 import { useCockpitData } from "../../lib/cockpit/useCockpitData";
 import { useGenesisControl } from "../../lib/cockpit/useGenesisControl";
+import { useSceneControl } from "../../lib/cockpit/useSceneControl";
+import { useSceneRender } from "../../lib/cockpit/useSceneRender";
 import { selectResearchFocus } from "../../lib/research/api";
 import { UnauthorizedError } from "../../lib/session";
 import { alarmView, displayView, eyeView, presenceView, releaseView } from "../../lib/uistate/ambient";
@@ -81,12 +84,16 @@ import {
   OwnerActionsPanel,
   ResearchPanel,
   RunningToolsPanel,
+  ScenesPanel,
   ShadowReadyPanel,
   StateStreamPanel,
   VoiceQualificationPanel,
   WorldPanel,
 } from "../panels/CockpitPanels";
 import "../core.css";
+
+/** A stable empty list, so the render hook's effect does not re-run on every poll. */
+const EMPTY_SCENES: SceneRow[] = [];
 
 function Cockpit() {
   const { truth, now, refresh } = useCoreState();
@@ -134,6 +141,25 @@ function Cockpit() {
   // produced. The routes land on the Cloud Core track (ADR-0087 §8); until
   // they do, the panel says "henüz yok".
   const genesisControl = useGenesisControl(genesisClient, refreshPanels);
+  // M25 §6: "Render al" and "Sahneyi oku" ask the Cloud Core for the
+  // device's bounded `scene.render` / `scene.inspect` on one scene, one
+  // call at a time, and every answer reloads the list so the rows show what
+  // the tool now holds — never what this page assumed a click produced. The
+  // routes land on the Cloud Core track (ADR-0088 §8); until they do, the
+  // panel says "henüz yok". `sceneTool` is read from the rows only so an
+  // `unavailable` Unity is worded with its licence rather than generically.
+  const sceneRows = useMemo(
+    () => (data.scenes.kind === "ok" ? data.scenes.value : EMPTY_SCENES),
+    [data.scenes],
+  );
+  const sceneTool = useCallback(
+    (sceneId: string) => sceneRows.find((row) => row.scene_id === sceneId)?.tool ?? null,
+    [sceneRows],
+  );
+  const sceneControl = useSceneControl(sceneClient, refreshPanels, sceneTool);
+  // The render route is owner-session gated, so the images are FETCHED with
+  // the session and handed to the rows as blobs; a bare <img src> would 401.
+  const scenePreview = useSceneRender(sceneRows);
   const [downloadNotice, setDownloadNotice] = useState<string | null>(null);
   const download = useCallback((artifactId: string, format: string) => {
     setDownloadNotice(null);
@@ -244,6 +270,18 @@ function Cockpit() {
               owner — each run's state, the error when it failed, "Onayla"
               only while one waits for the owner, "Vazgeç" while one runs. */}
           <GenesisPanel runs={data.genesisRuns} truth={truth} now={now} control={genesisControl} />
+          {/* M25 §6: the 3D scenes the assistant made — each scene's tool
+              and step, what the last inspection read back, the last render
+              as an image through the owner session, and the two chips for
+              the device's bounded editor run. A tool that cannot be driven
+              gets no chips and says why. */}
+          <ScenesPanel
+            scenes={data.scenes}
+            truth={truth}
+            now={now}
+            control={sceneControl}
+            preview={scenePreview}
+          />
           <GoalsPanel state={data.goals} now={now} />
           <ResearchPanel
             state={data.research}

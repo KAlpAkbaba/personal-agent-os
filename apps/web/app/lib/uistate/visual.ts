@@ -51,6 +51,7 @@ import { type CalendarFacts, calendarCaption, calendarFacts } from "./calendar";
 import { type DocumentFacts, documentCaption, documentFacts } from "./documents";
 import { type GenesisFacts, genesisCaption, genesisFacts, genesisPosture } from "./genesis";
 import { type MailFacts, mailCaption, mailFacts } from "./mail";
+import { type SceneFacts, sceneCaption, sceneFacts, scenePosture } from "./scenes";
 import { operatorCaption, operatorFacts } from "./operator";
 import type { VoiceUiState } from "../voice/controller";
 
@@ -153,7 +154,25 @@ export type CoreVisualKind =
    * fault in the agent. Calm, nothing that could be read as progress, and
    * the capability, the state and the error class as the caption.
    */
-  | "capability_genesis";
+  | "capability_genesis"
+  /**
+   * v10 (M25): the Core building a 3D scene for the owner through the
+   * tool's OWN scripting interface — executing a scene plan in Blender or
+   * Unity, rendering a still, then READING THE TOOL BACK and comparing it
+   * with what was asked. A making posture while the plan runs (the app
+   * factory's lattice and outward traffic); a distinct RENDERING posture —
+   * the lattice stands still and the paths carry an image out, because
+   * writing a picture is not the same act as building the thing in it; a
+   * READING posture at `inspecting`, the one step in this family that draws
+   * inward (the tool is being asked what it holds); still and bright at
+   * `verified`; `mismatch` held under restraint and named; `unavailable`
+   * SETTLED and dim with no agitation whatever — a tool that cannot be
+   * driven for want of a licence is a fact about a licence, not a fault in
+   * the agent (ADR-0088 §5) — and `failed` held under the same restraint.
+   * Calm, nothing that could be read as progress, and the tool, the scene,
+   * the step and the object count as the caption.
+   */
+  | "scene_activity";
 
 /**
  * Which of the two evidence sources produced the intent (ADR-0061 §4).
@@ -456,6 +475,16 @@ export type VisualIntent = {
    */
   genesis: GenesisFacts | null;
 
+  // ------------------------------------------------ v10: 3D creation (M25 §6)
+  /**
+   * The published facts about the scene being made — the tool, the scene,
+   * the step, the object count the INSPECTION read — each `null` when the
+   * publisher sent none, and the whole thing `null` outside the
+   * `scene_activity` kind (kept on its last-known shape). Words, not
+   * channels.
+   */
+  scene: SceneFacts | null;
+
   palette: PaletteToken;
 };
 
@@ -544,6 +573,7 @@ function blank(kind: CoreVisualKind, palette: PaletteToken): VisualIntent {
     artifact: null,
     app: null,
     genesis: null,
+    scene: null,
     palette,
   };
 }
@@ -1216,6 +1246,56 @@ function forLiveState(event: UiStateEvent, claim: Claim): VisualIntent {
       };
     }
 
+    case "scene.activity": {
+      // Seven postures (M25 §6), each from the published step alone. MAKING
+      // (`creating`, `applying`): the app factory's shape — a lattice being
+      // laid, the paths carrying a plan OUT to the editor on the owner's
+      // machine, nothing flowing inward. RENDERING: its own posture, because
+      // writing an image is not building the thing in it — the lattice
+      // STANDS, the rings all but stop, and the paths carry a single steady
+      // stream out; a still is one long write, not a structure taking shape.
+      // READING (`inspecting`): the one step in this family that draws
+      // INWARD, on the document Core's shape — the tool is being asked what
+      // it holds, and the answer is what every claim downstream rests on.
+      // VERIFIED: still and bright in the ready palette — the read-back
+      // matched. MISMATCH: held under restraint, named, never rounded up to
+      // done. UNAVAILABLE: settled and dim under restraint with NO agitation
+      // and no error palette at all — an editor that cannot be driven for
+      // want of a licence is a fact about a licence (ADR-0088 §5), and
+      // drawing it as a fault would be the Core telling the owner something
+      // broke. FAILED: the same restraint. A step this build cannot read, or
+      // none at all, is the making posture with the bare caption. No pulse,
+      // no constellation and no progress: a render of unknown length gets no
+      // bar.
+      const facts = sceneFacts(event);
+      const posture = scenePosture(facts.state);
+      const rendering = posture === "rendering";
+      const reading = posture === "reading";
+      const verified = posture === "verified";
+      const mismatch = posture === "mismatch";
+      const unavailable = posture === "unavailable";
+      const failed = posture === "failed";
+      const still = verified || mismatch || unavailable || failed;
+      const palette: PaletteToken = unavailable ? "held" : verified ? "ready" : reading ? "reading" : "making";
+      const glowBase = verified ? 0.42 : rendering ? 0.36 : mismatch ? 0.22 : failed ? 0.22 : unavailable ? 0.12 : 0.3;
+      return {
+        ...base("scene_activity", palette),
+        label: sceneCaption(facts),
+        scale: unavailable ? 0.96 : rendering ? 1.05 : still ? 1.02 : 1.04,
+        topology: reading ? 0.1 : unavailable ? 0 : rendering ? 0.3 : still ? 0.15 : 0.2,
+        breathAmplitude: unavailable ? 0.015 : 0.03,
+        breathHz: unavailable ? 0.1 : rendering ? 0.18 : verified ? 0.14 : 0.24,
+        energy: e,
+        glow: glowOf(glowBase, e),
+        inwardFlow: reading ? 0.3 : 0,
+        shellSpread: unavailable ? 0.1 : rendering ? 0.35 : still ? 0.2 : 0.3,
+        ringSpin: unavailable ? 0.02 : rendering ? 0.04 : still ? IDLE_RING_SPIN : 0.18,
+        flowRate: rendering ? 0.4 : still ? 0 : reading ? 0.15 : 0.3,
+        restraint: unavailable ? 0.6 : mismatch || failed ? 0.5 : 0,
+        scene: facts,
+      };
+    }
+
     default:
       // Reached only by a contract state this table has not been taught. Both
       // gates upstream (`isKnownState`, and `coreClaim`'s agent/lab filter)
@@ -1338,7 +1418,9 @@ export function applyVoiceOverlay(bus: VisualIntent, voice: VoiceOverlay): Visua
   // çalıştır" runs `app.run`, and the bus knows the project and the port
   // (M23 §6). v9 extends it to Capability Genesis: "sayaç kutusunu bir
   // artır" runs `capability.request`, and the bus knows the capability and
-  // the run's state (M24 §6, §8).
+  // the run's state (M24 §6, §8). v10 extends it to 3D creation: "render
+  // al" runs `scene.render`, and the bus knows the tool, the scene and the
+  // step (M25 §5, §6).
   if (
     voice.state === "tool_running" &&
     (isOperatorActing(bus) ||
@@ -1347,7 +1429,8 @@ export function applyVoiceOverlay(bus: VisualIntent, voice: VoiceOverlay): Visua
       isCalendarPlanning(bus) ||
       isArtifactMaking(bus) ||
       isAppBuilding(bus) ||
-      isGenesisWorking(bus))
+      isGenesisWorking(bus) ||
+      isSceneWorking(bus))
   )
     return bus;
   const local = (kind: CoreVisualKind, palette: PaletteToken): VisualIntent => ({
@@ -1656,4 +1739,25 @@ export function isGenesisWorking(intent: VisualIntent): boolean {
 /** True while the Core body is a LIVE genesis event whose publisher said `awaiting_approval`: the owner is the thing being waited on. */
 export function isGenesisAwaiting(intent: VisualIntent): boolean {
   return isGenesisWorking(intent) && intent.genesis !== null && genesisPosture(intent.genesis.state) === "waiting";
+}
+
+/** True while the Core body is a LIVE scene event (v10) — making, rendering, reading, verified, mismatched, unavailable or failed; a last-known shape is not. */
+export function isSceneWorking(intent: VisualIntent): boolean {
+  return intent.kind === "scene_activity";
+}
+
+/** True while the Core body is a LIVE scene event whose publisher said `rendering`: the one posture that draws an image being written out. */
+export function isSceneRendering(intent: VisualIntent): boolean {
+  return isSceneWorking(intent) && intent.scene !== null && scenePosture(intent.scene.state) === "rendering";
+}
+
+/**
+ * True while the Core body is a LIVE scene event whose publisher said the
+ * tool could not be driven at all. Named separately so a harness — and the
+ * cockpit — can tell "Unity cannot be driven" from "something failed"
+ * without reading the geometry, which is exactly the distinction ADR-0088
+ * §5 asks the Core to keep.
+ */
+export function isSceneUnavailable(intent: VisualIntent): boolean {
+  return isSceneWorking(intent) && intent.scene !== null && scenePosture(intent.scene.state) === "unavailable";
 }

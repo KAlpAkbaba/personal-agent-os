@@ -92,6 +92,26 @@ import {
   rowIsFailed as genesisRowIsFailed,
 } from "../../lib/cockpit/genesis-rows";
 import {
+  SCENE_ACTION_LABEL,
+  SCENE_ROWS_SHOWN,
+  sceneActionGate,
+  sceneObjectNamesLine,
+  sceneRenderAlt,
+  sceneRowActions,
+  sceneRowLine,
+  rowHasRender as sceneRowHasRender,
+  rowIsFailed as sceneRowIsFailed,
+  rowIsMismatch as sceneRowIsMismatch,
+  rowIsUnavailable as sceneRowIsUnavailable,
+  rowIsVerified as sceneRowIsVerified,
+} from "../../lib/cockpit/scene-rows";
+import type {
+  SceneAction,
+  SceneControlProps,
+  ScenePreviewProps,
+  SceneRow,
+} from "../../lib/cockpit/scenes";
+import {
   FOCUS_UNSUPPORTED,
   focusSourceLabel,
   focusSummary,
@@ -123,6 +143,8 @@ import {
   MAIL_UNTOLD,
   OPERATOR_EMPTY,
   OPERATOR_LABEL,
+  SCENE_EMPTY,
+  SCENE_UNTOLD,
   documentFactsLine,
   documentRefLine,
   formatAge,
@@ -131,6 +153,7 @@ import {
   stateLabel,
   subsystemLabel,
 } from "../../lib/uistate/labels";
+import { sceneView } from "../../lib/uistate/scenes";
 import { MAIL_DRAFT_STATE_LABEL, mailView } from "../../lib/uistate/mail";
 import { operatorPosition, operatorView } from "../../lib/uistate/operator";
 import type { CoreTruth } from "../../lib/uistate/truth";
@@ -144,6 +167,7 @@ import {
   mailClaim,
   operatorClaim,
   recentDescending,
+  sceneClaim,
 } from "../../lib/uistate/truth";
 import Panel, { LoadedNotice } from "./Panel";
 
@@ -2002,6 +2026,254 @@ export function GenesisPanel({
       )}
       <p className="muted" data-genesis-note>
         {GENESIS_NOTE}
+      </p>
+    </section>
+  );
+}
+
+// ---------------------------------------------------- M25: 3D creation
+
+/** What the panel says under the rows: what the two chips ask for, and what this page cannot do. */
+const SCENE_NOTE =
+  '"Render al" ve "Sahneyi oku" Cloud Core\'dan cihazdaki sınırlı süreci ister: aracın kendi betik arayüzü (Blender için `-b --python`, Unity için `-batchmode -executeMethod`), sabit sürücü dosyası, 3B kökünün içinde ve kendi iş nesnesinde. Sahne, plana uyduğu araçtan geri okunduğunda doğrulanmış olur; önce değil. Sürülemeyen bir araç için düğme gösterilmez. Bu ekran editör açmaz, fare kullanmaz, kod üretmez, sahibin kendi projelerine dokunmaz.';
+
+/** Said under a row that has a render the page has not fetched yet. */
+const SCENE_RENDER_PENDING = "Render var; görüntü henüz alınmadı.";
+
+/**
+ * One scene's last render.
+ *
+ * A plain `<img>` on purpose, and `next/image` deliberately not used: `src`
+ * here is a `blob:` URL made in this tab from bytes fetched through the
+ * owner session (the route is gated, so an optimizer that re-fetches the
+ * URL server-side would be answered with a 401 and could not read a blob of
+ * this tab's anyway). The dimensions are the driver's, not this page's — a
+ * render is up to 1920×1080 (M25 spec §7) and the CSS bounds it without
+ * changing its proportions, because the owner reads geometry off it.
+ */
+function SceneRenderImage({ row, src }: { row: SceneRow; src: string }) {
+  /* eslint-disable-next-line next/no-img-element */
+  return <img className="scene-render" src={src} alt={sceneRenderAlt(row)} data-scene-render={row.scene_id} data-scene-render-sha={row.render_sha256 ?? ""} />;
+}
+
+/**
+ * The chips under one scene: both for a scene whose step this build can
+ * read, NEITHER for a tool that could not be driven — each drawn only when
+ * the Cloud Core would not refuse it, and disabled with the reason in words
+ * while another call is in flight.
+ */
+function SceneControls({ row, control }: { row: SceneRow; control: SceneControlProps }) {
+  const actions = sceneRowActions(row);
+  if (actions.length === 0) return null;
+  const handlers: Record<SceneAction, (id: string) => void> = { render: control.onRender, inspect: control.onInspect };
+  const gates = actions.map((action) => ({ action, gate: sceneActionGate(row, action, control.busy) }));
+  const inFlight = control.busy !== null && control.busy.id === row.scene_id;
+  // One sentence per distinct reason, naming every chip it refuses; the one
+  // in-flight call disables both chips and is said once.
+  const reasons = new Map<string, { actions: SceneAction[]; kind: string }>();
+  for (const { action, gate } of gates) {
+    if (gate.reason === null) continue;
+    const entry = reasons.get(gate.reason) ?? { actions: [], kind: gate.reasonKind ?? "" };
+    entry.actions.push(action);
+    reasons.set(gate.reason, entry);
+  }
+  return (
+    <div
+      className="approval-pair"
+      data-scene-controls={row.scene_id}
+      data-scene-in-flight={inFlight ? "yes" : "no"}
+      data-scene-in-flight-action={inFlight && control.busy ? control.busy.action : ""}
+    >
+      {gates.map(({ action, gate }) => (
+        <button
+          key={action}
+          type="button"
+          className="core-chip"
+          data-scene-action={action}
+          data-scene-target={row.scene_id}
+          data-scene-enabled={gate.enabled ? "yes" : "no"}
+          disabled={!gate.enabled}
+          onClick={() => handlers[action](row.scene_id)}
+        >
+          {SCENE_ACTION_LABEL[action]}
+        </button>
+      ))}
+      {Array.from(reasons, ([reason, { actions: refused, kind }]) => (
+        <span key={reason} className="approval-reason" data-scene-reason={kind} data-scene-reason-for={refused.join(",")}>
+          {kind === "busy" ? reason : `${refused.map((a) => SCENE_ACTION_LABEL[a]).join(", ")}: ${reason}`}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function SceneRowItem({
+  row,
+  now,
+  control,
+  preview,
+}: {
+  row: SceneRow;
+  now: number;
+  control: SceneControlProps;
+  preview: ScenePreviewProps;
+}) {
+  const unavailable = sceneRowIsUnavailable(row);
+  const failed = sceneRowIsFailed(row);
+  const hasRender = sceneRowHasRender(row);
+  const src = hasRender ? preview.srcFor(row.scene_id) : null;
+  return (
+    <li
+      data-scene={row.scene_id}
+      data-scene-row-tool={row.tool ?? ""}
+      data-scene-row-name={row.scene ?? ""}
+      data-scene-row-state={row.state ?? ""}
+      data-scene-row-objects={row.objects ?? ""}
+      data-scene-row-mismatch={row.mismatch ?? ""}
+      data-scene-row-verified={sceneRowIsVerified(row) ? "yes" : "no"}
+      data-scene-row-unavailable={unavailable ? "yes" : "no"}
+      data-scene-row-failed={failed ? "yes" : "no"}
+      data-scene-row-has-render={hasRender ? "yes" : "no"}
+    >
+      <div className="event-row">
+        <span>{row.scene ?? "sahne adı bildirilmedi"}</span>
+        <span className="event-when">{when(row.updated_at ?? row.created_at, now)}</span>
+      </div>
+      {/* The tool and the step, with the object count beside `verified` and
+          the object beside `mismatch` — each as the row says it, or the
+          statement that it did not. */}
+      <span className="muted" data-scene-line>
+        {sceneRowLine(row)}
+      </span>
+      {/* What the last inspection called the objects it read. Drawn only for
+          a row that HAD an inspection (it counted): "never read" and "read
+          and named none" are different answers, and only the second gets a line. */}
+      {row.objects !== null && (
+        <span className="muted" data-scene-objects={row.object_names.length}>
+          {sceneObjectNamesLine(row)}
+        </span>
+      )}
+      {/* The run's own sentence — for Unity, the licensing client's words —
+          beside the two steps that have one to give. */}
+      {(unavailable || failed) && row.error_message && (
+        <span className="muted" data-scene-error-message>
+          {row.error_message}
+        </span>
+      )}
+      {/* The last render, fetched through the owner session and shown only
+          because the ROW says one exists. Until the bytes are in hand the
+          row says that, rather than drawing a picture that is not there. */}
+      {hasRender &&
+        (src ? (
+          <SceneRenderImage row={row} src={src} />
+        ) : (
+          <span className="muted" data-scene-render-pending>
+            {SCENE_RENDER_PENDING}
+          </span>
+        ))}
+      <SceneControls row={row} control={control} />
+    </li>
+  );
+}
+
+/**
+ * 3B Sahne (M25 spec §6): what 3D creation is doing, from the bus, and the
+ * scenes that exist, from `/v1/scenes` — each scene with its tool, its
+ * name, the step it is on, how many objects the last INSPECTION read and
+ * what they were called, the object a comparison found wrong, and the last
+ * render as an image fetched through the owner session; "Render al" and
+ * "Sahneyi oku" ask the Cloud Core for the device's bounded `scene.render`
+ * / `scene.inspect`.
+ *
+ * Two sources, kept apart because they answer different questions. The bus
+ * line is "what is happening now" and decays like every bus claim; the rows
+ * are "what exists" and are the route's. Nothing here opens an editor,
+ * renders a pixel or writes a plan: a scene is verified because its row
+ * says the read-back matched, an image is drawn because the row says a
+ * render exists, a chip is drawn because there is a tool to ask — and the
+ * Cloud Core still refuses on its own terms. An `unavailable` row gets no
+ * chips at all and says why in the tool's own words: ADR-0088 §5's honest
+ * form, never a control over an editor this machine cannot drive. The
+ * empty sentence is the route's answer, never the bus's silence — and
+ * "henüz yok" (no route on this Cloud Core) is neither.
+ */
+export function ScenesPanel({
+  scenes,
+  truth,
+  now,
+  control,
+  preview,
+}: {
+  scenes: Loaded<SceneRow[]>;
+  truth: CoreTruth;
+  now: number;
+  control: SceneControlProps;
+  preview: ScenePreviewProps;
+}) {
+  const view = sceneView(sceneClaim(truth, now));
+  const told = view.lastKnown !== null;
+  const rows = scenes.kind === "ok" ? scenes.value : [];
+  const shown = rows.slice(0, SCENE_ROWS_SHOWN);
+  const verified = rows.filter(sceneRowIsVerified).length;
+  const attention = rows.some((row) => sceneRowIsMismatch(row) || sceneRowIsFailed(row));
+  return (
+    <section
+      className={`panel ${attention ? "attention" : ""}`}
+      data-panel="scenes"
+      data-panel-state={scenes.kind}
+      data-panel-empty={scenes.kind === "ok" ? (rows.length ? "no" : "yes") : ""}
+      data-scene-stage={view.stage}
+      data-scene-last-known={view.lastKnown ?? ""}
+      data-scene-posture={told ? view.posture : ""}
+      data-scenes-verified={scenes.kind === "ok" ? verified : ""}
+    >
+      <h3 className="panel-title">
+        <span>3B Sahne</span>
+        {scenes.kind === "ok" && (
+          <span className="panel-count" data-panel-badge>
+            {verified > 0 ? `${verified} doğrulandı / ${rows.length}` : `${rows.length}`}
+          </span>
+        )}
+      </h3>
+      {/* The bus: the caption the Core draws, with its age; last-known when it aged out. */}
+      <p
+        className={told ? "muted" : "panel-empty"}
+        data-scene-activity={told ? view.stage : "untold"}
+        data-scene-caption={told ? view.caption : ""}
+      >
+        {told ? `${view.stage === "none" ? "Son bilinen: " : ""}${view.caption} · ${formatAge(view.ageMs)}` : SCENE_UNTOLD}
+      </p>
+      <LoadedNotice state={scenes} />
+      {scenes.kind === "ok" && rows.length === 0 && (
+        <p className="panel-empty" data-panel-empty-text>
+          {SCENE_EMPTY}
+        </p>
+      )}
+      {shown.length > 0 && (
+        <ul>
+          {shown.map((row) => (
+            <SceneRowItem key={row.scene_id} row={row} now={now} control={control} preview={preview} />
+          ))}
+        </ul>
+      )}
+      {preview.notice && (
+        <p className="panel-unknown" data-scene-render-notice>
+          {preview.notice}
+        </p>
+      )}
+      {control.outcome && (
+        <p
+          className={`approval-outcome ${control.outcome.ok ? "muted" : "panel-unknown"}`}
+          data-scene-outcome={control.outcome.action}
+          data-scene-ok={control.outcome.ok ? "yes" : "no"}
+          data-scene-target={control.outcome.id}
+        >
+          {control.outcome.text}
+          {` · ${formatAge(Math.max(0, now - control.outcome.at))}`}
+        </p>
+      )}
+      <p className="muted" data-scene-note>
+        {SCENE_NOTE}
       </p>
     </section>
   );

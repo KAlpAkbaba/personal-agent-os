@@ -19,10 +19,18 @@ import {
   GENESIS_CAPTION_BARE,
   GENESIS_STATE_LABEL,
   MAIL_CAPTION_BARE,
+  SCENE_CAPTION_BARE,
 } from "./contract";
 import type { DocumentRef, KnownUiState } from "./contract";
 import { type AppFacts, type AppStage, appTestsPhrase } from "./apps";
 import { type GenesisFacts, type GenesisStage, genesisStatePhrase } from "./genesis";
+import {
+  SCENE_STATE_LABEL,
+  type SceneFacts,
+  type SceneStage,
+  sceneStatePhrase,
+  sceneToolWord,
+} from "./scenes";
 import { type ArtifactFacts, type ArtifactStage, artifactFormatLabel } from "./artifacts";
 import {
   CALENDAR_PROPOSAL_STATE_LABEL,
@@ -72,6 +80,7 @@ export const KIND_LABEL: Record<CoreVisualKind, string> = {
   artifact_factory: ARTIFACT_CAPTION_BARE,
   app_factory: APP_CAPTION_BARE,
   capability_genesis: GENESIS_CAPTION_BARE,
+  scene_activity: SCENE_CAPTION_BARE,
 };
 
 /**
@@ -142,6 +151,13 @@ export const KIND_DETAIL: Record<CoreVisualKind, string> = {
   // capability means (ADR-0087) and that nothing here says it on its own.
   capability_genesis:
     "Sahibin istediği şey için bir yetenek yok; arayüzü araştırılıyor, bağdaştırıcısı yazılıyor, çalışan uygulamaya karşı sınanıyor, gerekirse sahip onayı bekleniyor, kaydediliyor, kullanılıyor ve sonuç uygulamadan okunarak doğrulanıyor; yetenek, durum ve hata sınıfı yalnızca yayınlandığı kadar söylenir. Doğrulanmamış bir yetenek yapıldı sayılmaz. İlerleme bildirilmez.",
+  // M25: a 3D scene is being built or changed through the tool's OWN
+  // scripting interface, rendered, and then READ BACK from the tool and
+  // compared with the plan. The sentence says what "done" means for a scene
+  // (ADR-0088 §4) and that a tool that cannot be driven is said so rather
+  // than claimed (§5) — nothing here controls a mouse in an editor.
+  scene_activity:
+    "Sahip için bir 3B sahne, aracın kendi betik arayüzüyle kuruluyor, değiştiriliyor, render alınıyor ya da araçtan geri okunuyor; araç, sahne, adım ve nesne sayısı yalnızca yayınlandığı kadar söylenir. Geri okunup istenenle karşılaştırılmamış bir sahne doğrulanmış sayılmaz; sürülemeyen bir araç için denetim kurulmaz, yapılamadığı söylenir. İlerleme bildirilmez.",
 };
 
 /**
@@ -296,6 +312,10 @@ export const STATE_LABEL: Record<KnownUiState, string> = {
   // whole run, from "yetenek yok" to "doğrulandı", and the run's state is
   // said only from its published metadata.
   "capability.genesis": GENESIS_CAPTION_BARE,
+  // v10 — 3D creation (M25). No verb, for v9's reason: one token covers the
+  // whole loop from "sahne kuruluyor" to "doğrulandı", and the step is said
+  // only from its published metadata.
+  "scene.activity": SCENE_CAPTION_BARE,
 };
 
 export function stateLabel(state: string): string {
@@ -323,6 +343,7 @@ export const SUBSYSTEM_LABEL: Record<string, string> = {
   artifacts: "Üretim",
   apps: "Uygulamalar",
   genesis: "Yeni yetenek",
+  creative3d: "3B sahne",
 };
 
 export function subsystemLabel(subsystem: string): string {
@@ -475,6 +496,7 @@ const CONTRACT_ADDITIONS: Record<number, string> = {
   7: "dosya üretim durumu",
   8: "uygulama üretim durumu",
   9: "yeni yetenek durumu",
+  10: "3B sahne durumu",
 };
 
 /**
@@ -785,4 +807,61 @@ export function genesisFactsLine(facts: GenesisFacts): string {
 /** The state with its failure class, for a row or a caption, or the statement that none came. */
 export function genesisStateLine(facts: Pick<GenesisFacts, "state" | "stateToken" | "errorClass">): string {
   return genesisStatePhrase(facts) ?? genesisStateWord(facts.stateToken);
+}
+
+// -------------------------------------------------------- v10: 3D creation
+
+export const SCENE_LABEL: Record<SceneStage, string> = {
+  active: SCENE_CAPTION_BARE,
+  none: "Süren bir 3B sahne işi yok",
+};
+
+/** The 3B Sahne panel's empty sentence (M25 spec §6): the list route answered, and holds no scene. */
+export const SCENE_EMPTY = "Henüz bir sahne yapılmadı.";
+
+/** The 3B Sahne panel's line when the bus never carried a scene event: not "no scenes", "nothing reported". */
+export const SCENE_UNTOLD = "3B sahne etkinliği bildirilmedi.";
+
+/** Said where a scene's object count was never read back: not "0 nesne", which nobody counted. */
+export const SCENE_OBJECTS_UNTOLD = "nesne sayısı bildirilmedi";
+
+/** Said where an inspection named no objects at all: nothing was listed, which is not "no objects". */
+export const SCENE_NO_OBJECT_NAMES = "nesne adı bildirilmedi";
+
+/**
+ * A scene step token as one word: the spec's word for the eight this build
+ * knows, the token verbatim for one it does not (still a published fact),
+ * and the statement that none came.
+ */
+export function sceneStateWord(token: string | null): string {
+  if (token === null) return "durum bildirilmedi";
+  return (SCENE_STATE_LABEL as Record<string, string>)[token] ?? token;
+}
+
+/**
+ * The published scene facts on one line, each one either what the publisher
+ * sent or the statement that it did not send it. The object count is
+ * printed whenever the inspection counted, and its absence said only beside
+ * the two states that rest on a read-back (`verified`, `mismatch`) — a
+ * scene that is still rendering has nothing read back yet, and "nesne
+ * sayısı bildirilmedi" there would be noise rather than a fact.
+ */
+export function sceneFactsLine(facts: SceneFacts): string {
+  const tool = sceneToolWord(facts.toolToken);
+  const parts = [
+    tool ? `araç: ${tool}` : "araç bildirilmedi",
+    facts.scene ? `sahne: ${facts.scene}` : "sahne bildirilmedi",
+    facts.stateToken ? `durum: ${sceneStateWord(facts.stateToken)}` : "durum bildirilmedi",
+  ];
+  if (facts.objects !== null) parts.push(`nesneler: ${facts.objects}`);
+  else if (facts.state === "verified" || facts.state === "mismatch") parts.push(SCENE_OBJECTS_UNTOLD);
+  return parts.join(" · ");
+}
+
+/** The step with everything the publisher attached to it, for a row or a caption, or the statement that none came. */
+export function sceneStateLine(
+  facts: Pick<SceneFacts, "state" | "stateToken" | "tool" | "objects">,
+  object: string | null = null,
+): string {
+  return sceneStatePhrase(facts, object) ?? sceneStateWord(facts.stateToken);
 }

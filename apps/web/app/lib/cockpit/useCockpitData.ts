@@ -55,6 +55,7 @@ import { type PendingDraft, type PendingProposal, fetchPendingDrafts, fetchPendi
 import { type AppProjectRow, fetchApps } from "./apps";
 import { type ArtifactRow, fetchArtifacts } from "./artifacts";
 import { type GenesisRunRow, fetchGenesisRuns } from "./genesis";
+import { type SceneRow, fetchScenes } from "./scenes";
 
 const POLL_VISIBLE_MS = 15_000;
 
@@ -114,6 +115,14 @@ export type CockpitData = {
    * panel says in words. The run's transitions are on the bus, not here.
    */
   genesisRuns: Loaded<GenesisRunRow[]>;
+  /**
+   * M25 §6: the 3D scenes, from `/v1/scenes`, each with its tool, its step,
+   * what the last inspection read back and whether a render exists. The
+   * Cloud Core half lands on a parallel track (ADR-0088 §8); until it does
+   * the route answers "absent", which the panel says in words. The runs
+   * themselves are on the bus, not here.
+   */
+  scenes: Loaded<SceneRow[]>;
 };
 
 const INITIAL: CockpitData = {
@@ -138,6 +147,7 @@ const INITIAL: CockpitData = {
   artifacts: { kind: "loading" },
   apps: { kind: "loading" },
   genesisRuns: { kind: "loading" },
+  scenes: { kind: "loading" },
 };
 
 export function useCockpitData(enabled = true): { data: CockpitData; refresh: () => void } {
@@ -171,6 +181,7 @@ export function useCockpitData(enabled = true): { data: CockpitData; refresh: ()
         artifacts,
         apps,
         genesisRuns,
+        scenes,
       ] = await Promise.all([
         fetchResearchTasks(),
         // Same refresh, no extra timer: the focus changes when the list does.
@@ -194,6 +205,7 @@ export function useCockpitData(enabled = true): { data: CockpitData; refresh: ()
         fetchArtifacts(),
         fetchApps(),
         fetchGenesisRuns(),
+        fetchScenes(),
       ]);
       if (stopped.current) return;
       setData({
@@ -218,6 +230,7 @@ export function useCockpitData(enabled = true): { data: CockpitData; refresh: ()
         artifacts,
         apps,
         genesisRuns,
+        scenes,
       });
     } finally {
       inFlight.current = false;

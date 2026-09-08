@@ -33,6 +33,7 @@ import {
   mailFactsLine,
   operatorErrorLine,
   operatorFactsLine,
+  sceneFactsLine,
   stateLabel,
   subsystemLabel,
 } from "../lib/uistate/labels";
@@ -41,6 +42,7 @@ import { isOperatorState } from "../lib/uistate/contract";
 import { documentPartPhrase } from "../lib/uistate/documents";
 import { genesisPosture } from "../lib/uistate/genesis";
 import { operatorPosition } from "../lib/uistate/operator";
+import { scenePosture, sceneToolWord } from "../lib/uistate/scenes";
 import type { VisualIntent } from "../lib/uistate/visual";
 import { isLive } from "../lib/uistate/visual";
 
@@ -95,6 +97,11 @@ export default function StateReadout({
       // tell "onay bekliyor" from "bağdaştırıcı yazılıyor" in the compact
       // form too, without reading the geometry. Absent for every other kind.
       data-genesis-posture={intent.genesis ? genesisPosture(intent.genesis.state) : undefined}
+      // M25: which of the seven postures the 3D body takes, from the
+      // published step alone — on the root so a harness can tell "render
+      // alınıyor" from "sahne okunuyor", and above all an `unavailable` from
+      // a failure, in the compact form too. Absent for every other kind.
+      data-scene-posture={intent.scene ? scenePosture(intent.scene.state) : undefined}
     >
       <h2 className="core-headline">{KIND_LABEL[intent.kind]}</h2>
 
@@ -308,6 +315,34 @@ export default function StateReadout({
           data-genesis-error-class={intent.genesis.errorClass ?? ""}
         >
           {genesisFactsLine(intent.genesis)}
+        </p>
+      )}
+
+      {/*
+        M25: 3D creation's published facts — the tool being driven, the
+        scene, the step, and the object count the INSPECTION read — each the
+        token the publisher sent or the statement that none came; present on
+        the live posture and on its last-known shape alike.
+        `data-scene-unavailable` marks the one step the Core draws as a tool
+        that could not be driven at all, so a harness can tell it from a
+        failure without reading the geometry (ADR-0088 §5). The compact
+        caption already carries the same sentence as `label`, so the long
+        line is the full form's alone. No bar: a render of unknown length
+        gets none. No control here either — "Render al" and "Sahneyi oku" are
+        the Cockpit's, built from the row on the list route.
+      */}
+      {intent.scene && !compact && (
+        <p
+          className="muted core-count"
+          data-scene-facts
+          data-scene-tool={intent.scene.toolToken ?? ""}
+          data-scene-tool-label={sceneToolWord(intent.scene.toolToken) ?? ""}
+          data-scene-name={intent.scene.scene ?? ""}
+          data-scene-state={intent.scene.stateToken ?? ""}
+          data-scene-objects={intent.scene.objects ?? ""}
+          data-scene-unavailable={scenePosture(intent.scene.state) === "unavailable" ? "yes" : "no"}
+        >
+          {sceneFactsLine(intent.scene)}
         </p>
       )}
 
