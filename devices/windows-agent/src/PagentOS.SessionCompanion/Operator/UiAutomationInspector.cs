@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Text.Json.Nodes;
 using System.Windows.Automation;
@@ -148,7 +149,20 @@ public sealed class UiAutomationInspector
     {
         budget ??= new WalkBudget(MaxNodes);
         budget.Take();
-        var info = element.Current;
+        AutomationElement.AutomationElementInformation info;
+        try
+        {
+            info = element.Current;
+        }
+        catch (Exception ex) when (IsElementGone(ex))
+        {
+            // The element went away between the walk finding it and this read - the ordinary
+            // case when a dialog is being dismissed. Say it in the shape every caller here
+            // already handles (``OperatorCapabilities.UiInvoke`` catches exactly this after
+            // an invoke that closed its own dialog), never as a catastrophic COM failure.
+            throw new ElementNotAvailableException();
+        }
+
         var node = new JsonObject
         {
             ["automation_id"] = info.AutomationId ?? string.Empty,
@@ -174,14 +188,24 @@ public sealed class UiAutomationInspector
             }
         }
 
-        if (element.TryGetCurrentPattern(SelectionItemPattern.Pattern, out var selectionItem))
+        var selected = ReadOrGone<bool?>(
+            () => element.TryGetCurrentPattern(SelectionItemPattern.Pattern, out var pattern)
+                ? ((SelectionItemPattern)pattern).Current.IsSelected
+                : null,
+            null);
+        if (selected is not null)
         {
-            node["selected"] = ((SelectionItemPattern)selectionItem).Current.IsSelected;
+            node["selected"] = selected.Value;
         }
 
-        if (element.TryGetCurrentPattern(TogglePattern.Pattern, out var toggle))
+        var toggleState = ReadOrGone<string?>(
+            () => element.TryGetCurrentPattern(TogglePattern.Pattern, out var pattern)
+                ? ((TogglePattern)pattern).Current.ToggleState.ToString().ToLowerInvariant()
+                : null,
+            null);
+        if (toggleState is not null)
         {
-            node["toggle_state"] = ((TogglePattern)toggle).Current.ToggleState.ToString().ToLowerInvariant();
+            node["toggle_state"] = toggleState;
         }
 
         if (includeChildren)
@@ -193,7 +217,16 @@ public sealed class UiAutomationInspector
                 var child = SafeFirstChild(walker, element);
                 while (child is not null && !budget.Exhausted)
                 {
-                    children.Add(Describe(child, includeChildren: true, depth - 1, budget));
+                    try
+                    {
+                        children.Add(Describe(child, includeChildren: true, depth - 1, budget));
+                    }
+                    catch (ElementNotAvailableException)
+                    {
+                        // A child that closed while we walked its siblings is simply not in
+                        // the description; the rest of the window is still worth reporting.
+                    }
+
                     child = SafeNextSibling(walker, child);
                 }
             }
@@ -224,7 +257,7 @@ public sealed class UiAutomationInspector
                 return ((TextPattern)textPattern).DocumentRange.GetText(-1);
             }
         }
-        catch (ElementNotAvailableException)
+        catch (Exception ex) when (IsElementGone(ex))
         {
             return null;
         }
@@ -478,13 +511,52 @@ public sealed class UiAutomationInspector
         }
     }
 
+    /// <summary>HRESULTs UI Automation raises when the element (or the process behind it)
+    /// has gone away between one call and the next. Kept narrow ON PURPOSE: an unrelated COM
+    /// failure must still surface, because swallowing it would hide a real defect.</summary>
+    private const int UiaElementNotAvailable = unchecked((int)0x80040201);
+    private const int Unexpected = unchecked((int)0x8000FFFF);         // E_UNEXPECTED
+    private const int RpcDisconnected = unchecked((int)0x80010108);    // RPC_E_DISCONNECTED
+    private const int RpcServerUnavailable = unchecked((int)0x800706BA);
+
+    /// <summary>
+    /// Did this element just go away? UI Automation says so in two shapes - the typed
+    /// <see cref="ElementNotAvailableException"/>, and a raw <see cref="COMException"/>
+    /// carrying one of the HRESULTs above. The runner met the second shape on 2026-09-08
+    /// while a save dialog was being dismissed, and a capability that already expected the
+    /// first failed catastrophically on it. One predicate, both shapes.
+    /// </summary>
+    public static bool IsElementGone(Exception exception) => exception switch
+    {
+        ElementNotAvailableException => true,
+        COMException com => com.HResult is UiaElementNotAvailable
+            or Unexpected
+            or RpcDisconnected
+            or RpcServerUnavailable,
+        _ => false,
+    };
+
+    /// <summary>Reads one property of a live element, answering <paramref name="fallback"/>
+    /// when the element vanished mid-read rather than failing the whole description.</summary>
+    private static T ReadOrGone<T>(Func<T> read, T fallback)
+    {
+        try
+        {
+            return read();
+        }
+        catch (Exception ex) when (IsElementGone(ex))
+        {
+            return fallback;
+        }
+    }
+
     private static AutomationElement? SafeFirstChild(TreeWalker walker, AutomationElement element)
     {
         try
         {
             return walker.GetFirstChild(element);
         }
-        catch (ElementNotAvailableException)
+        catch (Exception ex) when (IsElementGone(ex))
         {
             return null;
         }
@@ -496,7 +568,7 @@ public sealed class UiAutomationInspector
         {
             return walker.GetNextSibling(element);
         }
-        catch (ElementNotAvailableException)
+        catch (Exception ex) when (IsElementGone(ex))
         {
             return null;
         }
