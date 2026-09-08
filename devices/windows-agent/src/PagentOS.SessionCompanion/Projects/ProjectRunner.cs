@@ -730,7 +730,7 @@ public sealed class ProjectRunner : IDisposable
                     throw;
                 }
 
-                var tail = ComposeTail(run.LogTail, command, arguments);
+                var tail = ComposeTail(run.LogTail, command, arguments, project.Folder);
                 throw new CapabilityException(
                     ErrorClasses.Timeout,
                     $"'{project.Slug}' ran past {wait.TotalSeconds:F0} s under {command.Runtime}; the job was ended; log tail: {Trim(tail, 1200)}",
@@ -749,7 +749,7 @@ public sealed class ProjectRunner : IDisposable
             run.Job?.Terminate();
             await run.Log.CompleteAsync().ConfigureAwait(false);
 
-            var logTail = ComposeTail(run.LogTail, command, arguments);
+            var logTail = ComposeTail(run.LogTail, command, arguments, project.Folder);
             _logger.LogInformation("project.run (batch {Runtime}) {Slug} exit={Exit} seconds={Seconds}", command.Runtime, project.Slug, exitCode, stopwatch.Elapsed.TotalSeconds);
             RequireLicence(command.Runtime, project.Slug, exitCode, logTail);
             return new BatchOutcome(command.Runtime, exitCode, stopwatch.Elapsed.TotalSeconds, logTail, run.LogTruncated, logPath, run.Pid);
@@ -817,7 +817,7 @@ public sealed class ProjectRunner : IDisposable
     /// there and next to nothing to stdout, so without this the licence refusal would be
     /// invisible to the caller.
     /// </summary>
-    private static string ComposeTail(string streams, ProjectCommand command, IReadOnlyList<string> arguments)
+    private static string ComposeTail(string streams, ProjectCommand command, IReadOnlyList<string> arguments, string workingDirectory)
     {
         if (command.Runtime != ProjectRuntime.Unity)
         {
@@ -830,7 +830,9 @@ public sealed class ProjectRunner : IDisposable
             return streams;
         }
 
-        var fileTail = ReadTail(arguments[index + 1], TailChars);
+        // The -logFile argument is RELATIVE (the allowlist admits nothing else) and the
+        // child's working directory is the project folder, so that is where it landed.
+        var fileTail = ReadTail(Path.Combine(workingDirectory, arguments[index + 1]), TailChars);
         if (string.IsNullOrEmpty(fileTail))
         {
             return streams;

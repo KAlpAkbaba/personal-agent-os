@@ -33,6 +33,9 @@ public sealed class ProjectRoots
     /// <summary>How many entries of the Projects root a lookup by id will read markers from.</summary>
     public const int MaxScanEntries = 2000;
 
+    /// <summary>M25: how many missing directories above a root <see cref="RequireRoot"/> will create on the way to it (the 3D root needs one — its parent, the Projects root).</summary>
+    public const int MaxRootAncestors = 4;
+
     private const int MaxMarkerBytes = 64 * 1024;
 
     private static readonly Regex SlugPattern = new("^[a-z0-9][a-z0-9-]{0,63}$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -106,14 +109,40 @@ public sealed class ProjectRoots
                 throw DocumentErrors.Denied("the Projects root's name is taken by something that is not a directory; nothing was written");
             }
 
-            var parent = Path.GetDirectoryName(full);
-            var parentResolved = parent is null ? null : Roots.Confine(parent);
-            if (parentResolved is null || !Directory.Exists(parentResolved))
+            // The nearest ancestor that EXISTS must resolve inside the authorised roots; the
+            // missing directories between it and the root are then created, outermost first,
+            // each under a parent that was just resolved. M25 needs the walk: the 3D root's
+            // parent is the Projects root, which may not exist either the first time a 3D
+            // project is scaffolded, and a `<root>\3d` that could never be created would make
+            // every 3D run impossible on a fresh machine.
+            var missing = new List<string>();
+            var ancestor = Path.GetDirectoryName(full);
+            while (ancestor is not null && !Directory.Exists(ancestor) && missing.Count < MaxRootAncestors)
+            {
+                if (File.Exists(ancestor) || IsReparsePoint(ancestor))
+                {
+                    throw DocumentErrors.Denied("a directory above the Projects root's name is taken by something that is not a directory; nothing was written");
+                }
+
+                missing.Add(ancestor);
+                ancestor = Path.GetDirectoryName(ancestor);
+            }
+
+            var existing = ancestor is null ? null : Roots.Confine(ancestor);
+            if (existing is null || !Directory.Exists(existing))
             {
                 throw DocumentErrors.Denied(Refusal("the Projects root's parent"));
             }
 
-            Directory.CreateDirectory(Path.Combine(parentResolved, Path.GetFileName(full)));
+            var current = existing;
+            for (var i = missing.Count - 1; i >= 0; i--)
+            {
+                current = Path.Combine(current, Path.GetFileName(missing[i]));
+                Directory.CreateDirectory(current);
+                current = Roots.Confine(current) ?? throw DocumentErrors.Denied(Refusal("the Projects root's parent"));
+            }
+
+            Directory.CreateDirectory(Path.Combine(current, Path.GetFileName(full)));
         }
 
         var resolved = Roots.Confine(full) ?? throw DocumentErrors.Denied(Refusal("the Projects root"));

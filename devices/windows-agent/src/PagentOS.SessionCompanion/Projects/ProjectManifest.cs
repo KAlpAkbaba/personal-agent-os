@@ -189,10 +189,12 @@ public sealed class ProjectManifest
     private static int ReadPort(JsonObject manifest, ProjectScope scope)
     {
         var node = manifest["port"];
-        if (node is null && scope == ProjectScope.ThreeD)
+        if (scope == ProjectScope.ThreeD && (node is null || IsNoPort(node)))
         {
             // A batch run binds nothing. Requiring a port of a 3D manifest would be requiring
             // a number nothing ever checks, and every 3D project would have to invent one.
+            // The marker records what THIS parse produced, so the re-parse at run time must
+            // accept the absence back in the shape it wrote it (0 or the key gone).
             return NoPort;
         }
 
@@ -222,6 +224,13 @@ public sealed class ProjectManifest
 
         return (int)raw;
     }
+
+    /// <summary>M25: whether a <c>port</c> node is the "no port" a 3D manifest records (the number 0).</summary>
+    private static bool IsNoPort(JsonNode node)
+        => node is JsonValue value
+            && ((value.TryGetValue<int>(out var asInt) && asInt == NoPort)
+                || (value.TryGetValue<long>(out var asLong) && asLong == NoPort)
+                || (value.TryGetValue<double>(out var asDouble) && asDouble == NoPort));
 
     private static bool ManifestSaysLockfile(JsonObject manifest)
         => manifest["lockfile"]?.GetValueKind() == JsonValueKind.True;
@@ -350,13 +359,15 @@ public sealed class ProjectManifest
             case SceneCapabilityNames.UnityProgram when scope != ProjectScope.ThreeD:
                 throw Refuse(key, text, $"the 3D runtimes run only under the 3D root ('{SceneCapabilityNames.Root3dFolderName}'), never in a project of the Projects root");
 
+            // blender -b <scene.blend> --python <driver.py> -- <plan.json> <out.json>
+            //    0     1       2           3         4      5      6           7
             case SceneCapabilityNames.BlenderProgram when tokens.Length == 8
                 && tokens[1] == "-b"
-                && tokens[4] == "--python"
+                && tokens[3] == "--python"
                 && tokens[5] == "--":
                 {
                     var scene = InsideProject(key, text, tokens[2], SceneCapabilityNames.BlendExtension, "the scene file");
-                    var driver = InsideProject(key, text, tokens[3], SceneCapabilityNames.DriverExtension, "the driver");
+                    var driver = InsideProject(key, text, tokens[4], SceneCapabilityNames.DriverExtension, "the driver");
                     var plan = InsideProject(key, text, tokens[6], SceneCapabilityNames.JsonExtension, "the plan");
                     var inspection = InsideProject(key, text, tokens[7], SceneCapabilityNames.JsonExtension, "the inspection");
                     return new ProjectCommand(

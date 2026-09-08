@@ -151,6 +151,12 @@ public static class SceneInspection
     /// (every junction and link followed) and required to lie inside the folder. A path the
     /// inspection invented that points anywhere else is <c>permission_denied</c> and nothing
     /// is opened.
+    ///
+    /// The DIRECTORY is what is resolved, so a file that is not there yet still gets a path
+    /// and the caller can say "there is no inspection yet" rather than "you may not look" —
+    /// the two are different answers and the Cloud Core needs to tell them apart. When the
+    /// file does exist it is resolved as well, so a link planted where the render belongs is
+    /// followed and refused before a byte is read.
     /// </summary>
     public static string Confine(string projectFolder, string relative, string what)
     {
@@ -165,14 +171,26 @@ public static class SceneInspection
         }
 
         var candidate = Path.Combine(projectFolder, normalised.Replace('/', Path.DirectorySeparatorChar));
-        var resolved = AuthorisedRoots.ResolveFinal(candidate);
-        if (resolved is null || !AuthorisedRoots.IsWithin(resolved, projectFolder))
+        var directory = Path.GetDirectoryName(candidate);
+        var resolvedDirectory = directory is null ? null : AuthorisedRoots.ResolveFinal(directory);
+        if (resolvedDirectory is null || !Directory.Exists(resolvedDirectory) || !AuthorisedRoots.IsWithin(resolvedDirectory, projectFolder))
         {
-            throw DocumentErrors.Denied($"{what} does not resolve to a path inside the project folder; every junction and link is followed before the comparison; nothing was read");
+            throw Outside(what);
         }
 
-        return resolved;
+        var resolved = Path.Combine(resolvedDirectory, Path.GetFileName(candidate));
+        var final = AuthorisedRoots.ResolveFinal(resolved);
+        if (final is null)
+        {
+            // Nothing opens there yet: the path is inside, and the caller reports the absence.
+            return resolved;
+        }
+
+        return AuthorisedRoots.IsWithin(final, projectFolder) ? final : throw Outside(what);
     }
+
+    private static CapabilityException Outside(string what)
+        => DocumentErrors.Denied($"{what} does not resolve to a path inside the project folder; every junction and link is followed before the comparison; nothing was read");
 
     private static string? StringOf(JsonObject node, string key)
         => node[key]?.GetValueKind() == JsonValueKind.String ? node[key]!.GetValue<string>() : null;
