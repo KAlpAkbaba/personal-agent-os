@@ -30,6 +30,7 @@ from app.ledger.vocabulary import (
     SUBSYSTEM_VOICE,
 )
 from app.logging import get_logger
+from app.monotonic_clock import SESSION_CLOCK
 from app.narration import service as narration_service
 from app.narration.commands import NarrationState, State
 from app.uistate import UiState
@@ -343,7 +344,7 @@ def create_session(
 ) -> tuple[RealtimeSessionRow, EphemeralCredential, dict[str, Any]]:
     """Spec §4 step 1. Returns the row, the one-time credential and the
     client payload (session id, provider, transport, tools, instructions)."""
-    now = utcnow()
+    now = SESSION_CLOCK.next()  # never ties with the previous session (app.monotonic_clock)
     if narration_session_id is not None:
         if narration_service.get_session(db, narration_session_id) is None:
             raise VoiceError(
