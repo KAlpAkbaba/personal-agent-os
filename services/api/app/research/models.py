@@ -10,6 +10,9 @@ that share similar names (``ResearchReport`` the dataclass vs.
 
 from __future__ import annotations
 
+import os
+import threading
+import time
 import uuid
 from datetime import datetime
 from typing import Any
@@ -177,6 +180,50 @@ def _in_list(column: str, values: tuple[str, ...]) -> str:
     return f"{column} IN ({joined})"
 
 
+#: ``ResearchFocusRow.id`` is TIME-ORDERED (an RFC 9562 UUIDv7 with a per-process
+#: counter), never random. The stack reads ``ORDER BY selected_at, id``; with a random v4
+#: id that second key was a lottery, and two rows stamped with one identical instant — the
+#: completion hook and the announcer on Windows' coarse wall clock — came out in random
+#: order (the flaky ``test_voice_research_followup`` binding, 2026-09-08).
+#: ``app.research.focus.set_focus`` already refuses to write a tie (a new row's instant is
+#: pushed past the newest row's); this is the guard for a tie that is nevertheless IN the
+#: table — rows written before that rule, or two writers in concurrent transactions. Two
+#: ids made in the same millisecond differ in the counter, so insertion order IS id order
+#: and the later act reads as the more recent one. Hex-string (SQLite) and native
+#: (PostgreSQL) uuid columns both sort these bytewise, which is numeric order.
+_focus_id_lock = threading.Lock()
+_focus_id_last_ms = 0
+_focus_id_counter = 0
+
+
+def focus_row_id() -> uuid.UUID:
+    """A UUIDv7: 48 bits of unix milliseconds, a 12-bit in-millisecond counter, 62 random
+    bits. Strictly increasing within this process (a clock that steps back holds the last
+    millisecond and counts on); millisecond-ordered across processes."""
+    global _focus_id_last_ms, _focus_id_counter
+    with _focus_id_lock:
+        ms = time.time_ns() // 1_000_000
+        if ms <= _focus_id_last_ms:
+            ms = _focus_id_last_ms
+            _focus_id_counter += 1
+            if _focus_id_counter > 0xFFF:  # the counter wrapped: step the millisecond
+                ms += 1
+                _focus_id_counter = 0
+        else:
+            _focus_id_counter = 0
+        _focus_id_last_ms = ms
+        counter = _focus_id_counter
+    rand_b = int.from_bytes(os.urandom(8), "big") & ((1 << 62) - 1)
+    value = (
+        ((ms & ((1 << 48) - 1)) << 80)
+        | (0x7 << 76)  # version
+        | (counter << 64)  # rand_a, used as the monotonic counter (RFC 9562 §6.2 method 1)
+        | (0b10 << 62)  # variant
+        | rand_b
+    )
+    return uuid.UUID(int=value)
+
+
 class ResearchFocusRow(Base):
     """One entry of the owner's research focus stack (docs/DECISIONS.md ADR-0076).
 
@@ -195,7 +242,8 @@ class ResearchFocusRow(Base):
         Index("ix_research_focus_owner_selected_at", "owner_id", "selected_at"),
     )
 
-    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    #: Time-ordered on purpose (see ``focus_row_id``): the stack's tiebreak key.
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=focus_row_id)
     owner_id: Mapped[str] = mapped_column(String(64), nullable=False, default=OWNER_ID)
     #: The research task id — the identity. Never a title: two runs may share one
     #: (the owner's 2026-09-06 record has exactly that pair).

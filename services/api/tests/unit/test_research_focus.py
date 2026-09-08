@@ -1058,3 +1058,99 @@ def test_two_writers_with_one_tied_explicit_moment_keep_the_later_act_current(
         assert current.source_of_focus == FOCUS_RESULT_JUST_SPOKEN
         stack = focus_module.focus_stack(db, limit=2)
         assert stack[0].selected_at > stack[1].selected_at
+
+
+def test_two_rows_on_one_identical_instant_come_out_in_insertion_order(
+    wired, two_same_title
+) -> None:
+    """The read side's own guard. ``set_focus`` never writes a tie, but a tie can still be
+    IN the table (rows from before that rule; two writers in concurrent transactions), and
+    then the stack's second key - the row id - decides. That id is time-ordered, so the
+    row written last is the row read first. With a random id this was a coin toss per
+    pair; ten pairs, alternating which job comes last, leave luck no room."""
+    from app.research import focus as focus_module
+    from app.research.models import (
+        FOCUS_RESEARCH_JUST_COMPLETED,
+        FOCUS_RESULT_JUST_SPOKEN,
+        OWNER_ID,
+    )
+
+    _client, runtime, _sideband, _artifacts = wired
+    (a_task, _a_art), (b_task, _b_art) = two_same_title
+    _clear_focus(runtime)
+    moment = datetime(2026, 9, 8, 12, 0, 0, tzinfo=UTC)
+    ids: list[uuid.UUID] = []
+    with runtime.session() as db:
+        for round_ in range(10):
+            first, last = (a_task, b_task) if round_ % 2 == 0 else (b_task, a_task)
+            for job, source in (
+                (first, FOCUS_RESEARCH_JUST_COMPLETED),
+                (last, FOCUS_RESULT_JUST_SPOKEN),
+            ):
+                row = ResearchFocusRow(
+                    owner_id=OWNER_ID,
+                    research_job_id=uuid.UUID(job),
+                    source_of_focus=source,
+                    selected_at=moment,  # identical on purpose: the tie set_focus refuses
+                )
+                db.add(row)
+                db.flush()
+                ids.append(row.id)
+            db.commit()
+            current = focus_module.current_focus(db)
+            assert current is not None and current.research_job_id == last, round_
+            assert current.source_of_focus == FOCUS_RESULT_JUST_SPOKEN, round_
+            previous = focus_module.previous_focus(db)
+            assert previous is not None and previous.research_job_id == first, round_
+    # Twenty rows on one instant: their ids read back in exactly the order they were made.
+    assert ids == sorted(ids)
+    assert all(i.version == 7 for i in ids)
+
+
+def test_a_completed_research_becomes_the_focus_on_a_frozen_clock(wired) -> None:
+    """``test_a_completed_research_becomes_the_focus`` with the wall clock standing still.
+
+    On Windows both writers of one run - the completion hook (this module's own clock) and
+    the announcer (the realtime service's ``utcnow``) - can read the same instant, and it
+    was a coin toss which of the two rows came out current. Here they are MADE to read one
+    instant, for A and then for B. The stack must still say B, spoken, then A; and the four
+    recorded instants must be strictly increasing in the order the acts happened."""
+    from app.voice.realtime_sessions import service as realtime_service
+
+    client, runtime, _sideband, _artifacts = wired
+    frozen = datetime.now(UTC).replace(microsecond=0)
+
+    class _Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None):  # noqa: D102 - the clock stands still
+            return frozen if tz is None else frozen.astimezone(tz)
+
+    base = frozen - timedelta(hours=2)
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(research_focus, "datetime", _Frozen)
+        mp.setattr(research_focus, "_focus_last_selected_at", None)
+        mp.setattr(realtime_service, "utcnow", lambda: frozen)
+        a_task, _a_art = _complete(client, runtime, topic=SHARED_TOPIC, marker="A", ready_at=base)
+        b_task, b_art = _complete(
+            client, runtime, topic=SHARED_TOPIC, marker="B", ready_at=base + timedelta(minutes=25)
+        )
+
+    focus = client.get("/v1/research/focus").json()
+    assert focus["current"]["research_job_id"] == b_task
+    assert focus["current"]["artifact_id"] == b_art
+    assert focus["current"]["source_of_focus"] == "result_just_spoken"
+    assert focus["previous"]["research_job_id"] == a_task
+    assert [e["research_job_id"] for e in focus["stack"]] == [b_task, a_task]
+
+    with runtime.session() as db:
+        rows = db.execute(select(ResearchFocusRow).order_by(ResearchFocusRow.id)).scalars().all()
+    assert [(str(r.research_job_id), r.source_of_focus) for r in rows] == [
+        (a_task, "research_just_completed"),
+        (a_task, "result_just_spoken"),
+        (b_task, "research_just_completed"),
+        (b_task, "result_just_spoken"),
+    ]
+    instants = [r.selected_at for r in rows]
+    assert instants == sorted(instants) and len(set(instants)) == 4
+    # Nudged apart by microseconds, never re-clocked: the acts still happened "now".
+    assert (instants[-1] - instants[0]).total_seconds() < 0.001

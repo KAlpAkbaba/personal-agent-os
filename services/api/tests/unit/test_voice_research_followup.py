@@ -588,3 +588,47 @@ def test_the_session_that_started_the_research_binds_to_its_own_run(wired) -> No
     assert refused["result"]["research_job_id"] == str(own_task_id)
     assert refused["result"]["binding_basis"] == "current_focus"
     assert refused["result"]["focus_source"] == "result_just_spoken"
+
+
+def test_the_completion_and_its_announcement_on_one_frozen_instant_bind_to_the_spoken_focus(
+    wired,
+) -> None:
+    """The flake behind the test above, forced instead of waited for.
+
+    Windows' wall clock is coarse enough that the completion hook (``update_run`` ->
+    ``note_research_ready``, the focus module's own clock) and the announcer
+    (``complete_tool_call_system``, the realtime service's ``utcnow``) read the SAME
+    instant. The stack then fell to a random row id, and about half the time "Teknik
+    anlat." came back bound with ``research_just_completed`` instead of the result the
+    owner had just heard. Both clocks are frozen to one instant here: the spoken focus
+    must be the current one, its recorded instant strictly after the completion's.
+    """
+    from app.research import focus as focus_module
+    from app.voice.realtime_sessions import service as realtime_service
+
+    client, runtime, _sideband, broker, artifacts = wired
+    _enroll_online_device(broker)
+    frozen = datetime.now(UTC).replace(microsecond=0)
+
+    class _Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None):  # noqa: D102 - the clock stands still
+            return frozen if tz is None else frozen.astimezone(tz)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(focus_module, "datetime", _Frozen)
+        mp.setattr(focus_module, "_focus_last_selected_at", None)
+        mp.setattr(realtime_service, "utcnow", lambda: frozen)
+        task_id, _artifact_id = _complete_a_research(client, runtime, artifacts)
+
+    with runtime.session() as db:
+        rows = db.execute(select(ResearchFocusRow).order_by(ResearchFocusRow.id)).scalars().all()
+    assert [r.source_of_focus for r in rows] == ["research_just_completed", "result_just_spoken"]
+    assert rows[1].selected_at > rows[0].selected_at  # the tie was refused at write time
+
+    sid = _create(client)  # a fresh session: the focus is the owner's, not the session's
+    _say(client, sid, "Teknik anlat.")
+    refused = _tool(client, sid, "c-start", "research.start", {"topic": "Teknik anlat."})
+    assert refused["result"]["research_job_id"] == task_id
+    assert refused["result"]["binding_basis"] == "current_focus"
+    assert refused["result"]["focus_source"] == "result_just_spoken"

@@ -237,11 +237,16 @@ def is_completed(db: Session, research_job_id: str | uuid.UUID) -> bool:
 #: "Most recent" must never fall back to a tiebreak on a random UUID. Two focus writes
 #: from the SAME process (a research completing and the announcer speaking it; two calls
 #: in one test) can land on the identical ``datetime.now(UTC)`` reading on a coarse wall
-#: clock (Windows' default resolution is far coarser than a microsecond) and the stack's
-#: order then depends on row ids that are not chronological — measured as a flaky
-#: ``test_voice_research_followup`` binding on 2026-09-08. A caller with a real moment
-#: passes ``now=`` and bypasses this; only the default path is nudged (the same rule as
-#: ``app.operator.focus._next_default_selected_at``).
+#: clock (Windows' default resolution is far coarser than a microsecond) — measured as a
+#: flaky ``test_voice_research_followup`` binding on 2026-09-08. Three guards, in order:
+#: the default clock below never hands out one instant twice in a process (the same rule
+#: as ``app.operator.focus._next_default_selected_at``; a caller with a real moment passes
+#: ``now=`` and skips only this one); ``_after_the_latest_row`` pushes a new row's instant
+#: past the newest row's in the table, whichever clock the caller used; and the row id is
+#: itself time-ordered (``ResearchFocusRow.id`` is a counter-backed UUIDv7,
+#: ``app.research.models.focus_row_id``), so a tie that is nevertheless in the table —
+#: rows from before these rules, two writers in concurrent transactions — reads as
+#: insertion order rather than as a coin toss.
 _focus_clock_lock = threading.Lock()
 _focus_last_selected_at: datetime | None = None
 
@@ -332,6 +337,9 @@ def _rows(db: Session, *, limit: int = _SCAN_ROWS) -> list[ResearchFocusRow]:
             db.execute(
                 select(ResearchFocusRow)
                 .where(ResearchFocusRow.owner_id == OWNER_ID)
+                # selected_at is strictly increasing per table (set_focus) and the id is
+                # a time-ordered UUIDv7: a tie, should one exist, still reads as the
+                # order the rows were written.
                 .order_by(ResearchFocusRow.selected_at.desc(), ResearchFocusRow.id.desc())
                 .limit(limit)
             )
