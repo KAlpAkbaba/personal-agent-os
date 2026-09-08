@@ -93,6 +93,57 @@ def _rfc822(
     return ("\r\n".join(lines)).encode("utf-8")
 
 
+def deeply_nested_rfc822(depth: int = 3000, *, uid: int = 299) -> bytes:
+    """A message ~``depth`` multipart levels deep, built ITERATIVELY (never a Python
+    recursive call of our own — that would just move the RecursionError into the test
+    fixture itself) around one ``text/plain`` leaf (M1, security review: the ~3000-level
+    nested message that used to raise ``RecursionError`` — verified live, and, on THIS
+    interpreter's default recursion limit, actually inside stdlib's own
+    ``email.message_from_bytes`` before ``Message.walk()`` is ever reached; either way,
+    ``app.mail.providers.ImapMailProvider._fetch_uids``'s per-message try/except is what
+    must isolate it, and this is the poisoned message that proves it)."""
+    inner = "Content-Type: text/plain\r\n\r\nleaf\r\n"
+    for i in range(depth, 0, -1):
+        boundary = f"depth{i}"
+        inner = (
+            f'Content-Type: multipart/mixed; boundary="{boundary}"\r\n\r\n'
+            f"--{boundary}\r\n"
+            f"{inner}"
+            f"--{boundary}--\r\n"
+        )
+    headers = (
+        f"Message-ID: <t{uid}@fixture.example>\r\n"
+        "From: Poison <poison@example.com>\r\n"
+        "To: Alp Akbaba <alp@example.com>\r\n"
+        "Subject: Deep\r\n"
+        "Date: Tue, 08 Sep 2026 10:00:00 +0300\r\n"
+        "MIME-Version: 1.0\r\n"
+    )
+    return (headers + inner).encode("utf-8")
+
+
+def folded_from_header_rfc822(*, uid: int = 298) -> bytes:
+    """L1 (security review): a folded ``From:`` header whose CONTINUATION LINE is itself
+    a bogus extra header — the kind of input that, unsanitised, could survive parsing and
+    reappear as a reply's own recipient. Built with a raw byte string (never through
+    ``email.message.EmailMessage``, which would refuse to construct a header containing a
+    line break in the first place — module docstring's own point is that this parser must
+    neutralise it on the READ side, before anything downstream ever sees it)."""
+    raw = (
+        f"Message-ID: <t{uid}@fixture.example>\r\n"
+        "From: Ali Yilmaz <ali.yilmaz@example.com>\r\n"
+        " X-Injected: evil@attacker.example\r\n"
+        "To: Alp Akbaba <alp@example.com>\r\n"
+        "Subject: Merhaba\r\n"
+        "Date: Tue, 08 Sep 2026 10:00:00 +0300\r\n"
+        "MIME-Version: 1.0\r\n"
+        "Content-Type: text/plain; charset=utf-8\r\n"
+        "\r\n"
+        "Selam.\r\n"
+    )
+    return raw.encode("utf-8")
+
+
 #: A small SYNTHETIC mailbox built specifically to exercise the wire protocol: an
 #: RFC-2047-encoded Turkish subject (``=?UTF-8?B?...?=``), an HTML-only body reduced to
 #: text, a plain-text body, and a message findable by FROM/TEXT search — never the full

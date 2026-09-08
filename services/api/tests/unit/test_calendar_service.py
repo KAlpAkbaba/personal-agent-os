@@ -408,3 +408,84 @@ def test_no_password_ever_reaches_a_receipt_or_ledger_row(db, monkeypatch) -> No
     for row in rows:
         blob = f"{row.factual_summary} {row.detail_json}"
         assert SECRET_PASSWORD not in blob
+
+
+# ------------------------------------------------------------- H2 (security review)
+
+
+def test_two_concurrent_confirmations_race_the_atomic_transition_and_only_one_commits(
+    tmp_path,
+) -> None:
+    """H2, the calendar side of ``test_mail_service.py``'s identical proof — see its
+    docstring for why a FILE-backed SQLite database (real per-thread connections, SQLite's
+    OWN file locking doing the serialising) is what makes this a genuine race rather than
+    a single shared connection's own thread-safety question."""
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    db_path = tmp_path / "concurrent_commit.sqlite3"
+    engine = create_engine(f"sqlite:///{db_path}", connect_args={"timeout": 30})
+    for table in (
+        CalendarIndexRow.__table__,
+        CalendarProposalRow.__table__,
+        ObjectFocusRow.__table__,
+        ActivityEventRow.__table__,
+    ):
+        table.create(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+
+    now = datetime.now(UTC)
+    with factory() as setup_db:
+        row = CalendarProposalRow(
+            id=uuid.uuid4(),
+            kind="create",
+            event_uid=None,
+            summary="Yeni toplantı",
+            start=NOW + timedelta(hours=2),
+            end=NOW + timedelta(hours=3),
+            location=None,
+            conflicts_json=[],
+            state=PROPOSAL_STATE_READ_BACK,
+            read_back_at=now,
+            read_back_session_id="sess-1",
+            read_back_turn=1,
+            created_at=now,
+            updated_at=now,
+        )
+        setup_db.add(row)
+        setup_db.commit()
+        proposal_id = str(row.id)
+
+    service = _service()
+    barrier = threading.Barrier(2)
+    results: list[dict] = [{}, {}]
+
+    def worker(slot: int) -> None:
+        confirmation = Confirmation(
+            source=CONFIRM_SOURCE_VOICE, session_id="sess-1", turn=2, owner_intent_ok=True
+        )
+        with factory() as thread_db:
+            barrier.wait(timeout=5)
+            results[slot] = service.commit(
+                thread_db,
+                proposal_id=proposal_id,
+                host_flag_enabled=True,
+                confirmation=confirmation,
+            )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(worker, 0), pool.submit(worker, 1)]
+        for future in futures:
+            future.result(timeout=10)
+
+    executed = [r for r in results if r["execution_status"] == "executed"]
+    refused = [r for r in results if r["execution_status"] == "refused"]
+    assert len(executed) == 1, results
+    assert len(refused) == 1, results
+    assert refused[0]["error_class"] == GATE_ALREADY_SENT
+    assert len(service._writer.created) == 1  # type: ignore[attr-defined]
+
+    with factory() as verify_db:
+        final = verify_db.get(CalendarProposalRow, uuid.UUID(proposal_id))
+        assert final.state == "committed"
+    engine.dispose()

@@ -443,3 +443,86 @@ def test_no_password_ever_reaches_a_receipt_or_ledger_row(db) -> None:
         for row in rows:
             blob = f"{row.factual_summary} {row.detail_json}"
             assert SECRET_PASSWORD not in blob
+
+
+# ------------------------------------------------------------- H2 (security review)
+
+
+def test_two_concurrent_confirmations_race_the_atomic_transition_and_only_one_sends(
+    tmp_path,
+) -> None:
+    """H2: ``send()`` used to be read-check-write with no atomicity — two concurrent
+    confirmations (a double click; a REST confirm racing a voice "Gönder.") could both
+    observe ``read_back`` and both reach the real sender. A FILE-backed SQLite database
+    (never ``StaticPool``'s single shared connection, which is not safe for genuinely
+    concurrent access from two threads) gives each worker thread its OWN real connection,
+    so SQLite's own file locking — not a lock this test adds — is what actually
+    serialises the two ``UPDATE ... WHERE state = 'read_back'`` statements: whichever
+    commits first wins the compare-and-swap, and the second's ``rowcount`` is 0.
+    """
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    db_path = tmp_path / "concurrent_confirm.sqlite3"
+    engine = create_engine(f"sqlite:///{db_path}", connect_args={"timeout": 30})
+    for table in (
+        MailIndexRow.__table__,
+        MailDraftRow.__table__,
+        ObjectFocusRow.__table__,
+        ActivityEventRow.__table__,
+    ):
+        table.create(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+
+    now = datetime.now(UTC)
+    with factory() as setup_db:
+        row = MailDraftRow(
+            id=uuid.uuid4(),
+            kind="new",
+            to_json=["ayse.kaya@example.com"],
+            cc_json=[],
+            subject="Toplantı",
+            body="Yarın gelemiyorum.",
+            in_reply_to=None,
+            state=DRAFT_STATE_READ_BACK,
+            read_back_at=now,
+            read_back_session_id="sess-1",
+            read_back_turn=1,
+            created_at=now,
+            updated_at=now,
+        )
+        setup_db.add(row)
+        setup_db.commit()
+        draft_id = str(row.id)
+
+    service = MailService(build_fake_mail_provider(), build_fake_mail_sender())
+    barrier = threading.Barrier(2)
+    results: list[dict] = [{}, {}]
+
+    def worker(slot: int) -> None:
+        confirmation = Confirmation(
+            source=CONFIRM_SOURCE_VOICE, session_id="sess-1", turn=2, owner_intent_ok=True
+        )
+        with factory() as thread_db:
+            barrier.wait(timeout=5)  # both threads call service.send() at the same instant
+            results[slot] = service.send(
+                thread_db, draft_id=draft_id, host_flag_enabled=True, confirmation=confirmation
+            )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(worker, 0), pool.submit(worker, 1)]
+        for future in futures:
+            future.result(timeout=10)
+
+    executed = [r for r in results if r["execution_status"] == "executed"]
+    refused = [r for r in results if r["execution_status"] == "refused"]
+    assert len(executed) == 1, results
+    assert len(refused) == 1, results
+    assert refused[0]["error_class"] == GATE_ALREADY_SENT
+    # The real sender was reached EXACTLY once - never twice, no matter which thread won.
+    assert len(service._sender.sent) == 1  # type: ignore[attr-defined]
+
+    with factory() as verify_db:
+        final = verify_db.get(MailDraftRow, uuid.UUID(draft_id))
+        assert final.state == DRAFT_STATE_SENT
+    engine.dispose()
