@@ -71,11 +71,22 @@ import {
   artifactRenderUrl,
 } from "../../lib/cockpit/artifacts";
 import {
+  APP_ACTION_LABEL,
+  APP_ROWS_SHOWN,
+  appActionGate,
+  appKindLabel,
+  appRowLine,
+  appRowUrl,
+  rowIsRunning,
+} from "../../lib/cockpit/app-rows";
+import { APP_ACTIONS, type AppAction, type AppProjectRow, type AppsControlProps } from "../../lib/cockpit/apps";
+import {
   FOCUS_UNSUPPORTED,
   focusSourceLabel,
   focusSummary,
   identityLine,
 } from "../../lib/research/focus";
+import { appView } from "../../lib/uistate/apps";
 import { artifactView } from "../../lib/uistate/artifacts";
 import {
   CALENDAR_PROPOSAL_STATE_LABEL,
@@ -85,6 +96,8 @@ import {
 import { isCalendarProposalState, isMailDraftState } from "../../lib/uistate/contract";
 import { documentPartPhrase, documentView, lastAnswerRefs, previousDocument } from "../../lib/uistate/documents";
 import {
+  APP_EMPTY,
+  APP_UNTOLD,
   ARTIFACT_EMPTY,
   ARTIFACT_UNTOLD,
   CALENDAR_EMPTY,
@@ -108,6 +121,7 @@ import { MAIL_DRAFT_STATE_LABEL, mailView } from "../../lib/uistate/mail";
 import { operatorPosition, operatorView } from "../../lib/uistate/operator";
 import type { CoreTruth } from "../../lib/uistate/truth";
 import {
+  appClaim,
   artifactClaim,
   calendarClaim,
   documentClaim,
@@ -1596,6 +1610,199 @@ export function ArtifactsPanel({
       )}
       <p className="muted" data-artifact-note>
         {ARTIFACT_NOTE}
+      </p>
+    </section>
+  );
+}
+
+// ---------------------------------------------------- M23: the App Factory
+
+/** What the panel says under the rows: where the link goes, and what the chips ask for. */
+const APP_NOTE =
+  'Bağlantı yalnızca çalışan bir uygulama için gösterilir ve sahibin makinesindeki tarayıcıda açılır; bu sayfa ona ulaşmaz. "Çalıştır", "Durdur" ve "Testleri çalıştır" Cloud Core\'dan cihazdaki sınırlı süreci ister: komut şablonun izin listesinden gelir, süreç eşlikçinin kendi iş nesnesinde çalışır, sahibin hiçbir süreci durdurulmaz. Bu ekran süreç başlatmaz, durdurmaz, dosya yazmaz.';
+
+/** The three chips under one project, each enabled only when the Cloud Core would not refuse it, with the reason in words when it would. */
+function AppControls({ row, control }: { row: AppProjectRow; control: AppsControlProps }) {
+  const handlers: Record<AppAction, (id: string) => void> = { run: control.onRun, stop: control.onStop, test: control.onTest };
+  const gates = APP_ACTIONS.map((action) => ({ action, gate: appActionGate(row, action, control.busy) }));
+  const inFlight = control.busy !== null && control.busy.id === row.app_id;
+  // One sentence per distinct reason, naming every chip it refuses: a planned
+  // project's "Çalıştır" and "Testleri çalıştır" share one sentence, and three
+  // chips disabled for the one in-flight call say it once.
+  const reasons = new Map<string, { actions: AppAction[]; kind: string }>();
+  for (const { action, gate } of gates) {
+    if (gate.reason === null) continue;
+    const entry = reasons.get(gate.reason) ?? { actions: [], kind: gate.reasonKind ?? "" };
+    entry.actions.push(action);
+    reasons.set(gate.reason, entry);
+  }
+  return (
+    <div
+      className="approval-pair"
+      data-app-controls={row.app_id}
+      data-app-in-flight={inFlight ? "yes" : "no"}
+      data-app-in-flight-action={inFlight && control.busy ? control.busy.action : ""}
+    >
+      {gates.map(({ action, gate }) => (
+        <button
+          key={action}
+          type="button"
+          className="core-chip"
+          data-app-action={action}
+          data-app-target={row.app_id}
+          data-app-enabled={gate.enabled ? "yes" : "no"}
+          disabled={!gate.enabled}
+          onClick={() => handlers[action](row.app_id)}
+        >
+          {APP_ACTION_LABEL[action]}
+        </button>
+      ))}
+      {Array.from(reasons, ([reason, { actions, kind }]) => (
+        <span key={reason} className="approval-reason" data-app-reason={kind} data-app-reason-for={actions.join(",")}>
+          {kind === "busy" ? reason : `${actions.map((a) => APP_ACTION_LABEL[a]).join(", ")}: ${reason}`}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function AppRowItem({ row, now, control }: { row: AppProjectRow; now: number; control: AppsControlProps }) {
+  const running = rowIsRunning(row);
+  const url = appRowUrl(row);
+  return (
+    <li
+      data-app={row.app_id}
+      data-app-state={row.state ?? ""}
+      data-app-kind={row.kind ?? ""}
+      data-app-template={row.template ?? ""}
+      data-app-port={row.port ?? ""}
+      data-app-running={running ? "yes" : "no"}
+      data-app-tests-passed={row.tests?.passed ?? ""}
+      data-app-tests-failed={row.tests?.failed ?? ""}
+    >
+      <div className="event-row">
+        <span>
+          {row.name ?? "ad bildirilmedi"}
+          {/* The link: only for a RUNNING project with a port, only to the
+              loopback, only for the owner's own browser. Never fetched here. */}
+          {url && (
+            <a
+              className="app-link"
+              href={url}
+              target="_blank"
+              rel="noreferrer noopener"
+              data-app-link={row.app_id}
+              data-app-url={url}
+            >
+              {url}
+            </a>
+          )}
+        </span>
+        <span className="event-when">
+          {[appKindLabel(row.kind), when(row.updated_at ?? row.created_at, now)].filter(Boolean).join(" · ")}
+        </span>
+      </div>
+      {/* The state, the port, the last test counts — each as the row says it, or the statement that it did not. */}
+      <span className="muted" data-app-line>
+        {appRowLine(row)}
+      </span>
+      {row.root_path && (
+        <span className="muted" data-app-root-path>
+          {row.root_path}
+        </span>
+      )}
+      <AppControls row={row} control={control} />
+    </li>
+  );
+}
+
+/**
+ * Uygulamalar (M23 spec §6): what the App Factory is doing, from the bus,
+ * and what it made, from `/v1/apps` — each project with its state, the
+ * port its bounded process is bound to while it runs, the counts its last
+ * test run gave, a link the owner's own browser can open for a RUNNING
+ * project and nothing else, and the three chips that ask the Cloud Core
+ * for the device's `project.run` / `project.stop` / `project.test`.
+ *
+ * Two sources, kept apart because they answer different questions. The bus
+ * line is "what is happening now" and decays like every bus claim; the rows
+ * are "what exists" and are the route's. Nothing here scaffolds, runs,
+ * stops or tests: a project is running because its row says so, a link
+ * exists because the project is running on a port the row named, a chip is
+ * enabled because the Cloud Core would not refuse it and nothing else is in
+ * flight — and the Cloud Core still refuses on its own terms. The empty
+ * sentence is the route's answer, never the bus's silence — and "henüz
+ * yok" (no route on this Cloud Core) is neither.
+ */
+export function AppsPanel({
+  apps,
+  truth,
+  now,
+  control,
+}: {
+  apps: Loaded<AppProjectRow[]>;
+  truth: CoreTruth;
+  now: number;
+  control: AppsControlProps;
+}) {
+  const view = appView(appClaim(truth, now));
+  const told = view.lastKnown !== null;
+  const rows = apps.kind === "ok" ? apps.value : [];
+  const shown = rows.slice(0, APP_ROWS_SHOWN);
+  const running = rows.filter(rowIsRunning).length;
+  const failed = rows.some((row) => row.state === "failed");
+  return (
+    <section
+      className={`panel ${failed ? "attention" : ""}`}
+      data-panel="apps"
+      data-panel-state={apps.kind}
+      data-panel-empty={apps.kind === "ok" ? (rows.length ? "no" : "yes") : ""}
+      data-app-stage={view.stage}
+      data-app-last-known={view.lastKnown ?? ""}
+      data-apps-running={apps.kind === "ok" ? running : ""}
+    >
+      <h3 className="panel-title">
+        <span>Uygulamalar</span>
+        {apps.kind === "ok" && (
+          <span className="panel-count" data-panel-badge>
+            {running > 0 ? `${running} çalışıyor / ${rows.length}` : `${rows.length}`}
+          </span>
+        )}
+      </h3>
+      {/* The bus: the caption the Core draws, with its age; last-known when it aged out. */}
+      <p
+        className={told ? "muted" : "panel-empty"}
+        data-app-activity={told ? view.stage : "untold"}
+        data-app-caption={told ? view.caption : ""}
+      >
+        {told ? `${view.stage === "none" ? "Son bilinen: " : ""}${view.caption} · ${formatAge(view.ageMs)}` : APP_UNTOLD}
+      </p>
+      <LoadedNotice state={apps} />
+      {apps.kind === "ok" && rows.length === 0 && (
+        <p className="panel-empty" data-panel-empty-text>
+          {APP_EMPTY}
+        </p>
+      )}
+      {shown.length > 0 && (
+        <ul>
+          {shown.map((row) => (
+            <AppRowItem key={row.app_id} row={row} now={now} control={control} />
+          ))}
+        </ul>
+      )}
+      {control.outcome && (
+        <p
+          className={`approval-outcome ${control.outcome.ok ? "muted" : "panel-unknown"}`}
+          data-app-outcome={control.outcome.action}
+          data-app-ok={control.outcome.ok ? "yes" : "no"}
+          data-app-target={control.outcome.id}
+        >
+          {control.outcome.text}
+          {` · ${formatAge(Math.max(0, now - control.outcome.at))}`}
+        </p>
+      )}
+      <p className="muted" data-app-note>
+        {APP_NOTE}
       </p>
     </section>
   );

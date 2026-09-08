@@ -10,6 +10,8 @@
 
 import type { AlarmStage, DisplayState, EyeStatus, PresenceKind, ReleaseStage } from "./ambient";
 import {
+  APP_CAPTION_BARE,
+  APP_STATE_LABEL,
   ARTIFACT_CAPTION_BARE,
   ARTIFACT_VERDICT_LABEL,
   CALENDAR_CAPTION_BARE,
@@ -17,6 +19,7 @@ import {
   MAIL_CAPTION_BARE,
 } from "./contract";
 import type { DocumentRef, KnownUiState } from "./contract";
+import { type AppFacts, type AppStage, appTestsPhrase } from "./apps";
 import { type ArtifactFacts, type ArtifactStage, artifactFormatLabel } from "./artifacts";
 import {
   CALENDAR_PROPOSAL_STATE_LABEL,
@@ -64,6 +67,7 @@ export const KIND_LABEL: Record<CoreVisualKind, string> = {
   mail_activity: MAIL_CAPTION_BARE,
   calendar_activity: CALENDAR_CAPTION_BARE,
   artifact_factory: ARTIFACT_CAPTION_BARE,
+  app_factory: APP_CAPTION_BARE,
 };
 
 /**
@@ -120,6 +124,12 @@ export const KIND_DETAIL: Record<CoreVisualKind, string> = {
   // never when it was written — and nothing here says how far along it is.
   artifact_factory:
     "Sahip için bir dosya üretiliyor ya da bağımsız bir okuyucuyla yeniden açılıp istenenle karşılaştırılıyor; başlık, biçim ve sonuç yalnızca yayınlandığı kadar söylenir. Doğrulanmamış bir çıktı bitmiş sayılmaz. İlerleme bildirilmez.",
+  // M23: a program is being made for the owner — planned, written into a
+  // real project on the owner's machine, run there in a bounded process,
+  // tested with its own tests. The sentence says what "exists" means for an
+  // app (ADR-0086) and that nothing here says it on its own.
+  app_factory:
+    "Sahip için bir uygulama planlanıyor, iskeleti kuruluyor, sahibin makinesinde sınırlı bir süreçte çalıştırılıyor ya da kendi testleriyle sınanıyor; proje, durum, port ve test sayıları yalnızca yayınlandığı kadar söylenir. Testleri geçmemiş bir uygulama bitmiş sayılmaz. İlerleme bildirilmez.",
 };
 
 /**
@@ -266,6 +276,10 @@ export const STATE_LABEL: Record<KnownUiState, string> = {
   // is entered when the render starts, and a verdict is said only from its
   // published metadata.
   "artifact.factory": ARTIFACT_CAPTION_BARE,
+  // v8 — the App Factory (M23). "Yapılıyor", not "çalışıyor": the token is
+  // one for the whole loop, and the project's state is said only from its
+  // published metadata.
+  "app.factory": APP_CAPTION_BARE,
 };
 
 export function stateLabel(state: string): string {
@@ -291,6 +305,7 @@ export const SUBSYSTEM_LABEL: Record<string, string> = {
   mail: "Posta",
   calendar: "Takvim",
   artifacts: "Üretim",
+  apps: "Uygulamalar",
 };
 
 export function subsystemLabel(subsystem: string): string {
@@ -441,6 +456,7 @@ const CONTRACT_ADDITIONS: Record<number, string> = {
   5: "belge inceleme durumu",
   6: "posta ve takvim durumları",
   7: "dosya üretim durumu",
+  8: "uygulama üretim durumu",
 };
 
 /**
@@ -656,5 +672,49 @@ export function artifactFactsLine(facts: ArtifactFacts): string {
     facts.verdictToken ? `sonuç: ${artifactVerdictWord(facts.verdictToken)}` : "sonuç bildirilmedi",
   ];
   if (facts.verdict === "invalid") parts.push(facts.failingRef ? `yer: ${facts.failingRef}` : "yer bildirilmedi");
+  return parts.join(" · ");
+}
+
+// ------------------------------------------------------- v8: the App Factory
+
+export const APP_LABEL: Record<AppStage, string> = {
+  active: APP_CAPTION_BARE,
+  none: "Süren bir uygulama işi yok",
+};
+
+/** The Uygulamalar panel's empty sentence: the list route answered, and holds no project. */
+export const APP_EMPTY = "Henüz bir uygulama yapılmadı.";
+
+/** The Uygulamalar panel's line when the bus never carried an app event: not "no apps", "nothing reported". */
+export const APP_UNTOLD = "Uygulama etkinliği bildirilmedi.";
+
+/**
+ * A project state token as one word: the spec's word for the six this
+ * build knows, the token verbatim for one it does not (still a published
+ * fact), and the statement that none came.
+ */
+export function appStateWord(token: string | null): string {
+  if (token === null) return "durum bildirilmedi";
+  return (APP_STATE_LABEL as Record<string, string>)[token] ?? token;
+}
+
+/**
+ * The published app facts on one line, each one either what the publisher
+ * sent or the statement that it did not send it. The port is printed
+ * whenever one was sent and its absence is said only beside `running` — a
+ * scaffolded project has no port to report, and "port bildirilmedi" there
+ * would be noise rather than a fact. The counts likewise: printed whenever
+ * sent, their absence said only beside `tested` or `failed`.
+ */
+export function appFactsLine(facts: AppFacts): string {
+  const parts = [
+    facts.project ? `proje: ${facts.project}` : "proje bildirilmedi",
+    facts.stateToken ? `durum: ${appStateWord(facts.stateToken)}` : "durum bildirilmedi",
+  ];
+  if (facts.port !== null) parts.push(`port: ${facts.port}`);
+  else if (facts.state === "running") parts.push("port bildirilmedi");
+  const tests = appTestsPhrase(facts.tests);
+  if (tests) parts.push(`testler: ${tests}`);
+  else if (facts.state === "tested" || facts.state === "failed") parts.push("test sayısı bildirilmedi");
   return parts.join(" · ");
 }

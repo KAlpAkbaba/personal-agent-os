@@ -31,8 +31,10 @@ import { useCallback, useMemo, useState } from "react";
 
 import OwnerGate from "../../components/OwnerGate";
 import { approvalClient } from "../../lib/cockpit/approvals";
+import { appsClient } from "../../lib/cockpit/apps";
 import { artifactClient, downloadRender } from "../../lib/cockpit/artifacts";
 import { useApprovalPair } from "../../lib/cockpit/useApprovalPair";
+import { useAppsControl } from "../../lib/cockpit/useAppsControl";
 import { useArtifactOpen } from "../../lib/cockpit/useArtifactOpen";
 import { useCockpitData } from "../../lib/cockpit/useCockpitData";
 import { selectResearchFocus } from "../../lib/research/api";
@@ -60,6 +62,7 @@ import { useCorePreferences } from "../usePreferences";
 import {
   AlarmsPanel,
   AmbientPanel,
+  AppsPanel,
   ArtifactsPanel,
   CalendarPanel,
   DigitalOperatorPanel,
@@ -116,6 +119,11 @@ function Cockpit() {
   // and hands the browser a blob — a failure is said in words, and the link
   // itself stays.
   const artifactOpen = useArtifactOpen(artifactClient, refreshPanels);
+  // M23 §6: the three chips ask the Cloud Core for the device's bounded
+  // `project.run` / `project.stop` / `project.test`, one call at a time, and
+  // every answer reloads the list so the rows show the state the Cloud Core
+  // now holds — never the state this page assumed a click produced.
+  const appsControl = useAppsControl(appsClient, refreshPanels);
   const [downloadNotice, setDownloadNotice] = useState<string | null>(null);
   const download = useCallback((artifactId: string, format: string) => {
     setDownloadNotice(null);
@@ -217,6 +225,11 @@ function Cockpit() {
             onDownload={download}
             notice={downloadNotice}
           />
+          {/* M23 §6: what the App Factory made — each project's state, the
+              port while it runs (a link for the owner's own browser), the
+              last test counts, and the chips for the device's bounded
+              process. */}
+          <AppsPanel apps={data.apps} truth={truth} now={now} control={appsControl} />
           <GoalsPanel state={data.goals} now={now} />
           <ResearchPanel
             state={data.research}

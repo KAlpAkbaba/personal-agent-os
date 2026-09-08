@@ -15,7 +15,7 @@
  */
 
 /** Contract version this client was written against (`CONTRACT_VERSION` in contract.py). */
-export const KNOWN_CONTRACT_VERSION = 7;
+export const KNOWN_CONTRACT_VERSION = 8;
 
 /**
  * The build marker of the Living Core (M18.3 §12, qualification A). Rendered server-side
@@ -38,12 +38,16 @@ export const CORE_BUILD_ID = "living-core-1";
  * `mail.activity` and `calendar.activity`, two subsystems, and metadata made
  * of the short tokens the bus already carried. v7 is additive over v6 (M22
  * spec §6): one token, `artifact.factory`, one subsystem, and metadata of
- * four short tokens (`title`, `format`, `verdict`, `failing_ref`). A v2 to
- * v6 server therefore serves a strict subset of what this build knows, and
- * refusing to draw anything at all because the alarm, operator, document,
- * mail, calendar or artifact states have not shipped yet would be a worse
- * lie than saying so in one line. A server NEWER than this build is a
- * different matter — we do not know its vocabulary, so it stays a mismatch.
+ * four short tokens (`title`, `format`, `verdict`, `failing_ref`). v8 is
+ * additive over v7 (M23 spec §6): one token, `app.factory`, one subsystem,
+ * three short tokens (`project`, `state`, `port`) and one bounded structured
+ * value (`tests: {passed, failed}`) that older publishers never send. A v2
+ * to v7 server therefore serves a strict subset of what this build knows,
+ * and refusing to draw anything at all because the alarm, operator,
+ * document, mail, calendar, artifact or app states have not shipped yet
+ * would be a worse lie than saying so in one line. A server NEWER than this
+ * build is a different matter — we do not know its vocabulary, so it stays
+ * a mismatch.
  */
 export const MIN_SUPPORTED_CONTRACT_VERSION = 2;
 
@@ -168,6 +172,16 @@ export const UI_STATES = [
   // The agent's own work, so it stays on the agent channel; a render whose
   // validation failed is kept and NAMED, never presented as done (ADR-0085 §3).
   "artifact.factory",
+  // v8 (M23 spec §6) — the App Factory. Published while an app the owner
+  // asked for is planned, scaffolded into a real project on the owner's
+  // machine, run there in a bounded process, tested with its own tests,
+  // stopped, or failed, with `{project?, state?, port?, tests?}`: the
+  // project's name, the `AppProject` state, the port the bounded process is
+  // bound to on `127.0.0.1` while it runs, and the counts its own tests gave.
+  // The agent's own work, so it stays on the agent channel; a project exists
+  // when it runs and its tests pass, and nothing here says so on its own
+  // (ADR-0086).
+  "app.factory",
 ] as const;
 
 export type KnownUiState = (typeof UI_STATES)[number];
@@ -341,6 +355,75 @@ export function isArtifactVerdict(value: unknown): value is ArtifactVerdict {
   return typeof value === "string" && ARTIFACT_VERDICT_SET.has(value);
 }
 
+/** The one app token (v8). Spelled here so every reader names the same wire word. */
+export const APP_FACTORY = "app.factory";
+
+/**
+ * The App Factory's states (v8). One token: the spec publishes the whole
+ * plan → scaffold → run → test loop as `app.factory` and names the project's
+ * state in `metadata.state`, so — as with the artifact's — there is nothing
+ * else to enumerate. Kept as a list so a second token lands here and nowhere
+ * else.
+ */
+export const APP_STATES = [APP_FACTORY] as const;
+
+export type AppUiState = (typeof APP_STATES)[number];
+
+const APP_STATE_SET: ReadonlySet<string> = new Set(APP_STATES);
+
+/**
+ * True for a v8 app state this build knows how to draw. Membership, not
+ * prefix: a newer server's `app.deleted` must not be drawn as a building
+ * Core on the strength of a word this build cannot read.
+ */
+export function isAppState(state: string): state is AppUiState {
+  return APP_STATE_SET.has(state);
+}
+
+/**
+ * An `AppProject`'s state as the publisher names it in `metadata.state`
+ * (M23 spec §1): the row exists (`planned`), its files were written into
+ * the device's `Projects` root (`scaffolded`), the companion's bounded child
+ * is serving it (`running`), its own tests ran (`tested`), a run or a test
+ * failed (`failed`), the job was closed (`stopped`). A token outside this
+ * list is a word this build cannot read and is shown as the plain state,
+ * never as one of these.
+ */
+export const APP_PROJECT_STATES = ["planned", "scaffolded", "running", "tested", "failed", "stopped"] as const;
+
+export type AppProjectState = (typeof APP_PROJECT_STATES)[number];
+
+const APP_PROJECT_STATE_SET: ReadonlySet<string> = new Set(APP_PROJECT_STATES);
+
+export function isAppProjectState(value: unknown): value is AppProjectState {
+  return typeof value === "string" && APP_PROJECT_STATE_SET.has(value);
+}
+
+/**
+ * The counts a project's own tests gave (M23 spec §3, `project.test` →
+ * `{passed, failed}`), as the publisher sent them and never derived: a
+ * `tested` state with no counts is "test edildi" downstream, never
+ * "12/12".
+ */
+export type AppTestCounts = {
+  passed: number;
+  failed: number;
+};
+
+/** The highest port a bounded process may be bound to; anything else is not a port. */
+export const MAX_PORT = 65_535;
+
+/**
+ * A TCP port the publisher actually sent: a whole number in 1..65535, else
+ * `null`. The caption and the Cockpit's link are built from this figure
+ * alone, so a `port` of `0`, `-1`, `"8123"` or `70000` yields no address —
+ * a link to a port nobody could be listening on would be an invitation to
+ * nothing.
+ */
+export function asPort(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= MAX_PORT ? value : null;
+}
+
 /**
  * A draft's lifecycle as the publisher names it in `metadata.draft_state`
  * (M21 spec §3 with the read-back step made explicit): prepared by the
@@ -419,6 +502,26 @@ export type ArtifactFactoryMetadata = {
 };
 
 /**
+ * The metadata an `app.factory` event may carry (M23 spec §6). Every key is
+ * optional on the wire; `project`, `state` and `port` are short tokens the
+ * bus already admits, and `tests` is the one structured value this family
+ * adds — two counts, read only through `parseAppTestCounts` at the boundary
+ * and carried on `UiStateEvent.tests`, as `refs` is for v5. Nothing here is
+ * a file list, a log tail or a spec body: the project's rows are on
+ * `/v1/apps`, which the Cockpit reads from the list route, never from the bus.
+ */
+export type AppFactoryMetadata = {
+  /** The project's name, as the owner named it (`Görev Takip`). */
+  project?: string;
+  /** The `AppProject` state. Absent while the publisher has nothing to say yet. */
+  state?: AppProjectState;
+  /** The port the bounded process is bound to on `127.0.0.1`, while `running`. */
+  port?: number;
+  /** The counts the project's own tests gave, when a test run was published. */
+  tests?: AppTestCounts;
+};
+
+/**
  * States that belong to the release band's own vocabulary.
  *
  * `releaseClaim` reads exactly these rather than "the newest event on the
@@ -468,6 +571,9 @@ export const SUBSYSTEMS = [
   // v7: the Artifact Factory (M22 spec §6) publishes `artifact.factory`;
   // its receipts and ledger rows carry the same subsystem name.
   "artifacts",
+  // v8: the App Factory (M23 spec §6) publishes `app.factory`; its receipts
+  // and ledger rows carry the same subsystem name.
+  "apps",
 ] as const;
 
 export type Subsystem = (typeof SUBSYSTEMS)[number];
@@ -544,6 +650,14 @@ export type UiStateEvent = {
    * content-shaped.
    */
   refs?: DocumentRef[];
+  /**
+   * v8: the counts an `app.factory` event's test run gave, read from
+   * `metadata.tests` alone (M23 spec §6). Present only when the publisher
+   * sent both counts as whole non-negative numbers, so a v7 event parses
+   * byte for byte as it did before; the object itself stays out of
+   * `metadata`, like `refs`.
+   */
+  tests?: AppTestCounts;
 };
 
 /** The body of `GET /v1/ui/state`. */
@@ -680,6 +794,13 @@ const STATE_KINDS: Record<KnownUiState, StateKind> = {
   // and the render itself is a ROW the Cockpit reads from the list route,
   // which does not expire. The claim never falls to "finished" or idle.
   "artifact.factory": "transient",
+  // v8. Scaffolding, running and testing a project on the device is work in
+  // flight on the same footing (`APP_FACTORY_TTL_MS`). A `running` app may
+  // serve for half an hour, but the bus claim is about the MOMENT it was
+  // published: the app's state and port are a ROW the Cockpit reads from
+  // `/v1/apps`, which does not expire, and the publisher's `ttl_s` may
+  // lengthen a standing condition. The claim never falls to "finished" or idle.
+  "app.factory": "transient",
 };
 
 /**
@@ -759,6 +880,41 @@ export const ARTIFACT_VERDICT_LABEL: Record<ArtifactVerdict, string> = {
 };
 
 /**
+ * How long an app step may be claimed as current without a newer event.
+ *
+ * The operator's horizon, for the factory's reason: the Cloud Core speaks
+ * once per project transition, not on a heartbeat, and a scaffold of two
+ * hundred files or a test run can outlast the twelve-second transient. Still
+ * a horizon: a `running` from a minute ago is last-known on the Core — the
+ * app itself is a ROW on `/v1/apps`, and the Cockpit's link comes from that
+ * row. The publisher's own `ttl_s` beats this figure.
+ */
+export const APP_FACTORY_TTL_MS: number = OPERATOR_STEP_TTL_MS;
+
+/**
+ * The Core's one wording for an app event whose metadata named no project
+ * (v8): the plain state, and nothing it did not say. A state with no project
+ * would be a state of nothing, so it too yields this line alone.
+ */
+export const APP_CAPTION_BARE = "Uygulama yapılıyor";
+
+/**
+ * The project's state in the owner's words, spelled once for the caption,
+ * the facts line and the Cockpit's rows alike. "Çalışıyor" is said only when
+ * the publisher said `running`, and "test edildi" — not "testleri geçti" —
+ * for a `tested` whose counts nobody published: the counts, when sent, are
+ * what turn it into a pass in words.
+ */
+export const APP_STATE_LABEL: Record<AppProjectState, string> = {
+  planned: "planlandı",
+  scaffolded: "iskeleti kuruluyor",
+  running: "çalışıyor",
+  tested: "test edildi",
+  failed: "başarısız",
+  stopped: "durduruldu",
+};
+
+/**
  * Per-state lifetimes for v3, in ms, exactly as `docs/M18_3_LIVING_CORE_WAKE_ALARM_SPEC.md`
  * §7 states them.
  *
@@ -785,6 +941,7 @@ const STATE_TTL_MS: Partial<Record<KnownUiState, number>> = {
   "mail.activity": MAIL_ACTIVITY_TTL_MS,
   "calendar.activity": CALENDAR_ACTIVITY_TTL_MS,
   "artifact.factory": ARTIFACT_FACTORY_TTL_MS,
+  "app.factory": APP_FACTORY_TTL_MS,
 };
 
 /**
@@ -869,7 +1026,8 @@ export function stateChannel(state: string): StateChannel {
   // `agent` below. v6's `mail.activity` and `calendar.activity` do the same,
   // for the same reason, through `isMailState` / `isCalendarState`; so does
   // v7's `artifact.factory`, through `isArtifactState`: making a file for
-  // the owner is the agent working.
+  // the owner is the agent working. v8's `app.factory` follows through
+  // `isAppState`: building and running an app for the owner is the same.
   // v3 adds `display.*` to the room: whether the screens are lit is a fact
   // about the owner's desk, never about the agent's activity.
   if (state.startsWith("eye.") || state.startsWith("owner.") || state.startsWith("display."))
@@ -937,11 +1095,16 @@ export function parseEvent(raw: unknown): UiStateEvent | null {
       // objects/arrays are content-shaped; the publisher drops them and so do we
     }
   }
-  // v5: the one structured value the contract admits, under the one key.
-  const refs = parseDocumentRefs(rawMeta && typeof rawMeta === "object" ? (rawMeta as Record<string, unknown>).refs : undefined);
+  // v5: the one structured value the contract admits, under the one key —
+  // and v8's second, under its own key. Everything else object-shaped stays
+  // dropped above.
+  const rawRecord = rawMeta && typeof rawMeta === "object" ? (rawMeta as Record<string, unknown>) : null;
+  const refs = parseDocumentRefs(rawRecord?.refs);
+  const tests = parseAppTestCounts(rawRecord?.tests);
 
   return {
     ...(refs.length ? { refs } : {}),
+    ...(tests ? { tests } : {}),
     event_id: typeof o.event_id === "string" ? o.event_id : "",
     sequence: asFiniteNumber(o.sequence) ?? 0,
     state,
@@ -985,6 +1148,28 @@ export function parseDocumentRefs(raw: unknown): DocumentRef[] {
     refs.push({ ref, path: refString(o.path), excerpt: refString(o.excerpt) });
   }
   return refs;
+}
+
+/** A whole, non-negative count, or `null` for anything else — a count is never rounded into being. */
+function asCount(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+/**
+ * `metadata.tests` as `{passed, failed}`, defensively (M23 spec §6).
+ *
+ * The same posture as `parseDocumentRefs`: both counts must be present as
+ * whole non-negative numbers or there are no counts at all — a `{passed: 12}`
+ * with no `failed` is not "12/12", because nobody said how many ran. Nothing
+ * here can produce a figure the publisher did not send.
+ */
+export function parseAppTestCounts(raw: unknown): AppTestCounts | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const o = raw as Record<string, unknown>;
+  const passed = asCount(o.passed);
+  const failed = asCount(o.failed);
+  if (passed === null || failed === null) return null;
+  return { passed, failed };
 }
 
 export function parseResponse(raw: unknown): UiStateResponse | null {

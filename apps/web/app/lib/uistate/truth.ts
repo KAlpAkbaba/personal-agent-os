@@ -23,6 +23,7 @@ import {
   type UiStateResponse,
   ageMs,
   isAlarmLifecycleState,
+  isAppState,
   isArtifactState,
   isCalendarState,
   isCoreChannel,
@@ -317,6 +318,17 @@ export function calendarClaim(truth: CoreTruth, now: number): Claim {
  */
 export function artifactClaim(truth: CoreTruth, now: number): Claim {
   return claimFor(newestWhere(truth, isArtifactState), now);
+}
+
+/**
+ * The App Factory's own claim (v8): the newest `app.factory`, by membership.
+ * Returned expired or not, for the artifact's reason: the panel words the
+ * age, and an expired app event is one we stopped hearing about — the
+ * projects themselves are rows on `/v1/apps`, which do not expire, and a
+ * `running` row is what the Cockpit's link is built from.
+ */
+export function appClaim(truth: CoreTruth, now: number): Claim {
+  return claimFor(newestWhere(truth, isAppState), now);
 }
 
 /**

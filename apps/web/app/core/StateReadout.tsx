@@ -21,6 +21,7 @@ import {
   KIND_LABEL,
   SEVERITY_LABEL,
   SOURCE_LABEL,
+  appFactsLine,
   artifactFactsLine,
   calendarFactsLine,
   capabilityNodesLine,
@@ -34,6 +35,7 @@ import {
   stateLabel,
   subsystemLabel,
 } from "../lib/uistate/labels";
+import { appIsServing } from "../lib/uistate/apps";
 import { isOperatorState } from "../lib/uistate/contract";
 import { documentPartPhrase } from "../lib/uistate/documents";
 import { operatorPosition } from "../lib/uistate/operator";
@@ -246,6 +248,34 @@ export default function StateReadout({
           data-artifact-failing-ref={intent.artifact.failingRef ?? ""}
         >
           {artifactFactsLine(intent.artifact)}
+        </p>
+      )}
+
+      {/*
+        M23: the App Factory's published facts — the project, the state, the
+        port, the counts its own tests gave — each the token the publisher
+        sent or the statement that none came; present on the live building
+        posture and on its last-known shape alike. `data-app-serving` marks
+        the one combination the Core draws as a server answering — `running`
+        on a named port — so a harness can tell the running posture from the
+        building one without reading the geometry. The compact caption
+        already carries the same sentence as `label`, so the long line is the
+        full form's alone. No bar: a scaffold of unknown length gets none, and
+        a running app has no progress to draw. No link here either — the link
+        is the Cockpit's, built from the row on the list route.
+      */}
+      {intent.app && !compact && (
+        <p
+          className="muted core-count"
+          data-app-facts
+          data-app-project={intent.app.project ?? ""}
+          data-app-state={intent.app.stateToken ?? ""}
+          data-app-port={intent.app.port ?? ""}
+          data-app-tests-passed={intent.app.tests?.passed ?? ""}
+          data-app-tests-failed={intent.app.tests?.failed ?? ""}
+          data-app-serving={appIsServing(intent.app) ? "yes" : "no"}
+        >
+          {appFactsLine(intent.app)}
         </p>
       )}
 

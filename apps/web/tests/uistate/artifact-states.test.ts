@@ -144,10 +144,16 @@ const INVALID = () => ARTIFACT_FACTORY("Bütçe 2026", "pdf", "invalid", "sheet:
 // ------------------------------------------------------------ the contract
 
 describe("contract v7 is v6 plus the artifact state, and says so", () => {
-  it("is version 7 and still reads a v6, v5, v4, v3 and v2 server", () => {
-    expect(KNOWN_CONTRACT_VERSION).toBe(7);
+  it("still reads a v7, v6, v5, v4, v3 and v2 server from a build at v7 or later", () => {
+    // v8 (M23) bumped the build past this file's contract; the assertion is
+    // relative, as the v6 file's became when v7 landed, so the v7 additions
+    // stay proven without pinning the build to a version it has left.
+    expect(KNOWN_CONTRACT_VERSION).toBeGreaterThanOrEqual(7);
     expect(MIN_SUPPORTED_CONTRACT_VERSION).toBe(2);
-    expect(contractCompatibility(7)).toBe("current");
+    expect(contractCompatibility(KNOWN_CONTRACT_VERSION)).toBe("current");
+    // v7 itself: current on a v7 build, a readable subset on any later one.
+    const built: number = KNOWN_CONTRACT_VERSION;
+    expect(contractCompatibility(7)).toBe(built === 7 ? "current" : "older_supported");
     expect(contractCompatibility(6)).toBe("older_supported");
     expect(contractCompatibility(5)).toBe("older_supported");
     expect(contractCompatibility(4)).toBe("older_supported");
@@ -155,7 +161,7 @@ describe("contract v7 is v6 plus the artifact state, and says so", () => {
     expect(contractCompatibility(2)).toBe("older_supported");
     // A server ahead of this build is a different problem: we do not know its
     // vocabulary, so nothing is drawn from it.
-    expect(contractCompatibility(8)).toBe("unsupported");
+    expect(contractCompatibility(KNOWN_CONTRACT_VERSION + 1)).toBe("unsupported");
     expect(contractCompatibility(1)).toBe("unsupported");
   });
 
@@ -176,7 +182,7 @@ describe("contract v7 is v6 plus the artifact state, and says so", () => {
 
   it("appends the token after v6's, never reordering", () => {
     expect(UI_STATES.indexOf("artifact.factory")).toBe(UI_STATES.indexOf("calendar.activity") + 1);
-    expect(UI_STATES[UI_STATES.length - 1]).toBe("artifact.factory");
+    // Appended after the last v6 token, never reordered; v8 appends after it in turn.
   });
 
   it("types the three verdicts, and admits nothing outside them", () => {
