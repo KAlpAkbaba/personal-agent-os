@@ -4,7 +4,7 @@
   "current_milestone": "M24_CLOSED_M25_IN_PROGRESS",
   "status": "M18 PROVEN_REAL and CLOSED 2026-09-06 from the durable record (ADR-0064): 18 of 20 Stage 12 rows real from the owner's runs - /core + realtime voice as one surface, real listening/speaking states, cognition on both paths, the eye opened/closed/re-opened by voice with verified receipts (contract v3), the MediaStream lifecycle, action receipts with runtime read-back, state.now agreement, a camera presence observation and a real leave-and-return transition (present -> away -> present with the engine's confidence), the alarm over the device path with its ramp, camera privacy, the SHADOW_READY / production authority boundary. Deliberately open: 12.13 media playback (never exercised for real; its own short owner run when wanted) and 12.19 display-off (separate, gated twice). Every monolithic-harness FAIL of that day was a qualification-harness / session-correlation defect while the record proved the capability. M18.1 (the Holographic Core visual experience pass) is in progress; M19 Digital Operator next.",
   "last_completed_milestone": "M24_CAPABILITY_GENESIS",
-  "last_updated": "2026-09-08T16:25:00+03:00",
+  "last_updated": "2026-09-08T21:10:00+03:00",
   "qualification": {
     "matrix": "docs/QUALIFICATION.md",
     "owner_queue": "docs/OWNER_ACTIONS.md",
@@ -263,7 +263,8 @@
       "living_core_document_state": "PROVEN_AUTOMATED",
       "cloud_core_released": "PROVEN_REAL"
     },
-    "ci": "run 34171734557 on 092e56d: 7/7 jobs green (API lint + unit 5145 passed / 2 skipped, API integration, Windows agent build + tests 529/529 + audio 135/135 with the bomb-container lab on the runner, browser agent, web shell build 927/927, recovery supervisor, secret hygiene); every M20 merge before it green as well (ce4378d device, f7d632f web, 4ee5756 device security fixes, d2fccdf core, b7c8714 core security fixes superseded by 092e56d)"
+    "ci": "run 34171734557 on 092e56d: 7/7 jobs green (API lint + unit 5145 passed / 2 skipped, API integration, Windows agent build + tests 529/529 + audio 135/135 with the bomb-container lab on the runner, browser agent, web shell build 927/927, recovery supervisor, secret hygiene); every M20 merge before it green as well (ce4378d device, f7d632f web, 4ee5756 device security fixes, d2fccdf core, b7c8714 core security fixes superseded by 092e56d)",
+    "test_gauge": "The two memory bounds this milestone asserts (BoundedReadTests 16 MiB for a bounded read, DecompressionBoundTests 64 MiB for the bombs) are measured in a QUIET WINDOW since 2026-09-08: devices/windows-agent/tests/PagentOS.Agent.Tests/Support/TestActivity.cs plus an assembly-level xunit BeforeAfterTestAttribute. GC.GetTotalAllocatedBytes and WorkingSet64 are process-wide and xunit runs collections in parallel, so neighbouring tests allocations were charged to the work under test and BoundedReadTests failed about one run in four; 795e860 answered by moving the bound to 24 MiB, which is reverted. The bounds themselves are unchanged, the fast path (a reading already under the bound is conclusive, since the counter only adds) keeps the suite at ~42 s, and Documents/AllocationGaugeTests.cs is the regression. DECISIONS ADR-0083 addendum 4."
   },
   "m21_mail_calendar": {
     "status": "M21 ENGINEERING CLOSED 2026-09-08 (ADR-0084; QUALIFICATION Stage 19; docs/reports/m21-mail-calendar-report.md). Cloud Core released 571ddb2 (armed, awaiting the owner's Tailscale SSH check — item 31); the tools answer account_missing until the owner puts an account on the host (item 30); nothing is ever sent for real by the autonomous system.",

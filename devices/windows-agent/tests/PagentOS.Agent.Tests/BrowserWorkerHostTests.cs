@@ -360,7 +360,14 @@ public sealed class BrowserWorkerHostTests : IDisposable
     [Fact]
     public async Task A_worker_that_stops_answering_pings_is_killed_and_replaced()
     {
-        await using var host = NewHost(extraArgs: "--no-pong", pingInterval: TimeSpan.FromMilliseconds(100));
+        // The interval sets BOTH how long the first kill takes (three missed pings, so four ticks)
+        // and how long the REPLACEMENT lives before the same guard kills it in its turn — every
+        // worker this host starts answers no ping. At 100 ms that gave the replacement about
+        // 400 ms to be started, serve a request and be asserted on, and on a loaded run it was
+        // not enough: the request itself failed with the kill (2026-09-08, Release run 3). Two
+        // seconds is still far inside the ten-second waits below and leaves the request four
+        // times the margin it needs on a slow runner.
+        await using var host = NewHost(extraArgs: "--no-pong", pingInterval: TimeSpan.FromMilliseconds(500));
         await host.StartAsync(CancellationToken.None);
         Assert.NotNull(host.WorkerPid);
 
@@ -372,7 +379,15 @@ public sealed class BrowserWorkerHostTests : IDisposable
         Assert.Equal(BrowserCapabilities.Inspect, result["capability"]!.GetValue<string>());
         // Windows reuses pids quickly, so a second start — not pid inequality — is the proof of a replacement.
         Assert.Equal(2, host.Starts);
-        Assert.True(host.WorkerRunning);
+
+        // The replacement served that request, and it is under the same guard: with --no-pong it
+        // misses three pings in its turn and is killed too. Waiting for that second kill is what
+        // proves the replacement was alive and being pinged. Sampling WorkerRunning here was a
+        // race even at the wider interval: the replacement is killed a fixed time after it starts,
+        // and nothing bounds how long the assertions above take on a loaded run.
+        await WaitUntilAsync(() => host.LivenessKills >= 2, TimeSpan.FromSeconds(10));
+        // Nothing restarted it behind the test: this host is not eager, so only a request starts a worker.
+        Assert.Equal(2, host.Starts);
     }
 
     [Fact]

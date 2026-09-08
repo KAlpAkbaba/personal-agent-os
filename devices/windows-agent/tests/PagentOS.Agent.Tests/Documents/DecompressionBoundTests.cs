@@ -50,8 +50,11 @@ public sealed class DecompressionBoundTests(ITestOutputHelper output) : IDisposa
                 ["a"] = new JsonObject { ["path"] = bomb },
                 ["b"] = new JsonObject { ["path"] = _lab.PathOf(honestFixture) },
             });
-        });
-        output.WriteLine($"{kind} bomb: {onDisk} bytes on disk, {BombBytes} inflated; working set +{workingSetMiB:F1} MiB, allocated +{allocatedMiB:F1} MiB across inspect+extract+compare");
+        },
+        GrowthBoundMiB,
+        output,
+        workingSetBoundMiB: GrowthBoundMiB);
+        output.WriteLine($"{kind} bomb: {onDisk} bytes on disk, {BombBytes} inflated; working set {BombFixtures.SignedMiB(workingSetMiB)} MiB, allocated {BombFixtures.SignedMiB(allocatedMiB)} MiB across inspect+extract+compare");
 
         foreach (var (name, ex) in new[] { ("inspect", inspect), ("extract", extract), ("compare", compare) })
         {
@@ -170,8 +173,11 @@ public sealed class DecompressionBoundTests(ITestOutputHelper output) : IDisposa
             inspected = _lab.Exec(DocumentCapabilityNames.FileInspect, new JsonObject { ["path"] = bomb });
             unranged = _lab.ExpectFailure(DocumentCapabilityNames.DocumentExtract, new JsonObject { ["path"] = bomb });
             ranged = _lab.ExpectFailure(DocumentCapabilityNames.DocumentExtract, new JsonObject { ["path"] = bomb, ["page_range"] = new JsonArray(1, 1) });
-        });
-        output.WriteLine($"pdf bomb: {onDisk} bytes on disk, {BombBytes} inflated per page; working set +{workingSetMiB:F1} MiB, allocated +{allocatedMiB:F1} MiB across inspect+extract+extract[1,1]");
+        },
+        GrowthBoundMiB,
+        output,
+        workingSetBoundMiB: GrowthBoundMiB);
+        output.WriteLine($"pdf bomb: {onDisk} bytes on disk, {BombBytes} inflated per page; working set {BombFixtures.SignedMiB(workingSetMiB)} MiB, allocated {BombFixtures.SignedMiB(allocatedMiB)} MiB across inspect+extract+extract[1,1]");
 
         Assert.Equal(300, inspected["pages"]!.GetValue<int>());
         Assert.Equal(DocumentErrors.PageBound, unranged.Detail[DocumentErrors.DetailKey]);
