@@ -107,6 +107,12 @@ const EXPECTED_KIND: Record<string, CoreVisualKind> = {
   // adapter — is the agent's own work: a core state with its own deliberate
   // building posture, a waiting posture and a settled posture inside it.
   "capability.genesis": "capability_genesis",
+  // v10 (M25): building a 3D scene for the owner through the tool's own
+  // scripting interface, rendering it and READING IT BACK is the agent's own
+  // work: a core state with its own deliberate making posture, a distinct
+  // rendering posture, a reading posture, and a settled `unavailable` for a
+  // tool that could not be driven at all.
+  "scene.activity": "scene_activity",
 };
 
 describe("a visual state is entered only by its own event", () => {

@@ -978,6 +978,30 @@
   color: var(--text);
 }
 
+/* ------------------------------------------------------ 3B Sahne (M25 §6) */
+
+/*
+ * The last render of one scene: the PNG the driver wrote, fetched through
+ * the owner session and handed here as a blob. Bounded rather than sized —
+ * a render is up to 1920×1080 (M25 §7) and the panel is a column — and
+ * never stretched: an image of a scene must show the scene's proportions,
+ * because the owner reads geometry off it.
+ */
+.scene-render {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin-top: 0.4rem;
+  border: 1px solid var(--muted);
+  border-radius: 4px;
+  background: var(--core-ground);
+}
+
+.approval-pair .core-chip[data-scene-action]:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
 /* ---------------------------------------------------- reduced motion */
 
 /*

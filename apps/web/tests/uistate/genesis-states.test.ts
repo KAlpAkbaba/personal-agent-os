@@ -186,14 +186,20 @@ const EXPECTED_CAPTION: Record<(typeof GENESIS_RUN_STATES)[number], string> = {
 // ------------------------------------------------------------ the contract
 
 describe("contract v9 is v8 plus the genesis state, and says so", () => {
-  it("is version 9 and still reads a v8, v7, v6, v5, v4, v3 and v2 server", () => {
-    expect(KNOWN_CONTRACT_VERSION).toBe(9);
+  it("still reads a v9, v8, v7, v6, v5, v4, v3 and v2 server from a build at v9 or later", () => {
+    // v10 (M25) bumped the build past this file's contract; the assertion is
+    // relative, as the v8 file's became when v9 landed, so the v9 additions
+    // stay proven without pinning the build to a version it has left.
+    expect(KNOWN_CONTRACT_VERSION).toBeGreaterThanOrEqual(9);
     expect(MIN_SUPPORTED_CONTRACT_VERSION).toBe(2);
-    expect(contractCompatibility(9)).toBe("current");
+    expect(contractCompatibility(KNOWN_CONTRACT_VERSION)).toBe("current");
+    // v9 itself: current on a v9 build, a readable subset on any later one.
+    const built: number = KNOWN_CONTRACT_VERSION;
+    expect(contractCompatibility(9)).toBe(built === 9 ? "current" : "older_supported");
     for (const older of [8, 7, 6, 5, 4, 3, 2]) expect(contractCompatibility(older), `v${older}`).toBe("older_supported");
     // A server ahead of this build is a different problem: we do not know its
     // vocabulary, so nothing is drawn from it.
-    expect(contractCompatibility(10)).toBe("unsupported");
+    expect(contractCompatibility(KNOWN_CONTRACT_VERSION + 1)).toBe("unsupported");
     expect(contractCompatibility(1)).toBe("unsupported");
   });
 
@@ -216,7 +222,10 @@ describe("contract v9 is v8 plus the genesis state, and says so", () => {
 
   it("appends the token after v8's, never reordering", () => {
     expect(UI_STATES.indexOf("capability.genesis")).toBe(UI_STATES.indexOf("app.factory") + 1);
-    expect(UI_STATES[UI_STATES.length - 1]).toBe("capability.genesis");
+    // Appended after the last v8 token, never reordered; v10 appends after it
+    // in turn, so the assertion is about the ORDER rather than about being
+    // last — exactly what "append only" means.
+    expect(UI_STATES.indexOf("capability.genesis")).toBeGreaterThan(UI_STATES.indexOf("app.factory"));
   });
 
   it("types the thirteen run states in the spec's order, and admits nothing outside them", () => {
