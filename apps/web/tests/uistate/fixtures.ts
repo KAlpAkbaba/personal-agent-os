@@ -530,6 +530,40 @@ export const CALENDAR_ACTIVITY = (
 export const CALENDAR_ACTIVITY_BARE = () =>
   event({ state: "calendar.activity", subsystem: "calendar", task_id: "cal-task-2" });
 
+// ------------------------------------------- v7: the Artifact Factory (M22 §6)
+
+/**
+ * `artifact.factory` as the M22 spec §6 has the Cloud Core publish it:
+ * subsystem `artifacts`, the task id, and in metadata the artifact's title,
+ * the format in hand, the verdict (`rendering` | `valid` | `invalid`) and —
+ * on `invalid` — the ref of the first element the independent parser could
+ * not find, in M20's reference scheme.
+ */
+export const ARTIFACT_FACTORY = (
+  title: string | null = "Bütçe 2026",
+  format: string | null = "xlsx",
+  verdict: string | null = "rendering",
+  failingRef: string | null = null,
+  extra: Record<string, unknown> = {},
+) =>
+  event({
+    state: "artifact.factory",
+    subsystem: "artifacts",
+    task_id: "art-task-1",
+    status: verdict ?? "rendering",
+    metadata: {
+      ...(title === null ? {} : { title }),
+      ...(format === null ? {} : { format }),
+      ...(verdict === null ? {} : { verdict }),
+      ...(failingRef === null ? {} : { failing_ref: failingRef }),
+      ...(extra as Record<string, string | number | boolean>),
+    },
+  });
+
+/** A factory event whose publisher sent no metadata at all. */
+export const ARTIFACT_FACTORY_BARE = () =>
+  event({ state: "artifact.factory", subsystem: "artifacts", task_id: "art-task-2" });
+
 /** The owner-authorised release path, mid-deployment (ADR-0055). */
 export const RELEASE_DEPLOYING = () =>
   event({

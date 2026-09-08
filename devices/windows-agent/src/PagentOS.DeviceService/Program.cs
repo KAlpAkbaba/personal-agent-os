@@ -361,7 +361,10 @@ public static class Program
             admission,
             new WindowsPipePeerInspector(),
             provider.GetRequiredService<ILogger<CompanionPipeServer>>(),
-            provider.GetRequiredService<AuditLog>()));
+            provider.GetRequiredService<AuditLog>(),
+            // M22 (§6k): the origin this device dials, told to the companion in the challenge
+            // so file.fetch is pinned to it on both sides of the pipe.
+            brokerOrigin: options.BrokerRestUrl));
         builder.Services.AddSingleton<ICapabilityExecutor>(provider =>
             new InteractiveCapabilityExecutor(
                 provider.GetRequiredService<CompanionPipeServer>(),

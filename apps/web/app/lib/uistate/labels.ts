@@ -9,8 +9,15 @@
  */
 
 import type { AlarmStage, DisplayState, EyeStatus, PresenceKind, ReleaseStage } from "./ambient";
-import { CALENDAR_CAPTION_BARE, DOCUMENT_CAPTION_BARE, MAIL_CAPTION_BARE } from "./contract";
+import {
+  ARTIFACT_CAPTION_BARE,
+  ARTIFACT_VERDICT_LABEL,
+  CALENDAR_CAPTION_BARE,
+  DOCUMENT_CAPTION_BARE,
+  MAIL_CAPTION_BARE,
+} from "./contract";
 import type { DocumentRef, KnownUiState } from "./contract";
+import { type ArtifactFacts, type ArtifactStage, artifactFormatLabel } from "./artifacts";
 import {
   CALENDAR_PROPOSAL_STATE_LABEL,
   type CalendarFacts,
@@ -56,6 +63,7 @@ export const KIND_LABEL: Record<CoreVisualKind, string> = {
   document_analysis: DOCUMENT_CAPTION_BARE,
   mail_activity: MAIL_CAPTION_BARE,
   calendar_activity: CALENDAR_CAPTION_BARE,
+  artifact_factory: ARTIFACT_CAPTION_BARE,
 };
 
 /**
@@ -106,6 +114,12 @@ export const KIND_DETAIL: Record<CoreVisualKind, string> = {
     "Sahibin postası okunuyor ya da bir taslak hazırlanıyor; klasör, konu ve taslak durumu yalnızca yayınlandığı kadar söylenir. Hiçbir şey sahip onayı olmadan gönderilmez.",
   calendar_activity:
     "Sahibin takvimi okunuyor ya da bir öneri hazırlanıyor; aralık, etkinlik ve öneri durumu yalnızca yayınlandığı kadar söylenir. Takvime sahip onayı olmadan yazılmaz.",
+  // M22: a file is being made, then reopened by an independent parser and
+  // compared to what was asked. The sentence says which side of "done" the
+  // posture is on: a render is done when the parser found what was asked,
+  // never when it was written — and nothing here says how far along it is.
+  artifact_factory:
+    "Sahip için bir dosya üretiliyor ya da bağımsız bir okuyucuyla yeniden açılıp istenenle karşılaştırılıyor; başlık, biçim ve sonuç yalnızca yayınlandığı kadar söylenir. Doğrulanmamış bir çıktı bitmiş sayılmaz. İlerleme bildirilmez.",
 };
 
 /**
@@ -248,6 +262,10 @@ export const STATE_LABEL: Record<KnownUiState, string> = {
   // proposal's step is said only from its published metadata.
   "mail.activity": MAIL_CAPTION_BARE,
   "calendar.activity": CALENDAR_CAPTION_BARE,
+  // v7 — the Artifact Factory (M22). "Üretiliyor", not "üretildi": the state
+  // is entered when the render starts, and a verdict is said only from its
+  // published metadata.
+  "artifact.factory": ARTIFACT_CAPTION_BARE,
 };
 
 export function stateLabel(state: string): string {
@@ -272,6 +290,7 @@ export const SUBSYSTEM_LABEL: Record<string, string> = {
   documents: "Belgeler",
   mail: "Posta",
   calendar: "Takvim",
+  artifacts: "Üretim",
 };
 
 export function subsystemLabel(subsystem: string): string {
@@ -421,6 +440,7 @@ const CONTRACT_ADDITIONS: Record<number, string> = {
   4: "dijital operatör durumları",
   5: "belge inceleme durumu",
   6: "posta ve takvim durumları",
+  7: "dosya üretim durumu",
 };
 
 /**
@@ -588,5 +608,53 @@ export function calendarFactsLine(facts: CalendarFacts): string {
     proposal ? `öneri: ${proposal}` : "öneri bildirilmedi",
   ];
   if (proposal) parts.push(conflictsPhrase(facts.conflicts) ?? "çakışma bildirilmedi");
+  return parts.join(" · ");
+}
+
+// ------------------------------------------------------- v7: the Artifact Factory
+
+export const ARTIFACT_LABEL: Record<ArtifactStage, string> = {
+  making: ARTIFACT_CAPTION_BARE,
+  none: "Süren bir üretim yok",
+};
+
+/** The Üretilenler panel's empty sentence: the list route answered, and holds no artifact. */
+export const ARTIFACT_EMPTY = "Henüz bir şey üretilmedi.";
+
+/** The Üretilenler panel's line when the bus never carried a factory event: not "nothing made", "nothing reported". */
+export const ARTIFACT_UNTOLD = "Üretim etkinliği bildirilmedi.";
+
+/**
+ * A render the list route holds with no validation state at all — an M13
+ * render made before the factory validated anything, or a row the route
+ * does not describe. Not "doğrulanamadı": nobody said it failed; and never
+ * "doğrulandı": nobody said it passed.
+ */
+export const ARTIFACT_RENDER_UNVALIDATED = "doğrulama bildirilmedi";
+
+/**
+ * A verdict token as one word: the spec's word for the three this build
+ * knows, the token verbatim for one it does not (still a published fact),
+ * and the statement that none came.
+ */
+export function artifactVerdictWord(token: string | null): string {
+  if (token === null) return ARTIFACT_RENDER_UNVALIDATED;
+  return (ARTIFACT_VERDICT_LABEL as Record<string, string>)[token] ?? token;
+}
+
+/**
+ * The published factory facts on one line, each one either what the
+ * publisher sent or the statement that it did not send it. The failing ref
+ * is printed only beside an `invalid` verdict: a valid render has no place
+ * that failed, and "yer bildirilmedi" there would be noise rather than a fact.
+ */
+export function artifactFactsLine(facts: ArtifactFacts): string {
+  const format = artifactFormatLabel(facts.format);
+  const parts = [
+    facts.title ? `başlık: ${facts.title}` : "başlık bildirilmedi",
+    format ? `biçim: ${format}` : "biçim bildirilmedi",
+    facts.verdictToken ? `sonuç: ${artifactVerdictWord(facts.verdictToken)}` : "sonuç bildirilmedi",
+  ];
+  if (facts.verdict === "invalid") parts.push(facts.failingRef ? `yer: ${facts.failingRef}` : "yer bildirilmedi");
   return parts.join(" · ");
 }

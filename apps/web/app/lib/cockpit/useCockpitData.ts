@@ -52,6 +52,7 @@ import {
   fetchWorld,
 } from "./api";
 import { type PendingDraft, type PendingProposal, fetchPendingDrafts, fetchPendingProposals } from "./approvals";
+import { type ArtifactRow, fetchArtifacts } from "./artifacts";
 
 const POLL_VISIBLE_MS = 15_000;
 
@@ -89,6 +90,12 @@ export type CockpitData = {
    */
   mailDrafts: Loaded<PendingDraft[]>;
   calendarProposals: Loaded<PendingProposal[]>;
+  /**
+   * M22 §4: the artifacts the factory made, from M13's list route, with each
+   * render's validation state once the Cloud Core half publishes it. The
+   * making itself (rendering, checking) is on the bus, not here.
+   */
+  artifacts: Loaded<ArtifactRow[]>;
 };
 
 const INITIAL: CockpitData = {
@@ -110,6 +117,7 @@ const INITIAL: CockpitData = {
   evolutionSupervisor: { kind: "loading" },
   mailDrafts: { kind: "loading" },
   calendarProposals: { kind: "loading" },
+  artifacts: { kind: "loading" },
 };
 
 export function useCockpitData(enabled = true): { data: CockpitData; refresh: () => void } {
@@ -140,6 +148,7 @@ export function useCockpitData(enabled = true): { data: CockpitData; refresh: ()
         evolutionSupervisor,
         mailDrafts,
         calendarProposals,
+        artifacts,
       ] = await Promise.all([
         fetchResearchTasks(),
         // Same refresh, no extra timer: the focus changes when the list does.
@@ -160,6 +169,7 @@ export function useCockpitData(enabled = true): { data: CockpitData; refresh: ()
         fetchEvolutionSupervisor(),
         fetchPendingDrafts(),
         fetchPendingProposals(),
+        fetchArtifacts(),
       ]);
       if (stopped.current) return;
       setData({
@@ -181,6 +191,7 @@ export function useCockpitData(enabled = true): { data: CockpitData; refresh: ()
         evolutionSupervisor,
         mailDrafts,
         calendarProposals,
+        artifacts,
       });
     } finally {
       inFlight.current = false;

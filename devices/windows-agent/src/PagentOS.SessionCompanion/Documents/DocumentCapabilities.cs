@@ -37,7 +37,12 @@ namespace PagentOS.SessionCompanion.Documents;
 /// Every bound answers <c>truncated: true</c>, never a silent cut; a format that cannot be
 /// parsed answers <c>unsupported_format</c> with the reason, never an empty success; every
 /// result passes the browser family's forbidden-key scan before it leaves the companion.
-/// Read-only by construction: nothing here writes, moves or deletes.
+/// Read-only by construction: nothing here writes, moves or deletes — with one creator since
+/// M22, <c>file.fetch</c> (<see cref="FileFetch"/>, DEVICE_PROTOCOL.md §6k), which brings a
+/// Cloud Core render into the Downloads root as a NEW file from the origin the device dialled
+/// (<see cref="FetchOrigin"/>, told by the Device Service in the pipe challenge), verified
+/// before it is kept and again under its final name, marked as from the web, never over an
+/// existing file, at most two at a time.
 /// </summary>
 [SupportedOSPlatform("windows")]
 public sealed class DocumentCapabilities
@@ -53,14 +58,25 @@ public sealed class DocumentCapabilities
     private readonly ILogger _logger;
     private readonly AuditLog? _audit;
     private readonly IReadOnlyList<IDocumentExtractor> _extractors;
+    private readonly OperatorCapabilities? _operator;
+    private readonly FileFetch _fetch;
     private readonly ConcurrentDictionary<string, string> _known = new(StringComparer.Ordinal);
+    private volatile string? _fetchOrigin;
 
-    public DocumentCapabilities(OperatorOptions options, ILogger logger, AuditLog? audit = null, IReadOnlyList<IDocumentExtractor>? extractors = null)
+    public DocumentCapabilities(
+        OperatorOptions options,
+        ILogger logger,
+        AuditLog? audit = null,
+        IReadOnlyList<IDocumentExtractor>? extractors = null,
+        OperatorCapabilities? fileOpener = null,
+        FileFetch? fetch = null)
     {
         _options = options;
         _logger = logger;
         _audit = audit;
         _extractors = extractors ?? DefaultExtractors();
+        _operator = fileOpener;
+        _fetch = fetch ?? new FileFetch();
         Roots = new AuthorisedRoots(options.AuthorisedRoots);
     }
 
@@ -72,6 +88,25 @@ public sealed class DocumentCapabilities
     public AuthorisedRoots Roots { get; }
 
     public IReadOnlyList<string> AuthorisedRootsConfigured => _options.AuthorisedRoots;
+
+    /// <summary>
+    /// M22 (§6k): the ONE origin <c>file.fetch</c> may download from — scheme, host and port of
+    /// the Cloud Core the Device Service dialled, as it says in every pipe challenge
+    /// (<see cref="CompanionRuntime"/> sets it on connect; a lab sets it to its local origin).
+    /// Null — never told — means every fetch is <c>permission_denied</c>: this companion does
+    /// not guess an origin from its own configuration.
+    /// </summary>
+    public string? FetchOrigin
+    {
+        get => _fetchOrigin;
+        set => _fetchOrigin = HttpOrigin.Of(value);
+    }
+
+    /// <summary>The directory <c>file.fetch</c> writes into (<c>DownloadsRoot</c>, else the owner's Downloads folder); it must resolve inside the roots at fetch time.</summary>
+    public string? DownloadsRoot => _options.EffectiveDownloadsRoot;
+
+    /// <summary>Whether <c>open: true</c> can be honoured — this companion was built with the operator's <c>file.open</c>.</summary>
+    public bool CanOpen => _operator is not null;
 
     /// <summary>How many <c>file_id</c>s this process has issued and can resolve again.</summary>
     public int KnownFiles => _known.Count;
@@ -94,7 +129,11 @@ public sealed class DocumentCapabilities
 
         try
         {
-            var result = await Task.Run(() => Dispatch(capability, payload, budget, budgetCts.Token), CancellationToken.None).ConfigureAwait(false);
+            // file.fetch is asynchronous end to end (its network reads carry the token, ADR-0085
+            // addendum 3) and is awaited directly; the read-only names run on a pool thread.
+            var result = string.Equals(capability, DocumentCapabilityNames.FileFetch, StringComparison.Ordinal)
+                ? await FetchAsync(payload, budget, budgetCts.Token).ConfigureAwait(false)
+                : await Task.Run(() => Dispatch(capability, payload, budget, budgetCts.Token), CancellationToken.None).ConfigureAwait(false);
             var forbidden = BrowserWorkerHost.FindForbiddenKey(result, path: "result");
             if (forbidden is not null)
             {
@@ -145,6 +184,92 @@ public sealed class DocumentCapabilities
             DocumentCapabilityNames.DocumentExtract => Extract(payload, cancellationToken),
             _ => throw new CapabilityException(ErrorClasses.CapabilityMissing, $"'{capability}' has no dispatch entry", retryable: false),
         };
+
+    // ================================================================== file.fetch (M22)
+
+    /// <summary>
+    /// §6k, in this order: the payload's shape (<c>validation_error</c>, before any request);
+    /// <c>open</c> needs the operator (<c>capability_missing</c>); the URL's origin and path
+    /// (<c>permission_denied</c>); the Downloads root RESOLVED and CONTAINED by the roots
+    /// (<c>permission_denied</c>); then <see cref="FileFetch.RunAsync"/> — at most two in
+    /// flight, size bound while streaming, every read under the cap, hash before the rename
+    /// and again under the final name, Mark-of-the-Web on the kept file, an existing file never
+    /// replaced. The kept file gets a record (and a <c>file_id</c> this companion will resolve
+    /// again); <c>open: true</c> then runs the operator's real <c>file.open</c> on the resolved
+    /// path and the result carries its observation as <c>opened</c> — a failure to open is
+    /// reported inside <c>opened</c> (<c>{opened: false, error: {…}}</c>), because the fetch
+    /// itself did succeed.
+    /// </summary>
+    private async Task<JsonObject> FetchAsync(JsonObject payload, TimeSpan budget, CancellationToken cancellationToken)
+    {
+        var started = Stopwatch.StartNew();
+        var request = FileFetch.Parse(payload);
+        if (request.Open && _operator is null)
+        {
+            throw new CapabilityException(ErrorClasses.CapabilityMissing, "payload.open needs the Digital Operator's file.open, which this companion was built without; nothing was fetched", retryable: false);
+        }
+
+        FileFetch.RequireOrigin(request.Url, FetchOrigin);
+
+        var downloads = DownloadsRoot;
+        var directory = string.IsNullOrWhiteSpace(downloads) ? null : Roots.Confine(downloads);
+        if (directory is null || !Directory.Exists(directory))
+        {
+            throw DocumentErrors.Denied($"the Downloads root does not resolve to a directory inside the owner's authorised roots ({string.Join(";", AuthorisedRootsConfigured)}); nothing was fetched");
+        }
+
+        var outcome = await _fetch.RunAsync(request, directory, Roots, cancellationToken).ConfigureAwait(false);
+        var record = FileRecord.From(outcome.Path, hashContent: true);
+        _known[record.FileId] = outcome.Path;
+        _logger.LogInformation("file.fetch kept {Bytes} bytes from {Origin} (sha256 verified twice, mark-of-the-web {Marked}) in {Ms} ms", outcome.Bytes, FetchOrigin, outcome.MarkOfTheWeb, started.ElapsedMilliseconds);
+
+        var result = new JsonObject
+        {
+            ["file"] = record.ToJson(),
+            ["path"] = outcome.Path,
+            ["verified"] = true,
+            ["sha256"] = request.Sha256,
+            ["bytes"] = outcome.Bytes,
+            ["mark_of_the_web"] = outcome.MarkOfTheWeb,
+        };
+
+        if (request.Open)
+        {
+            result["opened"] = await OpenFetchedAsync(outcome.Path, request.Application, budget, started.Elapsed, cancellationToken).ConfigureAwait(false);
+        }
+
+        return result;
+    }
+
+    /// <summary>The operator's own <c>file.open</c> (its confinement, its argument policy, its window wait), on the rest of this request's budget.</summary>
+    private async Task<JsonObject> OpenFetchedAsync(string path, string? application, TimeSpan budget, TimeSpan elapsed, CancellationToken cancellationToken)
+    {
+        var payload = new JsonObject { ["path"] = path };
+        if (application is not null)
+        {
+            payload["application"] = application;
+        }
+
+        var remaining = budget > TimeSpan.Zero ? budget - elapsed : TimeSpan.Zero;
+        if (budget > TimeSpan.Zero && remaining < TimeSpan.FromSeconds(1))
+        {
+            remaining = TimeSpan.FromSeconds(1);
+        }
+
+        try
+        {
+            return await _operator!.ExecuteAsync(OperatorCapabilityNames.FileOpen, payload, remaining, cancellationToken).ConfigureAwait(false);
+        }
+        catch (CapabilityException ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning("file.fetch kept the file but file.open failed: {Class}: {Reason}", ex.ErrorClass, ex.Message);
+            return new JsonObject
+            {
+                ["opened"] = false,
+                ["error"] = new JsonObject { ["class"] = ex.ErrorClass, ["message"] = ex.Message, ["retryable"] = ex.Retryable },
+            };
+        }
+    }
 
     // ================================================================== file.search
 
