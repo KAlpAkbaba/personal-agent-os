@@ -34,13 +34,15 @@ public sealed class DocumentLab : IDisposable
     /// <param name="withOperator">Build a real <see cref="OperatorCapabilities"/> on the same roots so <c>file.fetch {open: true}</c> can run the real <c>file.open</c> (M22).</param>
     /// <param name="fetchOrigin">The origin <c>file.fetch</c> is pinned to — what the Device Service would have said in the pipe challenge; null leaves every fetch refused.</param>
     /// <param name="downloadsRoot">Where <c>file.fetch</c> writes; default <c>&lt;Root&gt;\Downloads</c>, inside the lab's root.</param>
+    /// <param name="fetchCap">A shorter download cap than the family's 30 s, so a stalled-origin test finishes in seconds (ADR-0085 addendum 3).</param>
     public DocumentLab(
         bool enabled = true,
         IReadOnlyList<string>? roots = null,
         IReadOnlyList<IDocumentExtractor>? extractors = null,
         bool withOperator = false,
         string? fetchOrigin = null,
-        string? downloadsRoot = null)
+        string? downloadsRoot = null,
+        TimeSpan? fetchCap = null)
     {
         RunId = Guid.NewGuid().ToString("N")[..12];
         Root = Path.Combine(OperatorOptions.FixtureRoot, "documents", RunId);
@@ -50,7 +52,8 @@ public sealed class DocumentLab : IDisposable
         Log = new ListLogger();
         Options = new OperatorOptions(enabled, TerminalRunner.DefaultAllowlist, roots ?? [Root], Downloads);
         Operator = withOperator ? new OperatorCapabilities(Options, Log) : null;
-        Documents = new DocumentCapabilities(Options, Log, extractors: extractors, fileOpener: Operator)
+        Fetch = new FileFetch(cap: fetchCap);
+        Documents = new DocumentCapabilities(Options, Log, extractors: extractors, fileOpener: Operator, fetch: Fetch)
         {
             FetchOrigin = fetchOrigin,
         };
@@ -65,6 +68,9 @@ public sealed class DocumentLab : IDisposable
     public string Downloads { get; }
 
     public DocumentCapabilities Documents { get; }
+
+    /// <summary>The real <see cref="FileFetch"/> behind <see cref="Documents"/> — its cap, its in-flight count and its <see cref="FileFetch.BeforeFinalVerify"/> seam.</summary>
+    public FileFetch Fetch { get; }
 
     /// <summary>The operator built beside the documents object when a test asked for one; its started processes are ended on dispose.</summary>
     public OperatorCapabilities? Operator { get; }
@@ -170,5 +176,7 @@ public sealed class DocumentLab : IDisposable
         {
             // Best-effort teardown.
         }
+
+        Fetch.Dispose();
     }
 }
