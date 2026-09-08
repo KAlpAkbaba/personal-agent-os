@@ -370,11 +370,28 @@ class FakeSmtpServer:
             upper = text.upper()
             if upper.startswith("EHLO") or upper.startswith("HELO"):
                 send("250-fake.smtp")
-                send("250 STARTTLS")
+                send("250-STARTTLS")
+                send("250 AUTH LOGIN PLAIN")
             elif upper.startswith("STARTTLS"):
                 send("220 go ahead")
                 # Deliberately no real TLS handshake — a loopback test fake (module
                 # docstring); the provider's own STARTTLS call simply proceeds in plaintext.
+            elif upper.startswith("AUTH"):
+                # Accepts any credential — this fake proves the CLIENT's own wire
+                # behaviour and header composition, never real authentication (module
+                # docstring: the message never leaves this process either way).
+                tokens = text.split()
+                mechanism = tokens[1].upper() if len(tokens) > 1 else ""
+                has_initial_response = len(tokens) > 2
+                if mechanism == "LOGIN" and not has_initial_response:
+                    send("334 VXNlcm5hbWU6")  # "Username:"
+                    rfile.readline()
+                    send("334 UGFzc3dvcmQ6")  # "Password:"
+                    rfile.readline()
+                elif mechanism == "PLAIN" and not has_initial_response:
+                    send("334 ")
+                    rfile.readline()
+                send("235 Authentication successful")
             elif upper.startswith("MAIL FROM"):
                 send("250 OK")
             elif upper.startswith("RCPT TO"):
