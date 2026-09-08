@@ -111,6 +111,14 @@ CTX_APP_SCAFFOLDED: Final = "app_scaffolded"
 #: "uygulamayı durdur" / "uygulama çalışıyor mu?" / "uygulamayı aç".
 CTX_APP_RUNNING: Final = "app_running"
 
+#: M24 (docs/M24_CAPABILITY_GENESIS_SPEC.md §6, §7): the REAL counter-box/lamp-box
+#: fixture application, started by the harness on a free port and registered into
+#: app.genesis.catalogue for the duration of ONE case — never a mock; the same
+#: "genuine fixture, not a sentinel" discipline CTX_ARTIFACT_FOCUSED/CTX_APP_SCAFFOLDED
+#: already use, one level further (a real HTTP server, not just a real DB row).
+CTX_COUNTERBOX_RUNNING: Final = "counterbox_running"
+CTX_LAMPBOX_RUNNING: Final = "lampbox_running"
+
 #: Side-effect policies: the device capabilities a case MAY reach on the fake device.
 #: Anything else the fake device saw is a forbidden side effect.
 SIDE_EFFECTS_NONE: Final[frozenset[str]] = frozenset()
@@ -176,6 +184,15 @@ SIDE_EFFECTS_APP_TEST: Final[frozenset[str]] = frozenset({"project.test"})
 SIDE_EFFECTS_APP_STOP: Final[frozenset[str]] = frozenset({"project.stop"})
 SIDE_EFFECTS_APP_STATUS: Final[frozenset[str]] = frozenset({"project.status"})
 SIDE_EFFECTS_APP_OPEN: Final[frozenset[str]] = frozenset({"file.reveal"})
+
+#: M24 (docs/M24_CAPABILITY_GENESIS_SPEC.md §6, §7): NOT a fake-DEVICE capability like
+#: every set above — a genesis dispatch reaches the REAL fixture over real loopback
+#: HTTP, never the fake device. This is the harness's OWN token (the same shape
+#: SIDE_EFFECTS_MAIL_SEND/SIDE_EFFECTS_CALENDAR_COMMIT already are for their own
+#: non-device sinks): "this case's tool call is allowed to change the fixture's real
+#: state". A case naming it must actually change that state; every other genesis case
+#: must not.
+SIDE_EFFECTS_CAPABILITY_MUTATE: Final[frozenset[str]] = frozenset({"capability.mutate"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -2653,6 +2670,254 @@ def _app_cases() -> list[UtteranceCase]:
     ]
 
 
+def _capability_request_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    # A MUTATING operation with no owner authorization on record parks at
+    # awaiting_approval BEFORE registering (spec §5/§9's deny-by-default) — but
+    # the "testing" stage's OWN evaluation (app.genesis.service._test) already
+    # ran the generated tests/evals against the REAL fixture before that park,
+    # never a mock (app.genesis.adapter's own module docstring), so a
+    # NON-idempotent operation's state has ALREADY moved by the time a bare
+    # request (no pre_turn approval) returns — "increment" (by=1, twice: the
+    # generated test's own primary-input check + the one eval case) ends up
+    # +2, never merely parked-and-untouched. "reset" is idempotent (0 -> 0
+    # twice is still 0) and "toggle" flips an EVEN number of times (twice) —
+    # both net to NO observable change, which is what makes them a fair
+    # "awaiting_approval, untouched" proof instead.
+    for case_id, text, source, context, args in (
+        (
+            "genesis.request.increment",
+            "Sayaç kutusunu bir artır.",
+            "canonical",
+            CTX_COUNTERBOX_RUNNING,
+            {"by": 1},
+        ),
+        (
+            "genesis.request.increment.para",
+            "Sayacı bir artırır mısın?",
+            "paraphrase",
+            CTX_COUNTERBOX_RUNNING,
+            {"by": 1},
+        ),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="capability_request",
+                    expected_tool="capability.request",
+                    side_effects=SIDE_EFFECTS_CAPABILITY_MUTATE,
+                    context=context,
+                    category="genesis",
+                    source=source,
+                    tool_arguments={"arguments": args},
+                )
+            )
+        )
+    for case_id, text, source, context, args in (
+        (
+            "genesis.request.reset",
+            "Sayaç kutusunu sıfırla.",
+            "canonical",
+            CTX_COUNTERBOX_RUNNING,
+            {},
+        ),
+        (
+            "genesis.request.toggle",
+            "Test lambasını aç.",
+            "canonical",
+            CTX_LAMPBOX_RUNNING,
+            {},
+        ),
+        (
+            "genesis.request.toggle.para",
+            "Lambayı kapatsana.",
+            "paraphrase",
+            CTX_LAMPBOX_RUNNING,
+            {},
+        ),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="capability_request",
+                    expected_tool="capability.request",
+                    side_effects=SIDE_EFFECTS_NONE,
+                    context=context,
+                    category="genesis",
+                    source=source,
+                    tool_arguments={"arguments": args},
+                )
+            )
+        )
+    for case_id, text, source, context in (
+        ("genesis.request.read", "Sayaç kaç?", "canonical", CTX_COUNTERBOX_RUNNING),
+        (
+            "genesis.request.state",
+            "Test lambasının durumu ne?",
+            "canonical",
+            CTX_LAMPBOX_RUNNING,
+        ),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="capability_request",
+                    expected_tool="capability.request",
+                    side_effects=SIDE_EFFECTS_NONE,
+                    context=context,
+                    category="genesis",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _capability_status_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        ("genesis.status.general", "Yeni yetenek ne durumda?", "canonical"),
+        ("genesis.status.deictic", "Onu yapabiliyor musun artık?", "canonical"),
+        ("genesis.status.para", "Yeni yeteneğin durumu nedir?", "paraphrase"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="capability_status",
+                    expected_tool="capability.status",
+                    side_effects=SIDE_EFFECTS_NONE,
+                    context=CTX_NONE,
+                    category="genesis",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _capability_approve_cancel_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    # ADR-0084 addendum 2's own pre_turn shape (M21), reused here for the M24
+    # confirmation gate: the mutating request runs first at turn 1 (parking at
+    # awaiting_approval — nothing is authorized in the harness), the owner's
+    # approval/cancellation then runs at turn 2, strictly after it.
+    for case_id, text, source in (
+        ("genesis.approve.canonical", "Onaylıyorum.", "canonical"),
+        ("genesis.approve.authorize", "Bu uygulamayı yetkilendir.", "canonical"),
+        ("genesis.approve.para", "Onaylıyorum, devam et.", "paraphrase"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="capability_approve",
+                    expected_tool="capability.approve",
+                    side_effects=SIDE_EFFECTS_CAPABILITY_MUTATE,
+                    context=CTX_COUNTERBOX_RUNNING,
+                    category="genesis",
+                    source=source,
+                    pre_turn=("Sayaç kutusunu bir artır.", "capability.request"),
+                )
+            )
+        )
+    for case_id, text, source in (
+        ("genesis.cancel.canonical", "Vazgeç, yapma.", "canonical"),
+        ("genesis.cancel.para", "Boş ver, vazgeçtim.", "paraphrase"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="capability_cancel",
+                    expected_tool="capability.cancel",
+                    side_effects=SIDE_EFFECTS_NONE,
+                    context=CTX_COUNTERBOX_RUNNING,
+                    category="genesis",
+                    source=source,
+                    pre_turn=("Sayaç kutusunu sıfırla.", "capability.request"),
+                )
+            )
+        )
+    return cases
+
+
+def _capability_negative_cases() -> list[UtteranceCase]:
+    return list(
+        itertools.chain.from_iterable(
+            _with_variants(c)
+            for c in (
+                UtteranceCase(
+                    case_id="genesis.neg.delete",
+                    utterance="Sayaç kutusunu sil.",
+                    expected_intent="none",
+                    expected_tool=None,
+                    expected_response=RESPONSE_NONE,
+                    context=CTX_COUNTERBOX_RUNNING,
+                    category="genesis",
+                    source="canonical",
+                    regression_issue_id="M24 spec §7: no delete tool for a genesis target",
+                ),
+                UtteranceCase(
+                    case_id="genesis.neg.not_local_application",
+                    utterance="Google'ı bir artır.",
+                    expected_intent="none",
+                    expected_tool=None,
+                    expected_response=RESPONSE_NONE,
+                    context=CTX_NONE,
+                    category="genesis",
+                    source="canonical",
+                    notes=(
+                        "spec §7: a target outside the catalogue is refused before any "
+                        "research — the catalogue miss means the router never even "
+                        "resolves a capability intent, let alone dispatches a tool."
+                    ),
+                    regression_issue_id="M24 spec §7: refused before any research",
+                ),
+                UtteranceCase(
+                    case_id="genesis.neg.approve_nothing_pending",
+                    utterance="Onaylıyorum.",
+                    expected_intent="calendar_commit",
+                    expected_tool="calendar.commit",
+                    expected_response=RESPONSE_CLARIFY,
+                    side_effects=SIDE_EFFECTS_NONE,
+                    context=CTX_NONE,
+                    category="genesis",
+                    source="canonical",
+                    notes=(
+                        "spec §7: 'Onaylıyorum' with nothing awaiting -> clarification, "
+                        "no side effect. With no genesis run parked (genesis_awaiting_"
+                        "approval false) the word falls through UNCHANGED to its "
+                        "existing target (CALENDAR_COMMIT), whose own service layer "
+                        "answers an honest clarification when nothing is prepared "
+                        "there either — never a guessed genesis approval, and never a "
+                        "side effect anywhere."
+                    ),
+                    regression_issue_id="M24 spec §7: no confirmation without a pending run",
+                ),
+            )
+        )
+    )
+
+
+def _capability_cases() -> list[UtteranceCase]:
+    return [
+        *_capability_request_cases(),
+        *_capability_status_cases(),
+        *_capability_approve_cancel_cases(),
+        *_capability_negative_cases(),
+    ]
+
+
 def all_cases() -> list[UtteranceCase]:
     cases = [
         *_research_cases(),
@@ -2667,6 +2932,7 @@ def all_cases() -> list[UtteranceCase]:
         *_mail_calendar_cases(),
         *_artifact_cases(),
         *_app_cases(),
+        *_capability_cases(),
     ]
     ids = [c.case_id for c in cases]
     assert len(ids) == len(set(ids)), "duplicate case ids"
@@ -2677,7 +2943,9 @@ __all__ = [
     "CORPUS_VERSION",
     "CTX_ALARM_RINGING",
     "CTX_ALARM_SCHEDULED",
+    "CTX_COUNTERBOX_RUNNING",
     "CTX_EYE_DISABLED",
+    "CTX_LAMPBOX_RUNNING",
     "CTX_NONE",
     "CTX_OPERATOR_RUNNING",
     "CTX_RESEARCH_FOCUS_B",

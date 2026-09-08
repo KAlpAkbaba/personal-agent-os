@@ -2315,7 +2315,12 @@ def _appfactory_create_match(tokens: tuple[str, ...]) -> str | None:
 # block below — with the flag false (every case in the existing corpus), neither matcher
 # is even consulted and both words fall through to their EXISTING targets unchanged.
 
-_CAPABILITY_STATUS_NOUN_STEMS: Final[tuple[str, ...]] = ("yetenek",)
+#: "yetenek" itself, "yeteneğ" (the k->ğ consonant softening a vowel-initial suffix
+#: triggers: "yetenek" + "-in" -> "yeteneğin") and "yeteneg" (the SAME mutated form
+#: with its own diacritic stripped by the corpus's own asr_noise variants) —
+#: ``_has``'s plain prefix-stem test needs all three spellings here (it cannot know
+#: the mutation, and the diacritic strip happens on the mutated form, not the base).
+_CAPABILITY_STATUS_NOUN_STEMS: Final[tuple[str, ...]] = ("yetenek", "yeteneğ", "yeteneg")
 _CAPABILITY_STATUS_QUESTION_FORMS: Final[tuple[str, ...]] = (
     "durumda",
     "durumu",
@@ -2340,15 +2345,18 @@ def _capability_catalogue_entry(tokens: tuple[str, ...]) -> Any | None:
 
 def _capability_request_match(
     tokens: tuple[str, ...],
-) -> tuple[Any, str | None, str] | None:
-    """ "Sayaç kutusunu bir artır.", "Test lambasını aç.", "Sayaç kaç?" (spec §6) — a
-    known target (the catalogue) is REQUIRED; the operation is best-effort (the
-    resolved target's own verb aliases), None when no known verb matched at all (the
-    tool then asks which operation, never guesses one)."""
+) -> tuple[Any, str, str] | None:
+    """ "Sayaç kutusunu bir artır.", "Test lambasını aç.", "Sayaç kaç?" (spec §6) — BOTH
+    a known target (the catalogue) AND a known operation (that target's own verb
+    aliases) are REQUIRED: a known target with an UNRECOGNISED verb ("Sayaç kutusunu
+    sil." — no delete operation exists, spec §7's own negative case) must fall through
+    to NONE rather than become a clarification this family never offers."""
     entry = _capability_catalogue_entry(tokens)
     if entry is None:
         return None
     operation_id = entry.resolve_operation(tokens)
+    if operation_id is None:
+        return None
     return entry, operation_id, "capability request"
 
 

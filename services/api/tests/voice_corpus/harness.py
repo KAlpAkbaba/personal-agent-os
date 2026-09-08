@@ -131,6 +131,7 @@ from tests.voice_corpus.corpus import (
     CTX_APP_SCAFFOLDED,
     CTX_ARTIFACT_FOCUSED,
     CTX_COMMON_POINTS_FOCUSED,
+    CTX_COUNTERBOX_RUNNING,
     CTX_DOCUMENT_ARTIFACT_FOCUSED,
     CTX_DOCUMENT_FOCUSED,
     CTX_DOCX_FOCUSED,
@@ -138,6 +139,7 @@ from tests.voice_corpus.corpus import (
     CTX_EVENT_FOCUSED,
     CTX_EYE_DISABLED,
     CTX_FILE_FOCUSED,
+    CTX_LAMPBOX_RUNNING,
     CTX_MESSAGE_FOCUSED,
     CTX_OPERATOR_RUNNING,
     CTX_PPTX_FOCUSED,
@@ -265,6 +267,13 @@ class Harness:
     browser_gateway: FakeBrowserGateway
     genesis: GenesisRuntime
     ids: dict[str, str] = field(default_factory=dict)
+    #: M24 (docs/M24_CAPABILITY_GENESIS_SPEC.md §6, §7): the live fixture application
+    #: (CounterBoxServer/LampBoxServer) a CTX_COUNTERBOX_RUNNING/CTX_LAMPBOX_RUNNING case
+    #: started, for reading its real state after the case (the "forbidden side effect"
+    #: check) — None for every other case. ``_genesis_fixture_cm`` is the context manager
+    #: itself, closed by ``run_case``'s own ``finally`` block.
+    genesis_fixture: Any = None
+    _genesis_fixture_cm: Any = None
 
     # ------------------------------------------------------------- relay
 
@@ -673,6 +682,105 @@ class Harness:
                         db, self.device, target="current", session_id="seed:app_running"
                     )
                     assert ran["execution_status"] == "executed", ran
+        elif context in (CTX_COUNTERBOX_RUNNING, CTX_LAMPBOX_RUNNING):
+            # M24 (docs/M24_CAPABILITY_GENESIS_SPEC.md §6, §7): the REAL fixture
+            # application, started on a free port for the duration of THIS ONE case (a
+            # fresh harness per case, module docstring's own "no test here calls a
+            # handler directly" — the fixture is the genuine dependency
+            # capability.request talks to, never a mock), registered into the SAME
+            # catalogue app.voice.intents' matchers read (a fresh, empty one per
+            # harness build_harness() already set).
+            from app.genesis.catalogue import CatalogueEntry, OperationAlias, get_catalogue
+            from tests.fixtures.genesis import counterbox_app, lampbox_app
+
+            # Every phrase/verb below is listed in BOTH its dotted and diacritic-
+            # stripped spelling — the same discipline app.voice.intents' own
+            # ``_APP_RUN_VERB_FORMS`` ("çalıştır"/"calistir") already follows,
+            # since the corpus's own asr_noise variants strip diacritics from the
+            # utterance BEFORE it ever reaches the router/catalogue.
+            if context == CTX_COUNTERBOX_RUNNING:
+                cm = counterbox_app.serve()
+                server = cm.__enter__()
+                entry = CatalogueEntry(
+                    name="counterbox",
+                    url=server.spec_url,
+                    target_phrases=(
+                        "sayaç kutusu",
+                        "sayac kutusu",
+                        "sayaç kutusunu",
+                        "sayac kutusunu",
+                        "sayacı",
+                        "sayaci",
+                        "sayaç",
+                        "sayac",
+                    ),
+                    operations=(
+                        OperationAlias("read", ("kaç", "kac")),
+                        OperationAlias(
+                            "increment",
+                            (
+                                "artır",
+                                "artir",
+                                "arttır",
+                                "arttir",
+                                "artırsana",
+                                "artirsana",
+                                "arttırsana",
+                                "arttirsana",
+                                "artırır",
+                                "artirir",
+                                "arttırır",
+                                "arttirir",
+                            ),
+                        ),
+                        OperationAlias(
+                            "reset",
+                            (
+                                "sıfırla",
+                                "sifirla",
+                                "sıfırlasana",
+                                "sifirlasana",
+                                "sıfırlar",
+                                "sifirlar",
+                            ),
+                        ),
+                    ),
+                )
+            else:
+                cm = lampbox_app.serve()
+                server = cm.__enter__()
+                entry = CatalogueEntry(
+                    name="lampbox",
+                    url=server.spec_url,
+                    target_phrases=(
+                        "test lambası",
+                        "test lambasi",
+                        "test lambasını",
+                        "test lambasini",
+                        "lambayı",
+                        "lambayi",
+                        "lamba",
+                    ),
+                    operations=(
+                        OperationAlias("state", ("durumu", "durumda")),
+                        OperationAlias(
+                            "toggle",
+                            (
+                                "aç",
+                                "ac",
+                                "açsana",
+                                "acsana",
+                                "kapat",
+                                "kapatsana",
+                                "değiştir",
+                                "degistir",
+                            ),
+                        ),
+                    ),
+                )
+            get_catalogue().register(entry)
+            self._genesis_fixture_cm = cm
+            self.genesis_fixture = server
 
     # ------------------------------------------------------------- M21: mail/calendar
 
@@ -1133,6 +1241,17 @@ class CaseResult:
         }
 
 
+def _genesis_fixture_state(server: Any) -> Any:
+    """A snapshot of a live genesis fixture's real state, regardless of shape
+    (CounterBoxServer.value vs. LampBoxServer.on/.brightness) — None when no
+    fixture is running this case (every non-genesis case)."""
+    if server is None:
+        return None
+    if hasattr(server, "value"):
+        return server.value
+    return (server.on, server.brightness)
+
+
 def run_case(case: UtteranceCase, *, harness: Harness | None = None) -> CaseResult:
     h = harness or build_harness()
     result = CaseResult(
@@ -1153,6 +1272,7 @@ def run_case(case: UtteranceCase, *, harness: Harness | None = None) -> CaseResu
         alarms_before = h.alarm_rows()
         mail_sent_before = h.mail_sent_count()
         calendar_committed_before = h.calendar_committed_count()
+        genesis_state_before = _genesis_fixture_state(h.genesis_fixture)
 
         main_turn = 1
         if case.pre_turn is not None:
@@ -1419,6 +1539,26 @@ def run_case(case: UtteranceCase, *, harness: Harness | None = None) -> CaseResu
             )
             result.verdict = "forbidden_side_effect"
 
+        # 5b. M24 (docs/M24_CAPABILITY_GENESIS_SPEC.md §6, §7): the fixture's REAL state,
+        #     read back after the case — the same "reaches the sink exactly once, or
+        #     exactly never" policy the mail/calendar checks above enforce for their own
+        #     non-device sinks. A capability.request/approve build+dispatch chain also
+        #     runs the release gates (evaluation, the independent reviewer's own re-run,
+        #     shadow, canary) against the SAME live fixture (app.genesis.adapter's own
+        #     module docstring), so a case naming SIDE_EFFECTS_CAPABILITY_MUTATE only
+        #     asserts the state CHANGED, never a specific delta.
+        genesis_state_after = _genesis_fixture_state(h.genesis_fixture)
+        if "capability.mutate" in case.side_effects:
+            if genesis_state_after == genesis_state_before:
+                result.problems.append("the genesis fixture's state did not change")
+                result.verdict = "forbidden_side_effect"
+        elif h.genesis_fixture is not None and genesis_state_after != genesis_state_before:
+            result.problems.append(
+                f"the genesis fixture's state changed unexpectedly: "
+                f"{genesis_state_before!r} -> {genesis_state_after!r}"
+            )
+            result.verdict = "forbidden_side_effect"
+
         # 6. The speech lifecycle, structurally: the client reports the turn and the record
         #    shows the tool's speech and the audible turn from durable rows alone.
         if call["status"] in ("succeeded", "needs_clarification") and speech:
@@ -1442,6 +1582,8 @@ def run_case(case: UtteranceCase, *, harness: Harness | None = None) -> CaseResu
         h.client.close()
         set_holdoffs(HoldoffRegistry())
         set_publisher(UiStatePublisher())
+        if h._genesis_fixture_cm is not None:  # noqa: SLF001 - this module owns the field
+            h._genesis_fixture_cm.__exit__(None, None, None)
 
 
 def build_report(results: list[CaseResult], *, corpus_version: int) -> dict[str, Any]:
