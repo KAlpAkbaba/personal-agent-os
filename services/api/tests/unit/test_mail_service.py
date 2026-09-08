@@ -6,7 +6,7 @@ five refusals, idempotent confirmation, and secrets absent from every receipt/le
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import create_engine, select
@@ -224,7 +224,10 @@ def _prepared_draft(
 
 def _voice_confirmation(*, session_id="sess-1", turn=2, owner_intent_ok=True) -> Confirmation:
     return Confirmation(
-        source=CONFIRM_SOURCE_VOICE, session_id=session_id, turn=turn, owner_intent_ok=owner_intent_ok
+        source=CONFIRM_SOURCE_VOICE,
+        session_id=session_id,
+        turn=turn,
+        owner_intent_ok=owner_intent_ok,
     )
 
 

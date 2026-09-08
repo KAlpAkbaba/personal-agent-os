@@ -9,7 +9,6 @@ from zoneinfo import ZoneInfo
 
 from app.calendar.ics import (
     MAX_OCCURRENCES_PER_EVENT,
-    MAX_OCCURRENCES_PER_WINDOW,
     MAX_WINDOW_DAYS,
     VEvent,
     clamp_window,

@@ -12,10 +12,9 @@ import uuid
 from datetime import UTC, datetime
 
 from app.actions.confirmation_gate import CONFIRM_SOURCE_VOICE, Confirmation
-from app.mail.models import DRAFT_STATE_PREPARED, DRAFT_STATE_READ_BACK, MailDraftRow
+from app.mail.models import DRAFT_STATE_READ_BACK, MailDraftRow
 from app.mail.providers import (
     MIME_MAX_DEPTH,
-    MIME_MAX_PARTS,
     FakeMailSender,
     is_valid_email_address,
     message_from_rfc822,
@@ -104,7 +103,9 @@ def test_draft_reply_refuses_a_poisoned_from_address_before_writing_anything() -
     from app.mail.models import MailIndexRow
     from app.operator.models import ObjectFocusRow
 
-    engine = create_engine("sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False})
+    engine = create_engine(
+        "sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False}
+    )
     for table in (
         MailIndexRow.__table__,
         MailDraftRow.__table__,
@@ -148,7 +149,9 @@ def test_a_provider_failure_reverts_the_draft_to_read_back_never_stuck() -> None
     from app.operator import focus as focus_module
     from app.operator.models import FOCUS_KIND_DRAFT, ObjectFocusRow
 
-    engine = create_engine("sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False})
+    engine = create_engine(
+        "sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False}
+    )
     for table in (
         MailIndexRow.__table__,
         MailDraftRow.__table__,

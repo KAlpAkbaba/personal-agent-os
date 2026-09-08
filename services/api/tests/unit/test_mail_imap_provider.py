@@ -12,8 +12,8 @@ from app.mail.providers import ImapMailProvider
 from tests.mail_calendar_support import (
     FakeImapServer,
     _ImapMessage,
-    default_imap_fixture,
     deeply_nested_rfc822,
+    default_imap_fixture,
     folded_from_header_rfc822,
 )
 

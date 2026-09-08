@@ -186,7 +186,10 @@ def _prepared_proposal(
 
 def _voice_confirmation(*, session_id="sess-1", turn=2, owner_intent_ok=True) -> Confirmation:
     return Confirmation(
-        source=CONFIRM_SOURCE_VOICE, session_id=session_id, turn=turn, owner_intent_ok=owner_intent_ok
+        source=CONFIRM_SOURCE_VOICE,
+        session_id=session_id,
+        turn=turn,
+        owner_intent_ok=owner_intent_ok,
     )
 
 
