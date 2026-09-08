@@ -9,8 +9,15 @@
  */
 
 import type { AlarmStage, DisplayState, EyeStatus, PresenceKind, ReleaseStage } from "./ambient";
-import { DOCUMENT_CAPTION_BARE } from "./contract";
+import { CALENDAR_CAPTION_BARE, DOCUMENT_CAPTION_BARE, MAIL_CAPTION_BARE } from "./contract";
 import type { DocumentRef, KnownUiState } from "./contract";
+import {
+  CALENDAR_PROPOSAL_STATE_LABEL,
+  type CalendarFacts,
+  type CalendarStage,
+  calendarRangePhrase,
+  conflictsPhrase,
+} from "./calendar";
 import {
   type DocumentFacts,
   type DocumentStage,
@@ -18,6 +25,7 @@ import {
   documentStepLabel,
   refKind,
 } from "./documents";
+import { MAIL_DRAFT_STATE_LABEL, type MailFacts, type MailStage, mailFolderPhrase } from "./mail";
 import { type OperatorFacts, type OperatorStage, operatorPosition } from "./operator";
 import type { CoreVisualKind, VisualSource } from "./visual";
 
@@ -46,6 +54,8 @@ export const KIND_LABEL: Record<CoreVisualKind, string> = {
   operator_verifying: "Operatör doğruluyor",
   operator_failed: "Operatör başarısız",
   document_analysis: DOCUMENT_CAPTION_BARE,
+  mail_activity: MAIL_CAPTION_BARE,
+  calendar_activity: CALENDAR_CAPTION_BARE,
 };
 
 /**
@@ -89,6 +99,13 @@ export const KIND_DETAIL: Record<CoreVisualKind, string> = {
   // along it is, nothing here knows.
   document_analysis:
     "Sahibin bir belgesi okunuyor; dosya ve içindeki yer yalnızca yayınlandığı kadar söylenir. İlerleme bildirilmez.",
+  // M21: reading and preparing are the assistant's; sending is the owner's.
+  // Both sentences say which side of that line the posture is on, and that
+  // nothing on this screen crosses it by itself.
+  mail_activity:
+    "Sahibin postası okunuyor ya da bir taslak hazırlanıyor; klasör, konu ve taslak durumu yalnızca yayınlandığı kadar söylenir. Hiçbir şey sahip onayı olmadan gönderilmez.",
+  calendar_activity:
+    "Sahibin takvimi okunuyor ya da bir öneri hazırlanıyor; aralık, etkinlik ve öneri durumu yalnızca yayınlandığı kadar söylenir. Takvime sahip onayı olmadan yazılmaz.",
 };
 
 /**
@@ -227,6 +244,10 @@ export const STATE_LABEL: Record<KnownUiState, string> = {
   // v5 — File & Document Intelligence (M20). "İnceleniyor", not "okundu": the
   // state is entered when the read starts, and nothing publishes its end.
   "document.analysis": DOCUMENT_CAPTION_BARE,
+  // v6 — Mail & Calendar (M21). The plain state is a read; a draft's or a
+  // proposal's step is said only from its published metadata.
+  "mail.activity": MAIL_CAPTION_BARE,
+  "calendar.activity": CALENDAR_CAPTION_BARE,
 };
 
 export function stateLabel(state: string): string {
@@ -249,6 +270,8 @@ export const SUBSYSTEM_LABEL: Record<string, string> = {
   presence: "Varlık",
   operator: "Operatör",
   documents: "Belgeler",
+  mail: "Posta",
+  calendar: "Takvim",
 };
 
 export function subsystemLabel(subsystem: string): string {
@@ -397,6 +420,7 @@ const CONTRACT_ADDITIONS: Record<number, string> = {
   3: "alarm ve ekran durumları",
   4: "dijital operatör durumları",
   5: "belge inceleme durumu",
+  6: "posta ve takvim durumları",
 };
 
 /**
@@ -500,4 +524,69 @@ export function documentRefLine(ref: DocumentRef): string {
     documentPartPhrase(ref.ref, refKind(ref)) ?? ref.ref,
     ref.excerpt ?? "alıntı bildirilmedi",
   ].join(" · ");
+}
+
+// ------------------------------------------------------- v6: Mail & Calendar
+
+export const MAIL_LABEL: Record<MailStage, string> = {
+  active: MAIL_CAPTION_BARE,
+  none: "Süren bir posta işi yok",
+};
+
+/** The Posta panel's empty sentence: the pending route answered, and holds no draft. */
+export const MAIL_EMPTY = "Bekleyen taslak yok.";
+
+/** The Posta panel's line when the bus never carried a mail event: not "no mail", "nothing reported". */
+export const MAIL_UNTOLD = "Posta etkinliği bildirilmedi.";
+
+/**
+ * The published mail facts on one line, each one either what the publisher
+ * sent or the statement that it did not send it. "Taslak bildirilmedi" is a
+ * real answer: a read of the inbox names no draft.
+ */
+export function mailFactsLine(facts: MailFacts): string {
+  const folder = mailFolderPhrase(facts.folder);
+  const draft =
+    facts.draftState !== null
+      ? MAIL_DRAFT_STATE_LABEL[facts.draftState]
+      : facts.draftStateToken;
+  return [
+    folder ? `klasör: ${folder}` : "klasör bildirilmedi",
+    facts.subject ? `konu: ${facts.subject}` : "konu bildirilmedi",
+    draft ? `taslak: ${draft}` : "taslak bildirilmedi",
+  ].join(" · ");
+}
+
+export const CALENDAR_LABEL: Record<CalendarStage, string> = {
+  active: CALENDAR_CAPTION_BARE,
+  none: "Süren bir takvim işi yok",
+};
+
+/** The Takvim panel's empty sentence for today: the bus carried no event for today. */
+export const CALENDAR_EMPTY = "Bugün için kayıt yok.";
+
+/** The Takvim panel's empty sentence for the pending route: it answered, and holds no proposal. */
+export const CALENDAR_NO_PROPOSAL = "Bekleyen öneri yok.";
+
+/** The Takvim panel's line when the bus never carried a calendar event. */
+export const CALENDAR_UNTOLD = "Takvim etkinliği bildirilmedi.";
+
+/**
+ * The published calendar facts on one line. The conflicts figure is printed
+ * only beside a proposal: a plain agenda read has nothing to collide with,
+ * and "çakışma bildirilmedi" there would be noise rather than a fact.
+ */
+export function calendarFactsLine(facts: CalendarFacts): string {
+  const range = calendarRangePhrase(facts.range);
+  const proposal =
+    facts.proposalState !== null
+      ? CALENDAR_PROPOSAL_STATE_LABEL[facts.proposalState]
+      : facts.proposalStateToken;
+  const parts = [
+    range ? `aralık: ${range}` : "aralık bildirilmedi",
+    facts.event ? `etkinlik: ${facts.event}` : "etkinlik bildirilmedi",
+    proposal ? `öneri: ${proposal}` : "öneri bildirilmedi",
+  ];
+  if (proposal) parts.push(conflictsPhrase(facts.conflicts) ?? "çakışma bildirilmedi");
+  return parts.join(" · ");
 }

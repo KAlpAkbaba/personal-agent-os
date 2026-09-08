@@ -119,23 +119,27 @@ const VOICE_TOOL_RUNNING: VoiceOverlay = {
 };
 
 describe("contract v5 is v4 plus the document state, and says so", () => {
-  it("is version 5 and still reads a v4, v3 and v2 server", () => {
-    expect(KNOWN_CONTRACT_VERSION).toBe(5);
+  it("still reads a v5, v4, v3 and v2 server from a build at v5 or later", () => {
+    // v6 (M21) bumped the build past this file's contract; the assertion is
+    // relative, as the v4 file's became when v5 landed, so the v5 additions
+    // stay proven without pinning the build to a version it has left.
+    expect(KNOWN_CONTRACT_VERSION).toBeGreaterThanOrEqual(5);
     expect(MIN_SUPPORTED_CONTRACT_VERSION).toBe(2);
-    expect(contractCompatibility(5)).toBe("current");
+    expect(contractCompatibility(KNOWN_CONTRACT_VERSION)).toBe("current");
     expect(contractCompatibility(4)).toBe("older_supported");
     expect(contractCompatibility(3)).toBe("older_supported");
     expect(contractCompatibility(2)).toBe("older_supported");
     // A server ahead of this build is a different problem: we do not know its
     // vocabulary, so nothing is drawn from it.
-    expect(contractCompatibility(6)).toBe("unsupported");
+    expect(contractCompatibility(KNOWN_CONTRACT_VERSION + 1)).toBe("unsupported");
     expect(contractCompatibility(1)).toBe("unsupported");
   });
 
   it("knows the one document state, by membership rather than by prefix", () => {
     expect(DOCUMENT_STATES).toEqual(["document.analysis"]);
     expect(UI_STATES).toContain("document.analysis");
-    expect(UI_STATES[UI_STATES.length - 1]).toBe("document.analysis"); // appended, never reordered
+    // Appended after the last v4 token, never reordered; v6 appends after it in turn.
+    expect(UI_STATES.indexOf("document.analysis")).toBe(UI_STATES.indexOf("operator.failed") + 1);
     expect(isKnownState("document.analysis")).toBe(true);
     expect(isDocumentState("document.analysis")).toBe(true);
     // A newer server's word is not a state this build may draw as reading.

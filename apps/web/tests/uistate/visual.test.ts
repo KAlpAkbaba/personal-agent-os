@@ -89,6 +89,11 @@ const EXPECTED_KIND: Record<string, CoreVisualKind> = {
   // v5 (M20): reading one of the owner's documents is the agent's own work —
   // a core state with its own deliberate reading posture.
   "document.analysis": "document_analysis",
+  // v6 (M21): reading the owner's mail and calendar, and holding a draft or
+  // a proposal for the owner, are the agent's own work — a calm reading
+  // posture and a planning posture, each its own deliberate kind.
+  "mail.activity": "mail_activity",
+  "calendar.activity": "calendar_activity",
 };
 
 describe("a visual state is entered only by its own event", () => {

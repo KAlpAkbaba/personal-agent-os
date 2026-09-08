@@ -94,6 +94,10 @@ const PALETTE: Record<PaletteToken, string> = {
   // v5: a reading Core is parchment — pale, desaturated, calmer than any
   // working amber, and still inside the gold family.
   reading: "#e3cfa0",
+  // v6: a planning Core is straw — the parchment's neighbour, a shade
+  // greener and duller, so laying out a day is told apart from reading a
+  // page without leaving the gold family.
+  planning: "#d4c48e",
   unknown: "#6b6250",
 };
 

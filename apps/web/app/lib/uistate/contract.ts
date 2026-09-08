@@ -15,7 +15,7 @@
  */
 
 /** Contract version this client was written against (`CONTRACT_VERSION` in contract.py). */
-export const KNOWN_CONTRACT_VERSION = 5;
+export const KNOWN_CONTRACT_VERSION = 6;
 
 /**
  * The build marker of the Living Core (M18.3 §12, qualification A). Rendered server-side
@@ -34,11 +34,14 @@ export const CORE_BUILD_ID = "living-core-1";
  * same way (M19 spec §4): three `operator.*` tokens and one subsystem. v5 is
  * additive over v4 (M20 spec §3): one `document.analysis` token, one
  * subsystem, and one bounded metadata shape (`refs`) that older publishers
- * never send. A v2, v3 or v4 server therefore serves a strict subset of what
- * this build knows, and refusing to draw anything at all because the alarm,
- * operator or document states have not shipped yet would be a worse lie than
- * saying so in one line. A server NEWER than this build is a different matter
- * — we do not know its vocabulary, so it stays a mismatch.
+ * never send. v6 is additive over v5 (M21 spec §3): two tokens,
+ * `mail.activity` and `calendar.activity`, two subsystems, and metadata made
+ * of the short tokens the bus already carried. A v2, v3, v4 or v5 server
+ * therefore serves a strict subset of what this build knows, and refusing to
+ * draw anything at all because the alarm, operator, document, mail or
+ * calendar states have not shipped yet would be a worse lie than saying so in
+ * one line. A server NEWER than this build is a different matter — we do not
+ * know its vocabulary, so it stays a mismatch.
  */
 export const MIN_SUPPORTED_CONTRACT_VERSION = 2;
 
@@ -145,6 +148,15 @@ export const UI_STATES = [
   // step the Core is on, and — on an answer — the refs it cited. The agent's
   // own work, so it stays on the agent channel and drives the core body.
   "document.analysis",
+  // v6 (M21 spec §3) — Mail & Calendar. Published while the Core reads the
+  // owner's mail or prepares a draft (`{folder?, subject?, draft_state?}`),
+  // and while it reads the owner's calendar or prepares a proposal
+  // (`{range?, event?, proposal_state?}`). Reading and preparing are the
+  // assistant's own work (ADR-0084 tier READ / PREPARE); the one external
+  // mutation each family has — sending, committing — is never entered by this
+  // client, which only ever asks the Cloud Core to run its own gate.
+  "mail.activity",
+  "calendar.activity",
 ] as const;
 
 export type KnownUiState = (typeof UI_STATES)[number];
@@ -235,6 +247,104 @@ export function isDocumentState(state: string): state is DocumentUiState {
   return DOCUMENT_STATE_SET.has(state);
 }
 
+/** The one mail token (v6). Spelled here so every reader names the same wire word. */
+export const MAIL_ACTIVITY = "mail.activity";
+/** The one calendar token (v6). */
+export const CALENDAR_ACTIVITY = "calendar.activity";
+
+/**
+ * The mail family's states (v6). One token: the spec publishes every mail
+ * read and every draft transition as `mail.activity` and names the phase in
+ * `metadata.draft_state`, so — as with the document's — there is nothing
+ * else to enumerate. Kept as a list so a second token lands here and nowhere
+ * else.
+ */
+export const MAIL_STATES = [MAIL_ACTIVITY] as const;
+
+export type MailUiState = (typeof MAIL_STATES)[number];
+
+const MAIL_STATE_SET: ReadonlySet<string> = new Set(MAIL_STATES);
+
+/**
+ * True for a v6 mail state this build knows how to draw. Membership, not
+ * prefix: a newer server's `mail.sent` must not be drawn as a mail read on
+ * the strength of a word this build cannot read.
+ */
+export function isMailState(state: string): state is MailUiState {
+  return MAIL_STATE_SET.has(state);
+}
+
+/** The calendar family's states (v6), for the mail family's reason. */
+export const CALENDAR_STATES = [CALENDAR_ACTIVITY] as const;
+
+export type CalendarUiState = (typeof CALENDAR_STATES)[number];
+
+const CALENDAR_STATE_SET: ReadonlySet<string> = new Set(CALENDAR_STATES);
+
+/** True for a v6 calendar state this build knows how to draw. Membership, not prefix. */
+export function isCalendarState(state: string): state is CalendarUiState {
+  return CALENDAR_STATE_SET.has(state);
+}
+
+/**
+ * A draft's lifecycle as the publisher names it in `metadata.draft_state`
+ * (M21 spec §3 with the read-back step made explicit): prepared by the
+ * assistant, read back to the owner, sent on the owner's confirmation, or
+ * discarded. A token outside this list is a word this build cannot read and
+ * is shown as the plain state, never as one of these.
+ */
+export const MAIL_DRAFT_STATES = ["prepared", "read_back", "sent", "discarded"] as const;
+
+export type MailDraftState = (typeof MAIL_DRAFT_STATES)[number];
+
+const MAIL_DRAFT_STATE_SET: ReadonlySet<string> = new Set(MAIL_DRAFT_STATES);
+
+export function isMailDraftState(value: unknown): value is MailDraftState {
+  return typeof value === "string" && MAIL_DRAFT_STATE_SET.has(value);
+}
+
+/** A proposal's lifecycle in `metadata.proposal_state`: the draft's, with `committed` for `sent`. */
+export const CALENDAR_PROPOSAL_STATES = ["prepared", "read_back", "committed", "discarded"] as const;
+
+export type CalendarProposalState = (typeof CALENDAR_PROPOSAL_STATES)[number];
+
+const CALENDAR_PROPOSAL_STATE_SET: ReadonlySet<string> = new Set(CALENDAR_PROPOSAL_STATES);
+
+export function isCalendarProposalState(value: unknown): value is CalendarProposalState {
+  return typeof value === "string" && CALENDAR_PROPOSAL_STATE_SET.has(value);
+}
+
+/**
+ * The metadata a `mail.activity` event may carry (M21 spec §3). Every key is
+ * optional on the wire and every value is a short token the bus already
+ * admits; nothing here is a message body, an address list or an attachment.
+ */
+export type MailActivityMetadata = {
+  /** The folder being read (`INBOX`, `Gönderilmiş`, `Arşiv`, …). */
+  folder?: string;
+  /** The subject of the message or draft in hand. */
+  subject?: string;
+  /** Where the draft in hand is in its lifecycle. Absent on a plain read. */
+  draft_state?: MailDraftState;
+};
+
+/**
+ * The metadata a `calendar.activity` event may carry (M21 spec §3).
+ * `conflicts` is the one number: how many existing events a proposal
+ * collides with, as the Core counted them — read only when sent, so a
+ * caption never names a count nobody published.
+ */
+export type CalendarActivityMetadata = {
+  /** The range being read (`today`, `tomorrow`, `week`, or a date token). */
+  range?: string;
+  /** The title of the event or proposal in hand. */
+  event?: string;
+  /** Where the proposal in hand is in its lifecycle. Absent on a plain read. */
+  proposal_state?: CalendarProposalState;
+  /** How many conflicts the proposal has, when the Core counted them. */
+  conflicts?: number;
+};
+
 /**
  * States that belong to the release band's own vocabulary.
  *
@@ -278,6 +388,10 @@ export const SUBSYSTEMS = [
   // v5: the document intelligence (M20 spec §3) publishes `document.analysis`;
   // its receipts and ledger rows carry the same subsystem name.
   "documents",
+  // v6: mail and calendar (M21 spec §3) publish their activity under their
+  // own names, which are also their receipt subsystems.
+  "mail",
+  "calendar",
 ] as const;
 
 export type Subsystem = (typeof SUBSYSTEMS)[number];
@@ -475,6 +589,14 @@ const STATE_KINDS: Record<KnownUiState, StateKind> = {
   // (`DOCUMENT_STEP_TTL_MS`), and a Core that stopped hearing about it says
   // last-known, never "finished" and never idle.
   "document.analysis": "transient",
+  // v6. A mail or calendar activity is work in flight on the same footing: a
+  // provider round trip bounded by a timeout, published once per step. A
+  // draft waiting on the owner is a ROW, not an activity — the Cockpit reads
+  // it from `/v1/mail/drafts/pending`, which does not expire — so the bus
+  // claim decays on the activity horizon and the publisher's `ttl_s` may
+  // lengthen it for a standing condition.
+  "mail.activity": "transient",
+  "calendar.activity": "transient",
 };
 
 /**
@@ -508,6 +630,22 @@ export const DOCUMENT_STEP_TTL_MS: number = OPERATOR_STEP_TTL_MS;
 export const DOCUMENT_CAPTION_BARE = "Belge inceleniyor";
 
 /**
+ * How long a mail or calendar activity may be claimed as current without a
+ * newer event. The operator's horizon, for the document's reason: the Cloud
+ * Core speaks once per step, not on a heartbeat, and one IMAP fetch or one
+ * CalDAV REPORT can outlast the twelve-second transient. Still a horizon: an
+ * activity from a minute ago is last-known, never a Core still reading. The
+ * publisher's own `ttl_s` beats this figure.
+ */
+export const MAIL_ACTIVITY_TTL_MS: number = OPERATOR_STEP_TTL_MS;
+export const CALENDAR_ACTIVITY_TTL_MS: number = OPERATOR_STEP_TTL_MS;
+
+/** The Core's one wording for a mail activity whose metadata named nothing (v6). */
+export const MAIL_CAPTION_BARE = "Posta okunuyor";
+/** The Core's one wording for a calendar activity whose metadata named nothing (v6). */
+export const CALENDAR_CAPTION_BARE = "Takvim okunuyor";
+
+/**
  * Per-state lifetimes for v3, in ms, exactly as `docs/M18_3_LIVING_CORE_WAKE_ALARM_SPEC.md`
  * §7 states them.
  *
@@ -531,6 +669,8 @@ const STATE_TTL_MS: Partial<Record<KnownUiState, number>> = {
   "operator.running": OPERATOR_STEP_TTL_MS,
   "operator.verifying": OPERATOR_STEP_TTL_MS,
   "document.analysis": DOCUMENT_STEP_TTL_MS,
+  "mail.activity": MAIL_ACTIVITY_TTL_MS,
+  "calendar.activity": CALENDAR_ACTIVITY_TTL_MS,
 };
 
 /**
@@ -612,7 +752,8 @@ export function stateChannel(state: string): StateChannel {
   // v5's `document.analysis` needs no channel of its own: reading the owner's
   // document IS the agent working, and the cockpit asks "which document" by
   // membership (`isDocumentState`), never off a channel. It falls through to
-  // `agent` below.
+  // `agent` below. v6's `mail.activity` and `calendar.activity` do the same,
+  // for the same reason, through `isMailState` / `isCalendarState`.
   // v3 adds `display.*` to the room: whether the screens are lit is a fact
   // about the owner's desk, never about the agent's activity.
   if (state.startsWith("eye.") || state.startsWith("owner.") || state.startsWith("display."))

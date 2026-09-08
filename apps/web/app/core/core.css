@@ -651,6 +651,10 @@
 .palette-reading {
   --core-color: #e3cfa0;
 }
+/* v6: the planning Core, straw. Same value as CoreScene's PALETTE. */
+.palette-planning {
+  --core-color: #d4c48e;
+}
 .palette-unknown {
   --core-color: #6b6250;
 }
