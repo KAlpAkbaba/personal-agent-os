@@ -370,8 +370,15 @@ public sealed class BrowserWorkerHostTests : IDisposable
 
         var result = await Exec(host, BrowserCapabilities.Inspect, Payload("echo"));
         Assert.Equal(BrowserCapabilities.Inspect, result["capability"]!.GetValue<string>());
-        // Windows reuses pids quickly, so a second start — not pid inequality — is the proof of a replacement.
-        Assert.Equal(2, host.Starts);
+        // Windows reuses pids quickly, so a START — not pid inequality — is the proof of a
+        // replacement. A FLOOR, not an exact count, and deliberately: the replacement is
+        // launched with `--no-pong` too, so it is unresponsive by construction and the
+        // watchdog is right to kill it again. "Exactly two" only ever held while this test
+        // won a race against the next kill, and on a loaded machine it lost one run in
+        // three (2026-09-09). Nothing is weakened — a host that never replaced the worker,
+        // or served this request from the dead one, still fails every line below.
+        Assert.True(host.Starts >= 2, $"expected a replacement start, saw {host.Starts}");
+        Assert.True(host.LivenessKills >= 1);
         Assert.True(host.WorkerRunning);
     }
 
@@ -397,8 +404,9 @@ public sealed class BrowserWorkerHostTests : IDisposable
         // Restart through the backoff; the next request succeeds on a new process.
         var result = await Exec(host, BrowserCapabilities.Inspect, Payload("echo"));
         Assert.Equal(BrowserCapabilities.Inspect, result["capability"]!.GetValue<string>());
-        Assert.Equal(2, host.Starts);
-        // Windows reuses pids quickly, so a second start — not pid inequality — is the proof of a replacement.
+        // Windows reuses pids quickly, so a second start — not pid inequality — is the proof
+        // of a replacement. Exact here, unlike the liveness test above: this worker answers
+        // pings, so nothing kills it a second time.
         Assert.Equal(2, host.Starts);
         Assert.True(host.WorkerRunning);
     }

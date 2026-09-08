@@ -128,28 +128,32 @@ public sealed class AuditLogSchemaTests : IDisposable
         var audit = new AuditLog(path);
         audit.Write("first", status: "ok");
 
-        // The reader is released on a SIGNAL, never after a fixed sleep. An earlier version
-        // held the file for 150 ms and assumed the writer's bounded retry would outlast it;
-        // on a loaded runner the sleep overshot the whole retry budget and the row really was
-        // lost (CI run 34232628964). The product bound stays deliberately tight — an audited
-        // code path may not be blocked for long — so the TEST is what must be deterministic.
-        var opened = new TaskCompletionSource();
-        var release = new TaskCompletionSource();
-        var holder = Task.Run(async () =>
-        {
-            // Exactly what File.ReadAllText does: open for read, share read only.
-            using var reader = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-            opened.SetResult();
-            await release.Task;
-        });
-        await opened.Task;
-
-        var write = Task.Run(() => audit.Write("second", status: "ok"));
+        // NEITHER SIDE MAY DEPEND ON THE THREADPOOL. Two earlier versions of this test
+        // failed on the runner and neither failure was the code under test:
+        //
+        //   * a fixed 150 ms hold, which a loaded runner stretched past the writer's whole
+        //     retry budget (CI 34232628964);
+        //   * a `TaskCompletionSource` release, whose continuation — and therefore the
+        //     file's close — ran on the ThreadPool and could be delayed past that same
+        //     budget under starvation (CI 34275087364).
+        //
+        // The product's bound is deliberately tight (20 retries x 25 ms: an audited code
+        // path may not be blocked for long), so the TEST is what has to be deterministic.
+        // The reader is now closed by THIS thread, and the writer gets a dedicated thread
+        // so pool starvation cannot delay it either. If the writer somehow starts after the
+        // release, the file is already free and it simply succeeds — no false failure in
+        // either direction.
+        // Exactly what File.ReadAllText does: open for read, share read only.
+        var reader = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        var write = Task.Factory.StartNew(
+            () => audit.Write("second", status: "ok"),
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default);
         // Let the writer meet the sharing violation and enter its retry loop, then let go.
         await Task.Delay(30);
-        release.SetResult();
+        reader.Dispose();
         await write;
-        await holder;
 
         Assert.Equal(0, audit.FailedWrites);
         var lines = File.ReadAllLines(path);
