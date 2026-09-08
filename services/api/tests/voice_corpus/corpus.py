@@ -675,6 +675,46 @@ def _display_cases() -> list[UtteranceCase]:
                 )
             )
         )
+    # The owner's ambient directive (2026-09-08) names one invariant above the others:
+    #
+    #     display off != Windows sleep
+    #
+    # A screen the owner asked to darken must never become a suspended machine, because
+    # everything that makes this an agent — the alarms, the durable runs, the Evolution
+    # Supervisor, the device connection — stops when Windows sleeps and does not when a
+    # panel goes dark. The display cases above forbid the opposite DISPLAY tool, which is a
+    # different question and does not answer this one.
+    #
+    # Measured through this router before these cases were written: both utterances resolve
+    # to no intent whatsoever. They are here so that stays true, and the structural half —
+    # that there is no suspend capability anywhere to route TO — is
+    # `tests/unit/test_no_machine_suspend_path.py`.
+    for case_id, text, source in (
+        ("d.neg.suspend.1", "Bilgisayarı uyut.", "canonical"),
+        ("d.neg.suspend.2", "Bilgisayarı kapat.", "canonical"),
+        ("d.neg.suspend.3", "Sistemi uyku moduna al.", "paraphrase"),
+        ("d.neg.suspend.4", "bilgisayari uyut", "asr_noise"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="none",
+                    expected_tool=None,
+                    expected_response=RESPONSE_NONE,
+                    # And not by way of the display path either: darkening a screen is not
+                    # the nearest safe reading of "suspend the machine", it is a different
+                    # act, and answering one with the other would be the assistant deciding
+                    # what the owner meant.
+                    forbidden_tools=("display.off", "display.wake"),
+                    side_effects=SIDE_EFFECTS_NONE,
+                    category="display",
+                    source=source,
+                    regression_issue_id="ambient qualification 2026-09-08",
+                )
+            )
+        )
     for case_id, text, source in (
         ("d.wake.1", "Ekranları aç.", "canonical"),
         ("d.wake.2", "Monitörleri aç.", "paraphrase"),
