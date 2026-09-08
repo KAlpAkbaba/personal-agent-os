@@ -47,6 +47,7 @@ from app.alarms.models import (
     DEFAULT_SNOOZE_MINUTES,
     DEFAULT_TIMEZONE,
     MAX_SNOOZE_MINUTES,
+    MEDIA_KIND_REMEMBERED,
     MEDIA_KIND_TONE,
     MEDIA_KIND_YOUTUBE,
     PLAYED_KIND_LOCAL_FALLBACK,
@@ -281,6 +282,17 @@ def set_wake_song(session: Session, *, url: str, title: str | None = None) -> di
     return dict(row.wake_song)
 
 
+def _resolved_from_wake_song(wake_song: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The approved wake song, shaped as a ``resolved_media_identity`` — or ``None`` when
+    the owner has never approved one (:func:`set_wake_song`)."""
+    if not wake_song or not isinstance(wake_song.get("url"), str) or not wake_song["url"]:
+        return None
+    resolved = {"kind": MEDIA_KIND_YOUTUBE, "url": wake_song["url"]}
+    if wake_song.get("title"):
+        resolved["title"] = str(wake_song["title"])[:200]
+    return resolved
+
+
 def _media_source(
     media: dict[str, Any] | None, *, wake_song: dict[str, Any] | None = None
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
@@ -292,6 +304,16 @@ def _media_source(
     "seçtiğim müzik" / a remembered title resolves to that one item, which the owner
     named. The caller turns an unresolved media source into either a tone alarm with a
     follow-up question or a refusal, depending on whether the alarm recurs (spec §3.8).
+
+    Naming NO media at all resolves the SAME way (owner directive 2026-09-08): "Yarın
+    07:30'da beni uyandır." must not repeat the tone every single morning just because the
+    owner did not re-say the URL — YouTube-primary/tone-fallback (``app.alarms.sequence``)
+    is only as real as what it is asked to play. ``media_source`` still says the owner
+    named nothing (``{"kind": "tone"}`` — the only vocabulary word for that, spec §3.1's
+    ``MEDIA_SOURCE_KINDS``; there is no wire field for "I explicitly want the tone" today,
+    see ``CreateAlarmRequest``/``MediaIn``), so the two fields keep meaning what they always
+    meant: what was asked, and what will actually play. With no approved wake song either,
+    the tone is exactly what plays — nothing has changed for that owner.
     """
     media = media or {}
     url = media.get("url")
@@ -302,14 +324,9 @@ def _media_source(
             source["title"] = str(title)[:200]
         return source, dict(source)
     if title:
-        source = {"kind": "remembered", "name": str(title)[:200]}
-        if wake_song and isinstance(wake_song.get("url"), str) and wake_song["url"]:
-            resolved = {"kind": MEDIA_KIND_YOUTUBE, "url": wake_song["url"]}
-            if wake_song.get("title"):
-                resolved["title"] = str(wake_song["title"])[:200]
-            return source, resolved
-        return source, None
-    return {"kind": MEDIA_KIND_TONE}, None
+        source = {"kind": MEDIA_KIND_REMEMBERED, "name": str(title)[:200]}
+        return source, _resolved_from_wake_song(wake_song)
+    return {"kind": MEDIA_KIND_TONE}, _resolved_from_wake_song(wake_song)
 
 
 def create_alarm(
@@ -535,6 +552,13 @@ def snooze_alarm(
     alarm.playing_since = None
     alarm.armed_at = None
     alarm.triggered_at = None
+    # A snooze starts a fresh occurrence (module docstring): a media-failure reason from
+    # the ring just stopped must not linger on ``GET /v1/alarms/{id}`` describing a ring
+    # that has not happened yet.
+    if "media_failure_reason" in (alarm.detail_json or {}):
+        alarm.detail_json = {
+            k: v for k, v in alarm.detail_json.items() if k != "media_failure_reason"
+        }
     transition(session, alarm, STATE_SNOOZED, now=moment, minutes=span)
 
     # A fresh one-shot routine for the new moment; the old one is resolved by the engine
@@ -902,6 +926,11 @@ def alarm_dict(alarm: WakeAlarm) -> dict[str, Any]:
         "media_source": alarm.media_source,
         "resolved_media_identity": alarm.resolved_media_identity,
         "media_kind": alarm.media_kind,
+        # Directive 2026-09-08 item C ("never silently fall back"): WHY the tone played
+        # instead of the owner's media, readable from this row alone — set by
+        # ``WakeSequence.fire`` only when a youtube attempt genuinely failed, never
+        # invented for an alarm that simply asked for the tone.
+        "media_failure_reason": (alarm.detail_json or {}).get("media_failure_reason"),
         "volume_policy": alarm.volume_policy,
         "greeting_policy": alarm.greeting_policy,
         "display_wake_policy": alarm.display_wake_policy,

@@ -199,6 +199,121 @@ def test_both_audio_paths_failing_is_the_only_failed_outcome(session, device):
     assert result.reason
 
 
+# ------------------------------------------------- the invariant: not a beep by default
+
+
+def test_a_normal_alarm_with_no_named_media_plays_the_approved_wake_song_not_a_beep(
+    session, device
+):
+    """The owner's own words (2026-09-08): "Owner-selected YouTube music is PRIMARY; the
+    local tone is EMERGENCY FALLBACK ONLY." With an approved, playable wake song and no
+    media named on THIS alarm, ``fire()`` through a fake browser worker that succeeds must
+    reach the music, never the beep — asserted at the resolution layer in
+    ``test_alarms_wake_song.py`` and here again through the real physical sequence."""
+    alarms_service.set_wake_song(session, url=MEDIA_URL, title="Sabah Şarkısı")
+    alarm = _alarm(session)  # media=None: exactly "Yarın 07:30'da beni uyandır."
+    _, result = _fire(session, device, alarm)
+    assert result.state == STATE_PLAYING
+    assert result.media_kind == PLAYED_KIND_YOUTUBE
+    play_payload = device.payload_for("browser.media_play")
+    assert play_payload["url"] == MEDIA_URL
+    assert device.count("desktop.alarm_start") == 0  # never the tone alongside it
+
+
+def test_a_normal_alarm_with_no_named_media_and_no_approved_song_still_rings_the_tone(
+    session, device
+):
+    """The mirror: nothing named, nothing approved — the tone, and the run does not
+    fail."""
+    alarm = _alarm(session)
+    _, result = _fire(session, device, alarm)
+    assert result.state == STATE_PLAYING
+    assert result.media_kind == PLAYED_KIND_TONE_FALLBACK
+    assert device.count("browser.session_open") == 0
+
+
+# ------------------------------------------------------- never silently fall back (C)
+
+
+def test_a_media_failure_records_a_durable_readable_reason(session, device):
+    """Directive 2026-09-08 item C: "Do not silently fall back. Record why." Falling back
+    to the tone is fine; the owner must be able to answer "neden zil çaldı?" from
+    ``GET /v1/alarms/{id}`` alone, not by reading receipts out of the ledger."""
+    device.results["browser.media_play"] = ok(playing=False, verified=False, reason="challenge")
+    alarm = _alarm(session, media={"url": MEDIA_URL})
+    _, result = _fire(session, device, alarm)
+    assert result.media_kind == PLAYED_KIND_TONE_FALLBACK
+    assert alarm.detail_json.get("media_failure_reason")
+    body = alarms_service.alarm_dict(alarm)
+    assert body["media_failure_reason"] == alarm.detail_json["media_failure_reason"]
+    assert "challenge" in body["media_failure_reason"]
+
+
+def test_an_alarm_with_no_media_requested_records_no_failure_reason(session, device):
+    """The mirror: an alarm that never asked for media did not "fail" to play it — there
+    is nothing to explain, and inventing a reason would be its own kind of lie (the same
+    rule the no-media-receipt test above already states for the receipt itself)."""
+    alarm = _alarm(session)
+    _, result = _fire(session, device, alarm)
+    assert result.media_kind == PLAYED_KIND_TONE_FALLBACK
+    assert alarms_service.alarm_dict(alarm)["media_failure_reason"] is None
+
+
+# ------------------------------------------------------- verify playback, not a guess (D)
+
+
+def test_a_session_that_opens_and_reports_playing_but_not_verified_still_falls_back(
+    session, device
+):
+    """Directive 2026-09-08 item D: ``browser.session_open`` succeeding is NOT proof that
+    music is playing, and neither is the browser merely claiming ``playing: true`` —
+    ``verified`` (that ``currentTime`` genuinely advanced) is the one signal this module
+    trusts. A tab that opened fine and even claims to be playing, but was never verified,
+    is treated exactly like an outright failure."""
+    device.results["browser.session_open"] = ok(opened=True)
+    device.results["browser.media_play"] = ok(playing=True, verified=False)
+    alarm = _alarm(session, media={"url": MEDIA_URL})
+    _, result = _fire(session, device, alarm)
+    assert device.count("browser.session_open") == 1  # the session DID open
+    assert result.media_kind == PLAYED_KIND_TONE_FALLBACK  # but that proves nothing
+    assert device.count("desktop.alarm_start") == 1
+
+
+# ------------------------------------------------------------ owned context only (E)
+
+
+def test_stop_playback_only_ever_addresses_this_alarms_own_media_session(session, device):
+    """Directive 2026-09-08 item E: never hijack, pause or close an unrelated tab. Two
+    alarms, two distinct dedicated sessions (``media_session_id`` is ``alarm-<alarm_id>``,
+    spec §4) — stopping one must name only its own session, never the other's."""
+    other_url = "https://www.youtube.com/watch?v=zzzzzzz"
+    alarm_a = _alarm(session, media={"url": MEDIA_URL})
+    alarm_b = _alarm(session, media={"url": other_url})
+    sequence = WakeSequence(device_action=device, tts=None)
+    sequence.fire(
+        session, alarm_a, firing_id=uuid.uuid4(), now=FIRED_AT, transition=alarms_service.transition
+    )
+    sequence.fire(
+        session, alarm_b, firing_id=uuid.uuid4(), now=FIRED_AT, transition=alarms_service.transition
+    )
+    assert alarm_a.media_session_id != alarm_b.media_session_id
+    device.reset()
+    sequence.stop_playback(session, alarm_a, reason="owner", now=FIRED_AT + timedelta(seconds=60))
+    stop_payload = device.payload_for("browser.media_stop")
+    assert stop_payload["session_id"] == media_session_id(alarm_a.id)
+    assert stop_payload["session_id"] != media_session_id(alarm_b.id)
+    assert device.count("browser.media_stop") == 1  # only the one session touched
+
+
+def test_the_media_session_is_always_opened_in_the_dedicated_alarm_profile(session, device):
+    """Never the research profile, never the owner's own Chrome (spec §4)."""
+    alarm = _alarm(session, media={"url": MEDIA_URL})
+    _fire(session, device, alarm)
+    open_payload = device.payload_for("browser.session_open")
+    assert open_payload["profile"] == ALARM_BROWSER_PROFILE == "alarm"
+    assert open_payload["session_kind"] == ALARM_BROWSER_SESSION_KIND
+
+
 # ---------------------------------------------------------------------- the display
 
 
@@ -370,6 +485,26 @@ def test_a_failed_step_records_execution_failed_with_its_error_class(session, de
     assert tone.receipt.execution_status == EXECUTION_FAILED
     assert tone.receipt.terminal_status == TERMINAL_FAILED
     assert tone.receipt.error_class == "no_capable_device"
+
+
+def test_stopping_while_the_alarm_is_in_the_greeting_state_still_stops_the_media(session, device):
+    """Directive 2026-09-08 item F: the restore must happen on stop, not only when the
+    greeting finishes on its own. ``stop_playback`` reads ``alarm.media_kind`` /
+    ``media_session_id`` — never ``alarm.state`` — so it stops the SAME media whether the
+    owner speaks while the alarm is PLAYING or mid-GREETING (``speak_greeting`` writes the
+    GREETING state before it ducks, so that window is real in production even though this
+    synchronous fake device cannot race it). This pins the state-independence down against
+    a future change that made ``stop_playback`` branch on state by accident."""
+    alarm = _alarm(session, media={"url": MEDIA_URL})
+    sequence, _ = _fire(session, device, alarm)
+    from app.alarms.models import STATE_GREETING
+
+    alarms_service.transition(session, alarm, STATE_GREETING, now=FIRED_AT + timedelta(seconds=20))
+    assert alarm.state == STATE_GREETING
+    device.reset()
+    sequence.stop_playback(session, alarm, reason="owner", now=FIRED_AT + timedelta(seconds=25))
+    assert device.count("browser.media_stop") == 1
+    assert alarm.media_session_id is None
 
 
 def test_stop_playback_stops_the_medium_that_is_actually_playing(session, device):
