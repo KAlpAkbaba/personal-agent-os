@@ -69,9 +69,7 @@ class CalendarProposalRow(Base):
     conflicts_json: Mapped[list[Any]] = mapped_column(
         JSON().with_variant(JSONB(), "postgresql"), nullable=False, default=list
     )
-    state: Mapped[str] = mapped_column(
-        String(16), nullable=False, default=PROPOSAL_STATE_PREPARED
-    )
+    state: Mapped[str] = mapped_column(String(16), nullable=False, default=PROPOSAL_STATE_PREPARED)
     read_back_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     committed_event_uid: Mapped[str | None] = mapped_column(String(500), nullable=True)

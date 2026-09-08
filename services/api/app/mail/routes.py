@@ -24,9 +24,7 @@ from app.mail.service import MailService
 
 MAIL_ROUTES_VERSION = 1
 
-router = APIRouter(
-    prefix="/v1/mail", tags=["mail"], dependencies=[Depends(require_owner_session)]
-)
+router = APIRouter(prefix="/v1/mail", tags=["mail"], dependencies=[Depends(require_owner_session)])
 
 
 def _artifacts(request: Request) -> Any:

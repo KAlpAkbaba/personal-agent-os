@@ -243,7 +243,9 @@ def message_from_rfc822(raw: bytes, *, uid: str, folder: str, unread: bool) -> M
                 html_part = part
         if plain_part is not None:
             payload = plain_part.get_payload(decode=True) or b""
-            body_text = payload.decode(plain_part.get_content_charset() or "utf-8", errors="replace")
+            body_text = payload.decode(
+                plain_part.get_content_charset() or "utf-8", errors="replace"
+            )
         elif html_part is not None:
             payload = html_part.get_payload(decode=True) or b""
             body_text = html_to_text(
@@ -336,7 +338,11 @@ class ImapMailProvider:
                 for entry in data:
                     if not entry:
                         continue
-                    text = entry.decode("utf-8", errors="replace") if isinstance(entry, bytes) else str(entry)
+                    text = (
+                        entry.decode("utf-8", errors="replace")
+                        if isinstance(entry, bytes)
+                        else str(entry)
+                    )
                     # '(\\HasNoChildren) "/" "INBOX"' — the mailbox name is the last quoted token.
                     if '"' in text:
                         names.append(text.rsplit('"', 2)[-2])

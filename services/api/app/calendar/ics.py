@@ -241,7 +241,10 @@ def expand_events(events: list[VEvent], *, start: datetime, end: datetime) -> li
                     continue
                 out.append(
                     Occurrence(
-                        uid=ev.uid, summary=ev.summary, start=occ_start, end=occ_end,
+                        uid=ev.uid,
+                        summary=ev.summary,
+                        start=occ_start,
+                        end=occ_end,
                         all_day=ev.all_day,
                     )
                 )
@@ -250,7 +253,10 @@ def expand_events(events: list[VEvent], *, start: datetime, end: datetime) -> li
                 continue
             out.append(
                 Occurrence(
-                    uid=ev.uid, summary=ev.summary, start=ev.dtstart, end=ev.dtend,
+                    uid=ev.uid,
+                    summary=ev.summary,
+                    start=ev.dtstart,
+                    end=ev.dtend,
                     all_day=ev.all_day,
                 )
             )
@@ -271,8 +277,8 @@ def build_vevent(
     in reverse (a comma/semicolon/backslash in a spoken summary must survive the wire)."""
 
     def esc(value: str) -> str:
-        return value.replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace(
-            "\n", "\\n"
+        return (
+            value.replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", "\\n")
         )
 
     def fmt(dt: datetime) -> str:

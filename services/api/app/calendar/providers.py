@@ -143,7 +143,7 @@ class CalDavCalendarProvider:
             '<?xml version="1.0" encoding="utf-8" ?>'
             '<C:calendar-query xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">'
             "<D:prop><C:calendar-data/></D:prop>"
-            "<C:filter><C:comp-filter name=\"VCALENDAR\"><C:comp-filter name=\"VEVENT\">"
+            '<C:filter><C:comp-filter name="VCALENDAR"><C:comp-filter name="VEVENT">'
             f'<C:time-range start="{start.strftime("%Y%m%dT%H%M%SZ")}" '
             f'end="{end.strftime("%Y%m%dT%H%M%SZ")}"/>'
             "</C:comp-filter></C:comp-filter></C:filter>"
@@ -166,7 +166,7 @@ class CalDavCalendarProvider:
     def get_event(self, uid: str) -> Occurrence | None:
         from datetime import timedelta
 
-        now = datetime.now(start_tz := start_timezone())
+        now = datetime.now(start_timezone())
         occs = self._report(now - timedelta(days=365), now + timedelta(days=365))
         for occ in occs:
             if occ.uid == uid:
@@ -212,8 +212,9 @@ class CalDavCalendarProvider:
 
 
 def start_timezone():
-    from app.calendar.ics import DEFAULT_TIMEZONE
     from zoneinfo import ZoneInfo
+
+    from app.calendar.ics import DEFAULT_TIMEZONE
 
     return ZoneInfo(DEFAULT_TIMEZONE)
 

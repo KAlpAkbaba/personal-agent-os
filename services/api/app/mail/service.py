@@ -110,10 +110,7 @@ def _draft_dict(row: MailDraftRow) -> dict[str, Any]:
 
 def _draft_speech(row: MailDraftRow) -> str:
     to = ", ".join(row.to_json or []) or "?"
-    return (
-        f"Taslak: Kime: {to}. Konu: {row.subject}. Mesaj: {row.body} "
-        "Göndermemi ister misiniz?"
-    )
+    return f"Taslak: Kime: {to}. Konu: {row.subject}. Mesaj: {row.body} Göndermemi ister misiniz?"
 
 
 class MailService:
@@ -167,7 +164,9 @@ class MailService:
             out.update(extra)
         return out
 
-    def _account_missing(self, *, capability: str, session_id: str | None, db: Session) -> dict[str, Any]:
+    def _account_missing(
+        self, *, capability: str, session_id: str | None, db: Session
+    ) -> dict[str, Any]:
         return self._receipt(
             capability=capability,
             requested_state="read",
@@ -181,7 +180,13 @@ class MailService:
         )
 
     def _ledger(
-        self, db: Session | None, *, event_type: str, action: str, summary: str, detail: dict[str, Any]
+        self,
+        db: Session | None,
+        *,
+        event_type: str,
+        action: str,
+        summary: str,
+        detail: dict[str, Any],
     ) -> None:
         if db is None:
             return
@@ -203,7 +208,11 @@ class MailService:
             logger.warning("mail_ledger_failed", action=action)
 
     def _publish(
-        self, *, folder: str | None = None, subject: str | None = None, draft_state: str | None = None
+        self,
+        *,
+        folder: str | None = None,
+        subject: str | None = None,
+        draft_state: str | None = None,
     ) -> None:
         metadata: dict[str, Any] = {}
         if folder:
@@ -222,9 +231,7 @@ class MailService:
     def _index_upsert(self, db: Session, message: MailMessage, *, now: datetime) -> MailIndexRow:
         row = (
             db.execute(
-                select(MailIndexRow).where(
-                    MailIndexRow.provider_message_id == message.message_id
-                )
+                select(MailIndexRow).where(MailIndexRow.provider_message_id == message.message_id)
             )
             .scalars()
             .first()
@@ -306,11 +313,15 @@ class MailService:
             speech = SPEECH_NOT_FOUND
         elif len(results) == 1:
             m = results[0]
-            speech = f"{m.from_name or m.from_email}'dan '{m.subject}' konulu bir mail buldum efendim."
+            speech = (
+                f"{m.from_name or m.from_email}'dan '{m.subject}' konulu bir mail buldum efendim."
+            )
         else:
-            speech = f"{len(results)} mail buldum efendim: " + ", ".join(
-                m.subject for m in results[:5]
-            ) + "."
+            speech = (
+                f"{len(results)} mail buldum efendim: "
+                + ", ".join(m.subject for m in results[:5])
+                + "."
+            )
         return self._receipt(
             capability="mail.search",
             requested_state="searched",
@@ -343,30 +354,47 @@ class MailService:
         found = self._provider.search(target, limit=50)
         if not found:
             return None, {"clarification": SPEECH_NOT_FOUND}
-        found = sorted(found, key=lambda m: m.date or datetime.min.replace(tzinfo=UTC), reverse=True)
+        found = sorted(
+            found, key=lambda m: m.date or datetime.min.replace(tzinfo=UTC), reverse=True
+        )
         return found[0], None
 
-    def read(self, db: Session, *, target: str = "current", session_id: str | None = None) -> dict[str, Any]:
+    def read(
+        self, db: Session, *, target: str = "current", session_id: str | None = None
+    ) -> dict[str, Any]:
         if self._provider is None:
             return self._account_missing(capability="mail.read", session_id=session_id, db=db)
         message, clar = self._resolve_message(db, target)
         if clar is not None:
-            return {"status": "needs_clarification", "speech": clar["clarification"], "candidates": []}
+            return {
+                "status": "needs_clarification",
+                "speech": clar["clarification"],
+                "candidates": [],
+            }
         assert message is not None
         now = _now()
         self._index_upsert(db, message, now=now)
         focus_module.set_focus(
-            db, FOCUS_KIND_MESSAGE, message.message_id,
-            label=message.subject, source="mail_read", now=now,
+            db,
+            FOCUS_KIND_MESSAGE,
+            message.message_id,
+            label=message.subject,
+            source="mail_read",
+            now=now,
         )
         self._ledger(
-            db, event_type=EVENT_TYPE_MAIL_READ, action="mail.read",
+            db,
+            event_type=EVENT_TYPE_MAIL_READ,
+            action="mail.read",
             summary=f"mail.read -> {message.subject}",
             detail={"message_id": message.message_id, "folder": message.folder},
         )
         self._publish(folder=message.folder, subject=message.subject)
         who = message.from_name or message.from_email
-        speech = f"{who}'dan, {_fmt_date(message.date)} tarihli, '{message.subject}' konulu mail: {message.body_text}"
+        speech = (
+            f"{who}'dan, {_fmt_date(message.date)} tarihli, '{message.subject}' konulu "
+            f"mail: {message.body_text}"
+        )
         return self._receipt(
             capability="mail.read",
             requested_state="read",
@@ -379,12 +407,18 @@ class MailService:
             extra={"message": message.as_full()},
         )
 
-    def thread(self, db: Session, *, target: str = "current", session_id: str | None = None) -> dict[str, Any]:
+    def thread(
+        self, db: Session, *, target: str = "current", session_id: str | None = None
+    ) -> dict[str, Any]:
         if self._provider is None:
             return self._account_missing(capability="mail.thread", session_id=session_id, db=db)
         message, clar = self._resolve_message(db, target)
         if clar is not None:
-            return {"status": "needs_clarification", "speech": clar["clarification"], "candidates": []}
+            return {
+                "status": "needs_clarification",
+                "speech": clar["clarification"],
+                "candidates": [],
+            }
         assert message is not None
         messages = self._provider.thread(message.message_id)
         now = _now()
@@ -392,11 +426,17 @@ class MailService:
             self._index_upsert(db, m, now=now)
         if messages:
             focus_module.set_focus(
-                db, FOCUS_KIND_THREAD, messages[0].thread_key,
-                label=messages[0].thread_key, source="mail_thread", now=now,
+                db,
+                FOCUS_KIND_THREAD,
+                messages[0].thread_key,
+                label=messages[0].thread_key,
+                source="mail_thread",
+                now=now,
             )
         self._ledger(
-            db, event_type=EVENT_TYPE_MAIL_READ, action="mail.thread",
+            db,
+            event_type=EVENT_TYPE_MAIL_READ,
+            action="mail.thread",
             summary=f"mail.thread -> {len(messages)} mesaj",
             detail={"thread_key": message.thread_key, "count": len(messages)},
         )
@@ -422,12 +462,19 @@ class MailService:
             db, FOCUS_KIND_DRAFT, str(row.id), label=row.subject, source="mail_draft", now=now
         )
 
-    def _secret_refused(self, db: Session, *, capability: str, session_id: str | None) -> dict[str, Any]:
+    def _secret_refused(
+        self, db: Session, *, capability: str, session_id: str | None
+    ) -> dict[str, Any]:
         return self._receipt(
-            capability=capability, requested_state="prepared",
-            execution=EXECUTION_REFUSED, terminal=TERMINAL_FAILED,
-            server={"reason": ERROR_SECRET_REFUSED}, speech=SPEECH_SECRET_REFUSED,
-            db=db, error_class=ERROR_SECRET_REFUSED, session_id=session_id,
+            capability=capability,
+            requested_state="prepared",
+            execution=EXECUTION_REFUSED,
+            terminal=TERMINAL_FAILED,
+            server={"reason": ERROR_SECRET_REFUSED},
+            speech=SPEECH_SECRET_REFUSED,
+            db=db,
+            error_class=ERROR_SECRET_REFUSED,
+            session_id=session_id,
         )
 
     def draft_reply(
@@ -439,7 +486,11 @@ class MailService:
             return self._account_missing(capability="mail.draft", session_id=session_id, db=db)
         message, clar = self._resolve_message(db, target)
         if clar is not None:
-            return {"status": "needs_clarification", "speech": clar["clarification"], "candidates": []}
+            return {
+                "status": "needs_clarification",
+                "speech": clar["clarification"],
+                "candidates": [],
+            }
         assert message is not None
         now = _now()
         subject = message.subject
@@ -466,15 +517,23 @@ class MailService:
         # send time from the original message's own chain, never stored twice.
         self._upsert_draft_focus(db, row, now=now)
         self._ledger(
-            db, event_type=EVENT_TYPE_MAIL_DRAFTED, action="mail.draft",
-            summary=f"mail.draft -> {subject}", detail={"draft_id": str(row.id), "kind": "reply"},
+            db,
+            event_type=EVENT_TYPE_MAIL_DRAFTED,
+            action="mail.draft",
+            summary=f"mail.draft -> {subject}",
+            detail={"draft_id": str(row.id), "kind": "reply"},
         )
         self._publish(subject=subject, draft_state=row.state)
         return self._receipt(
-            capability="mail.draft", requested_state="prepared",
-            execution=EXECUTION_EXECUTED, terminal=TERMINAL_VERIFIED,
-            server={"draft_id": str(row.id)}, speech=_draft_speech(row), db=db,
-            session_id=session_id, extra={"draft": _draft_dict(row), "references": references},
+            capability="mail.draft",
+            requested_state="prepared",
+            execution=EXECUTION_EXECUTED,
+            terminal=TERMINAL_VERIFIED,
+            server={"draft_id": str(row.id)},
+            speech=_draft_speech(row),
+            db=db,
+            session_id=session_id,
+            extra={"draft": _draft_dict(row), "references": references},
         )
 
     def draft_new(
@@ -486,24 +545,40 @@ class MailService:
             return self._account_missing(capability="mail.draft", session_id=session_id, db=db)
         now = _now()
         row = MailDraftRow(
-            id=uuid.uuid4(), kind=DRAFT_KIND_NEW, to_json=[to], cc_json=[],
-            subject=subject, body=body, in_reply_to=None, state=DRAFT_STATE_PREPARED,
-            read_back_at=now, created_at=now, updated_at=now,
+            id=uuid.uuid4(),
+            kind=DRAFT_KIND_NEW,
+            to_json=[to],
+            cc_json=[],
+            subject=subject,
+            body=body,
+            in_reply_to=None,
+            state=DRAFT_STATE_PREPARED,
+            read_back_at=now,
+            created_at=now,
+            updated_at=now,
         )
         db.add(row)
         db.commit()
         db.refresh(row)
         self._upsert_draft_focus(db, row, now=now)
         self._ledger(
-            db, event_type=EVENT_TYPE_MAIL_DRAFTED, action="mail.draft",
-            summary=f"mail.draft -> {subject}", detail={"draft_id": str(row.id), "kind": "new"},
+            db,
+            event_type=EVENT_TYPE_MAIL_DRAFTED,
+            action="mail.draft",
+            summary=f"mail.draft -> {subject}",
+            detail={"draft_id": str(row.id), "kind": "new"},
         )
         self._publish(subject=subject, draft_state=row.state)
         return self._receipt(
-            capability="mail.draft", requested_state="prepared",
-            execution=EXECUTION_EXECUTED, terminal=TERMINAL_VERIFIED,
-            server={"draft_id": str(row.id)}, speech=_draft_speech(row), db=db,
-            session_id=session_id, extra={"draft": _draft_dict(row)},
+            capability="mail.draft",
+            requested_state="prepared",
+            execution=EXECUTION_EXECUTED,
+            terminal=TERMINAL_VERIFIED,
+            server={"draft_id": str(row.id)},
+            speech=_draft_speech(row),
+            db=db,
+            session_id=session_id,
+            extra={"draft": _draft_dict(row)},
         )
 
     def _current_draft(self, db: Session) -> MailDraftRow | None:
@@ -541,15 +616,23 @@ class MailService:
         db.refresh(row)
         self._upsert_draft_focus(db, row, now=now)
         self._ledger(
-            db, event_type=EVENT_TYPE_MAIL_DRAFTED, action="mail.edit_draft",
-            summary=f"mail.edit_draft -> {row.subject}", detail={"draft_id": str(row.id)},
+            db,
+            event_type=EVENT_TYPE_MAIL_DRAFTED,
+            action="mail.edit_draft",
+            summary=f"mail.edit_draft -> {row.subject}",
+            detail={"draft_id": str(row.id)},
         )
         self._publish(subject=row.subject, draft_state=row.state)
         return self._receipt(
-            capability="mail.edit_draft", requested_state="prepared",
-            execution=EXECUTION_EXECUTED, terminal=TERMINAL_VERIFIED,
-            server={"draft_id": str(row.id)}, speech=_draft_speech(row), db=db,
-            session_id=session_id, extra={"draft": _draft_dict(row)},
+            capability="mail.edit_draft",
+            requested_state="prepared",
+            execution=EXECUTION_EXECUTED,
+            terminal=TERMINAL_VERIFIED,
+            server={"draft_id": str(row.id)},
+            speech=_draft_speech(row),
+            db=db,
+            session_id=session_id,
+            extra={"draft": _draft_dict(row)},
         )
 
     def read_draft(self, db: Session, *, session_id: str | None = None) -> dict[str, Any]:
@@ -561,28 +644,36 @@ class MailService:
         db.commit()
         db.refresh(row)
         self._ledger(
-            db, event_type=EVENT_TYPE_MAIL_DRAFTED, action="mail.read_draft",
-            summary=f"mail.read_draft -> {row.subject}", detail={"draft_id": str(row.id)},
+            db,
+            event_type=EVENT_TYPE_MAIL_DRAFTED,
+            action="mail.read_draft",
+            summary=f"mail.read_draft -> {row.subject}",
+            detail={"draft_id": str(row.id)},
         )
         self._publish(subject=row.subject, draft_state=row.state)
         return self._receipt(
-            capability="mail.read_draft", requested_state="read",
-            execution=EXECUTION_EXECUTED, terminal=TERMINAL_VERIFIED,
-            server={"draft_id": str(row.id)}, speech=_draft_speech(row), db=db,
-            session_id=session_id, extra={"draft": _draft_dict(row)},
+            capability="mail.read_draft",
+            requested_state="read",
+            execution=EXECUTION_EXECUTED,
+            terminal=TERMINAL_VERIFIED,
+            server={"draft_id": str(row.id)},
+            speech=_draft_speech(row),
+            db=db,
+            session_id=session_id,
+            extra={"draft": _draft_dict(row)},
         )
 
     # ---------------------------------------------------------- EXTERNAL MUTATION
 
     def send(
-        self, db: Session, *, draft_id: str | None = None, host_flag_enabled: bool,
+        self,
+        db: Session,
+        *,
+        draft_id: str | None = None,
+        host_flag_enabled: bool,
         session_id: str | None = None,
     ) -> dict[str, Any]:
-        row = (
-            db.get(MailDraftRow, uuid.UUID(draft_id))
-            if draft_id
-            else self._current_draft(db)
-        )
+        row = db.get(MailDraftRow, uuid.UUID(draft_id)) if draft_id else self._current_draft(db)
         if row is None:
             return {"status": "needs_clarification", "speech": "Neyi göndereyim?", "candidates": []}
         now = _now()
@@ -597,15 +688,21 @@ class MailService:
         if not result.ok:
             assert result.reason is not None
             self._ledger(
-                db, event_type=EVENT_TYPE_MAIL_SENT, action="mail.send",
+                db,
+                event_type=EVENT_TYPE_MAIL_SENT,
+                action="mail.send",
                 summary=f"mail.send refused ({result.reason})",
                 detail={"draft_id": str(row.id), "reason": result.reason},
             )
             return self._receipt(
-                capability="mail.send", requested_state="sent",
-                execution=EXECUTION_REFUSED, terminal=TERMINAL_FAILED,
+                capability="mail.send",
+                requested_state="sent",
+                execution=EXECUTION_REFUSED,
+                terminal=TERMINAL_FAILED,
                 server={"draft_id": str(row.id), "reason": result.reason},
-                speech=_GATE_SPEECH[result.reason], db=db, session_id=session_id,
+                speech=_GATE_SPEECH[result.reason],
+                db=db,
+                session_id=session_id,
                 error_class=result.reason,
             )
         if self._sender is None:
@@ -613,15 +710,23 @@ class MailService:
             # wiring never built a live sender — a configuration inconsistency, never a
             # guess at having sent anything.
             return self._receipt(
-                capability="mail.send", requested_state="sent",
-                execution=EXECUTION_REFUSED, terminal=TERMINAL_FAILED,
+                capability="mail.send",
+                requested_state="sent",
+                execution=EXECUTION_REFUSED,
+                terminal=TERMINAL_FAILED,
                 server={"draft_id": str(row.id), "reason": GATE_SEND_DISABLED},
-                speech=_GATE_SPEECH[GATE_SEND_DISABLED], db=db, session_id=session_id,
+                speech=_GATE_SPEECH[GATE_SEND_DISABLED],
+                db=db,
+                session_id=session_id,
                 error_class=GATE_SEND_DISABLED,
             )
         draft_input = DraftInput(
-            kind=row.kind, to=tuple(row.to_json or []), cc=tuple(row.cc_json or []),
-            subject=row.subject, body=row.body, in_reply_to=row.in_reply_to,
+            kind=row.kind,
+            to=tuple(row.to_json or []),
+            cc=tuple(row.cc_json or []),
+            subject=row.subject,
+            body=row.body,
+            in_reply_to=row.in_reply_to,
             references=tuple(),
         )
         sent_message_id = self._sender.send(draft_input)
@@ -632,27 +737,29 @@ class MailService:
         db.commit()
         db.refresh(row)
         self._ledger(
-            db, event_type=EVENT_TYPE_MAIL_SENT, action="mail.send",
+            db,
+            event_type=EVENT_TYPE_MAIL_SENT,
+            action="mail.send",
             summary=f"mail.send -> {row.subject}",
             detail={"draft_id": str(row.id), "sent_message_id": sent_message_id},
         )
         self._publish(subject=row.subject, draft_state=row.state)
         return self._receipt(
-            capability="mail.send", requested_state="sent",
-            execution=EXECUTION_EXECUTED, terminal=TERMINAL_VERIFIED,
+            capability="mail.send",
+            requested_state="sent",
+            execution=EXECUTION_EXECUTED,
+            terminal=TERMINAL_VERIFIED,
             server={"draft_id": str(row.id), "sent_message_id": sent_message_id},
-            speech="Maili gönderdim efendim.", db=db, session_id=session_id,
+            speech="Maili gönderdim efendim.",
+            db=db,
+            session_id=session_id,
             extra={"draft": _draft_dict(row)},
         )
 
     def discard(
         self, db: Session, *, draft_id: str | None = None, session_id: str | None = None
     ) -> dict[str, Any]:
-        row = (
-            db.get(MailDraftRow, uuid.UUID(draft_id))
-            if draft_id
-            else self._current_draft(db)
-        )
+        row = db.get(MailDraftRow, uuid.UUID(draft_id)) if draft_id else self._current_draft(db)
         if row is None:
             return {"status": "needs_clarification", "speech": SPEECH_NO_DRAFT, "candidates": []}
         now = _now()
@@ -661,15 +768,23 @@ class MailService:
         db.commit()
         db.refresh(row)
         self._ledger(
-            db, event_type=EVENT_TYPE_MAIL_DISCARDED, action="mail.discard",
-            summary=f"mail.discard -> {row.subject}", detail={"draft_id": str(row.id)},
+            db,
+            event_type=EVENT_TYPE_MAIL_DISCARDED,
+            action="mail.discard",
+            summary=f"mail.discard -> {row.subject}",
+            detail={"draft_id": str(row.id)},
         )
         self._publish(subject=row.subject, draft_state=row.state)
         return self._receipt(
-            capability="mail.discard", requested_state="discarded",
-            execution=EXECUTION_EXECUTED, terminal=TERMINAL_VERIFIED,
-            server={"draft_id": str(row.id)}, speech="Taslağı sildim efendim.", db=db,
-            session_id=session_id, extra={"draft": _draft_dict(row)},
+            capability="mail.discard",
+            requested_state="discarded",
+            execution=EXECUTION_EXECUTED,
+            terminal=TERMINAL_VERIFIED,
+            server={"draft_id": str(row.id)},
+            speech="Taslağı sildim efendim.",
+            db=db,
+            session_id=session_id,
+            extra={"draft": _draft_dict(row)},
         )
 
 

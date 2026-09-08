@@ -33,7 +33,6 @@ from app.actions.receipt import (
     ActionReceipt,
     record_receipt,
 )
-from app.calendar.ics import Occurrence
 from app.calendar.models import (
     PROPOSAL_KIND_CREATE,
     PROPOSAL_KIND_RESCHEDULE,
@@ -46,7 +45,6 @@ from app.calendar.providers import (
     CalendarProvider,
     CalendarWriter,
     ProposalInput,
-    compute_free_slots,
     find_conflicts,
 )
 from app.ledger import service as ledger_service
@@ -166,16 +164,29 @@ class CalendarService:
             out.update(extra)
         return out
 
-    def _account_missing(self, *, capability: str, session_id: str | None, db: Session) -> dict[str, Any]:
+    def _account_missing(
+        self, *, capability: str, session_id: str | None, db: Session
+    ) -> dict[str, Any]:
         return self._receipt(
-            capability=capability, requested_state="read", execution=EXECUTION_REFUSED,
-            terminal=TERMINAL_FAILED, server={"reason": "account_missing"},
-            speech=SPEECH_ACCOUNT_MISSING, db=db, error_class="account_missing",
+            capability=capability,
+            requested_state="read",
+            execution=EXECUTION_REFUSED,
+            terminal=TERMINAL_FAILED,
+            server={"reason": "account_missing"},
+            speech=SPEECH_ACCOUNT_MISSING,
+            db=db,
+            error_class="account_missing",
             session_id=session_id,
         )
 
     def _ledger(
-        self, db: Session | None, *, event_type: str, action: str, summary: str, detail: dict[str, Any]
+        self,
+        db: Session | None,
+        *,
+        event_type: str,
+        action: str,
+        summary: str,
+        detail: dict[str, Any],
     ) -> None:
         if db is None:
             return
@@ -183,9 +194,14 @@ class CalendarService:
             ledger_service.record(
                 db,
                 ledger_service.ActivityEvent(
-                    event_type=event_type, subsystem=SUBSYSTEM_CALENDAR, action=action,
-                    factual_summary=summary, occurred_at=_now(), detail_json=detail,
-                    source="live", source_ref=f"{action}:{uuid.uuid4()}",
+                    event_type=event_type,
+                    subsystem=SUBSYSTEM_CALENDAR,
+                    action=action,
+                    factual_summary=summary,
+                    occurred_at=_now(),
+                    detail_json=detail,
+                    source="live",
+                    source_ref=f"{action}:{uuid.uuid4()}",
                 ),
             )
         except Exception:  # noqa: BLE001 - evidence, never a dependency of the action
@@ -202,21 +218,30 @@ class CalendarService:
         if proposal_state:
             metadata["proposal_state"] = proposal_state[:32]
         publish_ui_state(
-            UiState.CALENDAR_ACTIVITY, subsystem=SUBSYSTEM_CALENDAR,
-            label=(event or rng or "calendar")[:64], metadata=metadata,
+            UiState.CALENDAR_ACTIVITY,
+            subsystem=SUBSYSTEM_CALENDAR,
+            label=(event or rng or "calendar")[:64],
+            metadata=metadata,
         )
 
     # ------------------------------------------------------------------- READ
 
     def agenda(
-        self, db: Session, *, start: datetime, end: datetime, range_label: str = "today",
+        self,
+        db: Session,
+        *,
+        start: datetime,
+        end: datetime,
+        range_label: str = "today",
         session_id: str | None = None,
     ) -> dict[str, Any]:
         if self._provider is None:
             return self._account_missing(capability="calendar.agenda", session_id=session_id, db=db)
         occs = self._provider.events(start, end)
         self._ledger(
-            db, event_type=EVENT_TYPE_CALENDAR_READ, action="calendar.agenda",
+            db,
+            event_type=EVENT_TYPE_CALENDAR_READ,
+            action="calendar.agenda",
             summary=f"calendar.agenda -> {len(occs)} etkinlik",
             detail={"range": range_label, "count": len(occs)},
         )
@@ -227,21 +252,35 @@ class CalendarService:
             names = ", ".join(f"{o.summary} ({o.start.strftime('%H:%M')})" for o in occs)
             speech = f"{len(occs)} etkinliğiniz var efendim: {names}."
         return self._receipt(
-            capability="calendar.agenda", requested_state="read",
-            execution=EXECUTION_EXECUTED, terminal=TERMINAL_VERIFIED,
-            server={"count": len(occs)}, speech=speech, db=db, session_id=session_id,
+            capability="calendar.agenda",
+            requested_state="read",
+            execution=EXECUTION_EXECUTED,
+            terminal=TERMINAL_VERIFIED,
+            server={"count": len(occs)},
+            speech=speech,
+            db=db,
+            session_id=session_id,
             extra={"events": [o.as_dict() for o in occs]},
         )
 
     def find_slot(
-        self, db: Session, *, start: datetime, end: datetime, duration_minutes: int,
+        self,
+        db: Session,
+        *,
+        start: datetime,
+        end: datetime,
+        duration_minutes: int,
         session_id: str | None = None,
     ) -> dict[str, Any]:
         if self._provider is None:
-            return self._account_missing(capability="calendar.find_slot", session_id=session_id, db=db)
+            return self._account_missing(
+                capability="calendar.find_slot", session_id=session_id, db=db
+            )
         slots = self._provider.free_slots(start, end, duration_minutes)
         self._ledger(
-            db, event_type=EVENT_TYPE_CALENDAR_READ, action="calendar.find_slot",
+            db,
+            event_type=EVENT_TYPE_CALENDAR_READ,
+            action="calendar.find_slot",
             summary=f"calendar.find_slot -> {len(slots)} boşluk",
             detail={"duration_minutes": duration_minutes, "count": len(slots)},
         )
@@ -252,17 +291,29 @@ class CalendarService:
             s0, e0 = slots[0]
             speech = f"{s0.strftime('%H:%M')} - {e0.strftime('%H:%M')} arası uygunsunuz efendim."
         return self._receipt(
-            capability="calendar.find_slot", requested_state="read",
-            execution=EXECUTION_EXECUTED, terminal=TERMINAL_VERIFIED,
-            server={"count": len(slots)}, speech=speech, db=db, session_id=session_id,
+            capability="calendar.find_slot",
+            requested_state="read",
+            execution=EXECUTION_EXECUTED,
+            terminal=TERMINAL_VERIFIED,
+            server={"count": len(slots)},
+            speech=speech,
+            db=db,
+            session_id=session_id,
             extra={"slots": [{"start": s.isoformat(), "end": e.isoformat()} for s, e in slots]},
         )
 
     # ------------------------------------------------------------------ PREPARE
 
-    def _upsert_proposal_focus(self, db: Session, row: CalendarProposalRow, *, now: datetime) -> None:
+    def _upsert_proposal_focus(
+        self, db: Session, row: CalendarProposalRow, *, now: datetime
+    ) -> None:
         focus_module.set_focus(
-            db, FOCUS_KIND_PROPOSAL, str(row.id), label=row.summary, source="calendar_propose", now=now
+            db,
+            FOCUS_KIND_PROPOSAL,
+            str(row.id),
+            label=row.summary,
+            source="calendar_propose",
+            now=now,
         )
 
     def _current_event(self, db: Session) -> str | None:
@@ -270,46 +321,75 @@ class CalendarService:
         return entry.object_id if entry is not None else None
 
     def propose(
-        self, db: Session, *, summary: str, start: datetime, end: datetime,
-        location: str | None = None, session_id: str | None = None,
+        self,
+        db: Session,
+        *,
+        summary: str,
+        start: datetime,
+        end: datetime,
+        location: str | None = None,
+        session_id: str | None = None,
     ) -> dict[str, Any]:
         if self._provider is None:
-            return self._account_missing(capability="calendar.propose", session_id=session_id, db=db)
+            return self._account_missing(
+                capability="calendar.propose", session_id=session_id, db=db
+            )
         window_start = start - timedelta(hours=6)
         window_end = end + timedelta(hours=6)
         busy = self._provider.events(window_start, window_end)
         conflicts = find_conflicts(busy, start=start, end=end)
         now = _now()
         row = CalendarProposalRow(
-            id=uuid.uuid4(), kind=PROPOSAL_KIND_CREATE, event_uid=None, summary=summary,
-            start=start, end=end, location=location, conflicts_json=conflicts,
-            state=PROPOSAL_STATE_PREPARED, read_back_at=now, created_at=now, updated_at=now,
+            id=uuid.uuid4(),
+            kind=PROPOSAL_KIND_CREATE,
+            event_uid=None,
+            summary=summary,
+            start=start,
+            end=end,
+            location=location,
+            conflicts_json=conflicts,
+            state=PROPOSAL_STATE_PREPARED,
+            read_back_at=now,
+            created_at=now,
+            updated_at=now,
         )
         db.add(row)
         db.commit()
         db.refresh(row)
         self._upsert_proposal_focus(db, row, now=now)
         self._ledger(
-            db, event_type=EVENT_TYPE_CALENDAR_PROPOSED, action="calendar.propose",
+            db,
+            event_type=EVENT_TYPE_CALENDAR_PROPOSED,
+            action="calendar.propose",
             summary=f"calendar.propose -> {summary}",
             detail={"proposal_id": str(row.id), "conflicts": len(conflicts)},
         )
         self._publish(event=summary, proposal_state=row.state)
         return self._receipt(
-            capability="calendar.propose", requested_state="prepared",
-            execution=EXECUTION_EXECUTED, terminal=TERMINAL_VERIFIED,
+            capability="calendar.propose",
+            requested_state="prepared",
+            execution=EXECUTION_EXECUTED,
+            terminal=TERMINAL_VERIFIED,
             server={"proposal_id": str(row.id), "conflicts": len(conflicts)},
-            speech=_proposal_speech(row), db=db, session_id=session_id,
+            speech=_proposal_speech(row),
+            db=db,
+            session_id=session_id,
             extra={"proposal": _proposal_dict(row)},
         )
 
     def propose_reschedule(
-        self, db: Session, *, minutes_delta: int, event_uid: str | None = None,
+        self,
+        db: Session,
+        *,
+        minutes_delta: int,
+        event_uid: str | None = None,
         session_id: str | None = None,
     ) -> dict[str, Any]:
-        """"Bunu bir saat ertele" (spec §3): the current event -> a reschedule proposal."""
+        """ "Bunu bir saat ertele" (spec §3): the current event -> a reschedule proposal."""
         if self._provider is None:
-            return self._account_missing(capability="calendar.propose", session_id=session_id, db=db)
+            return self._account_missing(
+                capability="calendar.propose", session_id=session_id, db=db
+            )
         uid = event_uid or self._current_event(db)
         if uid is None:
             return {"status": "needs_clarification", "speech": SPEECH_NO_EVENT, "candidates": []}
@@ -325,25 +405,40 @@ class CalendarService:
         conflicts = find_conflicts(busy, start=new_start, end=new_end, exclude_uid=uid)
         now = _now()
         row = CalendarProposalRow(
-            id=uuid.uuid4(), kind=PROPOSAL_KIND_RESCHEDULE, event_uid=uid, summary=occ.summary,
-            start=new_start, end=new_end, location=None, conflicts_json=conflicts,
-            state=PROPOSAL_STATE_PREPARED, read_back_at=now, created_at=now, updated_at=now,
+            id=uuid.uuid4(),
+            kind=PROPOSAL_KIND_RESCHEDULE,
+            event_uid=uid,
+            summary=occ.summary,
+            start=new_start,
+            end=new_end,
+            location=None,
+            conflicts_json=conflicts,
+            state=PROPOSAL_STATE_PREPARED,
+            read_back_at=now,
+            created_at=now,
+            updated_at=now,
         )
         db.add(row)
         db.commit()
         db.refresh(row)
         self._upsert_proposal_focus(db, row, now=now)
         self._ledger(
-            db, event_type=EVENT_TYPE_CALENDAR_PROPOSED, action="calendar.propose",
+            db,
+            event_type=EVENT_TYPE_CALENDAR_PROPOSED,
+            action="calendar.propose",
             summary=f"calendar.propose -> {occ.summary} (ertele)",
             detail={"proposal_id": str(row.id), "conflicts": len(conflicts)},
         )
         self._publish(event=occ.summary, proposal_state=row.state)
         return self._receipt(
-            capability="calendar.propose", requested_state="prepared",
-            execution=EXECUTION_EXECUTED, terminal=TERMINAL_VERIFIED,
+            capability="calendar.propose",
+            requested_state="prepared",
+            execution=EXECUTION_EXECUTED,
+            terminal=TERMINAL_VERIFIED,
             server={"proposal_id": str(row.id), "conflicts": len(conflicts)},
-            speech=_proposal_speech(row), db=db, session_id=session_id,
+            speech=_proposal_speech(row),
+            db=db,
+            session_id=session_id,
             extra={"proposal": _proposal_dict(row)},
         )
 
@@ -354,8 +449,13 @@ class CalendarService:
         return db.get(CalendarProposalRow, uuid.UUID(entry.object_id))
 
     def edit_proposal(
-        self, db: Session, *, start: datetime | None = None, end: datetime | None = None,
-        summary: str | None = None, session_id: str | None = None,
+        self,
+        db: Session,
+        *,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        summary: str | None = None,
+        session_id: str | None = None,
     ) -> dict[str, Any]:
         row = self._current_proposal(db)
         if row is None or row.state != PROPOSAL_STATE_PREPARED:
@@ -371,7 +471,9 @@ class CalendarService:
             window_start = row.start - timedelta(hours=6)
             window_end = row.end + timedelta(hours=6)
             busy = self._provider.events(window_start, window_end)
-            conflicts = find_conflicts(busy, start=row.start, end=row.end, exclude_uid=row.event_uid)
+            conflicts = find_conflicts(
+                busy, start=row.start, end=row.end, exclude_uid=row.event_uid
+            )
         row.conflicts_json = conflicts
         now = _now()
         row.read_back_at = now
@@ -380,15 +482,23 @@ class CalendarService:
         db.refresh(row)
         self._upsert_proposal_focus(db, row, now=now)
         self._ledger(
-            db, event_type=EVENT_TYPE_CALENDAR_PROPOSED, action="calendar.edit_proposal",
-            summary=f"calendar.edit_proposal -> {row.summary}", detail={"proposal_id": str(row.id)},
+            db,
+            event_type=EVENT_TYPE_CALENDAR_PROPOSED,
+            action="calendar.edit_proposal",
+            summary=f"calendar.edit_proposal -> {row.summary}",
+            detail={"proposal_id": str(row.id)},
         )
         self._publish(event=row.summary, proposal_state=row.state)
         return self._receipt(
-            capability="calendar.edit_proposal", requested_state="prepared",
-            execution=EXECUTION_EXECUTED, terminal=TERMINAL_VERIFIED,
-            server={"proposal_id": str(row.id)}, speech=_proposal_speech(row), db=db,
-            session_id=session_id, extra={"proposal": _proposal_dict(row)},
+            capability="calendar.edit_proposal",
+            requested_state="prepared",
+            execution=EXECUTION_EXECUTED,
+            terminal=TERMINAL_VERIFIED,
+            server={"proposal_id": str(row.id)},
+            speech=_proposal_speech(row),
+            db=db,
+            session_id=session_id,
+            extra={"proposal": _proposal_dict(row)},
         )
 
     def read_proposal(self, db: Session, *, session_id: str | None = None) -> dict[str, Any]:
@@ -400,21 +510,33 @@ class CalendarService:
         db.commit()
         db.refresh(row)
         self._ledger(
-            db, event_type=EVENT_TYPE_CALENDAR_PROPOSED, action="calendar.read_proposal",
-            summary=f"calendar.read_proposal -> {row.summary}", detail={"proposal_id": str(row.id)},
+            db,
+            event_type=EVENT_TYPE_CALENDAR_PROPOSED,
+            action="calendar.read_proposal",
+            summary=f"calendar.read_proposal -> {row.summary}",
+            detail={"proposal_id": str(row.id)},
         )
         self._publish(event=row.summary, proposal_state=row.state)
         return self._receipt(
-            capability="calendar.read_proposal", requested_state="read",
-            execution=EXECUTION_EXECUTED, terminal=TERMINAL_VERIFIED,
-            server={"proposal_id": str(row.id)}, speech=_proposal_speech(row), db=db,
-            session_id=session_id, extra={"proposal": _proposal_dict(row)},
+            capability="calendar.read_proposal",
+            requested_state="read",
+            execution=EXECUTION_EXECUTED,
+            terminal=TERMINAL_VERIFIED,
+            server={"proposal_id": str(row.id)},
+            speech=_proposal_speech(row),
+            db=db,
+            session_id=session_id,
+            extra={"proposal": _proposal_dict(row)},
         )
 
     # ---------------------------------------------------------- EXTERNAL MUTATION
 
     def commit(
-        self, db: Session, *, proposal_id: str | None = None, host_flag_enabled: bool,
+        self,
+        db: Session,
+        *,
+        proposal_id: str | None = None,
+        host_flag_enabled: bool,
         session_id: str | None = None,
     ) -> dict[str, Any]:
         row = (
@@ -423,38 +545,59 @@ class CalendarService:
             else self._current_proposal(db)
         )
         if row is None:
-            return {"status": "needs_clarification", "speech": "Neyi onaylayayım?", "candidates": []}
+            return {
+                "status": "needs_clarification",
+                "speech": "Neyi onaylayayım?",
+                "candidates": [],
+            }
         now = _now()
         result = check_gate(
-            state=row.state, prepared_state=PROPOSAL_STATE_PREPARED,
-            read_back_at=row.read_back_at, confirmed_at=now,
-            host_flag_enabled=host_flag_enabled, provider_available=self._account_configured,
+            state=row.state,
+            prepared_state=PROPOSAL_STATE_PREPARED,
+            read_back_at=row.read_back_at,
+            confirmed_at=now,
+            host_flag_enabled=host_flag_enabled,
+            provider_available=self._account_configured,
         )
         if not result.ok:
             assert result.reason is not None
             self._ledger(
-                db, event_type=EVENT_TYPE_CALENDAR_COMMITTED, action="calendar.commit",
+                db,
+                event_type=EVENT_TYPE_CALENDAR_COMMITTED,
+                action="calendar.commit",
                 summary=f"calendar.commit refused ({result.reason})",
                 detail={"proposal_id": str(row.id), "reason": result.reason},
             )
             return self._receipt(
-                capability="calendar.commit", requested_state="committed",
-                execution=EXECUTION_REFUSED, terminal=TERMINAL_FAILED,
+                capability="calendar.commit",
+                requested_state="committed",
+                execution=EXECUTION_REFUSED,
+                terminal=TERMINAL_FAILED,
                 server={"proposal_id": str(row.id), "reason": result.reason},
-                speech=_GATE_SPEECH[result.reason], db=db, session_id=session_id,
+                speech=_GATE_SPEECH[result.reason],
+                db=db,
+                session_id=session_id,
                 error_class=result.reason,
             )
         if self._writer is None:
             return self._receipt(
-                capability="calendar.commit", requested_state="committed",
-                execution=EXECUTION_REFUSED, terminal=TERMINAL_FAILED,
+                capability="calendar.commit",
+                requested_state="committed",
+                execution=EXECUTION_REFUSED,
+                terminal=TERMINAL_FAILED,
                 server={"proposal_id": str(row.id), "reason": GATE_SEND_DISABLED},
-                speech=_GATE_SPEECH[GATE_SEND_DISABLED], db=db, session_id=session_id,
+                speech=_GATE_SPEECH[GATE_SEND_DISABLED],
+                db=db,
+                session_id=session_id,
                 error_class=GATE_SEND_DISABLED,
             )
         proposal_input = ProposalInput(
-            kind=row.kind, event_uid=row.event_uid, summary=row.summary,
-            start=row.start, end=row.end, location=row.location,
+            kind=row.kind,
+            event_uid=row.event_uid,
+            summary=row.summary,
+            start=row.start,
+            end=row.end,
+            location=row.location,
         )
         if row.kind == PROPOSAL_KIND_RESCHEDULE and row.event_uid:
             event_uid = self._writer.update(row.event_uid, proposal_input)
@@ -467,16 +610,22 @@ class CalendarService:
         db.commit()
         db.refresh(row)
         self._ledger(
-            db, event_type=EVENT_TYPE_CALENDAR_COMMITTED, action="calendar.commit",
+            db,
+            event_type=EVENT_TYPE_CALENDAR_COMMITTED,
+            action="calendar.commit",
             summary=f"calendar.commit -> {row.summary}",
             detail={"proposal_id": str(row.id), "event_uid": event_uid},
         )
         self._publish(event=row.summary, proposal_state=row.state)
         return self._receipt(
-            capability="calendar.commit", requested_state="committed",
-            execution=EXECUTION_EXECUTED, terminal=TERMINAL_VERIFIED,
+            capability="calendar.commit",
+            requested_state="committed",
+            execution=EXECUTION_EXECUTED,
+            terminal=TERMINAL_VERIFIED,
             server={"proposal_id": str(row.id), "event_uid": event_uid},
-            speech="Onayladım efendim.", db=db, session_id=session_id,
+            speech="Onayladım efendim.",
+            db=db,
+            session_id=session_id,
             extra={"proposal": _proposal_dict(row)},
         )
 
@@ -496,15 +645,23 @@ class CalendarService:
         db.commit()
         db.refresh(row)
         self._ledger(
-            db, event_type=EVENT_TYPE_CALENDAR_DISCARDED, action="calendar.discard",
-            summary=f"calendar.discard -> {row.summary}", detail={"proposal_id": str(row.id)},
+            db,
+            event_type=EVENT_TYPE_CALENDAR_DISCARDED,
+            action="calendar.discard",
+            summary=f"calendar.discard -> {row.summary}",
+            detail={"proposal_id": str(row.id)},
         )
         self._publish(event=row.summary, proposal_state=row.state)
         return self._receipt(
-            capability="calendar.discard", requested_state="discarded",
-            execution=EXECUTION_EXECUTED, terminal=TERMINAL_VERIFIED,
-            server={"proposal_id": str(row.id)}, speech="Vazgeçtim efendim.", db=db,
-            session_id=session_id, extra={"proposal": _proposal_dict(row)},
+            capability="calendar.discard",
+            requested_state="discarded",
+            execution=EXECUTION_EXECUTED,
+            terminal=TERMINAL_VERIFIED,
+            server={"proposal_id": str(row.id)},
+            speech="Vazgeçtim efendim.",
+            db=db,
+            session_id=session_id,
+            extra={"proposal": _proposal_dict(row)},
         )
 
 

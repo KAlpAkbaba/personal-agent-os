@@ -35,9 +35,6 @@ from app.devices.commands import DeviceCommandClient, register_broker_runtime
 from app.devices.routes import router as devices_router
 from app.devices.status import get_status_registry
 from app.documents.service import DocumentService
-from app.mail.providers import build_mail_provider, build_mail_sender
-from app.mail.routes import router as mail_router
-from app.mail.service import MailService
 from app.evolution.routes import router as evolution_router
 from app.evolution.runtime import EvolutionRuntime
 from app.experience.routes import router as experience_router
@@ -48,6 +45,9 @@ from app.identity.runtime import IdentityRuntime
 from app.ledger import service as ledger_service
 from app.ledger.routes import router as ledger_router
 from app.logging import configure_logging, get_logger
+from app.mail.providers import build_mail_provider, build_mail_sender
+from app.mail.routes import router as mail_router
+from app.mail.service import MailService
 from app.memory.routes import router as memory_router
 from app.memory.runtime import MemoryRuntime
 from app.middleware import TraceIdMiddleware
