@@ -24,6 +24,7 @@ from live sources injected by the realtime runtime — never imported as singlet
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Final
@@ -56,6 +57,7 @@ from app.logging import get_logger
 from app.operator import focus as focus_module
 from app.operator.models import FOCUS_KIND_ARTIFACT
 from app.voice.errors import VoiceError, VoiceErrorClass
+from app.voice.intents import contains_secret_reference
 
 if TYPE_CHECKING:
     from app.voice.realtime_sessions.tools import ToolContext, ToolRegistry
@@ -84,6 +86,28 @@ SPEECH_UNKNOWN_KIND: Final = (
 
 ERROR_VALIDATION: Final = "validation_error"
 ERROR_NOT_FOUND: Final = "not_found"
+#: Security-review findings on M22's Cloud Core half (ADR-0085 addendum 6).
+ERROR_INVENTED_NUMBER: Final = "invented_number"
+ERROR_FORMULA_INJECTION: Final = "formula_injection"
+ERROR_SECRET_REFUSED: Final = "secret_refused"
+
+SPEECH_INVENTED_NUMBER: Final = (
+    "Bunu dosyaya dökemedim efendim; söylediğiniz rakamlarla uyuşmuyor."
+)
+SPEECH_FORMULA_INJECTION: Final = (
+    "Bunu dosyaya dökemedim efendim; bu içerik bir formül gibi yorumlanabilir."
+)
+SPEECH_INVALID_SPEC: Final = "Bunu dosyaya dökemedim efendim; yapı geçersiz."
+SPEECH_SECRET_REFUSED: Final = "Şifreleri dosyaya yazamam efendim."
+
+#: ``app.artifacts.spec``'s own model validators name the failing ref between a fixed,
+#: greppable ``<marker>[<ref>]:`` prefix (never the refused CONTENT — see spec.py's own
+#: docstrings) specifically so this tool can build a clean refusal receipt without ever
+#: embedding ``str(exc)`` — pydantic's ``ValidationError`` formatting echoes the raw
+#: failing input alongside any custom message, which this tool must never repeat back
+#: in a receipt, a ledger row or (worse) something read aloud by TTS.
+_INVENTED_NUMBER_REF_RE: Final = re.compile(r"invented_number\[(.*?)\]:")
+_FORMULA_INJECTION_REF_RE: Final = re.compile(r"formula_injection\[(.*?)\]:")
 
 _KIND_LABELS: Final[dict[str, str]] = {
     "document": "belge",
@@ -264,13 +288,54 @@ def artifact_create(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, An
     spec_dict: dict[str, Any] = dict(raw_spec) if isinstance(raw_spec, dict) else {}
     spec_dict.setdefault("kind", kind)
     spec_dict.setdefault("title", title)
-    spoken_numbers = turn.get("spoken_numbers")
-    if isinstance(spoken_numbers, list) and spoken_numbers:
-        spec_dict.setdefault("spoken_numbers", list(spoken_numbers))
+    # MEDIUM security-review finding (ADR-0085 addendum 6): ``spoken_numbers`` is now
+    # ALWAYS force-set from the router's own extraction — an empty list when the
+    # utterance had no numbers at all, never left unset. Previously this only ran
+    # `if spoken_numbers` (truthy), so a NUMBERLESS utterance left ``spoken_numbers``
+    # unset entirely, ``ArtifactSpec.spoken_numbers`` defaulted to ``None``, and the
+    # "never invented" rule was SKIPPED OUTRIGHT rather than enforcing "no numbers
+    # allowed" — an invented figure (e.g. a model hallucinating "kira 12000" with
+    # nothing spoken) sailed straight into a rendered file. A forced assignment (never
+    # ``setdefault``) also means the MODEL's own ``spec`` argument can never widen this
+    # set by smuggling its own ``spoken_numbers`` key — only the router's words count.
+    turn_numbers = turn.get("spoken_numbers")
+    spec_dict["spoken_numbers"] = list(turn_numbers) if isinstance(turn_numbers, list) else []
 
     try:
         spec = ArtifactSpec.model_validate(spec_dict)
     except (ValidationError, ValueError) as exc:
+        detail = str(exc)
+        formula_match = _FORMULA_INJECTION_REF_RE.search(detail)
+        if formula_match:
+            ref = formula_match.group(1)
+            # Never `str(exc)` here: pydantic's own ValidationError formatting echoes
+            # the raw failing input alongside spec.py's own (already content-free)
+            # message — this receipt names the ref and NOTHING else (HIGH finding).
+            return _receipt(
+                ctx,
+                capability=TOOL_ARTIFACT_CREATE,
+                requested_state="created",
+                execution=EXECUTION_REFUSED,
+                terminal=TERMINAL_FAILED,
+                server={"reason": ERROR_FORMULA_INJECTION, "ref": ref},
+                speech=SPEECH_FORMULA_INJECTION,
+                error_class=ERROR_FORMULA_INJECTION,
+                extra={"failing_ref": ref},
+            )
+        invented_match = _INVENTED_NUMBER_REF_RE.search(detail)
+        if invented_match:
+            ref = invented_match.group(1)
+            return _receipt(
+                ctx,
+                capability=TOOL_ARTIFACT_CREATE,
+                requested_state="created",
+                execution=EXECUTION_REFUSED,
+                terminal=TERMINAL_FAILED,
+                server={"reason": ERROR_INVENTED_NUMBER, "ref": ref},
+                speech=SPEECH_INVENTED_NUMBER,
+                error_class=ERROR_INVENTED_NUMBER,
+                extra={"failing_ref": ref},
+            )
         return _receipt(
             ctx,
             capability=TOOL_ARTIFACT_CREATE,
@@ -278,9 +343,29 @@ def artifact_create(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, An
             execution=EXECUTION_REFUSED,
             terminal=TERMINAL_FAILED,
             server={"reason": ERROR_VALIDATION},
-            speech="Bunu dosyaya dökemedim efendim; söylediğiniz rakamlarla uyuşmuyor.",
+            speech=SPEECH_INVALID_SPEC,
             error_class=ERROR_VALIDATION,
-            extra={"detail": str(exc)[:500]},
+            extra={"detail": detail[:500]},
+        )
+
+    # LOW security-review finding (ADR-0085 addendum 6): the same secret-reference gate
+    # M21 already applies to mail (``app.voice.intents.contains_secret_reference``,
+    # M19 spec §1 invariant 2) is applied here to the title and every free-text/cell
+    # string the structure carries — a password/PIN never gets written to a file, the
+    # same way it never gets typed or mailed. Checked AFTER the spec validates (so
+    # ``spec._all_text()``/sheet & dataset cells are available in one already-typed
+    # traversal) and BEFORE ``factory.create`` — nothing is rendered.
+    secret_texts = [title, spec.title, *spec._all_text()]  # noqa: SLF001 - same package
+    if any(contains_secret_reference(t) for t in secret_texts if t):
+        return _receipt(
+            ctx,
+            capability=TOOL_ARTIFACT_CREATE,
+            requested_state="created",
+            execution=EXECUTION_REFUSED,
+            terminal=TERMINAL_FAILED,
+            server={"reason": ERROR_SECRET_REFUSED},
+            speech=SPEECH_SECRET_REFUSED,
+            error_class=ERROR_SECRET_REFUSED,
         )
 
     result = factory.create(db, runtime.store, spec=spec)
