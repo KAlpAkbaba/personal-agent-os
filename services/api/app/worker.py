@@ -15,6 +15,8 @@ from temporalio.client import Client
 from temporalio.worker import Worker
 
 from app.config import Settings, get_settings
+from app.executive.activities import EXECUTIVE_ACTIVITIES
+from app.executive.workflow import ExecutiveWorkflow
 from app.logging import configure_logging, get_logger
 from app.research.activities import (
     compose_activity,
@@ -50,17 +52,29 @@ def build_worker(
     return Worker(
         client,
         task_queue=task_queue,
-        workflows=[HealthPingWorkflow, ResearchWorkflow, BrowserResearchWorkflow],
-        activities=[ping_activity, *RESEARCH_ACTIVITIES, *BROWSER_RESEARCH_ACTIVITIES],
+        workflows=[
+            HealthPingWorkflow,
+            ResearchWorkflow,
+            BrowserResearchWorkflow,
+            # M26 (docs/M26_EXECUTIVE_AUTONOMY_SPEC.md §3): registered on the SAME task
+            # queue as BrowserResearchWorkflow — a research.run step starts that
+            # workflow as its own, independent execution (app.executive.activities.
+            # _run_research), never a child needing a separate worker/queue.
+            ExecutiveWorkflow,
+        ],
+        activities=[
+            ping_activity,
+            *RESEARCH_ACTIVITIES,
+            *BROWSER_RESEARCH_ACTIVITIES,
+            *EXECUTIVE_ACTIVITIES,
+        ],
         activity_executor=executor,
     )
 
 
 async def run_worker(settings: Settings | None = None) -> None:
     settings = settings or get_settings()
-    client = await Client.connect(
-        settings.temporal_address, namespace=settings.temporal_namespace
-    )
+    client = await Client.connect(settings.temporal_address, namespace=settings.temporal_namespace)
     with ThreadPoolExecutor(max_workers=8) as executor:
         worker = build_worker(client, settings.temporal_task_queue, activity_executor=executor)
         logger.info(

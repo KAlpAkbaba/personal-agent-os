@@ -90,6 +90,19 @@ PROTECTED_ENDPOINTS = [
     ("genesis-run", "get", f"/v1/genesis/runs/{uuid.uuid4()}"),
     ("genesis-approve", "post", f"/v1/genesis/runs/{uuid.uuid4()}/approve"),
     ("genesis-cancel", "post", f"/v1/genesis/runs/{uuid.uuid4()}/cancel"),
+    # M26 (docs/M26_EXECUTIVE_AUTONOMY_SPEC.md §6): a durable multi-step run drives the
+    # owner's own device/mail/calendar/artifacts, and pausing/cancelling/retrying/
+    # amending one is a real control action — never one unauthenticated HTTP call away;
+    # the listing names the owner's own runs and their state.
+    ("executive-runs", "get", "/v1/executive/runs"),
+    ("executive-start", "post", "/v1/executive/runs"),
+    ("executive-run", "get", f"/v1/executive/runs/{uuid.uuid4()}"),
+    ("executive-explain", "get", f"/v1/executive/runs/{uuid.uuid4()}/explain"),
+    ("executive-pause", "post", f"/v1/executive/runs/{uuid.uuid4()}/pause"),
+    ("executive-resume", "post", f"/v1/executive/runs/{uuid.uuid4()}/resume"),
+    ("executive-cancel", "post", f"/v1/executive/runs/{uuid.uuid4()}/cancel"),
+    ("executive-retry", "post", f"/v1/executive/runs/{uuid.uuid4()}/retry"),
+    ("executive-amend", "post", f"/v1/executive/runs/{uuid.uuid4()}/amend"),
     ("broker-enrollment-token", "post", "/v1/devices/enrollment-tokens"),
     ("broker-command", "post", f"/v1/devices/{DEVICE_ID}/commands"),
     ("broker-revoke", "post", f"/v1/devices/{DEVICE_ID}/revoke"),

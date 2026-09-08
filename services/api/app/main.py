@@ -43,6 +43,7 @@ from app.devices.status import get_status_registry
 from app.documents.service import DocumentService
 from app.evolution.routes import router as evolution_router
 from app.evolution.runtime import EvolutionRuntime
+from app.executive.routes import router as executive_router
 from app.experience.routes import router as experience_router
 from app.genesis.routes import router as genesis_router
 from app.genesis.runtime import GenesisRuntime
@@ -482,6 +483,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # M25 (docs/M25_CREATIVE_3D_SPEC.md §6): the Cockpit's "3B Sahne" panel — owner-
     # gated, the same require_owner_session dependency every other router applies.
     app.include_router(scenes_router)
+    # M26 (docs/M26_EXECUTIVE_AUTONOMY_SPEC.md §6): executive.* reads the SAME
+    # ExecutiveService the voice tools (app.executive.tools_executive) drive.
+    app.include_router(executive_router)
 
     @app.get("/v1/system/health")
     async def system_health() -> dict[str, Any]:

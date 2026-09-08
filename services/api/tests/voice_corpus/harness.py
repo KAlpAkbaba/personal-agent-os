@@ -71,6 +71,7 @@ from app.documents.service import DocumentService
 from app.evolution.models import Capability, CapabilityGap, EvolutionOpportunity, SkillVersion
 from app.evolution.runtime import EvolutionRuntime
 from app.evolution.supervisor import is_paused
+from app.executive.models import ExecutiveRunRow, ExecutiveStepRow
 from app.genesis.catalogue import GenesisInterfaceCatalogue, set_catalogue
 from app.genesis.models import GenesisRun
 from app.genesis.runtime import GenesisRuntime
@@ -200,6 +201,8 @@ TABLES = (
     CalendarProposalRow.__table__,
     AppProjectRow.__table__,
     SceneRow.__table__,
+    ExecutiveRunRow.__table__,
+    ExecutiveStepRow.__table__,
 )
 
 #: The tools the harness may dispatch as "forbidden" because the product refuses them at
@@ -1107,6 +1110,8 @@ def contract_arguments(case: UtteranceCase, tool: str, resolved: dict) -> dict:
         args = {"level": level} if level else {}
     elif tool == "research.start":
         args = {"topic": text}
+    elif tool == "executive.start":
+        args = {"directive": text}
     elif tool == "alarm.create":
         args = {"when_spoken": text}
         if resolved.get("intent") == "alarm_test_create":
@@ -1337,18 +1342,21 @@ def run_case(case: UtteranceCase, *, harness: Harness | None = None) -> CaseResu
         genesis_state_before = _genesis_fixture_state(h.genesis_fixture)
 
         main_turn = 1
-        if case.pre_turn is not None:
-            # ADR-0084 addendum 2: the read-back turn, through the REAL tool, in THIS
-            # session, at turn 1 — the case's own utterance (the confirmation) then runs
-            # at turn 2, strictly after it (UtteranceCase.pre_turn's own docstring).
-            pre_text, pre_tool = case.pre_turn
-            h.say(sid, pre_text, turn=1)
-            pre_call = h.tool(sid, "c-pre", pre_tool, {})
-            if pre_call["status"] != "succeeded":
+        # ADR-0084 addendum 2 / M26 ADR-0089: every preceding turn, through the REAL
+        # tool, in THIS session, at increasing turns — the case's own utterance runs
+        # strictly after all of them (UtteranceCase.preceding_turns's own docstring).
+        # A tool that legitimately answers with a clarification rather than success
+        # (e.g. a retry_step aimed at a step that has not failed yet, in a case built to
+        # exercise exactly that) is accepted too — TOOL_STATUS_NEEDS_CLARIFICATION is
+        # not a harness failure, only an unexpected status name is.
+        for pre_text, pre_tool in case.preceding_turns:
+            main_turn += 1
+            h.say(sid, pre_text, turn=main_turn - 1)
+            pre_call = h.tool(sid, f"c-pre{main_turn - 1}", pre_tool, {})
+            if pre_call["status"] not in ("succeeded", "needs_clarification"):
                 result.problems.append(
-                    f"pre_turn {pre_tool!r} did not succeed: {pre_call['status']}"
+                    f"preceding turn {pre_tool!r} did not succeed: {pre_call['status']}"
                 )
-            main_turn = 2
 
         said = h.say(sid, case.utterance, turn=main_turn)
         resolved = said["resolved_intents"][0]

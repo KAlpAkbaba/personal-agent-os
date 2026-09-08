@@ -236,15 +236,18 @@ class UtteranceCase:
     tool_arguments: dict[str, object] = field(default_factory=dict)
     #: A turn number > 1 lets a case run after another case in the same session (conversation).
     notes: str = ""
-    #: M21 (ADR-0084 addendum 2): a (utterance, tool_name) pair the harness runs FIRST, in
-    #: the SAME session at turn 1, before this case's own utterance (which then runs at
-    #: turn 2) — for a case whose contract is genuinely a TWO-TURN sequence: a read-back
-    #: turn, then the owner's confirmation. ``None`` for every single-turn case (the
-    #: overwhelming majority); ``mc.send.confirmed``/``mc.commit.confirmed`` are the ones
-    #: that need it, because the confirmation gate now binds a confirmation to the SAME
-    #: session and a LATER turn than its own read-back (never satisfied by a context
-    #: fixture alone — see tests/voice_corpus/harness.py's ``seed`` docstring).
-    pre_turn: tuple[str, str] | None = None
+    #: M21 (ADR-0084 addendum 2) / M26 (docs/M26_EXECUTIVE_AUTONOMY_SPEC.md §5, ADR-0089):
+    #: a SEQUENCE of (utterance, tool_name) pairs the harness runs FIRST, in the SAME
+    #: session, at increasing turns starting from 1, before this case's own utterance
+    #: (which then runs at the next turn) — for a case whose contract is genuinely a
+    #: MULTI-TURN conversation: a read-back then a confirmation (M21's own two-turn
+    #: shape, still exactly supported as a length-1 sequence), or a whole executive
+    #: conversation ("Bu işi durdur" -> "Devam et" -> "İkinci adımı tekrar dene" ->
+    #: "Sunumu da ekle" -> "Bunu iptal et", each building on the durable state the REAL
+    #: tool call before it left behind). ``()`` for every single-turn case (the
+    #: overwhelming majority) — never satisfied by a context fixture alone (see
+    #: tests/voice_corpus/harness.py's ``seed`` docstring).
+    preceding_turns: tuple[tuple[str, str], ...] = ()
 
 
 def _strip_diacritics(text: str) -> str:
@@ -1769,7 +1772,7 @@ def _mail_calendar_cases() -> list[UtteranceCase]:
             source="canonical",
             # ADR-0084 addendum 2: the REAL read-back-then-confirm sequence, through the
             # real tool, in this session, at an EARLIER turn than the confirmation below.
-            pre_turn=("Cevabı oku.", "mail.read_draft"),
+            preceding_turns=(("Cevabı oku.", "mail.read_draft"),),
         )
     )
     cases.append(
@@ -1921,7 +1924,7 @@ def _mail_calendar_cases() -> list[UtteranceCase]:
             category="mail_calendar",
             source="canonical",
             # ADR-0084 addendum 2: see mc.send.confirmed's identical comment.
-            pre_turn=("Öneriyi oku.", "calendar.read_proposal"),
+            preceding_turns=(("Öneriyi oku.", "calendar.read_proposal"),),
         )
     )
     cases.append(
@@ -1951,7 +1954,7 @@ def _mail_calendar_cases() -> list[UtteranceCase]:
             side_effects=SIDE_EFFECTS_CALENDAR_COMMIT,
             category="mail_calendar",
             source="paraphrase",
-            pre_turn=("Öneriyi oku.", "calendar.read_proposal"),
+            preceding_turns=(("Öneriyi oku.", "calendar.read_proposal"),),
         )
     )
     cases.append(
@@ -2893,7 +2896,7 @@ def _capability_approve_cancel_cases() -> list[UtteranceCase]:
                     context=CTX_COUNTERBOX_RUNNING,
                     category="genesis",
                     source=source,
-                    pre_turn=("Sayaç kutusunu bir artır.", "capability.request"),
+                    preceding_turns=(("Sayaç kutusunu bir artır.", "capability.request"),),
                 )
             )
         )
@@ -2913,7 +2916,7 @@ def _capability_approve_cancel_cases() -> list[UtteranceCase]:
                     context=CTX_COUNTERBOX_RUNNING,
                     category="genesis",
                     source=source,
-                    pre_turn=("Sayaç kutusunu sıfırla.", "capability.request"),
+                    preceding_turns=(("Sayaç kutusunu sıfırla.", "capability.request"),),
                 )
             )
         )
@@ -3332,6 +3335,445 @@ def _scene_cases() -> list[UtteranceCase]:
     ]
 
 
+#: M26 (docs/M26_EXECUTIVE_AUTONOMY_SPEC.md §5, ADR-0089): Executive Autonomy. Every
+#: directive here is the SAME text that starts a real run through
+#: ``app.executive.planner.RuleBasedExecutivePlanner`` — the router and the planner
+#: read the same words, never a fixture standing in for either.
+_EXEC_RESEARCH_DIRECTIVE = (
+    "Son üç gündeki AI gelişmelerini araştır, bana etkisini çıkar, Word raporu ve sunum hazırla."
+)
+_EXEC_RESEARCH_DIRECTIVE_PARA = (
+    "Yapay zekadaki son gelişmeleri araştırıp bana bir rapor ve sunum hazırlar mısın?"
+)
+_EXEC_FOLDER_DIRECTIVE = (
+    "Bu klasördeki teklifleri karşılaştır, Excel oluştur ve yönetici özeti hazırla."
+)
+_EXEC_FOLDER_DIRECTIVE_PARA = (
+    "Masaüstündeki teklif dosyalarını karşılaştırıp bir Excel tablosu ve yönetici "
+    "özeti çıkarır mısın?"
+)
+_EXEC_MAIL_DIRECTIVE = "Bu mail zincirini analiz et, ilgili dosyaları bul ve cevap taslağı hazırla."
+_EXEC_MAIL_DIRECTIVE_PARA = (
+    # NOT "yazışma" (correspondence): that word starts with the SAME "yaz" stem
+    # TYPE_TEXT's own write-verb match uses, and TYPE_TEXT is checked earlier in the
+    # router's priority chain than EXEC_START — found via the corpus (this exact
+    # phrase used to resolve as TYPE_TEXT, "buraya X yaz").
+    "Bu mail dizisini inceleyip ilgili belgeleri bulup bir cevap taslağı hazırlar mısın?"
+)
+
+#: A directive-shaped preceding turn every active-run case starts with — the run is
+#: RUNNING by the time the case's own utterance runs (spec §5's own multi-turn shape;
+#: app.executive.service.start_run_db transitions straight to "running", module
+#: docstring's own note on why "planned" is not separately durable-visible).
+_START_TURN: tuple[str, str] = (_EXEC_RESEARCH_DIRECTIVE, "executive.start")
+_START_TURN_MAIL: tuple[str, str] = (_EXEC_MAIL_DIRECTIVE, "executive.start")
+_PAUSE_TURN: tuple[str, str] = ("Bu işi durdur.", "executive.pause")
+
+
+def _executive_start_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, utterance, source in (
+        ("exec.start.research", _EXEC_RESEARCH_DIRECTIVE, "canonical"),
+        ("exec.start.research.para", _EXEC_RESEARCH_DIRECTIVE_PARA, "paraphrase"),
+        ("exec.start.folder", _EXEC_FOLDER_DIRECTIVE, "canonical"),
+        ("exec.start.folder.para", _EXEC_FOLDER_DIRECTIVE_PARA, "paraphrase"),
+        ("exec.start.mail", _EXEC_MAIL_DIRECTIVE, "canonical"),
+        ("exec.start.mail.para", _EXEC_MAIL_DIRECTIVE_PARA, "paraphrase"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=utterance,
+                    expected_intent="exec_start",
+                    expected_tool="executive.start",
+                    expected_response=RESPONSE_OK,
+                    side_effects=SIDE_EFFECTS_NONE,
+                    context=CTX_NONE,
+                    category="executive",
+                    source=source,
+                )
+            )
+        )
+    # A directive with no recognised shape and no deliverable word reaches no tool at
+    # all (spec §2: the planner's three shapes, never a guess at a fourth) — a plain
+    # miss, exactly what "Onu araştır mısın?" (no output word) or an unrelated request
+    # must stay.
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="exec.start.neg.no_shape",
+                utterance="Bana yardım eder misin?",
+                expected_intent="none",
+                expected_tool=None,
+                expected_response=RESPONSE_NONE,
+                side_effects=SIDE_EFFECTS_NONE,
+                context=CTX_NONE,
+                category="executive",
+                source="regression",
+                regression_issue_id=(
+                    "M26 spec §2: an utterance naming none of the three shapes is a "
+                    "plain miss, never a guessed executive run"
+                ),
+            )
+        )
+    )
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="exec.start.neg.plain_research",
+                utterance="Yapay zeka haberlerini araştır.",
+                expected_intent="none",
+                expected_tool=None,
+                expected_response=RESPONSE_NONE,
+                side_effects=SIDE_EFFECTS_NONE,
+                context=CTX_NONE,
+                category="executive",
+                source="regression",
+                regression_issue_id=(
+                    "M26 spec §2: a plain research request with no deliverable word "
+                    "stays the EXISTING single-shot research.start path, never "
+                    "promoted to a multi-step executive run"
+                ),
+            )
+        )
+    )
+    return cases
+
+
+def _executive_status_explain_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, utterance, intent in (
+        ("exec.status.1", "Ne yapıyorsun?", "exec_status"),
+        ("exec.status.2", "Ne durumda?", "exec_status"),
+        ("exec.status.3", "Şu an ne durumdasın?", "exec_status"),
+        ("exec.explain.1", "Şu an tam olarak ne yapıyorsun?", "exec_explain"),
+        ("exec.explain.2", "Tam olarak şu anda ne yapıyorsun?", "exec_explain"),
+    ):
+        tool = "executive.status" if intent == "exec_status" else "executive.explain"
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=utterance,
+                    expected_intent=intent,
+                    expected_tool=tool,
+                    expected_response=RESPONSE_OK,
+                    side_effects=SIDE_EFFECTS_NONE,
+                    context=CTX_NONE,
+                    category="executive",
+                    source="canonical",
+                    preceding_turns=(_START_TURN,),
+                )
+            )
+        )
+    # The SAME status question, over a mail-thread-shaped run (spec §5's shape (c)) —
+    # proves the active-run gate is not accidentally coupled to one shape's own steps.
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="exec.status.mail_shape",
+                utterance="Ne durumda?",
+                expected_intent="exec_status",
+                expected_tool="executive.status",
+                expected_response=RESPONSE_OK,
+                side_effects=SIDE_EFFECTS_NONE,
+                context=CTX_NONE,
+                category="executive",
+                source="canonical",
+                preceding_turns=(_START_TURN_MAIL,),
+            )
+        )
+    )
+    # Spec §5's own negative shape mirrored from OPERATOR_STATUS/ALARM_STOP: with NO
+    # run at all, "Ne yapıyorsun?" is not executive business — it stays whatever this
+    # router already resolves an unclaimed generic question to.
+    cases.append(
+        UtteranceCase(
+            case_id="exec.status.neg.no_run",
+            utterance="Ne yapıyorsun?",
+            expected_intent="none",
+            expected_tool=None,
+            expected_response=RESPONSE_NONE,
+            side_effects=SIDE_EFFECTS_NONE,
+            context=CTX_NONE,
+            category="executive",
+            source="regression",
+            regression_issue_id="M26 spec §5: with no run, this is not executive business",
+        )
+    )
+    return cases
+
+
+def _executive_pause_resume_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, utterance in (
+        ("exec.pause.1", "Bu işi durdur."),
+        ("exec.pause.2", "Bekle."),
+        ("exec.pause.3", "Duraklat."),
+        ("exec.pause.4", "Bir dur."),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=utterance,
+                    expected_intent="exec_pause",
+                    expected_tool="executive.pause",
+                    expected_response=RESPONSE_OK,
+                    side_effects=SIDE_EFFECTS_NONE,
+                    context=CTX_NONE,
+                    category="executive",
+                    source="canonical",
+                    preceding_turns=(_START_TURN,),
+                )
+            )
+        )
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="exec.resume.para",
+                utterance="Kaldığın yerden devam et.",
+                expected_intent="exec_resume",
+                expected_tool="executive.resume",
+                expected_response=RESPONSE_OK,
+                side_effects=SIDE_EFFECTS_NONE,
+                context=CTX_NONE,
+                category="executive",
+                source="paraphrase",
+                preceding_turns=(_START_TURN, _PAUSE_TURN),
+            )
+        )
+    )
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="exec.resume.1",
+                utterance="Devam et.",
+                expected_intent="exec_resume",
+                expected_tool="executive.resume",
+                expected_response=RESPONSE_OK,
+                side_effects=SIDE_EFFECTS_NONE,
+                context=CTX_NONE,
+                category="executive",
+                source="canonical",
+                # spec §5's own conversation: durdur -> devam et, in the SAME session.
+                preceding_turns=(_START_TURN, _PAUSE_TURN),
+            )
+        )
+    )
+    # spec §5's mandatory negative: "Devam et" with nothing paused (a run exists and is
+    # RUNNING, never having been paused) -> the tool's own honest clarification, never
+    # a silent success and never a narration no-op (app.voice.intents._executive_
+    # active_match's own docstring explains why this is a ROUTER-level EXEC_RESUME
+    # match that the TOOL then refuses, not a router-level miss).
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="exec.resume.neg.nothing_paused",
+                utterance="Devam et.",
+                expected_intent="exec_resume",
+                expected_tool="executive.resume",
+                expected_response=RESPONSE_CLARIFY,
+                side_effects=SIDE_EFFECTS_NONE,
+                context=CTX_NONE,
+                category="executive",
+                source="canonical",
+                preceding_turns=(_START_TURN,),
+                regression_issue_id="M26 spec §5: 'Devam et' with nothing paused -> clarification",
+            )
+        )
+    )
+    # With NO run at all, "Devam et" is not executive business either — the generic
+    # RESUME control intent (narration/conversation) stays the honest fallback.
+    cases.append(
+        UtteranceCase(
+            case_id="exec.resume.neg.no_run",
+            utterance="Devam et.",
+            expected_intent="resume",
+            expected_tool=None,
+            expected_response=RESPONSE_CONTROL,
+            side_effects=SIDE_EFFECTS_NONE,
+            context=CTX_NONE,
+            category="executive",
+            source="regression",
+            regression_issue_id="M26 spec §5: with no run, 'Devam et' is not executive business",
+        )
+    )
+    return cases
+
+
+def _executive_retry_amend_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    # Neither step has actually FAILED yet (the corpus never runs the durable workflow
+    # itself — that is app.executive.workflow's own Temporal test suite's job), so both
+    # retry shapes are proven at the ROUTER (the right intent/tool) and the TOOL
+    # honestly clarifies rather than pretending to retry something that never failed.
+    for case_id, utterance, expected in (
+        ("exec.retry.kind", "Araştırmayı tekrar dene.", {}),
+        ("exec.retry.kind.mail", "Mail taslağını tekrar dene.", {}),
+        # Lowercase "ikinci" deliberately (not "İkinci"): tests.voice_corpus.corpus.
+        # _variants' plain str.lower() turns a capital İ into "i" + a combining dot
+        # above (U+0307) rather than turkish_casefold's clean "i", which then fails
+        # app.voice.intents._ORDINALS' own lookup — found via the full executive
+        # corpus run. A real transcript is lowercase at least as often as not, so this
+        # loses no realistic coverage.
+        ("exec.retry.ordinal", "ikinci adımı tekrar dene.", {}),
+        ("exec.retry.ordinal.para", "ikinci adımı yeniden dene.", {}),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=utterance,
+                    expected_intent="exec_retry",
+                    expected_tool="executive.retry",
+                    expected_response=RESPONSE_CLARIFY,
+                    expected=expected,
+                    side_effects=SIDE_EFFECTS_NONE,
+                    context=CTX_NONE,
+                    category="executive",
+                    source="canonical",
+                    preceding_turns=(_START_TURN,),
+                )
+            )
+        )
+    for case_id, utterance in (
+        ("exec.amend.presentation", "Sunumu da ekle."),
+        ("exec.amend.spreadsheet", "Excel'i de hazırla."),
+        ("exec.amend.document", "Rapor da hazırla."),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=utterance,
+                    expected_intent="exec_amend",
+                    expected_tool="executive.amend",
+                    expected_response=RESPONSE_OK,
+                    side_effects=SIDE_EFFECTS_NONE,
+                    context=CTX_NONE,
+                    category="executive",
+                    source="canonical",
+                    preceding_turns=(_START_TURN,),
+                )
+            )
+        )
+    # With no run at all, neither vocabulary means anything executive.
+    cases.append(
+        UtteranceCase(
+            case_id="exec.retry.neg.no_run",
+            utterance="Araştırmayı tekrar dene.",
+            # With no run, "tekrar dene" is not executive business — "tekrar" alone
+            # already means something to this router (the generic REPEAT control
+            # intent, "tekrar oku" etc.), and that is the honest fallback here, never
+            # a guessed executive retry.
+            expected_intent="repeat",
+            expected_tool=None,
+            expected_response=RESPONSE_CONTROL,
+            side_effects=SIDE_EFFECTS_NONE,
+            context=CTX_NONE,
+            category="executive",
+            source="regression",
+            regression_issue_id="M26 spec §5: with no run, a retry phrase is not executive "
+            "business",
+        )
+    )
+    return cases
+
+
+def _executive_cancel_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, utterance, start_turn in (
+        ("exec.cancel.1", "Bunu iptal et.", _START_TURN),
+        ("exec.cancel.2", "Vazgeç.", _START_TURN),
+        # Lowercase for the same reason exec.retry.ordinal's own comment explains
+        # (capital İ + str.lower() + _ORDINALS/_has_exact — here "iptal" needs no
+        # ordinal lookup, but the SAME combining-dot mangling still makes the token
+        # not-equal to the plain "iptal" this router matches).
+        ("exec.cancel.3", "iptal ediyorum.", _START_TURN),
+        ("exec.cancel.mail_shape", "Vazgeç.", _START_TURN_MAIL),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=utterance,
+                    expected_intent="exec_cancel",
+                    expected_tool="executive.cancel",
+                    expected_response=RESPONSE_OK,
+                    side_effects=SIDE_EFFECTS_NONE,
+                    context=CTX_NONE,
+                    category="executive",
+                    source="canonical",
+                    preceding_turns=(start_turn,),
+                )
+            )
+        )
+    # spec §5's mandatory negative: "Bunu iptal et" with NO run at all -> clarification
+    # (the tool itself: app.executive.service._get_run's own "not_found" refusal) —
+    # the router still recognises "iptal et"/"vazgeç" as EXEC_CANCEL only once a run
+    # exists (app.voice.intents._executive_active_match: ``if run_state is None:
+    # return None``), so with NO run this is a plain miss instead, and THAT is the
+    # regression this pair of cases pins down together.
+    cases.append(
+        UtteranceCase(
+            case_id="exec.cancel.neg.no_run",
+            utterance="Bunu iptal et.",
+            expected_intent="none",
+            expected_tool=None,
+            expected_response=RESPONSE_NONE,
+            side_effects=SIDE_EFFECTS_NONE,
+            context=CTX_NONE,
+            category="executive",
+            source="regression",
+            regression_issue_id="M26 spec §5: 'Bunu iptal et' with no run -> refused/clarified, "
+            "never a guess",
+        )
+    )
+    return cases
+
+
+def _executive_negative_cross_family_cases() -> list[UtteranceCase]:
+    """Spec §5's structural-refusal negative: "Bu maili gönder" inside a run must
+    reach the SAME M21 MAIL_SEND path it always does — there is no executive.send, so
+    this is unreachable BY CONSTRUCTION (app.executive.spec.STEP_KINDS names no send
+    kind, module docstring) rather than merely asserted. Proven the SAME shape
+    ``mc.send.no_readback`` already proves with no run at all (no read-back, no send,
+    RESPONSE_CLARIFY) — what THIS case adds is that an ACTIVE executive run changes
+    nothing about it; ``mc.send.confirmed`` already proves the full successful-send
+    shape, which is not this case's job to repeat."""
+    return [
+        UtteranceCase(
+            case_id="exec.neg.mail_send_unchanged",
+            utterance="Gönder.",
+            expected_intent="mail_send",
+            expected_tool="mail.send",
+            expected_response=RESPONSE_CLARIFY,
+            side_effects=SIDE_EFFECTS_NONE,
+            context=CTX_NONE,
+            category="executive",
+            source="regression",
+            preceding_turns=(_START_TURN,),
+            regression_issue_id=(
+                "M26 spec §5: 'Bu maili gönder' inside a run stays the M21 gate; "
+                "no executive.send exists to intercept it"
+            ),
+        )
+    ]
+
+
+def _executive_cases() -> list[UtteranceCase]:
+    return [
+        *_executive_start_cases(),
+        *_executive_status_explain_cases(),
+        *_executive_pause_resume_cases(),
+        *_executive_retry_amend_cases(),
+        *_executive_cancel_cases(),
+        *_executive_negative_cross_family_cases(),
+    ]
+
+
 def all_cases() -> list[UtteranceCase]:
     cases = [
         *_research_cases(),
@@ -3348,6 +3790,7 @@ def all_cases() -> list[UtteranceCase]:
         *_app_cases(),
         *_capability_cases(),
         *_scene_cases(),
+        *_executive_cases(),
     ]
     ids = [c.case_id for c in cases]
     assert len(ids) == len(set(ids)), "duplicate case ids"

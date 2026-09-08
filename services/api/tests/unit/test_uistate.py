@@ -96,9 +96,11 @@ def test_the_vocabulary_is_the_one_the_owner_specified() -> None:
         "capability.genesis",
         # M25 (3D Creation spec §5, §6, ADR-0088): the scene channel.
         "scene.activity",
+        # M26 (Executive Autonomy spec §6, §7, ADR-0089): the executive channel.
+        "executive.run",
     }
     contract = ui_state_contract()
-    assert contract["contract_version"] == 10
+    assert contract["contract_version"] == 11
     assert "ambient" in contract["subsystems"]
     assert "operator" in contract["subsystems"]
     assert "documents" in contract["subsystems"]

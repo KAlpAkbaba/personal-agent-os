@@ -37,7 +37,7 @@ from app.uistate import UiState
 from app.uistate import publish as publish_ui
 from app.voice import service as voice_service
 from app.voice.errors import VoiceError, VoiceErrorClass
-from app.voice.intents import ResolvedIntent, classify_research_shape, resolve_intent
+from app.voice.intents import Intent, ResolvedIntent, classify_research_shape, resolve_intent
 from app.voice.providers import EphemeralCredential, RealtimeProvider, RealtimeSessionConfig
 from app.voice.realtime import RealtimeState
 from app.voice.realtime_bench import (
@@ -1122,6 +1122,14 @@ def record_client_events(
     #: ``awaiting_approval`` in THIS session right now, the one precondition that
     #: turns a bare "Onaylıyorum."/"Vazgeç." into CAPABILITY_APPROVE/CANCEL.
     genesis_awaiting_approval_known: bool | None = None
+    #: M26 (docs/M26_EXECUTIVE_AUTONOMY_SPEC.md §5, ADR-0089): the same lazy discipline
+    #: — the owner's most recent run's OWN state word, or None when there is no run at
+    #: all. Unlike the booleans above, ``None`` here means BOTH "not yet computed" and
+    #: "no run exists" (there is no run state spelled "none"): the computation re-runs
+    #: at most once per client EVENT within this request rather than once per request,
+    #: a deliberate, bounded inefficiency (a request carries very few events) rather
+    #: than a third sentinel value.
+    executive_run_state_known: str | None = None
     accepted = 0
     sideband_payloads: list[tuple[str, dict[str, Any]]] = []
     for ev in events:
@@ -1235,6 +1243,22 @@ def record_client_events(
                     )
                 except Exception:  # noqa: BLE001 - a deployment without genesis wired
                     genesis_awaiting_approval_known = False
+            if executive_run_state_known is None:
+                try:
+                    from app.executive.models import ExecutiveRunRow
+
+                    exec_run = (
+                        db.execute(
+                            select(ExecutiveRunRow)
+                            .order_by(ExecutiveRunRow.created_at.desc())
+                            .limit(1)
+                        )
+                        .scalars()
+                        .first()
+                    )
+                    executive_run_state_known = exec_run.state if exec_run is not None else None
+                except Exception:  # noqa: BLE001 - a deployment without the executive tables
+                    executive_run_state_known = None
             intent: ResolvedIntent = resolve_intent(
                 text,
                 session_state=RealtimeState(fsm) if fsm else None,
@@ -1247,6 +1271,7 @@ def record_client_events(
                 draft_pending=draft_pending_known,
                 proposal_pending=proposal_pending_known,
                 genesis_awaiting_approval=genesis_awaiting_approval_known,
+                executive_run_state=executive_run_state_known,
             )
             ctx["last_intent"] = intent.intent.value
             # ADR-0075: the LATEST resolved utterance of this session, kept on the
@@ -1310,6 +1335,20 @@ def record_client_events(
                 "scene_tool": intent.scene_tool,
                 "scene_ref": intent.scene_ref,
                 "scene_kind": intent.scene_kind,
+                # M26 (docs/M26_EXECUTIVE_AUTONOMY_SPEC.md §5): the Executive Autonomy
+                # fields the owner's WORDS carried, for the same "owner's words win
+                # over the model's argument" reason.
+                "exec_shape": intent.exec_shape,
+                "exec_step_ordinal": intent.exec_step_ordinal,
+                "exec_kind_hint": intent.exec_kind_hint,
+                "exec_amend_kind": intent.exec_amend_kind,
+                # EXEC_START is the one intent in this whole router whose tool needs the
+                # OWNER'S FULL FREE TEXT (a directive), not a categorical field — every
+                # other family's tool gets its content from the model's own argument
+                # (research.start's own "topic" is the same shape). Carried only for
+                # EXEC_START so no other tool is ever tempted to read raw text off the
+                # turn record instead of its own model argument.
+                "exec_directive_text": text if intent.intent == Intent.EXEC_START else None,
                 # ADR-0076. The research SHAPE, decided without the "does a completed
                 # research exist?" precondition (that precondition is what let a deictic
                 # follow-up on an empty history become a crawl), and WHICH research the
