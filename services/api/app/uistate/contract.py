@@ -45,7 +45,12 @@ from typing import Any
 #: ``{folder?, subject?, draft_state?}``) and ``calendar.activity`` (metadata
 #: ``{range?, event?, proposal_state?}``), plus the ``mail``/``calendar`` subsystems. Same
 #: additive rule: a v5 renderer keeps working and simply never sees them.
-CONTRACT_VERSION = 6
+#: v7 (M22 Artifact Factory spec §6, ADR-0085) adds ``artifact.factory``, published while a
+#: render is being made and while an INDEPENDENT parser reopens it and compares it to what
+#: was asked, with metadata ``{title?, format?, verdict?, failing_ref?}`` (verdict one of
+#: ``rendering | valid | invalid``), plus the ``artifacts`` subsystem. Same additive rule: a
+#: v6 renderer keeps working and simply never sees it.
+CONTRACT_VERSION = 7
 
 #: Metadata value bounds. Numbers are floats in [0, 1] except where noted; strings are
 #: short machine tokens, never prose.
@@ -156,6 +161,13 @@ class UiState(StrEnum):
     MAIL_ACTIVITY = "mail.activity"
     CALENDAR_ACTIVITY = "calendar.activity"
 
+    #: M22 (spec §6, §7): the Artifact Factory's channel. Published while a render is
+    #: being made and while it is reopened by an independent parser and compared to what
+    #: was asked (ADR-0085 decision 3) — never to animate a surge, the same rule every
+    #: other channel here follows. One token: the whole render -> reopen -> compare loop,
+    #: with ``metadata.verdict`` naming where it is (``rendering | valid | invalid``).
+    ARTIFACT_FACTORY = "artifact.factory"
+
 
 UI_STATES: tuple[str, ...] = tuple(s.value for s in UiState)
 
@@ -184,6 +196,8 @@ SUBSYSTEMS: tuple[str, ...] = (
     # M21: Mail & Calendar publishes mail.activity / calendar.activity (spec §7).
     "mail",
     "calendar",
+    # M22: the Artifact Factory publishes artifact.factory (spec §7).
+    "artifacts",
 )
 
 SEVERITIES: tuple[str, ...] = ("info", "notice", "warning", "critical")

@@ -68,6 +68,11 @@ SUBSYSTEM_DOCUMENTS = "documents"
 #: own docstring gives for its own separation from operator/routine).
 SUBSYSTEM_MAIL = "mail"
 SUBSYSTEM_CALENDAR = "calendar"
+#: M22 Artifact Factory (docs/M22_ARTIFACT_FACTORY_SPEC.md §5, ADR-0085): the owner's own
+#: made files — created, rendered, validated and opened by voice or by the Cockpit. Its
+#: own subsystem so "what did it make/open on my behalf?" is answerable without separating
+#: it from the M13/M20 rows that happen to share a device call or a render.
+SUBSYSTEM_ARTIFACTS = "artifacts"
 
 SUBSYSTEMS: Final[tuple[str, ...]] = (
     SUBSYSTEM_RESEARCH,
@@ -89,6 +94,7 @@ SUBSYSTEMS: Final[tuple[str, ...]] = (
     SUBSYSTEM_DOCUMENTS,
     SUBSYSTEM_MAIL,
     SUBSYSTEM_CALENDAR,
+    SUBSYSTEM_ARTIFACTS,
 )
 
 # ------------------------------------------------------------------ statuses
@@ -310,6 +316,13 @@ EVENT_TYPE_CALENDAR_READ = "calendar.read"
 EVENT_TYPE_CALENDAR_PROPOSED = "calendar.propose"
 EVENT_TYPE_CALENDAR_COMMITTED = "calendar.commit"
 EVENT_TYPE_CALENDAR_DISCARDED = "calendar.discard"
+#: M22 Artifact Factory (spec §5, ADR-0085): one row per owner-initiated artifact
+#: interaction — created, rendered, (re)validated, opened on the device, or listed.
+EVENT_TYPE_ARTIFACT_CREATED = "artifact.create"
+EVENT_TYPE_ARTIFACT_RENDERED = "artifact.render"
+EVENT_TYPE_ARTIFACT_VALIDATED = "artifact.validate"
+EVENT_TYPE_ARTIFACT_OPENED = "artifact.open"
+EVENT_TYPE_ARTIFACT_LISTED = "artifact.list"
 
 EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_RESEARCH_PLANNED,
@@ -392,6 +405,11 @@ EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_CALENDAR_PROPOSED,
     EVENT_TYPE_CALENDAR_COMMITTED,
     EVENT_TYPE_CALENDAR_DISCARDED,
+    EVENT_TYPE_ARTIFACT_CREATED,
+    EVENT_TYPE_ARTIFACT_RENDERED,
+    EVENT_TYPE_ARTIFACT_VALIDATED,
+    EVENT_TYPE_ARTIFACT_OPENED,
+    EVENT_TYPE_ARTIFACT_LISTED,
 )
 
 #: ``alarm.<state_lowercase>`` for every state in ``app.alarms.models.ALARM_STATES``

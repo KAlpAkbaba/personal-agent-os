@@ -52,6 +52,12 @@ FOCUS_KIND_THREAD = "thread"
 FOCUS_KIND_DRAFT = "draft"
 FOCUS_KIND_EVENT = "event"
 FOCUS_KIND_PROPOSAL = "proposal"
+#: M22 (docs/M22_ARTIFACT_FACTORY_SPEC.md §4, ADR-0085 decision 5): the Artifact Factory's
+#: own focus by identity. ``artifact`` names one ``artifacts`` row (never a render/format —
+#: those are chosen at open/render time) so "bunu aç" after "Bana bir bütçe tablosu yap"
+#: resolves to the artifact just made, and "önceki" works the same current/previous way
+#: every other kind above already gets from this module.
+FOCUS_KIND_ARTIFACT = "artifact"
 FOCUS_KINDS: tuple[str, ...] = (
     FOCUS_KIND_WINDOW,
     FOCUS_KIND_APP,
@@ -63,6 +69,7 @@ FOCUS_KINDS: tuple[str, ...] = (
     FOCUS_KIND_DRAFT,
     FOCUS_KIND_EVENT,
     FOCUS_KIND_PROPOSAL,
+    FOCUS_KIND_ARTIFACT,
 )
 
 #: How many recent rows of ONE kind the stack keeps (bounded, per task brief: "a bounded
@@ -100,6 +107,7 @@ class ObjectFocusRow(Base):
 __all__ = [
     "FOCUS_KINDS",
     "FOCUS_KIND_APP",
+    "FOCUS_KIND_ARTIFACT",
     "FOCUS_KIND_DOCUMENT",
     "FOCUS_KIND_DRAFT",
     "FOCUS_KIND_EVENT",
