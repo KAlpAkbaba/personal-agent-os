@@ -28,6 +28,7 @@ import {
   isCalendarState,
   isCoreChannel,
   isDocumentState,
+  isExecutiveState,
   isGenesisState,
   isMailState,
   isOperatorState,
@@ -354,6 +355,18 @@ export function genesisClaim(truth: CoreTruth, now: number): Claim {
  */
 export function sceneClaim(truth: CoreTruth, now: number): Claim {
   return claimFor(newestWhere(truth, isSceneState), now);
+}
+
+/**
+ * Executive Autonomy's own claim (v11): the newest `executive.run`, by
+ * membership. Returned expired or not, for the scene claim's reason: the
+ * panel words the age, and an expired run event is one we stopped hearing
+ * about — the runs themselves are rows on `/v1/executive/runs`, which do
+ * not expire, and a `paused` row is what the Cockpit's "Devam" is built
+ * from.
+ */
+export function executiveClaim(truth: CoreTruth, now: number): Claim {
+  return claimFor(newestWhere(truth, isExecutiveState), now);
 }
 
 /**

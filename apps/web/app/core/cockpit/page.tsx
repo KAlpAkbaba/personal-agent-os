@@ -33,12 +33,15 @@ import OwnerGate from "../../components/OwnerGate";
 import { approvalClient } from "../../lib/cockpit/approvals";
 import { appsClient } from "../../lib/cockpit/apps";
 import { artifactClient, downloadRender } from "../../lib/cockpit/artifacts";
+import { type ExecutiveRunRow, executiveClient } from "../../lib/cockpit/executive";
 import { genesisClient } from "../../lib/cockpit/genesis";
 import { type SceneRow, sceneClient } from "../../lib/cockpit/scenes";
 import { useApprovalPair } from "../../lib/cockpit/useApprovalPair";
 import { useAppsControl } from "../../lib/cockpit/useAppsControl";
 import { useArtifactOpen } from "../../lib/cockpit/useArtifactOpen";
 import { useCockpitData } from "../../lib/cockpit/useCockpitData";
+import { useExecutiveControl } from "../../lib/cockpit/useExecutiveControl";
+import { useExecutiveDetail } from "../../lib/cockpit/useExecutiveDetail";
 import { useGenesisControl } from "../../lib/cockpit/useGenesisControl";
 import { useSceneControl } from "../../lib/cockpit/useSceneControl";
 import { useSceneRender } from "../../lib/cockpit/useSceneRender";
@@ -74,6 +77,7 @@ import {
   DocumentsPanel,
   EvolutionPanel,
   EvolutionSupervisorPanel,
+  ExecutivePanel,
   GenesisPanel,
   GoalsPanel,
   HealthPanel,
@@ -94,6 +98,9 @@ import "../core.css";
 
 /** A stable empty list, so the render hook's effect does not re-run on every poll. */
 const EMPTY_SCENES: SceneRow[] = [];
+
+/** The same, for the executive rows the detail hook reads. */
+const EMPTY_RUNS: ExecutiveRunRow[] = [];
 
 function Cockpit() {
   const { truth, now, refresh } = useCoreState();
@@ -157,6 +164,20 @@ function Cockpit() {
     [sceneRows],
   );
   const sceneControl = useSceneControl(sceneClient, refreshPanels, sceneTool);
+  // M26 §6: "Duraklat", "Devam" and "İptal" ask the Cloud Core for the
+  // workflow's own pause / resume / cancel signals on one run, one call at a
+  // time, and every answer reloads the list so the rows show the state the
+  // Cloud Core now holds — never the state this page assumed a click
+  // produced. The current step's sentence comes from the run's OWN route,
+  // asked only for the runs that have not ended (≤ 2 at once, spec §4). The
+  // routes land on the Cloud Core track (ADR-0089 §8); until they do, the
+  // panel says "henüz yok".
+  const executiveRows = useMemo(
+    () => (data.executiveRuns.kind === "ok" ? data.executiveRuns.value : EMPTY_RUNS),
+    [data.executiveRuns],
+  );
+  const executiveControl = useExecutiveControl(executiveClient, refreshPanels);
+  const executiveDetails = useExecutiveDetail(executiveRows);
   // The render route is owner-session gated, so the images are FETCHED with
   // the session and handed to the rows as blobs; a bare <img src> would 401.
   const scenePreview = useSceneRender(sceneRows);
@@ -281,6 +302,18 @@ function Cockpit() {
             now={now}
             control={sceneControl}
             preview={scenePreview}
+          />
+          {/* M26 §6: the multi-step jobs the assistant is carrying — each
+              run's state, the step it is on with the route's own sentence
+              for it, how many steps are done, what a partly finished run is
+              missing, and the three chips the owner stops and resumes a run
+              with. */}
+          <ExecutivePanel
+            runs={data.executiveRuns}
+            truth={truth}
+            now={now}
+            control={executiveControl}
+            details={executiveDetails}
           />
           <GoalsPanel state={data.goals} now={now} />
           <ResearchPanel

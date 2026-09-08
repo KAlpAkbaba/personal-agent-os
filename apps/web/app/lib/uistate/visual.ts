@@ -52,6 +52,7 @@ import { type DocumentFacts, documentCaption, documentFacts } from "./documents"
 import { type GenesisFacts, genesisCaption, genesisFacts, genesisPosture } from "./genesis";
 import { type MailFacts, mailCaption, mailFacts } from "./mail";
 import { type SceneFacts, sceneCaption, sceneFacts, scenePosture } from "./scenes";
+import { type ExecutiveFacts, executiveCaption, executiveFacts, executivePosture } from "./executive";
 import { operatorCaption, operatorFacts } from "./operator";
 import type { VoiceUiState } from "../voice/controller";
 
@@ -172,7 +173,23 @@ export type CoreVisualKind =
    * Calm, nothing that could be read as progress, and the tool, the scene,
    * the step and the object count as the caption.
    */
-  | "scene_activity";
+  | "scene_activity"
+  /**
+   * v11 (M26): the Core carrying a multi-step job for the owner — a
+   * validated task graph run step by step across the families, pausable,
+   * correctable and cancellable at any moment, ending in an honest state.
+   * A planning posture while the graph exists and nothing has run; a
+   * WORKING posture while steps run (the making posture's lattice and
+   * outward traffic); a HELD posture at `paused`, because the owner said
+   * "Bekle" and a run waiting on the owner is held exactly as
+   * `agent.waiting_owner` is, with no agitation whatever; still and bright
+   * at `completed`; `partial` held and NAMED by what is missing, never
+   * rounded up to done (ADR-0089 §3); `cancelled` settled and dim — the
+   * owner's own decision, not a fault; `failed` under the same restraint.
+   * A bar only when the publisher counted BOTH `done` and `total`, and the
+   * step, the state and the counts as the caption.
+   */
+  | "executive_run";
 
 /**
  * Which of the two evidence sources produced the intent (ADR-0061 §4).
@@ -485,6 +502,17 @@ export type VisualIntent = {
    */
   scene: SceneFacts | null;
 
+  // ------------------------------------------ v11: Executive Autonomy (M26 §6)
+  /**
+   * The published facts about the run being carried — the run's id, the
+   * step it is on, its state, and how many of its steps are done out of how
+   * many there are — each `null` when the publisher sent none, and the
+   * whole thing `null` outside the `executive_run` kind (kept on its
+   * last-known shape). Words and counts, not channels: the one thing here
+   * that moves anything is `progress`, and only when BOTH counts came.
+   */
+  executive: ExecutiveFacts | null;
+
   palette: PaletteToken;
 };
 
@@ -574,6 +602,7 @@ function blank(kind: CoreVisualKind, palette: PaletteToken): VisualIntent {
     app: null,
     genesis: null,
     scene: null,
+    executive: null,
     palette,
   };
 }
@@ -673,6 +702,24 @@ export function progressOf(event: UiStateEvent | null): number | null {
   const percent = metaNumber(event, "percent");
   if (percent === null) return null;
   return Math.max(0, Math.min(1, percent / 100));
+}
+
+/**
+ * A run's progress from its COUNTED steps (M26 §6), or `null`.
+ *
+ * The only figure in this file derived from metadata counts, and it is a
+ * count rather than an estimate: `done` and `total` are the numbers the
+ * publisher wrote from the `executive_steps` rows. Both must be present —
+ * "3 of an unknown number" is not a fraction — and the total must be
+ * positive, because a graph with no steps has no progress to draw. Capped
+ * at 1 so a publisher that ever reports `done > total` brightens nothing
+ * beyond a full bar; the counts themselves are still printed verbatim
+ * beside it.
+ */
+export function executiveProgress(facts: Pick<ExecutiveFacts, "done" | "total">): number | null {
+  const { done, total } = facts;
+  if (done === null || total === null || total <= 0) return null;
+  return Math.min(1, done / total);
 }
 
 /** Seed the fields every event-backed intent shares. */
@@ -1313,6 +1360,67 @@ function forLiveState(event: UiStateEvent, claim: Claim): VisualIntent {
       };
     }
 
+    case "executive.run": {
+      // Seven postures (M26 §6), each from the published state alone.
+      // PLANNED: the graph exists and nothing has run — the making shape,
+      // still, with nothing flowing anywhere yet, because a plan is not
+      // work in flight. RUNNING: the app factory's shape — a lattice being
+      // laid, the paths carrying steps OUT to the families that do them,
+      // nothing flowing inward. PAUSED: held exactly as `agent.waiting_owner`
+      // holds the Core — full restraint, the rings all but stopped, the
+      // shells close, nothing flowing, the held palette — because the owner
+      // said "Bekle", and busy motion under "duraklatıldı" would be the lie
+      // ADR-0052 exists to prevent; it is NOT an error and draws no
+      // agitation. COMPLETED: still and bright in the ready palette, the one
+      // posture the word "tamamlandı" reaches. PARTIAL: settled and held
+      // under restraint — part of the job exists and part of it does not,
+      // and the caption names which; never rounded up to completed and
+      // never dressed as a failure. CANCELLED: settled and dim, with
+      // neither restraint nor alarm — the owner's own decision. FAILED:
+      // held under restraint, no agitation. A state this build cannot
+      // read, or none at all, is the RUNNING posture with the bare caption:
+      // a run exists and nothing settled was said about it.
+      //
+      // The one bar in this family, and the only one drawn from metadata
+      // besides the self-model's `percent`: `done`/`total` are counted
+      // steps the publisher sent, so a bar from them is a count rather than
+      // an estimate — and it appears ONLY when both came and the total is
+      // positive. A `done` alone draws nothing (ADR-0052 §2: work of
+      // unknown length gets no bar).
+      const facts = executiveFacts(event);
+      const posture = executivePosture(facts.state);
+      const planned = posture === "planned";
+      const running = posture === "running";
+      const paused = posture === "paused";
+      const completed = posture === "completed";
+      const partial = posture === "partial";
+      const cancelled = posture === "cancelled";
+      const failed = posture === "failed";
+      const settled = completed || partial || cancelled || failed;
+      const still = planned || paused || settled;
+      // `held` covers the two stopped states and only those: the owner
+      // paused this run, or the owner ended it. Neither is a fault palette,
+      // and neither is the ready one — nothing was finished either.
+      const palette: PaletteToken = paused || cancelled ? "held" : completed ? "ready" : "making";
+      const glowBase = completed ? 0.42 : partial ? 0.26 : failed ? 0.22 : cancelled ? 0.16 : paused ? 0.12 : planned ? 0.2 : 0.3;
+      return {
+        ...base("executive_run", palette),
+        label: executiveCaption(facts),
+        progress: executiveProgress(facts) ?? progressOf(event),
+        scale: paused ? 0.94 : completed ? 1.02 : running ? 1.05 : 1.02,
+        topology: paused ? 0 : running ? 0.25 : planned ? 0.15 : 0.15,
+        breathAmplitude: paused ? 0.015 : 0.03,
+        breathHz: paused ? 0.09 : completed ? 0.14 : running ? 0.22 : 0.16,
+        energy: e,
+        glow: glowOf(glowBase, e),
+        shellSpread: paused ? 0.1 : running ? 0.35 : 0.2,
+        ringSpin: paused ? 0.02 : running ? 0.2 : IDLE_RING_SPIN,
+        flowRate: still ? 0 : 0.3,
+        restraint: paused ? 1 : partial || failed ? 0.5 : 0,
+        executive: facts,
+      };
+    }
+
     default:
       // Reached only by a contract state this table has not been taught. Both
       // gates upstream (`isKnownState`, and `coreClaim`'s agent/lab filter)
@@ -1437,7 +1545,9 @@ export function applyVoiceOverlay(bus: VisualIntent, voice: VoiceOverlay): Visua
   // artır" runs `capability.request`, and the bus knows the capability and
   // the run's state (M24 §6, §8). v10 extends it to 3D creation: "render
   // al" runs `scene.render`, and the bus knows the tool, the scene and the
-  // step (M25 §5, §6).
+  // step (M25 §5, §6). v11 extends it to Executive Autonomy: "Ne
+  // yapıyorsun?" and the start of a run go through the same router, and the
+  // bus knows the run, the step and how far along it is (M26 §5, §6).
   if (
     voice.state === "tool_running" &&
     (isOperatorActing(bus) ||
@@ -1447,7 +1557,8 @@ export function applyVoiceOverlay(bus: VisualIntent, voice: VoiceOverlay): Visua
       isArtifactMaking(bus) ||
       isAppBuilding(bus) ||
       isGenesisWorking(bus) ||
-      isSceneWorking(bus))
+      isSceneWorking(bus) ||
+      isExecutiveRunning(bus))
   )
     return bus;
   const local = (kind: CoreVisualKind, palette: PaletteToken): VisualIntent => ({
@@ -1777,4 +1888,19 @@ export function isSceneRendering(intent: VisualIntent): boolean {
  */
 export function isSceneUnavailable(intent: VisualIntent): boolean {
   return isSceneWorking(intent) && intent.scene !== null && scenePosture(intent.scene.state) === "unavailable";
+}
+
+/** True while the Core body is a LIVE executive event (v11) — planned, running, paused, ended or unreadable; a last-known shape is not. */
+export function isExecutiveRunning(intent: VisualIntent): boolean {
+  return intent.kind === "executive_run";
+}
+
+/**
+ * True while the Core body is a LIVE executive event whose publisher said
+ * `paused`. Named separately so a harness — and the cockpit — can tell "the
+ * owner stopped this run" from "something failed" without reading the
+ * geometry, which is exactly the distinction M26 §3 asks the Core to keep.
+ */
+export function isExecutivePaused(intent: VisualIntent): boolean {
+  return isExecutiveRunning(intent) && intent.executive !== null && executivePosture(intent.executive.state) === "paused";
 }

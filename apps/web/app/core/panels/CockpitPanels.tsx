@@ -111,6 +111,24 @@ import type {
   ScenePreviewProps,
   SceneRow,
 } from "../../lib/cockpit/scenes";
+import type {
+  ExecutiveChipAction,
+  ExecutiveControlProps,
+  ExecutiveDetailProps,
+  ExecutiveRunRow,
+} from "../../lib/cockpit/executive";
+import {
+  EXECUTIVE_ACTION_LABEL,
+  EXECUTIVE_ROWS_SHOWN,
+  executiveActionGate,
+  executiveRowActions,
+  executiveRowLine,
+  rowIsActive as executiveRowIsActive,
+  rowIsComplete as executiveRowIsComplete,
+  rowIsFailed as executiveRowIsFailed,
+  rowIsPartial as executiveRowIsPartial,
+  rowIsPaused as executiveRowIsPaused,
+} from "../../lib/cockpit/executive-rows";
 import {
   FOCUS_UNSUPPORTED,
   focusSourceLabel,
@@ -137,6 +155,8 @@ import {
   CALENDAR_UNTOLD,
   DOCUMENT_EMPTY,
   DOCUMENT_LABEL,
+  EXECUTIVE_EMPTY,
+  EXECUTIVE_UNTOLD,
   GENESIS_EMPTY,
   GENESIS_UNTOLD,
   MAIL_EMPTY,
@@ -154,6 +174,7 @@ import {
   subsystemLabel,
 } from "../../lib/uistate/labels";
 import { sceneView } from "../../lib/uistate/scenes";
+import { executiveView } from "../../lib/uistate/executive";
 import { MAIL_DRAFT_STATE_LABEL, mailView } from "../../lib/uistate/mail";
 import { operatorPosition, operatorView } from "../../lib/uistate/operator";
 import type { CoreTruth } from "../../lib/uistate/truth";
@@ -162,6 +183,7 @@ import {
   artifactClaim,
   calendarClaim,
   documentClaim,
+  executiveClaim,
   genesisClaim,
   liveEventFor,
   mailClaim,
@@ -2274,6 +2296,218 @@ export function ScenesPanel({
       )}
       <p className="muted" data-scene-note>
         {SCENE_NOTE}
+      </p>
+    </section>
+  );
+}
+
+// ---------------------------------------------- M26: Executive Autonomy
+
+/** What the panel says under the rows: what the three chips ask for, and what this page cannot do. */
+const EXECUTIVE_NOTE =
+  '"Duraklat", "Devam" ve "İptal" Cloud Core\'a sesli "Bu işi durdur", "Devam et", "Bunu iptal et" ile aynı sinyalleri gönderir: çalışan adım biter, yenisi başlamaz; iptalde telafi adımları çalışır ve sahibin hiçbir dosyası silinmez. Bir iş yalnızca her adımı kanıtıyla doğrulandığında tamamlandı sayılır; eksik kalanına kısmen bitti denir ve nesi eksik olduğu yazılır. Hiçbir adım posta göndermez, ödeme yapmaz, silmez, yayımlamaz — taslak ve öneri sahibin onayını bekler. Bu ekran iş planlamaz, adım çalıştırmaz, iş bitirmez.';
+
+/**
+ * The chips under one run: "Duraklat" while it is planned or running,
+ * "Devam" ONLY while it is paused, "İptal" while it has not ended, none
+ * once it has — each drawn only when the Cloud Core would not refuse it,
+ * and disabled with the reason in words while another call is in flight.
+ */
+function ExecutiveControls({ row, control }: { row: ExecutiveRunRow; control: ExecutiveControlProps }) {
+  const actions = executiveRowActions(row);
+  if (actions.length === 0) return null;
+  const handlers: Record<ExecutiveChipAction, (id: string) => void> = {
+    pause: control.onPause,
+    resume: control.onResume,
+    cancel: control.onCancel,
+  };
+  const gates = actions.map((action) => ({ action, gate: executiveActionGate(row, action, control.busy) }));
+  const inFlight = control.busy !== null && control.busy.id === row.run_id;
+  // One sentence per distinct reason, naming every chip it refuses; the one
+  // in-flight call disables every chip and is said once.
+  const reasons = new Map<string, { actions: ExecutiveChipAction[]; kind: string }>();
+  for (const { action, gate } of gates) {
+    if (gate.reason === null) continue;
+    const entry = reasons.get(gate.reason) ?? { actions: [], kind: gate.reasonKind ?? "" };
+    entry.actions.push(action);
+    reasons.set(gate.reason, entry);
+  }
+  return (
+    <div
+      className="approval-pair"
+      data-executive-controls={row.run_id}
+      data-executive-in-flight={inFlight ? "yes" : "no"}
+      data-executive-in-flight-action={inFlight && control.busy ? control.busy.action : ""}
+    >
+      {gates.map(({ action, gate }) => (
+        <button
+          key={action}
+          type="button"
+          className="core-chip"
+          data-executive-action={action}
+          data-executive-target={row.run_id}
+          data-executive-enabled={gate.enabled ? "yes" : "no"}
+          disabled={!gate.enabled}
+          onClick={() => handlers[action](row.run_id)}
+        >
+          {EXECUTIVE_ACTION_LABEL[action]}
+        </button>
+      ))}
+      {Array.from(reasons, ([reason, { actions: refused, kind }]) => (
+        <span key={reason} className="approval-reason" data-executive-reason={kind} data-executive-reason-for={refused.join(",")}>
+          {kind === "busy" ? reason : `${refused.map((a) => EXECUTIVE_ACTION_LABEL[a]).join(", ")}: ${reason}`}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function ExecutiveRowItem({
+  row,
+  now,
+  control,
+  details,
+}: {
+  row: ExecutiveRunRow;
+  now: number;
+  control: ExecutiveControlProps;
+  details: ExecutiveDetailProps;
+}) {
+  const partial = executiveRowIsPartial(row);
+  const failed = executiveRowIsFailed(row);
+  // The run's own route answers the `explain` query; the list route's field
+  // stands in where it carried one. Nothing is written when neither did.
+  const explain = details.detailFor(row.run_id)?.explain ?? row.explain;
+  return (
+    <li
+      data-executive-run={row.run_id}
+      data-executive-run-state={row.state ?? ""}
+      data-executive-run-step={row.step ?? ""}
+      data-executive-run-active={executiveRowIsActive(row) ? "yes" : "no"}
+      data-executive-run-paused={executiveRowIsPaused(row) ? "yes" : "no"}
+      data-executive-run-complete={executiveRowIsComplete(row) ? "yes" : "no"}
+      data-executive-run-partial={partial ? "yes" : "no"}
+      data-executive-run-failed={failed ? "yes" : "no"}
+      data-executive-run-done={row.done ?? ""}
+      data-executive-run-total={row.total ?? ""}
+    >
+      <div className="event-row">
+        <span>{row.goal ?? "iş bildirilmedi"}</span>
+        <span className="event-when">{when(row.updated_at ?? row.created_at, now)}</span>
+      </div>
+      {/* The step, the state with what is missing beside a partial run, and the counts — each as the row says it, or the statement that it did not. */}
+      <span className="muted" data-executive-line>
+        {executiveRowLine(row)}
+      </span>
+      {/* The current step in one sentence, exactly as the route sent it. */}
+      {explain && (
+        <span className="muted" data-executive-explain>
+          {explain}
+        </span>
+      )}
+      <ExecutiveControls row={row} control={control} />
+    </li>
+  );
+}
+
+/**
+ * Görevler (M26 spec §6): what the executive is doing, from the bus, and
+ * the runs that exist, from `/v1/executive/runs` — each run with the
+ * owner's own words for it, its state, the step it is on, how many of its
+ * steps are done and, for a run that ended partly, what is missing; plus
+ * the current step's explanation from the run's own route, and "Duraklat /
+ * Devam / İptal" asking the Cloud Core for its own signals.
+ *
+ * Two sources, kept apart because they answer different questions. The bus
+ * line is "what is happening now" and decays like every bus claim; the rows
+ * are "what exists" and are the route's. Nothing here plans a graph, runs a
+ * step or ends a run: a run is paused because its row says so, a chip is
+ * drawn because the Cloud Core would not refuse it and enabled because
+ * nothing else is in flight — and the Cloud Core still decides on its own
+ * terms. The empty sentence is the route's answer, never the bus's silence
+ * — and "henüz yok" (no route on this Cloud Core) is neither. Only a
+ * `completed` row reads as done; a `partial` one names what is missing.
+ */
+export function ExecutivePanel({
+  runs,
+  truth,
+  now,
+  control,
+  details,
+}: {
+  runs: Loaded<ExecutiveRunRow[]>;
+  truth: CoreTruth;
+  now: number;
+  control: ExecutiveControlProps;
+  details: ExecutiveDetailProps;
+}) {
+  const view = executiveView(executiveClaim(truth, now));
+  const told = view.lastKnown !== null;
+  const rows = runs.kind === "ok" ? runs.value : [];
+  const shown = rows.slice(0, EXECUTIVE_ROWS_SHOWN);
+  const active = rows.filter(executiveRowIsActive).length;
+  // A partial run and a failed one are the two the owner is owed a look at:
+  // one ended with something missing, the other stopped. A completed run
+  // needs no attention, and a paused one is where the owner put it.
+  const attention = rows.some((row) => executiveRowIsPartial(row) || executiveRowIsFailed(row));
+  return (
+    <section
+      className={`panel ${attention ? "attention" : ""}`}
+      data-panel="executive"
+      data-panel-state={runs.kind}
+      data-panel-empty={runs.kind === "ok" ? (rows.length ? "no" : "yes") : ""}
+      data-executive-stage={view.stage}
+      data-executive-last-known={view.lastKnown ?? ""}
+      data-executive-posture={told ? view.posture : ""}
+      data-executive-active={runs.kind === "ok" ? active : ""}
+    >
+      <h3 className="panel-title">
+        <span>Görevler</span>
+        {runs.kind === "ok" && (
+          <span className="panel-count" data-panel-badge>
+            {active > 0 ? `${active} sürüyor / ${rows.length}` : `${rows.length}`}
+          </span>
+        )}
+      </h3>
+      {/* The bus: the caption the Core draws, with its age; last-known when it aged out. */}
+      <p
+        className={told ? "muted" : "panel-empty"}
+        data-executive-activity={told ? view.stage : "untold"}
+        data-executive-caption={told ? view.caption : ""}
+      >
+        {told ? `${view.stage === "none" ? "Son bilinen: " : ""}${view.caption} · ${formatAge(view.ageMs)}` : EXECUTIVE_UNTOLD}
+      </p>
+      <LoadedNotice state={runs} />
+      {runs.kind === "ok" && rows.length === 0 && (
+        <p className="panel-empty" data-panel-empty-text>
+          {EXECUTIVE_EMPTY}
+        </p>
+      )}
+      {shown.length > 0 && (
+        <ul>
+          {shown.map((row) => (
+            <ExecutiveRowItem key={row.run_id} row={row} now={now} control={control} details={details} />
+          ))}
+        </ul>
+      )}
+      {details.notice && (
+        <p className="panel-unknown" data-executive-detail-notice>
+          {details.notice}
+        </p>
+      )}
+      {control.outcome && (
+        <p
+          className={`approval-outcome ${control.outcome.ok ? "muted" : "panel-unknown"}`}
+          data-executive-outcome={control.outcome.action}
+          data-executive-ok={control.outcome.ok ? "yes" : "no"}
+          data-executive-target={control.outcome.id}
+        >
+          {control.outcome.text}
+          {` · ${formatAge(Math.max(0, now - control.outcome.at))}`}
+        </p>
+      )}
+      <p className="muted" data-executive-note>
+        {EXECUTIVE_NOTE}
       </p>
     </section>
   );
