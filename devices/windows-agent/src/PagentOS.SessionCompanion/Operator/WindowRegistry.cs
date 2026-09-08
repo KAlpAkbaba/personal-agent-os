@@ -137,6 +137,29 @@ public sealed class WindowRegistry
     }
 
     /// <summary>The window behind an id this registry issued, freshly read; <c>ui_target_not_found</c> otherwise.</summary>
+    /// <summary>The owning process still runs: a window whose process exited is not a target.</summary>
+    public static bool ProcessAlive(int pid)
+    {
+        if (pid <= 0)
+        {
+            return true; // unknown owner: the handle check decides
+        }
+
+        try
+        {
+            using var process = System.Diagnostics.Process.GetProcessById(pid);
+            return !process.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
     public WindowInfo Resolve(string? windowId)
     {
         if (string.IsNullOrWhiteSpace(windowId))
@@ -159,8 +182,12 @@ public sealed class WindowRegistry
                     retryable: true);
             }
 
-            if (!OperatorNative.IsWindow(hwnd))
+            if (!OperatorNative.IsWindow(hwnd) || !ProcessAlive(known.Pid))
             {
+                // A window struct can outlive its process for a moment (measured on the GitHub
+                // runner after a forced close): the handle still answers IsWindow while the
+                // process is gone, and an action on it fails its postcondition instead of
+                // saying the target is not there. The process is the truth.
                 _known.Remove(hwnd.ToInt64());
                 throw new CapabilityException(ErrorClasses.UiTargetNotFound, $"window '{windowId}' no longer exists", retryable: true);
             }

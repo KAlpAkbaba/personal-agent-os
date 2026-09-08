@@ -88,6 +88,27 @@ public sealed class NotepadLifecycleTests : IDisposable
     }
 
     [LabFact]
+    public void A_window_whose_process_died_is_not_a_target_even_while_its_handle_lingers()
+    {
+        // The runner showed a forced close leaving the window handle alive for a moment after
+        // the process had exited: window.activate then failed its postcondition instead of
+        // saying the target is gone. The registry now asks the process, not only the handle.
+        var (pid, windowId, _) = _lab.LaunchNotepad();
+        _lab.Activate(windowId);
+        using (var process = System.Diagnostics.Process.GetProcessById(pid))
+        {
+            process.Kill();
+            process.WaitForExit(3000);
+        }
+
+        Assert.False(WindowRegistry.ProcessAlive(pid));
+        var gone = _lab.ExpectFailure(OperatorCapabilityNames.WindowActivate, new JsonObject { ["window_id"] = windowId });
+        Assert.Equal(ErrorClasses.UiTargetNotFound, gone.ErrorClass);
+        var listed = _lab.Exec(OperatorCapabilityNames.WindowList, new JsonObject());
+        Assert.DoesNotContain(listed["windows"]!.AsArray(), w => w!["window_id"]!.GetValue<string>() == windowId);
+    }
+
+    [LabFact]
     public void Setting_the_documents_value_through_UI_Automation_reads_back_exactly()
     {
         var (pid, windowId, _) = _lab.LaunchNotepad();
