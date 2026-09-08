@@ -270,6 +270,22 @@ def test_create_selects_by_capability_and_returns_the_contract(wired) -> None:
         "document.inspect",
         "document.common_points",
         "document.previous",
+        # M21 (docs/M21_MAIL_CALENDAR_SPEC.md §4): Mail & Calendar.
+        "mail.inbox",
+        "mail.search",
+        "mail.read",
+        "mail.thread",
+        "mail.draft",
+        "mail.edit_draft",
+        "mail.read_draft",
+        "mail.send",
+        "mail.discard",
+        "calendar.agenda",
+        "calendar.find_slot",
+        "calendar.propose",
+        "calendar.read_proposal",
+        "calendar.commit",
+        "calendar.discard",
     }
     research = next(t for t in data["tools"] if t["name"] == "research.start")
     assert research["long_running"] is True and research["preamble"] == RESEARCH_PREAMBLE_TR
