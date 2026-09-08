@@ -53,26 +53,69 @@ spec = importlib.util.spec_from_file_location(
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 
-input_name = payload["input_name"]
-output_name = payload["output_name"]
 results = []
-for case in payload["cases"]:
-    started = time.perf_counter()
-    try:
-        actual = module.run({{input_name: case["input"]}})[output_name]
-        error = ""
-    except Exception as exc:  # noqa: BLE001 - rollout harness
-        actual = None
-        error = type(exc).__name__
-    results.append(
-        {{
-            "actual": actual,
-            "expected": case.get("expected"),
-            "ok": (error == "" and actual == case.get("expected")),
-            "error": error,
-            "latency_ms": (time.perf_counter() - started) * 1000.0,
-        }}
-    )
+
+if payload.get("mode") == "payload":
+    # M24 (ADR-0087): a genesis HTTP adapter's run(payload) takes/returns a
+    # dict of arbitrary shape (zero, one or many fields) rather than the single
+    # scalar input_name/output_name shape pure-transform skills use, and its
+    # result is state-dependent (a live application), so a case
+    # asserts SHAPE conformance (declared field names + types) rather than an
+    # exact value — the same thing evaluated once here, once in the eval set.
+    def _shape_ok(value, kind):
+        if kind == "integer":
+            return isinstance(value, int) and not isinstance(value, bool)
+        if kind == "number":
+            return isinstance(value, (int, float)) and not isinstance(value, bool)
+        if kind == "boolean":
+            return isinstance(value, bool)
+        if kind == "string":
+            return isinstance(value, str)
+        return False
+
+    for case in payload["cases"]:
+        started = time.perf_counter()
+        try:
+            actual = module.run(dict(case.get("input") or {{}}))
+            shape = case.get("expected_shape") or {{}}
+            required = case.get("expected_required") or list(shape)
+            ok = isinstance(actual, dict) and all(
+                name in actual and _shape_ok(actual[name], shape[name]) for name in required
+            )
+            error = "" if ok else "shape_mismatch"
+        except Exception as exc:  # noqa: BLE001 - rollout harness
+            actual = None
+            ok = False
+            error = type(exc).__name__
+        results.append(
+            {{
+                "actual": actual,
+                "expected": None,
+                "ok": ok,
+                "error": error,
+                "latency_ms": (time.perf_counter() - started) * 1000.0,
+            }}
+        )
+else:
+    input_name = payload["input_name"]
+    output_name = payload["output_name"]
+    for case in payload["cases"]:
+        started = time.perf_counter()
+        try:
+            actual = module.run({{input_name: case["input"]}})[output_name]
+            error = ""
+        except Exception as exc:  # noqa: BLE001 - rollout harness
+            actual = None
+            error = type(exc).__name__
+        results.append(
+            {{
+                "actual": actual,
+                "expected": case.get("expected"),
+                "ok": (error == "" and actual == case.get("expected")),
+                "error": error,
+                "latency_ms": (time.perf_counter() - started) * 1000.0,
+            }}
+        )
 
 total = len(results)
 passed = sum(1 for r in results if r["ok"])
@@ -141,18 +184,25 @@ class RolloutReport:
 
 
 def load_eval_cases(layout: SkillLayout) -> dict[str, Any]:
-    """The case set the rollout replays, taken from the generated eval set."""
+    """The case set the rollout replays, taken from the generated eval set.
+
+    Two shapes: the original single-scalar ``{input_name, output_name, cases:
+    [{input, expected}]}`` (every pure-transform skill), and the M24 "payload"
+    shape a genesis HTTP adapter emits (``mode: "payload"``, each case's
+    ``input``/``expected_shape`` a dict) — see ``rollout.py``'s driver source.
+    """
     if not layout.cases_path.is_file():
         raise EvolutionError(
             EvolutionErrorClass.NOT_FOUND, "generated eval cases are missing; cannot roll out"
         )
     payload = json.loads(layout.cases_path.read_text(encoding="utf-8"))
-    return {
-        "module": layout.skill_name,
-        "input_name": payload["input_name"],
-        "output_name": payload["output_name"],
-        "cases": payload["cases"],
-    }
+    result: dict[str, Any] = {"module": layout.skill_name, "cases": payload["cases"]}
+    if payload.get("mode") == "payload":
+        result["mode"] = "payload"
+    else:
+        result["input_name"] = payload["input_name"]
+        result["output_name"] = payload["output_name"]
+    return result
 
 
 def run_cases(

@@ -76,6 +76,12 @@ FILESYSTEM_MODES = ("read", "write")
 
 # A host a generated capability may talk to, when (and only when) a grant exists.
 HOSTNAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9-]{1,63}){1,4}$")
+#: M24: ``localhost`` has no dot-label and would otherwise fail HOSTNAME_RE, but
+#: it is one of the two loopback hosts ``app.genesis.interface`` accepts for a
+#: ``base_url`` — an IPv4-literal loopback host (``127.0.0.1``) already matches
+#: HOSTNAME_RE unchanged (digits are inside ``[a-z0-9]``), so only this one
+#: single-label name needs an explicit allowance.
+LOOPBACK_SINGLE_LABEL_HOSTS = frozenset({"localhost"})
 # A filesystem grant is an absolute-ish path token without traversal.
 FS_PATH_RE = re.compile(r"^[A-Za-z]:[\\/][^\r\n\"']{0,200}$|^/[^\r\n\"']{0,200}$")
 
@@ -106,6 +112,20 @@ REQUIRED_FIELDS = (
     "owner_scope",
 )
 
+#: M24 (ADR-0087, spec §4): the six additive keys a genesis HTTP adapter's
+#: manifest carries. Two of the spec's six (``input_schema``/``output_schema``)
+#: are the EXISTING required typed-io fields above — ``HttpAdapterGenerator``
+#: populates them from its own bounded JSON-schema subset
+#: (``app.genesis.interface.ObjectSchema.to_manifest_schema``), so no schema
+#: change was needed for those two. The four genuinely NEW optional keys are
+#: below. Every existing manifest and test is unchanged: nothing here is
+#: required, and ``validate_manifest`` only shape-checks a key when present.
+AUTHORITY_CLASSES = ("read_only", "mutating_authorized_asset", "mutating_unauthorized")
+SIDE_EFFECT_CLASSES = ("none", "read", "mutate_external")
+ROLLBACK_SEMANTICS_NONE_APPLICABLE = "not_applicable"
+ROLLBACK_SEMANTICS_NONE_IRREVERSIBLE = "none_irreversible"
+ROLLBACK_SEMANTICS_COMPENSATING_RE = re.compile(r"^compensating_operation:[a-z][a-z0-9_]{0,31}$")
+
 OPTIONAL_FIELDS = (
     "skill",
     "entrypoint",
@@ -114,6 +134,11 @@ OPTIONAL_FIELDS = (
     "extension_points",
     "resource_budget",
     "components",
+    # M24 additive keys (spec §4):
+    "authority_class",
+    "side_effect_class",
+    "evidence_contract",
+    "rollback_semantics",
 )
 
 PERMISSION_FIELDS = (
@@ -220,7 +245,7 @@ def validate_permissions(manifest: dict[str, Any]) -> dict[str, Any]:
         for host in _require_list(manifest.get("network_permissions"), "network_permissions")
     ]
     for host in network:
-        if not HOSTNAME_RE.match(host):
+        if host not in LOOPBACK_SINGLE_LABEL_HOSTS and not HOSTNAME_RE.match(host):
             raise _fail("manifest.network_permissions entries must be hostnames")
     filesystem: list[dict[str, str]] = []
     for index, entry in enumerate(
@@ -423,6 +448,45 @@ def validate_manifest(manifest: Any) -> dict[str, Any]:
         )
     if "components" in manifest:
         normalized["components"] = validate_dependencies(manifest["components"])
+    # M24 additive keys (spec §4). Shape-checked only when present; nothing
+    # here is consistency-checked against risk_class/side_effects the way the
+    # existing permission grants are — the dispatcher enforces the ONE hard
+    # rule that matters (a mutate_external + mutating_unauthorized capability
+    # never dispatches), in app.evolution.task_resumption.
+    if "authority_class" in manifest:
+        if manifest["authority_class"] not in AUTHORITY_CLASSES:
+            raise _fail(f"manifest.authority_class must be one of {AUTHORITY_CLASSES}")
+        normalized["authority_class"] = manifest["authority_class"]
+    if "side_effect_class" in manifest:
+        if manifest["side_effect_class"] not in SIDE_EFFECT_CLASSES:
+            raise _fail(f"manifest.side_effect_class must be one of {SIDE_EFFECT_CLASSES}")
+        normalized["side_effect_class"] = manifest["side_effect_class"]
+    if "evidence_contract" in manifest:
+        contract = _require_dict(manifest["evidence_contract"], "evidence_contract")
+        unknown_contract = set(contract) - {"read_back", "postcondition"}
+        if unknown_contract or "read_back" not in contract or "postcondition" not in contract:
+            raise _fail(
+                "manifest.evidence_contract must be an object with exactly "
+                "read_back and postcondition"
+            )
+        normalized["evidence_contract"] = {
+            "read_back": require_slug(contract["read_back"], field="evidence_contract.read_back"),
+            "postcondition": _require_text(
+                contract["postcondition"], "evidence_contract.postcondition", 256
+            ),
+        }
+    if "rollback_semantics" in manifest:
+        value = manifest["rollback_semantics"]
+        valid = value in (
+            ROLLBACK_SEMANTICS_NONE_APPLICABLE,
+            ROLLBACK_SEMANTICS_NONE_IRREVERSIBLE,
+        ) or (isinstance(value, str) and ROLLBACK_SEMANTICS_COMPENSATING_RE.match(value))
+        if not valid:
+            raise _fail(
+                "manifest.rollback_semantics must be not_applicable, none_irreversible or "
+                "compensating_operation:<id>"
+            )
+        normalized["rollback_semantics"] = value
     return normalized
 
 
@@ -527,15 +591,20 @@ def default_manifest(
 
 
 __all__ = [
+    "AUTHORITY_CLASSES",
     "CAPABILITY_STATUSES",
     "FILESYSTEM_MODES",
     "IO_TYPES",
+    "LOOPBACK_SINGLE_LABEL_HOSTS",
     "MAX_LIST_ITEMS",
     "OPTIONAL_FIELDS",
     "PERMISSION_FIELDS",
     "REQUIRED_FIELDS",
     "RISK_CLASSES",
+    "ROLLBACK_SEMANTICS_NONE_APPLICABLE",
+    "ROLLBACK_SEMANTICS_NONE_IRREVERSIBLE",
     "SIDE_EFFECTS",
+    "SIDE_EFFECT_CLASSES",
     "SUPPORTED_ENTRYPOINT",
     "default_manifest",
     "granted_permissions",

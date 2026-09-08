@@ -1,0 +1,6 @@
+{
+  "root_files": ["manifest.yaml", "README.md"],
+  "src_files": ["{skill}.py"],
+  "tests_files": ["test_{skill}.py"],
+  "evals_files": ["eval_{skill}.py", "cases.json"]
+}

@@ -55,7 +55,12 @@ from typing import Any
 #: ``{project?, state?, port?}`` (``state`` one of the ``app_projects`` states), plus the
 #: ``appfactory`` subsystem. Same additive rule: a v7 renderer keeps working and simply
 #: never sees it.
-CONTRACT_VERSION = 8
+#: v9 (M24 Capability Genesis spec §5, §8, ADR-0087) adds ``capability.genesis``,
+#: published from ``GenesisRun`` rows at every state transition, with metadata
+#: ``{capability?, state?, approval_required?, error_class?}`` (``state`` one of the
+#: ``genesis_runs`` states), plus the ``genesis`` subsystem. Same additive rule: a v8
+#: renderer keeps working and simply never sees it.
+CONTRACT_VERSION = 9
 
 #: Metadata value bounds. Numbers are floats in [0, 1] except where noted; strings are
 #: short machine tokens, never prose.
@@ -179,6 +184,13 @@ class UiState(StrEnum):
     #: which project, its state, and the port while running.
     APP_FACTORY = "app.factory"
 
+    #: M24 (spec §5, §8): the Capability Genesis channel. Published from
+    #: ``GenesisRun`` rows at every state transition — never to animate a surge, the
+    #: same rule every other channel here follows. Metadata is identity only: which
+    #: capability, its state, whether it is awaiting approval, and the error class
+    #: when it failed.
+    CAPABILITY_GENESIS = "capability.genesis"
+
 
 UI_STATES: tuple[str, ...] = tuple(s.value for s in UiState)
 
@@ -211,6 +223,8 @@ SUBSYSTEMS: tuple[str, ...] = (
     "artifacts",
     # M23: the App Factory publishes app.factory (spec §7).
     "appfactory",
+    # M24: Capability Genesis publishes capability.genesis (spec §7).
+    "genesis",
 )
 
 SEVERITIES: tuple[str, ...] = ("info", "notice", "warning", "critical")

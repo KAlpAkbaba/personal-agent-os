@@ -92,9 +92,11 @@ def test_the_vocabulary_is_the_one_the_owner_specified() -> None:
         "artifact.factory",
         # M23 (App Factory spec §2, §7, ADR-0086): the app-factory channel.
         "app.factory",
+        # M24 (Capability Genesis spec §5, §8, ADR-0087): the genesis channel.
+        "capability.genesis",
     }
     contract = ui_state_contract()
-    assert contract["contract_version"] == 8
+    assert contract["contract_version"] == 9
     assert "ambient" in contract["subsystems"]
     assert "operator" in contract["subsystems"]
     assert "documents" in contract["subsystems"]
@@ -102,6 +104,7 @@ def test_the_vocabulary_is_the_one_the_owner_specified() -> None:
     assert "calendar" in contract["subsystems"]
     assert "artifacts" in contract["subsystems"]
     assert "appfactory" in contract["subsystems"]
+    assert "genesis" in contract["subsystems"]
     assert "audio" in contract["metadata_rules"]["forbidden"]
 
 
@@ -124,6 +127,31 @@ def test_an_event_carries_state_identity_and_bounded_numbers(bus: UiStatePublish
     assert payload["metadata"] == {"fetched": 12, "kept": 5}
     assert payload["at"].endswith("Z")
     assert payload["sequence"] == 1
+
+
+def test_capability_genesis_publishes_scalar_metadata_only(bus: UiStatePublisher) -> None:
+    """M24 (spec §5, §8): capability.genesis carries identity only — capability,
+    state, approval_required, and error_class when failed — the same bounded-
+    scalar rule every other channel's metadata follows."""
+    event = publish(
+        UiState.CAPABILITY_GENESIS,
+        subsystem="genesis",
+        label="counterbox.increment",
+        metadata={
+            "capability": "counterbox.increment",
+            "state": "awaiting_approval",
+            "approval_required": True,
+        },
+    )
+    assert event is not None
+    payload = event.as_dict()
+    assert payload["state"] == "capability.genesis"
+    assert payload["subsystem"] == "genesis"
+    assert payload["metadata"] == {
+        "capability": "counterbox.increment",
+        "state": "awaiting_approval",
+        "approval_required": True,
+    }
 
 
 def test_content_never_reaches_the_renderer(bus: UiStatePublisher) -> None:

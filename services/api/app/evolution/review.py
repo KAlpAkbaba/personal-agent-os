@@ -210,13 +210,22 @@ class IndependentSkillReviewer:
             ReviewCheck(name="manifest_valid", passed=manifest_ok, detail=manifest_detail)
         )
 
-        # Static security scan (independent of the evaluator's run).
+        # Static security scan (independent of the evaluator's run). The manifest
+        # is resolved here (rather than after) so it can gate a network-related
+        # import the same way ``permission_findings`` below does.
         source = (
             layout.module_path.read_text(encoding="utf-8")
             if layout.module_path.is_file()
             else ""
         )
-        findings = static_findings(source) if source else ["missing_source"]
+        # Capability-scoped access, deny-by-default — re-derived by the reviewer
+        # from the source and the manifest, never taken from the evaluator.
+        loaded_manifest = manifest if manifest_ok else {}
+        # M24 (ADR-0087): pass the manifest so a network-gated import (urllib,
+        # for a genesis HTTP adapter) is allowed exactly when the manifest
+        # grants network_permissions — the same deny-by-default rule
+        # permission_findings below already applies to the same constructs.
+        findings = static_findings(source, loaded_manifest) if source else ["missing_source"]
         checks.append(
             ReviewCheck(
                 name="no_forbidden_constructs",
@@ -225,9 +234,6 @@ class IndependentSkillReviewer:
             )
         )
 
-        # Capability-scoped access, deny-by-default — re-derived by the reviewer
-        # from the source and the manifest, never taken from the evaluator.
-        loaded_manifest = manifest if manifest_ok else {}
         scope_findings = permission_findings(source, loaded_manifest) if source else []
         checks.append(
             ReviewCheck(

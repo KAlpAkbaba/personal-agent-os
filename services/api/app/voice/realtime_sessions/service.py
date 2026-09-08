@@ -1117,6 +1117,11 @@ def record_client_events(
     event_focused_known: bool | None = None
     draft_pending_known: bool | None = None
     proposal_pending_known: bool | None = None
+    #: M24 (docs/M24_CAPABILITY_GENESIS_SPEC.md §6, ADR-0087): the same lazy,
+    #: once-per-request discipline — whether a GenesisRun is parked
+    #: ``awaiting_approval`` in THIS session right now, the one precondition that
+    #: turns a bare "Onaylıyorum."/"Vazgeç." into CAPABILITY_APPROVE/CANCEL.
+    genesis_awaiting_approval_known: bool | None = None
     accepted = 0
     sideband_payloads: list[tuple[str, dict[str, Any]]] = []
     for ev in events:
@@ -1219,6 +1224,17 @@ def record_client_events(
                     )
                 except Exception:  # noqa: BLE001 - a deployment without the calendar tables
                     proposal_pending_known = False
+            if genesis_awaiting_approval_known is None:
+                from app.genesis.service import get_genesis_service
+
+                try:
+                    genesis_service = get_genesis_service()
+                    genesis_awaiting_approval_known = bool(
+                        genesis_service is not None
+                        and genesis_service.find_awaiting_approval(str(row.id)) is not None
+                    )
+                except Exception:  # noqa: BLE001 - a deployment without genesis wired
+                    genesis_awaiting_approval_known = False
             intent: ResolvedIntent = resolve_intent(
                 text,
                 session_state=RealtimeState(fsm) if fsm else None,
@@ -1230,6 +1246,7 @@ def record_client_events(
                 event_focused=event_focused_known,
                 draft_pending=draft_pending_known,
                 proposal_pending=proposal_pending_known,
+                genesis_awaiting_approval=genesis_awaiting_approval_known,
             )
             ctx["last_intent"] = intent.intent.value
             # ADR-0075: the LATEST resolved utterance of this session, kept on the
@@ -1281,6 +1298,12 @@ def record_client_events(
                 "app_template": intent.app_template,
                 "app_name": intent.app_name,
                 "app_commands": intent.app_commands,
+                # M24 (docs/M24_CAPABILITY_GENESIS_SPEC.md §6): the Capability Genesis
+                # fields the owner's WORDS carried, for the same "owner's words win
+                # over the model's argument" reason.
+                "capability_target_name": intent.capability_target_name,
+                "capability_target_url": intent.capability_target_url,
+                "capability_operation": intent.capability_operation,
                 # ADR-0076. The research SHAPE, decided without the "does a completed
                 # research exist?" precondition (that precondition is what let a deictic
                 # follow-up on an empty history become a crawl), and WHICH research the

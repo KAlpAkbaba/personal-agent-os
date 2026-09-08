@@ -78,6 +78,13 @@ SUBSYSTEM_ARTIFACTS = "artifacts"
 #: "what did it build and run for me?" is answerable without separating it from the
 #: M19 operator rows or the M22 artifact rows that happen to share a device call.
 SUBSYSTEM_APPFACTORY = "appfactory"
+#: M24 Capability Genesis (docs/M24_CAPABILITY_GENESIS_SPEC.md §5, ADR-0087): a gap
+#: against a local interface with no adapter, driven through research, build, test,
+#: classify, (approval), rollout, registration, use and verification. Its own
+#: subsystem so "what did it teach itself to do, against what, and did it prove the
+#: mutation really happened?" is answerable without separating it from the M7/M18.4
+#: evolution rows a genesis run's own pipeline stages also touch.
+SUBSYSTEM_GENESIS = "genesis"
 
 SUBSYSTEMS: Final[tuple[str, ...]] = (
     SUBSYSTEM_RESEARCH,
@@ -101,6 +108,7 @@ SUBSYSTEMS: Final[tuple[str, ...]] = (
     SUBSYSTEM_CALENDAR,
     SUBSYSTEM_ARTIFACTS,
     SUBSYSTEM_APPFACTORY,
+    SUBSYSTEM_GENESIS,
 )
 
 # ------------------------------------------------------------------ statuses
@@ -340,6 +348,25 @@ EVENT_TYPE_APP_PROJECT_TESTED = "app.project.test"
 EVENT_TYPE_APP_PROJECT_STOPPED = "app.project.stop"
 EVENT_TYPE_APP_PROJECT_FAILED = "app.project.failed"
 EVENT_TYPE_APP_PROJECT_LISTED = "app.project.list"
+#: M24 Capability Genesis (spec §5, ADR-0087): one row per GenesisRun state
+#: transition — "genesis.<state>" for every state in
+#: app.genesis.models.GENESIS_STATES (the literal strings below are kept in sync
+#: by hand, the same discipline ALARM_EVENT_TYPE_BY_STATE below already follows;
+#: app.genesis.service asserts the mapping is complete at import time).
+EVENT_TYPE_GENESIS_CAPABILITY_MISSING = "genesis.capability_missing"
+EVENT_TYPE_GENESIS_RESEARCHING = "genesis.researching"
+EVENT_TYPE_GENESIS_DESIGNING = "genesis.designing"
+EVENT_TYPE_GENESIS_BUILDING = "genesis.building"
+EVENT_TYPE_GENESIS_TESTING = "genesis.testing"
+EVENT_TYPE_GENESIS_CLASSIFYING = "genesis.classifying"
+EVENT_TYPE_GENESIS_AWAITING_APPROVAL = "genesis.awaiting_approval"
+EVENT_TYPE_GENESIS_ROLLING_OUT = "genesis.rolling_out"
+EVENT_TYPE_GENESIS_REGISTERING = "genesis.registering"
+EVENT_TYPE_GENESIS_AVAILABLE = "genesis.available"
+EVENT_TYPE_GENESIS_USED = "genesis.used"
+EVENT_TYPE_GENESIS_VERIFIED = "genesis.verified"
+EVENT_TYPE_GENESIS_FAILED = "genesis.failed"
+EVENT_TYPE_GENESIS_CANCELLED = "genesis.cancelled"
 
 EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_RESEARCH_PLANNED,
@@ -435,7 +462,41 @@ EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_APP_PROJECT_STOPPED,
     EVENT_TYPE_APP_PROJECT_FAILED,
     EVENT_TYPE_APP_PROJECT_LISTED,
+    EVENT_TYPE_GENESIS_CAPABILITY_MISSING,
+    EVENT_TYPE_GENESIS_RESEARCHING,
+    EVENT_TYPE_GENESIS_DESIGNING,
+    EVENT_TYPE_GENESIS_BUILDING,
+    EVENT_TYPE_GENESIS_TESTING,
+    EVENT_TYPE_GENESIS_CLASSIFYING,
+    EVENT_TYPE_GENESIS_AWAITING_APPROVAL,
+    EVENT_TYPE_GENESIS_ROLLING_OUT,
+    EVENT_TYPE_GENESIS_REGISTERING,
+    EVENT_TYPE_GENESIS_AVAILABLE,
+    EVENT_TYPE_GENESIS_USED,
+    EVENT_TYPE_GENESIS_VERIFIED,
+    EVENT_TYPE_GENESIS_FAILED,
+    EVENT_TYPE_GENESIS_CANCELLED,
 )
+
+#: "genesis.<state>" for every state in app.genesis.models.GENESIS_STATES — the
+#: same "derive the event type from the state being entered" discipline
+#: ALARM_EVENT_TYPE_BY_STATE follows for app.alarms.
+GENESIS_EVENT_TYPE_BY_STATE: Final[dict[str, str]] = {
+    "capability_missing": EVENT_TYPE_GENESIS_CAPABILITY_MISSING,
+    "researching": EVENT_TYPE_GENESIS_RESEARCHING,
+    "designing": EVENT_TYPE_GENESIS_DESIGNING,
+    "building": EVENT_TYPE_GENESIS_BUILDING,
+    "testing": EVENT_TYPE_GENESIS_TESTING,
+    "classifying": EVENT_TYPE_GENESIS_CLASSIFYING,
+    "awaiting_approval": EVENT_TYPE_GENESIS_AWAITING_APPROVAL,
+    "rolling_out": EVENT_TYPE_GENESIS_ROLLING_OUT,
+    "registering": EVENT_TYPE_GENESIS_REGISTERING,
+    "available": EVENT_TYPE_GENESIS_AVAILABLE,
+    "used": EVENT_TYPE_GENESIS_USED,
+    "verified": EVENT_TYPE_GENESIS_VERIFIED,
+    "failed": EVENT_TYPE_GENESIS_FAILED,
+    "cancelled": EVENT_TYPE_GENESIS_CANCELLED,
+}
 
 #: ``alarm.<state_lowercase>`` for every state in ``app.alarms.models.ALARM_STATES``
 #: (spec §3.2). Named here so the alarm service derives the event type from the state it
@@ -567,6 +628,7 @@ __all__ = [
     "ALARM_EVENT_TYPE_BY_STATE",
     "EVENT_TYPES",
     "EVOLUTION_EVENT_TYPES",
+    "GENESIS_EVENT_TYPE_BY_STATE",
     "InvalidVocabulary",
     "PRODUCTION_STATES",
     "SEVERITIES",

@@ -57,22 +57,29 @@ EVAL_RESULT_PREFIX = "EVAL-RESULT "
 # Constructs a generated, sandboxed skill has no business containing. Matched
 # on the AST (imports) and on the source (dynamic-execution builtins) so a
 # string mention in a docstring is not a false positive for the import checks.
-FORBIDDEN_IMPORTS = frozenset(
+#
+# NETWORK_GATED_IMPORTS (M24, ADR-0087): the HttpAdapterGenerator's rendered
+# `src/<skill>.py` legitimately needs exactly one `urllib.request` call to its
+# declared loopback base_url. These imports stay forbidden by DEFAULT (the
+# `static_findings(source)` single-arg call every existing caller/test used
+# before M24 is unchanged) and are allowed ONLY when the manifest explicitly
+# grants `network_permissions` — the same deny-by-default gate
+# `app.evolution.resources.permission_findings` already applies to the same
+# constructs, so there is exactly one place the "network" grant is decided.
+ALWAYS_FORBIDDEN_IMPORTS = frozenset(
     {
         "subprocess",
-        "socket",
         "shutil",
         "ctypes",
         "importlib",
         "pickle",
-        "urllib",
-        "http",
-        "requests",
         "multiprocessing",
         "threading",
         "pathlib",
     }
 )
+NETWORK_GATED_IMPORTS = frozenset({"socket", "urllib", "http", "ftplib", "smtplib", "requests"})
+FORBIDDEN_IMPORTS = ALWAYS_FORBIDDEN_IMPORTS | NETWORK_GATED_IMPORTS
 FORBIDDEN_CALLS = ("eval(", "exec(", "__import__(", "compile(", "open(", "os.system")
 
 
@@ -246,22 +253,34 @@ def parse_test_output(stdout: str) -> dict[str, Any]:
     return {}
 
 
-def static_findings(source: str) -> list[str]:
-    """Forbidden imports/dynamic-execution constructs in generated source."""
+def static_findings(source: str, manifest: dict[str, Any] | None = None) -> list[str]:
+    """Forbidden imports/dynamic-execution constructs in generated source.
+
+    ``manifest`` is optional and additive (M24, ADR-0087): with no manifest
+    (every call site before M24, and every existing test) the full forbidden
+    set applies unchanged. When a manifest is given AND it grants
+    ``network_permissions``, the NETWORK_GATED_IMPORTS are removed from the
+    forbidden set — mirrors ``app.evolution.resources.permission_findings``'s
+    existing deny-by-default rule for the same constructs, so there is exactly
+    one place "does this manifest allow network code" is decided.
+    """
     findings: list[str] = []
     try:
         tree = ast.parse(source)
     except SyntaxError as exc:
         return [f"syntax_error:{exc.msg}"]
+    forbidden = ALWAYS_FORBIDDEN_IMPORTS | (
+        frozenset() if (manifest or {}).get("network_permissions") else NETWORK_GATED_IMPORTS
+    )
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 root = alias.name.split(".")[0]
-                if root in FORBIDDEN_IMPORTS:
+                if root in forbidden:
                     findings.append(f"forbidden_import:{root}")
         elif isinstance(node, ast.ImportFrom):
             root = (node.module or "").split(".")[0]
-            if root in FORBIDDEN_IMPORTS:
+            if root in forbidden:
                 findings.append(f"forbidden_import:{root}")
     stripped = re.sub(r'(""".*?"""|\'\'\'.*?\'\'\'|#[^\n]*)', "", source, flags=re.DOTALL)
     for needle in FORBIDDEN_CALLS:
@@ -360,7 +379,7 @@ class SkillEvaluator:
 
         # 4. Static security scan of the generated source.
         source = layout.module_path.read_text(encoding="utf-8")
-        findings = static_findings(source)
+        findings = static_findings(source, manifest)
         if findings:
             failed_gates.append("security_findings")
 
@@ -459,12 +478,14 @@ class SkillEvaluator:
 
 
 __all__ = [
+    "ALWAYS_FORBIDDEN_IMPORTS",
     "DEFAULT_MAX_P95_LATENCY_MS",
     "DEFAULT_SUCCESS_THRESHOLD",
     "DEFAULT_TIMEOUT_S",
     "EVAL_RESULT_PREFIX",
     "FORBIDDEN_CALLS",
     "FORBIDDEN_IMPORTS",
+    "NETWORK_GATED_IMPORTS",
     "EvaluationResult",
     "ProcessRun",
     "ReleaseScore",

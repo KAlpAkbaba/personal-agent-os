@@ -63,6 +63,10 @@ from app.voice.realtime_sessions.tools_documents import (
     register_documents_tools,
 )
 from app.voice.realtime_sessions.tools_evolution import register_evolution_tools
+from app.voice.realtime_sessions.tools_genesis import (
+    CAPABILITY_TOOL_NAMES,
+    register_genesis_tools,
+)
 from app.voice.realtime_sessions.tools_mail import MAIL_TOOL_NAMES, register_mail_tools
 from app.voice.realtime_sessions.tools_operator import register_operator_tools
 
@@ -555,6 +559,13 @@ ARTIFACT_CLARIFYING_TOOLS: frozenset[str] = frozenset(ARTIFACT_TOOL_NAMES)
 #: copy of it.
 APP_CLARIFYING_TOOLS: frozenset[str] = frozenset(APP_TOOL_NAMES)
 
+#: M24 (docs/M24_CAPABILITY_GENESIS_SPEC.md §6): every genesis tool may answer
+#: "Hangi uygulamayı diyorsunuz?" / "Ne yapmamı istersiniz?" / "Onaylayacağım bir
+#: şey yok." rather than a receipt — the same non-research extension of the
+#: ADR-0077 contract the operator/document/mail/artifact/app families already
+#: get, never a second copy of it.
+GENESIS_CLARIFYING_TOOLS: frozenset[str] = frozenset(CAPABILITY_TOOL_NAMES)
+
 
 def result_is_research_bound(tool_name: str, result: Any) -> bool:
     """Whether a handler's result falls under the research result contract (ADR-0077)."""
@@ -598,6 +609,7 @@ def terminal_status_for(tool_name: str, result: Any) -> tuple[str, str | None]:
             | CALENDAR_CLARIFYING_TOOLS
             | ARTIFACT_CLARIFYING_TOOLS
             | APP_CLARIFYING_TOOLS
+            | GENESIS_CLARIFYING_TOOLS
             and isinstance(result, dict)
             and result.get("status") == RESULT_NEEDS_CLARIFICATION
             and str(result.get("speech") or "").strip()
@@ -1645,6 +1657,8 @@ def default_registry() -> ToolRegistry:
     register_artifacts_tools(reg)
     # M23 (docs/M23_APP_FACTORY_SPEC.md §5): the App Factory's voice tools.
     register_apps_tools(reg)
+    # M24 (docs/M24_CAPABILITY_GENESIS_SPEC.md §6): Capability Genesis's voice tools.
+    register_genesis_tools(reg)
     return reg
 
 
