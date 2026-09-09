@@ -245,9 +245,18 @@ describe("contract v8 is v7 plus the app state, and says so", () => {
     expect(parseAppTestCounts(null)).toBeNull();
   });
 
-  it("adds the apps subsystem and names it", () => {
-    expect(SUBSYSTEMS).toContain("apps");
-    expect(subsystemLabel("apps")).toBe("Uygulamalar");
+  it("adds the app factory subsystem under the name the Cloud Core publishes", () => {
+    // `appfactory`, not `apps`. `AppFactoryService._publish` sends
+    // `SUBSYSTEM_APPFACTORY` (`app/ledger/vocabulary.py`), and this file
+    // asserted `apps` from M23 until M28 — a test written to hold a belief
+    // the publisher had already contradicted, exactly as the M24 genesis
+    // `cancelled` assertion was. The consequence was visible: every
+    // `app.factory` row in the Defter and the durum akışı printed the raw
+    // token instead of "Uygulamalar". Both halves are now read against each
+    // other by `services/api/tests/unit/test_uistate_contract_halves.py`.
+    expect(SUBSYSTEMS).toContain("appfactory");
+    expect(subsystemLabel("appfactory")).toBe("Uygulamalar");
+    expect(SUBSYSTEMS).not.toContain("apps");
   });
 
   it("keeps the token on the agent channel, which drives the core body", () => {
@@ -520,7 +529,7 @@ describe("the Core draws the building posture from the published state", () => {
     const intent = intentOf([SCAFFOLDED()]);
     expect(intent.kind).toBe("app_factory");
     expect(intent.source).toBe("bus");
-    expect(intent.subsystem).toBe("apps");
+    expect(intent.subsystem).toBe("appfactory");
     expect(intent.palette).toBe("making");
     expect(intent.label).toBe("Görev Takip iskeleti kuruluyor");
     expect(intent.app).toEqual({ project: "Görev Takip", stateToken: "scaffolded", state: "scaffolded", port: null, tests: null });

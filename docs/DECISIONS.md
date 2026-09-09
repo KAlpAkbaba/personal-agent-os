@@ -7763,3 +7763,63 @@ The sandbox now carries all three components, the browser tree has both copies w
 **Decision 4 — the install proves what it unlocked, by itself.** `scripts/core/qualify-item28-unlocked.ps1` runs after the owner's one elevated command and exercises M19 (a real application launched, its window moved, resized, minimised, maximised, restored and each state re-observed; the UI tree read; a value set through UI Automation and read back; typing read back through the window title), M20 (this repository's own fixtures placed inside an authorised root — the checkout is outside every root and resolve-then-contain means a junction must not be tried — then search/inspect/read/extract checked against `truth.json`, plus the roots refusal), M23, M25, M27 and the M18.3 device path. It **refuses to run** against the superseded build or a device advertising fewer than 40 capabilities: a green report measured against the release item 28 replaces would be worse than none. It never darkens a display and never makes a sound — those steps are written into the evidence as `READY_FOR_OWNER` naming the harness that runs them properly (`owner-m18-3-display.ps1`, `owner-m18-3-alarm.ps1`), and the alarm device path is still proved end to end by arming an alarm an hour away, watching `desktop.activity_status` change, and disarming it. `-DryRun` sends nothing, walks every section, and records the whole plan, which is how the script was qualified before the runtime it needs exists; a dry run records NO checks, because a judgement over answers no device gave is not evidence. `scripts/tests/item28-gate.tests.ps1` holds all of that in CI.
 
 **Consequences.** The staged-update qualification passes 71 checks (was 52) against a binary rebuilt clean from this checkout, `0.6.0+64c990e`. Owner item 28 is one line — `.\scripts\install-device-service.ps1 -DisplayPower -Operator` — and 29 capabilities become 85, with 45 of them added by `-Operator` and none subtracted.
+
+### ADR-0095 addendum 1 — the Living Core half of M28, and two mirrors that had drifted (2026-09-09)
+
+**Context.** Built while the Cloud Core half was landing on a parallel track. Four things
+were decided in the web half that ADR-0095 leaves open, and two defects were found on the
+way that are older than this milestone.
+
+1. **v13 is held to being additive by a test, not by a habit.** Every version of this
+   contract has been described as "purely ADDITIVE", `MIN_SUPPORTED_CONTRACT_VERSION` is
+   2, and nothing was holding the promise: a renamed token, a reordered tuple or a deleted
+   state would have passed every test in `test_uistate.py`, whose vocabulary assertion is
+   rewritten at each milestone — which is exactly when a rename would slip through it. The
+   v12 vocabulary and subsystem list are now frozen as ordered PREFIXES
+   (`test_the_contract_only_ever_grows`), so new words go on the end and old ones cannot
+   move or be respelled. Removing one is now a deliberate break that must bump the web's
+   `MIN_SUPPORTED_CONTRACT_VERSION`.
+
+2. **The row states and the wire words are the same eleven, and the mapping is still
+   explicit.** `native_builds.state` and `NATIVE_BUILD_STEPS` hold the same vocabulary —
+   M26's shape, not M25's, because the lifecycle the row records is exactly what the owner
+   watches. `app/nativefactory/models_wire.wire_step` is nevertheless a total dict that
+   RAISES on an unmapped state rather than the identity function: an identity mapping
+   silently absorbs a twelfth row state the day someone adds one and publishes a word the
+   web cannot read, which is M25's failure exactly.
+
+3. **The "Yerel Uygulamalar" panel has no controls at all.** Every other factory panel has
+   chips that ask the Cloud Core for something bounded and reversible. A build starts a
+   twenty-minute compiler under a Job Object and can end by installing a signed package
+   for the current user; a "Derle" chip would be a second authority surface for an act the
+   owner asks for by voice through the ONE router, which already gates it. The panel
+   watches, and every fact on it was published: the size is what a reader measured, the
+   hash is what a reader computed, the verdict is what a reader concluded. `verdict_ok` is
+   read only from the row's own verdict and never inferred from `state == "verified"` —
+   the step says where the build rests, the verdict says what something that did not build
+   the file found when it opened it, and they are two statements.
+
+4. **`ios_project` is not in the web's target list either.** The spec's prose lists six
+   targets; `app/nativefactory/spec.py` defines five, for ADR-0095 decision 3's reason. A
+   web build offering the sixth would be drawing progress towards an iPhone application
+   this machine can never produce. The two lists are now compared in both directions by
+   `test_uistate_contract_halves.py`.
+
+**Defect 1 (released, M23–M27): the subsystem mirror said `apps`, the publisher says
+`appfactory`.** `AppFactoryService._publish` sends `SUBSYSTEM_APPFACTORY` ("appfactory");
+the web's `SUBSYSTEMS` mirror, its `SUBSYSTEM_LABEL` table and its `APP_FACTORY` test
+fixture all said "apps", and a web test asserted it. So every `app.factory` event in the
+Defter and the durum akışı printed the raw token where "Uygulamalar" belongs, for five
+milestones, with both suites green — the same shape as the M24 genesis `cancelled`
+assertion this repository has already recorded once. The three files and the two
+assertions are corrected, and `test_uistate_contract_halves.py` now compares the two
+subsystem lists so it cannot recur in either direction.
+
+**Defect 2 (in the guard itself): a word with a digit in it was invisible.** The
+cross-file guard read the web's lists with `"([a-z_.]+)"`, which silently dropped
+`creative3d` — the only word in any of these lists carrying a number. A list containing it
+compared one word fewer than it appeared to. Found by adding the subsystem check, which
+reported `creative3d` as a word the web had never heard of while it sat in the file. This
+is the guard's own recurring failure mode one level down, and the reason every check added
+here was watched failing first: the four cross-file assertions were each broken on the web
+side, observed red, and restored byte-identically before the work was committed.

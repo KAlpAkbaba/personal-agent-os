@@ -34,6 +34,7 @@ import {
   mailFactsLine,
   operatorErrorLine,
   creativeFactsLine,
+  nativeFactsLine,
   operatorFactsLine,
   sceneFactsLine,
   stateLabel,
@@ -47,6 +48,7 @@ import { genesisPosture } from "../lib/uistate/genesis";
 import { operatorPosition } from "../lib/uistate/operator";
 import { scenePosture, sceneToolWord } from "../lib/uistate/scenes";
 import { creativePosture, creativeToolWord } from "../lib/uistate/creative";
+import { nativePosture, nativeTargetWord } from "../lib/uistate/native";
 import type { VisualIntent } from "../lib/uistate/visual";
 import { isLive } from "../lib/uistate/visual";
 
@@ -413,6 +415,32 @@ export default function StateReadout({
           data-creative-unavailable={creativePosture(intent.creative.state) === "unavailable" ? "yes" : "no"}
         >
           {creativeFactsLine(intent.creative)}
+        </p>
+      )}
+
+      {/* v13 (M28 §4, §6): the published facts about the application being
+          built — which application, which artefact, the step, the stack the
+          rule chose — each either what the publisher sent or the statement
+          that it did not. `data-native-unavailable` marks the one state the
+          Core draws as a toolchain this MACHINE does not have, so a harness
+          can tell it from a failure without reading the geometry (ADR-0095
+          decision 3). No bar: a build publishes steps, not a fraction of
+          itself. No artefact name, size or hash either — the bus is
+          content-free, and those are the Cockpit row's, read from
+          `/v1/native/builds`. No control here: a compiler is started by
+          voice through the ONE router, never from this screen. */}
+      {intent.native && !compact && (
+        <p
+          className="muted core-count"
+          data-native-facts
+          data-native-app={intent.native.appToken ?? ""}
+          data-native-target={intent.native.targetToken ?? ""}
+          data-native-target-label={nativeTargetWord(intent.native.targetToken) ?? ""}
+          data-native-state={intent.native.stateToken ?? ""}
+          data-native-stack={intent.native.stackToken ?? ""}
+          data-native-unavailable={nativePosture(intent.native.state) === "unavailable" ? "yes" : "no"}
+        >
+          {nativeFactsLine(intent.native)}
         </p>
       )}
 

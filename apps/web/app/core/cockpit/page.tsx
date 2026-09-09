@@ -89,6 +89,7 @@ import {
   LessonsPanel,
   MailPanel,
   MemoryPanel,
+  NativePanel,
   OwnerActionsPanel,
   ResearchPanel,
   RunningToolsPanel,
@@ -356,6 +357,13 @@ function Cockpit() {
             control={creativeControl}
             preview={creativePreview}
           />
+          {/* M28 §6: the applications the assistant compiled for the owner
+              — each build's target and stack, the step it reached, and for
+              a build that produced something the artefact's name, size and
+              hash and what a reader that did NOT build it concluded. No
+              controls: starting a compiler and installing a package are
+              asked for by voice through the ONE router, which gates them. */}
+          <NativePanel builds={data.nativeBuilds} truth={truth} now={now} />
           <GoalsPanel state={data.goals} now={now} />
           <ResearchPanel
             state={data.research}

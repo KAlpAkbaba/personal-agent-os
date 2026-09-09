@@ -563,7 +563,10 @@ describe("the Core's readout for the App Factory", () => {
     const html = readout([APP_FACTORY("Görev Takip", "scaffolded")]);
     expect(html).toContain('data-core-kind="app_factory"');
     expect(html).toContain('data-core-state="app.factory"');
-    expect(html).toContain('data-core-subsystem="apps"');
+    // `appfactory`, which is what the Cloud Core actually publishes; this
+    // assertion said `apps` until M28 and the label table agreed with it, so
+    // the readout printed the raw token where the owner's word belongs.
+    expect(html).toContain('data-core-subsystem="appfactory"');
     expect(html).toContain('data-live="yes"');
     expect(html).toContain("Uygulama yapılıyor");
     expect(html).toContain("Uygulamalar");

@@ -57,6 +57,7 @@ import { type ArtifactRow, fetchArtifacts } from "./artifacts";
 import { type CreativeRunRow, fetchCreativeRuns } from "./creative";
 import { type ExecutiveRunRow, fetchExecutiveRuns } from "./executive";
 import { type GenesisRunRow, fetchGenesisRuns } from "./genesis";
+import { type NativeBuildRow, fetchNativeBuilds } from "./native";
 import { type SceneRow, fetchScenes } from "./scenes";
 
 const POLL_VISIBLE_MS = 15_000;
@@ -144,6 +145,16 @@ export type CockpitData = {
    * image route's — neither is here.
    */
   creativeRuns: Loaded<CreativeRunRow[]>;
+  /**
+   * M28 §6: the native builds, from `/v1/native/builds`, each with its
+   * application, target, stack, the step it reached and — for a build that
+   * produced something — the artefact's name, size and sha256 and what the
+   * INDEPENDENT reader said about it. The Cloud Core half lands on a
+   * parallel track (ADR-0095); until it does the route answers "absent",
+   * which the panel says in words. The build's transitions are on the bus,
+   * not here.
+   */
+  nativeBuilds: Loaded<NativeBuildRow[]>;
 };
 
 const INITIAL: CockpitData = {
@@ -171,6 +182,7 @@ const INITIAL: CockpitData = {
   scenes: { kind: "loading" },
   executiveRuns: { kind: "loading" },
   creativeRuns: { kind: "loading" },
+  nativeBuilds: { kind: "loading" },
 };
 
 export function useCockpitData(enabled = true): { data: CockpitData; refresh: () => void } {
@@ -207,6 +219,7 @@ export function useCockpitData(enabled = true): { data: CockpitData; refresh: ()
         scenes,
         executiveRuns,
         creativeRuns,
+        nativeBuilds,
       ] = await Promise.all([
         fetchResearchTasks(),
         // Same refresh, no extra timer: the focus changes when the list does.
@@ -233,6 +246,7 @@ export function useCockpitData(enabled = true): { data: CockpitData; refresh: ()
         fetchScenes(),
         fetchExecutiveRuns(),
         fetchCreativeRuns(),
+        fetchNativeBuilds(),
       ]);
       if (stopped.current) return;
       setData({
@@ -260,6 +274,7 @@ export function useCockpitData(enabled = true): { data: CockpitData; refresh: ()
         scenes,
         executiveRuns,
         creativeRuns,
+        nativeBuilds,
       });
     } finally {
       inFlight.current = false;

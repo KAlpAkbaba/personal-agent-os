@@ -15,7 +15,7 @@
  */
 
 /** Contract version this client was written against (`CONTRACT_VERSION` in contract.py). */
-export const KNOWN_CONTRACT_VERSION = 12;
+export const KNOWN_CONTRACT_VERSION = 13;
 
 /**
  * The build marker of the Living Core (M18.3 §12, qualification A). Rendered server-side
@@ -56,11 +56,18 @@ export const CORE_BUILD_ID = "living-core-1";
  * token, `creative.activity`, one subsystem, and metadata of three short
  * tokens (`tool`, `operation`, `state`), one more short token for the
  * comparison's named defect (`defect`) and one bounded fraction
- * (`similarity`) that older publishers never send. A v2 to v11 server
+ * (`similarity`) that older publishers never send. v13 is additive over v12
+ * (M28 spec §4, §6): one token, `native.build`, one subsystem
+ * (`nativefactory`, deliberately not M23's `appfactory`), and metadata of
+ * four short tokens (`app`, `target`, `state`, `stack`) plus the
+ * independent reader's `verdict` — no earlier token, kind, horizon, label or
+ * assertion changed with it, and the API side holds that as a frozen prefix
+ * rather than as a convention (`test_uistate.py`). A v2 to v12 server
  * therefore serves a strict subset of what this build knows, and refusing to
  * draw anything at all because the alarm, operator, document, mail,
- * calendar, artifact, app, genesis, scene, executive or creative states have
- * not shipped yet would be a worse lie than saying so in one line. A server
+ * calendar, artifact, app, genesis, scene, executive, creative or native
+ * build states have not shipped yet would be a worse lie than saying so in
+ * one line. A server
  * NEWER than this build is a different matter — we do not know its
  * vocabulary, so it stays a mismatch.
  */
@@ -247,6 +254,21 @@ export const UI_STATES = [
   // installed is `unavailable` — a settled, honest posture (ADR-0093
   // decision 3), never an error and never imitated.
   "creative.activity",
+  // v13 (M28 spec §4, §6) — the Native Application Factory. Published at
+  // every arrow of ONE application build: a project written from a fixed
+  // template, compiled by the real toolchain on the owner's machine, its
+  // own tests run, packaged, and then the produced artefact reopened by a
+  // reader that did NOT build it — with `{app, target, state, stack,
+  // verdict}`: which application, which of the six targets, the step of the
+  // build, the stack the rule chose and what the independent reader said.
+  // Making a program the owner can install is the agent's own work, so it
+  // stays on the agent channel, beside `app.factory`. A build is
+  // "doğrulandı" only when that INDEPENDENT reader agreed; `unverified` is
+  // an artefact nobody could check and is never rounded up to it; and a
+  // target this machine's toolchain cannot reach — Android with no JDK,
+  // iOS with no macOS (spec §1) — is `unavailable`: a settled fact about
+  // the world, never an error and never imitated.
+  "native.build",
 ] as const;
 
 export type KnownUiState = (typeof UI_STATES)[number];
@@ -952,6 +974,193 @@ export type CreativeActivityMetadata = {
   defect?: CreativeDefect;
 };
 
+/** The one native-build token (v13). Spelled here so every reader names the same wire word. */
+export const NATIVE_BUILD = "native.build";
+
+/**
+ * The Native Application Factory's states (v13). One token: the spec
+ * publishes the whole generate → build → test → package → validate
+ * lifecycle as `native.build` and names the step in `metadata.state`, so —
+ * as with the genesis, scene, executive and creative tokens — there is
+ * nothing else to enumerate. Kept as a list so a second token lands here
+ * and nowhere else.
+ */
+export const NATIVE_STATES = [NATIVE_BUILD] as const;
+
+export type NativeUiState = (typeof NATIVE_STATES)[number];
+
+const NATIVE_STATE_SET: ReadonlySet<string> = new Set(NATIVE_STATES);
+
+/**
+ * True for a v13 native state this build knows how to draw. Membership,
+ * not prefix: a newer server's `native.installed` must not be drawn as a
+ * build in progress on the strength of a word this build cannot read.
+ */
+export function isNativeState(state: string): state is NativeUiState {
+  return NATIVE_STATE_SET.has(state);
+}
+
+/**
+ * The artefacts M28 can actually be asked for, and the only words
+ * `metadata.target` may carry.
+ *
+ * FIVE, not the six the spec's prose lists: `ios_project` is deliberately
+ * not a target on the Cloud Core either (`app/nativefactory/spec.py`), for
+ * the reason ADR-0095 decision 3 gives — there is no macOS, no Xcode and no
+ * MAUI workload on this machine, so a project that looked like progress
+ * towards an iPhone application would be the one thing this milestone
+ * exists to refuse. iOS is a refusal in words, never a row. A sixth token
+ * on the wire is one this build cannot read: it is printed verbatim as a
+ * published fact and never translated into one of these.
+ */
+export const NATIVE_TARGETS = [
+  "windows_exe",
+  "windows_portable",
+  "windows_msix",
+  "android_apk",
+  "android_aab",
+] as const;
+
+export type NativeTarget = (typeof NATIVE_TARGETS)[number];
+
+const NATIVE_TARGET_SET: ReadonlySet<string> = new Set(NATIVE_TARGETS);
+
+export function isNativeTarget(value: unknown): value is NativeTarget {
+  return typeof value === "string" && NATIVE_TARGET_SET.has(value);
+}
+
+/**
+ * The stacks the selection rule (spec §3) may choose between, and the only
+ * words `metadata.stack` may carry. `dotnet_maui` is absent for the same
+ * reason `ios_project` is: `dotnet workload list` reports no MAUI workload
+ * here, and the assistant installs nothing. A word outside this list is
+ * printed verbatim.
+ */
+export const NATIVE_STACKS = ["dotnet_wpf", "dotnet_winforms", "tauri", "android_kotlin"] as const;
+
+export type NativeStack = (typeof NATIVE_STACKS)[number];
+
+const NATIVE_STACK_SET: ReadonlySet<string> = new Set(NATIVE_STACKS);
+
+export function isNativeStack(value: unknown): value is NativeStack {
+  return typeof value === "string" && NATIVE_STACK_SET.has(value);
+}
+
+/**
+ * The step one build is on as the publisher names it in `metadata.state`
+ * (M28 spec §4's lifecycle, plus the honest terminal words):
+ *
+ *   planned     — the spec was accepted and the stack chosen; nothing has
+ *                 been written and no compiler has run
+ *   generating  — the project is being written from a fixed template
+ *   building    — the real toolchain is compiling it on this machine
+ *   testing     — the generated project's OWN tests are running
+ *   packaging   — the artefact is being zipped, MSIX-packed or signed
+ *   validating  — the produced file is being reopened by a reader that did
+ *                 NOT build it: the PE header and version resource, the
+ *                 MSIX manifest, the APK's badging
+ *   verified    — that INDEPENDENT reader agreed the artefact is what the
+ *                 spec asked for. Reachable from this one word and nothing
+ *                 else — not from a build that exited 0, not from a file
+ *                 that exists
+ *   unverified  — the artefact exists and could not be checked: no version
+ *                 resource to read, no reader for that format. Settled and
+ *                 plain: nothing disagreed, and nothing was verified either
+ *   mismatch    — the reader read it and DISAGREES with the spec (the wrong
+ *                 version, a console image where a desktop application was
+ *                 asked for)
+ *   unavailable — this machine's toolchain cannot reach the target at all:
+ *                 Android without a JDK, iOS without macOS (spec §1). A fact
+ *                 about the world, never a defect and never an error
+ *   failed      — the build was possible and did not work
+ *
+ * A token outside this list is a word this build cannot read and is shown
+ * as the plain state, never as one of these — and above all never as
+ * `verified`. The list is held to the publisher's own in BOTH directions by
+ * `services/api/tests/unit/test_uistate_contract_halves.py`, which reads
+ * THIS file; the two halves each proving their own belief is how this
+ * vocabulary drifted in M24, M25 and M26.
+ */
+export const NATIVE_BUILD_STATES = [
+  "planned",
+  "generating",
+  "building",
+  "testing",
+  "packaging",
+  "validating",
+  "verified",
+  "unverified",
+  "mismatch",
+  "unavailable",
+  "failed",
+] as const;
+
+export type NativeBuildState = (typeof NATIVE_BUILD_STATES)[number];
+
+const NATIVE_BUILD_STATE_SET: ReadonlySet<string> = new Set(NATIVE_BUILD_STATES);
+
+/**
+ * True for one of the eleven words above. Membership, never a prefix: a
+ * publisher's `verified_partially` shares eight letters with `verified` and
+ * means something the owner must not read as an application they can install.
+ */
+export function isNativeBuildState(value: unknown): value is NativeBuildState {
+  return typeof value === "string" && NATIVE_BUILD_STATE_SET.has(value);
+}
+
+/**
+ * A byte count the row actually reported: a whole, positive number.
+ *
+ * `0` is folded into `null` here, unlike the creative family's similarity,
+ * and for the opposite reason: a zero-byte artefact is not a measurement of
+ * a small file, it is a file that is not there — and
+ * `app/nativefactory/artifacts.py` already names an empty artefact as a
+ * mismatch. Printing "0 KB" beside a name would present that as a size.
+ */
+export function asArtifactBytes(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) return null;
+  return value;
+}
+
+/**
+ * How much of an artefact's sha256 the owner is shown (spec §6's receipt).
+ *
+ * A prefix, because the whole 64 characters are unreadable on a panel row
+ * and the owner's use for it is recognising the same file twice; the full
+ * digest stays on the row and on the receipt. Twelve hex characters is what
+ * the evidence files already print.
+ */
+export const SHA256_PREFIX_CHARS = 12;
+
+/**
+ * The metadata a `native.build` event may carry (M28 spec §4, §6).
+ *
+ * Every key is optional on the wire and every value is a short token the
+ * bus already admits; nothing here is a path, a compiler line, a log, a
+ * signing certificate or a byte of the artefact — the build is a row on
+ * `/v1/native/builds`, which the Cockpit reads from the list route.
+ *
+ * `verdict` is deliberately NOT a closed vocabulary. It is the independent
+ * reader's own short word about the file it opened, printed verbatim: the
+ * reader's structured answer (`{ok, mismatches, facts}`, the shape
+ * `app/nativefactory/artifacts.py::ArtifactVerdict` produces) lives on the
+ * ROW, and inventing a list of tokens here that nothing yet publishes would
+ * be exactly the dead-vocabulary-that-reads-like-a-promise the contract
+ * guards refuse in the other direction.
+ */
+export type NativeBuildMetadata = {
+  /** Which application is being built; absent when the publisher did not say. */
+  app?: string;
+  /** Which of the five artefacts, from §2's closed list. */
+  target?: NativeTarget;
+  /** The step the build is on in the §4 names. Absent while the publisher has nothing to say yet. */
+  state?: NativeBuildState;
+  /** The stack §3's rule chose. */
+  stack?: NativeStack;
+  /** The independent reader's own short word, when it has spoken. Read verbatim. */
+  verdict?: string;
+};
+
 /**
  * A draft's lifecycle as the publisher names it in `metadata.draft_state`
  * (M21 spec §3 with the read-back step made explicit): prepared by the
@@ -1118,8 +1327,11 @@ export const SUBSYSTEMS = [
   // its receipts and ledger rows carry the same subsystem name.
   "artifacts",
   // v8: the App Factory (M23 spec §6) publishes `app.factory`; its receipts
-  // and ledger rows carry the same subsystem name.
-  "apps",
+  // and ledger rows carry the same subsystem name. Spelled `appfactory`,
+  // which is what `SUBSYSTEM_APPFACTORY` in `app/ledger/vocabulary.py`
+  // actually is: this list said `apps` from M23 until M28, and a web test
+  // asserted it, so a mirror and a fact disagreed with both suites green.
+  "appfactory",
   // v9: Capability Genesis (M24 spec §6, §8) publishes `capability.genesis`;
   // its receipts and ledger rows (`genesis.<state>`) carry the same name.
   "genesis",
@@ -1136,6 +1348,13 @@ export const SUBSYSTEMS = [
   // `creative`) and its ledger rows carry the same name. Deliberately NOT
   // `creative3d`, which is M25's own subsystem and stays exactly as it was.
   "creative",
+  // v13: the Native Application Factory (M28 spec §4, §6) publishes
+  // `native.build`; its receipts, its voice corpus category (§6's
+  // `nativeapps`) and its ledger rows carry the same name. Deliberately NOT
+  // `appfactory`, which is M23's own subsystem and stays exactly as it was:
+  // a web app run on the owner's machine and a signed EXE read back from
+  // its PE header are different claims.
+  "nativefactory",
 ] as const;
 
 export type Subsystem = (typeof SUBSYSTEMS)[number];
@@ -1401,6 +1620,19 @@ const STATE_KINDS: Record<KnownUiState, StateKind> = {
   // before/after images come from that row. The claim never falls to
   // "finished", "doğrulandı" or idle.
   "creative.activity": "transient",
+  // v13. A native build is the second family this table's `operation` kind
+  // was written for, and for M26's reason: the publisher speaks once per
+  // step transition, and ONE step here is a real compiler run bounded at
+  // twenty minutes (M28 spec §5's Job Object limits). The twelve-second
+  // transient horizon would report a healthy `dotnet publish` as lost
+  // within seconds of it starting. It still expires, on `NATIVE_TTL_MS`
+  // below: a `building` from an hour ago is not a build that is building
+  // now. A `verified`, an `unverified` or an `unavailable` is a standing
+  // fact about a build, but the bus claim is about the MOMENT it was
+  // published — the build itself is a ROW on `/v1/native/builds`, which
+  // does not expire and carries the artefact's name, size, hash and the
+  // reader's verdict. The claim never falls to "doğrulandı" or idle.
+  "native.build": "operation",
 };
 
 /**
@@ -1828,6 +2060,80 @@ export const CREATIVE_OPERATION_LABEL: Record<CreativeOperation, string> = {
 export const MAX_CREATIVE_ROUNDS = 3;
 
 /**
+ * How long a native build step may be claimed as current without a newer
+ * event.
+ *
+ * The longest horizon any WORKING state here has — the alarm and display
+ * figures below are standing arrangements, not work in flight — and the
+ * figure is the spec's own: M28
+ * §5 bounds each build command at twenty minutes of Job Object time, and
+ * the publisher speaks once per step transition — so twenty minutes plus a
+ * margin is the worst legitimate gap between two published steps, and
+ * anything shorter would draw a healthy release build as lost. Still a
+ * horizon: a `building` from half an hour ago is last-known, never a
+ * compiler still running. The build itself is a ROW on
+ * `/v1/native/builds`, which does not expire. The publisher's own `ttl_s`
+ * beats this figure, as it beats every figure here.
+ */
+export const NATIVE_TTL_MS = 21 * 60_000;
+
+/**
+ * The Core's one wording for a native build event whose metadata named
+ * nothing this build can read (v13): the plain name of the token, and
+ * nothing it did not say. Deliberately no verb: a build may be generating,
+ * compiling, testing, packaging, validating, verified, unverified,
+ * mismatched or unavailable, and the bare line must be true of every one.
+ */
+export const NATIVE_CAPTION_BARE = "Yerel uygulama";
+
+/**
+ * The step in the owner's words, spelled once for the caption, the facts
+ * line and the Cockpit's rows alike (M28 spec §4).
+ *
+ * "Doğrulandı" is said for exactly one state, `verified`, and no other word
+ * here contains it: a build that exited 0 and a file that exists are not an
+ * artefact a reader opened and agreed with. `unverified` is the spec's
+ * honest middle — the artefact is there and nothing could check it — and is
+ * worded so it can be mistaken for neither. `unavailable` is worded as a
+ * plain inability about this MACHINE, never as a fault: no JDK is not a
+ * broken build (ADR-0095 decision 3).
+ */
+export const NATIVE_STATE_LABEL: Record<NativeBuildState, string> = {
+  planned: "planlandı",
+  generating: "proje yazılıyor",
+  building: "derleniyor",
+  testing: "test ediliyor",
+  packaging: "paketleniyor",
+  validating: "çıktı okunuyor",
+  verified: "doğrulandı",
+  unverified: "doğrulanamadı (okunacak sürüm yok)",
+  mismatch: "uyuşmazlık",
+  unavailable: "bu makinede yapılamıyor",
+  failed: "başarısız",
+};
+
+/**
+ * The artefact as the owner names it (M28 spec §2's five targets). These
+ * are the words the receipt uses — "EXE hazır", "APK üret" — rather than
+ * the wire tokens, which mean nothing spoken aloud.
+ */
+export const NATIVE_TARGET_LABEL: Record<NativeTarget, string> = {
+  windows_exe: "Windows EXE",
+  windows_portable: "taşınabilir paket",
+  windows_msix: "MSIX kurulumu",
+  android_apk: "Android APK",
+  android_aab: "Android AAB",
+};
+
+/** The stack §3's rule chose, as the owner would hear it named on the receipt. */
+export const NATIVE_STACK_LABEL: Record<NativeStack, string> = {
+  dotnet_wpf: "WPF",
+  dotnet_winforms: "WinForms",
+  tauri: "Tauri",
+  android_kotlin: "Kotlin",
+};
+
+/**
  * Per-state lifetimes for v3, in ms, exactly as `docs/M18_3_LIVING_CORE_WAKE_ALARM_SPEC.md`
  * §7 states them.
  *
@@ -1859,6 +2165,7 @@ const STATE_TTL_MS: Partial<Record<KnownUiState, number>> = {
   "scene.activity": SCENE_TTL_MS,
   "executive.run": EXECUTIVE_TTL_MS,
   "creative.activity": CREATIVE_TTL_MS,
+  "native.build": NATIVE_TTL_MS,
 };
 
 /**
@@ -1956,6 +2263,9 @@ export function stateChannel(state: string): StateChannel {
   // v12's `creative.activity` follows through `isCreativeState`: making a
   // picture for the owner — in Paint, in Photoshop or on a file with
   // Pillow — is the agent working, not a fact about the room.
+  // v13's `native.build` follows through `isNativeState`: compiling a real
+  // program the owner can install is the agent working, on the same footing
+  // as `app.factory` and beside it.
   // v3 adds `display.*` to the room: whether the screens are lit is a fact
   // about the owner's desk, never about the agent's activity.
   if (state.startsWith("eye.") || state.startsWith("owner.") || state.startsWith("display."))

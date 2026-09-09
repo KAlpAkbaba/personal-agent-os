@@ -21,6 +21,7 @@ import {
   GENESIS_CAPTION_BARE,
   GENESIS_STATE_LABEL,
   MAIL_CAPTION_BARE,
+  NATIVE_CAPTION_BARE,
   SCENE_CAPTION_BARE,
 } from "./contract";
 import type { DocumentRef, KnownUiState } from "./contract";
@@ -42,6 +43,14 @@ import {
   creativeStatePhrase,
   creativeToolWord,
 } from "./creative";
+import {
+  NATIVE_STATE_LABEL,
+  type NativeFacts,
+  type NativeStage,
+  nativeStackWord,
+  nativeStatePhrase,
+  nativeTargetWord,
+} from "./native";
 import {
   EXECUTIVE_RUN_STATE_LABEL,
   type ExecutiveFacts,
@@ -101,6 +110,7 @@ export const KIND_LABEL: Record<CoreVisualKind, string> = {
   scene_activity: SCENE_CAPTION_BARE,
   executive_run: EXECUTIVE_CAPTION_BARE,
   creative_activity: CREATIVE_CAPTION_BARE,
+  native_build: NATIVE_CAPTION_BARE,
 };
 
 /**
@@ -195,6 +205,15 @@ export const KIND_DETAIL: Record<CoreVisualKind, string> = {
   // not installed is said so rather than imitated (decision 3).
   creative_activity:
     "Sahip için bir görsel inceleniyor, planlanıyor, uygulamanın en yapısal arayüzüyle düzenleniyor, bağımsız bir okuyucuyla yeniden açılıp istenenle karşılaştırılıyor; uygulama, işlem, adım ve benzerlik yalnızca yayınlandığı kadar söylenir. Karşılaştırması tutmamış bir çıktı doğrulanmış sayılmaz; kurulu olmayan bir uygulama taklit edilmez, kurulu değil denir. Sahibin özgün dosyası değiştirilmez. İlerleme bildirilmez.",
+  // M28: a real program the owner can install is being made — generated from
+  // a fixed template, compiled by the real toolchain on this machine, tested,
+  // packaged, and the produced file reopened by a reader that did NOT build
+  // it. The sentence says what "done" means for a build (spec §4: the
+  // independent reader is the proof, never a compiler that exited 0) and that
+  // a target this machine's toolchain cannot reach is said so rather than
+  // attempted (ADR-0095 decision 3) — no toolchain is downloaded or installed.
+  native_build:
+    "Sahip için gerçek bir uygulama üretiliyor: proje sabit şablondan yazılıyor, bu makinedeki gerçek araç zinciriyle derleniyor, kendi testleriyle sınanıyor, paketleniyor ve üretilen dosya, onu derlemeyen bağımsız bir okuyucuyla açılıp istenenle karşılaştırılıyor; uygulama, hedef, adım ve okuyucunun kararı yalnızca yayınlandığı kadar söylenir. Yalnızca bağımsız okuyucunun onayladığı bir çıktı doğrulanmış sayılır; okunamayan çıktı doğrulandı denmez, doğrulanamadı denir. Bu makinenin araç zincirinin ulaşamadığı hedef için hiçbir şey indirilmez ya da kurulmaz, yapılamayacağı söylenir. İlerleme bildirilmez.",
 };
 
 /**
@@ -361,6 +380,10 @@ export const STATE_LABEL: Record<KnownUiState, string> = {
   // one token covers a run from "görsel inceleniyor" to "doğrulandı", and
   // the step is said only from its published metadata.
   "creative.activity": CREATIVE_CAPTION_BARE,
+  // v13 — the Native Application Factory (M28). No verb, for the same
+  // reason: one token covers a build from "planlandı" to "doğrulandı", and
+  // the step is said only from its published metadata.
+  "native.build": NATIVE_CAPTION_BARE,
 };
 
 export function stateLabel(state: string): string {
@@ -386,11 +409,18 @@ export const SUBSYSTEM_LABEL: Record<string, string> = {
   mail: "Posta",
   calendar: "Takvim",
   artifacts: "Üretim",
-  apps: "Uygulamalar",
+  // The App Factory publishes `appfactory` (`SUBSYSTEM_APPFACTORY` in
+  // `app/ledger/vocabulary.py`), never `apps`. This table said `apps` from
+  // M23 until M28, so every `app.factory` event in the Defter and the durum
+  // akışı printed the raw token instead of the owner's word — and a test
+  // asserted the wrong key, which is why nothing found it. Held now by
+  // `test_uistate_contract_halves.py`, which reads the published list.
+  appfactory: "Uygulamalar",
   genesis: "Yeni yetenek",
   creative3d: "3B sahne",
   executive: "Görevler",
   creative: "Yaratıcı",
+  nativefactory: "Yerel uygulamalar",
 };
 
 export function subsystemLabel(subsystem: string): string {
@@ -1034,4 +1064,59 @@ export function creativeStateLine(
   defect: string | null = null,
 ): string {
   return creativeStatePhrase(facts, defect) ?? creativeStateWord(facts.stateToken);
+}
+
+// -------------------------------------- v13: the Native Application Factory
+
+export const NATIVE_LABEL: Record<NativeStage, string> = {
+  active: NATIVE_CAPTION_BARE,
+  none: "Süren bir uygulama derlemesi yok",
+};
+
+/** The Yerel Uygulamalar panel's empty sentence (M28 spec §6): the list route answered, and holds no build. */
+export const NATIVE_EMPTY = "Henüz bir yerel uygulama üretilmedi.";
+
+/** The panel's line when the bus never carried a native build event: not "no builds", "nothing reported". */
+export const NATIVE_UNTOLD = "Uygulama derleme etkinliği bildirilmedi.";
+
+/** Said where a row named no artefact: the file's identity is unknown, which is not "there is no file". */
+export const NATIVE_ARTIFACT_UNTOLD = "çıktı bildirilmedi";
+
+/** Said where a row carried no verdict from the independent reader at all. */
+export const NATIVE_VERDICT_UNTOLD = "bağımsız okuyucu bir şey bildirmedi";
+
+/**
+ * A native build step token as one word: the spec's word for the eleven this
+ * build knows, the token verbatim for one it does not (still a published
+ * fact), and the statement that none came.
+ */
+export function nativeStateWord(token: string | null): string {
+  if (token === null) return "durum bildirilmedi";
+  return (NATIVE_STATE_LABEL as Record<string, string>)[token] ?? token;
+}
+
+/**
+ * The published native facts on one line, each one either what the publisher
+ * sent or the statement that it did not send it: "uygulama: Notlarim ·
+ * hedef: Windows EXE · durum: doğrulandı · yığın: WPF".
+ *
+ * The stack is printed only when the publisher named one; unlike the step and
+ * the target it is not a claim the owner is waiting on, so its absence is not
+ * worth a sentence of its own.
+ */
+export function nativeFactsLine(facts: NativeFacts): string {
+  const target = nativeTargetWord(facts.targetToken);
+  const parts = [
+    facts.appToken ? `uygulama: ${facts.appToken}` : "uygulama bildirilmedi",
+    target ? `hedef: ${target}` : "hedef bildirilmedi",
+    facts.stateToken ? `durum: ${nativeStateWord(facts.stateToken)}` : "durum bildirilmedi",
+  ];
+  const stack = nativeStackWord(facts.stackToken);
+  if (stack) parts.push(`yığın: ${stack}`);
+  return parts.join(" · ");
+}
+
+/** The step with what the publisher attached to it, for a row or a caption, or the statement that none came. */
+export function nativeStateLine(facts: Pick<NativeFacts, "state" | "stateToken" | "verdictToken">): string {
+  return nativeStatePhrase(facts) ?? nativeStateWord(facts.stateToken);
 }

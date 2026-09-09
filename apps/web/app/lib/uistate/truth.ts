@@ -32,6 +32,7 @@ import {
   isExecutiveState,
   isGenesisState,
   isMailState,
+  isNativeState,
   isOperatorState,
   isReleaseBandState,
   isSceneState,
@@ -380,6 +381,19 @@ export function executiveClaim(truth: CoreTruth, now: number): Claim {
  */
 export function creativeClaim(truth: CoreTruth, now: number): Claim {
   return claimFor(newestWhere(truth, isCreativeState), now);
+}
+
+/**
+ * The Native Application Factory's own claim (v13): the newest
+ * `native.build`, by membership. Returned expired or not, for the creative
+ * claim's reason: the panel words the age, and an expired build event is one
+ * we stopped hearing about — the builds themselves are rows on
+ * `/v1/native/builds`, which do not expire, and the artefact's name, size,
+ * hash and the independent reader's verdict come from such a row rather than
+ * from the bus, which carries no content.
+ */
+export function nativeClaim(truth: CoreTruth, now: number): Claim {
+  return claimFor(newestWhere(truth, isNativeState), now);
 }
 
 /**

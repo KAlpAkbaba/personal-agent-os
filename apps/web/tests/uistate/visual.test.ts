@@ -128,6 +128,15 @@ const EXPECTED_KIND: Record<string, CoreVisualKind> = {
   // and comparing postures, a `verified` reachable from the comparison alone,
   // and a settled `unavailable` for an application that is not installed.
   "creative.activity": "creative_activity",
+  // v13 (M28): compiling a real program the owner can install — writing the
+  // project from a fixed template, running the toolchain on this machine,
+  // running the generated project's own tests, packaging, and reopening the
+  // produced artefact with a reader that did NOT build it — is the agent's
+  // own work: a core state with its own planning, making, testing and
+  // reading postures, a `verified` reachable from that independent reader
+  // alone, and a settled `unavailable` for a target this machine's toolchain
+  // cannot reach at all.
+  "native.build": "native_build",
 };
 
 describe("a visual state is entered only by its own event", () => {

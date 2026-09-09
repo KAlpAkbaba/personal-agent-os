@@ -568,7 +568,10 @@ export const ARTIFACT_FACTORY_BARE = () =>
 
 /**
  * `app.factory` as the M23 spec §6 has the Cloud Core publish it: subsystem
- * `apps`, the task id, and in metadata the project's name, its `AppProject`
+ * `appfactory` (`SUBSYSTEM_APPFACTORY` in `app/ledger/vocabulary.py` — this
+ * fixture said `apps` from M23 until M28, which is why nothing noticed that
+ * the web's own mirror and label table said `apps` too), the task id, and in
+ * metadata the project's name, its `AppProject`
  * state (`planned` | `scaffolded` | `running` | `tested` | `failed` |
  * `stopped`), the port the bounded process is bound to on `127.0.0.1` while
  * it runs, and — after a test run — the counts as `tests: {passed, failed}`,
@@ -584,7 +587,7 @@ export const APP_FACTORY = (
 ) => ({
   ...event({
     state: "app.factory",
-    subsystem: "apps",
+    subsystem: "appfactory",
     task_id: "app-task-1",
     status: state ?? "building",
     metadata: {
@@ -598,7 +601,8 @@ export const APP_FACTORY = (
 });
 
 /** An app event whose publisher sent no metadata at all. */
-export const APP_FACTORY_BARE = () => event({ state: "app.factory", subsystem: "apps", task_id: "app-task-2" });
+export const APP_FACTORY_BARE = () =>
+  event({ state: "app.factory", subsystem: "appfactory", task_id: "app-task-2" });
 
 // ------------------------------------------- v9: Capability Genesis (M24 §8)
 
@@ -749,6 +753,43 @@ export const CREATIVE_ACTIVITY = (
 /** A creative event whose publisher sent no metadata at all. */
 export const CREATIVE_ACTIVITY_BARE = () =>
   event({ state: "creative.activity", subsystem: "creative", task_id: "creative-task-2" });
+
+/**
+ * `native.build` as the M28 spec §4, §6 has the Cloud Core publish it:
+ * subsystem `nativefactory`, the task id, and in metadata the application's
+ * name, the target, the step of the build, the stack §3's rule chose and the
+ * independent reader's own short word.
+ *
+ * Nothing here carries the artefact's name, its size or its hash, and that is
+ * deliberate rather than an omission: the bus is content-free, and those three
+ * facts are the ROW's, read by the Cockpit from `/v1/native/builds`.
+ */
+export const NATIVE_BUILD = (
+  app: string | null = "Notlarim",
+  target: string | null = "windows_exe",
+  state: string | null = "building",
+  stack: string | null = "dotnet_wpf",
+  verdict: string | null = null,
+  extra: Record<string, unknown> = {},
+) =>
+  event({
+    state: "native.build",
+    subsystem: "nativefactory",
+    task_id: "native-task-1",
+    status: state ?? "native",
+    metadata: {
+      ...(app === null ? {} : { app }),
+      ...(target === null ? {} : { target }),
+      ...(state === null ? {} : { state }),
+      ...(stack === null ? {} : { stack }),
+      ...(verdict === null ? {} : { verdict }),
+      ...(extra as Record<string, string | number | boolean>),
+    },
+  });
+
+/** A native build event whose publisher sent no metadata at all. */
+export const NATIVE_BUILD_BARE = () =>
+  event({ state: "native.build", subsystem: "nativefactory", task_id: "native-task-2" });
 
 /** The owner-authorised release path, mid-deployment (ADR-0055). */
 export const RELEASE_DEPLOYING = () =>

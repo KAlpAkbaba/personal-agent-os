@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 import pytest
 
 from app.uistate import UI_STATES, UiState, UiStateEvent, ui_state_contract
-from app.uistate.contract import CONTRACT_VERSION
+from app.uistate.contract import CONTRACT_VERSION, SUBSYSTEMS
 from app.uistate.publisher import (
     TAIL_SIZE,
     UiStatePublisher,
@@ -100,9 +100,11 @@ def test_the_vocabulary_is_the_one_the_owner_specified() -> None:
         "executive.run",
         # M27 (Creative Tools spec §3, §6, ADR-0093): the creative loop's channel.
         "creative.activity",
+        # M28 (Native App Factory spec §4, §6, ADR-0095): the native build's channel.
+        "native.build",
     }
     contract = ui_state_contract()
-    assert contract["contract_version"] == 12
+    assert contract["contract_version"] == 13
     assert "ambient" in contract["subsystems"]
     assert "operator" in contract["subsystems"]
     assert "documents" in contract["subsystems"]
@@ -111,7 +113,135 @@ def test_the_vocabulary_is_the_one_the_owner_specified() -> None:
     assert "artifacts" in contract["subsystems"]
     assert "appfactory" in contract["subsystems"]
     assert "genesis" in contract["subsystems"]
+    assert "nativefactory" in contract["subsystems"]
     assert "audio" in contract["metadata_rules"]["forbidden"]
+
+
+#: The vocabulary exactly as v12 shipped, in order. Frozen here on purpose: see
+#: `test_the_contract_only_ever_grows` below.
+_V12_STATES: tuple[str, ...] = (
+    "agent.idle",
+    "agent.listening",
+    "agent.thinking",
+    "agent.speaking",
+    "agent.researching",
+    "agent.memory_retrieval",
+    "agent.tool_running",
+    "agent.waiting_owner",
+    "agent.goal_completed",
+    "agent.error",
+    "evolution.researching",
+    "evolution.designing",
+    "evolution.building",
+    "evolution.testing",
+    "evolution.shadow_ready",
+    "eye.active",
+    "eye.disabled",
+    "owner.present",
+    "owner.away",
+    "owner.returned",
+    "owner.resting",
+    "owner.likely_asleep",
+    "owner.awake",
+    "routine.armed",
+    "routine.triggered",
+    "alarm.triggered",
+    "alarm.armed",
+    "alarm.firing",
+    "alarm.playing",
+    "alarm.greeting",
+    "alarm.snoozed",
+    "alarm.stopped",
+    "alarm.completed",
+    "alarm.failed",
+    "display.on",
+    "display.off",
+    "release.owner_approval_required",
+    "release.owner_authorized",
+    "release.qualifying",
+    "release.deploying",
+    "release.verifying",
+    "release.live",
+    "release.rollback",
+    "operator.running",
+    "operator.verifying",
+    "operator.failed",
+    "document.analysis",
+    "mail.activity",
+    "calendar.activity",
+    "artifact.factory",
+    "app.factory",
+    "capability.genesis",
+    "scene.activity",
+    "executive.run",
+    "creative.activity",
+)
+
+#: The subsystems exactly as v12 shipped, in order. Same reason.
+_V12_SUBSYSTEMS: tuple[str, ...] = (
+    "voice",
+    "research",
+    "browser",
+    "memory",
+    "experience",
+    "goal",
+    "cognitive",
+    "self_model",
+    "evolution",
+    "deployment",
+    "ledger",
+    "system",
+    "presence",
+    "routine",
+    "ambient",
+    "operator",
+    "documents",
+    "mail",
+    "calendar",
+    "artifacts",
+    "appfactory",
+    "genesis",
+    "creative3d",
+    "executive",
+    "creative",
+)
+
+
+def test_the_contract_only_ever_grows() -> None:
+    """Every version of this contract has been described as "purely ADDITIVE", and every
+    released renderer is built on that promise: `MIN_SUPPORTED_CONTRACT_VERSION` is 2 in
+    `apps/web/app/lib/uistate/contract.ts`, so a v2 client reads a v13 server by reading
+    the subset it knows and ignoring the rest.
+
+    Nothing was holding the promise. A renamed token, a reordered tuple or a deleted state
+    would pass every other test in this file — the vocabulary assertion above is rewritten
+    with each milestone, which is exactly when a rename would slip through it — and would
+    silently break every client older than the change. So the v12 shipped vocabulary is
+    frozen here as an ordered PREFIX: new states go on the end, old ones never move and
+    never change spelling. Deleting one is a contract BREAK and must bump
+    `MIN_SUPPORTED_CONTRACT_VERSION` on the web side deliberately, not by accident here.
+    """
+    assert UI_STATES[: len(_V12_STATES)] == _V12_STATES, (
+        "a state that shipped in v12 changed value, order or spelling - every renderer "
+        "built against v2..v12 reads this contract as a superset of its own, and this is "
+        "the assumption that makes that true"
+    )
+    assert SUBSYSTEMS[: len(_V12_SUBSYSTEMS)] == _V12_SUBSYSTEMS, (
+        "a subsystem that shipped in v12 changed value or order - the publisher REFUSES "
+        "an unknown subsystem, so a rename here silently stops a whole family publishing"
+    )
+    assert CONTRACT_VERSION >= 13
+    assert len(UI_STATES) > len(_V12_STATES), "v13 adds a state; it is not here"
+
+
+def test_that_freeze_would_notice_a_break() -> None:
+    """And the guard proves itself before it is trusted: a renamed or reordered token in
+    the frozen prefix must fail the comparison, rather than the comparison being one that
+    can only ever pass (the vacuous-guard failure this repo has shipped twice)."""
+    renamed = (*_V12_STATES[:-1], "creative.activity_v2")
+    assert UI_STATES[: len(renamed)] != renamed
+    reordered = (_V12_STATES[1], _V12_STATES[0], *_V12_STATES[2:])
+    assert UI_STATES[: len(reordered)] != reordered
 
 
 def test_an_event_carries_state_identity_and_bounded_numbers(bus: UiStatePublisher) -> None:

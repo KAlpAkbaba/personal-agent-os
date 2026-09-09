@@ -81,6 +81,17 @@ from typing import Any
 #: SSIM - ADR-0093 decision 4 - ``defect`` one of the four objective ones) plus the
 #: ``creative`` subsystem. Same additive rule: a v11 renderer keeps working and simply
 #: never sees it.
+#: v13 (M28 Native App Factory spec §6, §8, ADR-0095) adds ``native.build``, published at
+#: every arrow of ONE application build with metadata ``{app?, target?, state, stack?,
+#: verdict?}`` (``state`` the STEP OF THE BUILD from ``NATIVE_BUILD_STEPS`` below,
+#: ``target`` one of the FIVE ``app.nativefactory.spec.NATIVE_TARGETS`` defines - the
+#: spec's prose lists six, and ``ios_project`` is a refusal in words rather than a value
+#: (ADR-0095 decision 3) - ``verdict`` what the INDEPENDENT reader said
+#: about the produced artefact) plus the ``nativefactory`` subsystem. Same additive rule:
+#: a v12 renderer keeps working and simply never sees it. Nothing above changed value —
+#: ``test_uistate.py`` holds the v12 vocabulary as a frozen prefix, because a contract
+#: that is only additive by convention is one word away from breaking every released
+#: renderer at once.
 
 #: The STEP of the 3D loop that ``scene.activity`` names in ``metadata.state`` — the
 #: channel says what is happening, never what a database row happens to be called. The
@@ -165,6 +176,61 @@ CREATIVE_ACTIVITY_STEPS: tuple[str, ...] = (
     CREATIVE_STEP_FAILED,
 )
 
+#: M28 (spec §4, §6, ADR-0095): the STEP OF THE BUILD that ``native.build`` names in
+#: ``metadata.state``. This family is M26's shape rather than M25's: the eleven words a
+#: ``native_builds`` row can hold ARE the eleven words the channel says, because the
+#: lifecycle the row records (generate → build → test → package → validate → a verdict) is
+#: exactly what the owner is watching — there is no second, richer set of database words to
+#: translate down from. ``app.nativefactory.models_wire.wire_step`` is still an explicit,
+#: total mapping rather than the identity function: a row state added without a wire word
+#: must fail loudly, which is what M25 did not do when it published the row's own word and
+#: left five of seven tokens unreadable by the web build.
+#:
+#: The two words that are neither success nor failure carry this milestone's whole point
+#: (spec §8, ADR-0095 decision 3): ``unverified`` is an artefact that exists and could not
+#: be checked, and ``unavailable`` is a toolchain this MACHINE does not have (no JDK, no
+#: macOS) — a fact about the world, never a defect. Rounding either up to ``verified``, or
+#: down to ``failed``, is the exact lie M28 exists to prevent.
+#:
+#: The web reads exactly this list (``apps/web/app/lib/uistate/contract.ts``,
+#: ``NATIVE_BUILD_STATES``) and ``test_uistate_contract_halves.py`` holds the two to each
+#: other in both directions.
+NATIVE_STEP_PLANNED = "planned"
+#: The project is being written from a template — no compiler has run yet.
+NATIVE_STEP_GENERATING = "generating"
+NATIVE_STEP_BUILDING = "building"
+NATIVE_STEP_TESTING = "testing"
+NATIVE_STEP_PACKAGING = "packaging"
+#: The artefact is being reopened by a reader that did not build it (spec §4).
+NATIVE_STEP_VALIDATING = "validating"
+#: That reader agreed the artefact is what the spec asked for.
+NATIVE_STEP_VERIFIED = "verified"
+#: The artefact exists and could not be checked — no version resource to read, no reader
+#: for the format. Not a failure, and emphatically not a success.
+NATIVE_STEP_UNVERIFIED = "unverified"
+#: The reader DISAGREES with the spec (the wrong version, a console image where a desktop
+#: application was asked for).
+NATIVE_STEP_MISMATCH = "mismatch"
+#: The toolchain cannot reach this target on this machine (spec §1: no JDK for Android, no
+#: macOS for iOS). A fact about the world, never a defect.
+NATIVE_STEP_UNAVAILABLE = "unavailable"
+#: The build was possible and did not work.
+NATIVE_STEP_FAILED = "failed"
+
+NATIVE_BUILD_STEPS: tuple[str, ...] = (
+    NATIVE_STEP_PLANNED,
+    NATIVE_STEP_GENERATING,
+    NATIVE_STEP_BUILDING,
+    NATIVE_STEP_TESTING,
+    NATIVE_STEP_PACKAGING,
+    NATIVE_STEP_VALIDATING,
+    NATIVE_STEP_VERIFIED,
+    NATIVE_STEP_UNVERIFIED,
+    NATIVE_STEP_MISMATCH,
+    NATIVE_STEP_UNAVAILABLE,
+    NATIVE_STEP_FAILED,
+)
+
 EXECUTIVE_STEP_PLANNED = "planned"
 EXECUTIVE_STEP_RUNNING = "running"
 EXECUTIVE_STEP_PAUSED = "paused"
@@ -186,7 +252,7 @@ EXECUTIVE_RUN_STATES: tuple[str, ...] = (
 )
 
 
-CONTRACT_VERSION = 12
+CONTRACT_VERSION = 13
 
 #: Metadata value bounds. Numbers are floats in [0, 1] except where noted; strings are
 #: short machine tokens, never prose.
@@ -338,6 +404,15 @@ class UiState(StrEnum):
     #: Metadata is identity and measurement only: never a file path, never image bytes.
     CREATIVE_ACTIVITY = "creative.activity"
 
+    #: M28 (spec §4, §6): the Native Application Factory's channel. Published at every
+    #: arrow of ONE application build — the project generated from a template, compiled,
+    #: its own tests run, packaged, and then the produced artefact reopened by a reader
+    #: that did NOT build it — so the owner can watch a build rather than be handed a
+    #: claim at the end. Metadata is identity and verdict only: which application, which
+    #: target, the step of the build, and what the independent reader said. Never a path,
+    #: never compiler output, never a log line.
+    NATIVE_BUILD = "native.build"
+
 
 UI_STATES: tuple[str, ...] = tuple(s.value for s in UiState)
 
@@ -378,6 +453,11 @@ SUBSYSTEMS: tuple[str, ...] = (
     "executive",
     # M27: the Creative Tools Operator publishes creative.activity (spec §6).
     "creative",
+    # M28: the Native Application Factory publishes native.build (spec §6). Deliberately
+    # NOT `appfactory`, which is M23's own subsystem and stays exactly as it was: a web
+    # app scaffolded and run on the owner's machine and a signed EXE read back from its
+    # PE header are different claims, and one name for both would hide which was made.
+    "nativefactory",
 )
 
 SEVERITIES: tuple[str, ...] = ("info", "notice", "warning", "critical")
@@ -466,6 +546,18 @@ __all__ = [
     "EXECUTIVE_STEP_RUNNING",
     "MAX_LABEL_CHARS",
     "MAX_METADATA_KEYS",
+    "NATIVE_BUILD_STEPS",
+    "NATIVE_STEP_BUILDING",
+    "NATIVE_STEP_FAILED",
+    "NATIVE_STEP_GENERATING",
+    "NATIVE_STEP_MISMATCH",
+    "NATIVE_STEP_PACKAGING",
+    "NATIVE_STEP_PLANNED",
+    "NATIVE_STEP_TESTING",
+    "NATIVE_STEP_UNAVAILABLE",
+    "NATIVE_STEP_UNVERIFIED",
+    "NATIVE_STEP_VALIDATING",
+    "NATIVE_STEP_VERIFIED",
     "SCENE_ACTIVITY_STEPS",
     "SEVERITIES",
     "SUBSYSTEMS",

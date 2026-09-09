@@ -155,6 +155,20 @@ import {
   rowIsPartial as executiveRowIsPartial,
   rowIsPaused as executiveRowIsPaused,
 } from "../../lib/cockpit/executive-rows";
+import type { NativeBuildRow } from "../../lib/cockpit/native";
+import {
+  NATIVE_ROWS_SHOWN,
+  nativeArtifactLine,
+  nativeIdentityLine,
+  nativeRowLine,
+  nativeVerdictLine,
+  nativeVersionDisagrees,
+  rowHasArtifact as nativeRowHasArtifact,
+  rowIsFailed as nativeRowIsFailed,
+  rowIsMismatch as nativeRowIsMismatch,
+  rowIsUnavailable as nativeRowIsUnavailable,
+  rowIsVerified as nativeRowIsVerified,
+} from "../../lib/cockpit/native-rows";
 import {
   FOCUS_UNSUPPORTED,
   focusSourceLabel,
@@ -191,6 +205,8 @@ import {
   OPERATOR_LABEL,
   CREATIVE_EMPTY,
   CREATIVE_UNTOLD,
+  NATIVE_EMPTY,
+  NATIVE_UNTOLD,
   SCENE_EMPTY,
   SCENE_UNTOLD,
   documentFactsLine,
@@ -203,6 +219,7 @@ import {
 } from "../../lib/uistate/labels";
 import { sceneView } from "../../lib/uistate/scenes";
 import { creativeView } from "../../lib/uistate/creative";
+import { nativeView } from "../../lib/uistate/native";
 import { executiveView } from "../../lib/uistate/executive";
 import { MAIL_DRAFT_STATE_LABEL, mailView } from "../../lib/uistate/mail";
 import { operatorPosition, operatorView } from "../../lib/uistate/operator";
@@ -217,6 +234,7 @@ import {
   genesisClaim,
   liveEventFor,
   mailClaim,
+  nativeClaim,
   operatorClaim,
   recentDescending,
   sceneClaim,
@@ -2875,6 +2893,158 @@ export function CreativePanel({
       <p className="muted" data-creative-note>
         {CREATIVE_NOTE}
       </p>
+    </section>
+  );
+}
+
+function NativeBuildItem({ row, now }: { row: NativeBuildRow; now: number }) {
+  const unavailable = nativeRowIsUnavailable(row);
+  const failed = nativeRowIsFailed(row);
+  const mismatch = nativeRowIsMismatch(row);
+  const verdict = nativeVerdictLine(row);
+  return (
+    <li
+      className="native-build"
+      data-native-build={row.build_id}
+      data-native-row-app={row.app ?? ""}
+      data-native-row-target={row.target ?? ""}
+      data-native-row-stack={row.stack ?? ""}
+      data-native-row-state={row.state ?? ""}
+      data-native-row-artifact={row.artifact_name ?? ""}
+      data-native-row-bytes={row.artifact_bytes ?? ""}
+      data-native-row-sha256={row.artifact_sha256 ?? ""}
+      data-native-row-verdict={row.verdict_ok === null ? "" : row.verdict_ok ? "ok" : "mismatch"}
+      data-native-row-verified={nativeRowIsVerified(row) ? "yes" : "no"}
+      data-native-row-unavailable={unavailable ? "yes" : "no"}
+      data-native-row-failed={failed ? "yes" : "no"}
+      data-native-row-has-artifact={nativeRowHasArtifact(row) ? "yes" : "no"}
+    >
+      <div className="event-row">
+        <span>{nativeIdentityLine(row)}</span>
+        <span className="event-when">{when(row.updated_at ?? row.created_at, now)}</span>
+      </div>
+      {/* The step, exactly as the row named it — "derleniyor", "doğrulandı",
+          "bu makinede yapılamıyor" — or the token verbatim for a word this
+          build cannot read. */}
+      <span className="muted" data-native-line>
+        {nativeRowLine(row)}
+      </span>
+      {/* The artefact, drawn only because the ROW named one: its file name,
+          its size and the first characters of the sha256 a reader computed
+          from the bytes. Never from the spec, and never from a step. */}
+      {nativeRowHasArtifact(row) && (
+        <span className="muted" data-native-artifact>
+          {nativeArtifactLine(row)}
+        </span>
+      )}
+      {/* What the INDEPENDENT reader said. Its own line, because it is its
+          own statement: the step says where the build rests, this says what
+          something that did not build the file found when it opened it. */}
+      {verdict && (
+        <span className="muted" data-native-verdict={row.verdict_ok === null ? "untold" : row.verdict_ok ? "ok" : "mismatch"}>
+          {verdict}
+        </span>
+      )}
+      {/* Two published versions that disagree, printed side by side on a
+          mismatch: what was asked for, and what the reader read out of the
+          file. Nothing is decided here — both figures are the row's. */}
+      {mismatch && nativeVersionDisagrees(row) && (
+        <span className="muted" data-native-version-disagrees="yes">
+          {`istenen sürüm ${row.version} · çıktıdaki sürüm ${row.artifact_version}`}
+        </span>
+      )}
+      {/* The build's own sentence, beside the two steps that have one to
+          give. An `unavailable` says which toolchain is missing in the Cloud
+          Core's words; this page never guesses one. */}
+      {(unavailable || failed) && row.error_message && (
+        <span className="muted" data-native-error-message>
+          {row.error_message}
+        </span>
+      )}
+    </li>
+  );
+}
+
+/**
+ * Yerel Uygulamalar (M28 spec §4, §6): what the Native Application Factory
+ * is doing, from the bus, and the builds that exist, from
+ * `/v1/native/builds` — each with its application, target and stack, the
+ * step it reached, and for a build that produced something the artefact's
+ * name, its size, the first characters of its sha256, and what the
+ * INDEPENDENT reader said when it opened the file.
+ *
+ * Two sources, kept apart because they answer different questions. The bus
+ * line is "what is happening now" and decays like every bus claim; the rows
+ * are "what exists" and are the route's. Every fact drawn here was
+ * published: the size is what a reader measured, the hash is what a reader
+ * computed, the verdict is what a reader concluded — this page computes
+ * nothing and re-reads no file. A build is "doğrulandı" because its row
+ * says `verified`, never because an artefact exists or a compiler exited 0;
+ * an `unavailable` row says this MACHINE cannot reach that target and is
+ * never drawn as a failure (ADR-0095 decision 3).
+ *
+ * There are no controls at all, unlike every other factory panel. Starting a
+ * twenty-minute compiler and installing a signed package are asked for by
+ * voice through the ONE router, which gates them; a chip here would be a
+ * second authority surface for the same act. The empty sentence is the
+ * route's answer, never the bus's silence — and "henüz yok" (no route on
+ * this Cloud Core) is neither.
+ */
+export function NativePanel({
+  builds,
+  truth,
+  now,
+}: {
+  builds: Loaded<NativeBuildRow[]>;
+  truth: CoreTruth;
+  now: number;
+}) {
+  const view = nativeView(nativeClaim(truth, now));
+  const told = view.lastKnown !== null;
+  const rows = builds.kind === "ok" ? builds.value : [];
+  const shown = rows.slice(0, NATIVE_ROWS_SHOWN);
+  const verified = rows.filter(nativeRowIsVerified).length;
+  const attention = rows.some((row) => nativeRowIsMismatch(row) || nativeRowIsFailed(row));
+  return (
+    <section
+      className={`panel ${attention ? "attention" : ""}`}
+      data-panel="native"
+      data-panel-state={builds.kind}
+      data-panel-empty={builds.kind === "ok" ? (rows.length ? "no" : "yes") : ""}
+      data-native-stage={view.stage}
+      data-native-last-known={view.lastKnown ?? ""}
+      data-native-posture={told ? view.posture : ""}
+      data-native-verified={builds.kind === "ok" ? verified : ""}
+    >
+      <h3 className="panel-title">
+        <span>Yerel Uygulamalar</span>
+        {builds.kind === "ok" && (
+          <span className="panel-count" data-panel-badge>
+            {verified > 0 ? `${verified} doğrulandı / ${rows.length}` : `${rows.length}`}
+          </span>
+        )}
+      </h3>
+      {/* The bus: the caption the Core draws, with its age; last-known when it aged out. */}
+      <p
+        className={told ? "muted" : "panel-empty"}
+        data-native-activity={told ? view.stage : "untold"}
+        data-native-caption={told ? view.caption : ""}
+      >
+        {told ? `${view.stage === "none" ? "Son bilinen: " : ""}${view.caption} · ${formatAge(view.ageMs)}` : NATIVE_UNTOLD}
+      </p>
+      <LoadedNotice state={builds} />
+      {builds.kind === "ok" && rows.length === 0 && (
+        <p className="panel-empty" data-panel-empty-text>
+          {NATIVE_EMPTY}
+        </p>
+      )}
+      {shown.length > 0 && (
+        <ul>
+          {shown.map((row) => (
+            <NativeBuildItem key={row.build_id} row={row} now={now} />
+          ))}
+        </ul>
+      )}
     </section>
   );
 }

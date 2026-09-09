@@ -53,6 +53,7 @@ import { type GenesisFacts, genesisCaption, genesisFacts, genesisPosture } from 
 import { type MailFacts, mailCaption, mailFacts } from "./mail";
 import { type SceneFacts, sceneCaption, sceneFacts, scenePosture } from "./scenes";
 import { type CreativeFacts, creativeCaption, creativeFacts, creativePosture } from "./creative";
+import { type NativeFacts, nativeCaption, nativeFacts, nativePosture } from "./native";
 import { type ExecutiveFacts, executiveCaption, executiveFacts, executivePosture } from "./executive";
 import { operatorCaption, operatorFacts } from "./operator";
 import type { VoiceUiState } from "../voice/controller";
@@ -212,7 +213,26 @@ export type CoreVisualKind =
    * restraint. Calm, nothing that could be read as progress, and the
    * application, the operation, the step and the comparison as the caption.
    */
-  | "creative_activity";
+  | "creative_activity"
+  /**
+   * v13 (M28): the Core making a program the owner can install — a project
+   * written from a fixed template, compiled by the real toolchain on this
+   * machine, its own tests run, packaged, and the produced artefact reopened
+   * by a reader that did NOT build it. A planning posture at `planned`,
+   * still because a chosen stack is not a build; a making posture while the
+   * project is written, compiled and packed; a distinct TESTING posture,
+   * because the generated project's own tests are the first thing that can
+   * disagree with what was asked; a READING posture at `validating`, drawing
+   * inward, because that is where every "doğrulandı" in this family comes
+   * from; still and bright at `verified` and at nothing else; `unverified`
+   * settled and plain — the artefact is there and nothing could check it;
+   * `mismatch` held under restraint and named; `unavailable` SETTLED and dim
+   * with no agitation whatever — a machine with no JDK is a fact about the
+   * world, not a fault in the agent (ADR-0095 decision 3) — and `failed`
+   * under the same restraint. Calm, and no bar: a build publishes steps, not
+   * a fraction of itself.
+   */
+  | "native_build";
 
 /**
  * Which of the two evidence sources produced the intent (ADR-0061 §4).
@@ -548,6 +568,20 @@ export type VisualIntent = {
    */
   creative: CreativeFacts | null;
 
+  // ------------------------ v13: the Native Application Factory (M28 §4, §6)
+  /**
+   * The published facts about the application being built — which
+   * application, which artefact, the step, the stack the rule chose and the
+   * independent reader's own word — each `null` when the publisher sent
+   * none, and the whole thing `null` outside the `native_build` kind (kept
+   * on its last-known shape). Words only: nothing here moves anything, and
+   * in particular there is no bar — a build publishes STEPS, and a bar over
+   * five of them would be an invented estimate of the kind ADR-0052 §2
+   * forbids. The artefact's name, size and hash are the ROW's, never the
+   * bus's.
+   */
+  native: NativeFacts | null;
+
   palette: PaletteToken;
 };
 
@@ -639,6 +673,7 @@ function blank(kind: CoreVisualKind, palette: PaletteToken): VisualIntent {
     scene: null,
     executive: null,
     creative: null,
+    native: null,
     palette,
   };
 }
@@ -1542,6 +1577,90 @@ function forLiveState(event: UiStateEvent, claim: Claim): VisualIntent {
         flowRate: exporting ? 0.4 : still ? 0 : reading || comparing ? 0.15 : 0.3,
         restraint: unavailable ? 0.6 : mismatch || failed ? 0.5 : correcting ? 0.5 : 0,
         creative: facts,
+      };
+    }
+
+    case "native.build": {
+      // Nine postures (M28 §4, §6), each from the published step alone.
+      // PLANNING: the spec is accepted and the stack chosen, and NOTHING has
+      // been written — still, in the planning palette, with nothing flowing
+      // anywhere, because a decision is not a build. MAKING (`generating`,
+      // `building`, `packaging`): the app factory's shape, a lattice being
+      // laid with the paths carrying work OUT to the toolchain that does it.
+      // TESTING: its own posture at a lower flow, because the generated
+      // project's own tests are the first thing that can disagree with what
+      // was asked, and drawing that exactly like compiling would hide it.
+      // READING (`validating`): the document Core's shape, drawing INWARD —
+      // a reader that did not build the file is opening it, and every
+      // "doğrulandı" in this family comes from what that reader saw.
+      // VERIFIED: still and bright in the ready palette, reachable from that
+      // ONE word — not from a compiler that exited 0 and not from a file
+      // that exists. UNVERIFIED: just as still, in the plain making palette
+      // with no brightness — the artefact is there and nothing could check
+      // it, so there is nothing to be bright about and nothing to hold under
+      // restraint either. MISMATCH: held under restraint and named.
+      // UNAVAILABLE: settled and dim under restraint with NO agitation and
+      // no fault palette at all — a machine with no JDK is a fact about the
+      // world (ADR-0095 decision 3), and drawing it as a failure would be
+      // the Core telling the owner something broke. FAILED: the same
+      // restraint. A step this build cannot read, or none at all, is the
+      // making posture with the bare caption.
+      //
+      // No progress bar anywhere in this family. A build publishes STEPS,
+      // and five of eleven words being "work" does not make a fraction: a
+      // bar drawn from step positions would be an estimate of how long a
+      // compiler will take, which is exactly the invented claim ADR-0052 §2
+      // forbids.
+      const facts = nativeFacts(event);
+      const posture = nativePosture(facts.state);
+      const planning = posture === "planning";
+      const testing = posture === "testing";
+      const reading = posture === "reading";
+      const verified = posture === "verified";
+      const unverified = posture === "unverified";
+      const mismatch = posture === "mismatch";
+      const unavailable = posture === "unavailable";
+      const failed = posture === "failed";
+      const still = planning || verified || unverified || mismatch || unavailable || failed;
+      const palette: PaletteToken = unavailable
+        ? "held"
+        : verified
+          ? "ready"
+          : reading
+            ? "reading"
+            : planning
+              ? "planning"
+              : "making";
+      const glowBase = verified
+        ? 0.42
+        : reading
+          ? 0.34
+          : mismatch
+            ? 0.22
+            : failed
+              ? 0.22
+              : unavailable
+                ? 0.12
+                : unverified
+                  ? 0.2
+                  : planning
+                    ? 0.24
+                    : 0.3;
+      return {
+        ...base("native_build", palette),
+        label: nativeCaption(facts),
+        scale: unavailable ? 0.96 : still ? 1.02 : 1.04,
+        topology: reading ? 0.1 : unavailable ? 0 : still ? 0.15 : testing ? 0.2 : 0.25,
+        breathAmplitude: unavailable ? 0.015 : 0.03,
+        breathHz: unavailable ? 0.1 : verified || unverified || planning ? 0.14 : 0.22,
+        energy: e,
+        glow: glowOf(glowBase, e),
+        inwardFlow: reading ? 0.3 : 0,
+        shellSpread: unavailable ? 0.1 : still ? 0.2 : 0.3,
+        ringSpin: unavailable ? 0.02 : still ? IDLE_RING_SPIN : 0.18,
+        flowRate: still ? 0 : reading ? 0.15 : testing ? 0.2 : 0.3,
+        restraint: unavailable ? 0.6 : mismatch || failed ? 0.5 : 0,
+        native: facts,
       };
     }
 
