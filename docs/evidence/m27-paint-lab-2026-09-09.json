@@ -1,0 +1,73 @@
+{
+  "kind": "m27_paint_lab",
+  "measured_at": "2026-09-09T04:20:28.542650Z",
+  "machine": "the owner's Windows machine",
+  "paint_detection": {
+    "installed": true,
+    "checked": [
+      "C:\\Windows\\System32\\mspaint.exe",
+      "C:\\Windows\\mspaint.exe"
+    ],
+    "detail": "C:\\Windows\\System32\\mspaint.exe"
+  },
+  "output_bytes": 3703,
+  "reopened_size": [
+    320,
+    240
+  ],
+  "reopened_format": "PNG",
+  "colours": {
+    "inside_rect": [
+      220,
+      30,
+      40,
+      255
+    ],
+    "inside_ellipse": [
+      40,
+      70,
+      210,
+      255
+    ],
+    "background": [
+      255,
+      255,
+      255,
+      255
+    ]
+  },
+  "text_ink_pixels": 969,
+  "compare_ok": {
+    "ok": true,
+    "checked": 4,
+    "reason": null
+  },
+  "compare_mismatch": {
+    "ok": false,
+    "mismatches": [
+      {
+        "object": "add_text[3]",
+        "field": "presence",
+        "expected": [
+          20,
+          200,
+          60,
+          255
+        ],
+        "actual": "not found",
+        "detail": "no ink within tolerance of (20, 200, 60, 255) near the planned position"
+      }
+    ],
+    "wire_defects": [
+      "missing_region"
+    ]
+  },
+  "compare_after_correction": {
+    "ok": true,
+    "checked": 4
+  },
+  "m19_open_in_paint": {
+    "status": "NOT_YET_PROVEN",
+    "why": "DEVICE_PROTOCOL §6: desktop.open_application's allowlist is notepad/calc; §6a: desktop.open_artifact's extension allowlist is .pdf .docx .html .htm .txt .md with no image format. Opening a PNG in mspaint.exe needs a device-side change, which needs the elevated agent update (owner item 28). Spec §6 anticipated it."
+  }
+}
