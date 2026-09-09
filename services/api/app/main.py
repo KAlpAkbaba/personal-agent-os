@@ -94,6 +94,7 @@ from app.routines.models import Routine
 from app.routines.routes import router as routines_router
 from app.security.routes import router as security_router
 from app.security.runtime import SecurityRuntime
+from app.selfhealing.defects import register_defect_sink
 from app.selfhealing.routes import router as selfhealing_router
 from app.selfhealing.runtime import SelfHealingRuntime
 from app.selfmodel.routes import router as selfmodel_router
@@ -430,6 +431,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.memory = memory
     app.state.settings = settings
     app.state.selfhealing = selfhealing
+    # A device that refuses this server's payload has found a defect here. Until now that
+    # evidence sat in device_commands and nothing read it, so every one of them reached the
+    # backlog only when the OWNER noticed and said so (app.selfhealing.defects).
+    register_defect_sink(selfhealing.service.ingest_incident)
     app.state.evolution = evolution
     app.state.genesis = genesis
     app.state.security = security

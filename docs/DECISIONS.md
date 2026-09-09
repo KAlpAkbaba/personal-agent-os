@@ -8411,3 +8411,65 @@ device's desktop was empty — a state that cannot exist. It now puts the window
 desktop too, and `window.list` reads the device's own call log so that "which windows
 exist?" and "is it gone after the close?" get different, correct answers. Three incidents
 in one day have had the same second half: **the fake was kinder than the machine.**
+
+## ADR-0102 — The backlog nobody was filling: a device refusal is a defect report (2026-09-09)
+
+**Owner directive.** "kendi bug'ını bulma ... bunun hata olduğunu bilip arka planda kodu
+fixlemesini istiyorum sana yazmak istemiyorum."
+
+**What the code actually said.** The Evolution Supervisor runs in-process on the routine
+clock (`main.py:336`) and has been scanning production for days; it reads incidents and
+capability gaps. `grep` for who writes them:
+
+```
+ingest_incident  ->  app/selfhealing/routes.py  (POST /v1/selfhealing/incidents)   ...and nothing else
+gaps.record      ->  app/evolution/routes.py, app/genesis/service.py               ...and nothing else
+```
+
+Both are reachable only from the outside. **No code path in the product files a defect
+against the product.** Every one has arrived the same way: the owner noticed and said so.
+Three did on 2026-09-09 alone, and all three had left identical evidence in
+`device_commands` hours before they were reported:
+
+```
+window.activate    validation_error     'Not Defteri' is not a window id      x8   (ADR-0100)
+file.search        validation_error     payload.roots must be absolute paths
+desktop.play_audio security_scope_error audio may only be fetched from ...
+```
+
+**The insight that makes this cheap.** A device's error class says whose fault it was, and
+two of them say ours. `validation_error` means the companion could not parse what this
+server sent. `security_scope_error` means this server built a request outside the scope it
+holds. Neither is weather, a closed window, or a busy machine: the payload was wrong when
+it left here and will be wrong again. That is a defect, by definition, with its own
+reproduction attached.
+
+Deliberately excluded: `ui_target_not_found` and `ui_state_changed` (the owner closed a
+window — true, retryable, not a bug), refusals the device is right to make, and anything
+marked retryable. A backlog that cries wolf is worse than no backlog.
+
+**Where.** `broker.service.apply_command_ack` — the one choke point every command's terminal
+state passes through. It calls `app.selfhealing.defects.report_device_defect`, which is a
+no-op until `create_app` registers the sink, so the broker keeps no dependency on the
+self-healing runtime and no test needs one.
+
+**Fingerprints, and why the message is normalised.** Eight refusals arrived in ninety
+seconds, each quoting a different window name. They are ONE bug. `normalise_message`
+replaces the values a message quotes back at us — quoted strings, window ids, paths, URLs,
+numbers — leaving the RULE that was broken. `'Not Defteri' is not a window id` and
+`'Excel' is not a window id` produce one `failing_check`, so `ingest_incident`'s existing
+fingerprint dedupe collapses them into a single incident with a count.
+
+**Regression.** `tests/unit/test_selfhealing_device_defects.py` (22) drives the three real
+production failures through and asserts each files an incident naming the payload;
+`test_broker_service.py` proves the wire end to end and goes red when it is removed;
+`test_create_app_registers_the_sink` catches the case where both halves are perfect and
+nothing joins them — without it, every other test here would still pass while production
+computed defects and dropped them.
+
+**What this does NOT do.** It fills the Supervisor's in-tray; it does not write the patch.
+That half is `ClaudeCodingBackend`, inert in production because
+`PAGENTOS_SELFHEALING_CLAUDE_CLI` is unset on the host — a paid credential, and therefore
+the owner's decision, not mine. And the engine's authority still stops at `shadow_ready`
+(`LAB_FORBIDDEN_STATUSES`): it may find, diagnose and prepare, and it must ask before it
+ships. The owner's "evet" to "ekleyeyim mi?" IS that authorization.

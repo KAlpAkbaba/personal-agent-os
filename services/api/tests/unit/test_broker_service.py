@@ -399,3 +399,77 @@ def test_orphan_session_cleanup(db: Session) -> None:
     refreshed = db.get(DeviceSession, row.id)
     assert refreshed is not None and refreshed.ended_at is not None
     assert service.end_orphan_sessions(db) == 0
+
+
+# ------------------------------------------- a device refusal becomes a work item
+
+
+def test_a_device_validation_error_files_a_defect_against_this_server(db: Session) -> None:
+    """The wire itself (ADR-0102): the broker is where every command lands, so it is where
+    a payload this server got wrong stops being invisible. Nothing else in the product ever
+    called ingest_incident, so every defect reached the backlog by the owner reporting it."""
+    from app.selfhealing.defects import register_defect_sink
+
+    filed: list = []
+    register_defect_sink(filed.append)
+    try:
+        device = enroll(db)
+        command, _ = service.create_command(
+            db,
+            device_id=device.id,
+            capability="window.activate",
+            payload={"window_id": "Not Defteri"},
+            idempotency_key="key-defect-001",
+            timeout_s=300,
+            trace_id="trace-defect",
+        )
+        service.mark_command_delivered(db, command.id)
+        service.apply_command_ack(
+            db,
+            device_id=device.id,
+            command_id=command.id,
+            ack_status="failed",
+            result=None,
+            error_class="validation_error",
+            error_message="'Not Defteri' is not a window id (expected w-<hwnd>-<tick>)",
+        )
+    finally:
+        register_defect_sink(None)
+
+    assert len(filed) == 1, "the owner would have had to report this one too"
+    draft = filed[0]
+    assert draft.error_class == "validation_error"
+    assert "window.activate" in draft.failing_check
+    assert draft.evidence["payload"] == {"window_id": "Not Defteri"}
+    assert draft.evidence["command_id"] == str(command.id)
+
+
+def test_a_succeeded_command_files_nothing(db: Session) -> None:
+    from app.selfhealing.defects import register_defect_sink
+
+    filed: list = []
+    register_defect_sink(filed.append)
+    try:
+        device = enroll(db)
+        command, _ = service.create_command(
+            db,
+            device_id=device.id,
+            capability="window.activate",
+            payload={"window_id": "w-1-2"},
+            idempotency_key="key-defect-002",
+            timeout_s=300,
+            trace_id="trace-ok",
+        )
+        service.mark_command_delivered(db, command.id)
+        service.apply_command_ack(
+            db,
+            device_id=device.id,
+            command_id=command.id,
+            ack_status="succeeded",
+            result={"ok": True},
+            error_class=None,
+            error_message=None,
+        )
+    finally:
+        register_defect_sink(None)
+    assert filed == []

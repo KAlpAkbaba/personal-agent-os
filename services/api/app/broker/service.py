@@ -35,6 +35,7 @@ from app.broker.models import (
     EnrollmentToken,
 )
 from app.broker.state import TERMINAL_STATUSES, TransitionDecision, classify_transition
+from app.selfhealing.defects import report_device_defect
 
 
 def utcnow() -> datetime:
@@ -495,6 +496,18 @@ def apply_command_ack(
             metadata={"error_class": error_class} if error_class else None,
         )
         session.commit()
+        if ack_status == COMMAND_STATUS_FAILED:
+            # A device that refuses OUR payload has found a defect in this server. File it
+            # so the Evolution Supervisor has something to read; unwired, this is a no-op
+            # and the broker keeps no dependency on the self-healing runtime.
+            report_device_defect(
+                capability=command.capability,
+                error_class=error_class,
+                error_message=error_message,
+                payload=command.payload_json,
+                command_id=str(command.id),
+                device_id=str(device_id),
+            )
     return decision, command
 
 
