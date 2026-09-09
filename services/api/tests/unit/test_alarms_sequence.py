@@ -116,9 +116,7 @@ def test_the_media_path_opens_the_dedicated_alarm_profile_and_ramps(session, dev
     assert device.count("desktop.alarm_start") == 0  # no tone alongside the music
 
 
-def test_an_alarm_with_no_media_goes_straight_to_the_tone_without_a_media_receipt(
-    session, device
-):
+def test_an_alarm_with_no_media_goes_straight_to_the_tone_without_a_media_receipt(session, device):
     """An alarm the owner set with the tone has no media step to fail, and inventing a
     failed receipt for a thing nobody asked for would be its own kind of lie."""
     alarm = _alarm(session)
@@ -139,9 +137,7 @@ def test_an_alarm_with_no_media_goes_straight_to_the_tone_without_a_media_receip
         pytest.param(
             ok(playing=False, verified=False, reason="no_media_element"), id="no_media_element"
         ),
-        pytest.param(
-            ok(playing=False, verified=False, reason="consent_wall"), id="consent_wall"
-        ),
+        pytest.param(ok(playing=False, verified=False, reason="consent_wall"), id="consent_wall"),
         pytest.param(failed("capability_missing"), id="capability_missing"),
         pytest.param(failed("timeout"), id="timeout"),
     ],
@@ -169,9 +165,7 @@ def test_every_media_failure_falls_back_to_the_tone_with_a_failure_receipt(
     assert any(r.status in (TERMINAL_FAILED, TERMINAL_UNVERIFIED) for r in media_receipts)
 
 
-def test_a_media_session_that_cannot_be_opened_falls_back_without_trying_to_play(
-    session, device
-):
+def test_a_media_session_that_cannot_be_opened_falls_back_without_trying_to_play(session, device):
     device.results["browser.session_open"] = failed("browser_lifecycle_violation")
     alarm = _alarm(session, media={"url": MEDIA_URL})
     _, result = _fire(session, device, alarm)
@@ -429,9 +423,19 @@ def test_the_greeting_payload_carries_a_one_time_token_and_its_hash(session, dev
     assert payload["level"] == 0.75
     assert payload["max_seconds"] == 15
     # ...and the token is really redeemable, once.
+    #
+    # Redeemed on the FIXTURE's clock, not the wall clock. This test used to call
+    # `take(token)` with no `now`, so the store compared a 2026-09-09T04:01Z entry against
+    # whatever time it actually was - and the entry's five-minute TTL meant the test could
+    # only pass between 04:00 and 04:06 UTC on one particular day. It passed for weeks and
+    # then failed in CI at 04:31Z, looking exactly like a flake and being nothing of the
+    # kind: the PRODUCT was right (the TTL works), the test was reading a different clock
+    # from the one it set up. Every other time in this file is the fixture's; this is now
+    # too.
     token = payload["audio"]["url"].rsplit("/", 1)[-1]
-    assert store.take(token) is not None
-    assert store.take(token) is None
+    redeemed_at = FIRED_AT + timedelta(seconds=45)
+    assert store.take(token, now=redeemed_at) is not None
+    assert store.take(token, now=redeemed_at) is None
 
 
 def test_a_custom_greeting_text_is_used_verbatim_after_normalisation(session, device):
@@ -514,3 +518,40 @@ def test_stop_playback_stops_the_medium_that_is_actually_playing(session, device
     sequence.stop_playback(session, alarm, reason="owner", now=FIRED_AT + timedelta(seconds=60))
     assert device.count("browser.media_stop") == 1
     assert alarm.media_session_id is None
+
+
+def test_no_assertion_in_this_file_reads_the_wall_clock() -> None:
+    """A time bomb that ticks for weeks and then looks like a flake.
+
+    `test_the_greeting_payload_carries_a_one_time_token_and_its_hash` called
+    `store.take(token)` with no `now`, so the store compared an entry stamped at the
+    fixture's 2026-09-09T04:01Z against whatever time it really was. The entry's TTL is five
+    minutes, so the test could only pass between 04:00 and 04:06 UTC on one particular day.
+    It passed locally at 04:0x and failed in CI at 04:31Z - and a failure that depends on
+    the hour reads as a flake, which is how this class survives.
+
+    Every clock in this file is the fixture's. `AudioStore.put`/`take` both accept `now`,
+    and a call here that omits it is reaching for a different clock from the one the test
+    set up.
+    """
+    import re
+    from pathlib import Path
+
+    source = Path(__file__).read_text(encoding="utf-8")
+    body = source[: source.index("def test_no_assertion_in_this_file_reads_the_wall_clock")]
+
+    clockless = [
+        call for call in re.findall(r"\bstore\.(?:take|put)\([^)]*\)", body) if "now=" not in call
+    ]
+    assert not clockless, (
+        f"{clockless} read the wall clock while every fixture time is 2026-09-09T04:00Z - "
+        f"this test can then only pass inside the TTL window of that one moment"
+    )
+
+    # And the detector is proven to bite, so it cannot pass against a file that lost the
+    # discipline: a synthetic clockless call must be caught.
+    assert [
+        call
+        for call in re.findall(r"\bstore\.(?:take|put)\([^)]*\)", "store.take(token)")
+        if "now=" not in call
+    ] == ["store.take(token)"]
