@@ -1365,6 +1365,10 @@ def record_client_events(
                 # win over the model's argument" reason every other family above follows.
                 "weather_place": intent.weather_place,
                 "location_default_city": intent.location_default_city,
+                # M26 addendum (docs/M26_LATEST_NEWS_MODE_SPEC.md §6): the news-source
+                # channel-name hint the owner's WORDS carried, for the same
+                # "owner's words win over the model's argument" reason.
+                "news_source_ref": intent.news_source_ref,
             }
             resolved.append(
                 {"t_ms": t_ms, "turn": turn, **intent.to_dict(), "normalized_text": None}

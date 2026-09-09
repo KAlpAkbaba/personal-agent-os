@@ -89,6 +89,11 @@ from app.mail.providers import FakeMailSender
 from app.mail.service import MailService
 from app.main import create_app
 from app.narration.models import NarrationSession, PronunciationEntry
+from app.news import models as news_models
+from app.news import sources_service as news_sources_service
+from app.news.classification import VideoCandidate
+from app.news.models import NewsPlaybackContextRow, NewsResolutionRow, NewsSourceRow
+from app.news.provider import FixtureNewsProvider
 from app.object_store import InMemoryObjectStore
 from app.operator import focus as operator_focus
 from app.operator.models import (
@@ -154,6 +159,7 @@ from tests.voice_corpus.corpus import (
     CTX_FILE_FOCUSED,
     CTX_LAMPBOX_RUNNING,
     CTX_MESSAGE_FOCUSED,
+    CTX_NEWS_SOURCE_CONFIGURED,
     CTX_OPERATOR_RUNNING,
     CTX_PPTX_FOCUSED,
     CTX_PROPOSAL_READ_BACK,
@@ -215,6 +221,9 @@ TABLES = (
     LocationContextRow.__table__,
     WeatherQueryEvidenceRow.__table__,
     BriefingPreferencesRow.__table__,
+    NewsSourceRow.__table__,
+    NewsResolutionRow.__table__,
+    NewsPlaybackContextRow.__table__,
 )
 
 #: The tools the harness may dispatch as "forbidden" because the product refuses them at
@@ -290,6 +299,11 @@ class Harness:
     location: LocationService
     weather: WeatherService
     briefing: BriefingService
+    #: M26 addendum (docs/M26_LATEST_NEWS_MODE_SPEC.md §3, §4): the SAME deterministic provider
+    #: every news.* voice tool reads (registered on ``ToolContext.live`` exactly like
+    #: ``browser_gateway`` is for research) — never the real network in a corpus run
+    #: (task brief: fixtures are what make the behaviour testable every day).
+    news_provider: Any = None
     ids: dict[str, str] = field(default_factory=dict)
     #: M24 (docs/M24_CAPABILITY_GENESIS_SPEC.md §6, §7): the live fixture application
     #: (CounterBoxServer/LampBoxServer) a CTX_COUNTERBOX_RUNNING/CTX_LAMPBOX_RUNNING case
@@ -655,6 +669,46 @@ class Harness:
                     last_observed={"window": {"title": "Adsız - Not Defteri"}},
                 )
             )
+        elif context == CTX_NEWS_SOURCE_CONFIGURED:
+            # M26 addendum (docs/M26_LATEST_NEWS_MODE_SPEC.md §1, §3): a REAL, identity-resolved
+            # news source — a fixture channel id (never a real external claim), the
+            # default (lowest priority, enabled) so a bare "Haberleri aç." resolves to
+            # it, and named "Show Ana Haber" so the channel-name-hint cases ("Show'un
+            # son haberini aç.") match it too. The provider is populated with THREE
+            # candidates spanning both content policies the corpus exercises: an older
+            # full bulletin, a newer promo (so latest_main_news must skip it) — this is
+            # the SAME deterministic-fixture discipline test_news_resolver.py's own
+            # scenarios use, reused here so the corpus and the resolver's unit tests
+            # agree about what "latest" means for identical inputs.
+            channel_id = "UCnewsfixturechannel0000"
+            with self.factory() as db:
+                news_sources_service.create_source(
+                    db,
+                    news_source_id="show-ana-haber",
+                    display_name="Show Ana Haber",
+                    channel_input=f"https://www.youtube.com/channel/{channel_id}",
+                    priority=1,
+                    content_type=news_models.CONTENT_TYPE_MAIN_NEWS,
+                )
+            now = datetime(2026, 9, 8, 20, 0, tzinfo=UTC)
+            self.news_provider.channels[channel_id] = [
+                VideoCandidate(
+                    video_id="bulletin-1",
+                    title="Ana Haber Bülteni",
+                    published_at=now - timedelta(hours=2),
+                    channel_id=channel_id,
+                    url="https://www.youtube.com/watch?v=bulletin-1",
+                ),
+                VideoCandidate(
+                    video_id="promo-1",
+                    title="Yeni dizi için fragman",
+                    published_at=now,
+                    channel_id=channel_id,
+                    url="https://www.youtube.com/watch?v=promo-1",
+                ),
+            ]
+            self.ids["news:channel_id"] = channel_id
+            self.ids["news:video_id"] = "bulletin-1"
         elif context == CTX_MESSAGE_FOCUSED:
             # The latest message from Ali (uid 104, truth.json's own "Re: Proje planı") —
             # a real fake-provider read, exactly as if the owner had just heard it.
@@ -1050,6 +1104,16 @@ def build_harness() -> Harness:
     app.state.location_service = location_service
     app.state.weather_service = weather_service
     app.state.briefing_service = briefing_service
+    # M26 addendum (docs/M26_LATEST_NEWS_MODE_SPEC.md §3): a deterministic, offline provider —
+    # never the real network in a corpus run. Populated per-case by seed()'s own
+    # CTX_NEWS_SOURCE_CONFIGURED branch; empty channels answer with zero candidates
+    # (an honest "no eligible video"), never an error.
+    news_provider = FixtureNewsProvider()
+    # Also on app.state, for the REST routes (app.news.routes._news_provider) — the
+    # same override seam ``ctx.live["news_provider"]`` gives the voice tools, applied
+    # to the other surface `news.open`'s own module docstring promises never drifts
+    # from it (mirrors app.state.browser_gateway / ctx.live["browser_gateway"] above).
+    app.state.news_provider = news_provider
     runtime.register_live(
         wake_sequence=sequence,
         device_statuses=statuses,
@@ -1068,6 +1132,7 @@ def build_harness() -> Harness:
         location_service=location_service,
         weather_service=weather_service,
         briefing_service=briefing_service,
+        news_provider=news_provider,
     )
     holdoffs = HoldoffRegistry()
     set_holdoffs(holdoffs)
@@ -1117,6 +1182,7 @@ def build_harness() -> Harness:
         location=location_service,
         weather=weather_service,
         briefing=briefing_service,
+        news_provider=news_provider,
     )
 
 
@@ -1565,6 +1631,17 @@ def run_case(case: UtteranceCase, *, harness: Harness | None = None) -> CaseResu
                     result.problems.append(
                         f"snooze_count {count} != {case.expected['snooze_count']}"
                     )
+            # M26 addendum (docs/M26_LATEST_NEWS_MODE_SPEC.md §7): the exact channel/video
+            # identity a news.open/news.query_latest receipt names — never a title or
+            # a display name, the identity itself.
+            elif key == "news_channel_id" and body.get("channel_id") != want:
+                result.problems.append(f"channel_id {body.get('channel_id')!r} != {want!r}")
+            elif key == "news_video_id" and body.get("video_id") != want:
+                result.problems.append(f"video_id {body.get('video_id')!r} != {want!r}")
+            elif key == "news_source_id" and body.get("news_source_id") != want:
+                result.problems.append(f"news_source_id {body.get('news_source_id')!r} != {want!r}")
+            elif key == "news_provider" and body.get("answered_by") != want:
+                result.problems.append(f"answered_by {body.get('answered_by')!r} != {want!r}")
 
         # M22 (docs/M22_ARTIFACT_FACTORY_SPEC.md §5): the "never invented" rule, checked
         # end to end — every number ``artifact.create`` actually built the spec's
@@ -1626,7 +1703,15 @@ def run_case(case: UtteranceCase, *, harness: Harness | None = None) -> CaseResu
         if extra:
             result.problems.append(f"device calls outside the policy: {extra}")
             result.verdict = "forbidden_side_effect"
-        if case.expected_tool != "research.start" and h.research_task_ids() != tasks_before:
+        # M26 addendum (docs/M26_LATEST_NEWS_MODE_SPEC.md §6): news.summarize is the ONE other
+        # tool allowed to create a research task, by design — it delegates to the SAME
+        # M13 pipeline research.start uses (module docstring: "never a second research
+        # engine"), so a summary run creating a real ``research_runs`` row is the
+        # correct behaviour, not a forbidden side effect.
+        if (
+            case.expected_tool not in ("research.start", "news.summarize")
+            and h.research_task_ids() != tasks_before
+        ):
             result.problems.append("a research task was created")
             result.verdict = "forbidden_side_effect"
         if case.expected_tool != "alarm.create" and h.alarm_rows() != alarms_before:

@@ -135,6 +135,15 @@ CTX_SCENE_BLENDER: Final = "scene_blender"
 CTX_COUNTERBOX_RUNNING: Final = "counterbox_running"
 CTX_LAMPBOX_RUNNING: Final = "lampbox_running"
 
+#: M26 addendum (docs/M26_LATEST_NEWS_MODE_SPEC.md §1, §3): a REAL, identity-resolved news
+#: source ("Show Ana Haber", a fixture channel id — never a real external claim), the
+#: default (lowest priority, enabled) so a bare "Haberleri aç." resolves to it, with a
+#: deterministic fixture provider behind it (an older full bulletin, a newer promo) —
+#: the same "genuine fixture, not a sentinel" discipline CTX_ARTIFACT_FOCUSED already
+#: uses, and the SAME fixture shape tests/unit/test_news_resolver.py's own promo
+#: scenario uses, so the corpus and the resolver's unit tests agree.
+CTX_NEWS_SOURCE_CONFIGURED: Final = "news_source_configured"
+
 #: Side-effect policies: the device capabilities a case MAY reach on the fake device.
 #: Anything else the fake device saw is a forbidden side effect.
 SIDE_EFFECTS_NONE: Final[frozenset[str]] = frozenset()
@@ -221,6 +230,17 @@ SIDE_EFFECTS_SCENE_MUTATE: Final[frozenset[str]] = frozenset(
     {"project.scaffold", "project.run", "scene.inspect"}
 )
 SIDE_EFFECTS_SCENE_INSPECT: Final[frozenset[str]] = frozenset({"scene.inspect"})
+
+#: M26 addendum (docs/M26_LATEST_NEWS_MODE_SPEC.md §5, §6): governed playback opens the
+#: browser worker's OWN ``news`` profile/context — ``browser.session_open`` then
+#: ``browser.media_play``, never the alarm's ``desktop.alarm_*``/``browser.media_stop``
+#: family and never a research-shaped ``browser.search``/``browser.fetch_evidence``.
+#: news.summarize/news.query_latest reach no device capability at all (summarize
+#: delegates to research's OWN device selection, invisible to this fake; query_latest
+#: only reads the fixture provider).
+SIDE_EFFECTS_NEWS_OPEN: Final[frozenset[str]] = frozenset(
+    {"browser.session_open", "browser.media_play"}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -3969,6 +3989,240 @@ def _executive_negative_cross_family_cases() -> list[UtteranceCase]:
     ]
 
 
+#: M26 addendum (docs/M26_LATEST_NEWS_MODE_SPEC.md §1, §3): the fixture channel identity and
+#: the bulletin video ``tests/voice_corpus/harness.py``'s own CTX_NEWS_SOURCE_CONFIGURED
+#: seeds — literal strings agreed between the two files (the same "genuine fixture"
+#: discipline every other CTX_* uses), never guessed or re-derived here.
+_NEWS_FIXTURE_CHANNEL_ID = "UCnewsfixturechannel0000"
+_NEWS_FIXTURE_BULLETIN_VIDEO_ID = "bulletin-1"
+_NEWS_FIXTURE_SOURCE_ID = "show-ana-haber"
+
+
+def _news_open_cases() -> list[UtteranceCase]:
+    canonical = [
+        ("n.open.1", "Haberleri aç.", "canonical"),
+        ("n.open.2", "Son haberleri aç.", "canonical"),
+        ("n.open.3", "Show Haber'i aç.", "canonical"),
+        ("n.open.4", "Show'un son haberini aç.", "canonical"),
+        ("n.open.5", "Bugünün Show Ana Haber videosunu aç.", "canonical"),
+        ("n.open.6", "En son yüklenen ana haberi aç.", "canonical"),
+        ("n.open.7", "Haberleri YouTube'dan aç.", "canonical"),
+        ("n.open.8", "Show haberi aç", "canonical"),
+        ("n.open.9", "Showun son haberini aç", "canonical"),
+        ("n.open.10", "En güncel haber videosunu aç.", "canonical"),
+    ]
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in canonical:
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="news_open",
+                    expected_tool="news.open",
+                    expected_response=RESPONSE_OK,
+                    expected={
+                        "news_channel_id": _NEWS_FIXTURE_CHANNEL_ID,
+                        "news_video_id": _NEWS_FIXTURE_BULLETIN_VIDEO_ID,
+                        "news_source_id": _NEWS_FIXTURE_SOURCE_ID,
+                    },
+                    # Negative assertions (task brief §6): opening the news must never
+                    # start a bare research crawl and must never touch the alarm's own
+                    # media/tone capabilities - the alarm profile is a structurally
+                    # separate browser (packages/protocol/BROWSER_CAPABILITIES.md §2
+                    # v1.3) from the ``news`` profile this tool actually opens.
+                    forbidden_tools=("research.start",),
+                    side_effects=SIDE_EFFECTS_NEWS_OPEN,
+                    context=CTX_NEWS_SOURCE_CONFIGURED,
+                    category="news",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _news_summarize_cases() -> list[UtteranceCase]:
+    canonical = [
+        ("n.sum.1", "Haberleri özetle.", "canonical"),
+        ("n.sum.2", "Haberleri anlat.", "canonical"),
+        ("n.sum.3", "Bugünkü haberleri özetle.", "canonical"),
+    ]
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in canonical:
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="news_summarize",
+                    expected_tool="news.summarize",
+                    expected_response=RESPONSE_RUNNING,
+                    # Negative assertion (task brief §6): a summary must NEVER open a
+                    # video or touch the browser at all - it only creates a research
+                    # task, exactly as research.start would (never a second engine).
+                    forbidden_tools=("news.open",),
+                    side_effects=SIDE_EFFECTS_NONE,
+                    context=CTX_NEWS_SOURCE_CONFIGURED,
+                    category="news",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _news_query_cases() -> list[UtteranceCase]:
+    canonical = [
+        ("n.query.1", "Son haber ne zaman yüklenmiş?", "canonical"),
+        ("n.query.2", "Şu an hangi haber videosunu açacaksın?", "canonical"),
+    ]
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in canonical:
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="news_query_latest",
+                    expected_tool="news.query_latest",
+                    expected_response=RESPONSE_OK,
+                    expected={
+                        "news_channel_id": _NEWS_FIXTURE_CHANNEL_ID,
+                        "news_video_id": _NEWS_FIXTURE_BULLETIN_VIDEO_ID,
+                    },
+                    # Negative assertion (task brief §6): a query must never play
+                    # anything and must never start a research/summary run.
+                    forbidden_tools=("news.open", "research.start"),
+                    side_effects=SIDE_EFFECTS_NONE,
+                    context=CTX_NEWS_SOURCE_CONFIGURED,
+                    category="news",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _news_asr_noise_regression_cases() -> list[UtteranceCase]:
+    """The exact ASR-noise phrasing the task brief names verbatim (§7), pinned
+    forever regardless of what ``_with_variants`` happens to generate from the
+    canonical cases above."""
+    return [
+        UtteranceCase(
+            case_id="n.asr.1",
+            utterance="haberlerı aç",
+            expected_intent="news_open",
+            expected_tool="news.open",
+            expected_response=RESPONSE_OK,
+            forbidden_tools=("research.start",),
+            side_effects=SIDE_EFFECTS_NEWS_OPEN,
+            context=CTX_NEWS_SOURCE_CONFIGURED,
+            category="news",
+            source="asr_noise",
+        ),
+        UtteranceCase(
+            case_id="n.asr.2",
+            utterance="haberleri ac",
+            expected_intent="news_open",
+            expected_tool="news.open",
+            expected_response=RESPONSE_OK,
+            forbidden_tools=("research.start",),
+            side_effects=SIDE_EFFECTS_NEWS_OPEN,
+            context=CTX_NEWS_SOURCE_CONFIGURED,
+            category="news",
+            source="asr_noise",
+        ),
+        UtteranceCase(
+            case_id="n.asr.3",
+            utterance="bugünün haberlerini aç",
+            expected_intent="news_open",
+            expected_tool="news.open",
+            expected_response=RESPONSE_OK,
+            forbidden_tools=("research.start",),
+            side_effects=SIDE_EFFECTS_NEWS_OPEN,
+            context=CTX_NEWS_SOURCE_CONFIGURED,
+            category="news",
+            source="asr_noise",
+        ),
+    ]
+
+
+def _news_negative_cases() -> list[UtteranceCase]:
+    """Task brief §6's mandatory negatives, as their OWN cases rather than only a
+    ``forbidden_tools`` entry on the positive ones: a plain display/eye "aç" (no
+    "haber" noun at all) must resolve to ITS OWN family, never NEWS_OPEN - proven
+    the same way ``test_a_policy_phrase_is_not_a_display_command`` proves the
+    ambient/display split."""
+    return [
+        UtteranceCase(
+            case_id="n.neg.display_wake_untouched",
+            utterance="Ekranları aç.",
+            expected_intent="display_wake",
+            expected_tool="display.wake",
+            expected_response=RESPONSE_OK,
+            side_effects=SIDE_EFFECTS_DISPLAY_WAKE,
+            category="news",
+            source="regression",
+            regression_issue_id="Latest News Mode spec §6: 'haber' noun required, never a bare 'aç'",
+        ),
+        UtteranceCase(
+            case_id="n.neg.eye_enable_untouched",
+            utterance="Gözünü aç.",
+            expected_intent="eye_enable",
+            expected_tool="eye.enable",
+            expected_response=RESPONSE_OK,
+            category="news",
+            source="regression",
+            regression_issue_id="Latest News Mode spec §6: 'haber' noun required, never a bare 'aç'",
+        ),
+    ]
+
+
+def _news_refusal_cases() -> list[UtteranceCase]:
+    """Two honest refusals (never a guess, never an invented channel): no news source
+    configured at all, and a channel name the owner's WORDS named that matches none of
+    the configured sources — the fixture's only source is "Show Ana Haber", so naming
+    a different channel must refuse rather than silently opening Show's video."""
+    return [
+        UtteranceCase(
+            case_id="n.refuse.no_source_configured",
+            utterance="Haberleri aç.",
+            expected_intent="news_open",
+            expected_tool="news.open",
+            expected_response=RESPONSE_REFUSED,
+            expected={"error_class": "no_news_source"},
+            side_effects=SIDE_EFFECTS_NONE,
+            context=CTX_NONE,
+            category="news",
+            source="canonical",
+        ),
+        UtteranceCase(
+            case_id="n.refuse.named_source_not_found",
+            utterance="CNN haberini aç.",
+            expected_intent="news_open",
+            expected_tool="news.open",
+            expected_response=RESPONSE_REFUSED,
+            expected={"error_class": "news_source_not_found"},
+            side_effects=SIDE_EFFECTS_NONE,
+            context=CTX_NEWS_SOURCE_CONFIGURED,
+            category="news",
+            source="canonical",
+        ),
+    ]
+
+
+def _news_cases() -> list[UtteranceCase]:
+    return [
+        *_news_open_cases(),
+        *_news_summarize_cases(),
+        *_news_query_cases(),
+        *_news_asr_noise_regression_cases(),
+        *_news_negative_cases(),
+        *_news_refusal_cases(),
+    ]
+
+
 def _executive_cases() -> list[UtteranceCase]:
     return [
         *_executive_start_cases(),
@@ -4277,6 +4531,7 @@ def all_cases() -> list[UtteranceCase]:
         *_scene_cases(),
         *_executive_cases(),
         *_weather_briefing_cases(),
+        *_news_cases(),
     ]
     ids = [c.case_id for c in cases]
     assert len(ids) == len(set(ids)), "duplicate case ids"
@@ -4292,6 +4547,7 @@ __all__ = [
     "CTX_COUNTERBOX_RUNNING",
     "CTX_EYE_DISABLED",
     "CTX_LAMPBOX_RUNNING",
+    "CTX_NEWS_SOURCE_CONFIGURED",
     "CTX_NONE",
     "CTX_OPERATOR_RUNNING",
     "CTX_RESEARCH_FOCUS_B",

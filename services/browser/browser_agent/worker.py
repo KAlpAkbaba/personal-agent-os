@@ -488,6 +488,18 @@ class Worker:
             else media.alarm_profile_dir_for(self._profile_dir)
         )
         media.require_distinct_alarm_profile(self._alarm_profile_dir, self._profile_dir)
+        # Latest News Mode (v1.3): a THIRD persistent profile, the same derive-and-check
+        # discipline as the alarm one above so news playback can never land in the
+        # research browser (profile contention) or the alarm browser (a news video must
+        # never be able to interrupt or replace the owner's wake song).
+        self._news_profile_dir = (
+            Path(args.news_profile_dir)
+            if getattr(args, "news_profile_dir", None)
+            else media.news_profile_dir_for(self._profile_dir)
+        )
+        media.require_distinct_news_profile(
+            self._news_profile_dir, self._profile_dir, self._alarm_profile_dir
+        )
         self._default_channel: str | None = args.channel
         self._default_visible = bool(args.visible) and not args.headless
         self._idle_timeout_s = args.idle_timeout_s
@@ -540,6 +552,8 @@ class Worker:
             return self._profile_dir
         if profile == media.ALARM_PROFILE:
             return self._alarm_profile_dir
+        if profile == media.NEWS_PROFILE:
+            return self._news_profile_dir
         return None
 
     def _lock_for(self, session_id: str) -> asyncio.Lock:
@@ -600,10 +614,11 @@ class Worker:
         ``BrowserSession.close()``. Best effort: swallows every error, since
         this is the process's last chance to clean up, not a place to raise.
 
-        M18.3: BOTH persistent profiles are swept. An alarm Chrome left running
-        after the worker died would keep playing music at the owner — the
-        loudest possible way to leak a browser."""
-        for profile_dir in (self._profile_dir, self._alarm_profile_dir):
+        M18.3 / Latest News Mode: EVERY persistent profile is swept. An alarm Chrome left
+        running after the worker died would keep playing music at the owner — the
+        loudest possible way to leak a browser; a news Chrome left running would keep
+        playing a video nobody is watching."""
+        for profile_dir in (self._profile_dir, self._alarm_profile_dir, self._news_profile_dir):
             try:
                 pids = lifecycle.find_profile_chrome_pids(profile_dir)
             except Exception:
@@ -958,7 +973,7 @@ class Worker:
             raise BrowserError(
                 ErrorClass.VALIDATION_ERROR,
                 "session_open: a media session may not use the research profile; "
-                "use profile 'alarm' (or 'isolated')",
+                "use profile 'alarm', 'news' (or 'isolated')",
                 retryable=False,
             )
         channel = payload.get("channel", self._default_channel)
@@ -2144,7 +2159,7 @@ class Worker:
                 ErrorClass.VALIDATION_ERROR,
                 f"{op}: session {state.session_id!r} is a "
                 f"{state.session_kind!r} session; the media operations require a session "
-                "opened with profile='alarm' and session_kind='media'",
+                "opened with profile='alarm' or 'news' and session_kind='media'",
                 retryable=False,
             )
 
@@ -2516,6 +2531,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "profile's sibling '<profile-dir>-alarm'). It must not be, or contain, the "
             "research profile — and like every profile here it may never be a real "
             "browser profile tree."
+        ),
+    )
+    parser.add_argument(
+        "--news-profile-dir",
+        default=None,
+        help=(
+            "Persistent 'news' media profile directory (Latest News Mode; default: the "
+            "research profile's sibling '<profile-dir>-news'). It must not be, or "
+            "contain, the research OR the alarm profile — and like every profile here it "
+            "may never be a real browser profile tree."
         ),
     )
     parser.add_argument(

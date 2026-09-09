@@ -331,6 +331,11 @@ def test_create_selects_by_capability_and_returns_the_contract(wired) -> None:
         "briefing.morning",
         "briefing.system_status",
         "briefing.overnight_work",
+        # M26 addendum (docs/M26_LATEST_NEWS_MODE_SPEC.md §6): Latest News Mode.
+        "news.open",
+        "news.close",
+        "news.summarize",
+        "news.query_latest",
     }
     research = next(t for t in data["tools"] if t["name"] == "research.start")
     assert research["long_running"] is True and research["preamble"] == RESEARCH_PREAMBLE_TR

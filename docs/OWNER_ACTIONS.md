@@ -73,6 +73,7 @@ have a quiet ten minutes with audio, but nothing is blocked on it.
 | K | 33 — a JDK for Android builds: the Android SDK is here (adb, the emulator, build-tools 30.0.3/33.0.0, system images for API 23/33) but there is no Java on this machine (no `java`, no `JAVA_HOME`, no Android Studio, no `cmdline-tools`, no AVD — `docs/evidence/m27-m28-tool-detection-2026-09-08.json`), so an APK/AAB build (Gradle, `javac`/`kotlinc`, `apksigner`, `avdmanager`) cannot run. Install Android Studio (brings its own JDK and the command-line tools) or a JDK 17 and set `JAVA_HOME`; the assistant never starts a download itself. Until then M28's Android half is honest PROVEN_PROXY (the provider, the template and the emulator driver exist; the lab reports the refusal) and the voice says "Android için Java yok" instead of pretending; Windows EXE/portable/MSIX need nothing (.NET 10 and makeappx are here) | `READY_FOR_OWNER` (an installer; Android Studio asks for one UAC) | 10 min |
 | E | 27 — the same elevated update now verifies itself: the staged candidate against its manifest before the swap, then Cloud Core must see the device online as 0.2.0 with every promised capability, else the engine rolls back (`install-device-service.ps1`; ADR-0081 addendum 3) | `READY_FOR_OWNER` (folded into D's one UAC prompt; watch for "candidate manifest verified" and "Cloud Core sees the candidate") | 0 extra |
 | L | 35 — `SET_DEFAULT_WEATHER_LOCATION`: say (or type in the Cockpit once it has a form) "Varsayılan hava durumu konumumu <şehir> yap." — Owner Location Context has no invented default (ADR-0091: "Do NOT invent one"), so until you set one, "Hava nasıl?" with no device location and no place named answers honestly that it does not know where you are rather than guessing. Live weather itself needs nothing from you (Open-Meteo, keyless, already wired) — this is only the default PLACE for a bare "Hava nasıl?" when no fresher location exists | `READY_FOR_OWNER` (one sentence, no UAC, no account) | 10 sec |
+| M | 36 — the exact YouTube channel URL for "Show Ana Haber" (Latest News Mode) | `READY_FOR_OWNER` (paste one URL) | 1 min |
 
 Not repeated: research runs, the Eye, presence transitions - all proven on 2026-09-06.
 
@@ -86,6 +87,32 @@ owner-selected item playing on the real chain) and the display-off qualification
 is implemented and merged (ADR-0065); item 22 is your look at it, when you like.
 
 ---
+
+### 36. The exact YouTube channel for "Show Ana Haber" — **`READY_FOR_OWNER` (Latest News Mode, docs/M26_LATEST_NEWS_MODE_SPEC.md)**
+
+Latest News Mode is built, tested and merge-ready (fixtures, the resolver, source
+configuration, governed playback on the browser worker's own `news` profile, and a
+separate summary mode over the existing research pipeline) — but it will not bind
+"Show Ana Haber" to any channel on your behalf. A similarly-named channel is a wrong
+answer that would look right for months, so the source is recorded as
+`NEEDS_NEWS_SOURCE_IDENTITY` (`news_source_id = "show-ana-haber"`) until you give an
+authoritative signal: the exact channel URL. The rest of the capability already runs
+against a fixture channel and, for the live path, against any channel whose identity
+you (or a canonical channel-page link) actually confirm — this is the one channel it
+will not guess.
+
+Paste the exact URL here (from YouTube, `Kanal` → `Paylaş` → `Kopyala`, or the
+address bar on the channel's own page — a `/channel/UC...`, `/@handle`, `/c/...` or
+`/user/...` URL, not a search result):
+
+```
+Show Ana Haber channel URL: <paste here>
+```
+
+Once given, `PATCH /v1/news/sources/show-ana-haber {"channel_input": "<url>"}` resolves
+and records the canonical channel id (`app.news.identity.resolve_channel_identity`) and
+the source becomes usable by voice ("Show Ana Haber'i aç.") and REST alike. No account,
+no login, no payment — one URL.
 
 ### 25. The wake alarm, end to end — **M18.3 qualification B — `READY_FOR_OWNER_AUDIO_TEST` (one Cloud Core release and one elevated agent update, both inside the run; the whole path is proven end to end without ears, ADR-0078 — only the audibility is yours)**
 

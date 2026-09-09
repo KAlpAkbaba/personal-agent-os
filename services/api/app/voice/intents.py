@@ -231,6 +231,15 @@ class Intent(StrEnum):
     MORNING_BRIEFING = "morning_briefing"  # Günaydın. / Sabah özetimi ver. / ... bekliyor?
     SYSTEM_STATUS_QUERY = "system_status_query"  # Sistem durumu nasıl?
     OVERNIGHT_WORK_QUERY = "overnight_work_query"  # Gece neler yaptın?
+    # M26 addendum (docs/M26_LATEST_NEWS_MODE_SPEC.md §6): Latest News Mode. Two distinct
+    # operations, deterministic — NEWS_OPEN plays the latest eligible video (a real
+    # mutation: a browser opens, a video plays), NEWS_SUMMARIZE routes a current-events
+    # SUMMARY through the existing research pipeline and never plays anything.
+    # NEWS_QUERY_LATEST answers "son haber ne zaman yüklenmiş?" / "hangi haberi
+    # açacaksın?" from the resolver alone, without opening anything.
+    NEWS_OPEN = "news_open"  # Haberleri aç / Son haberleri aç / Show'un son haberini aç
+    NEWS_SUMMARIZE = "news_summarize"  # Haberleri özetle / Bugünkü haberleri özetle
+    NEWS_QUERY_LATEST = "news_query_latest"  # Son haber ne zaman yüklenmiş?
 
     NONE = "none"
 
@@ -341,6 +350,11 @@ CAPABILITY_BY_INTENT: dict[Intent, str] = {
     # overnight summary/briefing all read something without changing it, so each is a
     # QUERY_TOOL_BY_INTENT entry instead, below.
     Intent.LOCATION_DEFAULT_SET: "location.set_default",
+    # M26 addendum (spec §6): opening a video and starting a summary run are both real
+    # mutations (a browser opens/plays; a research task is created) - the same class
+    # every other family above gets.
+    Intent.NEWS_OPEN: "news.open",
+    Intent.NEWS_SUMMARIZE: "news.summarize",
 }
 
 #: QUERY intents that name a tool rather than being answered conversationally (contract §2:
@@ -405,6 +419,10 @@ QUERY_TOOL_BY_INTENT: dict[Intent, str] = {
     Intent.MORNING_BRIEFING: "briefing.morning",
     Intent.SYSTEM_STATUS_QUERY: "briefing.system_status",
     Intent.OVERNIGHT_WORK_QUERY: "briefing.overnight_work",
+    # M26 addendum (spec §6): the resolver's own decision, read without opening anything -
+    # mutates nothing the owner can see, the same query class every other family's
+    # own status/explain entry above already gets.
+    Intent.NEWS_QUERY_LATEST: "news.query_latest",
 }
 
 
@@ -704,6 +722,16 @@ class ResolvedIntent:
     #: when the words named none at all — the tool then asks which, never guesses a
     #: default (task brief §1: "Do NOT invent one").
     location_default_city: str | None = None
+    #: M26 addendum (docs/M26_LATEST_NEWS_MODE_SPEC.md §6): for NEWS_OPEN/NEWS_SUMMARIZE/
+    #: NEWS_QUERY_LATEST, a channel-name HINT the owner's WORDS carried ("Show'un son
+    #: haberini aç" -> "show'un"), matched by the tool against configured sources'
+    #: display names - or None when the words named no source at all ("Haberleri
+    #: aç."), which is not a refusal: the tool falls back to the default configured
+    #: source (never a guess at WHICH channel; that identity was already established
+    #: when the source was configured, app.news.identity). The same "owner's words
+    #: win only when they actually said something" rule ``app_ref``/``scene_ref``
+    #: already follow.
+    news_source_ref: str | None = None
 
     def __post_init__(self) -> None:
         if not self.klass:
@@ -743,6 +771,7 @@ class ResolvedIntent:
             "artifact_kind": self.artifact_kind,
             "artifact_title": self.artifact_title,
             "spoken_numbers": list(self.spoken_numbers) if self.spoken_numbers else None,
+            "news_source_ref": self.news_source_ref,
         }
 
     @property
@@ -3187,6 +3216,119 @@ def _executive_active_match(
     return None
 
 
+# --------------------------------------------------- M26 addendum: Latest News Mode
+#
+# One noun family ("haber" - "the news"), a prefix stem for the same reason
+# _RESEARCH_STEMS is: every Turkish inflection ("haberler", "haberi", "haberini",
+# "haberlerini") starts with it, and no unrelated word in this vocabulary shares that
+# prefix. Deliberately its own small block rather than folded into an existing family:
+# news media is neither research (it never crawls or synthesises - NEWS_OPEN plays a
+# video; NEWS_SUMMARIZE delegates to research but must never be confused with a bare
+# "araştır") nor alarm media (a completely separate browser profile, spec §5).
+
+_NEWS_NOUN_STEMS: Final[tuple[str, ...]] = ("haber",)
+_NEWS_OPEN_VERB_FORMS: Final[tuple[str, ...]] = (
+    "aç",
+    "açsana",
+    "açar",
+    "ac",
+    "acsana",
+    "acar",
+)
+_NEWS_SUMMARIZE_VERB_STEMS: Final[tuple[str, ...]] = ("özetle", "ozetle", "anlat")
+
+#: Words that precede the news noun without themselves naming a channel/source -
+#: temporal/superlative qualifiers ("son", "en güncel", "bugünkü") and the noun's own
+#: object words (a video, YouTube itself). ``_news_source_ref`` skips every one of
+#: these so what is left, if anything, is a genuine channel-name hint ("show",
+#: "show'un") - never a guess, just "the words did not name a source at all" versus
+#: "the words named this one".
+_NEWS_GENERIC_STEMS: Final[frozenset[str]] = frozenset(
+    {
+        "bugünün",
+        "bugunun",
+        "bugünkü",
+        "bugunku",
+        "son",
+        "en",
+        "güncel",
+        "guncel",
+        "şu",
+        "su",
+        "an",
+        "şimdiki",
+        "simdiki",
+        "yüklenen",
+        "yuklenen",
+        "yüklenmiş",
+        "yuklenmis",
+        "yükledi",
+        "yukledi",
+        "ana",
+        "video",
+        "videosunu",
+        "videosu",
+        "youtube'dan",
+        "youtubedan",
+        "youtube'da",
+        "hangi",
+        "zaman",
+        "ne",
+        "şimdi",
+        "simdi",
+    }
+)
+
+
+def _news_noun(tokens: tuple[str, ...]) -> str | None:
+    return _has(tokens, *_NEWS_NOUN_STEMS)
+
+
+#: Stem-prefix matched (like ``_RESEARCH_STEMS`` above): every inflection of "open"
+#: ("aç", "açacaksın", "açar mısın") or "summarize"/"tell" ("özetle", "özetler misin",
+#: "anlatır mısın") is a verb, never a channel name - a future-tense "açacaksın"
+#: ("Şu an hangi haber videosunu açacaksın?") is exactly the shape a query asks with,
+#: and matching only the imperative forms in ``_NEWS_OPEN_VERB_FORMS`` (needed for
+#: INTENT detection, where a false match on some unrelated word would be worse) missed
+#: it.
+_NEWS_VERB_STEM_PREFIXES: Final[tuple[str, ...]] = ("aç", "ac", "özet", "ozet", "anlat")
+
+
+def _news_source_ref(tokens: tuple[str, ...]) -> str | None:
+    """The first token that is neither a generic qualifier, the news noun itself, nor
+    an open/summarize verb (in any inflection) - a channel-name hint the tool matches
+    against configured sources' display names ("Show'un son haberini aç" ->
+    "show'un"), or ``None`` when the words named no source at all ("Haberleri aç.",
+    "En güncel haber videosunu aç.") - the default configured source then answers,
+    never a guessed channel."""
+    for tok in tokens:
+        if tok in _NEWS_GENERIC_STEMS:
+            continue
+        if tok.startswith(_NEWS_NOUN_STEMS[0]):
+            continue
+        if any(tok.startswith(prefix) for prefix in _NEWS_VERB_STEM_PREFIXES):
+            continue
+        return tok
+    return None
+
+
+def _news_match(tokens: tuple[str, ...]) -> tuple[Intent, str] | None:
+    noun = _news_noun(tokens)
+    if noun is None:
+        return None
+    # "hangi" ("which") is its own question trigger, alongside the shared
+    # _is_question shapes ("ne zaman", "mı") - "Şu an hangi haber videosunu
+    # açacaksın?" carries no "mı" particle and no "ne zaman", only the interrogative
+    # pronoun itself.
+    if _is_question(tokens) or _has_exact(tokens, "hangi"):
+        return Intent.NEWS_QUERY_LATEST, noun
+    if _has(tokens, *_NEWS_SUMMARIZE_VERB_STEMS):
+        return Intent.NEWS_SUMMARIZE, "haberleri özetle"
+    if _has_exact(tokens, *_NEWS_OPEN_VERB_FORMS):
+        return Intent.NEWS_OPEN, "haberleri aç"
+    return None
+
+
 # ------------------------------------------------- research interaction classes
 
 #: A research word in any Turkish inflection: "araştır", "araştırma", "araştırmayı",
@@ -4042,6 +4184,23 @@ def resolve_intent(
             matched=exec_start_text,
             exec_shape=shape,
             folder=_extract_document_folder(tokens) if shape == "folder_compare" else None,
+            **base,
+        )
+
+    # 0e-3. M26 addendum (docs/M26_LATEST_NEWS_MODE_SPEC.md §6): Latest News Mode. Checked HERE,
+    #       before the M20 document block (DOCUMENT_SUMMARIZE also owns "özetle") and
+    #       before the generic SUMMARIZE/TECHNICAL control branches far below (which own
+    #       "özetle"/"anlat" with no noun at all) - "haberleri özetle" must resolve to a
+    #       NEWS summary, never a document summary or a bare narration control, and
+    #       "haberleri aç" must never be read as APP_OPEN/DISPLAY_WAKE/EYE_ENABLE (each
+    #       of those requires its OWN noun, which "haber" is not).
+    if news_matched := _news_match(tokens):
+        news_intent, news_matched_text = news_matched
+        return ResolvedIntent(
+            news_intent,
+            scope=SCOPE_CONVERSATION,
+            matched=news_matched_text,
+            news_source_ref=_news_source_ref(tokens),
             **base,
         )
 

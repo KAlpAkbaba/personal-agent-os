@@ -73,6 +73,7 @@ from app.voice.realtime_sessions.tools_genesis import (
     register_genesis_tools,
 )
 from app.voice.realtime_sessions.tools_mail import MAIL_TOOL_NAMES, register_mail_tools
+from app.voice.realtime_sessions.tools_news import register_news_tools
 from app.voice.realtime_sessions.tools_operator import register_operator_tools
 from app.voice.realtime_sessions.tools_scene import SCENE_TOOL_NAMES, register_scene_tools
 from app.voice.realtime_sessions.tools_weather import (
@@ -1698,6 +1699,8 @@ def default_registry() -> ToolRegistry:
     # voice tools.
     register_weather_tools(reg)
     register_briefing_tools(reg)
+    # M26 addendum (docs/M26_LATEST_NEWS_MODE_SPEC.md §6): Latest News Mode's voice tools.
+    register_news_tools(reg)
     return reg
 
 
