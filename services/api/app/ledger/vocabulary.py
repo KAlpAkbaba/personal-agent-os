@@ -117,6 +117,15 @@ SUBSYSTEM_NEWS = "news"
 #: which tool, and did the read-back agree?" is answerable without separating it from
 #: the M25 3D Creation rows a creative run's own object-store storage happens to share.
 SUBSYSTEM_CREATIVE = "creative"
+#: M28 Native Application Factory (docs/M28_NATIVE_APP_FACTORY_SPEC.md, ADR-0095): a
+#: real distributable application planned, generated, compiled, packaged and read
+#: back from the produced file by an independent reader. Deliberately NOT
+#: ``appfactory``, which is M23's own: a web app scaffolded and run on the owner's
+#: machine and a signed EXE verified from its PE header are different claims, and one
+#: name for both would hide which was made. The SAME name ``app.uistate.contract``'s
+#: own SUBSYSTEMS already carries for this milestone, so a receipt row and the UI
+#: event it belongs with can never disagree about who made it.
+SUBSYSTEM_NATIVEFACTORY = "nativefactory"
 
 SUBSYSTEMS: Final[tuple[str, ...]] = (
     SUBSYSTEM_RESEARCH,
@@ -147,6 +156,7 @@ SUBSYSTEMS: Final[tuple[str, ...]] = (
     SUBSYSTEM_BRIEFING,
     SUBSYSTEM_NEWS,
     SUBSYSTEM_CREATIVE,
+    SUBSYSTEM_NATIVEFACTORY,
 )
 
 # ------------------------------------------------------------------ statuses

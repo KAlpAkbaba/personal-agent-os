@@ -344,6 +344,18 @@ def test_create_selects_by_capability_and_returns_the_contract(wired) -> None:
         "creative.cleanup",
         "creative.design",
         "creative.export",
+        # M28 (docs/M28_NATIVE_APP_FACTORY_SPEC.md §6): the Native App Factory's eight.
+        # ``native.install`` has no utterance of its own in spec §6's list and is served
+        # all the same - the model reaches it once a package exists, the same way
+        # ``artifact.render`` is reached with no ARTIFACT_RENDER intent behind it.
+        "native.create",
+        "native.build",
+        "native.package",
+        "native.install",
+        "native.launch",
+        "native.check",
+        "native.fix",
+        "native.rebuild",
     }
     research = next(t for t in data["tools"] if t["name"] == "research.start")
     assert research["long_running"] is True and research["preamble"] == RESEARCH_PREAMBLE_TR

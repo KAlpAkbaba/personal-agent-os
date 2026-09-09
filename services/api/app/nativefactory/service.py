@@ -219,6 +219,7 @@ def generate(
     row: NativeBuildRow,
     workdir: Path,
     *,
+    root: Path | None = None,
     allow_outside_root: bool = False,
 ) -> NativeBuildRow:
     """Render the template and write it, after the policy has accepted every file."""
@@ -258,11 +259,17 @@ def generate(
 
     # Containment BEFORE anything is written: resolve-then-contain, so `..`, a symlink
     # or an absolute path handed in by a caller cannot put a compiler's output somewhere
-    # the authorised root does not cover. `allow_outside_root` exists for the tests and
-    # the lab, which build in a temp directory on purpose and say so.
+    # the authorised root does not cover.
+    #
+    # The root is a PARAMETER because containment is a claim about the root in force, and
+    # the caller is what knows it: the voice tools inject `native_root` through `ctx.live`
+    # the way this codebase injects everything it wants testable. Resolving against a
+    # globally computed root instead refused builds under a perfectly legitimate injected
+    # one. `allow_outside_root` remains for the lab and the tests that build in a temp
+    # directory deliberately and say so.
     if not allow_outside_root:
         try:
-            resolve_within(native_root(), workdir)
+            resolve_within(root or native_root(), workdir)
         except NativeFactoryError as exc:
             return _touch(
                 db, row, STATE_FAILED, error_class=exc.error_class, error_message=exc.speech

@@ -256,6 +256,27 @@ class Intent(StrEnum):
     CREATIVE_DESIGN = "creative_design"  # Figma'da buna benzeyen bir arayüz tasarla.
     CREATIVE_EXPORT = "creative_export"  # Bunu PNG olarak dışa aktar.
 
+    # M28 (docs/M28_NATIVE_APP_FACTORY_SPEC.md §6): the Native Desktop + Mobile
+    # Application Factory. Every one of these targets app.nativefactory through
+    # tools_native - never a second build path. This family's VERBS are the most
+    # heavily shared in the whole router ("yap", "çıkar", "oluştur", "aç", "kontrol
+    # et", "düzelt", "build et" are claimed by M19-M27 between them), so every matcher
+    # below is gated on a NATIVE NOUN of its own (windows / masaüstü / android / exe /
+    # apk / kurulum / emülatör) or, for the three utterances spec §6 spells with no
+    # noun at all, on the CALLER's live "a native build exists" fact - and every one of
+    # them REFUSES when another family's noun is present. Narrowed, never reordered:
+    # the M27 lesson (the module comment above ``_native_create_windows_match`` names
+    # the four real collisions this cost).
+    NATIVE_CREATE_WINDOWS = "native_create_windows"  # Bana Windows için masaüstü uygulaması yap.
+    NATIVE_BUILD_EXE = "native_build_exe"  # Bunu EXE olarak çıkar.
+    NATIVE_BUILD_INSTALLER = "native_build_installer"  # Kurulum dosyasını oluştur.
+    NATIVE_CREATE_ANDROID = "native_create_android"  # Android sürümünü yap.
+    NATIVE_BUILD_APK = "native_build_apk"  # APK üret.
+    NATIVE_EMULATOR_OPEN = "native_emulator_open"  # Uygulamayı emülatörde aç.
+    NATIVE_CHECK = "native_check"  # Çalışıyor mu kontrol et.
+    NATIVE_FIX = "native_fix"  # Hata varsa düzelt.
+    NATIVE_REBUILD = "native_rebuild"  # Yeni sürümü build et.
+
     NONE = "none"
 
 
@@ -382,6 +403,19 @@ CAPABILITY_BY_INTENT: dict[Intent, str] = {
     Intent.CREATIVE_CLEANUP: "creative.cleanup",
     Intent.CREATIVE_DESIGN: "creative.design",
     Intent.CREATIVE_EXPORT: "creative.export",
+    # M28 (spec §6): scaffolding, compiling, packaging, installing, launching, fixing
+    # and rebuilding a real distributable application on the owner's machine are all
+    # real mutations - the same receipt class app.create/creative.redraw already get.
+    # NATIVE_CHECK is a QUERY_TOOL_BY_INTENT entry instead (below): it reads a build
+    # row back and drives nothing.
+    Intent.NATIVE_CREATE_WINDOWS: "native.create",
+    Intent.NATIVE_CREATE_ANDROID: "native.create",
+    Intent.NATIVE_BUILD_EXE: "native.build",
+    Intent.NATIVE_BUILD_APK: "native.build",
+    Intent.NATIVE_BUILD_INSTALLER: "native.package",
+    Intent.NATIVE_EMULATOR_OPEN: "native.launch",
+    Intent.NATIVE_FIX: "native.fix",
+    Intent.NATIVE_REBUILD: "native.rebuild",
 }
 
 #: QUERY intents that name a tool rather than being answered conversationally (contract §2:
@@ -450,6 +484,11 @@ QUERY_TOOL_BY_INTENT: dict[Intent, str] = {
     # mutates nothing the owner can see, the same query class every other family's
     # own status/explain entry above already gets.
     Intent.NEWS_QUERY_LATEST: "news.query_latest",
+    # M28 (spec §6): "Çalışıyor mu kontrol et." reads the build row and the artefact
+    # facts an independent reader already recorded - it drives nothing and changes
+    # nothing the owner can see, so it is a query, the same class app.status/
+    # scene.inspect already get for the identical reason.
+    Intent.NATIVE_CHECK: "native.check",
 }
 
 
@@ -774,6 +813,25 @@ class ResolvedIntent:
     #: "png"), or None when none was said - the tool then falls back to "png", the
     #: same best-effort-convenience rule ``scene_kind`` already follows.
     creative_format: str | None = None
+    #: M28 (docs/M28_NATIVE_APP_FACTORY_SPEC.md §6): for the Native App Factory family,
+    #: the TARGET the owner's own WORDS named - one of ``app.nativefactory.spec.
+    #: NATIVE_TARGETS`` ("EXE" -> "windows_exe", "kurulum" -> "windows_msix", "APK" ->
+    #: "android_apk", "Windows"/"masaüstü" -> "windows_exe", "Android" ->
+    #: "android_apk") - or None when the words named no target at all ("Çalışıyor mu
+    #: kontrol et."). The tool prefers THIS over the model's own ``target`` argument,
+    #: the same "owner's words win" rule ``creative_format``/``scene_kind`` already
+    #: follow. Spelled here as literals rather than imported from app.nativefactory
+    #: (this module's own "no cross-module import for a string literal" convention);
+    #: tests/unit/test_voice_native_intents.py reads the OTHER side's source and fails
+    #: if the two ever drift.
+    native_target: str | None = None
+    #: For the Native App Factory family, which build the owner's WORDS pointed at:
+    #: "current" | "previous" | None. ``None`` means the words named neither and the
+    #: tool falls back to its own default ("current") - the same "owner's words win
+    #: only when they actually said something" rule ``creative_ref``/``app_ref``
+    #: already follow. Spec §7: "Bunu EXE yap." / "Bunun Android sürümünü yap."
+    #: resolve through ids on the build stack, never through fuzzy titles.
+    native_ref: str | None = None
 
     def __post_init__(self) -> None:
         if not self.klass:
@@ -814,6 +872,8 @@ class ResolvedIntent:
             "artifact_title": self.artifact_title,
             "spoken_numbers": list(self.spoken_numbers) if self.spoken_numbers else None,
             "news_source_ref": self.news_source_ref,
+            "native_target": self.native_target,
+            "native_ref": self.native_ref,
         }
 
     @property
@@ -3262,6 +3322,468 @@ def _creative_export_match(tokens: tuple[str, ...]) -> str | None:
     return "dışa aktar"
 
 
+# ------------------------------------------ M28: the Native App Factory (spec §6)
+#
+# Built on the SAME token/stem primitives as every family above - no second Turkish
+# pattern table (module docstring's own rule). Called EARLY in resolve_intent (0b''',
+# right after the M27 creative block and BEFORE the M19 operator block, the M20
+# document block, M23's App Factory block and M22's artifact block) because this
+# family's own VERBS are the most heavily shared in the entire router. FOUR real
+# collisions were MEASURED against the existing corpus and the live router before any
+# of this was written, and each is closed by a NARROWING gate rather than by priority
+# alone - the M27 lesson, where CREATIVE_EXPORT's "dışa"+"aktar" matched every "...
+# dışa aktar." sentence in Turkish including another family's own negative case, and
+# was fixed by refusing that family's noun rather than by moving the branch:
+#
+#   1. "Bana Windows için masaüstü uygulaması yap." resolved to APP_FACTORY_CREATE
+#      (M23 owns "uygulam" + "yap"). Priority position alone would fix THIS
+#      utterance and silently break "Web uygulaması yap." / "Bana bir görev takip
+#      uygulaması yap.", which must stay M23. The gate is a WINDOWS/ANDROID noun,
+#      so an app-factory request that names no platform never reaches here at all.
+#   2. "Masaüstündeki teklif dosyalarını karşılaştırıp bir Excel tablosu ve yönetici
+#      özeti hazırla." (the corpus's own EXEC_START case, ex.start.folder.*) carries
+#      "masaüstü" AND a create verb ("hazırla"). Two independent gates keep it out:
+#      the create matchers additionally require an APPLICATION noun ("uygulama" /
+#      "proje" / "program" / "sürüm"), and they refuse outright when another
+#      family's noun ("dosya", "excel", "tablo", "özet", "rapor", "sunum", ...) is
+#      present. Either one alone would have been enough; both are cheap.
+#   3. "Uygulamayı emülatörde aç." resolved to APP_FACTORY_OPEN. The gate is the
+#      "emülatör" noun, which M23's own open matcher never requires - so a bare
+#      "Uygulamayı aç." / "Bir uygulama aç." falls through UNCHANGED to M23, exactly
+#      as it did before this family existed.
+#   4. "Hata varsa düzelt." resolved to EXPLAIN (``_RESEARCH_PROBLEM_WORDS`` owns
+#      "hata"). It carries NO native noun at all - spec §6 spells it that way - so
+#      the gate cannot be vocabulary: NATIVE_FIX, NATIVE_CHECK and NATIVE_REBUILD are
+#      gated on ``native_build_focused``, the CALLER's one live fact ("this owner has
+#      a native build to be asked about"), the same "context, never vocabulary alone"
+#      discipline ``operator_running``/``document_focused``/``executive_run_state``
+#      already establish. With no build in the system, all three fall through
+#      UNCHANGED - "Hata varsa düzelt." is still EXPLAIN.
+#
+# And the fifth rule, which is the milestone's own character: iOS is refused BY NAME,
+# never claimed. ``_NATIVE_IOS_WORDS`` mirrors ``app.nativefactory.stacks.IOS_WORDS``
+# (spelled here, per this module's "no cross-module import for a string literal"
+# convention); tests/unit/test_voice_native_intents.py reads the OTHER side's source
+# and fails if the two drift, so "an iOS request routes to nothing in this family"
+# cannot quietly stop being true.
+
+#: Mirrors ``app.nativefactory.stacks.IOS_WORDS``. "app store" is a two-word phrase
+#: there; tokenised here it can only ever be seen as its two tokens, and "store" alone
+#: is not evidence of anything, so the single-token members are what this checks.
+_NATIVE_IOS_WORD_STEMS: Final[tuple[str, ...]] = ("ios", "iphone", "ipad", "ipados")
+
+#: The platform nouns. "masaüstü" is ALSO ``_DOCUMENT_FOLDER_WORDS``' own Desktop word,
+#: which is why every matcher using it needs a second gate (collision 2 above).
+_NATIVE_WINDOWS_NOUN_STEMS: Final[tuple[str, ...]] = ("windows", "masaüstü", "masaustu")
+_NATIVE_ANDROID_NOUN_STEMS: Final[tuple[str, ...]] = ("android",)
+_NATIVE_EMULATOR_NOUN_STEMS: Final[tuple[str, ...]] = (
+    "emülatör",
+    "emulator",
+    "emülator",
+    "emulatör",
+    "emülatörde",
+)
+#: The artefact nouns - each one names a TARGET on its own, which is what makes these
+#: the narrowest gates in the family.
+_NATIVE_EXE_NOUN_STEMS: Final[tuple[str, ...]] = ("exe",)
+_NATIVE_APK_NOUN_STEMS: Final[tuple[str, ...]] = ("apk",)
+_NATIVE_AAB_NOUN_STEMS: Final[tuple[str, ...]] = ("aab",)
+#: "kurulum" (an installer), never a bare "kur" - the alarm family's own "kur"
+#: ("alarm kur") shares no prefix with this, so the two can never collide.
+_NATIVE_INSTALLER_NOUN_STEMS: Final[tuple[str, ...]] = ("kurulum", "msix", "installer", "setup")
+
+#: An APPLICATION noun: the second, independent gate on the two CREATE matchers
+#: (collision 2). "sürüm"/"versiyon" is here because spec §6's own Android phrase is
+#: "Android sürümünü yap." and names no application word at all.
+_NATIVE_APP_NOUN_STEMS: Final[tuple[str, ...]] = (
+    "uygulam",
+    "proje",
+    "program",
+    "sürüm",
+    "surum",
+    "versiyon",
+)
+
+_NATIVE_CREATE_VERB_FORMS: Final[tuple[str, ...]] = (
+    "yap",
+    "yapsana",
+    "yapar",
+    "yapabilir",
+    "oluştur",
+    "olustur",
+    "oluşturur",
+    "olusturur",
+    "oluştursana",
+    "olustursana",
+    "hazırla",
+    "hazirla",
+    "hazırlar",
+    "hazirlar",
+)
+#: The OUTPUT verbs: "çıkar" (produce), "üret" (generate), "derle"/"build" (compile),
+#: "paketle" (package), plus the create verbs (an owner says "EXE yap" as readily as
+#: "EXE çıkar"). Every one of these is claimed elsewhere in this router with a
+#: different noun, which is exactly why the artefact noun is required first.
+_NATIVE_OUTPUT_VERB_FORMS: Final[tuple[str, ...]] = _NATIVE_CREATE_VERB_FORMS + (
+    "çıkar",
+    "cikar",
+    "çıkart",
+    "cikart",
+    "çıkarsana",
+    "cikarsana",
+    "çıkarır",
+    "cikarir",
+    "üret",
+    "uret",
+    "üretsene",
+    "uretsene",
+    "üretir",
+    "uretir",
+    "derle",
+    "derlesene",
+    "derler",
+    "build",
+    "paketle",
+    "paketlesene",
+    "al",
+    "alsana",
+)
+_NATIVE_OPEN_VERB_FORMS: Final[tuple[str, ...]] = _OPEN_VERB_FORMS + (
+    "başlat",
+    "baslat",
+    "başlatsana",
+    "baslatsana",
+    "çalıştır",
+    "calistir",
+)
+_NATIVE_CHECK_STEMS: Final[tuple[str, ...]] = ("kontrol",)
+_NATIVE_PROBLEM_NOUN_STEMS: Final[tuple[str, ...]] = ("hata", "bug", "çökme", "cokme")
+_NATIVE_FIX_VERB_FORMS: Final[tuple[str, ...]] = (
+    "düzelt",
+    "duzelt",
+    "düzeltsene",
+    "duzeltsene",
+    "düzeltir",
+    "duzeltir",
+    "onar",
+    "gider",
+)
+_NATIVE_REBUILD_VERB_FORMS: Final[tuple[str, ...]] = (
+    "build",
+    "derle",
+    "derlesene",
+    "derler",
+    "rebuild",
+)
+_NATIVE_NEW_VERSION_STEMS: Final[tuple[str, ...]] = ("yeni",)
+
+#: Another family's own noun. Its presence means the utterance belongs to that family,
+#: whose answer (or honest silence) is that family's to give, never this one's to
+#: satisfy - the exact narrowing ``_creative_export_match`` documents for ``sahne``.
+#: Deliberately NOT applied blanket-wide: "uygulama" is genuinely part of THIS family's
+#: own canonical sentence, and "dosya" is part of "Kurulum dosyasını oluştur." - so each
+#: matcher below names the list it actually refuses.
+_NATIVE_FOREIGN_ARTIFACT_STEMS: Final[tuple[str, ...]] = (
+    "sunum",
+    "slayt",
+    "tablo",
+    "belge",
+    "rapor",
+    "excel",
+    "word",
+    "csv",
+    "özet",
+    "ozet",
+)
+_NATIVE_FOREIGN_FILE_STEMS: Final[tuple[str, ...]] = (
+    "dosya",
+    "klasör",
+    "klasor",
+    "pdf",
+)
+_NATIVE_FOREIGN_MEDIA_STEMS: Final[tuple[str, ...]] = (
+    "resim",
+    "resm",
+    "görsel",
+    "gorsel",
+    "fotoğraf",
+    "fotograf",
+    "renk",
+    "reng",
+    "logo",
+    "video",
+    "haber",
+)
+_NATIVE_FOREIGN_SURFACE_STEMS: Final[tuple[str, ...]] = (
+    "pencere",
+    "ekran",
+    "alarm",
+    "mail",
+    "posta",
+    "eposta",
+    "takvim",
+    # M21's own inbox noun (``_INBOX_NOUN_STEMS``). A REAL defect, found by this
+    # family's own probe before it landed: "Gelen kutumu kontrol eder misin?" carries
+    # "kontrol", and with a native build in the system NATIVE_CHECK - which runs
+    # earlier - claimed it away from MAIL_INBOX. Narrowed, not reordered: the mail
+    # family's own noun is what says the utterance is not about a build.
+    "kutu",
+    "gelen",
+)
+#: The full refusal set the noun-less matchers (CHECK / FIX / REBUILD) use: they have
+#: no native noun of their own to lean on, so they refuse the WIDEST set, M23's own
+#: "uygulam"/"proje" included - "Uygulama çalışıyor mu?" stays APP_FACTORY_STATUS.
+_NATIVE_FOREIGN_ALL_STEMS: Final[tuple[str, ...]] = (
+    _NATIVE_FOREIGN_ARTIFACT_STEMS
+    + _NATIVE_FOREIGN_FILE_STEMS
+    + _NATIVE_FOREIGN_MEDIA_STEMS
+    + _NATIVE_FOREIGN_SURFACE_STEMS
+    + _SCENE_NOUN_STEMS
+    + ("uygulam", "proje")
+)
+
+#: The TARGET each artefact noun names, in ``app.nativefactory.spec.NATIVE_TARGETS``'
+#: own vocabulary. "kurulum" is an MSIX here because MSIX is the only installer format
+#: this machine can actually produce (spec §1: Inno Setup and WiX are absent, so an MSI
+#: is out of scope) - the tool still refuses honestly when makeappx is missing.
+_NATIVE_TARGET_WINDOWS_EXE: Final = "windows_exe"
+_NATIVE_TARGET_WINDOWS_MSIX: Final = "windows_msix"
+_NATIVE_TARGET_ANDROID_APK: Final = "android_apk"
+_NATIVE_TARGET_ANDROID_AAB: Final = "android_aab"
+
+
+def _native_ios_requested(tokens: tuple[str, ...]) -> bool:
+    """An iOS request, recognised so it can be refused BY NAME rather than claimed.
+
+    Spec §1/§6: there is no macOS and no Xcode here, and with no MAUI workload there is
+    not even a shared head to compile. Nothing in this family may answer such an
+    utterance, so every matcher below returns None the moment one of these words is
+    present, and the router falls through to whatever it meant before M28 existed.
+    """
+    return _has(tokens, *_NATIVE_IOS_WORD_STEMS) is not None
+
+
+def _native_target_from_tokens(tokens: tuple[str, ...]) -> str | None:
+    """The target word the owner's OWN WORDS carried ("EXE" -> ``windows_exe``,
+    "kurulum" -> ``windows_msix``, "APK" -> ``android_apk``), or None when the words
+    named none - a best-effort convenience the tool prefers when non-empty, never a
+    substitute for the model's own argument (the same rule ``scene_kind``/
+    ``artifact_kind`` already follow). The artefact nouns are checked before the
+    platform nouns: "Windows için EXE çıkar." names an EXE, not merely Windows."""
+    if _has(tokens, *_NATIVE_EXE_NOUN_STEMS):
+        return _NATIVE_TARGET_WINDOWS_EXE
+    if _has(tokens, *_NATIVE_APK_NOUN_STEMS):
+        return _NATIVE_TARGET_ANDROID_APK
+    if _has(tokens, *_NATIVE_AAB_NOUN_STEMS):
+        return _NATIVE_TARGET_ANDROID_AAB
+    if _has(tokens, *_NATIVE_INSTALLER_NOUN_STEMS):
+        return _NATIVE_TARGET_WINDOWS_MSIX
+    if _has(tokens, *_NATIVE_ANDROID_NOUN_STEMS):
+        return _NATIVE_TARGET_ANDROID_APK
+    if _has(tokens, *_NATIVE_WINDOWS_NOUN_STEMS):
+        return _NATIVE_TARGET_WINDOWS_EXE
+    return None
+
+
+def _native_create_windows_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Bana Windows için masaüstü uygulaması yap." (spec §6).
+
+    THREE gates, because "yap" is the single most claimed verb in this router: a
+    Windows/desktop noun, an APPLICATION noun, and no other family's noun at all. The
+    second gate is what keeps the corpus's own "Masaüstündeki teklif dosyalarını ...
+    hazırla." with M26 (module comment, collision 2); the third is the same narrowing
+    ``_creative_export_match`` already applies for its own reason.
+    """
+    if _native_ios_requested(tokens):
+        return None
+    if _has(tokens, *_NATIVE_WINDOWS_NOUN_STEMS) is None:
+        return None
+    if _has_exact(tokens, *_NATIVE_CREATE_VERB_FORMS) is None:
+        return None
+    if _has(tokens, *_NATIVE_APP_NOUN_STEMS) is None:
+        return None
+    if (
+        _has(
+            tokens,
+            *_NATIVE_FOREIGN_ARTIFACT_STEMS,
+            *_NATIVE_FOREIGN_FILE_STEMS,
+            *_NATIVE_FOREIGN_MEDIA_STEMS,
+            *_NATIVE_FOREIGN_SURFACE_STEMS,
+            *_SCENE_NOUN_STEMS,
+        )
+        is not None
+    ):
+        return None
+    return "windows masaüstü uygulaması yap"
+
+
+def _native_create_android_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Android sürümünü yap." / "Bunun Android sürümünü yap." (spec §6) - the same
+    three gates the Windows create match uses, on the Android noun."""
+    if _native_ios_requested(tokens):
+        return None
+    if _has(tokens, *_NATIVE_ANDROID_NOUN_STEMS) is None:
+        return None
+    if _has_exact(tokens, *_NATIVE_CREATE_VERB_FORMS) is None:
+        return None
+    if _has(tokens, *_NATIVE_APP_NOUN_STEMS) is None:
+        return None
+    if (
+        _has(
+            tokens,
+            *_NATIVE_FOREIGN_ARTIFACT_STEMS,
+            *_NATIVE_FOREIGN_FILE_STEMS,
+            *_NATIVE_FOREIGN_MEDIA_STEMS,
+            *_NATIVE_FOREIGN_SURFACE_STEMS,
+            *_SCENE_NOUN_STEMS,
+        )
+        is not None
+    ):
+        return None
+    return "android sürümünü yap"
+
+
+def _native_build_exe_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Bunu EXE olarak çıkar." (spec §6) - gated on the "exe" noun, which nothing
+    else in this router claims, so the shared output verbs cost nothing here."""
+    if _native_ios_requested(tokens):
+        return None
+    if _has(tokens, *_NATIVE_EXE_NOUN_STEMS) is None:
+        return None
+    if _has_exact(tokens, *_NATIVE_OUTPUT_VERB_FORMS) is None:
+        return None
+    return "exe olarak çıkar"
+
+
+def _native_build_apk_match(tokens: tuple[str, ...]) -> str | None:
+    """ "APK üret." (spec §6) - gated on the "apk"/"aab" noun, for the same reason."""
+    if _native_ios_requested(tokens):
+        return None
+    if _has(tokens, *_NATIVE_APK_NOUN_STEMS, *_NATIVE_AAB_NOUN_STEMS) is None:
+        return None
+    if _has_exact(tokens, *_NATIVE_OUTPUT_VERB_FORMS) is None:
+        return None
+    return "apk üret"
+
+
+def _native_build_installer_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Kurulum dosyasını oluştur." (spec §6) - gated on "kurulum"/"msix". The
+    utterance also carries "dosya", M20's own noun, which is why this matcher (unlike
+    the two CREATE matchers) does NOT refuse the file stems: an installer IS a file,
+    and M20's own matchers all require a SEARCH/READ verb this one never carries."""
+    if _native_ios_requested(tokens):
+        return None
+    if _has(tokens, *_NATIVE_INSTALLER_NOUN_STEMS) is None:
+        return None
+    if _has_exact(tokens, *_NATIVE_OUTPUT_VERB_FORMS) is None:
+        return None
+    return "kurulum dosyasını oluştur"
+
+
+def _native_emulator_open_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Uygulamayı emülatörde aç." (spec §6) - gated on the "emülatör" noun, which
+    M23's own open matcher never requires, so a bare "Uygulamayı aç." / "Bir uygulama
+    aç." falls through to APP_FACTORY_OPEN exactly as it did before M28 existed
+    (module comment, collision 3)."""
+    if _native_ios_requested(tokens):
+        return None
+    if _has(tokens, *_NATIVE_EMULATOR_NOUN_STEMS) is None:
+        return None
+    if _has_exact(tokens, *_NATIVE_OPEN_VERB_FORMS) is None:
+        return None
+    return "emülatörde aç"
+
+
+def _native_check_match(tokens: tuple[str, ...], *, native_build_focused: bool) -> str | None:
+    """ "Çalışıyor mu kontrol et." (spec §6).
+
+    Spec §6 spells this with NO native noun, so vocabulary alone cannot gate it and
+    ``native_build_focused`` does (module comment, collision 4). Two further gates: the
+    "kontrol" stem (M21's inbox check is the only other claim on it, and that one
+    requires an inbox noun), and a refusal of every other family's noun - so
+    "Uygulama çalışıyor mu?" stays APP_FACTORY_STATUS and "Gelen kutumu kontrol et."
+    stays MAIL_INBOX, in either priority order.
+    """
+    if _native_ios_requested(tokens):
+        return None
+    if _has(tokens, *_NATIVE_CHECK_STEMS) is None:
+        return None
+    has_native_noun = (
+        _has(
+            tokens,
+            *_NATIVE_EXE_NOUN_STEMS,
+            *_NATIVE_APK_NOUN_STEMS,
+            *_NATIVE_AAB_NOUN_STEMS,
+            *_NATIVE_INSTALLER_NOUN_STEMS,
+            *_NATIVE_EMULATOR_NOUN_STEMS,
+            *_NATIVE_ANDROID_NOUN_STEMS,
+            *_NATIVE_WINDOWS_NOUN_STEMS,
+        )
+        is not None
+    )
+    if not has_native_noun and not native_build_focused:
+        return None
+    if _has(tokens, *_NATIVE_FOREIGN_ALL_STEMS) is not None:
+        return None
+    return "çalışıyor mu kontrol et"
+
+
+def _native_fix_match(tokens: tuple[str, ...], *, native_build_focused: bool) -> str | None:
+    """ "Hata varsa düzelt." (spec §6) - the same noun-less shape as NATIVE_CHECK, so
+    the same three gates: a problem noun plus a fix verb, ``native_build_focused``, and
+    a refusal of every other family's noun. With no build in the system this returns
+    None and the utterance stays EXPLAIN, which is what it resolved to before M28
+    (module comment, collision 4); "Renkleri biraz düzelt." carries "renk" and stays
+    CREATIVE_ADJUST in either order."""
+    if _native_ios_requested(tokens):
+        return None
+    if _has(tokens, *_NATIVE_PROBLEM_NOUN_STEMS) is None:
+        return None
+    if _has_exact(tokens, *_NATIVE_FIX_VERB_FORMS) is None:
+        return None
+    has_native_noun = (
+        _has(
+            tokens,
+            *_NATIVE_EXE_NOUN_STEMS,
+            *_NATIVE_APK_NOUN_STEMS,
+            *_NATIVE_INSTALLER_NOUN_STEMS,
+            *_NATIVE_EMULATOR_NOUN_STEMS,
+            *_NATIVE_ANDROID_NOUN_STEMS,
+            *_NATIVE_WINDOWS_NOUN_STEMS,
+        )
+        is not None
+    )
+    if not has_native_noun and not native_build_focused:
+        return None
+    if _has(tokens, *_NATIVE_FOREIGN_ALL_STEMS) is not None:
+        return None
+    return "hata varsa düzelt"
+
+
+def _native_rebuild_match(tokens: tuple[str, ...], *, native_build_focused: bool) -> str | None:
+    """ "Yeni sürümü build et." (spec §6).
+
+    "build"/"derle" is claimed nowhere else in this router, but "sürüm" is
+    (RELEASE_ROLLBACK's "önceki sürüme dön"), so the COMPILE verb is required and the
+    version word alone never fires this. The third gate is the usual foreign-noun
+    refusal; the second accepts either the explicit "yeni sürüm" phrasing or a live
+    build, so the spec's own sentence works with no context at all.
+    """
+    if _native_ios_requested(tokens):
+        return None
+    if _has_exact(tokens, *_NATIVE_REBUILD_VERB_FORMS) is None:
+        return None
+    said_new_version = (
+        _has(tokens, *_NATIVE_NEW_VERSION_STEMS) is not None
+        and _has(tokens, *_VERSION_STEMS) is not None
+    )
+    if not said_new_version and not native_build_focused:
+        return None
+    if _has(tokens, *_NATIVE_FOREIGN_ALL_STEMS) is not None:
+        return None
+    return "yeni sürümü build et"
+
+
 # --------------------------------------------------- M26: Executive Autonomy
 #
 # Built on the same token/stem primitives as every family above — no second Turkish
@@ -4212,6 +4734,7 @@ def resolve_intent(
     proposal_pending: bool = False,
     genesis_awaiting_approval: bool = False,
     executive_run_state: str | None = None,
+    native_build_focused: bool = False,
 ) -> ResolvedIntent:
     """Resolve a transcript into an :class:`Intent` against the live state.
 
@@ -4256,6 +4779,15 @@ def resolve_intent(
     session right now — the same "one precondition turns a bare confirmation word into a
     real tool call" shape ``draft_pending``/``proposal_pending`` already give MAIL_SEND/
     CALENDAR_COMMIT, established by the caller from ``GenesisService.find_awaiting_approval``.
+
+    ``native_build_focused`` is M28's own one fact (docs/M28_NATIVE_APP_FACTORY_SPEC.md §6):
+    whether this owner has a native build to be asked about at all (established by the
+    caller from the ``native_builds`` table). Three of spec §6's own utterances -
+    "Çalışıyor mu kontrol et.", "Hata varsa düzelt.", "Yeni sürümü build et." - carry no
+    native noun whatsoever, so this flag is what keeps them from stealing "kontrol"/
+    "düzelt"/"build" from M21's inbox check, M27's colour adjust and the research
+    EXPLAIN branch when there is no build in the system - the same "context, never
+    vocabulary alone" discipline ``operator_running``/``executive_run_state`` establish.
 
     ``executive_run_state`` is M26's own one fact (docs/M26_EXECUTIVE_AUTONOMY_SPEC.md §5,
     ADR-0089): one of ``app.executive.models.EXECUTIVE_RUN_STATE_VALUES`` when the owner
@@ -4369,6 +4901,104 @@ def resolve_intent(
             matched=creative_export_matched,
             creative_ref="current",
             creative_format=_creative_export_format_from_tokens(tokens),
+            **base,
+        )
+
+    # 0b'''. M28 (docs/M28_NATIVE_APP_FACTORY_SPEC.md §6): the Native App Factory.
+    #        Checked here - before the M19 operator block (0e), the M20 document block
+    #        (0f), M23's App Factory block (0g-2) and M22's artifact block (0h) -
+    #        because four MEASURED collisions live in those families' vocabulary; the
+    #        module comment above ``_native_create_windows_match`` names each one and
+    #        the NARROWING gate that closes it, so no branch below this one loses any
+    #        ground it held before M28 existed. Order inside the block: the artefact
+    #        matchers (exe / apk / kurulum) first, because "Windows için EXE çıkar."
+    #        names an EXE rather than merely a platform; then the platform CREATE
+    #        matchers; then the emulator; then the three noun-less, focus-gated ones.
+    if native_exe_matched := _native_build_exe_match(tokens):
+        return ResolvedIntent(
+            Intent.NATIVE_BUILD_EXE,
+            scope=SCOPE_CONVERSATION,
+            matched=native_exe_matched,
+            native_target=_NATIVE_TARGET_WINDOWS_EXE,
+            native_ref="current",
+            **base,
+        )
+    if native_apk_matched := _native_build_apk_match(tokens):
+        return ResolvedIntent(
+            Intent.NATIVE_BUILD_APK,
+            scope=SCOPE_CONVERSATION,
+            matched=native_apk_matched,
+            native_target=_native_target_from_tokens(tokens),
+            native_ref="current",
+            **base,
+        )
+    if native_installer_matched := _native_build_installer_match(tokens):
+        return ResolvedIntent(
+            Intent.NATIVE_BUILD_INSTALLER,
+            scope=SCOPE_CONVERSATION,
+            matched=native_installer_matched,
+            native_target=_NATIVE_TARGET_WINDOWS_MSIX,
+            native_ref="current",
+            **base,
+        )
+    if native_windows_matched := _native_create_windows_match(tokens):
+        return ResolvedIntent(
+            Intent.NATIVE_CREATE_WINDOWS,
+            scope=SCOPE_CONVERSATION,
+            matched=native_windows_matched,
+            native_target=_NATIVE_TARGET_WINDOWS_EXE,
+            **base,
+        )
+    if native_android_matched := _native_create_android_match(tokens):
+        return ResolvedIntent(
+            Intent.NATIVE_CREATE_ANDROID,
+            scope=SCOPE_CONVERSATION,
+            matched=native_android_matched,
+            native_target=_NATIVE_TARGET_ANDROID_APK,
+            # Spec §7: "Bunun Android sürümünü yap." points at a build that already
+            # exists; a bare "Android sürümünü yap." names no antecedent, so the tool
+            # resolves the project itself rather than being handed a wrong one.
+            native_ref="current" if _has_exact(tokens, "bunun", "bunu") else None,
+            **base,
+        )
+    if native_emulator_matched := _native_emulator_open_match(tokens):
+        return ResolvedIntent(
+            Intent.NATIVE_EMULATOR_OPEN,
+            scope=SCOPE_CONVERSATION,
+            matched=native_emulator_matched,
+            native_target=_NATIVE_TARGET_ANDROID_APK,
+            native_ref="current",
+            **base,
+        )
+    if native_check_matched := _native_check_match(
+        tokens, native_build_focused=native_build_focused
+    ):
+        return ResolvedIntent(
+            Intent.NATIVE_CHECK,
+            scope=SCOPE_CONVERSATION,
+            matched=native_check_matched,
+            native_target=_native_target_from_tokens(tokens),
+            native_ref="current",
+            **base,
+        )
+    if native_fix_matched := _native_fix_match(tokens, native_build_focused=native_build_focused):
+        return ResolvedIntent(
+            Intent.NATIVE_FIX,
+            scope=SCOPE_CONVERSATION,
+            matched=native_fix_matched,
+            native_target=_native_target_from_tokens(tokens),
+            native_ref="current",
+            **base,
+        )
+    if native_rebuild_matched := _native_rebuild_match(
+        tokens, native_build_focused=native_build_focused
+    ):
+        return ResolvedIntent(
+            Intent.NATIVE_REBUILD,
+            scope=SCOPE_CONVERSATION,
+            matched=native_rebuild_matched,
+            native_target=_native_target_from_tokens(tokens),
+            native_ref="current",
             **base,
         )
 

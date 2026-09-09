@@ -77,6 +77,10 @@ from app.voice.realtime_sessions.tools_genesis import (
     register_genesis_tools,
 )
 from app.voice.realtime_sessions.tools_mail import MAIL_TOOL_NAMES, register_mail_tools
+from app.voice.realtime_sessions.tools_native import (
+    NATIVE_TOOL_NAMES,
+    register_native_tools,
+)
 from app.voice.realtime_sessions.tools_news import register_news_tools
 from app.voice.realtime_sessions.tools_operator import register_operator_tools
 from app.voice.realtime_sessions.tools_scene import SCENE_TOOL_NAMES, register_scene_tools
@@ -605,6 +609,13 @@ WEATHER_CLARIFYING_TOOLS: frozenset[str] = frozenset(WEATHER_TOOL_NAMES)
 #: every family above already gets, never a second copy of it.
 CREATIVE_CLARIFYING_TOOLS: frozenset[str] = frozenset(CREATIVE_TOOL_NAMES)
 
+#: M28 (docs/M28_NATIVE_APP_FACTORY_SPEC.md §6): every native-factory tool may answer
+#: "Henüz derlenmiş bir uygulama yok efendim" rather than a receipt — the same
+#: non-research extension of the ADR-0077 contract every family above already gets,
+#: never a second copy of it. It matters MORE here than anywhere else: a build tool
+#: that answered a question with a receipt would be claiming something was built.
+NATIVE_CLARIFYING_TOOLS: frozenset[str] = frozenset(NATIVE_TOOL_NAMES)
+
 
 def result_is_research_bound(tool_name: str, result: Any) -> bool:
     """Whether a handler's result falls under the research result contract (ADR-0077)."""
@@ -653,6 +664,7 @@ def terminal_status_for(tool_name: str, result: Any) -> tuple[str, str | None]:
             | EXECUTIVE_CLARIFYING_TOOLS
             | WEATHER_CLARIFYING_TOOLS
             | CREATIVE_CLARIFYING_TOOLS
+            | NATIVE_CLARIFYING_TOOLS
             and isinstance(result, dict)
             and result.get("status") == RESULT_NEEDS_CLARIFICATION
             and str(result.get("speech") or "").strip()
@@ -1714,6 +1726,8 @@ def default_registry() -> ToolRegistry:
     register_news_tools(reg)
     # M27 (docs/M27_CREATIVE_TOOLS_SPEC.md §5): the Creative Tools Operator's voice tools.
     register_creative_tools(reg)
+    # M28 (docs/M28_NATIVE_APP_FACTORY_SPEC.md §6): the Native App Factory's voice tools.
+    register_native_tools(reg)
     return reg
 
 

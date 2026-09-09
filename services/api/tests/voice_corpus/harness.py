@@ -16,6 +16,7 @@ No test here calls a handler directly and none knows a phrase table of its own.
 from __future__ import annotations
 
 import base64
+import json
 import tempfile
 import uuid
 from dataclasses import dataclass, field
@@ -98,6 +99,10 @@ from app.mail.providers import FakeMailSender
 from app.mail.service import MailService
 from app.main import create_app
 from app.narration.models import NarrationSession, PronunciationEntry
+from app.nativefactory.models import NativeBuildRow
+from app.nativefactory.service import RunResult, build_and_test, generate, plan_build
+from app.nativefactory.service import publish_and_validate as native_publish
+from app.nativefactory.stacks import ToolchainFacts
 from app.news import models as news_models
 from app.news import sources_service as news_sources_service
 from app.news.classification import VideoCandidate
@@ -169,6 +174,9 @@ from tests.voice_corpus.corpus import (
     CTX_FILE_FOCUSED,
     CTX_LAMPBOX_RUNNING,
     CTX_MESSAGE_FOCUSED,
+    CTX_NATIVE_ANDROID,
+    CTX_NATIVE_BUILT,
+    CTX_NATIVE_PLANNED,
     CTX_NEWS_SOURCE_CONFIGURED,
     CTX_OPERATOR_RUNNING,
     CTX_PPTX_FOCUSED,
@@ -187,6 +195,85 @@ from tests.voice_corpus.corpus import (
 )
 
 VENDOR_KEY = "unit-test-vendor-key-sentinel-must-never-leave-the-server"
+
+#: M28 (docs/M28_NATIVE_APP_FACTORY_SPEC.md §1): this machine as the milestone MEASURED
+#: it on 2026-09-09 - .NET 10 and the Windows Kits present, the Android SDK present, and
+#: no Java at all. FIXED rather than detected on purpose: a corpus case must mean the
+#: same thing here and on a CI runner with no .NET installed, and "Android needs a JDK
+#: (owner item 33)" is a CONTRACT this suite holds, not an accident of what happens to be
+#: on the box running it.
+NATIVE_TOOLCHAIN = ToolchainFacts(
+    dotnet=r"C:\Program Files\dotnet\dotnet.exe",
+    dotnet_sdk="10.0.400",
+    makeappx=r"C:\Program Files (x86)\Windows Kits\10\bin\x64\makeappx.exe",
+    signtool=r"C:\Program Files (x86)\Windows Kits\10\bin\x64\signtool.exe",
+    java=None,
+    java_home=None,
+    android_sdk=r"C:\Android\Sdk",
+    aapt2=r"C:\Android\Sdk\build-tools\33.0.0\aapt2.exe",
+    macos=False,
+)
+
+#: The bytes the scripted publish writes where an EXE would go. Deliberately not a PE
+#: image: what this fixture stands in for is the COMPILER, never the reader.
+NATIVE_UNREADABLE_ARTIFACT = b"corpus fixture: a produced file no reader can call a PE image"
+
+
+class CorpusBuildRunner:
+    """The device's compiler, scripted - and NOT a fake artefact reader.
+
+    Spec §5 puts the real build on the DEVICE, as a bounded Job Object child, so the
+    Cloud Core's own seam is exactly this: an injected runner. What this one stands in
+    for is the compiler; what it deliberately does NOT stand in for is the independent
+    reader. It exits zero and writes a real file at the path a publish would - a file
+    that is not a PE image - so ``app.nativefactory.artifacts.read_artifact`` (the real
+    one, unmocked) refuses to read it and the row lands ``unverified`` with its reason.
+
+    That is the milestone's own character as a fixture: the whole lifecycle runs for
+    real, and the one sentence that could have lied - "hazir" - cannot be said, because
+    nothing verified the file. The VERIFIED path, where a reader really does read it, is
+    proven over this same lifecycle in tests/unit/test_voice_native_tools.py.
+    """
+
+    #: The `dotnet test` line the lifecycle parses its counts out of.
+    TEST_OUTPUT = "Passed!  - Failed: 0, Passed: 4, Skipped: 0, Total: 4"
+
+    def __init__(self) -> None:
+        self.calls: list[list[str]] = []
+
+    def run(self, argv: list[str], cwd: Path, *, timeout_s: int) -> RunResult:
+        self.calls.append(list(argv))
+        verb = argv[1] if len(argv) > 1 else ""
+        if verb == "test":
+            return RunResult(0, self.TEST_OUTPUT)
+        if verb == "publish":
+            out_dir = Path(argv[argv.index("-o") + 1]) if "-o" in argv else cwd
+            out_dir.mkdir(parents=True, exist_ok=True)
+            manifest = json.loads((cwd / "manifest.json").read_text(encoding="utf-8"))
+            (out_dir / manifest["artifact"]).write_bytes(NATIVE_UNREADABLE_ARTIFACT)
+        return RunResult(0, "")
+
+
+#: The one spec every native fixture row is opened from: the built-in Windows template,
+#: at the spec's own default version, so ``nativeapps.rebuild.*`` can assert the NEXT one
+#: (0.1.1) rather than a number this file invented.
+NATIVE_WINDOWS_SPEC: dict[str, Any] = {
+    "name": "Notlarim",
+    "title": "Notlarim",
+    "template": "notes-desktop",
+    "targets": ["windows_exe"],
+    "version": "0.1.0",
+    "persistence": "local_file",
+    "features": ["add_item", "list_items", "delete_item", "persist_local"],
+}
+NATIVE_ANDROID_SPEC: dict[str, Any] = {
+    "name": "Sayac",
+    "title": "Sayac",
+    "template": "counter-mobile",
+    "targets": ["android_apk"],
+    "version": "0.1.0",
+    "features": ["counter"],
+}
 SHARED_TOPIC = "OpenAI son gelişmeler"
 
 TABLES = (
@@ -235,6 +322,7 @@ TABLES = (
     NewsSourceRow.__table__,
     NewsResolutionRow.__table__,
     NewsPlaybackContextRow.__table__,
+    NativeBuildRow.__table__,
 )
 
 #: The tools the harness may dispatch as "forbidden" because the product refuses them at
@@ -332,6 +420,11 @@ class Harness:
     #: ``browser_gateway`` is for research) — never the real network in a corpus run
     #: (task brief: fixtures are what make the behaviour testable every day).
     news_provider: Any = None
+    #: M28 (docs/M28_NATIVE_APP_FACTORY_SPEC.md §5): the scripted compiler every
+    #: ``native.*`` voice tool reads through ``ctx.live``, and the authorised root it
+    #: writes under - never this machine's real dotnet in a corpus run.
+    native_runner: Any = None
+    native_root: Any = None
     ids: dict[str, str] = field(default_factory=dict)
     #: M24 (docs/M24_CAPABILITY_GENESIS_SPEC.md §6, §7): the live fixture application
     #: (CounterBoxServer/LampBoxServer) a CTX_COUNTERBOX_RUNNING/CTX_LAMPBOX_RUNNING case
@@ -852,6 +945,39 @@ class Harness:
                 )
                 assert created["execution_status"] == "executed", created
                 self.ids["creative:current"] = created["run_id"]
+        elif context in (CTX_NATIVE_PLANNED, CTX_NATIVE_ANDROID, CTX_NATIVE_BUILT):
+            # M28 (docs/M28_NATIVE_APP_FACTORY_SPEC.md §4, §6, ADR-0095): REAL
+            # ``native_builds`` rows, opened through the REAL ``plan_build`` against the
+            # FIXTURE toolchain (the same "genuine fixture, not a sentinel" discipline
+            # CTX_CREATIVE_PAINT already uses). Their existence is also the caller fact
+            # ``native_build_focused`` the router reads for the three spec §6 utterances
+            # that carry no native noun.
+            payload = (
+                NATIVE_ANDROID_SPEC if context == CTX_NATIVE_ANDROID else NATIVE_WINDOWS_SPEC
+            )
+            with self.factory() as db:
+                rows = plan_build(db, payload, facts=NATIVE_TOOLCHAIN)
+                row = rows[0]
+                self.ids["native:current"] = str(row.id)
+                if context == CTX_NATIVE_BUILT:
+                    # The WHOLE lifecycle, for real, against the scripted compiler - and
+                    # then the REAL independent reader, which refuses to read what it
+                    # produced. The row lands ``unverified``: that is the fixture's whole
+                    # point, and a fixture that landed ``verified`` here would have
+                    # verified nothing.
+                    workdir = Path(self.native_root) / f"seed-{str(row.id)[:8]}"
+                    row = generate(db, row, workdir / "project", root=Path(self.native_root))
+                    row = build_and_test(
+                        db, row, self.native_runner, dotnet=NATIVE_TOOLCHAIN.dotnet
+                    )
+                    row = native_publish(
+                        db,
+                        row,
+                        self.native_runner,
+                        dotnet=NATIVE_TOOLCHAIN.dotnet,
+                        out_dir=workdir / "publish",
+                    )
+                    assert row.state == "unverified", row.state
         elif context in (CTX_COUNTERBOX_RUNNING, CTX_LAMPBOX_RUNNING):
             # M24 (docs/M24_CAPABILITY_GENESIS_SPEC.md §6, §7): the REAL fixture
             # application, started on a free port for the duration of THIS ONE case (a
@@ -987,6 +1113,12 @@ class Harness:
             row = db.get(WakeAlarm, uuid.UUID(alarm_id))
             db.refresh(row)
             return row.state, int(row.snooze_minutes), int(row.snooze_count)
+
+    def native_build_ids(self) -> set[str]:
+        """Every native build row that exists right now (M28 spec §9's own
+        "forbidden side effects: 0" measure, read straight off the table)."""
+        with self.factory() as db:
+            return {str(r) for r in db.execute(select(NativeBuildRow.id)).scalars()}
 
     def alarm_rows(self) -> int:
         with self.factory() as db:
@@ -1193,6 +1325,11 @@ def build_harness() -> Harness:
     # to the other surface `news.open`'s own module docstring promises never drifts
     # from it (mirrors app.state.browser_gateway / ctx.live["browser_gateway"] above).
     app.state.news_provider = news_provider
+    # M28 (spec §5, §6): the compiler seam and the authorised build root, injected
+    # the same way every other family's dependency is - so the tools read exactly
+    # what production reads, through the one path (ADR-0078).
+    native_runner = CorpusBuildRunner()
+    native_root = Path(tempfile.mkdtemp(prefix="native-corpus-"))
     runtime.register_live(
         wake_sequence=sequence,
         device_statuses=statuses,
@@ -1213,6 +1350,9 @@ def build_harness() -> Harness:
         weather_service=weather_service,
         briefing_service=briefing_service,
         news_provider=news_provider,
+        native_runner=native_runner,
+        native_root=str(native_root),
+        native_toolchain=NATIVE_TOOLCHAIN,
     )
     holdoffs = HoldoffRegistry()
     set_holdoffs(holdoffs)
@@ -1264,6 +1404,8 @@ def build_harness() -> Harness:
         weather=weather_service,
         briefing=briefing_service,
         news_provider=news_provider,
+        native_runner=native_runner,
+        native_root=native_root,
     )
 
 
@@ -1359,6 +1501,16 @@ def contract_arguments(case: UtteranceCase, tool: str, resolved: dict) -> dict:
         template = resolved.get("app_template") or "task-tracker"
         name = resolved.get("app_name") or "Adsız Uygulama"
         args = {"template": template, "name": name}
+    # M28 (docs/M28_NATIVE_APP_FACTORY_SPEC.md §6): the ROUTER resolves the target word
+    # ("EXE" -> windows_exe, "kurulum" -> windows_msix, "APK" -> android_apk) and the
+    # tool prefers it over anything passed here - so the only argument a real persona
+    # adds for native.create is the NAME, and it also relays the owner's own sentence so
+    # the tool's own iOS gate has something to read on the one path that bypasses the
+    # router (a model calling the tool directly). Every other native tool resolves its
+    # build from the durable rows and needs no wire argument at all - the same rule
+    # app.run/app.test/scene.render already follow.
+    elif tool == "native.create":
+        args = {"name": "Notlarim", "request": text}
     # M25 (docs/M25_CREATIVE_3D_SPEC.md §5): the 3D-creation family. The router
     # resolves the tool word and (for scene.add) the primitive kind - everything
     # else here is a plausible model argument a real persona would send after
@@ -1532,6 +1684,7 @@ def run_case(case: UtteranceCase, *, harness: Harness | None = None) -> CaseResu
         mail_sent_before = h.mail_sent_count()
         calendar_committed_before = h.calendar_committed_count()
         genesis_state_before = _genesis_fixture_state(h.genesis_fixture)
+        native_builds_before = h.native_build_ids()
 
         main_turn = 1
         # ADR-0084 addendum 2 / M26 ADR-0089: every preceding turn, through the REAL
@@ -1723,6 +1876,29 @@ def run_case(case: UtteranceCase, *, harness: Harness | None = None) -> CaseResu
                 result.problems.append(f"news_source_id {body.get('news_source_id')!r} != {want!r}")
             elif key == "news_provider" and body.get("answered_by") != want:
                 result.problems.append(f"answered_by {body.get('answered_by')!r} != {want!r}")
+            # M28 (docs/M28_NATIVE_APP_FACTORY_SPEC.md §6): the build ROW as the tool read
+            # it back. ``native_state`` is the one that matters most: the milestone's rule
+            # is that only an independent reader may make a row ``verified``, so a case
+            # asserting ``unverified`` here is asserting that the tool did NOT round its
+            # own hopefulness up.
+            elif key == "native_target" and resolved.get("native_target") != want:
+                result.problems.append(
+                    f"native_target {resolved.get('native_target')!r} != {want!r}"
+                )
+            elif key == "native_state":
+                builds = body.get("builds") or ([body["build"]] if body.get("build") else [])
+                states = [b.get("state") for b in builds]
+                if want not in states:
+                    result.problems.append(f"native build states {states} lack {want!r}")
+            elif key == "native_version":
+                builds = body.get("builds") or ([body["build"]] if body.get("build") else [])
+                versions = [b.get("version") for b in builds]
+                if want not in versions:
+                    result.problems.append(f"native build versions {versions} lack {want!r}")
+            elif key == "native_verified" and body.get("verified", False) is not want:
+                result.problems.append(f"native verified {body.get('verified')!r} != {want!r}")
+            elif key == "speech_contains" and str(want) not in speech:
+                result.problems.append(f"speech does not carry {want!r}: {speech[:120]!r}")
 
         # M22 (docs/M22_ARTIFACT_FACTORY_SPEC.md §5): the "never invented" rule, checked
         # end to end — every number ``artifact.create`` actually built the spec's
@@ -1797,6 +1973,16 @@ def run_case(case: UtteranceCase, *, harness: Harness | None = None) -> CaseResu
             result.verdict = "forbidden_side_effect"
         if case.expected_tool != "alarm.create" and h.alarm_rows() != alarms_before:
             result.problems.append("an alarm row was created")
+            result.verdict = "forbidden_side_effect"
+        # M28 (docs/M28_NATIVE_APP_FACTORY_SPEC.md §9): only the two tools that OPEN a
+        # build row may leave one behind. Any other case that grew a native_builds row
+        # took a route it was never meant to take - the same table-level check the alarm
+        # and research families already get for their own rows.
+        if (
+            case.expected_tool not in ("native.create", "native.rebuild")
+            and h.native_build_ids() != native_builds_before
+        ):
+            result.problems.append("a native build row was created")
             result.verdict = "forbidden_side_effect"
         # M21 (docs/M21_MAIL_CALENDAR_SPEC.md §5, ADR-0084): mail.send/calendar.commit
         # never touch the fake DEVICE at all — the check above cannot see them. A case

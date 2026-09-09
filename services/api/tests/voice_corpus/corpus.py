@@ -137,6 +137,27 @@ CTX_SCENE_BLENDER: Final = "scene_blender"
 #: to something real.
 CTX_CREATIVE_PAINT: Final = "creative_paint"
 
+#: M28 (docs/M28_NATIVE_APP_FACTORY_SPEC.md §4, §6, ADR-0095): REAL ``native_builds``
+#: rows, opened through the real ``app.nativefactory.service.plan_build`` against a
+#: FIXTURE ``ToolchainFacts`` that mirrors this machine as spec §1 measured it on
+#: 2026-09-09 - .NET 10 and the Windows Kits present, the Android SDK present, and NO
+#: Java. Fixed rather than measured on purpose: a corpus case must mean the same thing
+#: on the owner's machine and on a CI runner with no .NET at all, and the honest
+#: "Android needs a JDK (owner item 33)" refusal is a CONTRACT here, not an accident of
+#: what happened to be installed.
+#: ``native_planned`` is one ``windows_exe`` row in ``planned``; ``native_android`` is
+#: one ``android_apk`` row, which plan_build opens as ``unavailable`` WITH its reason
+#: (spec §4: the owner asked, so the answer has to exist somewhere they can see);
+#: ``native_built`` is a ``windows_exe`` row driven all the way through the REAL
+#: lifecycle - generate, build, test, publish - by a scripted runner standing in for
+#: the device's compiler, whose output the REAL independent reader then refuses to
+#: read. That last one is the milestone's own character as a fixture: the row lands
+#: ``unverified`` and the receipt says "Hazır demiyorum", which is exactly what must
+#: happen when nothing has actually verified the file.
+CTX_NATIVE_PLANNED: Final = "native_planned"
+CTX_NATIVE_ANDROID: Final = "native_android"
+CTX_NATIVE_BUILT: Final = "native_built"
+
 #: M24 (docs/M24_CAPABILITY_GENESIS_SPEC.md §6, §7): the REAL counter-box/lamp-box
 #: fixture application, started by the harness on a free port and registered into
 #: app.genesis.catalogue for the duration of ONE case — never a mock; the same
@@ -261,6 +282,16 @@ SIDE_EFFECTS_NEWS_OPEN: Final[frozenset[str]] = frozenset(
 #: round trip through the M19 operator) is a visible, deliberate change to this
 #: constant rather than a silent widening of an already-shared one.
 SIDE_EFFECTS_CREATIVE: Final[frozenset[str]] = frozenset()
+
+#: M28 (docs/M28_NATIVE_APP_FACTORY_SPEC.md §5, §6, §9): the Native App Factory reaches
+#: the fake DEVICE never at all in this Cloud Core half. The compiler is the device's
+#: (spec §5: bounded Job Object children under the authorised ``native`` root), and the
+#: corpus hands the tools a scripted runner directly through ``ctx.live`` rather than
+#: through a device capability - so a native case that touched ANY device capability
+#: would be reaching a path this milestone deliberately does not have. Spelled under its
+#: own name, like ``SIDE_EFFECTS_CREATIVE``, so the day the runner does become a device
+#: call it is a visible change to this constant.
+SIDE_EFFECTS_NATIVE: Final[frozenset[str]] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
@@ -4856,6 +4887,608 @@ def _weather_briefing_cases() -> list[UtteranceCase]:
     ]
 
 
+#: M28 (docs/M28_NATIVE_APP_FACTORY_SPEC.md §6, ADR-0095): the Native App Factory.
+#: Every case names ``category="nativeapps"``. Never touches the fake device (module
+#: comment above ``SIDE_EFFECTS_NATIVE``).
+#:
+#: This category is written around one measured fact and one milestone rule.
+#:
+#: The FACT: this family's verbs ("yap", "çıkar", "oluştur", "aç", "kontrol et",
+#: "düzelt", "build et") are shared with M19-M27, and FOUR real collisions were found
+#: against the live router before a line of it was written - the module comment above
+#: ``app.voice.intents._native_create_windows_match`` names each one. Every one of
+#: them has a NEGATIVE case here, asserting the OTHER family still wins, because a
+#: narrowing gate that nobody tests is a gate that quietly reopens.
+#:
+#: The RULE: a receipt is a read-back. The build cases run the REAL lifecycle
+#: (generate -> build -> test -> publish) against a scripted runner standing in for the
+#: device's own compiler, and the REAL independent reader then refuses to read what it
+#: produced. So the sentence the owner hears in this corpus is "üretildi ama
+#: doğrulayamadım efendim ... Hazır demiyorum" - not because the assertion was weakened
+#: but because that IS the truthful answer when nothing has verified the file. The
+#: VERIFIED path, where a reader really reads it, is proven in
+#: tests/unit/test_voice_native_tools.py against the same real lifecycle.
+
+
+def _native_create_windows_cases() -> list[UtteranceCase]:
+    """Spec §6's own Windows phrase and its variants. Every one of these resolved to
+    M23's APP_FACTORY_CREATE before M28 existed (collision 1) - the platform noun is
+    what tells the two apart, and ``nativeapps.neg.web_app_is_m23`` holds the other
+    side of that line."""
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        ("nativeapps.create.win.canonical", "Bana Windows için masaüstü uygulaması yap.",
+         "canonical"),
+        ("nativeapps.create.win.para",
+         "Windows için bir masaüstü uygulaması yapar mısın?", "paraphrase"),
+        ("nativeapps.create.win.short", "Masaüstü uygulaması yap.", "paraphrase"),
+        ("nativeapps.create.win.asr", "windows icin masaustu uygulamasi yap", "asr_noise"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="native_create_windows",
+                    expected_tool="native.create",
+                    expected={"native_target": "windows_exe", "native_state": "planned"},
+                    side_effects=SIDE_EFFECTS_NATIVE,
+                    context=CTX_NONE,
+                    category="nativeapps",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _native_create_android_cases() -> list[UtteranceCase]:
+    """Spec §1/§6: the Android head is REFUSED here and the refusal names owner item 33.
+    An `unavailable` ROW is opened all the same (spec §4) - the owner asked, so the
+    answer about it exists where they can see it, rather than being a silence."""
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        ("nativeapps.create.android.canonical", "Android sürümünü yap.", "canonical"),
+        ("nativeapps.create.android.deictic", "Bunun Android sürümünü yap.", "canonical"),
+        ("nativeapps.create.android.asr", "android surumunu yap", "asr_noise"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="native_create_android",
+                    expected_tool="native.create",
+                    expected_response=RESPONSE_REFUSED,
+                    expected={
+                        "error_class": "dependency_unavailable",
+                        "native_target": "android_apk",
+                        "native_state": "unavailable",
+                        "speech_contains": "33",
+                    },
+                    side_effects=SIDE_EFFECTS_NATIVE,
+                    context=CTX_NONE,
+                    category="nativeapps",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _native_build_exe_cases() -> list[UtteranceCase]:
+    """ "Bunu EXE olarak çıkar." - the whole lifecycle, and the honest verdict at the
+    end of it. ``native_state`` is asserted as ``unverified`` deliberately: the scripted
+    runner produces a file the REAL reader cannot read, and a row that said ``verified``
+    there would be the exact dishonesty the independent reader exists to prevent."""
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        ("nativeapps.build.exe.canonical", "Bunu EXE olarak çıkar.", "canonical"),
+        ("nativeapps.build.exe.para", "Bunu EXE olarak çıkarır mısın?", "paraphrase"),
+        ("nativeapps.build.exe.bare", "EXE olarak çıkar.", "paraphrase"),
+        ("nativeapps.build.exe.asr", "bunu exe olarak cikar", "asr_noise"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="native_build_exe",
+                    expected_tool="native.build",
+                    expected={
+                        "native_target": "windows_exe",
+                        "native_state": "unverified",
+                        "native_verified": False,
+                        "speech_contains": "Hazır demiyorum",
+                    },
+                    side_effects=SIDE_EFFECTS_NATIVE,
+                    context=CTX_NATIVE_PLANNED,
+                    category="nativeapps",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _native_build_apk_cases() -> list[UtteranceCase]:
+    """ "APK üret." on a machine with the Android SDK and no Java: refused, with the two
+    facts stated separately (spec §1), because the SDK being present is exactly what
+    makes this blocker confusing."""
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        ("nativeapps.build.apk.canonical", "APK üret.", "canonical"),
+        ("nativeapps.build.apk.para", "Bana bir APK üretir misin?", "paraphrase"),
+        ("nativeapps.build.apk.asr", "apk uret", "asr_noise"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="native_build_apk",
+                    expected_tool="native.build",
+                    expected_response=RESPONSE_REFUSED,
+                    expected={
+                        "error_class": "dependency_unavailable",
+                        "native_target": "android_apk",
+                        "speech_contains": "33",
+                    },
+                    side_effects=SIDE_EFFECTS_NATIVE,
+                    context=CTX_NATIVE_ANDROID,
+                    category="nativeapps",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _native_package_cases() -> list[UtteranceCase]:
+    """ "Kurulum dosyasını oluştur." - the portable package is made HERE, for real, with
+    the standard library. The MSIX is not, and the receipt says so rather than letting
+    "kurulum dosyası" quietly mean "a zip" (spec §1: makeappx and signing run in the
+    device's own authorised root)."""
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        ("nativeapps.package.canonical", "Kurulum dosyasını oluştur.", "canonical"),
+        ("nativeapps.package.para", "Kurulum dosyası oluşturur musun?", "paraphrase"),
+        ("nativeapps.package.asr", "kurulum dosyasini olustur", "asr_noise"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="native_build_installer",
+                    expected_tool="native.package",
+                    expected={
+                        "native_target": "windows_msix",
+                        "speech_contains": "MSIX kurulumu cihazda üretilir",
+                    },
+                    side_effects=SIDE_EFFECTS_NATIVE,
+                    context=CTX_NATIVE_BUILT,
+                    category="nativeapps",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _native_emulator_cases() -> list[UtteranceCase]:
+    """ "Uygulamayı emülatörde aç." resolved to M23's APP_FACTORY_OPEN before M28
+    existed (collision 3); ``nativeapps.neg.bare_app_open_is_m23`` holds the other side.
+    The answer is a refusal naming item 33: the emulator binary and the API 33 image are
+    both here, and there is still no APK to install without a JDK."""
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        ("nativeapps.launch.canonical", "Uygulamayı emülatörde aç.", "canonical"),
+        ("nativeapps.launch.short", "Emülatörde aç.", "paraphrase"),
+        ("nativeapps.launch.asr", "uygulamayi emulatorde ac", "asr_noise"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="native_emulator_open",
+                    expected_tool="native.launch",
+                    expected_response=RESPONSE_REFUSED,
+                    expected={
+                        "error_class": "dependency_unavailable",
+                        "speech_contains": "33",
+                    },
+                    side_effects=SIDE_EFFECTS_NATIVE,
+                    context=CTX_NATIVE_ANDROID,
+                    category="nativeapps",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _native_check_fix_rebuild_cases() -> list[UtteranceCase]:
+    """The three utterances spec §6 spells with NO native noun at all. Each is gated on
+    ``native_build_focused`` (the caller's live "there is a build to be asked about"
+    fact) rather than on vocabulary - so each has a twin negative below proving it stays
+    with its previous owner when there is nothing built."""
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        ("nativeapps.check.canonical", "Çalışıyor mu kontrol et.", "canonical"),
+        ("nativeapps.check.asr", "calisiyor mu kontrol et", "asr_noise"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="native_check",
+                    expected_tool="native.check",
+                    expected={"native_state": "unverified", "native_verified": False},
+                    side_effects=SIDE_EFFECTS_NATIVE,
+                    context=CTX_NATIVE_BUILT,
+                    category="nativeapps",
+                    source=source,
+                )
+            )
+        )
+    # "varsa" is the whole sentence: with nothing broken the truthful answer is that
+    # nothing is broken - a NOOP receipt, never a pretended repair.
+    for case_id, text, source in (
+        ("nativeapps.fix.nothing.canonical", "Hata varsa düzelt.", "canonical"),
+        ("nativeapps.fix.nothing.asr", "hata varsa duzelt", "asr_noise"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="native_fix",
+                    expected_tool="native.fix",
+                    expected={"speech_contains": "Düzeltilecek bir hata görünmüyor"},
+                    side_effects=SIDE_EFFECTS_NATIVE,
+                    context=CTX_NATIVE_PLANNED,
+                    category="nativeapps",
+                    source=source,
+                )
+            )
+        )
+    # ... and with something genuinely wrong and no coding worker connected (spec §9:
+    # the coding-model seam is inert here), the truthful answer is the ERROR ITSELF plus
+    # an explicit statement that the fix was NOT written.
+    cases.append(
+        UtteranceCase(
+            case_id="nativeapps.fix.unfixed",
+            utterance="Hata varsa düzelt.",
+            expected_intent="native_fix",
+            expected_tool="native.fix",
+            expected_response=RESPONSE_REFUSED,
+            expected={
+                "error_class": "dependency_unavailable",
+                "speech_contains": "düzeltmeyi kendi başıma yazamıyorum",
+            },
+            side_effects=SIDE_EFFECTS_NATIVE,
+            context=CTX_NATIVE_BUILT,
+            category="nativeapps",
+            source="canonical",
+        )
+    )
+    for case_id, text, source in (
+        ("nativeapps.rebuild.canonical", "Yeni sürümü build et.", "canonical"),
+        ("nativeapps.rebuild.asr", "yeni surumu build et", "asr_noise"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="native_rebuild",
+                    expected_tool="native.rebuild",
+                    expected={
+                        "native_version": "0.1.1",
+                        "native_state": "unverified",
+                        "speech_contains": "Hazır demiyorum",
+                    },
+                    side_effects=SIDE_EFFECTS_NATIVE,
+                    context=CTX_NATIVE_PLANNED,
+                    category="nativeapps",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _native_negative_cases() -> list[UtteranceCase]:
+    """The mandatory negatives. Each one is a family this router already served, and each
+    was checked against the LIVE router before M28's matchers were written - so the
+    expected value here is the behaviour that must not change, not a guess at it."""
+    cases: list[UtteranceCase] = []
+    # iOS: refused BY NAME, and by refusing to claim it at all. There is no macOS and no
+    # Xcode here and no MAUI head to share, so nothing in this family may answer - the
+    # router resolves it to NOTHING and no native tool is reached (spec §1, §6).
+    for case_id, text in (
+        ("nativeapps.neg.ios_version", "iOS sürümünü yap."),
+        ("nativeapps.neg.ipad_exe", "iPad uygulamasını EXE olarak çıkar."),
+    ):
+        cases.append(
+            UtteranceCase(
+                case_id=case_id,
+                utterance=text,
+                expected_intent="none",
+                expected_tool=None,
+                expected_response=RESPONSE_NONE,
+                forbidden_tools=("native.create", "native.build"),
+                side_effects=SIDE_EFFECTS_NONE,
+                context=CTX_NATIVE_PLANNED,
+                category="nativeapps",
+                source="canonical",
+                regression_issue_id=(
+                    "M28 spec §1/§6: an iOS request routes to nothing in this family"
+                ),
+            )
+        )
+    # The same, with M28's own strongest noun present: "masaüstü uygulaması yap" would
+    # otherwise be NATIVE_CREATE_WINDOWS. The iOS gate runs first, so this stays exactly
+    # what it was before M28 - M23's own app factory.
+    cases.append(
+        UtteranceCase(
+            case_id="nativeapps.neg.iphone_desktop_stays_m23",
+            utterance="iPhone için masaüstü uygulaması yap.",
+            expected_intent="app_factory_create",
+            expected_tool="app.create",
+            forbidden_tools=("native.create",),
+            side_effects=SIDE_EFFECTS_APP_CREATE,
+            context=CTX_NONE,
+            category="nativeapps",
+            source="regression",
+            regression_issue_id=(
+                "M28: the iOS gate runs before the platform noun, so an iPhone request "
+                "never becomes a Windows build"
+            ),
+        )
+    )
+    # Collision 1's other side: an app-factory request that names no platform.
+    for case_id, text in (
+        ("nativeapps.neg.web_app_is_m23", "Web uygulaması yap."),
+        ("nativeapps.neg.task_tracker_is_m23", "Bana bir görev takip uygulaması yap."),
+    ):
+        cases.append(
+            UtteranceCase(
+                case_id=case_id,
+                utterance=text,
+                expected_intent="app_factory_create",
+                expected_tool="app.create",
+                forbidden_tools=("native.create",),
+                side_effects=SIDE_EFFECTS_APP_CREATE,
+                context=CTX_NONE,
+                category="nativeapps",
+                source="regression",
+                regression_issue_id=(
+                    "M28: an app-factory request that names no native platform stays M23"
+                ),
+            )
+        )
+    # M22 keeps "yap" for its own kinds: a presentation is not a desktop application.
+    cases.append(
+        UtteranceCase(
+            case_id="nativeapps.neg.sunum_is_m22",
+            utterance="Sunum yap.",
+            expected_intent="artifact_create",
+            expected_tool="artifact.create",
+            forbidden_tools=("native.create",),
+            side_effects=SIDE_EFFECTS_NONE,
+            context=CTX_NONE,
+            category="nativeapps",
+            source="regression",
+            regression_issue_id="M28: 'Sunum yap.' stays M22's artifact factory",
+        )
+    )
+    # Collision 3's other side: an open with no "emülatör" noun.
+    cases.append(
+        UtteranceCase(
+            case_id="nativeapps.neg.bare_app_open_is_m23",
+            utterance="Bir uygulama aç.",
+            expected_intent="app_factory_open",
+            expected_tool="app.open",
+            forbidden_tools=("native.launch",),
+            side_effects=SIDE_EFFECTS_APP_OPEN,
+            context=CTX_APP_SCAFFOLDED,
+            category="nativeapps",
+            source="regression",
+            regression_issue_id=(
+                "M28: a bare application open with no emulator noun stays M23's app.open "
+                "- measured against the live router on 2026-09-09 before M28's matchers "
+                "were written, so this asserts the UNCHANGED route, not a hoped-for one"
+            ),
+        )
+    )
+    # Collision 2's other side: the corpus's own EXEC_START directive carries "masaüstü"
+    # and a create verb, and must stay M26.
+    cases.append(
+        UtteranceCase(
+            case_id="nativeapps.neg.desktop_folder_directive_is_m26",
+            utterance=(
+                "Masaüstündeki teklif dosyalarını karşılaştırıp bir Excel tablosu ve "
+                "yönetici özeti hazırla."
+            ),
+            expected_intent="exec_start",
+            expected_tool="executive.start",
+            forbidden_tools=("native.create",),
+            side_effects=SIDE_EFFECTS_NONE,
+            context=CTX_NONE,
+            category="nativeapps",
+            source="regression",
+            regression_issue_id=(
+                "M28: 'masaüstü' + a create verb is not a desktop application unless an "
+                "application noun is there too"
+            ),
+        )
+    )
+    # ...and M20's own search verb keeps "masaüstü" too.
+    cases.append(
+        UtteranceCase(
+            case_id="nativeapps.neg.desktop_search_is_m20",
+            utterance="Masaüstündeki sözleşme dosyasını bul.",
+            expected_intent="file_search",
+            expected_tool="file.search",
+            forbidden_tools=("native.create",),
+            side_effects=SIDE_EFFECTS_DOCUMENTS_SEARCH,
+            context=CTX_NONE,
+            category="nativeapps",
+            source="regression",
+            regression_issue_id="M28: the Desktop FOLDER word is not a desktop application",
+        )
+    )
+    # The three noun-less matchers, each proved to stay with its previous owner when
+    # there is no build in the system (module comment, collision 4).
+    cases.append(
+        UtteranceCase(
+            case_id="nativeapps.neg.fix_without_a_build_is_explain",
+            utterance="Hata varsa düzelt.",
+            expected_intent="explain",
+            expected_tool="research.explain",
+            expected_target="current",
+            forbidden_tools=("native.fix",),
+            side_effects=SIDE_EFFECTS_NONE,
+            context=CTX_RESEARCH_FOCUS_B,
+            category="nativeapps",
+            source="regression",
+            regression_issue_id=(
+                "M28 collision 4: 'hata' is _RESEARCH_PROBLEM_WORDS' own word; with no "
+                "build in the system NATIVE_FIX must not fire"
+            ),
+        )
+    )
+    cases.append(
+        UtteranceCase(
+            case_id="nativeapps.neg.check_without_a_build_is_nothing",
+            utterance="Çalışıyor mu kontrol et.",
+            expected_intent="none",
+            expected_tool=None,
+            expected_response=RESPONSE_NONE,
+            forbidden_tools=("native.check",),
+            side_effects=SIDE_EFFECTS_NONE,
+            context=CTX_NONE,
+            category="nativeapps",
+            source="regression",
+            regression_issue_id=(
+                "M28 collision 4: with no build in the system this is what it always was"
+            ),
+        )
+    )
+    # The bug this family's own probe found before it landed: with a build in the system,
+    # NATIVE_CHECK's "kontrol" stem claimed M21's inbox check. Fixed by refusing the mail
+    # family's own noun - narrowed, not reordered.
+    cases.append(
+        UtteranceCase(
+            case_id="nativeapps.neg.inbox_check_stays_m21",
+            utterance="Gelen kutumu kontrol eder misin?",
+            expected_intent="mail_inbox",
+            expected_tool="mail.inbox",
+            forbidden_tools=("native.check",),
+            side_effects=SIDE_EFFECTS_NONE,
+            context=CTX_NATIVE_BUILT,
+            category="nativeapps",
+            source="regression",
+            regression_issue_id=(
+                "M28: NATIVE_CHECK's 'kontrol' stole 'Gelen kutumu kontrol eder misin?' "
+                "from MAIL_INBOX whenever a native build existed"
+            ),
+        )
+    )
+    # M23's own status question keeps "çalışıyor mu" even with a native build present:
+    # the app noun is what decides, and app.status then honestly asks WHICH project,
+    # there being no app project in this fixture.
+    cases.append(
+        UtteranceCase(
+            case_id="nativeapps.neg.app_status_stays_m23",
+            utterance="Uygulama çalışıyor mu?",
+            expected_intent="app_factory_status",
+            expected_tool="app.status",
+            expected_response=RESPONSE_CLARIFY,
+            forbidden_tools=("native.check",),
+            side_effects=SIDE_EFFECTS_NONE,
+            context=CTX_NATIVE_BUILT,
+            category="nativeapps",
+            source="regression",
+            regression_issue_id=(
+                "M28: 'Uygulama çalışıyor mu?' stays APP_FACTORY_STATUS even with a "
+                "native build in the system"
+            ),
+        )
+    )
+    # "sürüm" without a compile verb is still M18.4's rollback, with a build present.
+    cases.append(
+        UtteranceCase(
+            case_id="nativeapps.neg.previous_version_is_rollback",
+            utterance="Önceki sürüme dön.",
+            expected_intent="release_rollback",
+            expected_tool="release.rollback",
+            # The rollback itself is always the owner's (the same refusal the evolution
+            # category's own ``ev.rollback.*`` cases assert); what THIS case is about is
+            # the route surviving a native build's presence.
+            expected_response=RESPONSE_REFUSED,
+            expected={"error_class": "owner_authorization_required"},
+            forbidden_tools=("native.rebuild",),
+            side_effects=SIDE_EFFECTS_NONE,
+            context=CTX_NATIVE_BUILT,
+            category="nativeapps",
+            source="regression",
+            regression_issue_id=(
+                "M28: NATIVE_REBUILD requires the compile verb; the version word alone "
+                "never fires it"
+            ),
+        )
+    )
+    # M27 keeps "düzelt" for its own colour noun.
+    cases.append(
+        UtteranceCase(
+            case_id="nativeapps.neg.colour_adjust_stays_m27",
+            utterance="Renkleri biraz düzelt.",
+            expected_intent="creative_adjust",
+            expected_tool="creative.adjust",
+            forbidden_tools=("native.fix",),
+            side_effects=SIDE_EFFECTS_CREATIVE,
+            context=CTX_CREATIVE_PAINT,
+            category="nativeapps",
+            source="regression",
+            regression_issue_id="M28: 'Renkleri biraz düzelt.' stays CREATIVE_ADJUST",
+        )
+    )
+    # M23's own test verb, with a native build present.
+    cases.append(
+        UtteranceCase(
+            case_id="nativeapps.neg.app_tests_stay_m23",
+            utterance="Testleri çalıştır.",
+            expected_intent="app_factory_test",
+            expected_tool="app.test",
+            forbidden_tools=("native.build",),
+            side_effects=SIDE_EFFECTS_APP_TEST,
+            context=CTX_APP_SCAFFOLDED,
+            category="nativeapps",
+            source="regression",
+            regression_issue_id="M28: 'Testleri çalıştır.' stays M23's app.test",
+        )
+    )
+    return cases
+
+
+def _nativeapps_cases() -> list[UtteranceCase]:
+    return [
+        *_native_create_windows_cases(),
+        *_native_create_android_cases(),
+        *_native_build_exe_cases(),
+        *_native_build_apk_cases(),
+        *_native_package_cases(),
+        *_native_emulator_cases(),
+        *_native_check_fix_rebuild_cases(),
+        *_native_negative_cases(),
+    ]
+
+
 def all_cases() -> list[UtteranceCase]:
     cases = [
         *_research_cases(),
@@ -4877,6 +5510,7 @@ def all_cases() -> list[UtteranceCase]:
         *_weather_briefing_cases(),
         *_news_cases(),
         *_creative_cases(),
+        *_nativeapps_cases(),
     ]
     ids = [c.case_id for c in cases]
     assert len(ids) == len(set(ids)), "duplicate case ids"

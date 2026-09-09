@@ -1130,6 +1130,13 @@ def record_client_events(
     #: a deliberate, bounded inefficiency (a request carries very few events) rather
     #: than a third sentinel value.
     executive_run_state_known: str | None = None
+    #: M28 (docs/M28_NATIVE_APP_FACTORY_SPEC.md §6): the same lazy, once-per-request
+    #: discipline — whether this owner has a native build to be asked about at all.
+    #: Three of spec §6's own utterances carry no native noun ("Çalışıyor mu kontrol
+    #: et.", "Hata varsa düzelt.", "Yeni sürümü build et."), and this is what keeps
+    #: them from stealing those words from M21's inbox check, M27's colour adjust and
+    #: the research EXPLAIN branch when there is nothing built to talk about.
+    native_build_focused_known: bool | None = None
     accepted = 0
     sideband_payloads: list[tuple[str, dict[str, Any]]] = []
     for ev in events:
@@ -1259,6 +1266,16 @@ def record_client_events(
                     executive_run_state_known = exec_run.state if exec_run is not None else None
                 except Exception:  # noqa: BLE001 - a deployment without the executive tables
                     executive_run_state_known = None
+            if native_build_focused_known is None:
+                try:
+                    from app.nativefactory.models import NativeBuildRow
+
+                    native_build_focused_known = (
+                        db.execute(select(NativeBuildRow.id).limit(1)).scalars().first()
+                        is not None
+                    )
+                except Exception:  # noqa: BLE001 - a deployment without the native tables
+                    native_build_focused_known = False
             intent: ResolvedIntent = resolve_intent(
                 text,
                 session_state=RealtimeState(fsm) if fsm else None,
@@ -1272,6 +1289,7 @@ def record_client_events(
                 proposal_pending=proposal_pending_known,
                 genesis_awaiting_approval=genesis_awaiting_approval_known,
                 executive_run_state=executive_run_state_known,
+                native_build_focused=native_build_focused_known,
             )
             ctx["last_intent"] = intent.intent.value
             # ADR-0075: the LATEST resolved utterance of this session, kept on the
@@ -1375,6 +1393,13 @@ def record_client_events(
                 # channel-name hint the owner's WORDS carried, for the same
                 # "owner's words win over the model's argument" reason.
                 "news_source_ref": intent.news_source_ref,
+                # M28 (docs/M28_NATIVE_APP_FACTORY_SPEC.md §6): the build TARGET the
+                # owner's WORDS carried ("EXE" -> windows_exe, "kurulum" ->
+                # windows_msix, "APK" -> android_apk) and which build they pointed
+                # at, for the same "owner's words win over the model's argument"
+                # reason every family above follows.
+                "native_target": intent.native_target,
+                "native_ref": intent.native_ref,
             }
             resolved.append(
                 {"t_ms": t_ms, "turn": turn, **intent.to_dict(), "normalized_text": None}
