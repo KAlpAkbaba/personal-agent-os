@@ -418,7 +418,10 @@ def _resolve_window_id(
         return _confirm_alive(entry.object_id, list_windows, fall_back_to_foreground=False)
     entry = focus_module.current(db, FOCUS_KIND_WINDOW)
     if entry is None:
-        return _confirm_alive(None, list_windows, fall_back_to_foreground=True)
+        # Nothing to confirm, and no basis for a substitute. "Buraya" points at whatever the
+        # owner was last in, and this operator has no record of one — the window in front
+        # may be something they are not even looking at. Ask, and touch no device to do it.
+        return None, SPEECH_NO_WINDOW
     return _confirm_alive(entry.object_id, list_windows, fall_back_to_foreground=True)
 
 

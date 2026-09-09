@@ -616,3 +616,18 @@ def test_a_remembered_current_window_that_is_gone_never_gets_the_keystrokes() ->
 
     typed = device.payload_for("keyboard.type")
     assert typed is not None and typed["window_id"] == CHROME
+
+
+def test_with_no_remembered_window_the_device_is_not_even_asked() -> None:
+    """"Buraya yaz" with nothing in the focus stack is a question, and asking it costs no
+    device call: there is no remembered id to confirm, and the window that happens to be in
+    front is not evidence of what the owner meant."""
+    client, factory, device, _operator = _wired()
+    _on_desktop(device, [(CHROME, "YouTube - Chrome")])
+    sid = _create(client)
+    _say(client, sid, "Buraya merhaba yaz.")
+
+    call = _tool(client, sid, "operator.type", {})
+
+    assert call["status"] == "needs_clarification", call
+    assert device.calls == [], device.capabilities_called()

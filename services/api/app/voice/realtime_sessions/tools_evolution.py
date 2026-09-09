@@ -30,6 +30,7 @@ from app.actions.receipt import (
     record_receipt,
 )
 from app.config import get_settings
+from app.evolution import proposals
 from app.evolution import supervisor as evolution_supervisor
 from app.explain.classify import (
     QUERY_EVOLUTION_NOW,
@@ -47,6 +48,7 @@ logger = get_logger("app.voice.realtime_sessions.tools_evolution")
 TOOL_EVOLUTION_CONTROL: Final = "evolution.control"
 TOOL_EVOLUTION_STATUS: Final = "evolution.status"
 TOOL_RELEASE_ROLLBACK: Final = "release.rollback"
+TOOL_CAPABILITY_PROPOSE: Final = "capability.propose"
 EVOLUTION_TOOL_NAMES: Final[tuple[str, ...]] = (
     TOOL_EVOLUTION_CONTROL,
     TOOL_EVOLUTION_STATUS,
@@ -422,6 +424,58 @@ def evolution_status(ctx: Any, arguments: dict[str, Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------- registry
 
 
+
+# ------------------------------------------------ what to say instead of "yapamıyorum"
+
+
+def capability_propose(ctx: Any, arguments: dict[str, Any]) -> dict[str, Any]:
+    """The owner asked for something no tool here can serve (owner directive 2026-09-09).
+
+    Everything this needs already existed and nothing called it: ``GapDetector`` walks the
+    owner's own resolution order and ``GapRecorder`` writes the trail to ``capability_gaps``,
+    which the Evolution Supervisor reads on every tick. Until now an unmet request produced a
+    sentence and no row, so it existed only until the owner said it again.
+
+    This is the ONE tool in the family with no "the owner's words win" field to prefer, and
+    the reason is the point of the tool: the intent resolver has no intent for a request it
+    does not recognise, so nothing upstream extracted the owner's sentence. The model's
+    relay is the only account of it there is. The wire key is ``request`` rather than
+    anything transcript-shaped because ``service.FORBIDDEN_KEY_PARTS`` refuses those at the
+    HTTP boundary with a 422 before this handler runs.
+
+    Nothing here decides anything: the resolution comes from the detector, the row from the
+    recorder, and the sentence from the resolution.
+    """
+    argued = arguments.get("request") if isinstance(arguments.get("request"), str) else ""
+    request_text = argued.strip()
+    if not request_text:
+        return {
+            "status": "needs_clarification",
+            "speech": "Neyi ekleyeyim efendim?",
+            "routed": TOOL_CAPABILITY_PROPOSE,
+        }
+
+    runtime = ctx.live.get("evolution_runtime")
+    if runtime is None:
+        return {
+            "recorded": False,
+            "speech": proposals.SPEECH_NOT_RECORDED,
+            "routed": TOOL_CAPABILITY_PROPOSE,
+        }
+    try:
+        proposal = proposals.propose(
+            runtime.detector, runtime.gaps, request_text=request_text
+        )
+    except Exception as exc:  # noqa: BLE001 - an unrecorded request is a fact, not a crash
+        logger.error("capability_propose_failed", error=str(exc)[:200])
+        return {
+            "recorded": False,
+            "speech": proposals.SPEECH_NOT_RECORDED,
+            "routed": TOOL_CAPABILITY_PROPOSE,
+        }
+    return {"recorded": True, "routed": TOOL_CAPABILITY_PROPOSE, **proposal.as_dict()}
+
+
 def register_evolution_tools(reg: Any) -> Any:
     from app.voice.realtime_sessions.tools import ToolSpec
 
@@ -490,11 +544,33 @@ def register_evolution_tools(reg: Any) -> Any:
             handler=release_rollback,
         )
     )
+    reg.register(
+        ToolSpec(
+            name=TOOL_CAPABILITY_PROPOSE,
+            description=(
+                "Sahibin istediği bir şeyi ELİNDEKİ ARAÇLARLA YAPAMIYORSAN bu aracı "
+                "çağırırsın. 'Bunu yapamıyorum', 'bu bende yok', 'buna yetkim yok' gibi "
+                "bir cümleyi ASLA bu aracı çağırmadan kurmazsın. 'request' alanına sahibin "
+                "ne istediğini kendi cümlesiyle yazarsın. Sunucu isteği geliştirme "
+                "listesine kaydeder ve ne olacağını söyleyen cümleyi döner; o 'speech' "
+                "metnini aynen okursun. Yapabileceğin bir şey için bu aracı çağırmazsın - "
+                "önce doğru aracı denersin."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {"request": {"type": "string", "maxLength": 2000}},
+                "additionalProperties": False,
+            },
+            handler=capability_propose,
+        )
+    )
     return reg
 
 
 __all__ = [
     "ACTION_CANCEL",
+    "TOOL_CAPABILITY_PROPOSE",
+    "capability_propose",
     "ACTION_HOLD",
     "ACTION_PAUSE",
     "ACTION_RESUME",

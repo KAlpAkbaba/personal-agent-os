@@ -62,7 +62,20 @@ function Initialize-Store {
     # to hold the bytes.
     $sid = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
     $grant = "*" + $sid + ":(OI)(CI)F"
-    & icacls $StoreRoot /inheritance:r /grant:r $grant /Q 2>$null | Out-Null
+    # ABSOLUTE path, not a bare name. A spawned shell on this machine can have a PATH with
+    # System32 missing entirely, and a bare `icacls` then dies with "The term 'icacls' is
+    # not recognized" BEFORE any secret is stored — which is exactly how the owner's first
+    # attempt to install an Anthropic key failed (2026-09-10). The ACL is a hardening step,
+    # not the protection itself (DPAPI already makes the bytes useless to another account),
+    # so a machine where it genuinely cannot run must not lose the store; it must say so.
+    $icacls = Join-Path $env:SystemRoot "System32\icacls.exe"
+    if (-not (Test-Path -LiteralPath $icacls)) { $icacls = "icacls" }
+    try {
+        & $icacls $StoreRoot /inheritance:r /grant:r $grant /Q 2>$null | Out-Null
+    }
+    catch {
+        Write-Warning "could not tighten the ACL on $StoreRoot ($($_.Exception.Message)); the stored value is still DPAPI-encrypted to this account"
+    }
 }
 
 function Get-SecretPath {

@@ -115,6 +115,13 @@ services:
       # nothing else changes. Installed into /opt/pagentos/.env by
       # scripts/cloud/set-cloud-secret.ps1 over Tailscale SSH (stdin only, never argv).
       PAGENTOS_VOICE_OPENAI_API_KEY: ${PAGENTOS_VOICE_OPENAI_API_KEY:-}
+      # The Anthropic key (research synthesis today; the coding backend that writes the
+      # engine's own patches next). OPTIONAL in exactly the same way as the line above:
+      # absent means the deterministic synthesis provider is used and nothing else changes.
+      # Installed the same way — scripts/cloud/set-cloud-secret.ps1, stdin only, never argv
+      # — and that installer REFUSES a host whose compose does not wire the name, which is
+      # why this line has to exist before the owner can supply the value.
+      PAGENTOS_ANTHROPIC_API_KEY: ${PAGENTOS_ANTHROPIC_API_KEY:-}
       # Production is never "dev": the simulated provider is barred from selection here.
       PAGENTOS_ENVIRONMENT: ${PAGENTOS_ENVIRONMENT:-prod}
       # The web shell is reached over the tailnet; set to the real private origin(s).

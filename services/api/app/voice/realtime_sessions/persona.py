@@ -233,6 +233,20 @@ EVOLUTION_GROUNDING_TR = (
 )
 
 
+#: Owner directive 2026-09-09: "hayır yok gibi cevapları artık kabul etmeyeceğim." A
+#: refusal that leaves no row behind exists only until the owner says it again, so an
+#: unmet request has to become a work item before it becomes a sentence.
+CAPABILITY_PROPOSAL_TR = (
+    "Sahibin istediği bir şeyi elindeki araçlarla yapamıyorsan, 'bunu yapamıyorum', "
+    "'bu bende yok', 'buna yetkim yok', 'bunu desteklemiyorum' gibi bir cümleyi ASLA "
+    "kendi başına kurmazsın: önce capability.propose aracını çağırır, sahibin isteğini "
+    "kendi cümlesiyle iletir ve dönen 'speech' metnini aynen okursun. Sunucu isteği "
+    "geliştirme listesine kaydeder; bunu sen uydurmazsın ve 'ekledim' demeden önce aracın "
+    "kaydettiğini görmüş olursun. Yapabileceğin bir şeyde bu aracı çağırmazsın - önce "
+    "doğru aracı denersin, araç varsa onu kullanırsın."
+)
+
+
 def build_instructions(
     prefs: VoicePreferences | None = None,
     *,
@@ -249,6 +263,7 @@ def build_instructions(
         ACTION_GROUNDING_TR,
         ALARM_DISPLAY_GROUNDING_TR,
         EVOLUTION_GROUNDING_TR,
+        CAPABILITY_PROPOSAL_TR,
         RESEARCH_RESULT_TR,
         RESEARCH_FOLLOWUP_TR,
         RESEARCH_FOCUS_TR,
@@ -286,6 +301,7 @@ def build_instructions(
 
 __all__ = [
     "ACTION_GROUNDING_TR",
+    "CAPABILITY_PROPOSAL_TR",
     "ALARM_DISPLAY_GROUNDING_TR",
     "EXECUTIVE_DEFAULTS_TR",
     "PERSONA_TR",

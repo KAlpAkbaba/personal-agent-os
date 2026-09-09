@@ -8473,3 +8473,112 @@ That half is `ClaudeCodingBackend`, inert in production because
 the owner's decision, not mine. And the engine's authority still stops at `shadow_ready`
 (`LAB_FORBIDDEN_STATUSES`): it may find, diagnose and prepare, and it must ask before it
 ships. The owner's "evet" to "ekleyeyim mi?" IS that authorization.
+
+## ADR-0103 — "Bunu yapamıyorum" is an unfiled feature request (2026-09-10)
+
+**Owner directive.** "bir şey sorduğumda 'bunu yapamıyorum' değil ... 'bunu feature olarak
+ekleyeyim mi' olarak dönüp ... hayır yok gibi cevapları artık kabul etmeyeceğim."
+
+**What was already there, and what was missing.** `GapDetector` walks the owner's own
+resolution order — existing capability, composition, configuration, extension, a vetted
+component, a new skill, and finally a product change it refuses to start on its own — and
+`GapService.record` writes the whole decision trail to `capability_gaps`, which the Evolution
+Supervisor reads on every tick. The only callers were `POST /v1/evolution/gaps` and the M24
+genesis service. So a request the assistant could not serve produced a sentence and nothing
+else: no row, no trail, no work item, and no way for the owner to find it again except by
+saying it a second time.
+
+`capability.propose` is the missing caller. The model is told — in the tool description and
+in `persona.CAPABILITY_PROPOSAL_TR` — that it may not form the sentence "bunu yapamıyorum"
+without calling it first.
+
+**Three answers, because three different things can be true.** The tool does not pick one;
+the detector does, and `speech_for` reads its resolution:
+
+| the tree decided | the owner hears |
+| --- | --- |
+| `existing_capability` / `composition` / `configuration` / `extension` | "Bunu aslında yapabiliyorum efendim; bir daha deneyeyim…" |
+| `generation` | "…geliştirme listeme aldım ve üzerinde çalışacağım." |
+| `product_change_required` | "…kendi çekirdeğimde bir değişiklik gerekiyor; kendi başıma başlamam, onayınıza getireceğim." |
+
+A test forbids all three from containing "yayına al", "canlıya al" or "kurdum": the engine's
+authority stops at `shadow_ready` and a sentence that implies a release is a lie the owner
+would only discover later.
+
+**The id was written twice.** `CapabilityRequest.parse` refuses anything that is not a
+dotted capability id (`tokens.CAPABILITY_ID_RE`) with "refusing to derive code". The first
+version produced a hyphenated slug and every real call failed — caught by the tests, not in
+production. `capability_id` now folds a spoken Turkish sentence into `owner.<identifier>`,
+and a test READS that regex from the module that owns it and holds thirteen shapes of
+sentence against it, including emoji, 300 dashes and a leading digit.
+
+**No comfortable lies.** Without the evolution runtime, or with a recorder that raises, the
+answer is "listeye de alamadım" — never "aldım". Two regressions cover exactly that, because
+the failure mode that matters here is a system that says it filed something and did not.
+
+**What this deliberately does NOT do.** The owner's "evet" does not yet become the
+authorization. A bare confirmation is disambiguated by a mechanism that already has five
+participants (a calendar proposal, a genesis run awaiting approval, an executive run, a
+native build, a draft), and adding a sixth in the same sitting as three device-layer fixes
+was not a trade worth making at speed. So the tool records and says what it recorded, rather
+than asking a question whose answer would go nowhere. Wiring the yes is the next work item.
+
+**Also corrected here.** The corpus's per-utterance device-call policy refused the
+`window.list` liveness read ADR-0101 added: `forbidden_side_effect: device calls outside the
+policy: ['window.list']`. That guard was right — a read is still a device call and the
+policy exists so that no new one appears unannounced. `SIDE_EFFECTS_OPERATOR_*` now declare
+it, with the reason.
+
+## ADR-0104 — A bare `icacls` in the owner's hands, and a guard that only watched one file (2026-09-10)
+
+**What happened.** The owner went to install an Anthropic API key and
+`scripts\secret-store.ps1 -Set …` died with
+
+```
+The term 'icacls' is not recognized as the name of a cmdlet, function, script file, or operable program.
+```
+
+before anything was stored. Line 65 invoked `icacls` by bare name, and a spawned shell on
+this machine can have a PATH whose first entry is the literal `%PATH%` with no System32 in
+it at all.
+
+**Why this one hurts.** The identical defect was found and fixed on 2026-09-05 in
+`scripts\cloud\rotate-cloud-owner-credential.ps1`, where the fix resolves
+`System32\icacls.exe` by absolute path and falls back to a warning rather than losing the
+credential. It even has a regression:
+`Assert-True ($src.Contains('System32\icacls.exe'))`. But that assertion reads ONE file's
+source. `secret-store.ps1` held its own copy of the same directory-hardening logic and kept
+the bare call, and nothing was watching it. Two implementations of one idea; one guarded.
+
+`harness-symbols.tests.ps1` could not catch it either, and the reason is worth stating: it
+asserts every invoked command RESOLVES, using `Get-Command` in the test's own shell — where
+`icacls` resolves perfectly. A guard that runs in a healthy environment cannot see a defect
+that only exists in a broken one.
+
+**Fix.** `secret-store.ps1` resolves the tool by absolute path, and a failure to tighten the
+ACL is a warning rather than a lost secret (DPAPI already makes the bytes useless to another
+account; the ACL is hardening, not the protection). And the guard is now a rule about
+SHAPE rather than resolution: an AST walk over **every** `.ps1` under `scripts\` (tests
+excluded), failing any bare invocation of a System32-only tool — `icacls`, `takeown`, `sc`,
+`netsh`, `reg`, `taskkill`, `schtasks`, `wevtutil`. 136 checks. Reintroducing the bare call
+turns it red:
+
+```
+FAIL  \scripts\secret-store.ps1 invokes no System32 tool by bare name
+harness symbols: 135 passed, 1 failed
+```
+
+**The credential.** The key the owner typed was passed as the `-Set` NAME rather than
+entered at the masked prompt, so it landed in PowerShell history, in a screenshot and in the
+assistant's transcript. It was never stored, used or written anywhere by the assistant, and
+the owner was told to revoke it. The script's design was already right — "values are read
+with a masked prompt (never as a parameter, so they cannot land in PowerShell history)" —
+which is why the instruction accompanying it now says explicitly that `-Set` takes the name
+and the value is asked for afterwards.
+
+**Also corrected here.** The corpus's `op.type.no_window` case caught a real over-reach in
+ADR-0101's liveness check: with NO remembered window, `_confirm_alive` was asking the device
+for its foreground window and offering it. "Buraya yaz" points at whatever the owner was
+last in, and an operator with no record of one has no evidence that the window in front is
+what they meant — the fallback belongs to "the remembered window is gone", not to "there
+never was one". It now asks, and touches no device to do it.

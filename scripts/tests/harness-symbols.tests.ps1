@@ -90,6 +90,31 @@ function Get-InvokedCommands {
     return , @($names.Keys | Sort-Object)
 }
 
+
+#: Tools that live in System32 and ONLY there. A spawned shell on the owner's machine can
+#: have a PATH whose first entry is a literal "%PATH%" and no System32 at all, so a bare
+#: name here is a script that works for its author and dies for its owner. This was fixed
+#: once, in the cloud owner-credential rotation script on 2026-09-05, and guarded
+#: there by a string check on that ONE file. scripts\secret-store.ps1 kept its own copy of
+#: the same hardening with a bare `icacls`, and on 2026-09-10 it threw
+#: "The term 'icacls' is not recognized" in the owner's hands while they were installing an
+#: API key. Get-Command finds these in a healthy shell, which is exactly why the existing
+#: resolution guard above cannot see the problem.
+$systemTools = @("icacls", "takeown", "sc", "netsh", "reg", "taskkill", "schtasks", "wevtutil")
+
+function Get-BareSystemToolSites {
+    param($Ast)
+    $sites = @()
+    foreach ($c in $Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true)) {
+        $name = $c.GetCommandName()
+        if ([string]::IsNullOrEmpty($name)) { continue }
+        if ($systemTools -contains $name.ToLowerInvariant()) {
+            $sites += "$name at line $($c.Extent.StartLineNumber)"
+        }
+    }
+    return , @($sites)
+}
+
 function Get-ClosureSites {
     param($Ast)
     $sites = @()
@@ -213,6 +238,27 @@ Test-Case "the guard itself catches the 2026-09-06 shape: a call to a function n
 }
 
 # ------------------------------------------------------------ the 2026-09-09 coverage gap
+
+# EVERY script, not a curated list. The curated list above is what made this necessary: the
+# file that failed in the owner's hands on 2026-09-10 (scripts\secret-store.ps1) was not on
+# it, and neither is most of the repository. A bare System32 tool is a defect wherever it is
+# written, so this walks all of them.
+Write-Host ""
+Write-Host "system tools: no script invokes one by bare name"
+
+$allScripts = Get-ChildItem -LiteralPath (Join-Path $repoRoot "scripts") -Filter *.ps1 -File -Recurse |
+    Where-Object { $_.FullName -notmatch '\\tests\\' }
+foreach ($script in $allScripts) {
+    $relative = $script.FullName.Substring($repoRoot.Length).TrimStart('')
+    Test-Case "$relative invokes no System32 tool by bare name" {
+        $sites = Get-BareSystemToolSites -Ast (Get-ScriptAst -Path $script.FullName)
+        if ($sites.Count -gt 0) {
+            throw ("bare System32 tool: " + ($sites -join ', ') +
+                   " - resolve it through Get-SystemTool or an absolute System32 path; a spawned shell here has had no System32 on PATH at all")
+        }
+    }
+}
+
 # The blanket "no GetNewClosure" rule above was written on 2026-09-06 for the owner harnesses
 # and their two libraries. scripts\lib\AgentUpdate.ps1 was never added to that hand-typed
 # list, and three days later it shipped the identical defect: a closure calling

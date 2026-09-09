@@ -192,15 +192,28 @@ SIDE_EFFECTS_ALARM_CANCEL: Final[frozenset[str]] = frozenset({"desktop.alarm_dis
 #: may reach on the fake device — anything else the harness sees is a forbidden side
 #: effect (the same policy the alarm/display families already use above).
 SIDE_EFFECTS_OPERATOR_APP_OPEN: Final[frozenset[str]] = frozenset({"app.launch", "window.current"})
+#: ``window.list`` appears in every plan that acts on a REMEMBERED window (ADR-0101): the
+#: focus stack records what the operator once observed, and the owner closes windows, so
+#: "current"/"previous" are held against the desktop before anything acts on them. It is a
+#: read and it changes nothing — but it IS a device call this policy did not allow, and the
+#: policy is the reason it had to be declared here rather than appearing unannounced.
 SIDE_EFFECTS_OPERATOR_WINDOW_CLOSE: Final[frozenset[str]] = frozenset(
     {"window.close", "window.list"}
 )
-SIDE_EFFECTS_OPERATOR_WINDOW_MAXIMIZE: Final[frozenset[str]] = frozenset({"window.maximize"})
-SIDE_EFFECTS_OPERATOR_WINDOW_MINIMIZE: Final[frozenset[str]] = frozenset({"window.minimize"})
-SIDE_EFFECTS_OPERATOR_WINDOW_RESTORE: Final[frozenset[str]] = frozenset({"window.restore"})
-SIDE_EFFECTS_OPERATOR_WINDOW_PREVIOUS: Final[frozenset[str]] = frozenset({"window.activate"})
+SIDE_EFFECTS_OPERATOR_WINDOW_MAXIMIZE: Final[frozenset[str]] = frozenset(
+    {"window.maximize", "window.list"}
+)
+SIDE_EFFECTS_OPERATOR_WINDOW_MINIMIZE: Final[frozenset[str]] = frozenset(
+    {"window.minimize", "window.list"}
+)
+SIDE_EFFECTS_OPERATOR_WINDOW_RESTORE: Final[frozenset[str]] = frozenset(
+    {"window.restore", "window.list"}
+)
+SIDE_EFFECTS_OPERATOR_WINDOW_PREVIOUS: Final[frozenset[str]] = frozenset(
+    {"window.activate", "window.list"}
+)
 SIDE_EFFECTS_OPERATOR_TYPE: Final[frozenset[str]] = frozenset(
-    {"window.activate", "keyboard.type", "ui.inspect"}
+    {"window.activate", "keyboard.type", "ui.inspect", "window.list"}
 )
 SIDE_EFFECTS_OPERATOR_SHELL: Final[frozenset[str]] = frozenset({"terminal.execute"})
 

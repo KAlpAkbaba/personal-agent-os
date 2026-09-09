@@ -339,3 +339,80 @@ def test_status_without_the_runtime_is_an_honest_sentence(wired) -> None:
         answer = tools_evolution.evolution_status(ctx, {})
     assert answer["status"] is None
     assert "bağlı değil" in answer["speech"]
+
+
+# ---------------------------------- what to say instead of "yapamıyorum" (ADR-0103)
+
+
+def test_an_unmet_request_is_recorded_as_a_real_gap(wired) -> None:
+    """Through the tool, against the REAL detector and recorder: a request the assistant
+    cannot serve leaves a row the Evolution Supervisor can read on its next tick."""
+    factory, runtime, settings = wired
+    with factory() as session:
+        ctx = _ctx(session, runtime, settings, utterance=None)
+        answer = tools_evolution.capability_propose(
+            ctx, {"request": "Ekranı ikiye bölüp sol tarafa not defterini koy."}
+        )
+
+    assert answer["recorded"] is True, answer
+    assert answer["gap_id"], answer
+    stored = runtime.gaps.get(uuid.UUID(answer["gap_id"]))
+    assert stored["request_text"] == "Ekranı ikiye bölüp sol tarafa not defterini koy."
+    assert stored["decision_trail"], "no trail means no evidence of what was decided"
+    assert answer["speech"].strip()
+
+
+def test_the_tool_asks_rather_than_recording_an_empty_request(wired) -> None:
+    factory, runtime, settings = wired
+    with factory() as session:
+        ctx = _ctx(session, runtime, settings, utterance=None)
+        answer = tools_evolution.capability_propose(ctx, {"request": "   "})
+    assert answer["status"] == "needs_clarification"
+    assert runtime.gaps.list() == []
+
+
+def test_without_the_runtime_it_says_it_could_not_record_rather_than_claiming_it_did(
+    wired,
+) -> None:
+    """The dangerous failure here is a comfortable lie: "listeye aldım" when nothing was
+    written. The owner would only find out by asking for it later."""
+    factory, runtime, settings = wired
+    with factory() as session:
+        ctx = _ctx(session, runtime, settings, utterance=None)
+        ctx.live.pop("evolution_runtime")
+        answer = tools_evolution.capability_propose(ctx, {"request": "Bir şey yap."})
+    assert answer["recorded"] is False
+    assert "alamadım" in answer["speech"]
+
+
+def test_a_recorder_that_fails_never_claims_the_request_was_queued(wired) -> None:
+    factory, runtime, settings = wired
+
+    class _Broken:
+        def record(self, *_a, **_k):
+            raise RuntimeError("database is down")
+
+    with factory() as session:
+        ctx = _ctx(session, runtime, settings, utterance=None)
+        ctx.live["evolution_runtime"] = type(
+            "R", (), {"detector": runtime.detector, "gaps": _Broken()}
+        )()
+        answer = tools_evolution.capability_propose(ctx, {"request": "Bir şey yap."})
+    assert answer["recorded"] is False
+    assert "alamadım" in answer["speech"]
+
+
+def test_the_tool_is_reachable_from_the_default_registry() -> None:
+    """A tool the model cannot see is a tool that does not exist."""
+    registry = default_registry()
+    assert registry.get(tools_evolution.TOOL_CAPABILITY_PROPOSE) is not None
+
+
+def test_the_persona_forbids_a_bare_refusal_and_names_the_tool() -> None:
+    """The tool only fires if the model is told to prefer it over saying "yapamıyorum" —
+    a registered tool with no instruction behind it changes nothing."""
+    from app.voice.realtime_sessions.persona import CAPABILITY_PROPOSAL_TR, build_instructions
+
+    assert tools_evolution.TOOL_CAPABILITY_PROPOSE in CAPABILITY_PROPOSAL_TR
+    assert "yapamıyorum" in CAPABILITY_PROPOSAL_TR
+    assert CAPABILITY_PROPOSAL_TR in build_instructions()
