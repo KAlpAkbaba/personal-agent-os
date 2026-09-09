@@ -152,7 +152,51 @@ else {
 }
 
 Write-Host ""
-Write-Host "5. closing the window the probe opened"
+Write-Host "5. a name that matches nothing: does the server ask the DEVICE what is open?"
+#: Read-only on purpose. Naming a window that cannot exist forces the resolver down the
+#: path addendum 2 added, and the question it asks back should name windows this operator
+#: never opened - which is only possible if it really asked the device. Nothing is
+#: activated, moved or typed into: the owner's desktop is not disturbed to prove this.
+$unknown = Invoke-Tool -Name "operator.type" -Arguments @{
+    content = "bu asla yazilmayacak"
+    target  = "Zzz Boyle Bir Pencere Yok"
+}
+Write-Host "   status : $($unknown.status)"
+Write-Host "   speech : $($unknown.result.speech)"
+Assert-Ok ([string]$unknown.status -eq "needs_clarification") `
+    "an unknown window name is a question, not a guess"
+$asked = [string]$unknown.result.speech
+
+#: What IS on the desktop, asked directly, so the claim below is a comparison and not a
+#: guess about sentence length. A window this operator never opened can only appear in the
+#: clarification if the server really asked the device.
+$listBody = @{ capability = "window.list"; payload = @{} } | ConvertTo-Json -Depth 6 -Compress
+$listSent = Invoke-JsonUtf8 -Method POST -Uri "$BaseUrl/v1/devices/$($row.device_id)/commands" `
+    -Headers $headers -Body $listBody -TimeoutSec 60
+$listState = $null
+for ($i = 0; $i -lt 30; $i++) {
+    $s = Invoke-JsonUtf8 -Uri "$BaseUrl/v1/devices/$($row.device_id)/commands/$($listSent.command_id)" `
+        -Headers $headers -TimeoutSec 30
+    if (@("succeeded", "failed", "cancelled", "expired") -contains [string]$s.status) { $listState = $s; break }
+    Start-Sleep -Milliseconds 700
+}
+$desktopTitles = @()
+if ($listState -and [string]$listState.status -eq "succeeded") {
+    $desktopTitles = @($listState.result.windows | ForEach-Object { [string]$_.title } |
+        Where-Object { $_ -and $_ -notlike "*Not Defteri*" })
+}
+Write-Host "   desktop: $($desktopTitles.Count) other window(s) open"
+if ($desktopTitles.Count -eq 0) {
+    Write-Host "  SKIP  no window besides the probe's own is open; nothing to distinguish" -ForegroundColor Yellow
+}
+else {
+    $named = @($desktopTitles | Where-Object { $asked.Contains($_) })
+    Assert-Ok ($named.Count -gt 0) `
+        "the question names a window this operator never opened (e.g. '$($desktopTitles[0])')"
+}
+
+Write-Host ""
+Write-Host "6. closing the window the probe opened"
 [void](Invoke-Tool -Name "operator.window_control" -Arguments @{ action = "close" })
 
 Write-Host ""
