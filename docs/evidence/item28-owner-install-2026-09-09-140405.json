@@ -9,7 +9,8 @@
     "transcript_lines": 95,
     "deploy_journal": "C:\\Program Files\\PagentOS\\agent\\.deploy-journal.json",
     "event_log": "Application log, providers PagentOSDeviceAgent and PagentOS.DeviceService",
-    "device_row": "GET http://100.90.158.26:8001/v1/devices, owner session, read 2026-09-09T11:19:02Z"
+    "device_row": "GET http://100.90.158.26:8001/v1/devices, owner session, read 2026-09-09T11:19:02Z",
+    "cloud_core_database": "ssh root@100.90.158.26 -> docker exec pagentos-prod-postgres psql -U pagentos -d pagentos_prod; tables device_sessions and audit_events, read 2026-09-09T12:0xZ. Read-only."
   },
   "environment": {
     "host_application": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
@@ -73,19 +74,31 @@
     "last_seen_at": "2026-09-09T11:19:02.582878Z",
     "heartbeat_age_s": 6.3,
     "row_keys": [
-      "device_id", "name", "platform", "status", "presence", "software_version",
-      "capabilities", "capability_count", "last_seen_at", "aliases", "labels", "policy",
-      "health", "enrolled_at", "revoked_at", "heartbeat_status"
+      "device_id",
+      "name",
+      "platform",
+      "status",
+      "presence",
+      "software_version",
+      "capabilities",
+      "capability_count",
+      "last_seen_at",
+      "aliases",
+      "labels",
+      "policy",
+      "health",
+      "enrolled_at",
+      "revoked_at",
+      "heartbeat_status"
     ],
     "findings": [
       "The row is COMPLETE for the gate's purposes: presence, software_version at the top level AND under health, the capability list and capability_count are all present. The 2026-09-08 'Cloud Core carries no software version at all' contract fault is fixed, and this row proves it against production.",
       "The row currently describes the RESTORED release (0.1.0, 29 capabilities) with a six-second heartbeat, so the rollback overwrote the row exactly as expected - the last question of the independent investigation, answered yes.",
       "The candidate would have announced 0.6.0: PagentOS.Agent.Core/Protocol/ProtocolConstants.cs sets AgentInfo.SoftwareVersion = \"0.6.0\", and Program.cs sends that value in hello. The restored release predates that constant, which is why the row says 0.1.0.",
-      "Whether 0.6.0 / 85 capabilities actually reached the row during the candidate's 97-second window is NOT_YET_PROVEN. The durable per-connection record is device_sessions.software_version on the Cloud Core, and SSH to the host is not reachable from this machine today (TCP connects, the SSH banner exchange times out over the Tailscale DERP relay); HTTP on 8001 works. No HTTP endpoint exposes device-session history. The installer's own reading proves nothing either way: it never sent a request."
+      "SETTLED, with durable evidence: device_sessions row ef480d48 records the candidate connecting at 2026-09-09T11:04:45.942853Z announcing software_version 0.6.0 and 85 distinct capabilities, and holding that connection for 94.0 s - the whole window in which the installer was failing to ask. See cloud_core_candidate_registration below."
     ]
   },
   "not_proven_by_this_run": [
-    "the candidate reaching Cloud Core's device row as 0.6.0 with 85 capabilities",
     "anything item 28 unlocks - the runtime is the restored release, 29 capabilities",
     "M28 26.15: the generated EXE launched, driven, relaunched and its log read back"
   ],
@@ -101,5 +114,49 @@
       ".github/workflows/ci.yml - runs harness-symbols, owner-harness and the new regression, none of which any automation ran before"
     ],
     "mutation_proof": "With New-CoreDeviceFetcher reverted to the 2026-09-09 implementation, core-verifier-scope.tests.ps1 fails 5 of 20 and qualify-staged-update.ps1 fails 3 of 85 - each reproducing the owner's exact message. With the fix, 20/20 and 85/85."
+  },
+  "cloud_core_candidate_registration": {
+    "verdict": "PROVEN_REAL - the candidate DID register with Cloud Core as 0.6.0 with 85 capabilities. Only the installer failed to read it.",
+    "how": "app/broker/ws.py handles one handshake: service.start_device_session() writes a durable device_sessions row carrying software_version and the hello's full capability list in connection_metadata_json, and service.apply_hello() overwrites devices.software_version and devices.capabilities_json from the same hello. So a session row is a permanent record of what the devices row held at that moment - and unlike the devices row, a rollback does not erase it.",
+    "sessions": [
+      {
+        "id": "ef480d48-d963-4b6c-9c26-8abad7d37bf8",
+        "software_version": "0.6.0",
+        "capability_count": 85,
+        "distinct_capability_names": 85,
+        "started_at": "2026-09-09T11:04:45.942853Z",
+        "ended_at": "2026-09-09T11:06:19.991321Z",
+        "seconds": 94.0,
+        "note": "THE CANDIDATE. It connected 1.0 s after the service started and held the connection for the whole 90.6 s the installer spent failing to ask a question."
+      },
+      {
+        "id": "64f54ae7-141a-4298-8f35-69ad1d087511",
+        "software_version": "0.1.0",
+        "capability_count": 29,
+        "started_at": "2026-09-09T11:06:21.872201Z",
+        "ended_at": "2026-09-09T11:20:07.640105Z",
+        "note": "the rolled-back release, 1.9 s after the candidate's connection ended"
+      },
+      {
+        "id": "0e550ebd-ea00-4e7d-9c0b-bd53d7f45bdd",
+        "software_version": "0.6.0",
+        "capability_count": 40,
+        "note": "the 2026-09-08 attempt, -DisplayPower only. Its candidate reached Cloud Core too."
+      }
+    ],
+    "audit_events": [
+      "2026-09-09T11:04:45.942Z device_session/session_started {\"software_version\": \"0.6.0\"}",
+      "2026-09-09T11:06:19.993Z device_session/session_ended {\"reason\": \"disconnect\"}",
+      "2026-09-09T11:06:21.872Z device_session/session_started {\"software_version\": \"0.1.0\"}"
+    ],
+    "consequence": "The health gate compares the candidate's version and its capability names against the row. Cloud Core held 0.6.0 and all 85 names, with no name announced twice (entries == distinct names in the session row). Had the fetcher resolved, the gate would have PASSED and the install would have committed. The only defect between the owner and item 28 was the closure.",
+    "questions_answered": {
+      "did the candidate register/heartbeat before rollback": "yes, for 94.0 s",
+      "did 0.6.0 / 85 ever reach the device row": "yes - the same handshake writes both, and the session row records it durably",
+      "did the installer query the correct row": "the question never arose: it sent no request. The correct row is 3f60fdb5-5022-48cf-bb3c-d7192466b701, the only enrolled device, and it is the one the installer named",
+      "did candidate and previous runtime race during the swap": "no - the previous session ended 2026-09-09T11:04:42.647Z, the candidate's began 11:04:45.943Z; 3.3 s apart and strictly ordered",
+      "could stale data overwrite the candidate": "no - every hello is authoritative and overwrites rather than merges (apply_hello), and the session timeline shows no overlap",
+      "did rollback overwrite the row as expected": "yes - 0.1.0 / 29 from 11:06:21.872Z, and the row read over HTTP at 11:19Z showed exactly that"
+    }
   }
 }

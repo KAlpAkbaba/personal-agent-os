@@ -172,11 +172,28 @@ public sealed class AuditLogSchemaTests : IDisposable
 
         using var reader = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
         var clock = System.Diagnostics.Stopwatch.StartNew();
-        await Task.Run(() => audit.Write("second", status: "ok"));
+
+        // "Not a hang" is a claim about TERMINATION, and it is asserted as one: the write is
+        // given a hard deadline this test owns, so an unbounded retry (the regression this
+        // guards) fails with a TimeoutException rather than eventually being noticed.
+        //
+        // It used to assert `elapsed < 5 s` instead, and CI run 34347704153 failed on
+        // 00:00:05.0220759 - the loop sleeps 20 x 25 ms by contract, and a contended runner
+        // stretched half a second into five. That assertion measured the runner, not the
+        // product. The generous ceiling here is not a weaker claim: only a genuinely
+        // unbounded loop can reach it, which is exactly what the test is named for.
+        await Task.Run(() => audit.Write("second", status: "ok"))
+            .WaitAsync(TimeSpan.FromSeconds(60));
         clock.Stop();
 
         Assert.Equal(1, audit.FailedWrites);
-        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(5), $"the bounded retry took {clock.Elapsed}");
+
+        // And it really did exhaust the retry budget rather than giving up at once - the
+        // other way this could break, invisible to any ceiling. 20 x 25 ms of sleeping
+        // cannot pass in less than that on any machine, however fast.
+        Assert.True(
+            clock.Elapsed >= TimeSpan.FromMilliseconds(20 * 25),
+            $"the write gave up after {clock.Elapsed}, before its 20 x 25 ms retry budget was spent");
     }
 
     // A tailer that opens the file the cooperative way never blocks the trail at all.

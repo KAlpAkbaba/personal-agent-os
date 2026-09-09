@@ -131,8 +131,13 @@ that fails verification for *any* reason — the verifier's own defect included 
 owner on a working agent. All three trees restored, the previous release judged by its own
 baseline predicate and reported healthy, 96.6 s from candidate start to a working machine.
 
-**Cloud Core was investigated separately and is not at fault.** The device row is complete
-and correct against production — online, `software_version` at the top level and under
+**Cloud Core was investigated separately, is not at fault, and had in fact already seen the
+candidate.** Its durable record settles it: `device_sessions` row `ef480d48-…` has the
+candidate connecting at 11:04:45.942853Z announcing `software_version 0.6.0` with **85
+distinct capability names**, and holding that connection for **94.0 s** — the entire window
+in which the installer was failing to ask it anything. The same handshake overwrites the
+device row's version and capability list, so the gate the installer could not run **would
+have passed**. The device row is also complete and correct against production — online, `software_version` at the top level and under
 `health`, a capability list — and `scripts/core/verify-core-device-row.ps1` now proves, in
 the owner's own invocation form, that the real fetcher reads the real row and that its
 capability set is *exactly* what the installed binary advertises. What the installer said

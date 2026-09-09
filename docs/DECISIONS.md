@@ -7971,12 +7971,19 @@ purposes: `presence`, `software_version` at the top level **and** under `health`
 capability list and `capability_count`. ADR-0090's contract fault is fixed, and this row is
 the production proof of it. The row currently describes the *restored* release (0.1.0, 29
 capabilities) with a six-second heartbeat, so the rollback overwrote the row as expected. The
-candidate would have announced 0.6.0 (`AgentInfo.SoftwareVersion`). Whether it actually
-reached the row during its 97-second window is **NOT_YET_PROVEN**: the durable record is
-`device_sessions.software_version` on the Cloud Core, no HTTP endpoint exposes it, and SSH to
-the host is not reachable from this machine today (TCP connects; the banner exchange times
-out over the Tailscale relay). The installer's own reading settles nothing — it never took
-one. Recorded rather than guessed: `docs/evidence/item28-owner-install-2026-09-09-140405.json`.
+candidate reached it: `device_sessions` row `ef480d48-…` records the candidate connecting at
+11:04:45.942853Z announcing **`software_version 0.6.0` with 85 distinct capability names**,
+and holding that connection for **94.0 s** — the entire window in which the installer was
+failing to ask. `audit_events` carries the matching `session_started` and, 1.9 s after the
+disconnect, the rolled-back release announcing 0.1.0 / 29. `app/broker/ws.py` writes that
+session row and `apply_hello()` overwrites `devices.software_version` and
+`devices.capabilities_json` in the SAME handshake, so the session row is a permanent record
+of what the device row held at that instant — which a rollback erases and this does not.
+
+**So the gate would have passed.** Version matched, capability count matched, no name
+announced twice, no overlapping session that could have raced or overwritten it. The only
+thing standing between the owner and item 28 was the closure. Recorded rather than guessed:
+`docs/evidence/item28-owner-install-2026-09-09-140405.json`.
 
 **Decision 4 — the guard for this defect existed, covered the wrong files, and was run by
 nothing.** `scripts/tests/harness-symbols.tests.ps1` was written on 2026-09-06 for this exact
@@ -8004,6 +8011,20 @@ shell would be worthless). Its own health closure was rewritten the same way as 
 `core-verifier-scope.tests.ps1` fails 5 of 20 and `qualify-staged-update.ps1` fails 3 of 85,
 each printing the owner's exact sentence; with the fix, 20/20 and 85/85. The `-File` half
 passes under the mutation too — which is precisely why nothing caught this.
+
+**One more defect, found by CI on this very commit.** `AuditLogSchemaTests.
+A_reader_that_never_lets_go_costs_one_counted_failure_not_a_hang` failed on run
+`34347704153` with *"the bounded retry took 00:00:05.0220759"*. Nothing in this change
+touches C#; the test asserted `elapsed < 5 s` over a loop whose contract is 20 × 25 ms of
+sleeping, and a contended runner stretched half a second into five. That assertion measured
+the runner, not the product — the same shape as the four "two clocks for one decision" bugs
+this repository has already recorded. "Not a hang" is a claim about TERMINATION, so it is
+asserted as one now: the write is given a hard deadline the test owns (`WaitAsync`), so an
+unbounded retry fails with a `TimeoutException` instead of being noticed eventually; and a
+LOWER bound was added, because the other way this could break — giving up before the retry
+budget is spent — no ceiling could ever have caught. Both directions were watched failing:
+`SharingRetries = 0` trips the lower bound in 4.9 ms, `SharingRetries = 100000` trips the
+timeout at one minute.
 
 **Consequences.** Item 28 is **not** passed. The device is the restored release, 29
 capabilities, and M28 row 26.15 is untouched. What this run did prove, for real and on the
