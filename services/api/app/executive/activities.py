@@ -33,10 +33,11 @@ defect that cost M24 and M25 a security finding each).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Final
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -1024,6 +1025,50 @@ async def _dispatch_once(
     raise StepError("invalid_kind", f"{kind!r} is not a dispatched step kind")
 
 
+#: How often a running step tells Temporal it is alive. The workflow asks for a
+#: heartbeat timeout of `min(timeout_s, 90)`; twenty seconds leaves four missed beats of
+#: margin, which is enough that an ordinary GC pause or a slow log write cannot look like
+#: death, and short enough that a genuinely stuck step is still caught inside the minute
+#: and a half the workflow allows it.
+HEARTBEAT_EVERY_S: Final = 20.0
+
+
+async def _dispatch_with_heartbeat(
+    run_uuid: uuid.UUID, step_id: str, kind: str, resolved: dict[str, Any]
+) -> dict[str, Any]:
+    """One attempt, with something proving it alive while it runs.
+
+    Found on production (M26 runtime verification, run `ef6d685c`): `research.run` was
+    killed with "activity Heartbeat timeout" after ninety seconds, because the only
+    heartbeats this activity sent were BETWEEN retry attempts - so a single dispatch that
+    legitimately takes minutes, which an M13 browser research run routinely does, looked
+    stuck to Temporal from the first second. The step's own `timeout_s` (up to 900) was
+    never reached; the LIVENESS bound was, and the two are not the same promise.
+
+    A heartbeat is not progress and this does not pretend it is - it says "this activity's
+    event loop is still turning", which is exactly the question `heartbeat_timeout` asks.
+    A step that has genuinely hung inside a blocking call cannot beat either, so the guard
+    still bites; it simply no longer bites the steps that are working.
+    """
+    if not activity.in_activity():  # a direct/unit-test call: no worker to hear a beat
+        return await _dispatch_once(run_uuid, step_id, kind, resolved)
+
+    async def _beat() -> None:
+        elapsed = 0.0
+        while True:
+            await asyncio.sleep(HEARTBEAT_EVERY_S)
+            elapsed += HEARTBEAT_EVERY_S
+            activity.heartbeat(f"{kind} running: {elapsed:.0f}s")
+
+    pump = asyncio.ensure_future(_beat())
+    try:
+        return await _dispatch_once(run_uuid, step_id, kind, resolved)
+    finally:
+        pump.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await pump
+
+
 @activity.defn(name="executive_run_step")
 async def run_step_activity(run_id: str, step_id: str) -> dict[str, Any]:
     """Spec §1's retry — ``max_attempts <= 3``, ``backoff_s <= 60``, only on
@@ -1057,7 +1102,7 @@ async def run_step_activity(run_id: str, step_id: str) -> dict[str, Any]:
     attempt = 1
     while True:
         try:
-            evidence = await _dispatch_once(run_uuid, step_id, kind, resolved)
+            evidence = await _dispatch_with_heartbeat(run_uuid, step_id, kind, resolved)
             error = None
             break
         except StepError as exc:

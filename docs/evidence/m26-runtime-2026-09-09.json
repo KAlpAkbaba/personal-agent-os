@@ -1,35 +1,35 @@
 ﻿{
-    "checked_at":  "2026-09-09T01:17:19Z",
+    "checked_at":  "2026-09-09T01:30:50Z",
     "base_url":  "http://pagentos-core:8001",
     "release":  {
-                    "version":  "5d08c6db0b602cbcfb8736c2b8503ad428e9163d",
-                    "last_known_good":  "20db2678bd89a5e37ea5e21bb3a96b7f00d5b67a",
+                    "version":  "824265445a7f5d18e4c3d70bba236b36446cc78f",
+                    "last_known_good":  "5d08c6db0b602cbcfb8736c2b8503ad428e9163d",
                     "app_version":  "0.1.0",
                     "ui_state":  11,
                     "action":  12,
                     "status":  "ok",
-                    "uptime_s":  214.052035
+                    "uptime_s":  80.721334
                 },
     "news_sources":  [
 
                      ],
     "executive_run":  {
-                          "run":  "3ef7c639-f0b8-47da-9cd9-261c3bc4c668",
-                          "state":  "running",
-                          "done":  3,
+                          "run":  "ef6d685c-9521-4a7d-b19b-617f5da1512c",
+                          "state":  "partial",
+                          "done":  4,
                           "total":  4,
                           "steps":  [
                                         {
                                             "id":  "s1",
                                             "kind":  "research.run",
-                                            "state":  "failed_recoverable",
-                                            "error_class":  "dependency_unavailable"
+                                            "state":  "failed",
+                                            "error_class":  "internal_error"
                                         },
                                         {
                                             "id":  "s2",
                                             "kind":  "research.synthesize",
-                                            "state":  "skipped",
-                                            "error_class":  "precondition_unmet"
+                                            "state":  "failed",
+                                            "error_class":  "verification_failed"
                                         },
                                         {
                                             "id":  "s3",

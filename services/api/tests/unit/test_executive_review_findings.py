@@ -408,3 +408,62 @@ def test_a_retryable_step_can_still_be_retried_from_a_partial_run() -> None:
     assert "STATE_PARTIAL" not in source, (
         "a partial run now refuses a retry - the fix took away the thing it was protecting"
     )
+
+
+# ------------------------------ the step that could not prove it was alive (production)
+
+
+@pytest.mark.asyncio
+async def test_a_long_step_heartbeats_while_it_runs(monkeypatch) -> None:
+    """The M26 runtime verification's second production finding.
+
+    Run `ef6d685c` on the deployed Cloud Core: `s1 research.run` failed with
+    `internal_error`, message "the step's activity did not return: TimeoutError: activity
+    Heartbeat timeout". The workflow asks Temporal for `heartbeat_timeout = min(timeout_s,
+    90)`, and this activity heartbeated only BETWEEN retry attempts - so a single dispatch
+    that legitimately takes minutes, which an M13 browser research run routinely does,
+    looked stuck from the first second. The step's own `timeout_s` (up to 900) was never
+    reached; the LIVENESS bound was, and the two are different promises.
+
+    Asserted at the boundary that matters: while a dispatch is in flight, beats reach
+    Temporal. Not "the code calls heartbeat somewhere" - beats arrive DURING the call, from
+    a dispatch that never returns until the test lets it.
+    """
+    from app.executive import activities
+
+    beats: list[str] = []
+    released = asyncio.Event()
+
+    async def slow_dispatch(run_uuid, step_id, kind, resolved):
+        await released.wait()
+        return {"text": "done"}
+
+    monkeypatch.setattr(activities, "_dispatch_once", slow_dispatch)
+    monkeypatch.setattr(activities.activity, "in_activity", lambda: True)
+    monkeypatch.setattr(activities.activity, "heartbeat", lambda *a: beats.append(str(a)))
+    # A beat every 10 ms so the test is fast; the production value is 20 s.
+    monkeypatch.setattr(activities, "HEARTBEAT_EVERY_S", 0.01)
+
+    task = asyncio.ensure_future(
+        activities._dispatch_with_heartbeat(uuid.uuid4(), "s1", "research.run", {})
+    )
+    await asyncio.sleep(0.08)
+    beats_during = len(beats)
+    released.set()
+    result = await asyncio.wait_for(task, timeout=5)
+
+    assert beats_during >= 2, f"{beats_during} beats while the step ran - Temporal will kill it"
+    assert result == {"text": "done"}
+    # And the pump stops with the step: no beat after it returned.
+    after = len(beats)
+    await asyncio.sleep(0.05)
+    assert len(beats) == after, "the heartbeat pump outlived the step it was proving alive"
+
+
+def test_the_heartbeat_interval_leaves_margin_under_the_workflow_bound() -> None:
+    """The two numbers have to agree, and they live in different modules: the workflow
+    asks for `min(timeout_s, 90)`, the activity beats every `HEARTBEAT_EVERY_S`. If anyone
+    raises the interval past a quarter of the bound, a working step starts dying again."""
+    from app.executive.activities import HEARTBEAT_EVERY_S
+
+    assert HEARTBEAT_EVERY_S * 4 <= 90
