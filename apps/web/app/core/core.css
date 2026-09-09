@@ -848,6 +848,19 @@
   border-bottom: none;
 }
 
+/* Each fact a row publishes gets its own line.
+   A row's body is a sequence of sibling <span>s - the step, the object list, the run's own
+   error sentence, a pending notice - and `.panel li` is a plain block, so inline layout ran
+   them together: the M25 "3B Sahne" panel really rendered "doğrulandı (3 nesne)Kure, Kamera,
+   Gunes" and "yapılamadıNo valid Unity Editor license found.". Two separately published
+   facts read as one garbled claim, on every panel built on this row shape (M23, M24, M25,
+   M26 - all released). Found by rendering the panels side by side while building M27's.
+   `.event-row` is a <div> and keeps its own flex layout; only DIRECT-child spans are
+   affected. Guarded by tests/cockpit/panel-row-lines.test.tsx. */
+.panel li > span {
+  display: block;
+}
+
 .panel-empty {
   color: var(--muted);
   font-size: 0.85rem;
