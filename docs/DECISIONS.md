@@ -8113,3 +8113,78 @@ seconds — which is what it is for.
 can be proven. That is stated plainly rather than worked around: the alternative is to claim a
 launch that has not happened. Everything else the qualification measures is already
 `PROVEN_REAL` against the runtime now installed.
+
+## ADR-0099 — The timer that outlived its promise: an overlay on a page that asked for nothing (2026-09-09)
+
+Status: Accepted. Touches `apps/web/app/lib/voice/webrtc.ts`, `apps/web/app/lib/voice/controller.ts`,
+`apps/web/tests/voice/transport.test.ts`, a new `apps/web/tests/voice/stale-terminal-state.test.ts`,
+and `apps/web/tests/uistate/document-states.test.ts`.
+
+**Context — what the owner saw.** `/voice` was connected: the button read *Bağlantıyı kes*, the
+status read **Dinliyor**, the network was online, the microphone heard the owner and the turn
+counter advanced. On the same screen, in red: **"Oturum sunucuda kapanmış."** Then opening
+`/core` threw *"data channel did not open in time"* into the Next runtime overlay, pointing at
+the 15-second timeout in `webrtc.ts`.
+
+Three claims were on the screen and at most two could be true.
+
+**Root cause of the overlay — a promise nobody was holding.** `WebRtcTransport.connect()` arms
+the open timer, then does the whole handshake, then awaits `opened` on its **last line**. Every
+other way out of that method — an SDP exchange that fails, a `close()` while the handshake is in
+flight — abandons the promise with the timer still running. Fifteen seconds later the timer
+rejects a promise nobody is awaiting, and an unhandled rejection is what the Next overlay
+renders. It appears on whatever page is mounted *then*, which is why it looked like `/core`'s
+fault: `/core` had not asked for a connection at all.
+
+That last point is worth stating because it was the owner's question E. `/core`, `/core/cockpit`
+and `/voice` share ONE module-level store (`store.ts`), so `/core` observes the session rather
+than opening a second one — and `store.test.tsx` already proves it: both views firing connect on
+the same gesture yield `microphonesOpened: 1, transports: 1, sessionsCreated: 1`. There is no
+competing peer connection and no second microphone owner. The architecture was not ambiguous;
+the error's *timing* made it look as if it were.
+
+**Decision 1 — one settle path, owned by the instance, idempotent.** Whoever gets there first —
+the channel opening, a channel error, the timeout, or `close()` — clears the timer and settles
+once. `close()` reaches it, so a session torn down mid-handshake ends its caller's wait
+immediately instead of leaving it to the timeout. And the promise carries a no-op `catch` from
+birth: a rejection it can reach is always *observed*, whether or not the code below ever got as
+far as awaiting it. The timeout itself is unchanged — the owner's instruction was explicit, and
+raising it would have hidden the defect rather than removed it. A test holds the bound: a
+channel that never opens still fails the connect, once, through the promise the caller holds.
+
+My first attempt at this rejected the abandoned promise in the error path — the same disease,
+one layer down. Vitest's unhandled-error report caught it in the same minute.
+
+**Decision 2 — arriving at `listening` clears the failure marker.** Only `connect()` ever
+cleared `lastError`, so a marker written at any *other* moment outlived its cause: the
+superseded session's reporter answering 410 just after the new session started, the rate
+limiter, a transient failure during a reconnect. Nothing later removed it, because reaching
+`listening` only patched `state`. Hence *Dinliyor* beside *Oturum sunucuda kapanmış.* It clears
+on arrival now, by whichever path we arrive — and a session that is **broken** keeps its marker,
+which the second test in the new file holds.
+
+**What was NOT changed, because measurement said it was not broken.** The owner asked whether
+`LISTENING` derives from microphone state alone. It does not. Both paths to it — `connect()` and
+the reattach loop — await `transport.connect()`, which resolves only after the data channel is
+open; a media leg that never opens leaves `error` with *"Medya bağlantısı kurulamadı"* and the
+transport's own sentence, which is a state the UI can offer a retry from. A test now says so
+rather than leaving it to be re-derived. Inventing a new state machine on top of a correct one
+would have been change without a defect.
+
+**One theoretical race closed anyway.** `channel.onopen` is assigned before the SDP exchange, so
+an open cannot precede the handler today. The code no longer depends on that ordering staying
+true: it asks the channel what it *is*, and a channel already open is not waited for.
+
+**Found on the way, by the random-order run the owner asked for.**
+`tests/uistate/document-states.test.ts` asserted absolute `sequence` numbers, and its helper
+reset the shared counter AFTER its arguments had already been evaluated — JavaScript builds the
+event array before the call. So the reset never applied to the events being passed in, and every
+such assertion was really "the previous test left the counter at zero". Shuffled, it saw 4 where
+it expected 1. Reset per test now; 1583 tests green across three seeds.
+
+**Consequences.** The overlay cannot recur for this reason: no path through `connect()` leaves a
+timer, and no rejection it can reach is unobserved. The contradiction cannot recur: a listening
+session carries no stale marker. What this ADR does **not** close is the real-browser leg — the
+web shell's login gate needs the owner's credential, which is theirs to enter, and the realtime
+provider has no credits (item 29). The running dev server was verified to be serving all four
+parts of the fix, so the next connect exercises it without a restart.
