@@ -309,7 +309,14 @@ def test_media_action_preserves_the_owners_requested_item_end_to_end(session) ->
 
 def test_dispatcher_failure_does_not_break_execution_and_is_recorded(session) -> None:
     class ExplodingDispatcher:
-        def dispatch(self, *, routine_id: uuid.UUID, firing_id: uuid.UUID, action: dict[str, Any]):
+        def dispatch(
+            self,
+            *,
+            routine_id: uuid.UUID,
+            firing_id: uuid.UUID,
+            action: dict[str, Any],
+            now: Any = None,
+        ):
             raise RuntimeError("device offline")
 
     routine = routines_service.create_routine(

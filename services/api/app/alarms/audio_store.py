@@ -97,9 +97,7 @@ class AudioStore:
             self._entries[token] = _Entry(
                 audio=audio, sha256=digest, expires_at=expires_at, content_type=content_type
             )
-        return AudioHandle(
-            token=token, sha256=digest, size_bytes=len(audio), expires_at=expires_at
-        )
+        return AudioHandle(token=token, sha256=digest, size_bytes=len(audio), expires_at=expires_at)
 
     def take(self, token: str, *, now: datetime | None = None) -> tuple[bytes, str] | None:
         """Redeem a token: the bytes and their content type, ONCE. ``None`` for an unknown,

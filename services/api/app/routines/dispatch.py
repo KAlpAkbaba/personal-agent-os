@@ -137,7 +137,12 @@ class WakeAlarmPort(Protocol):
     """
 
     def fire(
-        self, *, alarm_id: UUID, routine_id: UUID, firing_id: UUID
+        self,
+        *,
+        alarm_id: UUID,
+        routine_id: UUID,
+        firing_id: UUID,
+        now: datetime | None = None,
     ) -> DispatchOutcome: ...
 
 
@@ -410,8 +415,15 @@ class ActionDispatcher:
         self._wake_alarm = wake_alarm
 
     def dispatch(
-        self, *, routine_id: UUID, firing_id: UUID, action: dict[str, Any]
+        self,
+        *,
+        routine_id: UUID,
+        firing_id: UUID,
+        action: dict[str, Any],
+        now: datetime | None = None,
     ) -> DispatchOutcome:
+        """`now` is the moment the engine decided this firing was due, threaded through so
+        an action that has its own lateness rule judges the same moment the engine did."""
         kind = action.get("kind")
         detail = dict(action.get("detail") or {})
         if kind == ACTION_KIND_VOICE_BRIEFING:
@@ -425,7 +437,7 @@ class ActionDispatcher:
         if kind == ACTION_KIND_DISPLAY_ACTION:
             return self._display_action(routine_id, firing_id, detail)
         if kind == ACTION_KIND_WAKE_ALARM:
-            return self._wake_alarm_action(routine_id, firing_id, detail)
+            return self._wake_alarm_action(routine_id, firing_id, detail, now=now)
         return DispatchOutcome.refused(f"unknown_action_kind:{kind}")
 
     # -------------------------------------------------------------- voice_briefing
@@ -551,7 +563,12 @@ class ActionDispatcher:
     # ------------------------------------------------------------------ wake_alarm
 
     def _wake_alarm_action(
-        self, routine_id: UUID, firing_id: UUID, detail: dict[str, Any]
+        self,
+        routine_id: UUID,
+        firing_id: UUID,
+        detail: dict[str, Any],
+        *,
+        now: datetime | None = None,
     ) -> DispatchOutcome:
         """Hand the alarm id to the wake sequence (M18.3 spec §3.5).
 
@@ -567,11 +584,9 @@ class ActionDispatcher:
         except ValueError:
             return DispatchOutcome.refused(f"wake_alarm_alarm_id_not_uuid:{raw[:64]}")
         if self._wake_alarm is None:
-            return DispatchOutcome.failed(
-                "wake_alarm_port_unavailable", {"alarm_id": raw}
-            )
+            return DispatchOutcome.failed("wake_alarm_port_unavailable", {"alarm_id": raw})
         return self._wake_alarm.fire(
-            alarm_id=alarm_id, routine_id=routine_id, firing_id=firing_id
+            alarm_id=alarm_id, routine_id=routine_id, firing_id=firing_id, now=now
         )
 
 

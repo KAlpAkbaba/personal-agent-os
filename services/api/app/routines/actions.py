@@ -33,6 +33,7 @@ Six closed kinds:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Protocol
 from uuid import UUID
 
@@ -249,8 +250,21 @@ class RoutineDispatcher(Protocol):
     a browser tab, or touches a display itself (module docstring)."""
 
     def dispatch(
-        self, *, routine_id: UUID, firing_id: UUID, action: dict[str, Any]
-    ) -> DispatchOutcome: ...
+        self,
+        *,
+        routine_id: UUID,
+        firing_id: UUID,
+        action: dict[str, Any],
+        now: datetime | None = None,
+    ) -> DispatchOutcome:
+        """`now` is the moment the engine decided this firing was due.
+
+        Optional, because most actions have no time of their own to reason about. It
+        matters to the ones that do: a wake alarm judges its own lateness, and judging it
+        against a different clock from the one that decided it was due is two clocks for
+        one decision.
+        """
+        ...
 
 
 class NoopDispatcher:
@@ -259,8 +273,14 @@ class NoopDispatcher:
     ``dispatched: False`` — an execution log built on this never lies about having acted."""
 
     def dispatch(
-        self, *, routine_id: UUID, firing_id: UUID, action: dict[str, Any]
+        self,
+        *,
+        routine_id: UUID,
+        firing_id: UUID,
+        action: dict[str, Any],
+        now: datetime | None = None,
     ) -> DispatchOutcome:
+        del now  # nothing is dispatched, so no clock is consulted
         return DispatchOutcome(ok=True, detail={"dispatched": False, "reason": "noop_dispatcher"})
 
 

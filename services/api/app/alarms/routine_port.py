@@ -15,6 +15,7 @@ A dispatcher exception is not a possibility this class leaves open: every failur
 
 from __future__ import annotations
 
+from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy.orm import Session, sessionmaker
@@ -30,18 +31,32 @@ logger = get_logger("app.alarms.routine_port")
 class WakeAlarmRunner:
     """Runs one alarm's wake sequence in its own session (module docstring)."""
 
-    def __init__(
-        self, *, session_factory: sessionmaker[Session], sequence: WakeSequence
-    ) -> None:
+    def __init__(self, *, session_factory: sessionmaker[Session], sequence: WakeSequence) -> None:
         self._session_factory = session_factory
         self._sequence = sequence
 
-    def fire(self, *, alarm_id: UUID, routine_id: UUID, firing_id: UUID) -> DispatchOutcome:
+    def fire(
+        self,
+        *,
+        alarm_id: UUID,
+        routine_id: UUID,
+        firing_id: UUID,
+        now: datetime | None = None,
+    ) -> DispatchOutcome:
+        """`now` is the routine engine's OWN clock, and it matters.
+
+        The engine decides this alarm is DUE at some moment; `fire_alarm` then decides
+        whether it is TOO LATE (`MAX_LATE_FIRE_S`). Those must be the same moment. This
+        used to pass nothing, so the second decision was made against `utcnow()` - two
+        clocks for one decision, which agree in production right up until the case the
+        lateness bound exists for: a catch-up tick replaying a firing that came due while
+        the Cloud Core was down.
+        """
         del routine_id  # the alarm is the aggregate; the routine is only how it was timed
         session = self._session_factory()
         try:
             decision = alarms_service.fire_alarm(
-                session, alarm_id, sequence=self._sequence, firing_id=firing_id
+                session, alarm_id, sequence=self._sequence, firing_id=firing_id, now=now
             )
         except Exception as exc:  # noqa: BLE001 - a wake-up that failed must say so
             logger.error(

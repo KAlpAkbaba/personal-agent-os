@@ -334,9 +334,7 @@ def _find_existing_firing(
     ).scalar_one_or_none()
 
 
-def _check_due(
-    routine: Routine, now: datetime
-) -> tuple[bool, str | None, int | None]:
+def _check_due(routine: Routine, now: datetime) -> tuple[bool, str | None, int | None]:
     """Returns (due, occurrence_key, new_presence_watermark). The watermark is only
     meaningful (non-None) for a presence trigger."""
     if routine.trigger_kind == TRIGGER_KIND_AT:
@@ -542,7 +540,10 @@ def evaluate_due(
             kind = action.get("kind")
             try:
                 outcome = dispatcher.dispatch(
-                    routine_id=routine.routine_id, firing_id=firing.firing_id, action=action
+                    routine_id=routine.routine_id,
+                    firing_id=firing.firing_id,
+                    action=action,
+                    now=now,
                 )
             except Exception as exc:  # noqa: BLE001 - a broken dispatcher must not break evaluation
                 outcome = DispatchOutcome.failed(
@@ -574,9 +575,7 @@ def evaluate_due(
                         if refused
                         else f"Rutin eylemi başarısız oldu: {routine.name} ({kind})"
                     ),
-                    source_ref=(
-                        f"routines:{routine.routine_id}:action:{occurrence_key}:{kind}"
-                    ),
+                    source_ref=(f"routines:{routine.routine_id}:action:{occurrence_key}:{kind}"),
                     detail={"kind": kind, "reason": outcome.reason, "detail": outcome.detail},
                 )
                 _publish_ui_state(

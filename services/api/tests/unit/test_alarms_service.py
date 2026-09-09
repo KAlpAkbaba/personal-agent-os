@@ -869,3 +869,53 @@ def test_ok_helper_is_a_verified_read_back(device):
     )
     assert plain.ok is True
     assert plain.result == {}
+
+
+def test_the_engine_and_the_alarm_judge_the_same_moment(factory, device) -> None:
+    """One decision, one clock.
+
+    `evaluate_due(now=...)` decides an alarm is DUE at some moment; `fire_alarm` then
+    decides whether it is TOO LATE (`MAX_LATE_FIRE_S`). Those have to be the same moment.
+    `WakeAlarmRunner.fire` took no `now` and passed none, so the second decision was made
+    against the wall clock while the first used the engine's - two clocks for one decision.
+
+    In production they agree to within milliseconds, which is exactly why it hid. The case
+    where they do NOT is the case the lateness bound exists for: a catch-up tick replaying a
+    firing that came due while the Cloud Core was down. Here that case is made explicit -
+    the engine's clock is hours behind the wall clock, and the alarm must still fire,
+    because by the ENGINE's reckoning it is only thirty seconds late.
+
+    This is also the shape that broke the suite: this file's fixtures are pinned to
+    2026-09-09T03:00Z, so the old code passed only while real time stayed within
+    MAX_LATE_FIRE_S of that and began failing once it drifted past - a wall-clock time bomb
+    that reads as a flake.
+    """
+    from app.alarms.routine_port import WakeAlarmRunner
+    from app.routines.dispatch import ActionDispatcher, BriefingDelivery
+
+    class _NoBriefing:
+        def narrate(self, *, text, routine_id, firing_id):
+            return BriefingDelivery(False, "not_used")
+
+    sequence = WakeSequence(device_action=device, tts=None)
+    dispatcher = ActionDispatcher(
+        briefing=_NoBriefing(),
+        device_action=device,
+        wake_alarm=WakeAlarmRunner(session_factory=factory, sequence=sequence),
+    )
+    with factory() as session:
+        alarm = alarms_service.create_alarm(
+            session, when=parse_when_struct({"relative_seconds": 30}, now=NOW)
+        )
+        result = routines_service.evaluate_due(
+            session, now=NOW + timedelta(seconds=60), dispatcher=dispatcher
+        )
+        firing = session.query(RoutineFiring).one()
+
+    assert len(result.outcomes) == 1
+    assert firing.dispatch_status == "succeeded", (
+        "the alarm judged its own lateness on a different clock from the engine that "
+        "decided it was due - so a catch-up firing expires instead of ringing"
+    )
+    assert firing.dispatch_results[0]["kind"] == "wake_alarm"
+    del alarm
