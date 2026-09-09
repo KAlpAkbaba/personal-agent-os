@@ -1,9 +1,9 @@
 {
-    "run_id":  "item28-unlocked-20260909-130744",
-    "started_at":  "2026-09-09T10:07:44.6165281Z",
+    "run_id":  "item28-unlocked-20260909-131637",
+    "started_at":  "2026-09-09T10:16:37.9631784Z",
     "mode":  "dry-run",
     "cloud":  "http://pagentos-core:8001",
-    "repo_head":  "514bb06f6db7080c543fb3d476abf64284e0de41 (refs/heads/main)",
+    "repo_head":  "90505b1733fa61caeebc762203056e916f1b5e38 (refs/heads/main)",
     "runtime":  {
                     "present":  true,
                     "exe":  "C:\\Program Files\\PagentOS\\agent\\service\\PagentOS.DeviceService.exe",
@@ -170,7 +170,7 @@
                                                            "pattern":  "sozlesme",
                                                            "max":  50,
                                                            "roots":  [
-                                                                         "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-130744\\documents"
+                                                                         "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-131637\\documents"
                                                                      ]
                                                        }
                                        },
@@ -179,7 +179,7 @@
                                            "section":  "documents",
                                            "capability":  "file.inspect",
                                            "payload":  {
-                                                           "path":  "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-130744\\documents\\rapor.pdf"
+                                                           "path":  "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-131637\\documents\\rapor.pdf"
                                                        }
                                        },
                                        {
@@ -187,7 +187,7 @@
                                            "section":  "documents",
                                            "capability":  "file.inspect",
                                            "payload":  {
-                                                           "path":  "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-130744\\documents\\butce-2026.xlsx"
+                                                           "path":  "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-131637\\documents\\butce-2026.xlsx"
                                                        }
                                        },
                                        {
@@ -195,7 +195,7 @@
                                            "section":  "documents",
                                            "capability":  "file.read",
                                            "payload":  {
-                                                           "path":  "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-130744\\documents\\kod.py",
+                                                           "path":  "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-131637\\documents\\kod.py",
                                                            "length":  4096
                                                        }
                                        },
@@ -204,7 +204,7 @@
                                            "section":  "documents",
                                            "capability":  "document.extract",
                                            "payload":  {
-                                                           "path":  "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-130744\\documents\\notlar.md"
+                                                           "path":  "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-131637\\documents\\notlar.md"
                                                        }
                                        },
                                        {
@@ -216,7 +216,7 @@
                                                                               3,
                                                                               3
                                                                           ],
-                                                           "path":  "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-130744\\documents\\rapor.pdf"
+                                                           "path":  "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-131637\\documents\\rapor.pdf"
                                                        }
                                        },
                                        {
@@ -263,7 +263,7 @@
                                                                          }
                                                                      ],
                                                            "slug":  "item28-check",
-                                                           "project_id":  "item28-130745"
+                                                           "project_id":  "item28-131638"
                                                        }
                                        },
                                        {
@@ -271,7 +271,7 @@
                                            "section":  "projects",
                                            "capability":  "project.status",
                                            "payload":  {
-                                                           "project_id":  "item28-130745"
+                                                           "project_id":  "item28-131638"
                                                        }
                                        },
                                        {
@@ -279,7 +279,7 @@
                                            "section":  "projects",
                                            "capability":  "project.run",
                                            "payload":  {
-                                                           "project_id":  "item28-130745"
+                                                           "project_id":  "item28-131638"
                                                        }
                                        },
                                        {
@@ -287,7 +287,7 @@
                                            "section":  "projects",
                                            "capability":  "project.stop",
                                            "payload":  {
-                                                           "project_id":  "item28-130745"
+                                                           "project_id":  "item28-131638"
                                                        }
                                        },
                                        {
@@ -295,7 +295,7 @@
                                            "section":  "projects",
                                            "capability":  "project.test",
                                            "payload":  {
-                                                           "project_id":  "item28-130745"
+                                                           "project_id":  "item28-131638"
                                                        }
                                        }
                                    ]
@@ -331,7 +331,7 @@
                                                                          }
                                                                      ],
                                                            "slug":  "item28-scene",
-                                                           "project_id":  "item28-scene-130745"
+                                                           "project_id":  "item28-scene-131638"
                                                        }
                                        },
                                        {
@@ -339,7 +339,7 @@
                                            "section":  "scene",
                                            "capability":  "scene.inspect",
                                            "payload":  {
-                                                           "project_id":  "item28-scene-130745"
+                                                           "project_id":  "item28-scene-131638"
                                                        }
                                        }
                                    ]
@@ -358,7 +358,7 @@
                                            "payload":  {
                                                            "application":  "mspaint",
                                                            "args":  [
-                                                                        "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-130744\\documents\\item28-export.png"
+                                                                        "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-131637\\documents\\item28-export.png"
                                                                     ]
                                                        }
                                        }
@@ -374,9 +374,9 @@
                                        {
                                            "step":  29,
                                            "section":  "nativeapp",
-                                           "capability":  "app.launch",
+                                           "capability":  "file.open",
                                            "payload":  {
-                                                           "application":  "\u003cthe freshly built EXE\u003e"
+                                                           "path":  "\u003cthe freshly built EXE\u003e"
                                                        }
                                        },
                                        {
@@ -419,9 +419,9 @@
                                        {
                                            "step":  34,
                                            "section":  "nativeapp",
-                                           "capability":  "app.launch",
+                                           "capability":  "file.open",
                                            "payload":  {
-                                                           "application":  "\u003cthe freshly built EXE\u003e"
+                                                           "path":  "\u003cthe freshly built EXE\u003e"
                                                        }
                                        },
                                        {
@@ -507,8 +507,8 @@
                                            "payload":  {
                                                            "label":  "item 28 qualification (never rings)",
                                                            "grace_s":  60,
-                                                           "alarm_id":  "item28-766a0d79158a",
-                                                           "fire_at":  "2026-09-09T11:07:47.3405766Z"
+                                                           "alarm_id":  "item28-ae9e864ea93f",
+                                                           "fire_at":  "2026-09-09T11:16:40.6724076Z"
                                                        }
                                        },
                                        {
@@ -524,7 +524,7 @@
                                            "section":  "alarm",
                                            "capability":  "desktop.alarm_disarm",
                                            "payload":  {
-                                                           "alarm_id":  "item28-766a0d79158a"
+                                                           "alarm_id":  "item28-ae9e864ea93f"
                                                        }
                                        },
                                        {
@@ -705,7 +705,7 @@
                                      "pattern":  "sozlesme",
                                      "max":  50,
                                      "roots":  [
-                                                   "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-130744\\documents"
+                                                   "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-131637\\documents"
                                                ]
                                  }
                  },
@@ -718,7 +718,7 @@
                      "section":  "documents",
                      "capability":  "file.inspect",
                      "payload":  {
-                                     "path":  "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-130744\\documents\\rapor.pdf"
+                                     "path":  "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-131637\\documents\\rapor.pdf"
                                  }
                  },
                  {
@@ -734,7 +734,7 @@
                      "section":  "documents",
                      "capability":  "file.inspect",
                      "payload":  {
-                                     "path":  "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-130744\\documents\\butce-2026.xlsx"
+                                     "path":  "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-131637\\documents\\butce-2026.xlsx"
                                  }
                  },
                  {
@@ -746,7 +746,7 @@
                      "section":  "documents",
                      "capability":  "file.read",
                      "payload":  {
-                                     "path":  "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-130744\\documents\\kod.py",
+                                     "path":  "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-131637\\documents\\kod.py",
                                      "length":  4096
                                  }
                  },
@@ -759,7 +759,7 @@
                      "section":  "documents",
                      "capability":  "document.extract",
                      "payload":  {
-                                     "path":  "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-130744\\documents\\notlar.md"
+                                     "path":  "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-131637\\documents\\notlar.md"
                                  }
                  },
                  {
@@ -775,7 +775,7 @@
                                                         3,
                                                         3
                                                     ],
-                                     "path":  "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-130744\\documents\\rapor.pdf"
+                                     "path":  "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-131637\\documents\\rapor.pdf"
                                  }
                  },
                  {
@@ -821,7 +821,7 @@
                                                    }
                                                ],
                                      "slug":  "item28-check",
-                                     "project_id":  "item28-130745"
+                                     "project_id":  "item28-131638"
                                  }
                  },
                  {
@@ -833,7 +833,7 @@
                      "section":  "projects",
                      "capability":  "project.status",
                      "payload":  {
-                                     "project_id":  "item28-130745"
+                                     "project_id":  "item28-131638"
                                  }
                  },
                  {
@@ -845,7 +845,7 @@
                      "section":  "projects",
                      "capability":  "project.run",
                      "payload":  {
-                                     "project_id":  "item28-130745"
+                                     "project_id":  "item28-131638"
                                  }
                  },
                  {
@@ -857,7 +857,7 @@
                      "section":  "projects",
                      "capability":  "project.stop",
                      "payload":  {
-                                     "project_id":  "item28-130745"
+                                     "project_id":  "item28-131638"
                                  }
                  },
                  {
@@ -869,7 +869,7 @@
                      "section":  "projects",
                      "capability":  "project.test",
                      "payload":  {
-                                     "project_id":  "item28-130745"
+                                     "project_id":  "item28-131638"
                                  }
                  },
                  {
@@ -900,7 +900,7 @@
                                                    }
                                                ],
                                      "slug":  "item28-scene",
-                                     "project_id":  "item28-scene-130745"
+                                     "project_id":  "item28-scene-131638"
                                  }
                  },
                  {
@@ -908,7 +908,7 @@
                      "section":  "scene",
                      "capability":  "scene.inspect",
                      "payload":  {
-                                     "project_id":  "item28-scene-130745"
+                                     "project_id":  "item28-scene-131638"
                                  }
                  },
                  {
@@ -926,7 +926,7 @@
                      "payload":  {
                                      "application":  "mspaint",
                                      "args":  [
-                                                  "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-130744\\documents\\item28-export.png"
+                                                  "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-131637\\documents\\item28-export.png"
                                               ]
                                  }
                  },
@@ -945,9 +945,9 @@
                  {
                      "step":  29,
                      "section":  "nativeapp",
-                     "capability":  "app.launch",
+                     "capability":  "file.open",
                      "payload":  {
-                                     "application":  "\u003cthe freshly built EXE\u003e"
+                                     "path":  "\u003cthe freshly built EXE\u003e"
                                  }
                  },
                  {
@@ -998,9 +998,9 @@
                  {
                      "step":  34,
                      "section":  "nativeapp",
-                     "capability":  "app.launch",
+                     "capability":  "file.open",
                      "payload":  {
-                                     "application":  "\u003cthe freshly built EXE\u003e"
+                                     "path":  "\u003cthe freshly built EXE\u003e"
                                  }
                  },
                  {
@@ -1092,8 +1092,8 @@
                      "payload":  {
                                      "label":  "item 28 qualification (never rings)",
                                      "grace_s":  60,
-                                     "alarm_id":  "item28-766a0d79158a",
-                                     "fire_at":  "2026-09-09T11:07:47.3405766Z"
+                                     "alarm_id":  "item28-ae9e864ea93f",
+                                     "fire_at":  "2026-09-09T11:16:40.6724076Z"
                                  }
                  },
                  {
@@ -1109,7 +1109,7 @@
                      "section":  "alarm",
                      "capability":  "desktop.alarm_disarm",
                      "payload":  {
-                                     "alarm_id":  "item28-766a0d79158a"
+                                     "alarm_id":  "item28-ae9e864ea93f"
                                  }
                  },
                  {
@@ -1167,5 +1167,5 @@
                             }
                         ],
     "verdict":  "BLOCKED",
-    "finished_at":  "2026-09-09T10:07:47.3605780Z"
+    "finished_at":  "2026-09-09T10:16:40.6959917Z"
 }
