@@ -8582,3 +8582,36 @@ for its foreground window and offering it. "Buraya yaz" points at whatever the o
 last in, and an operator with no record of one has no evidence that the window in front is
 what they meant — the fallback belongs to "the remembered window is gone", not to "there
 never was one". It now asks, and touches no device to do it.
+
+### ADR-0104 addendum 1 — the same script, broken a second time, by me (2026-09-10)
+
+Fixing the bare `icacls` I added a message telling the owner that `-Set` takes the NAME. It
+contained an em-dash, and I shipped it into their hands without running
+`scripts\tests\script-syntax.tests.ps1`. The script stopped parsing:
+
+```
++ "history â€" treat it as exposed and issue a new one."
++              ~~~~~
+Unexpected token 'treat' in expression or statement.
+```
+
+**The mechanism, because it will happen again otherwise.** PowerShell 5.1 reads a `.ps1`
+with no BOM using the ANSI codepage. `—` is UTF-8 `E2 80 94`, and the byte `0x94` decodes to
+a RIGHT DOUBLE QUOTATION MARK — which PowerShell accepts as a string delimiter. So the
+string ended early and the rest of the line became code. This is why 36 other scripts carry
+the same bytes harmlessly: theirs are in COMMENTS, where an early quote means nothing. Mine
+was inside a string literal.
+
+**No new guard was written, on purpose.** `script-syntax.tests.ps1` already parses all 101
+scripts and catches this exactly — reintroducing the em-dash turns it red
+(`FAIL scripts\secret-store.ps1`, 1 failed), and removing it turns it green again. The guard
+was not missing; running it was. The lesson is procedural and belongs to whoever edits a
+`.ps1`: parse the file before handing anyone a command that runs it.
+
+**Two more things the incident produced, both real.** `Get-SecretPath` echoed the offending
+argument back into the console — so a key pasted where a name belongs was reprinted into the
+terminal, the scrollback and the screenshot. It no longer echoes anything (the discipline
+`app.evolution.tokens._fail` already follows on the server, for the same reason). And a
+value-shaped argument is now recognised for what it is: the error says `-Set` takes the name,
+shows the exact command, and says the value just typed is in the shell's history and should
+be treated as exposed.

@@ -17,7 +17,7 @@
 
     Nothing here ever prints a secret. `-Run` decrypts straight into the environment of a
     child process, so the plaintext exists only in that process's memory for as long as it
-    runs — there is no decrypted file at any point.
+    runs -- there is no decrypted file at any point.
 
 .EXAMPLE
     # Store a key (prompts; nothing echoes, nothing is logged):
@@ -64,7 +64,7 @@ function Initialize-Store {
     $grant = "*" + $sid + ":(OI)(CI)F"
     # ABSOLUTE path, not a bare name. A spawned shell on this machine can have a PATH with
     # System32 missing entirely, and a bare `icacls` then dies with "The term 'icacls' is
-    # not recognized" BEFORE any secret is stored — which is exactly how the owner's first
+    # not recognized" BEFORE any secret is stored -- which is exactly how the owner's first
     # attempt to install an Anthropic key failed (2026-09-10). The ACL is a hardening step,
     # not the protection itself (DPAPI already makes the bytes useless to another account),
     # so a machine where it genuinely cannot run must not lose the store; it must say so.
@@ -78,12 +78,51 @@ function Initialize-Store {
     }
 }
 
+#: Shapes that are obviously a VALUE and not a name. Not a secret detector -- just enough to
+#: recognise the mistake the owner actually made, twice, on 2026-09-10: pasting the key
+#: where the name goes.
+$script:ValueShapes = @(
+    '^sk-',          # Anthropic / OpenAI
+    '^sk_',          # Stripe and friends
+    '^ghp_', '^gho_', '^github_pat_',
+    '^xox[abpsr]-',  # Slack
+    '^AKIA',         # AWS access key id
+    '^ey[A-Za-z0-9_-]+\.'  # a JWT
+)
+
+function Test-LooksLikeAValue {
+    param([string]$Text)
+    foreach ($shape in $script:ValueShapes) {
+        if ($Text -cmatch $shape) { return $true }
+    }
+    # Long, and carrying characters an environment-variable name never has.
+    return ($Text.Length -ge 32 -and $Text -cmatch '[^A-Za-z0-9_]')
+}
+
 function Get-SecretPath {
     param([string]$Name)
-    if ($Name -cnotmatch '^[A-Za-z_][A-Za-z0-9_]{0,127}$') {
-        throw "secret names must look like environment variables (letters, digits, underscore): '$Name'"
+    if ($Name -cmatch '^[A-Za-z_][A-Za-z0-9_]{0,127}$') {
+        return Join-Path $StoreRoot "$Name.dpapi"
     }
-    return Join-Path $StoreRoot "$Name.dpapi"
+    # The offending text is NEVER echoed. It reached this function as a command-line
+    # argument, so if it IS a secret it is already in the shell's history and in any
+    # process listing that was watching -- repeating it into the console, a transcript or a
+    # screenshot is the one thing that can still make it worse. (The same discipline
+    # app.evolution.tokens._fail follows on the server for the same reason.)
+    if (Test-LooksLikeAValue -Text $Name) {
+        throw (
+            "that looks like the secret VALUE, not its name. -Set takes the NAME; the value " +
+            "is asked for afterwards at a hidden prompt:`n`n" +
+            "    .\scripts\secret-store.ps1 -Set PAGENTOS_ANTHROPIC_API_KEY`n`n" +
+            "Nothing was stored. IMPORTANT: the value you just typed is now in this shell's " +
+            "history -- treat it as exposed and issue a new one."
+        )
+    }
+    throw (
+        "secret names must look like environment variables (letters, digits, underscore), " +
+        "e.g. PAGENTOS_ANTHROPIC_API_KEY. The value is asked for afterwards, not on the " +
+        "command line. Nothing was stored."
+    )
 }
 
 switch ($PSCmdlet.ParameterSetName) {
