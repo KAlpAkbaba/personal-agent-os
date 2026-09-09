@@ -218,8 +218,26 @@ class WeatherService:
             summary=speech,
             session_id=session_id,
         )
-        session.add(evidence)
-        session.commit()
+        # The evidence row is EVIDENCE, never a dependency of the answer - and never a
+        # way to break the turn it belongs to. The M26-era review proved live that an
+        # unguarded commit here poisons the caller's session: SQLAlchemy leaves a session
+        # that failed a flush needing an explicit rollback, and the realtime tool
+        # dispatcher's own unconditional commit at the end of the turn then raises
+        # PendingRollbackError - so a too-long place name from a third-party geocoder
+        # would fail the WHOLE tool-call round trip, not merely lose one weather receipt.
+        # The same rollback discipline `app.actions.receipt.record_receipt` already
+        # applies for exactly this reason. The provider bounds its own strings now
+        # (app.weather.providers.MAX_PLACE_NAME_LEN); this is the second wall.
+        evidence_written = True
+        try:
+            session.add(evidence)
+            session.commit()
+        except Exception:  # noqa: BLE001 - a lost receipt must never cost the answer
+            evidence_written = False
+            session.rollback()
+            logger.warning(
+                "weather_evidence_write_failed", extra={"provider": observation.provider}
+            )
 
         try:
             ledger_service.record(
@@ -234,7 +252,15 @@ class WeatherService:
                     occurred_at=now,
                     detail_json={"location": location_snapshot, "provider": observation.provider},
                     source="live",
-                    source_ref=f"weather_query_evidence:{evidence.id}",
+                    # Only point at a row that EXISTS. A dangling reference to an
+                    # evidence row the write above lost would be a receipt claiming a
+                    # record nobody can read back - the failure this whole family is
+                    # built to make impossible.
+                    source_ref=(
+                        f"weather_query_evidence:{evidence.id}"
+                        if evidence_written
+                        else f"weather_query_evidence_lost:{evidence.id}"
+                    ),
                 ),
             )
         except Exception:  # noqa: BLE001 - evidence, never a dependency of the answer
@@ -249,7 +275,7 @@ class WeatherService:
             session_id=session_id,
             server={"observation": _observation_dict(observation), "location": location_snapshot},
             now=now,
-            extra={"evidence_id": str(evidence.id)},
+            extra={"evidence_id": str(evidence.id) if evidence_written else None},
         )
 
     def last_evidence(self, session: Session, *, session_id: str | None = None) -> dict[str, Any]:

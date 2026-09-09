@@ -108,6 +108,28 @@ def _round1(value: Any) -> float | None:
         return None
 
 
+#: Every string this provider hands back is bounded HERE, where the vendor's JSON
+#: enters the process — not at the database, which is where an unbounded one is found
+#: the expensive way. A geocoded place name and its region are free text from a third
+#: party; they reach a spoken sentence AND `weather_query_evidence`'s fixed-width
+#: columns (`condition` String(64), `summary` String(500)). On SQLite an over-long value
+#: is silently stored; on Postgres — production — it raises, and the M26 review proved
+#: live that a raised insert leaves the caller's session needing a rollback, which then
+#: fails the WHOLE tool-call turn, not just the weather answer. Bounding at the seam is
+#: what makes that unreachable rather than merely unlikely.
+MAX_PLACE_NAME_LEN: Final = 120
+MAX_SUMMARY_LEN: Final = 480  # < the column's 500, leaving room for nothing to be lost
+
+
+def _bounded(value: str | None, limit: int) -> str | None:
+    """A third party's string, cut to what this system promised to store. Returns
+    ``None`` unchanged so a missing field stays missing rather than becoming ""."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text[:limit] if len(text) > limit else text
+
+
 class OpenMeteoProvider:
     """Two calls: geocode a city name when no coordinates were given
     (``geocoding-api.open-meteo.com``), then the forecast
@@ -143,6 +165,15 @@ class OpenMeteoProvider:
                 raise WeatherError(WeatherError.REASON_TIMEOUT, str(exc)) from exc
             except httpx.HTTPError as exc:
                 raise WeatherError(WeatherError.REASON_PROVIDER_ERROR, str(exc)) from exc
+            except ValueError as exc:
+                # A 200 whose body is not JSON: a captive portal, a CDN error page, a
+                # misrouted endpoint. `json.JSONDecodeError` is a `ValueError`, and it is
+                # NOT an `httpx.HTTPError`, so before this it escaped every typed handler
+                # and the owner heard an internal-bug failure instead of the honest
+                # "the weather service did not answer properly" sentence.
+                raise WeatherError(
+                    WeatherError.REASON_PROVIDER_ERROR, f"geocoding response was not JSON: {exc}"
+                ) from exc
         results = data.get("results") or []
         if not results:
             raise WeatherError(WeatherError.REASON_LOCATION_NOT_FOUND, city)
@@ -157,8 +188,8 @@ class OpenMeteoProvider:
         return (
             latitude,
             longitude,
-            str(first.get("name") or city),
-            first.get("admin1"),
+            _bounded(str(first.get("name") or city), MAX_PLACE_NAME_LEN) or city,
+            _bounded(first.get("admin1"), MAX_PLACE_NAME_LEN),
             first.get("timezone"),
         )
 
@@ -196,6 +227,10 @@ class OpenMeteoProvider:
                 raise WeatherError(WeatherError.REASON_TIMEOUT, str(exc)) from exc
             except httpx.HTTPError as exc:
                 raise WeatherError(WeatherError.REASON_PROVIDER_ERROR, str(exc)) from exc
+            except ValueError as exc:  # see _geocode: a 200 that is not JSON
+                raise WeatherError(
+                    WeatherError.REASON_PROVIDER_ERROR, f"forecast response was not JSON: {exc}"
+                ) from exc
 
         current = data.get("current") or {}
         daily = data.get("daily") or {}
@@ -234,6 +269,9 @@ class OpenMeteoProvider:
             summary += f" Bugün en yüksek {daily_high_c:.0f}°C, en düşük {daily_low_c:.0f}°C."
         if precipitation_probability is not None:
             summary += f" Yağış olasılığı yüzde {precipitation_probability:.0f}."
+        # The last word on length: whatever the pieces did, what leaves here fits the
+        # column that stores it and the sentence the owner hears.
+        summary = summary[:MAX_SUMMARY_LEN]
 
         return WeatherObservation(
             location_label=place,

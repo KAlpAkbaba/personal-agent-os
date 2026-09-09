@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from app.location.service import LocationService
 from app.voice.errors import VoiceError, VoiceErrorClass
+from app.voice.intents import turkish_casefold
 from app.weather.service import WeatherService
 
 if TYPE_CHECKING:
@@ -67,6 +68,45 @@ def _turn_record(ctx: ToolContext) -> dict[str, Any]:
     return dict(ctx.context.get("last_utterance") or {})
 
 
+def _corroborated_place(turn: dict[str, Any], argument: Any) -> str | None:
+    """A place the MODEL proposed, accepted only if the owner's own words carry it.
+
+    "Owner's words win over the model's argument" is this family's stated rule, and the
+    router's ``_extract_place`` implements the strong half of it: a known city in the
+    utterance is canonicalised and used. But its gazetteer is a closed list, so for every
+    place outside it the tool used to fall straight through to ``arguments["city"]`` /
+    ``arguments["place"]`` - free text the model generated, never checked against what
+    was actually said. A review found this live: "Varsayilan hava durumu konumumu Paris
+    yap." extracted nothing and the durable default became whatever the model typed. On a
+    single-owner system whose model routinely reads documents, mail and web pages, that is
+    a state mutation an injected instruction could aim.
+
+    So the argument is corroborated instead of trusted: it is accepted only when it
+    appears in the owner's own transcript for this turn (Turkish-casefolded, and matched
+    against a suffix-stripped form of each spoken token so "Paris'te"/"Adiyaman'i" carry
+    "Paris"/"Adiyaman"). An uncorroborated argument is not a place - the caller asks the
+    owner rather than acting on it.
+    """
+    if not argument:
+        return None
+    proposed = str(argument).strip()
+    if not proposed:
+        return None
+    said = str(turn.get("turn") or "")
+    if not said:
+        # No transcript on this turn (a REST/companion caller, or a session that never
+        # recorded one): the model's word cannot be corroborated, so it is not used.
+        return None
+    needle = turkish_casefold(proposed).strip("'’")
+    if not needle:
+        return None
+    for raw in said.replace("'", " ").replace("’", " ").split():
+        token = turkish_casefold(raw).strip('.,!?;:()"')
+        if token == needle or token.startswith(needle):
+            return proposed
+    return None
+
+
 # --------------------------------------------------------------------------- weather
 
 
@@ -79,7 +119,7 @@ def weather_current(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, An
     db = _require_db(ctx, TOOL_WEATHER_CURRENT)
     service = _weather_service(ctx, TOOL_WEATHER_CURRENT)
     turn = _turn_record(ctx)
-    place = turn.get("weather_place") or arguments.get("place")
+    place = turn.get("weather_place") or _corroborated_place(turn, arguments.get("place"))
     return service.current(
         db,
         requested_place=str(place) if place else None,
@@ -129,7 +169,7 @@ def location_set_default(ctx: ToolContext, arguments: dict[str, Any]) -> dict[st
     db = _require_db(ctx, TOOL_LOCATION_SET_DEFAULT)
     service = _location_service(ctx, TOOL_LOCATION_SET_DEFAULT)
     turn = _turn_record(ctx)
-    city = turn.get("location_default_city") or arguments.get("city")
+    city = turn.get("location_default_city") or _corroborated_place(turn, arguments.get("city"))
     if not city:
         return {"status": "needs_clarification", "speech": SPEECH_DEFAULT_NEEDS_A_CITY}
     row = service.set_default(db, city=str(city))

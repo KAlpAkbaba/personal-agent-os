@@ -403,8 +403,54 @@ class LocationService:
             permission_scope=permission_scope,
         )
         session.add(row)
+        self._prune_observations(session, source=source, device_id=device_id, now=captured_at)
         session.commit()
         return row
+
+    def _prune_observations(
+        self,
+        session: Session,
+        *,
+        source: str,
+        device_id: uuid.UUID | None,
+        now: datetime,
+    ) -> int:
+        """Keep only what the resolver could ever READ; delete the rest.
+
+        The product invariant is "no raw location-history archive by default"
+        (PROJECT_CONSTITUTION / the owner's location addendum), and an insert-only table
+        becomes exactly that the day a device can actually write to it. The bound is not
+        an arbitrary number of rows: a device row older than its own source's RECENT
+        window can never be returned by any tier of :meth:`resolve` - not tier 2 (fresh),
+        not tier 4 (recent-but-aged) - so keeping it stores a position the system has
+        promised never to use. It is deleted here, on the write that supersedes it.
+
+        Returns the number of rows removed (tests assert on it; nothing else reads it).
+        Default rows (``is_default``) are the owner's own setting, not an observation,
+        and are never touched.
+        """
+        _fresh_s, recent_s = FRESHNESS_S[source]
+        cutoff = _aware(now) - timedelta(seconds=recent_s)
+        stale = (
+            session.execute(
+                select(LocationContextRow).where(
+                    LocationContextRow.source == source,
+                    LocationContextRow.device_id == device_id,
+                    LocationContextRow.is_default.is_(False),
+                    LocationContextRow.captured_at < cutoff,
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for old_row in stale:
+            session.delete(old_row)
+        if stale:
+            logger.info(
+                "location_observations_pruned",
+                extra={"source": source, "removed": len(stale)},
+            )
+        return len(stale)
 
     # ------------------------------------------------------------------------ explain
 
