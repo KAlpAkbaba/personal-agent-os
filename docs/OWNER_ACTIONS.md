@@ -141,7 +141,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\qualify-staged-updat
 ```
 
 It does. As of 2026-09-09 it passes **85 checks**, built clean from this checkout, and it
-runs on every commit in CI. Fourteen of those checks are new since your failed run: gate 8
+runs on every commit in CI - green on `53f338b`, run `34349780427`, all seven jobs, with the
+whole Windows agent suite (838), the new clean-process regression (20) and this qualification
+(85) inside it. Fourteen of those checks are new since your failed run: gate 8
 builds the installer's REAL Cloud Core reader in a clean PowerShell process, in *both* ways
 a script can be started, and makes it read a device row — the step that had never been
 tested and the one that failed on you.
@@ -157,8 +159,10 @@ It passes 14 checks today: the real reader, a real owner session, your real devi
 online, carrying a version and 29 capabilities — and that capability list is exactly what
 your installed agent says about itself.
 
-**2 — the one elevated command.** In a PowerShell started with *Run as administrator*, at
-the repository root. Both switches, one UAC prompt, nothing else:
+**2 — the one elevated command.** Ready again: the root cause of the 2026-09-09 failure is
+fixed and proven (it fails without the fix), the qualification builds the part that broke, and
+CI is green on the commit you would be installing. In a PowerShell started with *Run as
+administrator*, at the repository root. Both switches, one UAC prompt, nothing else:
 
 ```powershell
 .\scripts\install-device-service.ps1 -DisplayPower -Operator
