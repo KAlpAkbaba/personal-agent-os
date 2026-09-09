@@ -28,9 +28,7 @@ from app.nativefactory.device_build import (
     native_manifest,
 )
 from app.nativefactory.models import (
-    STATE_BUILDING,
     STATE_FAILED,
-    STATE_TESTING,
     STATE_VERIFIED,
     NativeBuildRow,
 )
