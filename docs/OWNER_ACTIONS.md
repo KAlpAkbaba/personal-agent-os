@@ -159,10 +159,21 @@ It passes 14 checks today: the real reader, a real owner session, your real devi
 online, carrying a version and 29 capabilities — and that capability list is exactly what
 your installed agent says about itself.
 
-**2 — the one elevated command.** Ready again: the root cause of the 2026-09-09 failure is
-fixed and proven (it fails without the fix), the qualification builds the part that broke, and
-CI is green on the commit you would be installing. In a PowerShell started with *Run as
-administrator*, at the repository root. Both switches, one UAC prompt, nothing else:
+**2 — the one elevated command.**
+
+> **You ran this at 16:06 on 2026-09-09 and it WORKED** — `Cloud Core sees the candidate:
+> online, version 0.6.0, 85 capabilities … after 0.1 s`, journal `phase=committed`, `INSTALL
+> VERIFIED`. Your agent has advertised 85 capabilities since. The qualification that followed
+> proved the documents, projects, 3D, Paint, display, ambient and alarm paths against the real
+> device, and found one thing it could not do: **start an application the system had just
+> built.** Two capabilities refused it, both correctly — `file.open` opens documents, and
+> `app.launch` knew only Program Files. ADR-0098 teaches `app.launch` the native root, which
+> is a change to the agent itself, so it needs **one more run of the same command** to take
+> effect. Nothing else about the install changed, and a failure still rolls you back onto the
+> agent you are running now.
+
+In a PowerShell started with *Run as administrator*, at the repository root. Both switches,
+one UAC prompt, nothing else:
 
 ```powershell
 .\scripts\install-device-service.ps1 -DisplayPower -Operator
@@ -187,6 +198,12 @@ it did on 2026-09-09; you cannot be left with a broken agent.
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\core\qualify-item28-unlocked.ps1
 ```
+
+One thing helps it: **leave the desktop idle while it runs** — no Start menu or Search
+flyout open. Windows will not let a background process take the foreground from an application
+that owns it, so with the Search box in front the operator cannot bring a window forward and
+its focus guard refuses to type into a window that is not there. That is the guard working,
+but it means those two steps get measured as *prevented* rather than proven.
 
 It refuses to run against the old runtime rather than reporting a false success, then
 exercises the M19 Digital Operator path (launch a real allowlisted app, move and read
