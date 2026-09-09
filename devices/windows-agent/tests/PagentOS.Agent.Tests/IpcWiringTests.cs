@@ -163,7 +163,7 @@ public class IpcWiringTests
             string content;
             while (true)
             {
-                content = File.Exists(auditPath) ? File.ReadAllText(auditPath) : string.Empty;
+                content = LiveLog.Read(auditPath);
                 if (content.Contains("ipc_peer_refused", StringComparison.Ordinal))
                 {
                     break;
@@ -316,7 +316,7 @@ public class IpcWiringTests
             Assert.DoesNotContain("S-1-5-11", sddl);     // Authenticated Users
 
             // And the audit row a verifier reads must carry the same SDDL.
-            var audit = File.ReadAllText(auditPath);
+            var audit = LiveLog.Read(auditPath);
             Assert.Contains("ipc_pipe_created", audit, StringComparison.Ordinal);
             Assert.Contains(sddl, audit, StringComparison.Ordinal);
         }

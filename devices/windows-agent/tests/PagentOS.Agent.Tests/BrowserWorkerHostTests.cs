@@ -735,7 +735,7 @@ public sealed class BrowserWorkerHostTests : IDisposable
         Assert.Equal(ErrorClasses.UiTargetNotFound, failed["status"]!.GetValue<string>());
         Assert.Matches(@"request_id=[0-9a-f]{32}; duration_ms=\d+; retryable=false", failed["detail"]!.GetValue<string>());
 
-        var content = File.ReadAllText(auditPath);
+        var content = LiveLog.Read(auditPath);
         Assert.DoesNotContain(PayloadMarker, content, StringComparison.Ordinal);
         Assert.DoesNotContain("RESULT-MARKER", content, StringComparison.Ordinal);
         Assert.DoesNotContain("example.org", content, StringComparison.Ordinal);

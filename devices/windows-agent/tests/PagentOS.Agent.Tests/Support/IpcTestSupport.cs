@@ -160,3 +160,33 @@ public sealed class FixedPeerInspector(PipePeer? peer) : IPipePeerInspector
         return peer;
     }
 }
+
+
+/// <summary>Reading a log file that something is still writing to.</summary>
+public static class LiveLog
+{
+    /// <summary>
+    /// The contents of <paramref name="path"/>, opened with the share flags its writer
+    /// grants.
+    /// </summary>
+    /// <remarks>
+    /// <c>File.ReadAllText</c> opens with <c>FileShare.Read</c>, which denies the writer -
+    /// and <c>AuditLog</c>'s own comment names that call as the hazard, measured on the
+    /// runner on 2026-09-08 (CI run 34204979854). The reverse also happens, and is what
+    /// failed CI run 34339398396: the writer held the file and the READ was refused.
+    /// Opening with <c>FileShare.ReadWrite | FileShare.Delete</c> - what
+    /// <c>AuditLog</c> itself uses - removes both directions rather than narrowing one.
+    /// </remarks>
+    public static string Read(string path)
+    {
+        if (!File.Exists(path))
+        {
+            return string.Empty;
+        }
+
+        using var stream = new FileStream(
+            path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
+    }
+}
