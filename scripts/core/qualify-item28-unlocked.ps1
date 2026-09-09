@@ -748,6 +748,38 @@ function Invoke-PaintSection {
     return $section
 }
 
+function Get-UiNodeText {
+    <#  The text of one node in a ui.inspect tree, by automation id.
+
+        `ui.inspect` answers with a TREE (root, node_count, truncated, depth), not with the
+        one element asked about, so the node has to be found. And a WPF TextBlock has no
+        Value pattern: UI Automation exposes its text as the element's NAME, and
+        UiAutomationInspector only writes `value` when a value pattern exists. Reading
+        `value` alone would come back empty against a working application - which is the
+        worst kind of failing check, because it reads like a product defect.
+    #>
+    param($Tree, [string]$AutomationId)
+    if ($null -eq $Tree) { return $null }
+    $root = $null
+    if ($Tree.PSObject.Properties.Name -contains "root") { $root = $Tree.root } else { $root = $Tree }
+    $stack = New-Object System.Collections.Stack
+    $stack.Push($root)
+    while ($stack.Count -gt 0) {
+        $node = $stack.Pop()
+        if ($null -eq $node) { continue }
+        $names = $node.PSObject.Properties.Name
+        if (($names -contains "automation_id") -and ($node.automation_id -eq $AutomationId)) {
+            if (($names -contains "name") -and $node.name) { return [string]$node.name }
+            if (($names -contains "value") -and $node.value) { return [string]$node.value }
+            return ""
+        }
+        if ($names -contains "children") {
+            foreach ($child in @($node.children)) { $stack.Push($child) }
+        }
+    }
+    return $null
+}
+
 function Invoke-NativeAppSection {
     <#  M28: an application this system BUILT, launched and driven like any other.
 
@@ -840,8 +872,8 @@ function Invoke-NativeAppSection {
     $note = "item28 dogrulama notu"
     [void](Invoke-DeviceCapability -Section $section -Capability "ui.set_value" -Payload @{ window_id = $windowId; automation_id = "NoteInput"; value = $note })
     [void](Invoke-DeviceCapability -Section $section -Capability "ui.invoke" -Payload @{ window_id = $windowId; automation_id = "AddButton" })
-    $status = Invoke-DeviceCapability -Section $section -Capability "ui.inspect" -Payload @{ window_id = $windowId; automation_id = "StatusText" } -AllowFailure
-    $statusText = [string](Get-ResultField -Result $status.Result -Name "value")
+    $status = Invoke-DeviceCapability -Section $section -Capability "ui.inspect" -Payload @{ window_id = $windowId; depth = 6; max_nodes = 200 } -AllowFailure
+    $statusText = [string](Get-UiNodeText -Tree $status.Result -AutomationId "StatusText")
     $driveOk = $dry -or ($status.Ok -and $statusText -match "\d+\s+not")
     Add-Check -Section $section.name -Name "native.drive.status_line_read_back" -Ok $driveOk `
         -Detail "the application's own status line says '$statusText' after one note was added through UI Automation"
@@ -853,8 +885,8 @@ function Invoke-NativeAppSection {
     Start-Sleep -Seconds 2
     $relaunch = Invoke-DeviceCapability -Section $section -Capability "app.launch" -Payload $launchPayload -AllowFailure
     $reWindow = [string](Get-ResultField -Result $relaunch.Result -Name "window_id")
-    $reStatus = Invoke-DeviceCapability -Section $section -Capability "ui.inspect" -Payload @{ window_id = $reWindow; automation_id = "StatusText" } -AllowFailure
-    $reText = [string](Get-ResultField -Result $reStatus.Result -Name "value")
+    $reStatus = Invoke-DeviceCapability -Section $section -Capability "ui.inspect" -Payload @{ window_id = $reWindow; depth = 6; max_nodes = 200 } -AllowFailure
+    $reText = [string](Get-UiNodeText -Tree $reStatus.Result -AutomationId "StatusText")
     $persistOk = $dry -or ($reStatus.Ok -and $reText -match "[1-9]\d*\s+not")
     Add-Check -Section $section.name -Name "native.relaunch.note_survived" -Ok $persistOk `
         -Detail "after a close and a fresh launch the status line says '$reText'"
