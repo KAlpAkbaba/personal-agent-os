@@ -7361,6 +7361,65 @@ only that the code agrees with the fixture. Make one half read the other half's 
 
 **Consequences.** The owner can ask "Hava nasıl?"/"İstanbul'da hava nasıl?"/"Ankara'da yarın yağmur var mı?" and get a real, provenance-tracked answer today, with no signup and no owner action; can set and query a durable default location; can ask "Konumum güncel mi?"/"Hangi konumu kullanıyorsun?" and get the truth from the record; and can say "Günaydın."/"Sabah özetimi ver." for a concise, honestly-sourced briefing. Named gaps, stated rather than hidden: `default_weather_location` starts UNSET (owner item `SET_DEFAULT_WEATHER_LOCATION`, `docs/OWNER_ACTIONS.md`); no device today can supply `windows_location`/`mobile_gps` (the seam is real, the writer is not); coarse IP geolocation is unconfigured until the owner sets a URL; the news-summary section of the briefing is honestly absent; live weather against the real Open-Meteo API is `NOT_YET_PROVEN` (proven against a mock transport only, this sandbox having no outbound network) pending one real run on the deployed Cloud Core.
 
+### ADR-0091 addendum 1 — what the pre-merge review found in the location/weather track (2026-09-09)
+
+An independent review ran against this branch before it merged, with live proofs against
+the real objects. Four defects, all closed with regression tests that were each watched to
+fail against the code as it stood.
+
+1. **HIGH — the evidence row could break the turn it belonged to.** `WeatherService.current`
+   committed its `weather_query_evidence` row unguarded. A failed commit does not stay
+   local: SQLAlchemy leaves the session needing an explicit rollback, the realtime tool
+   dispatcher's generic handler swallows the exception WITHOUT one, and the dispatcher's own
+   unconditional commit at the end of the turn then raises `PendingRollbackError` — failing
+   the whole tool-call round trip rather than losing one receipt. That is precisely the
+   session-poisoning bug this branch had already found and fixed once in `record_receipt`,
+   reintroduced one frame away, which is the argument for fixing a CLASS rather than a site.
+
+   The trigger was reachable on every successful answer, not in a corner: `place` is built
+   from Open-Meteo's own geocoded `name`/`admin1` with no bound and lands in `summary`
+   (`String(500)`) — a width Postgres enforces and SQLite does not, so this sandbox could
+   never have shown it. Closed at both ends: the provider bounds every string it hands back,
+   where the vendor's JSON enters the process, and the write is wrapped in the same rollback
+   discipline. A receipt that could not be written no longer leaves the ledger pointing at a
+   row nobody can read back, either.
+
+2. **MEDIUM — for most place names, "the owner's words win" was not true.** The router's
+   extractor is a closed thirteen-city gazetteer, so every other place fell through to the
+   MODEL's own tool argument, never checked against what was actually said:
+   "Varsayılan hava durumu konumumu Paris yap." extracted nothing and the durable default
+   became whatever the model typed. On a single-owner system whose model routinely reads
+   documents, mail and web pages, that is a state mutation an injected instruction could
+   aim at. The argument is now CORROBORATED rather than trusted — accepted only when the
+   owner's own transcript for that turn carries it, Turkish-casefolded and suffix-tolerant
+   so "Adıyaman'ı"/"Paris'te" still work — and an uncorroborated one asks the owner instead
+   of writing. The gazetteer stays as the canonicaliser it always was.
+
+3. **MEDIUM — `location_context` was an archive nobody asked for.** Insert-only, no
+   retention, `expires_at` written but never read. Dormant only because no device can write
+   to it yet — and this ADR's own decision 3 says the day one can, nothing in `app.location`
+   changes. That day it would become exactly the "no raw location-history archive by
+   default" invariant broken. Observations are pruned on the write that supersedes them, and
+   the bound is not a number chosen for comfort: a row older than its own source's RECENT
+   window can never be returned by any tier of `resolve`, so keeping it stores a position
+   the system has promised never to use. The owner's own default is not an observation and
+   is never touched.
+
+4. **LOW — a 200 that is not JSON.** A captive portal or CDN error page raises
+   `JSONDecodeError`, which is a `ValueError` and NOT an `httpx.HTTPError`, so it escaped
+   every typed handler and the owner heard an internal-bug failure instead of the honest
+   sentence this module writes for every other provider failure.
+
+**Confirmed sound by the same review** (each with how): the full resolution order including
+the property that IP-coarse never overrides a trusted tier, proven against real
+`LocationService`/`LocationContextRow` objects across five tier combinations; no default
+location seeded anywhere; `PAGENTOS_LOCATION_IP_GEO_URL` empty by default with no route or
+voice tool able to set it at runtime (so no SSRF through tier 5); no key-shaped literal
+anywhere; every outbound call timeout-bounded; no REST route and no UI-state token added;
+the two documented intent collisions still closed (168 tests re-run live); the overnight
+summary counting only real completed/failed ledger events and never asserting the batch
+finished; and the migration matching the ORM exactly, expand-only.
+
 ## ADR-0092 — M26 addendum: Latest News Mode: a durable, never-guessed channel identity; a real resolver; a third browser profile; two distinct operations (2026-09-08)
 
 **Context.** The owner asked for a "Latest News Mode": open the latest eligible video from a
@@ -7445,3 +7504,83 @@ owner's own "Show Ana Haber" stays `needs_identity` until the one URL is given
 (`docs/OWNER_ACTIONS.md` item 34); the DOM/Videos-listing discovery tiers are unimplemented;
 `news.close` has no deterministic voice phrase yet (the task's own list named
 open/summarize/query only) and is reachable by explicit tool call alone.
+
+### ADR-0092 addendum 1 — what the pre-merge review found in Latest News Mode (2026-09-09)
+
+Six findings, all closed with regression tests watched to fail first. The HIGH is worth
+recording in full because of HOW it survived: 288 resolver tests passed while it was live.
+
+1. **HIGH — the Shorts exclusion was structurally inert on the only provider that ships.**
+   `is_short()` answering `False` means either "not a Short" or "no evidence either way",
+   and `YouTubeFeedProvider` is permanently the second: YouTube's Atom feed carries no
+   duration and no Shorts flag, and the provider builds every url as `/watch?v=...`, so the
+   `/shorts/` marker can never fire. The entire exclusion rested on an uploader voluntarily
+   typing "#shorts" in a title, which a punchy news clip does not. An untagged Short posted
+   after the day's bulletin was therefore SELECTED for `latest_full_broadcast` /
+   `latest_main_news`, flagged only `ambiguous=True` — and nothing downstream reads
+   `ambiguous`. The owner would have been shown a thirty-second clip and told it was the
+   main news, which is the exact outcome the owner's directive names.
+
+   Every resolver fixture set `duration_s` or `is_short` explicitly — information the real
+   provider never supplies. That is the same failure class this repository built three
+   contract guards for in M25/M26: two self-consistent halves, never driven against each
+   other. The new regression tests build their candidates through the REAL `_parse_feed`
+   rather than by hand, so a fixture can no longer supply evidence production cannot.
+
+   `can_decide_shortness()` now separates "not a Short" from "cannot tell", and a policy
+   whose purpose is to exclude Shorts refuses when it cannot tell. The bulletin-marker path
+   is untouched and is how a main broadcast is normally recognised; `latest_any_news` is
+   untouched because it never claimed to exclude anything. The branch's own fallback test
+   encoded the defect and was corrected rather than deleted: it carries durations now, with
+   its evidence-less twin asserting the refusal directly beside it.
+
+2. **MEDIUM — the host check was a substring test.** `"youtube.com" not in netloc` accepts
+   `youtube.com.evil.example`, `notyoutube.com` and `evil-youtube.com.attacker.net`. Dead
+   today (nothing passes a real `fetch_page`) and a landmine the moment the documented seam
+   is filled: an attacker-chosen page would decide the persisted `channel_id`, in the one
+   module whose whole purpose is never to guess a channel identity — and fetching it would
+   be an SSRF primitive besides. Exact host or dotted suffix now; the regression asserts
+   nothing was fetched at all, not merely that the answer was `None`.
+
+3. **MEDIUM — untrusted titles reached verbatim speech.** Whoever can upload to a configured
+   channel writes `title`, and every news tool's registration instructs the model to read
+   the returned `speech` exactly as given. No length bound, no control-character stripping.
+   Folded and bounded at the read — the one place every candidate passes through — which is
+   the discipline `app.mail.providers._sanitize_header` already established for this class.
+
+4. **MEDIUM — the `news` browser profile was not media-only**, although
+   `packages/protocol/BROWSER_CAPABILITIES.md` said it was. Nothing that ships reached it,
+   but a governance claim nobody enforces stops being true quietly. Enforced bidirectionally
+   now, exactly as `alarm` has been since M18.3, and the contract doc says what the worker
+   actually does. The unimplemented discovery tiers can widen it deliberately when built.
+
+5. **MEDIUM — the feed was parsed with the raw stdlib parser and no size cap**, on a body
+   from the public internet through a redirect chain we do not control, in a repository that
+   added `defusedxml` as a hard dependency after exactly this class of finding (ADR-0085
+   addendum 6). `defusedxml` now, and the body is streamed under a 4 MB bound rather than
+   buffered whole by `response.content`.
+
+6. **LOW — `POST /v1/news/open` did not validate `content_type`**, so an unknown value was
+   an unhandled 500 rather than the 400 `/v1/news/resolve` already returns.
+
+**And one the fix itself exposed, worth more than the LOW it sat beside.** Three "offline"
+provider tests patched `httpx.get`. The size-cap fix changed the call to `httpx.stream`,
+the patches silently stopped intercepting, and those tests began making REAL requests to
+YouTube — one returned fifteen genuine NASA uploads where it expected two fixtures. The
+assertion caught it, but only by luck: had the counts matched, a unit suite would have been
+quietly talking to the public internet on every run. The fetch now lives behind one named
+`fetch_feed_bytes` seam, so a patch that stops matching fails loudly instead of dialling
+out. A monkeypatch aimed at a third party's API is only as stable as that API's shape.
+
+**Confirmed sound by the same review**: `channel_id` is regex-validated before it can reach
+the feed URL template, so no path/query injection through `channel_input`; the played video
+url is always synthesised by our own code and never taken opaquely from feed data; the
+three-way profile isolation uses `resolve()` + `is_relative_to()` rather than a leaf
+`is_symlink()` check (the junction-escape pattern this repo's memory flags as recurring);
+`news.summarize` reaches no device capability at all; `close_playback` touches only the row
+named by its own `context_id` and is idempotent; the router checks `_news_match` before
+`DOCUMENT_SUMMARIZE`, so "haberleri özetle" cannot be stolen; a spoken channel hint that
+matches no configured source refuses rather than falling back to the default; every REST
+route is owner-gated at the router; and the migration is expand-only with real CHECK
+constraints.
+
