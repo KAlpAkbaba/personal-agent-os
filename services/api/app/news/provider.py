@@ -22,10 +22,16 @@ testable every day without any of this.
 from __future__ import annotations
 
 import re
-import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Protocol
+from typing import Final, Protocol
+
+# `defusedxml`, not the stdlib parser. This repository added it as a hard dependency
+# after an XML-bomb finding on the OOXML path (ADR-0085 addendum 6), and this is the one
+# new network-facing parser this track adds - fed a body from the public internet,
+# through a redirect chain we do not control. `ET.fromstring` here refuses entity
+# expansion, external entities and DTDs outright; the size cap below bounds the rest.
+from defusedxml import ElementTree as ET
 
 from app.news.classification import VideoCandidate
 from app.news.models import ANSWERED_BY_CHANNEL_FEED, ANSWERED_BY_FIXTURE
@@ -66,8 +72,29 @@ class FixtureNewsProvider:
         return list(self.channels.get(channel_id, [])), ANSWERED_BY_FIXTURE
 
 
+#: Whoever can upload to (or briefly influence) a configured channel writes these
+#: strings, and they reach the owner's ears verbatim: every news tool's registration tells
+#: the model "Donen 'speech' metnini aynen oku". A title carrying newlines, control
+#: characters or a few kilobytes of crafted text would be spoken as if it were the
+#: assistant's own words, and handed back into the model's tool-call context as literal
+#: content later turns can see. `app.mail.providers._sanitize_header` established the
+#: pattern for exactly this class of input; the news feed had no equivalent.
+MAX_TITLE_LEN: Final = 300
+MAX_DESCRIPTION_LEN: Final = 2000
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]+")
+
+
+def _sanitize_text(value: str | None, limit: int) -> str:
+    """Fold every control character (newlines included) to a single space and bound the
+    length - at the READ, the one place every candidate this module hands back passes
+    through, rather than hoping each later speech/receipt/ledger site remembers."""
+    if not value:
+        return ""
+    return _CONTROL_CHARS.sub(" ", value).strip()[:limit]
+
+
 def _parse_feed(channel_id: str, xml_bytes: bytes) -> list[VideoCandidate]:
-    root = ET.fromstring(xml_bytes)  # noqa: S314 - our own known-schema fetch, not owner input
+    root = ET.fromstring(xml_bytes)
     out: list[VideoCandidate] = []
     for entry in root.findall("a:entry", _ATOM_NS):
         video_id_el = entry.find("yt:videoId", _ATOM_NS)
@@ -83,12 +110,12 @@ def _parse_feed(channel_id: str, xml_bytes: bytes) -> list[VideoCandidate]:
         if group is not None:
             desc_el = group.find("media:description", _ATOM_NS)
             if desc_el is not None and desc_el.text:
-                description = desc_el.text
+                description = _sanitize_text(desc_el.text, MAX_DESCRIPTION_LEN)
         video_id = video_id_el.text
         out.append(
             VideoCandidate(
                 video_id=video_id,
-                title=(title_el.text or "") if title_el is not None else "",
+                title=_sanitize_text(title_el.text if title_el is not None else "", MAX_TITLE_LEN),
                 published_at=published_at,
                 channel_id=channel_id,
                 url=f"https://www.youtube.com/watch?v={video_id}",
@@ -96,6 +123,35 @@ def _parse_feed(channel_id: str, xml_bytes: bytes) -> list[VideoCandidate]:
             )
         )
     return out
+
+
+def fetch_feed_bytes(url: str, *, timeout_s: float, max_bytes: int) -> bytes:
+    """The ONE place this module talks to the network, named so a test can replace it.
+
+    Streamed and capped rather than `response.content`, which buffers the whole body
+    before anyone can object to its size - the same discipline the M20 OOXML-bomb
+    remediation established for the other parser this repository feeds from outside.
+
+    It is a module-level function, not an inline `httpx` call, for a reason the suite
+    paid for: three offline tests patched `httpx.get`, the call changed shape, the
+    patches stopped matching, and those tests quietly began fetching the real YouTube
+    feed. A named seam cannot be missed silently - remove it and the patch fails loudly.
+    """
+    import httpx
+
+    try:
+        with httpx.stream("GET", url, timeout=timeout_s, follow_redirects=True) as response:
+            response.raise_for_status()
+            chunks: list[bytes] = []
+            total = 0
+            for chunk in response.iter_bytes():
+                total += len(chunk)
+                if total > max_bytes:
+                    raise ProviderUnavailableError(f"channel feed exceeded {max_bytes} bytes")
+                chunks.append(chunk)
+            return b"".join(chunks)
+    except httpx.HTTPError as exc:
+        raise ProviderUnavailableError(f"channel feed request failed: {exc}") from exc
 
 
 @dataclass
@@ -109,18 +165,18 @@ class YouTubeFeedProvider:
     """
 
     timeout_s: float = 10.0
+    #: A channel's upload feed is a few tens of kilobytes. Anything past this is not a
+    #: feed, and `response.content` buffers the WHOLE body before the parser ever sees
+    #: it - so the cap has to be applied while streaming, not after. The same discipline
+    #: the M20 OOXML-bomb remediation established for the other parser this repo feeds
+    #: from the outside world.
+    max_bytes: int = 4 * 1024 * 1024
 
     def list_recent_uploads(self, channel_id: str) -> tuple[list[VideoCandidate], str]:
-        import httpx
-
         url = YOUTUBE_FEED_URL_TEMPLATE.format(channel_id=channel_id)
+        body = fetch_feed_bytes(url, timeout_s=self.timeout_s, max_bytes=self.max_bytes)
         try:
-            response = httpx.get(url, timeout=self.timeout_s, follow_redirects=True)
-            response.raise_for_status()
-        except httpx.HTTPError as exc:
-            raise ProviderUnavailableError(f"channel feed request failed: {exc}") from exc
-        try:
-            candidates = _parse_feed(channel_id, response.content)
+            candidates = _parse_feed(channel_id, body)
         except ET.ParseError as exc:
             raise ProviderUnavailableError(f"channel feed did not parse: {exc}") from exc
         return candidates, ANSWERED_BY_CHANNEL_FEED

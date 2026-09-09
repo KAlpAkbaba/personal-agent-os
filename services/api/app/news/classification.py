@@ -100,6 +100,29 @@ def is_short(candidate: VideoCandidate) -> bool:
     )
 
 
+def can_decide_shortness(candidate: VideoCandidate) -> bool:
+    """Whether this candidate carries ANY evidence that could decide :func:`is_short`.
+
+    The distinction ``is_short`` cannot make on its own, and the one the security review
+    proved matters: ``False`` means EITHER "this is not a Short" OR "I have no way to
+    tell", and the only provider that ships is always in the second case. YouTube's Atom
+    feed carries no duration and no Shorts flag, and ``YouTubeFeedProvider`` builds every
+    url as ``/watch?v=...``, so the ``/shorts/`` marker can never fire either - leaving
+    the whole exclusion resting on an uploader voluntarily typing "#shorts" in a title,
+    which a punchy news clip does not.
+
+    A content policy whose entire purpose is to exclude Shorts must not read "I cannot
+    tell" as "it is fine". :func:`app.news.resolver.resolve_latest` uses this to refuse
+    honestly instead of selecting one.
+    """
+    if candidate.is_short is not None or candidate.duration_s is not None:
+        return True
+    haystack = _fold(f"{candidate.title} {candidate.description} {candidate.url}")
+    return any(marker in haystack for marker in _SHORTS_URL_MARKERS) or any(
+        _fold(marker) in haystack for marker in _SHORTS_TEXT_MARKERS
+    )
+
+
 def is_promo(candidate: VideoCandidate) -> bool:
     """A teaser/trailer/highlight reel — real channel content, not a bulletin."""
     haystack = _fold(f"{candidate.title} {candidate.description}")

@@ -177,6 +177,23 @@ class TestOpenAndCloseRoutes:
         resp = h.client.post("/v1/news/open", json={})
         assert resp.status_code == 409
 
+    def test_open_refuses_an_unknown_content_type_with_a_400_not_a_500(self, h: Harness) -> None:
+        """The security review's LOW. `/v1/news/resolve` already validated this; `/open`
+        passed it straight through to `resolve_latest`'s bare `ValueError`, which nothing
+        on that path translates - so an unknown value was an unhandled 500 rather than an
+        answer the caller could act on. The voice tool never hit it (it coerces an unknown
+        value to None); the REST route was the one place the input was not checked."""
+        self._seed_resolved_source(h, _channel_id("badtype"))
+        resp = h.client.post(
+            "/v1/news/open",
+            json={"news_source_id": "nasa", "content_type": "latest_anything_i_want"},
+        )
+        assert resp.status_code == 400, resp.text
+        assert resp.json()["detail"]["error_class"] == "invalid_content_type"
+        assert not [c for c in h.device.calls if c["capability"] == "browser.session_open"], (
+            "a refused content_type still opened a browser"
+        )
+
     def test_get_playback_status(self, h: Harness) -> None:
         self._seed_resolved_source(h, _channel_id("status"))
         open_resp = h.client.post("/v1/news/open", json={"news_source_id": "nasa"})

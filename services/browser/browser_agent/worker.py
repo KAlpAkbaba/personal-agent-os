@@ -963,6 +963,21 @@ class Worker:
         # dedicated profile is that alarm audio cannot appear in the browser the
         # owner's research is using — and the alarm profile exists for nothing
         # but media.
+        if profile == media.NEWS_PROFILE and session_kind != media.MEDIA_SESSION_KIND:
+            # The contract says this profile is "for Latest News Mode playback only", and
+            # a security review pointed out it was not enforced the way `alarm` is: a
+            # caller could open a general-purpose, persistent browsing session on the
+            # dedicated news Chrome by naming `session_kind: "research"`. Nothing that
+            # ships did that - `open_latest_news` always sends "media" - but a governance
+            # claim nobody enforces is a claim that stops being true quietly. The
+            # discovery tiers the spec leaves unimplemented can widen this deliberately,
+            # with their own decision record, when they are actually built.
+            raise BrowserError(
+                ErrorClass.VALIDATION_ERROR,
+                "session_open: the 'news' profile is for media playback only; "
+                "use session_kind 'media'",
+                retryable=False,
+            )
         if profile == media.ALARM_PROFILE and session_kind != media.MEDIA_SESSION_KIND:
             raise BrowserError(
                 ErrorClass.VALIDATION_ERROR,

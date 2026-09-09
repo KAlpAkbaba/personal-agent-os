@@ -15,6 +15,7 @@ from typing import Any, Final
 
 from app.news.classification import (
     VideoCandidate,
+    can_decide_shortness,
     is_promo,
     is_short,
     matches_bulletin_markers,
@@ -32,6 +33,11 @@ REASON_NEWEST: Final = "newest"
 REASON_BULLETIN_MARKER: Final = "bulletin_marker"
 REASON_NEWEST_NON_SHORT_FALLBACK: Final = "newest_non_short_fallback"
 REASON_NONE_ELIGIBLE: Final = "none_eligible"
+#: Nothing was wrong with the candidates - the QUESTION could not be answered. Everything
+#: that survived the filters lacks any signal that could decide whether it is a Short, and
+#: this content policy exists to exclude Shorts. Refusing is the honest answer; selecting
+#: would be the guess the owner explicitly forbade.
+REASON_SHORTS_UNDECIDABLE: Final = "shorts_undecidable"
 
 #: Per-candidate rejection reasons recorded in ``ResolverResult.rejected`` /
 #: ``NewsResolutionRow.candidates_json`` — every refusal is recorded, never silent
@@ -39,6 +45,7 @@ REASON_NONE_ELIGIBLE: Final = "none_eligible"
 REJECT_SHORTS_EXCLUDED: Final = "shorts_excluded"
 REJECT_PROMO_EXCLUDED: Final = "promo_excluded"
 REJECT_DUPLICATE: Final = "duplicate"
+REJECT_SHORTS_UNDECIDABLE: Final = "shorts_undecidable"
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,9 +153,34 @@ def resolve_latest(
             tuple(rejected),
         )
 
-    # Safer fallback (task brief §2: "take the safest configured rule ... never guess
-    # quietly"): the newest candidate that already survived the shorts/promo filter,
-    # marked ambiguous so nothing downstream mistakes this for a confident title match.
+    # No candidate named itself a bulletin, so the fallback is the newest one that
+    # survived the shorts/promo filter - but ONLY if that filter could actually see
+    # anything.
+    #
+    # The security review's HIGH: `is_short()` answering False means either "not a Short"
+    # or "no evidence either way", and on the only provider that ships (YouTube's Atom
+    # feed - no duration, no flag, every url a /watch?v= link) it is ALWAYS the second.
+    # An untagged Short posted after the day's bulletin was therefore selected here and
+    # played, for a content policy that exists precisely to exclude it, with nothing but
+    # `ambiguous=True` to say so - and nothing downstream reads `ambiguous`. The owner
+    # would be shown a thirty-second clip and told it was the main news.
+    #
+    # "Do not silently choose a Shorts clip" is answered the only honest way: with no
+    # evidence that could decide the question, refuse. The bulletin-marker path above is
+    # untouched and is how a main broadcast is normally recognised ("Show Ana Haber -
+    # 8 Eylul 2026 Bolumu"); `latest_any_news` is untouched too, because it never claimed
+    # to exclude anything.
+    if not can_decide_shortness(eligible[0]):
+        rejected.append((eligible[0].video_id, REJECT_SHORTS_UNDECIDABLE))
+        return ResolverResult(
+            None,
+            REASON_SHORTS_UNDECIDABLE,
+            content_type,
+            answered_by,
+            len(candidates),
+            tuple(rejected),
+        )
+
     return ResolverResult(
         eligible[0],
         REASON_NEWEST_NON_SHORT_FALLBACK,
@@ -190,6 +222,8 @@ def audit_candidates(
 
 __all__ = [
     "REASON_BULLETIN_MARKER",
+    "REASON_SHORTS_UNDECIDABLE",
+    "REJECT_SHORTS_UNDECIDABLE",
     "REASON_NEWEST",
     "REASON_NEWEST_NON_SHORT_FALLBACK",
     "REASON_NONE_ELIGIBLE",

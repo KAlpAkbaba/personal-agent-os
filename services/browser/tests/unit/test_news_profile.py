@@ -256,23 +256,48 @@ class TestNewsSessionOpen:
         assert exc.value.error_class == ErrorClass.VALIDATION_ERROR
         assert "may not use the research profile" in exc.value.message
 
-    async def test_media_ops_refuse_a_non_media_session_naming_news_in_the_fix(
+    async def test_a_news_session_must_be_a_media_session(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recording_backend
     ) -> None:
-        """A ``news`` profile opened WITHOUT ``session_kind="media"`` (research-shaped,
-        the discovery/inspection surface only) must still refuse media_play — and the
-        refusal must name 'news' as a fix, not just 'alarm' (a Cloud Core that forgot
-        ``session_kind`` on a news session would otherwise get a misleading message)."""
+        """The security review's M3, at the door rather than one step past it.
+
+        This test used to open ``{profile: "news", session_kind: "research"}``
+        SUCCESSFULLY and only check that a later media_play refused — which meant a
+        caller could hold a general-purpose, persistent browsing session on the
+        dedicated news Chrome profile, while `packages/protocol/BROWSER_CAPABILITIES.md`
+        promised that profile was "for Latest News Mode playback only". Nothing that
+        ships did it (`open_latest_news` always sends "media"), but a governance claim
+        nobody enforces stops being true quietly.
+
+        `alarm` has had this bidirectional guard since M18.3; `news` has it now, and the
+        unimplemented discovery tiers can widen it deliberately when they are built."""
+        worker = _make_worker(tmp_path, monkeypatch)
+        await worker._print_hello()
+        with pytest.raises(BrowserError) as exc:
+            await worker._execute(
+                "browser.session_open",
+                {"session_id": "news-research-1", "profile": "news", "session_kind": "research"},
+            )
+        assert exc.value.error_class == ErrorClass.VALIDATION_ERROR
+        assert "playback only" in exc.value.message
+
+    async def test_media_ops_name_news_as_a_fix_not_only_alarm(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recording_backend
+    ) -> None:
+        """The half of the old test that is still worth having: a media op aimed at a
+        non-media session names BOTH profiles that can carry one, so a Cloud Core that
+        forgot ``session_kind`` on a news session gets a contract error it can read
+        rather than a message that only mentions alarms."""
         worker = _make_worker(tmp_path, monkeypatch)
         await worker._print_hello()
         await worker._execute(
             "browser.session_open",
-            {"session_id": "news-research-1", "profile": "news", "session_kind": "research"},
+            {"session_id": "iso-research-1", "profile": "isolated", "session_kind": "research"},
         )
         with pytest.raises(BrowserError) as exc:
             await worker._execute(
                 "browser.media_play",
-                {"session_id": "news-research-1", "url": "https://www.youtube.com/watch?v=x"},
+                {"session_id": "iso-research-1", "url": "https://www.youtube.com/watch?v=x"},
             )
         assert exc.value.error_class == ErrorClass.VALIDATION_ERROR
         assert "'alarm' or 'news'" in exc.value.message

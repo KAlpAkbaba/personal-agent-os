@@ -258,6 +258,16 @@ def _playback_status_code(outcome: PlaybackOutcome) -> int:
 
 @router.post("/open")
 async def open_news(request: Request, body: OpenNewsRequest) -> JSONResponse:
+    # The same check `/resolve` already makes, and for the same reason. Without it
+    # `content_type` fell through to `resolve_latest`'s bare `ValueError`, which nothing
+    # on this path translates, so an unknown value was an unhandled 500 rather than the
+    # 400 the caller could act on. The voice path never hit it (the tool coerces an
+    # unknown value to None); the REST route was the one place the input was not checked.
+    if body.content_type is not None and body.content_type not in CONTENT_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail={"error_class": "invalid_content_type", "detail": body.content_type},
+        )
     artifacts = _artifacts(request)
     device_action = _device_action(request)
     news_provider = _news_provider(request)

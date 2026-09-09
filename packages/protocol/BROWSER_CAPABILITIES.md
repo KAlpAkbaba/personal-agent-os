@@ -84,7 +84,7 @@ id). A session is one Playwright context in one Chrome instance with its own tab
 
 - `profile`: `research` (the dedicated PagentOS agent profile, persistent, never the owner's
   `User Data`), `alarm` (v1.2 — a SECOND dedicated persistent profile, for alarm media only),
-  `news` (v1.3 — a THIRD dedicated persistent profile, for Latest News Mode playback only;
+  `news` (v1.3 — a THIRD dedicated persistent profile, for Latest News Mode playback only - enforced bidirectionally, exactly as `alarm` is: a session naming this profile without `session_kind: "media"` is refused at `session_open`;
   `session_id` convention `news-<news_media_context_id>`) or `isolated` (fresh non-persistent
   context). The owner's real Chrome session is NOT reachable through this contract in v1; it
   stays behind `BrowserEnrollment` + `owner_authorized_for_research` (ADR-0035 §4) and a

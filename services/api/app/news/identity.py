@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import Final
 from urllib.parse import urlparse
 
 from app.news.provider import CHANNEL_ID_RE, looks_like_channel_id
@@ -43,6 +44,25 @@ def _extract_channel_id_from_path(path: str) -> str | None:
     return match.group(1) if match else None
 
 
+#: The only hosts a channel URL may name. Checked as an EXACT host or a dotted suffix,
+#: never as a substring: the security review proved `"youtube.com" in netloc` accepts
+#: `youtube.com.evil.example`, `notyoutube.com` and `evil-youtube.com.attacker.net`. That
+#: is not a cosmetic bug. The whole point of this module is that a channel identity is
+#: resolved from an authoritative source rather than guessed, and whoever fills the
+#: documented `fetch_page` seam with a real fetcher would otherwise be handed an
+#: attacker-chosen page - which both decides the persisted `channel_id` and makes the
+#: fetch itself an SSRF primitive.
+_YOUTUBE_HOSTS: Final[tuple[str, ...]] = ("youtube.com", "youtu.be", "youtube-nocookie.com")
+
+
+def _is_youtube_host(netloc: str) -> bool:
+    """Exact host, or a subdomain of one, case-insensitively and without its port."""
+    host = netloc.split("@")[-1].split(":")[0].strip().rstrip(".").lower()
+    if not host:
+        return False
+    return any(host == known or host.endswith(f".{known}") for known in _YOUTUBE_HOSTS)
+
+
 def resolve_channel_identity(
     source_input: str, *, fetch_page: object | None = None
 ) -> ChannelIdentity | None:
@@ -65,7 +85,7 @@ def resolve_channel_identity(
 
     # A URL (with or without scheme) — never a bare display name, which has no path.
     parsed = urlparse(text if "://" in text else f"https://{text}")
-    if not parsed.netloc or "youtube.com" not in parsed.netloc:
+    if not _is_youtube_host(parsed.netloc):
         return None  # not a YouTube URL and not a bare id: nothing authoritative here
 
     # 2. /channel/UC... — the id is literally in the URL.

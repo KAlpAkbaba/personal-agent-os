@@ -120,14 +120,11 @@ class TestFeedParsing:
 
 class TestYouTubeFeedProviderOffline:
     def test_http_error_raises_provider_unavailable(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        import httpx
 
-        class _FailingClient:
-            @staticmethod
-            def get(*args: object, **kwargs: object) -> object:
-                raise httpx.ConnectError("no network in this test")
+        def _no_network(*args: object, **kwargs: object) -> bytes:
+            raise ProviderUnavailableError("channel feed request failed: no network")
 
-        monkeypatch.setattr("httpx.get", _FailingClient.get)
+        monkeypatch.setattr("app.news.provider.fetch_feed_bytes", _no_network)
         provider = YouTubeFeedProvider()
         with pytest.raises(ProviderUnavailableError):
             provider.list_recent_uploads(CH)
@@ -142,7 +139,9 @@ class TestYouTubeFeedProviderOffline:
             def raise_for_status() -> None:
                 return None
 
-        monkeypatch.setattr("httpx.get", lambda *a, **k: _FakeResponse())
+        monkeypatch.setattr(
+            "app.news.provider.fetch_feed_bytes", lambda *a, **k: _FakeResponse.content
+        )
         provider = YouTubeFeedProvider()
         with pytest.raises(ProviderUnavailableError):
             provider.list_recent_uploads(CH)
@@ -157,7 +156,9 @@ class TestYouTubeFeedProviderOffline:
             def raise_for_status() -> None:
                 return None
 
-        monkeypatch.setattr("httpx.get", lambda *a, **k: _FakeResponse())
+        monkeypatch.setattr(
+            "app.news.provider.fetch_feed_bytes", lambda *a, **k: _FakeResponse.content
+        )
         provider = YouTubeFeedProvider()
         candidates, answered_by = provider.list_recent_uploads(CH)
         assert answered_by == ANSWERED_BY_CHANNEL_FEED

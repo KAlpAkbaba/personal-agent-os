@@ -274,10 +274,17 @@ class TestAmbiguousFallback:
     def test_main_news_with_no_marker_match_falls_back_and_flags_ambiguous(self) -> None:
         """Neither candidate carries an explicit bulletin marker; the safer fallback
         (newest non-short, non-promo) is used, and the result says so honestly
-        (task brief: "never guess quietly")."""
+        (task brief: "never guess quietly").
+
+        The durations are not decoration. This test used to omit them, and in doing so it
+        encoded the security review's HIGH: with no duration, no `is_short` flag and no
+        `/shorts/` url, the shorts filter has nothing to decide with, and selecting anyway
+        is the guess "do not silently choose a Shorts clip" forbids. The fallback is a
+        legitimate answer only when the filter could actually see - which is what these
+        durations give it, and what a duration-aware discovery tier would give it live."""
         candidates = [
-            _c("OLDER", "Gündem Özeti", NOW - timedelta(hours=1)),
-            _c("NEWER", "Gece Programı", NOW),
+            _c("OLDER", "Gündem Özeti", NOW - timedelta(hours=1), duration_s=1500.0),
+            _c("NEWER", "Gece Programı", NOW, duration_s=1800.0),
         ]
         result = resolve_latest(
             candidates, content_type=CONTENT_TYPE_MAIN_NEWS, answered_by="fixture"
@@ -286,3 +293,16 @@ class TestAmbiguousFallback:
         assert result.selected.video_id == "NEWER"
         assert result.reason == REASON_NEWEST_NON_SHORT_FALLBACK
         assert result.ambiguous is True
+
+    def test_the_same_shape_without_durations_refuses_instead(self) -> None:
+        """The other side of the line the fix draws, kept beside its neighbour so the
+        difference is one argument and impossible to miss."""
+        candidates = [
+            _c("OLDER", "Gündem Özeti", NOW - timedelta(hours=1)),
+            _c("NEWER", "Gece Programı", NOW),
+        ]
+        result = resolve_latest(
+            candidates, content_type=CONTENT_TYPE_MAIN_NEWS, answered_by="fixture"
+        )
+        assert result.selected is None
+        assert result.reason == "shorts_undecidable"
