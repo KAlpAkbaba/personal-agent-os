@@ -1,0 +1,306 @@
+{
+  "suite": "TtsLoopbackProxy",
+  "schema_version": "1.0",
+  "generated_at": "2026-09-09T09:53:20.430603Z",
+  "language": "tr-TR",
+  "seed": 20260907,
+  "providers": {
+    "tts": "openai",
+    "stt": "openai-whisper",
+    "tts_is_fake": false,
+    "stt_is_fake": false
+  },
+  "thresholds": {
+    "wer_matched": 0.35,
+    "wer_degraded": 0.6,
+    "content_min_chars": 4,
+    "content_max_edits": 1
+  },
+  "totals": {
+    "cases": 6,
+    "matched": 0,
+    "degraded": 0,
+    "mismatched": 0,
+    "error": 6
+  },
+  "mean_wer": null,
+  "per_category": {
+    "alarm": {
+      "cases": 1,
+      "matched": 0,
+      "degraded": 0,
+      "mismatched": 0,
+      "error": 1,
+      "mean_wer": null
+    },
+    "ambient": {
+      "cases": 1,
+      "matched": 0,
+      "degraded": 0,
+      "mismatched": 0,
+      "error": 1,
+      "mean_wer": null
+    },
+    "apps": {
+      "cases": 1,
+      "matched": 0,
+      "degraded": 0,
+      "mismatched": 0,
+      "error": 1,
+      "mean_wer": null
+    },
+    "artifacts": {
+      "cases": 1,
+      "matched": 0,
+      "degraded": 0,
+      "mismatched": 0,
+      "error": 1,
+      "mean_wer": null
+    },
+    "authority": {
+      "cases": 1,
+      "matched": 0,
+      "degraded": 0,
+      "mismatched": 0,
+      "error": 1,
+      "mean_wer": null
+    },
+    "creative": {
+      "cases": 1,
+      "matched": 0,
+      "degraded": 0,
+      "mismatched": 0,
+      "error": 1,
+      "mean_wer": null
+    }
+  },
+  "audio": {
+    "cases_with_audio": 0,
+    "total_ms": 0,
+    "mean_ms": 0,
+    "min_ms": 0,
+    "max_ms": 0,
+    "total_bytes": 0,
+    "formats": {},
+    "mean_tts_latency_ms": 0.0,
+    "mean_stt_latency_ms": 0.0
+  },
+  "marks": {
+    "audio_generation": {
+      "mark": "NOT_PROVEN",
+      "reason": "a real provider (openai) produced audio for 0 of 6 cases; 6 failed (named per case under 'error')."
+    },
+    "loopback_semantics": {
+      "mark": "PROVEN_PROXY",
+      "reason": "an isolated in-process byte path: the synthesised bytes are handed straight to the recogniser - no loudspeaker, no microphone, no room, no feedback loop. The match proves the spoken text survives synthesis and recognition; it proves nothing about what a person hears."
+    },
+    "physical_hearing": {
+      "mark": "NOT_CLAIMED",
+      "reason": "never claimed by this harness: only the owner's ear, on the owner's device, can prove it (docs/OWNER_ACTIONS.md audio items)."
+    }
+  },
+  "summary": "PROVIDER_UNAVAILABLE",
+  "notes": [
+    "251 speakable cases available, 6 selected by the balanced sampler (seed 20260907)"
+  ],
+  "ledger": {
+    "event_type": "voice.tts_loopback",
+    "factual_summary": "TTS-STT geri döngü sınaması (vekil yol): 6 cümle, 0 eşleşti, 0 bozuk, 0 uyumsuz, 6 hata; ortalama WER -; ses üretimi openai (NOT_PROVEN), tanıma openai-whisper; anlam geri döngüsü PROVEN_PROXY; fiziksel duyma NOT_CLAIMED — sağlayıcı erişilemedi, sonuç yok.",
+    "detail": {
+      "suite": "TtsLoopbackProxy",
+      "schema_version": "1.0",
+      "generated_at": "2026-09-09T09:53:20.430603Z",
+      "language": "tr-TR",
+      "seed": 20260907,
+      "tts_provider": "openai",
+      "stt_provider": "openai-whisper",
+      "tts_is_fake": false,
+      "stt_is_fake": false,
+      "cases": 6,
+      "matched": 0,
+      "degraded": 0,
+      "mismatched": 0,
+      "errors": 6,
+      "mean_wer": null,
+      "per_category": {
+        "alarm": {
+          "cases": 1,
+          "matched": 0,
+          "degraded": 0,
+          "mismatched": 0,
+          "error": 1,
+          "mean_wer": null
+        },
+        "ambient": {
+          "cases": 1,
+          "matched": 0,
+          "degraded": 0,
+          "mismatched": 0,
+          "error": 1,
+          "mean_wer": null
+        },
+        "apps": {
+          "cases": 1,
+          "matched": 0,
+          "degraded": 0,
+          "mismatched": 0,
+          "error": 1,
+          "mean_wer": null
+        },
+        "artifacts": {
+          "cases": 1,
+          "matched": 0,
+          "degraded": 0,
+          "mismatched": 0,
+          "error": 1,
+          "mean_wer": null
+        },
+        "authority": {
+          "cases": 1,
+          "matched": 0,
+          "degraded": 0,
+          "mismatched": 0,
+          "error": 1,
+          "mean_wer": null
+        },
+        "creative": {
+          "cases": 1,
+          "matched": 0,
+          "degraded": 0,
+          "mismatched": 0,
+          "error": 1,
+          "mean_wer": null
+        }
+      },
+      "synthesis": {
+        "files": 0,
+        "total_ms": 0,
+        "mean_ms": 0,
+        "min_ms": 0,
+        "max_ms": 0,
+        "total_bytes": 0,
+        "formats": {},
+        "mean_tts_latency_ms": 0.0,
+        "mean_stt_latency_ms": 0.0
+      },
+      "marks": {
+        "speech_generation": "NOT_PROVEN",
+        "loopback_semantics": "PROVEN_PROXY",
+        "physical_hearing": "NOT_CLAIMED"
+      },
+      "summary": "PROVIDER_UNAVAILABLE",
+      "failed_case_ids": [
+        "a.create.1",
+        "am.2",
+        "app.run.para.v3",
+        "art.render.para",
+        "dep.1",
+        "creative.redraw.canonical"
+      ]
+    }
+  },
+  "cases": [
+    {
+      "case_id": "a.create.1",
+      "category": "alarm",
+      "expected_speech": "Alarmı yarın yedi otuza kurdum efendim.",
+      "transcript": "",
+      "expected_normalized": "",
+      "transcript_normalized": "",
+      "wer": null,
+      "missing_content": [],
+      "verdict": "error",
+      "audio_ms": 0,
+      "audio_bytes": 0,
+      "audio_format": "",
+      "tts_latency_ms": 0.0,
+      "stt_latency_ms": 0.0,
+      "error": "tts:openai:dependency_unavailable: openai: HTTP 429 from v1/audio/speech: You have no credits remaining. Add credits to continue using the API at https://platform.openai.com/settings/organization/billing/."
+    },
+    {
+      "case_id": "am.2",
+      "category": "ambient",
+      "expected_speech": "Uyuduğunuzda ekranları kapatmayacağım efendim.",
+      "transcript": "",
+      "expected_normalized": "",
+      "transcript_normalized": "",
+      "wer": null,
+      "missing_content": [],
+      "verdict": "error",
+      "audio_ms": 0,
+      "audio_bytes": 0,
+      "audio_format": "",
+      "tts_latency_ms": 0.0,
+      "stt_latency_ms": 0.0,
+      "error": "tts:openai:dependency_unavailable: openai: HTTP 429 from v1/audio/speech: You have no credits remaining. Add credits to continue using the API at https://platform.openai.com/settings/organization/billing/."
+    },
+    {
+      "case_id": "app.run.para.v3",
+      "category": "apps",
+      "expected_speech": "Yapılacaklar uygulamasını 26021 portunda çalıştırdım efendim.",
+      "transcript": "",
+      "expected_normalized": "",
+      "transcript_normalized": "",
+      "wer": null,
+      "missing_content": [],
+      "verdict": "error",
+      "audio_ms": 0,
+      "audio_bytes": 0,
+      "audio_format": "",
+      "tts_latency_ms": 0.0,
+      "stt_latency_ms": 0.0,
+      "error": "tts:openai:dependency_unavailable: openai: HTTP 429 from v1/audio/speech: You have no credits remaining. Add credits to continue using the API at https://platform.openai.com/settings/organization/billing/."
+    },
+    {
+      "case_id": "art.render.para",
+      "category": "artifacts",
+      "expected_speech": "PDF olarak hazırladım efendim; doğrulandı.",
+      "transcript": "",
+      "expected_normalized": "",
+      "transcript_normalized": "",
+      "wer": null,
+      "missing_content": [],
+      "verdict": "error",
+      "audio_ms": 0,
+      "audio_bytes": 0,
+      "audio_format": "",
+      "tts_latency_ms": 0.0,
+      "stt_latency_ms": 0.0,
+      "error": "tts:openai:dependency_unavailable: openai: HTTP 429 from v1/audio/speech: You have no credits remaining. Add credits to continue using the API at https://platform.openai.com/settings/organization/billing/."
+    },
+    {
+      "case_id": "dep.1",
+      "category": "authority",
+      "expected_speech": "Canlıya alma kararı sizin efendim; onayı Core'daki Onay Merkezi'nden verirsiniz. Ben kendi başıma canlıya almam.",
+      "transcript": "",
+      "expected_normalized": "",
+      "transcript_normalized": "",
+      "wer": null,
+      "missing_content": [],
+      "verdict": "error",
+      "audio_ms": 0,
+      "audio_bytes": 0,
+      "audio_format": "",
+      "tts_latency_ms": 0.0,
+      "stt_latency_ms": 0.0,
+      "error": "tts:openai:dependency_unavailable: openai: HTTP 429 from v1/audio/speech: You have no credits remaining. Add credits to continue using the API at https://platform.openai.com/settings/organization/billing/."
+    },
+    {
+      "case_id": "creative.redraw.canonical",
+      "category": "creative",
+      "expected_speech": "redraw-83686dda: değişiklik uygulandı efendim (320x240). Doğrulanacak bir şey yoktu efendim.",
+      "transcript": "",
+      "expected_normalized": "",
+      "transcript_normalized": "",
+      "wer": null,
+      "missing_content": [],
+      "verdict": "error",
+      "audio_ms": 0,
+      "audio_bytes": 0,
+      "audio_format": "",
+      "tts_latency_ms": 0.0,
+      "stt_latency_ms": 0.0,
+      "error": "tts:openai:dependency_unavailable: openai: HTTP 429 from v1/audio/speech: You have no credits remaining. Add credits to continue using the API at https://platform.openai.com/settings/organization/billing/."
+    }
+  ]
+}

@@ -54,9 +54,23 @@ only you can cross, and each says exactly what it turns from PROVEN_PROXY into P
    > proven automatically before you are asked to run anything:
    > `powershell -NoProfile -File scripts\qualify-staged-update.ps1` (no elevation, no
    > install, nothing touched) must print `STAGED UPDATE QUALIFIED` first.
-2. **Item 29** — OpenAI credits. Every voice synthesis has answered HTTP 429 since
-   2026-09-07, so the TTS loopback is the one proof I cannot run; it is `NOT_YET_PROVEN`
-   in four milestone gates for that single reason.
+2. **Item 29** — OpenAI credits. **A DIFFERENT ACCOUNT FROM GITHUB'S**, and still short.
+   Rechecked once on 2026-09-09 (six cases, the smallest sample the harness takes) right
+   after the GitHub billing fix, and the provider now answers with a message that names the
+   problem exactly rather than a bare 429:
+
+   > `HTTP 429 from v1/audio/speech: You have no credits remaining. Add credits to continue
+   > using the API at https://platform.openai.com/settings/organization/billing/`
+
+   So: **<https://platform.openai.com/settings/organization/billing/> → add credits.** It is
+   not the same billing page as GitHub's, and fixing one does not touch the other.
+
+   Until then the TTS loopback is the one proof that cannot run — `audio_generation` is
+   `NOT_PROVEN`, `loopback_semantics` stays `PROVEN_PROXY`, `physical_hearing` is
+   `NOT_CLAIMED` — and it is the single reason four milestone gates carry a
+   `PROVEN_PROXY` where a `PROVEN_REAL` would otherwise sit. Nothing else is blocked by it,
+   and it is not retried on a loop: each real run costs characters and audio seconds.
+   Evidence: `docs/evidence/tts-loopback-2026-09-09-095313.json`.
 3. **Item 32** — sign in to Unity Hub. Two minutes in a browser. The Unity driver, the
    device runtime and the lab all exist and run the real editor today; the licence is the
    only thing between `PROVEN_PROXY` and `PROVEN_REAL`, and no code changes when it lands.
