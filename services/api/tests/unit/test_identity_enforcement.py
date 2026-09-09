@@ -82,6 +82,12 @@ PROTECTED_ENDPOINTS = [
     ("scenes", "get", "/v1/scenes"),
     ("scenes-render", "post", f"/v1/scenes/{uuid.uuid4()}/render"),
     ("scenes-inspect", "post", f"/v1/scenes/{uuid.uuid4()}/inspect"),
+    # M27 (docs/M27_CREATIVE_TOOLS_SPEC.md §6): a Paint/Photoshop/Illustrator/Figma
+    # edit runs against the owner's own images — never one unauthenticated HTTP call
+    # away; the listing names the owner's own runs and their last output.
+    ("creative", "get", "/v1/creative"),
+    ("creative-run", "get", f"/v1/creative/{uuid.uuid4()}"),
+    ("creative-output", "get", f"/v1/creative/{uuid.uuid4()}/output"),
     # M24 (docs/M24_CAPABILITY_GENESIS_SPEC.md §8): a generated capability's
     # approval/cancellation is a security decision, and the run list names
     # what the assistant taught itself against what interface — never one

@@ -1335,6 +1335,12 @@ def record_client_events(
                 "scene_tool": intent.scene_tool,
                 "scene_ref": intent.scene_ref,
                 "scene_kind": intent.scene_kind,
+                # M27 (docs/M27_CREATIVE_TOOLS_SPEC.md §5): the Creative Tools fields
+                # the owner's WORDS carried, for the same "owner's words win over the
+                # model's argument" reason.
+                "creative_tool": intent.creative_tool,
+                "creative_ref": intent.creative_ref,
+                "creative_format": intent.creative_format,
                 # M26 (docs/M26_EXECUTIVE_AUTONOMY_SPEC.md §5): the Executive Autonomy
                 # fields the owner's WORDS carried, for the same "owner's words win
                 # over the model's argument" reason.

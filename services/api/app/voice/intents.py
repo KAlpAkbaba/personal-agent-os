@@ -241,6 +241,21 @@ class Intent(StrEnum):
     NEWS_SUMMARIZE = "news_summarize"  # Haberleri özetle / Bugünkü haberleri özetle
     NEWS_QUERY_LATEST = "news_query_latest"  # Son haber ne zaman yüklenmiş?
 
+    # M27 (docs/M27_CREATIVE_TOOLS_SPEC.md §5, ADR-0093): the Creative Tools Operator.
+    # Every one of these targets app.creative through tools_creative - never a second
+    # image-editing path. Checked EARLY in resolve_intent (before the alarm/ambient
+    # block) because this family's own verbs ("kaldır", "arka plan", "aç") are also
+    # claimed elsewhere in this router with no gating noun of their own — see the
+    # module comment above the match functions for the exact collisions found and why
+    # priority position is the fix, not a vocabulary change on either side.
+    CREATIVE_REDRAW = "creative_redraw"  # Bu resmi Paint'te yeniden çiz.
+    CREATIVE_OPEN = "creative_open"  # Bunu Photoshop'ta aç.
+    CREATIVE_BACKGROUND = "creative_background"  # Arka planını kaldır.
+    CREATIVE_ADJUST = "creative_adjust"  # Renkleri biraz düzelt.
+    CREATIVE_CLEANUP = "creative_cleanup"  # Logoyu daha temiz hale getir.
+    CREATIVE_DESIGN = "creative_design"  # Figma'da buna benzeyen bir arayüz tasarla.
+    CREATIVE_EXPORT = "creative_export"  # Bunu PNG olarak dışa aktar.
+
     NONE = "none"
 
 
@@ -355,6 +370,18 @@ CAPABILITY_BY_INTENT: dict[Intent, str] = {
     # every other family above gets.
     Intent.NEWS_OPEN: "news.open",
     Intent.NEWS_SUMMARIZE: "news.summarize",
+    # M27 (spec §5): planning and executing a creative-tool edit is a real mutation
+    # (a file is produced, compared and stored) - the same class every other family
+    # above gets. CREATIVE_OPEN is an ACTION too, even when it ends in an honest
+    # refusal (the same "APP_OPEN/ARTIFACT_OPEN are actions regardless of outcome"
+    # rule already applies to their own open verbs).
+    Intent.CREATIVE_REDRAW: "creative.redraw",
+    Intent.CREATIVE_OPEN: "creative.open",
+    Intent.CREATIVE_BACKGROUND: "creative.background",
+    Intent.CREATIVE_ADJUST: "creative.adjust",
+    Intent.CREATIVE_CLEANUP: "creative.cleanup",
+    Intent.CREATIVE_DESIGN: "creative.design",
+    Intent.CREATIVE_EXPORT: "creative.export",
 }
 
 #: QUERY intents that name a tool rather than being answered conversationally (contract §2:
@@ -732,6 +759,21 @@ class ResolvedIntent:
     #: win only when they actually said something" rule ``app_ref``/``scene_ref``
     #: already follow.
     news_source_ref: str | None = None
+    #: M27 (docs/M27_CREATIVE_TOOLS_SPEC.md §5): for the Creative Tools family, the
+    #: tool word the owner's WORDS carried ("paint" / "photoshop" / "illustrator" /
+    #: "figma"), or None when no tool word was said at all - the tool then falls back
+    #: to the CURRENT creative focus's own tool, else the installed-provider default,
+    #: and only asks a clarification when none of those resolve one (spec §5's own
+    #: rule, the same shape ``scene_tool`` already documents for M25).
+    creative_tool: str | None = None
+    #: For the Creative Tools family, which run the owner's WORDS pointed at:
+    #: "current" | "previous" | None - the same "owner's words win only when they
+    #: actually said something" rule ``scene_ref`` already follows.
+    creative_ref: str | None = None
+    #: For CREATIVE_EXPORT, the export format word the owner's WORDS carried ("PNG" ->
+    #: "png"), or None when none was said - the tool then falls back to "png", the
+    #: same best-effort-convenience rule ``scene_kind`` already follows.
+    creative_format: str | None = None
 
     def __post_init__(self) -> None:
         if not self.klass:
@@ -3011,6 +3053,200 @@ def _scene_render_match(tokens: tuple[str, ...]) -> str | None:
     return "render al"
 
 
+# --------------------------------------------------- M27: Creative Tools Operator
+#
+# Built on the SAME token/stem primitives as every intent above - no second Turkish
+# pattern table (module docstring's own rule). Called EARLY in resolve_intent -
+# BEFORE the alarm/ambient block (0c) and before ARTIFACT_OPEN (0h) - because three
+# real collisions were found against ALREADY-CLAIMED vocabulary while writing this
+# family, the exact class of defect
+# .claude/agent-memory/backend-engineer/feedback_intents_prefix_collision_risk.md
+# warns about:
+#   1. "Arka planını kaldır." - "kaldır" is _WAKE_VERB_STEMS/_CANCEL_VERB_STEMS'
+#      own alarm verb, and with no alarm noun present the alarm resolver's own bare
+#      "kaldır" fallback would otherwise create a TEST-uncovered ALARM_CREATE.
+#   2. The SAME utterance also carries "arka" + a "plan"-prefixed token
+#      ("planını"), which is exactly ``_technical_match``'s own "arka planda"
+#      phrase (the research pipeline's technical-explanation trigger) - checked
+#      much later in resolve_intent's own body (the "3. presentation level"
+#      section), so priority position alone resolves it.
+#   3. "Bunu Photoshop'ta aç." carries "bunu" + "aç", ARTIFACT_OPEN's own deictic
+#      open pattern (0h). CREATIVE_OPEN's own tool-word gate makes the two
+#      mutually exclusive in EITHER order, but this family is placed first anyway
+#      so a bare "Bunu aç." (no tool word) still falls through, unchanged, to
+#      ARTIFACT_OPEN/M19's generic file-open exactly as spec §5 requires ("a bare
+#      'Bunu aç.' on an image focus is M19's file.open, never a creative tool").
+# Every matcher below is gated on its OWN noun/verb combination so nothing here can
+# be reached by an utterance this router already claims for something else -
+# checked directly against the corpus (``tests/voice_corpus/corpus.py``'s ``creative``
+# category, plus a full-suite run) before landing, per the same memory file's own
+# "run the FULL corpus, not just the new category" rule.
+
+_CREATIVE_TOOL_WORDS: Final[dict[str, str]] = {
+    "paint": "paint",
+    "mspaint": "paint",
+    "photoshop": "photoshop",
+    "illustrator": "illustrator",
+    # ``turkish_casefold`` maps an ASCII capital "I" to "ı" (dotless), never "i" —
+    # correct for a Turkish word, but "Illustrator" is a PROPER NOUN spelled with the
+    # ordinary Latin "I". A real bug found via this module's own test suite (2026-09-09):
+    # "Illustrator'da" casefolds to "ıllustrator'da", which the bare "illustrator" key
+    # above never matches. The same dual-form fix ``_PRIMITIVE_KIND_BY_NOUN`` already
+    # applies for "ışık"/"işık" (module comment there).
+    "ıllustrator": "illustrator",
+    "figma": "figma",
+}
+
+
+def _creative_tool_from_tokens(tokens: tuple[str, ...]) -> str | None:
+    """ "Paint'te" / "Photoshop'ta" / "Illustrator'da" / "Figma'da" (spec §5) - the
+    tool word, resolved once from the SAME utterance every matcher below already
+    checked, never a guess (the same shape ``_scene_tool_from_tokens`` already gives
+    M25's own tool word)."""
+    for tok in tokens:
+        for word, tool in _CREATIVE_TOOL_WORDS.items():
+            if tok == word or tok.startswith(word):
+                return tool
+    return None
+
+
+_CREATIVE_IMAGE_NOUN_STEMS: Final[tuple[str, ...]] = (
+    "resim",
+    "resm",
+    "görsel",
+    "gorsel",
+    "fotoğraf",
+    "fotograf",
+)
+_CREATIVE_REDRAW_VERB_STEMS: Final[tuple[str, ...]] = ("çiz", "ciz")
+_CREATIVE_DEICTIC_WORDS: Final[tuple[str, ...]] = ("bunu", "onu")
+_CREATIVE_BACKGROUND_NOUN_STEMS: Final[tuple[str, ...]] = ("arka",)
+_CREATIVE_BACKGROUND_PLAN_STEM: Final = "plan"
+_CREATIVE_BACKGROUND_VERB_FORMS: Final[tuple[str, ...]] = (
+    "kaldır",
+    "kaldir",
+    "kaldırsana",
+    "kaldirsana",
+    "kaldırır",
+    "kaldirir",
+)
+_CREATIVE_COLOR_NOUN_STEMS: Final[tuple[str, ...]] = ("renk", "reng")
+_CREATIVE_ADJUST_VERB_FORMS: Final[tuple[str, ...]] = (
+    "düzelt",
+    "duzelt",
+    "düzeltsene",
+    "duzeltsene",
+    "düzeltir",
+    "duzeltir",
+)
+_CREATIVE_CLEAN_STEMS: Final[tuple[str, ...]] = ("temiz",)
+_CREATIVE_CLEANUP_VERB_FORMS: Final[tuple[str, ...]] = ("getir", "getirsene", "getirir")
+_CREATIVE_DESIGN_VERB_FORMS: Final[tuple[str, ...]] = ("tasarla", "tasarlasana", "tasarlar")
+_CREATIVE_DESIGN_NOUN_STEMS: Final[tuple[str, ...]] = ("arayüz", "arayuz", "tasarım", "tasarim")
+_CREATIVE_EXPORT_OUT_WORD: Final = "dışa"
+_CREATIVE_EXPORT_OUT_WORD_ASCII: Final = "disa"
+_CREATIVE_EXPORT_VERB_STEMS: Final[tuple[str, ...]] = ("aktar",)
+_CREATIVE_EXPORT_FORMAT_WORDS: Final[dict[str, str]] = {
+    "png": "png",
+    "jpg": "jpg",
+    "jpeg": "jpg",
+    "svg": "svg",
+    "pdf": "pdf",
+}
+
+
+def _creative_export_format_from_tokens(tokens: tuple[str, ...]) -> str | None:
+    for tok in tokens:
+        fmt = _CREATIVE_EXPORT_FORMAT_WORDS.get(tok)
+        if fmt is not None:
+            return fmt
+    return None
+
+
+def _creative_redraw_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Bu resmi Paint'te yeniden çiz." / "Bunu Paint'te yeniden çiz." (spec §5) - an
+    image noun OR a deictic pronoun (the object may be named directly or pointed at),
+    the same "noun or deictic" alternative ``_scene_transform_match`` already allows
+    for its own object reference."""
+    has_noun = _has(tokens, *_CREATIVE_IMAGE_NOUN_STEMS) is not None
+    has_deictic = _has_exact(tokens, *_CREATIVE_DEICTIC_WORDS) is not None
+    if not has_noun and not has_deictic:
+        return None
+    if _has(tokens, *_CREATIVE_REDRAW_VERB_STEMS) is None:
+        return None
+    return "yeniden çiz"
+
+
+def _creative_open_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Bunu Photoshop'ta aç." (spec §5) - requires a creative TOOL WORD, so a bare
+    "Bunu aç." (no tool word) never reaches this branch (module comment, collision 3)."""
+    if _creative_tool_from_tokens(tokens) is None:
+        return None
+    if _has_exact(tokens, *_OPEN_VERB_FORMS) is None:
+        return None
+    return "aç"
+
+
+def _creative_background_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Arka planını kaldır." (spec §5) - requires BOTH "arka" and a "plan"-prefixed
+    token, never a bare "kaldır" (module comment, collision 1)."""
+    if _has_exact(tokens, *_CREATIVE_BACKGROUND_NOUN_STEMS) is None:
+        return None
+    if _has(tokens, _CREATIVE_BACKGROUND_PLAN_STEM) is None:
+        return None
+    if _has_exact(tokens, *_CREATIVE_BACKGROUND_VERB_FORMS) is None:
+        return None
+    return "arka planını kaldır"
+
+
+def _creative_adjust_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Renkleri biraz düzelt." (spec §5) - "düzelt" is not claimed anywhere else in
+    this router, but the colour noun is still required so this can never fire on an
+    unrelated "düzelt" ("Bunu düzelt.")."""
+    if _has(tokens, *_CREATIVE_COLOR_NOUN_STEMS) is None:
+        return None
+    if _has_exact(tokens, *_CREATIVE_ADJUST_VERB_FORMS) is None:
+        return None
+    return "renkleri düzelt"
+
+
+def _creative_cleanup_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Logoyu daha temiz hale getir." (spec §5) - "getir" alone is
+    ``WINDOW_RESTORE``'s own verb ("pencereyi eski haline getir"); requiring "temiz"
+    keeps the two disjoint in either priority order."""
+    if _has(tokens, *_CREATIVE_CLEAN_STEMS) is None:
+        return None
+    if _has_exact(tokens, *_CREATIVE_CLEANUP_VERB_FORMS) is None:
+        return None
+    return "temiz hale getir"
+
+
+def _creative_design_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Figma'da buna benzeyen bir arayüz tasarla." (spec §5) - the design verb plus
+    either the tool word or an interface/design noun, so a bare "tasarla" about
+    something else entirely (never seen elsewhere in this router today) still needs
+    ONE of the two before this fires."""
+    if _has_exact(tokens, *_CREATIVE_DESIGN_VERB_FORMS) is None:
+        return None
+    has_tool = _creative_tool_from_tokens(tokens) is not None
+    has_noun = _has(tokens, *_CREATIVE_DESIGN_NOUN_STEMS) is not None
+    if not has_tool and not has_noun:
+        return None
+    return "tasarla"
+
+
+def _creative_export_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Bunu PNG olarak dışa aktar." (spec §5) - requires BOTH "dışa" and "aktar";
+    "aktar" alone is ``_RESEARCH_TELLING_VERBS``' own word, but that branch ALSO
+    requires a research topic word, so the two are disjoint in either order - "dışa"
+    is required here anyway as a second, independent gate."""
+    if _has_exact(tokens, _CREATIVE_EXPORT_OUT_WORD, _CREATIVE_EXPORT_OUT_WORD_ASCII) is None:
+        return None
+    if _has(tokens, *_CREATIVE_EXPORT_VERB_STEMS) is None:
+        return None
+    return "dışa aktar"
+
+
 # --------------------------------------------------- M26: Executive Autonomy
 #
 # Built on the same token/stem primitives as every family above — no second Turkish
@@ -4059,6 +4295,65 @@ def resolve_intent(
             scope=SCOPE_CONVERSATION,
             matched=evolution_matched[1],
             evolution_action=EVOLUTION_ACTION_BY_INTENT.get(evolution_matched[0]),
+            **base,
+        )
+
+    # 0b''. M27 (docs/M27_CREATIVE_TOOLS_SPEC.md §5, ADR-0093): the Creative Tools
+    #       Operator. BEFORE the alarm/ambient block (0c) and before ARTIFACT_OPEN
+    #       (0h) - the module comment above the ``_creative_*_match`` functions names
+    #       the three real collisions this position resolves ("kaldır" vs. the
+    #       alarm's own bare-wake fallback; "arka planda" vs. the research
+    #       technical-explanation trigger; "bunu ... aç" vs. ARTIFACT_OPEN's own
+    #       deictic open, resolved by CREATIVE_OPEN's own tool-word gate either way).
+    if creative_redraw_matched := _creative_redraw_match(tokens):
+        return ResolvedIntent(
+            Intent.CREATIVE_REDRAW,
+            matched=creative_redraw_matched,
+            creative_tool=_creative_tool_from_tokens(tokens),
+            **base,
+        )
+    if creative_open_matched := _creative_open_match(tokens):
+        return ResolvedIntent(
+            Intent.CREATIVE_OPEN,
+            matched=creative_open_matched,
+            creative_tool=_creative_tool_from_tokens(tokens),
+            creative_ref="current",
+            **base,
+        )
+    if creative_background_matched := _creative_background_match(tokens):
+        return ResolvedIntent(
+            Intent.CREATIVE_BACKGROUND,
+            matched=creative_background_matched,
+            creative_ref="current",
+            **base,
+        )
+    if creative_adjust_matched := _creative_adjust_match(tokens):
+        return ResolvedIntent(
+            Intent.CREATIVE_ADJUST,
+            matched=creative_adjust_matched,
+            creative_ref="current",
+            **base,
+        )
+    if creative_cleanup_matched := _creative_cleanup_match(tokens):
+        return ResolvedIntent(
+            Intent.CREATIVE_CLEANUP,
+            matched=creative_cleanup_matched,
+            creative_ref="current",
+            **base,
+        )
+    if creative_design_matched := _creative_design_match(tokens):
+        return ResolvedIntent(
+            Intent.CREATIVE_DESIGN,
+            matched=creative_design_matched,
+            creative_tool=_creative_tool_from_tokens(tokens),
+            **base,
+        )
+    if creative_export_matched := _creative_export_match(tokens):
+        return ResolvedIntent(
+            Intent.CREATIVE_EXPORT,
+            matched=creative_export_matched,
+            creative_ref="current",
+            creative_format=_creative_export_format_from_tokens(tokens),
             **base,
         )
 

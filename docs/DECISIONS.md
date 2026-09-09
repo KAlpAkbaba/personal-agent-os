@@ -7657,3 +7657,71 @@ device's own `creative.export_check` (reopening an exported file with an indepen
 ON the device) needs the elevated agent update the owner has not run (item 28), so until
 then the export is validated on the Cloud Core side only; and a Paint round trip THROUGH the
 owner's device on production is gated on the same item.
+
+## ADR-0094 — M27 Creative Tools Operator Cloud Core: what actually got built, and what
+stays a named gap (2026-09-09)
+
+**Context.** ADR-0093 fixed the shape (document model first, honest refusal, Pillow-only
+comparison). Building `app/creative/*` against that shape surfaced five decisions ADR-0093
+did not settle, plus two real bugs the corpus and unit suite caught before they shipped.
+
+**Decisions.**
+
+1. **This Cloud Core half never calls the device.** Paint's edit runs entirely in-process
+   with Pillow, against bytes already in the object store (an M22/M13-produced artifact) —
+   never the owner's live device filesystem. Reading/writing a REAL file already sitting on
+   the owner's machine, and opening the result in the real `mspaint.exe` window through the
+   M19 operator, is windows-engineer-track work: the plan schema (`CreativePlan.source`)
+   already names an object-store key today and can be extended to a device path without a
+   further schema change, but no device capability is called from this half. Named here so
+   the gap is stated, not discovered later.
+2. **Photoshop/Illustrator ship detection and an honest refusal, never a driver.** The task
+   brief asked for "detection and an advertised capability subset" for these two providers —
+   not a fixed `.jsx` driver + manifest pin the way M25 ships one for Blender/Unity, since
+   neither application is installed on any machine this runs on today (ADR-0093's own
+   measurement). Building that driver now would be untestable code with no real target;
+   `app.creative.providers.PhotoshopProvider`/`IllustratorProvider` are complete for
+   everything ADR-0093 decision 3 actually asks of them (detection, capability list, the
+   honest `dependency_unavailable`) and the driver is real work for the day one exists.
+3. **`FigmaProvider` takes `token_present: bool` from its caller, never a DPAPI read of its
+   own.** No DPAPI-backed secret store exists anywhere in this codebase yet (grepped before
+   deciding); building one for a single boolean this milestone would be scope creep onto a
+   device/settings-layer concern. The provider's own contract (a plain fact in, an honest
+   `dependency_unavailable` out when absent) is unaffected by who eventually supplies that
+   fact truthfully.
+4. **No new `UiState`/Cockpit wiring in this half.** The spec's own §6 lists "the Living
+   Core (UI contract v12 `creative.activity`, the Cockpit panel)" as its own, separate
+   PROVEN_AUTOMATED line, and `apps/web` is explicitly another agent's half of this
+   milestone. Publishing a new UI-state channel without the paired web-contract update
+   would either sit untested or require touching `apps/web` directly, so this half emits
+   `creative.*` Activity Ledger rows (the same subsystem discipline every other family
+   uses) and leaves the Cockpit panel wiring for that other half.
+5. **The comparison's "empty output" check is alpha-based, not stddev-based.** ADR-0093's
+   own text described the render check the M25 pattern (`app.creative3d.compare.
+   check_render`) already uses: a near-uniform image counts as blank. Building `app.
+   creative.compare.check_output` against that same heuristic and then testing it against a
+   genuine Paint canvas found the heuristic wrong for this domain: a fresh `new` canvas with
+   a single solid background colour is a perfectly ordinary, correct Paint output, and the
+   3D-render heuristic flagged every one of them as "empty". `check_output` instead measures
+   whether every pixel is fully TRANSPARENT (alpha 0) — the real "nothing was produced" case
+   for a 2D raster canvas — and leaves a legitimately uniform, opaque canvas alone.
+
+**Two real bugs found and fixed, each with a regression test, before this shipped:**
+
+- `PhotoshopProvider`/`IllustratorProvider` originally treated the mere PRESENCE of the
+  `HKLM\SOFTWARE\Adobe\Photoshop`/`...\Illustrator` registry key as `installed=True`. Run
+  against the real machine this repo develops on, that reported Photoshop "installed"
+  because Creative Cloud writes that bare settings key even when Photoshop itself is not —
+  exactly the "imitated, not named" mistake ADR-0093 decision 3 forbids. Fixed to require
+  the real `Photoshop.exe`/`Illustrator.exe` on disk; the registry read still runs and is
+  carried in the spoken detection facts, but never decides `installed` alone.
+- `turkish_casefold` correctly maps an ASCII capital `I` to `ı` (dotless) for Turkish text,
+  but "Illustrator" is a proper noun spelled with the ordinary Latin `I` — so
+  `_creative_tool_from_tokens` never matched "Illustrator'da" until "ıllustrator" was added
+  as a second key, the same dual-form fix `_PRIMITIVE_KIND_BY_NOUN` already carries for
+  "ışık"/"işık".
+
+**Consequences.** The vertical slice that is real today — plan → Pillow execution → object
+store → independent Pillow comparison → bounded self-correction → voice tools → REST — is
+fully tested (unit + the real application object + the corpus) and PROVEN_REAL for Paint.
+Everything named as a gap above is a clean extension point, not a design dead end.

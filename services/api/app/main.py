@@ -35,6 +35,8 @@ from app.calendar.providers import build_calendar_provider, build_calendar_write
 from app.calendar.routes import router as calendar_router
 from app.calendar.service import CalendarService
 from app.config import Settings, get_settings
+from app.creative.routes import router as creative_router
+from app.creative.service import CreativeService
 from app.creative3d.routes import router as scenes_router
 from app.creative3d.service import SceneService
 from app.db import build_engine, build_session_factory
@@ -249,6 +251,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # SAME object store the Artifact Factory already uses (``artifacts.store``): one
     # bucket, one provider interface, never a second one for the same kind of file.
     creative3d_service = SceneService(object_store=artifacts.store)
+    # M27 (docs/M27_CREATIVE_TOOLS_SPEC.md, ADR-0093): the Creative Tools Operator's
+    # own service — Paint edits, executed entirely with Pillow, share the SAME object
+    # store the Artifact Factory and 3D Creation already use, one bucket, never a
+    # second one for the same kind of file.
+    creative_service = CreativeService(object_store=artifacts.store)
     voice_realtime.register_live(
         wake_sequence=wake_sequence,
         device_statuses=get_status_registry(),
@@ -270,6 +277,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # M25 (docs/M25_CREATIVE_3D_SPEC.md §5): scene.* reads the SAME SceneService
         # the REST surface (app/creative3d/routes.py) drives.
         creative3d_service=creative3d_service,
+        # M27 (docs/M27_CREATIVE_TOOLS_SPEC.md §5): creative.* reads the SAME
+        # CreativeService the REST surface (app/creative/routes.py) drives.
+        creative_service=creative_service,
         # ADR-0091: weather.*/location.*/briefing.* read the SAME services this
         # process builds above — one location/weather/briefing authority, never a
         # second one for the voice path.
@@ -440,6 +450,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.calendar_service = calendar_service
     app.state.app_factory_service = app_factory_service
     app.state.creative3d_service = creative3d_service
+    app.state.creative_service = creative_service
     app.state.location_service = location_service
     app.state.weather_service = weather_service
     app.state.briefing_service = briefing_service
@@ -515,6 +526,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # M25 (docs/M25_CREATIVE_3D_SPEC.md §6): the Cockpit's "3B Sahne" panel — owner-
     # gated, the same require_owner_session dependency every other router applies.
     app.include_router(scenes_router)
+    app.include_router(creative_router)
     # M26 (docs/M26_EXECUTIVE_AUTONOMY_SPEC.md §6): executive.* reads the SAME
     # ExecutiveService the voice tools (app.executive.tools_executive) drive.
     app.include_router(executive_router)

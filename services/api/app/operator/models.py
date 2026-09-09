@@ -71,6 +71,13 @@ FOCUS_KIND_PROJECT = "project"
 #: to the scene just created, and "önceki" works the same current/previous way every
 #: other kind above already gets from this module.
 FOCUS_KIND_SCENE = "scene"
+#: M27 (docs/M27_CREATIVE_TOOLS_SPEC.md §2, §5, ADR-0093): the Creative Tools
+#: Operator's own focus by identity. ``creative`` names one ``creative_runs`` row
+#: (never an inspection/compare version — those are read from the row itself) so
+#: "Arka planını kaldır." after a fresh Paint edit resolves to the run just made, and
+#: "önceki" works the same current/previous way every other kind above already gets
+#: from this module.
+FOCUS_KIND_CREATIVE = "creative"
 FOCUS_KINDS: tuple[str, ...] = (
     FOCUS_KIND_WINDOW,
     FOCUS_KIND_APP,
@@ -85,6 +92,7 @@ FOCUS_KINDS: tuple[str, ...] = (
     FOCUS_KIND_ARTIFACT,
     FOCUS_KIND_PROJECT,
     FOCUS_KIND_SCENE,
+    FOCUS_KIND_CREATIVE,
 )
 
 #: How many recent rows of ONE kind the stack keeps (bounded, per task brief: "a bounded
@@ -129,6 +137,7 @@ __all__ = [
     "FOCUS_KINDS",
     "FOCUS_KIND_APP",
     "FOCUS_KIND_ARTIFACT",
+    "FOCUS_KIND_CREATIVE",
     "FOCUS_KIND_DOCUMENT",
     "FOCUS_KIND_DRAFT",
     "FOCUS_KIND_EVENT",
