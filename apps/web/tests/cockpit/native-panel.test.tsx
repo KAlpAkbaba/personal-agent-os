@@ -14,6 +14,9 @@
  * Rendered with `react-dom/server` like the rest of this suite.
  */
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
@@ -501,5 +504,47 @@ describe("the Core's readout for the Native Application Factory", () => {
   it("tells the Core nothing when no build was published", () => {
     const html = readout([AGENT_IDLE()]);
     expect(html).not.toContain("data-native-facts");
+  });
+});
+
+
+// ---------------------------------------------------- mounted, not just built
+
+describe("the panel is wired into the real cockpit, not only into this test", () => {
+  /**
+   * A panel that renders correctly and is never mounted is a panel the owner
+   * does not have. Every test above renders `NativePanel` directly, which is
+   * exactly the shape of proof that would stay green if the cockpit page never
+   * imported it — so the page's own source and the loader's own source are
+   * read here, the same "hold the two sides to each other" discipline
+   * `test_uistate_contract_halves.py` uses across the language boundary.
+   */
+  const PAGE = readFileSync(join(process.cwd(), "app/core/cockpit/page.tsx"), "utf8");
+  const LOADER = readFileSync(join(process.cwd(), "app/lib/cockpit/useCockpitData.ts"), "utf8");
+
+  it("is imported and rendered by /core/cockpit with the loader's own field", () => {
+    expect(PAGE).toContain("NativePanel");
+    expect(PAGE).toMatch(/<NativePanel[\s\S]*?builds=\{data\.nativeBuilds\}/);
+  });
+
+  it("is fetched by the cockpit's own polling loop", () => {
+    // Declared on the shape, initialised, requested and stored: a field that
+    // is declared and never requested stays `loading` for ever, which the
+    // panel would render as "yükleniyor" and no one would question.
+    expect(LOADER).toContain("nativeBuilds: Loaded<NativeBuildRow[]>");
+    expect(LOADER).toContain("nativeBuilds: { kind: \"loading\" }");
+    expect(LOADER).toContain("fetchNativeBuilds()");
+    // Four appearances: the type, the initial value, the destructured result
+    // of the Promise.all, and the object handed to setData. Fewer than four
+    // means one of those steps was dropped and the field never reaches the
+    // panel — which renders as a permanent "yükleniyor" nobody questions.
+    expect((LOADER.match(/nativeBuilds/g) ?? []).length).toBeGreaterThanOrEqual(4);
+  });
+
+  it("would notice if the page stopped mounting it", () => {
+    // The detector proves itself: with the mount removed, the assertion above
+    // must fail rather than pass on the import alone.
+    const without = PAGE.replace(/<NativePanel[\s\S]*?\/>/, "");
+    expect(without).not.toMatch(/<NativePanel[\s\S]*?builds=\{data\.nativeBuilds\}/);
   });
 });
