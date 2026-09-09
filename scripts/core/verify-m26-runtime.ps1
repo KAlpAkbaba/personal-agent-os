@@ -116,7 +116,7 @@ if (-not $SkipExecutiveRun) {
     Write-Section "one real executive run on production (shape a: research -> synthesize -> document)"
     $directive = "Son uc gundeki yapay zeka gelismelerini arastir, bana etkisini cikar ve Word raporu hazirla."
     $started = Post-Json -Path "/v1/executive/runs" -Body @{ directive = $directive }
-    $runId = [string]$started.run
+    $runId = [string]$started.run_id
     Write-Host "run $runId started; steps $($started.total)"
 
     $deadline = (Get-Date).AddSeconds($RunPollSeconds)
@@ -134,7 +134,7 @@ if (-not $SkipExecutiveRun) {
         total  = [int]$last.total
         steps  = @($last.steps | ForEach-Object {
             [ordered]@{
-                id          = [string]$_.step
+                id          = [string]$_.step_id
                 kind        = [string]$_.kind
                 state       = [string]$_.state
                 error_class = [string]$_.error_class

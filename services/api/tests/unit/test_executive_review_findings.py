@@ -333,3 +333,78 @@ async def test_an_unclassified_failure_settles_on_its_first_attempt(monkeypatch)
     assert len(calls) == 1
     assert result["error_class"] == ERROR_INTERNAL
     assert "ValueError" in result["message"]
+
+
+# ------------------------- and the third route to "still working", found on production
+
+
+def _row(step_id: str, state: str, *, error_class: str | None = None) -> ExecutiveStepRow:
+    return ExecutiveStepRow(
+        step_id=step_id,
+        kind="synthesis",
+        state=state,
+        error_class=error_class,
+        error_message=None,
+        evidence_json=None,
+    )
+
+
+def test_a_run_whose_every_step_has_stopped_is_partial_not_running() -> None:
+    """The M26 runtime verification's own finding, from a REAL run on production.
+
+    Run `3ef7c639` ended with `s1 research.run` failed_recoverable, `s2` skipped,
+    `s3 artifacts.create` failed and `s4 synthesis` verified - every step stopped. The row
+    said `running`, `missing` was empty, and the owner was told, verbatim:
+
+        "Çalışıyorum efendim: 3/4 adım tamam."
+
+    Nothing was working, and nothing would be for the next sixty minutes. The cause was
+    `_derive_run_outcome` gating on "not terminal", which `failed_recoverable` satisfies -
+    but a step nothing will retry unless the OWNER asks is a step that stopped, not a step
+    in progress. This is the third route to a false "still working" after the two the
+    security review closed, and the only one that needs no crash at all: an unavailable
+    dependency is enough, and production produced two of those in one run.
+    """
+    from app.executive.activities import _derive_run_outcome
+
+    steps = [
+        _row("s1", "failed_recoverable", error_class="dependency_unavailable"),
+        _row("s2", "skipped", error_class="precondition_unmet"),
+        _row("s3", "failed", error_class="dependency_unavailable"),
+        _row("s4", "verified"),
+    ]
+    state, reasons, _text = _derive_run_outcome(steps)
+
+    assert state == "partial", f"{state!r}: the owner is being told work is in progress"
+    # ...and it can NAME what did not verify, which an empty `missing` could not.
+    assert set(reasons) == {"s1", "s2", "s3"}
+    assert reasons["s1"] == "dependency_unavailable"
+
+
+def test_a_step_actually_in_flight_still_keeps_the_run_running() -> None:
+    """The other side of the line: `running` has to keep meaning something. A step the
+    workflow will act on without anyone asking - pending, ready, running, retrying - is
+    the ONLY thing that makes the run `running`."""
+    from app.executive.activities import _derive_run_outcome
+
+    for in_flight in ("pending", "ready", "running", "retrying"):
+        steps = [_row("s1", in_flight), _row("s2", "verified")]
+        state, reasons, _text = _derive_run_outcome(steps)
+        assert state == "running", in_flight
+        assert reasons == {}, in_flight
+
+
+def test_a_retryable_step_can_still_be_retried_from_a_partial_run() -> None:
+    """The fix must not cost the owner the retry it was protecting. `partial` is a terminal
+    RUN state, so the question is real - and the answer is that `retry_step_validate`
+    refuses only on a cancelled run, and `_recompute_run_progress` deliberately does not
+    exclude partial (its own comment: a later EXEC_RETRY must be able to improve it)."""
+    import inspect
+
+    from app.executive import service as executive_service
+
+    source = inspect.getsource(executive_service.retry_step_validate)
+    assert "STATE_CANCELLED" in source
+    assert "STATE_PARTIAL" not in source, (
+        "a partial run now refuses a retry - the fix took away the thing it was protecting"
+    )

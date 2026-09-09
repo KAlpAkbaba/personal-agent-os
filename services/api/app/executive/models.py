@@ -97,6 +97,17 @@ STEP_TERMINAL_STATES: frozenset[str] = frozenset(
         STEP_STATE_CANCELLED,
     }
 )
+#: A step that is genuinely IN FLIGHT - the workflow will act on it without anyone asking.
+#: The distinction that matters for the run's own state, and it is NOT the complement of
+#: ``STEP_TERMINAL_STATES``: `failed_recoverable` is in neither set. It is not terminal
+#: (a retry can still move it) and it is not in flight (nothing will retry it unless the
+#: OWNER asks). A run whose every step is stopped is `partial` even when one of them could
+#: be retried - see the M26 runtime verification, where treating "retryable" as "in
+#: progress" told the owner "Çalışıyorum efendim" about a run that had stopped completely.
+STEP_IN_FLIGHT_STATES: frozenset[str] = frozenset(
+    {STEP_STATE_PENDING, STEP_STATE_READY, STEP_STATE_RUNNING, STEP_STATE_RETRYING}
+)
+
 #: A step that did NOT verify, for the run's ``partial`` naming (spec §3): finished, but
 #: not with the evidence its postcondition asked for.
 STEP_UNVERIFIED_TERMINAL_STATES: frozenset[str] = frozenset(
@@ -213,6 +224,7 @@ __all__ = [
     "STEP_STATE_RUNNING",
     "STEP_STATE_SKIPPED",
     "STEP_STATE_VERIFIED",
+    "STEP_IN_FLIGHT_STATES",
     "STEP_TERMINAL_STATES",
     "STEP_UNVERIFIED_TERMINAL_STATES",
     "TERMINAL_RUN_STATES",

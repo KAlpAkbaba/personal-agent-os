@@ -66,6 +66,7 @@ from app.executive.models import (
     STATE_PARTIAL,
     STATE_PLANNED,
     STATE_RUNNING,
+    STEP_IN_FLIGHT_STATES,
     STEP_STATE_CANCELLED,
     STEP_STATE_COMPENSATED,
     STEP_STATE_FAILED,
@@ -383,7 +384,13 @@ def _derive_run_outcome(steps: list[ExecutiveStepRow]) -> tuple[str, dict[str, s
     for step in steps:
         if step.kind == STEP_KIND_SYNTHESIS and step.evidence_json:
             synthesis_text = str(step.evidence_json.get("text") or "") or synthesis_text
-    if any(s.state not in STEP_TERMINAL_STATES for s in steps):
+    # IN FLIGHT, not "not terminal". `failed_recoverable` is in neither set: nothing will
+    # retry it unless the owner asks, so a run holding one is not working - it is waiting.
+    # Gating on `not in STEP_TERMINAL_STATES` here is what told the owner "Çalışıyorum
+    # efendim: 3/4 adım tamam" about a production run whose four steps had all stopped
+    # (M26 runtime verification, run 3ef7c639). The third route to a false "still working",
+    # after the two the security review closed, and the only one that needs no crash at all.
+    if any(s.state in STEP_IN_FLIGHT_STATES for s in steps):
         return STATE_RUNNING, {}, synthesis_text
     unverified = {
         s.step_id: (s.error_message or s.error_class or s.state)

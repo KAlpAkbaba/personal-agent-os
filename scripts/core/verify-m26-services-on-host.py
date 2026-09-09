@@ -12,8 +12,13 @@ capability: an answer the owner can ask about afterwards) and one ledger event; 
 else is written, nothing is deleted, and no device action is dispatched. The weather call
 reaches Open-Meteo, which is the point - "live weather" means a real provider answered.
 
-Run it with:
-    docker exec -i pagentos-prod-api-green python - < scripts/core/verify-m26-services-on-host.py
+Run it with (one line, from the repo root):
+    ssh root@pagentos-core "docker exec -i -w /srv/pagentos pagentos-prod-api-green
+    /srv/pagentos/.venv/bin/python -" < scripts/core/verify-m26-services-on-host.py
+
+The container's `/usr/local/bin/python` is NOT the app's interpreter - the workload runs
+under `uv run` against `/srv/pagentos/.venv`, so the bare one has no sqlalchemy and no
+pydantic. Use the venv's python and `-w /srv/pagentos`, or every import fails.
 """
 
 from __future__ import annotations
@@ -36,7 +41,7 @@ def record(name: str, fn) -> None:
 
 
 def _factory():
-    from app.artifacts.context import build_artifact_context
+    from app.artifacts.runtime import build_artifact_context
     from app.config import get_settings
 
     factory, _store = build_artifact_context(get_settings())
@@ -47,16 +52,35 @@ def _factory():
 
 
 def weather() -> dict[str, object]:
+    """Built the way `app.main` builds it - the same providers, from the same settings -
+    so what this proves is the DEPLOYED wiring, not a construction only this script uses."""
+    from app.config import get_settings
+    from app.location.providers import (
+        build_ip_coarse_location_provider,
+        build_windows_location_provider,
+    )
+    from app.location.service import LocationService
+    from app.weather.providers import build_weather_provider
     from app.weather.service import WeatherService
 
+    settings = get_settings()
+    service = WeatherService(
+        location_service=LocationService(
+            windows_provider=build_windows_location_provider(settings),
+            ip_provider=build_ip_coarse_location_provider(settings),
+        ),
+        provider=build_weather_provider(settings),
+    )
     with _factory()() as db:
-        result = WeatherService().current(db, requested_place="İstanbul", session_id=None)
-    server = result.get("server") or {}
+        result = service.current(db, requested_place="İstanbul", session_id=None)
+    # The M18 action contract nests it: a receipt's readings live under
+    # `observed_after.server`, never at the top level.
+    server = (result.get("observed_after") or {}).get("server") or {}
     observation = server.get("observation") or {}
     location = server.get("location") or {}
     return {
-        "execution": result.get("execution"),
-        "terminal": result.get("terminal"),
+        "execution": result.get("execution_status"),
+        "terminal": result.get("terminal_status"),
         "error_class": result.get("error_class"),
         "speech": result.get("speech"),
         "provider": observation.get("provider"),
@@ -99,9 +123,9 @@ def briefing() -> dict[str, object]:
     with _factory()() as db:
         result = BriefingService().build(db, settings=get_settings(), live={}, session_id=None)
     speech = str(result.get("speech") or "")
-    server = result.get("server") or {}
+    server = (result.get("observed_after") or {}).get("server") or {}
     return {
-        "execution": result.get("execution"),
+        "execution": result.get("execution_status"),
         "speech_len": len(speech),
         "speech_head": speech[:700],
         "sections": server.get("sections"),
