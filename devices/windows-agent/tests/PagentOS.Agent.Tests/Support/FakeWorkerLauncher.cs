@@ -62,6 +62,38 @@ public static class FakeWorkerLauncher
         };
     }
 
+    /// <summary>
+    /// A host whose worker is already UP, so a later call's timeout measures that call.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="NewHost"/> starts nothing: the worker is a separate process launched
+    /// lazily by the first <c>ExecuteAsync</c>, INSIDE that caller's timeout. A budget
+    /// written to say "how long may this capability take" was therefore also buying a cold
+    /// process launch and a first JIT - which on a shared CI runner took eleven seconds and
+    /// turned a `browser_lifecycle_violation` assertion into a `timeout`. The host's own
+    /// <c>helloTimeout</c> is twenty seconds, so the host was willing to wait for a start
+    /// the caller's budget refused to: two clocks for one decision.
+    ///
+    /// <see cref="BrowserWorkerHost.StartAsync"/> is the product's own eager-start path
+    /// (what <c>Eager = true</c> uses in production), not a test-only contrivance, and it
+    /// writes the same "browser worker started (pid=" line the lazy path does.
+    ///
+    /// Use this wherever the start is NOT the subject. A test whose subject IS the start -
+    /// eager restart, worker swaps, the orphan reaper, the <c>Starts</c>/<c>Restarts</c>
+    /// counters - must keep paying for it deliberately and should call <see cref="NewHost"/>.
+    /// </remarks>
+    public static async Task<BrowserWorkerHost> NewStartedHostAsync(
+        string dataDir,
+        ILogger? logger = null,
+        AuditLog? audit = null,
+        string extraArgs = "",
+        CancellationToken cancellationToken = default)
+    {
+        var host = NewHost(dataDir, logger, audit, extraArgs);
+        await host.StartAsync(cancellationToken).ConfigureAwait(false);
+        return host;
+    }
+
     /// <summary>A host with test-speed backoff, a short hello wait and (optionally) a fast ping.</summary>
     public static BrowserWorkerHost NewHost(
         string dataDir,

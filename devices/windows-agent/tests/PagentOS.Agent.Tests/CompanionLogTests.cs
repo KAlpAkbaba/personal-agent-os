@@ -88,7 +88,9 @@ public sealed class CompanionLogTests : IDisposable
     [Fact]
     public async Task Every_browser_request_writes_its_capability_request_id_outcome_and_duration_to_the_log()
     {
-        await using var host = FakeWorkerLauncher.NewHost(_dir, _log);
+        // Started first: the ten seconds below is the budget for the CALL, not for launching
+        // the worker process it happens to be the first to need.
+        await using var host = await FakeWorkerLauncher.NewStartedHostAsync(_dir, _log);
 
         await host.ExecuteAsync(BrowserCapabilities.Inspect, new JsonObject { ["mode"] = "echo" }, TimeSpan.FromSeconds(10), CancellationToken.None);
         await Assert.ThrowsAsync<CapabilityException>(() => host.ExecuteAsync(
@@ -117,7 +119,10 @@ public sealed class CompanionLogTests : IDisposable
     [Fact]
     public async Task A_worker_reported_browser_lifecycle_violation_passes_through_as_itself_and_is_never_retryable()
     {
-        await using var host = FakeWorkerLauncher.NewHost(_dir, _log);
+        // The one that actually failed, on CI, at eleven seconds: the worker's cold start
+        // ate the ten-second budget and the class the owner would have seen was `timeout`
+        // rather than the lifecycle violation the worker really reported.
+        await using var host = await FakeWorkerLauncher.NewStartedHostAsync(_dir, _log);
 
         // The worker says retryable=true; the companion knows better — a retry is a fresh
         // launch onto a profile something else still holds.
@@ -138,5 +143,35 @@ public sealed class CompanionLogTests : IDisposable
         Assert.Contains("pid 4242", ex.Message, StringComparison.Ordinal);
         Assert.True(_log.Any("outcome=browser_lifecycle_violation duration_ms="));
         Assert.True(_log.Any("retryable=false"));
+    }
+
+    [Fact]
+    public async Task A_slow_worker_start_is_not_charged_to_the_call_that_happens_to_be_first()
+    {
+        // The 2026-09-09 CI failure, made deterministic. There, the lifecycle-violation test
+        // above reported `timeout` after eleven seconds: the first ExecuteAsync launched the
+        // worker process INSIDE its own ten-second budget, and a busy shared runner spent it
+        // on the launch. Here the worker announces itself two seconds late on purpose and the
+        // call is given one second - so a start charged to the call cannot possibly fit, and
+        // the only way to see the worker's real error class is for the start to be paid
+        // separately, under the host's own hello budget.
+        await using var host = await FakeWorkerLauncher.NewStartedHostAsync(
+            _dir, _log, extraArgs: "--hello-delay-ms 2000");
+
+        var ex = await Assert.ThrowsAsync<CapabilityException>(() => host.ExecuteAsync(
+            BrowserCapabilities.SessionOpen,
+            new JsonObject
+            {
+                ["mode"] = "error",
+                ["error_class"] = ErrorClasses.BrowserLifecycleViolation,
+                ["message"] = "profile already held by chrome.exe pid 4242",
+                ["retryable"] = false,
+            },
+            TimeSpan.FromSeconds(1),
+            CancellationToken.None));
+
+        // The owner is told what the worker reported, not what our own bookkeeping cost.
+        Assert.Equal(ErrorClasses.BrowserLifecycleViolation, ex.ErrorClass);
+        Assert.DoesNotContain(ErrorClasses.Timeout, _log.Lines.Select(l => l), StringComparer.Ordinal);
     }
 }
