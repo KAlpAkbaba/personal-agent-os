@@ -111,6 +111,12 @@ SUBSYSTEM_BRIEFING = "briefing"
 #: and from which channel?" is answerable without separating it from the M13 research
 #: rows a summary's own device calls happen to share.
 SUBSYSTEM_NEWS = "news"
+#: M27 Creative Tools Operator (docs/M27_CREATIVE_TOOLS_SPEC.md, ADR-0093): a creative
+#: edit (Paint/Photoshop/Illustrator/Figma) the assistant planned, executed and
+#: compared against what was asked. Its own subsystem so "what did you edit for me, in
+#: which tool, and did the read-back agree?" is answerable without separating it from
+#: the M25 3D Creation rows a creative run's own object-store storage happens to share.
+SUBSYSTEM_CREATIVE = "creative"
 
 SUBSYSTEMS: Final[tuple[str, ...]] = (
     SUBSYSTEM_RESEARCH,
@@ -140,6 +146,7 @@ SUBSYSTEMS: Final[tuple[str, ...]] = (
     SUBSYSTEM_WEATHER,
     SUBSYSTEM_BRIEFING,
     SUBSYSTEM_NEWS,
+    SUBSYSTEM_CREATIVE,
 )
 
 # ------------------------------------------------------------------ statuses
@@ -426,6 +433,19 @@ EVENT_TYPE_NEWS_PLAYBACK_FAILED = "news.playback_failed"
 EVENT_TYPE_NEWS_CLOSED = "news.closed"
 EVENT_TYPE_NEWS_SUMMARIZED = "news.summarized"
 
+# M27 Creative Tools Operator (docs/M27_CREATIVE_TOOLS_SPEC.md §3, §4, ADR-0093): one
+# row per creative-run lifecycle transition — the same "one row per transition"
+# discipline app.creative3d's own scene rows already give M25.
+EVENT_TYPE_CREATIVE_CREATED = "creative.create"
+EVENT_TYPE_CREATIVE_APPLIED = "creative.apply"
+EVENT_TYPE_CREATIVE_VERIFIED = "creative.verified"
+#: The run produced output and the independent comparison disagreed with the plan.
+EVENT_TYPE_CREATIVE_MISMATCH = "creative.mismatch"
+#: The named tool is not installed/licensed — named, never imitated (ADR-0093 decision 3).
+EVENT_TYPE_CREATIVE_DEPENDENCY_UNAVAILABLE = "creative.dependency_unavailable"
+EVENT_TYPE_CREATIVE_FAILED = "creative.failed"
+EVENT_TYPE_CREATIVE_LISTED = "creative.list"
+
 EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_RESEARCH_PLANNED,
     EVENT_TYPE_RESEARCH_COMPLETED,
@@ -551,6 +571,13 @@ EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_NEWS_PLAYBACK_FAILED,
     EVENT_TYPE_NEWS_CLOSED,
     EVENT_TYPE_NEWS_SUMMARIZED,
+    EVENT_TYPE_CREATIVE_CREATED,
+    EVENT_TYPE_CREATIVE_APPLIED,
+    EVENT_TYPE_CREATIVE_VERIFIED,
+    EVENT_TYPE_CREATIVE_MISMATCH,
+    EVENT_TYPE_CREATIVE_DEPENDENCY_UNAVAILABLE,
+    EVENT_TYPE_CREATIVE_FAILED,
+    EVENT_TYPE_CREATIVE_LISTED,
 )
 
 #: "genesis.<state>" for every state in app.genesis.models.GENESIS_STATES — the

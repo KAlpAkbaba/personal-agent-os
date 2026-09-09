@@ -336,6 +336,14 @@ def test_create_selects_by_capability_and_returns_the_contract(wired) -> None:
         "news.close",
         "news.summarize",
         "news.query_latest",
+        # M27 (docs/M27_CREATIVE_TOOLS_SPEC.md §5): the Creative Tools Operator.
+        "creative.redraw",
+        "creative.open",
+        "creative.background",
+        "creative.adjust",
+        "creative.cleanup",
+        "creative.design",
+        "creative.export",
     }
     research = next(t for t in data["tools"] if t["name"] == "research.start")
     assert research["long_running"] is True and research["preamble"] == RESEARCH_PREAMBLE_TR

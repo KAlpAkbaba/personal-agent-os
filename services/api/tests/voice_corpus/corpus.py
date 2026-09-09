@@ -127,6 +127,16 @@ CTX_APP_RUNNING: Final = "app_running"
 #: "Sahnede ne var?" resolve to something real.
 CTX_SCENE_BLENDER: Final = "scene_blender"
 
+#: M27 (docs/M27_CREATIVE_TOOLS_SPEC.md §5, ADR-0093): a REAL ``creative_runs`` row,
+#: made through the real ``CreativeService.create`` against a fixture Paint provider
+#: that always answers "installed" (never launching ``mspaint.exe``, the same
+#: "genuine fixture, not a sentinel" discipline ``CTX_SCENE_BLENDER`` already uses) —
+#: sets the current ``creative`` focus as a side effect
+#: (``CreativeService._run_rounds``'s own ``focus_module.set_focus`` call), so "Arka
+#: planını kaldır." / "Renkleri biraz düzelt." / "Bunu PNG olarak dışa aktar." resolve
+#: to something real.
+CTX_CREATIVE_PAINT: Final = "creative_paint"
+
 #: M24 (docs/M24_CAPABILITY_GENESIS_SPEC.md §6, §7): the REAL counter-box/lamp-box
 #: fixture application, started by the harness on a free port and registered into
 #: app.genesis.catalogue for the duration of ONE case — never a mock; the same
@@ -241,6 +251,16 @@ SIDE_EFFECTS_SCENE_INSPECT: Final[frozenset[str]] = frozenset({"scene.inspect"})
 SIDE_EFFECTS_NEWS_OPEN: Final[frozenset[str]] = frozenset(
     {"browser.session_open", "browser.media_play"}
 )
+
+#: M27 (docs/M27_CREATIVE_TOOLS_SPEC.md §5, §7, ADR-0093): the Creative Tools Operator
+#: reaches the FAKE DEVICE never at all in this Cloud Core half — Paint's own edit runs
+#: entirely in-process with Pillow, against the object store, never a device call
+#: (``app.creative.service`` module docstring's own scope note). Every creative case
+#: therefore uses the SAME empty policy ``SIDE_EFFECTS_NONE`` already is, spelled here
+#: under its own name so a family that DOES later gain a device call (a real Paint
+#: round trip through the M19 operator) is a visible, deliberate change to this
+#: constant rather than a silent widening of an already-shared one.
+SIDE_EFFECTS_CREATIVE: Final[frozenset[str]] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
@@ -4223,6 +4243,330 @@ def _news_cases() -> list[UtteranceCase]:
     ]
 
 
+#: M27 (docs/M27_CREATIVE_TOOLS_SPEC.md §5, ADR-0093): the Creative Tools Operator.
+#: Every case names ``category="creative"``. Never touches the fake device (module
+#: comment above ``SIDE_EFFECTS_CREATIVE``): the SAME empty policy every case here uses
+#: is itself the "forbidden side effects" measure spec §5 asks for — any incidental
+#: device capability call would be flagged, and this Cloud Core half never makes one.
+#: CTX_CREATIVE_PAINT seeds one real, focused Paint run so BACKGROUND/ADJUST/CLEANUP/
+#: EXPORT/REDRAW resolve to something real; OPEN/DESIGN start from CTX_NONE (each
+#: names its own tool explicitly, and OPEN's blank-canvas path needs no prior run).
+
+
+def _creative_redraw_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        ("creative.redraw.canonical", "Bu resmi Paint'te yeniden çiz.", "canonical"),
+        ("creative.redraw.para", "Bu resmi Paint'te yeniden çizer misin?", "paraphrase"),
+        ("creative.redraw.para2", "Bunu Paint'te yeniden çiz.", "paraphrase"),
+        ("creative.redraw.asr", "bu resmi paintte yeniden ciz", "asr_noise"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="creative_redraw",
+                    expected_tool="creative.redraw",
+                    side_effects=SIDE_EFFECTS_CREATIVE,
+                    context=CTX_CREATIVE_PAINT,
+                    category="creative",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _creative_open_cases() -> list[UtteranceCase]:
+    """Route distinctions spec §5 demands: Paint (real, succeeds), Photoshop/
+    Illustrator/Figma (honest ``dependency_unavailable``), and a BARE "Bunu aç."
+    (no tool word) which must reach M19/ARTIFACT_OPEN's generic file-open instead —
+    ZERO wrong-app routings."""
+    cases: list[UtteranceCase] = []
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="creative.open.paint.canonical",
+                utterance="Paint'te yeni bir şey aç.",
+                expected_intent="creative_open",
+                expected_tool="creative.open",
+                side_effects=SIDE_EFFECTS_CREATIVE,
+                context=CTX_NONE,
+                category="creative",
+                source="canonical",
+            )
+        )
+    )
+    for case_id, text in (
+        ("creative.open.photoshop.canonical", "Bunu Photoshop'ta aç."),
+        ("creative.open.illustrator.canonical", "Bunu Illustrator'da aç."),
+        ("creative.open.figma.canonical", "Bunu Figma'da aç."),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="creative_open",
+                    expected_tool="creative.open",
+                    expected_response=RESPONSE_REFUSED,
+                    expected={"error_class": "dependency_unavailable"},
+                    side_effects=SIDE_EFFECTS_CREATIVE,
+                    context=CTX_NONE,
+                    category="creative",
+                    source="canonical",
+                )
+            )
+        )
+    # The route distinction itself: no tool word at all reaches ARTIFACT_OPEN, never
+    # a creative tool (spec §5: "a bare 'Bunu aç.' on an image focus is M19's
+    # file.open, never a creative tool").
+    cases.append(
+        UtteranceCase(
+            case_id="creative.open.neg.bare_open_is_artifact_open",
+            utterance="Bunu aç.",
+            expected_intent="artifact_open",
+            expected_tool="artifact.open",
+            expected_target="current",
+            side_effects=SIDE_EFFECTS_ARTIFACT_OPEN,
+            context=CTX_ARTIFACT_FOCUSED,
+            category="creative",
+            source="regression",
+            regression_issue_id=(
+                "M27 spec §5: a bare open with no tool word is never a creative tool"
+            ),
+        )
+    )
+    return cases
+
+
+def _creative_background_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        ("creative.background.canonical", "Arka planını kaldır.", "canonical"),
+        ("creative.background.para", "Arka planını kaldırır mısın?", "paraphrase"),
+        ("creative.background.asr", "arka planini kaldir", "asr_noise"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="creative_background",
+                    expected_tool="creative.background",
+                    side_effects=SIDE_EFFECTS_CREATIVE,
+                    context=CTX_CREATIVE_PAINT,
+                    category="creative",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _creative_adjust_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        ("creative.adjust.canonical", "Renkleri biraz düzelt.", "canonical"),
+        ("creative.adjust.para", "Renkleri düzeltir misin?", "paraphrase"),
+        ("creative.adjust.asr", "renkleri biraz duzelt", "asr_noise"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="creative_adjust",
+                    expected_tool="creative.adjust",
+                    side_effects=SIDE_EFFECTS_CREATIVE,
+                    context=CTX_CREATIVE_PAINT,
+                    category="creative",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _creative_cleanup_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        ("creative.cleanup.canonical", "Logoyu daha temiz hale getir.", "canonical"),
+        ("creative.cleanup.para", "Bunu daha temiz hale getirir misin?", "paraphrase"),
+        ("creative.cleanup.asr", "logoyu daha temiz hale getir", "asr_noise"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="creative_cleanup",
+                    expected_tool="creative.cleanup",
+                    side_effects=SIDE_EFFECTS_CREATIVE,
+                    context=CTX_CREATIVE_PAINT,
+                    category="creative",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _creative_design_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        (
+            "creative.design.canonical",
+            "Figma'da buna benzeyen bir arayüz tasarla.",
+            "canonical",
+        ),
+        ("creative.design.para", "Figma'da bir arayüz tasarlar mısın?", "paraphrase"),
+        ("creative.design.asr", "figmada buna benzeyen bir arayuz tasarla", "asr_noise"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="creative_design",
+                    expected_tool="creative.design",
+                    expected_response=RESPONSE_REFUSED,
+                    expected={"error_class": "dependency_unavailable"},
+                    side_effects=SIDE_EFFECTS_CREATIVE,
+                    context=CTX_NONE,
+                    category="creative",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _creative_export_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        ("creative.export.png.canonical", "Bunu PNG olarak dışa aktar.", "canonical"),
+        ("creative.export.jpg.para", "Bunu JPG olarak dışa aktarır mısın?", "paraphrase"),
+        ("creative.export.pdf.para", "Bunu PDF olarak dışa aktar.", "paraphrase"),
+        ("creative.export.png.asr", "bunu png olarak disa aktar", "asr_noise"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="creative_export",
+                    expected_tool="creative.export",
+                    side_effects=SIDE_EFFECTS_CREATIVE,
+                    context=CTX_CREATIVE_PAINT,
+                    category="creative",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _creative_negative_cases() -> list[UtteranceCase]:
+    cases: list[UtteranceCase] = []
+    # "Orijinali sil." names no creative tool at all (spec §5's own negative case) -
+    # the closed operation vocabulary names no delete anywhere, so nothing here can
+    # ever match it.
+    cases.append(
+        UtteranceCase(
+            case_id="creative.neg.delete_original",
+            utterance="Orijinali sil.",
+            expected_intent="none",
+            expected_tool=None,
+            expected_response=RESPONSE_NONE,
+            side_effects=SIDE_EFFECTS_NONE,
+            context=CTX_CREATIVE_PAINT,
+            category="creative",
+            source="canonical",
+            regression_issue_id="M27 spec §5: the closed vocabulary names no delete",
+        )
+    )
+    # "Bunu teknik anlat." stays exactly what M18.2/M21/M22/M23/M25 already made it -
+    # the SAME assertion those families' own "*.neg.technical_unchanged" cases make,
+    # kept here too so the creative category proves it on its own (the exact class of
+    # collision this family's own priority position was written to avoid — module
+    # comment above app.voice.intents._creative_redraw_match).
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="creative.neg.technical_unchanged",
+                utterance="Bunu teknik anlat.",
+                expected_intent="technical",
+                expected_tool="research.explain",
+                expected_target="current",
+                expected={"level": "technical"},
+                forbidden_tools=("research.start", "creative.redraw", "creative.open"),
+                context=CTX_RESEARCH_FOCUS_B,
+                category="creative",
+                source="regression",
+                regression_issue_id="M27 must not touch the M18.2 technical-explain path",
+            )
+        )
+    )
+    # The regression this whole family's priority placement exists for: a bare
+    # "kaldır" (no "arka"+"plan") stays exactly the alarm resolver's own bare-wake
+    # reading, never CREATIVE_BACKGROUND.
+    cases.append(
+        UtteranceCase(
+            case_id="creative.neg.bare_kaldir_unaffected",
+            utterance="Beni kaldır.",
+            expected_intent="alarm_create",
+            expected_tool="alarm.create",
+            # A bare "Beni kaldır." names no parseable time, so the alarm tool's own
+            # answer is an honest refusal — the point of this case is the ROUTING
+            # (never CREATIVE_BACKGROUND), not that an alarm actually gets created.
+            expected_response=RESPONSE_REFUSED,
+            expected={"error_class": "when_unparsed"},
+            forbidden_tools=("creative.background",),
+            side_effects=SIDE_EFFECTS_NONE,
+            context=CTX_NONE,
+            category="creative",
+            source="regression",
+            regression_issue_id=(
+                "M27: 'kaldır' alone must stay the alarm resolver's own bare-wake reading"
+            ),
+        )
+    )
+    # "getir" alone (no "temiz") stays WINDOW_RESTORE's own verb, never
+    # CREATIVE_CLEANUP.
+    cases.append(
+        UtteranceCase(
+            case_id="creative.neg.bare_getir_is_window_restore",
+            utterance="Pencereyi eski haline getir.",
+            expected_intent="window_restore",
+            expected_tool="operator.window_control",
+            forbidden_tools=("creative.cleanup",),
+            side_effects=SIDE_EFFECTS_OPERATOR_WINDOW_RESTORE,
+            context=CTX_WINDOW_FOCUSED,
+            category="creative",
+            source="regression",
+            regression_issue_id=(
+                "M27: 'getir' alone must stay WINDOW_RESTORE, never CREATIVE_CLEANUP"
+            ),
+        )
+    )
+    return cases
+
+
+def _creative_cases() -> list[UtteranceCase]:
+    return [
+        *_creative_redraw_cases(),
+        *_creative_open_cases(),
+        *_creative_background_cases(),
+        *_creative_adjust_cases(),
+        *_creative_cleanup_cases(),
+        *_creative_design_cases(),
+        *_creative_export_cases(),
+        *_creative_negative_cases(),
+    ]
+
+
 def _executive_cases() -> list[UtteranceCase]:
     return [
         *_executive_start_cases(),
@@ -4532,6 +4876,7 @@ def all_cases() -> list[UtteranceCase]:
         *_executive_cases(),
         *_weather_briefing_cases(),
         *_news_cases(),
+        *_creative_cases(),
     ]
     ids = [c.case_id for c in cases]
     assert len(ids) == len(set(ids)), "duplicate case ids"

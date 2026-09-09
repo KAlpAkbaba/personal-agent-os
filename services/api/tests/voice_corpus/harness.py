@@ -64,6 +64,15 @@ from app.calendar.models import (
 from app.calendar.providers import FakeCalendarWriter
 from app.calendar.service import CalendarService
 from app.config import Settings
+from app.creative.models import CreativeRunRow
+from app.creative.providers import (
+    DetectionFacts,
+    FigmaProvider,
+    IllustratorProvider,
+    PaintProvider,
+    PhotoshopProvider,
+)
+from app.creative.service import CreativeService
 from app.creative3d.models import SceneRow
 from app.creative3d.service import SceneService
 from app.devices.status import DeviceStatusRegistry
@@ -150,6 +159,7 @@ from tests.voice_corpus.corpus import (
     CTX_ARTIFACT_FOCUSED,
     CTX_COMMON_POINTS_FOCUSED,
     CTX_COUNTERBOX_RUNNING,
+    CTX_CREATIVE_PAINT,
     CTX_DOCUMENT_ARTIFACT_FOCUSED,
     CTX_DOCUMENT_FOCUSED,
     CTX_DOCX_FOCUSED,
@@ -216,6 +226,7 @@ TABLES = (
     CalendarProposalRow.__table__,
     AppProjectRow.__table__,
     SceneRow.__table__,
+    CreativeRunRow.__table__,
     ExecutiveRunRow.__table__,
     ExecutiveStepRow.__table__,
     LocationContextRow.__table__,
@@ -280,6 +291,16 @@ def _report(topic: str, *, marker: str) -> dict:
     }
 
 
+class _FixtureInstalledPaintProvider(PaintProvider):
+    """A test double whose ``detect()`` always answers "installed" — never running
+    the real filesystem check (module docstring, ``app.creative.providers``), so the
+    corpus's own Paint cases execute deterministically on any machine, including one
+    where ``mspaint.exe`` genuinely is not present."""
+
+    def detect(self) -> DetectionFacts:  # type: ignore[override]
+        return DetectionFacts(installed=True, checked=("fixture",), detail="mspaint.exe")
+
+
 @dataclass
 class Harness:
     client: TestClient
@@ -296,6 +317,13 @@ class Harness:
     browser_gateway: FakeBrowserGateway
     genesis: GenesisRuntime
     creative3d: SceneService
+    #: M27 (docs/M27_CREATIVE_TOOLS_SPEC.md §1, §5, ADR-0093): the SAME Paint-installed,
+    #: Photoshop/Illustrator/Figma-absent fixture every ``creative.*`` voice tool reads
+    #: — never the real filesystem/registry in a corpus run (never launches a binary
+    #: either way, ``app.creative.providers`` module docstring), so Paint cases execute
+    #: for real and Adobe/Figma cases exercise the honest ``dependency_unavailable``
+    #: refusal deterministically on every machine.
+    creative: CreativeService
     location: LocationService
     weather: WeatherService
     briefing: BriefingService
@@ -789,6 +817,41 @@ class Harness:
                 )
                 assert created["execution_status"] == "executed", created
                 self.ids["scene:current"] = created["scene_id"]
+        elif context == CTX_CREATIVE_PAINT:
+            # M27 (docs/M27_CREATIVE_TOOLS_SPEC.md §5, ADR-0093): a REAL creative_runs
+            # row, made through the real CreativeService.create against the fixture
+            # Paint provider (the same "genuine fixture, not a sentinel" discipline
+            # CTX_SCENE_BLENDER already uses) — sets the current ``creative`` focus as
+            # a side effect (CreativeService._run_rounds's own focus_module.set_focus
+            # call), so "Arka planını kaldır."/"Renkleri biraz düzelt."/"Bunu PNG
+            # olarak dışa aktar." resolve to something real. Never touches the fake
+            # device (module comment above SIDE_EFFECTS_CREATIVE).
+            with self.factory() as db:
+                created = self.creative.create(
+                    db,
+                    plan={
+                        "tool": "paint",
+                        "name": "corpus-fixture",
+                        "operations": [
+                            {
+                                "op": "new",
+                                "width": 320,
+                                "height": 240,
+                                "background": [255, 255, 255, 255],
+                            },
+                            {
+                                "op": "shape",
+                                "kind": "rect",
+                                "box": [10, 10, 100, 80],
+                                "fill": [255, 0, 0, 255],
+                            },
+                            {"op": "export", "format": "png"},
+                        ],
+                    },
+                    session_id="seed:creative_paint",
+                )
+                assert created["execution_status"] == "executed", created
+                self.ids["creative:current"] = created["run_id"]
         elif context in (CTX_COUNTERBOX_RUNNING, CTX_LAMPBOX_RUNNING):
             # M24 (docs/M24_CAPABILITY_GENESIS_SPEC.md §6, §7): the REAL fixture
             # application, started on a free port for the duration of THIS ONE case (a
@@ -1088,6 +1151,22 @@ def build_harness() -> Harness:
     # in-memory object store artifacts already uses (task brief: no network).
     creative3d_service = SceneService(object_store=artifacts.store)
     app.state.creative3d_service = creative3d_service
+    # M27 (docs/M27_CREATIVE_TOOLS_SPEC.md §1, ADR-0093): a fixture Paint provider that
+    # always answers "installed" (never launching ``mspaint.exe`` — module docstring),
+    # plus the REAL Photoshop/Illustrator providers (genuinely absent on the runner,
+    # exercising the honest ``dependency_unavailable`` refusal for real) and a
+    # token-absent Figma provider, so the corpus's own route-distinction cases (Paint
+    # vs. Photoshop vs. Illustrator vs. Figma) are deterministic on every machine.
+    creative_service = CreativeService(
+        object_store=artifacts.store,
+        providers={
+            "paint": _FixtureInstalledPaintProvider(),
+            "photoshop": PhotoshopProvider(),
+            "illustrator": IllustratorProvider(),
+            "figma": FigmaProvider(token_present=False),
+        },
+    )
+    app.state.creative_service = creative_service
     # ADR-0091 (Owner Location Context / Live Weather / Morning Briefing): the FAKE
     # weather provider (never real network in a corpus run — task brief: no network),
     # with a durable default location set so "Hava nasıl?" has a deterministic answer
@@ -1129,6 +1208,7 @@ def build_harness() -> Harness:
         browser_gateway=browser_gateway,
         genesis_service=genesis.service,
         creative3d_service=creative3d_service,
+        creative_service=creative_service,
         location_service=location_service,
         weather_service=weather_service,
         briefing_service=briefing_service,
@@ -1179,6 +1259,7 @@ def build_harness() -> Harness:
         browser_gateway=browser_gateway,
         genesis=genesis,
         creative3d=creative3d_service,
+        creative=creative_service,
         location=location_service,
         weather=weather_service,
         briefing=briefing_service,

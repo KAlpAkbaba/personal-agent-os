@@ -59,6 +59,10 @@ from app.voice.realtime_sessions.tools_calendar import (
     CALENDAR_TOOL_NAMES,
     register_calendar_tools,
 )
+from app.voice.realtime_sessions.tools_creative import (
+    CREATIVE_TOOL_NAMES,
+    register_creative_tools,
+)
 from app.voice.realtime_sessions.tools_documents import (
     DOCUMENT_TOOL_NAMES,
     register_documents_tools,
@@ -595,6 +599,12 @@ EXECUTIVE_CLARIFYING_TOOLS: frozenset[str] = frozenset(EXECUTIVE_TOOL_NAMES)
 #: non-research extension of the ADR-0077 contract every family above already gets.
 WEATHER_CLARIFYING_TOOLS: frozenset[str] = frozenset(WEATHER_TOOL_NAMES)
 
+#: M27 (docs/M27_CREATIVE_TOOLS_SPEC.md §5): every creative tool may answer "Hangi
+#: programda efendim?" / "Hangi resmi çizeyim efendim?" / "Hangi çalışma efendim?"
+#: rather than a receipt — the same non-research extension of the ADR-0077 contract
+#: every family above already gets, never a second copy of it.
+CREATIVE_CLARIFYING_TOOLS: frozenset[str] = frozenset(CREATIVE_TOOL_NAMES)
+
 
 def result_is_research_bound(tool_name: str, result: Any) -> bool:
     """Whether a handler's result falls under the research result contract (ADR-0077)."""
@@ -642,6 +652,7 @@ def terminal_status_for(tool_name: str, result: Any) -> tuple[str, str | None]:
             | SCENE_CLARIFYING_TOOLS
             | EXECUTIVE_CLARIFYING_TOOLS
             | WEATHER_CLARIFYING_TOOLS
+            | CREATIVE_CLARIFYING_TOOLS
             and isinstance(result, dict)
             and result.get("status") == RESULT_NEEDS_CLARIFICATION
             and str(result.get("speech") or "").strip()
@@ -1701,6 +1712,8 @@ def default_registry() -> ToolRegistry:
     register_briefing_tools(reg)
     # M26 addendum (docs/M26_LATEST_NEWS_MODE_SPEC.md §6): Latest News Mode's voice tools.
     register_news_tools(reg)
+    # M27 (docs/M27_CREATIVE_TOOLS_SPEC.md §5): the Creative Tools Operator's voice tools.
+    register_creative_tools(reg)
     return reg
 
 
