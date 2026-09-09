@@ -3239,10 +3239,25 @@ def _creative_export_match(tokens: tuple[str, ...]) -> str | None:
     """ "Bunu PNG olarak dışa aktar." (spec §5) - requires BOTH "dışa" and "aktar";
     "aktar" alone is ``_RESEARCH_TELLING_VERBS``' own word, but that branch ALSO
     requires a research topic word, so the two are disjoint in either order - "dışa"
-    is required here anyway as a second, independent gate."""
+    is required here anyway as a second, independent gate.
+
+    And a THIRD gate, which the corpus had to teach: "dışa" + an export verb is every
+    "... dışa aktar." sentence in Turkish, including M25's own negative case "Sahneyi
+    dışa aktar." (expected: none, because the 3D family has no export operation and spec
+    §7 says an operation outside the vocabulary is never guessed). Matching it here would
+    have told the owner Paint was exporting a Blender scene.
+
+    So a creative export must be about something creative: it names a FORMAT the family
+    supports, or it names nothing else's noun. Narrowed rather than reordered - a
+    reordering would only move the collision to whichever family lost the race.
+    """
     if _has_exact(tokens, _CREATIVE_EXPORT_OUT_WORD, _CREATIVE_EXPORT_OUT_WORD_ASCII) is None:
         return None
     if _has(tokens, *_CREATIVE_EXPORT_VERB_STEMS) is None:
+        return None
+    if _has(tokens, *_SCENE_NOUN_STEMS) is not None:
+        # Another family's own noun. Its absence of an export operation is that family's
+        # to state, not this one's to satisfy.
         return None
     return "dışa aktar"
 

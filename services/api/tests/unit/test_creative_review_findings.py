@@ -184,3 +184,39 @@ def test_the_service_exposes_a_way_for_a_caller_to_fetch_what_it_names() -> None
     from app.creative.service import CreativeService
 
     assert callable(CreativeService.fetch_source_bytes)
+
+
+# ------------------------------- the fourth intent collision, caught by the corpus
+
+
+@pytest.mark.parametrize(
+    ("utterance", "should_match"),
+    [
+        # M25's own negative case. The 3D family has NO export operation, and spec §7 says
+        # an operation outside the vocabulary is never guessed - so this must reach no
+        # tool at all. M27 matched it and would have told the owner Paint was exporting a
+        # Blender scene.
+        ("Sahneyi dışa aktar.", False),
+        ("Sahneyi PNG olarak dışa aktar.", False),
+        # ...and the creative family's own sentences still route.
+        ("Bunu PNG olarak dışa aktar.", True),
+        ("Bunu dışa aktar.", True),
+    ],
+)
+def test_creative_export_does_not_answer_for_another_familys_noun(
+    utterance: str, should_match: bool
+) -> None:
+    """The fourth intent collision this repo has paid for, and the fourth fixed by
+    NARROWING rather than reordering - a reordering only moves the collision to whichever
+    family loses the race.
+
+    `_creative_export_match` required "dışa" plus an export verb, which is every
+    "... dışa aktar." sentence in Turkish, M25's negative case included.
+    """
+    from app.voice.intents import Intent, resolve_intent
+
+    # Driven through the REAL router rather than the matcher alone, because the property
+    # is about what the OWNER's sentence reaches - the matcher could be right and the
+    # dispatch order still wrong.
+    matched = resolve_intent(utterance).intent == Intent.CREATIVE_EXPORT
+    assert matched is should_match, utterance

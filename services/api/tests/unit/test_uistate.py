@@ -98,9 +98,11 @@ def test_the_vocabulary_is_the_one_the_owner_specified() -> None:
         "scene.activity",
         # M26 (Executive Autonomy spec §6, §7, ADR-0089): the executive channel.
         "executive.run",
+        # M27 (Creative Tools spec §3, §6, ADR-0093): the creative loop's channel.
+        "creative.activity",
     }
     contract = ui_state_contract()
-    assert contract["contract_version"] == 11
+    assert contract["contract_version"] == 12
     assert "ambient" in contract["subsystems"]
     assert "operator" in contract["subsystems"]
     assert "documents" in contract["subsystems"]
