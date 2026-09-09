@@ -160,6 +160,11 @@ jobs:
         run: dotnet build -c Release --nologo
       - name: Tests
         run: dotnet test -c Release --nologo --no-build
+      # 2026-09-09: harness-symbols.tests.ps1 - the static guard for closures that call a
+      # name only a dot-sourced scope defines - existed since 2026-09-06 and was run by
+      # NOTHING. The defect it describes reached the owner's install in a file the guard's
+      # hand-typed list did not cover. It runs here now, with the regression that drives
+      # the real Cloud Core verifier in a clean child process.
       # The installer/deployment/identity scripts run on the owner's machine under
       # WINDOWS POWERSHELL 5.1, and four real qualification failures were 5.1-only
       # (native quoting, StrictMode unrolling, ??, ImportFromPem). windows-latest still
@@ -189,7 +194,10 @@ jobs:
           powershell -NoProfile -File scripts\tests\cloud-secret.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\cloud-release.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\item28-gate.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\utf8-json.tests.ps1
+          powershell -NoProfile -File scripts\tests\utf8-json.tests.ps1 && ^
+          powershell -NoProfile -File scripts\tests\core-verifier-scope.tests.ps1 && ^
+          powershell -NoProfile -File scripts\tests\harness-symbols.tests.ps1 && ^
+          powershell -NoProfile -File scripts\tests\owner-harness.tests.ps1
       # The staged update, end to end, against the REAL DeviceService this job just built:
       # candidate identity, the complete capability manifest (40 with -DisplayPower and a
       # browser worker, browser.media_* included), promotion, Cloud Core verification,

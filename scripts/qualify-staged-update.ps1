@@ -57,6 +57,16 @@
       7. rollback     - a candidate Cloud Core cannot see is rolled back, all three trees
                         are restored and the previous release is judged by its OWN
                         baseline predicate
+      8. real verifier - 2026-09-09: all 71 gates above were green and the owner's install
+                        still rolled back after 90.6 s, because every one of them hands the
+                        health handler a FAKE fetch. The one part none of them built was
+                        New-CoreDeviceFetcher, whose closure could not resolve
+                        Invoke-JsonUtf8. So this gate builds the REAL fetcher in a clean
+                        child process - nothing preloaded - and reads a real device row
+                        through it, in BOTH invocation modes (`& script.ps1`, which is what
+                        the owner types, and `-File`, which is what every harness here
+                        uses; only the second one worked). Then it audits every library on
+                        disk for the same shape.
 
     Run: powershell -NoProfile -File scripts\qualify-staged-update.ps1
     Exit code 0 means the owner's retry is expected to succeed for the reasons above.
@@ -76,6 +86,11 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $repoRoot "scripts\lib\InstallEvidence.ps1")
 . (Join-Path $repoRoot "scripts\lib\AgentUpdate.ps1")
 . (Join-Path $repoRoot "scripts\lib\Deployment.ps1")
+# Gate 8 runs the REAL Cloud Core verifier in a clean child process; these two hold the
+# loopback stub and the static closure guard, shared with scripts\tests so the
+# qualification and the regression cannot drift apart.
+. (Join-Path $repoRoot "scripts\tests\lib\LoopbackJson.ps1")
+. (Join-Path $repoRoot "scripts\tests\lib\ClosureGuard.ps1")
 
 $script:Failures = 0
 $script:Passes = 0
@@ -309,6 +324,22 @@ function New-QualificationHealth {
     $browserDataDir = Join-Path $Root "browser-data"
     $auditPath = Join-Path $Root "audit\companion-audit.jsonl"
     $workerProcessId = 424242
+    # Every function this closure calls, RESOLVED NOW and carried in a variable.
+    #
+    # 2026-09-09: the installer's Cloud Core fetcher was built the same way this handler is -
+    # `.GetNewClosure()` - and called Invoke-JsonUtf8 by name. A closure's module is linked to
+    # the GLOBAL session state, so a name that only exists in a dot-sourced SCRIPT scope does
+    # not resolve, and the owner's install rolled back after 90.6 s. It only ever worked
+    # because `-File` makes the outermost script the top-level scope; `.\qualify-staged-update.ps1`
+    # would have failed here in exactly the same way. A qualification that passes only in the
+    # invocation mode its harness happens to use is not evidence.
+    $fn = @{}
+    foreach ($name in @("Get-ExpectedWorkerRelease", "Write-WorkerStartAudit", "Wait-LiveBrowserWorkerAudit",
+            "Test-LiveBrowserWorker", "Test-AgentHeartbeatOnCore", "New-CoreListing")) {
+        $found = Get-Command -Name $name -CommandType Function -ErrorAction SilentlyContinue
+        if (-not $found) { throw "the health handler cannot be built: $name is not defined here" }
+        $fn[$name] = $found
+    }
     return {
         $State.HealthCalls++
         # The candidate really is the tree that is now live.
@@ -320,7 +351,7 @@ function New-QualificationHealth {
 
         # ---- the browser worker, judged by scripts\lib\BrowserRelease.ps1 itself ---------
         $deployStartedAt = (Get-Date).AddSeconds(-2)
-        $release = Get-ExpectedWorkerRelease -BrowserSource $browserRoot
+        $release = & $fn["Get-ExpectedWorkerRelease"] -BrowserSource $browserRoot
         $State.LiveWorkerRelease = $release.Version
         if ($release.Version -ne $StagedWorkerVersion) {
             $State.Problems = @("the promoted browser tree is worker $($release.Version), the staged release is $StagedWorkerVersion")
@@ -328,8 +359,8 @@ function New-QualificationHealth {
         }
         $module = Join-Path $browserRoot ".venv\Lib\site-packages\browser_agent\worker.py"
         $python = Join-Path $browserRoot ".venv\Scripts\python.exe"
-        Write-WorkerStartAudit -AuditPath $auditPath -WorkerVersion $ReportedWorkerVersion -Module $module -WorkerProcessId $workerProcessId
-        $audit = Wait-LiveBrowserWorkerAudit -AuditPath $auditPath -Since $deployStartedAt -TimeoutSeconds 5
+        & $fn["Write-WorkerStartAudit"] -AuditPath $auditPath -WorkerVersion $ReportedWorkerVersion -Module $module -WorkerProcessId $workerProcessId
+        $audit = & $fn["Wait-LiveBrowserWorkerAudit"] -AuditPath $auditPath -Since $deployStartedAt -TimeoutSeconds 5
         if ($null -eq $audit) {
             $State.Problems = @("the companion recorded no browser_worker_started row after the swap")
             return $false
@@ -343,7 +374,7 @@ function New-QualificationHealth {
                 CommandLine    = "`"$python`" -m browser_agent.worker --data-dir `"$browserDataDir`""
                 CreationDate   = (Get-Date)
             })
-        $problems = @(Test-LiveBrowserWorker -Audit $audit -Expected $release -BrowserRoot $browserRoot `
+        $problems = @(& $fn["Test-LiveBrowserWorker"] -Audit $audit -Expected $release -BrowserRoot $browserRoot `
                 -BrowserDataDir $browserDataDir -DeployStartedAt $deployStartedAt -PreviousPids @() -Processes $processes)
         $State.Problems = @($problems)
         if (@($problems).Count -gt 0) { return $false }
@@ -359,8 +390,8 @@ function New-QualificationHealth {
         # enclosing closure's module scope - so a nested GetNewClosure here silently handed
         # New-CoreListing $null and every deployment failed as "Cloud Core could not be
         # read". A plain script block keeps this session state and resolves both.
-        $fetch = { New-CoreListing -DeviceId $DeviceId -Presence "online" -Version $State.Version -Capabilities $State.Caps }
-        $heartbeat = Test-AgentHeartbeatOnCore -FetchDevices $fetch -DeviceId $DeviceId `
+        $fetch = { & $fn["New-CoreListing"] -DeviceId $DeviceId -Presence "online" -Version $State.Version -Capabilities $State.Caps }
+        $heartbeat = & $fn["Test-AgentHeartbeatOnCore"] -FetchDevices $fetch -DeviceId $DeviceId `
             -ExpectedVersion $ExpectedVersion -ExpectedCapabilities $ExpectedCapabilities `
             -TimeoutSeconds $CoreTimeoutSeconds -PollSeconds 1
         $State.LastHeartbeat = $heartbeat
@@ -633,6 +664,59 @@ try {
     $rolled = @($journal.history | Where-Object { $_.phase -eq "rolled_back" })[-1]
     Assert-True ($rolled.detail -match "restored and healthy") "and reports the restored release as healthy, not as a capability regression that never happened"
 
+    # -------------------------------------------------- gate 8: the REAL Cloud Core verifier
+    # Every gate above this line hands the health handler a FAKE fetch script block, which is
+    # why all 71 of them were green on 2026-09-09 while the installer could not read Cloud
+    # Core at all. The thing that failed was the one part no gate had ever built:
+    # New-CoreDeviceFetcher, invoked the way the owner invokes the installer.
+    #
+    # So this gate builds the real fetcher in a CLEAN child process - nothing preloaded, no
+    # profile - and points it at a loopback HTTP stub. It runs it BOTH ways, because the two
+    # differ and only one of them is what the owner does:
+    #
+    #     command   `& install.ps1`      a child script scope   <- the owner
+    #     file      `-File install.ps1`  the top-level scope    <- every harness here
+    #
+    # A pass that depends on Invoke-JsonUtf8 already being loaded in the developer's shell
+    # would be worthless, so "nothing was preloaded" is itself asserted first.
+    Write-Gate "gate 8 - the REAL Cloud Core verifier, from a clean process, in the owner's invocation mode"
+    $verifierCaps = @("desktop.open_application", "browser.chrome", "desktop.display_off")
+    $verifierVersion = $candidate.SoftwareVersion
+    $stub = Start-JsonStub -Json (New-CoreDeviceListingJson -DeviceId $deviceId -Version $verifierVersion -Capabilities $verifierCaps)
+    try {
+        foreach ($mode in @("command", "file")) {
+            $verdict = Invoke-CoreVerifierChild -Mode $mode -RepoRoot $repoRoot -Sandbox $script:Sandbox -Port $stub.Port `
+                -DeviceId $deviceId -ExpectedVersion $verifierVersion -ExpectedCapabilities $verifierCaps
+            Assert-True (-not $verdict.preloaded_globally) "[$mode] the child had NO Invoke-JsonUtf8 preloaded - without this the rest of this gate proves nothing"
+            Assert-True ([bool]$verdict.built) "[$mode] New-CoreDeviceFetcher built a fetcher$(if ($verdict.build_error) { ": $($verdict.build_error)" })"
+            Assert-True ([bool]$verdict.ok) "[$mode] the REAL fetcher read the device row and the candidate verified$(if (@($verdict.reasons).Count) { ": $(@($verdict.reasons) -join '; ')" })"
+            Assert-True (-not [bool]$verdict.verifier_fault) "[$mode] no verifier fault"
+            Assert-True ($verdict.observed_version -eq $verifierVersion -and [int]$verdict.observed_caps -eq $verifierCaps.Count) "[$mode] the whole chain ran, UTF-8 body decode included: '$($verdict.observed_version)', $($verdict.observed_caps) capabilities"
+            Assert-True ([int]$verdict.attempts -eq 1) "[$mode] one attempt - no timeout was spent on a fault waiting cannot fix"
+        }
+    }
+    finally { Stop-JsonStub -Stub $stub }
+
+    # And the class of defect, not only this instance: no closure anywhere in the installer's
+    # own libraries may call a command that a fresh PowerShell does not know.
+    # The library list is READ FROM DISK, not typed here. The 2026-09-06 guard had a
+    # hand-maintained list, AgentUpdate.ps1 was never added to it, and three days later
+    # AgentUpdate.ps1 shipped the same defect. A new library is covered the moment it exists.
+    $closureAudited = @("scripts\install-device-service.ps1", "scripts\qualify-staged-update.ps1")
+    foreach ($lib in @(Get-ChildItem -LiteralPath (Join-Path $repoRoot "scripts\lib") -Filter *.ps1 -File)) {
+        $closureAudited += "scripts\lib\$($lib.Name)"
+    }
+    $closureRisks = @()
+    foreach ($rel in $closureAudited) {
+        # ASSIGNED, not wrapped in @(): `return , $empty` yields one element when it is
+        # wrapped and none when it is assigned, which is how this audit first reported a
+        # risk in all 21 clean files.
+        $found = Get-ClosureCommandRisks -Path (Join-Path $repoRoot $rel)
+        foreach ($site in $found) { $closureRisks += "$rel $site" }
+    }
+    Assert-True (@($closureAudited).Count -ge 10) "the closure audit read its file list from disk ($(@($closureAudited).Count) files), so a new library cannot be forgotten the way AgentUpdate.ps1 was"
+    Assert-True (@($closureRisks).Count -eq 0) "no closure in the installer or its libraries calls a name a fresh PowerShell cannot resolve$(if (@($closureRisks).Count) { ": $($closureRisks -join '; ')" })"
+
     $exitCode = if ($script:Failures -eq 0) { 0 } else { 1 }
 }
 catch {
@@ -655,7 +739,9 @@ if ($script:Failures -eq 0) {
     Write-Host "  service, companion AND browser worker -> live worker proven by Test-LiveBrowserWorker"
     Write-Host "  -> Cloud Core sees the candidate's version and capabilities -> committed. A stale"
     Write-Host "  worker, a tampered or empty candidate, and a candidate Cloud Core cannot see each"
-    Write-Host "  roll back with all three trees restored."
+    Write-Host "  roll back with all three trees restored. Gate 8 then builds the REAL fetcher in a"
+    Write-Host "  clean child process, in BOTH invocation modes, and reads a device row through it -"
+    Write-Host "  the step whose absence let 71 green checks precede the 2026-09-09 rollback."
 }
 else {
     Write-Host "STAGED UPDATE NOT QUALIFIED: $script:Failures of $($script:Passes + $script:Failures) checks failed." -ForegroundColor Red

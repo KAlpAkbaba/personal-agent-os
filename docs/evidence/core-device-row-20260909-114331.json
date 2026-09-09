@@ -1,0 +1,144 @@
+﻿{
+    "record":  "the live Cloud Core device row, read through the installer\u0027s real verifier",
+    "recorded_at":  "2026-09-09T11:43:31.5627757Z",
+    "broker":  "http://100.90.158.26:8001",
+    "invocation":  {
+                       "ps_version":  "5.1.19041.6456",
+                       "preloaded_invoke_jsonutf8":  false
+                   },
+    "device_id":  "3f60fdb5-5022-48cf-bb3c-d7192466b701",
+    "device_id_source":  "the enrolled row named MAIL",
+    "installed_runtime":  {
+                              "software_version":  "",
+                              "capability_count":  29,
+                              "capabilities":  [
+                                                   "browser.back",
+                                                   "browser.chrome",
+                                                   "browser.click",
+                                                   "browser.download",
+                                                   "browser.extract",
+                                                   "browser.fetch_evidence",
+                                                   "browser.fill",
+                                                   "browser.find",
+                                                   "browser.forward",
+                                                   "browser.inspect",
+                                                   "browser.navigate",
+                                                   "browser.screenshot",
+                                                   "browser.scroll",
+                                                   "browser.search",
+                                                   "browser.select_option",
+                                                   "browser.session_close",
+                                                   "browser.session_open",
+                                                   "browser.set_checked",
+                                                   "browser.snapshot",
+                                                   "browser.tab_close",
+                                                   "browser.tab_list",
+                                                   "browser.tab_new",
+                                                   "browser.tab_select",
+                                                   "browser.wait",
+                                                   "browser.worker_status",
+                                                   "desktop.alarm_start",
+                                                   "desktop.alarm_stop",
+                                                   "desktop.open_application",
+                                                   "desktop.open_artifact"
+                                               ]
+                          },
+    "device_row":  {
+                       "presence":  "online",
+                       "software_version":  "0.1.0",
+                       "capability_count":  29,
+                       "capabilities":  [
+                                            "browser.back",
+                                            "browser.chrome",
+                                            "browser.click",
+                                            "browser.download",
+                                            "browser.extract",
+                                            "browser.fetch_evidence",
+                                            "browser.fill",
+                                            "browser.find",
+                                            "browser.forward",
+                                            "browser.inspect",
+                                            "browser.navigate",
+                                            "browser.screenshot",
+                                            "browser.scroll",
+                                            "browser.search",
+                                            "browser.select_option",
+                                            "browser.session_close",
+                                            "browser.session_open",
+                                            "browser.set_checked",
+                                            "browser.snapshot",
+                                            "browser.tab_close",
+                                            "browser.tab_list",
+                                            "browser.tab_new",
+                                            "browser.tab_select",
+                                            "browser.wait",
+                                            "browser.worker_status",
+                                            "desktop.alarm_start",
+                                            "desktop.alarm_stop",
+                                            "desktop.open_application",
+                                            "desktop.open_artifact"
+                                        ],
+                       "last_seen_at":  "2026-09-09T11:43:29.614199Z",
+                       "read_error":  ""
+                   },
+    "checks":  [
+                   {
+                       "ok":  true,
+                       "message":  "Invoke-JsonUtf8 was NOT already defined in this shell - so what follows measures the code, not the session"
+                   },
+                   {
+                       "ok":  true,
+                       "message":  "the installed service binary is where the installer expects it (C:\\Program Files\\PagentOS\\agent\\service\\PagentOS.DeviceService.exe)"
+                   },
+                   {
+                       "ok":  true,
+                       "message":  "the installed service answers its own \u0027capabilities\u0027 verb (exit 0)"
+                   },
+                   {
+                       "ok":  true,
+                       "message":  "an owner session was minted from the DPAPI-stored credential (bootstrap-owner-credential.ps1 stores it)"
+                   },
+                   {
+                       "ok":  true,
+                       "message":  "New-CoreDeviceFetcher built a fetcher without throwing"
+                   },
+                   {
+                       "ok":  true,
+                       "message":  "the fetcher READ Cloud Core - the step that never happened on 2026-09-09"
+                   },
+                   {
+                       "ok":  true,
+                       "message":  "exactly one enrolled device is named \u0027MAIL\u0027 (1 found) - so the row below is unambiguously this machine\u0027s"
+                   },
+                   {
+                       "ok":  true,
+                       "message":  "Cloud Core lists device 3f60fdb5-5022-48cf-bb3c-d7192466b701"
+                   },
+                   {
+                       "ok":  true,
+                       "message":  "the device is online (online)"
+                   },
+                   {
+                       "ok":  true,
+                       "message":  "the row carries a software version (\u00270.1.0\u0027) - ADR-0090\u0027s contract fault, held against production"
+                   },
+                   {
+                       "ok":  true,
+                       "message":  "the row carries a capability list (29 names)"
+                   },
+                   {
+                       "ok":  true,
+                       "message":  "the row carries a heartbeat timestamp (2026-09-09T11:43:29.614199Z)"
+                   },
+                   {
+                       "ok":  true,
+                       "message":  "every capability the installed binary advertises is on the row"
+                   },
+                   {
+                       "ok":  true,
+                       "message":  "and the row advertises nothing the binary does not"
+                   }
+               ],
+    "passed":  14,
+    "failed":  0
+}

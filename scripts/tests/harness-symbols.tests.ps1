@@ -29,6 +29,7 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+. (Join-Path $repoRoot "scripts\tests\lib\ClosureGuard.ps1")
 
 $script:Failures = 0
 $script:Passes = 0
@@ -207,6 +208,47 @@ Test-Case "the guard itself catches the 2026-09-06 shape: a call to a function n
         if (($missing -join ",") -ne "Get-Json,Get-NewSessions") { throw "expected Get-Json,Get-NewSessions undeclared (OwnerHarness declares Get-ArrayProperty), got '$($missing -join ',')'" }
         $sites = Get-ClosureSites -Ast (Get-ScriptAst -Path $tmp)
         if ($sites.Count -ne 1) { throw "expected one closure site, got $($sites.Count)" }
+    }
+    finally { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+}
+
+# ------------------------------------------------------------ the 2026-09-09 coverage gap
+# The blanket "no GetNewClosure" rule above was written on 2026-09-06 for the owner harnesses
+# and their two libraries. scripts\lib\AgentUpdate.ps1 was never added to that hand-typed
+# list, and three days later it shipped the identical defect: a closure calling
+# Invoke-JsonUtf8, a name only a dot-sourced script scope defines, which rolled a healthy
+# 0.6.0 candidate back after 90.6 s on the owner's machine.
+#
+# Two changes follow. The file list is READ FROM DISK, so a library cannot be forgotten
+# again. And the rule is the precise one - a closure may not call a name a fresh PowerShell
+# cannot resolve - because a blanket ban would have to be suppressed at the very sites where
+# the fix (`& $captured`, holding a FunctionInfo) is correct, and a suppressed guard is a
+# dead guard.
+$closureAudited = @("scripts\install-device-service.ps1", "scripts\qualify-staged-update.ps1")
+foreach ($lib in @(Get-ChildItem -LiteralPath (Join-Path $repoRoot "scripts\lib") -Filter *.ps1 -File)) {
+    $closureAudited += "scripts\lib\$($lib.Name)"
+}
+Test-Case "the closure audit reads its file list from disk, not from a list someone must remember to update" {
+    if (@($closureAudited).Count -lt 10) { throw "only $(@($closureAudited).Count) files - scripts\lib did not enumerate" }
+    if ($closureAudited -notcontains "scripts\lib\AgentUpdate.ps1") { throw "the file that shipped the 2026-09-09 defect is not covered" }
+}
+foreach ($rel in $closureAudited) {
+    Test-Case "$rel binds no closure that calls a name a fresh PowerShell cannot resolve" {
+        $risks = Get-ClosureCommandRisks -Path (Join-Path $repoRoot $rel)
+        if ($risks.Count -gt 0) { throw "$($risks -join '; ') - a closure's module is linked to GLOBAL, so a dot-sourced name does not resolve there" }
+    }
+}
+
+Test-Case "the closure guard catches the 2026-09-09 shape, and clears the fix for it" {
+    $tmp = Join-Path $env:TEMP ("closure-guard-probe-" + [guid]::NewGuid().ToString("N") + ".ps1")
+    try {
+        $body = '$broken = { Invoke-JsonUtf8 -Uri $u }.GetNewClosure()' + "`r`n" +
+                '$fixed = { & $fn -Uri $u }.GetNewClosure()' + "`r`n" +
+                '$fine = { Get-Content -LiteralPath $p }.GetNewClosure()' + "`r`n"
+        [System.IO.File]::WriteAllText($tmp, $body)
+        $risks = Get-ClosureCommandRisks -Path $tmp
+        if ($risks.Count -ne 1) { throw "expected exactly the broken site, got $($risks.Count): $($risks -join '; ')" }
+        if ($risks[0] -notmatch "Invoke-JsonUtf8") { throw "the wrong site was reported: $($risks[0])" }
     }
     finally { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
 }

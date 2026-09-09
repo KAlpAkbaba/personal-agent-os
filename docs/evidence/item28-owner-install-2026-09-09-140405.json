@@ -1,0 +1,105 @@
+{
+  "record": "item-28 owner install attempt, 2026-09-09 - REAL FAILURE, REAL ROLLBACK",
+  "classification": "PROVEN_REAL (a real staged update on the owner's machine, rolled back by the journaled engine). Item 28 is NOT passed.",
+  "recorded_at": "2026-09-09T12:05:00Z",
+  "owner_command": ".\\scripts\\install-device-service.ps1 -DisplayPower -Operator",
+  "sources": {
+    "transcript": "C:\\ProgramData\\PagentOS\\install-logs\\install-20260909-140405.log",
+    "transcript_sha256": "ae54c65c77996a57ba6ee3bc995ab1dab49de964228f330c1f906a98c944d275",
+    "transcript_lines": 95,
+    "deploy_journal": "C:\\Program Files\\PagentOS\\agent\\.deploy-journal.json",
+    "event_log": "Application log, providers PagentOSDeviceAgent and PagentOS.DeviceService",
+    "device_row": "GET http://100.90.158.26:8001/v1/devices, owner session, read 2026-09-09T11:19:02Z"
+  },
+  "environment": {
+    "host_application": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+    "ps_version": "5.1.19041.6456",
+    "ps_edition": "Desktop",
+    "elevated": true,
+    "repo_head": "f7d5a58c315aebd63c8d26f2320247cbb7735dcc",
+    "deployment_version": "20260909-140442"
+  },
+  "candidate": {
+    "component": "device-service",
+    "software_version": "0.6.0",
+    "assembly_version": "0.6.0",
+    "capability_manifest_version": "5cc3d9fbd9f7",
+    "capability_count": 85,
+    "service_files": 226,
+    "companion_files": 499,
+    "browser_worker_version": "0.5.0",
+    "browser_package_digest": "6b12c0b24843",
+    "manifest_verified_file_by_file": true
+  },
+  "what_worked": [
+    "publish of service and companion, browser package staged (27 files), worker environment relocatable",
+    "browser worker self-check: worker 0.5.0, 28 capabilities, chrome 152.0.7977.82",
+    "candidate manifest written and re-verified file by file with nothing changed since staging",
+    "service registration already correct; logon task registered for MAIL\\alpak",
+    "journaled swap of all three trees; ACL posture verified on 41 objects",
+    "candidate became LIVE: device-service 0.6.0, 85 capabilities, service started 2026-09-09T14:04:45.2774500+03:00, companion 14:04:45.8743940+03:00",
+    "live browser worker proven from the companion's own audit: pid 15804, worker 0.5.0, started 2026-09-09T11:04:47.0916670Z",
+    "rollback restored all three trees and the previous release came back healthy"
+  ],
+  "failure": {
+    "stage": "Cloud Core health verification, inside the engine's TestHealth handler",
+    "message": "The term 'Invoke-JsonUtf8' is not recognized as the name of a cmdlet, function, script file, or operable program.",
+    "occurrences_in_transcript": 31,
+    "waited_seconds": 90.6,
+    "http_requests_sent_to_cloud_core": 0,
+    "root_cause": "scripts/lib/AgentUpdate.ps1 New-CoreDeviceFetcher returned { Invoke-JsonUtf8 ... }.GetNewClosure(). GetNewClosure binds a script block to a new dynamic module linked to the GLOBAL session state, which cannot see a function dot-sourced into a SCRIPT scope - and install-device-service.ps1 dot-sources every library into its own script scope. Reproduced from a clean powershell.exe -NoProfile process: as `-File script.ps1` the name resolves (the script IS the top-level scope), as `& script.ps1` it raises CommandNotFoundException. Every harness in scripts/tests runs with -File, and the M18.4 unit tests inject a fake fetch script block, so the real fetcher had never been invoked by anything.",
+    "second_defect": "Test-AgentHeartbeatOnCore retried a CommandNotFoundException for the full 90 s and then reported 'Cloud Core does not see the candidate', and the installer printed 'the fault is in Cloud Core's device row, not in this candidate' about a fault that was its own - it had never sent a request. An empty reading and a reading of emptiness are different evidence."
+  },
+  "rollback": {
+    "journal_phase": "rolled_back",
+    "journal_detail": "previous version restored and healthy",
+    "at": "2026-09-09T11:06:22.5269237Z",
+    "seconds_from_candidate_start_to_restored": 96.6,
+    "restored_release": {
+      "software_version_verb": "absent (pre-0.2.0)",
+      "capability_count": 29,
+      "browser_enabled": true
+    },
+    "verdict": "the 2026-09-08 rollback-health defect is fixed: the previous release was judged by its OWN baseline predicate and reported healthy, not as a capability regression"
+  },
+  "cloud_core_device_row": {
+    "read_at": "2026-09-09T11:19:02Z",
+    "device_id": "3f60fdb5-5022-48cf-bb3c-d7192466b701",
+    "presence": "online",
+    "status": "online",
+    "software_version": "0.1.0",
+    "health_software_version": "0.1.0",
+    "capability_count": 29,
+    "last_seen_at": "2026-09-09T11:19:02.582878Z",
+    "heartbeat_age_s": 6.3,
+    "row_keys": [
+      "device_id", "name", "platform", "status", "presence", "software_version",
+      "capabilities", "capability_count", "last_seen_at", "aliases", "labels", "policy",
+      "health", "enrolled_at", "revoked_at", "heartbeat_status"
+    ],
+    "findings": [
+      "The row is COMPLETE for the gate's purposes: presence, software_version at the top level AND under health, the capability list and capability_count are all present. The 2026-09-08 'Cloud Core carries no software version at all' contract fault is fixed, and this row proves it against production.",
+      "The row currently describes the RESTORED release (0.1.0, 29 capabilities) with a six-second heartbeat, so the rollback overwrote the row exactly as expected - the last question of the independent investigation, answered yes.",
+      "The candidate would have announced 0.6.0: PagentOS.Agent.Core/Protocol/ProtocolConstants.cs sets AgentInfo.SoftwareVersion = \"0.6.0\", and Program.cs sends that value in hello. The restored release predates that constant, which is why the row says 0.1.0.",
+      "Whether 0.6.0 / 85 capabilities actually reached the row during the candidate's 97-second window is NOT_YET_PROVEN. The durable per-connection record is device_sessions.software_version on the Cloud Core, and SSH to the host is not reachable from this machine today (TCP connects, the SSH banner exchange times out over the Tailscale DERP relay); HTTP on 8001 works. No HTTP endpoint exposes device-session history. The installer's own reading proves nothing either way: it never sent a request."
+    ]
+  },
+  "not_proven_by_this_run": [
+    "the candidate reaching Cloud Core's device row as 0.6.0 with 85 capabilities",
+    "anything item 28 unlocks - the runtime is the restored release, 29 capabilities",
+    "M28 26.15: the generated EXE launched, driven, relaunched and its log read back"
+  ],
+  "fix": {
+    "commit": "see docs/DECISIONS.md ADR-0097",
+    "files": [
+      "scripts/lib/AgentUpdate.ps1 - the fetcher resolves Invoke-JsonUtf8 at CONSTRUCTION time (before the swap) and carries the FunctionInfo, so the closure resolves no command by name; a missing dependency now throws while the previous release is still live",
+      "scripts/lib/AgentUpdate.ps1 - Test-AgentHeartbeatOnCore returns immediately with VerifierFault=true on a CommandNotFoundException instead of retrying it for 90 s; still Ok=false, so the rollback is unchanged",
+      "scripts/install-device-service.ps1 - branches on VerifierFault and refuses to blame Cloud Core for a reading it never took",
+      "scripts/tests/core-verifier-scope.tests.ps1 - 20 assertions; drives the REAL fetcher from a clean child process in BOTH invocation modes against a loopback stub",
+      "scripts/qualify-staged-update.ps1 - gate 8 does the same inside the qualification, and audits every library on disk for the same closure shape; 71 checks became 85",
+      "scripts/tests/harness-symbols.tests.ps1 - the 2026-09-06 closure guard now reads its file list from disk instead of a hand-typed list that never included AgentUpdate.ps1",
+      ".github/workflows/ci.yml - runs harness-symbols, owner-harness and the new regression, none of which any automation ran before"
+    ],
+    "mutation_proof": "With New-CoreDeviceFetcher reverted to the 2026-09-09 implementation, core-verifier-scope.tests.ps1 fails 5 of 20 and qualify-staged-update.ps1 fails 3 of 85 - each reproducing the owner's exact message. With the fix, 20/20 and 85/85."
+  }
+}

@@ -297,12 +297,49 @@ function Get-OwnerSessionToken {
 }
 
 function New-CoreDeviceFetcher {
-    <#  The real GET /v1/devices, as the script block Test-AgentHeartbeatOnCore expects.  #>
+    <#
+    .SYNOPSIS
+        The real GET /v1/devices, as the script block Test-AgentHeartbeatOnCore expects -
+        carrying its dependency instead of hoping to find it.
+
+    .DESCRIPTION
+        The owner's 2026-09-09 install rolled back after 90.6 s with thirty-one identical
+        "The term 'Invoke-JsonUtf8' is not recognized" errors, and the cause is here.
+
+        `.GetNewClosure()` binds a script block to a NEW dynamic module linked to the GLOBAL
+        session state. A function dot-sourced into a SCRIPT's scope - which is where
+        install-device-service.ps1 puts every one of these libraries - is not in that path,
+        so the fetcher could not see Invoke-JsonUtf8 even though the function that built it
+        could, three lines earlier.
+
+        It looked fine for two days because of how the callers were started:
+
+            powershell -File script.ps1     the script IS the top-level scope -> resolves
+            .\script.ps1  /  & script.ps1   the script gets a child scope     -> DOES NOT
+
+        Every test harness in scripts/tests runs with -File, and a developer shell that had
+        dot-sourced HttpJson.ps1 at the prompt has the function globally. The owner typed
+        `.\scripts\install-device-service.ps1`, which is the one form nothing exercised.
+
+        So the dependency is now RESOLVED AND CARRIED at construction time: $json holds the
+        FunctionInfo, `& $json` runs the function in its own defining session state (its
+        helpers - Read-AllBytes, ConvertFrom-Utf8Json - resolve with it), and the closure
+        resolves no command by name at all.
+
+        Resolution failing is also moved to the right MOMENT. The fetcher is built before
+        the swap, so a missing dependency now throws while the previous release is still
+        live and nothing has moved - instead of being discovered inside the post-swap health
+        loop, where the only remaining outcome is a rollback of a candidate that was fine.
+    #>
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)][string]$BaseUrl, [Parameter(Mandatory = $true)][string]$Token)
     $uri = "$($BaseUrl.TrimEnd('/'))/v1/devices"
     $headers = @{ Authorization = "Bearer $Token" }
-    return { Invoke-JsonUtf8 -Uri $uri -Headers $headers -TimeoutSec 20 }.GetNewClosure()
+    $json = Get-Command -Name "Invoke-JsonUtf8" -CommandType Function -ErrorAction SilentlyContinue
+    if (-not $json) {
+        throw "Invoke-JsonUtf8 is not available to build the Cloud Core device fetcher; scripts\lib\HttpJson.ps1 must be dot-sourced by whatever loaded AgentUpdate.ps1. Refusing to build a verifier that would fail only after the swap."
+    }
+    return { & $json -Uri $uri -Headers $headers -TimeoutSec 20 }.GetNewClosure()
 }
 
 function Get-DeviceRowFromListing {
@@ -382,6 +419,23 @@ function Test-AgentHeartbeatOnCore {
         }
         catch {
             $observed.fetch_error = $_.Exception.Message
+            # A broken VERIFIER is not a slow Cloud Core. On 2026-09-09 the fetcher could not
+            # resolve Invoke-JsonUtf8, and this loop retried that thirty-one times over 90.6 s
+            # before reporting "Cloud Core does not see the candidate" - a sentence about the
+            # wrong component, arrived at after the maximum possible delay. A fault that no
+            # amount of waiting can change is returned NOW, named for what it is. Still
+            # Ok = $false, so the engine still rolls back: this makes the answer truthful and
+            # fast, it does not make the gate softer.
+            if ($_.Exception -is [System.Management.Automation.CommandNotFoundException]) {
+                return [pscustomobject]@{
+                    Ok            = $false
+                    VerifierFault = $true
+                    Reasons       = @("the Cloud Core verifier is broken, not the candidate: $($_.Exception.Message) This is a defect in the installer's own code - Cloud Core was never asked anything.")
+                    Observed      = $observed
+                    Waited        = [math]::Round(((& $Now) - $started).TotalSeconds, 1)
+                    Attempts      = $attempt
+                }
+            }
             $reasons += "Cloud Core could not be read: $($_.Exception.Message)"
         }
         if ($null -eq $row -and -not $observed.fetch_error) {
@@ -409,10 +463,10 @@ function Test-AgentHeartbeatOnCore {
         }
         $elapsed = ((& $Now) - $started).TotalSeconds
         if ($reasons.Count -eq 0) {
-            return [pscustomobject]@{ Ok = $true; Reasons = @(); Observed = $observed; Waited = [math]::Round($elapsed, 1); Attempts = $attempt }
+            return [pscustomobject]@{ Ok = $true; VerifierFault = $false; Reasons = @(); Observed = $observed; Waited = [math]::Round($elapsed, 1); Attempts = $attempt }
         }
         if ($elapsed -ge $TimeoutSeconds) {
-            return [pscustomobject]@{ Ok = $false; Reasons = @($reasons); Observed = $observed; Waited = [math]::Round($elapsed, 1); Attempts = $attempt }
+            return [pscustomobject]@{ Ok = $false; VerifierFault = $false; Reasons = @($reasons); Observed = $observed; Waited = [math]::Round($elapsed, 1); Attempts = $attempt }
         }
         & $Sleep $PollSeconds
     }

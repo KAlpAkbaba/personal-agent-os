@@ -7905,3 +7905,108 @@ unchanged and green. **None of it is proven against the installed runtime**: tha
 `1.0.0+a3cb04e` with 29 capabilities, and it stays that way until the owner runs item 28's
 one elevated command. What is proven is the agent's own suite, which is where the projects
 and scenes families are proven too.
+
+## ADR-0097 — The closure that never asked: a healthy 0.6.0 candidate rolled back by the installer's own verifier (2026-09-09)
+
+Status: Accepted. Follows ADR-0090 (the 2026-09-08 rollback) and ADR-0096 (the qualification
+written so that the owner would not be asked to install an unproven candidate). Touches
+`scripts/lib/AgentUpdate.ps1`, `scripts/install-device-service.ps1`,
+`scripts/qualify-staged-update.ps1`, `scripts/tests/harness-symbols.tests.ps1`, three new
+files under `scripts/tests/lib`, and `.github/workflows/ci.yml`.
+
+**Context — a production incident.** The owner ran
+
+    .\scripts\install-device-service.ps1 -DisplayPower -Operator
+
+Everything the last two ADRs were written for worked. The candidate was described file by
+file and re-verified unchanged; all three trees were swapped by the journaled engine; the
+candidate came up LIVE as `device-service 0.6.0`, binary stamped 0.6.0, capability manifest
+`5cc3d9fbd9f7`, **85 capabilities**; the live browser worker was proven from the companion's
+own audit (pid 15804, worker 0.5.0). Then the Cloud Core health gate failed after 90.6 s with
+
+    The term 'Invoke-JsonUtf8' is not recognized as the name of a cmdlet, function, script
+    file, or operable program.
+
+thirty-one times, three seconds apart, and the engine rolled back. The previous release came
+back healthy and said so — the one thing ADR-0090 fixed did work.
+
+**Root cause, reproduced before it was fixed.** `New-CoreDeviceFetcher` returned
+`{ Invoke-JsonUtf8 ... }.GetNewClosure()`. `GetNewClosure()` copies the current *variables*
+into a fresh dynamic module and links that module to the **global** session state. Functions
+are not copied, and the script scope is not in the lookup path — so the fetcher could not see
+a function that the line three above it could. Whether that matters depends entirely on how
+the outermost script was started:
+
+    powershell -NoProfile -File install.ps1     the script IS the top-level scope -> resolves
+    .\install.ps1   /   & install.ps1           the script gets a child scope     -> FAILS
+
+Every harness in `scripts/tests` runs with `-File`. The M18.4 unit tests inject a *fake*
+fetch script block, so the real fetcher had never been invoked by anything, ever. The owner
+typed the one form nothing exercised. A clean `powershell.exe -NoProfile` run of the same
+file both ways is the reproduction, and it is now the regression.
+
+**Decision 1 — a verifier carries its dependency; it does not hope to find it.** The fetcher
+resolves `Invoke-JsonUtf8` with `Get-Command` at *construction* time and keeps the
+`FunctionInfo` in a variable, so the closure resolves no command by name at all and the
+function's own helpers (`Read-AllBytes`, `ConvertFrom-Utf8Json` — script-scoped in exactly
+the same way) come with it. Resolution failure also moved to the right moment: the fetcher is
+built *before* the swap, so a missing dependency now throws while the previous release is
+still live and nothing has moved, instead of being discovered inside a post-swap health loop
+where the only remaining outcome is rolling back a candidate that was fine.
+
+**Decision 2 — a broken verifier is not a silent Cloud Core, and must not be reported as
+one.** `Test-AgentHeartbeatOnCore` retried a `CommandNotFoundException` for the full timeout
+and then reported "Cloud Core does not see the candidate", after which the installer printed
+"the fault is in Cloud Core's device row, not in this candidate" — about a fault that was its
+own, having never sent a request. It now returns on the first attempt with `VerifierFault`,
+and the installer says *"THE INSTALLER'S OWN VERIFIER FAILED — Cloud Core was never asked"*.
+Still `Ok = $false`, so the gate and the rollback are unchanged; what changed is that the
+answer is true and arrives in a second rather than after the maximum possible delay. A
+genuine unreadable Cloud Core is still retried across the timeout, and a test holds that
+distinction in both directions.
+
+**Decision 3 — the Cloud Core half was investigated separately, and is not at fault.** The
+device row was read directly over HTTP with an owner session. It is complete for the gate's
+purposes: `presence`, `software_version` at the top level **and** under `health`, the
+capability list and `capability_count`. ADR-0090's contract fault is fixed, and this row is
+the production proof of it. The row currently describes the *restored* release (0.1.0, 29
+capabilities) with a six-second heartbeat, so the rollback overwrote the row as expected. The
+candidate would have announced 0.6.0 (`AgentInfo.SoftwareVersion`). Whether it actually
+reached the row during its 97-second window is **NOT_YET_PROVEN**: the durable record is
+`device_sessions.software_version` on the Cloud Core, no HTTP endpoint exposes it, and SSH to
+the host is not reachable from this machine today (TCP connects; the banner exchange times
+out over the Tailscale relay). The installer's own reading settles nothing — it never took
+one. Recorded rather than guessed: `docs/evidence/item28-owner-install-2026-09-09-140405.json`.
+
+**Decision 4 — the guard for this defect existed, covered the wrong files, and was run by
+nothing.** `scripts/tests/harness-symbols.tests.ps1` was written on 2026-09-06 for this exact
+shape ("a closure cannot see dot-sourced functions") after an owner harness crashed the same
+way. Three days later the identical defect shipped in `scripts/lib/AgentUpdate.ps1`, because
+the guard's file list was hand-typed and that file was never added to it — and because no CI
+job and no quality gate ever ran that suite. Both are fixed: the audited list is now **read
+from disk** (`scripts/lib/*.ps1` plus the installer and the qualification, 21 files today),
+and CI runs `harness-symbols`, `owner-harness` and the new regression. The rule itself became
+precise rather than blanket — what is banned is a *name a fresh PowerShell cannot resolve*
+inside a closure, not `GetNewClosure` as such, because the correct fix (`& $captured`) uses
+it, and a guard that has to be suppressed where the fix lives is a dead guard.
+
+**Decision 5 — the qualification now builds the thing that failed.** All 71 checks of
+`qualify-staged-update.ps1` were green on the morning of the incident, and every one of them
+handed the health handler a **fake** fetch. New gate 8 builds the **real**
+`New-CoreDeviceFetcher` in a clean child process — nothing preloaded, no profile — points it
+at a loopback HTTP stub, and runs it in **both** invocation modes, asserting first that
+`Invoke-JsonUtf8` was *not* already defined there (a pass that depends on the developer's
+shell would be worthless). Its own health closure was rewritten the same way as the fix, so
+`.\qualify-staged-update.ps1` no longer passes only because the harness happens to use
+`-File`. 71 checks became 85.
+
+**Falsification.** With `New-CoreDeviceFetcher` reverted to the implementation the owner ran,
+`core-verifier-scope.tests.ps1` fails 5 of 20 and `qualify-staged-update.ps1` fails 3 of 85,
+each printing the owner's exact sentence; with the fix, 20/20 and 85/85. The `-File` half
+passes under the mutation too — which is precisely why nothing caught this.
+
+**Consequences.** Item 28 is **not** passed. The device is the restored release, 29
+capabilities, and M28 row 26.15 is untouched. What this run did prove, for real and on the
+owner's machine, is the staged update's safety property: a candidate that fails verification
+for *any* reason — including a defect in the verifier itself — leaves the owner on a working
+agent, with all three trees restored and the journal saying so.

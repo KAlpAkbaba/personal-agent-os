@@ -103,3 +103,43 @@ The "Yerel Uygulamalar" panel has **no controls at all**: a build is a twenty-mi
 | **CI green** | **externally blocked.** GitHub Actions has refused to START any job since `93335bd` — *"recent account payments have failed or your spending limit needs to be increased"*, every job refused in 2–5 seconds. Ten commits since then are verified by local gates only, which is a different claim from verified by CI, and this exit condition asks for the second. `docs/OWNER_ACTIONS.md` → "Blocking CI only". |
 
 **M28 must not close on the Windows path without the launch.** The lab stops exactly where the honest boundary is and its evidence file says so.
+
+## 2026-09-09 — the owner's item-28 install failed, and it was the installer's fault
+
+The one thing M28 still needs is the elevated install (row 26.15). The owner ran it. It
+rolled back, and the record belongs here because it is what stands between M28 and closing.
+
+`docs/evidence/item28-owner-install-2026-09-09-140405.json` holds the run; `ADR-0097` holds
+the reasoning; Stage 27 of `docs/QUALIFICATION.md` holds what is now proven.
+
+**What worked, on the owner's real machine.** The candidate was published, staged, described
+file by file and re-verified unchanged. All three trees were swapped by the journaled engine.
+The candidate came up **live** as `device-service 0.6.0` — binary stamped 0.6.0, capability
+manifest `5cc3d9fbd9f7`, **85 capabilities** — and the live browser worker was proven from
+the companion's own audit (pid 15804, worker 0.5.0). Everything M28 needs from the runtime
+was, for ninety seconds, actually running.
+
+**What failed.** The installer's Cloud Core health gate, after 90.6 s, having sent **no HTTP
+request at all**: `New-CoreDeviceFetcher` built a closure that called `Invoke-JsonUtf8`, and a
+closure's module is linked to the global session state, where a function dot-sourced into the
+installer's script scope does not live. It resolves when a script is started with `-File` and
+not when it is started by name — and the owner starts it by name, while every harness in this
+repository uses `-File`. Thirty-one identical errors, three seconds apart, and a rollback.
+
+**What the failure did prove.** The staged update's safety property, for real: a candidate
+that fails verification for *any* reason — the verifier's own defect included — leaves the
+owner on a working agent. All three trees restored, the previous release judged by its own
+baseline predicate and reported healthy, 96.6 s from candidate start to a working machine.
+
+**Cloud Core was investigated separately and is not at fault.** The device row is complete
+and correct against production — online, `software_version` at the top level and under
+`health`, a capability list — and `scripts/core/verify-core-device-row.ps1` now proves, in
+the owner's own invocation form, that the real fetcher reads the real row and that its
+capability set is *exactly* what the installed binary advertises. What the installer said
+about Cloud Core during the failure was the absence of a reading, not a reading of absence,
+and it no longer says it.
+
+**So row 26.15 is unchanged**: `NOT_YET_PROVEN`, and M28 does not close. What changed is that
+the step which failed is now built and exercised before the owner is asked for anything — by
+a regression that fails against the old line, and by gate 8 of the staged-update
+qualification, which went from 71 checks to 85.

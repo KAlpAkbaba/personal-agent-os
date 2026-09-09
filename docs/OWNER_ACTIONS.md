@@ -111,7 +111,21 @@ is implemented and merged (ADR-0065); item 22 is your look at it, when you like.
 
 ---
 
-### 28. The elevated agent update — 29 capabilities become 85 — **`READY_FOR_OWNER` (one UAC prompt; qualified in advance, ADR-0090)**
+### 28. The elevated agent update — 29 capabilities become 85 — **`READY_FOR_OWNER` (one UAC prompt; qualified in advance, ADR-0090, ADR-0097)**
+
+> **You already ran this once, on 2026-09-09, and it failed. Here is what happened and what
+> changed.** The candidate built, verified, swapped and came up live on your machine as
+> `device-service 0.6.0` with all 85 capabilities, with the browser worker proven. Then the
+> installer's *own* Cloud Core check broke — it could not find one of its own functions, so
+> it never sent a single request to Cloud Core, waited 90.6 s for an answer it had not asked
+> for, and rolled back. You were left on the working agent, which is the one thing that went
+> right. Nothing about your machine or Cloud Core was wrong: the fault was in the installer,
+> in a form that only appears when the script is started the way you started it — by typing
+> its name — and never when a test harness starts it. That is fixed, the fix fails without
+> it (proven by putting the old line back and watching the new tests go red), and the check
+> that would have caught it now runs before you are asked for anything.
+> Full account: `docs/DECISIONS.md` ADR-0097, evidence
+> `docs/evidence/item28-owner-install-2026-09-09-140405.json`.
 
 Two commands, and the first one is not the install.
 
@@ -126,8 +140,22 @@ three trees. It must print `STAGED UPDATE QUALIFIED` before you go on:
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\qualify-staged-update.ps1
 ```
 
-It does. As of 2026-09-09 it passes 71 checks against `0.6.0+64c990e`, built clean from
-this checkout, and it runs on every commit in CI.
+It does. As of 2026-09-09 it passes **85 checks**, built clean from this checkout, and it
+runs on every commit in CI. Fourteen of those checks are new since your failed run: gate 8
+builds the installer's REAL Cloud Core reader in a clean PowerShell process, in *both* ways
+a script can be started, and makes it read a device row — the step that had never been
+tested and the one that failed on you.
+
+There is now a second, optional command that proves the same path against the LIVE Cloud
+Core and your own device row, with nothing installed and nothing touched:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\core\verify-core-device-row.ps1
+```
+
+It passes 14 checks today: the real reader, a real owner session, your real device row —
+online, carrying a version and 29 capabilities — and that capability list is exactly what
+your installed agent says about itself.
 
 **2 — the one elevated command.** In a PowerShell started with *Run as administrator*, at
 the repository root. Both switches, one UAC prompt, nothing else:
@@ -145,8 +173,10 @@ advertises is still there. 40 capabilities without it, 85 with it, against 29 to
 
 Watch for `candidate manifest verified file by file`, `live browser worker proven`, and
 `Cloud Core sees the candidate` — the three lines that were missing or wrong on
-2026-09-08. If any of them fails the installer rolls back to the release you are running
-now and says so; you cannot be left with a broken agent.
+2026-09-08. On 2026-09-09 the first two appeared and the third did not; it will now either
+appear or say, in one second rather than ninety, exactly which half is at fault. If
+anything fails the installer rolls back to the release you are running now and says so, as
+it did on 2026-09-09; you cannot be left with a broken agent.
 
 **3 — everything the update unlocks then proves itself, with nothing further from you:**
 

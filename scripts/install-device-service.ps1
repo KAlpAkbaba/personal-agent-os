@@ -724,12 +724,22 @@ $testHealth = {
             -ExpectedVersion ([string]$candidateManifest.software_version) -ExpectedCapabilities @($candidateManifest.capabilities) `
             -TimeoutSeconds $CoreVerifyTimeoutSeconds
         if (-not $heartbeat.Ok) {
-            Write-Warning "health: Cloud Core does not see the candidate after $($heartbeat.Waited) s: $($heartbeat.Reasons -join '; ')"
-            # Locally the candidate may be perfectly healthy - it was on 2026-09-08, and the
-            # missing piece was Cloud Core's row shape, not the candidate. Print both sides so
-            # the next reader does not have to guess which half disagreed.
-            if ($script:CandidateRuntimeIdentity) {
-                Write-Warning "health: locally the candidate IS running as $($script:CandidateRuntimeIdentity.Component) $($script:CandidateRuntimeIdentity.SoftwareVersion) with $($script:CandidateRuntimeIdentity.CapabilityCount) capabilities; Cloud Core reported version '$($heartbeat.Observed.software_version)' and $($heartbeat.Observed.capability_count) capabilities. When the local identity is right and Cloud Core's is empty, the fault is in Cloud Core's device row, not in this candidate."
+            if ($heartbeat.VerifierFault) {
+                # 2026-09-09: the installer printed "the fault is in Cloud Core's device row"
+                # about a fault that was its own - it had never sent a request. An empty
+                # reading and a reading of emptiness are not the same evidence, and only the
+                # second one is allowed to accuse Cloud Core.
+                Write-Warning "health: THE INSTALLER'S OWN VERIFIER FAILED after $($heartbeat.Waited) s - Cloud Core was never asked: $($heartbeat.Reasons -join '; ')"
+                Write-Warning "health: this says nothing about the candidate or about Cloud Core. Fix the installer, not the device."
+            }
+            else {
+                Write-Warning "health: Cloud Core does not see the candidate after $($heartbeat.Waited) s: $($heartbeat.Reasons -join '; ')"
+                # Locally the candidate may be perfectly healthy - it was on 2026-09-08, and the
+                # missing piece was Cloud Core's row shape, not the candidate. Print both sides so
+                # the next reader does not have to guess which half disagreed.
+                if ($script:CandidateRuntimeIdentity) {
+                    Write-Warning "health: locally the candidate IS running as $($script:CandidateRuntimeIdentity.Component) $($script:CandidateRuntimeIdentity.SoftwareVersion) with $($script:CandidateRuntimeIdentity.CapabilityCount) capabilities; Cloud Core was READ and reported version '$($heartbeat.Observed.software_version)' and $($heartbeat.Observed.capability_count) capabilities. When the local identity is right and Cloud Core's is empty, the fault is in Cloud Core's device row, not in this candidate."
+                }
             }
             return $false
         }
