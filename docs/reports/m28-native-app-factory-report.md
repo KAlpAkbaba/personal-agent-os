@@ -97,5 +97,6 @@ The "Yerel Uygulamalar" panel has **no controls at all**: a build is a twenty-mi
 | The device build runner + allowlist | in progress |
 | Stage 26, written from evidence | after the above |
 | `BUILD_STATE` reconciled | after Stage 26 |
+| **CI green** | **externally blocked.** GitHub Actions has refused to START any job since `93335bd` — *"recent account payments have failed or your spending limit needs to be increased"*, every job refused in 2–5 seconds. Ten commits since then are verified by local gates only, which is a different claim from verified by CI, and this exit condition asks for the second. `docs/OWNER_ACTIONS.md` → "Blocking CI only". |
 
 **M28 must not close on the Windows path without the launch.** The lab stops exactly where the honest boundary is and its evidence file says so.

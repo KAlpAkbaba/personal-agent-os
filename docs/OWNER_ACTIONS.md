@@ -1395,12 +1395,31 @@ make.
 
 ## Blocking CI only (not M18)
 
-- **GitHub Actions cannot start any job** (2026-09-06, run 33997191892): *"The job was not
-  started because recent account payments have failed or your spending limit needs to be
-  increased."* Every job refused in two seconds; the workflow file is unchanged since the
-  last green run (`e5b3346`). Fix under GitHub → Settings → Billing & plans, then
-  `gh run rerun 33997191892`. Until then CI is not a gate; the local gates on the same
-  commits are green (API 3401 unit tests, web 420, PowerShell 71 scripts, Windows agent).
+- **GitHub Actions cannot start any job — AGAIN, and this time it is blocking M28**
+  (first 2026-09-06 run 33997191892; recurred 2026-09-09, first refused run 34332851360):
+  *"The job was not started because recent account payments have failed or your spending
+  limit needs to be increased."* Every job refused in **2–5 seconds** — not a test failure,
+  a refusal to start. The workflow file is unchanged.
+
+  **The exact boundary.** The last run that actually executed is `93335bd`
+  (`feat(m28): a portable package and a real MSIX`, 17m48s, **success**). Every push since
+  has been refused: ten commits, covering the whole item-28 qualification track, UI contract
+  v13 and its Cockpit panel, the native REST surface, the containment and extension guards,
+  and this milestone's report.
+
+  **What to do:** GitHub → Settings → **Billing & plans**, then re-run the newest push.
+
+  ```powershell
+  gh run rerun --failed 34333448904
+  ```
+
+  **Until then, CI is not a gate — and "CI green" is one of M28's own exit conditions**, so
+  the milestone cannot honestly close on it. The work itself is not unverified: every gate
+  was run locally on these commits, and those runs are cited in each commit message —
+  `services/api/tests/unit` **7664–7670 passed**, `devices/windows-agent` **902**, `apps/web`
+  **81 files / 1576 tests**, `scripts/qualify-staged-update.ps1` **71 checks**, 21 PowerShell
+  5.1 suites, `ruff`/`tsc`/`oxlint` clean. But "we ran the gates" and "CI ran the gates" are
+  different claims, and only the second is what the milestone's exit asks for.
 
 ## Deferred, not blocking
 
