@@ -907,7 +907,12 @@ function Invoke-NativeAppSection {
     if (-not $persistOk) { $failures++ }
 
     # THE APPLICATION'S OWN LOG. A crash the owner never saw is still evidence (spec §5).
-    $logPath = Join-Path $env:LOCALAPPDATA "notlarim\app.log"
+    # Beside the executable, which for this factory's output is inside the authorised roots.
+    # LOCALAPPDATA is NOT one of them (Documents, Desktop, Downloads, Pictures, Videos,
+    # Music, the fixture root, Projects, 3d, native), so a log written there could never be
+    # read back - which is why the template keeps its data beside the binary instead.
+    $logDir = if ($exe) { Join-Path (Split-Path -Parent $exe) "data" } else { "<the app data dir>" }
+    $logPath = Join-Path $logDir "app.log"
     $logRead = Invoke-DeviceCapability -Section $section -Capability "file.read" -Payload @{ path = $logPath } -AllowFailure
     $logText = [string](Get-ResultField -Result $logRead.Result -Name "text")
     $logOk = $dry -or ($logRead.Ok -and $logText -match "started")

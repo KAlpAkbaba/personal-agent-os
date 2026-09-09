@@ -1,6 +1,6 @@
 {
   "kind": "m28_native_windows_lab",
-  "measured_at": "2026-09-09T09:12:56.851542Z",
+  "measured_at": "2026-09-09T10:19:54.069051Z",
   "machine": "the owner's Windows machine",
   "request": {
     "name": "Notlarim",
@@ -40,7 +40,7 @@
   "policy": {
     "accepted": true,
     "files": 9,
-    "bytes": 10086
+    "bytes": 12193
   },
   "manifest": {
     "name": "notlarim",
@@ -57,7 +57,7 @@
   },
   "tests": {
     "exit": 0,
-    "summary": "Passed!  - Failed:     0, Passed:     5, Skipped:     0, Total:     5, Duration: 198 ms - notlarim.Tests.dll (net10.0)"
+    "summary": "Passed!  - Failed:     0, Passed:     6, Skipped:     0, Total:     6, Duration: 169 ms - notlarim.Tests.dll (net10.0)"
   },
   "publish": {
     "exit": 0
@@ -66,7 +66,7 @@
     "ok": true,
     "mismatches": [],
     "facts": {
-      "path": "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-m28-8psduk67\\out\\notlarim.exe",
+      "path": "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-m28-4a8db6r6\\out\\notlarim.exe",
       "kind": "pe",
       "size_bytes": 162304,
       "sha256": "175164a9e06475daa0b3e658a8daaefd88752ae7cd31bf374e0716fac64f85ce",

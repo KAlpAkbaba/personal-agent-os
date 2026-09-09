@@ -20,14 +20,40 @@ public sealed class NoteStore
         Load();
     }
 
-    /// <summary>Where a store keeps its notes when the application does not say.</summary>
-    public static string DefaultPath()
+    /// <summary>
+    /// Where a store keeps its notes when the application does not say.
+    /// </summary>
+    /// <remarks>
+    /// A <c>data</c> directory beside the executable is preferred, and for an application
+    /// this factory produced that is inside the owner's authorised roots - which is what
+    /// lets the system that built it read its log back afterwards (M28 spec §5). An
+    /// application installed somewhere read-only, as a real one under Program Files would
+    /// be, falls back to LocalApplicationData. The same code is correct in both places.
+    /// </remarks>
+    public static string DefaultPath() => Path.Combine(DataDirectory(), "notes.json");
+
+    /// <summary>The directory this application keeps everything of its own in.</summary>
+    public static string DataDirectory()
     {
-        var dir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "{{SLUG}}");
-        Directory.CreateDirectory(dir);
-        return Path.Combine(dir, "notes.json");
+        var beside = Path.Combine(AppContext.BaseDirectory, "data");
+        try
+        {
+            Directory.CreateDirectory(beside);
+            // Prove it is writable rather than assuming: a directory can be created and
+            // still refuse a file, which is exactly the case this fallback exists for.
+            var probe = Path.Combine(beside, ".writable");
+            File.WriteAllText(probe, string.Empty);
+            File.Delete(probe);
+            return beside;
+        }
+        catch (Exception)
+        {
+            var fallback = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "{{SLUG}}");
+            Directory.CreateDirectory(fallback);
+            return fallback;
+        }
     }
 
     public IReadOnlyList<string> Notes => _notes;

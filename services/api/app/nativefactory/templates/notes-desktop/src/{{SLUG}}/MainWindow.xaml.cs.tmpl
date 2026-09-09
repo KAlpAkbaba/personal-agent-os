@@ -54,14 +54,8 @@ public partial class MainWindow : Window
     {
         try
         {
-            var dir = Path.GetDirectoryName(NoteStore.DefaultPath());
-            if (string.IsNullOrEmpty(dir))
-            {
-                return;
-            }
-
             File.AppendAllText(
-                Path.Combine(dir, "app.log"),
+                Path.Combine(NoteStore.DataDirectory(), "app.log"),
                 $"{DateTime.UtcNow:O} {message}{Environment.NewLine}");
         }
         catch (Exception)

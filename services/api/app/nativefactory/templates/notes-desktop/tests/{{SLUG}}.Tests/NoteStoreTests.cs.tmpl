@@ -57,6 +57,27 @@ public class NoteStoreTests : IDisposable
     }
 
     [Fact]
+    public void The_data_directory_is_beside_the_application_and_writable()
+    {
+        // M28 spec 5: the system that BUILT this application reads its log back afterwards,
+        // and it can only read paths inside the owner's authorised roots. LocalApplicationData
+        // is not one of them, so the data directory has to sit beside the binary - which for a
+        // built application is inside the root it was produced in. Asserted here rather than
+        // trusted, because a silent fallback would make the log unreadable and nothing else
+        // would notice.
+        var dir = NoteStore.DataDirectory();
+        Assert.Equal(
+            Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "data")),
+            Path.GetFullPath(dir));
+        Assert.True(Directory.Exists(dir));
+
+        var probe = Path.Combine(dir, Path.GetRandomFileName());
+        File.WriteAllText(probe, "writable");
+        Assert.Equal("writable", File.ReadAllText(probe));
+        File.Delete(probe);
+    }
+
+    [Fact]
     public void A_corrupt_store_does_not_crash_the_application()
     {
         Directory.CreateDirectory(_dir);
