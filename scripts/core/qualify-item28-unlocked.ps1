@@ -748,6 +748,135 @@ function Invoke-PaintSection {
     return $section
 }
 
+function Invoke-NativeAppSection {
+    <#  M28: an application this system BUILT, launched and driven like any other.
+
+        The lab (scripts\tests\native-windows-lab.py) already proves the build end to end
+        and validates the artefact with an independent reader; what it cannot do is launch
+        it, because launching belongs to M19 and M19 needs this runtime. So this section
+        starts where the lab stops: it builds a fresh EXE, then treats it as an application.
+    #>
+    param([string]$FixtureRoot)
+    $section = New-Section -Name "nativeapp" -Milestone "M28" -Title "an application this system built, launched and driven"
+    $failures = 0
+
+    $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+    $python = Join-Path $repoRoot "services\api\.venv\Scripts\python.exe"
+    $lab = Join-Path $repoRoot "scripts\tests\native-windows-lab.py"
+    $exe = $null
+
+    if ($dry) {
+        Add-Check -Section $section.name -Name "native.build.planned" -Ok $true `
+            -Detail "would run $lab --keep and read the EXE path out of its evidence file"
+    }
+    elseif (-not (Test-Path $python) -or -not (Test-Path $lab)) {
+        Add-Check -Section $section.name -Name "native.build.lab_present" -Ok $false `
+            -Detail "the native lab or its interpreter is missing from this checkout"
+        Close-Section -Section $section -Verdict "BLOCKED" -Detail "nothing to build"
+        return $section
+    }
+    else {
+        # BUILD. The real pipeline, the real compiler, the real independent reader - the
+        # same script the milestone's evidence comes from, so this is not a second path.
+        $labOut = & $python $lab --keep 2>&1
+        $labExit = $LASTEXITCODE
+        $keptLine = ($labOut | Where-Object { $_ -match "kept_at|notlarim\.exe" } | Select-Object -First 1)
+        Add-Check -Section $section.name -Name "native.build.exe_produced" -Ok ($labExit -eq 0) `
+            -Detail "the lab exited $labExit; $keptLine"
+        if ($labExit -ne 0) {
+            Close-Section -Section $section -Verdict "FAILED" -Detail "the build did not produce an artefact"
+            return $section
+        }
+
+        $evidenceDir = Join-Path $repoRoot "docs\evidence"
+        $newest = Get-ChildItem $evidenceDir -Filter "m28-native-windows-lab-*.json" -ErrorAction SilentlyContinue |
+                  Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        if ($newest) {
+            $ev = Get-Content $newest.FullName -Raw | ConvertFrom-Json
+            $kept = $ev.kept_at
+            if ($kept) { $exe = Join-Path $kept "notlarim.exe" }
+            $facts = $ev.artifact.facts
+            Add-Check -Section $section.name -Name "native.build.independently_validated" -Ok ([bool]$ev.artifact.ok) `
+                -Detail "the reader saw $($facts.architecture) $($facts.subsystem) version $($facts.version), sha256 $($facts.sha256.Substring(0,16))"
+            if (-not $ev.artifact.ok) { $failures++ }
+        }
+        if (-not $exe -or -not (Test-Path $exe)) {
+            Add-Check -Section $section.name -Name "native.build.artifact_on_disk" -Ok $false `
+                -Detail "the lab reported success but no EXE was kept where the evidence names"
+            Close-Section -Section $section -Verdict "FAILED" -Detail "nothing to launch"
+            return $section
+        }
+    }
+
+    # LAUNCH. `app.launch` allowlists a name, or an absolute path under Program Files /
+    # Windows (OperatorCapabilities.cs). An application this system just built lives under
+    # the owner's Projects root, which is an authorised root but not Program Files - so a
+    # refusal here is a FINDING about the device, reported with its own error class, not a
+    # failure of this script.
+    # PowerShell 5.1: no null-coalescing operator. These scripts stay 5.1-compatible on
+    # purpose (docs/OWNER_ACTIONS.md), and four real qualification failures have been
+    # 5.1-only, so the plain form is the correct one rather than a stylistic choice.
+    $launchTarget = if ($exe) { $exe } else { "<the freshly built EXE>" }
+    $launchPayload = @{ application = $launchTarget }
+    $launch = Invoke-DeviceCapability -Section $section -Capability "app.launch" -Payload $launchPayload -AllowFailure
+    if (-not $dry -and -not $launch.Ok) {
+        Add-Check -Section $section.name -Name "native.launch.allowlist_reaches_the_projects_root" -Ok $false `
+            -Detail "app.launch refused a freshly built application with '$($launch.ErrorClass)': $($launch.Message). The allowlist covers a name or an absolute path under Program Files / Windows; a built application lives under the owner's Projects root."
+        Add-ReadyForOwner -Section $section.name `
+            -What "launching an application this system built" `
+            -Why "app.launch's allowlist does not yet reach the Projects root; the build, the packaging and the independent validation are all proven without it" `
+            -Harness "docs/evidence/m28-native-windows-lab-*.json"
+        Close-Section -Section $section -Verdict "BLOCKED" -Detail "built and validated; not launchable by this runtime"
+        return $section
+    }
+
+    $windowId = [string](Get-ResultField -Result $launch.Result -Name "window_id")
+    $launchPid = Get-ResultField -Result $launch.Result -Name "pid"
+    Add-Check -Section $section.name -Name "native.launch.window_observed" -Ok ($dry -or ($launch.Ok -and $windowId)) `
+        -Detail "pid=$launchPid window_id=$windowId"
+
+    # DRIVE. Type a note, press the button, and read the COUNT back out of the application's
+    # own status line - not out of the list, which would be counting our own typing.
+    $note = "item28 dogrulama notu"
+    [void](Invoke-DeviceCapability -Section $section -Capability "ui.set_value" -Payload @{ window_id = $windowId; automation_id = "NoteInput"; value = $note })
+    [void](Invoke-DeviceCapability -Section $section -Capability "ui.invoke" -Payload @{ window_id = $windowId; automation_id = "AddButton" })
+    $status = Invoke-DeviceCapability -Section $section -Capability "ui.inspect" -Payload @{ window_id = $windowId; automation_id = "StatusText" } -AllowFailure
+    $statusText = [string](Get-ResultField -Result $status.Result -Name "value")
+    $driveOk = $dry -or ($status.Ok -and $statusText -match "\d+\s+not")
+    Add-Check -Section $section.name -Name "native.drive.status_line_read_back" -Ok $driveOk `
+        -Detail "the application's own status line says '$statusText' after one note was added through UI Automation"
+    if (-not $driveOk) { $failures++ }
+
+    # RELAUNCH. Close it, start it again, and require the note to still be there - the
+    # persistence the generated project's own tests prove headlessly, now through a window.
+    [void](Invoke-DeviceCapability -Section $section -Capability "window.close" -Payload @{ window_id = $windowId } -AllowFailure)
+    Start-Sleep -Seconds 2
+    $relaunch = Invoke-DeviceCapability -Section $section -Capability "app.launch" -Payload $launchPayload -AllowFailure
+    $reWindow = [string](Get-ResultField -Result $relaunch.Result -Name "window_id")
+    $reStatus = Invoke-DeviceCapability -Section $section -Capability "ui.inspect" -Payload @{ window_id = $reWindow; automation_id = "StatusText" } -AllowFailure
+    $reText = [string](Get-ResultField -Result $reStatus.Result -Name "value")
+    $persistOk = $dry -or ($reStatus.Ok -and $reText -match "[1-9]\d*\s+not")
+    Add-Check -Section $section.name -Name "native.relaunch.note_survived" -Ok $persistOk `
+        -Detail "after a close and a fresh launch the status line says '$reText'"
+    if (-not $persistOk) { $failures++ }
+
+    # THE APPLICATION'S OWN LOG. A crash the owner never saw is still evidence (spec §5).
+    $logPath = Join-Path $env:LOCALAPPDATA "notlarim\app.log"
+    $logRead = Invoke-DeviceCapability -Section $section -Capability "file.read" -Payload @{ path = $logPath } -AllowFailure
+    $logText = [string](Get-ResultField -Result $logRead.Result -Name "text")
+    $logOk = $dry -or ($logRead.Ok -and $logText -match "started")
+    Add-Check -Section $section.name -Name "native.log.read_back" -Ok $logOk `
+        -Detail "the application's own log under its data directory carries its startup line"
+    if (-not $logOk) { $failures++ }
+
+    [void](Invoke-DeviceCapability -Section $section -Capability "window.close" -Payload @{ window_id = $reWindow } -AllowFailure)
+
+    if ($dry) { Close-Section -Section $section -Verdict "PLANNED" -Detail "payloads recorded; nothing sent" }
+    elseif ($failures -eq 0) { Close-Section -Section $section -Verdict "PROVEN_REAL" -Detail "built, validated, launched, driven, relaunched with its state intact, and its own log read" }
+    else { Close-Section -Section $section -Verdict "FAILED" -Detail "$failures step(s) did not answer correctly" }
+    return $section
+}
+
 function Invoke-AmbientSection {
     <#
     .SYNOPSIS
@@ -916,6 +1045,7 @@ try {
             [void](Invoke-ProjectsSection)
             [void](Invoke-SceneSection)
             [void](Invoke-PaintSection -FixtureRoot $fixtureRoot)
+            [void](Invoke-NativeAppSection -FixtureRoot $fixtureRoot)
             [void](Invoke-AmbientSection)
             [void](Invoke-AlarmSection)
             $exitCode = 0
@@ -973,6 +1103,7 @@ try {
         [void](Invoke-ProjectsSection)
         [void](Invoke-SceneSection)
         [void](Invoke-PaintSection -FixtureRoot $fixtureRoot)
+        [void](Invoke-NativeAppSection -FixtureRoot $fixtureRoot)
         [void](Invoke-AmbientSection)
         [void](Invoke-AlarmSection)
 
