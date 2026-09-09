@@ -74,12 +74,36 @@ def test_an_unauthenticated_request_is_refused_in_milliseconds() -> None:
     install_identity(app, settings=settings)
     client = TestClient(app)
 
+    # TWO requests, and the SECOND one is the measurement.
+    #
+    # The claim is "nothing is dialling", and it was being tested with an absolute stopwatch:
+    # one request, under 2 s. That measures the machine as much as the code, and on a CI runner
+    # that had just finished 7,892 tests it read 7.5 s and failed a suite in which nothing was
+    # dialling at all (run 34377649255). The first request pays whatever this process has not
+    # paid yet - imports, the app's first route match, SQLite touching disk - and that cost is
+    # not what the test is about.
+    #
+    # A dial, on the other hand, is paid EVERY time: a refusal that reaches the network blocks
+    # on the same socket on the second request as on the first. So the second request is where
+    # the claim lives, and the first keeps a generous backstop for a dial made once at startup
+    # (test_create_app_alone_does_not_connect_anywhere covers that boundary directly).
+    started = time.perf_counter()
+    first = client.get("/v1/ledger/events")
+    warm_up = time.perf_counter() - started
+
     started = time.perf_counter()
     response = client.get("/v1/ledger/events")
     elapsed = time.perf_counter() - started
 
+    assert first.status_code == 401
     assert response.status_code == 401
-    assert elapsed < 2.0, f"an unauthenticated refusal took {elapsed:.1f}s; something is dialling"
+    assert elapsed < 2.0, (
+        f"a warm unauthenticated refusal took {elapsed:.1f}s (first was {warm_up:.1f}s); "
+        "something is dialling on every request"
+    )
+    assert warm_up < 20.0, (
+        f"the first unauthenticated refusal took {warm_up:.1f}s; something is dialling at start-up"
+    )
 
 
 def test_create_app_alone_does_not_connect_anywhere() -> None:
