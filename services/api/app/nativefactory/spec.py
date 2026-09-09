@@ -141,12 +141,14 @@ MAX_TITLE_CHARS: Final = 80
 MAX_FEATURES: Final = len(NATIVE_FEATURES)
 MAX_TARGETS: Final = len(NATIVE_TARGETS)
 
-#: A display name may carry Turkish letters and spaces — it becomes a window title through
-#: XAML's own escaping, never through string concatenation into code. What it may NOT
-#: carry is anything that could close a tag, open an entity, or leave the attribute it
-#: lives in. Refused rather than escaped: an owner asking for a `<` in an application name
-#: has made a mistake worth telling them about.
-_TITLE_FORBIDDEN = re.compile(r"[<>&\"'{}\\\x00-\x1f]")
+#: A display name may carry Turkish letters, spaces, and the punctuation real application
+#: names use — "Notlar & Fikirler" is a name, not an attack, and `&` is escaped by every
+#: format this value reaches (XAML, AppxManifest, the .csproj's metadata). What it may NOT
+#: carry is markup STRUCTURE, or anything that could leave the attribute it lives in.
+#: Refused rather than escaped, for those: an owner asking for a `<` in an application name
+#: has made a mistake worth telling them about, and silently rewriting their name would put
+#: that decision in the wrong place.
+_TITLE_FORBIDDEN = re.compile(r"[<>\"{}\\\x00-\x1f]")
 
 #: The identity every generated artefact is named and stamped by: closed alphabet, so it
 #: can be a directory name, an assembly name, an MSIX package identity and a file name
