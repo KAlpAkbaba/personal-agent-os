@@ -1,6 +1,6 @@
 # M26 — Executive Autonomy
 
-Status: ACTIVE (owner master directive 2026-09-07, M26 section; kickoff 2026-09-08 after the M25 gate). Decision record: ADR-0089.
+Status: CLOSED 2026-09-09 (ADR-0089; QUALIFICATION Stage 24 rows 24.1-24.17; Cloud Core release e6f08ff, one executive run COMPLETED on production). Decision record: ADR-0089.
 Predecessors: the Goal Engine and the Cognitive Core loop (`app/goals`: goals above tasks, criteria satisfied only from evidence, the legal-transition table), the Routine Engine (`app/routines`: a closed action vocabulary, conditions, the real dispatcher), the durable research workflows on Temporal (`app/research/{workflow,browser_workflow}.py`: intent lives in Temporal, activities idempotent, the workflow holds no state), the task state machine (`app/artifacts/models.py`: `CREATED … READY … FAILED_RECOVERABLE`), the M18 action contract (receipts, `state.now`), M20 documents, M21 mail/calendar with the confirmation gate, M22 artifacts, M23 apps, M25 scenes.
 
 The owner's rule, in one line: **a multi-step job is a durable graph of steps the assistant can be asked about, paused, resumed, corrected and cancelled at any moment, that ends in an honest state — done, partly done with what is missing named, or stopped — and never takes an external high-risk action on its own.**

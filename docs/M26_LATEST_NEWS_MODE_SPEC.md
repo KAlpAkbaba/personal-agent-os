@@ -1,7 +1,9 @@
 # M26 addendum — Latest News Mode
 
-Status: BUILT, gated on branch (services/api, services/browser); not merged/pushed as of
-2026-09-08. Predecessors: M13 Research (`app/research`: the pipeline this milestone's
+Status: CLOSED 2026-09-09 as an M26 addendum (ADR-0092; QUALIFICATION Stage 24 row
+24.16; merged and released to production in e6f08ff). Owner item 36 - the exact
+"Show Ana Haber" channel URL - is the one thing outstanding, and it is the owner's to
+give: this track will not guess a channel from a display name. Predecessors: M13 Research (`app/research`: the pipeline this milestone's
 summary mode delegates to rather than duplicating), M18.3 alarm media
 (`packages/protocol/BROWSER_CAPABILITIES.md` §1-§3b: the dedicated-persistent-profile
 pattern and the verified-not-assumed playback discipline this milestone's playback reuses

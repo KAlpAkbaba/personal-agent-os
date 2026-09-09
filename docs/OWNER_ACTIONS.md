@@ -88,6 +88,29 @@ is implemented and merged (ADR-0065); item 22 is your look at it, when you like.
 
 ---
 
+### 35. `SET_DEFAULT_WEATHER_LOCATION` — where "Hava nasıl?" should mean, when you do not say — **`READY_FOR_OWNER` (Owner Location Context, ADR-0091)**
+
+Live weather is working on production today — a real Open-Meteo call, no signup, no key,
+nothing needed from you. This is only about the default PLACE for a bare question.
+
+Say one sentence:
+
+```
+Varsayılan hava durumu konumumu İstanbul yap.
+```
+
+(or any city — it is taken from YOUR words, not from what the model guesses; a place the
+transcript does not carry is refused and you are asked again.)
+
+Until you set one, the resolution order runs out honestly. Verified on production
+2026-09-09: with no device location, no default and no place named, it answers
+`resolved: false`, `reason: unresolved` — it says it does not know where you are rather
+than picking somewhere plausible. That is deliberate (ADR-0091: "Do NOT invent one"), and
+it is why this is your call and not mine.
+
+Nothing is blocked by it: `"İstanbul'da hava nasıl?"` works right now, because the place is
+in the sentence.
+
 ### 36. The exact YouTube channel for "Show Ana Haber" — **`READY_FOR_OWNER` (Latest News Mode, docs/M26_LATEST_NEWS_MODE_SPEC.md)**
 
 Latest News Mode is built, tested and merge-ready (fixtures, the resolver, source
@@ -165,7 +188,7 @@ evidence. A camera that stops delivering, a stale state, an alarm, or any recent
 mouse, command or return holds the screens on — and those holdoffs now survive a Cloud
 Core restart. Nothing here needs sound; this item stays the one physical check.
 
-### 34. SET_OWNER_DEFAULT_WAKE_MUSIC_URL — put your real wake song behind every plain alarm — **`READY_FOR_OWNER` (no production release yet; the fix is gated on its own worktree branch — see `docs/DECISIONS.md` for the branch and commit once it merges)**
+### 34. SET_OWNER_DEFAULT_WAKE_MUSIC_URL — put your real wake song behind every plain alarm — **`READY_FOR_OWNER` (the fix is merged and LIVE on production as of the M26 release `e6f08ff`, 2026-09-09; all that is left is your song)**
 
 Fixed 2026-09-08 (your own words: "the wake alarm produces the internal beep [...]
 Owner-selected YouTube music is PRIMARY; the local tone is EMERGENCY FALLBACK ONLY"): a

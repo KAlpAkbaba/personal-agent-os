@@ -1,41 +1,41 @@
 ﻿{
-    "checked_at":  "2026-09-09T01:37:17Z",
+    "checked_at":  "2026-09-09T02:04:15Z",
     "base_url":  "http://pagentos-core:8001",
     "release":  {
-                    "version":  "52d5ddb3e52dc1861a40810670734166db273ab3",
-                    "last_known_good":  "824265445a7f5d18e4c3d70bba236b36446cc78f",
+                    "version":  "e6f08ff3e80661c1a94bdd58f4c3b9823a06b7d9",
+                    "last_known_good":  "52d5ddb3e52dc1861a40810670734166db273ab3",
                     "app_version":  "0.1.0",
                     "ui_state":  11,
                     "action":  12,
                     "status":  "ok",
-                    "uptime_s":  78.226045
+                    "uptime_s":  75.755527
                 },
     "news_sources":  [
 
                      ],
     "executive_run":  {
-                          "run":  "4f9e50cd-6677-4841-a8dd-b6e303bdbf36",
-                          "state":  "partial",
-                          "done":  3,
+                          "run":  "ec20975f-a3ee-4bf5-9636-c2696d8fa0c7",
+                          "state":  "completed",
+                          "done":  4,
                           "total":  4,
                           "steps":  [
                                         {
                                             "id":  "s1",
                                             "kind":  "research.run",
-                                            "state":  "failed_recoverable",
-                                            "error_class":  "dependency_unavailable"
+                                            "state":  "verified",
+                                            "error_class":  ""
                                         },
                                         {
                                             "id":  "s2",
                                             "kind":  "research.synthesize",
-                                            "state":  "failed",
-                                            "error_class":  "internal_error"
+                                            "state":  "verified",
+                                            "error_class":  ""
                                         },
                                         {
                                             "id":  "s3",
                                             "kind":  "artifacts.create",
-                                            "state":  "failed",
-                                            "error_class":  "dependency_unavailable"
+                                            "state":  "verified",
+                                            "error_class":  ""
                                         },
                                         {
                                             "id":  "s4",
