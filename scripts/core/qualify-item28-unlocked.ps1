@@ -412,7 +412,13 @@ function Invoke-OperatorSection {
         $g_br = [char]0x011F; $u_uml = [char]0x00FC; $s_ced = [char]0x015F
         $o_uml = [char]0x00F6; $c_ced = [char]0x00E7; $i_dot = [char]0x0131
         $sample = "Item 28: " + $g_br + $u_uml + $s_ced + $o_uml + $c_ced + $i_dot + " 123"
+        # The editor's text area is a Document on some Windows builds and an Edit on others
+        # (NotepadLifecycleTests accepts either), and the element query is by control type,
+        # so both spellings are tried before this is called a refusal.
         $setValue = Invoke-DeviceCapability -Section $section -Capability "ui.set_value" -Payload @{ window_id = $windowId; control_type = "Document"; value = $sample } -AllowFailure
+        if ((-not $setValue.Ok) -and $setValue.ErrorClass -eq "ui_target_not_found") {
+            $setValue = Invoke-DeviceCapability -Section $section -Capability "ui.set_value" -Payload @{ window_id = $windowId; control_type = "Edit"; value = $sample } -AllowFailure
+        }
         if ($setValue.Ok) {
             $observedValue = [string](Get-ResultField -Result $setValue.Result -Name "observed_value")
             $valueOk = ($observedValue -eq $sample)
