@@ -23,7 +23,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Any
 
-from PIL import Image, ImageStat
+from PIL import Image, ImageChops, ImageMath, ImageStat
 
 from app.creative.spec import AddText, CreativePlan, Draw, Shape
 
@@ -49,6 +49,37 @@ RENDER_MAX_HEIGHT = 8192
 RENDER_MAX_BYTES = 50 * 1024 * 1024
 
 
+#: The four objective defects spec §3 names, and the only words `creative.activity` puts
+#: in `metadata.defect`. The ROW keeps the precise mismatch (which object, which field,
+#: expected, actual); the channel carries the category a posture is drawn from.
+DEFECT_WRONG_SIZE = "wrong_size"
+DEFECT_MISSING_REGION = "missing_region"
+DEFECT_COLOR_DRIFT = "color_drift"
+DEFECT_EMPTY_OUTPUT = "empty_output"
+
+WIRE_DEFECTS: tuple[str, ...] = (
+    DEFECT_WRONG_SIZE,
+    DEFECT_MISSING_REGION,
+    DEFECT_COLOR_DRIFT,
+    DEFECT_EMPTY_OUTPUT,
+)
+
+#: Field -> category. Total by construction: `wire_defect` raises on an unmapped field
+#: rather than defaulting, because a new defect kind silently becoming "colour drift" on
+#: the owner's screen is exactly the class of quiet wrongness this milestone's reviews kept
+#: finding. A test drives every field the comparison can produce through it.
+_DEFECT_BY_FIELD: dict[str, str] = {
+    "size": DEFECT_WRONG_SIZE,
+    "output.size": DEFECT_WRONG_SIZE,
+    "presence": DEFECT_MISSING_REGION,
+    "alpha": DEFECT_MISSING_REGION,
+    "output.alpha": DEFECT_EMPTY_OUTPUT,
+    "output": DEFECT_EMPTY_OUTPUT,
+    "output.bytes": DEFECT_EMPTY_OUTPUT,
+    "similarity": DEFECT_COLOR_DRIFT,
+}
+
+
 @dataclass(frozen=True, slots=True)
 class Mismatch:
     """One named defect — always names WHAT and WHERE, never a bare "mismatch" (spec
@@ -59,6 +90,13 @@ class Mismatch:
     expected: Any
     actual: Any
     detail: str = ""
+
+    def wire_defect(self) -> str:
+        """The coarse category `creative.activity` says for this mismatch."""
+        try:
+            return _DEFECT_BY_FIELD[self.field]
+        except KeyError:  # pragma: no cover - the vocabulary guard makes this unreachable
+            raise ValueError(f"mismatch field {self.field!r} has no wire defect") from None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -203,12 +241,40 @@ def _region_contains_color(
     y1 = max(y0 + 1, min(image.height, round(max(y0, y1)) + 1))
     region = image.convert("RGB").crop((x0, y0, x1, y1))
     target = color[:3]
-    px = region.load()
-    for y in range(region.height):
-        for x in range(region.width):
-            if _color_distance(px[x, y], target) <= COLOR_TOLERANCE:
-                return True
-    return False
+    # Vectorised for the same reason as `execute._apply_background_remove`: this runs once
+    # per drawn shape or text, and the op's box is bounded only by MAX_DIMENSION per side,
+    # so a full-canvas region was up to 67 million Python iterations per operation. The M27
+    # review flagged it as the same root class as the HIGH: work proportional to pixels,
+    # done in Python, with the plan bounding the declared size rather than the cost.
+    #
+    # Same metric, same verdict per pixel: squared Euclidean distance against the squared
+    # tolerance, then "is any pixel within it?" answered by the extrema of the mask.
+    diffs = [
+        ImageChops.difference(channel, Image.new("L", region.size, value)).convert("I")
+        for channel, value in zip(region.split(), target, strict=True)
+    ]
+    within = ImageMath.lambda_eval(
+        lambda a: (a["dr"] * a["dr"] + a["dg"] * a["dg"] + a["db"] * a["db"]) <= a["t"],
+        dr=diffs[0],
+        dg=diffs[1],
+        db=diffs[2],
+        t=_squared_bound(COLOR_TOLERANCE),
+    ).convert("L")
+    return within.getextrema()[1] > 0
+
+
+def _squared_bound(tolerance: float) -> int:
+    """``floor(tolerance^2)`` as an int, for comparing against a SQUARED colour distance.
+
+    Two reasons it is not simply ``tolerance ** 2``. `ImageMath`'s comparison operators
+    coerce a scalar operand with ``Image.new("I", size, value)``, which rejects a float
+    outright - so the bound has to be an int. And flooring loses nothing: the left-hand
+    side is ``dr^2 + dg^2 + db^2`` over 8-bit channels, always a non-negative INTEGER, so
+    ``d2 <= t^2`` and ``d2 <= floor(t^2)`` accept exactly the same set for any real
+    ``t >= 0``. The verdict per pixel is identical to the Python loop this replaced,
+    including at the boundary.
+    """
+    return int(math.floor(float(tolerance) ** 2))
 
 
 def _color_distance(a: tuple[int, ...], b: tuple[int, ...]) -> float:

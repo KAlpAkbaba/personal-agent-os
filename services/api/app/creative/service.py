@@ -57,6 +57,7 @@ from app.creative.models import (
     STATE_UNVERIFIED,
     STATE_VERIFIED,
     CreativeRunRow,
+    wire_step,
 )
 from app.creative.providers import CreativeProvider, ProviderResult, default_providers
 from app.creative.spec import TOOL_PAINT, CreativePlan
@@ -75,6 +76,15 @@ from app.logging import get_logger
 from app.object_store import ObjectStore, validate_object_key
 from app.operator import focus as focus_module
 from app.operator.models import FOCUS_KIND_CREATIVE
+from app.uistate import UiState
+from app.uistate import publish as publish_ui_state
+from app.uistate.contract import (
+    CREATIVE_ACTIVITY_STEPS,
+    CREATIVE_STEP_COMPARING,
+    CREATIVE_STEP_CORRECTING,
+    CREATIVE_STEP_EXECUTING,
+    CREATIVE_STEP_FAILED,
+)
 
 logger = get_logger("app.creative.service")
 
@@ -285,6 +295,17 @@ class CreativeService:
         row.output_sha256 = hashlib.sha256(result.image_bytes).hexdigest()
         row.output_bytes = len(result.image_bytes)
 
+    def fetch_source_bytes(self, key: str | None) -> bytes | None:
+        """The bytes behind a stored object key, for a CALLER that names a source.
+
+        Public because `create()` deliberately does not dereference `plan.source` itself
+        (ADR-0094 decision 1) - which means every caller that names one must fetch it, and
+        the one that forgot produced a blank canvas instead of a redraw. Naming it in the
+        service rather than leaving each tool to reach for the object store keeps that a
+        one-line obligation with one implementation.
+        """
+        return self._fetch_bytes(key)
+
     def _fetch_bytes(self, key: str | None) -> bytes | None:
         if key is None or self._object_store is None:
             return None
@@ -361,6 +382,30 @@ class CreativeService:
 
     # ------------------------------------------------------------------------ core
 
+    def _publish(self, *, tool: str, name: str, step: str, **extra: object) -> None:
+        """One ``creative.activity`` event. ``metadata.state`` is the STEP of the loop from
+        the closed wire vocabulary both halves share - never the database row's own word,
+        which is exactly what let M25's two halves drift until its Cockpit panel could not
+        read a single successful run.
+
+        Never fails the owner's run over a UI concern: an unknown step is logged and
+        dropped, because a word the build cannot read would draw a finished run as one
+        still going, and saying nothing is the smaller lie.
+        """
+        if step not in CREATIVE_ACTIVITY_STEPS:
+            logger.error("creative_unknown_activity_step", step=step)
+            return
+        metadata: dict[str, object] = {"tool": tool, "state": step}
+        for key, value in extra.items():
+            if value is not None:
+                metadata[key] = value
+        publish_ui_state(
+            UiState.CREATIVE_ACTIVITY,
+            subsystem=SUBSYSTEM_CREATIVE,
+            label=name[:64],
+            metadata=metadata,
+        )
+
     def _run_rounds(
         self,
         db: Session,
@@ -378,12 +423,19 @@ class CreativeService:
         cmp_result: CompareResult | None = None
 
         while True:
+            self._publish(
+                tool=plan.tool,
+                name=row.name,
+                step=CREATIVE_STEP_CORRECTING if rounds else CREATIVE_STEP_EXECUTING,
+                round=len(rounds) + 1,
+            )
             try:
                 result = execute(current_plan, source_bytes)
             except ExecutionError as exc:
                 row.state = STATE_FAILED
                 row.error_class = ERROR_VALIDATION
                 row.error_message = str(exc)
+                self._publish(tool=plan.tool, name=row.name, step=CREATIVE_STEP_FAILED)
                 row.rounds_json = rounds
                 row.updated_at = datetime.now(UTC)
                 db.commit()
@@ -407,6 +459,7 @@ class CreativeService:
                     extra={"run_id": str(row.id)},
                 )
             self._store_output(row, result)
+            self._publish(tool=plan.tool, name=row.name, step=CREATIVE_STEP_COMPARING)
             cmp_result = compare(
                 current_plan,
                 result.inspection(),
@@ -443,6 +496,15 @@ class CreativeService:
             row.state = STATE_MISMATCH
         row.updated_at = datetime.now(UTC)
         db.commit()
+        # The settled word, from the row's own state through the ONE mapping - so the
+        # channel and the row can never disagree about how a run ended.
+        self._publish(
+            tool=plan.tool,
+            name=row.name,
+            step=wire_step(row.state),
+            similarity=cmp_result.similarity,
+            defect=(cmp_result.mismatches[0].wire_defect() if cmp_result.mismatches else None),
+        )
         focus_module.set_focus(
             db, FOCUS_KIND_CREATIVE, str(row.id), label=row.name, source="creative_dispatch"
         )

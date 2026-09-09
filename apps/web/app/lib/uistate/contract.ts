@@ -15,7 +15,7 @@
  */
 
 /** Contract version this client was written against (`CONTRACT_VERSION` in contract.py). */
-export const KNOWN_CONTRACT_VERSION = 11;
+export const KNOWN_CONTRACT_VERSION = 12;
 
 /**
  * The build marker of the Living Core (M18.3 §12, qualification A). Rendered server-side
@@ -52,12 +52,17 @@ export const CORE_BUILD_ID = "living-core-1";
  * (`run`, `step`), one state word and two bounded counts (`done`, `total`)
  * that older publishers never send — no earlier token, kind, horizon, label
  * or assertion changed with it, so a v10 renderer reads a v11 server exactly
- * as it read a v10 one. A v2 to v10 server therefore serves a
- * strict subset of what this build knows, and refusing to draw anything at
- * all because the alarm, operator, document, mail, calendar, artifact, app,
- * genesis, scene or executive states have not shipped yet would be a worse
- * lie than saying so in one line. A server NEWER than this build is a
- * different matter — we do not know its vocabulary, so it stays a mismatch.
+ * as it read a v10 one. v12 is additive over v11 (M27 spec §3, §6): one
+ * token, `creative.activity`, one subsystem, and metadata of three short
+ * tokens (`tool`, `operation`, `state`), one more short token for the
+ * comparison's named defect (`defect`) and one bounded fraction
+ * (`similarity`) that older publishers never send. A v2 to v11 server
+ * therefore serves a strict subset of what this build knows, and refusing to
+ * draw anything at all because the alarm, operator, document, mail,
+ * calendar, artifact, app, genesis, scene, executive or creative states have
+ * not shipped yet would be a worse lie than saying so in one line. A server
+ * NEWER than this build is a different matter — we do not know its
+ * vocabulary, so it stays a mismatch.
  */
 export const MIN_SUPPORTED_CONTRACT_VERSION = 2;
 
@@ -226,6 +231,22 @@ export const UI_STATES = [
   // run is drawn still and calm rather than as an error — the owner stopped
   // it, and it has not ended: "Devam" is still the other answer.
   "executive.run",
+  // v12 (M27 spec §3, §6) — the Creative Tools Operator. Published at every
+  // arrow of ONE creative run: the owner's image is analysed, a
+  // `CreativePlan` is built, its operations are applied through the most
+  // structured interface the installed application really offers (for Paint
+  // the FILE itself, with Pillow — ADR-0093 decision 1), the output is
+  // reopened by an INDEPENDENT reader, exported, and compared with what was
+  // asked — with `{tool, operation, state, similarity, defect}`: which of
+  // the four applications is being driven, the operation from the plan's
+  // closed vocabulary, the run's step, the bounded aggregate the comparison
+  // measured and the defect it named. Making a picture for the owner is the
+  // agent's own work, so it stays on the agent channel; a run is
+  // "doğrulandı" only when the comparison MATCHED, a `mismatch` names the
+  // defect rather than rounding up to done, and an application that is not
+  // installed is `unavailable` — a settled, honest posture (ADR-0093
+  // decision 3), never an error and never imitated.
+  "creative.activity",
 ] as const;
 
 export type KnownUiState = (typeof UI_STATES)[number];
@@ -734,6 +755,203 @@ export type ExecutiveRunMetadata = {
   total?: number;
 };
 
+/** The one creative token (v12). Spelled here so every reader names the same wire word. */
+export const CREATIVE_ACTIVITY = "creative.activity";
+
+/**
+ * The Creative Tools Operator's states (v12). One token: the spec publishes
+ * the whole analyse → plan → execute → inspect → export → compare → correct
+ * loop as `creative.activity` and names the step in `metadata.state`, so —
+ * as with the genesis, scene and executive tokens — there is nothing else to
+ * enumerate. Kept as a list so a second token lands here and nowhere else.
+ */
+export const CREATIVE_STATES = [CREATIVE_ACTIVITY] as const;
+
+export type CreativeUiState = (typeof CREATIVE_STATES)[number];
+
+const CREATIVE_STATE_SET: ReadonlySet<string> = new Set(CREATIVE_STATES);
+
+/**
+ * True for a v12 creative state this build knows how to draw. Membership,
+ * not prefix: a newer server's `creative.deleted` must not be drawn as a
+ * picture being made on the strength of a word this build cannot read.
+ */
+export function isCreativeState(state: string): state is CreativeUiState {
+  return CREATIVE_STATE_SET.has(state);
+}
+
+/**
+ * The four applications M27 plans for, and the only four words
+ * `metadata.tool` may carry (M27 spec §2: `tool ∈ {paint, photoshop,
+ * illustrator, figma}`). A fifth word is one this build cannot read: it is
+ * printed verbatim as a published fact and never translated into one of
+ * these, because "Photoshop" is a claim about which program is being driven
+ * — and on this machine (ADR-0093, detection 2026-09-08) only Paint is
+ * installed at all.
+ */
+export const CREATIVE_TOOLS = ["paint", "photoshop", "illustrator", "figma"] as const;
+
+export type CreativeTool = (typeof CREATIVE_TOOLS)[number];
+
+const CREATIVE_TOOL_SET: ReadonlySet<string> = new Set(CREATIVE_TOOLS);
+
+export function isCreativeTool(value: unknown): value is CreativeTool {
+  return typeof value === "string" && CREATIVE_TOOL_SET.has(value);
+}
+
+/**
+ * The plan's CLOSED operation vocabulary (M27 spec §2, and the same twelve
+ * words §4 names as the `creative.*` capabilities). `metadata.operation` is
+ * the one the run is applying right now; a word outside this list is
+ * printed verbatim and never translated into one of these.
+ *
+ * This is a vocabulary of OPERATIONS, not of steps: `export` here is "the
+ * plan's export operation", while the run's own step lives in
+ * `metadata.state` and has its own list below. They are deliberately
+ * separate, because a run can be `comparing` an `export` it already wrote.
+ */
+export const CREATIVE_OPERATIONS = [
+  "new",
+  "open",
+  "inspect",
+  "draw",
+  "add_text",
+  "shape",
+  "transform",
+  "color_adjust",
+  "crop",
+  "background_remove",
+  "layer",
+  "export",
+] as const;
+
+export type CreativeOperation = (typeof CREATIVE_OPERATIONS)[number];
+
+const CREATIVE_OPERATION_SET: ReadonlySet<string> = new Set(CREATIVE_OPERATIONS);
+
+export function isCreativeOperation(value: unknown): value is CreativeOperation {
+  return typeof value === "string" && CREATIVE_OPERATION_SET.has(value);
+}
+
+/**
+ * The step one creative run is on as the publisher names it in
+ * `metadata.state` (M27 spec §3's workflow, measured at every arrow, plus
+ * the four honest terminal words):
+ *
+ *   analysing   — the input image is being read (dimensions, histogram,
+ *                 dominant regions): the facts the plan is built from
+ *   planning    — the `CreativePlan` is being built as DATA
+ *   executing   — the plan's operations are being applied through the
+ *                 provider's most structured interface
+ *   inspecting  — the output is reopened by an INDEPENDENT reader
+ *   exporting   — the export is being written in the asked-for format
+ *   comparing   — the produced image is measured against what was asked
+ *   correcting  — the comparison disagreed and a follow-up plan is running
+ *                 (≤ 3 rounds, ADR-0093 decision 7)
+ *   verified    — the comparison MATCHED within tolerance
+ *   unverified  — there was nothing to compare against (a bare export of an
+ *                 unchanged image asks for no target). Settled and plain:
+ *                 nothing disagreed, and nothing was verified either
+ *   mismatch    — the comparison found a defect; `defect` names which
+ *   unavailable — the application could not be driven at all: not installed,
+ *                 unlicensed, or without the owner's token (ADR-0093
+ *                 decision 3). A fact about this machine, not a fault
+ *   failed      — the run stopped
+ *
+ * A token outside this list is a word this build cannot read and is shown
+ * as the plain state, never as one of these — and above all never as
+ * `verified`. The list is held to the publisher's own in BOTH directions by
+ * a test on each side (`services/api` reads this file), because two halves
+ * that each prove their own belief is how this vocabulary drifted in M24,
+ * M25 and M26.
+ */
+export const CREATIVE_RUN_STATES = [
+  "analysing",
+  "planning",
+  "executing",
+  "inspecting",
+  "exporting",
+  "comparing",
+  "correcting",
+  "verified",
+  "unverified",
+  "mismatch",
+  "unavailable",
+  "failed",
+] as const;
+
+export type CreativeRunState = (typeof CREATIVE_RUN_STATES)[number];
+
+const CREATIVE_RUN_STATE_SET: ReadonlySet<string> = new Set(CREATIVE_RUN_STATES);
+
+/**
+ * True for one of the twelve words above. Membership, never a prefix: a
+ * publisher's `verified_partially` shares eight letters with `verified` and
+ * means something the owner must not read as done.
+ */
+export function isCreativeRunState(value: unknown): value is CreativeRunState {
+  return typeof value === "string" && CREATIVE_RUN_STATE_SET.has(value);
+}
+
+/**
+ * The objective defects the comparison can name (M27 spec §3): a wrong
+ * size, a region that was asked for and is not there, a colour drift beyond
+ * tolerance, and an empty output. Each is its own named defect rather than
+ * one blurred "did not match", because the owner's next question is always
+ * WHICH — and because a correction round has to know what to correct.
+ *
+ * A word outside this list is printed verbatim: it is still a published
+ * fact, and it is still not one of these four.
+ */
+export const CREATIVE_DEFECTS = ["wrong_size", "missing_region", "color_drift", "empty_output"] as const;
+
+export type CreativeDefect = (typeof CREATIVE_DEFECTS)[number];
+
+const CREATIVE_DEFECT_SET: ReadonlySet<string> = new Set(CREATIVE_DEFECTS);
+
+export function isCreativeDefect(value: unknown): value is CreativeDefect {
+  return typeof value === "string" && CREATIVE_DEFECT_SET.has(value);
+}
+
+/**
+ * The comparison's bounded aggregate as a fraction in 0..1, or `null`.
+ *
+ * ADR-0093 decision 4 governs this number twice over. First, it is what
+ * `app/creative/compare.py` measures with Pillow alone — a per-TILE mean
+ * colour distance over a fixed grid, aggregated — and it is NOT SSIM. The
+ * spec's own draft used that name; the ADR struck it, and a test reads these
+ * files to keep it struck. Second, it is never rounded into being: a
+ * comparison nobody ran published no figure, and `0` is a real answer
+ * (nothing matched), which is why it is not folded into `null`. Anything
+ * outside 0..1 is not a fraction this build will draw.
+ */
+export function asSimilarity(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  return value >= 0 && value <= 1 ? value : null;
+}
+
+/**
+ * The metadata a `creative.activity` event may carry (M27 spec §3, §6).
+ * Every key is optional on the wire and every value is a short token or a
+ * bounded fraction the bus already admits; nothing here is an image, a
+ * file's bytes, a path, a plan or a driver log — the run is a row on
+ * `/v1/creative/runs`, which the Cockpit reads from the list route, and the
+ * before/after images are fetched from the owner-session-gated image route,
+ * never from the bus.
+ */
+export type CreativeActivityMetadata = {
+  /** Which of the four applications is being driven; absent when the publisher did not say. */
+  tool?: CreativeTool;
+  /** The plan operation being applied, from §2's closed vocabulary. */
+  operation?: CreativeOperation;
+  /** The step the run is on in the §3 names. Absent while the publisher has nothing to say yet. */
+  state?: CreativeRunState;
+  /** The comparison's bounded aggregate in 0..1, when a comparison ran. NOT SSIM (ADR-0093 §4). */
+  similarity?: number;
+  /** The defect the comparison named, on a `mismatch`. */
+  defect?: CreativeDefect;
+};
+
 /**
  * A draft's lifecycle as the publisher names it in `metadata.draft_state`
  * (M21 spec §3 with the read-back step made explicit): prepared by the
@@ -913,6 +1131,11 @@ export const SUBSYSTEMS = [
   // receipts, its voice corpus category and its ledger rows carry the same
   // name.
   "executive",
+  // v12: the Creative Tools Operator (M27 spec §5, §6) publishes
+  // `creative.activity`; its receipts, its voice corpus category (§5's
+  // `creative`) and its ledger rows carry the same name. Deliberately NOT
+  // `creative3d`, which is M25's own subsystem and stays exactly as it was.
+  "creative",
 ] as const;
 
 export type Subsystem = (typeof SUBSYSTEMS)[number];
@@ -1169,6 +1392,15 @@ const STATE_KINDS: Record<KnownUiState, StateKind> = {
   // "Duraklat / Devam / İptal" live. The claim never falls to "tamamlandı"
   // or idle.
   "executive.run": "operation",
+  // v12. Analysing an image, applying a plan to a file with Pillow, opening
+  // the result in the application through M19 and comparing the export is
+  // work in flight on the same footing (`CREATIVE_TTL_MS`). A `verified`, a
+  // `mismatch` or an `unavailable` is a standing fact about a run, but the
+  // bus claim is about the MOMENT it was published: the run itself is a ROW
+  // on `/v1/creative/runs`, which does not expire, and the Cockpit's
+  // before/after images come from that row. The claim never falls to
+  // "finished", "doğrulandı" or idle.
+  "creative.activity": "transient",
 };
 
 /**
@@ -1460,6 +1692,142 @@ export const EXECUTIVE_RUN_STATE_LABEL: Record<ExecutiveRunState, string> = {
 };
 
 /**
+ * How long a creative step may be claimed as current without a newer event.
+ *
+ * Between M25's two minutes and the operator's forty-five seconds, and the
+ * figure is the sum of what M27 actually does per step. The heavy work is
+ * Pillow ON THE FILE in the Cloud Core (ADR-0093 decision 1) — no whole
+ * editor is started in batch mode, so M25's headless-render horizon is
+ * longer than anything here can legitimately take — but a single step may
+ * still open the application on the owner's desktop through the M19
+ * operator, which is bounded at `OPERATOR_STEP_TTL_MS`, and a
+ * `background_remove` over an 8192×8192 image (spec §7) outlasts it. Ninety
+ * seconds covers the worst legitimate gap between two published steps and
+ * nothing longer. Still a horizon: an `executing` from five minutes ago is
+ * last-known — the run itself is a ROW on `/v1/creative/runs`, which does
+ * not expire, and the Cockpit's images come from that row. The publisher's
+ * own `ttl_s` beats this figure, as it beats every figure here.
+ */
+export const CREATIVE_TTL_MS = 90_000;
+
+/**
+ * The Core's one wording for a creative event whose metadata named nothing
+ * this build can read (v12): the plain name of the token, and nothing it
+ * did not say. Deliberately no verb: a run may be analysing, planning,
+ * executing, exporting, comparing, verified, mismatched or unavailable, and
+ * the bare line must be true of every one of them.
+ */
+export const CREATIVE_CAPTION_BARE = "Görsel çalışması";
+
+/**
+ * The step in the owner's words, spelled once for the caption, the facts
+ * line and the Cockpit's rows alike (M27 spec §3).
+ *
+ * "Doğrulandı" is said for exactly one state, `verified`, and no other word
+ * here contains it: a file that was written is not an image that was
+ * compared with what was asked. `unverified` is the spec's honest middle —
+ * nothing was asked for that could be measured — and is worded so it can be
+ * mistaken for neither. `unavailable` is worded as a plain inability
+ * ("yapılamadı"), never as a fault: an application that is not installed is
+ * a fact about this machine (ADR-0093 decision 3).
+ */
+export const CREATIVE_STATE_LABEL: Record<CreativeRunState, string> = {
+  analysing: "görsel inceleniyor",
+  planning: "plan hazırlanıyor",
+  executing: "düzenleme uygulanıyor",
+  inspecting: "çıktı okunuyor",
+  exporting: "dışa aktarılıyor",
+  comparing: "karşılaştırılıyor",
+  correcting: "düzeltiliyor",
+  verified: "doğrulandı",
+  unverified: "karşılaştırılacak bir şey yoktu",
+  mismatch: "uyuşmazlık",
+  unavailable: "yapılamadı",
+  failed: "başarısız",
+};
+
+/** The application as the owner names it, for a line that talks ABOUT the application. */
+export const CREATIVE_TOOL_LABEL: Record<CreativeTool, string> = {
+  paint: "Paint",
+  photoshop: "Photoshop",
+  illustrator: "Illustrator",
+  figma: "Figma",
+};
+
+/**
+ * The application as the owner names it when it is the PLACE something
+ * happens — "Paint'te düzenleme uygulanıyor". The forms are the spec's own
+ * (M27 §5's utterances "Bu resmi Paint'te yeniden çiz", "Bunu Photoshop'ta
+ * aç", "Figma'da buna benzeyen bir arayüz tasarla"), and they are written
+ * out rather than derived, because a suffix rule guessed from a program's
+ * name is not Turkish grammar.
+ */
+export const CREATIVE_TOOL_LOCATIVE: Record<CreativeTool, string> = {
+  paint: "Paint'te",
+  photoshop: "Photoshop'ta",
+  illustrator: "Illustrator'da",
+  figma: "Figma'da",
+};
+
+/**
+ * Why an application could not be driven, in the owner's words — the spec's
+ * own wording (M27 §5: "Photoshop bu bilgisayarda kurulu değil").
+ *
+ * Said ONLY beside an `unavailable` whose publisher named a tool the
+ * detection MEASURED as absent: Photoshop and Illustrator (ADR-0093, the
+ * 2026-09-08 detection). Paint is present on this machine and on the runner,
+ * so an `unavailable` Paint is "yapılamadı" alone — this build does not know
+ * why, and inventing an uninstalled Paint would be the renderer making up a
+ * reason. Figma likewise: it has no desktop application to be installed, and
+ * its `unavailable` is about a token or an authorised file, which is not
+ * this word.
+ */
+export const CREATIVE_NOT_INSTALLED = "kurulu değil";
+
+/** The tools whose `unavailable` this build may word as "kurulu değil": the two the detection measured absent. */
+export const CREATIVE_NOT_INSTALLED_TOOLS: readonly CreativeTool[] = ["photoshop", "illustrator"];
+
+/**
+ * The four objective defects in the owner's words (M27 spec §3). Each names
+ * WHAT disagreed — the whole point of a mismatch that is not rounded up to
+ * done — and none of them contains "doğrulandı".
+ */
+export const CREATIVE_DEFECT_LABEL: Record<CreativeDefect, string> = {
+  wrong_size: "ölçü tutmadı",
+  missing_region: "istenen bölge yok",
+  color_drift: "renk sapması",
+  empty_output: "çıktı boş",
+};
+
+/**
+ * The plan's operations in the owner's words (M27 spec §2's closed
+ * vocabulary). Nouns rather than verbs, because they name what the plan
+ * ASKED for and are printed beside a step that has its own verb.
+ */
+export const CREATIVE_OPERATION_LABEL: Record<CreativeOperation, string> = {
+  new: "yeni tuval",
+  open: "açma",
+  inspect: "inceleme",
+  draw: "çizim",
+  add_text: "metin",
+  shape: "şekil",
+  transform: "dönüştürme",
+  color_adjust: "renk düzeltme",
+  crop: "kırpma",
+  background_remove: "arka plan kaldırma",
+  layer: "katman",
+  export: "dışa aktarma",
+};
+
+/**
+ * How many correction rounds a run may take (M27 spec §3, ADR-0093 decision
+ * 7: "at most three"). A client bound used only for wording ("2/3. tur") and
+ * for refusing a nonsensical round from a row; the Cloud Core enforces the
+ * real one.
+ */
+export const MAX_CREATIVE_ROUNDS = 3;
+
+/**
  * Per-state lifetimes for v3, in ms, exactly as `docs/M18_3_LIVING_CORE_WAKE_ALARM_SPEC.md`
  * §7 states them.
  *
@@ -1490,6 +1858,7 @@ const STATE_TTL_MS: Partial<Record<KnownUiState, number>> = {
   "capability.genesis": GENESIS_TTL_MS,
   "scene.activity": SCENE_TTL_MS,
   "executive.run": EXECUTIVE_TTL_MS,
+  "creative.activity": CREATIVE_TTL_MS,
 };
 
 /**
@@ -1584,6 +1953,9 @@ export function stateChannel(state: string): StateChannel {
   // v11's `executive.run` follows through `isExecutiveState`: carrying a
   // multi-step job to an end IS the agent working, and the cockpit asks
   // "which run" by membership rather than off a channel of its own.
+  // v12's `creative.activity` follows through `isCreativeState`: making a
+  // picture for the owner — in Paint, in Photoshop or on a file with
+  // Pillow — is the agent working, not a fact about the room.
   // v3 adds `display.*` to the room: whether the screens are lit is a fact
   // about the owner's desk, never about the agent's activity.
   if (state.startsWith("eye.") || state.startsWith("owner.") || state.startsWith("display."))

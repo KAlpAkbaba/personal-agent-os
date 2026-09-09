@@ -32,9 +32,17 @@ from pathlib import Path
 import pytest
 
 from app.appfactory.models import APP_PROJECT_STATES
+from app.calendar.models import PROPOSAL_STATES
+from app.creative.models import CREATIVE_STATES
+from app.creative.models import wire_step as creative_wire_step
 from app.creative3d.models import SCENE_STATES, wire_step
 from app.genesis.models import GENESIS_STATES
-from app.uistate.contract import EXECUTIVE_RUN_STATES, SCENE_ACTIVITY_STEPS
+from app.mail.models import DRAFT_STATES
+from app.uistate.contract import (
+    CREATIVE_ACTIVITY_STEPS,
+    EXECUTIVE_RUN_STATES,
+    SCENE_ACTIVITY_STEPS,
+)
 
 #: Found by walking up rather than by a counted `parents[n]`: a wrong depth would make this
 #: guard read nothing and pass, which is worse than not having it (the M24 `_REPO_ROOT`
@@ -77,7 +85,74 @@ FAMILIES: list[tuple[str, set[str], str]] = [
     # FAIL until the web track lands its own EXECUTIVE_RUN_STATES list — that is the
     # correct, catchable state this guard exists to produce (module docstring).
     ("executive_run", set(EXECUTIVE_RUN_STATES), "EXECUTIVE_RUN_STATES"),
+    # M27 (ADR-0093): the 3D family's shape again - the row rests in seven states, the
+    # channel says twelve, and `app.creative.models.wire_step` maps every one of the
+    # seven onto one of the twelve.
+    ("creative_activity", set(CREATIVE_ACTIVITY_STEPS), "CREATIVE_RUN_STATES"),
+    # M21, added at the M27 merge by the coverage check below - these two run
+    # vocabularies had never been compared with anything since M21 shipped. They agree
+    # today (checked before adding them); nothing was holding them there.
+    ("mail_drafts", set(DRAFT_STATES), "MAIL_DRAFT_STATES"),
+    ("calendar_proposals", set(PROPOSAL_STATES), "CALENDAR_PROPOSAL_STATES"),
 ]
+
+
+def _web_run_vocabularies() -> dict[str, list[str]]:
+    """Every list in the web contract that is a RUN vocabulary rather than a list of
+    channel NAMES, told apart by content: a channel name carries a dot
+    (``"scene.activity"``), a run state does not (``"verified"``).
+
+    Deliberately not a naming convention - `APP_PROJECT_STATES`, `MAIL_DRAFT_STATES` and
+    `SCENE_RUN_STATES` are all run vocabularies under three different spellings, and a
+    convention would have to be remembered by whoever adds the fourth.
+    """
+    text = _WEB_CONTRACT.read_text(encoding="utf-8")
+    out: dict[str, list[str]] = {}
+    for name, body in re.findall(
+        r"export const ([A-Z][A-Z0-9_]*_STATES) = \[(.*?)\] as const;", text, re.S
+    ):
+        words = re.findall(r'"([a-z_.]+)"', body)
+        if words and not all("." in w for w in words):
+            out[name] = words
+    return out
+
+
+def test_the_guard_knows_about_every_family_the_web_declares() -> None:
+    """The blind spot in this guard, found at the M27 merge.
+
+    `FAMILIES` is hand-maintained, so a family added on ONE side is invisible: the web
+    landed `CREATIVE_RUN_STATES` and every test in this file still passed, because no row
+    named it. A cross-file guard that silently compares nothing is worse than no guard -
+    this file's own docstring says so about the M25 drift, and then the file had the same
+    shape of hole.
+
+    So the TypeScript is scanned for every `*_STATES` list it exports, and each must have a
+    row here. Adding a family to the web without a Cloud Core vocabulary now fails LOUDLY,
+    which is the whole point.
+    """
+    declared = set(_web_run_vocabularies())
+    compared = {web_name for _family, _backend, web_name in FAMILIES}
+    unwatched = sorted(declared - compared)
+    assert not unwatched, (
+        f"the web declares the run vocabular{'y' if len(unwatched) == 1 else 'ies'} "
+        f"{unwatched}, which this guard never compares against anything - add a FAMILIES "
+        f"row, or the two halves can drift with every suite green"
+    )
+
+
+def test_that_scan_would_notice_a_missing_row() -> None:
+    """And the detector proves itself before it is trusted: the same discipline the M26
+    news review's regression tests were held to."""
+    found = _web_run_vocabularies()
+    assert len(found) >= len(FAMILIES), (
+        f"the scan found {len(found)} run vocabularies but there are {len(FAMILIES)} "
+        f"families - its regex has gone stale against the web contract's own shape and is "
+        f"now comparing less than it thinks"
+    )
+    # And it really is separating the two kinds, rather than letting everything through:
+    # the channel-name lists must NOT be in the result.
+    assert "UI_STATES" not in found
+    assert "SCENE_STATES" not in found, "a channel-name list was read as a run vocabulary"
 
 
 def test_the_web_contract_is_where_this_guard_thinks_it_is() -> None:
@@ -105,6 +180,14 @@ def test_the_web_draws_no_state_the_core_never_sends(
     promise. M25's `mismatch` posture sat unreachable from the day it was written."""
     unsent = sorted(set(_web_list(web_name)) - backend)
     assert not unsent, f"{family}: the web draws {unsent}, which nothing publishes"
+
+
+def test_the_creative_family_maps_its_row_states_into_that_same_vocabulary() -> None:
+    """M27's row states are a smaller, coarser set than the words its channel says (the
+    row rests; the channel narrates), so every one of them has to land on a word the web
+    declares - the same check the 3D family needs, for the same reason."""
+    for state in CREATIVE_STATES:
+        assert creative_wire_step(state) in CREATIVE_ACTIVITY_STEPS, state
 
 
 def test_the_3d_family_maps_its_row_states_into_that_same_vocabulary() -> None:

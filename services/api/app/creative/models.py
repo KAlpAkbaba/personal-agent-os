@@ -23,6 +23,15 @@ from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import JSON
 
 from app.models import Base
+from app.uistate.contract import (
+    CREATIVE_STEP_EXECUTING,
+    CREATIVE_STEP_FAILED,
+    CREATIVE_STEP_MISMATCH,
+    CREATIVE_STEP_PLANNING,
+    CREATIVE_STEP_UNAVAILABLE,
+    CREATIVE_STEP_UNVERIFIED,
+    CREATIVE_STEP_VERIFIED,
+)
 
 JSONColumn = JSON().with_variant(JSONB(), "postgresql")
 
@@ -53,6 +62,41 @@ CREATIVE_STATES: tuple[str, ...] = (
     STATE_DEPENDENCY_UNAVAILABLE,
     STATE_FAILED,
 )
+
+#: Every row state, mapped onto the word the CHANNEL says. The row records where a run
+#: RESTS; the wire says what the owner is looking at, and the two are deliberately not the
+#: same size: the loop publishes seven progress steps a row never holds (`analysing`,
+#: `planning`, `executing`, `inspecting`, `exporting`, `comparing`, `correcting`), and the
+#: row holds `dependency_unavailable`, which the channel says as `unavailable`.
+#:
+#: This is the shape M25 arrived at the expensive way: `scene.activity` published the
+#: database row's own word, five of seven tokens were unreadable by the build, and every
+#: finished scene was drawn as one still being made - with both suites green. So the
+#: mapping is explicit and total, and `test_uistate_contract_halves.py` proves every row
+#: state lands on a word the web declares.
+_WIRE_STEP: dict[str, str] = {
+    STATE_PLANNED: CREATIVE_STEP_PLANNING,
+    STATE_APPLIED: CREATIVE_STEP_EXECUTING,
+    STATE_VERIFIED: CREATIVE_STEP_VERIFIED,
+    STATE_UNVERIFIED: CREATIVE_STEP_UNVERIFIED,
+    STATE_MISMATCH: CREATIVE_STEP_MISMATCH,
+    STATE_DEPENDENCY_UNAVAILABLE: CREATIVE_STEP_UNAVAILABLE,
+    STATE_FAILED: CREATIVE_STEP_FAILED,
+}
+
+
+def wire_step(state: str) -> str:
+    """The word `creative.activity` says for a row in `state`.
+
+    Raises rather than guessing: a state with no mapping is a contract change someone made
+    without finishing it, and a silent fallback here is exactly how M25's panel ended up
+    unable to draw a single real scene.
+    """
+    try:
+        return _WIRE_STEP[state]
+    except KeyError:  # pragma: no cover - the guard below makes this unreachable
+        raise ValueError(f"creative row state {state!r} has no wire step") from None
+
 
 #: Self-correction is bounded at 3 rounds (ADR-0093 decision 7) — enforced here as a
 #: DB-level fact the service can check without re-deriving it from the ledger.

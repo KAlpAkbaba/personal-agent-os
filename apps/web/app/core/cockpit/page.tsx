@@ -33,6 +33,7 @@ import OwnerGate from "../../components/OwnerGate";
 import { approvalClient } from "../../lib/cockpit/approvals";
 import { appsClient } from "../../lib/cockpit/apps";
 import { artifactClient, downloadRender } from "../../lib/cockpit/artifacts";
+import { type CreativeRunRow, creativeClient } from "../../lib/cockpit/creative";
 import { type ExecutiveRunRow, executiveClient } from "../../lib/cockpit/executive";
 import { genesisClient } from "../../lib/cockpit/genesis";
 import { type SceneRow, sceneClient } from "../../lib/cockpit/scenes";
@@ -40,6 +41,8 @@ import { useApprovalPair } from "../../lib/cockpit/useApprovalPair";
 import { useAppsControl } from "../../lib/cockpit/useAppsControl";
 import { useArtifactOpen } from "../../lib/cockpit/useArtifactOpen";
 import { useCockpitData } from "../../lib/cockpit/useCockpitData";
+import { useCreativeControl } from "../../lib/cockpit/useCreativeControl";
+import { useCreativeImages } from "../../lib/cockpit/useCreativeImages";
 import { useExecutiveControl } from "../../lib/cockpit/useExecutiveControl";
 import { useExecutiveDetail } from "../../lib/cockpit/useExecutiveDetail";
 import { useGenesisControl } from "../../lib/cockpit/useGenesisControl";
@@ -73,6 +76,7 @@ import {
   AppsPanel,
   ArtifactsPanel,
   CalendarPanel,
+  CreativePanel,
   DigitalOperatorPanel,
   DocumentsPanel,
   EvolutionPanel,
@@ -101,6 +105,9 @@ const EMPTY_SCENES: SceneRow[] = [];
 
 /** The same, for the executive rows the detail hook reads. */
 const EMPTY_RUNS: ExecutiveRunRow[] = [];
+
+/** The same again, for the creative rows the image hook reads. */
+const EMPTY_CREATIVE: CreativeRunRow[] = [];
 
 function Cockpit() {
   const { truth, now, refresh } = useCoreState();
@@ -181,6 +188,27 @@ function Cockpit() {
   // The render route is owner-session gated, so the images are FETCHED with
   // the session and handed to the rows as blobs; a bare <img src> would 401.
   const scenePreview = useSceneRender(sceneRows);
+  // M27 §6: "Dışa aktar" and "Karşılaştır" ask the Cloud Core for its own
+  // `creative.export` and its comparison over the device's
+  // `creative.export_check` on one run, one call at a time, and every answer
+  // reloads the list so the rows show what the Cloud Core now holds — never
+  // what this page assumed a click produced. The routes land on the Cloud
+  // Core track (ADR-0093); until they do, the panel says "henüz yok".
+  // `creativeTool` is read from the rows only so an `unavailable` Photoshop
+  // is worded as "kurulu değil" rather than generically.
+  const creativeRows = useMemo(
+    () => (data.creativeRuns.kind === "ok" ? data.creativeRuns.value : EMPTY_CREATIVE),
+    [data.creativeRuns],
+  );
+  const creativeTool = useCallback(
+    (runId: string) => creativeRows.find((row) => row.run_id === runId)?.tool ?? null,
+    [creativeRows],
+  );
+  const creativeControl = useCreativeControl(creativeClient, refreshPanels, creativeTool);
+  // The image route is owner-session gated too, so the before/after pictures
+  // are FETCHED with the session and handed to the rows as blobs; a bare
+  // <img src> would 401 twice per row.
+  const creativePreview = useCreativeImages(creativeRows);
   const [downloadNotice, setDownloadNotice] = useState<string | null>(null);
   const download = useCallback((artifactId: string, format: string) => {
     setDownloadNotice(null);
@@ -314,6 +342,19 @@ function Cockpit() {
             now={now}
             control={executiveControl}
             details={executiveDetails}
+          />
+          {/* M27 §6: the pictures the assistant made — each run's
+              application, the operation it is on and the step it reached,
+              what the comparison measured, the owner's original beside what
+              was produced from it through the owner session, and the two
+              chips for the Cloud Core's export and comparison. An
+              application that is not installed gets no chips and says so. */}
+          <CreativePanel
+            runs={data.creativeRuns}
+            truth={truth}
+            now={now}
+            control={creativeControl}
+            preview={creativePreview}
           />
           <GoalsPanel state={data.goals} now={now} />
           <ResearchPanel

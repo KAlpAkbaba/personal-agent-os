@@ -15,6 +15,7 @@ import {
   ARTIFACT_CAPTION_BARE,
   ARTIFACT_VERDICT_LABEL,
   CALENDAR_CAPTION_BARE,
+  CREATIVE_CAPTION_BARE,
   DOCUMENT_CAPTION_BARE,
   EXECUTIVE_CAPTION_BARE,
   GENESIS_CAPTION_BARE,
@@ -32,6 +33,15 @@ import {
   sceneStatePhrase,
   sceneToolWord,
 } from "./scenes";
+import {
+  CREATIVE_STATE_LABEL,
+  type CreativeFacts,
+  type CreativeStage,
+  creativeOperationWord,
+  creativeSimilarityPhrase,
+  creativeStatePhrase,
+  creativeToolWord,
+} from "./creative";
 import {
   EXECUTIVE_RUN_STATE_LABEL,
   type ExecutiveFacts,
@@ -90,6 +100,7 @@ export const KIND_LABEL: Record<CoreVisualKind, string> = {
   capability_genesis: GENESIS_CAPTION_BARE,
   scene_activity: SCENE_CAPTION_BARE,
   executive_run: EXECUTIVE_CAPTION_BARE,
+  creative_activity: CREATIVE_CAPTION_BARE,
 };
 
 /**
@@ -175,6 +186,15 @@ export const KIND_DETAIL: Record<CoreVisualKind, string> = {
   // one can send, pay, delete or publish anything (§4).
   executive_run:
     "Sahibin istediği çok adımlı bir iş yürütülüyor: adımlar sırayla çalıştırılıyor, sahip istediği an duraklatabiliyor, sürdürebiliyor ya da iptal edebiliyor; iş, adım ve adım sayısı yalnızca yayınlandığı kadar söylenir. Yalnızca her adımı doğrulanmış bir iş tamamlandı sayılır; eksik kalan iş kısmen bitti denip nesi eksik olduğu söylenir. Hiçbir adım sahip onayı olmadan posta göndermez, ödeme yapmaz, silmez, yayımlamaz.",
+  // M27: a picture the owner asked for is being analysed, planned as data,
+  // applied through the most structured interface the installed application
+  // really offers, reopened by an independent reader and compared with what
+  // was asked. The sentence says what "done" means for a creative run
+  // (ADR-0093 decision 4: the comparison is the proof), that the owner's
+  // original is never touched (decision 5), and that an application that is
+  // not installed is said so rather than imitated (decision 3).
+  creative_activity:
+    "Sahip için bir görsel inceleniyor, planlanıyor, uygulamanın en yapısal arayüzüyle düzenleniyor, bağımsız bir okuyucuyla yeniden açılıp istenenle karşılaştırılıyor; uygulama, işlem, adım ve benzerlik yalnızca yayınlandığı kadar söylenir. Karşılaştırması tutmamış bir çıktı doğrulanmış sayılmaz; kurulu olmayan bir uygulama taklit edilmez, kurulu değil denir. Sahibin özgün dosyası değiştirilmez. İlerleme bildirilmez.",
 };
 
 /**
@@ -337,6 +357,10 @@ export const STATE_LABEL: Record<KnownUiState, string> = {
   // covers a run from "planlandı" to "tamamlandı", and the state is said
   // only from its published metadata.
   "executive.run": EXECUTIVE_CAPTION_BARE,
+  // v12 — the Creative Tools Operator (M27). No verb, for the same reason:
+  // one token covers a run from "görsel inceleniyor" to "doğrulandı", and
+  // the step is said only from its published metadata.
+  "creative.activity": CREATIVE_CAPTION_BARE,
 };
 
 export function stateLabel(state: string): string {
@@ -366,6 +390,7 @@ export const SUBSYSTEM_LABEL: Record<string, string> = {
   genesis: "Yeni yetenek",
   creative3d: "3B sahne",
   executive: "Görevler",
+  creative: "Yaratıcı",
 };
 
 export function subsystemLabel(subsystem: string): string {
@@ -520,6 +545,7 @@ const CONTRACT_ADDITIONS: Record<number, string> = {
   9: "yeni yetenek durumu",
   10: "3B sahne durumu",
   11: "çok adımlı iş durumu",
+  12: "görsel çalışması durumu",
 };
 
 /**
@@ -948,4 +974,64 @@ export function executiveStateLine(
   missing: readonly string[] = [],
 ): string {
   return executiveStatePhrase(facts, missing) ?? executiveStateWord(facts.stateToken);
+}
+
+// ------------------------------------------ v12: the Creative Tools Operator
+
+export const CREATIVE_LABEL: Record<CreativeStage, string> = {
+  active: CREATIVE_CAPTION_BARE,
+  none: "Süren bir görsel çalışması yok",
+};
+
+/** The Yaratıcı panel's empty sentence (M27 spec §6): the list route answered, and holds no run. */
+export const CREATIVE_EMPTY = "Henüz bir görsel çalışması yapılmadı.";
+
+/** The Yaratıcı panel's line when the bus never carried a creative event: not "no runs", "nothing reported". */
+export const CREATIVE_UNTOLD = "Görsel çalışması etkinliği bildirilmedi.";
+
+/** Said where a comparison's figure was never measured: not "%0", which nobody measured. */
+export const CREATIVE_SIMILARITY_UNTOLD = "benzerlik ölçülmedi";
+
+/** Said where a mismatch named no defect: what disagreed is unknown, which is not "nothing did". */
+export const CREATIVE_DEFECT_UNTOLD = "kusur bildirilmedi";
+
+/**
+ * A creative step token as one word: the spec's word for the twelve this
+ * build knows, the token verbatim for one it does not (still a published
+ * fact), and the statement that none came.
+ */
+export function creativeStateWord(token: string | null): string {
+  if (token === null) return "durum bildirilmedi";
+  return (CREATIVE_STATE_LABEL as Record<string, string>)[token] ?? token;
+}
+
+/**
+ * The published creative facts on one line, each one either what the
+ * publisher sent or the statement that it did not send it: "uygulama: Paint ·
+ * işlem: çizim · durum: doğrulandı · (benzerlik %92)". The similarity is
+ * printed whenever a comparison measured one, and its absence said only
+ * beside the two states that REST on a completed comparison (`verified`,
+ * `mismatch`) — a run that is still executing has measured nothing yet, and
+ * "benzerlik ölçülmedi" there would be noise rather than a fact.
+ */
+export function creativeFactsLine(facts: CreativeFacts): string {
+  const tool = creativeToolWord(facts.toolToken);
+  const operation = creativeOperationWord(facts.operationToken);
+  const parts = [
+    tool ? `uygulama: ${tool}` : "uygulama bildirilmedi",
+    operation ? `işlem: ${operation}` : "işlem bildirilmedi",
+    facts.stateToken ? `durum: ${creativeStateWord(facts.stateToken)}` : "durum bildirilmedi",
+  ];
+  const similarity = creativeSimilarityPhrase(facts.similarity);
+  if (similarity) parts.push(similarity);
+  else if (facts.state === "verified" || facts.state === "mismatch") parts.push(CREATIVE_SIMILARITY_UNTOLD);
+  return parts.join(" · ");
+}
+
+/** The step with everything the publisher attached to it, for a row or a caption, or the statement that none came. */
+export function creativeStateLine(
+  facts: Pick<CreativeFacts, "state" | "stateToken" | "tool" | "similarity" | "defectToken">,
+  defect: string | null = null,
+): string {
+  return creativeStatePhrase(facts, defect) ?? creativeStateWord(facts.stateToken);
 }

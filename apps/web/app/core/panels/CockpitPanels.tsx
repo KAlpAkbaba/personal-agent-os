@@ -117,6 +117,32 @@ import type {
   ExecutiveDetailProps,
   ExecutiveRunRow,
 } from "../../lib/cockpit/executive";
+import type {
+  CreativeAction,
+  CreativeControlProps,
+  CreativeImageSide,
+  CreativePreviewProps,
+  CreativeRunRow,
+} from "../../lib/cockpit/creative";
+import {
+  CREATIVE_ACTION_LABEL,
+  CREATIVE_ROWS_SHOWN,
+  CREATIVE_SIDE_LABEL,
+  creativeActionGate,
+  creativeFilesLine,
+  creativeHasMetrics,
+  creativeImageAlt,
+  creativeMetricsLine,
+  creativeRoundPhrase,
+  creativeRowActions,
+  creativeRowLine,
+  creativeRowSides,
+  rowHasImage as creativeRowHasImage,
+  rowIsFailed as creativeRowIsFailed,
+  rowIsMismatch as creativeRowIsMismatch,
+  rowIsUnavailable as creativeRowIsUnavailable,
+  rowIsVerified as creativeRowIsVerified,
+} from "../../lib/cockpit/creative-rows";
 import {
   EXECUTIVE_ACTION_LABEL,
   EXECUTIVE_ROWS_SHOWN,
@@ -163,6 +189,8 @@ import {
   MAIL_UNTOLD,
   OPERATOR_EMPTY,
   OPERATOR_LABEL,
+  CREATIVE_EMPTY,
+  CREATIVE_UNTOLD,
   SCENE_EMPTY,
   SCENE_UNTOLD,
   documentFactsLine,
@@ -174,6 +202,7 @@ import {
   subsystemLabel,
 } from "../../lib/uistate/labels";
 import { sceneView } from "../../lib/uistate/scenes";
+import { creativeView } from "../../lib/uistate/creative";
 import { executiveView } from "../../lib/uistate/executive";
 import { MAIL_DRAFT_STATE_LABEL, mailView } from "../../lib/uistate/mail";
 import { operatorPosition, operatorView } from "../../lib/uistate/operator";
@@ -182,6 +211,7 @@ import {
   appClaim,
   artifactClaim,
   calendarClaim,
+  creativeClaim,
   documentClaim,
   executiveClaim,
   genesisClaim,
@@ -2544,6 +2574,307 @@ export function StateStreamPanel({ truth, now }: { truth: CoreTruth; now: number
           ))}
         </ul>
       )}
+    </section>
+  );
+}
+
+// ------------------------------------- M27: the Creative Tools Operator
+
+/** What the panel says under the rows: what the two chips ask for, and what this page cannot do. */
+const CREATIVE_NOTE =
+  '"Dışa aktar" ve "Karşılaştır" Cloud Core\'dan uygulamanın en yapısal arayüzünü ister: Paint için belgenin kendisi (dosya, Pillow ile), Photoshop ve Illustrator için sabit sürücü dosyasının okuduğu JSON plan, Figma için REST. Çıktı sahibin özgün dosyasının yanına YENİ bir dosya olarak yazılır; özgün dosyanın üzerine yazılmaz ve hiçbir şey silinmez. Bir görsel, bağımsız bir okuyucuyla açılıp istenenle karşılaştırıldığında doğrulanmış olur; önce değil. Kurulu olmayan bir uygulama için düğme gösterilmez, taklit de edilmez. Bu ekran uygulama açmaz, fare kullanmaz, piksel çizmez, kod üretmez.';
+
+/** Said under a row that has a picture the page has not fetched yet. */
+const CREATIVE_IMAGE_PENDING = "Görsel var; henüz alınmadı.";
+
+/**
+ * One side of one run's pictures.
+ *
+ * A plain `<img>` on purpose, and `next/image` deliberately not used: `src`
+ * here is a `blob:` URL made in this tab from bytes fetched through the
+ * owner session (the route is gated, so an optimizer that re-fetched the URL
+ * server-side would be answered with a 401 and could not read a blob of this
+ * tab's anyway). The dimensions are the file's, not this page's — an image
+ * is up to 8192×8192 (M27 spec §7) and the CSS bounds it without changing
+ * its proportions, because the owner reads geometry off it.
+ */
+function CreativeImage({
+  row,
+  side,
+  src,
+}: {
+  row: CreativeRunRow;
+  side: CreativeImageSide;
+  src: string;
+}) {
+  const sha = (side === "before" ? row.before_sha256 : row.after_sha256) ?? "";
+  /* eslint-disable-next-line next/no-img-element */
+  return <img className="creative-image" src={src} alt={creativeImageAlt(row, side)} data-creative-image={row.run_id} data-creative-image-side={side} data-creative-image-sha={sha} />;
+}
+
+/**
+ * The before and the after, side by side, each drawn ONLY because the row
+ * says that picture exists and only once its bytes are in hand. A row with
+ * one of the two draws one: "there is no output yet" is a true thing to
+ * show, and pairing the source with a blank would say the opposite.
+ */
+function CreativeImages({ row, preview }: { row: CreativeRunRow; preview: CreativePreviewProps }) {
+  const sides = creativeRowSides(row);
+  if (sides.length === 0) return null;
+  return (
+    <div className="creative-images" data-creative-images={row.run_id} data-creative-image-count={sides.length}>
+      {sides.map((side) => {
+        const src = preview.srcFor(row.run_id, side);
+        return (
+          <figure key={side} data-creative-figure={side}>
+            <figcaption className="muted">{CREATIVE_SIDE_LABEL[side]}</figcaption>
+            {src ? (
+              <CreativeImage row={row} side={side} src={src} />
+            ) : (
+              <span className="muted" data-creative-image-pending={side}>
+                {CREATIVE_IMAGE_PENDING}
+              </span>
+            )}
+          </figure>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * The chips under one run: "Dışa aktar" for a run whose step this build can
+ * read, "Karşılaştır" only ALSO when there is an output to measure, NEITHER
+ * for an application that could not be driven — each drawn only when the
+ * Cloud Core would not refuse it, and disabled with the reason in words
+ * while another call is in flight.
+ */
+function CreativeControls({ row, control }: { row: CreativeRunRow; control: CreativeControlProps }) {
+  const actions = creativeRowActions(row);
+  if (actions.length === 0) return null;
+  const handlers: Record<CreativeAction, (id: string) => void> = {
+    export: control.onExport,
+    compare: control.onCompare,
+  };
+  const gates = actions.map((action) => ({ action, gate: creativeActionGate(row, action, control.busy) }));
+  const inFlight = control.busy !== null && control.busy.id === row.run_id;
+  // One sentence per distinct reason, naming every chip it refuses; the one
+  // in-flight call disables every chip and is said once.
+  const reasons = new Map<string, { actions: CreativeAction[]; kind: string }>();
+  for (const { action, gate } of gates) {
+    if (gate.reason === null) continue;
+    const entry = reasons.get(gate.reason) ?? { actions: [], kind: gate.reasonKind ?? "" };
+    entry.actions.push(action);
+    reasons.set(gate.reason, entry);
+  }
+  return (
+    <div
+      className="approval-pair"
+      data-creative-controls={row.run_id}
+      data-creative-in-flight={inFlight ? "yes" : "no"}
+      data-creative-in-flight-action={inFlight && control.busy ? control.busy.action : ""}
+    >
+      {gates.map(({ action, gate }) => (
+        <button
+          key={action}
+          type="button"
+          className="core-chip"
+          data-creative-action={action}
+          data-creative-target={row.run_id}
+          data-creative-enabled={gate.enabled ? "yes" : "no"}
+          disabled={!gate.enabled}
+          onClick={() => handlers[action](row.run_id)}
+        >
+          {CREATIVE_ACTION_LABEL[action]}
+        </button>
+      ))}
+      {Array.from(reasons, ([reason, { actions: refused, kind }]) => (
+        <span
+          key={reason}
+          className="approval-reason"
+          data-creative-reason={kind}
+          data-creative-reason-for={refused.join(",")}
+        >
+          {kind === "busy" ? reason : `${refused.map((a) => CREATIVE_ACTION_LABEL[a]).join(", ")}: ${reason}`}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function CreativeRunItem({
+  row,
+  now,
+  control,
+  preview,
+}: {
+  row: CreativeRunRow;
+  now: number;
+  control: CreativeControlProps;
+  preview: CreativePreviewProps;
+}) {
+  const unavailable = creativeRowIsUnavailable(row);
+  const failed = creativeRowIsFailed(row);
+  const files = creativeFilesLine(row);
+  const round = creativeRoundPhrase(row);
+  return (
+    <li
+      className="creative-run"
+      data-creative-run={row.run_id}
+      data-creative-row-tool={row.tool ?? ""}
+      data-creative-row-source={row.source ?? ""}
+      data-creative-row-output={row.output ?? ""}
+      data-creative-row-operation={row.operation ?? ""}
+      data-creative-row-state={row.state ?? ""}
+      data-creative-row-similarity={row.similarity ?? ""}
+      data-creative-row-defect={row.defect ?? ""}
+      data-creative-row-round={row.round ?? ""}
+      data-creative-row-verified={creativeRowIsVerified(row) ? "yes" : "no"}
+      data-creative-row-unavailable={unavailable ? "yes" : "no"}
+      data-creative-row-failed={failed ? "yes" : "no"}
+      data-creative-row-has-before={creativeRowHasImage(row, "before") ? "yes" : "no"}
+      data-creative-row-has-after={creativeRowHasImage(row, "after") ? "yes" : "no"}
+    >
+      <div className="event-row">
+        <span>{files ?? "dosya adı bildirilmedi"}</span>
+        <span className="event-when">{when(row.updated_at ?? row.created_at, now)}</span>
+      </div>
+      {/* The application, the operation and the step, with the similarity
+          beside `verified` and the defect beside `mismatch` — each as the row
+          says it, or the statement that it did not. */}
+      <span className="muted" data-creative-line>
+        {creativeRowLine(row)}
+      </span>
+      {/* What the COMPARISON measured: the produced dimensions, the bounded
+          aggregate (not SSIM — ADR-0093 decision 4) and the defect it named.
+          Drawn only for a row that has a comparison to report; a run still
+          executing has measured nothing yet. */}
+      {creativeHasMetrics(row) && (
+        <span className="muted" data-creative-metrics={row.similarity ?? ""}>
+          {creativeMetricsLine(row)}
+        </span>
+      )}
+      {/* Which of the ≤ 3 correction rounds the run is on, when one ran. */}
+      {round && (
+        <span className="muted" data-creative-round={row.round ?? ""}>
+          {round}
+        </span>
+      )}
+      {/* The run's own sentence, beside the two steps that have one to give. */}
+      {(unavailable || failed) && row.error_message && (
+        <span className="muted" data-creative-error-message>
+          {row.error_message}
+        </span>
+      )}
+      {/* The before and the after, fetched through the owner session and
+          shown only because the ROW says they exist. Until the bytes are in
+          hand the row says that, rather than drawing a picture that is not
+          there. */}
+      <CreativeImages row={row} preview={preview} />
+      <CreativeControls row={row} control={control} />
+    </li>
+  );
+}
+
+/**
+ * Yaratıcı (M27 spec §3, §6): what the Creative Tools Operator is doing,
+ * from the bus, and the runs that exist, from `/v1/creative/runs` — each run
+ * with its application, the operation it is on and the step it reached, what
+ * the COMPARISON measured (the produced dimensions, the bounded aggregate,
+ * the defect it named), which correction round it is on, and the owner's
+ * original beside what was produced from it, both fetched through the owner
+ * session; "Dışa aktar" and "Karşılaştır" ask the Cloud Core.
+ *
+ * Two sources, kept apart because they answer different questions. The bus
+ * line is "what is happening now" and decays like every bus claim; the rows
+ * are "what exists" and are the route's. Nothing here opens an application,
+ * draws a pixel or writes a plan: a run is verified because its row says the
+ * comparison matched, a picture is drawn because the row says it exists, a
+ * chip is drawn because there is an application to ask — and the Cloud Core
+ * still refuses on its own terms. An `unavailable` row gets no chips at all
+ * and says why in the application's own words: ADR-0093 decision 3's honest
+ * form, never a control over an application this machine does not have. The
+ * empty sentence is the route's answer, never the bus's silence — and
+ * "henüz yok" (no route on this Cloud Core) is neither.
+ */
+export function CreativePanel({
+  runs,
+  truth,
+  now,
+  control,
+  preview,
+}: {
+  runs: Loaded<CreativeRunRow[]>;
+  truth: CoreTruth;
+  now: number;
+  control: CreativeControlProps;
+  preview: CreativePreviewProps;
+}) {
+  const view = creativeView(creativeClaim(truth, now));
+  const told = view.lastKnown !== null;
+  const rows = runs.kind === "ok" ? runs.value : [];
+  const shown = rows.slice(0, CREATIVE_ROWS_SHOWN);
+  const verified = rows.filter(creativeRowIsVerified).length;
+  const attention = rows.some((row) => creativeRowIsMismatch(row) || creativeRowIsFailed(row));
+  return (
+    <section
+      className={`panel ${attention ? "attention" : ""}`}
+      data-panel="creative"
+      data-panel-state={runs.kind}
+      data-panel-empty={runs.kind === "ok" ? (rows.length ? "no" : "yes") : ""}
+      data-creative-stage={view.stage}
+      data-creative-last-known={view.lastKnown ?? ""}
+      data-creative-posture={told ? view.posture : ""}
+      data-creative-verified={runs.kind === "ok" ? verified : ""}
+    >
+      <h3 className="panel-title">
+        <span>Yaratıcı</span>
+        {runs.kind === "ok" && (
+          <span className="panel-count" data-panel-badge>
+            {verified > 0 ? `${verified} doğrulandı / ${rows.length}` : `${rows.length}`}
+          </span>
+        )}
+      </h3>
+      {/* The bus: the caption the Core draws, with its age; last-known when it aged out. */}
+      <p
+        className={told ? "muted" : "panel-empty"}
+        data-creative-activity={told ? view.stage : "untold"}
+        data-creative-caption={told ? view.caption : ""}
+      >
+        {told ? `${view.stage === "none" ? "Son bilinen: " : ""}${view.caption} · ${formatAge(view.ageMs)}` : CREATIVE_UNTOLD}
+      </p>
+      <LoadedNotice state={runs} />
+      {runs.kind === "ok" && rows.length === 0 && (
+        <p className="panel-empty" data-panel-empty-text>
+          {CREATIVE_EMPTY}
+        </p>
+      )}
+      {shown.length > 0 && (
+        <ul>
+          {shown.map((row) => (
+            <CreativeRunItem key={row.run_id} row={row} now={now} control={control} preview={preview} />
+          ))}
+        </ul>
+      )}
+      {preview.notice && (
+        <p className="panel-unknown" data-creative-image-notice>
+          {preview.notice}
+        </p>
+      )}
+      {control.outcome && (
+        <p
+          className={`approval-outcome ${control.outcome.ok ? "muted" : "panel-unknown"}`}
+          data-creative-outcome={control.outcome.action}
+          data-creative-ok={control.outcome.ok ? "yes" : "no"}
+          data-creative-target={control.outcome.id}
+        >
+          {control.outcome.text}
+          {` · ${formatAge(Math.max(0, now - control.outcome.at))}`}
+        </p>
+      )}
+      <p className="muted" data-creative-note>
+        {CREATIVE_NOTE}
+      </p>
     </section>
   );
 }

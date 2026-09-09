@@ -142,7 +142,20 @@ def creative_redraw(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, An
         "source": source,
         "operations": [{"op": "open"}, {"op": "export", "format": "png"}],
     }
-    return service.create(db, plan=plan, session_id=str(ctx.session_id))
+    # The bytes, not just the key. `CreativeService.create` never dereferences
+    # `plan.source` itself (ADR-0094 decision 1: no implicit object-store fetch inside
+    # `create`), so a caller that names a source and does not hand over its bytes gets
+    # `source_bytes=None`, the `open` operation falls through to a blank 1x1 canvas, and
+    # the run reports an empty-output mismatch. Which is to say: "Bu resmi Paint'te
+    # yeniden cizr" - THE sentence this whole capability is named for - could never
+    # actually reopen the owner's image. Found by the M27 security review; `apply()` had
+    # been doing it correctly on the continuation path all along.
+    return service.create(
+        db,
+        plan=plan,
+        source_bytes=service.fetch_source_bytes(source),
+        session_id=str(ctx.session_id),
+    )
 
 
 # -------------------------------------------------------------------- creative.open

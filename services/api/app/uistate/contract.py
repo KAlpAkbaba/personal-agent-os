@@ -74,6 +74,13 @@ from typing import Any
 #: database row's own word if the two ever diverge, from ``EXECUTIVE_RUN_STATES``
 #: below — ``done``/``total`` the step counts) plus the ``executive`` subsystem. Same
 #: additive rule: a v10 renderer keeps working and simply never sees it.
+#: v12 (M27 Creative Tools spec §3, §6, ADR-0093) adds ``creative.activity``, published
+#: at every stage of the creative loop with metadata ``{tool, operation?, state,
+#: similarity?, defect?}`` (``state`` the STEP OF THE RUN from
+#: ``CREATIVE_ACTIVITY_STEPS`` below, ``similarity`` a float in [0, 1] and never called
+#: SSIM - ADR-0093 decision 4 - ``defect`` one of the four objective ones) plus the
+#: ``creative`` subsystem. Same additive rule: a v11 renderer keeps working and simply
+#: never sees it.
 
 #: The STEP of the 3D loop that ``scene.activity`` names in ``metadata.state`` — the
 #: channel says what is happening, never what a database row happens to be called. The
@@ -119,6 +126,45 @@ SCENE_ACTIVITY_STEPS: tuple[str, ...] = (
 #: so the constants below are both the row's own column values and the wire words in
 #: one place; a future run-state that is NOT one of these seven must not be added to
 #: the row without adding it here first (`test_uistate_contract_halves.py`'s guard).
+#: M27 (spec §3, ADR-0093): the STEP of the creative loop that ``creative.activity``
+#: names in ``metadata.state``. Unlike the executive family, the creative row's own
+#: database states are a SMALLER, coarser set (``app.creative.models.CREATIVE_STATES``:
+#: seven words describing where a row rests), while the wire says what is HAPPENING -
+#: so this is the 3D family's shape, and ``app.creative.models.wire_step`` maps every
+#: row state onto one of these words. The web reads exactly this list
+#: (``apps/web/app/lib/uistate/contract.ts::CREATIVE_RUN_STATES``) and
+#: ``test_uistate_contract_halves.py`` holds the two to each other in both directions.
+CREATIVE_STEP_ANALYSING = "analysing"
+CREATIVE_STEP_PLANNING = "planning"
+CREATIVE_STEP_EXECUTING = "executing"
+CREATIVE_STEP_INSPECTING = "inspecting"
+CREATIVE_STEP_EXPORTING = "exporting"
+CREATIVE_STEP_COMPARING = "comparing"
+CREATIVE_STEP_CORRECTING = "correcting"
+CREATIVE_STEP_VERIFIED = "verified"
+CREATIVE_STEP_UNVERIFIED = "unverified"
+CREATIVE_STEP_MISMATCH = "mismatch"
+#: The named application is not installed or not licensed (ADR-0093 decision 3). The
+#: wire word is ``unavailable`` where the row's word is ``dependency_unavailable``:
+#: the row records WHY it stopped, the channel says WHAT the owner is looking at.
+CREATIVE_STEP_UNAVAILABLE = "unavailable"
+CREATIVE_STEP_FAILED = "failed"
+
+CREATIVE_ACTIVITY_STEPS: tuple[str, ...] = (
+    CREATIVE_STEP_ANALYSING,
+    CREATIVE_STEP_PLANNING,
+    CREATIVE_STEP_EXECUTING,
+    CREATIVE_STEP_INSPECTING,
+    CREATIVE_STEP_EXPORTING,
+    CREATIVE_STEP_COMPARING,
+    CREATIVE_STEP_CORRECTING,
+    CREATIVE_STEP_VERIFIED,
+    CREATIVE_STEP_UNVERIFIED,
+    CREATIVE_STEP_MISMATCH,
+    CREATIVE_STEP_UNAVAILABLE,
+    CREATIVE_STEP_FAILED,
+)
+
 EXECUTIVE_STEP_PLANNED = "planned"
 EXECUTIVE_STEP_RUNNING = "running"
 EXECUTIVE_STEP_PAUSED = "paused"
@@ -140,7 +186,7 @@ EXECUTIVE_RUN_STATES: tuple[str, ...] = (
 )
 
 
-CONTRACT_VERSION = 11
+CONTRACT_VERSION = 12
 
 #: Metadata value bounds. Numbers are floats in [0, 1] except where noted; strings are
 #: short machine tokens, never prose.
@@ -285,6 +331,13 @@ class UiState(StrEnum):
     #: done/total step counts.
     EXECUTIVE_RUN = "executive.run"
 
+    #: M27 (spec §3, §6): the Creative Tools loop's channel. Published at every STAGE
+    #: of the loop rather than only at its end, so the owner can see analysis, planning,
+    #: execution, inspection, export, comparison and correction happen - the same
+    #: "publish the step, never a row's own word" rule ``scene.activity`` documents.
+    #: Metadata is identity and measurement only: never a file path, never image bytes.
+    CREATIVE_ACTIVITY = "creative.activity"
+
 
 UI_STATES: tuple[str, ...] = tuple(s.value for s in UiState)
 
@@ -323,6 +376,8 @@ SUBSYSTEMS: tuple[str, ...] = (
     "creative3d",
     # M26: Executive Autonomy publishes executive.run (spec §6).
     "executive",
+    # M27: the Creative Tools Operator publishes creative.activity (spec §6).
+    "creative",
 )
 
 SEVERITIES: tuple[str, ...] = ("info", "notice", "warning", "critical")

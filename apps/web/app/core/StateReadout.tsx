@@ -33,6 +33,7 @@ import {
   kindDetail,
   mailFactsLine,
   operatorErrorLine,
+  creativeFactsLine,
   operatorFactsLine,
   sceneFactsLine,
   stateLabel,
@@ -45,6 +46,7 @@ import { executivePosture } from "../lib/uistate/executive";
 import { genesisPosture } from "../lib/uistate/genesis";
 import { operatorPosition } from "../lib/uistate/operator";
 import { scenePosture, sceneToolWord } from "../lib/uistate/scenes";
+import { creativePosture, creativeToolWord } from "../lib/uistate/creative";
 import type { VisualIntent } from "../lib/uistate/visual";
 import { isLive } from "../lib/uistate/visual";
 
@@ -109,6 +111,12 @@ export default function StateReadout({
       // "duraklatıldı" from "başarısız", and "kısmen bitti" from
       // "tamamlandı", in the compact form too. Absent for every other kind.
       data-executive-posture={intent.executive ? executivePosture(intent.executive.state) : undefined}
+      // M27: which of the eleven postures the creative body takes, from the
+      // published step alone — on the root so a harness can tell
+      // "karşılaştırılıyor" from "doğrulandı", and above all an
+      // `unavailable` (the application is not installed) from a failure, in
+      // the compact form too. Absent for every other kind.
+      data-creative-posture={intent.creative ? creativePosture(intent.creative.state) : undefined}
     >
       <h2 className="core-headline">{KIND_LABEL[intent.kind]}</h2>
 
@@ -376,6 +384,35 @@ export default function StateReadout({
           data-executive-paused={executivePosture(intent.executive.state) === "paused" ? "yes" : "no"}
         >
           {executiveFactsLine(intent.executive)}
+        </p>
+      )}
+
+      {/*
+        M27: the creative run's published facts — the application, the plan
+        operation, the step and the comparison's bounded aggregate — each the
+        token the publisher sent or the statement that none came; present on
+        the live posture and on its last-known shape alike.
+        `data-creative-unavailable` marks the one state the Core draws as an
+        application that could not be driven at all, so a harness can tell it
+        from a failure without reading the geometry (ADR-0093 decision 3).
+        No bar: `similarity` is a comparison's score, not a fraction of the
+        work done. No control here either — "Dışa aktar" and "Karşılaştır"
+        are the Cockpit's, built from the row on the list route, and the
+        before/after images are the panel's.
+      */}
+      {intent.creative && !compact && (
+        <p
+          className="muted core-count"
+          data-creative-facts
+          data-creative-tool={intent.creative.toolToken ?? ""}
+          data-creative-tool-label={creativeToolWord(intent.creative.toolToken) ?? ""}
+          data-creative-operation={intent.creative.operationToken ?? ""}
+          data-creative-state={intent.creative.stateToken ?? ""}
+          data-creative-similarity={intent.creative.similarity ?? ""}
+          data-creative-defect={intent.creative.defectToken ?? ""}
+          data-creative-unavailable={creativePosture(intent.creative.state) === "unavailable" ? "yes" : "no"}
+        >
+          {creativeFactsLine(intent.creative)}
         </p>
       )}
 
