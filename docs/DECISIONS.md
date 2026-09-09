@@ -8026,6 +8026,32 @@ budget is spent — no ceiling could ever have caught. Both directions were watc
 `SharingRetries = 0` trips the lower bound in 4.9 ms, `SharingRetries = 100000` trips the
 timeout at one minute.
 
+Pulling that thread found two more of the same shape, both by RUNNING the suite rather than
+reading it — five full local runs turned up a different intermittent failure in two of them,
+and the next CI run failed on a third:
+
+* `A_reader_holding_the_file_for_a_moment_does_not_lose_the_row` lost the row it says cannot
+  be lost (CI `34349029307`). Its own comment already records two earlier CI failures and two
+  earlier fixes for exactly this — and the remaining `await Task.Delay(30)` was the same
+  defect in its last hiding place, because a timer's CONTINUATION is a ThreadPool work item,
+  so the file's close was still queued behind a starved pool. There is no pool anywhere in
+  the release path now: the writer signals from its own dedicated thread and the wait is a
+  BLOCKING sleep on the test's thread. The reader is held ~5 ms against a 500 ms budget — a
+  hundredfold margin instead of the sixteenfold one that kept losing. Eight runs under a
+  concurrent full-suite load: clean.
+* `A_worker_that_stops_answering_pings_is_killed_and_replaced` failed with *"the browser
+  worker was killed by the companion (missed 3 consecutive pings) while this request was in
+  flight"* — the test failing on the very behaviour it exists to prove. The replacement worker
+  is launched `--no-pong` too, so the watchdog is certain to kill it again roughly every
+  300 ms; asserting that one request survives that is a coin toss. The host's contract is not
+  "this request survives" but "a request killed in flight is TOLD so, and the next one gets a
+  fresh worker", so that is what it asserts now, in a bounded loop that still fails at once on
+  any other exception or if no replacement ever serves.
+* `FakeBroker`'s default wait was 15 s, and a loaded machine turned "the agent connected and
+  sent its first heartbeat" into a failure. It is a HANG GUARD, not a latency budget — no test
+  asserts that a wait times out, and the two tests that genuinely measure cadence pass their
+  own bounds — so it is 60 s now, named and documented as such.
+
 **Consequences.** Item 28 is **not** passed. The device is the restored release, 29
 capabilities, and M28 row 26.15 is untouched. What this run did prove, for real and on the
 owner's machine, is the staged update's safety property: a candidate that fails verification

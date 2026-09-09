@@ -76,9 +76,24 @@ public sealed class FakeBroker : IAsyncDisposable
         return port;
     }
 
+    /// <summary>
+    /// How long a wait helper gives up after when the caller names no bound.
+    ///
+    /// This is a HANG GUARD, not a latency budget. Every caller's assertion is about the
+    /// CONTENT of the frame that arrives, and the tests that genuinely measure cadence pass
+    /// their own bound (LivingCoreCapabilityTests measures the interval between two
+    /// heartbeats, with 20 s and 10 s written out). At 15 s it was neither: a loaded machine
+    /// turned "the agent connected and sent its first heartbeat" into a failure - the sibling
+    /// test in that file already records a 8.65 s start-up on a GitHub runner, and
+    /// A_device_with_no_companion_sends_the_heartbeat_it_always_sent lost a full-suite run to
+    /// it here on 2026-09-09. Nothing is weakened by the larger number: no test asserts that
+    /// a wait TIMES OUT, so only a genuine hang can reach it, and the happy path is unchanged.
+    /// </summary>
+    internal static readonly TimeSpan DefaultWait = TimeSpan.FromSeconds(60);
+
     public async Task<BrokerSession> WaitForSessionAsync(TimeSpan? timeout = null)
     {
-        using var cts = new CancellationTokenSource(timeout ?? TimeSpan.FromSeconds(15));
+        using var cts = new CancellationTokenSource(timeout ?? DefaultWait);
         try
         {
             return await _sessions.Reader.ReadAsync(cts.Token);
@@ -266,7 +281,7 @@ public sealed class BrokerSession(WebSocket ws, HelloMessage hello)
     private async Task<T> WaitForAsync<T>(Func<T, bool> predicate, string description, TimeSpan? timeout)
         where T : ProtocolMessage
     {
-        using var cts = new CancellationTokenSource(timeout ?? TimeSpan.FromSeconds(15));
+        using var cts = new CancellationTokenSource(timeout ?? FakeBroker.DefaultWait);
         try
         {
             while (true)

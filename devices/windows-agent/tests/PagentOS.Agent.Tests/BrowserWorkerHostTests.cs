@@ -368,7 +368,34 @@ public sealed class BrowserWorkerHostTests : IDisposable
         Assert.True(host.PingsSent >= 3);
         Assert.Equal(0, host.PongsReceived);
 
-        var result = await Exec(host, BrowserCapabilities.Inspect, Payload("echo"));
+        // The replacement is launched with `--no-pong` too, so the watchdog is certain to
+        // kill it again roughly every 3 x 100 ms - and a request that happens to be in
+        // flight when that fires fails with a NAMED exception saying exactly that. The
+        // host's contract is not "this request survives", which is a coin toss; it is "a
+        // request killed in flight is TOLD so, and the NEXT one gets a fresh worker". So
+        // that is what is asserted, in a bounded loop. A host that never replaced the
+        // worker, or that failed for any OTHER reason, still fails here immediately.
+        //
+        // 2026-09-09: asserting the single request succeeded lost a run to
+        // "the browser worker was killed by the companion (missed 3 consecutive pings)
+        // while this request was in flight" - the test failing on the very behaviour it
+        // exists to prove.
+        JsonObject? result = null;
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
+        var killedInFlight = 0;
+        while (result is null)
+        {
+            try
+            {
+                result = await Exec(host, BrowserCapabilities.Inspect, Payload("echo"));
+            }
+            catch (CapabilityException ex) when (
+                ex.Message.Contains("missed 3 consecutive pings", StringComparison.Ordinal)
+                && DateTime.UtcNow < deadline)
+            {
+                killedInFlight++;  // killed in flight, and it said so; ask the next worker
+            }
+        }
         Assert.Equal(BrowserCapabilities.Inspect, result["capability"]!.GetValue<string>());
         // Windows reuses pids quickly, so a START — not pid inequality — is the proof of a
         // replacement. A FLOOR, not an exact count, and deliberately: the replacement is
@@ -377,7 +404,7 @@ public sealed class BrowserWorkerHostTests : IDisposable
         // won a race against the next kill, and on a loaded machine it lost one run in
         // three (2026-09-09). Nothing is weakened — a host that never replaced the worker,
         // or served this request from the dead one, still fails every line below.
-        Assert.True(host.Starts >= 2, $"expected a replacement start, saw {host.Starts}");
+        Assert.True(host.Starts >= 2, $"expected a replacement start, saw {host.Starts} (requests killed in flight: {killedInFlight})");
         Assert.True(host.LivenessKills >= 1);
         Assert.True(host.WorkerRunning);
     }

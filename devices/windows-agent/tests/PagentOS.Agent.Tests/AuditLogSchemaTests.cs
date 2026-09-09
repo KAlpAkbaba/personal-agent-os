@@ -135,7 +135,17 @@ public sealed class AuditLogSchemaTests : IDisposable
         //     retry budget (CI 34232628964);
         //   * a `TaskCompletionSource` release, whose continuation — and therefore the
         //     file's close — ran on the ThreadPool and could be delayed past that same
-        //     budget under starvation (CI 34275087364).
+        //     budget under starvation (CI 34275087364);
+        //   * `await Task.Delay(30)`, which is the same defect in its last hiding place: the
+        //     timer's CONTINUATION is a ThreadPool work item, so the close it leads to was
+        //     still queued behind a starved pool. It cost the row on CI 34349029307, which
+        //     is the one thing this test says cannot happen.
+        //
+        // So there is no pool anywhere in the release path now. The writer signals from its
+        // own dedicated thread, and the wait that follows is a BLOCKING sleep on this test's
+        // thread — it resumes without needing a pool slot at all. The window the reader is
+        // held for is ~5 ms against a 500 ms budget, a hundredfold margin rather than the
+        // sixteenfold one that kept losing.
         //
         // The product's bound is deliberately tight (20 retries x 25 ms: an audited code
         // path may not be blocked for long), so the TEST is what has to be deterministic.
@@ -145,13 +155,19 @@ public sealed class AuditLogSchemaTests : IDisposable
         // either direction.
         // Exactly what File.ReadAllText does: open for read, share read only.
         var reader = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        using var writerRunning = new ManualResetEventSlim(false);
         var write = Task.Factory.StartNew(
-            () => audit.Write("second", status: "ok"),
+            () =>
+            {
+                writerRunning.Set();
+                audit.Write("second", status: "ok");
+            },
             CancellationToken.None,
             TaskCreationOptions.LongRunning,
             TaskScheduler.Default);
         // Let the writer meet the sharing violation and enter its retry loop, then let go.
-        await Task.Delay(30);
+        Assert.True(writerRunning.Wait(TimeSpan.FromSeconds(30)), "the writer thread never started");
+        Thread.Sleep(5);
         reader.Dispose();
         await write;
 
