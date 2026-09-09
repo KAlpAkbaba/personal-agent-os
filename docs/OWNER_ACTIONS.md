@@ -161,6 +161,14 @@ your installed agent says about itself.
 
 **2 — the one elevated command.**
 
+> **Everything except one row is now proven on your machine.** The qualification passed 43 of
+> 44 checks against the agent you are running: the Digital Operator (a window launched,
+> activated, moved, resized, minimised, maximised, restored, its UI tree read, text set and
+> typed, closed), documents against this repository's own fixtures, projects scaffolded and
+> run and tested, `scene.inspect`, Paint opening the device's own export, display and the
+> ambient policy, and the alarm armed and disarmed in silence. The single failure is the one
+> below.
+>
 > **You ran this at 16:06 on 2026-09-09 and it WORKED** — `Cloud Core sees the candidate:
 > online, version 0.6.0, 85 capabilities … after 0.1 s`, journal `phase=committed`, `INSTALL
 > VERIFIED`. Your agent has advertised 85 capabilities since. The qualification that followed
@@ -171,6 +179,15 @@ your installed agent says about itself.
 > is a change to the agent itself, so it needs **one more run of the same command** to take
 > effect. Nothing else about the install changed, and a failure still rolls you back onto the
 > agent you are running now.
+>
+> That a different committed build is genuinely required was PROVEN, not assumed, in two
+> independent ways. `scripts\core\probe-native-launch.ps1` asked your live device to start
+> the built application and it answered *"…is not an allowlisted application
+> (calc,chrome,explorer,msedge,mspaint,notepad,powershell) nor an absolute .exe under Program
+> Files / Windows"* — which is the sentence the build BEFORE the fix emits; the current one
+> ends *"…, nor one this system built under the native root"*. And the commit graph agrees:
+> the fix (`a9ab760`) is not an ancestor of the build you installed (`cc6f4ee`), and the
+> function that implements it appears nowhere in that build's source.
 
 In a PowerShell started with *Run as administrator*, at the repository root. Both switches,
 one UAC prompt, nothing else:
